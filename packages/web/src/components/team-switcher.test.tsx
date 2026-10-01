@@ -58,10 +58,20 @@ beforeEach(() => {
 afterEach(cleanup);
 
 describe("team switcher", () => {
-  it.each([0, 1])("is hidden with %i active memberships", (count) => {
-    state.teams = [{ id: "team_alpha", slug: "alpha", name: "Alpha" }].slice(0, count);
+  it("is hidden without active memberships", () => {
     render(<TeamSwitcher />);
     expect(screen.queryByRole("combobox")).toBeNull();
+  });
+  it("offers the selector with a single active membership", () => {
+    state.teams = [{ id: "team_alpha", slug: "alpha", name: "Alpha" }];
+    state.scope = undefined;
+    render(<TeamSwitcher />);
+    expect(screen.getAllByRole("option").map((option) => option.textContent)).toEqual([
+      "Workspace",
+      "Alpha",
+      "All my teams",
+    ]);
+    expect(screen.getByRole("combobox").getAttribute("aria-label")).toBe("Active team");
   });
   it("shows Workspace first, active memberships and All my teams for a two-team member", () => {
     state.teams = [
@@ -113,7 +123,7 @@ describe("team switcher", () => {
     state.scope = undefined;
     const onNavigate = vi.fn();
     render(<TeamSwitcher onNavigate={onNavigate} />);
-    expect(screen.queryByRole("combobox")).toBeNull();
+    expect(screen.getByRole("combobox")).toBeTruthy();
     const link = screen.getByRole("link", { name: "Alpha team page" });
     expect(link.getAttribute("href")).toBe("/teams/alpha");
     fireEvent.click(link, { ctrlKey: true });

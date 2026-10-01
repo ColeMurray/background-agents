@@ -1,12 +1,15 @@
 // @vitest-environment jsdom
 
-import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
+import { act, cleanup, render, renderHook, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ReactNode } from "react";
 import { SWRConfig, useSWRConfig } from "swr";
 import { browserApiFetch } from "@/lib/browser-api-fetch";
+import { meTeamsKey } from "@/lib/me-teams-cache";
 import { currentUserAuthorizationKey } from "./use-current-user-authorization";
 import { ActiveTeamProvider, useActiveTeam } from "./use-active-team";
+import { useSidebarSessions } from "./use-sidebar-sessions";
+import { TeamSwitcher } from "@/components/team-switcher";
 
 const USER_ID = "11111111111111111111111111111111";
 
@@ -55,6 +58,40 @@ function team(id: string, archivedAt: number | null = null) {
   };
 }
 
+function inboxSnapshot() {
+  return {
+    categories: {
+      needs_attention: { items: [], hasMore: false, nextCursor: null },
+      in_progress: { items: [], hasMore: false, nextCursor: null },
+      finished: {
+        items: [
+          {
+            rootSession: {
+              id: "team-session",
+              title: "Team work",
+              repoOwner: null,
+              repoName: null,
+              baseBranch: null,
+              status: "active",
+              parentSessionId: null,
+              spawnSource: "user",
+              environmentId: null,
+              createdAt: 1,
+              updatedAt: 1,
+              ownerTeamId: "team_alpha",
+              visibility: "team",
+              readState: { latestMessageId: null, version: 0, unread: false },
+            },
+            descendantSessions: [],
+          },
+        ],
+        hasMore: false,
+        nextCursor: null,
+      },
+    },
+  };
+}
+
 function wrapper({ children }: { children: ReactNode }) {
   return (
     <SWRConfig
@@ -75,19 +112,150 @@ beforeEach(() => {
 afterEach(cleanup);
 
 describe("active team context", () => {
+  it("defaults a single-team user to unfiltered lists and shows the selector", async () => {
+    vi.mocked(browserApiFetch).mockImplementation(async (path) =>
+      path === "/api/me/authorization"
+        ? authorizationResponse()
+        : Response.json({ teams: [team("team_alpha")], requireTeamOnCreate: true })
+    );
+    const fetcher = vi.fn(async () => inboxSnapshot());
+    function SidebarProbe() {
+      const sidebar = useSidebarSessions();
+      return (
+        <>
+          <TeamSwitcher />
+          {sidebar.finished.map((row) => (
+            <p key={row.id}>{row.title}</p>
+          ))}
+        </>
+      );
+    }
+    render(
+      <SWRConfig value={{ provider: () => new Map(), fetcher, dedupingInterval: 0 }}>
+        <ActiveTeamProvider>
+          <SidebarProbe />
+        </ActiveTeamProvider>
+      </SWRConfig>
+    );
+    await screen.findByText("Team work");
+    expect(fetcher).toHaveBeenCalledWith("/api/sessions/inbox");
+    expect(screen.getByRole("combobox", { name: "Active team" }).textContent).toBe("All my teams");
+    expect(localStorage.getItem("open-inspect-active-team")).toBe("all-my-teams");
+  });
+
+  it.each([503, 401, 403, "network", "invalid-json", "invalid-schema"] as const)(
+    "retains memberships and sidebar rows only for transient refresh failure %s",
+    async (failure) => {
+      localStorage.setItem("open-inspect-active-team", "team_alpha");
+      const fetcher = vi.fn(async (_key: string) => inboxSnapshot());
+      const { result } = renderHook(
+        () => ({
+          context: useActiveTeam(),
+          sidebar: useSidebarSessions(),
+          mutate: useSWRConfig().mutate,
+        }),
+        {
+          wrapper: ({ children }) => (
+            <SWRConfig
+              value={{
+                provider: () => new Map(),
+                fetcher,
+                dedupingInterval: 0,
+                shouldRetryOnError: false,
+              }}
+            >
+              <ActiveTeamProvider>{children}</ActiveTeamProvider>
+            </SWRConfig>
+          ),
+        }
+      );
+      await waitFor(() => expect(result.current.sidebar.loading).toBe(false));
+      vi.mocked(browserApiFetch).mockImplementation(async () => {
+        if (failure === "network") throw new TypeError("Network unavailable");
+        if (failure === "invalid-json") return new Response("Invalid JSON");
+        if (failure === "invalid-schema") return Response.json({ teams: null });
+        return Response.json({ error: "Unavailable" }, { status: failure });
+      });
+      await act(async () => {
+        await result.current.mutate(meTeamsKey(USER_ID));
+      });
+      if (failure === 503 || failure === "network") {
+        expect(result.current.context.error).toBeUndefined();
+        expect(result.current.context.activeTeamId).toBe("team_alpha");
+        expect(result.current.context.teams).toHaveLength(2);
+        expect(result.current.context.requireTeamOnCreate).toBe(true);
+        expect(result.current.sidebar.loading).toBe(false);
+        expect(result.current.sidebar.finished.map((row) => row.id)).toEqual(["team-session"]);
+      } else {
+        expect(result.current.context.error).toBeInstanceOf(Error);
+        expect(result.current.context.activeTeamId).toBeNull();
+        expect(result.current.context.teams).toEqual([]);
+        expect(result.current.context.requireTeamOnCreate).toBe(false);
+        expect(result.current.sidebar.finished).toEqual([]);
+        expect(result.current.sidebar.sessionsError).toBeInstanceOf(Error);
+        expect(localStorage.getItem("open-inspect-active-team")).toBe("team_alpha");
+      }
+      expect(
+        fetcher.mock.calls.every(([key]) => key === "/api/sessions/inbox?teamIds%5B%5D=team_alpha")
+      ).toBe(true);
+    }
+  );
+
+  it("accepts a cached empty membership response during a transient refresh failure", async () => {
+    vi.mocked(browserApiFetch).mockImplementation(async (path) =>
+      path === "/api/me/authorization"
+        ? authorizationResponse()
+        : Response.json({ teams: [], requireTeamOnCreate: true })
+    );
+    const { result } = renderHook(
+      () => ({ context: useActiveTeam(), mutate: useSWRConfig().mutate }),
+      { wrapper }
+    );
+    await waitFor(() => expect(result.current.context.loading).toBe(false));
+    vi.mocked(browserApiFetch).mockResolvedValue(
+      Response.json({ error: "Unavailable" }, { status: 503 })
+    );
+    await act(async () => {
+      await result.current.mutate(meTeamsKey(USER_ID));
+    });
+    expect(result.current.context.error).toBeUndefined();
+    expect(result.current.context.teams).toEqual([]);
+    expect(result.current.context.requireTeamOnCreate).toBe(true);
+  });
+
+  it("preserves a stored Workspace context for team members", async () => {
+    localStorage.setItem("open-inspect-active-team", "workspace");
+    const { result } = renderHook(useActiveTeam, { wrapper });
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    expect(result.current.scope).toBe("workspace");
+  });
+
+  it("leaves lists unfiltered when the user has no active teams", async () => {
+    localStorage.setItem("open-inspect-active-team", "workspace");
+    vi.mocked(browserApiFetch).mockImplementation(async (path) =>
+      path === "/api/me/authorization"
+        ? authorizationResponse()
+        : Response.json({ teams: [team("team_old", 1)] })
+    );
+    const { result } = renderHook(useActiveTeam, { wrapper });
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    expect(result.current.activeTeamId).toBeNull();
+    expect(result.current.scope).toBeUndefined();
+  });
+
   it.each(["member", "viewer", null])(
-    "reconciles stored All teams to Workspace for role %s",
+    "reconciles stored All teams to All my teams for role %s",
     async (role) => {
       roleKey = role;
       localStorage.setItem("open-inspect-active-team", "all-teams");
       const { result } = renderHook(useActiveTeam, { wrapper });
       await waitFor(() => expect(result.current.loading).toBe(false));
       expect(result.current.activeTeamId).toBeNull();
-      expect(result.current.scope).toBe("workspace");
-      expect(localStorage.getItem("open-inspect-active-team")).toBe("workspace");
+      expect(result.current.scope).toBeUndefined();
+      expect(localStorage.getItem("open-inspect-active-team")).toBe("all-my-teams");
       act(() => result.current.setActiveTeam("all-teams"));
-      expect(result.current.scope).toBe("workspace");
-      expect(localStorage.getItem("open-inspect-active-team")).toBe("workspace");
+      expect(result.current.scope).toBeUndefined();
+      expect(localStorage.getItem("open-inspect-active-team")).toBe("all-my-teams");
     }
   );
 
@@ -114,15 +282,15 @@ describe("active team context", () => {
       await act(async () => {
         await result.current.mutate(currentUserAuthorizationKey(USER_ID));
       });
-      expect(result.current.context.scope).toBe("workspace");
-      expect(localStorage.getItem("open-inspect-active-team")).toBe("workspace");
+      expect(result.current.context.scope).toBeUndefined();
+      expect(localStorage.getItem("open-inspect-active-team")).toBe("all-my-teams");
 
       roleKey = role;
       await act(async () => {
         await result.current.mutate(currentUserAuthorizationKey(USER_ID));
       });
-      expect(result.current.context.scope).toBe("workspace");
-      expect(localStorage.getItem("open-inspect-active-team")).toBe("workspace");
+      expect(result.current.context.scope).toBeUndefined();
+      expect(localStorage.getItem("open-inspect-active-team")).toBe("all-my-teams");
       act(() => result.current.context.setActiveTeam("all-teams"));
       expect(result.current.context.scope).toBe("all");
     }
@@ -141,7 +309,7 @@ describe("active team context", () => {
     const { result } = renderHook(useActiveTeam, { wrapper });
     await waitFor(() => expect(result.current.teams).toHaveLength(2));
     expect(result.current.loading).toBe(true);
-    expect(result.current.scope).toBe("workspace");
+    expect(result.current.scope).toBeUndefined();
     expect(localStorage.getItem("open-inspect-active-team")).toBe("all-teams");
 
     await act(async () => {
@@ -161,7 +329,7 @@ describe("active team context", () => {
     );
     const { result } = renderHook(useActiveTeam, { wrapper });
     await waitFor(() => expect(result.current.error).toBeTruthy());
-    expect(result.current.scope).toBe("workspace");
+    expect(result.current.scope).toBeUndefined();
     expect(localStorage.getItem("open-inspect-active-team")).toBe("all-teams");
   });
 
@@ -176,13 +344,13 @@ describe("active team context", () => {
     expect(browserApiFetch).toHaveBeenCalledWith("/api/me/teams");
   });
 
-  it.each(["team_unknown", "team_old"])("falls back to Workspace for %s", async (id) => {
+  it.each(["team_unknown", "team_old"])("falls back to All my teams for %s", async (id) => {
     localStorage.setItem("open-inspect-active-team", id);
     const { result } = renderHook(useActiveTeam, { wrapper });
     await waitFor(() => expect(result.current.loading).toBe(false));
     expect(result.current.activeTeamId).toBeNull();
-    expect(result.current.scope).toBe("workspace");
-    expect(localStorage.getItem("open-inspect-active-team")).toBe("workspace");
+    expect(result.current.scope).toBeUndefined();
+    expect(localStorage.getItem("open-inspect-active-team")).toBe("all-my-teams");
   });
 
   it("shares team changes between consumers and remembers aggregate scopes", async () => {
@@ -200,13 +368,44 @@ describe("active team context", () => {
     expect(result.current.second.scope).toBe("workspace");
   });
 
-  it("does not become ready when the membership request fails", async () => {
-    vi.mocked(browserApiFetch).mockResolvedValue(
-      Response.json({ error: "Unavailable" }, { status: 503 })
-    );
-    const { result } = renderHook(useActiveTeam, { wrapper });
-    await waitFor(() => expect(result.current.error).toBeTruthy());
-    expect(result.current.teams).toEqual([]);
-    expect(result.current.loading).toBe(false);
-  });
+  it.each([503, 401, 403, "network", "invalid-json", "invalid-schema"] as const)(
+    "blocks sidebar requests on first-load membership failure %s",
+    async (failure) => {
+      localStorage.setItem("open-inspect-active-team", "team_alpha");
+      vi.mocked(browserApiFetch).mockImplementation(async (path) => {
+        if (path === "/api/me/authorization") return authorizationResponse();
+        if (failure === "network") throw new TypeError("Network unavailable");
+        if (failure === "invalid-json") return new Response("Invalid JSON");
+        if (failure === "invalid-schema") return Response.json({ teams: null });
+        return Response.json({ error: "Unavailable" }, { status: failure });
+      });
+      const fetcher = vi.fn(async () => inboxSnapshot());
+      const { result } = renderHook(
+        () => ({ context: useActiveTeam(), sidebar: useSidebarSessions() }),
+        {
+          wrapper: ({ children }) => (
+            <SWRConfig
+              value={{
+                provider: () => new Map(),
+                fetcher,
+                dedupingInterval: 0,
+                shouldRetryOnError: false,
+              }}
+            >
+              <ActiveTeamProvider>{children}</ActiveTeamProvider>
+            </SWRConfig>
+          ),
+        }
+      );
+      await waitFor(() => expect(result.current.context.loading).toBe(false));
+      expect(result.current.context.error).toBeInstanceOf(Error);
+      expect(result.current.context.teams).toEqual([]);
+      expect(result.current.context.activeTeamId).toBeNull();
+      expect(result.current.context.scope).toBeUndefined();
+      expect(result.current.sidebar.finished).toEqual([]);
+      expect(result.current.sidebar.sessionsError).toBeInstanceOf(Error);
+      expect(fetcher).not.toHaveBeenCalled();
+      expect(localStorage.getItem("open-inspect-active-team")).toBe("team_alpha");
+    }
+  );
 });

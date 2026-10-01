@@ -123,20 +123,26 @@ describe("session WebSocket D1 access", () => {
   });
 
   it.each(["off", "shadow", "on"] as const)(
-    "skips unused scope reads on a team session in %s mode",
+    "loads memberships at subscribe but skips unused scope reads on commands in %s mode",
     async (mode) => {
       const { name, team } = await scopedSession("team", mode);
       const userId = `query-member-${crypto.randomUUID()}`;
       const { token } = await issueClientWsToken(name, { userId, canonicalUserId: userId });
       await new TeamMembershipStore(env.DB).add(team.id, userId);
       const { ws } = await openClientWs(name);
-      const subscribed = collectMessages(ws, { until: (message) => message.type === "subscribed" });
-      ws.send(JSON.stringify({ type: "subscribe", token, clientId: "scope-reads" }));
-      expect((await subscribed).some((message) => message.type === "subscribed")).toBe(true);
-
       const memberships = vi.spyOn(TeamMembershipStore.prototype, "listForUser");
       const collaborators = vi.spyOn(SessionCollaboratorStore.prototype, "listUserIds");
       try {
+        const subscribed = collectMessages(ws, {
+          until: (message) => message.type === "subscribed",
+        });
+        ws.send(JSON.stringify({ type: "subscribe", token, clientId: "scope-reads" }));
+        expect((await subscribed).some((message) => message.type === "subscribed")).toBe(true);
+        expect(memberships).toHaveBeenCalledTimes(1);
+        expect(collaborators).toHaveBeenCalledTimes(mode === "on" ? 1 : 0);
+        memberships.mockClear();
+        collaborators.mockClear();
+
         const history = collectMessages(ws, {
           until: (message) => message.type === "history_page",
         });
@@ -147,6 +153,34 @@ describe("session WebSocket D1 access", () => {
       } finally {
         memberships.mockRestore();
         collaborators.mockRestore();
+        ws.close();
+      }
+    }
+  );
+
+  it.each(["off", "shadow", "on"] as const)(
+    "sends move and visibility capabilities for a non-owner team lead in %s mode",
+    async (mode) => {
+      const { name, team } = await scopedSession("team", mode);
+      const userId = `team-lead-${crypto.randomUUID()}`;
+      const { token } = await issueClientWsToken(name, { userId, canonicalUserId: userId });
+      await new TeamMembershipStore(env.DB).add(team.id, userId, "lead");
+      const { ws } = await openClientWs(name);
+      try {
+        const subscribed = collectMessages(ws, {
+          until: (message) => message.type === "subscribed",
+        });
+        ws.send(JSON.stringify({ type: "subscribe", token, clientId: "lead" }));
+        expect((await subscribed).find((message) => message.type === "subscribed")).toMatchObject({
+          session: {
+            capabilities: {
+              canMove: true,
+              canChangeVisibility: true,
+              canManageCollaborators: false,
+            },
+          },
+        });
+      } finally {
         ws.close();
       }
     }

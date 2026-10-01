@@ -652,13 +652,17 @@ describe("client session access", () => {
   it.each(["off", "shadow", "on"] as const)(
     "uses the %s mode for the team rule at subscribe and on commands",
     async (mode) => {
-      const { authenticator, close } = accessHarness(mode, member, teamRow);
+      const { authenticator, close, resolveSessionViewer } = accessHarness(mode, member, teamRow);
       await authenticator.handleSubscribe({} as WebSocket, { token: "token", clientId: "client" });
       expect(close).toHaveBeenCalledTimes(mode === "on" ? 1 : 0);
       if (mode === "on") expect(close).toHaveBeenCalledWith({}, 4010, expect.any(String));
       expect(
         await authenticator.authorizeClientCommand({} as WebSocket, member.userId, "collaborate")
       ).toEqual(mode === "on" ? { kind: "revoked" } : { kind: "allowed" });
+      expect(resolveSessionViewer).toHaveBeenNthCalledWith(1, member.userId, {
+        includeMemberships: true,
+      });
+      expect(resolveSessionViewer).toHaveBeenNthCalledWith(2, member.userId);
     }
   );
 

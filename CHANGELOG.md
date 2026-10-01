@@ -19,6 +19,17 @@ dependencies is a separate phase-2 release after rollout, in-flight requests, an
 addressed. No restore-auth maintenance window is required. See the
 [rollout guide](docs/GETTING_STARTED.md#modal-restore-auth-rollout).
 
+### Fixed
+
+Session navigation now defaults to **All my teams**, with the team selector available even for a
+single membership. Composer team and visibility choices stay local, including automatic team
+selection when new sessions require a team. Transient membership refresh failures retain loaded
+data, and changing draft configuration retires the old warm session without starting a replacement
+sandbox until the next prompt input or submission. Scope changes refresh lists without clearing
+terminal access or per-session caches. Visibility changes require a changed selection and confirm
+non-private child-session cascades. Workspace audit readers can filter by teams they do not belong
+to.
+
 ## September 30, 2026
 
 ### Added
@@ -39,6 +50,15 @@ roots and descendants. The current user's team response includes the require-tea
 without requiring settings-management permissions. Bot team selection and automation team ownership
 remain later phases; repository-backed team sessions still require existing grants, with no grant
 creation API or UI yet.
+
+### Fixed
+
+Allowed team directory, member, session, activity, and collaborator-candidate reads no longer add
+authorization-decision rows to the audit log. Capability writes and membership departures remain
+audited. Unauthorized cross-member removals are recorded as denied decisions. Live session
+subscriptions now include team memberships when computing capabilities in every enforcement mode,
+preserving team leads' move and visibility controls without adding reads to per-command
+authorization in `off` or `shadow`.
 
 ## September 29, 2026
 

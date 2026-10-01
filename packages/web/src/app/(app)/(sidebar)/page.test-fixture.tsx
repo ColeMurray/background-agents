@@ -14,12 +14,14 @@ expect.extend(matchers);
 const mocks = vi.hoisted(() => {
   const teamContext: {
     activeTeamId: string | null;
+    scope: "workspace" | "all" | undefined;
     teams: (TeamResponse & { role: TeamRole })[];
     teamsLoading: boolean;
     teamsError: unknown;
     requireTeamOnCreate: boolean;
   } = {
     activeTeamId: null,
+    scope: undefined,
     teams: [],
     teamsLoading: false,
     teamsError: undefined,
@@ -55,6 +57,7 @@ const mocks = vi.hoisted(() => {
       }>;
     }>,
     enabledModelsValue: [] as string[],
+    enabledModelsLoadingValue: false,
     enabledModelOptionsValue: [] as Array<{
       category: string;
       models: Array<{ id: string; name: string; description: string }>;
@@ -135,7 +138,7 @@ vi.mock("@/hooks/use-active-team", () => ({
     activeTeamId: mocks.activeTeamId,
     setActiveTeam: mocks.setActiveTeam,
     teams: mocks.teams,
-    scope: undefined,
+    scope: mocks.scope,
     requireTeamOnCreate: mocks.requireTeamOnCreate,
     loading: mocks.teamsLoading,
     error: mocks.teamsError,
@@ -170,10 +173,12 @@ vi.mock("@/components/model-reasoning-selector", () => ({
     disabled,
     harness,
     onHarnessChange,
+    onModelChange,
   }: {
     disabled?: boolean;
     harness?: string | null;
     onHarnessChange?: (harness: "opencode" | "claude") => void;
+    onModelChange: (model: string) => void;
   }) => (
     <>
       <button
@@ -183,6 +188,9 @@ vi.mock("@/components/model-reasoning-selector", () => ({
         data-agent-editable={onHarnessChange ? "true" : "false"}
       >
         Model and effort
+      </button>
+      <button type="button" onClick={() => onModelChange("openai/gpt-5.4")}>
+        Switch model to GPT-5.4
       </button>
       {onHarnessChange && (
         <>
@@ -210,7 +218,7 @@ vi.mock("@/hooks/use-enabled-models", () => ({
   useEnabledModels: () => ({
     enabledModels: mocks.enabledModelsValue,
     enabledModelOptions: mocks.enabledModelOptionsValue,
-    loading: false,
+    loading: mocks.enabledModelsLoadingValue,
   }),
 }));
 
@@ -258,6 +266,7 @@ beforeEach(() => {
   mocks.environmentsLoadingValue = false;
   mocks.environmentsValue = [];
   mocks.enabledModelsValue = [DEFAULT_MODEL];
+  mocks.enabledModelsLoadingValue = false;
   mocks.enabledModelOptionsValue = [
     {
       category: "Anthropic",
@@ -269,6 +278,7 @@ beforeEach(() => {
   mocks.keyboardShortcuts = DEFAULT_KEYBOARD_SHORTCUTS;
   mocks.canCreateSession = true;
   mocks.activeTeamId = null;
+  mocks.scope = undefined;
   mocks.teams = [];
   mocks.teamsLoading = false;
   mocks.teamsError = undefined;
