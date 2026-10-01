@@ -188,7 +188,12 @@ def _patch_dependencies(monkeypatch: pytest.MonkeyPatch):
     return service
 
 
+VCS_IDENTITY = {"clone_host": "github.com", "clone_username": "x-access-token"}
+
+
 async def _call(endpoint, request: dict) -> dict:
+    if endpoint is web_api.api_create_build_sandbox:
+        request = {**VCS_IDENTITY, **request}
     return await endpoint.get_raw_f()(
         request,
         authorization="Bearer test",
@@ -277,9 +282,9 @@ async def test_create_build_sandbox_forwards_callback_context_and_returns_provid
         repositories=REPOSITORIES,
         callback_url="https://worker.test/image-builds/build-complete",
         failure_callback_url="https://worker.test/image-builds/build-failed",
+        clone_host="github.com",
+        clone_username="x-access-token",
         clone_token="clone-token",
-        clone_host=None,
-        clone_username=None,
         user_env_vars={"FOO": "bar"},
         build_execution_timeout_seconds=DEFAULT_BUILD_TIMEOUT_SECONDS,
         timeout_seconds=2400,

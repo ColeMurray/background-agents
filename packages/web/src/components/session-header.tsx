@@ -133,9 +133,10 @@ export type SessionHeaderProps = {
   reconnecting: boolean;
   isDetailsOpen: boolean;
   isDesktopDetailsOpen: boolean;
-  showDesktopDetailsToggle: boolean;
   detailsButtonRef: RefObject<HTMLButtonElement | null>;
   actionsButtonRef: RefObject<HTMLButtonElement | null>;
+  /** The desktop sidebar toggle; focus returns here when a closed diff has no other target. */
+  desktopDetailsButtonRef?: RefObject<HTMLButtonElement | null>;
   onToggleDetails: () => void;
   onToggleDesktopDetails: () => void;
   onOpenMobileDetails: () => void;
@@ -155,9 +156,9 @@ export function SessionHeader({
   reconnecting,
   isDetailsOpen,
   isDesktopDetailsOpen,
-  showDesktopDetailsToggle,
   detailsButtonRef,
   actionsButtonRef,
+  desktopDetailsButtonRef,
   onToggleDetails,
   onToggleDesktopDetails,
   onOpenMobileDetails,
@@ -190,7 +191,7 @@ export function SessionHeader({
   };
 
   const handleRenameSubmit = async () => {
-    if (!sessionState) {
+    if (!sessionState || !capabilities.lifecycle) {
       setIsRenaming(false);
       return;
     }
@@ -235,7 +236,7 @@ export function SessionHeader({
         <div className="flex min-w-0 flex-1 items-center gap-3">
           {!isOpen && <CollapsedSidebarControls />}
           <div className="min-w-0 flex-1">
-            {isRenaming ? (
+            {isRenaming && capabilities.lifecycle ? (
               <input
                 autoFocus
                 aria-label="Session title"
@@ -307,22 +308,21 @@ export function SessionHeader({
               repositoryCount={sessionState?.repositories?.length ?? 0}
             />
           </div>
-          {showDesktopDetailsToggle && (
-            <button
-              type="button"
-              onClick={onToggleDesktopDetails}
-              className="hidden rounded p-1.5 text-muted-foreground transition hover:bg-muted hover:text-foreground lg:block"
-              aria-label={isDesktopDetailsOpen ? "Hide session details" : "Show session details"}
-              aria-controls="session-details-sidebar"
-              aria-expanded={isDesktopDetailsOpen}
-            >
-              {isDesktopDetailsOpen ? (
-                <RightSidebarOpenIcon className="h-4 w-4" />
-              ) : (
-                <RightSidebarIcon className="h-4 w-4" />
-              )}
-            </button>
-          )}
+          <button
+            type="button"
+            ref={desktopDetailsButtonRef}
+            onClick={onToggleDesktopDetails}
+            className="hidden rounded p-1.5 text-muted-foreground transition hover:bg-muted hover:text-foreground lg:block"
+            aria-label={isDesktopDetailsOpen ? "Hide session details" : "Show session details"}
+            aria-controls="session-details-sidebar"
+            aria-expanded={isDesktopDetailsOpen}
+          >
+            {isDesktopDetailsOpen ? (
+              <RightSidebarOpenIcon className="h-4 w-4" />
+            ) : (
+              <RightSidebarIcon className="h-4 w-4" />
+            )}
+          </button>
         </div>
       </div>
       <MobileStatusStrip

@@ -306,10 +306,12 @@ class SandboxManager:
         self,
         snapshot_image_id: str,
         session_config: SessionConfig | dict[str, Any],
+        *,
+        clone_host: str,
+        clone_username: str,
         sandbox_id: str | None = None,
         control_plane_url: str = "",
         sandbox_auth_token: str = "",
-        clone_token: str | None = None,
         user_env_vars: dict[str, str] | None = None,
         timeout_seconds: int = DEFAULT_SANDBOX_TIMEOUT_SECONDS,
         code_server_enabled: bool = False,
@@ -332,7 +334,8 @@ class SandboxManager:
             sandbox_id: Optional sandbox ID (generated if not provided)
             control_plane_url: URL for the control plane
             sandbox_auth_token: Auth token for the sandbox
-            clone_token: VCS clone token for git operations
+            clone_host: VCS host resolved by the control plane
+            clone_username: VCS clone username resolved by the control plane
 
         Returns:
             SandboxHandle for the restored sandbox
@@ -347,14 +350,6 @@ class SandboxManager:
             repo_name = session_config.repo_name
         _has_repository(repo_owner, repo_name)
 
-        # Snapshot restore still passes the clone token through for
-        # repo-backed sandboxes. Snapshots taken before the credential-helper
-        # migration ship an entrypoint that reads VCS_CLONE_TOKEN from env
-        # and embeds it in the origin URL; without it, those legacy snapshots
-        # can't fetch. GITHUB_TOKEN/GITHUB_APP_TOKEN aliases are restored too
-        # so the gh CLI keeps working on snapshots predating the gh wrapper.
-        # Host scoping remains common with fresh creates. These compatibility
-        # credentials are explicitly requested only by the restore path.
         handle = await SandboxLauncher().launch(
             SandboxLaunchSpec(
                 config=SandboxConfig(
@@ -373,11 +368,10 @@ class SandboxManager:
                     retire_sandbox_id=retire_sandbox_id,
                     sandbox_backend=sandbox_backend,
                     launch_deadline_at_ms=launch_deadline_at_ms,
+                    clone_host=clone_host,
+                    clone_username=clone_username,
                 ),
-                source=SnapshotImageSource(
-                    image_id=snapshot_image_id,
-                    clone_token=clone_token,
-                ),
+                source=SnapshotImageSource(image_id=snapshot_image_id),
             )
         )
 

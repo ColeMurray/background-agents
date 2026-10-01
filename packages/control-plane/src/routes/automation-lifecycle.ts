@@ -119,7 +119,7 @@ async function handleTriggerAutomation(
     triggerResult = await new Scheduler(ctx.db, env, ctx.executionCtx).trigger(
       id,
       requesterUserId,
-      requesterEnrichment ?? undefined
+      requesterEnrichment
     );
   } catch (triggerError) {
     logger.error("automation.trigger_failed", {

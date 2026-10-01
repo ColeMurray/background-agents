@@ -18,11 +18,15 @@ interface ReposResponse {
 /**
  * Loads repositories for an authenticated user when enabled, allowing callers to suppress unauthorized requests.
  */
-export function useRepos(enabled = true) {
+export function useRepos(enabled = true, teamId?: string | null) {
   const { data: session, status } = useAuthSession();
 
   const { data, isLoading, error } = useSWR<ReposResponse>(
-    enabled && session ? "/api/repos" : null
+    enabled && session
+      ? teamId
+        ? `/api/repos?teamId=${encodeURIComponent(teamId)}`
+        : "/api/repos"
+      : null
   );
 
   return {

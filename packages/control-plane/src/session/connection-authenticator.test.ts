@@ -6,7 +6,7 @@
 
 import { describe, it, expect, vi } from "vitest";
 import { hashToken } from "../auth/crypto";
-import { permissionsForBuiltInRole } from "@open-inspect/shared/rbac";
+import { permissionsForBuiltInRole, type PermissionId } from "@open-inspect/shared/rbac";
 import type { SessionAccessRow, SessionViewer } from "@open-inspect/shared";
 import type { Logger } from "../logger";
 import type { BackgroundTasks } from "../platform-ports";
@@ -652,13 +652,17 @@ describe("client session access", () => {
   it.each(["off", "shadow", "on"] as const)(
     "uses the %s mode for the team rule at subscribe and on commands",
     async (mode) => {
-      const { authenticator, close } = accessHarness(mode, member, teamRow);
+      const { authenticator, close, resolveSessionViewer } = accessHarness(mode, member, teamRow);
       await authenticator.handleSubscribe({} as WebSocket, { token: "token", clientId: "client" });
       expect(close).toHaveBeenCalledTimes(mode === "on" ? 1 : 0);
       if (mode === "on") expect(close).toHaveBeenCalledWith({}, 4010, expect.any(String));
       expect(
         await authenticator.authorizeClientCommand({} as WebSocket, member.userId, "collaborate")
-      ).toEqual(mode === "on" ? { kind: "revoked" } : { kind: "allowed" });
+      ).toEqual(mode === "on" ? { kind: "revoked" } : { kind: "denied", reason: "not_member" });
+      expect(resolveSessionViewer).toHaveBeenNthCalledWith(1, member.userId, {
+        includeMemberships: true,
+      });
+      expect(resolveSessionViewer).toHaveBeenNthCalledWith(2, member.userId);
     }
   );
 
@@ -681,6 +685,179 @@ describe("client session access", () => {
     expect(close).not.toHaveBeenCalled();
     expect(removeClient).not.toHaveBeenCalled();
   });
+
+  it.each(
+    (["off", "shadow", "on"] as const).flatMap((mode) =>
+      (["workspace", "team", "private"] as const).map((visibility) => ({ mode, visibility }))
+    )
+  )(
+    "sends fresh team-member capabilities for $visibility subscriptions in $mode mode",
+    async ({ mode, visibility }) => {
+      const permissions: PermissionId[] = [
+        "sessions.read",
+        "sessions.collaborate",
+        "sessions.lifecycle",
+        "sessions.delete",
+        "sessions.sandbox_access",
+      ];
+      const viewer: UserViewer = {
+        ...member,
+        memberships: new Map([["team-b", "member"]]),
+        permissions,
+      };
+      const { authenticator, send, close } = accessHarness(mode, viewer, {
+        ...teamRow,
+        visibility,
+        collaboratorIds: visibility === "private" ? [viewer.userId] : [],
+      });
+      const subscribe = () =>
+        authenticator.handleSubscribe({} as WebSocket, { token: "token", clientId: "client" });
+      const expectedCapabilities = {
+        canRead: true,
+        canCollaborate: true,
+        canManageLifecycle: true,
+        canDelete: false,
+        canSandbox: true,
+        canManageCollaborators: false,
+        canChangeVisibility: false,
+      };
+
+      await subscribe();
+      expect(send).toHaveBeenLastCalledWith(
+        {},
+        expect.objectContaining({
+          type: "subscribed",
+          session: expect.objectContaining({ capabilities: expectedCapabilities }),
+        })
+      );
+      expect(send.mock.calls.at(-1)?.[1]).toHaveProperty(
+        "session.codeServerUrl",
+        "https://code.example.test"
+      );
+      for (const action of ["collaborate", "lifecycle", "sandbox"] as const) {
+        expect(
+          await authenticator.authorizeClientCommand({} as WebSocket, viewer.userId, action)
+        ).toEqual({ kind: "allowed" });
+      }
+      expect(
+        await authenticator.authorizeClientCommand({} as WebSocket, viewer.userId, "delete")
+      ).toEqual({ kind: "denied", reason: "not_owner_or_lead" });
+
+      const originalPermissions = [...permissions];
+      permissions.splice(0, permissions.length, "sessions.read");
+      await subscribe();
+      expect(send).toHaveBeenLastCalledWith(
+        {},
+        expect.objectContaining({
+          type: "subscribed",
+          session: expect.objectContaining({
+            capabilities: {
+              ...expectedCapabilities,
+              canCollaborate: false,
+              canManageLifecycle: false,
+              canSandbox: false,
+            },
+          }),
+        })
+      );
+
+      permissions.push(...originalPermissions.slice(1));
+      await subscribe();
+      expect(send).toHaveBeenLastCalledWith(
+        {},
+        expect.objectContaining({
+          type: "subscribed",
+          session: expect.objectContaining({ capabilities: expectedCapabilities }),
+        })
+      );
+      expect(close).not.toHaveBeenCalled();
+    }
+  );
+
+  describe.each(["off", "shadow", "on"] as const)(
+    "team-owned subscriptions and commands in %s mode",
+    (mode) => {
+      it.each([
+        {
+          label: "workspace Member",
+          viewer: member,
+          row: { ...teamRow, visibility: "workspace" as const },
+        },
+        {
+          label: "workspace Admin",
+          viewer: {
+            ...member,
+            userId: "workspace-admin",
+            roleKey: "administrator" as const,
+            permissions: permissionsForBuiltInRole("administrator"),
+          },
+          row: { ...teamRow, visibility: "workspace" as const },
+        },
+        {
+          label: "workspace Owner",
+          viewer: owner,
+          row: { ...teamRow, visibility: "workspace" as const },
+        },
+        {
+          label: "removed private session owner",
+          viewer: { ...member, userId: "owner-user" },
+          row: { ...teamRow, visibility: "private" as const },
+        },
+        {
+          label: "private Owner break-glass reader",
+          viewer: owner,
+          row: { ...teamRow, visibility: "private" as const },
+        },
+      ])("keeps a $label read-only without team membership", async ({ viewer, row }) => {
+        const { authenticator, send, close, removeClient } = accessHarness(mode, viewer, row);
+        const socket = {} as WebSocket;
+
+        await authenticator.handleSubscribe(socket, { token: "token", clientId: "nonmember" });
+
+        const subscribed = send.mock.calls.find(
+          ([, message]) => message.type === "subscribed"
+        )?.[1];
+        expect(subscribed).toHaveProperty("session.capabilities", {
+          canRead: true,
+          canCollaborate: false,
+          canManageLifecycle: false,
+          canDelete: false,
+          canSandbox: false,
+          canManageCollaborators: false,
+          canChangeVisibility: false,
+        });
+        for (const field of [
+          "codeServerUrl",
+          "sandboxDashboardUrl",
+          "ttydUrl",
+          "vncUrl",
+          "tunnelUrls",
+        ]) {
+          expect(subscribed).not.toHaveProperty(`session.${field}`);
+        }
+        expect(await authenticator.authorizeClientCommand(socket, viewer.userId, "read")).toEqual({
+          kind: "allowed",
+        });
+        for (const action of [
+          "collaborate",
+          "lifecycle",
+          "delete",
+          "sandbox",
+          "manageCollaborators",
+          "changeVisibility",
+        ] as const) {
+          expect(await authenticator.authorizeClientCommand(socket, viewer.userId, action)).toEqual(
+            {
+              kind: "denied",
+              reason: "not_member",
+            }
+          );
+        }
+        expect(close).not.toHaveBeenCalled();
+        expect(removeClient).not.toHaveBeenCalled();
+      });
+    }
+  );
 
   it("closes on lost read access but not on a collaboration-only denial", async () => {
     const memberships = new Map([["team-b", "member"]] as const);
@@ -718,28 +895,32 @@ describe("client session access", () => {
     expect(resolveSessionViewer).toHaveBeenCalledTimes(4);
   });
 
-  it.each(["off", "shadow", "on"] as const)(
-    "refuses private non-collaborators in %s mode",
-    async (mode) => {
-      const { authenticator, close } = accessHarness(mode, member, {
-        ...teamRow,
-        visibility: "private",
-      });
-      await authenticator.handleSubscribe({} as WebSocket, { token: "token", clientId: "client" });
-      expect(close).toHaveBeenCalledWith({}, 4010, expect.any(String));
-      expect(
-        await authenticator.authorizeClientCommand({} as WebSocket, member.userId, "read")
-      ).toEqual({
-        kind: "revoked",
-      });
-    }
-  );
+  it.each(
+    (["off", "shadow", "on"] as const).flatMap((mode) => [
+      { mode, label: "non-collaborators", collaboratorIds: [] },
+      { mode, label: "nonmember collaborators", collaboratorIds: [member.userId] },
+    ])
+  )("refuses private $label in $mode mode", async ({ mode, collaboratorIds }) => {
+    const { authenticator, close } = accessHarness(mode, member, {
+      ...teamRow,
+      visibility: "private",
+      collaboratorIds,
+    });
+    await authenticator.handleSubscribe({} as WebSocket, { token: "token", clientId: "client" });
+    expect(close).toHaveBeenCalledWith({}, 4010, expect.any(String));
+    expect(
+      await authenticator.authorizeClientCommand({} as WebSocket, member.userId, "read")
+    ).toEqual({
+      kind: "revoked",
+    });
+  });
 
   it.each(["off", "shadow", "on"] as const)(
-    "redacts sandbox URLs for an Owner break-glass read in %s, permits lifecycle but not collaboration",
+    "redacts workspace-owned Owner break-glass URLs in %s, permits lifecycle but not collaboration",
     async (mode) => {
       const { authenticator, send, close, auditPrivateBreakGlass } = accessHarness(mode, owner, {
         ...teamRow,
+        ownerTeamId: null,
         visibility: "private",
       });
       await authenticator.handleSubscribe({} as WebSocket, { token: "token", clientId: "client" });
@@ -752,6 +933,15 @@ describe("client session access", () => {
       expect(subscribed).not.toHaveProperty("session.ttydUrl");
       expect(subscribed).not.toHaveProperty("session.vncUrl");
       expect(subscribed).not.toHaveProperty("session.tunnelUrls");
+      expect(subscribed).toHaveProperty("session.capabilities", {
+        canRead: true,
+        canCollaborate: false,
+        canManageLifecycle: true,
+        canDelete: true,
+        canSandbox: false,
+        canManageCollaborators: true,
+        canChangeVisibility: true,
+      });
       expect(auditPrivateBreakGlass).toHaveBeenCalledExactlyOnceWith(
         owner.userId,
         expect.objectContaining({ id: "session", visibility: "private" })

@@ -17,7 +17,6 @@ function createHandler() {
   const sandboxRepository = {
     createSandbox: vi.fn(),
   } as unknown as SandboxRepository;
-  const encryptScmToken = vi.fn();
   const generateId = vi.fn();
   const now = vi.fn(() => 1234);
   const scheduleWarmSandbox = vi.fn();
@@ -35,7 +34,6 @@ function createHandler() {
     repository as unknown as ParticipantRepository,
     "session-do-id",
     scheduleWarmSandbox,
-    encryptScmToken,
     generateId,
     now
   );
@@ -50,7 +48,6 @@ function createHandler() {
     handler,
     repository,
     sandboxRepository,
-    encryptScmToken,
     generateId,
     now,
     scheduleWarmSandbox,
@@ -59,9 +56,32 @@ function createHandler() {
 }
 
 describe("SessionInitHandler", () => {
+  it("ignores legacy OAuth secrets during initialization", async () => {
+    const { handler, repository } = createHandler();
+    const response = await handler.init(
+      new Request("http://internal/internal/init", {
+        method: "POST",
+        body: JSON.stringify({
+          sessionName: "session",
+          repoOwner: null,
+          repoName: null,
+          userId: "user-1",
+          scmToken: "secret",
+          scmTokenEncrypted: "encrypted-secret",
+          scmRefreshTokenEncrypted: "refresh-secret",
+          scmTokenExpiresAt: 9999,
+        }),
+      })
+    );
+    expect(response.status).toBe(200);
+    const written = repository.createParticipant.mock.calls[0][0];
+    expect(written).not.toHaveProperty("scmAccessTokenEncrypted");
+    expect(written).not.toHaveProperty("scmRefreshTokenEncrypted");
+    expect(written).not.toHaveProperty("scmTokenExpiresAt");
+  });
+
   it("does not repeat initialization side effects for an existing session", async () => {
-    const { handler, repository, sandboxRepository, encryptScmToken, scheduleWarmSandbox } =
-      createHandler();
+    const { handler, repository, sandboxRepository, scheduleWarmSandbox } = createHandler();
     repository.getSession.mockReturnValue({ id: "session-do-id" } as never);
 
     const response = await handler.init(
@@ -82,7 +102,6 @@ describe("SessionInitHandler", () => {
     expect(repository.replaceSessionRepositories).not.toHaveBeenCalled();
     expect(sandboxRepository.createSandbox).not.toHaveBeenCalled();
     expect(repository.createParticipant).not.toHaveBeenCalled();
-    expect(encryptScmToken).not.toHaveBeenCalled();
     expect(scheduleWarmSandbox).not.toHaveBeenCalled();
   });
 
@@ -116,16 +135,8 @@ describe("SessionInitHandler", () => {
   });
 
   it("initializes session, sandbox, and owner participant", async () => {
-    const {
-      handler,
-      repository,
-      sandboxRepository,
-      encryptScmToken,
-      generateId,
-      scheduleWarmSandbox,
-      log,
-    } = createHandler();
-    encryptScmToken.mockResolvedValue("encrypted-scm-token");
+    const { handler, repository, sandboxRepository, generateId, scheduleWarmSandbox, log } =
+      createHandler();
     generateId.mockReturnValueOnce("sandbox-1").mockReturnValueOnce("participant-1");
 
     const response = await handler.init(
@@ -147,9 +158,6 @@ describe("SessionInitHandler", () => {
           scmLogin: "octocat",
           scmName: "The Octocat",
           scmEmail: "octocat@example.com",
-          scmToken: "plain-scm-token",
-          scmRefreshTokenEncrypted: "encrypted-refresh-token",
-          scmTokenExpiresAt: 9999999,
           scmUserId: "github-user-123",
           parentSessionId: "parent-1",
           spawnSource: "agent",
@@ -198,9 +206,6 @@ describe("SessionInitHandler", () => {
       scmLogin: "octocat",
       scmName: "The Octocat",
       scmEmail: "octocat@example.com",
-      scmAccessTokenEncrypted: "encrypted-scm-token",
-      scmRefreshTokenEncrypted: "encrypted-refresh-token",
-      scmTokenExpiresAt: 9999999,
       role: "owner",
       joinedAt: 1234,
     });
@@ -292,10 +297,6 @@ describe("SessionInitHandler", () => {
           scmLogin: null,
           scmName: null,
           scmEmail: null,
-          scmToken: null,
-          scmTokenEncrypted: null,
-          scmRefreshTokenEncrypted: null,
-          scmTokenExpiresAt: null,
           scmUserId: null,
           parentSessionId: null,
           sandboxSettings: {
@@ -472,39 +473,6 @@ describe("SessionInitHandler", () => {
       error: "repositories[0] must match the scalar repository mirror",
     });
     expect(repository.upsertSession).not.toHaveBeenCalled();
-  });
-
-  it("falls back to pre-encrypted token when plain-token encryption fails", async () => {
-    const { handler, repository, encryptScmToken, generateId, log } = createHandler();
-    encryptScmToken.mockRejectedValue(new Error("encrypt failed"));
-    generateId.mockReturnValueOnce("sandbox-1").mockReturnValueOnce("participant-1");
-
-    const response = await handler.init(
-      new Request("http://internal/internal/init", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({
-          sessionName: "session-public-id",
-          repoOwner: "acme",
-          repoName: "repo",
-          repoId: 123,
-          userId: "user-1",
-          scmToken: "plain-scm-token",
-          scmTokenEncrypted: "existing-encrypted-token",
-        }),
-      })
-    );
-
-    expect(response.status).toBe(200);
-    expect(repository.createParticipant).toHaveBeenCalledWith(
-      expect.objectContaining({
-        scmAccessTokenEncrypted: "existing-encrypted-token",
-      })
-    );
-    expect(log.error).toHaveBeenCalledWith(
-      "Failed to encrypt SCM token",
-      expect.objectContaining({ error: expect.any(Error) })
-    );
   });
 
   it("logs invalid model warning and stores normalized model", async () => {

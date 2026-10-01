@@ -58,6 +58,8 @@ class TestCreateSandboxResources:
         manager = SandboxManager()
         await manager.create_sandbox(
             SandboxConfig(
+                clone_host="github.com",
+                clone_username="x-access-token",
                 repo_owner="acme",
                 repo_name="repo",
                 settings={"cpuCores": 2, "memoryMib": 4096},
@@ -86,6 +88,8 @@ class TestCreateSandboxResources:
 
         manager = SandboxManager()
         await manager.restore_from_snapshot(
+            clone_host="github.com",
+            clone_username="x-access-token",
             snapshot_image_id="img-abc",
             session_config={"repo_owner": "acme", "repo_name": "repo"},
             settings={"cpuCores": 1, "memoryMib": 2048},

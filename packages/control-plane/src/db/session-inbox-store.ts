@@ -1,12 +1,11 @@
 import {
   SESSION_INBOX_CATEGORIES,
   type SessionInboxCategory,
-  type SessionInboxItem,
   type SessionInboxSession,
 } from "@open-inspect/shared/types/session-inbox";
+import type { SessionVisibility } from "@open-inspect/shared/types/teams";
 import type { SessionStatus, SpawnSource } from "@open-inspect/shared/types/sessions";
-import { visibleSessionsPredicate, type SessionReadScope } from "./session-visibility";
-import type { TeamsEnforcementMode } from "../authorization/teams-enforcement";
+import { buildSessionListPredicates, type SessionListFilters } from "./session-list-predicates";
 import { attachSessionListMetadata } from "./session-list-metadata";
 import type { SessionInboxCursor } from "./session-inbox-cursor";
 import { readStateFromRow, unreadSql, type ViewerReadStateRow } from "./session-read-state";
@@ -14,28 +13,40 @@ import { assertD1QueryParameterLimit } from "./query-limits";
 import type { SqlDatabase, SqlStatement } from "./sql-database";
 
 /** Viewer, filtering, and pagination inputs for an inbox query. */
-export interface ListSessionInboxOptions {
+export interface ListSessionInboxOptions extends Pick<
+  SessionListFilters,
+  "createdByUserIds" | "teamIds" | "ownerFilter" | "visibility" | "scope" | "readScope" | "mode"
+> {
   category: SessionInboxCategory;
-  createdByUserIds?: readonly string[];
   excludeAutomatedSessions?: boolean;
-  teamIds?: readonly string[];
-  readScope: SessionReadScope;
-  mode: TeamsEnforcementMode;
   viewerUserId: string;
   limit: number;
   cursor: SessionInboxCursor | null;
 }
 
 export interface ListSessionInboxResult {
-  items: SessionInboxItem[];
+  items: Array<{
+    rootSession: ScopedInboxSession;
+    descendantSessions: ScopedInboxSession[];
+  }>;
   hasMore: boolean;
   nextCursor: SessionInboxCursor | null;
 }
+
+/** Persisted ownership is used for server capabilities, then stripped from the wire projection. */
+export type ScopedInboxSession = SessionInboxSession & {
+  userId: string | null;
+  ownerTeamId: string | null;
+  visibility: SessionVisibility;
+};
 
 export type ListSessionInboxSnapshotResult = Record<SessionInboxCategory, ListSessionInboxResult>;
 
 interface InboxSessionRow extends ViewerReadStateRow {
   id: string;
+  user_id: string | null;
+  owner_team_id: string | null;
+  visibility: SessionVisibility;
   title: string | null;
   repo_owner: string | null;
   repo_name: string | null;
@@ -58,9 +69,12 @@ interface InboxPageData {
   nextCursor: SessionInboxCursor | null;
 }
 
-function toListItem(row: InboxSessionRow): SessionInboxSession {
+function toListItem(row: InboxSessionRow): ScopedInboxSession {
   return {
     id: row.id,
+    userId: row.user_id,
+    ownerTeamId: row.owner_team_id,
+    visibility: row.visibility,
     title: row.title,
     repoOwner: row.repo_owner,
     repoName: row.repo_name,
@@ -205,21 +219,30 @@ export class SessionInboxStore {
       | "createdByUserIds"
       | "excludeAutomatedSessions"
       | "teamIds"
+      | "ownerFilter"
+      | "visibility"
+      | "scope"
       | "readScope"
       | "mode"
       | "viewerUserId"
     >
   ): { sql: string; params: unknown[] } {
-    const { conditions, params } = this.eligibility(options);
+    const { where, params } = buildSessionListPredicates(options);
     return {
       sql: `WITH RECURSIVE eligible_sessions AS (
               SELECT sessions.*, ${unreadSql("sessions")} AS unread
-              FROM sessions
+              -- Filter before viewer joins to keep shared predicates' columns unambiguous.
+              FROM (
+                SELECT * FROM sessions
+                ${where}
+              ) sessions
               LEFT JOIN users viewer ON viewer.id = ?
               LEFT JOIN session_read_states read_state
                 ON read_state.session_id = sessions.id
                AND read_state.user_id = viewer.id
-              WHERE ${conditions.join(" AND ")}
+              WHERE sessions.status != 'archived'
+                AND sessions.root_session_id IS NOT NULL
+                ${options.excludeAutomatedSessions ? "AND sessions.spawn_source NOT IN ('automation', 'github-bot')" : ""}
             ),
             -- Filtering can hide an ancestor. Re-root each resulting visible subtree
             -- while retaining the persisted root for uninterrupted lineages.
@@ -259,39 +282,8 @@ export class SessionInboxStore {
               FROM effective_sessions
               GROUP BY effective_root_session_id
             )`,
-      params: [options.viewerUserId, ...params],
+      params: [...params, options.viewerUserId],
     };
-  }
-
-  private eligibility(
-    options: Pick<
-      ListSessionInboxOptions,
-      "createdByUserIds" | "excludeAutomatedSessions" | "teamIds" | "readScope" | "mode"
-    >
-  ): { conditions: string[]; params: unknown[] } {
-    const conditions = ["sessions.status != 'archived'", "sessions.root_session_id IS NOT NULL"];
-    const params: unknown[] = [];
-    if (options.excludeAutomatedSessions) {
-      conditions.push("sessions.spawn_source NOT IN ('automation', 'github-bot')");
-    }
-    if (options.createdByUserIds?.length) {
-      conditions.push(
-        `sessions.user_id IN (${options.createdByUserIds.map(() => "?").join(", ")})`
-      );
-      params.push(...options.createdByUserIds);
-    }
-    if (options.teamIds?.length) {
-      conditions.push(`sessions.owner_team_id IN (${options.teamIds.map(() => "?").join(", ")})`);
-      params.push(...options.teamIds);
-    }
-    if (options.readScope.kind !== "internal") {
-      const visibility = visibleSessionsPredicate("sessions", options.readScope, {
-        mode: options.mode,
-      });
-      conditions.push(visibility.sql);
-      params.push(...visibility.params);
-    }
-    return { conditions, params };
   }
 
   /** Group ordered SQL rows into complete lineages and derive cursor metadata. */
@@ -322,7 +314,7 @@ export class SessionInboxStore {
   /** Replace selected D1 rows with their metadata-enriched list items. */
   private assemblePage(
     page: InboxPageData,
-    sessionsById: Map<string, SessionInboxSession>
+    sessionsById: Map<string, ScopedInboxSession>
   ): ListSessionInboxResult {
     const items = page.roots.map(([rootId, lineage]) => {
       const rootRow = lineage.find(({ id }) => id === rootId) ?? lineage[0];

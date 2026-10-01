@@ -8,7 +8,6 @@ import pytest
 from modal.exception import NotFoundError as ModalNotFoundError
 from modal.exception import SandboxTimeoutError
 from modal.exception import TimeoutError as ModalTimeoutError
-from modal_proto.task_command_router_pb2 import TaskExecStartRequest
 
 from sandbox_runtime.docker_control import CONTROL_TIMEOUT_SECONDS, PREPARATION_TIMEOUT_SECONDS
 from sandbox_runtime.types import SandboxStatus
@@ -18,6 +17,7 @@ from src.sandbox.manager import (
     SandboxHandle,
     SandboxManager,
 )
+from tests.modal_sdk_contract import sandbox_exec_request, snapshot_filesystem_request
 
 
 @pytest.mark.asyncio
@@ -107,6 +107,7 @@ async def test_take_snapshot_passes_explicit_timeout():
 
     assert image_id == "im-session"
     snapshot_filesystem.assert_not_called()
+    snapshot_filesystem_request(**snapshot_filesystem.aio.await_args.kwargs)
     snapshot_filesystem.aio.assert_awaited_once_with(timeout=SNAPSHOT_FILESYSTEM_TIMEOUT_SECONDS)
 
 
@@ -152,7 +153,9 @@ async def test_unknown_backend_tag_is_explicitly_rejected(monkeypatch):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("budget, expected", [(179.8, 179), (500, 300)])
+@pytest.mark.parametrize(
+    "budget, expected", [(1, 1), (1.9, 1), (179.8, 179), (300, 300), (500, 300)]
+)
 async def test_take_snapshot_bounds_whole_second_timeout(budget, expected):
     snapshot_filesystem = _async_method(SimpleNamespace(object_id="im-session"))
     handle = SandboxHandle(
@@ -164,6 +167,7 @@ async def test_take_snapshot_bounds_whole_second_timeout(budget, expected):
 
     await SandboxManager().take_snapshot(handle, timeout_seconds=budget)
 
+    snapshot_filesystem_request(**snapshot_filesystem.aio.await_args.kwargs)
     snapshot_filesystem.aio.assert_awaited_once_with(timeout=expected)
 
 
@@ -299,27 +303,31 @@ async def test_vm_capture_requires_docker_preparation(exit_code):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("budget", [300, 166, 165.5, 10])
-async def test_vm_capture_exec_timeout_is_sdk_compatible_and_within_budget(budget):
+@pytest.mark.parametrize("budget", [500, 300, 166, 165.5, 10, 1.5])
+async def test_vm_capture_exec_timeout_is_sdk_compatible_and_within_budget(monkeypatch, budget):
+    monkeypatch.setattr(
+        "src.sandbox.manager.time", SimpleNamespace(time=lambda: 1000, monotonic=lambda: 0)
+    )
     execute = _async_method(SimpleNamespace(wait=_async_method(0)))
+    snapshot = _async_method(SimpleNamespace(object_id="im-vm"))
     handle = SandboxHandle(
         sandbox_id="sb-vm",
         sandbox_backend="modal-vm",
         status=SandboxStatus.READY,
         created_at=0,
-        modal_sandbox=SimpleNamespace(
-            exec=execute,
-            snapshot_filesystem=_async_method(SimpleNamespace(object_id="im-vm")),
-        ),
+        modal_sandbox=SimpleNamespace(exec=execute, snapshot_filesystem=snapshot),
     )
 
     await SandboxManager().take_snapshot(handle, timeout_seconds=budget)
 
-    args = execute.aio.call_args.args
-    timeout = execute.aio.call_args.kwargs["timeout"]
-    TaskExecStartRequest(command_args=list(args), timeout_secs=timeout)
+    sandbox_exec_request(*execute.aio.await_args.args, **execute.aio.await_args.kwargs)
+    timeout = execute.aio.await_args.kwargs["timeout"]
     assert type(timeout) is int
     assert timeout == min(int(budget), int(CONTROL_TIMEOUT_SECONDS))
+    snapshot_filesystem_request(**snapshot.aio.await_args.kwargs)
+    snapshot.aio.assert_awaited_once_with(
+        timeout=min(int(budget), SNAPSHOT_FILESYSTEM_TIMEOUT_SECONDS)
+    )
 
 
 def test_vm_preparation_deadline_fits_capture_budget():
@@ -336,8 +344,8 @@ def test_vm_preparation_deadline_fits_capture_budget():
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("elapsed", [9, 10])
-async def test_vm_preparation_consumes_capture_budget(monkeypatch, elapsed):
+@pytest.mark.parametrize("elapsed, expected", [(0.5, 9), (8.9, 1), (9, 1), (9.1, None), (10, None)])
+async def test_vm_preparation_consumes_capture_budget(monkeypatch, elapsed, expected):
     clock = SimpleNamespace(time=lambda: 1000, monotonic=lambda: 0)
     monkeypatch.setattr("src.sandbox.manager.time", clock)
 
@@ -357,10 +365,11 @@ async def test_vm_preparation_consumes_capture_budget(monkeypatch, elapsed):
             exec=_async_method(SimpleNamespace(wait=wait)), snapshot_filesystem=snapshot
         ),
     )
-    if elapsed == 10:
+    if expected is None:
         with pytest.raises(TimeoutError):
             await SandboxManager().take_snapshot(handle, timeout_seconds=10)
         snapshot.aio.assert_not_awaited()
     else:
         await SandboxManager().take_snapshot(handle, timeout_seconds=10)
-        snapshot.aio.assert_awaited_once_with(timeout=1)
+        snapshot_filesystem_request(**snapshot.aio.await_args.kwargs)
+        snapshot.aio.assert_awaited_once_with(timeout=expected)

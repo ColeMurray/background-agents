@@ -15,6 +15,8 @@ import type { ModalClient, ModalBackend, CreateImageBuildSandboxResponse } from 
 import type { SandboxSettings } from "@open-inspect/shared/types/integrations";
 import type { CorrelationContext } from "../../logger";
 import { supportsConfigurableSandboxTimeout } from "@open-inspect/shared/types/integrations";
+import type { SourceControlProviderName } from "../../source-control";
+import { scmCloneIdentity, type ScmCloneIdentity } from "../sandbox-env";
 import {
   DEFAULT_SANDBOX_TIMEOUT_SECONDS,
   PrebuiltImageUnavailableError,
@@ -39,6 +41,14 @@ import {
   type StopResult,
 } from "../provider";
 
+/** Preserve typed VM lookup details separately from ambiguous-launch classification. */
+export function modalVmAllocationDetail(error: unknown): string | undefined {
+  const cause = error instanceof SandboxProviderError ? error.cause : error;
+  if (cause instanceof ModalVmStartupError) return cause.outcome;
+  if (cause instanceof ModalApiError) return cause.detail;
+  return undefined;
+}
+
 interface StartModalImageBuildConfig {
   buildId: string;
   providerSessionId: string;
@@ -46,11 +56,8 @@ interface StartModalImageBuildConfig {
   correlation?: CorrelationContext;
 }
 
-/** Modal extends the shared trigger contract with explicit SCM clone identity. */
 export interface ModalImageBuildTriggerConfig extends ImageBuildProviderTriggerConfig {
   resources?: Pick<SandboxSettings, "cpuCores" | "memoryMib">;
-  cloneHost?: string;
-  cloneUsername?: string;
 }
 
 export interface TerminateModalImageBuildConfig {
@@ -88,7 +95,7 @@ export interface ModalImageBuildProvider {
  * @example
  * ```typescript
  * const client = createModalClient(secret, workspace, environmentWebSuffix);
- * const provider = new ModalSandboxProvider(client, "modal");
+ * const provider = new ModalSandboxProvider(client, "modal", "github");
  *
  * try {
  *   const result = await provider.createSandbox(config);
@@ -181,11 +188,15 @@ export class ModalSandboxProvider implements SandboxProvider, ModalImageBuildPro
     return deadline;
   }
 
+  private readonly scmIdentity: ScmCloneIdentity;
+
   constructor(
     private readonly client: ModalClient,
-    backend: ModalBackend
+    backend: ModalBackend,
+    scmProvider: SourceControlProviderName
   ) {
     this.name = backend;
+    this.scmIdentity = scmCloneIdentity(scmProvider);
     this.capabilities = {
       supportsSandboxTimeout: supportsConfigurableSandboxTimeout(this.name),
       supportsSnapshots: true,
@@ -218,6 +229,7 @@ export class ModalSandboxProvider implements SandboxProvider, ModalImageBuildPro
           provider: config.provider,
           model: config.model,
           userEnvVars: config.userEnvVars,
+          scmIdentity: this.scmIdentity,
           prebuiltImageId: config.prebuiltImageId,
           prebuiltImageSha: config.prebuiltImageSha,
           timeoutSeconds,
@@ -265,6 +277,7 @@ export class ModalSandboxProvider implements SandboxProvider, ModalImageBuildPro
       const result = await this.client.restoreSandbox(
         {
           snapshotImageId: config.snapshotImageId,
+          scmIdentity: this.scmIdentity,
           launchDeadlineAtMs,
           sessionId: config.sessionId,
           sandboxId: config.sandboxId,
@@ -440,9 +453,8 @@ export class ModalSandboxProvider implements SandboxProvider, ModalImageBuildPro
           scopeId: config.scopeId,
           buildId: config.buildId,
           repositories: config.repositories,
+          scmIdentity: this.scmIdentity,
           cloneToken: config.cloneToken,
-          ...(config.cloneHost ? { cloneHost: config.cloneHost } : {}),
-          ...(config.cloneUsername ? { cloneUsername: config.cloneUsername } : {}),
           callbackUrl: config.callbackUrl,
           failureCallbackUrl: config.failureCallbackUrl,
           userEnvVars: config.userEnvVars,
@@ -619,7 +631,8 @@ export class ModalSandboxProvider implements SandboxProvider, ModalImageBuildPro
  */
 export function createModalProvider(
   client: ModalClient,
-  backend: ModalBackend
+  backend: ModalBackend,
+  scmProvider: SourceControlProviderName
 ): ModalSandboxProvider {
-  return new ModalSandboxProvider(client, backend);
+  return new ModalSandboxProvider(client, backend, scmProvider);
 }

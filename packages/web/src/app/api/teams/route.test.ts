@@ -29,6 +29,16 @@ describe("Teams settings list proxy", () => {
     expect(controlPlaneUserFetch).toHaveBeenCalledTimes(1);
   });
 
+  it("preserves server-authorized archived memberships for Settings and restore", async () => {
+    const teams = [{ id: "team_design", archivedAt: 1, capabilities: { canArchive: true } }];
+    vi.mocked(controlPlaneUserFetch).mockResolvedValue(Response.json({ teams }));
+    const result = await GET(new NextRequest("http://localhost/api/teams"));
+    expect(await result.json()).toEqual({ teams });
+    expect(controlPlaneUserFetch).toHaveBeenCalledWith(
+      "/teams?membership=all&includeArchived=true"
+    );
+  });
+
   it("uses memberships when the all-teams route denies a lead without sessions.read", async () => {
     vi.mocked(controlPlaneUserFetch)
       .mockResolvedValueOnce(Response.json({ error: "Forbidden" }, { status: 403 }))

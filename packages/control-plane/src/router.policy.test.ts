@@ -15,12 +15,20 @@ function routeFor(method: string, path: string) {
 }
 
 describe("route policy table", () => {
+  it("does not expose a member-facing team activity route", () => {
+    expect(routeFor("GET", "/teams/team-1/activity")).toBeUndefined();
+    expect(routeFor("GET", "/audit-events")?.authorization).toMatchObject({
+      allOf: [{ kind: "permission", permission: "workspace.audit.read" }],
+      service: { kind: "deny" },
+    });
+  });
+
   it("publishes the complete canonical route catalog", () => {
-    expect(routes).toHaveLength(199);
+    expect(routes).toHaveLength(203);
 
     const paths = routes.map((route) => route.path);
-    expect(new Set(paths).size).toBe(151);
-    expect(new Set(routes.map((route) => `${route.method}:${route.path}`)).size).toBe(199);
+    expect(new Set(paths).size).toBe(154);
+    expect(new Set(routes.map((route) => `${route.method}:${route.path}`)).size).toBe(203);
   });
 
   it("gates run analytics with analytics.read", () => {
@@ -28,6 +36,82 @@ describe("route policy table", () => {
     expect(route?.authorization).toMatchObject({
       kind: "active-user",
       allOf: [{ permission: "analytics.read" }],
+    });
+  });
+
+  it("gates collaborator candidates on always-enforced human session management", () => {
+    expect(routeFor("GET", "/sessions/session-1/collaborator-candidates")).toMatchObject({
+      authentication: { kind: "user" },
+      authorization: {
+        kind: "active-user",
+        allOf: [
+          {
+            kind: "session",
+            action: "manageCollaborators",
+            sessionIdParam: "id",
+            enforceAlways: true,
+          },
+        ],
+        service: { kind: "deny" },
+        auditAllowed: false,
+      },
+      supportedScmProviders: "all",
+      cacheControl: "private, no-store",
+    });
+  });
+
+  it("requires human team membership and session read permission for team sessions", () => {
+    expect(routeFor("GET", "/teams/team-1/sessions")).toMatchObject({
+      authentication: { kind: "user" },
+      authorization: {
+        kind: "active-user",
+        allOf: [
+          { kind: "team", teamIdParam: "id", need: "member" },
+          { kind: "permission", permission: "sessions.read" },
+        ],
+        service: { kind: "deny" },
+        auditAllowed: false,
+      },
+      cacheControl: "private, no-store",
+    });
+  });
+
+  it("requires target-aware member removal admission", () => {
+    expect(routeFor("DELETE", "/teams/team-1/members/user-1")?.authorization).toMatchObject({
+      allOf: [{ kind: "team", need: "removeMember", targetUserIdParam: "userId" }],
+      service: { kind: "deny" },
+      auditAllowed: true,
+    });
+  });
+
+  it.each(["/teams/team-1", "/teams/team-1/members"])(
+    "does not audit allowed directory reads at %s",
+    (path) => {
+      expect(routeFor("GET", path)?.authorization).toMatchObject({ auditAllowed: false });
+    }
+  );
+
+  it("still audits allowed team capability writes", () => {
+    expect(routeFor("PATCH", "/teams/team-1")?.authorization).toMatchObject({
+      allOf: [{ kind: "team", need: "canEditMetadata" }],
+      auditAllowed: true,
+    });
+  });
+
+  it.each([
+    ["GET", "/teams/team-1/secrets"],
+    ["PUT", "/teams/team-1/secrets"],
+    ["DELETE", "/teams/team-1/secrets/TOKEN"],
+  ])("requires human team secret management for %s %s", (method, path) => {
+    expect(routeFor(method, path)).toMatchObject({
+      authentication: { kind: "user" },
+      authorization: {
+        kind: "active-user",
+        allOf: [{ kind: "team", teamIdParam: "id", need: "canManageSecrets" }],
+        service: { kind: "deny" },
+      },
+      supportedScmProviders: "all",
+      cacheControl: "private, no-store",
     });
   });
 

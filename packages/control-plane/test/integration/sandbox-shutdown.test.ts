@@ -5,10 +5,14 @@ import {
   DEFAULT_LIFECYCLE_CONFIG,
   SandboxLifecycleManager,
 } from "../../src/sandbox/lifecycle/manager";
+import { SandboxAccess } from "../../src/sandbox/lifecycle/sandbox-access";
 import type { RestoreConfig, RestoreResult, SandboxProvider } from "../../src/sandbox/provider";
+import { providerResumesAfterStop } from "../../src/sandbox/provider";
+import { createLogger } from "../../src/logger";
 import { EventRepository } from "../../src/session/event-repository";
 import { MessageFailureService } from "../../src/session/message-failure-service";
 import { MessageRepository } from "../../src/session/message-repository";
+import { SessionMessengerImpl } from "../../src/session/messenger";
 import { SandboxRuntimeEventHandler } from "../../src/session/sandbox-events/runtime.handler";
 import { SandboxShutdownCoordinator } from "../../src/session/sandbox-shutdown";
 import {
@@ -77,6 +81,65 @@ async function readShutdown(stub: DurableObjectStub): Promise<Record<string, unk
 }
 
 describe("sandbox graceful shutdown wiring", () => {
+  it("retires access before detaching through the assembled shutdown callback without manager forwarding", async () => {
+    const { stub } = await initNamedSession(`shutdown-access-composition-${Date.now()}`);
+    await seedSandboxAuth(stub, { authToken: AUTH_TOKEN, sandboxId: SANDBOX_ID, status: "ready" });
+    await seedShutdown(stub, {
+      generationReady: true,
+      runtimeReady: true,
+      lifecyclePolicy: "confirmed",
+      protocolVersion: 1,
+    });
+
+    await runInSessionDO(stub, async (instance) => {
+      const { sandboxRepository, lifecycleManager, wsManager } = componentsOf(instance);
+      for (const kind of ["codeServer", "vnc", "ttyd"] as const) {
+        await sandboxRepository.updateSandboxAccess(kind, `https://${kind}.example`, "secret");
+      }
+      sandboxRepository.updateSandboxTunnelUrls({ "8080": "https://port.example" });
+      const pair = new WebSocketPair();
+      wsManager.acceptAndSetSandboxSocket(pair[1], SANDBOX_ID);
+      pair[0].accept();
+      const clear = vi.spyOn(sandboxRepository, "clearSandboxAccess");
+      const clearTunnels = vi.spyOn(sandboxRepository, "clearSandboxTunnelUrls");
+      const broadcast = vi.spyOn(SessionMessengerImpl.prototype, "broadcast");
+      const detach = vi.spyOn(wsManager, "detachSandboxSocket");
+      const close = vi.spyOn(wsManager, "close");
+      try {
+        expect("retireShutdownAccess" in lifecycleManager).toBe(false);
+        // With no provider handle, emergency shutdown retires access without outbound provider I/O.
+        await lifecycleManager.terminateUnresponsiveSandbox("stop_send_failed");
+
+        expect(clear.mock.calls).toEqual([["codeServer"], ["vnc"], ["ttyd"]]);
+        expect(clearTunnels).toHaveBeenCalledOnce();
+        const notificationIndex = broadcast.mock.calls.findIndex(
+          ([message]) => message.type === "sandbox_access_changed"
+        );
+        expect(notificationIndex).toBeGreaterThanOrEqual(0);
+        const notificationOrder = broadcast.mock.invocationCallOrder[notificationIndex];
+        expect(
+          Math.max(...clear.mock.invocationCallOrder, ...clearTunnels.mock.invocationCallOrder)
+        ).toBeLessThan(notificationOrder);
+        expect(notificationOrder).toBeLessThan(detach.mock.invocationCallOrder[0]);
+        expect(detach).toHaveBeenCalledExactlyOnceWith(1000, "Sandbox state preserved");
+        expect(close).toHaveBeenCalledExactlyOnceWith(pair[1], 1000, "Sandbox state preserved");
+        expect(sandboxRepository.getSandbox()).toMatchObject({
+          code_server_url: null,
+          code_server_password: null,
+          vnc_url: null,
+          vnc_password: null,
+          ttyd_url: null,
+          ttyd_token: null,
+          tunnel_urls: null,
+          active_socket_id: "",
+        });
+      } finally {
+        vi.restoreAllMocks();
+        pair[0].close();
+      }
+    });
+  });
+
   it("holds an interrupted legacy VM capture without recapture or retirement", async () => {
     const { stub } = await initNamedSession(`vm-capture-receipt-${Date.now()}`);
     await seedSandboxAuth(stub, { authToken: AUTH_TOKEN, sandboxId: SANDBOX_ID, status: "ready" });
@@ -663,6 +726,21 @@ describe("sandbox graceful shutdown wiring", () => {
         },
       };
       const sandbox = componentsOf(instance).sandboxRepository;
+      const broadcaster = { broadcast: () => undefined };
+      const sockets = {
+        getSandboxWebSocket: () => null,
+        getConnectedClientCount: () => 0,
+        sendToSandbox: () => false,
+        detachSandboxWebSocket: () => undefined,
+      };
+      const log = createLogger("shutdown-test");
+      const access = new SandboxAccess({
+        storage: sandbox,
+        broadcaster,
+        sockets,
+        canResumeAfterStop: () => providerResumesAfterStop(provider),
+        getLogger: () => log,
+      });
       const shutdown = new SandboxShutdownCoordinator({
         store: new SandboxShutdownRepository(durableState.storage.sql),
         provider,
@@ -670,14 +748,14 @@ describe("sandbox graceful shutdown wiring", () => {
         session: {
           getSession: () => ({ id: "session-1", session_name: "legacy-session" }),
         },
-        messenger: { broadcast: () => undefined },
+        messenger: broadcaster,
         background: {
           submit: (task: () => Promise<void>) => {
             void task();
           },
         },
         onLifecycleChange: async () => undefined,
-        retireAccess: () => undefined,
+        retireAccess: () => access.retireShutdownAccess(),
       } as never);
       const manager = new SandboxLifecycleManager(
         provider,
@@ -687,15 +765,12 @@ describe("sandbox graceful shutdown wiring", () => {
           getSessionRepositories: () => [],
           getUserEnvVars: async () => undefined,
         } as never,
-        { broadcast: () => undefined },
-        {
-          getConnectedClientCount: () => 0,
-          sendToSandbox: () => false,
-          detachSandboxWebSocket: () => undefined,
-        } as never,
+        broadcaster,
+        sockets,
         { schedule: async () => undefined, cancel: async () => undefined } as never,
         { generateId: () => "generated-id" },
         shutdown,
+        access,
         {
           ...DEFAULT_LIFECYCLE_CONFIG,
           controlPlaneUrl: "https://control-plane.test",

@@ -74,15 +74,6 @@ export class TeamStore {
     return rows.results.map(toTeam);
   }
 
-  async isActive(id: string): Promise<boolean> {
-    return (
-      (await this.db
-        .prepare("SELECT 1 AS ok FROM teams WHERE id = ? AND archived_at IS NULL")
-        .bind(id)
-        .first()) !== null
-    );
-  }
-
   private insertStatement(
     input: {
       slug: string;

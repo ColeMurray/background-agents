@@ -45,6 +45,16 @@ describe("SandboxShutdownRepository", () => {
     fixture.db.close();
   });
 
+  it.each([true, false])("round-trips capture failure provenance (%s)", (captureFailure) => {
+    const fixture = repository();
+    const failed = record({ phase: "unknown", captureFailure });
+
+    fixture.repository.write(failed);
+
+    expect(fixture.repository.read()).toEqual(failed);
+    fixture.db.close();
+  });
+
   it("atomically replaces the singleton while preserving a verified receipt", () => {
     const fixture = repository();
     fixture.repository.write(record());

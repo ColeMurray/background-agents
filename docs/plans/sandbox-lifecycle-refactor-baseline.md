@@ -72,7 +72,11 @@ reproducers/issues before behavior changes:
 
 - Fresh and restore access use `updateSandboxAccess` / `updateSandboxTunnelUrls` without generation
   guards after encryption/other awaits; a replacement can receive the old artifact. The T1 real-SQL
-  tests intentionally characterize only the stronger resume/bridge path.
+  tests intentionally characterize only the stronger resume/bridge path. T3 adds the real-SQL
+  reproducer "characterizes the unguarded fresh/restore artifact write across replacement":
+  encryption yields, a new identity is reserved, then the old URL and encrypted secret land on the
+  new row. The access extraction deliberately retains this behavior; a generation-guard fix is
+  separate work.
 - `connection-authenticator.ts` rechecks identity/credentials after `scheduleDisconnectCheck`, but
   not status; a same-generation stop during attachment can pass the final check. COL-238 proposes
   addressing this but is not landed here.
@@ -83,6 +87,23 @@ reproducers/issues before behavior changes:
   equal-valued fields. T1 covers an inconclusive foreground lookup handing its token to an
   equal-valued bridge observation; an old-finalizer/new-auth overlap still lacks coverage. Treat a
   new safety assertion failing on this checkout as a separate bug, not a refactor regression.
+- T3 characterizes another existing error boundary: "holds saved resume when its terminal secret
+  read fails before startup is committed". A successful provider response followed by secret-read
+  failure still marks the attempt failed and holds saved recovery. This differs from
+  access-write/publication failures after committed recovery, which retain startup success. No
+  boundary was moved or fixed.
+- Retirement also retains the baseline's capability-based secret clearing rather than the stop
+  operation's intent. Destructive watchdog/rejection/discard paths on a resumable provider can keep
+  encrypted credentials. Independent synchronous clearing writes can partially fail, and shutdown's
+  clear/notify-before-detach sequence can skip detachment on an exception. Explicit intent, atomic
+  clearing and failure-independent detachment require a separate behavioral fix, not an extraction
+  claim. `sandbox-access.test.ts` records the inherited failure boundary, not a desired safety rule.
+- `providerResumesAfterStop` centralizes the original preserve-stop predicate; it does not check
+  `resumeSandbox` or authorize recovery. All shipped persistent-resume providers implement resume,
+  but mismatched provider objects remain possible. Adding that method check would change the
+  inherited stop/credential policy. Saved retained recovery without the method already holds rather
+  than spawning fresh; ordinary resume retains its separate fresh fallback. A stronger provider
+  contract must preserve that distinction in separately approved work.
 
 ## Commands and results
 

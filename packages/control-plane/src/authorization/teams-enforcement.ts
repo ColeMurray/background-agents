@@ -1,5 +1,5 @@
 import type { PermissionId } from "@open-inspect/shared/rbac";
-import type { SessionAction } from "@open-inspect/shared";
+import type { SessionAccessRow, SessionAction } from "@open-inspect/shared";
 
 export type TeamsEnforcementMode = "off" | "shadow" | "on";
 
@@ -7,6 +7,17 @@ export function parseTeamsEnforcementMode(value: string | undefined): TeamsEnfor
   if (value === undefined || value === "") return "shadow";
   if (value === "off" || value === "shadow" || value === "on") return value;
   throw new Error(`Invalid TEAMS_ENFORCEMENT: ${value}`);
+}
+
+/** Private access and team-owned actions are never gated by the rollout mode. */
+export function resolverDecides(
+  mode: TeamsEnforcementMode,
+  row: Pick<SessionAccessRow, "ownerTeamId" | "visibility">,
+  action: SessionAction
+): boolean {
+  return (
+    mode === "on" || row.visibility === "private" || (row.ownerTeamId !== null && action !== "read")
+  );
 }
 
 export function legacyPermissionForAction(action: SessionAction): PermissionId {
@@ -20,7 +31,6 @@ export function legacyPermissionForAction(action: SessionAction): PermissionId {
     case "sandbox":
       return "sessions.sandbox_access";
     case "lifecycle":
-    case "move":
     case "changeVisibility":
     case "manageCollaborators":
       return "sessions.lifecycle";

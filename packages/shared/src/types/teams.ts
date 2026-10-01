@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { isEnvironmentId } from "./environments";
+import { sessionListRepositorySchema } from "./repositories";
 
 export const teamRoleSchema = z.enum(["lead", "member"]);
 export type TeamRole = z.infer<typeof teamRoleSchema>;
@@ -106,4 +107,74 @@ export const teamMemberSchema = teamMembershipSchema.extend({
 
 export const meTeamsResponseSchema = z.object({
   teams: z.array(teamResponseSchema.extend({ role: teamRoleSchema })),
+  // Older control-plane responses omit the setting during independent rollouts.
+  requireTeamOnCreate: z.boolean().default(false),
 });
+
+// Session modules depend on team settings; keep this wire schema cycle-free.
+const teamInboxSessionSchema = z.object({
+  ownerTeamId: z.string().nullable(),
+  visibility: sessionVisibilitySchema,
+  id: z.string(),
+  title: z.string().nullable(),
+  repoOwner: z.string().nullable(),
+  repoName: z.string().nullable(),
+  baseBranch: z.string().nullable(),
+  status: z.enum(["created", "active", "completed", "failed", "archived", "cancelled"]),
+  parentSessionId: z.string().nullable(),
+  spawnSource: z.enum(["user", "agent", "automation", "github-bot", "linear-bot", "slack-bot"]),
+  environmentId: z.string().nullable(),
+  createdAt: z.number(),
+  updatedAt: z.number(),
+  repositories: z.array(sessionListRepositorySchema).optional(),
+  pullRequestSummary: z
+    .object({
+      total: z.number(),
+      open: z.number(),
+      draft: z.number(),
+      merged: z.number(),
+      closed: z.number(),
+    })
+    .optional(),
+  readState: z.union([
+    z.object({ latestMessageId: z.null(), unread: z.literal(false), version: z.number() }),
+    z.object({ latestMessageId: z.string(), unread: z.boolean(), version: z.number() }),
+  ]),
+  capabilities: z.object({
+    canRead: z.boolean(),
+    canCollaborate: z.boolean(),
+    canManageLifecycle: z.boolean(),
+    canDelete: z.boolean(),
+    canSandbox: z.boolean(),
+    canManageCollaborators: z.boolean(),
+    canChangeVisibility: z.boolean(),
+  }),
+});
+const teamInboxItemSchema = z.object({
+  rootSession: teamInboxSessionSchema,
+  descendantSessions: z.array(teamInboxSessionSchema),
+});
+const teamInboxPageSchema = z.discriminatedUnion("hasMore", [
+  z.object({
+    items: z.array(teamInboxItemSchema),
+    hasMore: z.literal(true),
+    nextCursor: z.string().min(1),
+  }),
+  z.object({
+    items: z.array(teamInboxItemSchema),
+    hasMore: z.literal(false),
+    nextCursor: z.null(),
+  }),
+]);
+
+/** A bucket page when requested, otherwise the first page of all inbox buckets. */
+export const teamSessionsResponseSchema = z.union([
+  teamInboxPageSchema,
+  z.object({
+    categories: z.record(
+      z.enum(["needs_attention", "in_progress", "finished"]),
+      teamInboxPageSchema
+    ),
+  }),
+]);
+export type TeamSessionsResponse = z.infer<typeof teamSessionsResponseSchema>;

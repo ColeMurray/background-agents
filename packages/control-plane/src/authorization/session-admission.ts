@@ -1,6 +1,7 @@
 import {
   checkSessionAccess,
   sessionCapabilities,
+  type AccessDenialReason,
   type SessionAccessRow,
   type SessionAction,
   type SessionCapabilities,
@@ -17,6 +18,7 @@ import { auditPrivateSessionBreakGlass } from "./request-audit";
 import {
   legacyPermissionForAction,
   parseTeamsEnforcementMode,
+  resolverDecides,
   type TeamsEnforcementMode,
 } from "./teams-enforcement";
 
@@ -44,31 +46,33 @@ export function viewerFromContext(
   };
 }
 
-/** Existing non-private routes keep legacy permissions while enforcement is off or shadowed. */
+/** Preserve legacy read visibility without relaxing team-owned actions. */
 export function effectiveSessionCapabilities(
   viewer: SessionViewer,
   row: SessionAccessRow,
   mode: TeamsEnforcementMode
 ): SessionCapabilities {
   const capabilities = sessionCapabilities(viewer, row);
-  if (viewer.kind !== "user" || row.visibility === "private" || mode === "on") {
+  if (viewer.kind !== "user" || resolverDecides(mode, row, "read")) {
     return capabilities;
   }
-  const has = (action: SessionAction) =>
-    viewer.permissions.includes(legacyPermissionForAction(action));
+  const has = (action: SessionAction, resolved: boolean) =>
+    resolverDecides(mode, row, action)
+      ? resolved
+      : viewer.permissions.includes(legacyPermissionForAction(action));
   return {
     ...capabilities,
-    canRead: has("read"),
-    canCollaborate: has("collaborate"),
-    canManageLifecycle: has("lifecycle"),
-    canDelete: has("delete"),
-    canSandbox: has("sandbox"),
+    canRead: has("read", capabilities.canRead),
+    canCollaborate: has("collaborate", capabilities.canCollaborate),
+    canManageLifecycle: has("lifecycle", capabilities.canManageLifecycle),
+    canDelete: has("delete", capabilities.canDelete),
+    canSandbox: has("sandbox", capabilities.canSandbox),
   };
 }
 
 export type SessionAdmissionOutcome =
   | { kind: "not_found" }
-  | { kind: "action_denied"; reason: string }
+  | { kind: "action_denied"; reason: AccessDenialReason }
   | { kind: "allowed"; legacyPermission: PermissionId | null };
 
 /** Resolve one D1 session; a null slot is used by body-ID batches, not item routes. */
@@ -84,12 +88,12 @@ export async function evaluateSessionAdmission(
   const row = await new SessionIndexStore(ctx.db).get(sessionId);
   if (!row) return { kind: "not_found" };
 
-  if (mode === "off" && row.visibility !== "private") {
+  if (mode === "off" && !resolverDecides(mode, row, action)) {
     return { kind: "allowed", legacyPermission: legacyPermissionForAction(action) };
   }
 
   const memberships =
-    mode === "off" || !ctx.authorization
+    (mode === "off" && row.ownerTeamId === null) || !ctx.authorization
       ? new Map<string, TeamRole>()
       : (ctx.sessionMemberships ??= await new TeamMembershipStore(ctx.db).listForUser(
           ctx.authorization.userId
@@ -116,7 +120,7 @@ export async function evaluateSessionAdmission(
 
   // The signed route grant authorizes actorless actions; the service resolver only checks visibility.
   const decision = viewer.kind === "service" ? null : checkSessionAccess(viewer, accessRow, action);
-  if ((mode === "on" || row.visibility === "private") && decision && !decision.allowed) {
+  if (resolverDecides(mode, row, action) && decision && !decision.allowed) {
     return { kind: "action_denied", reason: decision.reason };
   }
   if (mode === "shadow") {
@@ -132,7 +136,6 @@ export async function evaluateSessionAdmission(
   }
   return {
     kind: "allowed",
-    legacyPermission:
-      mode === "on" || row.visibility === "private" ? null : legacyPermissionForAction(action),
+    legacyPermission: resolverDecides(mode, row, action) ? null : legacyPermissionForAction(action),
   };
 }

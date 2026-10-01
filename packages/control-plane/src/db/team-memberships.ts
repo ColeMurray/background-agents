@@ -99,10 +99,10 @@ export class TeamMembershipStore {
     );
   }
 
-  async listMembersWithUsers(teamId: string) {
+  async listMembersWithUsers(teamId: string, { includeEmail }: { includeEmail: boolean }) {
     const rows = await this.db
       .prepare(
-        `SELECT m.*, u.display_name, u.email, u.avatar_url
+        `SELECT m.*, u.display_name, ${includeEmail ? "u.email" : "NULL AS email"}, u.avatar_url
       FROM team_memberships m JOIN users u ON u.id = m.user_id
       WHERE m.team_id = ? ORDER BY m.created_at, m.user_id`
       )
@@ -142,7 +142,7 @@ export class TeamMembershipStore {
     return result.meta.changes > 0;
   }
 
-  bindAddIfJoinable(teamId: string, userId: string): SqlStatement {
+  private bindAddIfJoinable(teamId: string, userId: string): SqlStatement {
     return this.db
       .prepare(
         `INSERT INTO team_memberships (team_id, user_id, role, source, created_at)

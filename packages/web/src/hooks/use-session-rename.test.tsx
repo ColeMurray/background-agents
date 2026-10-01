@@ -9,6 +9,9 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { SessionListSummary } from "@open-inspect/shared/types/sessions";
 import { buildSessionsPageKey, type SessionListResponse } from "@/lib/session-list";
 import { useSessionRename } from "./use-session-rename";
+import { toast } from "sonner";
+
+vi.mock("sonner", () => ({ toast: { error: vi.fn() } }));
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
@@ -56,6 +59,18 @@ afterEach(() => {
 });
 
 describe("useSessionRename", () => {
+  it("toasts the server reason_code and rolls back a denied rename", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => Response.json({ reason_code: "session_read_only" }, { status: 403 }))
+    );
+    const { result } = renderHook(() =>
+      useSessionRename({ sessionId: "denied-session", currentTitle: "Original" })
+    );
+    await act(async () => expect(await result.current.renameSession("Denied")).toBe(false));
+    expect(result.current.optimisticTitle).toBeUndefined();
+    expect(toast.error).toHaveBeenCalledWith("Failed to update session title (session_read_only)");
+  });
   it("serializes overlapping renames and ignores a stale failure", async () => {
     const firstPageKey = buildSessionsPageKey({ excludeStatus: "archived" });
     const secondPageKey = buildSessionsPageKey({ excludeStatus: "archived", offset: 50 });

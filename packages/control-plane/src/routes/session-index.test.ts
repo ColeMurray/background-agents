@@ -7,6 +7,7 @@ import { D1QueryParameterLimitError } from "../db/query-limits";
 import type { Env } from "../types";
 import type { Principal } from "../auth/principal";
 import { createTestEnv, TEST_BACKGROUND_TASK_CONTEXT } from "../router.test-support";
+import { SessionCollaboratorStore } from "../db/session-collaborators";
 
 const mockSessionIndexStore = {
   list: vi.fn(),
@@ -104,6 +105,9 @@ const listSession = {
 
 const inboxSession = {
   id: listSession.id,
+  ownerTeamId: listSession.ownerTeamId,
+  visibility: listSession.visibility,
+  userId: listSession.userId,
   title: listSession.title,
   repoOwner: listSession.repoOwner,
   repoName: listSession.repoName,
@@ -119,12 +123,16 @@ const inboxSession = {
 
 const emptyInboxResult = { items: [], hasMore: false, nextCursor: null };
 
-async function listInbox(query = ""): Promise<Response> {
+async function listInbox(
+  query = "",
+  ctx = createCtx(USER_PRINCIPAL) as UserRouteContext,
+  env = createEnv()
+): Promise<Response> {
   return handleListSessionInbox(
     new Request(`https://test.local/sessions/inbox${query}`),
-    createEnv(),
+    env,
     {},
-    createCtx(USER_PRINCIPAL) as UserRouteContext
+    ctx
   );
 }
 
@@ -410,7 +418,14 @@ describe("session index routes", () => {
   });
 
   it("projects inbox page and snapshot responses through their shared schemas", async () => {
-    const item = { rootSession: inboxSession, descendantSessions: [] };
+    const { userId: _userId, ...projectedSession } = inboxSession;
+    const item = {
+      rootSession: {
+        ...projectedSession,
+        capabilities: expect.objectContaining({ canRead: true, canDelete: true }),
+      },
+      descendantSessions: [],
+    };
     const storedItem = {
       rootSession: { ...inboxSession, providerAuth: [{ secret: "internal" }] },
       descendantSessions: [],
@@ -575,6 +590,163 @@ describe("session index routes", () => {
       expectedAction
     );
   });
+});
+
+describe("scoped inbox routes", () => {
+  beforeEach(() => {
+    vi.restoreAllMocks();
+    vi.clearAllMocks();
+    mockSessionIndexStore.listInbox.mockResolvedValue(emptyInboxResult);
+    mockSessionIndexStore.listInboxSnapshot.mockResolvedValue({
+      needs_attention: emptyInboxResult,
+      in_progress: emptyInboxResult,
+      finished: emptyInboxResult,
+    });
+  });
+
+  it.each(["", "category=finished&cursor=200:session-1&"])(
+    "passes scoped filters to snapshot and paged reads (%s)",
+    async (pagination) => {
+      const response = await listInbox(
+        `?${pagination}ownerFilter=participating&visibility=private&scope=workspace&teamIds[]=team_alpha`
+      );
+      expect(response.status).toBe(200);
+      const read = pagination
+        ? mockSessionIndexStore.listInbox
+        : mockSessionIndexStore.listInboxSnapshot;
+      expect(read).toHaveBeenCalledWith(
+        expect.objectContaining({
+          ownerFilter: "participating",
+          visibility: "private",
+          scope: "workspace",
+          teamIds: ["team_alpha"],
+          readScope: expect.objectContaining({ userId: "user-1" }),
+        })
+      );
+    }
+  );
+
+  it.each([
+    ["member", "member"],
+    ["viewer", "viewer"],
+    ["custom", null],
+  ] as const)("rejects all scope for %s", async (_roleName, roleKey) => {
+    const ctx = createCtx(USER_PRINCIPAL) as UserRouteContext;
+    ctx.authorization!.role.key = roleKey;
+    for (const query of ["?scope=all", "?category=finished&scope=all"]) {
+      const response = await listInbox(query, ctx);
+      expect(response.status).toBe(403);
+      await expect(response.json()).resolves.toEqual({ error: "Invalid scope" });
+    }
+    expect(mockSessionIndexStore.listInboxSnapshot).not.toHaveBeenCalled();
+    expect(mockSessionIndexStore.listInbox).not.toHaveBeenCalled();
+  });
+
+  it.each(["owner", "administrator"] as const)("allows all scope for %s", async (roleKey) => {
+    const ctx = createCtx(USER_PRINCIPAL) as UserRouteContext;
+    ctx.authorization!.role.key = roleKey;
+    expect((await listInbox("?category=finished&scope=all", ctx)).status).toBe(200);
+    expect(mockSessionIndexStore.listInbox).toHaveBeenCalledWith(
+      expect.objectContaining({ scope: "all" })
+    );
+  });
+
+  it.each(["started", "participating", "anyone"])(
+    "preserves creator-only automated exclusions when mine composes with %s",
+    async (ownerFilter) => {
+      expect((await listInbox(`?mine=true&ownerFilter=${ownerFilter}`)).status).toBe(200);
+      expect(mockSessionIndexStore.listInboxSnapshot).toHaveBeenCalledWith(
+        expect.objectContaining({
+          createdByUserIds: ["user-1"],
+          excludeAutomatedSessions: true,
+          ownerFilter,
+        })
+      );
+    }
+  );
+
+  it.each([
+    ["ownerFilter=mine", "Invalid ownerFilter"],
+    ["ownerFilter=", "Invalid ownerFilter"],
+    ["ownerFilter=started&ownerFilter=anyone", "Invalid ownerFilter"],
+    ["visibility=public", "Invalid visibility"],
+    ["visibility=", "Invalid visibility"],
+    ["visibility=team&visibility=workspace", "Invalid visibility"],
+    ["scope=team", "Invalid scope"],
+    ["scope=", "Invalid scope"],
+    ["scope=all&scope=workspace", "Invalid scope"],
+  ])("rejects invalid scoped query %s", async (query, message) => {
+    const response = await listInbox(`?${query}`);
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toEqual({ error: message });
+    expect(mockSessionIndexStore.listInboxSnapshot).not.toHaveBeenCalled();
+    expect(mockSessionIndexStore.listInbox).not.toHaveBeenCalled();
+  });
+
+  it.each(["off", "shadow", "on"] as const)(
+    "decorates snapshot and page roots and descendants with effective capabilities in %s",
+    async (mode) => {
+      const ctx = createCtx(USER_PRINCIPAL) as UserRouteContext;
+      ctx.authorization!.role.key = "member";
+      ctx.authorization!.permissions = [
+        "sessions.read",
+        "sessions.collaborate",
+        "sessions.sandbox_access",
+        "sessions.lifecycle",
+        "sessions.delete",
+      ];
+      const item = {
+        rootSession: { ...inboxSession, userId: "another-user", providerAuth: "secret" },
+        descendantSessions: [
+          {
+            ...inboxSession,
+            id: "private-child",
+            parentSessionId: inboxSession.id,
+            userId: "another-user",
+            visibility: "private",
+          },
+        ],
+      };
+      const page = { items: [item], hasMore: false, nextCursor: null };
+      mockSessionIndexStore.listInbox.mockResolvedValue(page);
+      mockSessionIndexStore.listInboxSnapshot.mockResolvedValue({
+        needs_attention: page,
+        in_progress: emptyInboxResult,
+        finished: emptyInboxResult,
+      });
+      vi.spyOn(SessionCollaboratorStore.prototype, "listForSessions").mockResolvedValue(
+        new Map([["private-child", ["user-1"]]])
+      );
+      const env = { ...createEnv(), TEAMS_ENFORCEMENT: mode };
+      const paged = await (await listInbox("?category=needs_attention", ctx, env)).json();
+      const snapshot = (await (await listInbox("", ctx, env)).json()) as {
+        categories: { needs_attention: unknown };
+      };
+      expect(paged).toEqual(snapshot.categories.needs_attention);
+      expect(paged).toMatchObject({
+        items: [
+          {
+            rootSession: {
+              capabilities: { canRead: true, canDelete: mode !== "on" },
+            },
+            descendantSessions: [
+              {
+                capabilities: {
+                  canRead: true,
+                  canCollaborate: true,
+                  canSandbox: true,
+                  canDelete: false,
+                  canManageCollaborators: false,
+                },
+              },
+            ],
+          },
+        ],
+      });
+      expect(JSON.stringify(paged)).not.toContain("providerAuth");
+      expect(JSON.stringify(paged)).not.toContain("userId");
+    }
+  );
 });
 
 describe("session discovery filters", () => {

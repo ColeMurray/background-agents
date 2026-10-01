@@ -12,22 +12,34 @@ Paths are relative to `packages/control-plane/src/`.
 
 - `sandbox/lifecycle/manager.ts` remains the public readiness, work-admission and recovery boundary.
   It selects startup mode, reserves generation/token identity, sequences input awaits, registers
-  pending handles, records recovery invocation, dispatches providers, claims results, rotates retry
-  identity and owns failure/breaker accounting.
+  pending handles through VM reconciliation, records recovery invocation, dispatches providers,
+  claims results, rotates retry identity and owns failure/breaker accounting.
 - `sandbox/lifecycle/launch-context.ts` owns environment reads, model/harness defaults, ordered
   repository fields, MCP/Slack lookup, persisted-setting normalization, timeout conversion, image
   scope selection, lookup/logging and explicitly requested best-effort invalidation.
 - `sandbox/lifecycle/image-selection.ts` remains the pure fingerprint, harness/runtime compatibility
   and provenance evaluator. Launch context reuses it rather than reimplementing policy.
+- `sandbox/lifecycle/sandbox-access.ts` owns artifact-write mechanics, terminal JWT signing/reuse,
+  retirement and access notifications. It has no lifecycle state or eligibility authority.
+- `sandbox/lifecycle/vm-startup-reconciliation.ts` owns pending-reference registration,
+  lost-response lookup recovery and bridge lookup, including all five interleaving-sensitive
+  bridge/auth fields. It reconciles an authorized attempt without owning startup admission or
+  shutdown/recovery policy.
+- `sandbox/lifecycle/allocation-cleanup.ts` owns stateless bounded late-result destruction,
+  rejected-cleanup retry rearming and matching-handle completion. Rejection/claim authority,
+  admission flags and prior-generation replacement retirement remain in the manager.
+- `sandbox/lifecycle/provider-stop.ts` owns the shared local stop bound, abort/timer mechanics and
+  explicit `confirmed`/`not_stopped` outcome contract, not either caller's retirement policy.
 - `session/sandbox-repository.ts` owns conditional SQL and encrypted access storage.
   `session/sandbox-shutdown.ts` and `sandbox-shutdown-repository.ts` own the durable
   shutdown/checkpoint protocol, receipts, holds, source retirement and recovery.
 - `session/components.ts` and `sandbox-lifecycle-adapters.ts` compose the existing graph. Consumer
-  ports remain in `sandbox/lifecycle/ports.ts`; consumers do not gain launch or shutdown internals.
+  ports remain in `sandbox/lifecycle/ports.ts`; consumers do not gain launch, access or shutdown
+  internals. Session access readers retain authentication/read eligibility and decryption rechecks.
 
-Access, VM reconciliation, allocation cleanup and watchdog effects remain manager responsibilities
-until their serial extraction increments land. Each increment must integrate before its successor;
-the manager is not intended to become a tiny facade or lose lifecycle arbitration.
+Watchdog effects remain manager responsibilities until their serial extraction increment lands. Each
+increment must integrate before its successor; the manager is not intended to become a tiny facade
+or lose lifecycle arbitration.
 
 ## Launch Contract
 
@@ -70,6 +82,134 @@ There is no universal startup pipeline. Independently landed context injection, 
 or provider recovery behavior must be preserved, not implemented or removed as incidental cleanup.
 No schema, wire/runtime/provider-backend contract, timeout or retry policy changes are authorized.
 
+## Access Contract
+
+`SandboxAccess` receives only an artifact storage port, broadcast, socket observation/detachment,
+the provider's resumable-stop capability check, dashboard URL builder and lazy logger. It owns no
+mutable lifecycle flags, generation checks, signing-key retention, encryption key or full-manager
+reference. Its constructor performs no dependency work.
+
+Composition constructs repository/socket/messenger leaves, then access, then shutdown, then manager.
+Shutdown receives a callback to `access.retireShutdownAccess()` directly; retirement clears access,
+notifies clients, then detaches with the unchanged close code and reason. There is no manager
+retirement forwarding method. URL-only retirement preserves credentials on resumable providers when
+supported, falls back to full clearing otherwise, and always clears tunnels and notifies. Other
+termination paths keep their own existing clear/detach order.
+
+The manager calls individual `storeCodeServer`, `storeVnc`, `storeAndBroadcastTunnelUrls`,
+`storeTtyd` operations for fresh/restore at their original await points. It still orchestrates
+secret reads and atomic `completeProviderResume` writes for resume; VM reconciliation owns bridge
+completion with an expected pending reference. These operations are intentionally not unified.
+`reusableTtydToken` validates an already-read JWT synchronously so disabled terminal access does not
+acquire a new await. `mintTtydToken` uses the transient launch key, existing session/sandbox claims
+and the single terminal TTL. A hash-only restart or expired/missing JWT cannot renew access.
+
+`broadcastSandboxDashboardUrl` and `broadcastProviderAccessIfConnected` preserve separate,
+repeatable notifications, alongside tunnel notifications. The manager retains publication fallbacks
+and caller-specific catches, including committed recovery's access failure treatment. Atomic
+repository completion rechecks generation, status and fence after encryption; only bridge supplies
+an expected pending reference. Fresh/restore per-artifact writes remain unguarded, as characterized
+separately in the baseline gap notes, not silently hardened here.
+
+## VM Reconciliation Contract
+
+`VmStartupReconciliation` owns `bridgeResolution`, `bridgeRetryGeneration`, `bridgeStartupClaim`,
+`bridgeResolvedStartup` and `vmStartupAuth`, with no duplicate manager state. The manager calls
+`registerForegroundAuth`, `beginForegroundRetry` and `finalizeForeground` at the original points;
+none exposes mutable state or a generic field setter. Registration retains the actual foreground
+generation object. Foreground completion compares generation/claim object identity; bridge auth,
+claim and queue checks retain their value comparisons. Retry drops old auth before reservation/hash
+publication yields, then registers the replacement key after successful reservation. An older
+finalizer cannot clear newer auth. Inconclusive foreground lookup hands off its claim and signing
+key to a later equal-valued bridge; only the completing generation clears that key.
+
+Dependencies are the existing provider create/pending/classification/lookup hooks, three repository
+operations, pending/resolved shutdown-handle registration, session reading, launch-context settings,
+terminal signing/access publication, lazy logger and optional background submission. The only
+manager callback is `acceptResolvedStartup(generation, providerObjectId, lifetime)`, which invokes
+the existing generic `claimProviderStartup`. That operation still clears admission pending, refuses
+held-current adoption without destruction, conditionally commits, cleans unacceptable late results,
+records lifetime and publishes announcements. Resume still uses that same manager operation.
+
+The reconciler's bridge entry is synchronous and starts its background factory synchronously. An
+in-flight lookup deduplicates equal generations and queues the latest newer generation; eligibility
+is checked again before settings and provider work. Atomic bridge access completion still supplies
+the expected pending reference, leaving post-encryption generation/status/fence/reference checks to
+the repository. The cache projects only identity and lifetime, never credentials. Restart can
+resolve permissible provider/access facts but cannot reconstruct a terminal signing key.
+
+`createWithVmRecovery` returns `CreateSandboxResult | null`; `resolveUnknownVmStartup` returns
+`ResolveSandboxResult | null`. Null abandons the foreground path, not evidence of absence or
+permission to replay create. Lookup remains lookup-only with the original retry interval and
+materialization bounds. `modalVmAllocationDetail` lives beside the Modal provider and unwraps the
+same typed outcomes: `not_visible`, `other_generation` and unknown transport results remain
+distinct. The boolean unknown-startup hook does not replace detail classification. Hook existence
+alone does not enable VM behavior; standard Modal returns no pending allocation and does not
+classify launch errors as VM-unknown. Conservative lifetime provenance and resolved-handle
+replacement are unchanged.
+
+Restore remains manager-orchestrated: await pending registration, synchronously record
+`markRecoveryInvoked`, immediately invoke restore. No new await hides that durable boundary.
+`startup-errors.ts` holds the two existing internal abandonment/expiry errors shared by reservation
+and reconciliation, preserving the manager's distinct catches. No provider/backend/wire/persisted
+contract or public consumer port changes.
+
+Review follow-up explicitly corrects one inherited publication bug: a refused deferred bridge claim
+no longer emits an access-change notification. Auth finalization and queued lookup draining still
+run on refusal. This is a narrow behavioral fix, not a redesign of the extraction's contracts.
+Access may still have committed before the manager observes a hold; this fix does not make access
+and lifecycle acceptance atomic. Pending sandbox/shutdown registration also retains separate writes
+without a cross-record transaction (the shutdown write precedes its alarm await). Failure atomicity
+and unified acceptance require separately scoped safety work; neither is claimed fixed here.
+
+## Allocation Cleanup Contract
+
+`destroyLateProviderResult`, `rearmRejectedStartupCleanupAlarm` and `attemptRejectedStartupCleanup`
+are stateless functions. Their narrow dependencies are a two-method repository port (`getSandbox`,
+`updateSandboxModalObjectId`), the shared scheduler's `schedule`, explicit-stop eligibility, a stop
+operation requiring a supplied handle and signal with a `confirmed`/`not_stopped` result, and a lazy
+warning logger. Rearming and late destruction each accept only their dependency subset. The manager
+constructs the readonly dependency wiring without invoking it; no manager reference, local ownership
+flag, shutdown policy, new persisted record or raw platform alarm belongs to cleanup.
+
+Rejection ordering remains manager-owned: recognize `SandboxLaunchRejectedError`, synchronously
+`rejectProviderStartup` to fence credentials/socket authority and retain the handle, detach with the
+existing code/reason, then clear/notify access. Only the repository result `failed` authorizes
+failed-status/error publication and breaker accounting. `retained` preserves terminal status/error;
+`superseded` does not touch the current row or access and only attempts bounded late destruction.
+Generic `claimProviderStartup` still clears the pending admission flag and refuses a current held
+generation without destroying its potentially unique recovery copy.
+
+Rejected cleanup awaits retry scheduling before provider I/O. It stops the explicit target with
+`startup_superseded`, `destroy`, the public session name/internal ID fallback and a bounded signal,
+retaining the existing **undefined** `generationCreatedAtMs`. The provider adapter still interprets
+absence; row age does not change pending-reference retirement classification on this path. The
+original stop bound and abort/timer implementation live in `provider-stop.ts`; late destruction and
+the manager's separate replacement-retirement operation both call `boundedProviderStop`. Timeout
+error messages, logging, retry and handle-clearing policies remain with the callers.
+
+Review follow-up corrects the inherited false-confirmation bug: the manager's stop adapter returns
+`not_stopped` when no provider method, session context or target permits dispatch, and `confirmed`
+only after the provider reports success. Rejected cleanup retains its handle/retry on `not_stopped`;
+confirmation-required replacement on explicit-stop providers refuses an undispatched stop before
+reserving a replacement. Best-effort replacement and providers without explicit stop retain their
+existing handle-clearing/continuation policy. This is a narrow behavioral fix, not a new provider
+absence rule or generalized teardown operation.
+
+Failed, unsupported or locally timed-out cleanup retains the handle and scheduled retry. Abort
+bounds local waiting only; eventual completion of a timed-out stop does not clear the handle. A
+confirmed result clears only when sandbox ID, reservation timestamp and handle still match, without
+retargeting to a newly read row. It does not clear the fence or `startup_rejected` marker. Manager
+shutdown-alarm dispatch still prioritizes rejected cleanup over ordinary shutdown processing,
+including holds, and production runtime reconstruction retains its existing rearm hook.
+
+Generic superseded-result destruction remains bounded best effort rather than a new durable cleanup
+record. The assembled alarm handler can retry a failed rejected cleanup twice per delivery because
+it invokes shutdown processing before and after terminal-projection I/O, before generic watchdogs.
+These inherited semantics, along with prior-generation unscoped clearing and access-retirement
+failure boundaries recorded in the baseline, are unchanged; no stronger retirement/exactly-once
+guarantee is claimed.
+
 ## Verification
 
 Keep direct narrow-dependency tests for input resolution and lookup effects. Keep assembled tests
@@ -78,12 +218,44 @@ ordering, the no-await boundary for ineligible images, retry identity rotation a
 settings. Image compatibility policy belongs to `image-selection.test.ts`; real-storage and Workerd
 tests retain generation, shutdown and early-connect coverage.
 
+Access coverage includes direct retirement/fallback/notification-order tests, assembled JWT and
+resume/restart/bridge tests, committed recovery failure boundaries, real encryption interleavings
+and real composition retirement/construction checks. Existing session access-reader and repository
+tests remain independent; collaborator mocks do not replace assembled coverage.
+
+VM coverage retains assembled lost-create/lost-restore, bridge-first/provider-first, late-token,
+restart, visibility/transport bounds, fencing, queued-generation and lifetime tests. Direct
+narrow-port tests add object-identity finalization, retry reset/new-token isolation, identity-only
+cache reuse, post-await atomic-commit refusal without publication, successful older
+lookup/latest-generation queueing, pending expiry/supersession and non-VM hook gating. Assembled
+launch tests pin both successful restore marker order and absence of invocation after rejected
+pending registration. Real repository encryption-race tests retain reference/generation rechecks;
+direct commit substitutes do not replace them. ESLint prevents public consumers from importing VM
+reconciliation internals.
+
+Allocation cleanup coverage retains assembled rejection/repository tests and adds controlled
+schedule/stop gates, local timeout followed by late completion, exact stop arguments, unsuccessful
+provider results, skipped dispatch/missing session context, capability/method absence,
+generation-ID/timestamp/handle replacement isolation, terminal failure-accounting ownership and
+superseded results against a held successor. Existing real-storage held-current claim tests remain.
+Workerd now reconstructs the production runtime over a persisted rejected row and durable shutdown
+hold, exercises the actual rehydration hook/shared deadline storage, and confirms
+failed/successful/repeated cleanup preserves the hold and recovery receipt. ESLint keeps cleanup
+internals unavailable to public consumers.
+
+`manager-shutdown.test.ts` isolates the assembled shutdown/recovery cases, including the committed
+access/publication failure matrix, from the manager's orchestration suite. It retains real
+manager/access/shutdown composition with test storage/provider ports; real SQLite and Workerd checks
+remain separate. The baseline gap notes distinguish inherited unsafe outcomes from desired safety
+guarantees; green characterization tests do not make those outcomes safe or authorize hardening in
+this extraction.
+
 Build shared first, then run sequentially from the repository root:
 
 ```bash
 npm run build -w @open-inspect/shared
-npm test -w @open-inspect/control-plane -- src/sandbox/lifecycle
-npm run test:integration -w @open-inspect/control-plane -- sandbox-early-connect sandbox-shutdown
+npm test -w @open-inspect/control-plane -- src/sandbox/lifecycle src/sandbox/providers src/session/sandbox-access src/session/sandbox-repository src/session/sandbox-shutdown
+npm run test:integration -w @open-inspect/control-plane -- sandbox-early-connect sandbox-shutdown sandbox-state-retention session-components
 npm run typecheck -w @open-inspect/control-plane
 npm run lint -w @open-inspect/control-plane
 npm run test:lint-sandbox-boundaries

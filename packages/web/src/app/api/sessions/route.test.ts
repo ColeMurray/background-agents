@@ -1,4 +1,4 @@
-import type { NextRequest } from "next/server";
+import { NextRequest } from "next/server";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("@/lib/server-auth-session", () => ({
@@ -185,6 +185,30 @@ describe("sessions API route (POST)", () => {
     expect(sent.repositories).toBeUndefined();
     expect(sent.repoOwner).toBeUndefined();
     expect(sent.repoName).toBeUndefined();
+  });
+
+  it("forwards team and visibility while stripping adjacent client-controlled fields", async () => {
+    vi.mocked(getServerAuthSession).mockResolvedValue({ user: { id: "user-1" } });
+    vi.mocked(controlPlaneUserFetch).mockResolvedValue(
+      Response.json({ error: "Team archived", code: "team_archived" }, { status: 409 })
+    );
+    const response = await POST(
+      new NextRequest("http://localhost/api/sessions", {
+        method: "POST",
+        body: JSON.stringify({
+          teamId: "team-1",
+          visibility: "team",
+          grants: ["repo-1"],
+          ...hostileIdentityFields,
+        }),
+      })
+    );
+    expect(controlPlaneBody()).toEqual({ teamId: "team-1", visibility: "team" });
+    expect(response.status).toBe(409);
+    await expect(response.json()).resolves.toEqual({
+      error: "Team archived",
+      code: "team_archived",
+    });
   });
 
   it("forwards the repositories list for ad-hoc multi-repo launches", async () => {

@@ -723,7 +723,8 @@ export class SessionMessageQueue {
 
     if (data.scmEnrichment !== undefined) {
       const enrichment = data.scmEnrichment;
-      this.participantRepository.updateParticipantCoalesce(participant.id, {
+      this.participantRepository.updateParticipantIdentity(participant.id, {
+        canonicalUserId: data.canonicalUserId ?? participant.canonical_user_id ?? null,
         scmName: enrichment.name,
         scmEmail: enrichment.email,
         scmLogin: enrichment.login,

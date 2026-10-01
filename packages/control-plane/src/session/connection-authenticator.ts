@@ -5,6 +5,7 @@ import {
   type AccessDecision,
   type SessionAction,
   type SessionAccessRow,
+  type SessionCapabilities,
   type SessionViewer,
 } from "@open-inspect/shared";
 import {
@@ -39,9 +40,11 @@ import { WS_AUTHORIZATION_LEASE_MS } from "./authorization-lease";
 import { canManageSessionBudget } from "./budget-authorization";
 import {
   legacyPermissionForAction,
+  resolverDecides,
   type TeamsEnforcementMode,
 } from "../authorization/teams-enforcement";
 import type { ClientCommandAuthorization } from "./message-router";
+import { effectiveSessionCapabilities } from "../authorization/session-admission";
 
 /**
  * Maximum age of a WebSocket authentication token (in milliseconds).
@@ -65,7 +68,10 @@ export interface SessionConnectionAuthenticatorDeps {
   schedulePullRequestRefresh: (trigger: "open" | "manual") => void;
   scmProviderName: SourceControlProviderName;
   /** Resolve the current D1 session scope and user's authorization on every gated action. */
-  resolveSessionViewer: (userId: string) => Promise<SessionViewerResolution>;
+  resolveSessionViewer: (
+    userId: string,
+    options?: { includeMemberships?: boolean }
+  ) => Promise<SessionViewerResolution>;
   auditPrivateBreakGlass: (userId: string, row: SessionAccessRow) => Promise<void>;
   /** The session-scoped logger; upgrade/subscribe paths also receive request-scoped children. */
   log: Logger;
@@ -380,7 +386,9 @@ export class SessionConnectionAuthenticator implements SessionUpgradeAdmission {
       // Authorization is intentionally sampled once at the start of this
       // subscription request. A concurrent role change takes effect when this
       // bounded lease expires, not midway through an in-flight request.
-      const resolution = await this.deps.resolveSessionViewer(participant.canonical_user_id);
+      const resolution = await this.deps.resolveSessionViewer(participant.canonical_user_id, {
+        includeMemberships: true,
+      });
       const read = resolution.kind === "valid" ? this.decide(resolution, "read") : null;
       if (resolution.kind !== "valid" || !read?.allowed) {
         log.warn("ws.connect", {
@@ -451,7 +459,7 @@ export class SessionConnectionAuthenticator implements SessionUpgradeAdmission {
             ws,
             clientInfo,
             enrichment,
-            this.decide(resolution, "sandbox").allowed,
+            effectiveSessionCapabilities(resolution.viewer, resolution.row, resolution.mode),
             canManageSessionBudget(resolution.row.ownerUserId, resolution.authorization)
           )
         );
@@ -493,20 +501,21 @@ export class SessionConnectionAuthenticator implements SessionUpgradeAdmission {
     ws: SessionWebSocket,
     client: ClientInfo,
     enrichment: Parameters<SessionSnapshotReader["readSessionSnapshot"]>[0],
-    canAccessSandbox: boolean,
+    capabilities: SessionCapabilities,
     canManageBudget: boolean
   ): boolean {
     const { wsManager, snapshotReader } = this.deps;
     const snapshot = snapshotReader.readSessionSnapshot(enrichment);
     if (!snapshot) return false;
 
-    const authorizedSnapshot = canAccessSandbox
+    const authorizedSnapshot = capabilities.canSandbox
       ? snapshot
       : redactSessionSnapshotSandboxAccess(snapshot);
     if (
       !wsManager.send(ws, {
         type: "subscribed",
         ...authorizedSnapshot,
+        session: { ...authorizedSnapshot.session, capabilities },
         participantId: client.participantId,
         participant: {
           participantId: client.participantId,
@@ -548,7 +557,7 @@ export class SessionConnectionAuthenticator implements SessionUpgradeAdmission {
     resolution: Extract<SessionViewerResolution, { kind: "valid" }>,
     action: SessionAction
   ): AccessDecision {
-    if (resolution.mode === "on" || resolution.row.visibility === "private") {
+    if (resolverDecides(resolution.mode, resolution.row, action)) {
       return checkSessionAccess(resolution.viewer, resolution.row, action);
     }
     return resolution.authorization.permissions.includes(legacyPermissionForAction(action))

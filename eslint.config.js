@@ -17,6 +17,26 @@ const sandboxImplementationImports = [
     message:
       "Only session composition constructs the lifecycle manager. Consumers depend on focused lifecycle ports.",
   },
+  {
+    regex: "(?:^|/)lifecycle/sandbox-access(?:\\.[cm]?[jt]sx?)?$",
+    message:
+      "Access mechanics are internal to lifecycle composition. Consumers use lifecycle ports and session access readers.",
+  },
+  {
+    regex: "(?:^|/)lifecycle/vm-startup-reconciliation(?:\\.[cm]?[jt]sx?)?$",
+    message:
+      "VM startup reconciliation is internal to the lifecycle manager. Consumers use lifecycle ports.",
+  },
+  {
+    regex: "(?:^|/)lifecycle/allocation-cleanup(?:\\.[cm]?[jt]sx?)?$",
+    message:
+      "Allocation cleanup is internal to the lifecycle manager. Consumers use lifecycle ports.",
+  },
+  {
+    regex: "(?:^|/)lifecycle/provider-stop(?:\\.[cm]?[jt]sx?)?$",
+    message:
+      "Bounded provider-stop mechanics are internal to lifecycle. Consumers use lifecycle ports.",
+  },
 ];
 
 export default tseslint.config(

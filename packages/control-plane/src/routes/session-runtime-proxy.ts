@@ -23,6 +23,7 @@ import {
   teamsEnforcementMode,
   viewerFromContext,
 } from "../authorization/session-admission";
+import { resolverDecides } from "../authorization/teams-enforcement";
 import type { SubscriptionProviderId } from "@open-inspect/shared/types/provider-accounts";
 import { SessionInternalPaths, type SessionInternalPath } from "../session/contracts";
 import type { Env } from "../types";
@@ -198,14 +199,13 @@ async function handleSessionSnapshot(
     ctx.sessionAdmission?.row.collaboratorIds ??
     (await new SessionCollaboratorStore(ctx.db).listUserIds(sessionId));
   const accessRow = { ...row, ownerUserId: row.userId ?? null, collaboratorIds: collaborators };
-  const admission = ctx.sessionAdmission;
-  const sandboxAllowed =
-    admission && (admission.row.visibility === "private" || ctx.teamsEnforcementMode === "on")
-      ? checkSessionAccess(admission.viewer, admission.row, "sandbox").allowed
-      : ctx.authorization?.permissions.includes("sessions.sandbox_access");
+  const sandboxAllowed = resolverDecides(teamsEnforcementMode(ctx, env), accessRow, "sandbox")
+    ? checkSessionAccess(viewer, accessRow, "sandbox").allowed
+    : ctx.authorization?.permissions.includes("sessions.sandbox_access");
   const snapshot = sandboxAllowed ? parsed.data : redactSessionSnapshotSandboxAccess(parsed.data);
   snapshot.session = {
     ...snapshot.session,
+    ownerUserId: row.userId ?? null,
     ownerTeamId: row.ownerTeamId,
     visibility: row.visibility,
     collaborators: [...collaborators],

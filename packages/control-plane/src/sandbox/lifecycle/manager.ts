@@ -27,6 +27,7 @@ import {
   PrebuiltImageUnavailableError,
   SandboxProviderError,
   SandboxLaunchRejectedError,
+  providerResumesAfterStop,
   type SandboxProvider,
   type CreateSandboxConfig,
   type CreateSandboxResult,
@@ -46,7 +47,6 @@ import {
   DEFAULT_HEARTBEAT_CONFIG,
   DEFAULT_CONNECTING_TIMEOUT_CONFIG,
   DEFAULT_BOOT_BUDGET_CONFIG,
-  PENDING_VM_REFERENCE_MATERIALIZE_BOUND_MS,
   type CircuitBreakerConfig,
   type SpawnConfig,
 } from "./decisions";
@@ -54,7 +54,6 @@ import { evaluateAlarmPolicy, type AlarmPolicyConfig } from "./alarm-policy";
 import { formatBootBudgetFailure } from "./boot-failure-message";
 import { createLogger, type Logger } from "../../logger";
 import { hashToken } from "../../auth/crypto";
-import { isJwtUnexpired, mintJwt } from "../../auth/jwt";
 import { parseStoredSandboxBootPhase, sandboxBootPhaseLogFields } from "../boot-phase";
 import type { ImageBuildLookup } from "./image-selection";
 import {
@@ -78,32 +77,31 @@ import type {
   SandboxPushAdmission,
 } from "./ports";
 import { shutdownPolicyForLaunch, type ShutdownLifecyclePolicy } from "./shutdown-policy";
-import { parsePendingVmReference } from "../providers/pending-vm-reference";
-import { ModalApiError, ModalVmStartupError } from "../client";
-import type { ResolveSandboxResult } from "../provider";
+import type { SandboxAccess } from "./sandbox-access";
+import { SandboxLaunchExpiredError, SpawnSupersededError } from "./startup-errors";
+import {
+  VmStartupReconciliation,
+  type VmStartupReconciliationStorage,
+  type VmStartupReconciliationShutdown,
+} from "./vm-startup-reconciliation";
+import {
+  attemptRejectedStartupCleanup,
+  destroyLateProviderResult,
+  rearmRejectedStartupCleanupAlarm,
+  type AllocationCleanupDependencies,
+  type AllocationCleanupStorage,
+} from "./allocation-cleanup";
+import { boundedProviderStop, type ProviderStopOutcome } from "./provider-stop";
 export type { SandboxGeneration, SandboxAlarmResult } from "./ports";
 
 export type { AlarmScheduler } from "../../platform-ports";
 
 const log = createLogger("lifecycle-manager");
 
-/** TTL for terminal auth JWTs (24 hours, matching typical sandbox lifetime). */
-const TERMINAL_TOKEN_TTL_SECONDS = 86400;
-const PROVIDER_REPLACEMENT_STOP_TIMEOUT_MS = 10_000;
-const REJECTED_ALLOCATION_CLEANUP_RETRY_MS = 30_000;
-const VM_RESOLVE_RETRY_MS = 10_000;
-
-function vmAllocationDetail(error: unknown): string | undefined {
-  const cause = error instanceof SandboxProviderError ? error.cause : error;
-  if (cause instanceof ModalVmStartupError) return cause.outcome;
-  if (cause instanceof ModalApiError) return cause.detail;
-  return undefined;
-}
-
 // ==================== Dependency Interfaces ====================
 
 /** Internal shutdown collaborator; callers outside this subsystem use the manager's policies. */
-export interface SandboxShutdownLifecycle {
+export interface SandboxShutdownLifecycle extends VmStartupReconciliationShutdown {
   /** Atomically reserves the sandbox row and shutdown ownership, then announces after commit. */
   reserveStartup(
     createdAt: number,
@@ -112,20 +110,8 @@ export interface SandboxShutdownLifecycle {
   ): void;
   /** Durably marks the provider-I/O boundary so restart recovery cannot repeat it blindly. */
   markRecoveryInvoked(generation: SandboxGeneration, providerObjectId?: string): void;
-  /** Records a generation-scoped pending provider handle and its conservative expiry. */
-  recordPendingProviderHandle(
-    generation: SandboxGeneration,
-    reference: string,
-    lifetime: Extract<SandboxLifetime, { kind: "finite" }>
-  ): Promise<"registered" | "expired" | "superseded">;
   /** Records the provider-confirmed handle and scheduling lifetime after startup. */
   recordProviderStartup(generation: SandboxGeneration, lifetime: SandboxLifetime): Promise<void>;
-  /** Swap a pending handle after bridge recovery without changing shutdown policy or lifetime. */
-  recordResolvedProviderHandle?(
-    generation: SandboxGeneration,
-    expectedReference: string,
-    providerObjectId: string
-  ): void;
   /** Blocks generic destructive lifecycle work while shutdown or capture ownership is unresolved. */
   isHolding(): boolean;
   /** Tells a runtime refused at reconnect to retry while a capture needs its sandbox. */
@@ -155,7 +141,7 @@ export interface SandboxShutdownLifecycle {
   /** Supplies internal admission facts; the manager applies distinct queue and live-push policies. */
   admissionDecision(): SandboxWorkAdmission;
   /** Advances shutdown and prevents generic watchdogs from competing with unresolved work. */
-  handleAlarm(): Promise<"continue" | "hold_watchdogs">;
+  handleAlarm(allowCaptureRetry?: boolean): Promise<"continue" | "hold_watchdogs">;
   /** Applies an already-authorized recovery choice; only explicit restore releases a saved pause. */
   recover(action: ShutdownRecoveryAction): Promise<void>;
   /** Returns the safe public projection, excluding private provider handles and recovery receipts. */
@@ -193,9 +179,7 @@ export interface SessionContextReader extends SandboxLaunchContextReader {
  * Storage adapter for sandbox data operations — the sandbox repository's
  * contract, satisfied by it structurally.
  */
-export interface SandboxStorage {
-  /** Get current sandbox state */
-  getSandbox(): SandboxRow | null;
+export interface SandboxStorage extends VmStartupReconciliationStorage, AllocationCleanupStorage {
   /** Get sandbox with circuit breaker state (subset of fields) */
   getSandboxWithCircuitBreaker(): SandboxCircuitBreakerInfo | null;
   /** Update sandbox status */
@@ -262,20 +246,6 @@ export interface SandboxStorage {
   updateSandboxAuthTokenHash(modalSandboxId: string, authTokenHash: string): boolean;
   /** Update sandbox state for in-place resume without rotating auth/token identity */
   updateSandboxForResume(data: { status: SandboxStatus; createdAt: number }): void;
-  /** Atomically commit access returned for the named resume generation. */
-  completeProviderResume(
-    generation: SandboxGeneration,
-    access: {
-      providerObjectId: string;
-      codeServer: { url: string; password: string } | null;
-      vnc: { url: string; password: string } | null;
-      ttyd: { url: string | null; token: string } | null;
-      tunnelUrls: Record<string, string> | null;
-    },
-    expectedProviderObjectId?: string
-  ): Promise<boolean>;
-  /** Update sandbox Modal object ID (for snapshot API) */
-  updateSandboxModalObjectId(modalObjectId: string | null): void;
   /** Set the runtime version describing the sandbox's current filesystem. */
   updateSandboxRuntimeVersion(runtimeVersion: string | null): void;
   /**
@@ -299,18 +269,8 @@ export interface SandboxStorage {
   resetCircuitBreaker(): void;
   /** Persist last spawn error */
   setLastSpawnError(error: string | null, timestamp: number | null): void;
-  /** Set one access artifact's URL and (encrypted) secret on the sandbox row */
-  updateSandboxAccess(kind: SandboxAccessKind, url: string, secret: string): void | Promise<void>;
   /** Read and decrypt one access artifact's stored secret */
   getSandboxAccessSecret(kind: SandboxAccessKind): Promise<string | null>;
-  /** Clear one access artifact's URL and secret (e.g. on sandbox teardown) */
-  clearSandboxAccess(kind: SandboxAccessKind): void;
-  /** Clear one access artifact's URL while preserving its stored secret */
-  clearSandboxAccessUrl?(kind: SandboxAccessKind): void;
-  /** Update tunnel URLs for extra ports on the sandbox row */
-  updateSandboxTunnelUrls(urls: Record<string, string>): void | Promise<void>;
-  /** Clear stale tunnel URLs (e.g. on sandbox teardown) */
-  clearSandboxTunnelUrls(): void;
 }
 
 /**
@@ -380,8 +340,6 @@ export interface SandboxLifecycleConfig extends AlarmPolicyConfig, SandboxLaunch
    * row (and its public id) exists.
    */
   getSessionId?: () => string;
-  /** Builds a provider dashboard URL for a persisted provider object ID. */
-  sandboxDashboardUrlBuilder?: (providerObjectId: string) => string | null;
 }
 
 /**
@@ -431,29 +389,6 @@ export type UnresponsiveSandboxTrigger =
  * Uses dependency injection for all external interactions, enabling unit testing
  * with mocked dependencies.
  */
-/**
- * A spawn attempt discovered at hash publication that a newer reservation
- * had replaced its identity. The attempt must abandon without failure
- * writes: the sandbox row and circuit breaker now describe the newer
- * attempt, and marking them failed would clobber it.
- */
-class SpawnSupersededError extends Error {
-  constructor() {
-    super("Spawn reservation superseded before its auth hash was published");
-    this.name = "SpawnSupersededError";
-  }
-}
-
-class SandboxLaunchExpiredError extends SandboxProviderError {
-  constructor() {
-    super(
-      "The sandbox timeout leaves no time before the final save begins. Increase the sandbox timeout or reduce the final snapshot buffer in the sandbox settings.",
-      "transient"
-    );
-    this.name = "SandboxLaunchExpiredError";
-  }
-}
-
 export class SandboxLifecycleManager
   implements
     SandboxLifecycle,
@@ -470,26 +405,12 @@ export class SandboxLifecycleManager
   private isSpawningSandbox = false;
   private isTerminatingSandbox = false;
   private providerStartupPending = false;
-  private bridgeResolution: SandboxGeneration | null = null;
-  private bridgeRetryGeneration: SandboxGeneration | null = null;
-  private bridgeStartupClaim: SandboxGeneration | null = null;
-  private bridgeResolvedStartup: {
-    generation: SandboxGeneration;
-    result: ResolveSandboxResult;
-  } | null = null;
-  private vmStartupAuth: {
-    generation: SandboxGeneration;
-    sessionId: string;
-    token: string;
-  } | null = null;
-  retireShutdownAccess(): void {
-    this.clearSandboxAccessState();
-    this.wsManager.detachSandboxWebSocket(1000, "Sandbox state preserved");
-  }
 
   /** Memoized session-scoped logger, keyed by the resolved session id. */
   private logMemo?: { sessionId: string | undefined; logger: Logger };
   private readonly launchContext: SandboxLaunchContext;
+  private readonly vmStartup: VmStartupReconciliation;
+  private readonly allocationCleanup: AllocationCleanupDependencies;
 
   /**
    * Session-scoped logger. Falls back to the module-level logger if no
@@ -518,9 +439,10 @@ export class SandboxLifecycleManager
     private readonly alarmScheduler: AlarmScheduler,
     private readonly idGenerator: IdGenerator,
     private readonly shutdown: SandboxShutdownLifecycle,
+    private readonly access: SandboxAccess,
     private readonly config: SandboxLifecycleConfig,
     imageBuildLookup?: ImageBuildLookup,
-    private readonly backgroundTasks?: BackgroundTasks
+    backgroundTasks?: BackgroundTasks
   ) {
     this.launchContext = new SandboxLaunchContext({
       sessionContext,
@@ -536,6 +458,26 @@ export class SandboxLifecycleManager
       imageBuildLookup,
       getLogger: () => this.log,
     });
+    this.vmStartup = new VmStartupReconciliation({
+      provider,
+      storage,
+      sessionContext,
+      shutdown,
+      access,
+      launchContext: this.launchContext,
+      acceptResolvedStartup: (generation, providerObjectId, lifetime) =>
+        this.claimProviderStartup(generation, providerObjectId, lifetime),
+      getLogger: () => this.log,
+      backgroundTasks,
+    });
+    this.allocationCleanup = {
+      storage,
+      alarmScheduler,
+      canStop: () => this.canStopProviderSandbox(),
+      stop: (providerObjectId, signal) =>
+        this.stopProviderSandbox("startup_superseded", "destroy", signal, providerObjectId),
+      getLogger: () => this.log,
+    };
   }
 
   /**
@@ -811,13 +753,12 @@ export class SandboxLifecycleManager
         ...repositoryFields,
       };
 
-      if (this.provider.name === "modal-vm")
-        this.vmStartupAuth = { generation, sessionId, token: sandboxAuthToken };
+      this.vmStartup.registerForegroundAuth(generation, sessionId, sandboxAuthToken);
 
       let result: CreateSandboxResult;
       try {
-        await this.recordPendingProviderReference(generation, createConfig);
-        const created = await this.createWithVmRecovery(createConfig, generation);
+        await this.vmStartup.recordPendingProviderReference(generation, createConfig);
+        const created = await this.vmStartup.createWithVmRecovery(createConfig, generation);
         if (!created) return;
         result = created;
       } catch (error) {
@@ -850,13 +791,12 @@ export class SandboxLifecycleManager
         const retryNow = Math.max(Date.now(), now + 1);
         const retry = this.spawnGeneration(session, retryNow);
         generation = retry;
-        this.vmStartupAuth = null;
+        this.vmStartup.beginForegroundRetry();
         ({ sandboxAuthToken, expectedSandboxId } = await this.reserveSpawnIdentity(retry, {
           preserveProviderObjectId: false,
           shutdownPolicy: shutdownPolicyForLaunch("new", null),
         }));
-        if (this.provider.name === "modal-vm")
-          this.vmStartupAuth = { generation, sessionId, token: sandboxAuthToken };
+        this.vmStartup.registerForegroundAuth(generation, sessionId, sandboxAuthToken);
         const retryConfig: CreateSandboxConfig = {
           ...createConfig,
           sandboxId: expectedSandboxId,
@@ -865,8 +805,8 @@ export class SandboxLifecycleManager
           prebuiltImageId: null,
           prebuiltImageSha: null,
         };
-        await this.recordPendingProviderReference(generation, retryConfig);
-        const created = await this.createWithVmRecovery(retryConfig, generation);
+        await this.vmStartup.recordPendingProviderReference(generation, retryConfig);
+        const created = await this.vmStartup.createWithVmRecovery(retryConfig, generation);
         if (!created) return;
         result = created;
       }
@@ -874,17 +814,17 @@ export class SandboxLifecycleManager
       if (!(await this.claimProviderStartup(generation, result.providerObjectId, result.lifetime)))
         return;
       if (result.codeServerUrl && result.codeServerPassword) {
-        await this.storeCodeServer(result.codeServerUrl, result.codeServerPassword);
+        await this.access.storeCodeServer(result.codeServerUrl, result.codeServerPassword);
       }
       if (result.vncAccess) {
-        await this.storeVnc(result.vncAccess.url, result.vncAccess.password);
+        await this.access.storeVnc(result.vncAccess.url, result.vncAccess.password);
       }
-      await this.storeAndBroadcastTunnelUrls(result.tunnelUrls);
+      await this.access.storeAndBroadcastTunnelUrls(result.tunnelUrls);
       if (result.ttydUrl) {
-        await this.storeTtyd(result.ttydUrl, sandboxAuthToken, sessionId, expectedSandboxId);
+        await this.access.storeTtyd(result.ttydUrl, sandboxAuthToken, sessionId, expectedSandboxId);
       }
 
-      this.broadcastProviderAccessIfConnected();
+      this.access.broadcastProviderAccessIfConnected();
 
       this.log.info("Sandbox spawn completed", {
         event: "sandbox.spawn",
@@ -943,8 +883,7 @@ export class SandboxLifecycleManager
     } finally {
       this.isSpawningSandbox = false;
       this.providerStartupPending = false;
-      if (this.vmStartupAuth?.generation === generation && this.bridgeStartupClaim !== generation)
-        this.vmStartupAuth = null;
+      this.vmStartup.finalizeForeground(generation);
     }
   }
 
@@ -1122,20 +1061,15 @@ export class SandboxLifecycleManager
         sandboxSettings,
         ...repositoryFields,
       };
-      if (this.provider.name === "modal-vm")
-        this.vmStartupAuth = {
-          generation,
-          sessionId: restoreConfig.sessionId,
-          token: sandboxAuthToken,
-        };
-      await this.recordPendingProviderReference(generation, restoreConfig);
+      this.vmStartup.registerForegroundAuth(generation, restoreConfig.sessionId, sandboxAuthToken);
+      await this.vmStartup.recordPendingProviderReference(generation, restoreConfig);
       this.shutdown.markRecoveryInvoked(generation);
       let result;
       try {
         result = await this.provider.restoreFromSnapshot(restoreConfig);
       } catch (error) {
         if (!this.provider.isUnknownStartupError?.(error)) throw error;
-        const recovered = await this.resolveUnknownVmStartup(generation, restoreConfig);
+        const recovered = await this.vmStartup.resolveUnknownVmStartup(generation, restoreConfig);
         if (!recovered) return;
         result = { ...recovered, success: true as const };
       }
@@ -1147,14 +1081,14 @@ export class SandboxLifecycleManager
           return;
         startupClaimed = true;
         if (result.codeServerUrl && result.codeServerPassword) {
-          await this.storeCodeServer(result.codeServerUrl, result.codeServerPassword);
+          await this.access.storeCodeServer(result.codeServerUrl, result.codeServerPassword);
         }
         if (result.vncAccess) {
-          await this.storeVnc(result.vncAccess.url, result.vncAccess.password);
+          await this.access.storeVnc(result.vncAccess.url, result.vncAccess.password);
         }
-        await this.storeAndBroadcastTunnelUrls(result.tunnelUrls);
+        await this.access.storeAndBroadcastTunnelUrls(result.tunnelUrls);
         if (result.ttydUrl) {
-          await this.storeTtyd(
+          await this.access.storeTtyd(
             result.ttydUrl,
             sandboxAuthToken,
             session.session_name || session.id,
@@ -1162,7 +1096,7 @@ export class SandboxLifecycleManager
           );
         }
 
-        this.broadcastProviderAccessIfConnected();
+        this.access.broadcastProviderAccessIfConnected();
 
         this.broadcaster.broadcast({
           type: "sandbox_restored",
@@ -1227,8 +1161,7 @@ export class SandboxLifecycleManager
     } finally {
       this.isSpawningSandbox = false;
       this.providerStartupPending = false;
-      if (this.vmStartupAuth?.generation === generation && this.bridgeStartupClaim !== generation)
-        this.vmStartupAuth = null;
+      this.vmStartup.finalizeForeground(generation);
     }
   }
 
@@ -1309,17 +1242,11 @@ export class SandboxLifecycleManager
       const ttydToken = sandboxSettings.terminalEnabled
         ? await this.storage.getSandboxAccessSecret("ttyd")
         : null;
-      const validTtydToken = ttydToken && isJwtUnexpired(ttydToken) ? ttydToken : null;
-      if (result.ttydUrl && !validTtydToken) {
-        // Terminal tokens are signed with the sandbox auth token, which is kept
-        // only as a hash, so an expired or missing one cannot be renewed. The
-        // resumed sandbox holds the workspace; keep it without terminal access.
-        this.log.warn("Terminal credential unavailable; resuming without terminal access", {
-          event: "sandbox.resume_terminal_credential_unavailable",
-          provider_object_id: finalProviderObjectId,
-          reason: ttydToken ? "invalid_or_expired" : "missing",
-        });
-      }
+      const validTtydToken = this.access.reusableTtydToken(
+        ttydToken,
+        result.ttydUrl,
+        finalProviderObjectId
+      );
       let completed: boolean;
       try {
         completed = await this.storage.completeProviderResume(generation, {
@@ -1353,7 +1280,7 @@ export class SandboxLifecycleManager
       await this.shutdown.recordProviderStartup(generation, result.lifetime);
       startupClaimed = true;
 
-      if (!this.broadcastSandboxDashboardUrl(finalProviderObjectId)) {
+      if (!this.access.broadcastSandboxDashboardUrl(finalProviderObjectId)) {
         this.broadcaster.broadcast({ type: "sandbox_access_changed" });
       }
     } catch (error) {
@@ -1435,7 +1362,7 @@ export class SandboxLifecycleManager
    * Whether stopping should preserve provider-owned state for in-place resume.
    */
   private usesProviderManagedStop(): boolean {
-    return this.canStopProviderSandbox() && !!this.provider.capabilities.supportsPersistentResume;
+    return providerResumesAfterStop(this.provider);
   }
 
   /**
@@ -1453,25 +1380,20 @@ export class SandboxLifecycleManager
       return;
     }
 
-    const controller = new AbortController();
-    let timeoutId: ReturnType<typeof setTimeout> | undefined;
     try {
-      const stopTimeoutPromise = new Promise<never>((_, reject) => {
-        timeoutId = setTimeout(() => {
-          controller.abort();
-          reject(new Error("Provider stop timed out before sandbox replacement"));
-        }, PROVIDER_REPLACEMENT_STOP_TIMEOUT_MS);
-      });
-      await Promise.race([
-        this.stopProviderSandbox(
-          "respawn",
-          "destroy",
-          controller.signal,
-          providerObjectId,
-          prior?.created_at
-        ),
-        stopTimeoutPromise,
-      ]);
+      const outcome = await boundedProviderStop(
+        (signal) =>
+          this.stopProviderSandbox(
+            "respawn",
+            "destroy",
+            signal,
+            providerObjectId,
+            prior?.created_at
+          ),
+        "Provider stop timed out before sandbox replacement"
+      );
+      if (requireConfirmation && outcome !== "confirmed")
+        throw new Error("Provider stop could not be dispatched before sandbox replacement");
       this.storage.updateSandboxModalObjectId(null);
     } catch (error) {
       if (requireConfirmation) throw error;
@@ -1480,30 +1402,7 @@ export class SandboxLifecycleManager
         provider_object_id: providerObjectId,
         error: error instanceof Error ? error.message : String(error),
       });
-    } finally {
-      if (timeoutId !== undefined) clearTimeout(timeoutId);
     }
-  }
-
-  /**
-   * Clear preview URLs after a sandbox is no longer reachable.
-   *
-   * Persistent resumes preserve code-server and VNC passwords plus the ttyd
-   * token, so only their URLs are cleared. Snapshot restores rotate access
-   * secrets, so both values are removed.
-   */
-  private clearSandboxAccessState(): void {
-    if (this.usesProviderManagedStop() && this.storage.clearSandboxAccessUrl) {
-      this.storage.clearSandboxAccessUrl("codeServer");
-      this.storage.clearSandboxAccessUrl("vnc");
-      this.storage.clearSandboxAccessUrl("ttyd");
-    } else {
-      this.storage.clearSandboxAccess("codeServer");
-      this.storage.clearSandboxAccess("vnc");
-      this.storage.clearSandboxAccess("ttyd");
-    }
-    this.storage.clearSandboxTunnelUrls();
-    this.broadcaster.broadcast({ type: "sandbox_access_changed" });
   }
 
   /**
@@ -1515,16 +1414,16 @@ export class SandboxLifecycleManager
     signal?: AbortSignal,
     providerObjectId?: string,
     generationCreatedAtMs?: number
-  ): Promise<void> {
+  ): Promise<ProviderStopOutcome> {
     if (!this.provider.stopSandbox) {
-      return;
+      return "not_stopped";
     }
 
     const sandbox = providerObjectId ? null : this.storage.getSandbox();
     const session = this.sessionContext.getSession();
     const objectId = providerObjectId ?? sandbox?.modal_object_id;
     if (!objectId || !session) {
-      return;
+      return "not_stopped";
     }
 
     const result = await this.provider.stopSandbox({
@@ -1539,6 +1438,7 @@ export class SandboxLifecycleManager
     if (!result.success) {
       throw new Error(result.error || "Failed to stop provider sandbox");
     }
+    return "confirmed";
   }
 
   /**
@@ -1682,7 +1582,7 @@ export class SandboxLifecycleManager
     });
     this.storage.updateSandboxStatus("failed");
     this.recordSpawnFailure(ctx.now, ctx.sandbox.created_at);
-    this.clearSandboxAccessState();
+    this.access.clearAccess();
     const held = this.holdFailedRetainedBoot(
       ctx.sandbox,
       "Sandbox failed to connect within the allowed time"
@@ -1740,7 +1640,7 @@ export class SandboxLifecycleManager
     // like any other; the termination re-drives the queue, and the breaker
     // is what bounds a boot that dies the same way every time.
     if (isBooting) this.recordSpawnFailure(ctx.now, ctx.sandbox.created_at);
-    this.clearSandboxAccessState();
+    this.access.clearAccess();
     this.broadcaster.broadcast({ type: "sandbox_status", status: "stale" });
 
     const preservesProviderState = this.usesProviderManagedStop();
@@ -1839,7 +1739,7 @@ export class SandboxLifecycleManager
     }
     this.storage.updateSandboxStatus("failed");
     this.recordSpawnFailure(ctx.now, ctx.sandbox.created_at);
-    this.clearSandboxAccessState();
+    this.access.clearAccess();
     this.broadcaster.broadcast({ type: "sandbox_status", status: "failed" });
     this.reportSandboxError(reason);
     if (held) return { kind: "boot_budget_exceeded", reason };
@@ -1877,7 +1777,7 @@ export class SandboxLifecycleManager
     });
     // Set status to stopped FIRST to block reconnection attempts
     this.storage.updateSandboxStatus("stopped");
-    this.clearSandboxAccessState();
+    this.access.clearAccess();
     this.broadcaster.broadcast({ type: "sandbox_status", status: "stopped" });
 
     const preservesProviderState = this.usesProviderManagedStop();
@@ -1939,7 +1839,7 @@ export class SandboxLifecycleManager
     const canStopProvider = this.canStopProviderSandbox();
     if (!canStopProvider) this.wsManager.sendToSandbox({ type: "shutdown" });
     this.storage.updateSandboxStatus("stale");
-    this.clearSandboxAccessState();
+    this.access.clearAccess();
     this.broadcaster.broadcast({ type: "sandbox_status", status: "stale" });
     const closeReason = {
       prompt_dispatch_send_failed: "Prompt dispatch send failed",
@@ -1997,7 +1897,7 @@ export class SandboxLifecycleManager
       this.recordSpawnFailure(Date.now(), sandbox.created_at);
       this.broadcaster.broadcast({ type: "sandbox_status", status: "failed" });
       this.reportSandboxError(reason);
-      this.clearSandboxAccessState();
+      this.access.clearAccess();
       if (held) return false;
 
       const canStopProvider = this.canStopProviderSandbox();
@@ -2056,7 +1956,7 @@ export class SandboxLifecycleManager
     if (!row) return false;
     const generation = { sandboxId: row.modal_sandbox_id, createdAt: row.created_at };
     if (!this.storage.markSandboxReady(generation)) return false;
-    this.resolvePendingBridge(generation);
+    this.vmStartup.resolvePendingBridge(generation);
     this.log.info("sandbox.ready", { event: "sandbox.ready", harness: harness ?? null });
     this.updateLastActivity(timestamp);
     this.broadcaster.broadcast({ type: "sandbox_status", status: "ready" });
@@ -2101,16 +2001,17 @@ export class SandboxLifecycleManager
     }
   }
 
-  async handleShutdownAlarm(): Promise<"continue" | "hold_watchdogs"> {
+  async handleShutdownAlarm(allowCaptureRetry = true): Promise<"continue" | "hold_watchdogs"> {
     const rejected = this.storage.getSandbox();
     if (rejected?.startup_rejected && rejected.modal_object_id) {
-      await this.attemptRejectedStartupCleanup(
+      await attemptRejectedStartupCleanup(
+        this.allocationCleanup,
         { sandboxId: rejected.modal_sandbox_id, createdAt: rejected.created_at },
         rejected.modal_object_id
       );
       return "hold_watchdogs";
     }
-    return this.shutdown.handleAlarm();
+    return this.shutdown.handleAlarm(allowCaptureRetry);
   }
 
   recoverShutdown(action: ShutdownRecoveryAction): Promise<void> {
@@ -2189,358 +2090,6 @@ export class SandboxLifecycleManager
     return this.wsManager.getConnectedClientCount();
   }
 
-  private broadcastSandboxDashboardUrl(providerObjectId: string): boolean {
-    const url = this.config.sandboxDashboardUrlBuilder?.(providerObjectId);
-    if (url) {
-      this.log.debug("Broadcasting sandbox dashboard URL", {
-        provider_object_id: providerObjectId,
-      });
-      this.broadcaster.broadcast({ type: "sandbox_access_changed" });
-      return true;
-    }
-    return false;
-  }
-
-  private broadcastProviderAccessIfConnected(): void {
-    if (this.wsManager.getSandboxWebSocket()) {
-      this.broadcaster.broadcast({ type: "sandbox_access_changed" });
-    }
-  }
-
-  private async storeCodeServer(url: string, password: string): Promise<void> {
-    this.log.info("Storing code-server info", { url });
-    await this.storage.updateSandboxAccess("codeServer", url, password);
-  }
-
-  private async storeVnc(url: string, password: string): Promise<void> {
-    this.log.info("Storing VNC info", { url });
-    await this.storage.updateSandboxAccess("vnc", url, password);
-  }
-
-  private async storeAndBroadcastTunnelUrls(
-    urls: Record<string, string> | undefined
-  ): Promise<void> {
-    if (!urls || Object.keys(urls).length === 0) return;
-    this.log.info("Storing and broadcasting tunnel URLs", { ports: Object.keys(urls) });
-    await this.storage.updateSandboxTunnelUrls(urls);
-    this.broadcaster.broadcast({ type: "sandbox_access_changed" });
-  }
-
-  /** Mint and persist terminal access. */
-  private async storeTtyd(
-    url: string,
-    sandboxAuthToken: string,
-    sessionId: string,
-    sandboxId: string
-  ): Promise<void> {
-    const token = await this.mintTtydToken(sandboxAuthToken, sessionId, sandboxId);
-
-    this.log.info("Storing ttyd info", { url });
-    await this.storage.updateSandboxAccess("ttyd", url, token);
-  }
-
-  private mintTtydToken(
-    sandboxAuthToken: string,
-    sessionId: string,
-    sandboxId: string
-  ): Promise<string> {
-    return mintJwt(
-      {
-        sub: sessionId,
-        sid: sandboxId,
-        iat: Math.floor(Date.now() / 1000),
-        exp: Math.floor(Date.now() / 1000) + TERMINAL_TOKEN_TTL_SECONDS,
-      },
-      sandboxAuthToken
-    );
-  }
-
-  private async recordPendingProviderReference(
-    generation: SandboxGeneration,
-    config: Pick<
-      CreateSandboxConfig,
-      "sessionId" | "sandboxId" | "generationCreatedAtMs" | "timeoutSeconds"
-    >
-  ): Promise<void> {
-    if (!generation.sandboxId || config.sandboxId !== generation.sandboxId)
-      throw new SpawnSupersededError();
-    const pending = this.provider.pendingSandboxAllocation?.(config);
-    if (!pending) return;
-    const row = this.storage.getSandbox();
-    if (
-      row?.modal_sandbox_id !== generation.sandboxId ||
-      row.created_at !== generation.createdAt ||
-      row.fenced
-    ) {
-      throw new SpawnSupersededError();
-    }
-    const previousProviderObjectId = row.modal_object_id;
-    this.storage.updateSandboxModalObjectId(pending.reference);
-    const registered = await this.shutdown.recordPendingProviderHandle(
-      generation,
-      pending.reference,
-      pending.lifetime
-    );
-    if (registered === "superseded") throw new SpawnSupersededError();
-    if (registered === "expired") {
-      const current = this.storage.getSandbox();
-      if (
-        current?.modal_sandbox_id === generation.sandboxId &&
-        current.created_at === generation.createdAt &&
-        current.modal_object_id === pending.reference &&
-        !current.fenced
-      ) {
-        this.storage.updateSandboxModalObjectId(previousProviderObjectId);
-      }
-      throw new SandboxLaunchExpiredError();
-    }
-  }
-
-  private async createWithVmRecovery(
-    config: CreateSandboxConfig,
-    generation: SandboxGeneration
-  ): Promise<CreateSandboxResult | null> {
-    try {
-      return await this.provider.createSandbox(config);
-    } catch (error) {
-      if (!this.provider.isUnknownStartupError?.(error)) throw error;
-      const recovered = await this.resolveUnknownVmStartup(generation, config);
-      return recovered ? { ...recovered, createdAt: generation.createdAt } : null;
-    }
-  }
-
-  private knownBridgeStartup(
-    generation: SandboxGeneration,
-    row: SandboxRow | null
-  ): ResolveSandboxResult | null {
-    const known = this.bridgeResolvedStartup;
-    if (
-      !known ||
-      row?.modal_sandbox_id !== generation.sandboxId ||
-      row.created_at !== generation.createdAt ||
-      row.fenced ||
-      !["spawning", "connecting", "ready"].includes(row.status) ||
-      row.modal_object_id !== known.result.providerObjectId ||
-      known.generation.sandboxId !== generation.sandboxId ||
-      known.generation.createdAt !== generation.createdAt
-    )
-      return null;
-    return known.result;
-  }
-
-  private async resolveUnknownVmStartup(
-    generation: SandboxGeneration,
-    config: Pick<
-      CreateSandboxConfig,
-      "sessionId" | "sandboxId" | "generationCreatedAtMs" | "timeoutSeconds"
-    >
-  ): Promise<ResolveSandboxResult | null> {
-    if (!this.provider.resolveSandbox) return null;
-    const reference = this.provider.pendingSandboxAllocation?.(config)?.reference;
-    while (true) {
-      const row = this.storage.getSandbox();
-      const bridged = this.knownBridgeStartup(generation, row);
-      if (bridged) return bridged;
-      const resolvedByBridge =
-        !!row?.modal_object_id &&
-        row.modal_object_id !== reference &&
-        parsePendingVmReference(row.modal_object_id) === null;
-      if (
-        row?.modal_sandbox_id !== generation.sandboxId ||
-        row.created_at !== generation.createdAt ||
-        row.fenced ||
-        !["spawning", "connecting", "ready"].includes(row.status) ||
-        (row.modal_object_id !== reference && !resolvedByBridge)
-      )
-        return null;
-      try {
-        return await this.provider.resolveSandbox({
-          ...config,
-          generationCreatedAtMs: generation.createdAt,
-        });
-      } catch (error) {
-        const detail = vmAllocationDetail(error);
-        if (detail === "other_generation") throw error;
-        if (detail !== "not_visible" && !this.provider.isUnknownStartupError?.(error)) throw error;
-        if (Date.now() - generation.createdAt >= PENDING_VM_REFERENCE_MATERIALIZE_BOUND_MS) {
-          const current = this.storage.getSandbox();
-          const bridgedAfterLookup = this.knownBridgeStartup(generation, current);
-          if (bridgedAfterLookup) return bridgedAfterLookup;
-          if (
-            current?.modal_sandbox_id === generation.sandboxId &&
-            current.created_at === generation.createdAt &&
-            !current.fenced &&
-            current.modal_object_id &&
-            parsePendingVmReference(current.modal_object_id) === null
-          ) {
-            const lifetime = this.provider.pendingSandboxAllocation?.(config)?.lifetime;
-            if (lifetime)
-              return {
-                sandboxId: config.sandboxId,
-                providerObjectId: current.modal_object_id,
-                lifetime,
-              };
-          }
-          if (detail === "not_visible")
-            throw new SandboxProviderError(
-              "The VM allocation did not appear for this attempt. Please retry.",
-              "transient",
-              error instanceof Error ? error : undefined
-            );
-          if (
-            current?.modal_sandbox_id === generation.sandboxId &&
-            current.created_at === generation.createdAt &&
-            !current.fenced &&
-            current.modal_object_id === reference
-          )
-            this.bridgeStartupClaim = generation;
-          return null;
-        }
-      }
-      await new Promise<void>((resolve) => setTimeout(resolve, VM_RESOLVE_RETRY_MS));
-    }
-  }
-
-  /** Bridge-triggered reconciliation is lookup-only and never holds readiness. */
-  private resolvePendingBridge(generation: SandboxGeneration): void {
-    if (this.bridgeResolution) {
-      if (
-        this.bridgeResolution.sandboxId !== generation.sandboxId ||
-        this.bridgeResolution.createdAt !== generation.createdAt
-      )
-        this.bridgeRetryGeneration = generation;
-      return;
-    }
-    if (!this.provider.resolveSandbox) return;
-    const row = this.storage.getSandbox();
-    const reference = row?.modal_object_id;
-    const pending = reference ? parsePendingVmReference(reference) : null;
-    const session = this.sessionContext.getSession();
-    if (
-      !row ||
-      row.fenced ||
-      !["spawning", "connecting", "ready"].includes(row.status) ||
-      row.created_at !== generation.createdAt ||
-      row.modal_sandbox_id !== generation.sandboxId ||
-      !reference ||
-      !pending ||
-      !session ||
-      pending.sandboxId !== row.modal_sandbox_id ||
-      pending.sessionId !== (session.session_name || session.id)
-    )
-      return;
-    const config = {
-      sessionId: pending.sessionId,
-      sandboxId: pending.sandboxId,
-      generationCreatedAtMs: generation.createdAt,
-      timeoutSeconds: this.launchContext.resolveSandboxSettings(session).timeoutSeconds,
-    };
-    const retryDeadlineAtMs = Date.now() + PENDING_VM_REFERENCE_MATERIALIZE_BOUND_MS;
-    this.bridgeResolution = generation;
-    const work = () =>
-      (async () => {
-        let result: ResolveSandboxResult;
-        while (true) {
-          const current = this.storage.getSandbox();
-          if (
-            current?.modal_sandbox_id !== generation.sandboxId ||
-            current.created_at !== generation.createdAt ||
-            current.fenced ||
-            !["spawning", "connecting", "ready"].includes(current.status) ||
-            current.modal_object_id !== reference
-          )
-            return;
-          try {
-            result = await this.provider.resolveSandbox!(config);
-            break;
-          } catch (error) {
-            const detail = vmAllocationDetail(error);
-            if (detail !== "not_visible" && !this.provider.isUnknownStartupError?.(error))
-              throw error;
-            if (
-              Date.now() >= retryDeadlineAtMs ||
-              (detail === "not_visible" &&
-                Date.now() - generation.createdAt >= PENDING_VM_REFERENCE_MATERIALIZE_BOUND_MS) ||
-              this.bridgeRetryGeneration
-            )
-              return;
-            await new Promise<void>((resolve) => setTimeout(resolve, VM_RESOLVE_RETRY_MS));
-          }
-        }
-        if (!result.providerObjectId) return;
-        const auth = this.vmStartupAuth;
-        const terminalToken =
-          result.ttydUrl &&
-          auth &&
-          auth.generation.sandboxId === generation.sandboxId &&
-          auth.generation.createdAt === generation.createdAt
-            ? await this.mintTtydToken(auth.token, auth.sessionId, generation.sandboxId!)
-            : null;
-        const committed = await this.storage.completeProviderResume(
-          generation,
-          {
-            providerObjectId: result.providerObjectId,
-            codeServer:
-              result.codeServerUrl && result.codeServerPassword
-                ? { url: result.codeServerUrl, password: result.codeServerPassword }
-                : null,
-            vnc: result.vncAccess ?? null,
-            ttyd:
-              result.ttydUrl && terminalToken
-                ? { url: result.ttydUrl, token: terminalToken }
-                : null,
-            tunnelUrls: result.tunnelUrls ?? null,
-          },
-          reference
-        );
-        if (!committed) return;
-        this.bridgeResolvedStartup = {
-          generation,
-          result: {
-            sandboxId: result.sandboxId,
-            providerObjectId: result.providerObjectId,
-            lifetime: result.lifetime,
-          },
-        };
-        if (
-          this.bridgeStartupClaim?.sandboxId === generation.sandboxId &&
-          this.bridgeStartupClaim.createdAt === generation.createdAt
-        ) {
-          this.bridgeStartupClaim = null;
-          try {
-            await this.claimProviderStartup(generation, result.providerObjectId, result.lifetime);
-          } finally {
-            if (
-              this.vmStartupAuth?.generation.sandboxId === generation.sandboxId &&
-              this.vmStartupAuth.generation.createdAt === generation.createdAt
-            )
-              this.vmStartupAuth = null;
-          }
-        } else {
-          this.shutdown.recordResolvedProviderHandle?.(
-            generation,
-            reference,
-            result.providerObjectId
-          );
-        }
-        this.broadcastProviderAccessIfConnected();
-      })()
-        .catch((error) => {
-          this.log.warn("Bridge VM resolution failed", {
-            event: "sandbox.vm_resolve_failed",
-            error: error instanceof Error ? error.message : String(error),
-          });
-        })
-        .finally(() => {
-          this.bridgeResolution = null;
-          const queued = this.bridgeRetryGeneration;
-          this.bridgeRetryGeneration = null;
-          if (queued) this.resolvePendingBridge(queued);
-        });
-    if (this.backgroundTasks) this.backgroundTasks.submit(work, { name: "sandbox.vm_resolve" });
-    else void work();
-  }
-
   private async handleRejectedStartupAllocation(
     error: unknown,
     generation: SandboxGeneration | null
@@ -2551,42 +2100,26 @@ export class SandboxLifecycleManager
     // accept the allocation or lose the cleanup obligation.
     const rejection = this.storage.rejectProviderStartup(generation, error.providerObjectId);
     if (rejection === "superseded") {
-      await this.destroyLateProviderResult(error.providerObjectId ?? undefined);
+      await destroyLateProviderResult(this.allocationCleanup, error.providerObjectId ?? undefined);
       return;
     }
     this.wsManager.detachSandboxWebSocket(1008, "Provider allocation rejected");
-    this.clearSandboxAccessState();
+    this.access.clearAccess();
     if (rejection === "failed") {
       this.broadcaster.broadcast({ type: "sandbox_status", status: "failed" });
       this.reportSandboxError(error.message);
       this.recordSpawnFailure(Date.now(), generation.createdAt);
     }
     if (error.providerObjectId)
-      await this.attemptRejectedStartupCleanup(generation, error.providerObjectId);
+      await attemptRejectedStartupCleanup(
+        this.allocationCleanup,
+        generation,
+        error.providerObjectId
+      );
   }
 
-  async rearmRejectedStartupCleanupAlarm(): Promise<void> {
-    const row = this.storage.getSandbox();
-    if (row?.startup_rejected && row.modal_object_id) {
-      await this.alarmScheduler.schedule(Date.now() + REJECTED_ALLOCATION_CLEANUP_RETRY_MS);
-    }
-  }
-
-  private async attemptRejectedStartupCleanup(
-    generation: SandboxGeneration,
-    providerObjectId: string
-  ): Promise<void> {
-    // Persist the next attempt before provider I/O so an eviction cannot lose cleanup.
-    await this.rearmRejectedStartupCleanupAlarm();
-    if (!(await this.destroyLateProviderResult(providerObjectId))) return;
-    const row = this.storage.getSandbox();
-    if (
-      row?.modal_sandbox_id === generation.sandboxId &&
-      row.created_at === generation.createdAt &&
-      row.modal_object_id === providerObjectId
-    ) {
-      this.storage.updateSandboxModalObjectId(null);
-    }
+  rearmRejectedStartupCleanupAlarm(): Promise<void> {
+    return rearmRejectedStartupCleanupAlarm(this.allocationCleanup);
   }
 
   private async claimProviderStartup(
@@ -2615,14 +2148,14 @@ export class SandboxLifecycleManager
       !this.canStopProviderSandbox()
     );
     if (status === null) {
-      await this.destroyLateProviderResult(providerObjectId);
+      await destroyLateProviderResult(this.allocationCleanup, providerObjectId);
       return false;
     }
 
     await this.shutdown.recordProviderStartup(generation, lifetime);
     if (announce) {
       try {
-        if (providerObjectId) this.broadcastSandboxDashboardUrl(providerObjectId);
+        if (providerObjectId) this.access.broadcastSandboxDashboardUrl(providerObjectId);
         if (!this.wsManager.getSandboxWebSocket() && status === "connecting") {
           this.broadcaster.broadcast({ type: "sandbox_status", status: "connecting" });
         }
@@ -2634,38 +2167,6 @@ export class SandboxLifecycleManager
       }
     }
     return true;
-  }
-
-  private async destroyLateProviderResult(providerObjectId: string | undefined): Promise<boolean> {
-    if (!providerObjectId || !this.canStopProviderSandbox()) return false;
-    const controller = new AbortController();
-    let timeoutId: ReturnType<typeof setTimeout> | undefined;
-    try {
-      const timeout = new Promise<never>((_, reject) => {
-        timeoutId = setTimeout(() => {
-          controller.abort();
-          reject(new Error("Late provider cleanup timed out"));
-        }, PROVIDER_REPLACEMENT_STOP_TIMEOUT_MS);
-      });
-      await Promise.race([
-        this.stopProviderSandbox(
-          "startup_superseded",
-          "destroy",
-          controller.signal,
-          providerObjectId
-        ),
-        timeout,
-      ]);
-      return true;
-    } catch (error) {
-      this.log.warn("Failed to destroy superseded provider sandbox", {
-        provider_object_id: providerObjectId,
-        error: error instanceof Error ? error.message : String(error),
-      });
-      return false;
-    } finally {
-      if (timeoutId !== undefined) clearTimeout(timeoutId);
-    }
   }
 
   private async enterProviderStartup(
@@ -2711,7 +2212,7 @@ export class SandboxLifecycleManager
    * in flight, and for the user, who sees the boot begin.
    */
   onSandboxSocketAttached(generation: SandboxGeneration): void {
-    this.resolvePendingBridge(generation);
+    this.vmStartup.resolvePendingBridge(generation);
     if (this.storage.transitionSandboxStatus(generation, "spawning", "connecting")) {
       this.broadcaster.broadcast({ type: "sandbox_status", status: "connecting" });
       return;

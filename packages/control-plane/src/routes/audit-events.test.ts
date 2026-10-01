@@ -66,6 +66,15 @@ describe("audit events route", () => {
     expect(mockStore.list).toHaveBeenCalledWith({ limit: 100, cursor: null });
   });
 
+  it("passes the workspace team filter without a feed visibility scope", async () => {
+    expect((await list("?teamId=team_alpha")).status).toBe(200);
+    expect(mockStore.list).toHaveBeenCalledWith({
+      limit: DEFAULT_AUDIT_EVENT_LIMIT,
+      cursor: null,
+      teamId: "team_alpha",
+    });
+  });
+
   it("round-trips a cursor through the store and the next page", async () => {
     const cursor = { occurredAt: 1_700_000_000_000, id: "event-1" };
     const next = { occurredAt: 1_699_999_999_000, id: "event-2" };
@@ -106,6 +115,7 @@ describe("audit events route", () => {
   it.each([
     ["limit=1&limit=2", "Invalid limit"],
     ["cursor=one&cursor=two", "Invalid cursor"],
+    ["teamId=one&teamId=two", "Invalid teamId"],
   ])("rejects a repeated key (%s)", async (query, message) => {
     const response = await list(`?${query}`);
 

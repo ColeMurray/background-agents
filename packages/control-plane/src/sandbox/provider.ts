@@ -647,3 +647,14 @@ export interface SandboxProvider {
    */
   stopSandbox?(config: StopConfig): Promise<StopResult>;
 }
+
+/** Existing capability-based preserve-stop policy; resume support is checked separately at startup. */
+export function providerResumesAfterStop(
+  provider: Pick<SandboxProvider, "capabilities" | "stopSandbox">
+): boolean {
+  return (
+    !!provider.capabilities.supportsExplicitStop &&
+    !!provider.stopSandbox &&
+    !!provider.capabilities.supportsPersistentResume
+  );
+}

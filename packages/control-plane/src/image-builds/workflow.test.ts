@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ImageBuildStore } from "../db/image-builds";
+import { SecretDecryptionError } from "../db/scoped-secrets";
 import { createTestEnv } from "../router.test-support";
 import type { Env } from "../types";
 import {
@@ -312,6 +313,23 @@ describe("ImageBuildWorkflow", () => {
       expect(store.registerBuild.mock.invocationCallOrder[0]).toBeLessThan(
         planBuild.mock.invocationCallOrder[0]
       );
+    });
+
+    it("fails the registered build without starting the provider when secret loading fails", async () => {
+      const failure = new SecretDecryptionError("TEAM_TOKEN");
+      const { workflow, store, adapter } = createWorkflow({
+        planBuild: vi.fn().mockRejectedValue(failure),
+      });
+
+      await expect(workflow.triggerBuild(ENV_SCOPE, ctx)).rejects.toBeInstanceOf(
+        ImageBuildTriggerFailedError
+      );
+      expect(store.markBuildFailed).toHaveBeenCalledWith(
+        expect.stringMatching(/^imgb-env_1-/),
+        "modal",
+        failure.message
+      );
+      expect(adapter.startBuild).not.toHaveBeenCalled();
     });
 
     it("fails a misconfigured provider closed without writing a row", async () => {

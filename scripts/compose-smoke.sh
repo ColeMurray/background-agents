@@ -181,8 +181,13 @@ done
 echo "  ok  the cron loop ticked"
 
 log "replication"
-"${COMPOSE[@]}" logs --no-color litestream | grep -q "snapshot written" ||
-  fail "Litestream never wrote a snapshot of the global store"
+# Initial replication can finish after the other boot checks have already passed.
+REPLICATION_DEADLINE=$((SECONDS + 30))
+until "${COMPOSE[@]}" logs --no-color litestream | grep -F "snapshot written" >/dev/null; do
+  [ "$SECONDS" -lt "$REPLICATION_DEADLINE" ] ||
+    fail "Litestream never wrote a snapshot of the global store"
+  sleep 1
+done
 echo "  ok  Litestream replicated the global store"
 
 log "clean shutdown"

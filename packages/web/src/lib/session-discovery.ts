@@ -10,6 +10,7 @@ import {
   type SessionStatus,
   type SpawnSource,
 } from "@open-inspect/shared/types/sessions";
+import { sessionVisibilitySchema, type SessionVisibility } from "@open-inspect/shared/types/teams";
 import { formatRepoLabel } from "./repo-label";
 
 /**
@@ -20,8 +21,9 @@ import { formatRepoLabel } from "./repo-label";
  * `repoName`, `environmentId`, `origin`, `createdBy=me`) plus a `lifecycle`
  * control that maps onto the API's `status`/`excludeStatus` pair. Defaults
  * are omitted so `/sessions` alone is the canonical "not archived, all
- * creators" view. Values the API would reject are reported by the parser so
- * the page can refuse them instead of widening the result set.
+ * creators" view within the active team context. Values the API would reject
+ * are reported by the parser so the page can refuse them instead of widening
+ * the result set.
  */
 
 export const SESSIONS_PATH = "/sessions";
@@ -30,6 +32,7 @@ export const SESSIONS_PAGE_SIZE = DEFAULT_SESSION_LIST_LIMIT;
 export const SESSION_LIFECYCLES = ["nonarchived", "archived", "all"] as const;
 export type SessionLifecycle = (typeof SESSION_LIFECYCLES)[number];
 export type SessionCreatorFilter = "all" | "mine";
+export type SessionOwnerFilter = NonNullable<SessionListQuery["ownerFilter"]>;
 
 export interface SessionRepositoryFilter {
   repoOwner: string;
@@ -43,6 +46,10 @@ export interface SessionDiscoveryQuery {
   environmentId: string | null;
   lifecycle: SessionLifecycle;
   origin: SpawnSource | null;
+  teamIds: string[] | undefined;
+  scope: SessionListQuery["scope"];
+  ownerFilter: SessionOwnerFilter;
+  visibility: SessionVisibility | undefined;
 }
 
 export const DEFAULT_SESSION_DISCOVERY_QUERY: SessionDiscoveryQuery = {
@@ -52,6 +59,23 @@ export const DEFAULT_SESSION_DISCOVERY_QUERY: SessionDiscoveryQuery = {
   environmentId: null,
   lifecycle: "nonarchived",
   origin: null,
+  teamIds: undefined,
+  scope: undefined,
+  ownerFilter: "anyone",
+  visibility: undefined,
+};
+
+export const SESSION_OWNER_FILTERS = ["anyone", "started", "participating"] as const;
+export const SESSION_OWNER_LABELS: Record<SessionOwnerFilter, string> = {
+  anyone: "Anyone",
+  started: "Started by me",
+  participating: "Participating",
+};
+export const SESSION_VISIBILITIES = sessionVisibilitySchema.options;
+export const SESSION_VISIBILITY_LABELS: Record<SessionVisibility, string> = {
+  team: "Team",
+  workspace: "Workspace",
+  private: "Private",
 };
 
 export const SESSION_LIFECYCLE_LABELS: Record<SessionLifecycle, string> = {
@@ -85,6 +109,10 @@ const SESSION_DISCOVERY_TRANSPORT_PARAMS = [
   "repoName",
   "environmentId",
   "origin",
+  "teamIds[]",
+  "scope",
+  "ownerFilter",
+  "visibility",
 ] as const satisfies readonly SessionListQueryParam[];
 
 /** Every parameter a `/sessions` URL may carry; anything else is refused. */
@@ -102,7 +130,7 @@ export type SessionDiscoveryParseResult =
  * for every transport parameter, so a value the API would reject is refused
  * here first. The page adds its own rules: `createdBy` may only be `me` (the
  * page has no control for other creators), `lifecycle` is the page's own
- * control, no parameter repeats, and any other parameter is unsupported —
+ * control, only `teamIds[]` repeats, and any other parameter is unsupported —
  * including API parameters the page has no control for, such as `status`.
  * Refusing is deliberate: a bad link must never silently show a wider or
  * different result set than it names.
@@ -112,15 +140,17 @@ export function parseSessionDiscoveryQuery(
 ): SessionDiscoveryParseResult {
   const invalidParams = new Set<string>();
   for (const key of new Set(searchParams.keys())) {
-    if (!SESSION_DISCOVERY_PARAMS.includes(key) || searchParams.getAll(key).length > 1) {
+    if (
+      !SESSION_DISCOVERY_PARAMS.includes(key) ||
+      (key !== "teamIds[]" && searchParams.getAll(key).length > 1)
+    ) {
       invalidParams.add(key);
     }
   }
 
   const transport = new URLSearchParams();
   for (const key of SESSION_DISCOVERY_TRANSPORT_PARAMS) {
-    const value = searchParams.get(key);
-    if (value !== null) transport.set(key, value);
+    for (const value of searchParams.getAll(key)) transport.append(key, value);
   }
   const parsed = parseSessionListQuery(transport);
   if (!parsed.success) {
@@ -135,7 +165,18 @@ export function parseSessionDiscoveryQuery(
   if (!parsed.success || invalidParams.size > 0) {
     return { success: false, invalidParams: [...invalidParams] };
   }
-  const { q, createdBy, repoOwner, repoName, environmentId, origin } = parsed.data;
+  const {
+    q,
+    createdBy,
+    repoOwner,
+    repoName,
+    environmentId,
+    origin,
+    teamIds,
+    scope,
+    ownerFilter,
+    visibility,
+  } = parsed.data;
   return {
     success: true,
     data: {
@@ -147,6 +188,10 @@ export function parseSessionDiscoveryQuery(
         ? lifecycleParam
         : DEFAULT_SESSION_DISCOVERY_QUERY.lifecycle,
       origin: origin ?? null,
+      teamIds: teamIds ? [...teamIds] : undefined,
+      scope,
+      ownerFilter: ownerFilter ?? DEFAULT_SESSION_DISCOVERY_QUERY.ownerFilter,
+      visibility,
     },
   };
 }
@@ -165,6 +210,12 @@ export function serializeSessionDiscoveryQuery(query: SessionDiscoveryQuery): UR
     searchParams.set("lifecycle", query.lifecycle);
   }
   if (query.origin) searchParams.set("origin", query.origin);
+  for (const teamId of query.teamIds ?? []) searchParams.append("teamIds[]", teamId);
+  if (query.scope) searchParams.set("scope", query.scope);
+  if (query.ownerFilter !== DEFAULT_SESSION_DISCOVERY_QUERY.ownerFilter) {
+    searchParams.set("ownerFilter", query.ownerFilter);
+  }
+  if (query.visibility) searchParams.set("visibility", query.visibility);
   return searchParams;
 }
 
@@ -178,9 +229,12 @@ export function buildSessionsHref(query: Partial<SessionDiscoveryQuery> = {}): s
   return queryString ? `${SESSIONS_PATH}?${queryString}` : SESSIONS_PATH;
 }
 
-/** Whether any control differs from the default view (search text included). */
-export function hasSessionDiscoveryFilters(query: SessionDiscoveryQuery): boolean {
-  return serializeSessionDiscoveryQuery(query).toString() !== "";
+/** Whether any control differs from the active context's default view. */
+export function hasSessionDiscoveryFilters(
+  query: SessionDiscoveryQuery,
+  teamContext: Pick<SessionDiscoveryQuery, "teamIds" | "scope"> = DEFAULT_SESSION_DISCOVERY_QUERY
+): boolean {
+  return buildSessionsHref(query) !== buildSessionsHref(teamContext);
 }
 
 /** The API query for one page of `query`, in the shared list-query contract. */
@@ -199,6 +253,13 @@ export function toSessionListQuery(
     ...(query.repository ?? {}),
     ...(query.environmentId ? { environmentId: query.environmentId } : {}),
     ...(query.origin ? { origin: query.origin } : {}),
+    ...(query.teamIds?.length ? { teamIds: query.teamIds } : {}),
+    ...(query.scope ? { scope: query.scope } : {}),
+    // Omit Anyone so createdBy=me retains the API's legacy started-by-me semantics.
+    ...(query.ownerFilter !== DEFAULT_SESSION_DISCOVERY_QUERY.ownerFilter
+      ? { ownerFilter: query.ownerFilter }
+      : {}),
+    ...(query.visibility ? { visibility: query.visibility } : {}),
   };
 }
 

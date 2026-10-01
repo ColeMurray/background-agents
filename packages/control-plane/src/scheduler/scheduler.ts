@@ -61,6 +61,8 @@ import {
   type SlackRunMetadata,
   type SlackCompletionContext,
 } from "./slack-completion";
+import { getUserAuth } from "../auth/user/runtime";
+import { GitHubAttributionUnavailableError } from "../source-control/github-credential-authority";
 import { UserStore } from "../db/user-store";
 import { createRequestMetrics } from "../db/instrumented-sql-database";
 import { generateId } from "../auth/crypto";
@@ -88,7 +90,12 @@ import {
 } from "../automation/authorization-guard";
 import type { RequestContext } from "../routes/shared";
 import { deliverWithRetry } from "../session/callback-delivery";
-import type { GitHubEnrichment } from "../session/identity";
+import {
+  AmbiguousGitHubIdentityError,
+  resolveGitHubEnrichmentForCanonicalUser,
+  type GitHubEnrichment,
+} from "../session/identity";
+import { resolveScmProviderFromEnv } from "../source-control/config";
 
 /** Max automations to process per tick (backpressure). */
 const MAX_PER_TICK = 25;
@@ -270,7 +277,7 @@ interface StartInvocationParams {
 interface ExecutionPrincipal {
   platformUserId: string;
   participantUserId: string;
-  scmEnrichment?: GitHubEnrichment;
+  scmEnrichment: GitHubEnrichment | null;
 }
 
 type StartInvocationResult =
@@ -287,7 +294,7 @@ type StartInvocationResult =
 
 type SchedulerPromptRequest = Pick<
   EnqueuePromptRequest,
-  "content" | "authorId" | "canonicalUserId" | "source"
+  "content" | "authorId" | "canonicalUserId" | "source" | "scmEnrichment"
 > & {
   callbackContext: AutomationCallbackContext | SlackCallbackContext;
 };
@@ -397,6 +404,7 @@ export class Scheduler {
         ? {
             platformUserId: automation.user_id,
             participantUserId: automation.created_by,
+            scmEnrichment: null,
           }
         : null);
     if (!executionPrincipal) return { outcome: "unauthorized" };
@@ -563,6 +571,17 @@ export class Scheduler {
       return this.recordOverlapSkip(store, params, { advanceSchedule: false });
     }
 
+    let attributionError: unknown;
+    if (!params.executionPrincipal && launchCandidates.length > 0) {
+      try {
+        executionPrincipal.scmEnrichment = await this.resolveScmEnrichment(
+          executionPrincipal.platformUserId
+        );
+      } catch (error) {
+        attributionError = error;
+      }
+    }
+
     // Admitted. Only now is it worth paying for anything the prompt needs.
     // Contain provider failures here: children already exist in `starting`, so
     // a rejected lazy override must not escape and strand persisted state.
@@ -582,6 +601,7 @@ export class Scheduler {
 
     const launchChild = async (child: AutomationRunRow): Promise<void> => {
       try {
+        if (attributionError !== undefined) throw attributionError;
         if ("error" in providerAuthSnapshot) throw providerAuthSnapshot.error;
         const sessionId = generateId();
         // Claim the generated session before initialization. Otherwise the orphan sweep can
@@ -1223,7 +1243,7 @@ export class Scheduler {
   async trigger(
     automationId: string,
     requesterUserId: string,
-    requesterEnrichment?: GitHubEnrichment
+    requesterEnrichment: GitHubEnrichment | null = null
   ): Promise<SchedulerTriggerResult> {
     const store = new AutomationStore(this.db);
     const automation = await store.getById(automationId);
@@ -1595,6 +1615,8 @@ export class Scheduler {
       executionPrincipal.platformUserId
     );
 
+    const scmEnrichment = executionPrincipal.scmEnrichment;
+
     const sessionInput: SessionInitInput = {
       ownerTeamId: null,
       visibility: "workspace",
@@ -1606,10 +1628,11 @@ export class Scheduler {
       reasoningEffort: automation.reasoning_effort,
       participantUserId: executionPrincipal.participantUserId,
       platformUserId: executionPrincipal.platformUserId,
-      scmUserId: executionPrincipal.scmEnrichment?.scmUserId,
-      scmLogin: executionPrincipal.scmEnrichment?.scmLogin,
-      scmName: executionPrincipal.scmEnrichment?.displayName,
-      scmEmail: executionPrincipal.scmEnrichment?.email,
+      participantCanonicalUserId: executionPrincipal.platformUserId,
+      scmUserId: scmEnrichment?.scmUserId,
+      scmLogin: scmEnrichment?.scmLogin,
+      scmName: scmEnrichment?.displayName,
+      scmEmail: scmEnrichment?.email,
       codeServerEnabled,
       vncEnabled,
       sandboxSettings,
@@ -1651,6 +1674,29 @@ export class Scheduler {
     );
   }
 
+  private async resolveScmEnrichment(userId: string): Promise<GitHubEnrichment | null> {
+    if (resolveScmProviderFromEnv(this.env.SCM_PROVIDER) !== "github") return null;
+    try {
+      return await resolveGitHubEnrichmentForCanonicalUser(
+        new UserStore(this.db),
+        userId,
+        () => getUserAuth(this.env, this.db).api
+      );
+    } catch (error) {
+      if (
+        !(error instanceof AmbiguousGitHubIdentityError) &&
+        !(error instanceof GitHubAttributionUnavailableError)
+      )
+        throw error;
+      this.log.warn("GitHub attribution unavailable; continuing without it", {
+        event: "scheduler.github_enrichment_unavailable",
+        user_id: userId,
+        error,
+      });
+      return null;
+    }
+  }
+
   /**
    * Route a follow-up slack message in a thread to its run's existing session as
    * the next turn — whether that run is still in flight, completed, or failed —
@@ -1683,6 +1729,7 @@ export class Scheduler {
       automationId: automation.id,
     };
 
+    const enrichment = await this.resolveScmEnrichment(actorUserId);
     try {
       await this.enqueueSessionPrompt(
         sessionId,
@@ -1690,6 +1737,15 @@ export class Scheduler {
           content: event.text,
           authorId: `slack:${event.actorUserId}`,
           canonicalUserId: actorUserId,
+          scmEnrichment:
+            resolveScmProviderFromEnv(this.env.SCM_PROVIDER) === "github"
+              ? {
+                  userId: enrichment?.scmUserId ?? null,
+                  login: enrichment?.scmLogin ?? null,
+                  name: enrichment?.displayName ?? null,
+                  email: enrichment?.email ?? null,
+                }
+              : undefined,
           source: "slack",
           callbackContext,
         },

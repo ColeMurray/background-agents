@@ -178,7 +178,6 @@ export const sessionCapabilitiesSchema = z.object({
   canCollaborate: z.boolean(),
   canManageLifecycle: z.boolean(),
   canDelete: z.boolean(),
-  canMove: z.boolean(),
   canSandbox: z.boolean(),
   canManageCollaborators: z.boolean(),
   canChangeVisibility: z.boolean(),
@@ -310,3 +309,15 @@ export const sessionParticipantProfilesResponseSchema = z.object({
 export type SessionParticipantProfilesResponse = z.infer<
   typeof sessionParticipantProfilesResponseSchema
 >;
+
+export const sessionCollaboratorCandidateSchema = z.object({
+  userId: z.string(),
+  displayName: z.string().nullable(),
+  email: z.string().nullable(),
+  avatarUrl: z.string().nullable(),
+});
+export type SessionCollaboratorCandidate = z.infer<typeof sessionCollaboratorCandidateSchema>;
+
+export const sessionCollaboratorCandidatesResponseSchema = z.array(
+  sessionCollaboratorCandidateSchema
+);

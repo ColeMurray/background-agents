@@ -13,6 +13,14 @@ import {
   type SandboxShutdownLifecycle,
 } from "./manager";
 import { COMPATIBLE_RUNTIME_VERSION } from "../../image-builds/test-helpers";
+import { createLogger } from "../../logger";
+import type { BackgroundTasks } from "../../platform-ports";
+import type { ImageBuildLookup } from "./image-selection";
+import {
+  SandboxAccess,
+  type SandboxAccessDependencies,
+  type SandboxAccessStorage,
+} from "./sandbox-access";
 import { SandboxShutdownCoordinator } from "../../session/sandbox-shutdown";
 import type { ShutdownRecord } from "../../session/sandbox-shutdown-repository";
 import type {
@@ -30,6 +38,7 @@ import type {
   StopConfig,
   StopResult,
 } from "../provider";
+import { providerResumesAfterStop } from "../provider";
 import type { SandboxAccessKind, SandboxRow, SessionRow } from "../../session/types";
 import type { SandboxStatus } from "@open-inspect/shared/types/sessions";
 
@@ -118,7 +127,7 @@ export function createMockStorage(
     | null = createMockSandbox(),
   userEnvVars: Record<string, string> | undefined = undefined,
   sessionRepositories: SessionRepositoryInfo[] = []
-): SandboxStorage & SessionContextReader & { calls: string[] } {
+): SandboxStorage & SandboxAccessStorage & SessionContextReader & { calls: string[] } {
   const calls: string[] = [];
 
   return {
@@ -449,6 +458,47 @@ export function createTestConfig(): SandboxLifecycleConfig {
   };
 }
 
+export function createTestLifecycleManager(
+  provider: SandboxProvider,
+  storage: SandboxStorage & SandboxAccessStorage,
+  sessionContext: SessionContextReader,
+  broadcaster: SandboxBroadcaster,
+  wsManager: WebSocketManager,
+  alarmScheduler: AlarmScheduler,
+  idGenerator: IdGenerator,
+  shutdown: SandboxShutdownLifecycle,
+  config: SandboxLifecycleConfig & Pick<SandboxAccessDependencies, "sandboxDashboardUrlBuilder">,
+  imageBuildLookup?: ImageBuildLookup,
+  backgroundTasks?: BackgroundTasks
+): SandboxLifecycleManager {
+  const access = new SandboxAccess({
+    storage,
+    broadcaster,
+    sockets: wsManager,
+    canResumeAfterStop: () => providerResumesAfterStop(provider),
+    getLogger: () => {
+      const log = createLogger("lifecycle-manager");
+      const sessionId = config.getSessionId?.();
+      return sessionId ? log.child({ session_id: sessionId }) : log;
+    },
+    sandboxDashboardUrlBuilder: config.sandboxDashboardUrlBuilder,
+  });
+  return new SandboxLifecycleManager(
+    provider,
+    storage,
+    sessionContext,
+    broadcaster,
+    wsManager,
+    alarmScheduler,
+    idGenerator,
+    shutdown,
+    access,
+    config,
+    imageBuildLookup,
+    backgroundTasks
+  );
+}
+
 export function createUnmanagedShutdown() {
   return {
     reserveStartup: vi.fn((_createdAt, _policy, persist) => persist()),
@@ -535,7 +585,7 @@ export function createAlarmFixture(
   const wsManager = createMockWebSocketManager(false, clientCount);
   const alarmScheduler = createMockAlarmScheduler();
   const shutdown = createCheckpointShutdown(provider, storage, broadcaster, onLifecycleChange);
-  const manager = new SandboxLifecycleManager(
+  const manager = createTestLifecycleManager(
     provider,
     storage,
     storage,

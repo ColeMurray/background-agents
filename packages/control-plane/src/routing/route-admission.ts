@@ -617,6 +617,15 @@ async function enforceTeamRequirement(
       (ctx.sessionMemberships ??= await memberships.listForUser(ctx.principal.userId))
     );
     if (viewer.kind !== "user") throw new Error("Missing team viewer");
+    const isAdmin = viewer.roleKey === "owner" || viewer.roleKey === "administrator";
+    const isMember = isAdmin || viewer.memberships.has(teamId);
+    if (
+      !isMember &&
+      (requirement.need === "member" ||
+        requirement.need === "removeMember" ||
+        (requirement.need === "read" && team.archivedAt !== null))
+    )
+      return { response: error("Team not found", 404) };
     const access = resolveTeamAccess(
       {
         userId: viewer.userId,
@@ -625,11 +634,23 @@ async function enforceTeamRequirement(
       },
       { ...team, leadCount: await memberships.countLeads(teamId) }
     );
-    const isAdmin = viewer.roleKey === "owner" || viewer.roleKey === "administrator";
-    const visible = isAdmin || viewer.memberships.has(teamId);
-    if (!visible && requirement.need !== "canJoin")
-      return { response: error("Team not found", 404) };
-    if (requirement.need !== "read" && !access[requirement.need]) {
+    let capabilityDenied: boolean;
+    if (requirement.need === "removeMember") {
+      const targetUserId = params[requirement.targetUserIdParam];
+      if (!targetUserId) return { response: error("Invalid team member route", 400) };
+      capabilityDenied = targetUserId !== viewer.userId && !access.canManageMembers;
+      // Preserve the existing 404 for an absent target membership.
+      if (
+        capabilityDenied &&
+        !(await memberships.listMembers(teamId)).some((member) => member.userId === targetUserId)
+      ) {
+        return { response: error("Team membership not found", 404) };
+      }
+    } else {
+      capabilityDenied =
+        requirement.need !== "read" && requirement.need !== "member" && !access[requirement.need];
+    }
+    if (capabilityDenied) {
       const reasonCode =
         requirement.need === "canJoin"
           ? team.archivedAt !== null

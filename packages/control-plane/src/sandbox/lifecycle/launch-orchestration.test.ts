@@ -3,7 +3,6 @@ import type { McpServerConfig } from "@open-inspect/shared/types/integrations";
 import { hashToken } from "../../auth/crypto";
 import { COMPATIBLE_RUNTIME_VERSION } from "../../image-builds/test-helpers";
 import type { PendingSandboxAllocation, SessionRepositoryInfo } from "../provider";
-import { SandboxLifecycleManager } from "./manager";
 import {
   createMockAlarmScheduler,
   createMockBroadcaster,
@@ -14,6 +13,7 @@ import {
   createMockStorage,
   createMockWebSocketManager,
   createTestConfig,
+  createTestLifecycleManager,
   createUnmanagedShutdown,
   noLifetime,
 } from "./test-helpers";
@@ -117,7 +117,7 @@ function createLaunchFixture() {
       },
     })
   );
-  const manager = new SandboxLifecycleManager(
+  const manager = createTestLifecycleManager(
     provider,
     storage,
     sessionContext,
@@ -326,6 +326,22 @@ describe("launch input orchestration", () => {
     expect(provider.createSandbox).not.toHaveBeenCalled();
   });
 
+  it.each(["expired", "superseded"] as const)(
+    "does not mark restore invoked or call the provider after %s pending registration",
+    async (outcome) => {
+      const { manager, provider, sandbox, shutdown } = createLaunchFixture();
+      sandbox.status = "stopped";
+      sandbox.snapshot_image_id = "saved-image";
+      sandbox.snapshot_runtime_version = COMPATIBLE_RUNTIME_VERSION;
+      vi.mocked(hashToken).mockResolvedValueOnce("new-hash");
+      shutdown.recordPendingProviderHandle.mockResolvedValueOnce(outcome);
+      await manager.spawnSandbox();
+      expect(shutdown.markRecoveryInvoked).not.toHaveBeenCalled();
+      expect(provider.restoreFromSnapshot).not.toHaveBeenCalled();
+      expect(provider.createSandbox).not.toHaveBeenCalled();
+    }
+  );
+
   it.each(["fresh", "restore"] as const)(
     "%s reserves the identity before deferred hash and env reads",
     async (mode) => {
@@ -405,7 +421,7 @@ describe("launch input orchestration", () => {
         });
         return repositories;
       });
-      const manager = new SandboxLifecycleManager(
+      const manager = createTestLifecycleManager(
         createMockProvider(),
         storage,
         storage,
@@ -446,7 +462,7 @@ describe("launch input orchestration", () => {
       getLatestReady: vi.fn(async () => null),
       markRestoreFailed: vi.fn(async () => true),
     };
-    const manager = new SandboxLifecycleManager(
+    const manager = createTestLifecycleManager(
       provider,
       storage,
       storage,

@@ -1,6 +1,15 @@
-import { describe, it, expect, beforeEach } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { env } from "cloudflare:test";
-import { seedActiveUser, sqlDatabase } from "./helpers";
+import {
+  collectMessages,
+  initNamedSession,
+  openSandboxWs,
+  seedSandboxAuth,
+  waitForSandboxStatus,
+  seedActiveUser,
+  sqlDatabase,
+} from "./helpers";
+import { getUserAuth } from "../../src/auth/user/runtime";
 import { AutomationStore, type AutomationRow } from "../../src/db/automation-store";
 import { SlackChannelStore } from "../../src/db/slack-channel-store";
 import type { SlackAutomationEvent } from "@open-inspect/shared/triggers";
@@ -214,6 +223,104 @@ describe("Scheduler slack event handling (integration)", () => {
       invocations.find((invocation) => invocation.skipReason === "concurrent_run_active")
     ).toBeUndefined();
   });
+
+  afterEach(() => vi.restoreAllMocks());
+
+  it.each(["unlinked", "ambiguous", "unavailable", "missing-login"])(
+    "clears attribution on successive Slack follow-ups when current GitHub attribution is %s",
+    async (scenario) => {
+      const store = new AutomationStore(env.DB);
+      const automationId = await seedSlackAutomation(store);
+      await env.DB.prepare(
+        `INSERT INTO user_identities
+      (id, user_id, provider, provider_user_id, provider_login, provider_issuer, created_at, updated_at)
+      VALUES ('actor-github', 'slack-actor-1', 'github', '42', 'reviewer', 'https://github.com', 1, 1)`
+      ).run();
+      const name = `slack-attribution-${crypto.randomUUID()}`;
+      const { stub } = await initNamedSession(name, {
+        repoOwner: null,
+        repoName: null,
+        repoId: null,
+        userId: "user-1",
+        canonicalUserId: "user-1",
+      });
+      const concurrencyKey = `slack:C1:${name}`;
+      await seedRun(makeRunRow(automationId, { session_id: name, status: "running" }), {
+        concurrencyKey,
+      });
+      await seedSandboxAuth(stub, { authToken: "slack-sandbox-token", sandboxId: name });
+      const { ws: sandbox } = await openSandboxWs(name, {
+        authToken: "slack-sandbox-token",
+        sandboxId: name,
+      });
+      expect(sandbox).not.toBeNull();
+      sandbox!.accept();
+      try {
+        sandbox!.send(
+          JSON.stringify({ type: "ready", sandboxId: name, timestamp: Date.now() / 1000 })
+        );
+        await waitForSandboxStatus(stub, "ready");
+        const firstCommands = collectMessages(sandbox!, {
+          until: (message) => message.type === "prompt",
+        });
+        expect(
+          await sendEvent(
+            makeSlackEvent({ text: "first follow-up", concurrencyKey, threadTs: name })
+          )
+        ).toMatchObject({ steered: 1, triggered: 0 });
+        const first = (await firstCommands).find((message) => message.type === "prompt");
+        expect(first?.author).toEqual({
+          userId: "slack:U1",
+          gitIdentity: {
+            mode: "attributed-user",
+            name: "Integration User",
+            email: "42+reviewer@users.noreply.github.com",
+          },
+        });
+        if (scenario === "unlinked") {
+          await env.DB.prepare("DELETE FROM user_identities WHERE id = 'actor-github'").run();
+        } else if (scenario === "ambiguous") {
+          await env.DB.prepare(
+            `INSERT INTO user_identities
+          (id, user_id, provider, provider_user_id, provider_login, provider_issuer, created_at, updated_at)
+          VALUES ('actor-github-other', 'slack-actor-1', 'github', '43', 'other', 'https://github.com', 1, 1)`
+          ).run();
+        } else {
+          await env.DB.prepare(
+            "UPDATE user_identities SET provider_login = NULL WHERE id = 'actor-github'"
+          ).run();
+          if (scenario === "unavailable") {
+            vi.spyOn(
+              getUserAuth(createCloudflareEnv(env), env.DB).api,
+              "getAccessToken"
+            ).mockRejectedValue(new Error("Grant temporarily unavailable"));
+          }
+        }
+        const secondCommands = collectMessages(sandbox!, {
+          until: (message) => message.type === "prompt",
+        });
+        expect(
+          await sendEvent(
+            makeSlackEvent({ text: "second follow-up", concurrencyKey, threadTs: name })
+          )
+        ).toMatchObject({ steered: 1, triggered: 0 });
+        sandbox!.send(
+          JSON.stringify({
+            type: "execution_complete",
+            messageId: first!.messageId,
+            success: true,
+            sandboxId: name,
+            timestamp: Date.now() / 1000,
+          })
+        );
+        const second = (await secondCommands).find((message) => message.type === "prompt");
+        expect(second?.author).toEqual({ userId: "slack:U1", gitIdentity: { mode: "agent-only" } });
+        expect(await fetchRuns(automationId)).toHaveLength(1);
+      } finally {
+        sandbox!.close();
+      }
+    }
+  );
 
   it.each([
     [

@@ -78,3 +78,31 @@ run "docs_site_is_separate_from_the_web_app" {
     error_message = "The docs site must be its own Vercel project, so a docs publish cannot touch the product."
   }
 }
+
+run "docs_site_ignores_an_empty_custom_domain" {
+  command = plan
+  variables {
+    docs_site_enabled = true
+    vercel_team_id    = "test-team"
+    # The Terraform workflow passes an unset DOCS_CUSTOM_DOMAIN repository
+    # variable as an empty string, not null.
+    docs_custom_domain = ""
+  }
+  assert {
+    condition     = module.docs_site[0].custom_domain == null
+    error_message = "An empty docs_custom_domain must not attach a domain to the docs project."
+  }
+}
+
+run "docs_site_attaches_a_configured_custom_domain" {
+  command = plan
+  variables {
+    docs_site_enabled  = true
+    vercel_team_id     = "test-team"
+    docs_custom_domain = "docs.example.com"
+  }
+  assert {
+    condition     = module.docs_site[0].custom_domain == "docs.example.com"
+    error_message = "A configured docs_custom_domain must be attached to the docs project."
+  }
+}

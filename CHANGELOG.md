@@ -2,7 +2,46 @@
 
 New features, integrations, and notable improvements to Open-Inspect — newest first.
 
-## September 30, 2026
+## Unreleased
+
+### Changed
+
+Team-owned session actions now require current owning-team membership in every `TEAMS_ENFORCEMENT`
+mode, including for Owners and Administrators. Visibility still determines read access; collaborator
+self-removal requires only read access. Sessions, automations, and environments cannot move between
+teams or to/from the workspace; a team-owned session never becomes workspace-owned. Visibility and
+collaborator controls remain available to authorized users. Historical `session.moved` audit events
+remain readable.
+
+## October 1, 2026
+
+### Changed
+
+**Modal snapshot restores use brokered git credentials.** Restored sandboxes now fetch git
+credentials from the control plane like fresh sessions, instead of receiving a token minted by
+Modal. The control plane now sends the VCS host and clone username with every Modal create, restore,
+and image-build request, so Modal no longer reads `SCM_PROVIDER` or needs GitHub App credentials.
+Terraform no longer provisions Modal's `github-app` secret; you can delete the existing secret from
+Modal after upgrading.
+
+### Added
+
+Team leads and workspace administrators can manage encrypted secrets from a team's Secrets tab.
+Team-owned sessions receive global secrets, then team secrets, then environment or repository
+secrets, with later scopes taking precedence. Environment image builds include the environment's
+team secrets; repository-shared images do not. Secret mutation audits contain key names only. Team
+secret changes atomically supersede affected environment images. After the database batch, detached,
+best-effort rebuild scheduling is attempted for enabled team-owned environments; enumeration or
+trigger failures may leave no rebuild request. Team-owned environment images require matching
+session ownership. Team-only legacy OAuth refresh tokens do not enable managed authentication; API
+keys remain usable. Team-secret read and decryption errors abort environment builds rather than
+falling back to other secret scopes.
+
+### Removed
+
+Removed the team Activity tab and `GET /teams/:id/activity` endpoint. Team operations continue to be
+recorded in the workspace audit log, available to viewers with `workspace.audit.read` and filterable
+by team. No audit history is deleted.
 
 ### Fixed
 
@@ -11,6 +50,50 @@ admission check that cannot run, or a provider error), the OAuth callback now re
 access-denied page with a reason. Previously it returned HTTP 500. If a GitHub App lacks the **Email
 addresses: Read-only** account permission, the page names that permission, and the control plane
 logs `auth.github_email_lookup_failed` with the GitHub status.
+
+The team directory and collaborator picker now show email addresses only to viewers with
+`workspace.members.read` (Owners and Administrators in the built-in roles). Other viewers receive
+names and avatars with no email address, and unnamed users have a neutral label with a short ID
+suffix. This restriction applies in every team enforcement mode.
+
+Session navigation now defaults to **All my teams**, with the team selector available even for a
+single membership. Composer team and visibility choices stay local, including automatic team
+selection when new sessions require a team. Transient membership refresh failures retain loaded
+data, and changing draft configuration retires the old warm session without starting a replacement
+sandbox until the next prompt input or submission. Scope changes refresh lists without clearing
+terminal access or per-session caches. Visibility changes require a changed selection and confirm
+non-private child-session cascades. Workspace audit readers can filter by teams they do not belong
+to.
+
+## September 30, 2026
+
+### Added
+
+Teams now have a searchable directory with favorites, member lists, session overviews, and
+visibility-filtered activity. Active users can browse team names and memberships; a team's work
+remains restricted to members and administrators. Workspace audit readers can filter events by team.
+Session details show the owning team and visibility, with server-authorized controls to move
+sessions, change visibility, and manage private-session collaborators, including child-session
+cascades. Archived team metadata and member lists remain visible only to team members and workspace
+administrators. Team activity shows domain operations; HTTP authorization decisions remain in the
+permission-gated workspace audit log.
+
+**Team-aware session discovery and creation.** Following the team and visibility APIs, the web app
+now supports team selection and scoped session discovery. Inbox snapshot and paged reads accept
+ownership, visibility, and workspace scope filters and return effective server capabilities for
+roots and descendants. The current user's team response includes the require-team creation setting
+without requiring settings-management permissions. Bot team selection and automation team ownership
+remain later phases; repository-backed team sessions still require existing grants, with no grant
+creation API or UI yet.
+
+### Fixed
+
+Allowed team directory, member, session, activity, and collaborator-candidate reads no longer add
+authorization-decision rows to the audit log. Capability writes and membership departures remain
+audited. Unauthorized cross-member removals are recorded as denied decisions. Live session
+subscriptions now include team memberships when computing capabilities in every enforcement mode,
+preserving team leads' move and visibility controls without adding reads to per-command
+authorization in `off` or `shadow`.
 
 ## September 29, 2026
 
@@ -23,9 +106,13 @@ ownership denials without blocking non-private sessions, while `on` enforces the
 visibility is restricted in every mode. Session item routes, lists and aggregates, live connections,
 and sandbox access use the persisted session scope; Owners' private-session break-glass reads are
 audited and do not make those sessions enumerable. Session creation and team moves check membership
-and repository grants; team and visibility changes are available. Team grants do not yet narrow the
-shared source-control installation token in sandboxes. See
-[Authentication and Authorization](docs/AUTH.md).
+and repository grants; team and visibility change APIs have landed, with discovery UI following in
+the next entry. Visibility, scope, and collaborator mutations enforce the resolver in every mode and
+cascades refuse inaccessible descendants. The require-team setting refuses teamless session creation
+API requests; automation runs remain exempt until team ownership is supported. Repository grant
+creation is not yet available, so missing grants refuse repository-backed team sessions with
+`target_team_missing_grant`. Team grants do not yet narrow the shared source-control installation
+token in sandboxes. See [Authentication and Authorization](docs/AUTH.md).
 
 ## September 28, 2026
 

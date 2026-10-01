@@ -24,7 +24,9 @@ describe("visibleSessionsPredicate", () => {
     "never lists another user's private session in %s",
     (mode) => {
       const { sql, params } = visibleSessionsPredicate("root", member, { mode });
-      expect(sql).not.toContain("team_memberships");
+      // Only the private collaborator check consults membership outside enforcement.
+      expect(sql).not.toMatch(/\btm\.team_id/);
+      expect(sql).toContain("ctm.team_id = root.owner_team_id AND ctm.user_id = sc.user_id");
       expect(sql).toContain("root.visibility != 'private'");
       expect(sql).toContain("root.user_id = ?");
       expect(params).toEqual(["user-a", "user-a"]);

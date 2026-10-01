@@ -301,6 +301,7 @@ export async function handleCreateSession(
     reasoningEffort,
     participantUserId,
     platformUserId: resolvedUserId,
+    participantCanonicalUserId: resolvedUserId,
     scmLogin,
     scmName,
     scmEmail,

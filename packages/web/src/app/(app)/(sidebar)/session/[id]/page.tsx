@@ -1,6 +1,6 @@
 "use client";
 
-import { useRouter } from "next/navigation";
+import { notFound, useRouter } from "next/navigation";
 import { mutate } from "swr";
 import useSWRMutation from "swr/mutation";
 import { useState, useRef, useEffect, useCallback, useMemo } from "react";
@@ -11,17 +11,15 @@ import { MediaLightbox } from "@/components/media-lightbox";
 import { SessionHeader } from "@/components/session-header";
 import { SessionDetailsOverlay } from "@/components/session-details-overlay";
 import { SessionPromptComposer } from "@/components/session-prompt-composer";
+import { ActionBar } from "@/components/action-bar";
 import { QueuedPromptStack } from "@/components/queued-prompt-stack";
 import { SessionRightSidebar } from "@/components/session-right-sidebar";
-import {
-  Group as PanelGroup,
-  Panel,
-  Separator as PanelResizeHandle,
-  useDefaultLayout,
-} from "react-resizable-panels";
+import { Group as PanelGroup, Panel, Separator as PanelResizeHandle } from "react-resizable-panels";
 import { TerminalPanel } from "@/components/terminal-panel";
 import { archiveSession } from "@/lib/archive-session";
 import { browserApiFetch, type BrowserApiPath } from "@/lib/browser-api-fetch";
+import { sessionActionErrorMessage } from "@/lib/session-action-error";
+import { toast } from "sonner";
 import {
   isArchivedSessionListKey,
   isUnarchivedSessionListKey,
@@ -40,31 +38,27 @@ import type { HarnessId } from "@open-inspect/shared/harnesses";
 import { resolveHarnessModelSelection } from "@/lib/session-harness";
 import { useEnabledModels } from "@/hooks/use-enabled-models";
 import { useSessionDiffs } from "@/hooks/use-session-diffs";
-import { resolveDiffSelection, type DiffSelection } from "@/lib/session-diffs";
+import { resolveDiffSelection } from "@/lib/session-diffs";
 import { SessionFileLinksProvider } from "@/lib/session-file-links";
 import type {
   SessionDiffFile,
   SessionDiffRepository,
 } from "@open-inspect/shared/types/session-diffs";
 import { SessionChangesPanel } from "@/components/session-changes-panel";
-import {
-  SESSION_CHANGES_LAYOUT_ID,
-  SessionDesktopLayout,
-} from "@/components/session-desktop-layout";
+import { SessionDesktopLayout } from "@/components/session-desktop-layout";
 import { Sheet, SheetContent, SheetTitle } from "@/components/ui/sheet";
-import { useBrowserLayoutStorage } from "@/hooks/use-browser-layout-storage";
 import { focusSessionDetailsTrigger } from "@/lib/session-details-focus";
 import { useSessionParticipantProfiles } from "@/hooks/use-session-participant-profiles";
 import { useSessionDetailsSidebar } from "@/hooks/use-session-details-sidebar";
+import { useSessionDiffSelection } from "@/hooks/use-session-diff-selection";
+import { useSessionInspectorTab } from "@/hooks/use-session-inspector-tab";
 import { findLatestTerminalMessageId } from "@/lib/session-read-state";
 import { useMarkSessionRead } from "@/hooks/use-mark-session-read";
 import { usePromptInput } from "@/hooks/use-prompt-input";
 import { formatSessionCost } from "@/lib/session-cost";
 import { useKeyboardShortcuts } from "@/hooks/use-keyboard-shortcuts";
-import { useSessionSnapshot } from "./session-snapshot-provider";
+import { useSessionSnapshot, useRefreshSessionSnapshot } from "./session-snapshot-provider";
 import { useSessionRename } from "@/hooks/use-session-rename";
-import { useCurrentUserAuthorization } from "@/hooks/use-current-user-authorization";
-import { resolveSessionCapabilities } from "@/lib/session-capabilities";
 import { SandboxShutdownBanner } from "@/components/sandbox-shutdown-banner";
 import { sandboxPromptBlockReason } from "@open-inspect/shared/types/sandbox-shutdown";
 
@@ -74,12 +68,34 @@ const TERMINAL_VISIBLE_STORAGE_KEY = "terminal-visible";
 const DEFAULT_SESSION_STATUS = "created" as const;
 
 export default function SessionPage() {
-  const { shortcuts } = useKeyboardShortcuts();
-  const { hasPermission } = useCurrentUserAuthorization();
-  const capabilities = useMemo(() => resolveSessionCapabilities(hasPermission), [hasPermission]);
   const initialSnapshot = useSessionSnapshot();
+  const socket = useSessionSocket(initialSnapshot.session.id, initialSnapshot);
+  if (socket.sessionGone) notFound();
+  return <SessionContent initialSnapshot={initialSnapshot} socket={socket} />;
+}
+
+function SessionContent({
+  initialSnapshot,
+  socket,
+}: {
+  initialSnapshot: ReturnType<typeof useSessionSnapshot>;
+  socket: ReturnType<typeof useSessionSocket>;
+}) {
+  const { shortcuts } = useKeyboardShortcuts();
+  const refreshSnapshot = useRefreshSessionSnapshot();
   const sessionId = initialSnapshot.session.id;
+  const scope =
+    initialSnapshot.session.visibility === undefined
+      ? undefined
+      : {
+          ownerTeamId: initialSnapshot.session.ownerTeamId ?? null,
+          ownerUserId: initialSnapshot.session.ownerUserId ?? null,
+          visibility: initialSnapshot.session.visibility,
+          collaborators: initialSnapshot.session.collaborators ?? [],
+          onUpdated: refreshSnapshot,
+        };
   const {
+    capabilities,
     connected,
     connecting,
     reconnecting,
@@ -104,7 +120,7 @@ export default function SessionPage() {
     sendTyping,
     reconnect,
     loadOlderEvents,
-  } = useSessionSocket(sessionId, initialSnapshot, capabilities);
+  } = socket;
   const latestTerminalMessageId = useMemo(() => findLatestTerminalMessageId(events), [events]);
   useMarkSessionRead(sessionId, latestTerminalMessageId);
   const { profiles, participants: profiledParticipants } = useSessionParticipantProfiles(
@@ -195,8 +211,6 @@ export default function SessionPage() {
   );
 
   const [selectedMediaArtifactId, setSelectedMediaArtifactId] = useState<string | null>(null);
-  const [selectedDiff, setSelectedDiff] = useState<DiffSelection | null>(null);
-  const diffReturnFocusRef = useRef<DiffSelection | null>(null);
   const { state: diffState, isLoading: diffLoading } = useSessionDiffs(sessionId);
 
   const isBelowLg = useMediaQuery("(max-width: 1023px)");
@@ -206,6 +220,12 @@ export default function SessionPage() {
   const { isOpen: isDesktopDetailsOpen, toggle: toggleDesktopDetails } = useSessionDetailsSidebar();
   const detailsButtonRef = useRef<HTMLButtonElement>(null);
   const actionsButtonRef = useRef<HTMLButtonElement>(null);
+  const desktopDetailsButtonRef = useRef<HTMLButtonElement>(null);
+  const {
+    tab: inspectorTab,
+    selectTab: selectInspectorTab,
+    showTab: showInspectorTab,
+  } = useSessionInspectorTab();
 
   // Terminal panel state. Starts closed so the server and the client render the
   // same markup, then adopts the stored preference after hydration.
@@ -251,6 +271,22 @@ export default function SessionPage() {
     () => focusSessionDetailsTrigger(isPhone, actionsButtonRef.current, detailsButtonRef.current),
     [isPhone]
   );
+  const handleDiffOpen = useCallback(() => {
+    setIsDetailsOpen(false);
+    // The diff is navigated from the Changes list. Showing it is navigation, so the
+    // viewer's remembered tab stays as it was.
+    showInspectorTab("changes");
+  }, [showInspectorTab]);
+  const focusAfterDiff = useCallback(() => {
+    if (isBelowLg) focusDetailsTrigger();
+    else desktopDetailsButtonRef.current?.focus();
+  }, [focusDetailsTrigger, isBelowLg]);
+  const {
+    selectedDiff,
+    openDiff: openDiffSelection,
+    selectDiff,
+    closeDiff,
+  } = useSessionDiffSelection({ onOpen: handleDiffOpen, focusFallback: focusAfterDiff });
 
   useEffect(() => {
     if (isBelowLg) return;
@@ -279,46 +315,11 @@ export default function SessionPage() {
         : null,
     [diffState, selectedDiff]
   );
-  const changesLayoutStorage = useBrowserLayoutStorage();
-  const changesLayout = useDefaultLayout({
-    id: SESSION_CHANGES_LAYOUT_ID,
-    panelIds:
-      resolvedDiff && diffState && !isBelowLg
-        ? ["session-main", "session-changes"]
-        : ["session-main"],
-    storage: changesLayoutStorage,
-  });
-  const openDiffSelection = useCallback((selection: DiffSelection) => {
-    diffReturnFocusRef.current = selection;
-    setSelectedDiff(selection);
-    setIsDetailsOpen(false);
-  }, []);
   const openDiff = useCallback(
     (repository: SessionDiffRepository, file: SessionDiffFile) =>
       openDiffSelection({ repositoryPosition: repository.position, path: file.path }),
     [openDiffSelection]
   );
-  const closeDiff = useCallback(() => {
-    const returnSelection = diffReturnFocusRef.current;
-    setSelectedDiff(null);
-    requestAnimationFrame(() => {
-      if (!isBelowLg && returnSelection) {
-        const row = Array.from(
-          document.querySelectorAll<HTMLButtonElement>("button[data-diff-path]")
-        ).find(
-          (candidate) =>
-            candidate.dataset.diffRepositoryPosition ===
-              String(returnSelection.repositoryPosition) &&
-            candidate.dataset.diffPath === returnSelection.path
-        );
-        if (row) {
-          row.focus();
-          return;
-        }
-      }
-      focusDetailsTrigger();
-    });
-  }, [focusDetailsTrigger, isBelowLg]);
 
   const sessionWorkspace = (
     <div className="flex h-full min-h-0 min-w-0 flex-1 flex-col overflow-clip">
@@ -362,6 +363,19 @@ export default function SessionPage() {
         onRemove={handleRemoveQueuedPrompt}
         capabilities={capabilities}
       />
+      {!capabilities.collaborate && capabilities.read && (
+        <div className="hidden border-t border-border-muted p-4 md:block">
+          <ActionBar
+            sessionId={sessionId}
+            sessionStatus={sessionState?.status ?? DEFAULT_SESSION_STATUS}
+            artifacts={artifacts}
+            primaryRepo={primaryRepo}
+            onArchive={handleArchive}
+            onUnarchive={handleUnarchive}
+            capabilities={capabilities}
+          />
+        </div>
+      )}
       {capabilities.collaborate && (
         <SessionPromptComposer
           session={{
@@ -431,9 +445,9 @@ export default function SessionPage() {
         reconnecting={reconnecting}
         isDetailsOpen={isDetailsOpen}
         isDesktopDetailsOpen={isDesktopDetailsOpen}
-        showDesktopDetailsToggle={!resolvedDiff}
         detailsButtonRef={detailsButtonRef}
         actionsButtonRef={actionsButtonRef}
+        desktopDetailsButtonRef={desktopDetailsButtonRef}
         onToggleDetails={toggleDetails}
         onToggleDesktopDetails={toggleDesktopDetails}
         onOpenMobileDetails={openMobileDetails}
@@ -479,7 +493,7 @@ export default function SessionPage() {
             workspace={sessionWorkspace}
             sidebar={
               <SessionRightSidebar
-                isOpen={isDesktopDetailsOpen && !resolvedDiff}
+                isOpen={isDesktopDetailsOpen}
                 sessionId={sessionId}
                 sessionState={sessionState}
                 participants={profiledParticipants}
@@ -494,7 +508,10 @@ export default function SessionPage() {
                 selectedDiff={selectedDiff}
                 onOpenDiff={openDiff}
                 canManageBudget={canManageBudget}
+                activeTab={inspectorTab}
+                onTabChange={selectInspectorTab}
                 capabilities={capabilities}
+                scope={scope}
               />
             }
             changes={
@@ -504,13 +521,12 @@ export default function SessionPage() {
                   state={diffState}
                   resolved={resolvedDiff}
                   onClose={closeDiff}
-                  onSelect={setSelectedDiff}
+                  onSelect={selectDiff}
+                  sidebarShowsFileList={isDesktopDetailsOpen && inspectorTab === "changes"}
                   capabilities={capabilities}
                 />
               ) : null
             }
-            defaultLayout={changesLayout.defaultLayout}
-            onLayoutChanged={changesLayout.onLayoutChanged}
           />
         ) : (
           <>
@@ -530,7 +546,10 @@ export default function SessionPage() {
               selectedDiff={selectedDiff}
               onOpenDiff={openDiff}
               canManageBudget={canManageBudget}
+              activeTab={inspectorTab}
+              onTabChange={selectInspectorTab}
               capabilities={capabilities}
+              scope={scope}
             />
           </>
         )}
@@ -556,7 +575,10 @@ export default function SessionPage() {
           selectedDiff={selectedDiff}
           onOpenDiff={openDiff}
           canManageBudget={canManageBudget}
+          activeTab={inspectorTab}
+          onTabChange={selectInspectorTab}
           capabilities={capabilities}
+          scope={scope}
         />
       )}
 
@@ -574,7 +596,7 @@ export default function SessionPage() {
                 state={diffState}
                 resolved={resolvedDiff}
                 onClose={closeDiff}
-                onSelect={setSelectedDiff}
+                onSelect={selectDiff}
                 capabilities={capabilities}
               />
             )}
@@ -632,10 +654,10 @@ function useSessionListActions(sessionId: string) {
           );
           mutate(isUnarchivedSessionListKey);
         } else {
-          console.error("Failed to unarchive session");
+          toast.error(await sessionActionErrorMessage(r, "Failed to unarchive session"));
         }
       }),
-    { throwOnError: false }
+    { throwOnError: false, onError: () => toast.error("Failed to unarchive session") }
   );
 
   return { handleArchive, handleUnarchive };

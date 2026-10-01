@@ -4,7 +4,6 @@ import type { SessionStatus } from "@open-inspect/shared/types/sessions";
 import { runInSessionDO } from "./session-do-access";
 import type { SessionDO } from "../../src/cloudflare/durable-object";
 import { SessionIndexStore } from "../../src/db/session-index";
-import { SessionScopeStore } from "../../src/db/session-scope-store";
 import { cleanD1Tables } from "./cleanup";
 import {
   initNamedSession,
@@ -151,7 +150,9 @@ describe("Child session operations (list, get, cancel)", () => {
       await env.DB.prepare(
         "INSERT INTO teams (id, slug, name, created_at, updated_at) VALUES ('team_other', 'other', 'Other', 1, 1)"
       ).run();
-      await new SessionScopeStore(env.DB).updateOwnerTeam([id], "team_other");
+      await env.DB.prepare("UPDATE sessions SET owner_team_id = 'team_other' WHERE id = ?")
+        .bind(id)
+        .run();
     }
   }
 
@@ -679,7 +680,9 @@ describe("Child session operations (list, get, cancel)", () => {
       await env.DB.prepare(
         "INSERT INTO teams (id, slug, name, created_at, updated_at) VALUES ('team_other', 'other', 'Other', 1, 1)"
       ).run();
-      await new SessionScopeStore(env.DB).updateOwnerTeam([childName], "team_other");
+      await env.DB.prepare("UPDATE sessions SET owner_team_id = 'team_other' WHERE id = ?")
+        .bind(childName)
+        .run();
 
       const response = await SELF.fetch(
         `https://test.local/sessions/${pName}/children/${childName}/prompt`,
