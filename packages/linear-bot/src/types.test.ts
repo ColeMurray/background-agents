@@ -35,6 +35,28 @@ function validAgentSessionWebhook() {
   };
 }
 
+function minimalIssueWebhook() {
+  return {
+    type: "AgentSessionEvent",
+    action: "created",
+    organizationId: "org-1",
+    webhookId: "webhook-config-1",
+    appUserId: "app-user-1",
+    agentSession: {
+      id: "agent-session-1",
+      issue: {
+        id: "issue-1",
+        identifier: "ENG-1",
+        title: "Fix bug",
+        description: "Steps to reproduce",
+        url: "https://linear.app/acme/issue/ENG-1/fix-bug",
+        team: { id: "team-1", key: "ENG", name: "Engineering" },
+        teamId: "team-1",
+      },
+    },
+  };
+}
+
 describe("agentSessionWebhookSchema", () => {
   it("parses a valid AgentSessionEvent payload", () => {
     const result = agentSessionWebhookSchema.safeParse(validAgentSessionWebhook());
@@ -50,6 +72,16 @@ describe("agentSessionWebhookSchema", () => {
     payload.agentSession.id = 123 as never;
 
     expect(agentSessionWebhookSchema.safeParse(payload).success).toBe(false);
+  });
+
+  it("accepts Linear's minimal issue-bearing webhook payload", () => {
+    const result = agentSessionWebhookSchema.safeParse(minimalIssueWebhook());
+
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.agentSession.issue?.priority).toBeUndefined();
+      expect(result.data.agentSession.issue?.priorityLabel).toBeUndefined();
+    }
   });
 
   it("accepts nullable Linear fields that are optional in downstream handling", () => {
@@ -79,6 +111,36 @@ describe("agentSessionWebhookSchema", () => {
       expect(result.data.agentSession.issue?.labels).toBeUndefined();
       expect(result.data.agentSession.comment).toBeUndefined();
       expect(result.data.agentActivity).toBeUndefined();
+    }
+  });
+
+  it("accepts prompted deliveries with null optional scalars", () => {
+    const base = minimalIssueWebhook();
+    const payload = {
+      ...base,
+      action: "prompted",
+      promptContext: null,
+      agentSession: {
+        ...base.agentSession,
+        comment: { body: "Original comment", userId: null },
+      },
+      agentActivity: {
+        userId: null,
+        signal: null,
+        content: { type: null, body: "Follow up" },
+      },
+    };
+
+    const result = agentSessionWebhookSchema.safeParse(payload);
+
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.promptContext).toBeUndefined();
+      expect(result.data.agentSession.comment?.userId).toBeUndefined();
+      expect(result.data.agentActivity?.signal).toBeUndefined();
+      expect(result.data.agentActivity?.userId).toBeUndefined();
+      expect(result.data.agentActivity?.content?.type).toBeUndefined();
+      expect(result.data.agentActivity?.content?.body).toBe("Follow up");
     }
   });
 });

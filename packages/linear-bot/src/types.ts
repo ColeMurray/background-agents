@@ -220,8 +220,8 @@ export const agentSessionWebhookIssueSchema = z.object({
   title: z.string(),
   description: z.string().nullable().optional(),
   url: z.string(),
-  priority: z.number(),
-  priorityLabel: z.string(),
+  priority: z.number().optional(),
+  priorityLabel: z.string().optional(),
   team: z.object({ id: z.string(), key: z.string(), name: z.string() }),
   teamId: z.string().optional(),
   labels: optionalNullable(z.array(agentSessionWebhookNameSchema)),
@@ -237,21 +237,21 @@ export const agentSessionWebhookSchema = z.object({
   organizationId: z.string(),
   webhookId: z.string(),
   appUserId: z.string(),
-  promptContext: z.string().optional(),
+  promptContext: optionalNullable(z.string()),
   agentSession: z.object({
     id: z.string(),
     creatorId: z.string().nullable().optional(),
     issue: optionalNullable(agentSessionWebhookIssueSchema),
-    comment: optionalNullable(z.object({ body: z.string(), userId: z.string().optional() })),
+    comment: optionalNullable(z.object({ body: z.string(), userId: optionalNullable(z.string()) })),
   }),
   agentActivity: optionalNullable(
     z.object({
-      userId: z.string().optional(),
-      signal: z.string().optional(),
+      userId: optionalNullable(z.string()),
+      signal: optionalNullable(z.string()),
       content: optionalNullable(
         z.object({
-          type: z.string().optional(),
-          body: z.string().optional(),
+          type: optionalNullable(z.string()),
+          body: optionalNullable(z.string()),
         })
       ),
     })
