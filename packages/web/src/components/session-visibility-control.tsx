@@ -174,8 +174,8 @@ export function SessionVisibilityControl({
           <AlertDialogHeader>
             <AlertDialogTitle>Change child session visibility?</AlertDialogTitle>
             <AlertDialogDescription>
-              This will change this session and its child sessions to {selected} visibility. Private
-              child sessions will change to {selected} visibility.
+              This will change this session and any child sessions to {selected} visibility. Any
+              private child sessions will change to {selected} visibility.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>

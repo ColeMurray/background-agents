@@ -472,7 +472,7 @@ describe("SessionVisibilityControl", () => {
       const confirmation = within(screen.getByRole("alertdialog"));
       expect(
         confirmation.getByText(
-          new RegExp(`private child sessions will change to ${target} visibility`, "i")
+          new RegExp(`any private child sessions will change to ${target} visibility`, "i")
         )
       ).toBeInTheDocument();
       expect(browserApiFetch).not.toHaveBeenCalled();
