@@ -7,7 +7,7 @@ import { useTeamCapabilities } from "@/hooks/use-team-capabilities";
 import { useCurrentUserAuthorization } from "@/hooks/use-current-user-authorization";
 import { Button } from "@/components/ui/button";
 import { ErrorBanner } from "@/components/ui/error-banner";
-import { UserIdentity, userDisplayName } from "@/components/user-identity";
+import { UserIdentity, UserIdentityPicker, userDisplayName } from "@/components/user-identity";
 
 export function TeamMembersTable({ team, members }: { team: TeamResponse; members: TeamMember[] }) {
   const capabilities = useTeamCapabilities(team);
@@ -81,20 +81,13 @@ export function TeamMembersTable({ team, members }: { team: TeamResponse; member
           Add member
         </label>
         {hasPermission("workspace.members.read") ? (
-          <select
+          <UserIdentityPicker
             id="add-team-member"
             value={userId}
             disabled={!capabilities.canManageMembers || pending || loading || !!error}
-            onChange={(event) => setUserId(event.target.value)}
-            className="min-w-48 flex-1 rounded border border-border bg-background px-2 py-2 text-sm disabled:opacity-50"
-          >
-            <option value="">Select a workspace member</option>
-            {available.map((candidate) => (
-              <option key={candidate.userId} value={candidate.userId}>
-                {userDisplayName(candidate)}
-              </option>
-            ))}
-          </select>
+            onValueChange={setUserId}
+            candidates={available}
+          />
         ) : (
           <input
             id="add-team-member"

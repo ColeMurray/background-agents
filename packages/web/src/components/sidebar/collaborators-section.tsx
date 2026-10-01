@@ -6,8 +6,7 @@ import { useSessionCollaboratorCandidates } from "@/hooks/use-session-collaborat
 import { updateSessionScope } from "@/lib/session-scope";
 import { Button } from "../ui/button";
 import { ErrorBanner } from "../ui/error-banner";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../ui/select";
-import { UserIdentity, userDisplayName } from "../user-identity";
+import { UserIdentity, UserIdentityPicker, userDisplayName } from "../user-identity";
 import { CollapsibleSection } from "./collapsible-section";
 
 export interface CollaboratorsSectionProps {
@@ -96,23 +95,13 @@ export function CollaboratorsSection({
           Add collaborator
         </label>
         <div className="flex flex-wrap gap-2">
-          <Select value={userId} disabled={pending || loading || !!error} onValueChange={setUserId}>
-            <SelectTrigger id={`${id}-add`} className="min-w-0 flex-1">
-              <SelectValue placeholder="Select a workspace member" />
-            </SelectTrigger>
-            <SelectContent>
-              {available.map((candidate) => (
-                <SelectItem
-                  className="group focus:bg-muted focus:text-foreground"
-                  key={candidate.userId}
-                  value={candidate.userId}
-                  textValue={userDisplayName(candidate)}
-                >
-                  <UserIdentity {...candidate} />
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
+          <UserIdentityPicker
+            id={`${id}-add`}
+            value={userId}
+            disabled={pending || loading || !!error}
+            onValueChange={setUserId}
+            candidates={available}
+          />
           <Button
             size="sm"
             disabled={

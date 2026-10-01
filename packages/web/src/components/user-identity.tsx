@@ -1,3 +1,7 @@
+"use client";
+
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "./ui/select";
+
 interface UserIdentityProps {
   userId: string;
   displayName?: string | null;
@@ -7,6 +11,10 @@ interface UserIdentityProps {
 
 export function userDisplayName({ userId, displayName }: UserIdentityProps): string {
   return displayName?.trim() || `Unnamed user \u00b7 ${userId.slice(-6)}`;
+}
+
+function userPickerTextValue(user: UserIdentityProps): string {
+  return user.displayName?.trim() || user.email?.trim() || userDisplayName(user);
 }
 
 export function UserIdentity(user: UserIdentityProps) {
@@ -32,5 +40,39 @@ export function UserIdentity(user: UserIdentityProps) {
         )}
       </span>
     </span>
+  );
+}
+
+export function UserIdentityPicker({
+  id,
+  value,
+  onValueChange,
+  disabled,
+  candidates,
+}: {
+  id: string;
+  value: string;
+  onValueChange: (userId: string) => void;
+  disabled: boolean;
+  candidates: readonly UserIdentityProps[];
+}) {
+  return (
+    <Select value={value} disabled={disabled} onValueChange={onValueChange}>
+      <SelectTrigger id={id} className="min-w-0 flex-1">
+        <SelectValue placeholder="Select a workspace member" />
+      </SelectTrigger>
+      <SelectContent>
+        {candidates.map((candidate) => (
+          <SelectItem
+            className="group focus:bg-muted focus:text-foreground"
+            key={candidate.userId}
+            value={candidate.userId}
+            textValue={userPickerTextValue(candidate)}
+          >
+            <UserIdentity {...candidate} />
+          </SelectItem>
+        ))}
+      </SelectContent>
+    </Select>
   );
 }

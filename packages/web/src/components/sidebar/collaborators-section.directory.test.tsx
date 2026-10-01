@@ -46,6 +46,53 @@ beforeEach(() => {
 afterEach(cleanup);
 
 describe("collaborator directory authorization boundary", () => {
+  it.each([
+    ["  Grace  ", "person@example.com", "grace", "Grace"],
+    ["   ", "person@example.com", "person", "Unnamed user \u00b7 a1b2c3"],
+    [null, null, "unnamed", "Unnamed user \u00b7 a1b2c3"],
+  ] as const)(
+    "uses name, authorized email, or neutral fallback for collaborator typeahead (%s, %s)",
+    async (displayName, email, query, name) => {
+      const targetId = "user_identity_a1b2c3";
+      vi.mocked(browserApiFetch).mockImplementation(async (path) =>
+        path.endsWith("collaborator-candidates")
+          ? Response.json([
+              { userId: ADA, displayName: "Ada", email: null, avatarUrl: null },
+              { userId: targetId, displayName, email, avatarUrl: null },
+            ])
+          : Response.json({ status: "updated" })
+      );
+      const onUpdated = vi.fn().mockResolvedValue(undefined);
+      render(
+        <CollaboratorsSection
+          sessionId="private_session"
+          ownerUserId={OWNER}
+          collaborators={[]}
+          canManageCollaborators
+          onUpdated={onUpdated}
+        />,
+        { wrapper }
+      );
+      const user = userEvent.setup();
+      const picker = screen.getByRole("combobox", { name: "Add collaborator" });
+      await waitFor(() => expect(picker).toBeEnabled());
+      await user.click(picker);
+      await user.keyboard(query);
+      await waitFor(() =>
+        expect(screen.getByRole("option", { name: new RegExp(name) })).toHaveFocus()
+      );
+      await user.keyboard("{Enter}");
+      expect(picker).toHaveTextContent(name);
+      if (!email) expect(screen.queryByText("person@example.com")).toBeNull();
+      await user.click(screen.getByRole("button", { name: "Add" }));
+      await waitFor(() => expect(onUpdated).toHaveBeenCalledOnce());
+      expect(browserApiFetch).toHaveBeenCalledWith(
+        `/api/sessions/private_session/collaborators/${targetId}`,
+        { method: "PUT" }
+      );
+    }
+  );
+
   it.each([null, "ada@example.com"])(
     "renders names, avatars and neutral labels with only the returned email (%s)",
     async (email) => {

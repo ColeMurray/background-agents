@@ -4,7 +4,6 @@ import { BUILT_IN_ROLE_REGISTRY } from "@open-inspect/shared/rbac";
 import {
   meTeamsResponseSchema,
   teamSessionsResponseSchema,
-  teamMemberSchema,
   type Team,
 } from "@open-inspect/shared/types/teams";
 import { auditEventListResponseSchema } from "@open-inspect/shared/types/audit-events";
@@ -16,55 +15,18 @@ import { TeamStore } from "../../src/db/teams";
 import { TeamMembershipStore } from "../../src/db/team-memberships";
 import { TeamSettingsStore } from "../../src/db/team-settings";
 import type { SqlDatabase, SqlStatement } from "../../src/db/sql-database";
-import { cleanD1Tables } from "./cleanup";
+import { routeRequest, serviceFetch, serviceRequestHeaders, sqlDatabase } from "./helpers";
 import {
-  routeRequest,
-  seedActiveUser,
-  serviceFetch,
-  serviceRequestHeaders,
-  sqlDatabase,
-} from "./helpers";
-
-const BASE = "https://test.local";
-const OWNER = "11111111111111111111111111111111";
-const MEMBER = "22222222222222222222222222222222";
-const OTHER = "33333333333333333333333333333333";
-
-async function request(path: string, method = "GET", body?: object) {
-  return serviceFetch(`${BASE}${path}`, {
-    method,
-    ...(body ? { body: JSON.stringify(body) } : {}),
-  });
-}
-
-async function setRole(userId: string, role: "owner" | "administrator" | "member" | "viewer") {
-  await env.DB.prepare("UPDATE user_role_assignments SET role_id = ? WHERE user_id = ?")
-    .bind(BUILT_IN_ROLE_REGISTRY[role].id, userId)
-    .run();
-}
-
-async function auditEvents(teamId: string) {
-  const result = await env.DB.prepare(
-    "SELECT action, team_id, target_user_id_snapshot, metadata_json FROM authorization_audit_events WHERE resource_type = 'team' AND team_id = ? ORDER BY occurred_at, id"
-  )
-    .bind(teamId)
-    .all();
-  return result.results;
-}
-
-async function modeRequest(
-  path: string,
-  mode: "off" | "shadow" | "on",
-  role: "owner" | "administrator" | "member" | "viewer" = "member"
-) {
-  const url = `${BASE}${path}`;
-  const headers = await serviceRequestHeaders(url, { as: { userId: OWNER, role } });
-  return routeRequest(
-    new Request(url, { headers }),
-    { ...env, TEAMS_ENFORCEMENT: mode },
-    createExecutionContext()
-  );
-}
+  BASE,
+  OWNER,
+  MEMBER,
+  OTHER,
+  request,
+  setRole,
+  auditEvents,
+  modeRequest,
+  setupTeamRoutes,
+} from "./team-route-helpers";
 
 async function seedSession(id: string, teamId: string, overrides: Partial<SessionEntry> = {}) {
   await new SessionIndexStore(env.DB).create({
@@ -92,12 +54,7 @@ function inboxPage(value: unknown) {
 }
 
 describe("team routes", () => {
-  beforeEach(async () => {
-    await cleanD1Tables();
-    await seedActiveUser(MEMBER);
-    await seedActiveUser(OTHER);
-    await request("/me/authorization");
-  });
+  beforeEach(setupTeamRoutes);
 
   it("starts without teams and lets an administrator create, rename, archive and restore", async () => {
     expect((await request("/me/teams")).status).toBe(200);
@@ -304,69 +261,6 @@ describe("team routes", () => {
       expect((await request(`/teams/${open.id}/join`, "POST")).status).toBe(200);
     }
   );
-
-  it.each(["off", "shadow", "on"] as const)(
-    "returns directory emails only with workspace member read permission in %s mode",
-    async (mode) => {
-      const team = await new TeamStore(env.DB).create({
-        slug: "email-directory",
-        name: "Email directory",
-        joinPolicy: "open",
-      });
-      const memberships = new TeamMembershipStore(env.DB);
-      for (const userId of [MEMBER, OTHER]) {
-        await env.DB.prepare(
-          "UPDATE users SET display_name = ?, email = ?, avatar_url = ? WHERE id = ?"
-        )
-          .bind("Team member", `${userId}@example.com`, "https://example.com/avatar.png", userId)
-          .run();
-        await memberships.add(team.id, userId);
-      }
-      for (const role of ["member", "administrator"] as const) {
-        await setRole(OWNER, role);
-        const response = await modeRequest(`/teams/${team.id}/members`, mode, role);
-        expect(response.status).toBe(200);
-        const body = await response.json<{ members: unknown[] }>();
-        const members = teamMemberSchema.array().parse(body.members);
-        expect(members).toHaveLength(2);
-        for (const member of members) {
-          expect(member).toMatchObject({
-            displayName: "Team member",
-            email: role === "administrator" ? `${member.userId}@example.com` : null,
-            avatarUrl: "https://example.com/avatar.png",
-          });
-        }
-      }
-    }
-  );
-
-  it("redacts member emails for a non-administrator lead on add, role change, and unchanged role", async () => {
-    const team = await new TeamStore(env.DB).create({
-      slug: "email-lead",
-      name: "Email lead",
-      joinPolicy: "invite_only",
-    });
-    await new TeamMembershipStore(env.DB).add(team.id, OWNER, "lead");
-    await setRole(OWNER, "member");
-    await env.DB.prepare("UPDATE users SET email = ? WHERE id = ?")
-      .bind("member@example.com", MEMBER)
-      .run();
-    for (const role of ["member", "lead", "lead"] as const) {
-      const response = await request(`/teams/${team.id}/members/${MEMBER}`, "PUT", { role });
-      expect(response.status).toBe(200);
-      expect(await response.json()).toMatchObject({
-        member: { userId: MEMBER, role, email: null },
-      });
-    }
-    await setRole(OWNER, "administrator");
-    const response = await request(`/teams/${team.id}/members/${MEMBER}`, "PUT", {
-      role: "member",
-    });
-    expect(response.status).toBe(200);
-    expect(await response.json()).toMatchObject({
-      member: { userId: MEMBER, email: "member@example.com" },
-    });
-  });
 
   it.each(["off", "shadow", "on"] as const)(
     "always conceals member-only tabs from nonmembers in %s",
@@ -974,114 +868,6 @@ describe("team routes", () => {
     expect((await memberships.listForUser(MEMBER)).get(team.id)).toBe("lead");
     expect(await auditEvents(team.id)).toEqual([]);
   });
-
-  it("audits membership changes without recording administrator-visible profile fields", async () => {
-    await setRole(OWNER, "administrator");
-    await env.DB.prepare(
-      "UPDATE users SET display_name = ?, email = ?, avatar_url = ? WHERE id = ?"
-    )
-      .bind("Ada", "ada@example.com", "https://example.com/ada.png", MEMBER)
-      .run();
-    const team = await new TeamStore(env.DB).create({
-      slug: "roles",
-      name: "Roles",
-      joinPolicy: "invite_only",
-    });
-    const store = new TeamMembershipStore(env.DB);
-    await store.add(team.id, OWNER, "lead");
-    expect(
-      (await request(`/teams/${team.id}/members/${MEMBER}`, "PUT", { role: "member" })).status
-    ).toBe(200);
-    expect(
-      (await request(`/teams/${team.id}/members/${MEMBER}`, "PUT", { role: "lead" })).status
-    ).toBe(200);
-    expect((await request(`/teams/${team.id}/members/${MEMBER}`, "DELETE")).status).toBe(204);
-    const rows = await auditEvents(team.id);
-    expect(rows.map((row) => row.action)).toEqual([
-      "team.member_added",
-      "team.member_role_changed",
-      "team.member_removed",
-    ]);
-    for (const row of rows) {
-      expect(row.team_id).toBe(team.id);
-      expect(row.target_user_id_snapshot).toBe(MEMBER);
-      expect(JSON.parse(String(row.metadata_json))).toMatchObject({ before: {}, after: {} });
-      for (const field of ["displayName", "email", "avatarUrl"]) {
-        expect(String(row.metadata_json)).not.toContain(`"${field}"`);
-      }
-    }
-  });
-
-  it.each(["off", "shadow", "on"] as const)(
-    "redacts historical membership audit emails in activity only without member read permission in %s",
-    async (mode) => {
-      const team = await new TeamStore(env.DB).create({
-        slug: "historical-email",
-        name: "Historical email",
-        joinPolicy: "invite_only",
-      });
-      await new TeamMembershipStore(env.DB).add(team.id, OWNER);
-      const member = {
-        teamId: team.id,
-        userId: MEMBER,
-        role: "member",
-        source: "manual",
-        createdAt: 1,
-        displayName: "Ada",
-        email: "historical@example.com",
-        avatarUrl: "https://example.com/ada.png",
-      };
-      const audit = new TeamAuditStore(env.DB);
-      const actions = [
-        "team.member_added",
-        "team.member_role_changed",
-        "team.member_removed",
-      ] as const;
-      for (const action of actions) {
-        await audit.write({
-          requestId: action,
-          actorUserId: OTHER,
-          teamId: team.id,
-          targetUserId: MEMBER,
-          action,
-          before: action === "team.member_added" ? {} : member,
-          after: action === "team.member_removed" ? {} : { ...member, role: "lead" },
-        });
-      }
-      for (const role of ["member", "administrator"] as const) {
-        await setRole(OWNER, role);
-        for (const action of actions) {
-          const response = await modeRequest(
-            `/teams/${team.id}/activity?action=${action}`,
-            mode,
-            role
-          );
-          expect(response.status).toBe(200);
-          const feed = auditEventListResponseSchema.parse(await response.json());
-          expect(feed.events).toHaveLength(1);
-          expect(feed.events[0].metadata).toEqual({
-            before:
-              action === "team.member_added"
-                ? {}
-                : { ...member, email: role === "administrator" ? member.email : null },
-            requested: {},
-            after:
-              action === "team.member_removed"
-                ? {}
-                : {
-                    ...member,
-                    role: "lead",
-                    email: role === "administrator" ? member.email : null,
-                  },
-          });
-          if (role === "member") expect(JSON.stringify(feed)).not.toContain(member.email);
-        }
-      }
-      const rows = await auditEvents(team.id);
-      expect(rows).toHaveLength(3);
-      for (const row of rows) expect(String(row.metadata_json)).toContain(member.email);
-    }
-  );
 
   it("records a single addition when membership requests race", async () => {
     await setRole(OWNER, "member");
