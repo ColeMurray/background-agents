@@ -103,6 +103,7 @@ describe("SessionHeader", () => {
       onToggleDetails: vi.fn(),
       onToggleDesktopDetails: vi.fn(),
       onOpenMobileDetails: vi.fn(),
+      onOpenMobileMedia: vi.fn(),
       actions,
       renameSession: vi.fn(),
     };
@@ -130,6 +131,7 @@ describe("SessionHeader", () => {
         onToggleDetails={vi.fn()}
         onToggleDesktopDetails={vi.fn()}
         onOpenMobileDetails={vi.fn()}
+        onOpenMobileMedia={vi.fn()}
         actions={actions}
         renameSession={vi.fn()}
       />
@@ -161,6 +163,7 @@ describe("SessionHeader", () => {
         onToggleDetails={vi.fn()}
         onToggleDesktopDetails={vi.fn()}
         onOpenMobileDetails={vi.fn()}
+        onOpenMobileMedia={vi.fn()}
         actions={{ ...actions, capabilities: { ...FULL_CAPABILITIES, lifecycle: false } }}
         renameSession={vi.fn()}
         capabilities={{
@@ -199,6 +202,7 @@ describe("SessionHeader", () => {
         onToggleDetails={vi.fn()}
         onToggleDesktopDetails={onToggleDesktopDetails}
         onOpenMobileDetails={vi.fn()}
+        onOpenMobileMedia={vi.fn()}
         actions={actions}
         renameSession={vi.fn()}
       />
@@ -229,6 +233,7 @@ describe("SessionHeader", () => {
         onToggleDetails={vi.fn()}
         onToggleDesktopDetails={onToggleDesktopDetails}
         onOpenMobileDetails={vi.fn()}
+        onOpenMobileMedia={vi.fn()}
         actions={actions}
         renameSession={vi.fn()}
       />
@@ -254,6 +259,7 @@ describe("SessionHeader", () => {
         onToggleDetails={vi.fn()}
         onToggleDesktopDetails={vi.fn()}
         onOpenMobileDetails={vi.fn()}
+        onOpenMobileMedia={vi.fn()}
         actions={actions}
         renameSession={vi.fn()}
       />
@@ -267,6 +273,7 @@ describe("SessionHeader", () => {
   it("replaces the phone Details control with the unified actions menu", () => {
     const onToggleDetails = vi.fn();
     const onOpenMobileDetails = vi.fn();
+    const onOpenMobileMedia = vi.fn();
     render(
       <SessionHeader
         sessionState={null}
@@ -280,7 +287,11 @@ describe("SessionHeader", () => {
         onToggleDetails={onToggleDetails}
         onToggleDesktopDetails={vi.fn()}
         onOpenMobileDetails={onOpenMobileDetails}
-        actions={actions}
+        onOpenMobileMedia={onOpenMobileMedia}
+        actions={{
+          ...actions,
+          artifacts: [{ id: "shot-1", type: "screenshot", url: null, createdAt: 1 }],
+        }}
         renameSession={vi.fn()}
       />
     );
@@ -297,6 +308,11 @@ describe("SessionHeader", () => {
     fireEvent.click(screen.getByRole("menuitem", { name: "Details" }));
     expect(onOpenMobileDetails).toHaveBeenCalledOnce();
     expect(onToggleDetails).not.toHaveBeenCalled();
+
+    fireEvent.pointerDown(trigger, { button: 0, ctrlKey: false });
+    fireEvent.click(screen.getByRole("menuitem", { name: "Media (1)" }));
+    expect(onOpenMobileMedia).toHaveBeenCalledOnce();
+    expect(onOpenMobileDetails).toHaveBeenCalledOnce();
   });
 
   it("renders separate status icons and reveals the connection label on hover", async () => {
@@ -313,6 +329,7 @@ describe("SessionHeader", () => {
         onToggleDetails={vi.fn()}
         onToggleDesktopDetails={vi.fn()}
         onOpenMobileDetails={vi.fn()}
+        onOpenMobileMedia={vi.fn()}
         actions={actions}
         renameSession={vi.fn()}
       />
@@ -344,6 +361,7 @@ describe("SessionHeader", () => {
         onToggleDetails={vi.fn()}
         onToggleDesktopDetails={vi.fn()}
         onOpenMobileDetails={vi.fn()}
+        onOpenMobileMedia={vi.fn()}
         actions={actions}
         renameSession={vi.fn()}
       />
@@ -372,6 +390,7 @@ describe("SessionHeader", () => {
         onToggleDetails={vi.fn()}
         onToggleDesktopDetails={vi.fn()}
         onOpenMobileDetails={vi.fn()}
+        onOpenMobileMedia={vi.fn()}
         actions={actions}
         renameSession={vi.fn()}
       />
@@ -405,6 +424,7 @@ describe("SessionHeader", () => {
         onToggleDetails={vi.fn()}
         onToggleDesktopDetails={vi.fn()}
         onOpenMobileDetails={vi.fn()}
+        onOpenMobileMedia={vi.fn()}
         actions={actions}
         renameSession={vi.fn()}
       />
@@ -441,6 +461,7 @@ describe("SessionHeader", () => {
         onToggleDetails={vi.fn()}
         onToggleDesktopDetails={vi.fn()}
         onOpenMobileDetails={vi.fn()}
+        onOpenMobileMedia={vi.fn()}
         actions={actions}
         renameSession={vi.fn()}
       />
@@ -475,6 +496,7 @@ describe("SessionHeader", () => {
         onToggleDetails={vi.fn()}
         onToggleDesktopDetails={vi.fn()}
         onOpenMobileDetails={vi.fn()}
+        onOpenMobileMedia={vi.fn()}
         actions={actions}
         renameSession={vi.fn()}
       />
@@ -507,6 +529,7 @@ describe("SessionHeader", () => {
         onToggleDetails={vi.fn()}
         onToggleDesktopDetails={vi.fn()}
         onOpenMobileDetails={vi.fn()}
+        onOpenMobileMedia={vi.fn()}
         actions={actions}
         renameSession={vi.fn()}
       />
@@ -537,6 +560,7 @@ describe("SessionHeader", () => {
         onToggleDetails={vi.fn()}
         onToggleDesktopDetails={vi.fn()}
         onOpenMobileDetails={vi.fn()}
+        onOpenMobileMedia={vi.fn()}
         actions={actions}
         renameSession={vi.fn()}
       />
@@ -565,6 +589,7 @@ describe("SessionHeader", () => {
         onToggleDetails={vi.fn()}
         onToggleDesktopDetails={vi.fn()}
         onOpenMobileDetails={vi.fn()}
+        onOpenMobileMedia={vi.fn()}
         actions={actions}
         renameSession={vi.fn()}
       />
@@ -593,6 +618,7 @@ describe("SessionHeader", () => {
         onToggleDetails={vi.fn()}
         onToggleDesktopDetails={vi.fn()}
         onOpenMobileDetails={vi.fn()}
+        onOpenMobileMedia={vi.fn()}
         actions={actions}
         renameSession={vi.fn()}
       />
@@ -618,6 +644,7 @@ describe("SessionHeader", () => {
         onToggleDetails={vi.fn()}
         onToggleDesktopDetails={vi.fn()}
         onOpenMobileDetails={vi.fn()}
+        onOpenMobileMedia={vi.fn()}
         actions={actions}
         renameSession={vi.fn()}
       />
@@ -638,6 +665,7 @@ describe("SessionHeader", () => {
       onToggleDetails: vi.fn(),
       onToggleDesktopDetails: vi.fn(),
       onOpenMobileDetails: vi.fn(),
+      onOpenMobileMedia: vi.fn(),
       actions,
       renameSession: vi.fn(),
     };
@@ -664,6 +692,7 @@ describe("SessionHeader", () => {
       onToggleDetails: vi.fn(),
       onToggleDesktopDetails: vi.fn(),
       onOpenMobileDetails: vi.fn(),
+      onOpenMobileMedia: vi.fn(),
       actions,
       renameSession: vi.fn(),
     };
@@ -691,6 +720,7 @@ describe("SessionHeader", () => {
         onToggleDetails={vi.fn()}
         onToggleDesktopDetails={vi.fn()}
         onOpenMobileDetails={vi.fn()}
+        onOpenMobileMedia={vi.fn()}
         actions={actions}
         renameSession={vi.fn()}
       />
@@ -736,6 +766,7 @@ describe("SessionHeader mobile presentation", () => {
         onToggleDetails={vi.fn()}
         onToggleDesktopDetails={vi.fn()}
         onOpenMobileDetails={vi.fn()}
+        onOpenMobileMedia={vi.fn()}
         actions={actions}
         renameSession={vi.fn()}
       />
@@ -865,6 +896,7 @@ describe("SessionHeader mobile presentation", () => {
         onToggleDetails={vi.fn()}
         onToggleDesktopDetails={vi.fn()}
         onOpenMobileDetails={vi.fn()}
+        onOpenMobileMedia={vi.fn()}
         actions={actions}
         renameSession={vi.fn()}
       />
