@@ -36,6 +36,7 @@ import {
   deriveVncPassword,
   IMAGE_BUILD_MODE_ENV_VAR,
   scmCloneIdentity,
+  type ScmCloneIdentity,
 } from "../sandbox-env";
 import {
   PrebuiltImageActivationPendingError,
@@ -48,7 +49,6 @@ import {
   type ResumeResult,
   type SandboxProvider,
   type SandboxProviderCapabilities,
-  type ScmCloneIdentity,
   type StopConfig,
   type StopResult,
   type VncAccess,

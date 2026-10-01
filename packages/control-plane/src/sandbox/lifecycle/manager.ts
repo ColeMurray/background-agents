@@ -742,7 +742,6 @@ export class SandboxLifecycleManager
         provider: agent.provider,
         model: agent.model,
         userEnvVars,
-        scmIdentity: this.config.scmIdentity,
         prebuiltImageId,
         prebuiltImageSha,
         timeoutSeconds,
@@ -1060,7 +1059,6 @@ export class SandboxLifecycleManager
         agentSlackNotifyEnabled,
         mcpServers,
         sandboxSettings,
-        scmIdentity: this.config.scmIdentity,
         ...repositoryFields,
       };
       this.vmStartup.registerForegroundAuth(generation, restoreConfig.sessionId, sandboxAuthToken);

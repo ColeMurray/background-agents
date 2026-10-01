@@ -306,6 +306,9 @@ class SandboxManager:
         self,
         snapshot_image_id: str,
         session_config: SessionConfig | dict[str, Any],
+        *,
+        clone_host: str,
+        clone_username: str,
         sandbox_id: str | None = None,
         control_plane_url: str = "",
         sandbox_auth_token: str = "",
@@ -318,8 +321,6 @@ class SandboxManager:
         retire_sandbox_id: str | None = None,
         sandbox_backend: ModalBackend = "modal",
         launch_deadline_at_ms: int | None = None,
-        clone_host: str | None = None,
-        clone_username: str | None = None,
     ) -> SandboxHandle:
         """
         Create a new sandbox from a filesystem snapshot Image.
@@ -333,8 +334,8 @@ class SandboxManager:
             sandbox_id: Optional sandbox ID (generated if not provided)
             control_plane_url: URL for the control plane
             sandbox_auth_token: Auth token for the sandbox
-            clone_host: Optional VCS host override
-            clone_username: Optional VCS clone username override
+            clone_host: VCS host resolved by the control plane
+            clone_username: VCS clone username resolved by the control plane
 
         Returns:
             SandboxHandle for the restored sandbox

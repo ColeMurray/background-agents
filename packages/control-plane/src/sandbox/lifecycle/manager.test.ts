@@ -3482,8 +3482,6 @@ describe("SandboxLifecycleManager", () => {
       );
       // The retry rotates the spawn identity, same as the environment path.
       const [firstAttempt, retryAttempt] = createSandbox.mock.calls.map(([config]) => config);
-      expect(firstAttempt.scmIdentity).toBeDefined();
-      expect(retryAttempt.scmIdentity).toEqual(firstAttempt.scmIdentity);
       expect(retryAttempt.sandboxAuthToken).not.toBe(firstAttempt.sandboxAuthToken);
       expect(retryAttempt.sandboxId).not.toBe(firstAttempt.sandboxId);
       expect(storage.calls).toContain("commitProviderStartup");

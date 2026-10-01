@@ -45,7 +45,6 @@ function_image = (
 #   MODAL_API_SECRET: verify requests from control plane to Modal endpoints
 # Optional keys (add to the same secret as needed):
 #   ALLOWED_CONTROL_PLANE_HOSTS: comma-separated list of permitted callback hosts
-#   SCM_PROVIDER: "github" (default), "gitlab", or "bitbucket" for VCS identity defaults
 internal_api_secret = modal.Secret.from_name(
     "internal-api",
     required_keys=["MODAL_API_SECRET"],

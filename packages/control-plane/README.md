@@ -500,22 +500,14 @@ The system uses two types of GitHub tokens:
 | GitHub App Token | Clone, fetch, push | Brokered to credential helper | All repos where App is installed |
 | User OAuth Token | Create PRs         | Server-only                   | User's accessible repos          |
 
-Fresh, prebuilt-image, and restored session sandboxes do not receive a static system `GITHUB_TOKEN`,
-`GITHUB_APP_TOKEN`, or `VCS_CLONE_TOKEN` for normal git operations. Git invokes the sandbox
-credential helper, which calls `/sessions/:id/scm-credentials` with the sandbox auth token and
-receives short-lived credentials on demand. The helper preserves the existing installation-wide
-model by serving credentials for HTTPS git requests to the configured SCM host, including
-setup/start hooks that clone auxiliary private repos. This avoids stale embedded credentials in
-long-running sessions and Daytona persistent resumes. All supported Modal snapshots (v62+) already
-include the helper, shipped in v51 in May 2026; v72 is not an authentication boundary. Modal base,
-prebuilt-image, and snapshot launches share VCS host/username metadata and session broker context
-through a common sandbox configuration, including for repository-less sessions, without requiring
-token minting before launch. Create and restore accept the same optional top-level `clone_host` and
-`clone_username` strings. Unknown or incompatible snapshots remain under recovery hold without
-launch. Modal does not mint session git tokens or generate clone-token/GitHub CLI aliases, and no
-longer binds a `github-app` secret. The App key remains configured in the control plane and enabled
-GitHub bot, never in session sandboxes. User-supplied token overrides are preserved. One-shot image
-builds still receive `VCS_CLONE_TOKEN` because they lack a session broker context.
+Session sandboxes, including snapshot restores, do not receive `GITHUB_TOKEN`, `GITHUB_APP_TOKEN`,
+or `VCS_CLONE_TOKEN` for normal git operations. Git invokes the sandbox credential helper, which
+calls `/sessions/:id/scm-credentials` with the sandbox auth token and receives short-lived
+credentials on demand. The helper preserves the existing installation-wide model by serving
+credentials for HTTPS git requests to the configured SCM host, including setup/start hooks that
+clone auxiliary private repos. This avoids stale embedded credentials in long-running sessions and
+persistent resumes. One-shot image builds still receive `VCS_CLONE_TOKEN` because they have no
+session to broker through.
 
 If a `create-pr` request is triggered by a participant without a user OAuth token (for example,
 Slack-created or Google-login sessions), the sandbox can still push the branch with brokered GitHub

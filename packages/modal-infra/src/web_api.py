@@ -76,8 +76,8 @@ class CreateBuildSandboxRequest(_ModalRequestModel):
     callback_url: NonEmptyString
     failure_callback_url: NonEmptyString
     clone_token: str | None = None
-    clone_host: str | None = None
-    clone_username: str | None = None
+    clone_host: NonEmptyString
+    clone_username: NonEmptyString
     user_env_vars: dict[str, str] | None = None
     build_execution_timeout_seconds: int | None = None
     provider_session_timeout_seconds: int | None = None
@@ -120,16 +120,13 @@ class _RepositoryContextModel(_ModalRequestModel):
         return self
 
 
-class _SandboxLaunchMetadataRequest(_ModalRequestModel):
-    clone_host: str | None = None
-    clone_username: str | None = None
-
-
-class CreateSandboxRequest(_RepositoryContextModel, _SandboxLaunchMetadataRequest):
+class CreateSandboxRequest(_RepositoryContextModel):
     session_id: NonEmptyString
     sandbox_id: str | None = None
     control_plane_url: NonEmptyString
     sandbox_auth_token: NonEmptyString
+    clone_host: NonEmptyString
+    clone_username: NonEmptyString
     agent_session_id: str | None = None
     opencode_session_id: str | None = None
     harness: str | None = None
@@ -171,12 +168,14 @@ class RestoreSessionConfigRequest(_RepositoryContextModel):
     working_branch_name: str | None = None
 
 
-class RestoreSandboxRequest(_SandboxLaunchMetadataRequest):
+class RestoreSandboxRequest(_ModalRequestModel):
     snapshot_image_id: NonEmptyString
     session_config: RestoreSessionConfigRequest
     sandbox_id: str | None = None
     control_plane_url: NonEmptyString
     sandbox_auth_token: NonEmptyString
+    clone_host: NonEmptyString
+    clone_username: NonEmptyString
     user_env_vars: dict[str, str] | None = None
     timeout_seconds: int | None = Field(default=None, gt=0)
     code_server_enabled: bool = False
@@ -423,7 +422,7 @@ async def api_create_sandbox(
         "repo_name": "...",
         "control_plane_url": "...",
         "sandbox_auth_token": "...",
-        "clone_host": "github.com",  // Optional: VCS host/username pair
+        "clone_host": "github.com",
         "clone_username": "x-access-token",
         "provider": "anthropic",
         "model": "claude-sonnet-4-6"
@@ -462,8 +461,8 @@ async def api_create_sandbox(
             session_config=session_config,
             control_plane_url=parsed_request.control_plane_url,
             sandbox_auth_token=parsed_request.sandbox_auth_token,
-            clone_host=parsed_request.clone_host or None,
-            clone_username=parsed_request.clone_username or None,
+            clone_host=parsed_request.clone_host,
+            clone_username=parsed_request.clone_username,
             user_env_vars=parsed_request.user_env_vars or None,
             repo_image_id=parsed_request.repo_image_id or None,
             repo_image_sha=parsed_request.repo_image_sha or None,
@@ -871,8 +870,8 @@ async def api_restore_sandbox(
             sandbox_id=parsed_request.sandbox_id,
             control_plane_url=parsed_request.control_plane_url,
             sandbox_auth_token=parsed_request.sandbox_auth_token,
-            clone_host=parsed_request.clone_host or None,
-            clone_username=parsed_request.clone_username or None,
+            clone_host=parsed_request.clone_host,
+            clone_username=parsed_request.clone_username,
             user_env_vars=parsed_request.user_env_vars or None,
             timeout_seconds=(
                 parsed_request.timeout_seconds
@@ -955,8 +954,6 @@ async def api_create_build_sandbox(
             ),
             max_seconds=MAX_BUILD_TIMEOUT_SECONDS + IMAGE_BUILD_FINALIZATION_GRACE_SECONDS,
         )
-        clone_host = parsed_request.clone_host or None
-        clone_username = parsed_request.clone_username or None
         callback_url = parsed_request.callback_url
         failure_callback_url = parsed_request.failure_callback_url
         if not validate_control_plane_url(callback_url) or not validate_control_plane_url(
@@ -973,9 +970,9 @@ async def api_create_build_sandbox(
             repositories=repositories,
             callback_url=callback_url,
             failure_callback_url=failure_callback_url,
+            clone_host=parsed_request.clone_host,
+            clone_username=parsed_request.clone_username,
             clone_token=parsed_request.clone_token or "",
-            clone_host=clone_host,
-            clone_username=clone_username,
             user_env_vars=parsed_request.user_env_vars or None,
             build_execution_timeout_seconds=build_execution_timeout_seconds,
             timeout_seconds=provider_session_timeout_seconds,

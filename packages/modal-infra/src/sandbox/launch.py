@@ -181,7 +181,6 @@ class SandboxLauncher:
 
         inject_vcs_env_vars(
             env_vars,
-            clone_token=None,
             clone_host=config.clone_host,
             clone_username=config.clone_username,
         )

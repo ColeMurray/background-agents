@@ -28,13 +28,8 @@ import { generateId, hashToken } from "../auth/crypto";
 import { getUserAuth } from "../auth/user/runtime";
 import { resolveSandboxBackendName } from "../sandbox/provider-name";
 import { createSandboxProviderFromEnv } from "../sandbox/provider-factory";
-import {
-  providerResumesAfterStop,
-  type ScmCloneIdentity,
-  type SandboxProvider,
-} from "../sandbox/provider";
+import { providerResumesAfterStop, type SandboxProvider } from "../sandbox/provider";
 import { resolveExecutionBudgetMs } from "../sandbox/execution-budget";
-import { scmCloneIdentity } from "../sandbox/sandbox-env";
 import { createImageBuildLookup } from "../image-builds/lookup";
 import { resolveImageBuildAdmission } from "../image-builds/provider-policy";
 import { createLogger, parseLogLevel } from "../logger";
@@ -324,7 +319,6 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
   let scmProvider: SourceControlProvider = createSourceControlProviderFromEnv(env);
   const sourceControlProvider = () => scmProvider;
   const scmProviderName = scmProvider.name;
-  const scmIdentity = scmCloneIdentity(scmProviderName);
 
   // Shared single instances/closures — every consumer below takes these
   // rather than re-deriving its own copy.
@@ -487,7 +481,6 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
   });
   const lifecycleManager = createLifecycleManager({
     provider: sandboxProvider,
-    scmIdentity,
     shutdown,
     access,
     env,
@@ -1061,7 +1054,6 @@ interface LifecycleManagerDeps {
   shutdown: SandboxShutdownLifecycle;
   access: SandboxAccess;
   provider: SandboxProvider;
-  scmIdentity: ScmCloneIdentity;
   env: Env;
   db: SqlDatabase;
   /** The latched public-session-id resolver shared with the session logger. */
@@ -1080,7 +1072,6 @@ interface LifecycleManagerDeps {
 function createLifecycleManager(deps: LifecycleManagerDeps): SandboxLifecycleManager {
   const {
     provider,
-    scmIdentity,
     shutdown,
     access,
     env,
@@ -1159,7 +1150,6 @@ function createLifecycleManager(deps: LifecycleManagerDeps): SandboxLifecycleMan
     bootBudget: { timeoutMs: bootBudget.timeoutMs },
     mcpServerLookup,
     slackAgentNotifyLookup,
-    scmIdentity,
     recordWarning: deps.recordWarning,
   };
 

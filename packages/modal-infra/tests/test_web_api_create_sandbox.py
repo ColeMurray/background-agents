@@ -73,7 +73,10 @@ def _patch_restore_manager(
     monkeypatch.setattr(manager_module, "SandboxManager", FakeManager)
 
 
-async def _call_create_sandbox(request: dict, **headers) -> dict:
+VCS_IDENTITY = {"clone_host": "github.com", "clone_username": "x-access-token"}
+
+
+async def _call_create_sandbox(request: dict, *, with_identity: bool = True, **headers) -> dict:
     request_headers = {
         "authorization": "Bearer test",
         "x_trace_id": None,
@@ -83,12 +86,12 @@ async def _call_create_sandbox(request: dict, **headers) -> dict:
         **headers,
     }
     return await web_api.api_create_sandbox.get_raw_f()(
-        request,
+        {**VCS_IDENTITY, **request} if with_identity else request,
         **request_headers,
     )
 
 
-async def _call_restore_sandbox(request: dict, **headers) -> dict:
+async def _call_restore_sandbox(request: dict, *, with_identity: bool = True, **headers) -> dict:
     request_headers = {
         "authorization": "Bearer test",
         "x_trace_id": None,
@@ -98,7 +101,7 @@ async def _call_restore_sandbox(request: dict, **headers) -> dict:
         **headers,
     }
     return await web_api.api_restore_sandbox.get_raw_f()(
-        request,
+        {**VCS_IDENTITY, **request} if with_identity else request,
         **request_headers,
     )
 
@@ -185,6 +188,31 @@ async def test_sandbox_requests_reject_invalid_clone_fields(
 
     with pytest.raises(HTTPException) as exc_info:
         await call({**request, field: value})
+
+    assert exc_info.value.status_code == 400
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("restore", [False, True], ids=["create", "restore"])
+@pytest.mark.parametrize(
+    "identity",
+    [
+        {},
+        {"clone_username": "oauth2"},
+        {"clone_host": "gitlab.example"},
+        {"clone_host": None, "clone_username": None},
+        {"clone_host": "", "clone_username": ""},
+    ],
+    ids=["omitted", "host-missing", "username-missing", "null", "empty"],
+)
+async def test_sandbox_requests_require_vcs_identity(monkeypatch, restore, identity):
+    """The control plane is the only source of the sandbox VCS identity."""
+    _patch_auth(monkeypatch)
+    call = _call_restore_sandbox if restore else _call_create_sandbox
+    request = RESTORE_REQUEST if restore else CREATE_REQUEST
+
+    with pytest.raises(HTTPException) as exc_info:
+        await call({**request, **identity}, with_identity=False)
 
     assert exc_info.value.status_code == 400
 
@@ -610,16 +638,14 @@ async def test_create_sandbox_rejects_partial_repo_context(monkeypatch, request_
     ],
 )
 @pytest.mark.parametrize("repo_fields", [{}, {"repo_owner": "acme", "repo_name": "repo"}])
-@pytest.mark.parametrize("scm_provider", ["github", "gitlab"])
 async def test_restore_sandbox_never_resolves_or_forwards_static_clone_token(
-    monkeypatch, clone_fields, repo_fields, scm_provider
+    monkeypatch, clone_fields, repo_fields
 ):
     """Restore ignores obsolete token input and credentials in the function environment."""
     captured = {}
 
     _patch_auth(monkeypatch)
     _patch_restore_manager(monkeypatch, captured)
-    monkeypatch.setenv("SCM_PROVIDER", scm_provider)
     monkeypatch.setenv("GITLAB_ACCESS_TOKEN", "system-gitlab-token")
     monkeypatch.setenv("GITHUB_APP_ID", "123")
     monkeypatch.setenv("GITHUB_APP_PRIVATE_KEY", "private-key")
@@ -711,18 +737,8 @@ async def test_restore_sandbox_forwards_vnc_and_returns_credentials(monkeypatch)
 @pytest.mark.asyncio
 @pytest.mark.parametrize("restore", [False, True], ids=["create", "restore"])
 @pytest.mark.parametrize("repo_fields", [{}, {"repo_owner": "  acme  ", "repo_name": "  repo  "}])
-@pytest.mark.parametrize(
-    "metadata",
-    [
-        {},
-        {"clone_host": None, "clone_username": None},
-        {"clone_host": "", "clone_username": ""},
-        {"clone_host": "gitlab.example", "clone_username": "oauth2"},
-    ],
-    ids=["omitted", "null", "empty", "provided"],
-)
 async def test_sandbox_requests_forward_metadata_and_user_tokens_with_normalized_repo_context(
-    monkeypatch, restore, repo_fields, metadata
+    monkeypatch, restore, repo_fields
 ):
     """Create and restore share launch metadata, outside the nested session config."""
     captured = {}
@@ -743,7 +759,8 @@ async def test_sandbox_requests_forward_metadata_and_user_tokens_with_normalized
     result = await call(
         {
             **request,
-            **metadata,
+            "clone_host": "gitlab.example",
+            "clone_username": "oauth2",
             "user_env_vars": {"GH_TOKEN": "user-token", "VCS_CLONE_TOKEN": "user-clone-token"},
         }
     )
@@ -757,8 +774,8 @@ async def test_sandbox_requests_forward_metadata_and_user_tokens_with_normalized
     assert "clone_host" not in session_config
     assert "clone_username" not in session_config
     assert "clone_token" not in config
-    assert config["clone_host"] == (metadata.get("clone_host") or None)
-    assert config["clone_username"] == (metadata.get("clone_username") or None)
+    assert config["clone_host"] == "gitlab.example"
+    assert config["clone_username"] == "oauth2"
     assert config["control_plane_url"] == request["control_plane_url"]
     assert config["sandbox_auth_token"] == request["sandbox_auth_token"]
     assert config["user_env_vars"] == {

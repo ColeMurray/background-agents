@@ -222,21 +222,6 @@ describe("buildSandboxEnvVars", () => {
     expect(envVars.SANDBOX_TIMEOUT_SECONDS).toBe("14400");
   });
 
-  it.each(["create", "restore"] as const)(
-    "uses common launch identity over provider defaults on %s",
-    (source) => {
-      const config = {
-        ...baseConfig,
-        scmIdentity: scmCloneIdentity("gitlab"),
-        ...(source === "restore" ? { snapshotImageId: "saved-image" } : {}),
-      };
-      const envVars = buildSandboxEnvVars(config, { scmIdentity: scmCloneIdentity("github") });
-      expect(envVars.VCS_HOST).toBe("gitlab.com");
-      expect(envVars.VCS_CLONE_USERNAME).toBe("oauth2");
-      expect(envVars).not.toHaveProperty("VCS_CLONE_TOKEN");
-    }
-  );
-
   it("system vars take precedence over user-defined repo secrets", () => {
     const envVars = buildSandboxEnvVars(
       {

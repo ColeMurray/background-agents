@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, it, expect, vi } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import { env } from "cloudflare:test";
 import type { SessionDO } from "../../src/cloudflare/durable-object";
 import { createCloudflareEnv, type WorkerBindings } from "../../src/cloudflare/platform";
@@ -12,10 +12,6 @@ import { SessionMessengerImpl } from "../../src/session/messenger";
 import { SandboxShutdownCoordinator } from "../../src/session/sandbox-shutdown";
 import { SessionStatusService } from "../../src/session/session-status-service";
 import { SessionWebSocketManagerImpl } from "../../src/session/websocket-manager";
-import { ModalSandboxProvider } from "../../src/sandbox/providers/modal-provider";
-import { scmCloneIdentity } from "../../src/sandbox/sandbox-env";
-import { cleanD1Tables } from "./cleanup";
-import { initNamedSession, queryDO } from "./helpers";
 import { componentsOf, runInSessionDO } from "./session-do-access";
 
 /**
@@ -25,8 +21,6 @@ import { componentsOf, runInSessionDO } from "./session-do-access";
  * degraded and surfacing the error at the first spawn or PR operation.
  */
 describe("createSessionRuntime", () => {
-  beforeEach(cleanD1Tables);
-  afterEach(cleanD1Tables);
   async function buildWithEnv(overrides: Partial<Record<keyof Env, string | undefined>>) {
     const stub = env.SESSION.get(env.SESSION.idFromName(`components-eager-${crypto.randomUUID()}`));
 
@@ -52,70 +46,6 @@ describe("createSessionRuntime", () => {
   it("builds the whole graph on a correctly configured deployment", async () => {
     expect(await buildWithEnv({})).toBeNull();
   });
-
-  it.each([
-    ["create", false],
-    ["create", true],
-    ["restore", false],
-    ["restore", true],
-  ] as const)(
-    "preserves common GitLab identity on %s without minting (repo-less: %s)",
-    async (source, repoLess) => {
-      const { stub } = await initNamedSession(`restore-identity-${crypto.randomUUID()}`);
-      await queryDO(stub, "DELETE FROM sandbox_preservation");
-      await queryDO(
-        stub,
-        "UPDATE sandbox SET status = 'stopped', modal_object_id = NULL, snapshot_image_id = 'saved-image', snapshot_runtime_version = 'v62-compatible'"
-      );
-      if (source === "create") await queryDO(stub, "UPDATE sandbox SET snapshot_image_id = NULL");
-      if (repoLess) {
-        await queryDO(
-          stub,
-          "UPDATE session SET repo_owner = NULL, repo_name = NULL, repo_id = NULL, base_branch = NULL"
-        );
-        await queryDO(stub, "DELETE FROM session_repositories");
-      }
-      await runInSessionDO(stub, async (instance, state) => {
-        const runtime = createSessionRuntime(
-          createDurableObjectSessionPlatform(state, env.DB),
-          createCloudflareEnv({
-            ...(instance as unknown as { env: WorkerBindings }).env,
-            SCM_PROVIDER: "gitlab",
-            GITLAB_ACCESS_TOKEN: "configured-token",
-          } as WorkerBindings)
-        );
-        const mint = vi
-          .spyOn(runtime.internals.sourceControlProvider, "generateCredentialHelperAuth")
-          .mockRejectedValue(new Error("mint unavailable"));
-        const launch = vi
-          .spyOn(ModalSandboxProvider.prototype, "restoreFromSnapshot")
-          .mockResolvedValue({
-            success: true,
-            providerObjectId: "restored-source",
-            lifetime: { kind: "none", observedAtMs: Date.now() },
-          });
-        const create = vi.spyOn(ModalSandboxProvider.prototype, "createSandbox").mockResolvedValue({
-          sandboxId: "created-sandbox",
-          createdAt: Date.now(),
-          providerObjectId: "created-source",
-          lifetime: { kind: "none", observedAtMs: Date.now() },
-        });
-        try {
-          await runtime.internals.lifecycleManager.spawnSandbox();
-          expect(source === "restore" ? launch : create).toHaveBeenCalledWith(
-            expect.objectContaining({
-              scmIdentity: scmCloneIdentity("gitlab"),
-            })
-          );
-          expect(mint).not.toHaveBeenCalled();
-        } finally {
-          mint.mockRestore();
-          launch.mockRestore();
-          create.mockRestore();
-        }
-      });
-    }
-  );
 
   it("does not invoke runtime operations during construction", async () => {
     const stub = env.SESSION.get(env.SESSION.idFromName(`components-inert-${crypto.randomUUID()}`));

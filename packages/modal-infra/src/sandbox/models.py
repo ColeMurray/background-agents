@@ -19,6 +19,8 @@ class SandboxConfig:
 
     repo_owner: str | None
     repo_name: str | None
+    clone_host: str  # VCS identity resolved by the control plane
+    clone_username: str
     sandbox_id: str | None = None  # Expected sandbox ID from control plane
     session_config: SessionConfig | dict[str, Any] | None = None
     control_plane_url: str = ""
@@ -38,8 +40,6 @@ class SandboxConfig:
     sandbox_backend: ModalBackend = "modal"
     retire_sandbox_id: str | None = None
     launch_deadline_at_ms: int | None = None
-    clone_host: str | None = None
-    clone_username: str | None = None
 
 
 @dataclass

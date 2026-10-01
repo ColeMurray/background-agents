@@ -95,22 +95,24 @@ const testConfig = {
 // ==================== Tests ====================
 
 describe("ModalSandboxProvider", () => {
-  it.each([undefined, "prebuilt-image"])(
-    "forwards common SCM identity on create with image %s",
-    async (prebuiltImageId) => {
-      const client = createMockModalClient();
-      const provider = new ModalSandboxProvider(client, "modal");
-      await provider.createSandbox({
-        ...testConfig,
-        prebuiltImageId,
-        scmIdentity: scmCloneIdentity("gitlab"),
-      });
-      expect(client.createSandbox).toHaveBeenCalledWith(
-        expect.objectContaining({ scmIdentity: scmCloneIdentity("gitlab"), prebuiltImageId }),
-        undefined
-      );
-    }
-  );
+  it("sends the deployment SCM identity on create, prebuilt create, and restore", async () => {
+    const client = createMockModalClient();
+    const provider = new ModalSandboxProvider(client, "modal", "gitlab");
+    await provider.createSandbox(testConfig);
+    await provider.createSandbox({ ...testConfig, prebuiltImageId: "prebuilt-image" });
+    await provider.restoreFromSnapshot({ ...testConfig, snapshotImageId: "img-123" });
+
+    const identity = { scmIdentity: scmCloneIdentity("gitlab") };
+    expect(vi.mocked(client.createSandbox).mock.calls.map(([request]) => request)).toEqual([
+      expect.objectContaining(identity),
+      expect.objectContaining({ ...identity, prebuiltImageId: "prebuilt-image" }),
+    ]);
+    expect(client.restoreSandbox).toHaveBeenCalledWith(
+      expect.objectContaining(identity),
+      undefined
+    );
+  });
+
   it.each(["not_visible", "other_generation", "unknown"] as const)(
     "decodes raw and wrapped VM outcome %s without changing its classification",
     (detail) => {
@@ -128,7 +130,7 @@ describe("ModalSandboxProvider", () => {
   );
 
   it("standard Modal hooks do not enable VM allocation recovery", () => {
-    const provider = new ModalSandboxProvider(createMockModalClient(), "modal");
+    const provider = new ModalSandboxProvider(createMockModalClient(), "modal", "github");
     expect(provider.pendingSandboxAllocation(testConfig)).toBeUndefined();
     expect(provider.isUnknownStartupError(new ModalApiError("unavailable", 503))).toBe(false);
     expect(
@@ -153,7 +155,8 @@ describe("ModalSandboxProvider", () => {
             throw error;
           },
         }),
-        "modal-vm"
+        "modal-vm",
+        "github"
       );
       let caught: unknown;
       try {
@@ -187,7 +190,8 @@ describe("ModalSandboxProvider", () => {
             sandboxBackend: "modal-vm",
           }),
         }),
-        "modal-vm"
+        "modal-vm",
+        "github"
       );
       const config = { ...testConfig, generationCreatedAtMs: createdAt, timeoutSeconds: 5_400 };
       const pending = provider.pendingSandboxAllocation(config);
@@ -216,7 +220,7 @@ describe("ModalSandboxProvider", () => {
     try {
       vi.setSystemTime(new Date("2030-01-01T00:00:00.000Z"));
       const client = createMockModalClient();
-      const provider = new ModalSandboxProvider(client, "modal");
+      const provider = new ModalSandboxProvider(client, "modal", "github");
       const created = await provider.createSandbox({ ...testConfig, timeoutSeconds: 1200 });
       expect(created.lifetime).toEqual({
         kind: "finite",
@@ -254,7 +258,7 @@ describe("ModalSandboxProvider", () => {
   describe("capabilities", () => {
     it("reports correct capabilities", () => {
       const client = createMockModalClient();
-      const provider = new ModalSandboxProvider(client, "modal");
+      const provider = new ModalSandboxProvider(client, "modal", "github");
 
       expect(provider.name).toBe("modal");
       expect(provider.capabilities.supportsSnapshots).toBe(true);
@@ -270,7 +274,7 @@ describe("ModalSandboxProvider", () => {
             throw new Error("fetch failed");
           }),
         });
-        const provider = new ModalSandboxProvider(client, "modal");
+        const provider = new ModalSandboxProvider(client, "modal", "github");
 
         await expect(provider.createSandbox(testConfig)).rejects.toThrow(SandboxProviderError);
         try {
@@ -287,7 +291,7 @@ describe("ModalSandboxProvider", () => {
             throw new Error("connect ETIMEDOUT 192.168.1.1:443");
           }),
         });
-        const provider = new ModalSandboxProvider(client, "modal");
+        const provider = new ModalSandboxProvider(client, "modal", "github");
 
         try {
           await provider.createSandbox(testConfig);
@@ -303,7 +307,7 @@ describe("ModalSandboxProvider", () => {
             throw new Error("read ECONNRESET");
           }),
         });
-        const provider = new ModalSandboxProvider(client, "modal");
+        const provider = new ModalSandboxProvider(client, "modal", "github");
 
         try {
           await provider.createSandbox(testConfig);
@@ -319,7 +323,7 @@ describe("ModalSandboxProvider", () => {
             throw new Error("connect ECONNREFUSED 127.0.0.1:3000");
           }),
         });
-        const provider = new ModalSandboxProvider(client, "modal");
+        const provider = new ModalSandboxProvider(client, "modal", "github");
 
         try {
           await provider.createSandbox(testConfig);
@@ -335,7 +339,7 @@ describe("ModalSandboxProvider", () => {
             throw new Error("Network request failed");
           }),
         });
-        const provider = new ModalSandboxProvider(client, "modal");
+        const provider = new ModalSandboxProvider(client, "modal", "github");
 
         try {
           await provider.createSandbox(testConfig);
@@ -351,7 +355,7 @@ describe("ModalSandboxProvider", () => {
             throw new RequestDeadlineError("Modal", "createSandbox", 30_000);
           }),
         });
-        const provider = new ModalSandboxProvider(client, "modal");
+        const provider = new ModalSandboxProvider(client, "modal", "github");
 
         try {
           await provider.createSandbox(testConfig);
@@ -367,7 +371,7 @@ describe("ModalSandboxProvider", () => {
             throw new Error("Modal API error: 502 Bad Gateway");
           }),
         });
-        const provider = new ModalSandboxProvider(client, "modal");
+        const provider = new ModalSandboxProvider(client, "modal", "github");
 
         try {
           await provider.createSandbox(testConfig);
@@ -383,7 +387,7 @@ describe("ModalSandboxProvider", () => {
             throw new Error("Modal API error: 503 Service Unavailable");
           }),
         });
-        const provider = new ModalSandboxProvider(client, "modal");
+        const provider = new ModalSandboxProvider(client, "modal", "github");
 
         try {
           await provider.createSandbox(testConfig);
@@ -399,7 +403,7 @@ describe("ModalSandboxProvider", () => {
             throw new Error("Modal API error: 504 Gateway Timeout");
           }),
         });
-        const provider = new ModalSandboxProvider(client, "modal");
+        const provider = new ModalSandboxProvider(client, "modal", "github");
 
         try {
           await provider.createSandbox(testConfig);
@@ -415,7 +419,7 @@ describe("ModalSandboxProvider", () => {
             throw new Error("upstream bad gateway error");
           }),
         });
-        const provider = new ModalSandboxProvider(client, "modal");
+        const provider = new ModalSandboxProvider(client, "modal", "github");
 
         try {
           await provider.createSandbox(testConfig);
@@ -431,7 +435,7 @@ describe("ModalSandboxProvider", () => {
             throw new Error("service unavailable, try again later");
           }),
         });
-        const provider = new ModalSandboxProvider(client, "modal");
+        const provider = new ModalSandboxProvider(client, "modal", "github");
 
         try {
           await provider.createSandbox(testConfig);
@@ -447,7 +451,7 @@ describe("ModalSandboxProvider", () => {
             throw new Error("gateway timeout while waiting for upstream");
           }),
         });
-        const provider = new ModalSandboxProvider(client, "modal");
+        const provider = new ModalSandboxProvider(client, "modal", "github");
 
         try {
           await provider.createSandbox(testConfig);
@@ -465,7 +469,7 @@ describe("ModalSandboxProvider", () => {
             throw new Error("Modal API error: 401 Unauthorized");
           }),
         });
-        const provider = new ModalSandboxProvider(client, "modal");
+        const provider = new ModalSandboxProvider(client, "modal", "github");
 
         try {
           await provider.createSandbox(testConfig);
@@ -481,7 +485,7 @@ describe("ModalSandboxProvider", () => {
             throw new Error("Modal API error: 403 Forbidden");
           }),
         });
-        const provider = new ModalSandboxProvider(client, "modal");
+        const provider = new ModalSandboxProvider(client, "modal", "github");
 
         try {
           await provider.createSandbox(testConfig);
@@ -497,7 +501,7 @@ describe("ModalSandboxProvider", () => {
             throw new Error("Modal API error: 400 Bad Request - Invalid configuration");
           }),
         });
-        const provider = new ModalSandboxProvider(client, "modal");
+        const provider = new ModalSandboxProvider(client, "modal", "github");
 
         try {
           await provider.createSandbox(testConfig);
@@ -513,7 +517,7 @@ describe("ModalSandboxProvider", () => {
             throw new Error("Modal API error: 422 Unprocessable Entity");
           }),
         });
-        const provider = new ModalSandboxProvider(client, "modal");
+        const provider = new ModalSandboxProvider(client, "modal", "github");
 
         try {
           await provider.createSandbox(testConfig);
@@ -529,7 +533,7 @@ describe("ModalSandboxProvider", () => {
             throw new Error("Invalid repository configuration");
           }),
         });
-        const provider = new ModalSandboxProvider(client, "modal");
+        const provider = new ModalSandboxProvider(client, "modal", "github");
 
         try {
           await provider.createSandbox(testConfig);
@@ -545,7 +549,7 @@ describe("ModalSandboxProvider", () => {
             throw new Error("Quota exceeded: maximum sandboxes reached");
           }),
         });
-        const provider = new ModalSandboxProvider(client, "modal");
+        const provider = new ModalSandboxProvider(client, "modal", "github");
 
         try {
           await provider.createSandbox(testConfig);
@@ -561,7 +565,7 @@ describe("ModalSandboxProvider", () => {
             throw new Error("Something unexpected happened");
           }),
         });
-        const provider = new ModalSandboxProvider(client, "modal");
+        const provider = new ModalSandboxProvider(client, "modal", "github");
 
         try {
           await provider.createSandbox(testConfig);
@@ -577,7 +581,7 @@ describe("ModalSandboxProvider", () => {
             throw "string error"; // Throwing a string, not an Error
           }),
         });
-        const provider = new ModalSandboxProvider(client, "modal");
+        const provider = new ModalSandboxProvider(client, "modal", "github");
 
         try {
           await provider.createSandbox(testConfig);
@@ -597,7 +601,7 @@ describe("ModalSandboxProvider", () => {
             throw originalError;
           }),
         });
-        const provider = new ModalSandboxProvider(client, "modal");
+        const provider = new ModalSandboxProvider(client, "modal", "github");
 
         try {
           await provider.createSandbox(testConfig);
@@ -613,7 +617,7 @@ describe("ModalSandboxProvider", () => {
             throw new Error("timeout exceeded");
           }),
         });
-        const provider = new ModalSandboxProvider(client, "modal");
+        const provider = new ModalSandboxProvider(client, "modal", "github");
 
         try {
           await provider.createSandbox(testConfig);
@@ -639,7 +643,7 @@ describe("ModalSandboxProvider", () => {
       const client = createMockModalClient({
         createSandbox: vi.fn(async () => expectedResult),
       });
-      const provider = new ModalSandboxProvider(client, "modal");
+      const provider = new ModalSandboxProvider(client, "modal", "github");
 
       const result = await provider.createSandbox({ ...testConfig, vncEnabled: true });
 
@@ -664,7 +668,7 @@ describe("ModalSandboxProvider", () => {
       });
 
       await expect(
-        new ModalSandboxProvider(client, "modal").createSandbox({
+        new ModalSandboxProvider(client, "modal", "github").createSandbox({
           ...testConfig,
           prebuiltImageId: "im-missing",
         })
@@ -684,7 +688,7 @@ describe("ModalSandboxProvider", () => {
         }),
       });
 
-      const error = await new ModalSandboxProvider(client, "modal")
+      const error = await new ModalSandboxProvider(client, "modal", "github")
         .createSandbox({ ...testConfig, prebuiltImageId: "im-valid" })
         .catch((caught: unknown) => caught);
 
@@ -696,7 +700,7 @@ describe("ModalSandboxProvider", () => {
   describe("image builds", () => {
     it("binds a created image-build sandbox before starting it", async () => {
       const client = createMockModalClient();
-      const provider = new ModalSandboxProvider(client, "modal");
+      const provider = new ModalSandboxProvider(client, "modal", "github");
       const correlation = { request_id: "request-1", trace_id: "trace-1" };
       const onProviderSessionCreated = vi.fn(async () => undefined);
 
@@ -724,6 +728,7 @@ describe("ModalSandboxProvider", () => {
           scopeId: "acme/repo",
           buildId: "build-123",
           repositories: [{ repoOwner: "acme", repoName: "repo", baseBranch: "develop" }],
+          scmIdentity: scmCloneIdentity("github"),
           cloneToken: "clone-token",
           callbackUrl: "https://worker.test/image-builds/build-complete",
           failureCallbackUrl: "https://worker.test/image-builds/build-failed",
@@ -763,7 +768,8 @@ describe("ModalSandboxProvider", () => {
         });
         const provider = new ModalSandboxProvider(
           createMockModalClient({ stopSandbox }),
-          "modal-vm"
+          "modal-vm",
+          "github"
         );
         const config = {
           sessionId: "test-session",
@@ -809,7 +815,7 @@ describe("ModalSandboxProvider", () => {
           throw new ModalApiError("Modal API error: 502 Bad Gateway", 502);
         }),
       });
-      const provider = new ModalSandboxProvider(client, "modal");
+      const provider = new ModalSandboxProvider(client, "modal", "github");
 
       try {
         await provider.restoreFromSnapshot({
@@ -837,7 +843,7 @@ describe("ModalSandboxProvider", () => {
           throw new ModalApiError("Modal API error: 401 Unauthorized", 401);
         }),
       });
-      const provider = new ModalSandboxProvider(client, "modal");
+      const provider = new ModalSandboxProvider(client, "modal", "github");
 
       try {
         await provider.restoreFromSnapshot({
@@ -866,7 +872,7 @@ describe("ModalSandboxProvider", () => {
           throw modalError;
         }),
       });
-      const provider = new ModalSandboxProvider(client, "modal");
+      const provider = new ModalSandboxProvider(client, "modal", "github");
 
       try {
         await provider.takeSnapshot({
@@ -891,7 +897,8 @@ describe("ModalSandboxProvider", () => {
       }));
       const provider = new ModalSandboxProvider(
         createMockModalClient({ snapshotBuildSandbox }),
-        "modal"
+        "modal",
+        "github"
       );
 
       await expect(
@@ -917,7 +924,8 @@ describe("ModalSandboxProvider", () => {
             throw modalError;
           }),
         }),
-        "modal"
+        "modal",
+        "github"
       );
 
       await expect(
@@ -930,7 +938,7 @@ describe("ModalSandboxProvider", () => {
       });
     });
 
-    it("forwards restore SCM identity and returns the provider handle", async () => {
+    it("returns providerObjectId from restoreFromSnapshot", async () => {
       const client = createMockModalClient({
         restoreSandbox: vi.fn(async () => ({
           sandboxId: "restored-sandbox-123",
@@ -939,11 +947,10 @@ describe("ModalSandboxProvider", () => {
           vncPassword: "vnc-pw",
         })),
       });
-      const provider = new ModalSandboxProvider(client, "modal");
+      const provider = new ModalSandboxProvider(client, "modal", "github");
 
       const result = await provider.restoreFromSnapshot({
         snapshotImageId: "img-123",
-        scmIdentity: scmCloneIdentity("github"),
         sessionId: "session-123",
         sandboxId: "sandbox-123",
         sandboxAuthToken: "token",
@@ -963,10 +970,7 @@ describe("ModalSandboxProvider", () => {
         vncAccess: { url: "https://vnc.test", password: "vnc-pw" },
       });
       expect(client.restoreSandbox).toHaveBeenCalledWith(
-        expect.objectContaining({
-          vncEnabled: true,
-          scmIdentity: scmCloneIdentity("github"),
-        }),
+        expect.objectContaining({ vncEnabled: true }),
         undefined
       );
     });

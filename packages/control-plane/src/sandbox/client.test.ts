@@ -10,6 +10,8 @@ import {
 import { RequestDeadlineError } from "./request-deadline";
 import { scmCloneIdentity } from "./sandbox-env";
 
+const GITHUB_IDENTITY = scmCloneIdentity("github");
+
 function rejectWhenAborted(signal: AbortSignal): Promise<Response> {
   if (signal.aborted) return Promise.reject(signal.reason);
   return new Promise((_resolve, reject) => {
@@ -187,6 +189,7 @@ describe("ModalClient", () => {
     const client = createModalClient("secret", "acme");
     await expect(
       client.createSandbox({
+        scmIdentity: GITHUB_IDENTITY,
         sessionId: "session",
         sandboxId: "generation",
         sandboxBackend: "modal-vm",
@@ -205,6 +208,7 @@ describe("ModalClient", () => {
     );
     await expect(
       createModalClient("secret", "acme").restoreSandbox({
+        scmIdentity: GITHUB_IDENTITY,
         snapshotImageId: "image",
         sessionId: "session",
         sandboxId: "generation",
@@ -225,6 +229,7 @@ describe("ModalClient", () => {
       Response.json({ detail: "docker_not_available" }, { status: 501 })
     );
     const created = createModalClient("secret", "acme").createSandbox({
+      scmIdentity: GITHUB_IDENTITY,
       sessionId: "session",
       sandboxId: "generation",
       sandboxBackend: "modal-vm",
@@ -248,6 +253,7 @@ describe("ModalClient", () => {
     });
 
     const request = createModalClient("secret", "acme").createImageBuildSandbox({
+      scmIdentity: GITHUB_IDENTITY,
       scopeKind: "repo",
       scopeId: "acme/repo",
       buildId: "imgb-1",
@@ -353,6 +359,7 @@ describe("ModalClient", () => {
       endpoint: "create sandbox",
       call: (client: ReturnType<typeof createModalClient>) =>
         client.createSandbox({
+          scmIdentity: GITHUB_IDENTITY,
           sessionId: "session-123",
           repoOwner: null,
           repoName: null,
@@ -365,6 +372,7 @@ describe("ModalClient", () => {
       endpoint: "restore sandbox",
       call: (client: ReturnType<typeof createModalClient>) =>
         client.restoreSandbox({
+          scmIdentity: GITHUB_IDENTITY,
           snapshotImageId: "img-1",
           sessionId: "session-123",
           sandboxId: "sandbox-456",
@@ -389,6 +397,7 @@ describe("ModalClient", () => {
       endpoint: "create image-build sandbox",
       call: (client: ReturnType<typeof createModalClient>) =>
         client.createImageBuildSandbox({
+          scmIdentity: GITHUB_IDENTITY,
           scopeKind: "repo",
           scopeId: "acme/repo",
           buildId: "imgb-1",
@@ -522,6 +531,7 @@ describe("ModalClient", () => {
 
     const client = createModalClient("secret", "acme", "prod-web");
     await client.createSandbox({
+      scmIdentity: GITHUB_IDENTITY,
       sessionId: "session-123",
       sandboxId: "sandbox-456",
       repoOwner: "testowner",
@@ -550,6 +560,7 @@ describe("ModalClient", () => {
 
     const client = createModalClient("secret", "acme", "prod-web");
     await client.createSandbox({
+      scmIdentity: GITHUB_IDENTITY,
       sessionId: "session-123",
       sandboxId: "sandbox-456",
       repoOwner: "testowner",
@@ -583,6 +594,7 @@ describe("ModalClient", () => {
 
     const client = createModalClient("secret", "acme", "prod-web");
     await client.createSandbox({
+      scmIdentity: GITHUB_IDENTITY,
       sessionId: "session-123",
       repoOwner: "testowner",
       repoName: "testrepo",
@@ -604,6 +616,7 @@ describe("ModalClient", () => {
       .mockResolvedValueOnce(Response.json({ success: true, data: { sandbox_id: "sb-2" } }));
     const client = createModalClient("secret", "acme", "prod-web");
     await client.createSandbox({
+      scmIdentity: GITHUB_IDENTITY,
       sessionId: "session-1",
       repoOwner: null,
       repoName: null,
@@ -613,6 +626,7 @@ describe("ModalClient", () => {
       launchDeadlineAtMs: 123456,
     });
     await client.restoreSandbox({
+      scmIdentity: GITHUB_IDENTITY,
       snapshotImageId: "im-1",
       sessionId: "session-1",
       sandboxId: "sandbox-1",
@@ -655,6 +669,7 @@ describe("ModalClient", () => {
     const client = createModalClient("secret", "acme", "prod-web");
     await expect(
       client.createSandbox({
+        scmIdentity: GITHUB_IDENTITY,
         sessionId: "session-123",
         repoOwner: "testowner",
         repoName: "testrepo",
@@ -699,6 +714,7 @@ describe("ModalClient", () => {
 
     const client = createModalClient("secret", "acme", "prod-web");
     const result = await client.createSandbox({
+      scmIdentity: GITHUB_IDENTITY,
       sessionId: "session-123",
       repoOwner: "testowner",
       repoName: "testrepo",
@@ -734,6 +750,7 @@ describe("ModalClient", () => {
     const client = createModalClient("secret", "acme", "prod-web");
     await expect(
       client.createSandbox({
+        scmIdentity: GITHUB_IDENTITY,
         sessionId: "session-123",
         repoOwner: "testowner",
         repoName: "testrepo",
@@ -754,6 +771,7 @@ describe("ModalClient", () => {
 
     const client = createModalClient("secret", "acme", "prod-web");
     await client.restoreSandbox({
+      scmIdentity: GITHUB_IDENTITY,
       snapshotImageId: "img-1",
       sessionId: "session-123",
       sandboxId: "sandbox-456",
@@ -793,6 +811,7 @@ describe("ModalClient", () => {
     const client = createModalClient("secret", "acme", "prod-web");
     await expect(
       client.restoreSandbox({
+        scmIdentity: GITHUB_IDENTITY,
         snapshotImageId: "img-1",
         sessionId: "session-123",
         sandboxId: "sandbox-456",
@@ -831,6 +850,7 @@ describe("ModalClient", () => {
     const client = createModalClient("secret", "acme", "prod-web");
     await expect(
       client.restoreSandbox({
+        scmIdentity: GITHUB_IDENTITY,
         snapshotImageId: "img-1",
         sessionId: "session-123",
         sandboxId: "sandbox-456",
@@ -868,6 +888,7 @@ describe("ModalClient", () => {
     const client = createModalClient("secret", "acme", "prod-web");
 
     await client.createSandbox({
+      scmIdentity: GITHUB_IDENTITY,
       sessionId: "session-123",
       repoOwner: null,
       repoName: null,
@@ -877,6 +898,7 @@ describe("ModalClient", () => {
       vncEnabled: true,
     });
     await client.restoreSandbox({
+      scmIdentity: GITHUB_IDENTITY,
       snapshotImageId: "img-1",
       sessionId: "session-123",
       sandboxId: "sandbox-456",
@@ -993,8 +1015,7 @@ describe("ModalClient", () => {
       buildId: "imgb-1",
       repositories: [{ repoOwner: "acme", repoName: "repo", baseBranch: "develop" }],
       cloneToken: "clone-token",
-      cloneHost: "gitlab.com",
-      cloneUsername: "oauth2",
+      scmIdentity: scmCloneIdentity("gitlab"),
       callbackUrl: "https://worker.test/image-builds/build-complete",
       failureCallbackUrl: "https://worker.test/image-builds/build-failed",
       buildExecutionTimeoutSeconds: 1800,
@@ -1073,8 +1094,7 @@ describe("ModalClient", () => {
         buildId: "imgb-1",
         repositories: [{ repoOwner: "acme", repoName: "repo", baseBranch: "develop" }],
         cloneToken: "clone-token",
-        cloneHost: "github.com",
-        cloneUsername: "x-access-token",
+        scmIdentity: GITHUB_IDENTITY,
         callbackUrl: "https://cp.test/image-builds/build-complete",
         failureCallbackUrl: "https://cp.test/image-builds/build-failed",
         buildExecutionTimeoutSeconds: 1800,

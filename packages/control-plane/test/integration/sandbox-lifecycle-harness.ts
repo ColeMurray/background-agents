@@ -5,7 +5,6 @@ import {
 } from "../../src/sandbox/lifecycle/manager";
 import { SandboxAccess } from "../../src/sandbox/lifecycle/sandbox-access";
 import { providerResumesAfterStop, type SandboxProvider } from "../../src/sandbox/provider";
-import { scmCloneIdentity } from "../../src/sandbox/sandbox-env";
 import { LifecycleSessionContext } from "../../src/session/sandbox-lifecycle-adapters";
 import { SandboxShutdownCoordinator } from "../../src/session/sandbox-shutdown";
 import {
@@ -134,7 +133,6 @@ export function realLifecycleHarness(
       ...DEFAULT_LIFECYCLE_CONFIG,
       controlPlaneUrl: "https://control-plane.test",
       model: "anthropic/claude-sonnet-4-5",
-      scmIdentity: scmCloneIdentity("github"),
       recordWarning: (message: string, eventId: string) =>
         recordSessionWarning(
           new EventRepository(durableState.storage.sql, (operation) =>
