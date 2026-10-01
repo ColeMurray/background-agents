@@ -68,6 +68,7 @@ export async function authorizeWorkspaceRepositories(
   if (roleKey === "owner" || roleKey === "administrator") return null;
 
   const store = new TeamRepositoryGrantStore(ctx.db);
+  const teams = new TeamStore(ctx.db);
   for (const repository of target.repositories) {
     const repoId = repository.repoId;
     if (repoId === null || !Number.isSafeInteger(repoId) || repoId <= 0)
@@ -77,12 +78,16 @@ export async function authorizeWorkspaceRepositories(
     const memberships = (ctx.sessionMemberships ??= await new TeamMembershipStore(
       ctx.db
     ).listForUser(authorization.userId));
-    if (
-      !owners.some((teamId) =>
-        target.requireLead ? memberships.get(teamId) === "lead" : memberships.has(teamId)
-      )
-    )
-      return deniedRepository(repository);
+    let allowed = false;
+    for (const teamId of owners) {
+      if (target.requireLead ? memberships.get(teamId) !== "lead" : !memberships.has(teamId))
+        continue;
+      if (await teams.isActive(teamId)) {
+        allowed = true;
+        break;
+      }
+    }
+    if (!allowed) return deniedRepository(repository);
   }
   return null;
 }

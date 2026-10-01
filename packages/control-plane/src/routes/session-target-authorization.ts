@@ -35,10 +35,9 @@ export async function authorizeSessionTarget(
     }
   }
 
-  if (!target.repositories?.length) return null;
   return authorizeTeamRepositories(ctx, {
     teamId: target.teamId,
-    repositories: target.repositories.map((repository) => ({
+    repositories: (target.repositories ?? []).map((repository) => ({
       owner: repository.owner,
       name: repository.name,
       repoId: repository.repoId ?? null,

@@ -33,6 +33,7 @@ function context(): RequestContext {
 
 describe("workspace repository grants", () => {
   beforeEach(() => {
+    vi.spyOn(TeamStore.prototype, "isActive").mockResolvedValue(true);
     vi.spyOn(TeamMembershipStore.prototype, "listForUser").mockResolvedValue(
       new Map([["team-other", "member"]])
     );
@@ -97,6 +98,66 @@ describe("workspace repository grants", () => {
       await authorizeWorkspaceRepositories(context(), { repositories: [repository] })
     ).toBeNull();
     expect(TeamRepositoryGrantStore.prototype.listTeamsForRepository).toHaveBeenCalledWith(123);
+  });
+
+  it.each(["off", "shadow", "on"] as const)(
+    "refuses retained archived memberships in %s mode without making the repository unowned",
+    async (mode) => {
+      vi.mocked(TeamMembershipStore.prototype.listForUser).mockResolvedValue(
+        new Map([["team-granted", "lead"]])
+      );
+      vi.mocked(TeamStore.prototype.isActive).mockResolvedValue(false);
+      const ctx = context();
+      ctx.teamsEnforcementMode = mode;
+      expect(
+        (await authorizeWorkspaceRepositories(ctx, { repositories: [repository] }))?.status
+      ).toBe(403);
+      expect(
+        (
+          await authorizeWorkspaceRepositories(ctx, {
+            repositories: [repository],
+            requireLead: true,
+          })
+        )?.status
+      ).toBe(403);
+      expect(TeamRepositoryGrantStore.prototype.listTeamsForRepository).toHaveBeenCalledWith(123);
+    }
+  );
+
+  it("accepts an active granting team but not an archived lead", async () => {
+    vi.mocked(TeamMembershipStore.prototype.listForUser).mockResolvedValue(
+      new Map([
+        ["team-archived", "lead"],
+        ["team-active", "member"],
+      ])
+    );
+    vi.mocked(TeamRepositoryGrantStore.prototype.listTeamsForRepository).mockResolvedValue([
+      "team-archived",
+      "team-active",
+    ]);
+    vi.mocked(TeamStore.prototype.isActive).mockImplementation(
+      async (teamId) => teamId === "team-active"
+    );
+    expect(
+      await authorizeWorkspaceRepositories(context(), { repositories: [repository] })
+    ).toBeNull();
+    expect(
+      (
+        await authorizeWorkspaceRepositories(context(), {
+          repositories: [repository],
+          requireLead: true,
+        })
+      )?.status
+    ).toBe(403);
+    vi.mocked(TeamMembershipStore.prototype.listForUser).mockResolvedValue(
+      new Map([["team-active", "lead"]])
+    );
+    expect(
+      await authorizeWorkspaceRepositories(context(), {
+        repositories: [repository],
+        requireLead: true,
+      })
+    ).toBeNull();
   });
 
   it("allows grants from different caller teams without adding repositories.use", async () => {

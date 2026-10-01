@@ -123,23 +123,23 @@ describe("authorizeSessionTarget", () => {
   });
 
   it.each([{ repositories: undefined }, { repositories: [] }])(
-    "bypasses team checks for a repo-less target",
+    "refuses inactive ownership for a repo-less target",
     async ({ repositories }) => {
       const ctx = context(user, []);
       vi.mocked(TeamStore.prototype.isActive).mockResolvedValue(false);
 
-      expect(await authorizeSessionTarget(ctx, { teamId: "team_alpha", repositories })).toBeNull();
+      const denied = await authorizeSessionTarget(ctx, { teamId: "team_alpha", repositories });
+      expect(denied?.status).toBe(403);
+      await expect(denied?.json()).resolves.toMatchObject({ code: "team_not_active" });
       expect(ctx.db.prepare).not.toHaveBeenCalled();
-      expect(TeamStore.prototype.isActive).not.toHaveBeenCalled();
+      expect(TeamStore.prototype.isActive).toHaveBeenCalledWith("team_alpha");
     }
   );
 
   it("preflights environment permission without team lookup when repository members are absent", async () => {
     const ctx = context(user, ["environments.use"]);
 
-    expect(
-      await authorizeSessionTarget(ctx, { teamId: "team_alpha", environmentId: "env_1" })
-    ).toBeNull();
+    expect(await authorizeSessionTarget(ctx, { teamId: null, environmentId: "env_1" })).toBeNull();
     expect(TeamStore.prototype.isActive).not.toHaveBeenCalled();
     expect(ctx.db.prepare).not.toHaveBeenCalled();
   });
@@ -195,6 +195,18 @@ describe("authorizeSessionTarget", () => {
         repositories: [{ ...repository, repoId }],
       });
       expect(response?.status).toBe(409);
+    }
+  );
+
+  it.each([user, sandbox])(
+    "allows an active repo-less team target for $kind without grants",
+    async (principal) => {
+      const ctx = context(principal, []);
+      expect(
+        await authorizeSessionTarget(ctx, { teamId: "team_alpha", repositories: [] })
+      ).toBeNull();
+      expect(TeamStore.prototype.isActive).toHaveBeenCalledWith("team_alpha");
+      expect(ctx.db.prepare).not.toHaveBeenCalled();
     }
   );
 

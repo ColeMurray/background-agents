@@ -49,11 +49,15 @@ describe("handleSpawnChild repository grants", () => {
   });
   afterEach(() => vi.restoreAllMocks());
 
-  function makeGrantFixture(repoId = 12345, environmentId: string | null = null) {
+  function makeGrantFixture(
+    repoId = 12345,
+    environmentId: string | null = null,
+    hasRepository = true
+  ) {
     const spawnContext: SpawnContext = {
-      repoOwner: "acme",
-      repoName: "web-app",
-      repoId,
+      repoOwner: hasRepository ? "acme" : null,
+      repoName: hasRepository ? "web-app" : null,
+      repoId: hasRepository ? repoId : null,
       harness: "opencode",
       model: "anthropic/claude-sonnet-4-6",
       reasoningEffort: null,
@@ -140,6 +144,42 @@ describe("handleSpawnChild repository grants", () => {
     expect(store.create).not.toHaveBeenCalled();
     expect(childStub.fetch).not.toHaveBeenCalled();
   });
+
+  it.each(["service", "sandbox"] as const)(
+    "rejects a repo-less %s child after the parent team is archived",
+    async (principal) => {
+      const { store, env, childStub } = makeGrantFixture(12345, null, false);
+      vi.mocked(TeamStore.prototype.isActive).mockResolvedValue(false);
+      const grants = vi.spyOn(TeamRepositoryGrantStore.prototype, "listForTeam");
+      const response =
+        principal === "service"
+          ? await makeRequest(env)
+          : await handleSpawnChild(
+              new Request(`https://test.local/sessions/${parentId}/children`, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ title: "Child", prompt: "Do the thing" }),
+              }),
+              env,
+              { id: parentId },
+              withSessionRuntime(env, {
+                request_id: "request-1",
+                trace_id: "trace-1",
+                metrics: createRequestMetrics(),
+                executionCtx: TEST_BACKGROUND_TASK_CONTEXT,
+                db: env.DB,
+                principal: { kind: "sandbox", sessionId: parentId },
+              })
+            );
+      expect(response.status).toBe(403);
+      await expect(response.json()).resolves.toMatchObject({ code: "team_not_active" });
+      expect(resolveRepoOrError).not.toHaveBeenCalled();
+      expect(grants).not.toHaveBeenCalled();
+      expect(store.acquireChildAdmissionLease).not.toHaveBeenCalled();
+      expect(store.create).not.toHaveBeenCalled();
+      expect(childStub.fetch).not.toHaveBeenCalled();
+    }
+  );
 
   it("checks sandbox child grants with the current SCM ID instead of a stale inherited ID", async () => {
     const { store, env: fixture, childStub } = makeGrantFixture(999, "env_parent");
