@@ -90,6 +90,8 @@ export const AUDIT_OPERATION_ACTIONS = [
   "team.member_role_changed",
   "team.member_removed",
   "team.member_joined",
+  "team.secret_set",
+  "team.secret_deleted",
 ] as const;
 
 export const AUTHORIZATION_DECISION_METADATA_SCHEMA = "authorization_decision.v1";

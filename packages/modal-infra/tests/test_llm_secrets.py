@@ -31,7 +31,14 @@ def captured_launch(monkeypatch):
 
 
 async def test_create_attaches_the_deployment_wide_secret(captured_launch, fake_llm_secret):
-    await SandboxManager().create_sandbox(SandboxConfig(repo_owner="acme", repo_name="repo"))
+    await SandboxManager().create_sandbox(
+        SandboxConfig(
+            clone_host="github.com",
+            clone_username="x-access-token",
+            repo_owner="acme",
+            repo_name="repo",
+        )
+    )
 
     assert len(fake_llm_secret) == 1
     assert captured_launch["secrets"] == fake_llm_secret
@@ -47,6 +54,8 @@ async def test_restore_attaches_the_deployment_wide_secret(
     monkeypatch.setattr("src.sandbox.launch.modal.Image.from_id", lambda *a, **k: FakeImage())
 
     await SandboxManager().restore_from_snapshot(
+        clone_host="github.com",
+        clone_username="x-access-token",
         snapshot_image_id="img-abc",
         session_config={"repo_owner": "acme", "repo_name": "repo", "session_id": "sess-1"},
     )
@@ -57,7 +66,12 @@ async def test_restore_attaches_the_deployment_wide_secret(
 
 
 async def test_each_launch_resolves_a_fresh_secret(captured_launch, fake_llm_secret):
-    config = SandboxConfig(repo_owner="acme", repo_name="repo")
+    config = SandboxConfig(
+        clone_host="github.com",
+        clone_username="x-access-token",
+        repo_owner="acme",
+        repo_name="repo",
+    )
     await SandboxManager().create_sandbox(config)
     first_secret = captured_launch["secrets"][0]
     await SandboxManager().create_sandbox(config)

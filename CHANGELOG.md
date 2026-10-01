@@ -29,11 +29,31 @@ repositories are included in the session's environment and, for team sessions, g
 Repository image builds receive a token for that repository alone; environment builds use only their
 member repositories, intersected with the environment team's grants. Metadata and workspace-catalog
 operations retain installation-wide access. GitLab still uses a deployment-wide PAT and does not
-enforce repository-scoped credentials. Modal restore-token scoping remains a separate change.
+enforce repository-scoped credentials.
 
 Token cache keys cover the sorted, de-duplicated repository set, the process cache is bounded, and
 overlapping refreshes share one mint per scope. Grant removal changes the next credential scope but
 does not revoke already-issued tokens; sandbox helpers cache them until shortly before expiry.
+
+**Modal snapshot restores use brokered git credentials.** Restored sandboxes now fetch git
+credentials from the control plane like fresh sessions, instead of receiving a token minted by
+Modal. The control plane now sends the VCS host and clone username with every Modal create, restore,
+and image-build request, so Modal no longer reads `SCM_PROVIDER` or needs GitHub App credentials.
+Terraform no longer provisions Modal's `github-app` secret; you can delete the existing secret from
+Modal after upgrading.
+
+### Added
+
+Team leads and workspace administrators can manage encrypted secrets from a team's Secrets tab.
+Team-owned sessions receive global secrets, then team secrets, then environment or repository
+secrets, with later scopes taking precedence. Environment image builds include the environment's
+team secrets; repository-shared images do not. Secret mutation audits contain key names only. Team
+secret changes atomically supersede affected environment images. After the database batch, detached,
+best-effort rebuild scheduling is attempted for enabled team-owned environments; enumeration or
+trigger failures may leave no rebuild request. Team-owned environment images require matching
+session ownership. Team-only legacy OAuth refresh tokens do not enable managed authentication; API
+keys remain usable. Team-secret read and decryption errors abort environment builds rather than
+falling back to other secret scopes.
 
 ### Removed
 

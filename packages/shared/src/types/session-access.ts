@@ -124,8 +124,11 @@ interface SessionFacts extends Facts {
 
 function sessionFacts(viewer: UserViewer, row: SessionAccessRow): SessionFacts {
   const isOwner = row.ownerUserId !== null && row.ownerUserId === viewer.userId;
-  const isCollaborator = row.collaboratorIds.includes(viewer.userId);
   const teamRole = row.ownerTeamId === null ? undefined : viewer.memberships.get(row.ownerTeamId);
+  // A team-owned grant lapses with team membership, so stale collaborator rows grant nothing.
+  const isCollaborator =
+    row.collaboratorIds.includes(viewer.userId) &&
+    (row.ownerTeamId === null || teamRole !== undefined);
   const isWsOwner = viewer.roleKey === "owner";
   const isAdmin = isWsOwner || viewer.roleKey === "administrator";
   const isPrivate = row.visibility === "private";

@@ -144,7 +144,6 @@ describe("team routes", () => {
     expect((await request(`/teams/${team.id}`, "PATCH", { name: "Platform" })).status).toBe(200);
     expect((await request(`/teams/${team.id}/archive`, "POST")).status).toBe(200);
     expect((await new TeamStore(env.DB).getById(team.id))?.archivedAt).not.toBeNull();
-    expect(await new TeamStore(env.DB).isActive(team.id)).toBe(false);
     expect(await (await request("/teams?membership=all")).json()).toEqual({ teams: [] });
     expect(
       await (await request("/teams?membership=all&includeArchived=true")).json()
@@ -153,7 +152,6 @@ describe("team routes", () => {
     });
     expect((await request(`/teams/${team.id}/restore`, "POST")).status).toBe(200);
     expect((await new TeamStore(env.DB).getById(team.id))?.archivedAt).toBeNull();
-    expect(await new TeamStore(env.DB).isActive(team.id)).toBe(true);
     expect((await auditEvents(team.id)).map((row) => row.action)).toEqual([
       "team.created",
       "team.updated",

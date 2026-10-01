@@ -431,6 +431,8 @@ async def test_vm_launch_reports_typed_outcomes(monkeypatch, endpoint, case, det
         "sandbox_id": GENERATION,
         "control_plane_url": "https://control.example",
         "sandbox_auth_token": "secret",
+        "clone_host": "github.com",
+        "clone_username": "x-access-token",
         "sandbox_backend": "modal-vm",
         "launch_deadline_at_ms": 1 if case == "expired" else 9999999999999,
     }

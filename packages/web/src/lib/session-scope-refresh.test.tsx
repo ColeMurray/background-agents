@@ -21,111 +21,73 @@ beforeEach(() => vi.resetAllMocks());
 afterEach(cleanup);
 
 describe("scope refresh with real SWR caches", () => {
-  it.each(["success", "failure"] as const)(
-    "keeps sandbox access and the terminal mounted while membership refresh is pending and after %s",
-    async (outcome) => {
-      const sandboxAccess = { ttydUrl: "https://terminal.example", ttydToken: "token" };
-      const meTeams = { teams: [{ id: "source" }] };
-      const refreshedTeams = { teams: [{ id: "target" }] };
-      const membershipError = new Error("Membership unavailable");
-      let finishMembership!: (value: typeof meTeams) => void;
-      let failMembership!: (error: Error) => void;
-      const pendingMembership = new Promise<typeof meTeams>((resolve, reject) => {
-        finishMembership = resolve;
-        failMembership = reject;
-      });
-      const fetchMembership = vi
-        .fn()
-        .mockResolvedValueOnce(meTeams)
-        .mockImplementation(() => pendingMembership);
-      // An unexpected refetch must not mask a cleared sandbox-access cache.
-      const fetchSandboxAccess = vi
-        .fn()
-        .mockResolvedValueOnce(sandboxAccess)
-        .mockImplementation(() => new Promise<typeof sandboxAccess>(() => {}));
-      const terminalMounted = vi.fn();
-      const terminalUnmounted = vi.fn();
-      const snapshot = vi.fn().mockResolvedValue(undefined);
-      vi.mocked(browserApiFetch).mockResolvedValue(new Response(null, { status: 204 }));
-      let request!: Promise<void>;
-      let done = false;
+  it("completes a scope write without refetching membership or unmounting the terminal", async () => {
+    const sandboxAccess = { ttydUrl: "https://terminal.example", ttydToken: "token" };
+    const meTeams = { teams: [{ id: "source" }] };
+    const fetchMembership = vi.fn().mockResolvedValue(meTeams);
+    // An unexpected refetch must not mask a cleared sandbox-access cache.
+    const fetchSandboxAccess = vi
+      .fn()
+      .mockResolvedValueOnce(sandboxAccess)
+      .mockImplementation(() => new Promise<typeof sandboxAccess>(() => {}));
+    const terminalMounted = vi.fn();
+    const terminalUnmounted = vi.fn();
+    const snapshot = vi.fn().mockResolvedValue(undefined);
+    vi.mocked(browserApiFetch).mockResolvedValue(new Response(null, { status: 204 }));
+    let request!: Promise<void>;
 
-      function Terminal() {
-        useEffect(() => {
-          terminalMounted();
-          return () => terminalUnmounted();
-        }, []);
-        return <div data-testid="terminal">Terminal</div>;
-      }
+    function Terminal() {
+      useEffect(() => {
+        terminalMounted();
+        return () => terminalUnmounted();
+      }, []);
+      return <div data-testid="terminal">Terminal</div>;
+    }
 
-      function Session() {
-        const config = useSWRConfig();
-        const access = useSWR("/api/sessions/s1/sandbox-access", fetchSandboxAccess);
-        const membership = useSWR(["/api/me/teams", "viewer"], fetchMembership, {
-          shouldRetryOnError: false,
-        });
-        return (
-          <>
-            <div data-testid="sandbox-access">{JSON.stringify(access.data)}</div>
-            <div data-testid="membership">{JSON.stringify(membership.data)}</div>
-            <div data-testid="membership-error">{membership.error?.message}</div>
-            {access.data?.ttydUrl && <Terminal />}
-            <button
-              onClick={() => {
-                request = updateSessionScope(
-                  "/api/sessions/s1/visibility",
-                  { method: "PUT" },
-                  snapshot,
-                  config
-                ).then(() => {
-                  done = true;
-                });
-              }}
-            >
-              Update scope
-            </button>
-          </>
-        );
-      }
+    function Session() {
+      const config = useSWRConfig();
+      const access = useSWR("/api/sessions/s1/sandbox-access", fetchSandboxAccess);
+      const membership = useSWR(["/api/me/teams", "viewer"], fetchMembership);
+      return (
+        <>
+          <div data-testid="sandbox-access">{JSON.stringify(access.data)}</div>
+          <div data-testid="membership">{JSON.stringify(membership.data)}</div>
+          {access.data?.ttydUrl && <Terminal />}
+          <button
+            onClick={() => {
+              request = updateSessionScope(
+                "/api/sessions/s1/visibility",
+                { method: "PUT" },
+                snapshot,
+                config
+              );
+            }}
+          >
+            Update scope
+          </button>
+        </>
+      );
+    }
 
-      const view = render(<Session />, { wrapper });
-      await waitFor(() => {
-        expect(view.getByTestId("sandbox-access").textContent).toBe(JSON.stringify(sandboxAccess));
-        expect(view.getByTestId("membership").textContent).toBe(JSON.stringify(meTeams));
-        expect(view.getByTestId("terminal")).toBeTruthy();
-      });
-      await act(async () => {
-        fireEvent.click(view.getByRole("button", { name: "Update scope" }));
-      });
-      await waitFor(() => expect(fetchMembership).toHaveBeenCalledTimes(2));
-      expect(done).toBe(false);
-      expect(snapshot).toHaveBeenCalledOnce();
+    const view = render(<Session />, { wrapper });
+    await waitFor(() => {
       expect(view.getByTestId("sandbox-access").textContent).toBe(JSON.stringify(sandboxAccess));
       expect(view.getByTestId("membership").textContent).toBe(JSON.stringify(meTeams));
       expect(view.getByTestId("terminal")).toBeTruthy();
-      expect(fetchSandboxAccess).toHaveBeenCalledOnce();
-      expect(terminalMounted).toHaveBeenCalledOnce();
-      expect(terminalUnmounted).not.toHaveBeenCalled();
-
-      await act(async () => {
-        if (outcome === "failure") failMembership(membershipError);
-        else finishMembership(refreshedTeams);
-        await request;
-      });
-      expect(done).toBe(true);
-      expect(view.getByTestId("sandbox-access").textContent).toBe(JSON.stringify(sandboxAccess));
-      expect(view.getByTestId("membership").textContent).toBe(
-        JSON.stringify(outcome === "failure" ? meTeams : refreshedTeams)
-      );
-      expect(view.getByTestId("membership-error").textContent).toBe(
-        outcome === "failure" ? membershipError.message : ""
-      );
-      expect(view.getByTestId("terminal")).toBeTruthy();
-      expect(fetchSandboxAccess).toHaveBeenCalledOnce();
-      expect(terminalMounted).toHaveBeenCalledOnce();
-      expect(terminalUnmounted).not.toHaveBeenCalled();
-    }
-  );
+    });
+    await act(async () => {
+      fireEvent.click(view.getByRole("button", { name: "Update scope" }));
+      await request;
+    });
+    expect(snapshot).toHaveBeenCalledOnce();
+    expect(fetchMembership).toHaveBeenCalledOnce();
+    expect(view.getByTestId("membership").textContent).toBe(JSON.stringify(meTeams));
+    expect(view.getByTestId("sandbox-access").textContent).toBe(JSON.stringify(sandboxAccess));
+    expect(view.getByTestId("terminal")).toBeTruthy();
+    expect(fetchSandboxAccess).toHaveBeenCalledOnce();
+    expect(terminalMounted).toHaveBeenCalledOnce();
+    expect(terminalUnmounted).not.toHaveBeenCalled();
+  });
 
   it.each(
     [

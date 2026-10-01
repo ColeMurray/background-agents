@@ -142,7 +142,7 @@ export class TeamMembershipStore {
     return result.meta.changes > 0;
   }
 
-  bindAddIfJoinable(teamId: string, userId: string): SqlStatement {
+  private bindAddIfJoinable(teamId: string, userId: string): SqlStatement {
     return this.db
       .prepare(
         `INSERT INTO team_memberships (team_id, user_id, role, source, created_at)

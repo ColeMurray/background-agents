@@ -574,4 +574,54 @@ describe("session scope routes", () => {
     }
     expect((await fetchMode("/sessions/team-session", "on")).status).toBe(404);
   });
+
+  it("limits team-owned collaborators and candidates to members of the owning team", async () => {
+    await session("root");
+    const team = await new TeamStore(env.DB).create({
+      slug: "owning",
+      name: "Owning",
+      joinPolicy: "invite_only",
+    });
+    const memberships = new TeamMembershipStore(env.DB);
+    await memberships.add(team.id, OWNER);
+    await env.DB.prepare("UPDATE sessions SET owner_team_id = ? WHERE id = 'root'")
+      .bind(team.id)
+      .run();
+    const candidateIds = async () =>
+      (await (await request("/sessions/root/collaborator-candidates")).json<{ userId: string }[]>())
+        .map((candidate) => candidate.userId)
+        .sort();
+    const path = `/sessions/root/collaborators/${COLLABORATOR}`;
+
+    expect(await candidateIds()).toEqual([OWNER]);
+    const rejected = await request(path, "PUT");
+    expect(rejected.status).toBe(409);
+    expect(await rejected.json()).toMatchObject({ code: "not_team_member" });
+    expect(await new SessionCollaboratorStore(env.DB).listUserIds("root")).toEqual([]);
+
+    await memberships.add(team.id, COLLABORATOR);
+    expect(await candidateIds()).toEqual([OWNER, COLLABORATOR].sort());
+    const added = await request(path, "PUT");
+    expect(added.status).toBe(200);
+    expect(await added.json()).toMatchObject({ status: "updated" });
+    expect(
+      (await request("/sessions/root/visibility", "PUT", { visibility: "private" })).status
+    ).toBe(200);
+    const listedIds = async () =>
+      (
+        await (
+          await request("/sessions", "GET", undefined, COLLABORATOR)
+        ).json<{
+          sessions: { id: string }[];
+        }>()
+      ).sessions.map((listed) => listed.id);
+    expect((await request("/sessions/root", "GET", undefined, COLLABORATOR)).status).toBe(200);
+    expect(await listedIds()).toContain("root");
+
+    // The grant lapses with membership even though the collaborator row remains.
+    await memberships.remove(team.id, COLLABORATOR);
+    expect(await new SessionCollaboratorStore(env.DB).listUserIds("root")).toEqual([COLLABORATOR]);
+    expect((await request("/sessions/root", "GET", undefined, COLLABORATOR)).status).toBe(404);
+    expect(await listedIds()).not.toContain("root");
+  });
 });

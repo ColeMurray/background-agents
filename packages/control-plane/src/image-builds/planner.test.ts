@@ -392,12 +392,7 @@ describe("ImageBuildPlanner clone auth", () => {
       kind: "repositories",
       repositoryIds: [12],
     });
-    expect(plan.cloneAuth).toEqual({
-      type: "credential_helper",
-      host: "github.com",
-      username: "x-access-token",
-      token: "clone-token",
-    });
+    expect(plan.cloneAuth).toEqual({ type: "credential_helper", token: "clone-token" });
     expect(TeamRepositoryGrantStore.prototype.listForTeam).not.toHaveBeenCalled();
     expect(readCachedInstallationRepositories).not.toHaveBeenCalled();
   });

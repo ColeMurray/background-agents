@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type * as SourceControlModule from "../source-control";
 import type * as IntegrationSettingsResolutionModule from "../session/integration-settings-resolution";
 import type { Env } from "../types";
+import { SecretDecryptionError } from "../db/scoped-secrets";
 import { ImageBuildPlanningError, ImageBuildScopeNotFoundError } from "./errors";
 import { computeRepositoriesFingerprint } from "./fingerprint";
 import { repoImageBuildScope, type ImageBuildScope } from "./model";
@@ -25,6 +26,7 @@ const integrationSettings = vi.hoisted(() => ({
 
 const secretsStores = vi.hoisted(() => ({
   global: vi.fn(async (): Promise<Record<string, string>> => ({})),
+  team: vi.fn(async (_teamId: string): Promise<Record<string, string>> => ({})),
   repo: vi.fn(async (_repoId: number): Promise<Record<string, string>> => ({})),
   environment: vi.fn(async (_id: string): Promise<Record<string, string>> => ({})),
 }));
@@ -48,6 +50,12 @@ vi.mock("../session/integration-settings-resolution", async (importOriginal) => 
 vi.mock("../db/global-secrets", () => ({
   GlobalSecretsStore: class {
     getDecryptedSecrets = secretsStores.global;
+  },
+}));
+
+vi.mock("../db/team-secrets", () => ({
+  TeamSecretsStore: class {
+    getDecryptedSecrets = secretsStores.team;
   },
 }));
 
@@ -121,6 +129,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   integrationSettings.resolveSandboxSettings.mockResolvedValue({});
   secretsStores.global.mockResolvedValue({});
+  secretsStores.team.mockResolvedValue({});
   secretsStores.repo.mockResolvedValue({});
   secretsStores.environment.mockResolvedValue({});
 });
@@ -358,6 +367,65 @@ describe("resolveScopeSandboxSettings", () => {
 
 describe("loadScopeBuildSecrets", () => {
   const encryptedEnv = (db: D1Database) => envWith(db, { REPO_SECRETS_ENCRYPTION_KEY: "key" });
+
+  it("loads the environment owner's team before environment secrets", async () => {
+    secretsStores.global.mockResolvedValue({ SHARED: "global", GLOBAL_TEAM: "global" });
+    secretsStores.team.mockResolvedValue({ SHARED: "team", GLOBAL_TEAM: "team" });
+    secretsStores.environment.mockResolvedValue({ SHARED: "environment" });
+    const db = fakeDb({ environment: { id: "env_1", owner_team_id: "team_build" } });
+    const merged = await loadScopeBuildSecrets(encryptedEnv(db), db, ENV_SCOPE, {
+      kind: "environment",
+      repositories: [],
+      repositoriesFingerprint: "fp-env",
+    });
+    expect(secretsStores.team).toHaveBeenCalledWith("team_build");
+    expect(merged).toEqual({ SHARED: "environment", GLOBAL_TEAM: "team" });
+  });
+
+  it.each([new SecretDecryptionError("SHARED"), new Error("Team secrets storage unavailable")])(
+    "aborts a team-owned build when its team layer fails: %s",
+    async (failure) => {
+      secretsStores.global.mockResolvedValue({ SHARED: "global" });
+      secretsStores.team.mockRejectedValue(failure);
+      secretsStores.environment.mockResolvedValue({ SHARED: "environment" });
+      const db = fakeDb({ environment: { id: "env_1", owner_team_id: "team_build" } });
+
+      await expect(
+        loadScopeBuildSecrets(encryptedEnv(db), db, ENV_SCOPE, {
+          kind: "environment",
+          repositories: [],
+          repositoriesFingerprint: "fp-env",
+        })
+      ).rejects.toBe(failure);
+
+      expect(secretsStores.team).toHaveBeenCalledWith("team_build");
+      expect(secretsStores.environment).not.toHaveBeenCalled();
+    }
+  );
+
+  it("accepts a readable empty team layer without dropping other scopes", async () => {
+    secretsStores.global.mockResolvedValue({ SHARED: "global", GLOBAL_ONLY: "global" });
+    secretsStores.environment.mockResolvedValue({ SHARED: "environment" });
+    const db = fakeDb({ environment: { id: "env_1", owner_team_id: "team_build" } });
+    expect(
+      await loadScopeBuildSecrets(encryptedEnv(db), db, ENV_SCOPE, {
+        kind: "environment",
+        repositories: [],
+        repositoriesFingerprint: "fp-env",
+      })
+    ).toEqual({ SHARED: "environment", GLOBAL_ONLY: "global" });
+    expect(secretsStores.team).toHaveBeenCalledWith("team_build");
+  });
+
+  it("never loads a team layer for repository-shared images", async () => {
+    secretsStores.team.mockResolvedValue({ TEAM_ONLY: "private" });
+    secretsStores.global.mockResolvedValue({ GLOBAL_ONLY: "global" });
+    const db = fakeDb({ environment: { id: "env_1", owner_team_id: "team_build" } });
+    expect(await loadScopeBuildSecrets(encryptedEnv(db), db, REPO_SCOPE, repoTarget())).toEqual({
+      GLOBAL_ONLY: "global",
+    });
+    expect(secretsStores.team).not.toHaveBeenCalled();
+  });
 
   it("returns undefined without an encryption key", async () => {
     expect(

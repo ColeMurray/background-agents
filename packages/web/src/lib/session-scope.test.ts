@@ -126,7 +126,7 @@ describe("updateSessionScope", () => {
       await request;
       expect(listener).toHaveBeenCalledOnce();
       expect(refresh).toHaveBeenCalledOnce();
-      expect(mutate).toHaveBeenCalledTimes(3);
+      expect(mutate).toHaveBeenCalledTimes(2);
     } finally {
       unsubscribe();
     }
@@ -161,23 +161,21 @@ describe("updateSessionScope", () => {
     expect(listener).not.toHaveBeenCalled();
   });
 
-  it("awaits snapshot, list, and membership refreshes even when timestamps do not change", async () => {
+  it("awaits snapshot and list refreshes even when timestamps do not change", async () => {
     vi.mocked(browserApiFetch).mockResolvedValue(Response.json({ updatedAt: 1 }));
     let finishSnapshot!: () => void;
     let finishLists!: () => void;
-    let finishMembership!: () => void;
     const refresh = vi.fn(
       () =>
         new Promise<void>((resolve) => {
           finishSnapshot = resolve;
         })
     );
-    const mutate = vi.fn().mockImplementation((key, _data, options) =>
+    const mutate = vi.fn().mockImplementation((_key, _data, options) =>
       options?.revalidate === false
         ? Promise.resolve()
         : new Promise<void>((resolve) => {
-            if (key === isMeTeamsCacheKey) finishMembership = resolve;
-            else finishLists = resolve;
+            finishLists = resolve;
           })
     );
     let done = false;
@@ -194,17 +192,11 @@ describe("updateSessionScope", () => {
       revalidate: false,
     });
     expect(mutate).toHaveBeenCalledWith(isSessionScopeCacheKey);
-    expect(mutate).toHaveBeenCalledWith(isMeTeamsCacheKey);
-    expect(mutate).not.toHaveBeenCalledWith(isMeTeamsCacheKey, undefined, {
-      revalidate: false,
-    });
+    expect(mutate).not.toHaveBeenCalledWith(isMeTeamsCacheKey);
     finishSnapshot();
     await Promise.resolve();
     expect(done).toBe(false);
     finishLists();
-    await Promise.resolve();
-    expect(done).toBe(false);
-    finishMembership();
     await request;
     expect(done).toBe(true);
   });
@@ -246,7 +238,7 @@ describe("updateSessionScope", () => {
       expect(mutate).not.toHaveBeenCalledWith(key, undefined, { revalidate: false });
       expect(mutate).not.toHaveBeenCalledWith(key);
     }
-    expect(mutate).toHaveBeenCalledTimes(3 + infiniteKeys.length * 2);
+    expect(mutate).toHaveBeenCalledTimes(2 + infiniteKeys.length * 2);
   });
 
   it("refreshes even for an empty successful response", async () => {
@@ -258,7 +250,7 @@ describe("updateSessionScope", () => {
       cache: new Map(),
     });
     expect(refresh).toHaveBeenCalledOnce();
-    expect(mutate).toHaveBeenCalledTimes(3);
+    expect(mutate).toHaveBeenCalledTimes(2);
   });
 
   it("still revalidates lists when snapshot refresh rejects after a successful mutation", async () => {
@@ -272,7 +264,6 @@ describe("updateSessionScope", () => {
       })
     ).rejects.toThrow("Snapshot unavailable");
     expect(mutate).toHaveBeenCalledWith(isSessionScopeCacheKey);
-    expect(mutate).toHaveBeenCalledWith(isMeTeamsCacheKey);
   });
 
   it("reports non-JSON mutation failures without attempting a refresh", async () => {
