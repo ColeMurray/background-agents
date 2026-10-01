@@ -7,7 +7,8 @@ import { useTeamCapabilities } from "@/hooks/use-team-capabilities";
 import { useCurrentUserAuthorization } from "@/hooks/use-current-user-authorization";
 import { Button } from "@/components/ui/button";
 import { ErrorBanner } from "@/components/ui/error-banner";
-import { UserIdentity, UserIdentityPicker, userDisplayName } from "@/components/user-identity";
+import { UserIdentity, UserIdentityPicker } from "@/components/user-identity";
+import { userDisplayName } from "@/components/user-identity-utils";
 
 export function TeamMembersTable({ team, members }: { team: TeamResponse; members: TeamMember[] }) {
   const capabilities = useTeamCapabilities(team);
