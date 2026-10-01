@@ -32,6 +32,15 @@ without requiring settings-management permissions. Bot team selection and automa
 remain later phases; repository-backed team sessions still require existing grants, with no grant
 creation API or UI yet.
 
+### Fixed
+
+Allowed team directory, member, session, activity, and collaborator-candidate reads no longer add
+authorization-decision rows to the audit log. Capability writes and membership departures remain
+audited. Unauthorized cross-member removals are recorded as denied decisions. Live session
+subscriptions now include team memberships when computing capabilities in every enforcement mode,
+preserving team leads' move and visibility controls without adding reads to per-command
+authorization in `off` or `shadow`.
+
 ## September 29, 2026
 
 ### Added

@@ -14,12 +14,44 @@ import {
   request,
   setRole,
   auditEvents,
+  requestAuditEvents,
   modeRequest,
   setupTeamRoutes,
 } from "./team-route-helpers";
 
 describe("team member privacy", () => {
   beforeEach(setupTeamRoutes);
+
+  it.each([
+    ["member", "lead", false],
+    ["member", "lead", true],
+    ["administrator", null, false],
+    ["administrator", null, true],
+  ] as const)(
+    "admits and audits cross-target removal for %s/%s (archived: %s)",
+    async (role, teamRole, archived) => {
+      await setRole(OWNER, role);
+      const teams = new TeamStore(env.DB);
+      const team = await teams.create({
+        slug: "managed-removal",
+        name: "Managed removal",
+        joinPolicy: "open",
+      });
+      const memberships = new TeamMembershipStore(env.DB);
+      await memberships.add(team.id, MEMBER, "lead");
+      await memberships.add(team.id, OTHER);
+      if (teamRole) await memberships.add(team.id, OWNER, teamRole);
+      if (archived) await teams.archive(team.id);
+
+      const response = await request(`/teams/${team.id}/members/${OTHER}`, "DELETE");
+      expect(response.status).toBe(204);
+      expect((await memberships.listForUser(OTHER)).has(team.id)).toBe(false);
+      expect(await requestAuditEvents(response)).toEqual([
+        { action: "authorization.request_allowed" },
+        { action: "team.member_removed" },
+      ]);
+    }
+  );
 
   it.each(["off", "shadow", "on"] as const)(
     "returns directory emails only with workspace member read permission in %s mode",

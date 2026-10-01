@@ -66,6 +66,27 @@ describe("session scope routes", () => {
     await request("/me/authorization");
   });
 
+  it("does not audit allowed collaborator-candidate reads but still audits denials", async () => {
+    await session("root");
+    const path = "/sessions/root/collaborator-candidates";
+    const allowed = await request(path);
+    expect(allowed.status).toBe(200);
+    const denied = await request(path, "GET", undefined, COLLABORATOR);
+    expect(denied.status).toBe(403);
+    expect(await denied.json()).toMatchObject({ reason_code: "not_owner_or_lead" });
+    for (const [response, expected] of [
+      [allowed, []],
+      [denied, [{ action: "authorization.request_denied" }]],
+    ] as const) {
+      const events = await env.DB.prepare(
+        "SELECT action FROM authorization_audit_events WHERE request_id = ?"
+      )
+        .bind(response.headers.get("x-request-id"))
+        .all();
+      expect(events.results).toEqual(expected);
+    }
+  });
+
   it("moves every descendant to a granted team and audits the move", async () => {
     await session("root");
     await session("child", "root");

@@ -33,6 +33,15 @@ export async function auditEvents(teamId: string) {
   return result.results;
 }
 
+export async function requestAuditEvents(response: Response) {
+  const result = await env.DB.prepare(
+    "SELECT action FROM authorization_audit_events WHERE request_id = ? ORDER BY action"
+  )
+    .bind(response.headers.get("x-request-id"))
+    .all();
+  return result.results;
+}
+
 export async function modeRequest(
   path: string,
   mode: "off" | "shadow" | "on",
