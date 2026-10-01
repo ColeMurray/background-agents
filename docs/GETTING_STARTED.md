@@ -1431,12 +1431,14 @@ terraform apply
 ### Modal Restore Authentication
 
 All supported Modal snapshots (v62+) already have the credential helper, which shipped in v51 in
-May 2026. There is no v72 authentication cutoff or legacy restore-token migration. Restores carry
-VCS host/username identity and session broker context, including for repository-less sessions,
-without resolving or injecting a static system clone token. Git and the GitHub CLI request
-credentials on demand after launch; a token mint is not a prerequisite for the restore request.
-Unknown or incompatible snapshots remain under recovery hold without launch. User-supplied token
-overrides remain supported, and image builds retain their one-shot clone credentials.
+May 2026. There is no v72 authentication cutoff or legacy restore-token migration. Base,
+prebuilt-image, and snapshot launches share VCS host/username metadata and session broker context
+through a common sandbox configuration, including for repository-less sessions, without resolving or
+injecting a static system clone token. Create and restore accept the same optional top-level
+`clone_host` and `clone_username` strings. Git and the GitHub CLI request credentials on demand
+after launch; a token mint is not a prerequisite for either session launch request. Unknown or
+incompatible snapshots remain under recovery hold without launch. User-supplied token overrides
+remain supported, and image builds retain their one-shot clone credentials.
 
 Apply the deployment normally; no separate restore-auth rollout phases or maintenance window are
 needed. Modal no longer binds the `github-app` secret, and Terraform no longer provisions it. Delete

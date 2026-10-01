@@ -120,7 +120,12 @@ class _RepositoryContextModel(_ModalRequestModel):
         return self
 
 
-class CreateSandboxRequest(_RepositoryContextModel):
+class _SandboxLaunchMetadataRequest(_ModalRequestModel):
+    clone_host: str | None = None
+    clone_username: str | None = None
+
+
+class CreateSandboxRequest(_RepositoryContextModel, _SandboxLaunchMetadataRequest):
     session_id: NonEmptyString
     sandbox_id: str | None = None
     control_plane_url: NonEmptyString
@@ -166,14 +171,12 @@ class RestoreSessionConfigRequest(_RepositoryContextModel):
     working_branch_name: str | None = None
 
 
-class RestoreSandboxRequest(_ModalRequestModel):
+class RestoreSandboxRequest(_SandboxLaunchMetadataRequest):
     snapshot_image_id: NonEmptyString
     session_config: RestoreSessionConfigRequest
     sandbox_id: str | None = None
     control_plane_url: NonEmptyString
     sandbox_auth_token: NonEmptyString
-    clone_host: str | None = None
-    clone_username: str | None = None
     user_env_vars: dict[str, str] | None = None
     timeout_seconds: int | None = Field(default=None, gt=0)
     code_server_enabled: bool = False
@@ -420,6 +423,8 @@ async def api_create_sandbox(
         "repo_name": "...",
         "control_plane_url": "...",
         "sandbox_auth_token": "...",
+        "clone_host": "github.com",  // Optional: VCS host/username pair
+        "clone_username": "x-access-token",
         "provider": "anthropic",
         "model": "claude-sonnet-4-6"
     }
@@ -457,6 +462,8 @@ async def api_create_sandbox(
             session_config=session_config,
             control_plane_url=parsed_request.control_plane_url,
             sandbox_auth_token=parsed_request.sandbox_auth_token,
+            clone_host=parsed_request.clone_host or None,
+            clone_username=parsed_request.clone_username or None,
             user_env_vars=parsed_request.user_env_vars or None,
             repo_image_id=parsed_request.repo_image_id or None,
             repo_image_sha=parsed_request.repo_image_sha or None,

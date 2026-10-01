@@ -157,20 +157,34 @@ async def test_sandbox_requests_reject_invalid_typed_fields(monkeypatch, call, p
     assert exc_info.value.status_code == 400
 
 
-def test_restore_sandbox_does_not_bind_github_app_secrets():
-    assert [secret.name for secret in web_api.api_restore_sandbox.spec.secrets] == [
+@pytest.mark.parametrize("endpoint", [web_api.api_create_sandbox, web_api.api_restore_sandbox])
+def test_sandbox_endpoints_do_not_bind_github_app_secrets(endpoint):
+    assert [secret.name for secret in endpoint.spec.secrets] == [
         "internal-api",
     ]
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("restore", [False, True], ids=["create", "restore"])
+@pytest.mark.parametrize("repo_fields", [{}, {"repo_owner": "acme", "repo_name": "repo"}])
 @pytest.mark.parametrize("field", ["clone_host", "clone_username"])
 @pytest.mark.parametrize("value", [123, True, [], {}])
-async def test_restore_sandbox_rejects_invalid_clone_fields(monkeypatch, field, value):
+async def test_sandbox_requests_reject_invalid_clone_fields(
+    monkeypatch, restore, repo_fields, field, value
+):
     _patch_auth(monkeypatch)
+    if restore:
+        call = _call_restore_sandbox
+        request = {
+            **RESTORE_REQUEST,
+            "session_config": {**RESTORE_REQUEST["session_config"], **repo_fields},
+        }
+    else:
+        call = _call_create_sandbox
+        request = {**CREATE_REQUEST, **repo_fields}
 
     with pytest.raises(HTTPException) as exc_info:
-        await _call_restore_sandbox({**RESTORE_REQUEST, field: value})
+        await call({**request, field: value})
 
     assert exc_info.value.status_code == 400
 
@@ -695,42 +709,59 @@ async def test_restore_sandbox_forwards_vnc_and_returns_credentials(monkeypatch)
 
 
 @pytest.mark.asyncio
-async def test_restore_sandbox_forwards_identity_and_user_tokens_with_normalized_repo_context(
-    monkeypatch,
+@pytest.mark.parametrize("restore", [False, True], ids=["create", "restore"])
+@pytest.mark.parametrize("repo_fields", [{}, {"repo_owner": "  acme  ", "repo_name": "  repo  "}])
+@pytest.mark.parametrize(
+    "metadata",
+    [
+        {},
+        {"clone_host": None, "clone_username": None},
+        {"clone_host": "", "clone_username": ""},
+        {"clone_host": "gitlab.example", "clone_username": "oauth2"},
+    ],
+    ids=["omitted", "null", "empty", "provided"],
+)
+async def test_sandbox_requests_forward_metadata_and_user_tokens_with_normalized_repo_context(
+    monkeypatch, restore, repo_fields, metadata
 ):
-    """Snapshot restores preserve VCS identity and user-supplied token overrides."""
+    """Create and restore share launch metadata, outside the nested session config."""
     captured = {}
 
     _patch_auth(monkeypatch)
-    _patch_restore_manager(monkeypatch, captured)
+    if restore:
+        _patch_restore_manager(monkeypatch, captured)
+        call = _call_restore_sandbox
+        request = {
+            **RESTORE_REQUEST,
+            "session_config": {**RESTORE_REQUEST["session_config"], **repo_fields},
+        }
+    else:
+        _patch_manager(monkeypatch, captured)
+        call = _call_create_sandbox
+        request = {**CREATE_REQUEST, **repo_fields}
 
-    result = await _call_restore_sandbox(
+    result = await call(
         {
-            "snapshot_image_id": "img-abc",
-            "session_config": {
-                "session_id": "sess-1",
-                "repo_owner": "  acme  ",
-                "repo_name": "  repo  ",
-                "provider": "anthropic",
-                "model": "claude-sonnet-4-6",
-            },
-            "control_plane_url": "https://control-plane.example",
-            "sandbox_auth_token": "sandbox-token",
-            "clone_host": "gitlab.example",
-            "clone_username": "oauth2",
+            **request,
+            **metadata,
             "user_env_vars": {"GH_TOKEN": "user-token", "VCS_CLONE_TOKEN": "user-clone-token"},
         }
     )
 
-    session_config = captured["restore"]["session_config"]
+    config = captured["restore"] if restore else vars(captured["config"])
+    session_config = config["session_config"] if restore else config["session_config"].model_dump()
 
     assert result["success"] is True
-    assert session_config["repo_owner"] == "acme"
-    assert session_config["repo_name"] == "repo"
-    assert "clone_token" not in captured["restore"]
-    assert captured["restore"]["clone_host"] == "gitlab.example"
-    assert captured["restore"]["clone_username"] == "oauth2"
-    assert captured["restore"]["user_env_vars"] == {
+    assert session_config.get("repo_owner") == ("acme" if repo_fields else None)
+    assert session_config.get("repo_name") == ("repo" if repo_fields else None)
+    assert "clone_host" not in session_config
+    assert "clone_username" not in session_config
+    assert "clone_token" not in config
+    assert config["clone_host"] == (metadata.get("clone_host") or None)
+    assert config["clone_username"] == (metadata.get("clone_username") or None)
+    assert config["control_plane_url"] == request["control_plane_url"]
+    assert config["sandbox_auth_token"] == request["sandbox_auth_token"]
+    assert config["user_env_vars"] == {
         "GH_TOKEN": "user-token",
         "VCS_CLONE_TOKEN": "user-clone-token",
     }

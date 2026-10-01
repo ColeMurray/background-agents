@@ -15,7 +15,7 @@ DEFAULT_VNC_ENABLED = False
 
 @dataclass
 class SandboxConfig:
-    """Configuration for creating a sandbox."""
+    """Shared configuration for creating or restoring a sandbox."""
 
     repo_owner: str | None
     repo_name: str | None
@@ -38,6 +38,8 @@ class SandboxConfig:
     sandbox_backend: ModalBackend = "modal"
     retire_sandbox_id: str | None = None
     launch_deadline_at_ms: int | None = None
+    clone_host: str | None = None
+    clone_username: str | None = None
 
 
 @dataclass

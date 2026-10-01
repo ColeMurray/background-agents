@@ -30,7 +30,7 @@ import { resolveSandboxBackendName } from "../sandbox/provider-name";
 import { createSandboxProviderFromEnv } from "../sandbox/provider-factory";
 import {
   providerResumesAfterStop,
-  type RestoreScmIdentity,
+  type ScmCloneIdentity,
   type SandboxProvider,
 } from "../sandbox/provider";
 import { resolveExecutionBudgetMs } from "../sandbox/execution-budget";
@@ -487,7 +487,7 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
   });
   const lifecycleManager = createLifecycleManager({
     provider: sandboxProvider,
-    restoreScmIdentity: { host: scmIdentity.host, username: scmIdentity.cloneUsername },
+    scmIdentity,
     shutdown,
     access,
     env,
@@ -1061,7 +1061,7 @@ interface LifecycleManagerDeps {
   shutdown: SandboxShutdownLifecycle;
   access: SandboxAccess;
   provider: SandboxProvider;
-  restoreScmIdentity: RestoreScmIdentity;
+  scmIdentity: ScmCloneIdentity;
   env: Env;
   db: SqlDatabase;
   /** The latched public-session-id resolver shared with the session logger. */
@@ -1080,7 +1080,7 @@ interface LifecycleManagerDeps {
 function createLifecycleManager(deps: LifecycleManagerDeps): SandboxLifecycleManager {
   const {
     provider,
-    restoreScmIdentity,
+    scmIdentity,
     shutdown,
     access,
     env,
@@ -1159,8 +1159,7 @@ function createLifecycleManager(deps: LifecycleManagerDeps): SandboxLifecycleMan
     bootBudget: { timeoutMs: bootBudget.timeoutMs },
     mcpServerLookup,
     slackAgentNotifyLookup,
-    restoreScmIdentity:
-      provider.name === "modal" || provider.name === "modal-vm" ? restoreScmIdentity : undefined,
+    scmIdentity,
     recordWarning: deps.recordWarning,
   };
 

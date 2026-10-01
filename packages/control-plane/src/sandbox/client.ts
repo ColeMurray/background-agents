@@ -13,7 +13,7 @@ import { z } from "zod";
 import { createLogger } from "../logger";
 import type { CorrelationContext } from "../logger";
 import { buildSessionConfig, toRepositoryConfigPayload } from "./sandbox-env";
-import type { RestoreScmIdentity, SessionRepositoryInfo } from "./provider";
+import type { SandboxScmConfig, SessionRepositoryInfo } from "./provider";
 import { parsePendingVmReference } from "./providers/pending-vm-reference";
 import { withRequestDeadline } from "./request-deadline";
 
@@ -159,7 +159,7 @@ export function buildModalSandboxDashboardUrl(params: {
   return `https://modal.com/apps/${workspace}/${modalEnvironment}/deployed/${MODAL_APP_NAME}?activeTab=sandboxes&sandboxId=${providerObjectId}`;
 }
 
-export interface CreateSandboxRequest {
+export interface CreateSandboxRequest extends SandboxScmConfig {
   sandboxBackend?: ModalBackend;
   retireSandboxId?: string | null;
   launchDeadlineAtMs?: number;
@@ -201,7 +201,7 @@ export interface CreateSandboxResponse {
   tunnelUrls?: Record<string, string>;
 }
 
-export interface RestoreSandboxRequest {
+export interface RestoreSandboxRequest extends SandboxScmConfig {
   sandboxBackend?: ModalBackend;
   retireSandboxId?: string | null;
   launchDeadlineAtMs?: number;
@@ -216,7 +216,6 @@ export interface RestoreSandboxRequest {
   provider: string;
   model: string;
   userEnvVars?: Record<string, string>;
-  scmIdentity?: RestoreScmIdentity;
   timeoutSeconds?: number;
   branch?: string | null;
   codeServerEnabled?: boolean;
@@ -507,6 +506,8 @@ export class ModalClient {
           repo_name: request.repoName,
           control_plane_url: request.controlPlaneUrl,
           sandbox_auth_token: request.sandboxAuthToken,
+          clone_host: request.scmIdentity?.host ?? null,
+          clone_username: request.scmIdentity?.cloneUsername ?? null,
           agent_session_id: request.agentSessionId || null,
           harness: request.harness,
           provider: request.provider || "anthropic",
@@ -587,7 +588,7 @@ export class ModalClient {
         {
           snapshot_image_id: request.snapshotImageId,
           clone_host: request.scmIdentity?.host ?? null,
-          clone_username: request.scmIdentity?.username ?? null,
+          clone_username: request.scmIdentity?.cloneUsername ?? null,
           session_config: buildSessionConfig(request),
           sandbox_id: request.sandboxId,
           control_plane_url: request.controlPlaneUrl,

@@ -3,6 +3,7 @@ import type { McpServerConfig } from "@open-inspect/shared/types/integrations";
 import { hashToken } from "../../auth/crypto";
 import { COMPATIBLE_RUNTIME_VERSION } from "../../image-builds/test-helpers";
 import type { PendingSandboxAllocation, SessionRepositoryInfo } from "../provider";
+import { scmCloneIdentity } from "../sandbox-env";
 import {
   createMockAlarmScheduler,
   createMockBroadcaster,
@@ -131,7 +132,7 @@ function createLaunchFixture() {
       model: "openai/gpt-5.4",
       mcpServerLookup,
       slackAgentNotifyLookup,
-      restoreScmIdentity: { host: "gitlab.com", username: "oauth2" },
+      scmIdentity: scmCloneIdentity("gitlab"),
     },
     imageBuildLookup
   );
@@ -218,6 +219,7 @@ describe("launch input orchestration", () => {
           provider: "openai",
           model: "gpt-5.4",
           userEnvVars: { API_KEY: "private-env" },
+          scmIdentity: scmCloneIdentity("gitlab"),
           prebuiltImageId: null,
           prebuiltImageSha: null,
           timeoutSeconds: 3600,
@@ -290,7 +292,7 @@ describe("launch input orchestration", () => {
       [
         {
           snapshotImageId: "saved-image",
-          scmIdentity: { host: "gitlab.com", username: "oauth2" },
+          scmIdentity: scmCloneIdentity("gitlab"),
           sessionId: "test-session",
           generationCreatedAtMs: 2_000_000,
           retireSandboxId: "prior-sandbox",

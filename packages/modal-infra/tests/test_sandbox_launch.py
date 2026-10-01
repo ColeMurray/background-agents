@@ -59,6 +59,7 @@ def _fake_create(captured: dict):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("image_source", ["base", "repository", "snapshot"])
+@pytest.mark.parametrize("scm_provider", [None, "gitlab"])
 @pytest.mark.parametrize(
     "resources, expected_cpu, expected_memory, timeout_seconds",
     [
@@ -70,7 +71,13 @@ def _fake_create(captured: dict):
     ids=["defaults", "cpu-only", "memory-only", "cpu-and-memory"],
 )
 async def test_launch_matrix_preserves_common_and_source_specific_behavior(
-    monkeypatch, image_source, resources, expected_cpu, expected_memory, timeout_seconds
+    monkeypatch,
+    image_source,
+    scm_provider,
+    resources,
+    expected_cpu,
+    expected_memory,
+    timeout_seconds,
 ):
     captured: dict = {}
     base_image = object()
@@ -81,7 +88,10 @@ async def test_launch_matrix_preserves_common_and_source_specific_behavior(
     monkeypatch.setattr("src.sandbox.launch.base_image", base_image)
     monkeypatch.setattr("src.sandbox.launch.modal.Image.from_id", images.__getitem__)
     monkeypatch.setattr("src.sandbox.launch.modal.Sandbox.create", _fake_create(captured))
-    monkeypatch.delenv("SCM_PROVIDER", raising=False)
+    if scm_provider is None:
+        monkeypatch.delenv("SCM_PROVIDER", raising=False)
+    else:
+        monkeypatch.setenv("SCM_PROVIDER", scm_provider)
     monkeypatch.setattr(
         SandboxLauncher, "_generate_code_server_password", staticmethod(lambda: "code-password")
     )
@@ -100,6 +110,8 @@ async def test_launch_matrix_preserves_common_and_source_specific_behavior(
         "sandbox_id": "sandbox-1",
         "control_plane_url": "https://control.example",
         "sandbox_auth_token": "sandbox-token",
+        "clone_host": "github.example",
+        "clone_username": "provided-user",
         "timeout_seconds": timeout_seconds,
         "user_env_vars": {
             "CONTROL_PLANE_URL": "https://user.example",
@@ -128,8 +140,6 @@ async def test_launch_matrix_preserves_common_and_source_specific_behavior(
                 "repo_name": "repo",
                 "future_field": {"preserved": True},
             },
-            clone_host="github.example",
-            clone_username="provided-user",
             **common,
         )
         expected_image = images["snapshot-image-1"]
@@ -178,6 +188,12 @@ async def test_launch_matrix_preserves_common_and_source_specific_behavior(
     assert env["TERMINAL_ENABLED"] == "true"
     assert "IMAGE_BUILD_MODE" not in env
     assert "GITHUB_APP_PRIVATE_KEY" not in env
+    assert env["VCS_HOST"] == "github.example"
+    assert env["VCS_CLONE_USERNAME"] == "provided-user"
+    assert "VCS_CLONE_TOKEN" not in env
+    assert "GITHUB_TOKEN" not in env
+    assert "GITHUB_APP_TOKEN" not in env
+    assert "OI_GITHUB_TOKEN_IS_FALLBACK" not in env
 
     if image_source == "repository":
         assert env["FROM_REPO_IMAGE"] == "true"
@@ -188,15 +204,8 @@ async def test_launch_matrix_preserves_common_and_source_specific_behavior(
     if image_source == "snapshot":
         assert env["RESTORED_FROM_SNAPSHOT"] == "true"
         assert '"future_field": {"preserved": true}' in env["SESSION_CONFIG"]
-        assert "VCS_CLONE_TOKEN" not in env
-        assert env["VCS_HOST"] == "github.example"
-        assert env["VCS_CLONE_USERNAME"] == "provided-user"
-        assert "GITHUB_TOKEN" not in env
-        assert "GITHUB_APP_TOKEN" not in env
-        assert "OI_GITHUB_TOKEN_IS_FALLBACK" not in env
     else:
         assert "RESTORED_FROM_SNAPSHOT" not in env
-        assert "VCS_CLONE_TOKEN" not in env
         session_config = json.loads(env["SESSION_CONFIG"])
         assert session_config["branch"] == "feature/shared-launch"
 

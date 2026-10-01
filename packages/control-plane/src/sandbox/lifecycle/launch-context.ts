@@ -13,6 +13,7 @@ import {
   SandboxProviderError,
   type CreateSandboxConfig,
   type SandboxProviderCapabilities,
+  type SandboxScmConfig,
   type SessionRepositoryInfo,
 } from "../provider";
 import { parsePersistedSandboxSettings } from "../settings";
@@ -40,7 +41,7 @@ export interface SlackAgentNotifyLookup {
   isEnabledForRepo(repoOwner: string | null, repoName: string | null): Promise<boolean>;
 }
 
-export interface SandboxLaunchConfig {
+export interface SandboxLaunchConfig extends SandboxScmConfig {
   /** Default model when the session has no override. */
   model: string;
   mcpServerLookup?: McpServerLookup;

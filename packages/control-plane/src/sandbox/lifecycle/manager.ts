@@ -31,7 +31,6 @@ import {
   type SandboxProvider,
   type CreateSandboxConfig,
   type CreateSandboxResult,
-  type RestoreScmIdentity,
   type SandboxLifetime,
   type StopConfig,
 } from "../provider";
@@ -334,8 +333,6 @@ export interface SandboxLifecycleConfig extends AlarmPolicyConfig, SandboxLaunch
   circuitBreaker: CircuitBreakerConfig;
   spawn: SpawnConfig;
   controlPlaneUrl: string;
-  /** Nonsecret SCM metadata for Modal restores; git credentials are brokered on demand. */
-  restoreScmIdentity?: RestoreScmIdentity;
   /**
    * Session ID for log correlation, resolved per use. Optional — logs will
    * omit sessionId if not provided. A thunk rather than a value because the
@@ -745,6 +742,7 @@ export class SandboxLifecycleManager
         provider: agent.provider,
         model: agent.model,
         userEnvVars,
+        scmIdentity: this.config.scmIdentity,
         prebuiltImageId,
         prebuiltImageSha,
         timeoutSeconds,
@@ -1062,7 +1060,7 @@ export class SandboxLifecycleManager
         agentSlackNotifyEnabled,
         mcpServers,
         sandboxSettings,
-        scmIdentity: this.config.restoreScmIdentity,
+        scmIdentity: this.config.scmIdentity,
         ...repositoryFields,
       };
       this.vmStartup.registerForegroundAuth(generation, restoreConfig.sessionId, sandboxAuthToken);

@@ -11,6 +11,7 @@ import { PENDING_VM_REFERENCE_MATERIALIZE_BOUND_MS } from "../lifecycle/decision
 import { PrebuiltImageUnavailableError, SandboxProviderError } from "../provider";
 import { ModalApiError, ModalVmStartupError } from "../client";
 import { RequestDeadlineError } from "../request-deadline";
+import { scmCloneIdentity } from "../sandbox-env";
 import type {
   ModalClient,
   CreateSandboxRequest,
@@ -94,6 +95,22 @@ const testConfig = {
 // ==================== Tests ====================
 
 describe("ModalSandboxProvider", () => {
+  it.each([undefined, "prebuilt-image"])(
+    "forwards common SCM identity on create with image %s",
+    async (prebuiltImageId) => {
+      const client = createMockModalClient();
+      const provider = new ModalSandboxProvider(client, "modal");
+      await provider.createSandbox({
+        ...testConfig,
+        prebuiltImageId,
+        scmIdentity: scmCloneIdentity("gitlab"),
+      });
+      expect(client.createSandbox).toHaveBeenCalledWith(
+        expect.objectContaining({ scmIdentity: scmCloneIdentity("gitlab"), prebuiltImageId }),
+        undefined
+      );
+    }
+  );
   it.each(["not_visible", "other_generation", "unknown"] as const)(
     "decodes raw and wrapped VM outcome %s without changing its classification",
     (detail) => {
@@ -926,7 +943,7 @@ describe("ModalSandboxProvider", () => {
 
       const result = await provider.restoreFromSnapshot({
         snapshotImageId: "img-123",
-        scmIdentity: { host: "github.com", username: "x-access-token" },
+        scmIdentity: scmCloneIdentity("github"),
         sessionId: "session-123",
         sandboxId: "sandbox-123",
         sandboxAuthToken: "token",
@@ -948,7 +965,7 @@ describe("ModalSandboxProvider", () => {
       expect(client.restoreSandbox).toHaveBeenCalledWith(
         expect.objectContaining({
           vncEnabled: true,
-          scmIdentity: { host: "github.com", username: "x-access-token" },
+          scmIdentity: scmCloneIdentity("github"),
         }),
         undefined
       );

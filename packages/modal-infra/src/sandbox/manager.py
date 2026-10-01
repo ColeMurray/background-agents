@@ -367,12 +367,10 @@ class SandboxManager:
                     retire_sandbox_id=retire_sandbox_id,
                     sandbox_backend=sandbox_backend,
                     launch_deadline_at_ms=launch_deadline_at_ms,
-                ),
-                source=SnapshotImageSource(
-                    image_id=snapshot_image_id,
                     clone_host=clone_host,
                     clone_username=clone_username,
                 ),
+                source=SnapshotImageSource(image_id=snapshot_image_id),
             )
         )
 

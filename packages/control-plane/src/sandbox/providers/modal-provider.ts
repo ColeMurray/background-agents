@@ -226,6 +226,7 @@ export class ModalSandboxProvider implements SandboxProvider, ModalImageBuildPro
           provider: config.provider,
           model: config.model,
           userEnvVars: config.userEnvVars,
+          scmIdentity: config.scmIdentity,
           prebuiltImageId: config.prebuiltImageId,
           prebuiltImageSha: config.prebuiltImageSha,
           timeoutSeconds,

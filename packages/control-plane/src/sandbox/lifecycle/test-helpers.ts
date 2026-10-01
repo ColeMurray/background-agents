@@ -14,6 +14,7 @@ import {
 } from "./manager";
 import { COMPATIBLE_RUNTIME_VERSION } from "../../image-builds/test-helpers";
 import { createLogger } from "../../logger";
+import { scmCloneIdentity } from "../sandbox-env";
 import type { BackgroundTasks } from "../../platform-ports";
 import type { ImageBuildLookup } from "./image-selection";
 import {
@@ -455,7 +456,7 @@ export function createTestConfig(): SandboxLifecycleConfig {
     ...DEFAULT_LIFECYCLE_CONFIG,
     controlPlaneUrl: "https://test.workers.dev",
     model: "anthropic/claude-sonnet-4-5",
-    restoreScmIdentity: { host: "github.com", username: "x-access-token" },
+    scmIdentity: scmCloneIdentity("github"),
   };
 }
 

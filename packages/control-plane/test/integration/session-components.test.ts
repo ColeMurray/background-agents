@@ -13,6 +13,7 @@ import { SandboxShutdownCoordinator } from "../../src/session/sandbox-shutdown";
 import { SessionStatusService } from "../../src/session/session-status-service";
 import { SessionWebSocketManagerImpl } from "../../src/session/websocket-manager";
 import { ModalSandboxProvider } from "../../src/sandbox/providers/modal-provider";
+import { scmCloneIdentity } from "../../src/sandbox/sandbox-env";
 import { cleanD1Tables } from "./cleanup";
 import { initNamedSession, queryDO } from "./helpers";
 import { componentsOf, runInSessionDO } from "./session-do-access";
@@ -52,15 +53,21 @@ describe("createSessionRuntime", () => {
     expect(await buildWithEnv({})).toBeNull();
   });
 
-  it.each([false, true])(
-    "preserves GitLab identity on all supported restores without minting (repo-less: %s)",
-    async (repoLess) => {
+  it.each([
+    ["create", false],
+    ["create", true],
+    ["restore", false],
+    ["restore", true],
+  ] as const)(
+    "preserves common GitLab identity on %s without minting (repo-less: %s)",
+    async (source, repoLess) => {
       const { stub } = await initNamedSession(`restore-identity-${crypto.randomUUID()}`);
       await queryDO(stub, "DELETE FROM sandbox_preservation");
       await queryDO(
         stub,
         "UPDATE sandbox SET status = 'stopped', modal_object_id = NULL, snapshot_image_id = 'saved-image', snapshot_runtime_version = 'v62-compatible'"
       );
+      if (source === "create") await queryDO(stub, "UPDATE sandbox SET snapshot_image_id = NULL");
       if (repoLess) {
         await queryDO(
           stub,
@@ -80,24 +87,31 @@ describe("createSessionRuntime", () => {
         const mint = vi
           .spyOn(runtime.internals.sourceControlProvider, "generateCredentialHelperAuth")
           .mockRejectedValue(new Error("mint unavailable"));
-        const restore = vi
+        const launch = vi
           .spyOn(ModalSandboxProvider.prototype, "restoreFromSnapshot")
           .mockResolvedValue({
             success: true,
             providerObjectId: "restored-source",
             lifetime: { kind: "none", observedAtMs: Date.now() },
           });
+        const create = vi.spyOn(ModalSandboxProvider.prototype, "createSandbox").mockResolvedValue({
+          sandboxId: "created-sandbox",
+          createdAt: Date.now(),
+          providerObjectId: "created-source",
+          lifetime: { kind: "none", observedAtMs: Date.now() },
+        });
         try {
           await runtime.internals.lifecycleManager.spawnSandbox();
-          expect(restore).toHaveBeenCalledWith(
+          expect(source === "restore" ? launch : create).toHaveBeenCalledWith(
             expect.objectContaining({
-              scmIdentity: { host: "gitlab.com", username: "oauth2" },
+              scmIdentity: scmCloneIdentity("gitlab"),
             })
           );
           expect(mint).not.toHaveBeenCalled();
         } finally {
           mint.mockRestore();
-          restore.mockRestore();
+          launch.mockRestore();
+          create.mockRestore();
         }
       });
     }

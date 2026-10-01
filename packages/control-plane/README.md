@@ -507,14 +507,15 @@ receives short-lived credentials on demand. The helper preserves the existing in
 model by serving credentials for HTTPS git requests to the configured SCM host, including
 setup/start hooks that clone auxiliary private repos. This avoids stale embedded credentials in
 long-running sessions and Daytona persistent resumes. All supported Modal snapshots (v62+) already
-include the helper, shipped in v51 in May 2026; v72 is not an authentication boundary. Restores
-preserve VCS host/username identity and session broker context, including for repository-less
-sessions, without requiring token minting before launch. Unknown or incompatible snapshots remain
-under recovery hold without launch. Modal does not mint restore tokens or generate
-clone-token/GitHub CLI aliases, and no longer binds a `github-app` secret. The App key remains
-configured in the control plane and enabled GitHub bot, never in session sandboxes. User-supplied
-token overrides are preserved. One-shot image builds still receive `VCS_CLONE_TOKEN` because they
-lack a session broker context.
+include the helper, shipped in v51 in May 2026; v72 is not an authentication boundary. Modal base,
+prebuilt-image, and snapshot launches share VCS host/username metadata and session broker context
+through a common sandbox configuration, including for repository-less sessions, without requiring
+token minting before launch. Create and restore accept the same optional top-level `clone_host` and
+`clone_username` strings. Unknown or incompatible snapshots remain under recovery hold without
+launch. Modal does not mint session git tokens or generate clone-token/GitHub CLI aliases, and no
+longer binds a `github-app` secret. The App key remains configured in the control plane and enabled
+GitHub bot, never in session sandboxes. User-supplied token overrides are preserved. One-shot image
+builds still receive `VCS_CLONE_TOKEN` because they lack a session broker context.
 
 If a `create-pr` request is triggered by a participant without a user OAuth token (for example,
 Slack-created or Google-login sessions), the sandbox can still push the branch with brokered GitHub

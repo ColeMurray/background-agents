@@ -129,9 +129,10 @@ modal run src/
 
 All supported Modal snapshots (v62+) use brokered git credentials. The credential helper shipped in
 v51 in May 2026, before the current snapshot compatibility floor; v72 is not an authentication
-boundary. Restores preserve VCS host/username identity and the session's control-plane broker
-context without resolving or injecting a static system clone token. Unknown or incompatible
-snapshots remain under recovery hold without launch.
+boundary. Base, prebuilt-image, and snapshot launches share VCS host/username metadata and the
+session's control-plane broker context through `SandboxConfig`, without resolving or injecting a
+static system clone token. Unknown or incompatible snapshots remain under recovery hold without
+launch.
 
 Update the deployment normally; no staged restore-auth migration is required. Terraform no longer
 provisions Modal's `github-app` secret. An existing secret can be deleted after the new Modal
@@ -159,15 +160,17 @@ Endpoint URLs follow the pattern: `https://{workspace}--open-inspect-{endpoint}.
 | `api-snapshot-build-sandbox` | POST | Yes | Snapshot the exact tagged build sandbox |
 | `api-terminate-build-sandbox` | POST | Yes | Terminate the exact tagged build sandbox (idempotent when already absent) |
 
-### Restore credentials
+### Session launch metadata
 
-`api-restore-sandbox` accepts optional `clone_host` and `clone_username` strings from the control
-plane. A provided host/username pair sets `VCS_HOST` and `VCS_CLONE_USERNAME`; otherwise provider
-defaults apply, including for repository-less restores. Obsolete top-level `clone_token` input is
-ignored by the request model and is never forwarded to the launcher.
+`api-create-sandbox` and `api-restore-sandbox` accept the same optional top-level `clone_host` and
+`clone_username` strings from the control plane. Both forward this launch metadata through the
+common `SandboxConfig`, separate from `SessionConfig`, for base, prebuilt-image, and snapshot
+launches. A provided host/username pair sets `VCS_HOST` and `VCS_CLONE_USERNAME`; otherwise provider
+defaults apply, including for repository-less sessions. Obsolete top-level `clone_token` input is
+ignored by both request models and is never forwarded to the session launcher.
 
-Fresh, prebuilt-image, and restored sessions use the credential helper. Restore does not generate
-`VCS_CLONE_TOKEN`, GitHub CLI token aliases, or a fallback marker. User-supplied tokens in
+Fresh, prebuilt-image, and restored sessions use the credential helper. Session launches do not
+generate `VCS_CLONE_TOKEN`, GitHub CLI token aliases, or a fallback marker. User-supplied tokens in
 `user_env_vars` remain unchanged. Image builds still accept a one-shot `clone_token` and inject
 `VCS_CLONE_TOKEN` because build sandboxes lack a session broker context.
 

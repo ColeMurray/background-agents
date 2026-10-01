@@ -41,9 +41,12 @@ import {
   IMAGE_BUILD_CONTEXT_START_ARGUMENT,
   imageBuildSandboxIdentity,
   scmCloneIdentity,
-  type ScmCloneIdentity,
 } from "../sandbox/sandbox-env";
-import { SandboxProviderError, type ImageBuildProviderTriggerConfig } from "../sandbox/provider";
+import {
+  SandboxProviderError,
+  type ImageBuildProviderTriggerConfig,
+  type ScmCloneIdentity,
+} from "../sandbox/provider";
 
 const log = createLogger("image-builds:daytona");
 

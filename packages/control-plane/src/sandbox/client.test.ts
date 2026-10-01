@@ -8,6 +8,7 @@ import {
   createModalClient,
 } from "./client";
 import { RequestDeadlineError } from "./request-deadline";
+import { scmCloneIdentity } from "./sandbox-env";
 
 function rejectWhenAborted(signal: AbortSignal): Promise<Response> {
   if (signal.aborted) return Promise.reject(signal.reason);
@@ -441,7 +442,7 @@ describe("ModalClient", () => {
       provider: "anthropic",
       model: "anthropic/claude-sonnet-4-5",
       mcpServers: [{ id: "mcp-1", name: "Tool", type: "local", enabled: true }],
-      scmIdentity: { host: "github.com", username: "x-access-token" },
+      scmIdentity: scmCloneIdentity("github"),
     });
 
     const body = JSON.parse((fetchMock.mock.calls[0]?.[1] as RequestInit).body as string);
@@ -462,34 +463,51 @@ describe("ModalClient", () => {
     });
   });
 
-  it("sends complete GitLab identity without a restore token", async () => {
-    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
-      new Response(JSON.stringify({ success: true, data: { sandbox_id: "sb-1" } }), {
-        status: 200,
-        headers: { "Content-Type": "application/json" },
-      })
-    );
-    await createModalClient("secret", "acme", "prod-web").restoreSandbox({
-      snapshotImageId: "img-1",
-      sessionId: "session-123",
-      sandboxId: "sandbox-456",
-      sandboxAuthToken: "auth-token",
-      controlPlaneUrl: "https://control-plane.test",
-      repoOwner: "group/subgroup",
-      repoName: "repo",
-      harness: "opencode",
-      provider: "anthropic",
-      model: "claude-sonnet-4-5",
-      scmIdentity: { host: "gitlab.com", username: "oauth2" },
-    });
+  it.each(["base", "prebuilt", "restore"] as const)(
+    "sends the same GitLab identity without a token on %s launch",
+    async (source) => {
+      const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+        new Response(
+          JSON.stringify({
+            success: true,
+            data: { sandbox_id: "sb-1", status: "spawning", created_at: 1 },
+          }),
+          {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          }
+        )
+      );
+      const client = createModalClient("secret", "acme", "prod-web");
+      const request = {
+        sessionId: "session-123",
+        sandboxId: "sandbox-456",
+        sandboxAuthToken: "auth-token",
+        controlPlaneUrl: "https://control-plane.test",
+        repoOwner: "group/subgroup",
+        repoName: "repo",
+        harness: "opencode" as const,
+        provider: "anthropic",
+        model: "claude-sonnet-4-5",
+        scmIdentity: scmCloneIdentity("gitlab"),
+      };
+      if (source === "restore") {
+        await client.restoreSandbox({ ...request, snapshotImageId: "img-1" });
+      } else {
+        await client.createSandbox({
+          ...request,
+          prebuiltImageId: source === "prebuilt" ? "img-1" : undefined,
+        });
+      }
 
-    const body = JSON.parse((fetchMock.mock.calls[0]?.[1] as RequestInit).body as string);
-    expect(body).toMatchObject({
-      clone_host: "gitlab.com",
-      clone_username: "oauth2",
-    });
-    expect(body).not.toHaveProperty("clone_token");
-  });
+      const body = JSON.parse((fetchMock.mock.calls[0]?.[1] as RequestInit).body as string);
+      expect(body).toMatchObject({
+        clone_host: "gitlab.com",
+        clone_username: "oauth2",
+      });
+      expect(body).not.toHaveProperty("clone_token");
+    }
+  );
 
   it("asks Modal's create handler for early bridge connect by SessionConfig field name", async () => {
     const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(

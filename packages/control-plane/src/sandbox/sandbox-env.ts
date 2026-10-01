@@ -7,6 +7,7 @@ import {
   type CreateSandboxConfig,
   type ImageBuildProviderTriggerConfig,
   type RestoreConfig,
+  type ScmCloneIdentity,
   type SessionRepositoryInfo,
 } from "./provider";
 import { resolveSandboxPortPlan, type SandboxPortPlan } from "./providers/port-resolution";
@@ -212,16 +213,6 @@ export const RESERVED_REPO_IMAGE_CALLBACK_ENV_KEYS: readonly string[] = [
 /** One-shot clone token used only by image-build sandboxes. */
 export const VCS_CLONE_TOKEN_ENV_VAR = "VCS_CLONE_TOKEN";
 
-/** Host/username pair git pairs with the brokered clone token in the sandbox. */
-export interface ScmCloneIdentity {
-  /** `VCS_HOST` — hostname the credential helper and clone URLs target. */
-  readonly host: string;
-  /** `VCS_CLONE_USERNAME` — username git sends alongside the brokered token. */
-  readonly cloneUsername: string;
-  /** Hosts an SCM credential secret may be released to (clone host + API host). */
-  readonly secretHosts: readonly string[];
-}
-
 const SCM_CLONE_IDENTITIES: Record<SourceControlProviderName, ScmCloneIdentity> = {
   github: {
     host: "github.com",
@@ -376,7 +367,7 @@ export function buildSandboxEnvVars(
     envVars.AGENT_SLACK_NOTIFY_ENABLED = "true";
   }
 
-  applyScmCloneEnv(envVars, options.scmIdentity);
+  applyScmCloneEnv(envVars, config.scmIdentity ?? options.scmIdentity);
 
   // Note: this builder never sets VCS_CLONE_TOKEN / GITHUB_TOKEN /
   // GITHUB_APP_TOKEN as system vars. Git operations in the sandbox
