@@ -6,10 +6,10 @@ refactor. [ADR 0004](../adr/0004-sandbox-checkpoint-and-shutdown.md) governs lif
 shutdown authority. The [characterization matrix](sandbox-lifecycle-refactor-baseline.md) records
 compatibility evidence and separate behavior gaps, not fixes claimed by extraction.
 
-**Status:** T1 through T6 are integrated. T7's combined audit, real-storage wiring evidence and full
-local validation passed; review/merge remains pending. Command results and release limits are in the
-[closure report](sandbox-lifecycle-refactor-verification.md). A green local suite is not deployment
-authorization or exhaustive interleaving safety.
+T7's combined audit, real-storage wiring evidence and validation are supplied by
+[PR #2203](https://github.com/ColeMurray/background-agents/pull/2203). Command results and release
+limits are in the [closure report](sandbox-lifecycle-refactor-verification.md). A green local suite
+is not deployment authorization or exhaustive interleaving safety.
 
 ## Ownership
 
@@ -337,13 +337,20 @@ acknowledgement plus known pending lifetime can admit work before lookup finishe
 reconstruction; the original instance's foreground-pending flag still blocks it. These gates are not
 equivalent.
 
+An explicitly ambiguous original create subsequently settles through foreground lookup.
+Post-settlement assertions retain supersession refusal and distinguish the original instance's
+still-live terminal signing key from the reconstructed instance's lack of one. Tests select the
+single named VM-resolution task, not the composition root's whole background-task list.
+
 The rejected-reconstruction test now enters `SessionServer.onScheduledDeadline()` rather than
 calling only manager shutdown processing. It covers the production pre/post-projection passes,
 durable retry-before-stop, delivery acknowledgement and duplicate wake-ups under a retained shutdown
-hold. Existing assembled-manager, real-SQL, Workerd, scheduler and Node conformance suites remain
-intact. ESLint additionally protects launch-context and startup-error internals using the existing
-import rules, including extension-bearing imports; composition alone supplies launch integration
-ports.
+hold. It asserts each stop target/intent and the real host alarm, consumes that alarm before
+simulated due delivery, and verifies failure rearming and the final retry's no-op drain after
+successful cleanup. Existing assembled-manager, real-SQL, Workerd, scheduler and Node conformance
+suites remain intact. ESLint additionally protects launch-context and startup-error internals using
+the existing import rules, including extension-bearing imports; composition alone supplies launch
+integration ports.
 
 `manager-shutdown.test.ts` isolates the assembled shutdown/recovery cases, including the committed
 access/publication failure matrix, from the manager's orchestration suite. It retains real

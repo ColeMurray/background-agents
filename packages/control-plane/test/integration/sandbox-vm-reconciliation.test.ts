@@ -5,6 +5,7 @@ import type { SessionDO } from "../../src/cloudflare/durable-object";
 import { createCloudflareEnv, type WorkerBindings } from "../../src/cloudflare/platform";
 import { createDurableObjectSessionPlatform } from "../../src/cloudflare/session-platform";
 import type { BackgroundTasks, SessionWebSocket } from "../../src/platform-ports";
+import { ModalVmStartupError } from "../../src/sandbox/client";
 import type { ResolveSandboxResult } from "../../src/sandbox/provider";
 import { ModalSandboxProvider } from "../../src/sandbox/providers/modal-provider";
 import { formatPendingVmReference } from "../../src/sandbox/providers/pending-vm-reference";
@@ -71,7 +72,7 @@ async function reconstructedPendingVm(instance: SessionDO, state: DurableObjectS
     .spyOn(ModalSandboxProvider.prototype, "createSandbox")
     .mockImplementation(async () => {
       await createGate;
-      throw new Error("Original create request ended without a response");
+      throw new ModalVmStartupError("unknown", new Error("Original create response was lost"));
     });
   let finishLookup!: (result: ResolveSandboxResult) => void;
   const lookup = new Promise<ResolveSandboxResult>((resolve) => (finishLookup = resolve));
@@ -128,7 +129,6 @@ async function reconstructedPendingVm(instance: SessionDO, state: DurableObjectS
     runtimeEnv,
     initial,
     restarted,
-    tasks,
     browser,
     bridge,
     create,
@@ -140,6 +140,11 @@ async function reconstructedPendingVm(instance: SessionDO, state: DurableObjectS
     result,
     finishLookup,
     shutdown: new SandboxShutdownRepository(state.storage.sql),
+    vmResolution() {
+      const resolutions = tasks.filter((task) => task.name === "sandbox.vm_resolve");
+      expect(resolutions).toHaveLength(1);
+      return resolutions[0];
+    },
     async finish() {
       finishLookup(result);
       finishCreate();
@@ -170,9 +175,7 @@ async function refuseEncryptedLookup(change: "reference" | "timestamp") {
       manager.onSandboxConnected();
       manager.onSandboxSocketAttached(f.generation);
       expect(manager.onRuntimeReady(Date.now(), "opencode", 1)).toBe(true);
-      expect(f.tasks).toEqual([
-        { factory: expect.any(Function), name: "sandbox.vm_resolve", promise: expect.any(Promise) },
-      ]);
+      const resolution = f.vmResolution();
       f.finishLookup(f.result);
       await encrypted;
       expect(encrypt).toHaveBeenCalledTimes(2);
@@ -184,14 +187,18 @@ async function refuseEncryptedLookup(change: "reference" | "timestamp") {
       });
 
       // Change each SQL predicate independently while real ciphertext is waiting to return.
-      if (change === "reference") sandbox.updateSandboxModalObjectId("other-provider-handle");
+      // A different pending reference is not a bridge-resolved handle the foreground may reconcile.
+      if (change === "reference")
+        sandbox.updateSandboxModalObjectId(
+          formatPendingVmReference("other-session", f.generation.sandboxId)
+        );
       else state.storage.sql.exec("UPDATE sandbox SET created_at = created_at + 1");
       const successor = sandbox.getSandbox();
       const shutdownBefore = f.shutdown.read();
       f.browser.send.mockClear();
       f.bridge.send.mockClear();
       releaseEncryption();
-      await f.tasks[0].promise;
+      await resolution.promise;
 
       expect(sandbox.getSandbox()).toEqual(successor);
       expect(f.shutdown.read()).toEqual(shutdownBefore);
@@ -206,6 +213,13 @@ async function refuseEncryptedLookup(change: "reference" | "timestamp") {
         generationCreatedAtMs: f.generation.createdAt,
         timeoutSeconds: SANDBOX_TIMEOUT_MS / 1000,
       });
+      await f.finish();
+      expect(sandbox.getSandbox()).toEqual(successor);
+      expect(f.shutdown.read()).toEqual(shutdownBefore);
+      expect(f.browser.send).not.toHaveBeenCalled();
+      expect(f.bridge.send).not.toHaveBeenCalled();
+      expect(f.resolve).toHaveBeenCalledOnce();
+      expect(f.stop).not.toHaveBeenCalled();
     } finally {
       releaseEncryption();
       await f.finish();
@@ -301,7 +315,7 @@ describe("production-wired VM startup reconciliation", () => {
           vnc_url: null,
           ttyd_token: null,
         });
-        const [resolution] = f.tasks.filter((task) => task.name === "sandbox.vm_resolve");
+        const resolution = f.vmResolution();
         expect(resolution.factory).toEqual(expect.any(Function));
         expect(f.resolve).toHaveBeenCalledExactlyOnceWith({
           sessionId: f.config.sessionId,
@@ -336,6 +350,28 @@ describe("production-wired VM startup reconciliation", () => {
         );
         expect(manager.mayProcessQueuedWork()).toBe(true);
         expect(manager.pushAdmissionDecision()).toBe("ready");
+        expect(f.create).toHaveBeenCalledOnce();
+        expect(f.stop).not.toHaveBeenCalled();
+        // The still-live foreground instance retains signing authority, unlike the reconstructed one.
+        await f.finish();
+        expect(f.resolve).toHaveBeenCalledTimes(2);
+        expect(f.resolve.mock.calls[1][0]).toMatchObject(f.resolve.mock.calls[0][0]);
+        expect(sandbox.getSandbox()).toMatchObject({
+          status: "ready",
+          modal_sandbox_id: f.generation.sandboxId,
+          created_at: f.generation.createdAt,
+          modal_object_id: "resolved-vm",
+          ttyd_url: f.result.ttydUrl,
+          last_spawn_error: null,
+        });
+        expect(await sandbox.getSandboxAccessSecret("codeServer")).toBe(
+          f.result.codeServerPassword
+        );
+        expect(await sandbox.getSandboxAccessSecret("vnc")).toBe(f.result.vncAccess!.password);
+        expect(await sandbox.getSandboxAccessSecret("ttyd")).toEqual(expect.any(String));
+        expect(f.shutdown.read()).toEqual({ ...acknowledged, providerObjectId: "resolved-vm" });
+        expect(f.initial.internals.lifecycleManager.isProviderStartupPending()).toBe(false);
+        expect(f.initial.internals.lifecycleManager.mayProcessQueuedWork()).toBe(true);
         expect(f.create).toHaveBeenCalledOnce();
         expect(f.stop).not.toHaveBeenCalled();
       } finally {

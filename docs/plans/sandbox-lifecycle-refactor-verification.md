@@ -125,8 +125,10 @@ T7 adds only missing wiring or explicit inherited-gap reproducers:
   startup-errors, extension-bearing imports and permitted internal uses; no bespoke scanner/rule
   weakening. Composition's launch-port import has an explicit, justified exemption.
 
-Checks ran sequentially, with one Vitest worker to avoid starving the sandbox. Log redirection under
-`/tmp/opencode/col247-*.log` does not alter the commands or selections below.
+The full results below record the initial `3b9e7a0` handoff; the test-only review follow-up has
+focused validation recorded separately below. Checks ran sequentially, with one Vitest worker to
+avoid starving the sandbox. Log redirection under `/tmp/opencode/col247-*.log` does not alter the
+commands or selections below.
 
 | Exact Command                                                                                  | Exit / Result                                                              |
 | ---------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------- |
@@ -149,7 +151,7 @@ All application suites passed; the first full integration attempt needed a longe
 not a test fix. The successful retry took 760.32 s. Final review moved deadline/hold assertions
 outside the cleanup provider stub so intentional provider-error catches cannot swallow assertions on
 failed attempts. The entire integration suite was then rerun successfully against that final test
-version (647.39 s); no source/test edits followed final validation.
+version (647.39 s); no source/test edits followed that pass before the initial PR handoff.
 
 Additional validation:
 
@@ -164,6 +166,38 @@ Additional validation:
   exit 0; checks the edited configuration/scripts/integration tests outside the package's
   `eslint src/` selection. All four typecheck configurations were also rerun after final assertion
   refinement.
+
+## PR Review Follow-up
+
+The test-only follow-up to `3b9e7a0` uses `ModalVmStartupError("unknown", ...)`, settles the
+original foreground create inside the assertions, and checks persisted state afterward. Refusal
+cases change the reservation timestamp or replace its pending reference with another session's
+pending reference; foreground completion must not mutate or publish. Success performs a second
+lookup, not a second create, and preserves early readiness and conservative lifetime. Only the
+still-live original instance can subsequently mint terminal access; the reconstructed graph cannot
+recover that key. Named VM-resolution task selection no longer constrains unrelated background work.
+
+Rejected cleanup asserts every explicit handle, destructive intent, reason and bounded signal
+outside the provider stub. A controlled `Date.now()` reaches each persisted deadline; the test
+verifies the real host alarm, consumes it before each simulated platform callback, and verifies
+replacement host arming after failure. Success retains the pre-I/O retry as designed; its final due
+no-op delivery drains both host and persisted deadlines without stopping again. This models host
+delivery semantics, not automatic Workerd clock advancement or live-provider timing.
+
+Validation uses the existing focused commands rather than repeating full application sweeps or
+bundles for test/documentation-only changes. An initial new assertion incorrectly equated foreground
+launch-config and narrower bridge lookup shapes; it was corrected to pin their common identity and
+timeout fields, without changing production behavior.
+
+| Follow-up Command                                                                                                                                                                          | Result                         |
+| ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------ |
+| `npm run build -w @open-inspect/shared`                                                                                                                                                    | Passed                         |
+| `npm run test:integration -w @open-inspect/control-plane -- sandbox-vm-reconciliation sandbox-state-retention --maxWorkers=1`                                                              | 2 files / 38 tests passed      |
+| `npm test -w @open-inspect/control-plane -- src/sandbox/lifecycle/vm-resolve.test.ts src/sandbox/lifecycle/rejected-allocation.test.ts src/session/alarm/scheduler.test.ts --maxWorkers=1` | 3 files / 71 tests passed      |
+| `npm run typecheck -w @open-inspect/control-plane`                                                                                                                                         | All four configurations passed |
+| `npx eslint packages/control-plane/test/integration/sandbox-vm-reconciliation.test.ts packages/control-plane/test/integration/sandbox-state-retention.test.ts`                             | Passed                         |
+| `npm run format:check`                                                                                                                                                                     | Whole repository passed        |
+| `git diff --check`                                                                                                                                                                         | Passed                         |
 
 ## Related Work
 
