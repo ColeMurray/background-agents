@@ -14,7 +14,7 @@ import { SLACK_THREAD_BINDING_KIND } from "@open-inspect/shared/types/session-ap
 import { Hono } from "hono";
 import { z } from "zod";
 import { createLogger } from "../logger";
-import { lookupThreadSession, storeThreadSession } from "../sessions/thread-session-store";
+import { readThreadSession, storeThreadSession } from "../sessions/thread-session-store";
 import { NO_REPOSITORY_TARGET_LABEL, NO_REPOSITORY_TARGET_VALUE } from "../targets";
 import type { Env } from "../types";
 
@@ -75,9 +75,13 @@ threadBindingRoutes.post("/internal/thread-binding", async (c) => {
 
   // ponytail: read-then-write, KV has no compare-and-swap. A top-level post's
   // ts is brand new, so only a replay of the same binding can race it.
-  const existing = await lookupThreadSession(c.env, channel, threadTs);
-  if (!existing) {
-    await storeThreadSession(c.env, channel, threadTs, {
+  const lookup = await readThreadSession(c.env, channel, threadTs);
+  // A mapping we could not read may exist, so never write over it.
+  const existing = lookup.ok ? lookup.session : null;
+  const stored =
+    lookup.ok &&
+    !existing &&
+    (await storeThreadSession(c.env, channel, threadTs, {
       sessionId,
       repoId: repoFullName ?? NO_REPOSITORY_TARGET_VALUE,
       repoFullName: repoFullName ?? NO_REPOSITORY_TARGET_LABEL,
@@ -85,19 +89,25 @@ threadBindingRoutes.post("/internal/thread-binding", async (c) => {
       reasoningEffort,
       createdAt: Date.now(),
       lastPromptTs: threadTs,
-    });
-  }
+    }));
+  const failed = !lookup.ok || (!existing && !stored);
+  const status = failed ? 503 : 200;
 
-  log.info("http.request", {
+  log[failed ? "warn" : "info"]("http.request", {
     trace_id: traceId,
     http_path: "/internal/thread-binding",
-    http_status: 200,
+    http_status: status,
+    outcome: failed ? "error" : "success",
+    reject_reason: !lookup.ok ? "kv_read_failed" : failed ? "kv_write_failed" : undefined,
     channel,
     thread_ts: threadTs,
     session_id: sessionId,
-    bound: !existing,
+    bound: stored,
     existing_session_id: existing?.sessionId,
   });
 
-  return c.json({ ok: true, bound: !existing });
+  if (failed) {
+    return c.json({ error: "binding not stored" }, 503);
+  }
+  return c.json({ ok: true, bound: stored });
 });

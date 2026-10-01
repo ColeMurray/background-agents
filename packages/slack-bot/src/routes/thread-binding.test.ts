@@ -116,6 +116,25 @@ describe("POST /internal/thread-binding", () => {
     });
   });
 
+  it("writes nothing when it cannot tell whether the thread is already bound", async () => {
+    const kv = env.SLACK_KV as unknown as ReturnType<typeof createMockKV>;
+    kv.get.mockRejectedValueOnce(new Error("KV unavailable"));
+
+    const res = await post(binding(), env);
+
+    expect(res.status).toBe(503);
+    expect(kv.put).not.toHaveBeenCalled();
+  });
+
+  it("does not report a binding that failed to store", async () => {
+    const kv = env.SLACK_KV as unknown as ReturnType<typeof createMockKV>;
+    kv.put.mockRejectedValueOnce(new Error("KV unavailable"));
+
+    const res = await post(binding(), env);
+
+    expect(res.status).toBe(503);
+  });
+
   it("rejects a body signed with another key", async () => {
     const res = await post(binding(), env, "wrong-secret");
 

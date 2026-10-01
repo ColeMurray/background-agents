@@ -312,7 +312,8 @@ When you need a decision from me, ask it with slack-notify in #eng-updates, then
 ```
 
 The link expires after 7 days. A notification posted as a reply inside an existing thread links
-nothing, so that thread keeps its current session.
+nothing, so that thread keeps its current session. Linking is best-effort: if it fails, the
+notification still posts, and a reply starts a new session.
 
 ### Mentions
 

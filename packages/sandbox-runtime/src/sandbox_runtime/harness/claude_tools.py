@@ -855,7 +855,8 @@ def build_tools(client: ControlPlaneToolClient) -> list[Any]:
                 "attribution footer and View Session button — do not fabricate them. A post without "
                 "thread_ts starts a thread linked to this session: when someone @mentions the bot in that "
                 "thread, their reply arrives here as your next prompt, so you can ask a question and end "
-                "your turn.",
+                "your turn. Linking is best-effort: if it fails, the post still succeeds and a reply "
+                "starts a new session.",
                 {
                     "type": "object",
                     "properties": {

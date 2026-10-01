@@ -253,9 +253,7 @@ describe("thread session store", () => {
     mocks.put.mockRejectedValue(new Error("KV write unavailable"));
     mocks.deleteValue.mockRejectedValue(new Error("KV delete unavailable"));
 
-    await expect(
-      storeThreadSession(mocks.env, "C123", "111.222", session)
-    ).resolves.toBeUndefined();
+    await expect(storeThreadSession(mocks.env, "C123", "111.222", session)).resolves.toBe(false);
     await expect(clearThreadSession(mocks.env, "C123", "111.222")).resolves.toBeUndefined();
   });
 });

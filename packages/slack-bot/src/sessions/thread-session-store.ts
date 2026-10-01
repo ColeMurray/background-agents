@@ -21,18 +21,23 @@ function getThreadSessionKey(channel: string, threadTs: string): string {
   return `thread:${channel}:${threadTs}`;
 }
 
-export async function lookupThreadSession(
+/**
+ * Read a thread's mapping, telling a failed read (`ok: false`) apart from an
+ * absent one (`session: null`). Callers that must not overwrite a mapping
+ * they could not see need the difference.
+ */
+export async function readThreadSession(
   env: Env,
   channel: string,
   threadTs: string
-): Promise<ThreadSession | null> {
+): Promise<{ ok: true; session: ThreadSession | null } | { ok: false }> {
   try {
     const data = await createKvCacheStore(env.SLACK_KV).get(
       getThreadSessionKey(channel, threadTs),
       "json"
     );
     const result = threadSessionSchema.safeParse(data);
-    return result.success ? result.data : null;
+    return { ok: true, session: result.success ? result.data : null };
   } catch (e) {
     log.error("kv.get", {
       key_prefix: "thread",
@@ -40,22 +45,33 @@ export async function lookupThreadSession(
       thread_ts: threadTs,
       error: e instanceof Error ? e : new Error(String(e)),
     });
-    return null;
+    return { ok: false };
   }
 }
 
+export async function lookupThreadSession(
+  env: Env,
+  channel: string,
+  threadTs: string
+): Promise<ThreadSession | null> {
+  const result = await readThreadSession(env, channel, threadTs);
+  return result.ok ? result.session : null;
+}
+
+/** Resolves false when the write failed; the failure is already logged. */
 export async function storeThreadSession(
   env: Env,
   channel: string,
   threadTs: string,
   session: ThreadSession
-): Promise<void> {
+): Promise<boolean> {
   try {
     await createKvCacheStore(env.SLACK_KV).put(
       getThreadSessionKey(channel, threadTs),
       JSON.stringify(session),
       { expirationTtl: THREAD_SESSION_TTL_MS / 1000 }
     );
+    return true;
   } catch (e) {
     log.error("kv.put", {
       key_prefix: "thread",
@@ -63,6 +79,7 @@ export async function storeThreadSession(
       thread_ts: threadTs,
       error: e instanceof Error ? e : new Error(String(e)),
     });
+    return false;
   }
 }
 

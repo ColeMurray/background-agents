@@ -9,7 +9,8 @@ New features, integrations, and notable improvements to Open-Inspect — newest 
 **Reply to agent notifications from Slack.** A top-level `slack-notify` post now starts a thread
 linked to its session. An `@mention` reply in that thread becomes the session's next prompt, so an
 automation can ask a question in Slack and continue when you answer. Before, such a reply started a
-new session.
+new session. Linking is best-effort: when it fails, the post still goes out and a reply starts a new
+session, as before.
 
 ### Changed
 
