@@ -10,9 +10,11 @@ Team leads and workspace administrators can manage encrypted secrets from a team
 Team-owned sessions receive global secrets, then team secrets, then environment or repository
 secrets, with later scopes taking precedence. Environment image builds include the environment's
 team secrets; repository-shared images do not. Secret mutation audits contain key names only. Team
-secret changes atomically supersede affected environment images and request enabled rebuilds.
-Team-owned environment images require matching session ownership. Team-only legacy OAuth refresh
-tokens do not enable managed authentication; API keys remain usable.
+secret changes atomically supersede affected environment images. After the database batch, detached,
+best-effort rebuild scheduling is attempted for enabled team-owned environments; enumeration or
+trigger failures may leave no rebuild request. Team-owned environment images require matching
+session ownership. Team-only legacy OAuth refresh tokens do not enable managed authentication; API
+keys remain usable.
 
 ## September 30, 2026
 
