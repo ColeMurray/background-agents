@@ -12,7 +12,11 @@ import type { McpServerConfig, SandboxSettings } from "@open-inspect/shared/type
 import { z } from "zod";
 import { createLogger } from "../logger";
 import type { CorrelationContext } from "../logger";
-import { buildSessionConfig, toRepositoryConfigPayload } from "./sandbox-env";
+import {
+  buildSessionConfig,
+  toRepositoryConfigPayload,
+  type ScmCloneIdentity,
+} from "./sandbox-env";
 import type { SessionRepositoryInfo } from "./provider";
 import { parsePendingVmReference } from "./providers/pending-vm-reference";
 import { withRequestDeadline } from "./request-deadline";
@@ -160,6 +164,7 @@ export function buildModalSandboxDashboardUrl(params: {
 }
 
 export interface CreateSandboxRequest {
+  scmIdentity: ScmCloneIdentity;
   sandboxBackend?: ModalBackend;
   retireSandboxId?: string | null;
   launchDeadlineAtMs?: number;
@@ -202,6 +207,7 @@ export interface CreateSandboxResponse {
 }
 
 export interface RestoreSandboxRequest {
+  scmIdentity: ScmCloneIdentity;
   sandboxBackend?: ModalBackend;
   retireSandboxId?: string | null;
   launchDeadlineAtMs?: number;
@@ -283,9 +289,8 @@ export interface CreateImageBuildSandboxRequest {
   buildId: string;
   /** Repositories in position order ([0] = primary), cloned at their base branches. */
   repositories: Array<{ repoOwner: string; repoName: string; baseBranch: string }>;
+  scmIdentity: ScmCloneIdentity;
   cloneToken?: string;
-  cloneHost?: string;
-  cloneUsername?: string;
   callbackUrl: string;
   failureCallbackUrl: string;
   userEnvVars?: Record<string, string>;
@@ -506,6 +511,8 @@ export class ModalClient {
           repo_name: request.repoName,
           control_plane_url: request.controlPlaneUrl,
           sandbox_auth_token: request.sandboxAuthToken,
+          clone_host: request.scmIdentity.host,
+          clone_username: request.scmIdentity.cloneUsername,
           agent_session_id: request.agentSessionId || null,
           harness: request.harness,
           provider: request.provider || "anthropic",
@@ -585,6 +592,8 @@ export class ModalClient {
         MODAL_SANDBOX_START_REQUEST_DEADLINE_MS,
         {
           snapshot_image_id: request.snapshotImageId,
+          clone_host: request.scmIdentity.host,
+          clone_username: request.scmIdentity.cloneUsername,
           session_config: buildSessionConfig(request),
           sandbox_id: request.sandboxId,
           control_plane_url: request.controlPlaneUrl,
@@ -790,8 +799,8 @@ export class ModalClient {
           build_id: request.buildId,
           repositories: request.repositories.map(toRepositoryConfigPayload),
           clone_token: request.cloneToken,
-          clone_host: request.cloneHost,
-          clone_username: request.cloneUsername,
+          clone_host: request.scmIdentity.host,
+          clone_username: request.scmIdentity.cloneUsername,
           callback_url: request.callbackUrl,
           failure_callback_url: request.failureCallbackUrl,
           user_env_vars: request.userEnvVars,

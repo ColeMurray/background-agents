@@ -15,6 +15,15 @@ remain readable.
 
 ## October 1, 2026
 
+### Changed
+
+**Modal snapshot restores use brokered git credentials.** Restored sandboxes now fetch git
+credentials from the control plane like fresh sessions, instead of receiving a token minted by
+Modal. The control plane now sends the VCS host and clone username with every Modal create, restore,
+and image-build request, so Modal no longer reads `SCM_PROVIDER` or needs GitHub App credentials.
+Terraform no longer provisions Modal's `github-app` secret; you can delete the existing secret from
+Modal after upgrading.
+
 ### Added
 
 Team leads and workspace administrators can manage encrypted secrets from a team's Secrets tab.

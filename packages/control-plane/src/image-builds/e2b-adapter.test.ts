@@ -31,8 +31,6 @@ function createPlan(): ImageBuildPlan {
     callbackToken: "callback-token",
     cloneAuth: {
       type: "credential_helper",
-      host: "github.com",
-      username: "x-access-token",
       token: "clone-token",
     },
     buildTimeoutMs: 1_800_001,

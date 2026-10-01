@@ -80,7 +80,7 @@ function fixture(action: "create" | "restore" = "create", imageBuildLookup?: Ima
     ),
     stopSandbox: vi.fn(async () => {}),
   };
-  const provider = new ModalSandboxProvider(client as unknown as ModalClient, "modal-vm");
+  const provider = new ModalSandboxProvider(client as unknown as ModalClient, "modal-vm", "github");
   const backgroundTasks = { submit: vi.fn((task: () => Promise<unknown>) => void task()) };
   let state: ShutdownRecord | null = null;
   const store = {

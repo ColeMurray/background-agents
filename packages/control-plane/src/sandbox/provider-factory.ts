@@ -35,7 +35,7 @@ function createModalProviderFromEnv(env: Env, backend: "modal" | "modal-vm"): Mo
     env.MODAL_API_URL
   );
 
-  return createModalProvider(client, backend);
+  return createModalProvider(client, backend, resolveScmProviderFromEnv(env.SCM_PROVIDER));
 }
 
 function createVercelProviderFromEnv(env: Env): VercelSandboxProvider {

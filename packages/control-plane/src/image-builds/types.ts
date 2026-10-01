@@ -25,7 +25,7 @@ export type TriggerImageBuildResult =
 
 /** Clone auth handed to provider-session build sandboxes (provider-policy.ts). */
 export type ImageBuildCloneAuth =
-  | { type: "credential_helper"; host: string; username: string; token: string }
+  | { type: "credential_helper"; token: string }
   | { type: "unavailable" };
 
 /**

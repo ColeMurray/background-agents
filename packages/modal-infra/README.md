@@ -53,8 +53,10 @@ The in-sandbox runtime (entrypoint supervisor, control-plane bridge, shared type
 
 Provided by `packages/sandbox-runtime/src/sandbox_runtime/auth/`:
 
-- **github_app.py**: GitHub App token generation for repo access
 - **internal.py**: HMAC authentication for control plane requests
+
+Modal holds no source-control credentials. Session sandboxes fetch git credentials on demand from the
+control plane; image builds receive a one-shot clone token in the build request.
 
 ### API (`src/`)
 
@@ -80,12 +82,6 @@ snapshot, terminate, and delete provider operations.
 # sandboxes take their model credentials from the control plane's secret store
 # instead. The secret itself must exist; Modal cannot hold one with no keys.
 modal secret create llm-api-keys ANTHROPIC_API_KEY="sk-ant-..."
-
-# GitHub App credentials (for repo access)
-modal secret create github-app \
-  GITHUB_APP_ID="123456" \
-  GITHUB_APP_PRIVATE_KEY="$(cat private-key-pkcs8.pem)" \
-  GITHUB_APP_INSTALLATION_ID="12345678"
 
 # Internal API secret (for control plane authentication)
 modal secret create internal-api \
@@ -145,6 +141,10 @@ Endpoint URLs follow the pattern: `https://{workspace}--open-inspect-{endpoint}.
 | `api-snapshot-build-sandbox` | POST | Yes | Snapshot the exact tagged build sandbox |
 | `api-terminate-build-sandbox` | POST | Yes | Terminate the exact tagged build sandbox (idempotent when already absent) |
 
+`api-create-sandbox`, `api-restore-sandbox`, and `api-create-build-sandbox` require `clone_host` and
+`clone_username`. The control plane resolves them from its `SCM_PROVIDER`, and Modal sets them as
+`VCS_HOST` and `VCS_CLONE_USERNAME` in the sandbox.
+
 ### Example: Create Sandbox
 
 ```bash
@@ -156,7 +156,9 @@ curl -X POST "https://${WORKSPACE}--open-inspect-api-create-sandbox.modal.run" \
     "repo_owner": "your-org",
     "repo_name": "your-repo",
     "control_plane_url": "https://your-control-plane.workers.dev",
-    "sandbox_auth_token": "your-token"
+    "sandbox_auth_token": "your-token",
+    "clone_host": "github.com",
+    "clone_username": "x-access-token"
   }'
 ```
 
@@ -174,9 +176,6 @@ Set via Modal secrets:
 | Variable | Secret | Description |
 |----------|--------|-------------|
 | `ANTHROPIC_API_KEY` | `llm-api-keys` | Anthropic API key for Claude; may be empty when sessions use other providers |
-| `GITHUB_APP_ID` | `github-app` | GitHub App ID for repo access |
-| `GITHUB_APP_PRIVATE_KEY` | `github-app` | GitHub App private key (PKCS#8) |
-| `GITHUB_APP_INSTALLATION_ID` | `github-app` | GitHub App installation ID |
 | `MODAL_API_SECRET` | `internal-api` | Shared secret for control plane auth |
 | `ALLOWED_CONTROL_PLANE_HOSTS` | `internal-api` | Comma-separated allowed hostnames for URL validation |
 
