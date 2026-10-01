@@ -68,9 +68,10 @@ describe("route policy table", () => {
     });
   });
 
-  it("keeps membership deletion behind member admission rather than directory read", () => {
+  it("requires target-aware member removal admission", () => {
     expect(routeFor("DELETE", "/teams/team-1/members/user-1")?.authorization).toMatchObject({
-      allOf: [{ kind: "team", need: "member" }],
+      allOf: [{ kind: "team", need: "removeMember", targetUserIdParam: "userId" }],
+      service: { kind: "deny" },
       auditAllowed: true,
     });
   });

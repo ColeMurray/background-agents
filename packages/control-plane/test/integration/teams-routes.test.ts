@@ -158,7 +158,7 @@ describe("team routes", () => {
     ]);
   });
 
-  it("still audits leaving a team", async () => {
+  it.each([false, true])("still audits leaving a team (archived: %s)", async (archived) => {
     await setRole(OWNER, "member");
     const team = await new TeamStore(env.DB).create({
       slug: "audited-leave",
@@ -168,6 +168,7 @@ describe("team routes", () => {
     const memberships = new TeamMembershipStore(env.DB);
     await memberships.add(team.id, MEMBER, "lead");
     await memberships.add(team.id, OWNER);
+    if (archived) await new TeamStore(env.DB).archive(team.id);
 
     const response = await request(`/teams/${team.id}/members/${OWNER}`, "DELETE");
     expect(response.status).toBe(204);
@@ -846,22 +847,31 @@ describe("team routes", () => {
     }
   );
 
-  it("rejects member creation, sole-lead demotion and departure without changing the membership", async () => {
-    await setRole(OWNER, "member");
-    expect((await request("/teams", "POST", { slug: "blocked", name: "Blocked" })).status).toBe(
-      403
-    );
-    const teams = new TeamStore(env.DB);
-    const memberships = new TeamMembershipStore(env.DB);
-    const team = await teams.create({ slug: "lead", name: "Lead", joinPolicy: "invite_only" });
-    await memberships.add(team.id, OWNER, "lead");
-    const demote = await request(`/teams/${team.id}/members/${OWNER}`, "PUT", { role: "member" });
-    expect(demote.status).toBe(409);
-    expect(await demote.json()).toMatchObject({ code: "last_lead" });
-    expect((await request(`/teams/${team.id}/members/${OWNER}`, "DELETE")).status).toBe(409);
-    expect((await memberships.listForUser(OWNER)).get(team.id)).toBe("lead");
-    expect(await auditEvents(team.id)).toEqual([]);
-  });
+  it.each([false, true])(
+    "rejects sole-lead demotion and departure without changing membership (archived: %s)",
+    async (archived) => {
+      await setRole(OWNER, "member");
+      expect((await request("/teams", "POST", { slug: "blocked", name: "Blocked" })).status).toBe(
+        403
+      );
+      const teams = new TeamStore(env.DB);
+      const memberships = new TeamMembershipStore(env.DB);
+      const team = await teams.create({ slug: "lead", name: "Lead", joinPolicy: "invite_only" });
+      await memberships.add(team.id, OWNER, "lead");
+      if (archived) await teams.archive(team.id);
+      const demote = await request(`/teams/${team.id}/members/${OWNER}`, "PUT", { role: "member" });
+      expect(demote.status).toBe(409);
+      expect(await demote.json()).toMatchObject({ code: "last_lead" });
+      const leave = await request(`/teams/${team.id}/members/${OWNER}`, "DELETE");
+      expect(leave.status).toBe(409);
+      expect(await leave.json()).toMatchObject({ code: "last_lead" });
+      expect(await requestAuditEvents(leave)).toEqual([
+        { action: "authorization.request_allowed" },
+      ]);
+      expect((await memberships.listForUser(OWNER)).get(team.id)).toBe("lead");
+      expect(await auditEvents(team.id)).toEqual([]);
+    }
+  );
 
   it("moves a session with its children and immediately updates both team buckets", async () => {
     await setRole(OWNER, "member");
@@ -973,22 +983,32 @@ describe("team routes", () => {
     }
   );
 
-  it("does not let an ordinary team member remove another member", async () => {
-    await setRole(OWNER, "member");
-    const team = await new TeamStore(env.DB).create({
-      slug: "remove-guard",
-      name: "Remove Guard",
-      joinPolicy: "open",
-    });
-    const memberships = new TeamMembershipStore(env.DB);
-    await memberships.add(team.id, OWNER);
-    await memberships.add(team.id, MEMBER, "lead");
-    const denied = await request(`/teams/${team.id}/members/${MEMBER}`, "DELETE");
-    expect(denied.status).toBe(403);
-    expect(await denied.json()).toMatchObject({ reason_code: "team_capability_required" });
-    expect((await memberships.listForUser(MEMBER)).get(team.id)).toBe("lead");
-    expect(await auditEvents(team.id)).toEqual([]);
-  });
+  it.each([false, true])(
+    "denies and audits ordinary-member removal of another member (archived: %s)",
+    async (archived) => {
+      await setRole(OWNER, "member");
+      const team = await new TeamStore(env.DB).create({
+        slug: "remove-guard",
+        name: "Remove Guard",
+        joinPolicy: "open",
+      });
+      const memberships = new TeamMembershipStore(env.DB);
+      await memberships.add(team.id, OWNER);
+      await memberships.add(team.id, MEMBER, "lead");
+      if (archived) await new TeamStore(env.DB).archive(team.id);
+      const absent = await request(`/teams/${team.id}/members/${OTHER}`, "DELETE");
+      expect(absent.status).toBe(404);
+      expect(await absent.json()).toEqual({ error: "Team membership not found" });
+      const denied = await request(`/teams/${team.id}/members/${MEMBER}`, "DELETE");
+      expect(denied.status).toBe(403);
+      expect(await denied.json()).toMatchObject({ reason_code: "team_capability_required" });
+      expect((await memberships.listForUser(MEMBER)).get(team.id)).toBe("lead");
+      expect(await auditEvents(team.id)).toEqual([]);
+      expect(await requestAuditEvents(denied)).toEqual([
+        { action: "authorization.request_denied" },
+      ]);
+    }
+  );
 
   it("audits adding, changing and removing members with team and target IDs", async () => {
     const team = await new TeamStore(env.DB).create({
@@ -1017,6 +1037,37 @@ describe("team routes", () => {
       expect(JSON.parse(String(row.metadata_json))).toMatchObject({ before: {}, after: {} });
     }
   });
+
+  it.each([
+    ["member", "lead", false],
+    ["member", "lead", true],
+    ["administrator", null, false],
+    ["administrator", null, true],
+  ] as const)(
+    "admits and audits cross-target removal for %s/%s (archived: %s)",
+    async (role, teamRole, archived) => {
+      await setRole(OWNER, role);
+      const teams = new TeamStore(env.DB);
+      const team = await teams.create({
+        slug: "managed-removal",
+        name: "Managed removal",
+        joinPolicy: "open",
+      });
+      const memberships = new TeamMembershipStore(env.DB);
+      await memberships.add(team.id, MEMBER, "lead");
+      await memberships.add(team.id, OTHER);
+      if (teamRole) await memberships.add(team.id, OWNER, teamRole);
+      if (archived) await teams.archive(team.id);
+
+      const response = await request(`/teams/${team.id}/members/${OTHER}`, "DELETE");
+      expect(response.status).toBe(204);
+      expect((await memberships.listForUser(OTHER)).has(team.id)).toBe(false);
+      expect(await requestAuditEvents(response)).toEqual([
+        { action: "authorization.request_allowed" },
+        { action: "team.member_removed" },
+      ]);
+    }
+  );
 
   it("records a single addition when membership requests race", async () => {
     await setRole(OWNER, "member");

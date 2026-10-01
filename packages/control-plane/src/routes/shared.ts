@@ -47,6 +47,7 @@ export type RouteAuthorizationRequirement =
       automationIdParam: string;
     }
   | { kind: "team"; teamIdParam: string; need: keyof TeamCapabilities | "read" | "member" }
+  | { kind: "team"; teamIdParam: string; need: "removeMember"; targetUserIdParam: string }
   | { kind: "session"; sessionIdParam: string; action: SessionAction; enforceAlways?: boolean };
 
 type BotServiceName = Exclude<ServiceName, "web">;
@@ -144,6 +145,9 @@ const AUDITED_ALLOWED_PERMISSIONS = new Set<PermissionId>([
 
 function auditsAllowedRequirement(requirement: RouteAuthorizationRequirement): boolean {
   if (requirement.kind === "session") return requirement.action !== "read";
+  if (requirement.kind === "team") {
+    return requirement.need !== "read" && requirement.need !== "member";
+  }
   if (requirement.kind === "permission") {
     return AUDITED_ALLOWED_PERMISSIONS.has(requirement.permission);
   }
@@ -188,11 +192,16 @@ export function requireTeam(
   need: keyof TeamCapabilities | "read" | "member",
   options?: { teamIdParam?: string; auditAllowed?: boolean }
 ): RouteAuthorization {
+  const requirement: RouteAuthorizationRequirement = {
+    kind: "team",
+    teamIdParam: options?.teamIdParam ?? "id",
+    need,
+  };
   return {
     kind: "active-user",
-    allOf: [{ kind: "team", teamIdParam: options?.teamIdParam ?? "id", need }],
+    allOf: [requirement],
     service: { kind: "deny" },
-    auditAllowed: options?.auditAllowed ?? (need !== "read" && need !== "member"),
+    auditAllowed: options?.auditAllowed ?? auditsAllowedRequirement(requirement),
   };
 }
 
