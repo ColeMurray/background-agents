@@ -1,7 +1,6 @@
 import type { Cache, ScopedMutator } from "swr";
 import { unstable_serialize } from "swr/infinite";
 import { browserApiFetch, type BrowserApiPath } from "./browser-api-fetch";
-import { isMeTeamsCacheKey } from "./me-teams-cache";
 import { isSessionListKey } from "./session-list";
 import type { SessionVisibility } from "@open-inspect/shared/types/teams";
 
@@ -99,8 +98,6 @@ export async function updateSessionScope(
   ]);
   await Promise.all([
     Promise.resolve().then(onUpdated),
-    // Membership data drives access controls and must stay available during revalidation.
-    mutate(isMeTeamsCacheKey),
     mutate(isSessionScopeCacheKey),
     ...infiniteKeys.map((key) => mutate(key)),
   ]);

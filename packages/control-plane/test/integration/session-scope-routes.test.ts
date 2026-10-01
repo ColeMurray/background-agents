@@ -574,4 +574,35 @@ describe("session scope routes", () => {
     }
     expect((await fetchMode("/sessions/team-session", "on")).status).toBe(404);
   });
+
+  it("limits team-owned collaborators and candidates to members of the owning team", async () => {
+    await session("root");
+    const team = await new TeamStore(env.DB).create({
+      slug: "owning",
+      name: "Owning",
+      joinPolicy: "invite_only",
+    });
+    const memberships = new TeamMembershipStore(env.DB);
+    await memberships.add(team.id, OWNER);
+    await env.DB.prepare("UPDATE sessions SET owner_team_id = ? WHERE id = 'root'")
+      .bind(team.id)
+      .run();
+    const candidateIds = async () =>
+      (await (await request("/sessions/root/collaborator-candidates")).json<{ userId: string }[]>())
+        .map((candidate) => candidate.userId)
+        .sort();
+    const path = `/sessions/root/collaborators/${COLLABORATOR}`;
+
+    expect(await candidateIds()).toEqual([OWNER]);
+    const rejected = await request(path, "PUT");
+    expect(rejected.status).toBe(409);
+    expect(await rejected.json()).toMatchObject({ code: "not_team_member" });
+    expect(await new SessionCollaboratorStore(env.DB).listUserIds("root")).toEqual([]);
+
+    await memberships.add(team.id, COLLABORATOR);
+    expect(await candidateIds()).toEqual([OWNER, COLLABORATOR].sort());
+    const added = await request(path, "PUT");
+    expect(added.status).toBe(200);
+    expect(await added.json()).toMatchObject({ status: "updated" });
+  });
 });

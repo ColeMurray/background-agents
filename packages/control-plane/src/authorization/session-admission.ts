@@ -55,17 +55,17 @@ export function effectiveSessionCapabilities(
   if (viewer.kind !== "user" || resolverDecides(mode, row, "read")) {
     return capabilities;
   }
-  const has = (action: SessionAction) =>
+  const has = (action: SessionAction, resolved: boolean) =>
     resolverDecides(mode, row, action)
-      ? checkSessionAccess(viewer, row, action).allowed
+      ? resolved
       : viewer.permissions.includes(legacyPermissionForAction(action));
   return {
     ...capabilities,
-    canRead: has("read"),
-    canCollaborate: has("collaborate"),
-    canManageLifecycle: has("lifecycle"),
-    canDelete: has("delete"),
-    canSandbox: has("sandbox"),
+    canRead: has("read", capabilities.canRead),
+    canCollaborate: has("collaborate", capabilities.canCollaborate),
+    canManageLifecycle: has("lifecycle", capabilities.canManageLifecycle),
+    canDelete: has("delete", capabilities.canDelete),
+    canSandbox: has("sandbox", capabilities.canSandbox),
   };
 }
 

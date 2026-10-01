@@ -54,10 +54,14 @@ sessionBatchArchiveRoutes.post(
         const skipped: SessionBatchArchiveResponse["skipped"] = [];
         for (const sessionId of body.sessionIds) {
           const admission = await evaluateSessionAdmission(ctx, env, sessionId, "lifecycle", null);
-          if (admission.kind !== "allowed") {
+          if (admission.kind === "not_found") {
+            skipped.push({ sessionId, reason: "not_found" });
+            continue;
+          }
+          if (admission.kind === "action_denied") {
             skipped.push({
               sessionId,
-              reason: admission.kind === "not_found" ? "not_found" : "missing_permission",
+              reason: admission.reason === "not_member" ? "not_member" : "missing_permission",
             });
             continue;
           }

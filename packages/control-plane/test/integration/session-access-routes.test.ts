@@ -575,6 +575,22 @@ describe("HTTP session access by enforcement mode", () => {
     }
   );
 
+  it.each(["off", "shadow", "on"] as const)(
+    "reports team membership, not permission, when a workspace owner batch-archives a team session in %s mode",
+    async (mode) => {
+      const { sessionName } = await session("workspace");
+      const response = await fetchMode("/sessions/batch-archive", mode, {
+        method: "POST",
+        body: JSON.stringify({ sessionIds: [sessionName] }),
+      });
+      expect(response.status).toBe(200);
+      expect(await response.json()).toEqual({
+        results: [],
+        skipped: [{ sessionId: sessionName, reason: "not_member" }],
+      });
+    }
+  );
+
   it("lists, idempotently adds, and removes collaborators", async () => {
     const { sessionName } = await session("private");
     const store = new SessionCollaboratorStore(env.DB);
