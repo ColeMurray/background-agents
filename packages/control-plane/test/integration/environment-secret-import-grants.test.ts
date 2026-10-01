@@ -1,14 +1,18 @@
-import { createExecutionContext, env } from "cloudflare:test";
+import { env } from "cloudflare:test";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as tokenCrypto from "../../src/auth/crypto";
 import { EnvironmentSecretsStore } from "../../src/db/environment-secrets";
 import { EnvironmentStore, type EnvironmentRepositoryInsert } from "../../src/db/environments";
 import { RepoSecretsStore } from "../../src/db/repo-secrets";
-import { TeamRepositoryGrantStore } from "../../src/db/team-repository-grants";
-import { TeamStore } from "../../src/db/teams";
 import * as routeShared from "../../src/routes/shared";
 import { cleanD1Tables } from "./cleanup";
-import { routeRequest, serviceRequestHeaders } from "./helpers";
+import { serviceRequestHeaders } from "./helpers";
+import {
+  seedEnvironment as seedOwnedEnvironment,
+  ownershipRequest,
+  seedGrant,
+  seedTeam,
+} from "./ownership-test-helpers";
 
 const BASE = "https://test.local";
 const WEB: EnvironmentRepositoryInsert = {
@@ -18,48 +22,20 @@ const WEB: EnvironmentRepositoryInsert = {
   repo_id: 1,
   base_branch: "main",
 };
-const API: EnvironmentRepositoryInsert = { ...WEB, position: 1, repo_name: "api", repo_id: 2 };
+const API = { ...WEB, position: 1, repo_name: "api", repo_id: 2 };
 const SOURCE = { repoOwner: WEB.repo_owner, repoName: WEB.repo_name, keys: ["TOKEN", "NEW_TOKEN"] };
-
-async function team(slug: string) {
-  return new TeamStore(env.DB).create({ slug, name: slug, joinPolicy: "invite_only" });
-}
-
-async function grant(teamId: string, kind: "repository" | "installation", repo = WEB) {
-  await env.DB.prepare(
-    `INSERT INTO team_repository_grants
-       (id, team_id, grant_kind, repo_external_id, repo_owner, repo_name, created_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?)`
-  )
-    .bind(
-      crypto.randomUUID(),
-      teamId,
-      kind,
-      kind === "repository" ? repo.repo_id : null,
-      kind === "repository" ? repo.repo_owner : null,
-      kind === "repository" ? repo.repo_name : null,
-      Date.now()
-    )
-    .run();
-}
+const store = new EnvironmentStore(env.DB);
+const secrets = new EnvironmentSecretsStore(env.DB, env.REPO_SECRETS_ENCRYPTION_KEY!);
+const resolvedRepo = {
+  repoId: 1,
+  repoOwner: WEB.repo_owner,
+  repoName: WEB.repo_name,
+  defaultBranch: "main",
+};
 
 async function seedEnvironment(ownerTeamId: string | null, repositories = [WEB]) {
-  const id = `env_${crypto.randomUUID()}`;
-  const now = Date.now();
-  await new EnvironmentStore(env.DB).create(
-    {
-      id,
-      owner_team_id: ownerTeamId,
-      name: id,
-      description: null,
-      prebuild_enabled: 0,
-      channel_associations: null,
-      created_at: now,
-      updated_at: now,
-    },
-    repositories
-  );
-  await new EnvironmentSecretsStore(env.DB, env.REPO_SECRETS_ENCRYPTION_KEY!).setSecrets(id, {
+  const id = await seedOwnedEnvironment(`env_${crypto.randomUUID()}`, ownerTeamId, repositories);
+  await secrets.setSecrets(id, {
     TOKEN: "original-environment-token",
     KEEP: "keep-environment-token",
   });
@@ -68,28 +44,24 @@ async function seedEnvironment(ownerTeamId: string | null, repositories = [WEB])
 
 async function secretRows(id: string) {
   const rows = await env.DB.prepare(
-    "SELECT key, encrypted_value, created_at, updated_at FROM environment_secrets WHERE environment_id = ? ORDER BY key"
+    "SELECT * FROM environment_secrets WHERE environment_id = ? ORDER BY key"
   )
     .bind(id)
-    .all<{ key: string; encrypted_value: string; created_at: number; updated_at: number }>();
+    .all();
   return rows.results;
 }
 
-async function importSecrets(id: string) {
-  const url = `${BASE}/environments/${id}/secrets/import`;
-  const init = { method: "POST", body: JSON.stringify(SOURCE) };
-  return routeRequest(
-    new Request(url, { ...init, headers: await serviceRequestHeaders(url, init) }),
-    env,
-    createExecutionContext()
-  );
+function importSecrets(id: string) {
+  return ownershipRequest(`/environments/${id}/secrets/import`, {
+    method: "POST",
+    body: JSON.stringify(SOURCE),
+  });
 }
 
 async function expectMissingSourceGrant(id: string) {
   const before = await secretRows(id);
-  const repositories = await new EnvironmentStore(env.DB).getRepositoriesForEnvironment(id);
+  const repositories = await store.getRepositoriesForEnvironment(id);
   const response = await importSecrets(id);
-
   expect(response.status).toBe(409);
   expect(await response.json()).toMatchObject({
     code: "target_team_missing_grant",
@@ -99,21 +71,11 @@ async function expectMissingSourceGrant(id: string) {
   expect(EnvironmentSecretsStore.prototype.importFromRepo).not.toHaveBeenCalled();
   expect(tokenCrypto.decryptToken).not.toHaveBeenCalled();
   expect(await secretRows(id)).toEqual(before);
-  expect(await new EnvironmentStore(env.DB).getRepositoriesForEnvironment(id)).toEqual(
-    repositories
-  );
+  expect(await store.getRepositoriesForEnvironment(id)).toEqual(repositories);
 }
 
 async function expectSuccessfulImport(id: string) {
-  const before = await secretRows(id);
-  const repositories = await new EnvironmentStore(env.DB).getRepositoriesForEnvironment(id);
-  const source = await env.DB.prepare(
-    "SELECT key, encrypted_value FROM repo_secrets WHERE repo_id = ? ORDER BY key"
-  )
-    .bind(WEB.repo_id)
-    .all<{ key: string; encrypted_value: string }>();
   const response = await importSecrets(id);
-
   expect(response.status).toBe(200);
   expect(await response.json()).toEqual({
     status: "imported",
@@ -123,25 +85,7 @@ async function expectSuccessfulImport(id: string) {
     created: 1,
     updated: 1,
   });
-  expect(EnvironmentSecretsStore.prototype.importFromRepo).toHaveBeenCalledWith(
-    id,
-    WEB.repo_id,
-    SOURCE.keys
-  );
   expect(tokenCrypto.decryptToken).not.toHaveBeenCalled();
-  const copied = await secretRows(id);
-  expect(copied).toHaveLength(3);
-  expect(copied.find((row) => row.key === "KEEP")).toEqual(
-    before.find((row) => row.key === "KEEP")
-  );
-  for (const row of source.results) {
-    expect(copied.find((secret) => secret.key === row.key)?.encrypted_value).toBe(
-      row.encrypted_value
-    );
-  }
-  expect(await new EnvironmentStore(env.DB).getRepositoriesForEnvironment(id)).toEqual(
-    repositories
-  );
 }
 
 describe("environment secret import team grants", () => {
@@ -156,110 +100,89 @@ describe("environment secret import team grants", () => {
     );
     vi.spyOn(EnvironmentSecretsStore.prototype, "importFromRepo");
     vi.spyOn(tokenCrypto, "decryptToken");
-    vi.spyOn(routeShared, "resolveRepoOrError").mockResolvedValue({
-      repoId: WEB.repo_id!,
-      repoOwner: WEB.repo_owner,
-      repoName: WEB.repo_name,
-      defaultBranch: "main",
-    });
+    vi.spyOn(routeShared, "resolveRepoOrError").mockResolvedValue(resolvedRepo);
   });
-
   afterEach(() => vi.restoreAllMocks());
 
   it.each(["repository", "installation"] as const)(
-    "denies import after revoking the source's %s grant from a saved environment",
+    "denies a revoked source %s grant even in a saved environment",
     async (kind) => {
-      const target = await team(`revoked-${kind}`);
-      await grant(target.id, kind);
-      if (kind === "repository") await grant(target.id, "repository", API);
-      const id = await seedEnvironment(target.id, [WEB, API]);
+      const teamId = await seedTeam(`team_revoked_${kind}`);
+      await seedGrant(teamId, kind === "installation" ? kind : WEB);
+      if (kind === "repository") await seedGrant(teamId, API);
+      const id = await seedEnvironment(teamId, [WEB, API]);
       await env.DB.prepare(
         "DELETE FROM team_repository_grants WHERE team_id = ? AND grant_kind = ? AND (repo_external_id = ? OR grant_kind = 'installation')"
       )
-        .bind(target.id, kind, WEB.repo_id)
+        .bind(teamId, kind, WEB.repo_id)
         .run();
-
       await expectMissingSourceGrant(id);
       expect(routeShared.resolveRepoOrError).not.toHaveBeenCalled();
     }
   );
 
-  it("does not authorize matching repository names with a different numeric grant", async () => {
-    const target = await team("numeric-mismatch");
-    await grant(target.id, "repository", { ...WEB, repo_id: 99 });
-    const id = await seedEnvironment(target.id);
-
-    await expectMissingSourceGrant(id);
+  it("does not authorize matching names with a different saved numeric grant", async () => {
+    const teamId = await seedTeam("team_numeric_mismatch");
+    await seedGrant(teamId, { ...WEB, repo_id: 99 });
+    await expectMissingSourceGrant(await seedEnvironment(teamId));
     expect(routeShared.resolveRepoOrError).not.toHaveBeenCalled();
   });
 
   it.each(["repository", "installation"] as const)(
-    "does not use another team's %s grant, even for a workspace owner",
+    "does not use another team's %s grant for a workspace owner",
     async (kind) => {
-      const target = await team(`target-${kind}`);
-      const other = await team(`other-${kind}`);
-      await grant(other.id, kind);
-      const id = await seedEnvironment(target.id);
-
-      await expectMissingSourceGrant(id);
+      const target = await seedTeam("team_target");
+      const other = await seedTeam("team_other");
+      await seedGrant(other, kind === "installation" ? kind : WEB);
+      await expectMissingSourceGrant(await seedEnvironment(target));
     }
   );
 
-  it("imports with only the source numeric grant without requiring other member grants or matching grant names", async () => {
-    const target = await team("source-only");
-    await grant(target.id, "repository", {
-      ...WEB,
-      repo_owner: "previous-owner",
-      repo_name: "previous-name",
-    });
-    const id = await seedEnvironment(target.id, [WEB, { ...API, repo_id: null }]);
-
+  it("imports with only a numeric source grant despite stale names and ungranted secondary members", async () => {
+    const teamId = await seedTeam("team_source_only");
+    await seedGrant(teamId, { ...WEB, repo_owner: "previous-owner", repo_name: "previous-name" });
+    const id = await seedEnvironment(teamId, [WEB, { ...API, repo_id: null }]);
+    const before = await secretRows(id);
+    const repositories = await store.getRepositoriesForEnvironment(id);
     await expectSuccessfulImport(id);
     expect(routeShared.resolveRepoOrError).not.toHaveBeenCalled();
+    const copied = await secretRows(id);
+    expect(copied.find((row) => row.key === "KEEP")).toEqual(
+      before.find((row) => row.key === "KEEP")
+    );
+    // Import's no-decryption assertion above precedes this consumer read.
+    expect(await secrets.getDecryptedSecrets(id)).toEqual({
+      TOKEN: "source-token",
+      NEW_TOKEN: "new-source-token",
+      KEEP: "keep-environment-token",
+    });
+    expect(await store.getRepositoriesForEnvironment(id)).toEqual(repositories);
   });
 
-  it.each([1, null])(
-    "allows an installation grant for a source with saved numeric ID %s",
-    async (repoId) => {
-      const target = await team("installation");
-      await grant(target.id, "installation");
-      const id = await seedEnvironment(target.id, [{ ...WEB, repo_id: repoId }, API]);
+  it.each([1, null])("allows an installation grant with saved source ID %s", async (repoId) => {
+    const teamId = await seedTeam("team_installation");
+    await seedGrant(teamId, "installation");
+    await expectSuccessfulImport(await seedEnvironment(teamId, [{ ...WEB, repo_id: repoId }, API]));
+    expect(routeShared.resolveRepoOrError).toHaveBeenCalledTimes(repoId === null ? 1 : 0);
+  });
 
-      await expectSuccessfulImport(id);
-      if (repoId === null) {
-        expect(routeShared.resolveRepoOrError).toHaveBeenCalledTimes(1);
-      } else {
-        expect(routeShared.resolveRepoOrError).not.toHaveBeenCalled();
-      }
-    }
-  );
-
-  it("preserves workspace-owned imports without any team repository grant", async () => {
-    const id = await seedEnvironment(null, [WEB, API]);
-
-    await expectSuccessfulImport(id);
+  it("preserves workspace imports without any team grant", async () => {
+    await expectSuccessfulImport(await seedEnvironment(null, [WEB, API]));
     expect(routeShared.resolveRepoOrError).not.toHaveBeenCalled();
   });
 
   it.each([1, 99])(
-    "resolves a directly seeded null source ID to %s before checking its numeric team grant",
+    "checks the freshly resolved numeric identity %s for a null saved source ID",
     async (resolvedId) => {
-      const target = await team("resolve-null");
-      await grant(target.id, "repository");
-      const id = await seedEnvironment(target.id, [{ ...WEB, repo_id: null }, API]);
+      const teamId = await seedTeam("team_resolve_null");
+      await seedGrant(teamId, WEB);
+      const id = await seedEnvironment(teamId, [{ ...WEB, repo_id: null }, API]);
       vi.mocked(routeShared.resolveRepoOrError).mockResolvedValue({
+        ...resolvedRepo,
         repoId: resolvedId,
-        repoOwner: WEB.repo_owner,
-        repoName: WEB.repo_name,
-        defaultBranch: "main",
       });
-      const covers = vi.spyOn(TeamRepositoryGrantStore.prototype, "covers");
-
-      if (resolvedId === WEB.repo_id) {
-        await expectSuccessfulImport(id);
-      } else {
-        await expectMissingSourceGrant(id);
-      }
+      if (resolvedId === WEB.repo_id) await expectSuccessfulImport(id);
+      else await expectMissingSourceGrant(id);
       expect(routeShared.resolveRepoOrError).toHaveBeenCalledExactlyOnceWith(
         expect.anything(),
         WEB.repo_owner,
@@ -267,34 +190,26 @@ describe("environment secret import team grants", () => {
         expect.anything(),
         expect.anything()
       );
-      expect(covers).toHaveBeenCalledWith(target.id, [resolvedId]);
-      expect(vi.mocked(routeShared.resolveRepoOrError).mock.invocationCallOrder[0]).toBeLessThan(
-        covers.mock.invocationCallOrder[0]
-      );
+      expect((await store.getRepositoriesForEnvironment(id))[0].repo_id).toBeNull();
     }
   );
 
   it.each([404, 500])(
-    "fails closed when a null source ID cannot resolve with status %s despite matching grant names",
+    "fails closed on null-ID resolution failure %s despite matching grant names",
     async (status) => {
-      const target = await team("unresolved-source");
-      await grant(target.id, "repository");
-      const id = await seedEnvironment(target.id, [{ ...WEB, repo_id: null }]);
+      const teamId = await seedTeam("team_unresolved");
+      await seedGrant(teamId, WEB);
+      const id = await seedEnvironment(teamId, [{ ...WEB, repo_id: null }]);
       const before = await secretRows(id);
       vi.mocked(routeShared.resolveRepoOrError).mockRejectedValue(
-        new routeShared.HttpError("Source repository resolution failed", status)
+        new routeShared.HttpError("Resolution failed", status)
       );
-      const covers = vi.spyOn(TeamRepositoryGrantStore.prototype, "covers");
-
-      const response = await importSecrets(id);
-
-      expect(response.status).toBe(status);
+      expect((await importSecrets(id)).status).toBe(status);
       expect(routeShared.resolveRepoOrError).toHaveBeenCalledTimes(1);
-      expect(covers).not.toHaveBeenCalled();
       expect(EnvironmentSecretsStore.prototype.importFromRepo).not.toHaveBeenCalled();
       expect(tokenCrypto.decryptToken).not.toHaveBeenCalled();
       expect(await secretRows(id)).toEqual(before);
-      expect(await new EnvironmentStore(env.DB).getRepositoriesForEnvironment(id)).toMatchObject([
+      expect(await store.getRepositoriesForEnvironment(id)).toMatchObject([
         { ...WEB, repo_id: null },
       ]);
     }

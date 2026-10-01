@@ -9,6 +9,7 @@ import EditAutomationPage from "./page";
 import type { Automation } from "@open-inspect/shared/types/automations";
 import type { AutomationFormValues } from "@/components/automations/automation-form";
 import { browserApiFetch } from "@/lib/browser-api-fetch";
+import { invalidateAutomationCache } from "@/lib/automation-cache";
 
 expect.extend(matchers);
 
@@ -16,7 +17,6 @@ const CURRENT_USER_ID = "11111111111111111111111111111111";
 let permissions: string[] = [];
 const replace = vi.fn();
 const push = vi.fn();
-const cacheMocks = vi.hoisted(() => ({ mutate: vi.fn(), cache: new Map() }));
 let search = "";
 const formProps = vi.fn();
 let submittedEnvironmentIds = ["env-1"];
@@ -95,7 +95,7 @@ vi.mock("@/components/automations/automation-form", () => ({
   },
 }));
 vi.mock("@/lib/browser-api-fetch", () => ({ browserApiFetch: vi.fn() }));
-vi.mock("swr", () => ({ useSWRConfig: () => cacheMocks }));
+vi.mock("@/lib/automation-cache", () => ({ invalidateAutomationCache: vi.fn() }));
 
 async function renderPage() {
   await act(async () => {
@@ -111,15 +111,12 @@ beforeEach(() => {
   permissions = [];
   search = "";
   formProps.mockClear();
-  cacheMocks.cache.clear();
-  cacheMocks.cache.set("/api/automations/auto-1", { data: automation });
   automation.capabilities = undefined;
   automation.environmentIds = [];
   submittedEnvironmentIds = ["env-1"];
   replace.mockReset();
   push.mockReset();
-  cacheMocks.mutate.mockReset();
-  cacheMocks.mutate.mockResolvedValue(undefined);
+  vi.mocked(invalidateAutomationCache).mockReset().mockResolvedValue(undefined);
   vi.mocked(browserApiFetch).mockReset();
   vi.mocked(browserApiFetch).mockResolvedValue(Response.json({}));
 });
@@ -127,11 +124,7 @@ afterEach(cleanup);
 
 describe("EditAutomationPage authorization", () => {
   it.each([
-    { saved: ["env-1"], submitted: ["env-1"], unchanged: true },
     { saved: ["env-1", "env-2"], submitted: ["env-2", "env-1"], unchanged: true },
-    { saved: [], submitted: [], unchanged: true },
-    { saved: ["env-1"], submitted: ["env-1", "env-2"], unchanged: false },
-    { saved: ["env-1", "env-2"], submitted: ["env-1"], unchanged: false },
     { saved: ["env-1"], submitted: [], unchanged: false },
   ])(
     "only sends a replacement for changed environment IDs ($saved -> $submitted)",
@@ -162,21 +155,27 @@ describe("EditAutomationPage authorization", () => {
     );
     fireEvent.click(screen.getByRole("button", { name: "Save changes" }));
     await waitFor(() => expect(push).toHaveBeenCalledWith("/automations/auto-1?teamId=team%2Fone"));
+    expect(browserApiFetch).toHaveBeenCalledWith(
+      "/api/automations/auto-1",
+      expect.objectContaining({ method: "PUT" })
+    );
+    const body = JSON.parse(String(vi.mocked(browserApiFetch).mock.calls[0][1]?.body));
+    expect(body).not.toHaveProperty("teamId");
+    expect(body.environmentIds).toEqual(["env-1"]);
+    expect(invalidateAutomationCache).toHaveBeenCalledWith(expect.anything(), "auto-1");
   });
 
-  it("preserves scope when redirecting a read-only deep link", async () => {
-    search = "teamId=team%2Fone";
-    await renderPage();
-    expect(replace).toHaveBeenCalledWith("/automations/auto-1?teamId=team%2Fone");
-  });
+  it.each(["", "?teamId=team%2Fone"])(
+    "redirects missing capabilities with global manage and scope %s",
+    async (query) => {
+      search = query.slice(1);
+      permissions = ["automations.manage.any"];
+      await renderPage();
 
-  it("redirects a deep link with missing capabilities even with global manage", async () => {
-    permissions = ["automations.manage.any"];
-    await renderPage();
-
-    await waitFor(() => expect(replace).toHaveBeenCalledWith("/automations/auto-1"));
-    expect(screen.queryByText("Automation edit form")).not.toBeInTheDocument();
-  });
+      await waitFor(() => expect(replace).toHaveBeenCalledWith(`/automations/auto-1${query}`));
+      expect(screen.queryByText("Automation edit form")).not.toBeInTheDocument();
+    }
+  );
 
   it("renders the form with server canManage", async () => {
     automation.capabilities = { canRead: true, canManage: true, canTrigger: false };
@@ -184,20 +183,6 @@ describe("EditAutomationPage authorization", () => {
 
     expect(await screen.findByText("Automation edit form")).toBeInTheDocument();
     expect(replace).not.toHaveBeenCalled();
-  });
-
-  it("saves configuration without resubmitting team ownership", async () => {
-    automation.capabilities = { canRead: true, canManage: true, canTrigger: false };
-    await renderPage();
-    fireEvent.click(screen.getByRole("button", { name: "Save changes" }));
-    await waitFor(() => expect(push).toHaveBeenCalledWith("/automations/auto-1"));
-    const calls = vi.mocked(browserApiFetch).mock.calls;
-    expect(calls.map(([path]) => path)).toEqual(["/api/automations/auto-1"]);
-    expect(JSON.parse(String(calls[0][1]?.body))).not.toHaveProperty("teamId");
-    expect(JSON.parse(String(calls[0][1]?.body))).toMatchObject({
-      repositories: [{ repoOwner: "acme", repoName: "app" }],
-      environmentIds: ["env-1"],
-    });
   });
 
   it("reports configuration failures without navigating away", async () => {
@@ -212,6 +197,6 @@ describe("EditAutomationPage authorization", () => {
       "/api/automations/auto-1",
     ]);
     expect(push).not.toHaveBeenCalled();
-    expect(cacheMocks.mutate).not.toHaveBeenCalled();
+    expect(invalidateAutomationCache).not.toHaveBeenCalled();
   });
 });

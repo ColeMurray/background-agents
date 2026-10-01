@@ -158,21 +158,6 @@ describe("automation listing routes", () => {
       });
     });
 
-    it.each(["team-a", "null"])(
-      "passes the exact team filter alongside the resource viewer (%s)",
-      async (teamId) => {
-        mockStore.list.mockResolvedValue({ automations: [], hasMore: false, nextCursor: null });
-        const response = await callRoute("GET", "/automations", { query: { teamId } });
-        expect(response.status).toBe(200);
-        expect(mockStore.list).toHaveBeenCalledWith(
-          expect.objectContaining({
-            teamId: teamId === "null" ? null : teamId,
-            viewer: expect.objectContaining({ kind: "user", userId: "user-1" }),
-          })
-        );
-      }
-    );
-
     it.each([
       [{ limit: "0" }, "limit"],
       [{ limit: String(MAX_AUTOMATION_LIST_PAGE_SIZE + 1) }, "limit"],

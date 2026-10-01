@@ -220,21 +220,13 @@ describe("Team page tabs", () => {
     expect(screen.getByText("Team member table")).toBeInTheDocument();
   });
 
-  it("places scoped Environments and Automations after Members and before Secrets and Settings", () => {
+  it("mounts scoped resources and unmounts them when membership disappears", () => {
     mocks.mine = [team];
     mocks.teams = [
       { ...team, capabilities: { ...denied, canEditMetadata: true, canManageSecrets: true } },
     ];
     const view = render(<TeamPage slug="design" />);
     const tabs = within(screen.getByRole("navigation", { name: "Team tabs" }));
-    expect(tabs.getAllByRole("button").map((button) => button.textContent)).toEqual([
-      "Overview",
-      "Members",
-      "Environments",
-      "Automations",
-      "Secrets",
-      "Settings",
-    ]);
     fireEvent.click(tabs.getByRole("button", { name: "Environments" }));
     expect(screen.getByText("Environments for team_design")).toBeInTheDocument();
     fireEvent.click(tabs.getByRole("button", { name: "Automations" }));

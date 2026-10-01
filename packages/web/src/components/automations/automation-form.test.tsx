@@ -58,10 +58,7 @@ vi.mock("@/hooks/use-resource-teams", () => ({
       { id: "team-1", name: "Engineering" },
       { id: "team-2", name: "Design" },
     ],
-    allTeams: [
-      { id: "team-1", name: "Engineering" },
-      { id: "team-2", name: "Design" },
-    ],
+    allTeams: [],
     loading: false,
     error: null,
     allowWorkspace: scopeMocks.allowWorkspace,
@@ -174,30 +171,34 @@ describe("automation cron submission", () => {
     expect(onSubmit).toHaveBeenCalledWith(
       expect.objectContaining({ teamId: "team-2", repositories: [], environmentIds: [] })
     );
+    scopeMocks.allowWorkspace = false;
+    fireEvent.change(screen.getByRole("combobox", { name: "Team" }), { target: { value: "" } });
+    expect(screen.getByRole("button", { name: "Create Automation" })).toBeDisabled();
+    fireEvent.submit(container.querySelector("form")!);
+    expect(onSubmit).toHaveBeenCalledTimes(1);
   });
 
-  it("shows team ownership read-only and excludes it from edit submissions", () => {
+  it.each(["team-1", null])("keeps owner %s read-only and omits edit ownership", (teamId) => {
+    scopeMocks.allowWorkspace = false;
     const onSubmit = vi.fn();
-    const initialValues = {
-      name: "Review",
-      instructions: "Review code",
-      teamId: "team-1",
-      repositories: singleRepository,
-    };
     const { container } = render(
       <AutomationForm
         mode="edit"
         submitting={false}
         onSubmit={onSubmit}
-        initialValues={initialValues}
+        initialValues={{
+          name: "Review",
+          instructions: "Review code",
+          teamId,
+          repositories: singleRepository,
+        }}
       />
     );
     expect(screen.getByRole("combobox", { name: "Team" })).toBeDisabled();
-    expect(screen.getByRole("combobox", { name: "Team" })).toHaveValue("team-1");
-    fireEvent.change(screen.getByRole("combobox", { name: "Team" }), {
-      target: { value: "team-2" },
-    });
-    expect(scopeMocks.repos).toHaveBeenLastCalledWith(true, "team-1");
+    expect(screen.getByRole("combobox", { name: "Team" })).toHaveValue(teamId ?? "");
+    if (!teamId) {
+      expect(screen.getByRole("option", { name: "Workspace (no team)" })).toBeInTheDocument();
+    }
     fireEvent.submit(container.querySelector("form")!);
     expect(onSubmit).toHaveBeenCalledTimes(1);
     expect(onSubmit.mock.calls[0][0]).not.toHaveProperty("teamId");
@@ -207,21 +208,6 @@ describe("automation cron submission", () => {
   it("requests workspace-owned environments for a workspace automation", () => {
     render(<AutomationForm mode="create" submitting={false} onSubmit={vi.fn()} />);
     expect(scopeMocks.environments).toHaveBeenLastCalledWith(null);
-  });
-
-  it("shows existing workspace ownership even when creation requires a team", () => {
-    scopeMocks.allowWorkspace = false;
-    render(
-      <AutomationForm
-        mode="edit"
-        submitting={false}
-        onSubmit={vi.fn()}
-        initialValues={{ teamId: null }}
-      />
-    );
-    expect(screen.getByRole("combobox", { name: "Team" })).toHaveValue("");
-    expect(screen.getByRole("option", { name: "Workspace (no team)" })).toBeInTheDocument();
-    expect(screen.getByRole("combobox", { name: "Team" })).toBeDisabled();
   });
 
   it("locks provider authentication while submitting", () => {
@@ -632,10 +618,12 @@ describe("environment binding", () => {
   };
 
   it.each([undefined, false])(
-    "allows unchanged saved targets without canUse %s while disabling their choices",
+    "permits unchanged and cleared edits but blocks changed targets without canUse %s",
     (canUse) => {
+      const capabilities = canUse === undefined ? undefined : { canUse };
       environmentsValue = [
-        { ...fullstackEnvironment, capabilities: canUse === undefined ? undefined : { canUse } },
+        { ...fullstackEnvironment, capabilities },
+        { ...fullstackEnvironment, id: "env_2", name: "Data", capabilities },
       ];
       const onSubmit = vi.fn();
       const { container } = render(
@@ -643,14 +631,24 @@ describe("environment binding", () => {
           mode="edit"
           submitting={false}
           onSubmit={onSubmit}
-          initialValues={{ ...scheduleBase, environmentIds: ["env_1"] }}
+          initialValues={{ ...scheduleBase, environmentIds: ["env_1", "env_2"] }}
         />
       );
       openRepositoryPicker();
-      expect(screen.getByRole("button", { name: /Fullstack/ })).toBeDisabled();
+      expect(screen.getByRole("checkbox", { name: /Fullstack/ })).toBeDisabled();
       expect(screen.getByRole("button", { name: "Save Changes" })).toBeEnabled();
       fireEvent.submit(container.querySelector("form")!);
-      expect(onSubmit).toHaveBeenCalledWith(expect.objectContaining({ environmentIds: ["env_1"] }));
+      expect(onSubmit).toHaveBeenLastCalledWith(
+        expect.objectContaining({ environmentIds: ["env_1", "env_2"] })
+      );
+      fireEvent.click(screen.getByRole("button", { name: "Select One" }));
+      expect(screen.getByRole("button", { name: "Save Changes" })).toBeDisabled();
+      fireEvent.submit(container.querySelector("form")!);
+      expect(onSubmit).toHaveBeenCalledTimes(1);
+      fireEvent.click(screen.getByRole("button", { name: "No repository" }));
+      expect(screen.getByRole("button", { name: "Save Changes" })).toBeEnabled();
+      fireEvent.submit(container.querySelector("form")!);
+      expect(onSubmit).toHaveBeenLastCalledWith(expect.objectContaining({ environmentIds: [] }));
     }
   );
 
@@ -668,45 +666,6 @@ describe("environment binding", () => {
     expect(screen.getByRole("button", { name: "Create Automation" })).toBeDisabled();
     fireEvent.submit(container.querySelector("form")!);
     expect(onSubmit).not.toHaveBeenCalled();
-  });
-
-  it("requires use permission for a changed nonempty environment selection", () => {
-    environmentsValue = [
-      { ...fullstackEnvironment, capabilities: { canUse: false } },
-      { ...fullstackEnvironment, id: "env_2", name: "Data", capabilities: { canUse: false } },
-    ];
-    const onSubmit = vi.fn();
-    const { container } = render(
-      <AutomationForm
-        mode="edit"
-        submitting={false}
-        onSubmit={onSubmit}
-        initialValues={{ ...scheduleBase, environmentIds: ["env_1", "env_2"] }}
-      />
-    );
-    openRepositoryPicker();
-    fireEvent.click(screen.getByRole("button", { name: "Select One" }));
-    expect(screen.getByRole("button", { name: "Save Changes" })).toBeDisabled();
-    fireEvent.submit(container.querySelector("form")!);
-    expect(onSubmit).not.toHaveBeenCalled();
-  });
-
-  it("allows clearing all saved environments without use permission", () => {
-    environmentsValue = [{ ...fullstackEnvironment, capabilities: { canUse: false } }];
-    const onSubmit = vi.fn();
-    const { container } = render(
-      <AutomationForm
-        mode="edit"
-        submitting={false}
-        onSubmit={onSubmit}
-        initialValues={{ ...scheduleBase, environmentIds: ["env_1"] }}
-      />
-    );
-    openRepositoryPicker();
-    fireEvent.click(screen.getByRole("button", { name: "No repository" }));
-    expect(screen.getByRole("button", { name: "Save Changes" })).toBeEnabled();
-    fireEvent.submit(container.querySelector("form")!);
-    expect(onSubmit).toHaveBeenCalledWith(expect.objectContaining({ environmentIds: [] }));
   });
 
   it("submits the selected environment in single-select mode", () => {

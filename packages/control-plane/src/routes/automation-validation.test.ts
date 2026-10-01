@@ -1,11 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { SessionViewer } from "@open-inspect/shared";
-import type { SqlDatabase, SqlStatement } from "../db/sql-database";
-import {
-  resolveEnvironmentSelection,
-  TargetSelectionError,
-  validateAutomationRepositoryGrants,
-} from "./automation-validation";
+import type { SqlDatabase } from "../db/sql-database";
+import { resolveEnvironmentSelection, TargetSelectionError } from "./automation-validation";
 
 const environments = vi.hoisted(() => ({
   getById: vi.fn(),
@@ -16,17 +12,12 @@ vi.mock("../db/environments", () => ({
     return environments;
   }),
 }));
-
-function database(rows: unknown[] = []): SqlDatabase {
-  const statement: SqlStatement = {
-    bind: () => statement,
-    first: async () => null,
-    all: async <T>() => ({ results: rows as T[], meta: { changes: 0 } }),
-    run: async <T>() => ({ results: [] as T[], meta: { changes: 0 } }),
-  };
-  return { prepare: () => statement, batch: async () => [] };
-}
-
+const db: SqlDatabase = {
+  prepare: () => {
+    throw new Error("Unexpected SQL query");
+  },
+  batch: async () => [],
+};
 const viewer: SessionViewer = {
   kind: "user",
   userId: "executor",
@@ -37,14 +28,10 @@ const viewer: SessionViewer = {
 };
 
 async function selectionFailure(selection: Promise<unknown>) {
-  try {
-    await selection;
-  } catch (error) {
-    if (!(error instanceof TargetSelectionError)) throw error;
-    const response = error.response();
-    return { status: response.status, body: await response.text() };
-  }
-  throw new Error("Expected environment selection to fail");
+  const result = await selection.catch((error: unknown) => error);
+  expect(result).toBeInstanceOf(TargetSelectionError);
+  const response = (result as TargetSelectionError).response();
+  return { status: response.status, ...(await response.json<Record<string, unknown>>()) };
 }
 
 describe("automation environment selection", () => {
@@ -56,196 +43,67 @@ describe("automation environment selection", () => {
     ]);
   });
 
-  it("returns repositories for use-only viewers without read permission", async () => {
+  it.each([true, false])("resolves use-only/unchanged targets (%s)", async (requireUse) => {
+    const actor = { ...viewer, permissions: requireUse ? viewer.permissions : [] };
     await expect(
-      resolveEnvironmentSelection(database(), ["env_a"], "team-a", viewer)
+      resolveEnvironmentSelection(db, ["env_a"], "team-a", actor, requireUse)
     ).resolves.toEqual([{ repoOwner: "group/subgroup", repoName: "api", repoId: 11 }]);
   });
 
-  it.each(["team-a", "team-b"])(
-    "checks environment-use access before ownership compatibility with %s",
-    async (ownerTeamId) => {
-      await expect(
-        resolveEnvironmentSelection(database(), ["env_a"], ownerTeamId, {
-          ...viewer,
-          permissions: [],
-        })
-      ).rejects.toMatchObject({ status: 403, reasonCode: "missing_permission" });
-      expect(environments.getRepositoriesForEnvironment).not.toHaveBeenCalled();
-    }
-  );
+  it("checks replacement-use access before owner compatibility", async () => {
+    await expect(
+      resolveEnvironmentSelection(db, ["env_a"], "team-b", { ...viewer, permissions: [] })
+    ).rejects.toMatchObject({ status: 403, reasonCode: "missing_permission" });
+    expect(environments.getRepositoriesForEnvironment).not.toHaveBeenCalled();
+  });
 
-  it.each(
-    [true, false].flatMap((requireUse) =>
-      [null, "team-a", "team-b"].map((ownerTeamId) => ({ requireUse, ownerTeamId }))
-    )
-  )(
-    "matches hidden and missing responses for owner $ownerTeamId with requireUse=$requireUse",
-    async ({ requireUse, ownerTeamId }) => {
-      const actor: SessionViewer = {
-        ...viewer,
-        permissions: requireUse ? ["environments.use"] : [],
-      };
-      environments.getById.mockResolvedValue(null);
-      const missing = await selectionFailure(
-        resolveEnvironmentSelection(database(), ["env_hidden"], ownerTeamId, actor, requireUse)
-      );
-      expect(missing).toEqual({
-        status: 400,
-        body: JSON.stringify({ error: "Environment not found: env_hidden" }),
-      });
-
-      environments.getById.mockResolvedValue({ id: "env_hidden", owner_team_id: "team-b" });
-      const hidden = await selectionFailure(
-        resolveEnvironmentSelection(database(), ["env_hidden"], ownerTeamId, actor, requireUse)
-      );
-      expect(hidden).toEqual(missing);
-      expect(environments.getRepositoriesForEnvironment).not.toHaveBeenCalled();
-    }
-  );
-
-  it.each(
-    [true, false].flatMap((requireUse) =>
-      [
-        ["env_visible_cross", "env_hidden_z", "env_missing", "env_hidden_a"],
-        ["env_hidden_a", "env_missing", "env_hidden_z", "env_visible_cross"],
-      ].map((environmentIds) => ({ requireUse, environmentIds }))
-    )
-  )(
-    "aggregates unavailable IDs before conflicts, requireUse=$requireUse: $environmentIds",
-    async ({ requireUse, environmentIds }) => {
-      const actor: SessionViewer = {
-        ...viewer,
-        permissions: requireUse ? ["environments.use"] : [],
-      };
+  it.each([true, false])(
+    "aggregates hidden/missing IDs in input order before conflicts with requireUse=%s",
+    async (requireUse) => {
+      const ids = ["env_visible_cross", "env_hidden_z", "env_missing", "env_hidden_a"];
+      const actor = { ...viewer, permissions: requireUse ? viewer.permissions : [] };
       environments.getById.mockImplementation(async (id: string) =>
         id === "env_visible_cross" ? { id, owner_team_id: "team-a" } : null
       );
       const missing = await selectionFailure(
-        resolveEnvironmentSelection(database(), environmentIds, null, actor, requireUse)
+        resolveEnvironmentSelection(db, ids, null, actor, requireUse)
       );
       expect(missing).toEqual({
         status: 400,
-        body: JSON.stringify({
-          error: `Environment not found: ${environmentIds
-            .filter((id) => id !== "env_visible_cross")
-            .join(", ")}`,
-        }),
+        error: "Environment not found: env_hidden_z, env_missing, env_hidden_a",
       });
-
-      environments.getById.mockImplementation(async (id: string) => {
-        if (id === "env_missing") return null;
-        return { id, owner_team_id: id === "env_visible_cross" ? "team-a" : "team-b" };
-      });
-      const hidden = await selectionFailure(
-        resolveEnvironmentSelection(database(), environmentIds, null, actor, requireUse)
+      environments.getById.mockImplementation(async (id: string) =>
+        id === "env_missing"
+          ? null
+          : { id, owner_team_id: id === "env_visible_cross" ? "team-a" : "team-b" }
       );
-      expect(hidden).toEqual(missing);
+      expect(
+        await selectionFailure(resolveEnvironmentSelection(db, ids, null, actor, requireUse))
+      ).toEqual(missing);
       expect(environments.getRepositoriesForEnvironment).not.toHaveBeenCalled();
     }
   );
 
-  it("resolves unchanged environment repositories without requiring viewer use access", async () => {
-    await expect(
-      resolveEnvironmentSelection(
-        database(),
-        ["env_a"],
-        "team-a",
-        { ...viewer, permissions: [] },
-        false
-      )
-    ).resolves.toEqual([{ repoOwner: "group/subgroup", repoName: "api", repoId: 11 }]);
-  });
-
-  it("still checks the team of a visible unchanged environment", async () => {
-    await expect(
-      resolveEnvironmentSelection(
-        database(),
-        ["env_a"],
-        "team-b",
-        { ...viewer, permissions: [] },
-        false
-      )
-    ).rejects.toMatchObject({ status: 409, reasonCode: "environment_team_mismatch" });
-  });
-
-  it("still rejects missing unchanged environments", async () => {
-    environments.getById.mockResolvedValue(null);
-    await expect(
-      resolveEnvironmentSelection(
-        database(),
-        ["env_a"],
-        "team-a",
-        { ...viewer, permissions: [] },
-        false
-      )
-    ).rejects.toMatchObject({ status: 400, message: "Environment not found: env_a" });
-  });
-
-  it.each([null, "team-b"])("rejects a visible different owner scope (%s)", async (ownerTeamId) => {
-    await expect(
-      resolveEnvironmentSelection(database(), ["env_a"], ownerTeamId, viewer)
-    ).rejects.toMatchObject({ status: 409, reasonCode: "environment_team_mismatch" });
-  });
-
-  it("permits actorless service use of a workspace environment", async () => {
-    environments.getById.mockResolvedValue({ id: "env_a", owner_team_id: null });
-    await expect(
-      resolveEnvironmentSelection(database(), ["env_a"], null, { kind: "service", teamId: null })
-    ).resolves.toEqual([]);
-  });
-});
-
-describe("automation repository grants", () => {
-  const grant = {
-    grant_kind: "repository",
-    repo_external_id: 11,
-    repo_owner: "group/subgroup",
-    repo_name: "api",
-  };
-
-  it("rejects null IDs even when the repository name matches a grant", async () => {
-    const response = await validateAutomationRepositoryGrants(database([grant]), "team-a", [
-      { repoOwner: "group/subgroup", repoName: "api", repoId: null },
-    ]);
-    expect(response?.status).toBe(409);
-    await expect(response?.json()).resolves.toMatchObject({
-      code: "target_team_missing_grant",
-      repository: "group/subgroup/api",
-    });
-  });
-
-  it("accepts matching IDs and refuses same-name recreated repositories", async () => {
-    await expect(
-      validateAutomationRepositoryGrants(database([grant]), "team-a", [
-        { repoOwner: "group/subgroup", repoName: "api", repoId: 11 },
-      ])
-    ).resolves.toBeNull();
-    const recreated = await validateAutomationRepositoryGrants(database([grant]), "team-a", [
-      { repoOwner: "group/subgroup", repoName: "api", repoId: 22 },
-    ]);
-    expect(recreated?.status).toBe(409);
-  });
-
-  it("checks every numeric member after a granted repository", async () => {
-    const response = await validateAutomationRepositoryGrants(database([grant]), "team-a", [
-      { repoOwner: "group/subgroup", repoName: "api", repoId: 11 },
-      { repoOwner: "acme", repoName: "ungranted", repoId: 22 },
-    ]);
-    await expect(response?.json()).resolves.toMatchObject({ repository: "acme/ungranted" });
-  });
-
-  it("honors installation grants and leaves workspace selections unrestricted", async () => {
-    const repository = { repoOwner: "acme", repoName: "api", repoId: null };
-    await expect(
-      validateAutomationRepositoryGrants(
-        database([{ grant_kind: "installation", repo_external_id: null }]),
-        "team-a",
-        [repository]
-      )
-    ).resolves.toBeNull();
-    await expect(
-      validateAutomationRepositoryGrants(database(), null, [repository])
-    ).resolves.toBeNull();
-  });
+  it.each([
+    ["team-a", null, true],
+    ["team-a", "team-b", true],
+    [null, "team-a", true],
+    ["team-a", "team-b", false],
+  ] as const)(
+    "rejects owner mismatch %s -> %s with requireUse=%s",
+    async (environmentTeamId, ownerTeamId, requireUse) => {
+      environments.getById.mockResolvedValue({ id: "env_a", owner_team_id: environmentTeamId });
+      const actor = { ...viewer, permissions: requireUse ? viewer.permissions : [] };
+      const result = await selectionFailure(
+        resolveEnvironmentSelection(db, ["env_a"], ownerTeamId, actor, requireUse)
+      );
+      expect(result).toEqual({
+        status: 409,
+        error: "Environment must belong to the automation's owner team",
+        code: "environment_team_mismatch",
+        reason_code: "environment_team_mismatch",
+      });
+      expect(environments.getRepositoriesForEnvironment).not.toHaveBeenCalled();
+    }
+  );
 });

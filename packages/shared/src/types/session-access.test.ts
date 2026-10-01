@@ -466,63 +466,58 @@ describe("checkEnvironmentAccess", () => {
     );
   });
 
-  it.each(relations)(
-    "allows a %s to manage workspace rows with only environments.manage regardless of role key",
-    (relation) => {
+  it.each([
+    [null, [], false, false, false, false],
+    [
+      null,
+      ["environments.secrets.manage", "environments.settings.manage", "environments.images.manage"],
+      false,
+      false,
+      false,
+      false,
+    ],
+    [null, ["environments.read"], false, true, false, false],
+    [null, ["environments.manage"], false, false, true, false],
+    ["member", ["environments.manage"], false, false, true, false],
+    [null, ["environments.use"], false, false, false, true],
+    [
+      null,
+      ["environments.read", "environments.manage", "environments.use"],
+      false,
+      true,
+      true,
+      true,
+    ],
+    [
+      null,
+      ["environments.read", "environments.manage", "environments.use"],
+      true,
+      false,
+      false,
+      false,
+    ],
+  ] as const)(
+    "projects workspace grants for role %s, permissions %j, suspended %s",
+    (role, permissions, suspended, read, manage, use) => {
       const workspace = { ownerTeamId: null };
-      for (const roleKey of roles) {
-        const actor = viewer(relation, roleKey, false, ["environments.manage"]);
-        expect(checkEnvironmentAccess(actor, workspace, "manage")).toEqual({ allowed: true });
-        for (const action of ["read", "use"] as const) {
-          expect(checkEnvironmentAccess(actor, workspace, action)).toEqual({
-            allowed: false,
-            reason: "missing_permission",
-          });
-        }
-        expect(environmentCapabilities(actor, workspace)).toEqual({
-          canRead: false,
-          canManage: true,
-          canUse: false,
-        });
+      const actor = viewer("non-member", role, suspended, permissions);
+      const permits = { read, manage, use };
+      for (const action of ENVIRONMENT_ACTIONS) {
+        expect(checkEnvironmentAccess(actor, workspace, action)).toEqual(
+          suspended
+            ? { allowed: false, reason: "suspended" }
+            : permits[action]
+              ? { allowed: true }
+              : { allowed: false, reason: "missing_permission" }
+        );
       }
+      expect(environmentCapabilities(actor, workspace)).toEqual({
+        canRead: read,
+        canManage: manage,
+        canUse: use,
+      });
     }
   );
-
-  it("keeps workspace capabilities authoritative for independent grants and suspension", () => {
-    const workspace = { ownerTeamId: null };
-    for (const read of [false, true]) {
-      for (const manage of [false, true]) {
-        for (const use of [false, true]) {
-          for (const suspended of [false, true]) {
-            const permissions: PermissionId[] = [
-              "environments.secrets.manage",
-              "environments.settings.manage",
-              "environments.images.manage",
-            ];
-            if (read) permissions.push("environments.read");
-            if (manage) permissions.push("environments.manage");
-            if (use) permissions.push("environments.use");
-            const actor = viewer("non-member", null, suspended, permissions);
-            const permits = { read, manage, use };
-            for (const action of ENVIRONMENT_ACTIONS) {
-              expect(checkEnvironmentAccess(actor, workspace, action)).toEqual(
-                suspended
-                  ? { allowed: false, reason: "suspended" }
-                  : permits[action]
-                    ? { allowed: true }
-                    : { allowed: false, reason: "missing_permission" }
-              );
-            }
-            expect(environmentCapabilities(actor, workspace)).toEqual({
-              canRead: !suspended && read,
-              canManage: !suspended && manage,
-              canUse: !suspended && use,
-            });
-          }
-        }
-      }
-    }
-  });
 
   it("denies suspended and outside-team users for every action", () => {
     for (const action of ENVIRONMENT_ACTIONS) {

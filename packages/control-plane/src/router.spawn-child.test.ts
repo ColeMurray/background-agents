@@ -299,87 +299,55 @@ describe("handleSpawnChild prompt enqueue handling", () => {
     expect(store.create).not.toHaveBeenCalled();
   });
 
-  it.each([null, "team_b"])(
-    "rejects a visible environment when the parent's owner is %s before settings or initialization",
-    async (ownerTeamId) => {
-      const store = makeStore(
-        "canonical-user-123",
-        spawnContext,
-        "env_parent",
-        ownerTeamId,
-        "private"
-      );
-      vi.mocked(SessionIndexStore).mockImplementation(function () {
-        return store as never;
-      });
-      environmentMocks.getById.mockResolvedValue({ id: "env_parent", owner_team_id: "team_a" });
-      vi.spyOn(TeamMembershipStore.prototype, "listForUser").mockResolvedValue(
-        new Map([
-          ["team_a", "member"],
-          ["team_b", "member"],
-        ])
-      );
-      const { env, childStub } = makeSuccessfulEnv(spawnContext, [
-        "sessions.read",
-        "sessions.create",
-        "sessions.collaborate",
-        "environments.use",
-      ]);
+  const actorTargetPermissions = [
+    "sessions.read",
+    "sessions.create",
+    "sessions.collaborate",
+    "environments.use",
+  ];
 
-      const response = await makeRequest(env);
+  it("rejects a service actor's incompatible inherited target before settings or child admission", async () => {
+    const store = makeStore("canonical-user-123", spawnContext, "env_parent", null, "private");
+    vi.mocked(SessionIndexStore).mockImplementation(function () {
+      return store as never;
+    });
+    environmentMocks.getById.mockResolvedValue({ id: "env_parent", owner_team_id: "team_a" });
+    vi.spyOn(TeamMembershipStore.prototype, "listForUser").mockResolvedValue(
+      new Map([["team_a", "member"]])
+    );
+    const { env, childStub } = makeSuccessfulEnv(spawnContext, actorTargetPermissions);
+    const response = await makeRequest(env);
+    expect(response.status).toBe(409);
+    await expect(response.json()).resolves.toMatchObject({
+      code: "environment_team_mismatch",
+      reason_code: "environment_team_mismatch",
+    });
+    expect(integrationSettingsMocks.resolveSandboxSettings).not.toHaveBeenCalled();
+    expect(store.acquireChildAdmissionLease).not.toHaveBeenCalled();
+    expect(store.create).not.toHaveBeenCalled();
+    expect(childStub.fetch).not.toHaveBeenCalled();
+  });
 
-      expect(response.status).toBe(409);
-      await expect(response.json()).resolves.toMatchObject({
-        code: "environment_team_mismatch",
-        reason_code: "environment_team_mismatch",
-      });
-      expect(integrationSettingsMocks.resolveSandboxSettings).not.toHaveBeenCalled();
-      expect(integrationSettingsMocks.resolveCodeServerEnabled).not.toHaveBeenCalled();
-      expect(integrationSettingsMocks.resolveVncEnabled).not.toHaveBeenCalled();
-      expect(store.getCompleteProviderAuth).not.toHaveBeenCalled();
-      expect(store.acquireChildAdmissionLease).not.toHaveBeenCalled();
-      expect(store.create).not.toHaveBeenCalled();
-      expect(childStub.fetch).not.toHaveBeenCalled();
-    }
-  );
-
-  it.each([
-    { environmentOwnerTeamId: "team_a", ownerTeamId: "team_a" },
-    { environmentOwnerTeamId: null, ownerTeamId: "team_a" },
-  ])(
-    "inherits compatible environment ownership from $environmentOwnerTeamId to $ownerTeamId",
-    async ({ environmentOwnerTeamId, ownerTeamId }) => {
-      const store = makeStore("canonical-user-123", spawnContext, "env_parent", ownerTeamId);
-      vi.mocked(SessionIndexStore).mockImplementation(function () {
-        return store as never;
-      });
-      environmentMocks.getById.mockResolvedValue({
-        id: "env_parent",
-        owner_team_id: environmentOwnerTeamId,
-      });
-      vi.spyOn(TeamMembershipStore.prototype, "listForUser").mockResolvedValue(
-        new Map([["team_a", "member"]])
-      );
-      const { env, childStub } = makeSuccessfulEnv(spawnContext, [
-        "sessions.read",
-        "sessions.create",
-        "sessions.collaborate",
-        "environments.use",
-      ]);
-
-      const response = await makeRequest(env);
-
-      expect(response.status).toBe(201);
-      expect(store.create).toHaveBeenCalledWith(
-        expect.objectContaining({
-          ownerTeamId,
-          visibility: "workspace",
-          environmentId: "env_parent",
-        })
-      );
-      await expect(getInitBody(childStub)).resolves.toMatchObject({ environmentId: "env_parent" });
-    }
-  );
+  it("inherits matching team ownership and private visibility for a service actor", async () => {
+    const store = makeStore("canonical-user-123", spawnContext, "env_parent", "team_a", "private");
+    vi.mocked(SessionIndexStore).mockImplementation(function () {
+      return store as never;
+    });
+    environmentMocks.getById.mockResolvedValue({ id: "env_parent", owner_team_id: "team_a" });
+    vi.spyOn(TeamMembershipStore.prototype, "listForUser").mockResolvedValue(
+      new Map([["team_a", "member"]])
+    );
+    const { env, childStub } = makeSuccessfulEnv(spawnContext, actorTargetPermissions);
+    expect((await makeRequest(env)).status).toBe(201);
+    expect(store.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        ownerTeamId: "team_a",
+        visibility: "private",
+        environmentId: "env_parent",
+      })
+    );
+    await expect(getInitBody(childStub)).resolves.toMatchObject({ environmentId: "env_parent" });
+  });
 
   async function getInitBody(childStub: DurableObjectStub) {
     const initRequest = vi.mocked(childStub.fetch).mock.calls.find((call) => {

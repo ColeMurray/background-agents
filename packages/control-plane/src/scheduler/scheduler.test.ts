@@ -14,16 +14,10 @@ import type { FetchClient } from "../platform-ports";
 import { fakeSessionRuntimeDispatch } from "../router.test-support";
 import type { Logger } from "../logger";
 import type { AutomationRow, InvocationRunAggregate } from "../db/automation-store";
-import type { EnvironmentRepositoryRow, EnvironmentRow } from "../db/environments";
-import type { SessionEntry } from "../db/session-index";
 import type { SlackAutomationEvent } from "@open-inspect/shared/triggers";
-import type { SessionVisibility, Team, TeamRole } from "@open-inspect/shared/types/teams";
-import {
-  BUILT_IN_ROLE_REGISTRY,
-  type BuiltInRoleKey,
-  type EffectiveAuthorization,
-  type PermissionId,
-} from "@open-inspect/shared/rbac";
+import type { Team } from "@open-inspect/shared/types/teams";
+import type { EffectiveAuthorization } from "@open-inspect/shared/rbac";
+import type * as SessionAdmissionModule from "../authorization/session-admission";
 
 const mockCheckRepositoryAccess = vi.hoisted(() => vi.fn());
 const mockResolveSessionProviderAuth = vi.hoisted(() =>
@@ -34,8 +28,7 @@ const mockResolveSessionProviderAuth = vi.hoisted(() =>
 );
 const mockIsAutomationExecutionAuthorized = vi.hoisted(() => vi.fn().mockResolvedValue(true));
 const mockGetEffectiveAuthorization = vi.hoisted(() => vi.fn());
-const mockMembershipListForUser = vi.hoisted(() => vi.fn());
-const mockCollaboratorListUserIds = vi.hoisted(() => vi.fn());
+const mockEvaluateSessionAdmission = vi.hoisted(() => vi.fn());
 const mockTeamGetById = vi.hoisted(() =>
   vi.fn<(id: string) => Promise<Team | null>>().mockResolvedValue(null)
 );
@@ -67,21 +60,9 @@ vi.mock("../authorization/service", async (importOriginal) => {
   };
 });
 
-// Keep session admission real; mock only the authorization and persisted inputs it consumes.
-vi.mock("../db/team-memberships", async (importOriginal) => {
-  const actual = (await importOriginal()) as Record<string, unknown>;
-  return {
-    ...actual,
-    TeamMembershipStore: vi.fn().mockImplementation(function () {
-      return { listForUser: mockMembershipListForUser };
-    }),
-  };
-});
-
-vi.mock("../db/session-collaborators", () => ({
-  SessionCollaboratorStore: vi.fn().mockImplementation(function () {
-    return { listUserIds: mockCollaboratorListUserIds };
-  }),
+vi.mock("../authorization/session-admission", async (importOriginal) => ({
+  ...(await importOriginal<typeof SessionAdmissionModule>()),
+  evaluateSessionAdmission: mockEvaluateSessionAdmission,
 }));
 
 const mockGetGitHubAccessToken = vi.hoisted(() => vi.fn());
@@ -214,13 +195,11 @@ vi.mock("../db/automation-model-provider-auth", async (importOriginal) => {
 
 const mockSessionStoreCreate = vi.fn().mockResolvedValue(undefined);
 const mockSessionStoreUpdateStatus = vi.fn().mockResolvedValue(undefined);
-const mockSessionStoreGet = vi.fn();
 vi.mock("../db/session-index", () => ({
   SessionIndexStore: vi.fn().mockImplementation(function () {
     return {
       create: mockSessionStoreCreate,
       updateStatus: mockSessionStoreUpdateStatus,
-      get: mockSessionStoreGet,
     };
   }),
 }));
@@ -553,33 +532,13 @@ function makeSlackEvent(overrides?: Partial<SlackAutomationEvent>): SlackAutomat
   };
 }
 
-function steeringSessionRow(id: string, overrides?: Partial<SessionEntry>): SessionEntry {
-  return {
-    id,
-    title: null,
-    repoOwner: null,
-    repoName: null,
-    model: sampleAutomation.model,
-    reasoningEffort: null,
-    baseBranch: null,
-    status: "completed",
-    ownerTeamId: null,
-    visibility: "workspace",
-    userId: "user-1",
-    createdAt: now,
-    updatedAt: now,
-    ...overrides,
-  };
-}
-
 function steeringAuthorization(
-  role: BuiltInRoleKey = "member",
   overrides?: Partial<EffectiveAuthorization>
 ): EffectiveAuthorization {
   return {
     userId: "slack-actor-user",
     suspendedAt: null,
-    role: { ...BUILT_IN_ROLE_REGISTRY[role], name: role },
+    role: { id: "role-member", key: "member", name: "Member" },
     permissions: ["sessions.read", "sessions.collaborate"],
     ...overrides,
   };
@@ -606,11 +565,9 @@ describe("Scheduler", () => {
     mockProviderAuthList.mockResolvedValue([]);
     mockIsAutomationExecutionAuthorized.mockResolvedValue(true);
     mockGetEffectiveAuthorization.mockReset().mockResolvedValue(steeringAuthorization());
-    mockMembershipListForUser.mockReset().mockResolvedValue(new Map<string, TeamRole>());
-    mockCollaboratorListUserIds.mockReset().mockResolvedValue([]);
-    mockSessionStoreGet
+    mockEvaluateSessionAdmission
       .mockReset()
-      .mockImplementation(async (id: string) => steeringSessionRow(id));
+      .mockResolvedValue({ kind: "allowed", legacyPermission: null });
     mockTeamGetById.mockReset().mockResolvedValue(null);
     mockTeamGrantCovers.mockReset().mockResolvedValue(true);
     mockUserStoreGetIdentity.mockImplementation(async (provider: string) =>
@@ -626,14 +583,6 @@ describe("Scheduler", () => {
       repoOwner: "acme",
       repoName: "web-app",
       defaultBranch: "main",
-    });
-  });
-
-  it("defaults an unauthorized execution error to the generic denial reason", () => {
-    expect(new AutomationExecutionUnauthorizedError()).toMatchObject({
-      name: "AutomationExecutionUnauthorizedError",
-      message: "Automation execution principal is not authorized",
-      reason: "execution_authorization_denied",
     });
   });
 
@@ -2431,8 +2380,13 @@ describe("Scheduler", () => {
       mockIsAutomationExecutionAuthorized.mockResolvedValue(false);
 
       const scheduler = createScheduler();
-      await expect(scheduler.trigger("auto-1", "user-1")).rejects.toBeInstanceOf(
-        AutomationExecutionUnauthorizedError
+      const denied = scheduler.trigger("auto-1", "user-1");
+      await expect(denied).rejects.toBeInstanceOf(AutomationExecutionUnauthorizedError);
+      await expect(denied).rejects.toMatchObject({
+        reason: "execution_authorization_denied",
+      });
+      expect(new AutomationExecutionUnauthorizedError().reason).toBe(
+        "execution_authorization_denied"
       );
       expect(mockStore.insertInvocationGuarded).not.toHaveBeenCalled();
     });
@@ -3025,184 +2979,21 @@ describe("Scheduler", () => {
       expect(mockUserStoreGetIdentity).toHaveBeenCalledTimes(1);
       expect(mockGetEffectiveAuthorization).toHaveBeenCalledTimes(1);
       expect(mockGetEffectiveAuthorization).toHaveBeenCalledWith("slack-actor-user");
-      expect(mockMembershipListForUser).toHaveBeenCalledTimes(1);
-      expect(mockSessionStoreGet.mock.calls).toEqual([["sess-running-1"], ["sess-running-2"]]);
+      expect(mockEvaluateSessionAdmission.mock.calls.map(([, , id]) => id)).toEqual([
+        "sess-running-1",
+        "sess-running-2",
+      ]);
     });
 
     describe("Slack steering session admission", () => {
-      const teamId = "team-steering";
       const actorUserId = "slack-actor-user";
       const sessionId = "sess-steering";
-      const modes = ["off", "shadow", "on"] as const;
-      const cases: Array<{
-        name: string;
-        visibility?: SessionVisibility;
-        ownerTeamId?: string | null;
-        userId?: string;
-        member?: boolean;
-        collaborator?: boolean;
-        role?: BuiltInRoleKey;
-        permissions?: PermissionId[];
-        suspendedAt?: number;
-        allowed: boolean;
-      }> = [
-        { name: "private owner who is a member", userId: actorUserId, member: true, allowed: true },
-        { name: "private member collaborator", member: true, collaborator: true, allowed: true },
-        { name: "private outsider", allowed: false },
-        { name: "private member without collaboration", member: true, allowed: false },
-        {
-          name: "private administrator without collaboration",
-          role: "administrator",
-          member: true,
-          allowed: false,
-        },
-        {
-          name: "private workspace owner with only break-glass access",
-          role: "owner",
-          member: true,
-          allowed: false,
-        },
-        { name: "private stale collaborator", collaborator: true, allowed: false },
-        { name: "private departed owner", userId: actorUserId, allowed: false },
-        {
-          name: "private owner without read permission",
-          userId: actorUserId,
-          member: true,
-          permissions: ["sessions.collaborate"],
-          allowed: false,
-        },
-        { name: "team member", visibility: "team", member: true, allowed: true },
-        { name: "team outsider", visibility: "team", allowed: false },
-        {
-          name: "team nonmember administrator",
-          visibility: "team",
-          role: "administrator",
-          allowed: false,
-        },
-        {
-          name: "team nonmember workspace owner",
-          visibility: "team",
-          role: "owner",
-          allowed: false,
-        },
-        {
-          name: "team member without read permission",
-          visibility: "team",
-          member: true,
-          permissions: ["sessions.collaborate"],
-          allowed: false,
-        },
-        {
-          name: "team-owned workspace session member",
-          visibility: "workspace",
-          member: true,
-          allowed: true,
-        },
-        {
-          name: "team-owned workspace session outsider",
-          visibility: "workspace",
-          allowed: false,
-        },
-        { name: "workspace-private owner", ownerTeamId: null, userId: actorUserId, allowed: true },
-        {
-          name: "workspace-private collaborator",
-          ownerTeamId: null,
-          collaborator: true,
-          allowed: true,
-        },
-        {
-          name: "suspended private owner",
-          userId: actorUserId,
-          member: true,
-          suspendedAt: 1,
-          allowed: false,
-        },
-        {
-          name: "private owner with revoked collaboration",
-          userId: actorUserId,
-          member: true,
-          permissions: ["sessions.read"],
-          allowed: false,
-        },
-      ];
 
       beforeEach(() => {
         mockGetSlackAutomationsForChannel.mockResolvedValue([sampleSlackAutomation]);
         mockStore.getLatestSteerableRunForThread.mockResolvedValue(
           sampleRunRow({ session_id: sessionId })
         );
-      });
-
-      describe.each(modes)("%s mode", (mode) => {
-        it.each(cases)(
-          "admits $name only with session collaboration authority",
-          async (testCase) => {
-            mockSessionStoreGet.mockResolvedValue(
-              steeringSessionRow(sessionId, {
-                ownerTeamId: testCase.ownerTeamId === undefined ? teamId : testCase.ownerTeamId,
-                visibility: testCase.visibility ?? "private",
-                userId: testCase.userId ?? "user-1",
-              })
-            );
-            mockMembershipListForUser.mockResolvedValue(
-              new Map<string, TeamRole>(testCase.member ? [[teamId, "member"]] : [])
-            );
-            mockCollaboratorListUserIds.mockResolvedValue(
-              testCase.collaborator ? [actorUserId] : []
-            );
-            const authorization = steeringAuthorization(testCase.role, {
-              suspendedAt: testCase.suspendedAt ?? null,
-              permissions: testCase.permissions ?? ["sessions.read", "sessions.collaborate"],
-            });
-            mockGetEffectiveAuthorization.mockResolvedValue(authorization);
-            const stub = createMockSessionStub();
-            const scheduler = createScheduler(createEnv({ TEAMS_ENFORCEMENT: mode }, stub));
-
-            expect(await scheduler.event(makeSlackEvent())).toEqual({
-              triggered: 0,
-              skipped: 0,
-              steered: testCase.allowed ? 1 : 0,
-            });
-            expect(promptCallCount(vi.mocked(stub.fetch))).toBe(testCase.allowed ? 1 : 0);
-            expect(mockGetEffectiveAuthorization).toHaveBeenCalledTimes(1);
-            expect(mockGetEffectiveAuthorization).toHaveBeenCalledWith(actorUserId);
-            if (
-              authorization.suspendedAt !== null ||
-              !authorization.permissions.includes("sessions.collaborate")
-            ) {
-              expect(mockSessionStoreGet).not.toHaveBeenCalled();
-              expect(mockMembershipListForUser).not.toHaveBeenCalled();
-              expect(mockCollaboratorListUserIds).not.toHaveBeenCalled();
-            } else {
-              expect(mockSessionStoreGet).toHaveBeenCalledTimes(1);
-              expect(mockSessionStoreGet).toHaveBeenCalledWith(sessionId);
-            }
-            expect(mockStore.insertInvocationGuarded).not.toHaveBeenCalled();
-            expect(mockStore.insertSkippedInvocation).not.toHaveBeenCalled();
-            expect(mockIsAutomationExecutionAuthorized).not.toHaveBeenCalled();
-            if (testCase.allowed) {
-              await expect(getPromptBody(vi.mocked(stub.fetch))).resolves.toMatchObject({
-                authorId: "slack:U1",
-                canonicalUserId: actorUserId,
-              });
-            }
-          }
-        );
-
-        it("preserves workspace collaboration-only access except in on mode", async () => {
-          mockGetEffectiveAuthorization.mockResolvedValue(
-            steeringAuthorization("member", { permissions: ["sessions.collaborate"] })
-          );
-          const stub = createMockSessionStub();
-
-          expect(
-            await createScheduler(createEnv({ TEAMS_ENFORCEMENT: mode }, stub)).event(
-              makeSlackEvent()
-            )
-          ).toEqual({ triggered: 0, skipped: 0, steered: mode === "on" ? 0 : 1 });
-          expect(promptCallCount(vi.mocked(stub.fetch))).toBe(mode === "on" ? 0 : 1);
-          expect(mockStore.insertInvocationGuarded).not.toHaveBeenCalled();
-        });
       });
 
       it.each([
@@ -3214,12 +3005,12 @@ describe("Scheduler", () => {
         if (scenario === "unresolved actor") mockUserStoreGetIdentity.mockResolvedValue(null);
         if (scenario === "missing collaboration permission") {
           mockGetEffectiveAuthorization.mockResolvedValue(
-            steeringAuthorization("member", { permissions: [] })
+            steeringAuthorization({ permissions: [] })
           );
         }
         if (scenario === "suspended actor") {
           mockGetEffectiveAuthorization.mockResolvedValue(
-            steeringAuthorization("member", { suspendedAt: 1 })
+            steeringAuthorization({ suspendedAt: 1 })
           );
         }
         if (scenario === "authorization unavailable") {
@@ -3233,9 +3024,7 @@ describe("Scheduler", () => {
           steered: 0,
         });
         expect(stub.fetch).not.toHaveBeenCalled();
-        expect(mockSessionStoreGet).not.toHaveBeenCalled();
-        expect(mockMembershipListForUser).not.toHaveBeenCalled();
-        expect(mockCollaboratorListUserIds).not.toHaveBeenCalled();
+        expect(mockEvaluateSessionAdmission).not.toHaveBeenCalled();
         expect(mockStore.insertInvocationGuarded).not.toHaveBeenCalled();
         if (scenario === "unresolved actor") {
           expect(mockGetEffectiveAuthorization).not.toHaveBeenCalled();
@@ -3246,7 +3035,7 @@ describe("Scheduler", () => {
       });
 
       it("does not steer or start a replacement run when the session index row is missing", async () => {
-        mockSessionStoreGet.mockResolvedValue(null);
+        mockEvaluateSessionAdmission.mockResolvedValue({ kind: "not_found" });
         const stub = createMockSessionStub();
 
         expect(await createScheduler(createEnv(undefined, stub)).event(makeSlackEvent())).toEqual({
@@ -3258,78 +3047,42 @@ describe("Scheduler", () => {
         expect(mockStore.insertInvocationGuarded).not.toHaveBeenCalled();
       });
 
-      it("refreshes owner membership between events on the same scheduler", async () => {
-        mockSessionStoreGet.mockResolvedValue(
-          steeringSessionRow(sessionId, {
-            ownerTeamId: teamId,
-            visibility: "private",
-            userId: actorUserId,
-          })
+      it("checks each session instead of reusing the first admission", async () => {
+        const sessionIds = ["sess-allowed", "sess-denied"];
+        mockGetSlackAutomationsForChannel.mockResolvedValue([
+          sampleSlackAutomation,
+          { ...sampleSlackAutomation, id: "auto-slack-2" },
+        ]);
+        mockStore.getLatestSteerableRunForThread
+          .mockResolvedValueOnce(sampleRunRow({ session_id: sessionIds[0] }))
+          .mockResolvedValueOnce(sampleRunRow({ session_id: sessionIds[1] }));
+        mockEvaluateSessionAdmission
+          .mockResolvedValueOnce({ kind: "allowed", legacyPermission: null })
+          .mockResolvedValueOnce({ kind: "action_denied", reason: "not_collaborator" });
+        const requests = vi.fn(async (_request: Request, _sessionId: string) =>
+          Response.json({ messageId: "msg-steer", status: "queued" })
         );
-        mockMembershipListForUser
-          .mockResolvedValueOnce(new Map<string, TeamRole>([[teamId, "member"]]))
-          .mockResolvedValueOnce(new Map<string, TeamRole>());
-        const stub = createMockSessionStub();
-        const scheduler = createScheduler(createEnv({ TEAMS_ENFORCEMENT: "shadow" }, stub));
+        const env = createEnv({ TEAMS_ENFORCEMENT: "shadow" });
+        env.SESSION = fakeSessionRuntimeDispatch(requests);
 
-        expect(await scheduler.event(makeSlackEvent())).toEqual({
+        expect(await createScheduler(env).event(makeSlackEvent())).toEqual({
           triggered: 0,
           skipped: 0,
           steered: 1,
         });
-        expect(
-          await scheduler.event(
-            makeSlackEvent({ ts: "1700000000.000300", triggerKey: "slack:msg:C1:revoked" })
-          )
-        ).toEqual({ triggered: 0, skipped: 0, steered: 0 });
-        expect(promptCallCount(vi.mocked(stub.fetch))).toBe(1);
-        expect(mockGetEffectiveAuthorization).toHaveBeenCalledTimes(2);
-        expect(mockMembershipListForUser).toHaveBeenCalledTimes(2);
-        expect(mockStore.insertInvocationGuarded).not.toHaveBeenCalled();
-      });
-
-      it.each([true, false])(
-        "checks each distinct session instead of caching the first allow (%s)",
-        async (allowedFirst) => {
-          const sessionIds = allowedFirst
-            ? ["sess-allowed", "sess-denied"]
-            : ["sess-denied", "sess-allowed"];
-          mockGetSlackAutomationsForChannel.mockResolvedValue([
-            sampleSlackAutomation,
-            { ...sampleSlackAutomation, id: "auto-slack-2" },
-          ]);
-          mockStore.getLatestSteerableRunForThread
-            .mockResolvedValueOnce(sampleRunRow({ session_id: sessionIds[0] }))
-            .mockResolvedValueOnce(sampleRunRow({ session_id: sessionIds[1] }));
-          mockSessionStoreGet.mockImplementation(async (id: string) =>
-            steeringSessionRow(id, { ownerTeamId: teamId, visibility: "private" })
-          );
-          mockMembershipListForUser.mockResolvedValue(
-            new Map<string, TeamRole>([[teamId, "member"]])
-          );
-          mockCollaboratorListUserIds.mockImplementation(async (id: string) =>
-            id === "sess-allowed" ? [actorUserId] : []
-          );
-          const requests = vi.fn(async (_request: Request, _sessionId: string) =>
-            Response.json({ messageId: "msg-steer", status: "queued" })
-          );
-          const env = createEnv({ TEAMS_ENFORCEMENT: "shadow" });
-          env.SESSION = fakeSessionRuntimeDispatch(requests);
-
-          expect(await createScheduler(env).event(makeSlackEvent())).toEqual({
-            triggered: 0,
-            skipped: 0,
-            steered: 1,
-          });
-          expect(requests).toHaveBeenCalledTimes(1);
-          expect(requests.mock.calls[0][1]).toBe("sess-allowed");
-          expect(mockSessionStoreGet.mock.calls).toEqual(sessionIds.map((id) => [id]));
-          expect(mockCollaboratorListUserIds.mock.calls).toEqual(sessionIds.map((id) => [id]));
-          expect(mockGetEffectiveAuthorization).toHaveBeenCalledTimes(1);
-          expect(mockMembershipListForUser).toHaveBeenCalledTimes(1);
-          expect(mockStore.insertInvocationGuarded).not.toHaveBeenCalled();
+        expect(requests).toHaveBeenCalledTimes(1);
+        expect(requests.mock.calls[0][1]).toBe("sess-allowed");
+        expect(mockEvaluateSessionAdmission.mock.calls.map(([, , id]) => id)).toEqual(sessionIds);
+        for (const [ctx, , id, action, slot] of mockEvaluateSessionAdmission.mock.calls) {
+          expect(ctx.principal).toEqual({ kind: "user", userId: actorUserId });
+          expect(sessionIds).toContain(id);
+          expect(action).toBe("collaborate");
+          expect(slot).toBeNull();
         }
-      );
+        expect(mockGetEffectiveAuthorization).toHaveBeenCalledTimes(1);
+        expect(mockStore.insertInvocationGuarded).not.toHaveBeenCalled();
+        expect(mockIsAutomationExecutionAuthorized).not.toHaveBeenCalled();
+      });
     });
 
     it("continues the same session on a reply after the run has completed", async () => {
@@ -3644,89 +3397,23 @@ describe("Scheduler", () => {
       trigger_config: null,
       trigger_auth_data: null,
     };
-    const environment: EnvironmentRow = {
+    const environment = {
       id: "env_55555555555555555555555555555555",
       owner_team_id: teamId,
       name: "Full workspace",
-      description: null,
-      prebuild_enabled: 0,
-      channel_associations: null,
-      created_at: 1,
-      updated_at: 1,
     };
-    const members: EnvironmentRepositoryRow[] = [
+    const members = [
       {
+        ...repositoryRow("auto-1", { base_branch: "main" }),
         environment_id: environment.id,
         position: 0,
-        repo_owner: "acme",
-        repo_name: "web-app",
-        repo_id: 12345,
-        base_branch: "main",
       },
       {
+        ...repositoryRow("auto-1", { repo_name: "api", repo_id: 67890, base_branch: "develop" }),
         environment_id: environment.id,
         position: 1,
-        repo_owner: "acme",
-        repo_name: "api",
-        repo_id: 67890,
-        base_branch: "develop",
       },
     ];
-    const sources = ["manual", "schedule", "event"] as const;
-
-    function fireSource(
-      source: (typeof sources)[number],
-      execution: InstanceType<typeof Scheduler>
-    ) {
-      if (source === "manual") return execution.trigger("auto-1", "manual-user");
-      if (source === "schedule") return execution.tick();
-      mockStore.getById.mockResolvedValue({ ...teamAutomation, trigger_type: "webhook" });
-      return execution.event({
-        source: "webhook",
-        automationId: "auto-1",
-        eventType: "webhook.received",
-        triggerKey: "webhook:auto-1:delivery-1",
-        concurrencyKey: "webhook:auto-1",
-        contextBlock: "Webhook received",
-        meta: {},
-        body: {},
-      });
-    }
-
-    async function expectGrantDenied(source: (typeof sources)[number]) {
-      const stub = createMockSessionStub();
-      const firing = fireSource(source, createScheduler(createEnv(undefined, stub)));
-      if (source === "manual") {
-        await expect(firing).rejects.toBeInstanceOf(AutomationExecutionUnauthorizedError);
-        await expect(firing).rejects.toMatchObject({ reason: "target_team_missing_grant" });
-      } else if (source === "schedule") {
-        await expect(firing).resolves.toEqual({ processed: 0, skipped: 1, failed: 0 });
-      } else {
-        await expect(firing).resolves.toEqual({ triggered: 0, skipped: 1, steered: 0 });
-      }
-      expect(mockStore.insertInvocationGuarded).not.toHaveBeenCalled();
-      expect(mockStore.claimRunSession).not.toHaveBeenCalled();
-      expect(mockSessionStoreCreate).not.toHaveBeenCalled();
-      expect(stub.fetch).not.toHaveBeenCalled();
-      expect(mockResolveSessionProviderAuth).not.toHaveBeenCalled();
-      expect(mockStore.incrementConsecutiveFailures).not.toHaveBeenCalled();
-      expect(mockStore.insertSkippedInvocation).not.toHaveBeenCalled();
-      if (source === "schedule") {
-        expect(mockStore.recordAuthorizationDenied).toHaveBeenCalledWith(
-          expect.objectContaining({
-            automation_id: "auto-1",
-            source: "schedule",
-            scheduled_at: teamAutomation.next_run_at,
-            skip_reason: "target_team_missing_grant",
-            failure_counted_at: null,
-          }),
-          teamAutomation.next_run_at
-        );
-      } else {
-        expect(mockStore.recordAuthorizationDenied).not.toHaveBeenCalled();
-      }
-    }
-
     beforeEach(() => {
       mockTeamGetById.mockResolvedValue(activeTeam);
       mockStore.getById.mockResolvedValue(teamAutomation);
@@ -3735,7 +3422,7 @@ describe("Scheduler", () => {
       mockEnvironmentRepositories.mockReset().mockResolvedValue(members);
     });
 
-    it.each(sources)("checks resolved direct IDs before %s admission", async (source) => {
+    it("checks resolved direct IDs before manual admission", async () => {
       selectRepositories("auto-1", [repositoryRow("auto-1")]);
       mockCheckRepositoryAccess.mockResolvedValue({
         repoId: 98765,
@@ -3743,88 +3430,22 @@ describe("Scheduler", () => {
         repoName: "web-app",
         defaultBranch: "main",
       });
-      mockTeamGrantCovers.mockImplementation(async (_teamId, repoIds) =>
-        repoIds.every((repoId) => repoId === 12345)
-      );
+      mockTeamGrantCovers.mockResolvedValue(false);
 
-      await expectGrantDenied(source);
+      const stub = createMockSessionStub();
+      await expect(
+        createScheduler(createEnv(undefined, stub)).trigger("auto-1", "manual-user")
+      ).rejects.toMatchObject({ reason: "target_team_missing_grant" });
       expect(mockTeamGrantCovers).toHaveBeenCalledWith(teamId, [98765]);
       expect(mockCheckRepositoryAccess).toHaveBeenCalledTimes(1);
-    });
-
-    it.each(sources)("checks nonprimary member grants before %s admission", async (source) => {
-      selectRepositories("auto-1", [repositoryRow("auto-1")]);
-      selectEnvironments("auto-1", [environment.id]);
-      mockCheckRepositoryAccess.mockImplementation(async ({ owner, name }) => ({
-        repoId: name === "api" ? 67890 : 12345,
-        repoOwner: owner,
-        repoName: name,
-        defaultBranch: "main",
-      }));
-      mockTeamGrantCovers.mockImplementation(async (_teamId, repoIds) =>
-        repoIds.every((repoId) => repoId === 12345)
-      );
-
-      await expectGrantDenied(source);
-      expect(mockTeamGrantCovers).toHaveBeenCalledWith(
-        teamId,
-        expect.arrayContaining([12345, 67890])
-      );
-      expect(mockEnvironmentRepositories).toHaveBeenCalledTimes(1);
-      expect(mockCheckRepositoryAccess).toHaveBeenCalledTimes(3);
-    });
-
-    it("uses the exact authorized environment member snapshot after admission edits", async () => {
-      selectEnvironments("auto-1", [environment.id]);
-      mockCheckRepositoryAccess.mockImplementation(async ({ owner, name }) => ({
-        repoId: name === "api" ? 67890 : 12345,
-        repoOwner: owner,
-        repoName: name,
-        defaultBranch: "main",
-      }));
-      mockStore.insertInvocationGuarded.mockImplementation(async (params: unknown) => {
-        capturedInvocationParams.push(
-          structuredClone(params) as { children: Array<Record<string, unknown>> }
-        );
-        mockEnvironmentRepositories.mockResolvedValue([
-          members[0],
-          { ...members[1], base_branch: "edited-after-admission" },
-          { ...members[1], position: 2, repo_name: "ungranted", repo_id: 99999 },
-        ]);
-        return { inserted: true };
-      });
-      const stub = createMockSessionStub();
-
-      expect(await createScheduler(createEnv(undefined, stub)).tick()).toEqual({
-        processed: 1,
-        skipped: 0,
-        failed: 0,
-      });
-      expect(mockTeamGrantCovers).toHaveBeenCalledWith(teamId, [12345, 67890]);
-      expect(mockEnvironmentRepositories).toHaveBeenCalledTimes(1);
-      expect(mockCheckRepositoryAccess).toHaveBeenCalledTimes(2);
-      expect(mockTeamGrantCovers.mock.invocationCallOrder[0]).toBeLessThan(
-        mockStore.insertInvocationGuarded.mock.invocationCallOrder[0]
-      );
-      for (const callOrder of mockCheckRepositoryAccess.mock.invocationCallOrder) {
-        expect(callOrder).toBeLessThan(
-          mockStore.insertInvocationGuarded.mock.invocationCallOrder[0]
-        );
-      }
-      expect(await getInitBody(vi.mocked(stub.fetch))).toMatchObject({
-        environmentId: environment.id,
-        repoOwner: "acme",
-        repoName: "web-app",
-        repoId: 12345,
-        defaultBranch: "main",
-        repositories: [
-          { repoOwner: "acme", repoName: "web-app", repoId: 12345, baseBranch: "main" },
-          { repoOwner: "acme", repoName: "api", repoId: 67890, baseBranch: "develop" },
-        ],
-      });
-      expect(mockSessionStoreCreate).toHaveBeenCalledWith(
-        expect.objectContaining({ ownerTeamId: teamId, visibility: "team" })
-      );
+      expect(mockStore.insertInvocationGuarded).not.toHaveBeenCalled();
+      expect(mockStore.claimRunSession).not.toHaveBeenCalled();
+      expect(mockSessionStoreCreate).not.toHaveBeenCalled();
+      expect(stub.fetch).not.toHaveBeenCalled();
+      expect(mockResolveSessionProviderAuth).not.toHaveBeenCalled();
+      expect(mockStore.incrementConsecutiveFailures).not.toHaveBeenCalled();
+      expect(mockStore.insertSkippedInvocation).not.toHaveBeenCalled();
+      expect(mockStore.recordAuthorizationDenied).not.toHaveBeenCalled();
     });
 
     it.each(["repository", "environment"] as const)(
@@ -3842,9 +3463,7 @@ describe("Scheduler", () => {
             ? null
             : { repoId: 12345, repoOwner: owner, repoName: name, defaultBranch: "main" }
         );
-        mockTeamGrantCovers.mockImplementation(async (_teamId, repoIds) =>
-          repoIds.every((repoId) => repoId === 12345)
-        );
+        mockTeamGrantCovers.mockResolvedValue(true);
         mockStore.getInvocationRunAggregate.mockResolvedValue(
           aggregate({ total: 2, active: 1, failed: 1 })
         );
@@ -3865,6 +3484,7 @@ describe("Scheduler", () => {
           }),
         ]);
         expect(mockTeamGrantCovers).toHaveBeenCalledWith(teamId, [12345]);
+        expect(mockTeamGrantCovers).toHaveBeenCalledTimes(1);
         expect(mockStore.insertInvocationGuarded).toHaveBeenCalledTimes(1);
         expect(mockSessionStoreCreate).toHaveBeenCalledTimes(1);
         expect(mockStore.recordAuthorizationDenied).not.toHaveBeenCalled();
@@ -3872,29 +3492,10 @@ describe("Scheduler", () => {
       }
     );
 
-    it("does not apply team grants to workspace repository and environment launches", async () => {
-      mockStore.getOverdueAutomations.mockResolvedValue([sampleAutomation]);
-      mockEnvironmentGetById.mockResolvedValue({ ...environment, owner_team_id: null });
-      selectRepositories("auto-1", [repositoryRow("auto-1")]);
-      selectEnvironments("auto-1", [environment.id]);
-      mockCheckRepositoryAccess.mockImplementation(async ({ owner, name }) => ({
-        repoId: name === "api" ? 67890 : 12345,
-        repoOwner: owner,
-        repoName: name,
-        defaultBranch: "main",
-      }));
-      mockTeamGrantCovers.mockResolvedValue(false);
-
-      expect(await createScheduler().tick()).toEqual({ processed: 1, skipped: 0, failed: 0 });
-      expect(mockTeamGrantCovers).not.toHaveBeenCalled();
-      expect(mockTeamGetById).not.toHaveBeenCalled();
-      expect(mockSessionStoreCreate).toHaveBeenCalledTimes(2);
-      expect(mockStore.recordAuthorizationDenied).not.toHaveBeenCalled();
-    });
-
     it("keeps workspace environment resolution at launch time", async () => {
       mockStore.getOverdueAutomations.mockResolvedValue([sampleAutomation]);
       mockEnvironmentGetById.mockResolvedValue({ ...environment, owner_team_id: null });
+      mockTeamGrantCovers.mockResolvedValue(false);
       selectEnvironments("auto-1", [environment.id]);
       mockStore.insertInvocationGuarded.mockImplementation(async (params: unknown) => {
         capturedInvocationParams.push(
@@ -3920,6 +3521,9 @@ describe("Scheduler", () => {
         failed: 0,
       });
       expect(mockTeamGrantCovers).not.toHaveBeenCalled();
+      expect(mockTeamGetById).not.toHaveBeenCalled();
+      expect(mockSessionStoreCreate).toHaveBeenCalledTimes(1);
+      expect(mockStore.recordAuthorizationDenied).not.toHaveBeenCalled();
       expect(mockEnvironmentRepositories.mock.invocationCallOrder[0]).toBeGreaterThan(
         mockStore.insertInvocationGuarded.mock.invocationCallOrder[0]
       );

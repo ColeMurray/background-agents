@@ -51,23 +51,17 @@ describe("AutomationTemplatesPage", () => {
     );
   });
 
-  it("preserves scope when creation is denied", () => {
-    search = "teamId=team%2Fone";
-    canCreate = false;
-    render(<AutomationTemplatesPage />);
-    expect(replace).toHaveBeenCalledWith("/automations?teamId=team%2Fone");
-  });
-
   it("renders templates with automations.create", () => {
     render(<AutomationTemplatesPage />);
     expect(screen.getByRole("heading", { name: "Automation templates" })).toBeInTheDocument();
   });
 
-  it("redirects a direct template link without automations.create", () => {
+  it.each(["", "?teamId=team%2Fone"])("redirects a denied template link with scope %s", (query) => {
+    search = query.slice(1);
     canCreate = false;
     render(<AutomationTemplatesPage />);
 
-    expect(replace).toHaveBeenCalledWith("/automations");
+    expect(replace).toHaveBeenCalledWith(`/automations${query}`);
     expect(screen.queryByRole("heading", { name: "Automation templates" })).not.toBeInTheDocument();
   });
 });

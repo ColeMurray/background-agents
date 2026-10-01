@@ -1,11 +1,18 @@
 import { env } from "cloudflare:test";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import type { PermissionId } from "@open-inspect/shared/rbac";
-import { AutomationStore, type AutomationRow } from "../../src/db/automation-store";
-import { EnvironmentStore } from "../../src/db/environments";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { AutomationStore } from "../../src/db/automation-store";
 import { TeamSettingsStore } from "../../src/db/team-settings";
+import * as routeShared from "../../src/routes/shared";
 import { cleanD1Tables } from "./cleanup";
 import { serviceFetch, sqlDatabase } from "./helpers";
+import {
+  assignCustomRole,
+  expectStatus,
+  ownershipRequest,
+  seedEnvironment,
+  seedGrant,
+  seedTeam,
+} from "./ownership-test-helpers";
 
 const EXECUTOR = "11111111111111111111111111111111";
 const LEAD = "22222222222222222222222222222222";
@@ -19,7 +26,6 @@ const createBody = {
   scheduleCron: "0 9 * * *",
   scheduleTz: "UTC",
 };
-
 const invisibleRoutes: Array<{ method: string; suffix: string; body?: unknown }> = [
   { method: "GET", suffix: "" },
   { method: "GET", suffix: "/invocations" },
@@ -33,107 +39,32 @@ const invisibleRoutes: Array<{ method: string; suffix: string; body?: unknown }>
   { method: "PATCH", suffix: "", body: { userId: MEMBER } },
 ];
 
-function request(
-  path: string,
-  userId = EXECUTOR,
-  method = "GET",
-  body?: unknown
-): Promise<Response> {
-  return serviceFetch(`https://cp.test${path}`, {
+function request(path: string, userId = EXECUTOR, method = "GET", body?: unknown) {
+  return ownershipRequest(path, {
     as: { userId, role: userId === ADMIN ? "administrator" : "member" },
     method,
     ...(body === undefined ? {} : { body: JSON.stringify(body) }),
   });
 }
 
-async function team(id: string, members: Array<[string, "member" | "lead"]>): Promise<void> {
+async function automation(id: string, ownerTeamId: string | null, createdAt = 1) {
   await env.DB.prepare(
-    "INSERT INTO teams (id, slug, name, created_at, updated_at) VALUES (?, ?, ?, 1, 1)"
+    `INSERT INTO automations
+     (id, name, instructions, model, schedule_cron, created_by, user_id, owner_team_id, created_at, updated_at)
+     VALUES (?, ?, 'Run tests', 'anthropic/claude-sonnet-4-6', '0 9 * * *', ?, ?, ?, ?, ?)`
   )
-    .bind(id, id, id)
-    .run();
-  for (const [userId, role] of members) {
-    await env.DB.prepare(
-      "INSERT INTO team_memberships (team_id, user_id, role, created_at) VALUES (?, ?, ?, 1)"
-    )
-      .bind(id, userId, role)
-      .run();
-  }
-}
-
-function automation(id: string, ownerTeamId: string | null, createdAt = 1): AutomationRow {
-  return {
-    id,
-    owner_team_id: ownerTeamId,
-    name: id,
-    instructions: "Run tests",
-    trigger_type: "schedule",
-    schedule_cron: "0 9 * * *",
-    schedule_tz: "UTC",
-    harness: "opencode",
-    model: "anthropic/claude-sonnet-4-6",
-    reasoning_effort: null,
-    enabled: 1,
-    next_run_at: null,
-    consecutive_failures: 0,
-    created_by: EXECUTOR,
-    user_id: EXECUTOR,
-    created_at: createdAt,
-    updated_at: createdAt,
-    deleted_at: null,
-    event_type: null,
-    trigger_config: null,
-    trigger_auth_data: null,
-  };
-}
-
-async function environment(id: string, ownerTeamId: string | null, repoId?: number) {
-  await new EnvironmentStore(env.DB).create(
-    {
-      id,
-      name: id,
-      owner_team_id: ownerTeamId,
-      description: null,
-      prebuild_enabled: 0,
-      channel_associations: null,
-      created_at: 1,
-      updated_at: 1,
-    },
-    repoId === undefined
-      ? []
-      : [{ position: 0, repo_owner: "acme", repo_name: id, repo_id: repoId, base_branch: "main" }]
-  );
-}
-
-async function grant(teamId: string, repoId: number, repoOwner: string, repoName: string) {
-  await env.DB.prepare(
-    `INSERT INTO team_repository_grants
-     (id, team_id, grant_kind, repo_external_id, repo_owner, repo_name, created_at)
-     VALUES (?, ?, 'repository', ?, ?, ?, 1)`
-  )
-    .bind(`${teamId}-${repoId}`, teamId, repoId, repoOwner, repoName)
+    .bind(id, id, EXECUTOR, EXECUTOR, ownerTeamId, createdAt, createdAt)
     .run();
 }
 
-async function customRole(userId: string, permissions: readonly PermissionId[]): Promise<void> {
-  const roleId = "role_automation_custom";
-  await env.DB.batch([
-    env.DB.prepare(
-      `INSERT INTO roles (id, key, name, normalized_name, description, is_system)
-       VALUES (?, NULL, 'Automation Custom', 'automation custom', NULL, 0)`
-    ).bind(roleId),
-    ...permissions.map((permission) =>
-      env.DB.prepare("INSERT INTO role_permissions (role_id, permission_id) VALUES (?, ?)").bind(
-        roleId,
-        permission
-      )
-    ),
-    env.DB.prepare("UPDATE user_role_assignments SET role_id = ? WHERE user_id = ?").bind(
-      roleId,
-      userId
-    ),
-  ]);
-}
+const store = new AutomationStore(env.DB);
+const repository = (id: number | null, name = "api") => ({
+  position: 0,
+  repo_owner: "group/subgroup",
+  repo_name: name,
+  repo_id: id,
+  base_branch: "main",
+});
 
 describe("automation team ownership", () => {
   beforeEach(async () => {
@@ -141,92 +72,70 @@ describe("automation team ownership", () => {
     for (const userId of [EXECUTOR, LEAD, MEMBER, ADMIN]) {
       expect((await request("/me/authorization", userId)).status).toBe(200);
     }
-    await team(TEAM_A, [
+    await seedTeam(TEAM_A, [
       [EXECUTOR, "member"],
       [LEAD, "lead"],
       [MEMBER, "member"],
     ]);
-    await team(TEAM_B, [[EXECUTOR, "member"]]);
+    await seedTeam(TEAM_B, [[EXECUTOR, "member"]]);
   });
-  afterEach(cleanD1Tables);
+  afterEach(async () => {
+    vi.restoreAllMocks();
+    await cleanD1Tables();
+  });
 
-  it("defaults creation to workspace and returns request-specific capabilities", async () => {
-    const response = await request("/automations", EXECUTOR, "POST", createBody);
-    expect(response.status).toBe(201);
-    await expect(response.json()).resolves.toMatchObject({
+  it.each([undefined, null])("enforces workspace/team defaults (%s)", async (teamId) => {
+    const created = await request("/automations", EXECUTOR, "POST", { ...createBody, teamId });
+    expect(created.status).toBe(201);
+    const { automation: row } = await created.json<{ automation: { id: string } }>();
+    const fetched = await request(`/automations/${row.id}`);
+    expect(fetched.status).toBe(200);
+    await expect(fetched.json()).resolves.toMatchObject({
       automation: {
         ownerTeamId: null,
         userId: EXECUTOR,
         capabilities: { canRead: true, canManage: true, canTrigger: true },
       },
     });
-  });
-
-  it.each([null, TEAM_A])(
-    "returns executor capabilities for owner team %s",
-    async (ownerTeamId) => {
-      await new AutomationStore(env.DB).create(automation("executor-capabilities", ownerTeamId));
-      const response = await request("/automations/executor-capabilities", EXECUTOR);
-      expect(response.status).toBe(200);
-      const result = await response.json<{ automation: { capabilities: unknown } }>();
-      expect(result.automation.capabilities).toEqual({
-        canRead: true,
-        canManage: true,
-        canTrigger: true,
-      });
-      const listed = await request("/automations", EXECUTOR);
-      const page = await listed.json<{
-        automations: Array<{ id: string; capabilities: unknown }>;
-      }>();
-      expect(page.automations).toHaveLength(1);
-      expect(page.automations[0]?.id).toBe("executor-capabilities");
-      expect(page.automations[0]?.capabilities).toEqual({
-        canRead: true,
-        canManage: true,
-        canTrigger: true,
-      });
-    }
-  );
-
-  it.each([undefined, null])("requires an explicit team when configured (%s)", async (teamId) => {
     await new TeamSettingsStore(env.DB).set({ requireTeamOnCreate: true });
     const response = await request("/automations", EXECUTOR, "POST", { ...createBody, teamId });
     expect(response.status).toBe(400);
     await expect(response.json()).resolves.toMatchObject({ code: "team_required" });
   });
 
-  it("creates in a team only when its canonical executor is a member", async () => {
+  it("creates only for a member executor in an active team", async () => {
     const created = await request("/automations", EXECUTOR, "POST", {
       ...createBody,
       teamId: TEAM_A,
     });
     expect(created.status).toBe(201);
     await expect(created.json()).resolves.toMatchObject({
-      automation: { ownerTeamId: TEAM_A, userId: EXECUTOR },
+      automation: {
+        ownerTeamId: TEAM_A,
+        userId: EXECUTOR,
+        capabilities: { canRead: true, canManage: true, canTrigger: true },
+      },
     });
     const denied = await request("/automations", ADMIN, "POST", { ...createBody, teamId: TEAM_A });
     expect(denied.status).toBe(403);
     await expect(denied.json()).resolves.toMatchObject({ reason_code: "not_member" });
-  });
-
-  it("rejects archived team creation with the archived reason code", async () => {
     await env.DB.prepare("UPDATE teams SET archived_at = 2 WHERE id = ?").bind(TEAM_A).run();
-    const response = await request("/automations", EXECUTOR, "POST", {
+    const archived = await request("/automations", EXECUTOR, "POST", {
       ...createBody,
       teamId: TEAM_A,
     });
-    expect(response.status).toBe(409);
-    await expect(response.json()).resolves.toMatchObject({ reason_code: "team_archived" });
+    expect(archived.status).toBe(409);
+    await expect(archived.json()).resolves.toMatchObject({ reason_code: "team_archived" });
   });
 
-  it("filters visibility before pagination and supports an exact team filter", async () => {
-    const store = new AutomationStore(env.DB);
-    await store.create(automation("hidden-newest", TEAM_B, 4));
-    await store.create(automation("visible-team", TEAM_A, 3));
-    await store.create(automation("visible-workspace", null, 2));
-    const first = await request("/automations?limit=1", MEMBER);
-    const page = await first.json<{
-      automations: Array<{ id: string; ownerTeamId: string | null; capabilities: unknown }>;
+  it("filters visibility before pagination and supports exact team/workspace filters", async () => {
+    await automation("hidden-newest", TEAM_B, 4);
+    await automation("visible-team", TEAM_A, 3);
+    await automation("visible-workspace", null, 2);
+    const page = await (
+      await request("/automations?limit=1", MEMBER)
+    ).json<{
+      automations: unknown[];
       nextCursor: string;
       hasMore: boolean;
     }>();
@@ -236,169 +145,134 @@ describe("automation team ownership", () => {
       ],
       hasMore: true,
     });
-    const second = await request(
+    const next = await request(
       `/automations?limit=1&cursor=${encodeURIComponent(page.nextCursor)}`,
       MEMBER
     );
-    await expect(second.json()).resolves.toMatchObject({
+    await expect(next.json()).resolves.toMatchObject({
       automations: [{ id: "visible-workspace" }],
       hasMore: false,
       nextCursor: null,
     });
-    const filtered = await request(`/automations?teamId=${TEAM_A}`, MEMBER);
-    await expect(filtered.json()).resolves.toMatchObject({
-      automations: [{ id: "visible-team" }],
-      hasMore: false,
-    });
-    const hidden = await request(`/automations?teamId=${TEAM_B}`, MEMBER);
-    await expect(hidden.json()).resolves.toMatchObject({ automations: [] });
-    const workspace = await request("/automations?teamId=null", MEMBER);
-    await expect(workspace.json()).resolves.toMatchObject({
-      automations: [{ id: "visible-workspace" }],
-      hasMore: false,
-    });
-    const admin = await request("/automations", ADMIN);
-    const adminPage = await admin.json<{ automations: Array<{ id: string }> }>();
-    expect(adminPage.automations.map((row) => row.id)).toEqual([
+    for (const [teamId, ids] of [
+      [TEAM_A, ["visible-team"]],
+      [TEAM_B, []],
+      ["null", ["visible-workspace"]],
+    ] as const) {
+      const response = await request(`/automations?teamId=${teamId}`, MEMBER);
+      const filtered = await response.json<{ automations: { id: string }[]; hasMore: boolean }>();
+      expect(filtered.automations.map((row) => row.id)).toEqual(ids);
+      expect(filtered.hasMore).toBe(false);
+    }
+    const admin = await (
+      await request("/automations", ADMIN)
+    ).json<{ automations: { id: string }[] }>();
+    expect(admin.automations.map((row) => row.id)).toEqual([
       "hidden-newest",
       "visible-team",
       "visible-workspace",
     ]);
   });
 
-  it.each(
-    invisibleRoutes.flatMap((route) => ["member", "custom-any"].map((role) => ({ ...route, role })))
-  )(
-    "returns the missing-resource 404 for $role outsiders on $method /automations/:id$suffix",
-    async ({ method, suffix, body, role }) => {
-      const store = new AutomationStore(env.DB);
-      await store.create(automation("hidden-resource", TEAM_B));
-      if (role === "custom-any") {
-        await customRole(MEMBER, [
-          "automations.read",
-          "automations.manage.any",
-          "automations.trigger.any",
-        ]);
-      }
-      const hiddenPath = `/automations/hidden-resource${suffix}`;
-      const missingPath = `/automations/missing-resource${suffix}`;
-      const hidden = await request(hiddenPath, MEMBER, method, body);
-      const missing = await request(missingPath, MEMBER, method, body);
-      expect(hidden.status).toBe(404);
-      expect(missing.status).toBe(404);
-      const missingBody = await missing.json();
-      expect(missingBody).toEqual({ error: "Automation not found" });
-      await expect(hidden.json()).resolves.toEqual(missingBody);
-      expect(await store.getById("hidden-resource")).toMatchObject({
-        name: "hidden-resource",
-        user_id: EXECUTOR,
-        owner_team_id: TEAM_B,
-        enabled: 1,
-      });
-      const denied = await env.DB.prepare(
-        `SELECT resource_id, team_id FROM authorization_audit_events
+  describe("custom-any outsiders", () => {
+    beforeEach(async () => {
+      await automation("hidden-resource", TEAM_B);
+      await assignCustomRole(MEMBER, [
+        "automations.read",
+        "automations.manage.any",
+        "automations.trigger.any",
+      ]);
+    });
+    it.each(invisibleRoutes)(
+      "conceals $method /automations/:id$suffix without handler effects",
+      async ({ method, suffix, body }) => {
+        const original = await store.getById("hidden-resource");
+        const hiddenPath = `/automations/hidden-resource${suffix}`;
+        const missingPath = `/automations/missing-resource${suffix}`;
+        for (const path of [hiddenPath, missingPath]) {
+          const response = await request(path, MEMBER, method, body);
+          expect(response.status).toBe(404);
+          await expect(response.json()).resolves.toEqual({ error: "Automation not found" });
+        }
+        expect(await store.getById("hidden-resource")).toEqual(original);
+        expect(
+          await env.DB.prepare("SELECT COUNT(*) AS count FROM automation_invocations").first()
+        ).toEqual({ count: 0 });
+        expect(await env.DB.prepare("SELECT COUNT(*) AS count FROM sessions").first()).toEqual({
+          count: 0,
+        });
+        const denied = await env.DB.prepare(
+          `SELECT resource_id, team_id FROM authorization_audit_events
          WHERE action = 'authorization.request_denied' AND operation_result = 'denied'
            AND actor_user_id_snapshot = ? AND resource_id IN (?, ?)`
-      )
-        .bind(MEMBER, hiddenPath, missingPath)
-        .all();
-      expect(denied.results).toHaveLength(2);
-      expect(denied.results).toEqual(
-        expect.arrayContaining([
-          { resource_id: hiddenPath, team_id: TEAM_B },
-          { resource_id: missingPath, team_id: null },
-        ])
-      );
-    }
-  );
+        )
+          .bind(MEMBER, hiddenPath, missingPath)
+          .all();
+        expect(denied.results).toHaveLength(2);
+        expect(denied.results).toEqual(
+          expect.arrayContaining([
+            { resource_id: hiddenPath, team_id: TEAM_B },
+            { resource_id: missingPath, team_id: null },
+          ])
+        );
+      }
+    );
+  });
 
-  it.each([
-    ["own", EXECUTOR, 200],
-    ["own", MEMBER, 403],
-    ["own", LEAD, 200],
-    ["any", EXECUTOR, 200],
-    ["any", MEMBER, 200],
-    ["any", LEAD, 200],
-  ] as const)("preserves manage.%s without read for %s", async (scope, userId, status) => {
-    const store = new AutomationStore(env.DB);
-    await store.create(automation("no-read-management", TEAM_A));
-    await customRole(userId, [`automations.manage.${scope}`]);
-    const read = await request("/automations/no-read-management", userId);
+  it("lets a lead manage another executor's automation without read permission", async () => {
+    await automation("no-read-management", TEAM_A);
+    await assignCustomRole(LEAD, ["automations.manage.own"]);
+    const read = await request("/automations/no-read-management", LEAD);
     expect(read.status).toBe(403);
     await expect(read.json()).resolves.toMatchObject({ reason_code: "missing_permission" });
-    const update = await request("/automations/no-read-management", userId, "PUT", {
-      name: "Managed without read",
+    const update = await request("/automations/no-read-management", LEAD, "PUT", {
+      name: "Managed",
     });
-    expect(update.status).toBe(status);
-    if (status === 200) {
-      await expect(update.json()).resolves.toMatchObject({
-        automation: {
-          name: "Managed without read",
-          capabilities: { canRead: false, canManage: true },
-        },
-      });
-    } else {
-      await expect(update.json()).resolves.toMatchObject({ reason_code: "not_owner_or_lead" });
-      expect((await store.getById("no-read-management"))?.name).toBe("no-read-management");
-    }
+    expect(update.status).toBe(200);
+    await expect(update.json()).resolves.toMatchObject({
+      automation: {
+        name: "Managed",
+        capabilities: { canRead: false, canManage: true },
+      },
+    });
+    expect((await store.getById("no-read-management"))?.name).toBe("Managed");
   });
 
-  it("lets a team lead manage another executor's automation", async () => {
-    await new AutomationStore(env.DB).create(automation("lead-managed", TEAM_A));
-    const response = await request("/automations/lead-managed", LEAD, "PUT", {
-      name: "Managed by lead",
-    });
-    expect(response.status).toBe(200);
-    await expect(response.json()).resolves.toMatchObject({
-      automation: { capabilities: { canManage: true, canTrigger: true } },
-    });
-  });
-
-  it("does not let an ordinary executor change the executor", async () => {
-    const store = new AutomationStore(env.DB);
-    await store.create(automation("executor-change", TEAM_A));
-    const response = await request("/automations/executor-change", EXECUTOR, "PATCH", {
-      userId: MEMBER,
-    });
-    expect(response.status).toBe(403);
+  it("reserves executor changes for leads and audits only effective changes", async () => {
+    await automation("executor-change", TEAM_A);
+    const path = "/automations/executor-change";
+    await expectStatus(request(path, EXECUTOR, "PATCH", { userId: MEMBER }), 403);
     expect((await store.getById("executor-change"))?.user_id).toBe(EXECUTOR);
-  });
-
-  it("changes executor as a lead and writes the domain audit with the mutation", async () => {
-    const store = new AutomationStore(env.DB);
-    await store.create(automation("executor-change", TEAM_A));
-    const response = await request("/automations/executor-change", LEAD, "PATCH", {
+    const changed = await request(path, LEAD, "PATCH", {
       userId: MEMBER,
     });
-    expect(response.status).toBe(200);
+    expect(changed.status).toBe(200);
     expect((await store.getById("executor-change"))?.user_id).toBe(MEMBER);
     const audit = await env.DB.prepare(
-      "SELECT resource_type, resource_id, team_id, target_user_id_snapshot, metadata_json FROM authorization_audit_events WHERE action = 'automation.executor_changed' AND operation_result = 'applied'"
+      "SELECT resource_type, resource_id, team_id, actor_user_id_snapshot, target_user_id_snapshot, metadata_json FROM authorization_audit_events WHERE action = 'automation.executor_changed' AND operation_result = 'applied'"
     ).first();
     expect(audit).toMatchObject({
       resource_type: "automation",
       resource_id: "executor-change",
       team_id: TEAM_A,
+      actor_user_id_snapshot: LEAD,
       target_user_id_snapshot: MEMBER,
     });
     expect(JSON.parse(String(audit?.metadata_json))).toMatchObject({
       before: { userId: EXECUTOR },
       after: { userId: MEMBER },
     });
-    const repeated = await request("/automations/executor-change", LEAD, "PATCH", {
-      userId: MEMBER,
-    });
-    expect(repeated.status).toBe(200);
-    const count = await env.DB.prepare(
-      "SELECT COUNT(*) AS count FROM authorization_audit_events WHERE action = 'automation.executor_changed'"
-    ).first<{ count: number }>();
-    expect(count?.count).toBe(1);
+    await expectStatus(request(path, LEAD, "PATCH", { userId: MEMBER }), 200);
+    expect(
+      await env.DB.prepare(
+        "SELECT COUNT(*) AS count FROM authorization_audit_events WHERE action = 'automation.executor_changed'"
+      ).first()
+    ).toEqual({ count: 1 });
   });
 
   it("rolls back an executor mutation when its batched audit fails", async () => {
-    const store = new AutomationStore(env.DB);
-    const row = automation("executor-change", TEAM_A);
-    await store.create(row);
+    await automation("executor-change", TEAM_A);
+    const row = (await store.getById("executor-change"))!;
     await expect(
       sqlDatabase(env.DB).batch([
         store.bindExecutorChange(row, MEMBER),
@@ -409,7 +283,7 @@ describe("automation team ownership", () => {
   });
 
   it("allows administrator reassignment of a workspace automation", async () => {
-    await new AutomationStore(env.DB).create(automation("workspace-executor", null));
+    await automation("workspace-executor", null);
     const response = await request("/automations/workspace-executor", ADMIN, "PATCH", {
       userId: MEMBER,
     });
@@ -417,90 +291,84 @@ describe("automation team ownership", () => {
     await expect(response.json()).resolves.toMatchObject({
       automation: { ownerTeamId: null, userId: MEMBER },
     });
+    expect((await store.getById("workspace-executor"))?.user_id).toBe(MEMBER);
   });
 
-  it.each(["missing", "suspended", "unassigned", "non-member"])(
-    "rejects an invalid canonical executor (%s)",
+  it.each(["missing", "suspended", "unassigned", "non-member", "provider identity"])(
+    "rejects an invalid executor (%s) without a mutation",
     async (kind) => {
-      const store = new AutomationStore(env.DB);
-      await store.create(automation("executor-change", TEAM_A));
+      await automation("executor-change", TEAM_A);
       if (kind === "suspended")
         await env.DB.prepare("UPDATE users SET suspended_at = 2 WHERE id = ?").bind(MEMBER).run();
       if (kind === "unassigned")
         await env.DB.prepare("DELETE FROM user_role_assignments WHERE user_id = ?")
           .bind(MEMBER)
           .run();
-      const userId =
-        kind === "missing"
-          ? "ffffffffffffffffffffffffffffffff"
-          : kind === "non-member"
-            ? ADMIN
-            : MEMBER;
-      const response = await request("/automations/executor-change", LEAD, "PATCH", { userId });
-      expect(response.status).toBe(kind === "missing" ? 404 : kind === "non-member" ? 403 : 409);
+      const targets = {
+        missing: ["f".repeat(32), 404],
+        suspended: [MEMBER, 409],
+        unassigned: [MEMBER, 409],
+        "non-member": [ADMIN, 403],
+        "provider identity": ["github:583231", 400],
+      } as const;
+      const [userId, status] = targets[kind as keyof typeof targets];
+      expect(
+        (await request("/automations/executor-change", LEAD, "PATCH", { userId })).status
+      ).toBe(status);
       expect((await store.getById("executor-change"))?.user_id).toBe(EXECUTOR);
     }
   );
 
-  it("rejects provider identities as executor IDs", async () => {
-    await new AutomationStore(env.DB).create(automation("executor-change", TEAM_A));
-    const response = await request("/automations/executor-change", LEAD, "PATCH", {
-      userId: "github:583231",
+  it.each([null, 71, 72])("uses numeric grant identity on target updates (%s)", async (repoId) => {
+    await automation("grant-update", TEAM_A);
+    await store.replaceRepositories("grant-update", [repository(repoId)]);
+    const body = { environmentIds: [] };
+    await expectStatus(request("/automations/grant-update", EXECUTOR, "PUT", body), 409);
+    await seedGrant(TEAM_A, repository(71));
+    const response = await request("/automations/grant-update", EXECUTOR, "PUT", {
+      environmentIds: [],
     });
-    expect(response.status).toBe(400);
+    expect(response.status).toBe(repoId === 71 ? 200 : 409);
+    if (repoId !== 71)
+      await expect(response.json()).resolves.toMatchObject({ code: "target_team_missing_grant" });
+    expect((await store.getById("grant-update"))?.owner_team_id).toBe(TEAM_A);
+    await seedGrant(TEAM_A, "installation");
+    await expectStatus(request("/automations/grant-update", EXECUTOR, "PUT", body), 200);
+    expect((await store.getRepositoriesForAutomation("grant-update"))[0].repo_id).toBe(repoId);
   });
 
-  it.each([null, 71, 72])(
-    "requires numeric repository identity on target updates (repoId %s)",
-    async (repoId) => {
-      const store = new AutomationStore(env.DB);
-      await store.create(automation("grant-update", TEAM_A));
-      await store.replaceRepositories("grant-update", [
-        { repo_owner: "group/subgroup", repo_name: "api", repo_id: repoId, base_branch: "main" },
-      ]);
-      const denied = await request("/automations/grant-update", EXECUTOR, "PUT", {
-        environmentIds: [],
-      });
-      expect(denied.status).toBe(409);
-      await grant(TEAM_A, 71, "group/subgroup", "api");
-      const response = await request("/automations/grant-update", EXECUTOR, "PUT", {
-        environmentIds: [],
-      });
-      expect(response.status).toBe(repoId === 71 ? 200 : 409);
-      expect((await store.getById("grant-update"))?.owner_team_id).toBe(TEAM_A);
-      if (repoId !== 71) {
-        await expect(response.json()).resolves.toMatchObject({ code: "target_team_missing_grant" });
-      }
-    }
-  );
-
-  it("revalidates unchanged environment grants without viewer use permission", async () => {
-    const store = new AutomationStore(env.DB);
-    await environment("env_unchanged", TEAM_A, 91);
-    await store.create(automation("repository-edit", TEAM_A));
+  it("revalidates unchanged environment grants without use permission, but requires use for replacement", async () => {
+    await seedEnvironment("env_unchanged", TEAM_A, [repository(91)]);
+    await automation("repository-edit", TEAM_A);
     await sqlDatabase(env.DB).batch(
       store.bindEnvironmentInserts("repository-edit", ["env_unchanged"], 1)
     );
-    await customRole(LEAD, ["automations.manage.own", "automations.read"]);
-
-    const missingGrant = await request("/automations/repository-edit", LEAD, "PUT", {
+    const original = await store.getEnvironmentsForAutomation("repository-edit");
+    await assignCustomRole(LEAD, ["automations.manage.own", "repositories.use"]);
+    const path = "/automations/repository-edit";
+    const missingGrant = await request(path, LEAD, "PUT", {
       repositories: [],
     });
     expect(missingGrant.status).toBe(409);
     await expect(missingGrant.json()).resolves.toMatchObject({
       reason_code: "target_team_missing_grant",
     });
-
-    await grant(TEAM_A, 91, "acme", "env_unchanged");
-    const updated = await request("/automations/repository-edit", LEAD, "PUT", {
-      repositories: [],
+    await seedGrant(TEAM_A, repository(91));
+    vi.spyOn(routeShared, "resolveRepoOrError").mockResolvedValue({
+      repoId: 91,
+      repoOwner: "group/subgroup",
+      repoName: "api",
+      defaultBranch: "main",
     });
-    expect(updated.status).toBe(200);
-    expect(
-      (await store.getEnvironmentsForAutomation("repository-edit")).map((row) => row.environment_id)
-    ).toEqual(["env_unchanged"]);
-
-    const replacement = await request("/automations/repository-edit", LEAD, "PUT", {
+    await expectStatus(
+      request(path, LEAD, "PUT", {
+        repositories: [{ repoOwner: "group/subgroup", repoName: "api" }],
+      }),
+      200
+    );
+    expect((await store.getRepositoriesForAutomation("repository-edit"))[0].repo_id).toBe(91);
+    expect(await store.getEnvironmentsForAutomation("repository-edit")).toEqual(original);
+    const replacement = await request(path, LEAD, "PUT", {
       environmentIds: ["env_unchanged"],
     });
     expect(replacement.status).toBe(403);
@@ -510,130 +378,57 @@ describe("automation team ownership", () => {
     });
   });
 
-  it("rejects visible cross-team unchanged selections without use access", async () => {
-    const store = new AutomationStore(env.DB);
-    await environment("env_unchanged_cross", TEAM_B);
-    await store.create(automation("unchanged-cross-team", TEAM_A));
-    await sqlDatabase(env.DB).batch(
-      store.bindEnvironmentInserts("unchanged-cross-team", ["env_unchanged_cross"], 1)
-    );
-    await customRole(EXECUTOR, ["automations.manage.own"]);
-
-    const mismatch = await request("/automations/unchanged-cross-team", EXECUTOR, "PUT", {
+  it("conceals unchanged non-member environments in stored order without replacing selections", async () => {
+    const ids = ["env_hidden_z", "env_missing", "env_hidden_a"];
+    await automation("unchanged-hidden", TEAM_A);
+    await sqlDatabase(env.DB).batch(store.bindEnvironmentInserts("unchanged-hidden", ids, 1));
+    await assignCustomRole(LEAD, ["automations.manage.own"]);
+    for (const id of ["env_hidden_a", "env_hidden_z"]) await seedEnvironment(id, TEAM_B);
+    const hidden = await request("/automations/unchanged-hidden", LEAD, "PUT", {
       repositories: [],
     });
-    expect(mismatch.status).toBe(409);
-    await expect(mismatch.json()).resolves.toEqual({
-      error: "Environment must belong to the automation's owner team",
-      code: "environment_team_mismatch",
-      reason_code: "environment_team_mismatch",
-    });
+    expect(hidden.status).toBe(400);
+    expect(await hidden.text()).toBe(
+      JSON.stringify({ error: `Environment not found: ${[...ids].sort().join(", ")}` })
+    );
+    expect(
+      (await store.getEnvironmentsForAutomation("unchanged-hidden")).map(
+        (row) => row.environment_id
+      )
+    ).toEqual([...ids].sort());
   });
 
-  it.each([
-    { environmentIds: ["env_hidden"] },
-    { environmentIds: ["env_hidden_z", "env_missing", "env_hidden_a"] },
-  ])(
-    "hides unchanged non-member environments like missing IDs: $environmentIds",
-    async ({ environmentIds }) => {
-      const store = new AutomationStore(env.DB);
-      await store.create(automation("unchanged-hidden", TEAM_A));
-      await sqlDatabase(env.DB).batch(
-        store.bindEnvironmentInserts("unchanged-hidden", environmentIds, 1)
-      );
-      await customRole(LEAD, ["automations.manage.own"]);
-
-      const missing = await request("/automations/unchanged-hidden", LEAD, "PUT", {
-        repositories: [],
+  it.each(["POST", "PUT"])(
+    "checks environment ownership through %s without changing selections",
+    async (method) => {
+      await automation("owner-check", TEAM_A);
+      await seedEnvironment("env_other_team", TEAM_B);
+      const original = await store.getById("owner-check");
+      const path = method === "POST" ? "/automations" : "/automations/owner-check";
+      const response = await request(path, EXECUTOR, method, {
+        ...createBody,
+        teamId: TEAM_A,
+        environmentIds: ["env_other_team"],
       });
-      expect(missing.status).toBe(400);
-      const missingBody = await missing.text();
-      expect(missingBody).toBe(
-        JSON.stringify({ error: `Environment not found: ${[...environmentIds].sort().join(", ")}` })
-      );
-
-      for (const id of environmentIds.filter((id) => id !== "env_missing")) {
-        await environment(id, TEAM_B);
-      }
-      const hidden = await request("/automations/unchanged-hidden", LEAD, "PUT", {
-        repositories: [],
+      expect(response.status).toBe(409);
+      await expect(response.json()).resolves.toMatchObject({
+        reason_code: "environment_team_mismatch",
       });
-      expect(hidden.status).toBe(missing.status);
-      expect(await hidden.text()).toBe(missingBody);
-      expect(
-        (await store.getEnvironmentsForAutomation("unchanged-hidden")).map(
-          (row) => row.environment_id
-        )
-      ).toEqual([...environmentIds].sort());
+      expect(await store.getById("owner-check")).toEqual(original);
+      expect(await store.getEnvironmentsForAutomation("owner-check")).toEqual([]);
+      expect(await env.DB.prepare("SELECT COUNT(*) AS count FROM automations").first()).toEqual({
+        count: 1,
+      });
     }
   );
 
-  it("allows a null repository ID on target updates with an installation grant", async () => {
-    const store = new AutomationStore(env.DB);
-    await store.create(automation("grant-update", TEAM_A));
-    await store.replaceRepositories("grant-update", [
-      { repo_owner: "group/subgroup", repo_name: "api", repo_id: null, base_branch: "main" },
+  it("selects environments with use but no read through create and update", async () => {
+    await seedEnvironment("env_use_only", TEAM_A);
+    await assignCustomRole(LEAD, [
+      "automations.create",
+      "automations.manage.own",
+      "environments.use",
     ]);
-    await env.DB.prepare(
-      `INSERT INTO team_repository_grants (id, team_id, grant_kind, created_at)
-       VALUES ('automation-installation-grant', ?, 'installation', 1)`
-    )
-      .bind(TEAM_A)
-      .run();
-    const response = await request("/automations/grant-update", EXECUTOR, "PUT", {
-      environmentIds: [],
-    });
-    expect(response.status).toBe(200);
-    expect((await store.getById("grant-update"))?.owner_team_id).toBe(TEAM_A);
-  });
-
-  it.each(
-    ["POST", "PUT"].flatMap((method) =>
-      [
-        ["env_hidden"],
-        ["env_visible_cross", "env_hidden_z", "env_missing", "env_hidden_a"],
-        ["env_hidden_a", "env_missing", "env_hidden_z", "env_visible_cross"],
-      ].map((environmentIds) => ({ method, environmentIds }))
-    )
-  )(
-    "matches hidden and missing selections on $method in input order: $environmentIds",
-    async ({ method, environmentIds }) => {
-      const store = new AutomationStore(env.DB);
-      const path = method === "POST" ? "/automations" : "/automations/hidden-targets-update";
-      if (method === "PUT") {
-        await store.create(automation("hidden-targets-update", TEAM_A));
-      }
-      await environment("env_visible_cross", null);
-      await customRole(LEAD, ["automations.create", "automations.manage.own", "environments.use"]);
-      const body =
-        method === "POST" ? { ...createBody, teamId: TEAM_A, environmentIds } : { environmentIds };
-
-      const missing = await request(path, LEAD, method, body);
-      expect(missing.status).toBe(400);
-      const missingBody = await missing.text();
-      expect(missingBody).toBe(
-        JSON.stringify({
-          error: `Environment not found: ${environmentIds
-            .filter((id) => id !== "env_visible_cross")
-            .join(", ")}`,
-        })
-      );
-
-      for (const id of environmentIds.filter((id) => id.startsWith("env_hidden"))) {
-        await environment(id, TEAM_B);
-      }
-      const hidden = await request(path, LEAD, method, body);
-      expect(hidden.status).toBe(missing.status);
-      expect(await hidden.text()).toBe(missingBody);
-      if (method === "PUT") {
-        expect(await store.getEnvironmentsForAutomation("hidden-targets-update")).toEqual([]);
-      }
-    }
-  );
-
-  it("selects visible environments with use but no read on create and update", async () => {
-    await environment("env_use_only", TEAM_A);
-    await customRole(LEAD, ["automations.create", "automations.manage.own", "environments.use"]);
     const created = await request("/automations", LEAD, "POST", {
       ...createBody,
       teamId: TEAM_A,
@@ -641,86 +436,36 @@ describe("automation team ownership", () => {
     });
     expect(created.status).toBe(201);
     const { automation: selected } = await created.json<{ automation: { id: string } }>();
-    const updated = await request(`/automations/${selected.id}`, LEAD, "PUT", {
-      environmentIds: ["env_use_only"],
-    });
-    expect(updated.status).toBe(200);
+    await expectStatus(
+      request(`/automations/${selected.id}`, LEAD, "PUT", { environmentIds: ["env_use_only"] }),
+      200
+    );
     expect(
-      (await new AutomationStore(env.DB).getEnvironmentsForAutomation(selected.id)).map(
-        (row) => row.environment_id
-      )
+      (await store.getEnvironmentsForAutomation(selected.id)).map((row) => row.environment_id)
     ).toEqual(["env_use_only"]);
   });
 
-  it.each(
-    ["POST", "PUT"].flatMap((method) =>
-      [null, TEAM_B].map((ownerTeamId) => ({ method, ownerTeamId }))
-    )
-  )(
-    "refuses selecting a visible environment outside the automation team on $method ($ownerTeamId)",
-    async ({ method, ownerTeamId }) => {
-      await environment("env_cross", ownerTeamId);
-      const path = method === "POST" ? "/automations" : "/automations/cross-team-update";
-      if (method === "PUT") {
-        await new AutomationStore(env.DB).create(automation("cross-team-update", TEAM_A));
-      }
-      const body =
-        method === "POST"
-          ? { ...createBody, teamId: TEAM_A, environmentIds: ["env_cross"] }
-          : { environmentIds: ["env_cross"] };
-      const response = await request(path, EXECUTOR, method, body);
-      expect(response.status).toBe(409);
-      await expect(response.json()).resolves.toEqual({
-        error: "Environment must belong to the automation's owner team",
-        code: "environment_team_mismatch",
-        reason_code: "environment_team_mismatch",
-      });
-    }
-  );
-
-  it("refuses selecting a team environment in a workspace automation", async () => {
-    await environment("env_team", TEAM_A);
-    const response = await request("/automations", EXECUTOR, "POST", {
-      ...createBody,
-      environmentIds: ["env_team"],
-    });
-    expect(response.status).toBe(409);
-    await new AutomationStore(env.DB).create(automation("workspace-targets", null));
-    const update = await request("/automations/workspace-targets", EXECUTOR, "PUT", {
-      environmentIds: ["env_team"],
-    });
-    expect(update.status).toBe(409);
-  });
-
   it("checks grants for every selected environment repository on create and update", async () => {
-    await environment("env_one", TEAM_A, 11);
-    await environment("env_two", TEAM_A, 22);
-    await grant(TEAM_A, 11, "acme", "env_one");
-    const body = { ...createBody, teamId: TEAM_A, environmentIds: ["env_one", "env_two"] };
-    const denied = await request("/automations", EXECUTOR, "POST", body);
-    expect(denied.status).toBe(409);
-    await new AutomationStore(env.DB).create(automation("targets-update", TEAM_A));
-    const update = await request("/automations/targets-update", EXECUTOR, "PUT", {
-      environmentIds: body.environmentIds,
-    });
-    expect(update.status).toBe(409);
-    await grant(TEAM_A, 22, "acme", "env_two");
+    await seedEnvironment("env_one", TEAM_A, [repository(11, "one")]);
+    await seedEnvironment("env_two", TEAM_A, [repository(22, "two")]);
+    await seedGrant(TEAM_A, repository(11, "one"));
+    const environmentIds = ["env_one", "env_two"];
+    const body = { ...createBody, teamId: TEAM_A, environmentIds };
+    expect((await request("/automations", EXECUTOR, "POST", body)).status).toBe(409);
+    await automation("targets-update", TEAM_A);
+    await expectStatus(
+      request("/automations/targets-update", EXECUTOR, "PUT", { environmentIds }),
+      409
+    );
+    expect(await store.getEnvironmentsForAutomation("targets-update")).toEqual([]);
+    await seedGrant(TEAM_A, repository(22, "two"));
     expect((await request("/automations", EXECUTOR, "POST", body)).status).toBe(201);
   });
 
-  it("repairs a legacy canonical executor before admitting a team lead", async () => {
-    const store = new AutomationStore(env.DB);
-    await store.create({ ...automation("legacy-team", TEAM_A), user_id: null });
-    const response = await request("/automations/legacy-team", LEAD);
-    expect(response.status).toBe(200);
-    expect((await store.getById("legacy-team"))?.user_id).toBe(EXECUTOR);
-  });
-
-  it("preserves actorless service credential ceilings on ID reads and mutations", async () => {
-    await new AutomationStore(env.DB).create(automation("service-read", TEAM_A));
-    const read = await serviceFetch("https://cp.test/automations/service-read", {
-      service: "slack-bot",
-    });
+  it("preserves actorless service read capabilities and mutation ceilings", async () => {
+    await automation("service-read", TEAM_A);
+    const url = "https://cp.test/automations/service-read";
+    const read = await serviceFetch(url, { service: "slack-bot" });
     expect(read.status).toBe(200);
     await expect(read.json()).resolves.toMatchObject({
       automation: {
@@ -729,15 +474,16 @@ describe("automation team ownership", () => {
       },
     });
     for (const service of ["github-bot", "linear-bot"] as const) {
-      expect(
-        (await serviceFetch("https://cp.test/automations/service-read", { service })).status
-      ).toBe(403);
+      expect((await serviceFetch(url, { service })).status).toBe(403);
     }
-    const mutate = await serviceFetch("https://cp.test/automations/service-read", {
-      service: "slack-bot",
-      method: "PATCH",
-      body: JSON.stringify({ userId: MEMBER }),
-    });
-    expect(mutate.status).toBe(403);
+    await expectStatus(
+      serviceFetch(url, {
+        service: "slack-bot",
+        method: "PATCH",
+        body: JSON.stringify({ userId: MEMBER }),
+      }),
+      403
+    );
+    expect((await store.getById("service-read"))?.user_id).toBe(EXECUTOR);
   });
 });

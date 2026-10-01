@@ -128,14 +128,14 @@ describe("listAutomationsResponseSchema", () => {
 });
 
 describe("automation team input", () => {
-  it("accepts a team on create", () => {
+  it.each(["team_a", null])("accepts teamId=%s on create", (teamId) => {
     expect(
       createAutomationRequestSchema.parse({
         name: "Daily sync",
         instructions: "Sync",
-        teamId: "team_a",
+        teamId,
       })
-    ).toHaveProperty("teamId", "team_a");
+    ).toHaveProperty("teamId", teamId);
   });
 });
 

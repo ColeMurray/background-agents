@@ -23,14 +23,14 @@ describe("isEnvironmentId", () => {
 });
 
 describe("createEnvironmentInputSchema", () => {
-  it("retains the owning team", () => {
+  it.each(["team_a", null])("retains owning team %s", (teamId) => {
     expect(
       createEnvironmentInputSchema.parse({
         name: "Staging",
-        teamId: "team_a",
+        teamId,
         repositories: [{ repoOwner: "acme", repoName: "web" }],
       })
-    ).toHaveProperty("teamId", "team_a");
+    ).toHaveProperty("teamId", teamId);
   });
   it("parses a valid environment and normalizes member identifiers", () => {
     const parsed = createEnvironmentInputSchema.parse({
@@ -148,13 +148,15 @@ describe("updateEnvironmentInputSchema", () => {
 });
 
 describe("listEnvironmentsResponseSchema", () => {
-  it("parses a valid environments response with nullable fields", () => {
+  it.each([
+    {},
+    { ownerTeamId: "team_a", capabilities: { canRead: true, canManage: false, canUse: true } },
+  ])("parses nullable fields and retains optional ownership %j", (ownership) => {
     const result = listEnvironmentsResponseSchema.safeParse({
       environments: [
         {
           id: "env_abc",
-          ownerTeamId: "team_a",
-          capabilities: { canRead: true, canManage: false, canUse: true },
+          ...ownership,
           name: "Production",
           description: null,
           prebuildEnabled: true,
@@ -174,13 +176,7 @@ describe("listEnvironmentsResponseSchema", () => {
     });
 
     expect(result.success).toBe(true);
-    if (result.success) {
-      expect(result.data.environments[0].capabilities).toEqual({
-        canRead: true,
-        canManage: false,
-        canUse: true,
-      });
-    }
+    if (result.success) expect(result.data.environments[0]).toMatchObject(ownership);
   });
 
   it("rejects malformed environment entries", () => {

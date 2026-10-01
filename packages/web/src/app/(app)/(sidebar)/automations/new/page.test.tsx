@@ -8,6 +8,7 @@ import type { ReactNode } from "react";
 import { DEFAULT_MODEL } from "@open-inspect/shared/models";
 import NewAutomationPage from "./page";
 import { browserApiFetch } from "@/lib/browser-api-fetch";
+import { invalidateAutomationCache } from "@/lib/automation-cache";
 
 expect.extend(matchers);
 afterEach(cleanup);
@@ -24,6 +25,7 @@ vi.mock("next/navigation", () => ({
   useRouter: () => ({ push, replace }),
 }));
 vi.mock("@/lib/browser-api-fetch", () => ({ browserApiFetch: vi.fn() }));
+vi.mock("@/lib/automation-cache", () => ({ invalidateAutomationCache: vi.fn() }));
 vi.mock("@/components/automations/webhook-config", () => ({
   WebhookConfig: () => <div>Webhook configuration</div>,
 }));
@@ -89,6 +91,7 @@ beforeEach(() => {
   canCreate = true;
   replace.mockReset();
   push.mockReset();
+  vi.mocked(invalidateAutomationCache).mockReset().mockResolvedValue(undefined);
   vi.mocked(browserApiFetch).mockReset();
   vi.mocked(browserApiFetch).mockResolvedValue(Response.json({ automation: { id: "new-auto" } }));
 });
@@ -99,6 +102,8 @@ describe("NewAutomationPage template pre-fill", () => {
     async (teamId) => {
       search = `template=find-bugs${teamId ? `&teamId=${teamId}` : ""}`;
       const { container } = render(<NewAutomationPage />);
+      expect(screen.getByDisplayValue("Find bugs")).toBeInTheDocument();
+      expect(screen.getByRole("combobox", { name: "Team" })).toHaveValue(teamId ?? "");
       fireEvent.change(screen.getByRole("combobox", { name: "Team" }), {
         target: { value: teamId ? "" : "team-1" },
       });
@@ -111,6 +116,8 @@ describe("NewAutomationPage template pre-fill", () => {
       await waitFor(() => expect(push).toHaveBeenCalledWith(`/automations/new-auto${scopeQuery}`));
       const body = JSON.parse(String(vi.mocked(browserApiFetch).mock.calls[0][1]?.body));
       expect(body.teamId).toBe(teamId ? null : "team-1");
+      expect(vi.mocked(browserApiFetch).mock.calls[0][1]?.method).toBe("POST");
+      expect(invalidateAutomationCache).toHaveBeenCalledWith(expect.anything());
     }
   );
 
@@ -131,24 +138,12 @@ describe("NewAutomationPage template pre-fill", () => {
     expect(push).not.toHaveBeenCalled();
   });
 
-  it("preserves scope when a create deep link is denied", () => {
-    search = "teamId=team%2Fone";
-    canCreate = false;
-    render(<NewAutomationPage />);
-    expect(replace).toHaveBeenCalledWith("/automations?teamId=team%2Fone");
-  });
-
-  it("preserves team query context alongside the template", () => {
-    search = "template=find-bugs&teamId=team-1";
-    render(<NewAutomationPage />);
-    expect(screen.getByDisplayValue("Find bugs")).toBeInTheDocument();
-    expect(screen.getByRole("combobox", { name: "Team" })).toHaveValue("team-1");
-  });
-  it("redirects a direct create link without automations.create", () => {
+  it.each(["", "?teamId=team%2Fone"])("redirects a denied create link with scope %s", (query) => {
+    search = query.slice(1);
     canCreate = false;
     render(<NewAutomationPage />);
 
-    expect(replace).toHaveBeenCalledWith("/automations");
+    expect(replace).toHaveBeenCalledWith(`/automations${query}`);
     expect(screen.queryByRole("heading", { name: "Create Automation" })).not.toBeInTheDocument();
   });
 

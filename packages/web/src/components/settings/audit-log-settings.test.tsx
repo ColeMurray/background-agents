@@ -197,6 +197,7 @@ describe("AuditLogSettings", () => {
   it.each([
     ["team.secret_set", "Team secret set"],
     ["team.secret_deleted", "Team secret deleted"],
+    ["automation.executor_changed", "Automation executor changed"],
   ])("labels %s as an applied operation", (action, label) => {
     const article = renderSingle(createEvent("applied", { action }));
     expect(article.getByText(label)).toBeInTheDocument();

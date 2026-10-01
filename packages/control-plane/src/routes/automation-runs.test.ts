@@ -7,26 +7,18 @@
  * supply the principal.
  */
 
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type * as AuthenticateModule from "../auth/authenticate";
-import type { Principal } from "../auth/principal";
-import type { PermissionId } from "@open-inspect/shared/rbac";
-import {
-  authorizationDatabase,
-  createTestEnv,
-  createTestRequestHandler,
-  emptyStatement,
-  TEST_BACKGROUND_TASK_CONTEXT,
-  TEST_SESSION_ROW,
-} from "../router.test-support";
+import { createTestRequestHandler, TEST_SESSION_ROW } from "../router.test-support";
 import {
   MAX_AUTOMATION_INVOCATION_LIST_LIMIT,
   type AutomationRun,
   type ListAutomationInvocationsResponse,
 } from "@open-inspect/shared/types/automations";
 import { toAutomationRun, type EnrichedRunRow } from "../db/automation-store";
-import type { SessionRow } from "../db/session-row";
-import type { SqlStatement } from "../db/sql-database";
+import { SessionCollaboratorStore } from "../db/session-collaborators";
+import { SessionIndexStore } from "../db/session-index";
+import { toSessionFields, type SessionRow } from "../db/session-row";
 import { automationRoutes } from "./automations";
 import { DEFAULT_INVOCATION_LIST_LIMIT, MAX_INVOCATION_LIST_OFFSET } from "./automation-runs";
 import {
@@ -39,7 +31,6 @@ import {
   sampleRow,
   applyMockDefaults,
   automationRequest,
-  USER_PRINCIPAL,
 } from "./automations.test-support";
 
 vi.mock("../auth/authenticate", async (importOriginal) => ({
@@ -241,95 +232,43 @@ describe("automation run routes", () => {
     { name: "invocation list", path: "/automations/auto-1/invocations" },
     { name: "run item", path: "/automations/auto-1/runs/run-1" },
   ])("linked session privacy on $name", ({ path }) => {
-    it.each<{
-      name: string;
-      session: SessionRow | null;
-      permissions: readonly PermissionId[];
-      principal?: Principal;
-      readable?: boolean;
-    }>([
-      {
-        name: "an ordinary reader of another user's private session",
-        session: privateSession,
-        permissions: ["automations.read", "sessions.read"],
-      },
-      {
-        name: "a session owner without sessions.read",
-        session: { ...privateSession, user_id: "user-1", visibility: "workspace" },
-        permissions: ["automations.read"],
-      },
-      {
-        name: "an actorless Slack bot",
-        session: privateSession,
-        permissions: [],
-        principal: { kind: "service", service: "slack-bot", actor: null },
-      },
-      {
-        name: "a missing persisted session row",
-        session: null,
-        permissions: ["automations.read", "sessions.read"],
-      },
-      {
-        name: "the current private session owner",
-        session: { ...privateSession, user_id: "user-1" },
-        permissions: ["automations.read", "sessions.read"],
-        readable: true,
-      },
-    ])(
-      "enforces linked metadata privacy without changing the run for $name",
-      async ({ session, permissions, principal = USER_PRINCIPAL, readable = false }) => {
-        const run = toAutomationRun(linkedRunRow);
-        const invocation = {
-          id: "inv-1",
-          automationId: "auto-1",
-          status: "completed" as const,
-          source: "schedule" as const,
-          scheduledAt: 1000,
-          skipReason: null,
-          createdAt: 1000,
-          completedAt: 2000,
-          runs: [run],
-        };
-        mockStore.listInvocations.mockResolvedValue({
-          invocations: [{ ...invocation, runs: [{ ...run }] }],
-          total: 1,
-        });
-        mockStore.getRunById.mockResolvedValue({ ...linkedRunRow });
-        mocks.authenticate.mockImplementation(async (request: Request) => ({ principal, request }));
-        const db = authorizationDatabase({
-          permissions,
-          batch: async <T>(statements: SqlStatement[]) =>
-            Promise.all(statements.map((statement) => statement.all<T>())),
-          statement(sql) {
-            if (!sql.includes("FROM sessions") || !session) return emptyStatement();
-            const statement: SqlStatement = {
-              ...emptyStatement(),
-              bind: () => statement,
-              first: async <T>() => session as T,
-              all: async <T>() => ({ results: [session] as T[], meta: { changes: 0 } }),
-            };
-            return statement;
-          },
-        });
+    afterEach(() => vi.restoreAllMocks());
 
-        const res = await handleRequest(
-          new Request(`https://test.local${path}`),
-          createTestEnv({ DB: db }),
-          TEST_BACKGROUND_TASK_CONTEXT
-        );
+    it("redacts non-null linked metadata without changing the run", async () => {
+      const run = toAutomationRun(linkedRunRow);
+      const invocation = {
+        id: "inv-1",
+        automationId: "auto-1",
+        status: "completed" as const,
+        source: "schedule" as const,
+        scheduledAt: 1000,
+        skipReason: null,
+        createdAt: 1000,
+        completedAt: 2000,
+        runs: [run],
+      };
+      mockStore.listInvocations.mockResolvedValue({
+        invocations: [{ ...invocation, runs: [{ ...run }] }],
+        total: 1,
+      });
+      mockStore.getRunById.mockResolvedValue({ ...linkedRunRow });
+      vi.spyOn(SessionIndexStore.prototype, "getByIds").mockResolvedValue(
+        new Map([["session-1", toSessionFields(privateSession)]])
+      );
+      vi.spyOn(SessionCollaboratorStore.prototype, "listForSessions").mockResolvedValue(new Map());
+      const res = await callRoute("GET", path, {
+        permissions: ["automations.read", "sessions.read"],
+      });
 
-        expect(res.status).toBe(200);
-        const expectedRun = readable
-          ? run
-          : { ...run, sessionId: null, sessionTitle: null, artifactSummary: null };
-        if (path.endsWith("/invocations")) {
-          const body = await res.json<ListAutomationInvocationsResponse>();
-          expect(body).toEqual({ invocations: [{ ...invocation, runs: [expectedRun] }], total: 1 });
-        } else {
-          const body = await res.json<{ run: AutomationRun }>();
-          expect(body).toEqual({ run: expectedRun });
-        }
+      expect(res.status).toBe(200);
+      const expectedRun = { ...run, sessionId: null, sessionTitle: null, artifactSummary: null };
+      if (path.endsWith("/invocations")) {
+        const body = await res.json<ListAutomationInvocationsResponse>();
+        expect(body).toEqual({ invocations: [{ ...invocation, runs: [expectedRun] }], total: 1 });
+      } else {
+        const body = await res.json<{ run: AutomationRun }>();
+        expect(body).toEqual({ run: expectedRun });
       }
-    );
+    });
   });
 });

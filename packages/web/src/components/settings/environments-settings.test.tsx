@@ -5,6 +5,7 @@ import * as matchers from "@testing-library/jest-dom/matchers";
 import { afterEach, beforeAll, beforeEach, expect, it, vi } from "vitest";
 import type { Environment } from "@open-inspect/shared/types/environments";
 import { EnvironmentsSettings } from "./environments-settings";
+import { TeamEnvironments } from "@/components/teams/team-environments";
 
 expect.extend(matchers);
 afterEach(cleanup);
@@ -15,6 +16,8 @@ const mocks = vi.hoisted(() => ({
   fetch: vi.fn(),
   mutate: vi.fn(),
   imagesSupported: false,
+  canEditMetadata: false,
+  canManageBindings: false,
 }));
 vi.mock("swr", () => ({ useSWRConfig: () => ({ mutate: mocks.mutate }) }));
 vi.mock("sonner", () => ({ toast: { success: vi.fn() } }));
@@ -28,6 +31,8 @@ vi.mock("@/hooks/use-environments", () => ({
 }));
 vi.mock("@/hooks/use-image-builds", () => ({ useImageBuilds: () => ({}) }));
 vi.mock("@/lib/sandbox-provider", () => ({ supportsRepoImages: () => mocks.imagesSupported }));
+vi.mock("@/hooks/use-teams", () => ({ useTeam: () => ({ team: undefined }) }));
+vi.mock("@/hooks/use-team-capabilities", () => ({ useTeamCapabilities: () => mocks }));
 vi.mock("@/hooks/use-current-user-authorization", () => ({
   useCurrentUserAuthorization: () => ({
     hasPermission: (permission: string) => mocks.permissions.includes(permission),
@@ -89,6 +94,8 @@ beforeEach(() => {
   vi.clearAllMocks();
   mocks.permissions = [];
   mocks.imagesSupported = false;
+  mocks.canEditMetadata = false;
+  mocks.canManageBindings = false;
   mocks.environments = [
     {
       id: "env-1",
@@ -113,11 +120,26 @@ it("uses the exact team list and row capabilities, not global manage", () => {
   expect(screen.queryByRole("button", { name: "Delete" })).not.toBeInTheDocument();
 });
 
+it("requires metadata and environment grants, not bindings, for team creation", () => {
+  mocks.permissions = ["environments.manage"];
+  mocks.canManageBindings = true;
+  const view = render(<TeamEnvironments teamId="team/one" />);
+  expect(mocks.useEnvironments).toHaveBeenCalledWith("team/one");
+  expect(screen.queryByRole("button", { name: "New environment" })).not.toBeInTheDocument();
+  mocks.canManageBindings = false;
+  mocks.canEditMetadata = true;
+  view.rerender(<TeamEnvironments teamId="team/one" />);
+  expect(screen.getByRole("button", { name: "New environment" })).toBeInTheDocument();
+  mocks.permissions = [];
+  view.rerender(<TeamEnvironments teamId="team/one" />);
+  expect(screen.queryByRole("button", { name: "New environment" })).not.toBeInTheDocument();
+});
+
 it("allows row management without global manage and submits only configuration", async () => {
   mocks.environments[0].capabilities = {
-    canRead: true,
+    canRead: false,
     canManage: true,
-    canUse: true,
+    canUse: false,
   };
   render(<EnvironmentsSettings teamId="team-1" />);
   fireEvent.click(screen.getByRole("button", { name: "Edit" }));

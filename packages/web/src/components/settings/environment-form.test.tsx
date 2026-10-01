@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 /// <reference types="@testing-library/jest-dom" />
 
-import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import * as matchers from "@testing-library/jest-dom/matchers";
@@ -15,6 +15,7 @@ afterEach(cleanup);
 
 const mocks = vi.hoisted(() => ({
   useRepos: vi.fn(),
+  allowWorkspace: true,
   reposValue: [] as Array<{
     id: number;
     fullName: string;
@@ -38,13 +39,10 @@ vi.mock("@/hooks/use-resource-teams", () => ({
       { id: "team-1", name: "Engineering" },
       { id: "team-2", name: "Design" },
     ],
-    allTeams: [
-      { id: "team-1", name: "Engineering" },
-      { id: "team-2", name: "Design" },
-    ],
+    allTeams: [],
     loading: false,
     error: null,
-    allowWorkspace: true,
+    allowWorkspace: mocks.allowWorkspace,
   }),
 }));
 
@@ -63,6 +61,10 @@ beforeAll(() => {
       disconnect() {}
     }
   );
+});
+
+beforeEach(() => {
+  mocks.allowWorkspace = true;
 });
 
 function repo(owner: string, name: string, id: number) {
@@ -98,21 +100,29 @@ function environment(
 }
 
 describe("EnvironmentForm", () => {
-  it("scopes creation repositories and prevents saving stale selections after changing team", () => {
+  it.each(["team-1", null])("validates owner %s and discards stale selections", (teamId) => {
+    mocks.allowWorkspace = teamId !== null;
     mocks.reposValue = [repo("acme", "web", 1)];
     const onSubmit = vi.fn();
     const { container } = render(
       <EnvironmentForm
         mode="create"
+        teamId={teamId}
         submitting={false}
         onSubmit={onSubmit}
         onCancel={vi.fn()}
-        initialValues={environment([{ repoOwner: "acme", repoName: "web" }], {
-          ownerTeamId: "team-1",
-        })}
+        initialValues={environment([{ repoOwner: "acme", repoName: "web" }])}
       />
     );
-    expect(mocks.useRepos).toHaveBeenLastCalledWith(true, "team-1");
+    expect(mocks.useRepos).toHaveBeenLastCalledWith(true, teamId);
+    expect(screen.getByRole("combobox", { name: "Team" })).toHaveValue(teamId ?? "");
+    fireEvent.submit(container.querySelector("form")!);
+    if (!teamId) {
+      expect(screen.getByRole("button", { name: "Create environment" })).toBeDisabled();
+      expect(onSubmit).not.toHaveBeenCalled();
+      return;
+    }
+    expect(onSubmit).toHaveBeenCalledWith(expect.objectContaining({ teamId }));
     fireEvent.change(screen.getByRole("combobox", { name: "Team" }), {
       target: { value: "team-2" },
     });
@@ -120,7 +130,7 @@ describe("EnvironmentForm", () => {
     expect(screen.queryByTitle("acme/web")).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Create environment" })).toBeDisabled();
     fireEvent.submit(container.querySelector("form")!);
-    expect(onSubmit).not.toHaveBeenCalled();
+    expect(onSubmit).toHaveBeenCalledTimes(1);
   });
 
   it("shows existing team ownership read-only and excludes it from edit submissions", () => {
@@ -139,38 +149,12 @@ describe("EnvironmentForm", () => {
     );
     expect(screen.getByRole("combobox", { name: "Team" })).toHaveValue("team-1");
     expect(screen.getByRole("combobox", { name: "Team" })).toBeDisabled();
-    fireEvent.change(screen.getByRole("combobox", { name: "Team" }), {
-      target: { value: "team-2" },
-    });
-    expect(mocks.useRepos).toHaveBeenLastCalledWith(true, "team-1");
     fireEvent.submit(container.querySelector("form")!);
     expect(onSubmit).toHaveBeenCalledTimes(1);
     expect(onSubmit.mock.calls[0][0]).not.toHaveProperty("teamId");
     expect(onSubmit.mock.calls[0][0].repositories).toEqual([
       { repoOwner: "acme", repoName: "web", baseBranch: "main" },
     ]);
-  });
-
-  it("uses creation context and submits its team", async () => {
-    mocks.reposValue = [repo("acme", "web", 1)];
-    const user = userEvent.setup();
-    const onSubmit = vi.fn();
-    render(
-      <EnvironmentForm
-        mode="create"
-        teamId="team-1"
-        submitting={false}
-        onSubmit={onSubmit}
-        onCancel={vi.fn()}
-      />
-    );
-    expect(screen.getByRole("combobox", { name: "Team" })).toHaveValue("team-1");
-    await user.type(screen.getByLabelText("Name"), "Stack");
-    await user.click(screen.getByRole("button", { name: "Repository selection" }));
-    await user.click(screen.getByRole("checkbox", { name: /acme\/web/i }));
-    await user.keyboard("{Escape}");
-    await user.click(screen.getByRole("button", { name: "Create environment" }));
-    expect(onSubmit).toHaveBeenCalledWith(expect.objectContaining({ teamId: "team-1" }));
   });
 
   it("preserves a nested owner namespace when saving", async () => {

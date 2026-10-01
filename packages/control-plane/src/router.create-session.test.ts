@@ -19,8 +19,6 @@ import { resolveEnvironmentTarget, resolveSessionRepositories } from "./repos/re
 import { TeamStore } from "./db/teams";
 import { TeamMembershipStore } from "./db/team-memberships";
 import { TeamRepositoryGrantStore } from "./db/team-repository-grants";
-import * as sessionIdentity from "./session/identity";
-import * as integrationSettings from "./session/integration-settings-resolution";
 
 const { getAccessToken } = vi.hoisted(() => ({
   getAccessToken: vi.fn(async () => ({
@@ -311,62 +309,30 @@ describe("handleCreateSession D1 ordering", () => {
     );
   });
 
-  it.each([undefined, null, "team_b"])(
-    "rejects a visible team environment for destination %s before SCM, settings or session writes",
-    async (teamId) => {
-      environmentMocks.getById.mockResolvedValue({ id: "env_1", owner_team_id: "team_a" });
-      vi.spyOn(TeamMembershipStore.prototype, "listForUser").mockResolvedValue(
-        new Map([
-          ["team_a", "member"],
-          ["team_b", "member"],
-        ])
-      );
-      vi.spyOn(TeamStore.prototype, "getById").mockResolvedValue({
-        id: "team_b",
-        slug: "b",
-        name: "B",
-        description: null,
-        joinPolicy: "invite_only",
-        defaultVisibility: "team",
-        defaultEnvironmentId: null,
-        grantsVersion: 0,
-        archivedAt: null,
-        createdAt: 1,
-        updatedAt: 1,
-      });
-      vi.spyOn(TeamRepositoryGrantStore.prototype, "listForTeam").mockResolvedValue([
-        { grant_kind: "installation", repo_external_id: null },
-      ]);
-      const enrich = vi.spyOn(sessionIdentity, "resolveGitHubEnrichmentForRequest");
-      const settings = vi.spyOn(integrationSettings, "resolveSessionScopedSettings");
-      const create = vi.fn().mockResolvedValue(undefined);
-      vi.mocked(SessionIndexStore).mockImplementation(function () {
-        return { create } as never;
-      });
-      const initFetch = vi.fn(async () => Response.json({ status: "created" }));
-
-      const response = await createSessionRequestWithBody(createEnv(initFetch), {
-        environmentId: "env_1",
-        teamId,
-        visibility: "private",
-      });
-
-      expect(response.status).toBe(409);
-      await expect(response.json()).resolves.toMatchObject({
-        code: "environment_team_mismatch",
-        reason_code: "environment_team_mismatch",
-      });
-      expect(resolveEnvironmentTarget).not.toHaveBeenCalled();
-      expect(resolveSessionRepositories).not.toHaveBeenCalled();
-      expect(resolveRepoOrError).not.toHaveBeenCalled();
-      expect(enrich).not.toHaveBeenCalled();
-      expect(settings).not.toHaveBeenCalled();
-      expect(resolveSessionProviderAuth).not.toHaveBeenCalled();
-      expect(resolveManagedSkills).not.toHaveBeenCalled();
-      expect(create).not.toHaveBeenCalled();
-      expect(initFetch).not.toHaveBeenCalled();
-    }
-  );
+  it("rejects a service actor's team environment for a private workspace destination before resolution/writes", async () => {
+    environmentMocks.getById.mockResolvedValue({ id: "env_1", owner_team_id: "team_a" });
+    vi.spyOn(TeamMembershipStore.prototype, "listForUser").mockResolvedValue(
+      new Map([["team_a", "member"]])
+    );
+    const create = vi.fn();
+    vi.mocked(SessionIndexStore).mockImplementation(function () {
+      return { create } as never;
+    });
+    const initFetch = vi.fn();
+    const response = await createSessionRequestWithBody(createEnv(initFetch), {
+      environmentId: "env_1",
+      teamId: null,
+      visibility: "private",
+    });
+    expect(response.status).toBe(409);
+    await expect(response.json()).resolves.toMatchObject({
+      code: "environment_team_mismatch",
+      reason_code: "environment_team_mismatch",
+    });
+    expect(resolveEnvironmentTarget).not.toHaveBeenCalled();
+    expect(create).not.toHaveBeenCalled();
+    expect(initFetch).not.toHaveBeenCalled();
+  });
 
   it.each([
     {

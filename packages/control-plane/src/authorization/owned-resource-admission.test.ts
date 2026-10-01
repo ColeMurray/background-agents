@@ -4,42 +4,18 @@ import { AutomationStore, type AutomationRow } from "../db/automation-store";
 import { EnvironmentStore, type EnvironmentRow } from "../db/environments";
 import { createRequestMetrics } from "../db/instrumented-sql-database";
 import type { RequestContext } from "../http/request-context";
+import { authorizeSessionTarget } from "../routes/session-target-authorization";
 import { evaluateOwnedResourceAdmission } from "./owned-resource-admission";
 
-const automation: AutomationRow = {
+// Full row validation is covered by D1 tests; admission consumes only ownership fields.
+const automation = {
   id: "automation",
   owner_team_id: "team",
   user_id: null,
   created_by: "legacy-owner",
-  name: "Automation",
-  instructions: "Run tests",
-  trigger_type: "schedule",
-  schedule_cron: null,
-  schedule_tz: "UTC",
-  harness: "opencode",
-  model: "anthropic/claude-sonnet-4-6",
-  reasoning_effort: null,
-  enabled: 1,
-  next_run_at: null,
-  consecutive_failures: 0,
-  created_at: 1,
-  updated_at: 1,
-  deleted_at: null,
-  event_type: null,
-  trigger_config: null,
-  trigger_auth_data: null,
-};
+} as AutomationRow;
 const canonicalAutomation = { ...automation, user_id: "user" };
-const environment: EnvironmentRow = {
-  id: "environment",
-  owner_team_id: "team",
-  name: "Environment",
-  description: null,
-  prebuild_enabled: 0,
-  channel_associations: null,
-  created_at: 1,
-  updated_at: 1,
-};
+const environment = { id: "environment", owner_team_id: "team" } as EnvironmentRow;
 const automationRequirement = {
   kind: "automation",
   operation: "manage",
@@ -85,6 +61,8 @@ describe("owned-resource admission outcomes", () => {
     async (requirement) => {
       const ctx = context();
       ctx.sessionMemberships = new Map();
+      const message =
+        requirement.kind === "automation" ? "Automation not found" : "Environment not found";
       const hidden = await evaluateOwnedResourceAdmission(requirement, { id: "resource" }, ctx);
       expect(ctx.automationAdmission?.automation ?? ctx.environmentAdmission?.environment).toBe(
         requirement.kind === "automation" ? automation : environment
@@ -93,22 +71,14 @@ describe("owned-resource admission outcomes", () => {
       vi.mocked(AutomationStore.prototype.getById).mockResolvedValue(null);
       vi.mocked(EnvironmentStore.prototype.getById).mockResolvedValue(null);
       const missingCtx = context();
-      const missing = await evaluateOwnedResourceAdmission(
-        requirement,
-        { id: "missing" },
-        missingCtx
-      );
+      const missing = await evaluateOwnedResourceAdmission(requirement, { id: "id" }, missingCtx);
       expect(hidden).toEqual(missing);
       expect(hidden).toEqual({
         kind: "denied",
         status: 404,
-        response: {
-          error:
-            requirement.kind === "automation" ? "Automation not found" : "Environment not found",
-        },
+        response: { error: message },
         reasonCode: `${requirement.kind}_not_visible`,
-        reason:
-          requirement.kind === "automation" ? "Automation not found" : "Environment not found",
+        reason: message,
       });
       expect(missingCtx.automationAdmission).toBeUndefined();
       expect(missingCtx.environmentAdmission).toBeUndefined();
@@ -148,58 +118,44 @@ describe("owned-resource admission outcomes", () => {
   });
 
   it.each([automationRequirement, environmentRequirement])(
-    "denies $kind reads without read permission as 403, not an invisible 404",
+    "maps visible $kind read/action denials to 403 and retains loaded audit context",
     async (requirement) => {
-      const read =
-        requirement.kind === "automation"
-          ? { ...requirement, operation: "read" as const }
-          : { ...requirement, need: "read" as const };
-      const result = await evaluateOwnedResourceAdmission(read, { id: "resource" }, context());
-      expect(result).toEqual({
-        kind: "denied",
-        status: 403,
-        response: {
-          error: "Forbidden",
-          code: `${requirement.kind}_action_denied`,
-          reason_code: "missing_permission",
-        },
-        reasonCode: "missing_permission",
-        reason: "Forbidden",
-        ...(requirement.kind === "environment" ? { failedPermission: "environments.read" } : {}),
-      });
-    }
-  );
-
-  it.each([automationRequirement, environmentRequirement])(
-    "retains the loaded $kind admission on action denial with shipped failed-permission evidence",
-    async (requirement) => {
-      const ctx = context();
-      ctx.sessionMemberships = new Map([["team", "member"]]);
       vi.mocked(AutomationStore.prototype.resolveCanonicalOwner).mockResolvedValue({
         ...automation,
         user_id: "other-user",
       });
-      const result = await evaluateOwnedResourceAdmission(requirement, { id: "resource" }, ctx);
-      expect(result).toEqual({
-        kind: "denied",
-        status: 403,
-        response: {
-          error: "Forbidden",
-          code: `${requirement.kind}_action_denied`,
-          reason_code: "not_owner_or_lead",
-        },
-        reasonCode: "not_owner_or_lead",
-        reason: "Forbidden",
-        ...(requirement.kind === "environment" ? { failedPermission: "environments.manage" } : {}),
-      });
-      expect(ctx.automationAdmission?.automation ?? ctx.environmentAdmission?.environment).toBe(
-        requirement.kind === "automation" ? automation : environment
-      );
+      for (const read of [true, false]) {
+        const ctx = context();
+        ctx.sessionMemberships = new Map([["team", "member"]]);
+        const target = !read
+          ? requirement
+          : requirement.kind === "automation"
+            ? { ...requirement, operation: "read" as const }
+            : { ...requirement, need: "read" as const };
+        const reason = read ? "missing_permission" : "not_owner_or_lead";
+        expect(await evaluateOwnedResourceAdmission(target, { id: "resource" }, ctx)).toEqual({
+          kind: "denied",
+          status: 403,
+          reasonCode: reason,
+          reason: "Forbidden",
+          response: {
+            error: "Forbidden",
+            code: `${requirement.kind}_action_denied`,
+            reason_code: reason,
+          },
+          ...(requirement.kind === "environment"
+            ? { failedPermission: `environments.${read ? "read" : "manage"}` }
+            : {}),
+        });
+        expect(ctx.automationAdmission?.automation ?? ctx.environmentAdmission?.environment).toBe(
+          requirement.kind === "automation" ? automation : environment
+        );
+      }
     }
   );
 
   it.each([automationRequirement, environmentRequirement])(
-    "preserves the $kind invalid-route versus service-ceiling check order without loading resources",
+    "checks $kind service ceilings before lookup and attributes no actorless permissions",
     async (requirement) => {
       const ctx = context();
       ctx.principal = { kind: "service", service: "github-bot", actor: null };
@@ -220,21 +176,48 @@ describe("owned-resource admission outcomes", () => {
       ).resolves.toEqual(denied);
       expect(AutomationStore.prototype.getById).not.toHaveBeenCalled();
       expect(EnvironmentStore.prototype.getById).not.toHaveBeenCalled();
+      ctx.principal = { kind: "service", service: "slack-bot", actor: null };
+      ctx.authorization = undefined;
+      const allowed =
+        requirement.kind === "automation"
+          ? { ...requirement, operation: "read" as const }
+          : { ...requirement, need: "use" as const };
+      await expect(
+        evaluateOwnedResourceAdmission(allowed, { id: "resource" }, ctx)
+      ).resolves.toEqual({ kind: "allowed", effectivePermission: null });
     }
   );
 
-  it.each([
-    { ...automationRequirement, operation: "read" },
-    { ...environmentRequirement, need: "use" },
-  ] as const)(
-    "does not attribute user permissions to actorless $kind access",
-    async (requirement) => {
+  it("maps suspended session target use before owner mismatch", async () => {
+    const ctx = context();
+    ctx.authorization!.permissions = ["environments.use"];
+    ctx.authorization!.suspendedAt = 1;
+    const response = await authorizeSessionTarget(ctx, {
+      environmentId: "environment",
+      hasRepository: false,
+      ownerTeamId: null,
+    });
+    expect(response?.status).toBe(403);
+    await expect(response?.json()).resolves.toEqual({
+      error: "Forbidden",
+      code: "environment_action_denied",
+      reason_code: "suspended",
+    });
+  });
+
+  it.each([null, "env_deleted"])(
+    "allows sandbox clone inheritance with absent environment %s",
+    async (environmentId) => {
+      vi.mocked(EnvironmentStore.prototype.getById).mockResolvedValue(null);
       const ctx = context();
-      ctx.principal = { kind: "service", service: "slack-bot", actor: null };
-      ctx.authorization = undefined;
+      ctx.principal = { kind: "sandbox", sessionId: "parent" };
+      delete ctx.authorization;
       await expect(
-        evaluateOwnedResourceAdmission(requirement, { id: "resource" }, ctx)
-      ).resolves.toEqual({ kind: "allowed", effectivePermission: null });
+        authorizeSessionTarget(ctx, { environmentId, hasRepository: true, ownerTeamId: "team" })
+      ).resolves.toBeNull();
+      expect(EnvironmentStore.prototype.getById).toHaveBeenCalledTimes(
+        environmentId === null ? 0 : 1
+      );
     }
   );
 });

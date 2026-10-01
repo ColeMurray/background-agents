@@ -135,6 +135,7 @@ describe("interpretAuditEvent", () => {
     "team.member_joined",
     "team.secret_set",
     "team.secret_deleted",
+    "automation.executor_changed",
   ])("recognizes %s as a domain operation", (action) => {
     expect(interpretAuditEvent({ action, operationResult: "applied", metadata: {} })).toEqual({
       kind: "operation",

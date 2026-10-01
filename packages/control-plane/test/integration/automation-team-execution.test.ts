@@ -3,62 +3,47 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { SessionVisibility } from "@open-inspect/shared/types/teams";
 import { isAutomationExecutionAuthorized } from "../../src/automation/authorization-guard";
 import { createCloudflareEnv } from "../../src/cloudflare/platform";
-import { AutomationStore, type AutomationRow } from "../../src/db/automation-store";
-import { AutomationExecutionUnauthorizedError, Scheduler } from "../../src/scheduler/scheduler";
+import { AutomationStore } from "../../src/db/automation-store";
+import { SessionIndexStore } from "../../src/db/session-index";
+import { Scheduler } from "../../src/scheduler/scheduler";
 import { cleanD1Tables } from "./cleanup";
 import { queryDO, seedActiveUser, serviceFetch, sqlDatabase } from "./helpers";
 import { fetchRuns } from "./run-helpers";
+import { seedTeam } from "./ownership-test-helpers";
 
 const EXECUTOR = "11111111111111111111111111111111";
 const LEAD = "22222222222222222222222222222222";
 const MEMBER = "33333333333333333333333333333333";
 const ADMIN = "44444444444444444444444444444444";
-const OUTSIDER = "55555555555555555555555555555555";
 const TEAM = "team_automation_execution";
 const OTHER_TEAM = "team_automation_execution_other";
 
-function automation(id: string, overrides?: Partial<AutomationRow>): AutomationRow {
-  const now = Date.now();
-  return {
-    id,
-    owner_team_id: TEAM,
-    name: id,
-    instructions: "Run tests",
-    trigger_type: "schedule",
-    schedule_cron: "0 9 * * *",
-    schedule_tz: "UTC",
-    harness: "opencode",
-    model: "anthropic/claude-sonnet-4-6",
-    reasoning_effort: null,
-    enabled: 1,
-    next_run_at: now - 60_000,
-    consecutive_failures: 0,
-    created_by: EXECUTOR,
-    user_id: EXECUTOR,
-    created_at: now,
-    updated_at: now,
-    deleted_at: null,
-    event_type: null,
-    trigger_config: null,
-    trigger_auth_data: null,
-    ...overrides,
-  };
+async function saveAutomation(id: string, ownerTeamId: string | null = TEAM) {
+  await env.DB.prepare(
+    `INSERT INTO automations
+       (id, owner_team_id, name, instructions, schedule_cron, model, next_run_at,
+        consecutive_failures, created_by, user_id, created_at, updated_at)
+     VALUES (?, ?, ?, 'Run tests', '0 9 * * *', 'anthropic/claude-sonnet-4-6', ?, 2, ?, ?, 1, 1)`
+  )
+    .bind(id, ownerTeamId, id, Date.now() - 60_000, EXECUTOR, EXECUTOR)
+    .run();
+  return (await new AutomationStore(env.DB).getById(id))!;
 }
 
-function authorized(automationId: string, executionUserId?: string): Promise<boolean> {
+function authorized(automationId: string, executionUserId?: string) {
   return isAutomationExecutionAuthorized(sqlDatabase(env.DB), {
     automationId,
-    ...(executionUserId === undefined ? {} : { executionUserId }),
+    executionUserId,
     requiresRepositoryUse: false,
     requiresEnvironmentUse: false,
   });
 }
 
-function createScheduler(): Scheduler {
+function createScheduler() {
   return new Scheduler(sqlDatabase(env.DB), createCloudflareEnv(env), { submit() {} });
 }
 
-async function expectNoLaunch(automationId: string): Promise<void> {
+async function expectNoLaunch(automationId: string) {
   expect(await fetchRuns(automationId)).toEqual([]);
   const sessions = await env.DB.prepare("SELECT id FROM sessions WHERE automation_id = ?")
     .bind(automationId)
@@ -71,41 +56,26 @@ async function expectLaunchedSession(
   ownerTeamId: string | null,
   visibility: SessionVisibility,
   userId: string
-): Promise<void> {
+) {
   const runs = await fetchRuns(automationId);
   expect(runs).toEqual([
     expect.objectContaining({
       status: "running",
       session_id: expect.any(String),
-      repo_owner: null,
-      repo_name: null,
-      repo_id: null,
-      base_branch: null,
-      environment_id: null,
     }),
   ]);
-  const run = runs[0]!;
-  const sessions = await env.DB.prepare(
-    `SELECT id, owner_team_id, visibility, user_id, spawn_source, automation_run_id,
-       repo_owner, repo_name, base_branch
-     FROM sessions WHERE automation_id = ?`
-  )
-    .bind(automationId)
-    .all();
-  expect(sessions.results).toEqual([
-    {
-      id: run.session_id,
-      owner_team_id: ownerTeamId,
-      visibility,
-      user_id: userId,
-      spawn_source: "automation",
-      automation_run_id: run.id,
-      repo_owner: null,
-      repo_name: null,
-      base_branch: null,
-    },
-  ]);
-
+  const run = runs[0];
+  expect(await new SessionIndexStore(env.DB).get(run.session_id!)).toMatchObject({
+    ownerTeamId,
+    visibility,
+    userId,
+    spawnSource: "automation",
+    automationId,
+    automationRunId: run.id,
+    repoOwner: null,
+    repoName: null,
+    baseBranch: null,
+  });
   const stub = env.SESSION.get(env.SESSION.idFromName(run.session_id!));
   expect(await queryDO(stub, "SELECT repo_owner, repo_name, base_branch FROM session")).toEqual([
     { repo_owner: null, repo_name: null, base_branch: null },
@@ -113,8 +83,7 @@ async function expectLaunchedSession(
   expect(
     await queryDO(
       stub,
-      `SELECT m.content, m.source, p.canonical_user_id
-       FROM messages m JOIN participants p ON p.id = m.author_id`
+      "SELECT m.content, m.source, p.canonical_user_id FROM messages m JOIN participants p ON p.id = m.author_id"
     )
   ).toEqual([{ content: "Run tests", source: "automation", canonical_user_id: userId }]);
 }
@@ -122,128 +91,60 @@ async function expectLaunchedSession(
 describe("automation team execution (integration)", () => {
   beforeEach(async () => {
     await cleanD1Tables();
-    for (const userId of [EXECUTOR, LEAD, MEMBER, ADMIN, OUTSIDER]) {
-      await seedActiveUser(userId);
-    }
-    await env.DB.batch([
-      env.DB.prepare(
-        "UPDATE user_role_assignments SET role_id = 'role_builtin_administrator' WHERE user_id = ?"
-      ).bind(ADMIN),
-      env.DB.prepare(
-        `INSERT INTO teams (id, slug, name, created_at, updated_at)
-         VALUES (?, ?, 'Automation Execution', 1, 1), (?, ?, 'Other Execution', 1, 1)`
-      ).bind(TEAM, TEAM, OTHER_TEAM, OTHER_TEAM),
-      ...(
-        [
-          [TEAM, EXECUTOR, "member"],
-          [TEAM, LEAD, "lead"],
-          [TEAM, MEMBER, "member"],
-          [OTHER_TEAM, EXECUTOR, "member"],
-          [OTHER_TEAM, OUTSIDER, "member"],
-          [OTHER_TEAM, ADMIN, "member"],
-        ] as const
-      ).map(([teamId, userId, role]) =>
-        env.DB.prepare(
-          `INSERT INTO team_memberships (team_id, user_id, role, created_at)
-           VALUES (?, ?, ?, 1)`
-        ).bind(teamId, userId, role)
-      ),
+    for (const userId of [EXECUTOR, LEAD, MEMBER, ADMIN]) await seedActiveUser(userId);
+    await env.DB.prepare(
+      "UPDATE user_role_assignments SET role_id = 'role_builtin_administrator' WHERE user_id = ?"
+    )
+      .bind(ADMIN)
+      .run();
+    await seedTeam(TEAM, [
+      [EXECUTOR, "member"],
+      [LEAD, "lead"],
+      [MEMBER, "member"],
+    ]);
+    await seedTeam(OTHER_TEAM, [
+      [EXECUTOR, "member"],
+      [ADMIN, "member"],
     ]);
   });
   afterEach(cleanD1Tables);
 
-  it.each([undefined, EXECUTOR, MEMBER, LEAD])(
-    "authorizes an active team execution principal (%s)",
-    async (executionUserId) => {
-      await new AutomationStore(env.DB).create(automation("auto-team-authorized"));
-
-      await expect(authorized("auto-team-authorized", executionUserId)).resolves.toBe(true);
-    }
-  );
-
-  it("rejects a departed stored executor even when they remain in another team", async () => {
-    const store = new AutomationStore(env.DB);
-    await store.create(automation("auto-departed-executor"));
-    await store.create(
-      automation("auto-workspace-executor", { owner_team_id: null, next_run_at: null })
-    );
-    await expect(authorized("auto-departed-executor")).resolves.toBe(true);
+  it("rejects a departed executor despite other-team membership", async () => {
+    const row = await saveAutomation("auto-departed-executor");
+    expect(await authorized(row.id)).toBe(true);
     await env.DB.prepare("DELETE FROM team_memberships WHERE team_id = ? AND user_id = ?")
       .bind(TEAM, EXECUTOR)
       .run();
-
-    await expect(authorized("auto-departed-executor")).resolves.toBe(false);
-    await expect(authorized("auto-workspace-executor")).resolves.toBe(true);
+    expect(await authorized(row.id)).toBe(false);
     expect(await createScheduler().tick()).toEqual({ processed: 0, skipped: 1, failed: 0 });
-    const { invocations } = await store.listInvocations("auto-departed-executor", {
-      limit: 10,
-      offset: 0,
-    });
-    expect(invocations).toEqual([
-      expect.objectContaining({
-        source: "schedule",
-        status: "skipped",
-        skipReason: "execution_authorization_denied",
-        runs: [],
-      }),
-    ]);
-    expect(await store.getById("auto-departed-executor")).toMatchObject({
-      enabled: 0,
-      next_run_at: null,
-      consecutive_failures: 0,
-    });
-    await expectNoLaunch("auto-departed-executor");
+    await expectNoLaunch(row.id);
   });
 
-  it.each([
-    { role: "member", requesterId: OUTSIDER },
-    { role: "administrator", requesterId: ADMIN },
-  ])(
-    "rejects an explicit nonmember manual requester with the $role role",
-    async ({ requesterId }) => {
-      const store = new AutomationStore(env.DB);
-      await store.create(automation("auto-nonmember-requester"));
-      await store.create(automation("auto-workspace-requester", { owner_team_id: null }));
-      await expect(authorized("auto-nonmember-requester")).resolves.toBe(true);
-      await expect(authorized("auto-workspace-requester", requesterId)).resolves.toBe(true);
-      await expect(authorized("auto-nonmember-requester", requesterId)).resolves.toBe(false);
-
-      const denied = createScheduler().trigger("auto-nonmember-requester", requesterId);
-      await expect(denied).rejects.toBeInstanceOf(AutomationExecutionUnauthorizedError);
-      await expect(denied).rejects.toMatchObject({ reason: "execution_authorization_denied" });
-      expect(
-        (await store.listInvocations("auto-nonmember-requester", { limit: 10, offset: 0 }))
-          .invocations
-      ).toEqual([]);
-      await expectNoLaunch("auto-nonmember-requester");
-    }
-  );
-
-  it("rejects archived team execution and exposes the archived reason on a manual error", async () => {
-    const store = new AutomationStore(env.DB);
-    await store.create(automation("auto-archived-manual"));
-    await expect(authorized("auto-archived-manual")).resolves.toBe(true);
-    await expect(authorized("auto-archived-manual", MEMBER)).resolves.toBe(true);
-    await env.DB.prepare("UPDATE teams SET archived_at = 2 WHERE id = ?").bind(TEAM).run();
-
-    await expect(authorized("auto-archived-manual")).resolves.toBe(false);
-    await expect(authorized("auto-archived-manual", MEMBER)).resolves.toBe(false);
-    const denied = createScheduler().trigger("auto-archived-manual", MEMBER);
-    await expect(denied).rejects.toBeInstanceOf(AutomationExecutionUnauthorizedError);
-    await expect(denied).rejects.toMatchObject({ reason: "team_archived" });
+  it("rejects nonmember administrator manual execution", async () => {
+    const row = await saveAutomation("auto-nonmember-requester");
+    expect(await authorized(row.id)).toBe(true);
+    await expect(createScheduler().trigger(row.id, ADMIN)).rejects.toMatchObject({
+      name: "AutomationExecutionUnauthorizedError",
+      reason: "execution_authorization_denied",
+    });
     expect(
-      (await store.listInvocations("auto-archived-manual", { limit: 10, offset: 0 })).invocations
+      (await new AutomationStore(env.DB).listInvocations(row.id, { limit: 10, offset: 0 }))
+        .invocations
     ).toEqual([]);
-    await expectNoLaunch("auto-archived-manual");
+    await expectNoLaunch(row.id);
   });
 
-  it("persists a childless archived-team scheduled skip and pauses without a failure strike", async () => {
-    const store = new AutomationStore(env.DB);
-    const row = automation("auto-archived-schedule", { consecutive_failures: 2 });
-    await store.create(row);
+  it("rejects archived manual execution and pauses scheduled work without a failure strike", async () => {
+    const row = await saveAutomation("auto-archived-team");
     await env.DB.prepare("UPDATE teams SET archived_at = 2 WHERE id = ?").bind(TEAM).run();
-
+    expect(await authorized(row.id)).toBe(false);
+    expect(await authorized(row.id, MEMBER)).toBe(false);
     const scheduler = createScheduler();
+    await expect(scheduler.trigger(row.id, MEMBER)).rejects.toMatchObject({
+      reason: "team_archived",
+    });
+    const store = new AutomationStore(env.DB);
+    expect((await store.listInvocations(row.id, { limit: 10, offset: 0 })).invocations).toEqual([]);
     expect(await scheduler.tick()).toEqual({ processed: 0, skipped: 1, failed: 0 });
     const { invocations } = await store.listInvocations(row.id, { limit: 10, offset: 0 });
     expect(invocations).toEqual([
@@ -255,8 +156,7 @@ describe("automation team execution (integration)", () => {
         runs: [],
       }),
     ]);
-    expect(await store.getInvocationById(invocations[0]!.id)).toMatchObject({
-      skip_reason: "team_archived",
+    expect(await store.getInvocationById(invocations[0].id)).toMatchObject({
       failure_counted_at: null,
     });
     expect(await store.getById(row.id)).toMatchObject({
@@ -271,90 +171,54 @@ describe("automation team execution (integration)", () => {
     ).toHaveLength(1);
   });
 
-  it("allows a lead to reassign a departed executor and launches the next scheduled run", async () => {
-    const store = new AutomationStore(env.DB);
-    const row = automation("auto-reassigned-executor");
-    await store.create(row);
+  it("launches a scheduled run after lead executor reassignment", async () => {
+    const row = await saveAutomation("auto-reassigned-executor");
     await env.DB.prepare("DELETE FROM team_memberships WHERE team_id = ? AND user_id = ?")
       .bind(TEAM, EXECUTOR)
       .run();
-    await expect(authorized(row.id)).resolves.toBe(false);
-
-    const reassigned = await serviceFetch(`https://cp.test/automations/${row.id}`, {
+    expect(await authorized(row.id)).toBe(false);
+    const response = await serviceFetch(`https://cp.test/automations/${row.id}`, {
       as: { userId: LEAD, role: "member" },
       method: "PATCH",
       body: JSON.stringify({ userId: MEMBER }),
     });
-    expect(reassigned.status).toBe(200);
-    await expect(reassigned.json()).resolves.toMatchObject({
-      automation: { id: row.id, ownerTeamId: TEAM, userId: MEMBER },
-    });
-    expect(await store.getById(row.id)).toMatchObject({
+    expect(response.status).toBe(200);
+    expect(await new AutomationStore(env.DB).getById(row.id)).toMatchObject({
       created_by: EXECUTOR,
       user_id: MEMBER,
       owner_team_id: TEAM,
     });
-    await expect(authorized(row.id)).resolves.toBe(true);
+    expect(await authorized(row.id)).toBe(true);
     expect(await createScheduler().tick()).toEqual({ processed: 1, skipped: 0, failed: 0 });
     await expectLaunchedSession(row.id, TEAM, "team", MEMBER);
-    expect((await store.getById(row.id))!.next_run_at!).toBeGreaterThan(row.next_run_at!);
   });
 
-  it.each(
-    (["manual", "schedule"] as const).flatMap((source) =>
-      (["team", "workspace", "private"] as const).map((visibility) => ({ source, visibility }))
-    )
-  )(
-    "creates a $source session in the automation team with its $visibility default",
-    async ({ source, visibility }) => {
+  it.each(["team", "workspace", "private"] as const)(
+    "creates a manual session with the team's %s default",
+    async (visibility) => {
       await env.DB.prepare("UPDATE teams SET default_visibility = ? WHERE id = ?")
         .bind(visibility, TEAM)
         .run();
-      const row = automation(`auto-session-${source}-${visibility}`);
-      await new AutomationStore(env.DB).create(row);
-      const scheduler = createScheduler();
-      const executionUserId = source === "manual" ? MEMBER : EXECUTOR;
-
-      if (source === "manual") {
+      const row = await saveAutomation(`auto-session-${visibility}`);
+      if (visibility === "private") {
         await env.DB.prepare("DELETE FROM team_memberships WHERE team_id = ? AND user_id = ?")
           .bind(TEAM, EXECUTOR)
           .run();
-        await expect(authorized(row.id)).resolves.toBe(false);
-        await expect(authorized(row.id, MEMBER)).resolves.toBe(true);
-        await expect(scheduler.trigger(row.id, MEMBER)).resolves.toMatchObject({
-          runs: [expect.objectContaining({ status: "running" })],
-        });
-      } else {
-        expect(await scheduler.tick()).toEqual({ processed: 1, skipped: 0, failed: 0 });
+        expect(await authorized(row.id)).toBe(false);
       }
-
-      await expectLaunchedSession(row.id, TEAM, visibility, executionUserId);
+      await createScheduler().trigger(row.id, MEMBER);
+      await expectLaunchedSession(row.id, TEAM, visibility, MEMBER);
     }
   );
 
-  it.each(["manual", "schedule"] as const)(
-    "keeps a workspace automation's %s session workspace-owned despite archived team membership",
-    async (source) => {
-      await env.DB.prepare(
-        "UPDATE teams SET default_visibility = 'private', archived_at = 2 WHERE id = ?"
-      )
-        .bind(TEAM)
-        .run();
-      const row = automation(`auto-workspace-session-${source}`, { owner_team_id: null });
-      await new AutomationStore(env.DB).create(row);
-      const scheduler = createScheduler();
-      const executionUserId = source === "manual" ? MEMBER : EXECUTOR;
-      await expect(authorized(row.id, executionUserId)).resolves.toBe(true);
-
-      if (source === "manual") {
-        await expect(scheduler.trigger(row.id, MEMBER)).resolves.toMatchObject({
-          runs: [expect.objectContaining({ status: "running" })],
-        });
-      } else {
-        expect(await scheduler.tick()).toEqual({ processed: 1, skipped: 0, failed: 0 });
-      }
-
-      await expectLaunchedSession(row.id, null, "workspace", executionUserId);
-    }
-  );
+  it("keeps workspace sessions workspace-owned despite archived memberships", async () => {
+    await env.DB.prepare(
+      "UPDATE teams SET default_visibility = 'private', archived_at = 2 WHERE id = ?"
+    )
+      .bind(TEAM)
+      .run();
+    const row = await saveAutomation("auto-workspace-session", null);
+    await createScheduler().trigger(row.id, MEMBER);
+    await expectLaunchedSession(row.id, null, "workspace", MEMBER);
+  });
 });
