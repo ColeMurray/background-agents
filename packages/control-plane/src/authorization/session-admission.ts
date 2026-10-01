@@ -1,6 +1,7 @@
 import {
   checkSessionAccess,
   sessionCapabilities,
+  type AccessDenialReason,
   type SessionAccessRow,
   type SessionAction,
   type SessionCapabilities,
@@ -71,7 +72,7 @@ export function effectiveSessionCapabilities(
 
 export type SessionAdmissionOutcome =
   | { kind: "not_found" }
-  | { kind: "action_denied"; reason: string }
+  | { kind: "action_denied"; reason: AccessDenialReason }
   | { kind: "allowed"; legacyPermission: PermissionId | null };
 
 /** Resolve one D1 session; a null slot is used by body-ID batches, not item routes. */

@@ -1,4 +1,5 @@
 import { Hono } from "hono";
+import type { AccessDenialReason } from "@open-inspect/shared";
 import {
   sessionBatchArchiveRequestSchema,
   type SessionBatchArchiveResponse,
@@ -17,6 +18,19 @@ import {
   SCM_AGNOSTIC_HUMAN_USER_ROUTE,
   type UserRouteContext,
 } from "./shared";
+
+/** Exhaustive so a new denial reason must choose its public batch-archive reason. */
+const SKIPPED_REASON_BY_DENIAL = {
+  not_member: "not_member",
+  suspended: "missing_permission",
+  private: "missing_permission",
+  missing_permission: "missing_permission",
+  not_owner_or_lead: "missing_permission",
+  not_collaborator: "missing_permission",
+} as const satisfies Record<
+  AccessDenialReason,
+  SessionBatchArchiveResponse["skipped"][number]["reason"]
+>;
 
 export const sessionBatchArchiveRoutes = new Hono<ControlPlaneHonoEnv>();
 
@@ -59,10 +73,7 @@ sessionBatchArchiveRoutes.post(
             continue;
           }
           if (admission.kind === "action_denied") {
-            skipped.push({
-              sessionId,
-              reason: admission.reason === "not_member" ? "not_member" : "missing_permission",
-            });
+            skipped.push({ sessionId, reason: SKIPPED_REASON_BY_DENIAL[admission.reason] });
             continue;
           }
           eligible.push(sessionId);

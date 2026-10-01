@@ -604,5 +604,24 @@ describe("session scope routes", () => {
     const added = await request(path, "PUT");
     expect(added.status).toBe(200);
     expect(await added.json()).toMatchObject({ status: "updated" });
+    expect(
+      (await request("/sessions/root/visibility", "PUT", { visibility: "private" })).status
+    ).toBe(200);
+    const listedIds = async () =>
+      (
+        await (
+          await request("/sessions", "GET", undefined, COLLABORATOR)
+        ).json<{
+          sessions: { id: string }[];
+        }>()
+      ).sessions.map((listed) => listed.id);
+    expect((await request("/sessions/root", "GET", undefined, COLLABORATOR)).status).toBe(200);
+    expect(await listedIds()).toContain("root");
+
+    // The grant lapses with membership even though the collaborator row remains.
+    await memberships.remove(team.id, COLLABORATOR);
+    expect(await new SessionCollaboratorStore(env.DB).listUserIds("root")).toEqual([COLLABORATOR]);
+    expect((await request("/sessions/root", "GET", undefined, COLLABORATOR)).status).toBe(404);
+    expect(await listedIds()).not.toContain("root");
   });
 });

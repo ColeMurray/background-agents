@@ -129,11 +129,11 @@ and the context does not name one, the composer selects the user's first active 
 
 Each session stores a visibility independently of its team:
 
-| Visibility  | Who can read the session when team enforcement is on                                                                                                                                            |
-| ----------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `workspace` | Workspace users with session read permission, even if the session has a team.                                                                                                                   |
-| `team`      | Members of the owning team, plus workspace Owners and Administrators, with session read permission. Requires an owning team.                                                                    |
-| `private`   | The session owner and explicit collaborators with session read permission. A workspace Owner can also open it by ID under audited break-glass access; Administrators do not get this exception. |
+| Visibility  | Who can read the session when team enforcement is on                                                                                                                                                                                                             |
+| ----------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `workspace` | Workspace users with session read permission, even if the session has a team.                                                                                                                                                                                    |
+| `team`      | Members of the owning team, plus workspace Owners and Administrators, with session read permission. Requires an owning team.                                                                                                                                     |
+| `private`   | The session owner and explicit collaborators (who must be current owning-team members on team-owned sessions) with session read permission. A workspace Owner can also open it by ID under audited break-glass access; Administrators do not get this exception. |
 
 Private visibility is enforced in every enforcement mode. An Owner's break-glass read is audited,
 does not cause the session to appear in their lists, and does not grant prompt or sandbox access. An
@@ -167,9 +167,13 @@ collaborator may remove themselves with session read access alone; team membersh
 or lifecycle permission is not required for self-removal.
 
 The collaborator picker is available to session owners and workspace Owners after the session read
-and collaborator-management checks and lists every active workspace user, including users outside
-the owning team. Selecting a collaborator is an explicit private-session access grant, not a team
-membership or workspace role change.
+and collaborator-management checks. For a workspace-owned session it lists every active workspace
+user; for a team-owned session it lists only active members of the owning team, and adding anyone
+else is rejected with `not_team_member`. Selecting a collaborator is an explicit private-session
+access grant, not a team membership or workspace role change. On a team-owned session the grant is
+honored only while the collaborator remains a current member of the owning team: leaving or being
+removed from the team ends their collaborator access on the next authorization check, even though
+the collaborator record itself is kept.
 
 Session actions have additional rules after visibility: prompting requires collaboration permission,
 sandbox use requires sandbox permission, and lifecycle operations require lifecycle permission. With
