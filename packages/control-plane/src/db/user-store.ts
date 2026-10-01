@@ -1,3 +1,4 @@
+import { z } from "zod";
 import { getSignInProviderIssuer } from "@open-inspect/shared/sign-in-provider";
 import {
   sessionCollaboratorCandidatesResponseSchema,
@@ -137,6 +138,14 @@ function toUserIdentity(row: UserIdentityRow): UserIdentity {
   };
 }
 
+export type CollaboratorEligibility = "eligible" | "not_found" | "inactive" | "not_team_member";
+
+const collaboratorEligibilityRowSchema = z.object({
+  suspended_at: z.number().nullable(),
+  role_id: z.string().nullable(),
+  team_member: z.number(),
+});
+
 // ── UserStore ───────────────────────────────────────────────────────
 
 export class UserStore {
@@ -163,6 +172,30 @@ export class UserStore {
       .bind(...(teamId === null ? [] : [teamId]))
       .all();
     return sessionCollaboratorCandidatesResponseSchema.parse(results);
+  }
+
+  /** Applies the candidate-list rules to one user; a team ID also requires membership in that team. */
+  async getCollaboratorEligibility(
+    userId: string,
+    teamId: string | null
+  ): Promise<CollaboratorEligibility> {
+    const row = collaboratorEligibilityRowSchema.nullable().parse(
+      await this.db
+        .prepare(
+          `SELECT users.suspended_at, assignment.role_id,
+                  EXISTS (SELECT 1 FROM team_memberships m
+                          WHERE m.team_id = ? AND m.user_id = users.id) AS team_member
+           FROM users
+           LEFT JOIN user_role_assignments assignment ON assignment.user_id = users.id
+           WHERE users.id = ?`
+        )
+        .bind(teamId, userId)
+        .first()
+    );
+    if (!row) return "not_found";
+    if (row.suspended_at !== null || row.role_id === null) return "inactive";
+    if (teamId !== null && !row.team_member) return "not_team_member";
+    return "eligible";
   }
 
   async getUsersByIds(userIds: readonly string[]): Promise<User[]> {
