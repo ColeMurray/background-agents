@@ -133,6 +133,8 @@ describe("interpretAuditEvent", () => {
     "team.member_role_changed",
     "team.member_removed",
     "team.member_joined",
+    "team.binding_added",
+    "team.binding_removed",
   ])("recognizes %s as a domain operation", (action) => {
     expect(interpretAuditEvent({ action, operationResult: "applied", metadata: {} })).toEqual({
       kind: "operation",

@@ -55,10 +55,13 @@ export const REPOS_FETCH_TIMEOUT_MS = 5_000;
 /**
  * Local in-memory cache for repos.
  */
-let localCache: {
-  repos: RepoConfig[];
-  timestamp: number;
-} | null = null;
+const localCache = new Map<
+  string,
+  {
+    repos: RepoConfig[];
+    timestamp: number;
+  }
+>();
 
 const WATCHED_CHANNELS_CACHE_KEY = "slack:watched-channels";
 
@@ -104,15 +107,22 @@ function toRepoConfig(repo: ParsedControlPlaneRepo): RepoConfig {
  * @param env - Cloudflare Worker environment
  * @returns Array of RepoConfig objects
  */
-export async function getAvailableRepos(env: Env, traceId?: string): Promise<RepoConfig[]> {
+export async function getAvailableRepos(
+  env: Env,
+  traceId?: string,
+  teamId?: string | null
+): Promise<RepoConfig[]> {
+  const cacheKey = teamId ? `repos:cache:team:${encodeURIComponent(teamId)}` : "repos:cache";
+  const cached = localCache.get(cacheKey);
   // Check local cache first
-  if (localCache && Date.now() - localCache.timestamp < LOCAL_CACHE_TTL_MS) {
-    return localCache.repos;
+  if (cached && Date.now() - cached.timestamp < LOCAL_CACHE_TTL_MS) {
+    return cached.repos;
   }
 
   const startTime = Date.now();
   try {
-    const response = await controlPlaneFetch(env, "/repos", traceId, REPOS_FETCH_TIMEOUT_MS);
+    const path = teamId ? `/repos?teamId=${encodeURIComponent(teamId)}` : "/repos";
+    const response = await controlPlaneFetch(env, path, traceId, REPOS_FETCH_TIMEOUT_MS);
 
     if (!response.ok) {
       log.error("control_plane.fetch_repos", {
@@ -121,7 +131,7 @@ export async function getAvailableRepos(env: Env, traceId?: string): Promise<Rep
         http_status: response.status,
         duration_ms: Date.now() - startTime,
       });
-      return getFromCacheOrFallback(env);
+      return getFromCacheOrFallback(env, cacheKey);
     }
 
     const parsed = controlPlaneReposResponseSchema.safeParse(await response.json());
@@ -131,20 +141,20 @@ export async function getAvailableRepos(env: Env, traceId?: string): Promise<Rep
         outcome: "invalid_response",
         duration_ms: Date.now() - startTime,
       });
-      return getFromCacheOrFallback(env);
+      return getFromCacheOrFallback(env, cacheKey);
     }
 
     const repos = parsed.data.repos.map(toRepoConfig);
 
     // Update local cache
-    localCache = {
+    localCache.set(cacheKey, {
       repos,
       timestamp: Date.now(),
-    };
+    });
 
     // Also store in KV for persistence across worker restarts
     try {
-      await createKvCacheStore(env.SLACK_KV).put("repos:cache", JSON.stringify(repos), {
+      await createKvCacheStore(env.SLACK_KV).put(cacheKey, JSON.stringify(repos), {
         expirationTtl: KV_CACHE_TTL_SECONDS,
       });
     } catch (e) {
@@ -170,16 +180,16 @@ export async function getAvailableRepos(env: Env, traceId?: string): Promise<Rep
       error: e instanceof Error ? e : new Error(String(e)),
       duration_ms: Date.now() - startTime,
     });
-    return getFromCacheOrFallback(env);
+    return getFromCacheOrFallback(env, cacheKey);
   }
 }
 
 /**
  * Get repos from KV cache or return fallback.
  */
-async function getFromCacheOrFallback(env: Env): Promise<RepoConfig[]> {
+async function getFromCacheOrFallback(env: Env, cacheKey: string): Promise<RepoConfig[]> {
   try {
-    const cached = await createKvCacheStore(env.SLACK_KV).get("repos:cache", "json");
+    const cached = await createKvCacheStore(env.SLACK_KV).get(cacheKey, "json");
     const parsed = z.array(repoConfigSchema).safeParse(cached);
     if (parsed.success) {
       log.info("control_plane.fetch_repos", { source: "kv_cache" });
@@ -347,6 +357,6 @@ export function buildRepoDescriptions(repos: RepoConfig[]): string {
  * classifier/environments.ts.
  */
 export function clearLocalCache(): void {
-  localCache = null;
+  localCache.clear();
   routingRules.invalidate();
 }

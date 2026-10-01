@@ -7,6 +7,7 @@ import * as matchers from "@testing-library/jest-dom/matchers";
 import { ActionBar } from "./action-bar";
 import { MobileSessionActions } from "./mobile-session-actions";
 import type { SessionCapabilities } from "@/lib/session-capabilities";
+import type { MoveSessionDialogProps } from "./move-session-dialog";
 
 const FULL_CAPABILITIES = {
   read: true,
@@ -24,10 +25,15 @@ const NO_LIFECYCLE = { ...FULL_CAPABILITIES, lifecycle: false };
 expect.extend(matchers);
 
 vi.mock("@/components/move-session-dialog", () => ({
-  MoveSessionDialog: ({ open, sessionId }: { open: boolean; sessionId: string }) =>
+  MoveSessionDialog: ({
+    open,
+    sessionId,
+    slackThread,
+  }: Pick<MoveSessionDialogProps, "open" | "sessionId" | "slackThread">) =>
     open ? (
       <div role="dialog" aria-label="Move session">
         {sessionId}
+        <span>{slackThread?.channelId}</span>
       </div>
     ) : null,
 }));
@@ -36,6 +42,7 @@ const scope = {
   ownerUserId: "user_owner",
   visibility: "team" as const,
   collaborators: [],
+  slackThread: { channelId: "C_ORIGIN", teamId: "team_one" },
   onUpdated: vi.fn().mockResolvedValue(undefined),
 };
 
@@ -72,6 +79,7 @@ describe("ActionBar", () => {
     );
     fireEvent.click(screen.getByRole("menuitem", { name: "Move to team" }));
     expect(screen.getByRole("dialog", { name: "Move session" })).toHaveTextContent("session-1");
+    expect(screen.getByRole("dialog", { name: "Move session" })).toHaveTextContent("C_ORIGIN");
   });
 
   it("keeps moving a session available from the mobile action menu", () => {
@@ -93,6 +101,7 @@ describe("ActionBar", () => {
     });
     fireEvent.click(screen.getByRole("menuitem", { name: "Move to team" }));
     expect(screen.getByRole("dialog", { name: "Move session" })).toBeInTheDocument();
+    expect(screen.getByRole("dialog", { name: "Move session" })).toHaveTextContent("C_ORIGIN");
   });
 
   it("hides lifecycle actions when the capability is denied", () => {

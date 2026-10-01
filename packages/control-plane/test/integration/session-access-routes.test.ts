@@ -24,7 +24,7 @@ async function fetchMode(
     method?: string;
     as?: { userId: string; role: "owner" | "member" | "viewer" };
     body?: string;
-    service?: "linear-bot";
+    service?: "linear-bot" | "slack-bot";
   } = {}
 ) {
   const url = `${BASE}${path}`;
@@ -98,6 +98,133 @@ describe("HTTP session access by enforcement mode", () => {
     expect(denied.filter((row) => row.reason_code === "session_not_visible")).toHaveLength(2);
     expect(denied.find((row) => row.reason_code === "session_not_visible")?.team_id).toBe(team.id);
   });
+
+  it("uses the signed Slack channel binding for actorless event reads", async () => {
+    const { sessionName, team } = await session("team");
+    const other = await new TeamStore(env.DB).create({
+      slug: "other",
+      name: "Other",
+      joinPolicy: "invite_only",
+    });
+    await env.DB.prepare(
+      "INSERT INTO team_channel_bindings (provider, external_id, team_id, kind, created_at) VALUES ('slack', 'C1', ?, 'source', ?)"
+    )
+      .bind(other.id, Date.now())
+      .run();
+    const runtime = vi.spyOn(env.SESSION, "get");
+    const hidden = await fetchMode(`/sessions/${sessionName}/events?channel=slack:C1`, "on", {
+      service: "slack-bot",
+    });
+    expect(hidden.status).toBe(404);
+    expect(await hidden.json()).toEqual({ error: "Session not found" });
+    expect(runtime).not.toHaveBeenCalled();
+    runtime.mockRestore();
+    await env.DB.prepare("UPDATE team_channel_bindings SET team_id = ? WHERE external_id = 'C1'")
+      .bind(team.id)
+      .run();
+    expect(
+      (
+        await fetchMode(`/sessions/${sessionName}/events?channel=slack:C1`, "on", {
+          service: "slack-bot",
+        })
+      ).status
+    ).toBe(200);
+    expect(
+      (
+        await fetchMode(`/sessions/${sessionName}/events`, "on", {
+          service: "slack-bot",
+        })
+      ).status
+    ).toBe(200);
+  });
+
+  it.each(["slack:", "unknown:C1", "linear:C1", "slack:C1&channel=slack:C2"])(
+    "fails closed for invalid actorless channel scope %s",
+    async (channel) => {
+      const { sessionName } = await session("team");
+      expect(
+        (
+          await fetchMode(`/sessions/${sessionName}/events?channel=${channel}`, "on", {
+            service: "slack-bot",
+          })
+        ).status
+      ).toBe(404);
+    }
+  );
+
+  it.each(["off", "shadow"])(
+    "retains %s semantics for channel-scoped service reads",
+    async (mode) => {
+      const { sessionName } = await session("team");
+      const other = await new TeamStore(env.DB).create({
+        slug: "other",
+        name: "Other",
+        joinPolicy: "invite_only",
+      });
+      await env.DB.prepare(
+        "INSERT INTO team_channel_bindings (provider, external_id, team_id, kind, created_at) VALUES ('slack', 'C1', ?, 'source', ?)"
+      )
+        .bind(other.id, Date.now())
+        .run();
+      expect(
+        (
+          await fetchMode(`/sessions/${sessionName}/events?channel=slack:C1`, mode, {
+            service: "slack-bot",
+          })
+        ).status
+      ).toBe(200);
+    }
+  );
+
+  it.each(["off", "shadow", "on"])(
+    "rechecks outbound scope for queued Slack content in %s mode",
+    async (mode) => {
+      const { sessionName, team } = await session("team");
+      const other = await new TeamStore(env.DB).create({
+        slug: "destination",
+        name: "Destination",
+        joinPolicy: "invite_only",
+      });
+      await env.DB.prepare(
+        "INSERT INTO team_channel_bindings (provider, external_id, team_id, kind, created_at) VALUES ('slack', 'C1', ?, 'source', ?)"
+      )
+        .bind(team.id, Date.now())
+        .run();
+      const path = `/sessions/${sessionName}/events?channel=slack:C1&purpose=slack-post`;
+      expect((await fetchMode(path, mode, { service: "slack-bot" })).status).toBe(200);
+      await env.DB.prepare(
+        "UPDATE sessions SET owner_team_id = ?, visibility = 'workspace' WHERE id = ?"
+      )
+        .bind(other.id, sessionName)
+        .run();
+      expect(
+        (
+          await fetchMode(`/sessions/${sessionName}/events?channel=slack:C1`, mode, {
+            service: "slack-bot",
+          })
+        ).status
+      ).toBe(200);
+      const runtime = vi.spyOn(env.SESSION, "get");
+      for (const resource of ["events", "artifacts", "media/artifact_1"]) {
+        expect(
+          (
+            await fetchMode(
+              `/sessions/${sessionName}/${resource}?channel=slack:C1&purpose=slack-post`,
+              mode,
+              { service: "slack-bot" }
+            )
+          ).status
+        ).toBe(404);
+      }
+      expect(runtime).not.toHaveBeenCalled();
+      runtime.mockRestore();
+      expect((await auditRows("authorization.request_denied")).slice(-3)).toMatchObject([
+        { team_id: other.id },
+        { team_id: other.id },
+        { team_id: other.id },
+      ]);
+    }
+  );
 
   it("defers the team and delete rules in shadow but records each would-be denial", async () => {
     const { sessionName, team } = await session("team");

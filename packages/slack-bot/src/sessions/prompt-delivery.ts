@@ -39,12 +39,13 @@ export interface DeliverPromptOptions {
 export type DeliverPromptResult =
   | { ok: true; data: SendPromptResponse }
   /**
-   * "stale": the session no longer exists (retry against a new session).
+   * "stale": close the thread mapping; never start a replacement.
+   * "forbidden": refuse this user's prompt without closing the thread for others.
    * "transient": the prompt send failed; the user should be told to retry.
    * "no_images_delivered": an image-only request lost every image, so no
    * prompt was sent — the user has already been notified.
    */
-  | { ok: false; reason: "stale" | "transient" | "no_images_delivered" };
+  | { ok: false; reason: "stale" | "forbidden" | "transient" | "no_images_delivered" };
 
 /** Deliver one prompt and its image attachments to a session. */
 export async function deliverPrompt(
@@ -65,11 +66,10 @@ export async function deliverPrompt(
     traceId,
   } = options;
   const upload = await uploadPreparedAttachments(env, sessionId, attachments, authorId, traceId);
+  if (upload.sessionForbidden) return { ok: false, reason: "forbidden" };
 
   if (imageOnly && upload.references.length === 0) {
-    // The placeholder prompt would launch a meaningless run with nothing
-    // attached. When the uploads failed only because the session is gone,
-    // surface staleness instead so the caller retries on a fresh session.
+    // The placeholder needs an image. A missing session instead closes its thread.
     if (upload.sessionMissing) return { ok: false, reason: "stale" };
     await notifyDroppedAttachments(env, channel, threadTs, upload, {
       traceId,
@@ -89,9 +89,7 @@ export async function deliverPrompt(
     traceId,
   });
   if (!promptResult.ok) return promptResult;
-  // Notify about dropped images only now that the session proved live —
-  // uploads against a stale session fail spuriously and are retried against
-  // the replacement session.
+  // Notify about dropped images only now that the session proved accessible.
   await notifyDroppedAttachments(env, channel, threadTs, upload, { traceId });
   return promptResult;
 }

@@ -17,8 +17,9 @@ import { fetchControlPlaneJson } from "./control-plane";
 const environments = createCachedResource<Environment[]>({
   name: "environments",
   kvKey: "slack:environments",
-  load: async (env, traceId) => {
-    const body = await fetchControlPlaneJson(env, "/environments", traceId);
+  load: async (env, traceId, teamId) => {
+    const path = teamId ? `/environments?teamId=${encodeURIComponent(teamId)}` : "/environments";
+    const body = await fetchControlPlaneJson(env, path, traceId);
     // Throw on malformed fresh data so the cache can fall back to the KV
     // last-known-good copy instead of overwriting it with an empty list.
     return listEnvironmentsResponseSchema.parse(body).environments;
@@ -38,8 +39,12 @@ const environments = createCachedResource<Environment[]>({
 /**
  * Fetch the workspace's environments from the control plane.
  */
-export async function getAvailableEnvironments(env: Env, traceId?: string): Promise<Environment[]> {
-  return environments.get(env, traceId);
+export async function getAvailableEnvironments(
+  env: Env,
+  traceId?: string,
+  teamId?: string | null
+): Promise<Environment[]> {
+  return environments.get(env, traceId, teamId);
 }
 
 /**
@@ -48,9 +53,10 @@ export async function getAvailableEnvironments(env: Env, traceId?: string): Prom
 export async function getEnvironmentById(
   env: Env,
   environmentId: string,
-  traceId?: string
+  traceId?: string,
+  teamId?: string | null
 ): Promise<Environment | undefined> {
-  const all = await getAvailableEnvironments(env, traceId);
+  const all = await getAvailableEnvironments(env, traceId, teamId);
   return all.find((environment) => environment.id === environmentId);
 }
 

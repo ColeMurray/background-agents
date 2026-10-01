@@ -106,6 +106,25 @@ export {
 export type { Team, TeamRole, TeamJoinPolicy, SessionVisibility, TeamMembership } from "./teams";
 
 export {
+  teamChannelBindingProviderSchema,
+  teamChannelBindingKindSchema,
+  teamChannelBindingSchema,
+  putTeamChannelBindingRequestSchema,
+  teamChannelBindingResponseSchema,
+  teamChannelBindingsResponseSchema,
+  channelBindingResponseSchema,
+} from "./team-channel-bindings";
+export type {
+  TeamChannelBindingProvider,
+  TeamChannelBindingKind,
+  TeamChannelBinding,
+  PutTeamChannelBindingRequest,
+  TeamChannelBindingResponse,
+  TeamChannelBindingsResponse,
+  ChannelBindingResponse,
+} from "./team-channel-bindings";
+
+export {
   SESSION_ACTIONS,
   AUTOMATION_ACTIONS,
   ENVIRONMENT_ACTIONS,

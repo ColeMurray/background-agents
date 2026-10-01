@@ -53,6 +53,9 @@ import {
   toProviderSelections,
 } from "../db/automation-model-provider-auth";
 import { SlackChannelStore } from "../db/slack-channel-store";
+import { SessionIndexStore } from "../db/session-index";
+import { TeamChannelBindingStore } from "../db/team-channel-bindings";
+import { slackPostGate } from "../authorization/slack-post-gate";
 import { IntegrationSettingsStore } from "../db/integration-settings";
 import {
   buildSlackCompletionNotification,
@@ -1418,13 +1421,36 @@ export class Scheduler {
     const secret = callbackSigningSecret(this.env, "slack-bot");
     if (!binding || !secret) return;
 
-    const body = buildSlackCompletionNotification(meta, ctx);
+    if (!meta.messageTs) return;
+    const [session, channelBinding] = await Promise.all([
+      new SessionIndexStore(this.db).get(ctx.sessionId),
+      new TeamChannelBindingStore(this.db).get("slack", meta.channel),
+    ]);
+    const denial = slackPostGate(session, channelBinding);
+    const body = denial
+      ? {
+          kind: "slack.thread_closed",
+          sessionId: ctx.sessionId,
+          timestamp: Date.now(),
+          context: { channel: meta.channel, threadTs: meta.messageTs },
+        }
+      : buildSlackCompletionNotification(meta, ctx);
     if (!body) return;
 
+    if (denial) {
+      this.log.info("Slack completion denied by session scope", {
+        event: "scheduler.slack_complete_denied",
+        run_id: run.id,
+        session_id: ctx.sessionId,
+        reason: denial,
+      });
+    }
+
     const signature = await computeHmacHex(JSON.stringify(body), secret);
+    const endpoint = denial ? "thread_closed" : "automation-complete";
     await deliverWithRetry(
       (signal) =>
-        binding.fetch("https://internal/callbacks/automation-complete", {
+        binding.fetch(`https://internal/callbacks/${endpoint}`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ ...body, signature }),

@@ -50,6 +50,8 @@ export interface ExtractorDeps {
    * Signatures are request-bound, so headers are built per URL.
    */
   auth: OutboundServiceCredential;
+  /** Revalidate outbound Slack delivery authority; protected read failures must abort delivery. */
+  readPurpose?: "slack-post";
   /** Structured logger. Falls back to a silent no-op if not provided. */
   log?: Logger;
 }
@@ -80,14 +82,16 @@ const noopLogger: Logger = {
  *
  * Events are filtered server-side by `messageId`. Token events contain
  * cumulative text, so only the last one is kept. Artifacts are fetched from
- * the dedicated `/artifacts` endpoint, falling back to inline artifact events
- * when the endpoint errors.
+ * the dedicated `/artifacts` endpoint. Unprotected consumers may fall back to
+ * inline artifacts; purpose-protected consumers throw on any failed read.
+ * `channel` is an optional provider-qualified identity (for example, `slack:C123`).
  */
 export async function extractAgentResponse(
   deps: ExtractorDeps,
   sessionId: string,
   messageId: string,
-  traceId?: string
+  traceId?: string,
+  channel?: string
 ): Promise<AgentResponse> {
   const log = deps.log ?? noopLogger;
   const startTime = Date.now();
@@ -102,6 +106,8 @@ export async function extractAgentResponse(
       const url = new URL(`https://internal/sessions/${sessionId}/events`);
       url.searchParams.set("message_id", messageId);
       url.searchParams.set("limit", String(EVENTS_PAGE_LIMIT));
+      if (channel) url.searchParams.set("channel", channel);
+      if (deps.readPurpose) url.searchParams.set("purpose", deps.readPurpose);
       if (cursor) {
         url.searchParams.set("cursor", cursor);
       }
@@ -116,6 +122,8 @@ export async function extractAgentResponse(
           http_status: response.status,
           duration_ms: Date.now() - startTime,
         });
+        if (deps.readPurpose)
+          throw new Error(`Control plane events read failed: ${response.status}`);
         return {
           textContent: "",
           toolCalls: [],
@@ -133,6 +141,7 @@ export async function extractAgentResponse(
           error: new Error("Invalid events response"),
           duration_ms: Date.now() - startTime,
         });
+        if (deps.readPurpose) throw new Error("Invalid events response");
         return {
           textContent: "",
           toolCalls: [],
@@ -146,7 +155,14 @@ export async function extractAgentResponse(
       cursor = data.hasMore ? data.cursor : undefined;
     } while (cursor);
 
-    const artifacts = await fetchSessionArtifacts(deps, sessionId, traceId, base, allEvents);
+    const artifacts = await fetchSessionArtifacts(
+      deps,
+      sessionId,
+      traceId,
+      base,
+      allEvents,
+      channel
+    );
     const agentResponse = buildAgentResponseFromEvents(allEvents, artifacts);
 
     log.info("control_plane.fetch_events", {
@@ -169,6 +185,7 @@ export async function extractAgentResponse(
       error: error instanceof Error ? error : new Error(String(error)),
       duration_ms: Date.now() - startTime,
     });
+    if (deps.readPurpose) throw error;
     return { textContent: "", toolCalls: [], artifacts: [], mediaArtifacts: [], success: false };
   }
 }
@@ -260,12 +277,16 @@ async function fetchSessionArtifacts(
   sessionId: string,
   traceId: string | undefined,
   base: Record<string, unknown>,
-  events: EventResponse[]
+  events: EventResponse[],
+  channel?: string
 ): Promise<ArtifactInfo[]> {
   const log = deps.log ?? noopLogger;
   const eventRange = getEventCreatedAtRange(events);
   try {
-    const artifactsUrl = `https://internal/sessions/${sessionId}/artifacts`;
+    const url = new URL(`https://internal/sessions/${sessionId}/artifacts`);
+    if (channel) url.searchParams.set("channel", channel);
+    if (deps.readPurpose) url.searchParams.set("purpose", deps.readPurpose);
+    const artifactsUrl = url.toString();
     const headers = await buildExtractorAuthHeaders(deps, artifactsUrl, traceId);
     const response = await deps.fetcher.fetch(artifactsUrl, {
       headers,
@@ -277,6 +298,8 @@ async function fetchSessionArtifacts(
         outcome: "error",
         http_status: response.status,
       });
+      if (deps.readPurpose)
+        throw new Error(`Control plane artifacts read failed: ${response.status}`);
       return [];
     }
 
@@ -287,6 +310,7 @@ async function fetchSessionArtifacts(
         outcome: "error",
         error: new Error("Invalid artifacts response"),
       });
+      if (deps.readPurpose) throw new Error("Invalid artifacts response");
       return [];
     }
     const data = parsed.data;
@@ -305,6 +329,7 @@ async function fetchSessionArtifacts(
       outcome: "error",
       error: error instanceof Error ? error : new Error(String(error)),
     });
+    if (deps.readPurpose) throw error;
     return [];
   }
 }

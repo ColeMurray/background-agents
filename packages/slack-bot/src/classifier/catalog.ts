@@ -21,10 +21,14 @@ export interface TargetCatalog {
  * cache; environments fail open to an empty list, so an environments outage
  * degrades the whole catalog to repository-only.
  */
-export async function loadTargetCatalog(env: Env, traceId?: string): Promise<TargetCatalog> {
+export async function loadTargetCatalog(
+  env: Env,
+  traceId?: string,
+  teamId?: string | null
+): Promise<TargetCatalog> {
   const [repos, environments] = await Promise.all([
-    getAvailableRepos(env, traceId),
-    getAvailableEnvironments(env, traceId),
+    getAvailableRepos(env, traceId, teamId),
+    getAvailableEnvironments(env, traceId, teamId),
   ]);
   return { repos, environments };
 }

@@ -123,6 +123,37 @@ describe("control plane client request payloads", () => {
     vi.restoreAllMocks();
   });
 
+  it.each(["team-a", null])("sends explicit team scope %s on launch", async (teamId) => {
+    const fetch = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) =>
+      okJson({ sessionId: "s1", status: "created" })
+    );
+    await createSession(makeEnv(fetch), { target, model: "openai/gpt-5.4", teamId });
+    expect(parseRequestBody(fetch)).toMatchObject({ teamId });
+  });
+
+  it.each([
+    [403, { code: "session_action_denied", reason_code: "not_member" }],
+    [403, { code: "not_member" }],
+    [409, { code: "target_team_missing_grant", repository: "acme/app" }],
+  ] as const)("preserves create refusal details at %s", async (status, body) => {
+    const fetch = vi.fn(async () => okJson(body, status));
+    expect(await createSession(makeEnv(fetch), { target, model: "openai/gpt-5.4" })).toEqual({
+      error: {
+        status,
+        code: body.code,
+        reasonCode: "reason_code" in body ? body.reason_code : undefined,
+        repository: "repository" in body ? body.repository : undefined,
+      },
+    });
+  });
+
+  it("distinguishes denied follow-ups from transient errors", async () => {
+    const fetch = vi.fn(async () => new Response(null, { status: 403 }));
+    expect(
+      await sendPrompt(makeEnv(fetch), { sessionId: "s1", content: "Fix it", authorId: "slack:U1" })
+    ).toEqual({ ok: false, reason: "forbidden" });
+  });
+
   it("creates repository sessions with target, model, and branch — identity stays out of the body", async () => {
     const fetch = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) =>
       okJson({ sessionId: "session-1", status: "created" })

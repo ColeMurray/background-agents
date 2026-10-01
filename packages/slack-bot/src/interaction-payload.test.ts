@@ -40,4 +40,14 @@ describe("slackInteractionPayloadSchema", () => {
 
     expect(result.actions?.[0].block_id).toBe("target_picker:request-id");
   });
+
+  it("preserves the block_suggestion block id needed to recover pending scope", () => {
+    expect(
+      slackInteractionPayloadSchema.parse({
+        type: "block_suggestion",
+        action_id: "select_repo",
+        block_id: "target_picker:request-id",
+      }).block_id
+    ).toBe("target_picker:request-id");
+  });
 });

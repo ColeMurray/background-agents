@@ -161,6 +161,52 @@ describe("getAvailableRepos", () => {
     vi.clearAllMocks();
   });
 
+  it("isolates memory and KV fallback by team, never falling back to workspace repos", async () => {
+    const env = makeEnv(jsonResponse({ repos: [], cached: false, cachedAt: "2026-10-01" }));
+    const fetch = vi.mocked(env.CONTROL_PLANE.fetch);
+    fetch.mockImplementation(async (input) => {
+      const teamId = new URL(String(input)).searchParams.get("teamId");
+      return jsonResponse({
+        repos: [
+          {
+            id: 1,
+            owner: "acme",
+            name: teamId ?? "workspace",
+            fullName: `acme/${teamId ?? "workspace"}`,
+            description: null,
+            archived: false,
+            private: true,
+            defaultBranch: "main",
+          },
+        ],
+        cached: false,
+        cachedAt: "2026-10-01",
+      });
+    });
+    expect((await getAvailableRepos(env, "trace", null))[0].name).toBe("workspace");
+    expect((await getAvailableRepos(env, "trace", "team-a"))[0].name).toBe("team-a");
+    expect((await getAvailableRepos(env, "trace", "team-b"))[0].name).toBe("team-b");
+    await getAvailableRepos(env, "trace", "team-a");
+    expect(fetch).toHaveBeenCalledTimes(3);
+    expect(env.SLACK_KV.put).toHaveBeenCalledWith(
+      "repos:cache:team:team-a",
+      expect.any(String),
+      expect.anything()
+    );
+    clearLocalCache();
+    fetch.mockImplementation(async () => new Response(null, { status: 503 }));
+    const stored = new Map(
+      vi.mocked(env.SLACK_KV.put).mock.calls.map(([key, value]) => [key, JSON.parse(String(value))])
+    );
+    vi.mocked(env.SLACK_KV.get).mockImplementation(async (key) =>
+      typeof key === "string" ? (stored.get(key) ?? null) : null
+    );
+    expect((await getAvailableRepos(env, "trace", "team-a"))[0].name).toBe("team-a");
+    expect((await getAvailableRepos(env, "trace", "team-b"))[0].name).toBe("team-b");
+    expect(await getAvailableRepos(env, "trace", "team-c")).toEqual([]);
+    expect(env.SLACK_KV.get).toHaveBeenCalledWith("repos:cache:team:team-a", "json");
+  });
+
   it("normalizes control-plane repositories and stores them in KV", async () => {
     const env = makeEnv(
       jsonResponse({

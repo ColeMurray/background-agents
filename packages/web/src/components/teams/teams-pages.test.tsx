@@ -50,6 +50,7 @@ vi.mock("@/components/settings/team-detail", () => ({
 }));
 vi.mock("./team-overview", () => ({ TeamOverview: () => <p>Team session buckets</p> }));
 vi.mock("./team-activity", () => ({ TeamActivity: () => <p>Team activity feed</p> }));
+vi.mock("./team-channels", () => ({ TeamChannels: () => <p>Team channel bindings</p> }));
 
 const team: TeamResponse = {
   id: "team_design",
@@ -189,6 +190,20 @@ describe("Team page tabs", () => {
     expect(screen.queryByRole("button", { name: "Settings" })).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Activity" }));
     expect(screen.getByText("Team activity feed")).toBeInTheDocument();
+  });
+
+  it("places Channels between Members and Activity", () => {
+    mocks.mine = [team];
+    render(<TeamPage slug="design" />);
+    const tabs = within(screen.getByRole("navigation", { name: "Team tabs" }));
+    expect(tabs.getAllByRole("button").map((button) => button.textContent)).toEqual([
+      "Overview",
+      "Members",
+      "Channels",
+      "Activity",
+    ]);
+    fireEvent.click(tabs.getByRole("button", { name: "Channels" }));
+    expect(screen.getByText("Team channel bindings")).toBeInTheDocument();
   });
 
   it.each(["owner", "administrator"])(

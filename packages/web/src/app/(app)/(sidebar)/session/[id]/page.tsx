@@ -92,6 +92,7 @@ function SessionContent({
           ownerUserId: initialSnapshot.session.ownerUserId ?? null,
           visibility: initialSnapshot.session.visibility,
           collaborators: initialSnapshot.session.collaborators ?? [],
+          slackThread: initialSnapshot.session.slackThread,
           onUpdated: refreshSnapshot,
         };
   const {

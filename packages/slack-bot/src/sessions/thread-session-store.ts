@@ -6,9 +6,12 @@ import { targetId, targetLabel, type SlackSessionTarget } from "../targets";
 import type { Env, ThreadSession } from "../types";
 
 const log = createLogger("handler");
+export const THREAD_CLOSED_MESSAGE = "this session is no longer available from this channel";
 const THREAD_SESSION_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 const threadSessionSchema: z.ZodType<ThreadSession> = z.object({
   sessionId: z.string().min(1),
+  teamId: z.string().min(1).nullable().optional(),
+  closed: z.literal(true).optional(),
   repoId: z.string().min(1),
   repoFullName: z.string().min(1),
   model: z.string().min(1),
@@ -19,6 +22,23 @@ const threadSessionSchema: z.ZodType<ThreadSession> = z.object({
 
 function getThreadSessionKey(channel: string, threadTs: string): string {
   return `thread:${channel}:${threadTs}`;
+}
+
+function getThreadClosureKey(channel: string, threadTs: string, sessionId: string): string {
+  return `thread-closed:${channel}:${threadTs}:${sessionId}`;
+}
+
+async function hasThreadClosure(
+  env: Env,
+  channel: string,
+  threadTs: string,
+  sessionId: string
+): Promise<boolean> {
+  return (
+    (await createKvCacheStore(env.SLACK_KV).get(
+      getThreadClosureKey(channel, threadTs, sessionId)
+    )) === "1"
+  );
 }
 
 export async function lookupThreadSession(
@@ -32,7 +52,12 @@ export async function lookupThreadSession(
       "json"
     );
     const result = threadSessionSchema.safeParse(data);
-    return result.success ? result.data : null;
+    if (!result.success) return null;
+    const session = result.data;
+    if (!session.closed && (await hasThreadClosure(env, channel, threadTs, session.sessionId))) {
+      return { ...session, closed: true };
+    }
+    return session;
   } catch (e) {
     log.error("kv.get", {
       key_prefix: "thread",
@@ -51,6 +76,9 @@ export async function storeThreadSession(
   session: ThreadSession
 ): Promise<void> {
   try {
+    if (!session.closed && (await hasThreadClosure(env, channel, threadTs, session.sessionId))) {
+      session = { ...session, closed: true };
+    }
     await createKvCacheStore(env.SLACK_KV).put(
       getThreadSessionKey(channel, threadTs),
       JSON.stringify(session),
@@ -64,6 +92,54 @@ export async function storeThreadSession(
       error: e instanceof Error ? e : new Error(String(e)),
     });
   }
+}
+
+/** Also checks coordinate-only closures, where an automation has no interactive mapping. */
+export async function isThreadSessionClosed(
+  env: Env,
+  channel: string,
+  threadTs: string,
+  sessionId: string
+): Promise<boolean> {
+  const mapping = await lookupThreadSession(env, channel, threadTs);
+  if (mapping?.sessionId === sessionId) return mapping.closed === true;
+  return hasThreadClosure(env, channel, threadTs, sessionId);
+}
+
+/** The independent tombstone survives absent mappings and stale whole-record writes. */
+export async function closeThreadSession(
+  env: Env,
+  channel: string,
+  threadTs: string,
+  sessionId: string
+): Promise<void> {
+  if (await hasThreadClosure(env, channel, threadTs, sessionId)) return;
+  // Do not swallow marker failures: callback callers must return a retryable response.
+  await createKvCacheStore(env.SLACK_KV).put(
+    getThreadClosureKey(channel, threadTs, sessionId),
+    "1",
+    {
+      expirationTtl: THREAD_SESSION_TTL_MS / 1000,
+    }
+  );
+  const mapping = await lookupThreadSession(env, channel, threadTs);
+  if (mapping?.sessionId === sessionId) {
+    await storeThreadSession(env, channel, threadTs, { ...mapping, closed: true });
+  }
+}
+
+/** Best-effort deduplication only: KV has no atomic compare-and-set. */
+export async function claimThreadClosureNotice(
+  env: Env,
+  channel: string,
+  threadTs: string,
+  sessionId: string
+): Promise<boolean> {
+  const key = `${getThreadClosureKey(channel, threadTs, sessionId)}:notice`;
+  const kv = createKvCacheStore(env.SLACK_KV);
+  if ((await kv.get(key)) === "1") return false;
+  await kv.put(key, "1", { expirationTtl: THREAD_SESSION_TTL_MS / 1000 });
+  return true;
 }
 
 export async function clearThreadSession(
@@ -90,8 +166,8 @@ export async function clearThreadSession(
  * the mapping is re-read and only written when the new ts is strictly newer.
  * KV has no compare-and-swap, so truly simultaneous writes can still race in
  * a narrow window; a lost race only re-includes a few already-forwarded
- * thread messages in a later prompt. No-op when the mapping is gone (e.g.
- * concurrently cleared) so a dead session is never resurrected.
+ * thread messages in a later prompt. No-op when the mapping is gone or closed;
+ * the separate tombstone preserves closure across stale checkpoint writes.
  */
 export async function advanceLastPromptTs(
   env: Env,
@@ -100,7 +176,7 @@ export async function advanceLastPromptTs(
   promptTs: string
 ): Promise<void> {
   const current = await lookupThreadSession(env, channel, threadTs);
-  if (!current) return;
+  if (!current || current.closed) return;
   if (current.lastPromptTs && compareSlackTimestamps(current.lastPromptTs, promptTs) >= 0) return;
   await storeThreadSession(env, channel, threadTs, { ...current, lastPromptTs: promptTs });
 }
@@ -110,7 +186,8 @@ export function buildThreadSession(
   target: SlackSessionTarget,
   model: string,
   reasoningEffort?: string,
-  lastPromptTs?: string
+  lastPromptTs?: string,
+  teamId?: string | null
 ): ThreadSession {
   return {
     sessionId,
@@ -120,5 +197,6 @@ export function buildThreadSession(
     reasoningEffort,
     createdAt: Date.now(),
     lastPromptTs,
+    ...(teamId !== undefined ? { teamId } : {}),
   };
 }

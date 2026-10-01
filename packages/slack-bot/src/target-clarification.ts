@@ -164,17 +164,18 @@ function filterEnvironmentsByQuery(
 export async function resolveTargetValue(
   env: Env,
   value: string,
-  traceId?: string
+  traceId?: string,
+  teamId?: string | null
 ): Promise<SlackSessionTarget | null> {
   const ref = parseTargetValue(value);
   if (ref.kind === "none") {
     return { kind: "none" };
   }
   if (ref.kind === "environment") {
-    const environment = await getEnvironmentById(env, ref.environmentId, traceId);
+    const environment = await getEnvironmentById(env, ref.environmentId, traceId, teamId);
     return environment ? { kind: "environment", environment } : null;
   }
-  const repos = await getAvailableRepos(env, traceId);
+  const repos = await getAvailableRepos(env, traceId, teamId);
   const repo = repos.find((r) => r.id === ref.repoId);
   return repo ? { kind: "repository", repo } : null;
 }
@@ -240,9 +241,10 @@ function buildGroupedOptions(
 export async function getTargetClarificationOptions(
   env: Env,
   query: string | undefined,
-  traceId?: string
+  traceId?: string,
+  teamId?: string | null
 ): Promise<TargetClarificationOptions> {
-  const catalog = await loadTargetCatalog(env, traceId);
+  const catalog = await loadTargetCatalog(env, traceId, teamId);
   const remainingAfterNoRepository = MAX_REPO_SUGGESTION_OPTIONS - 1;
   const matchedEnvironments = filterEnvironmentsByQuery(catalog.environments, query).slice(
     0,

@@ -310,6 +310,23 @@ describe("getChannelInfo", () => {
     vi.restoreAllMocks();
   });
 
+  it("retains membership and external-sharing flags for binding validation", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
+      jsonResponse({
+        ok: true,
+        channel: { id: "C123", name: "ops", is_member: true, is_ext_shared: false },
+      })
+    );
+    const result = await getChannelInfo("xoxb-token", "C123");
+    expect(result.ok).toBe(true);
+    expect(result.channel).toEqual({
+      id: "C123",
+      name: "ops",
+      is_member: true,
+      is_ext_shared: false,
+    });
+  });
+
   it("fetches channel info via GET with bearer auth", async () => {
     const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
       jsonResponse({

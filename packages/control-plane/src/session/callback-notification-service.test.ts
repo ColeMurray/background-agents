@@ -9,6 +9,7 @@ import {
 } from "./callback-notification-service";
 import type { MessageRepository } from "./message-repository";
 import type { FetchClient } from "../platform-ports";
+import type { SlackPostScope } from "../authorization/slack-post-gate";
 import { verifyCallbackSignature } from "@open-inspect/shared/auth";
 import {
   linearCompletionCallbackSchema,
@@ -62,6 +63,13 @@ function createTestHarness(overrides?: {
   const slackBot = createMockFetcher();
   const linearBot = createMockFetcher();
   const sleep = vi.fn(async () => {});
+  const slackPostScope = {
+    getSession: vi.fn<SlackPostScope["getSession"]>().mockResolvedValue({
+      ownerTeamId: "team-a",
+      visibility: "workspace",
+    }),
+    getChannelBinding: vi.fn<SlackPostScope["getChannelBinding"]>().mockResolvedValue(null),
+  };
 
   const env: CallbackServiceEnv = {
     SERVICE_AUTH_SECRET_SLACK_BOT: "test-secret",
@@ -74,6 +82,7 @@ function createTestHarness(overrides?: {
   const deps: CallbackServiceDeps = {
     repository: repository as CallbackRepository,
     messageRepository: repository as unknown as MessageRepository,
+    slackPostScope,
     env,
     log,
     getSessionId: overrides?.getSessionId ?? (() => "session-123"),
@@ -89,6 +98,7 @@ function createTestHarness(overrides?: {
     slackBot,
     linearBot,
     sleep,
+    slackPostScope,
   };
 }
 
@@ -99,6 +109,130 @@ describe("CallbackNotificationService", () => {
 
   beforeEach(() => {
     harness = createTestHarness();
+  });
+
+  describe.each(["complete", "tool_call", "activity"] as const)("Slack post gate: %s", (path) => {
+    const context = {
+      channel: "C123",
+      threadTs: "1234.5678",
+      repoFullName: "secret/repository",
+      model: "private-model",
+    };
+
+    async function notify() {
+      harness.repository.getMessageCallbackContext.mockReturnValue({
+        callback_context: JSON.stringify(context),
+        source: "slack",
+      });
+      harness.repository.getProcessingMessageWithStartedAt.mockReturnValue({
+        id: "msg-1",
+        started_at: 1,
+      });
+      harness.slackBot.fetch.mockResolvedValue(new Response("ok"));
+      if (path === "complete") {
+        await harness.service.notifyComplete("msg-1", false, "secret error");
+      } else if (path === "tool_call") {
+        await harness.service.notifyToolCall("msg-1", {
+          type: "tool_call",
+          tool: "bash",
+          args: { command: "secret command" },
+          callId: "call-1",
+        });
+      } else {
+        await harness.service.refreshSlackActivity("msg-1", Date.now());
+      }
+    }
+
+    it.each([
+      { name: "missing session", session: null, binding: null },
+      {
+        name: "private session in an unbound channel",
+        session: { ownerTeamId: "team-a", visibility: "private" },
+        binding: null,
+      },
+      {
+        name: "private session in its own team's channel",
+        session: { ownerTeamId: "team-a", visibility: "private" },
+        binding: { teamId: "team-a" },
+      },
+      {
+        name: "team-visible cross-team session",
+        session: { ownerTeamId: "team-a", visibility: "team" },
+        binding: { teamId: "team-b" },
+      },
+      {
+        name: "workspace-visible cross-team session",
+        session: { ownerTeamId: "team-a", visibility: "workspace" },
+        binding: { teamId: "team-b" },
+      },
+    ] satisfies Array<{
+      name: string;
+      session: Awaited<ReturnType<SlackPostScope["getSession"]>>;
+      binding: Awaited<ReturnType<SlackPostScope["getChannelBinding"]>>;
+    }>)("sends only a safe closure for $name", async ({ session, binding }) => {
+      harness.slackPostScope.getSession.mockResolvedValue(session);
+      harness.slackPostScope.getChannelBinding.mockResolvedValue(binding);
+
+      await notify();
+
+      expect(harness.repository.getSession).not.toHaveBeenCalled();
+      expect(harness.slackPostScope.getSession).toHaveBeenCalledWith("session-123");
+      expect(harness.slackPostScope.getChannelBinding).toHaveBeenCalledWith("C123");
+      expect(harness.slackBot.fetch).toHaveBeenCalledOnce();
+      expect(harness.slackBot.fetch.mock.calls[0][0]).toBe(
+        "https://internal/callbacks/thread_closed"
+      );
+      const body = JSON.parse(String(harness.slackBot.fetch.mock.calls[0][1]?.body));
+      expect(body).toEqual({
+        kind: "slack.thread_closed",
+        sessionId: "session-123",
+        timestamp: expect.any(Number),
+        context: { channel: "C123", threadTs: "1234.5678" },
+        signature: expect.any(String),
+      });
+      expect(await verifyCallbackSignature(body, "test-secret")).toBe(true);
+      expect(harness.linearBot.fetch).not.toHaveBeenCalled();
+    });
+
+    it.each([null, { teamId: "team-a" }])("allows channel binding %j", async (binding) => {
+      harness.slackPostScope.getChannelBinding.mockResolvedValue(binding);
+      await notify();
+      expect(harness.slackBot.fetch.mock.calls[0][0]).toBe(`https://internal/callbacks/${path}`);
+    });
+
+    it.each(["getSession", "getChannelBinding"] as const)(
+      "fails closed when %s fails",
+      async (lookup) => {
+        harness.slackPostScope[lookup].mockRejectedValue(new Error("D1 unavailable"));
+        await notify();
+        expect(harness.slackBot.fetch).not.toHaveBeenCalled();
+      }
+    );
+  });
+
+  it("does not apply Slack scope to Linear completion or progress", async () => {
+    harness.slackPostScope.getSession.mockResolvedValue({
+      ownerTeamId: "team-a",
+      visibility: "private",
+    });
+    harness.repository.getMessageCallbackContext.mockReturnValue({
+      callback_context: JSON.stringify(LINEAR_CALLBACK_CONTEXT),
+      source: "linear",
+    });
+    harness.linearBot.fetch.mockResolvedValue(new Response("ok"));
+
+    await harness.service.notifyComplete("msg-1", true);
+    await harness.service.notifyToolCall("msg-1", {
+      type: "tool_call",
+      tool: "bash",
+      args: {},
+      callId: "call-1",
+    });
+    await harness.service.refreshSlackActivity("msg-1", Date.now());
+
+    expect(harness.linearBot.fetch).toHaveBeenCalledTimes(2);
+    expect(harness.slackPostScope.getSession).not.toHaveBeenCalled();
+    expect(harness.slackPostScope.getChannelBinding).not.toHaveBeenCalled();
   });
 
   describe("notifyComplete", () => {

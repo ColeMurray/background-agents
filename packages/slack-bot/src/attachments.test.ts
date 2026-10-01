@@ -399,6 +399,20 @@ describe("uploadPreparedAttachments", () => {
     expect(result.sessionMissing).toBe(true);
   });
 
+  it("preserves attachment access denial for image-only follow-up routing", async () => {
+    const env = makeEnv(vi.fn(async () => new Response(null, { status: 403 })));
+    const result = await uploadPreparedAttachments(
+      env,
+      "s1",
+      {
+        files: [{ attachment: pngAttachment, bytes: new Uint8Array(16) }],
+        dropped: [],
+      },
+      "slack:U1"
+    );
+    expect(result).toMatchObject({ sessionForbidden: true, references: [] });
+  });
+
   it("counts malformed upload responses as dropped", async () => {
     vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(imageBytesResponse());
     const controlPlaneFetch = vi

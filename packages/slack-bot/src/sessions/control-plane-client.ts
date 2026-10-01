@@ -15,6 +15,7 @@ const log = createLogger("handler");
 
 interface CreateSessionOptions {
   target: SlackSessionTarget;
+  teamId?: string | null;
   model: string;
   reasoningEffort?: string;
   branch?: string;
@@ -26,14 +27,19 @@ interface CreateSessionOptions {
 
 export type SendPromptResult =
   | { ok: true; data: SendPromptResponse }
-  | { ok: false; reason: "stale" | "transient" };
+  | { ok: false; reason: "stale" | "forbidden" | "transient" };
+
+export interface CreateSessionFailure {
+  error: { status: number; code?: string; reasonCode?: string; repository?: string };
+}
 
 export async function createSession(
   env: ControlPlaneEnv,
   options: CreateSessionOptions
-): Promise<CreateSessionResponse | null> {
+): Promise<CreateSessionResponse | CreateSessionFailure | null> {
   const {
     target,
+    teamId,
     model,
     reasoningEffort,
     branch,
@@ -55,6 +61,7 @@ export async function createSession(
     const url = "https://internal/sessions";
     const body = JSON.stringify({
       ...buildSessionTargetRequestFields(target, branch),
+      teamId,
       model,
       reasoningEffort,
       actorDisplayName,
@@ -78,7 +85,17 @@ export async function createSession(
         http_status: response.status,
         duration_ms: Date.now() - startTime,
       });
-      return null;
+      const details: unknown = await response.json().catch(() => null);
+      const body =
+        details && typeof details === "object" ? (details as Record<string, unknown>) : {};
+      return {
+        error: {
+          status: response.status,
+          code: typeof body.code === "string" ? body.code : undefined,
+          reasonCode: typeof body.reason_code === "string" ? body.reason_code : undefined,
+          repository: typeof body.repository === "string" ? body.repository : undefined,
+        },
+      };
     }
     const result = createSessionResponseSchema.safeParse(await response.json());
     if (!result.success) {
@@ -164,7 +181,11 @@ export async function sendPrompt(
         http_status: response.status,
         duration_ms: Date.now() - startTime,
       });
-      return { ok: false, reason: response.status === 404 ? "stale" : "transient" };
+      return {
+        ok: false,
+        reason:
+          response.status === 404 ? "stale" : response.status === 403 ? "forbidden" : "transient",
+      };
     }
     const result = sendPromptResponseSchema.safeParse(await response.json());
     if (!result.success) {

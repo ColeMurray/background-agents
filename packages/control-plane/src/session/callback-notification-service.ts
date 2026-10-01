@@ -15,6 +15,7 @@ import {
   SLACK_ACTIVITY_REFRESH_KIND,
 } from "@open-inspect/shared/types/session-api";
 import { callbackSigningSecret, type CallbackDestination } from "../auth/service/callback-signing";
+import { slackPostGate, type SlackPostScope } from "../authorization/slack-post-gate";
 import type { Logger } from "../logger";
 import { deliverWithRetry, retryDelivery } from "./callback-delivery";
 import { notifyLinearStarted } from "./linear-start-callback";
@@ -51,6 +52,7 @@ export type AutomationRunCompletionHandler = (completion: AutomationRunCompletio
 export interface CallbackServiceDeps {
   repository: CallbackRepository;
   messageRepository: MessageRepository;
+  slackPostScope: SlackPostScope;
   env: CallbackServiceEnv;
   log: Logger;
   getSessionId: () => string;
@@ -106,6 +108,7 @@ interface CallbackDeliveryResult {
 export class CallbackNotificationService {
   private readonly repository: CallbackRepository;
   private readonly messageRepository: MessageRepository;
+  private readonly slackPostScope: SlackPostScope;
   private readonly env: CallbackServiceEnv;
   private readonly log: Logger;
   private readonly getSessionId: () => string;
@@ -124,6 +127,7 @@ export class CallbackNotificationService {
   constructor(deps: CallbackServiceDeps) {
     this.repository = deps.repository;
     this.messageRepository = deps.messageRepository;
+    this.slackPostScope = deps.slackPostScope;
     this.env = deps.env;
     this.log = deps.log;
     this.getSessionId = deps.getSessionId;
@@ -144,6 +148,60 @@ export class CallbackNotificationService {
    */
   private async signPayload(data: object, secret: string): Promise<string> {
     return computeHmacHex(JSON.stringify(data), secret);
+  }
+
+  private async slackPostDenial(sessionId: string, context: unknown): Promise<string | null> {
+    if (!isRecord(context) || typeof context.channel !== "string" || !context.channel) {
+      return "invalid_callback_context";
+    }
+    const [session, binding] = await Promise.all([
+      this.slackPostScope.getSession(sessionId),
+      this.slackPostScope.getChannelBinding(context.channel),
+    ]);
+    return slackPostGate(session, binding);
+  }
+
+  /** Closure carries coordinates only, never session content or tool arguments. */
+  private async notifySlackThreadClosed(
+    sessionId: string,
+    context: unknown,
+    binding: FetchClient,
+    secret: string
+  ): Promise<CallbackDeliveryResult> {
+    if (
+      !isRecord(context) ||
+      typeof context.channel !== "string" ||
+      !context.channel ||
+      typeof context.threadTs !== "string" ||
+      !context.threadTs
+    ) {
+      return { delivered: false, attempts: 0 };
+    }
+    const unsigned = {
+      kind: "slack.thread_closed",
+      sessionId,
+      timestamp: Date.now(),
+      context: { channel: context.channel, threadTs: context.threadTs },
+    };
+    const signature = await this.signPayload(unsigned, secret);
+    return deliverWithRetry(
+      (signal) =>
+        binding.fetch("https://internal/callbacks/thread_closed", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ ...unsigned, signature }),
+          signal,
+        }),
+      this.sleep,
+      ({ attempt, response, error }) => {
+        this.log.warn("callback.thread_closed_delivery_attempt_failed", {
+          session_id: sessionId,
+          attempt,
+          ...(response ? { http_status: response.status } : {}),
+          ...(error !== undefined ? { error: error instanceof Error ? error : String(error) } : {}),
+        });
+      }
+    );
   }
 
   /**
@@ -259,6 +317,17 @@ export class CallbackNotificationService {
       if (!binding) {
         result.rejectReason = "no_binding";
         return;
+      }
+
+      if (source !== "linear") {
+        const denial = await this.slackPostDenial(sessionId, rawContext);
+        if (denial) {
+          result = {
+            ...(await this.notifySlackThreadClosed(sessionId, rawContext, binding, secret)),
+            rejectReason: denial,
+          };
+          return;
+        }
       }
 
       const timestamp = Date.now();
@@ -439,6 +508,27 @@ export class CallbackNotificationService {
     }
 
     const sessionId = this.getSessionId();
+    try {
+      const denial = await this.slackPostDenial(sessionId, context);
+      if (denial) {
+        await this.notifySlackThreadClosed(sessionId, context, binding, secret);
+        this.log.info("callback.activity_refresh", {
+          message_id: messageId,
+          session_id: sessionId,
+          outcome: "rejected",
+          reject_reason: denial,
+        });
+        return;
+      }
+    } catch (error) {
+      this.log.warn("callback.activity_refresh", {
+        message_id: messageId,
+        session_id: sessionId,
+        outcome: "error",
+        error: error instanceof Error ? error : new Error(String(error)),
+      });
+      return;
+    }
     const callbackData = {
       kind: SLACK_ACTIVITY_REFRESH_KIND,
       sessionId,
@@ -581,6 +671,30 @@ export class CallbackNotificationService {
 
     const sessionId = this.getSessionId();
     const rawContext: unknown = JSON.parse(message.callback_context);
+
+    if (source !== "linear") {
+      try {
+        const denial = await this.slackPostDenial(sessionId, rawContext);
+        if (denial) {
+          await this.notifySlackThreadClosed(sessionId, rawContext, binding, secret);
+          this.log.info("callback.tool_call", {
+            message_id: messageId,
+            session_id: sessionId,
+            outcome: "rejected",
+            reject_reason: denial,
+          });
+          return;
+        }
+      } catch (error) {
+        this.log.warn("callback.tool_call", {
+          message_id: messageId,
+          session_id: sessionId,
+          outcome: "error",
+          error: error instanceof Error ? error : new Error(String(error)),
+        });
+        return;
+      }
+    }
 
     const callbackData = {
       sessionId,

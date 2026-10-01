@@ -358,7 +358,7 @@ export class RepoClassifier {
     // The target catalog every stage below works over. Environments fail open
     // to []: an environments-fetch problem degrades the catalog — and with it
     // classification — to repository-only.
-    const catalog = await loadTargetCatalog(this.env, traceId);
+    const catalog = await loadTargetCatalog(this.env, traceId, context?.teamId);
 
     // Deterministic routing rules (explicit keyword → repo or environment) take
     // precedence over everything below, but never override an active thread

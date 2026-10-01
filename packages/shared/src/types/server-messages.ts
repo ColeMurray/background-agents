@@ -71,11 +71,19 @@ const sessionStateSchema = z.object({
 });
 export type SessionState = z.infer<typeof sessionStateSchema>;
 
-export const sessionSnapshotStateSchema = sessionStateSchema.omit({
-  codeServerPassword: true,
-  vncPassword: true,
-  ttydToken: true,
-});
+export const sessionSnapshotStateSchema = sessionStateSchema
+  .omit({
+    codeServerPassword: true,
+    vncPassword: true,
+    ttydToken: true,
+  })
+  .extend({
+    /** Originating Slack channel and its current platform-team binding. */
+    slackThread: z
+      .object({ channelId: z.string().min(1), teamId: z.string().nullable() })
+      .nullable()
+      .optional(),
+  });
 export type SessionSnapshotState = z.infer<typeof sessionSnapshotStateSchema>;
 
 const participantPresenceSchema = z.object({

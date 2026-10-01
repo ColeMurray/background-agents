@@ -92,6 +92,7 @@ function makeEnv() {
   const controlPlaneFetch = vi.fn<ControlPlaneFetcher["fetch"]>();
   controlPlaneFetch.mockImplementation(async (input) => {
     const url = typeof input === "string" ? input : input.toString();
+    if (url.includes("/channel-bindings/slack/")) return Response.json({ teamId: null });
     if (url.includes("/repos")) {
       return new Response(
         JSON.stringify(
@@ -161,6 +162,7 @@ function buildNumberedRepos(count: number) {
 function mockReposFetch(env: ReturnType<typeof makeEnv>, repos: Array<Record<string, unknown>>) {
   env.CONTROL_PLANE.fetch.mockImplementation(async (input: RequestInfo | URL) => {
     const url = typeof input === "string" ? input : input.toString();
+    if (url.includes("/channel-bindings/slack/")) return Response.json({ teamId: null });
     if (url.includes("/repos")) {
       return new Response(JSON.stringify(mockReposResponseBody(repos)), {
         status: 200,
@@ -202,6 +204,7 @@ function makeSessionEnv(
   let promptResponseIndex = 0;
   env.CONTROL_PLANE.fetch.mockImplementation(async (input: RequestInfo | URL) => {
     const url = typeof input === "string" ? input : input.toString();
+    if (url.includes("/channel-bindings/slack/")) return Response.json({ teamId: null });
     if (url.includes("/repos")) {
       order.push("repos");
       return new Response(
@@ -564,7 +567,6 @@ describe("POST /events", () => {
       loading_messages: ["Starting..."],
     });
     expect(startingStatusBodies(slackFetch)).toHaveLength(3);
-    expect(order.indexOf("status")).toBeLessThan(order.indexOf("channelInfo"));
     expect(order.indexOf("status")).toBeLessThan(order.indexOf("session"));
     expect(mockGetUserInfo).toHaveBeenCalledOnce();
 
@@ -616,6 +618,7 @@ describe("POST /events", () => {
     });
     env.CONTROL_PLANE.fetch.mockImplementation(async (input: RequestInfo | URL) => {
       const url = typeof input === "string" ? input : input.toString();
+      if (url.includes("/channel-bindings/slack/")) return Response.json({ teamId: null });
       if (url.includes("/repos")) {
         return new Response(
           JSON.stringify(
@@ -1227,7 +1230,7 @@ describe("POST /events", () => {
     slackFetch.mockRestore();
   });
 
-  it("fetches thread history after an existing session proves stale", async () => {
+  it("closes a stale session mapping without fetching history or launching a replacement", async () => {
     const order: string[] = [];
     const slackFetch = mockSlackFetch(order, {
       threadMessages: [{ type: "message", text: "Earlier request", user: "U456", ts: "111.222" }],
@@ -1269,29 +1272,31 @@ describe("POST /events", () => {
         ([input]) =>
           String(input).includes("conversations.replies") && String(input).includes("limit=200")
       )
-    ).toHaveLength(1);
+    ).toHaveLength(0);
     const promptBodies = promptFetchBodies(env.CONTROL_PLANE.fetch);
-    expect(promptBodies).toHaveLength(2);
-    expect(promptBodies[1].content).toContain("Context from the Slack thread");
-    expect(promptBodies[1].content).toContain("Earlier request");
+    expect(promptBodies).toHaveLength(1);
+    expect(sessionFetchBodies(env.CONTROL_PLANE.fetch)).toEqual([]);
+    expect(slackApiBodies(slackFetch, "chat.postMessage")).toContainEqual(
+      expect.objectContaining({
+        text: "this session is no longer available from this channel",
+      })
+    );
     const storedMapping = (
       env.SLACK_KV as unknown as { get: (key: string, type: string) => Promise<unknown> }
     ).get("thread:C123:111.222", "json");
     await expect(storedMapping).resolves.toEqual(
-      expect.objectContaining({ sessionId: "session-1" })
+      expect.objectContaining({ sessionId: "stale-session", closed: true })
     );
 
     slackFetch.mockRestore();
   });
 
-  it("keeps the thread's session defaults when replacing a stale session", async () => {
+  it("retains a closed mapping's session defaults without creating a replacement", async () => {
     const slackFetch = mockSlackFetch();
     const env = makeSessionEnv([], {
       prompt: [{ error: "Session not found" }, { messageId: "msg-2" }],
       promptStatus: [404, 200],
     });
-    // "high" is not this model's default effort, so an App Home reset would
-    // show up as "max" on the replacement session.
     await (env.SLACK_KV as unknown as { put: (k: string, v: string) => Promise<void> }).put(
       "thread:C123:111.222",
       JSON.stringify({
@@ -1321,19 +1326,14 @@ describe("POST /events", () => {
     expect(response.status).toBe(200);
     await flushWaitUntil(ctx);
 
-    expect(sessionFetchBodies(env.CONTROL_PLANE.fetch)).toEqual([
-      expect.objectContaining({
-        model: "anthropic/claude-haiku-4-5",
-        reasoningEffort: "high",
-      }),
-    ]);
+    expect(sessionFetchBodies(env.CONTROL_PLANE.fetch)).toEqual([]);
     await expect(
       (env.SLACK_KV as unknown as { get: (key: string, type: string) => Promise<unknown> }).get(
         "thread:C123:111.222",
         "json"
       )
     ).resolves.toEqual(
-      expect.objectContaining({ sessionId: "session-1", reasoningEffort: "high" })
+      expect.objectContaining({ sessionId: "stale-session", reasoningEffort: "high", closed: true })
     );
 
     slackFetch.mockRestore();
@@ -2127,6 +2127,7 @@ describe("POST /interactions", () => {
 
     env.CONTROL_PLANE.fetch.mockImplementation(async (input: RequestInfo | URL) => {
       const url = typeof input === "string" ? input : input.toString();
+      if (url.includes("/channel-bindings/slack/")) return Response.json({ teamId: null });
       if (url.includes("/repos")) {
         return new Response(JSON.stringify(mockReposResponseBody([])), {
           status: 200,
@@ -2529,6 +2530,7 @@ describe("POST /interactions", () => {
 
     env.CONTROL_PLANE.fetch.mockImplementation(async (input: RequestInfo | URL) => {
       const url = typeof input === "string" ? input : input.toString();
+      if (url.includes("/channel-bindings/slack/")) return Response.json({ teamId: null });
       if (url.includes("/repos")) {
         return new Response(
           JSON.stringify(
@@ -2648,6 +2650,7 @@ describe("POST /interactions", () => {
 
     env.CONTROL_PLANE.fetch.mockImplementation(async (input: RequestInfo | URL) => {
       const url = typeof input === "string" ? input : input.toString();
+      if (url.includes("/channel-bindings/slack/")) return Response.json({ teamId: null });
       if (url.includes("/repos")) {
         return new Response(
           JSON.stringify(
@@ -2750,6 +2753,7 @@ describe("POST /interactions", () => {
 
     env.CONTROL_PLANE.fetch.mockImplementation(async (input: RequestInfo | URL) => {
       const url = typeof input === "string" ? input : input.toString();
+      if (url.includes("/channel-bindings/slack/")) return Response.json({ teamId: null });
       if (url.includes("/repos")) {
         return new Response(
           JSON.stringify(
@@ -2937,7 +2941,9 @@ describe("POST /interactions", () => {
     const payload = {
       type: "block_suggestion",
       action_id: "select_repo",
+      block_id: "target_picker:00000000-0000-4000-8000-000000000001",
       user: { id: "U123" },
+      channel: { id: "C123" },
       value: "",
     };
 
@@ -2954,6 +2960,17 @@ describe("POST /interactions", () => {
     const env = makeEnv();
     const repos = buildNumberedRepos(150);
     mockReposFetch(env, repos);
+    await env.SLACK_KV.put(
+      "pending:00000000-0000-4000-8000-000000000001",
+      JSON.stringify({
+        requestId: "00000000-0000-4000-8000-000000000001",
+        channel: "C123",
+        threadTs: "111.222",
+        message: "Fix it",
+        userId: "U123",
+        teamId: null,
+      })
+    );
 
     const ctx = makeCtx();
     const response = await app.fetch(request, env, ctx);
@@ -2978,7 +2995,9 @@ describe("POST /interactions", () => {
     const payload = {
       type: "block_suggestion",
       action_id: "select_repo",
+      block_id: "target_picker:00000000-0000-4000-8000-000000000001",
       user: { id: "U123" },
+      channel: { id: "C123" },
       value: "repo-150",
     };
 
@@ -2995,6 +3014,17 @@ describe("POST /interactions", () => {
     const env = makeEnv();
     const repos = buildNumberedRepos(150);
     mockReposFetch(env, repos);
+    await env.SLACK_KV.put(
+      "pending:00000000-0000-4000-8000-000000000001",
+      JSON.stringify({
+        requestId: "00000000-0000-4000-8000-000000000001",
+        channel: "C123",
+        threadTs: "111.222",
+        message: "Fix it",
+        userId: "U123",
+        teamId: null,
+      })
+    );
 
     const ctx = makeCtx();
     const response = await app.fetch(request, env, ctx);

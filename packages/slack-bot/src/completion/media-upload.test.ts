@@ -15,7 +15,7 @@ function mediaResponse(sizeBytes = 9, body: BodyInit = "png-bytes"): Response {
 
 function makeEnv(fetchMedia: () => Promise<Response> = async () => mediaResponse()): Env {
   return {
-    SLACK_KV: {} as KVNamespace,
+    SLACK_KV: { get: vi.fn(async () => null) } as unknown as KVNamespace,
     SLACK_COMPLETION_QUEUE: {} as Queue,
     CONTROL_PLANE: { fetch: vi.fn(fetchMedia) } as unknown as Fetcher,
     DEPLOYMENT_NAME: "test",
@@ -51,6 +51,66 @@ function input(env: Env, artifacts: MediaArtifactInfo[]) {
 }
 
 describe("deliverMediaArtifacts", () => {
+  it("stops the batch and never shares staged files after an outbound media denial", async () => {
+    const env = makeEnv();
+    vi.mocked(env.CONTROL_PLANE.fetch)
+      .mockResolvedValueOnce(mediaResponse())
+      .mockResolvedValueOnce(new Response(null, { status: 404 }));
+    const fetch = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValue(Response.json({ ok: true, files: [{ id: "F1" }] }))
+      .mockResolvedValueOnce(
+        Response.json({ ok: true, upload_url: "https://files.slack.com/upload/one", file_id: "F1" })
+      )
+      .mockResolvedValueOnce(new Response("OK"));
+    const result = await deliverMediaArtifacts(
+      input(env, [IMAGE, { ...IMAGE, id: "denied" }, { ...IMAGE, id: "later" }])
+    );
+    expect(result).toMatchObject({ uploaded: 0, unavailable: true });
+    expect(env.CONTROL_PLANE.fetch).toHaveBeenCalledTimes(2);
+    expect(
+      fetch.mock.calls.some(([url]) => String(url).includes("files.completeUploadExternal"))
+    ).toBe(false);
+  });
+
+  it("suppresses media uploads for coordinate-only closed automation sessions", async () => {
+    const env = makeEnv();
+    env.SLACK_KV = {
+      get: vi.fn(async (key: string) =>
+        key === "thread-closed:C123:111.222:session-1" ? "1" : null
+      ),
+    } as unknown as KVNamespace;
+    const fetch = vi.spyOn(globalThis, "fetch");
+    await deliverMediaArtifacts(input(env, [IMAGE]));
+    expect(env.CONTROL_PLANE.fetch).not.toHaveBeenCalled();
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it("does not share staged files when the thread closes before finalization", async () => {
+    const env = makeEnv();
+    env.SLACK_KV = {
+      get: vi.fn().mockResolvedValueOnce(null).mockResolvedValue({
+        sessionId: "session-1",
+        repoId: "acme/app",
+        repoFullName: "acme/app",
+        model: "openai/gpt-5.4",
+        createdAt: 1,
+        closed: true,
+      }),
+    } as unknown as KVNamespace;
+    const fetch = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(
+        Response.json({ ok: true, upload_url: "https://files.slack.com/upload/one", file_id: "F1" })
+      )
+      .mockResolvedValueOnce(new Response("OK"));
+    expect((await deliverMediaArtifacts(input(env, [IMAGE]))).uploaded).toBe(0);
+    expect(fetch).toHaveBeenCalledTimes(2);
+    expect(
+      fetch.mock.calls.some(([url]) => String(url).includes("files.completeUploadExternal"))
+    ).toBe(false);
+  });
+
   it("stages files serially and finalizes them in one ordered call", async () => {
     const env = makeEnv();
     const slackFetch = vi
@@ -79,6 +139,11 @@ describe("deliverMediaArtifacts", () => {
 
     expect(result).toEqual({ uploaded: 2, failed: 0, omitted: 0 });
     expect(env.CONTROL_PLANE.fetch).toHaveBeenCalledTimes(2);
+    for (const [url, init] of vi.mocked(env.CONTROL_PLANE.fetch).mock.calls) {
+      expect(new URL(String(url)).searchParams.get("channel")).toBe("slack:C123");
+      expect(new URL(String(url)).searchParams.get("purpose")).toBe("slack-post");
+      expect(new Headers(init?.headers).get("X-OpenInspect-Service-Signature")).toMatch(/^sig1\./);
+    }
     expect(slackFetch.mock.calls[1]?.[0]).toBe("https://files.slack.com/upload/v1/one");
     expect(slackFetch.mock.calls[3]?.[0]).toBe("https://files.slack.com/upload/v1/two");
     const completeCalls = slackFetch.mock.calls.filter(([url]) =>
@@ -142,7 +207,7 @@ describe("deliverMediaArtifacts", () => {
 
     const result = await deliverMediaArtifacts(input(env, [IMAGE]));
 
-    expect(result).toEqual({ uploaded: 0, failed: 1, omitted: 0 });
+    expect(result).toEqual({ uploaded: 0, failed: 1, omitted: 0, unavailable: true });
     expect(cancel).toHaveBeenCalledOnce();
   });
 
@@ -219,6 +284,7 @@ describe("deliverMediaArtifacts", () => {
       uploaded: 0,
       failed: 1,
       omitted: 0,
+      unavailable: true,
     });
   });
 });

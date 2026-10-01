@@ -5,6 +5,7 @@ import { SlackChannelStore } from "../../src/db/slack-channel-store";
 import { cleanD1Tables } from "./cleanup";
 import { serviceFetch, sqlDatabase } from "./helpers";
 import type { TriggerConfig } from "@open-inspect/shared/triggers";
+import { TeamStore } from "../../src/db/teams";
 
 function makeSlackAutomation(overrides?: Partial<AutomationRow>): AutomationRow {
   const now = Date.now();
@@ -54,6 +55,29 @@ async function postAutomation(body: Record<string, unknown>): Promise<Response> 
 
 describe("POST /automations — slack_event validation (integration)", () => {
   beforeEach(cleanD1Tables);
+
+  it("rejects a workspace automation watching a team-bound channel before repository resolution", async () => {
+    const team = await new TeamStore(env.DB).create({
+      slug: "bound",
+      name: "Bound",
+      joinPolicy: "invite_only",
+    });
+    await env.DB.prepare(
+      "INSERT INTO team_channel_bindings (provider, external_id, team_id, kind, created_at) VALUES ('slack', 'C1', ?, 'source', ?)"
+    )
+      .bind(team.id, Date.now())
+      .run();
+    const response = await postAutomation(
+      createBody({
+        triggerConfig: {
+          conditions: [{ type: "slack_channel", operator: "any_of", value: ["C1"] }],
+        },
+      })
+    );
+    expect(response.status).toBe(409);
+    expect(await response.json()).toMatchObject({ code: "channel_team_mismatch" });
+    expect((await env.DB.prepare("SELECT id FROM automations").all()).results).toEqual([]);
+  });
 
   it("rejects a slack_event without a slack_channel condition (400)", async () => {
     const res = await postAutomation(createBody({ triggerConfig: { conditions: [] } }));
@@ -176,6 +200,30 @@ describe("PUT /automations/:id — slack_event validation (integration)", () => 
       body: JSON.stringify(body),
     });
   }
+
+  it("rejects writes after a watched channel moves to another team", async () => {
+    const team = await new TeamStore(env.DB).create({
+      slug: "bound",
+      name: "Bound",
+      joinPolicy: "invite_only",
+    });
+    const store = new AutomationStore(env.DB);
+    const auto = makeSlackAutomation({
+      trigger_config: JSON.stringify({
+        conditions: [{ type: "slack_channel", operator: "any_of", value: ["C1"] }],
+      }),
+    });
+    await store.create(auto);
+    await env.DB.prepare(
+      "INSERT INTO team_channel_bindings (provider, external_id, team_id, kind, created_at) VALUES ('slack', 'C1', ?, 'source', ?)"
+    )
+      .bind(team.id, Date.now())
+      .run();
+    const response = await putAutomation(auto.id, { name: "Changed" });
+    expect(response.status).toBe(409);
+    expect(await response.json()).toMatchObject({ code: "channel_team_mismatch" });
+    expect((await store.getById(auto.id))?.name).toBe(auto.name);
+  });
 
   it("rejects a non-array conditions on update with 400, not 500", async () => {
     const store = new AutomationStore(env.DB);

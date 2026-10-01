@@ -34,6 +34,8 @@ export type RequestContext = AuthenticationRequestServices & {
   sessionAdmission?: { row: SessionEntry & SessionAccessRow; viewer: SessionViewer };
   childSessionAdmission?: { row: SessionEntry & SessionAccessRow; viewer: SessionViewer };
   sessionMemberships?: ReadonlyMap<string, TeamRole>;
+  serviceTeamId?: string | null;
+  serviceReadPurpose?: "slack-post";
   teamsEnforcementMode?: TeamsEnforcementMode;
   shadowSessionDenial?: string;
   shadowBatchDenials?: { sessionId: string; reason: string }[];

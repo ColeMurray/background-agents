@@ -19,6 +19,7 @@ import {
 
 vi.mock("@open-inspect/shared/slack", () => ({
   postMessage: vi.fn(),
+  escapeMrkdwnText: (text: string) => text,
 }));
 
 vi.mock("../attachments", () => ({
@@ -138,6 +139,35 @@ describe("startSessionAndSendPrompt", () => {
     vi.mocked(postMessage).mockResolvedValue({ ok: true, channel: "C123", ts: "111.333" });
   });
 
+  it.each([
+    [
+      { status: 403, code: "session_action_denied", reasonCode: "not_member" },
+      "you are not a member of this channel's team",
+    ],
+    [{ status: 403, code: "not_member" }, "you are not a member of this channel's team"],
+    [
+      { status: 409, code: "target_team_missing_grant", repository: "acme/private" },
+      "This channel's team does not have access to repository acme/private.",
+    ],
+  ] as const)("reports a create refusal without sending a prompt: %s", async (error, message) => {
+    vi.mocked(createSession).mockResolvedValue({ error });
+    const env = makeEnv();
+    expect(
+      await startSessionAndSendPrompt(env, {
+        target: repositoryTarget,
+        channel: "C123",
+        threadTs: "111.222",
+        messageText: "Fix it",
+        actor,
+        teamId: "team-a",
+      })
+    ).toBeNull();
+    expect(postMessage).toHaveBeenCalledWith("xoxb-test", "C123", message, {
+      thread_ts: "111.222",
+    });
+    expect(deliverPrompt).not.toHaveBeenCalled();
+  });
+
   it("creates a repository session with resolved preferences and sends contextualized prompt", async () => {
     const env = makeEnv();
 
@@ -162,6 +192,7 @@ describe("startSessionAndSendPrompt", () => {
     expect(getUserRepoBranchPreference).toHaveBeenCalledWith(env, "U123", "acme/app");
     expect(createSession).toHaveBeenCalledWith(env, {
       target: repositoryTarget,
+      teamId: undefined,
       model: "openai/gpt-5.4",
       reasoningEffort: "high",
       branch: "repo-override-branch",
@@ -196,6 +227,7 @@ describe("startSessionAndSendPrompt", () => {
       repositoryTarget,
       "openai/gpt-5.4",
       "high",
+      undefined,
       undefined
     );
     expect(storeThreadSession).toHaveBeenCalledWith(env, "C123", "111.222", {
@@ -207,6 +239,30 @@ describe("startSessionAndSendPrompt", () => {
       createdAt: 123,
     });
   });
+
+  it.each(["team-a", null])(
+    "passes team scope %s through launch and thread persistence",
+    async (teamId) => {
+      const env = makeEnv();
+      await startSessionAndSendPrompt(env, {
+        target: repositoryTarget,
+        channel: "C123",
+        threadTs: "111.222",
+        messageText: "Fix it",
+        actor,
+        teamId,
+      });
+      expect(createSession).toHaveBeenCalledWith(env, expect.objectContaining({ teamId }));
+      expect(buildThreadSession).toHaveBeenCalledWith(
+        "session-1",
+        repositoryTarget,
+        "openai/gpt-5.4",
+        "high",
+        undefined,
+        teamId
+      );
+    }
+  );
 
   it("adopts combined model and reasoning flags as the new session's defaults", async () => {
     const env = makeEnv();
@@ -247,6 +303,7 @@ describe("startSessionAndSendPrompt", () => {
       repositoryTarget,
       "anthropic/claude-sonnet-4-6",
       "max",
+      undefined,
       undefined
     );
   });
@@ -254,8 +311,7 @@ describe("startSessionAndSendPrompt", () => {
   it("keeps a launch plan's prompt overrides off the session's stored defaults", async () => {
     const env = makeEnv();
 
-    // How a stale-thread recovery launches: the replacement inherits the
-    // thread's defaults while the follow-up's own flags stay one-turn.
+    // Prompt overrides must not become the session's stored defaults.
     await startSessionAndSendPrompt(env, {
       target: repositoryTarget,
       channel: "C123",
@@ -290,6 +346,7 @@ describe("startSessionAndSendPrompt", () => {
       repositoryTarget,
       "anthropic/claude-sonnet-4-6",
       "max",
+      undefined,
       undefined
     );
   });
@@ -450,6 +507,7 @@ describe("startSessionAndSendPrompt", () => {
       noRepositoryTarget,
       "openai/gpt-5.4",
       "high",
+      undefined,
       undefined
     );
   });

@@ -53,6 +53,13 @@ describe("pending request store", () => {
     mocks = makeEnv();
   });
 
+  it.each(["team-a", null])("persists and recovers team scope %s", async (teamId) => {
+    const pending = request({ teamId });
+    await storePendingRequest(mocks.env, pending);
+    mocks.get.mockResolvedValue(JSON.parse(mocks.put.mock.calls[0][1]));
+    expect(await getPendingRequest(mocks.env, REQUEST_ID)).toEqual(pending);
+  });
+
   it("stores requests under the request id for one hour", async () => {
     const pending = request({
       unattributedPrompt: { forwardedMessages: ["Forwarded body"] },

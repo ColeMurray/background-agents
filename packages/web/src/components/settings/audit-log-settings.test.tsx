@@ -194,6 +194,15 @@ describe("AuditLogSettings", () => {
     expect(article.getByText("Applied")).toBeInTheDocument();
   });
 
+  it.each([
+    ["team.binding_added", "Team channel binding added"],
+    ["team.binding_removed", "Team channel binding removed"],
+  ])("labels %s as an operation", (action, label) => {
+    const article = renderSingle(createEvent("applied", { action }));
+    expect(article.getByText(label)).toBeInTheDocument();
+    expect(article.getByText("Applied")).toBeInTheDocument();
+  });
+
   it("labels private session break-glass reads as operations", () => {
     const article = renderSingle(createEvent("applied", { action: "session.private_break_glass" }));
     expect(article.getByText("Private session break-glass read")).toBeInTheDocument();

@@ -6,6 +6,7 @@ import { extractAgentResponse } from "./extractor";
 import { buildCompletionBlocks, truncateError } from "./blocks";
 import { deliverMediaArtifacts } from "./media-upload";
 import type { SlackCompletionJob } from "./job";
+import { isThreadSessionClosed } from "../sessions/thread-session-store";
 
 const log = createLogger("completion-delivery");
 
@@ -49,6 +50,7 @@ export function shouldDeclineReply(
 }
 
 export async function processSlackCompletion(job: SlackCompletionJob, env: Env): Promise<void> {
+  if (await isThreadSessionClosed(env, job.channel, job.threadTs, job.sessionId)) return;
   const startTime = Date.now();
   const base = {
     trace_id: job.traceId,
@@ -58,14 +60,35 @@ export async function processSlackCompletion(job: SlackCompletionJob, env: Env):
     message_id: job.messageId,
     channel: job.channel,
   };
+  let readsAvailable = false;
 
   try {
     const agentResponse = await extractAgentResponse(
       env,
       job.sessionId,
       job.messageId,
+      job.channel,
       job.traceId
     );
+    if (await isThreadSessionClosed(env, job.channel, job.threadTs, job.sessionId)) return;
+    const mediaArtifacts = agentResponse.mediaArtifacts ?? [];
+    let unavailableMedia = 0;
+    // Complete protected media reads before emitting any completion message or fallback metadata.
+    if (mediaArtifacts.length > 0) {
+      const mediaResult = await deliverMediaArtifacts({
+        env,
+        sessionId: job.sessionId,
+        messageId: job.messageId,
+        channel: job.channel,
+        threadTs: job.threadTs,
+        artifacts: mediaArtifacts,
+        traceId: job.traceId,
+      });
+      if (mediaResult.unavailable) return;
+      unavailableMedia = mediaResult.failed + mediaResult.omitted;
+      if (await isThreadSessionClosed(env, job.channel, job.threadTs, job.sessionId)) return;
+    }
+    readsAvailable = true;
     agentResponse.error = agentResponse.error || job.error;
 
     if (!agentResponse.textContent && agentResponse.toolCalls.length === 0 && !job.success) {
@@ -139,26 +162,16 @@ export async function processSlackCompletion(job: SlackCompletionJob, env: Env):
       return;
     }
 
-    const mediaArtifacts = agentResponse.mediaArtifacts ?? [];
-    if (mediaArtifacts.length > 0) {
-      const mediaResult = await deliverMediaArtifacts({
-        env,
-        sessionId: job.sessionId,
-        messageId: job.messageId,
-        channel: job.channel,
-        threadTs: job.threadTs,
-        artifacts: mediaArtifacts,
-        traceId: job.traceId,
-      });
-      const unavailable = mediaResult.failed + mediaResult.omitted;
-      if (unavailable > 0) {
-        await postMessage(
-          env.SLACK_BOT_TOKEN,
-          job.channel,
-          `${unavailable} media artifact${unavailable === 1 ? " is" : "s are"} available in the session but could not be attached here.`,
-          { thread_ts: job.threadTs }
-        );
-      }
+    if (
+      unavailableMedia > 0 &&
+      !(await isThreadSessionClosed(env, job.channel, job.threadTs, job.sessionId))
+    ) {
+      await postMessage(
+        env.SLACK_BOT_TOKEN,
+        job.channel,
+        `${unavailableMedia} media artifact${unavailableMedia === 1 ? " is" : "s are"} available in the session but could not be attached here.`,
+        { thread_ts: job.threadTs }
+      );
     }
 
     log.info("callback.complete", {
@@ -179,7 +192,7 @@ export async function processSlackCompletion(job: SlackCompletionJob, env: Env):
       duration_ms: Date.now() - startTime,
     });
   } finally {
-    if (job.reactionMessageTs) {
+    if (readsAvailable && job.reactionMessageTs) {
       await clearThinkingReaction(env, job.channel, job.reactionMessageTs, job.traceId);
     }
   }

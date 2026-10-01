@@ -124,6 +124,21 @@ describe("deliverPrompt", () => {
     expect(notifyDroppedAttachments).not.toHaveBeenCalled();
   });
 
+  it("surfaces attachment access denial without sending a prompt or posting drop notices", async () => {
+    vi.mocked(uploadPreparedAttachments).mockResolvedValue({
+      references: [],
+      dropped: ["upload_rejected"],
+      sessionMissing: false,
+      sessionForbidden: true,
+    });
+    expect(await deliverPrompt(env, options({ imageOnly: true }))).toEqual({
+      ok: false,
+      reason: "forbidden",
+    });
+    expect(sendPrompt).not.toHaveBeenCalled();
+    expect(notifyDroppedAttachments).not.toHaveBeenCalled();
+  });
+
   it("still sends a text prompt when images dropped but user text exists", async () => {
     vi.mocked(uploadPreparedAttachments).mockResolvedValue({
       references: [],

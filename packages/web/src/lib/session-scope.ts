@@ -4,12 +4,14 @@ import { browserApiFetch, type BrowserApiPath } from "./browser-api-fetch";
 import { isMeTeamsCacheKey } from "./me-teams-cache";
 import { isSessionListKey } from "./session-list";
 import type { SessionVisibility } from "@open-inspect/shared/types/teams";
+import type { SessionSnapshotState } from "@open-inspect/shared/types/server-messages";
 
 export interface SessionScopeControls {
   ownerTeamId: string | null;
   ownerUserId: string | null;
   visibility: SessionVisibility;
   collaborators: string[];
+  slackThread?: SessionSnapshotState["slackThread"];
   onUpdated: () => Promise<void>;
 }
 

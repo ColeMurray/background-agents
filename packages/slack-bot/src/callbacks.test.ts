@@ -4,10 +4,18 @@ import { computeHmacHex } from "@open-inspect/shared/auth";
 import { callbacksRouter } from "./callbacks";
 import { makeExecutionContext as makeCtx } from "./test-helpers";
 import type { Env } from "./types";
+import {
+  isThreadSessionClosed,
+  lookupThreadSession,
+  storeThreadSession,
+} from "./sessions/thread-session-store";
 
 function makeEnv(overrides: Partial<Env> = {}): Env {
   return {
-    SLACK_KV: {} as KVNamespace,
+    SLACK_KV: {
+      get: vi.fn(async () => null),
+      put: vi.fn(async () => {}),
+    } as unknown as KVNamespace,
     SLACK_COMPLETION_QUEUE: { send: vi.fn(async () => {}) } as unknown as Queue,
     CONTROL_PLANE: { fetch: vi.fn() } as unknown as Fetcher,
     DEPLOYMENT_NAME: "test",
@@ -423,6 +431,201 @@ describe("POST /callbacks/activity", () => {
     expect(response.status).toBe(400);
     expect(fetchMock).not.toHaveBeenCalled();
   });
+});
+
+describe("POST /callbacks/thread_closed", () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  function closedData(overrides: Record<string, unknown> = {}) {
+    return {
+      kind: "slack.thread_closed",
+      sessionId: "session-1",
+      timestamp: Date.now(),
+      context: { channel: "C123", threadTs: "111.222" },
+      ...overrides,
+    };
+  }
+
+  async function mappedEnv(withMapping = true) {
+    const values = new Map<string, string>();
+    const env = makeEnv({
+      SLACK_KV: {
+        get: vi.fn(async (key: string, type?: string) => {
+          const value = values.get(key);
+          return value === undefined ? null : type === "json" ? JSON.parse(value) : value;
+        }),
+        put: vi.fn(async (key: string, value: string) => {
+          values.set(key, value);
+        }),
+      } as unknown as KVNamespace,
+    });
+    if (withMapping)
+      await storeThreadSession(env, "C123", "111.222", {
+        sessionId: "session-1",
+        repoId: "acme/app",
+        repoFullName: "acme/app",
+        model: "openai/gpt-5.4",
+        createdAt: 1,
+        teamId: "team-a",
+      });
+    return env;
+  }
+
+  it("closes the matching mapping and posts a safe final message once", async () => {
+    const fetch = okFetchMock();
+    const env = await mappedEnv();
+    const payload = await signPayload(closedData());
+    for (let index = 0; index < 2; index++) {
+      const { response, ctx } = await postCallback("/callbacks/thread_closed", payload, env);
+      expect(response.status).toBe(200);
+      await flushWaitUntil(ctx);
+    }
+    expect(await lookupThreadSession(env, "C123", "111.222")).toMatchObject({
+      closed: true,
+      teamId: "team-a",
+    });
+    expect(fetch).toHaveBeenCalledOnce();
+    expect(slackCall(fetch, "chat.postMessage")?.body.text).toBe(
+      "this session is no longer available from this channel"
+    );
+  });
+
+  it("records closure before the mapping exists and closes a late initial mapping", async () => {
+    const fetch = okFetchMock();
+    const env = await mappedEnv(false);
+    const payload = await signPayload(closedData());
+    const early = await postCallback("/callbacks/thread_closed", payload, env);
+    expect(early.response.status).toBe(200);
+    await flushWaitUntil(early.ctx);
+    await storeThreadSession(env, "C123", "111.222", {
+      sessionId: "session-1",
+      repoId: "acme/app",
+      repoFullName: "acme/app",
+      model: "openai/gpt-5.4",
+      createdAt: 1,
+    });
+    expect(await lookupThreadSession(env, "C123", "111.222")).toMatchObject({ closed: true });
+    const repeat = await postCallback("/callbacks/thread_closed", payload, env);
+    await flushWaitUntil(repeat.ctx);
+    expect(fetch).toHaveBeenCalledOnce();
+  });
+
+  it("deduplicates coordinate-only automation closure notices without a mapping", async () => {
+    const fetch = okFetchMock();
+    const env = await mappedEnv(false);
+    const payload = await signPayload(closedData());
+    for (let index = 0; index < 2; index++) {
+      const { response, ctx } = await postCallback("/callbacks/thread_closed", payload, env);
+      expect(response.status).toBe(200);
+      await flushWaitUntil(ctx);
+    }
+    expect(await lookupThreadSession(env, "C123", "111.222")).toBeNull();
+    expect(fetch).toHaveBeenCalledOnce();
+  });
+
+  it.each(["thread-closed:C123:111.222:session-1", "thread-closed:C123:111.222:session-1:notice"])(
+    "returns a retryable failure when closure marker persistence fails: %s",
+    async (failedKey) => {
+      const fetch = okFetchMock();
+      const env = await mappedEnv(false);
+      const put = vi.mocked(env.SLACK_KV.put);
+      const persist = put.getMockImplementation()!;
+      put.mockImplementation(async (key, value, options) => {
+        if (key === failedKey) throw new Error("KV unavailable");
+        return persist(key, value, options);
+      });
+      const payload = await signPayload(closedData());
+      const failure = await postCallback("/callbacks/thread_closed", payload, env);
+      expect(failure.response.status).toBe(503);
+      expect(failure.ctx.waitUntil).not.toHaveBeenCalled();
+      expect(fetch).not.toHaveBeenCalled();
+      put.mockImplementation(persist);
+      const retry = await postCallback("/callbacks/thread_closed", payload, env);
+      expect(retry.response.status).toBe(200);
+      await flushWaitUntil(retry.ctx);
+      expect(fetch).toHaveBeenCalledOnce();
+    }
+  );
+
+  it.each([
+    [{ kind: "slack.activity_refresh" }, 400],
+    [{ timestamp: Date.now() - 10 * 60 * 1000 }, 401],
+    [{ timestamp: Date.now() + 10 * 60 * 1000 }, 401],
+  ] as const)("rejects domain or freshness violations %s", async (override, status) => {
+    const fetch = okFetchMock();
+    const { response, ctx } = await postCallback(
+      "/callbacks/thread_closed",
+      await signPayload(closedData(override))
+    );
+    expect(response.status).toBe(status);
+    expect(ctx.waitUntil).not.toHaveBeenCalled();
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it("rejects invalid signatures and tombstones an old session without altering a different mapping", async () => {
+    const fetch = okFetchMock();
+    const env = await mappedEnv();
+    const invalid = await postCallback(
+      "/callbacks/thread_closed",
+      await signPayload(closedData(), "wrong"),
+      env
+    );
+    expect(invalid.response.status).toBe(401);
+    const mismatch = await postCallback(
+      "/callbacks/thread_closed",
+      await signPayload(closedData({ sessionId: "other" })),
+      env
+    );
+    await flushWaitUntil(mismatch.ctx);
+    expect(await lookupThreadSession(env, "C123", "111.222")).not.toHaveProperty("closed");
+    expect(env.SLACK_KV.put).toHaveBeenCalledWith(
+      "thread-closed:C123:111.222:other",
+      "1",
+      expect.anything()
+    );
+    expect(await isThreadSessionClosed(env, "C123", "111.222", "other")).toBe(true);
+    expect(await isThreadSessionClosed(env, "C123", "111.222", "session-1")).toBe(false);
+    expect(mismatch.ctx.waitUntil).not.toHaveBeenCalled();
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it.each([true, false])(
+    "suppresses late callbacks with interactive mapping present: %s",
+    async (withMapping) => {
+      const fetch = okFetchMock();
+      const env = await mappedEnv(withMapping);
+      const closed = await postCallback(
+        "/callbacks/thread_closed",
+        await signPayload(closedData()),
+        env
+      );
+      await flushWaitUntil(closed.ctx);
+      fetch.mockClear();
+      const context = {
+        source: "slack",
+        channel: "C123",
+        threadTs: "111.222",
+        repoFullName: "acme/app",
+        model: "openai/gpt-5.4",
+      };
+      const payloads = [
+        ["/callbacks/tool_call", { tool: "read", args: {}, callId: "call" }],
+        ["/callbacks/activity", { kind: "slack.activity_refresh", messageId: "msg" }],
+        ["/callbacks/complete", { messageId: "msg", success: true }],
+      ] as const;
+      for (const [path, fields] of payloads) {
+        const { response, ctx } = await postCallback(
+          path,
+          await signPayload({ sessionId: "session-1", timestamp: Date.now(), context, ...fields }),
+          env
+        );
+        expect(response.status).toBe(200);
+        await flushWaitUntil(ctx);
+      }
+      expect(fetch).not.toHaveBeenCalled();
+      expect(env.SLACK_COMPLETION_QUEUE.send).not.toHaveBeenCalled();
+    }
+  );
 });
 
 describe("POST /callbacks/complete", () => {

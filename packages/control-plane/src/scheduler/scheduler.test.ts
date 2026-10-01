@@ -15,6 +15,7 @@ import { fakeSessionRuntimeDispatch } from "../router.test-support";
 import type { Logger } from "../logger";
 import type { InvocationRunAggregate } from "../db/automation-store";
 import type { SlackAutomationEvent } from "@open-inspect/shared/triggers";
+import { verifyCallbackSignature } from "@open-inspect/shared/auth";
 
 const mockCheckRepositoryAccess = vi.hoisted(() => vi.fn());
 const mockResolveSessionProviderAuth = vi.hoisted(() =>
@@ -157,11 +158,19 @@ vi.mock("../db/automation-model-provider-auth", async (importOriginal) => {
 
 const mockSessionStoreCreate = vi.fn().mockResolvedValue(undefined);
 const mockSessionStoreUpdateStatus = vi.fn().mockResolvedValue(undefined);
+const mockSessionStoreGet = vi.fn();
+const mockTeamChannelBindingGet = vi.fn();
+vi.mock("../db/team-channel-bindings", () => ({
+  TeamChannelBindingStore: vi.fn().mockImplementation(function () {
+    return { get: mockTeamChannelBindingGet };
+  }),
+}));
 vi.mock("../db/session-index", () => ({
   SessionIndexStore: vi.fn().mockImplementation(function () {
     return {
       create: mockSessionStoreCreate,
       updateStatus: mockSessionStoreUpdateStatus,
+      get: mockSessionStoreGet,
     };
   }),
 }));
@@ -2042,6 +2051,75 @@ describe("Scheduler", () => {
   describe("runComplete", () => {
     beforeEach(() => {
       mockStore.getRunById.mockResolvedValue(sampleRunRow());
+      mockSessionStoreGet.mockResolvedValue({ ownerTeamId: "team-a", visibility: "workspace" });
+      mockTeamChannelBindingGet.mockResolvedValue(null);
+    });
+
+    it.each([
+      { name: "missing session", session: null, binding: null },
+      {
+        name: "private session",
+        session: { ownerTeamId: "team-a", visibility: "private" },
+        binding: null,
+      },
+      {
+        name: "team-visible cross-team session",
+        session: { ownerTeamId: "team-a", visibility: "team" },
+        binding: { teamId: "team-b" },
+      },
+      {
+        name: "workspace-visible cross-team session",
+        session: { ownerTeamId: "team-a", visibility: "workspace" },
+        binding: { teamId: "team-b" },
+      },
+    ])("sends only a safe Slack closure for $name", async ({ session, binding }) => {
+      mockSessionStoreGet.mockResolvedValue(session);
+      mockTeamChannelBindingGet.mockResolvedValue(binding);
+      mockStore.getInvocationById.mockResolvedValue({
+        trigger_metadata: JSON.stringify({ channel: "C1", messageTs: "1700000000.000200" }),
+      });
+      mockStore.getById.mockResolvedValue(sampleSlackAutomation);
+      const slackFetch = vi.fn().mockResolvedValue(Response.json({ ok: true }));
+      const scheduler = createScheduler(
+        createEnv({
+          SLACK_BOT: { fetch: slackFetch },
+          SERVICE_AUTH_SECRET_SLACK_BOT: "test-secret",
+        })
+      );
+
+      await scheduler.runComplete(runCompletion({ success: false, error: "secret error" }));
+
+      expect(mockStore.updateRun).toHaveBeenCalled();
+      expect(mockSessionStoreGet).toHaveBeenCalledWith("sess-1");
+      expect(mockTeamChannelBindingGet).toHaveBeenCalledWith("slack", "C1");
+      expect(slackFetch).toHaveBeenCalledOnce();
+      expect(slackFetch.mock.calls[0][0]).toBe("https://internal/callbacks/thread_closed");
+      const body = JSON.parse(String(slackFetch.mock.calls[0][1]?.body));
+      expect(body).toEqual({
+        kind: "slack.thread_closed",
+        sessionId: "sess-1",
+        timestamp: expect.any(Number),
+        context: { channel: "C1", threadTs: "1700000000.000200" },
+        signature: expect.any(String),
+      });
+      expect(await verifyCallbackSignature(body, "test-secret")).toBe(true);
+    });
+
+    it("does not send a completion when the authoritative scope lookup fails", async () => {
+      mockSessionStoreGet.mockRejectedValue(new Error("D1 unavailable"));
+      mockStore.getInvocationById.mockResolvedValue({
+        trigger_metadata: JSON.stringify({ channel: "C1", messageTs: "1700000000.000200" }),
+      });
+      const slackFetch = vi.fn();
+      const scheduler = createScheduler(
+        createEnv({
+          SLACK_BOT: { fetch: slackFetch },
+          SERVICE_AUTH_SECRET_SLACK_BOT: "test-secret",
+        })
+      );
+
+      await expect(scheduler.runComplete(runCompletion())).rejects.toThrow("D1 unavailable");
+      expect(slackFetch).not.toHaveBeenCalled();
     });
 
     it("marks run as completed and resets failures once every sibling completed", async () => {
@@ -2089,6 +2167,7 @@ describe("Scheduler", () => {
     });
 
     it("reads slack coordinates from the invocation and labels from the run snapshot", async () => {
+      mockTeamChannelBindingGet.mockResolvedValue({ teamId: "team-a" });
       mockStore.getRunById.mockResolvedValue(
         sampleRunRow({
           automation_id: "auto-slack",

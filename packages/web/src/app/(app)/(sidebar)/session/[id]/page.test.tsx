@@ -99,6 +99,7 @@ beforeEach(() => {
       ownerUserId: "user_owner",
       visibility: "private",
       collaborators: ["user_collaborator"],
+      slackThread: { channelId: "C_ORIGIN", teamId: "team_origin" },
       capabilities: {
         canRead: true,
         canCollaborate: false,
@@ -181,6 +182,7 @@ it("keeps desktop actions available to a mover without collaboration and forward
       ownerTeamId: "team_design",
       visibility: "private",
       collaborators: ["user_collaborator"],
+      slackThread: { channelId: "C_ORIGIN", teamId: "team_origin" },
       onUpdated: mocks.refreshSnapshot,
     },
   });
@@ -194,6 +196,7 @@ it("keeps desktop actions available to a mover without collaboration and forward
       ownerTeamId: "team_new",
       visibility: "team",
       collaborators: [],
+      slackThread: { channelId: "C_ORIGIN", teamId: "team_rebound" },
     },
   };
   mocks.mobile = true;
@@ -208,7 +211,21 @@ it("keeps desktop actions available to a mover without collaboration and forward
       ownerTeamId: "team_new",
       visibility: "team",
       collaborators: [],
+      slackThread: { channelId: "C_ORIGIN", teamId: "team_rebound" },
       onUpdated: mocks.refreshSnapshot,
     });
+  }
+});
+
+it("preserves an unbound or absent Slack thread in refreshed session scope", () => {
+  const view = render(<SessionPage />);
+  for (const slackThread of [{ channelId: "C_ORIGIN", teamId: null }, null, undefined]) {
+    mocks.snapshot = {
+      ...mocks.snapshot!,
+      session: { ...mocks.snapshot!.session, slackThread },
+    };
+    view.rerender(<SessionPage />);
+    expect(mocks.actionBar.mock.lastCall?.[0].scope.slackThread).toEqual(slackThread);
+    expect(mocks.header.mock.lastCall?.[0].actions.scope.slackThread).toEqual(slackThread);
   }
 });

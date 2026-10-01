@@ -8,6 +8,7 @@ import type { Env } from "../types";
 import { signedControlPlaneFetch } from "../internal-auth";
 import { createLogger } from "../logger";
 import { OUTBOUND_REQUEST_TIMEOUT_MS } from "../request-options";
+import { isThreadSessionClosed } from "../sessions/thread-session-store";
 
 export const SLACK_MEDIA_MAX_FILES_PER_COMPLETION = 5;
 export const SLACK_MEDIA_MAX_FILE_BYTES = 10 * 1024 * 1024;
@@ -27,6 +28,8 @@ export interface MediaDeliveryResult {
   uploaded: number;
   failed: number;
   omitted: number;
+  /** The current session snapshot could not be read for Slack posting; emit no further job content. */
+  unavailable?: true;
 }
 
 interface DeliverMediaArtifactsInput {
@@ -43,6 +46,7 @@ type StagedFile = { id: string; title: string };
 type StageResult =
   | { kind: "staged"; sizeBytes: number; file: StagedFile }
   | { kind: "failed"; sizeBytes?: number }
+  | { kind: "unavailable" }
   | { kind: "omitted" };
 
 export async function deliverMediaArtifacts(
@@ -57,6 +61,8 @@ export async function deliverMediaArtifacts(
     failed: 0,
     omitted: uniqueArtifacts.length - selected.length,
   };
+  if (await isThreadSessionClosed(input.env, input.channel, input.threadTs, input.sessionId))
+    return result;
   const staged: StagedFile[] = [];
   let attemptedBytes = 0;
 
@@ -79,9 +85,11 @@ export async function deliverMediaArtifacts(
         outcome: "error",
         error: error instanceof Error ? error : String(error),
       });
-      stage = { kind: "failed" };
+      stage = { kind: "unavailable" };
     }
 
+    if (stage.kind === "unavailable")
+      return { ...result, failed: result.failed + 1, unavailable: true };
     if (stage.kind === "omitted") {
       result.omitted += 1;
       continue;
@@ -94,7 +102,11 @@ export async function deliverMediaArtifacts(
     staged.push(stage.file);
   }
 
-  if (staged.length === 0) return result;
+  if (
+    staged.length === 0 ||
+    (await isThreadSessionClosed(input.env, input.channel, input.threadTs, input.sessionId))
+  )
+    return result;
 
   const complete = await completeExternalUpload(input.env.SLACK_BOT_TOKEN, {
     files: staged,
@@ -141,16 +153,20 @@ async function stageArtifact(
     artifact_id: artifact.id,
     artifact_type: artifact.type,
   };
-  const mediaUrl = `https://internal/sessions/${encodeURIComponent(input.sessionId)}/media/${encodeURIComponent(artifact.id)}`;
+  const mediaUrl = new URL(
+    `https://internal/sessions/${encodeURIComponent(input.sessionId)}/media/${encodeURIComponent(artifact.id)}`
+  );
+  mediaUrl.searchParams.set("channel", `slack:${input.channel}`);
+  mediaUrl.searchParams.set("purpose", "slack-post");
   const response = await signedControlPlaneFetch(
     input.env,
-    { method: "GET", url: mediaUrl, traceId: input.traceId },
+    { method: "GET", url: mediaUrl.toString(), traceId: input.traceId },
     { signal: AbortSignal.timeout(OUTBOUND_REQUEST_TIMEOUT_MS) }
   );
   if (!response.ok || !response.body) {
     await cancelBody(response.body);
     log.warn("slack.media.fetch", { ...base, outcome: "error", http_status: response.status });
-    return { kind: "failed" };
+    return { kind: "unavailable" };
   }
 
   const mimeType = response.headers.get("Content-Type")?.split(";", 1)[0]?.trim() ?? "";
@@ -159,7 +175,7 @@ async function stageArtifact(
   if (!extension || !Number.isSafeInteger(sizeBytes) || sizeBytes <= 0) {
     await cancelBody(response.body);
     log.warn("slack.media.fetch", { ...base, outcome: "error", error: "invalid_media_headers" });
-    return { kind: "failed" };
+    return { kind: "unavailable" };
   }
   if (
     sizeBytes > SLACK_MEDIA_MAX_FILE_BYTES ||

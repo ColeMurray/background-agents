@@ -7,9 +7,12 @@ import { DEFAULT_MODEL } from "@open-inspect/shared/models";
 import type { SessionRepositoryState } from "@open-inspect/shared/types/repositories";
 import type { Logger } from "../logger";
 import type { SqlDatabase } from "../db/sql-database";
+import { AutomationStore } from "../db/automation-store";
 import { EnvironmentStore } from "../db/environments";
+import { TeamChannelBindingStore } from "../db/team-channel-bindings";
 import { DEFAULT_SANDBOX_STATUS } from "../sandbox/sandbox-status";
 import { parseStoredSandboxBootPhase } from "../sandbox/boot-phase";
+import { parseSlackTriggerMetadata } from "../scheduler/slack-completion";
 import type { SandboxDashboardSettings } from "./sandbox-access";
 import { resolveSandboxDashboardUrl } from "./sandbox-access";
 import { findPrArtifactForRepo } from "./pr-artifacts";
@@ -28,6 +31,7 @@ import { DEFAULT_BASE_BRANCH } from "../repos/default-branch";
 export interface SessionSnapshotEnrichment {
   environmentId: string | null;
   environmentName: string | null;
+  slackThread?: SessionSnapshotState["slackThread"];
 }
 
 export interface SessionSnapshotReaderDeps {
@@ -66,8 +70,45 @@ export class SessionSnapshotReader {
   async resolveSessionSnapshotEnrichment(): Promise<SessionSnapshotEnrichment> {
     const session = this.deps.sessionCoreRepository.getSession();
     const environmentId = session?.environment_id ?? null;
+    const origin = this.deps.messageRepository.getSlackThreadOrigin();
     const environmentName = await this.resolveEnvironmentName(environmentId);
-    return { environmentId, environmentName };
+    const enrichment = { environmentId, environmentName };
+    if (!origin || !session) return enrichment;
+    let channelId = origin.source === "slack" ? origin.channelId : null;
+    try {
+      if (origin.source === "automation") {
+        const store = new AutomationStore(this.deps.db);
+        const run = await store.getRunById(origin.automationId, origin.runId);
+        if (!run || run.session_id !== resolvePublicSessionId(session, this.deps.durableObjectId)) {
+          return enrichment;
+        }
+        const invocation = await store.getInvocationById(run.invocation_id);
+        if (invocation?.source !== "event" || invocation.automation_id !== origin.automationId) {
+          return enrichment;
+        }
+        const metadata = parseSlackTriggerMetadata(invocation.trigger_metadata);
+        // Event invocations have a generic source; their persisted key identifies the provider.
+        if (
+          !metadata ||
+          !metadata.channel.trim() ||
+          !metadata.messageTs.trim() ||
+          invocation.trigger_key !== `slack:msg:${metadata.channel}:${metadata.messageTs}`
+        ) {
+          return enrichment;
+        }
+        channelId = metadata.channel;
+      }
+      if (!channelId) return enrichment;
+      const binding = await new TeamChannelBindingStore(this.deps.db).get("slack", channelId);
+      return { ...enrichment, slackThread: { channelId, teamId: binding?.teamId ?? null } };
+    } catch (e) {
+      this.deps.log.warn("Failed to resolve Slack thread provenance for session snapshot", {
+        channel_id: channelId,
+        error: e instanceof Error ? e.message : String(e),
+      });
+      // A failed lookup is not evidence that the channel is unbound.
+      return enrichment;
+    }
   }
 
   readSessionSnapshot(enrichment: SessionSnapshotEnrichment) {
@@ -125,6 +166,7 @@ export class SessionSnapshotReader {
       environmentId: session.environment_id ?? null,
       environmentName:
         session.environment_id === enrichment.environmentId ? enrichment.environmentName : null,
+      ...(enrichment.slackThread ? { slackThread: enrichment.slackThread } : {}),
     };
     return { session: publicSession, sandbox };
   }

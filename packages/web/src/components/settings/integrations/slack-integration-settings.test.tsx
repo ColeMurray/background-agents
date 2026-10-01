@@ -2,7 +2,7 @@
 /// <reference types="@testing-library/jest-dom" />
 
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { act, cleanup, render, screen, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import * as matchers from "@testing-library/jest-dom/matchers";
 import type { EnrichedRepository } from "@open-inspect/shared/types/repository-catalog";
@@ -14,8 +14,12 @@ import {
 } from "@open-inspect/shared/types/integrations";
 import { SlackIntegrationSettings } from "./slack-integration-settings";
 
+const authorization = vi.hoisted(() => ({ canManageGlobal: true }));
 vi.mock("@/hooks/use-current-user-authorization", () => ({
-  useCurrentUserAuthorization: () => ({ hasPermission: () => true }),
+  useCurrentUserAuthorization: () => ({
+    hasPermission: (permission: string) =>
+      permission !== "integrations.manage" || authorization.canManageGlobal,
+  }),
 }));
 
 vi.mock("@/hooks/use-enabled-models", () => ({
@@ -141,6 +145,7 @@ beforeAll(() => {
 });
 
 beforeEach(() => {
+  authorization.canManageGlobal = true;
   fetchMock.mockReset();
   toastSuccess.mockReset();
   toastError.mockReset();
@@ -179,6 +184,110 @@ describe("SlackIntegrationSettings", () => {
 
     const allowRadio = screen.getByRole("radio", { name: /allow/i }) as HTMLInputElement;
     expect(allowRadio.checked).toBe(true);
+    expect(screen.getByRole("combobox", { name: "Unbound channels" })).toHaveValue("workspace");
+  });
+
+  it("saves rejection of unbound channels without dropping routing or notification settings", async () => {
+    const user = userEvent.setup();
+    setupSWR({
+      global: {
+        defaults: {
+          agentNotificationsEnabled: true,
+          mentionsPolicy: "strip",
+          routingRules: [{ keyword: "frontend", target: "acme/web" }],
+        },
+      },
+      availableRepos: [repo("acme/web")],
+    });
+    fetchMock.mockResolvedValue(okJson({}));
+    render(<SlackIntegrationSettings />);
+    await user.selectOptions(screen.getByRole("combobox", { name: "Unbound channels" }), "reject");
+    await user.click(screen.getByRole("button", { name: /^save$/i }));
+    expect(JSON.parse(fetchMock.mock.calls[0][1].body as string)).toEqual({
+      settings: {
+        defaults: {
+          agentNotificationsEnabled: true,
+          mentionsPolicy: "strip",
+          routingRules: [{ keyword: "frontend", target: "acme/web" }],
+          unboundChannels: "reject",
+        },
+      },
+    });
+  });
+
+  it("resyncs the unbound policy without overwriting dirty edits", async () => {
+    const user = userEvent.setup();
+    setupSWR({ global: null });
+    const view = render(<SlackIntegrationSettings />);
+    setupSWR({ global: { defaults: { unboundChannels: "reject" } } });
+    view.rerender(<SlackIntegrationSettings />);
+    expect(screen.getByRole("combobox", { name: "Unbound channels" })).toHaveValue("reject");
+    await user.selectOptions(
+      screen.getByRole("combobox", { name: "Unbound channels" }),
+      "workspace"
+    );
+    setupSWR({ global: { defaults: { unboundChannels: "reject", mentionsPolicy: "strip" } } });
+    view.rerender(<SlackIntegrationSettings />);
+    expect(screen.getByRole("combobox", { name: "Unbound channels" })).toHaveValue("workspace");
+  });
+
+  it("disables the unbound policy without global integration-management permission", () => {
+    authorization.canManageGlobal = false;
+    setupSWR({ global: null });
+    render(<SlackIntegrationSettings />);
+    expect(screen.getByRole("combobox", { name: "Unbound channels" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: /^save$/i })).toBeDisabled();
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("resets the unbound policy to workspace while preserving routing rules", async () => {
+    const user = userEvent.setup();
+    const routingRules = [{ keyword: "frontend", target: "acme/web" }];
+    setupSWR({
+      global: { defaults: { unboundChannels: "reject", routingRules } },
+      availableRepos: [repo("acme/web")],
+    });
+    fetchMock.mockResolvedValue(okJson({}));
+    mutateMock.mockImplementation((_key: string, data: { settings: SlackGlobalConfig }) => {
+      setupSWR({ global: data.settings, availableRepos: [repo("acme/web")] });
+    });
+    const { rerender } = render(<SlackIntegrationSettings />);
+    await user.click(screen.getByRole("button", { name: "Reset to defaults" }));
+    await user.click(screen.getByRole("button", { name: "Reset" }));
+    expect(JSON.parse(fetchMock.mock.calls[0][1].body as string)).toEqual({
+      settings: { defaults: { routingRules } },
+    });
+    await waitFor(() =>
+      expect(mutateMock).toHaveBeenCalledWith("/api/integration-settings/slack", {
+        settings: { defaults: { routingRules } },
+      })
+    );
+    rerender(<SlackIntegrationSettings />);
+    await waitFor(() =>
+      expect(screen.getByRole("combobox", { name: "Unbound channels" })).toHaveValue("workspace")
+    );
+  });
+
+  it("preserves the unbound policy when routing rules are saved", async () => {
+    const user = userEvent.setup();
+    setupSWR({
+      global: {
+        defaults: {
+          unboundChannels: "reject",
+          routingRules: [{ keyword: "frontend", target: "acme/web" }],
+        },
+      },
+      availableRepos: [repo("acme/web")],
+    });
+    fetchMock.mockResolvedValue(okJson({}));
+    render(<SlackIntegrationSettings />);
+    fireEvent.change(screen.getByRole("textbox", { name: "Routing keyword" }), {
+      target: { value: "web" },
+    });
+    await user.click(screen.getByRole("button", { name: "Save routing rules" }));
+    expect(
+      JSON.parse(fetchMock.mock.calls[0][1].body as string).settings.defaults.unboundChannels
+    ).toBe("reject");
   });
 
   it("describes channel access via Slack bot membership in help copy", () => {
@@ -208,6 +317,7 @@ describe("SlackIntegrationSettings", () => {
     expect(body.settings.defaults).toEqual({
       agentNotificationsEnabled: true,
       mentionsPolicy: "allow",
+      unboundChannels: "workspace",
     });
   });
 
@@ -269,6 +379,7 @@ describe("SlackIntegrationSettings", () => {
       agentNotificationsEnabled: true,
       mentionsPolicy: "strip",
       routingRules: [{ keyword: "frontend", target: "acme/web" }],
+      unboundChannels: "workspace",
     });
   });
 
@@ -298,6 +409,7 @@ describe("SlackIntegrationSettings", () => {
       mentionsPolicy: "strip",
       routingRules: [{ keyword: "frontend", target: "acme/web" }],
       sessionInstructions: "Prefer minimal diffs.",
+      unboundChannels: "workspace",
     });
   });
 
@@ -324,7 +436,11 @@ describe("SlackIntegrationSettings", () => {
 
     expect(mutateMock).toHaveBeenCalledWith("/api/integration-settings/slack", {
       settings: {
-        defaults: { agentNotificationsEnabled: true, mentionsPolicy: "allow" },
+        defaults: {
+          agentNotificationsEnabled: true,
+          mentionsPolicy: "allow",
+          unboundChannels: "workspace",
+        },
       },
     });
   });
@@ -352,6 +468,7 @@ describe("SlackIntegrationSettings", () => {
     expect(body.settings.defaults).toEqual({
       agentNotificationsEnabled: true,
       mentionsPolicy: "strip",
+      unboundChannels: "workspace",
     });
   });
 
@@ -621,6 +738,7 @@ describe("SlackIntegrationSettings", () => {
         agentNotificationsEnabled: true,
         mentionsPolicy: "allow",
         routingRules: [{ keyword: "frontend", target: "acme/web" }],
+        unboundChannels: "workspace",
       });
     });
 

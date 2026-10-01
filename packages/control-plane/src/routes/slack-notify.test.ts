@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SessionStatus } from "@open-inspect/shared/types/sessions";
+import type { SessionVisibility } from "@open-inspect/shared/types/teams";
 import { SECTION_TEXT_MAX_CHARS } from "@open-inspect/shared/slack";
 import { handleSlackNotify } from "./slack-notify";
 import type { RequestContext } from "./shared";
@@ -10,6 +11,19 @@ import { fakeSessionRuntimeDispatch, TEST_BACKGROUND_TASK_CONTEXT } from "../rou
 const sessionStoreMock = {
   get: vi.fn(),
 };
+const channelBindingStoreMock = { get: vi.fn() };
+const listChannelsMock = vi.hoisted(() => vi.fn());
+
+vi.mock("@open-inspect/shared/slack", async (importOriginal) => {
+  const actual = (await importOriginal()) as Record<string, unknown>;
+  return { ...actual, listChannels: listChannelsMock };
+});
+
+vi.mock("../db/team-channel-bindings", () => ({
+  TeamChannelBindingStore: vi.fn().mockImplementation(function () {
+    return channelBindingStoreMock;
+  }),
+}));
 
 const integrationStoreMock = {
   getResolvedConfig: vi.fn(),
@@ -93,6 +107,8 @@ function seedActiveSession(opts?: {
   status?: SessionStatus;
   repoOwner?: string | null;
   repoName?: string | null;
+  ownerTeamId?: string | null;
+  visibility?: SessionVisibility;
 }) {
   sessionStoreMock.get.mockResolvedValue({
     id: "sess-1",
@@ -103,6 +119,8 @@ function seedActiveSession(opts?: {
     reasoningEffort: null,
     baseBranch: null,
     status: opts?.status ?? "active",
+    ownerTeamId: opts?.ownerTeamId ?? "team-a",
+    visibility: opts?.visibility ?? "workspace",
     parentSessionId: opts?.parentSessionId ?? null,
     spawnSource: opts?.spawnSource ?? "user",
     spawnDepth: 0,
@@ -127,6 +145,15 @@ let consoleErrorSpy: ReturnType<typeof vi.spyOn>;
 
 beforeEach(() => {
   vi.clearAllMocks();
+  channelBindingStoreMock.get.mockResolvedValue(null);
+  listChannelsMock.mockResolvedValue({
+    ok: true,
+    channels: [
+      { id: "C1", name: "ops", isMember: true, isPrivate: false },
+      { id: "C2", name: "nope", isMember: true, isPrivate: false },
+      { id: "C3", name: "archive", isMember: true, isPrivate: false },
+    ],
+  });
   sessionFetchMock.mockResolvedValue(new Response("{}", { status: 200 }));
   vi.stubGlobal("fetch", fetchMock);
   consoleLogSpy = vi.spyOn(console, "log").mockImplementation(() => {});
@@ -161,6 +188,128 @@ function lastLogPayload(
 }
 
 describe("handleSlackNotify", () => {
+  it("refuses a missing authoritative session before bot configuration", async () => {
+    sessionStoreMock.get.mockResolvedValue(null);
+
+    const res = await callHandler(
+      { channel: "C1", text: "secret text" },
+      { SLACK_BOT_TOKEN: undefined }
+    );
+
+    expect(res.status).toBe(400);
+    await expect(res.json()).resolves.toMatchObject({ error: "invalid_input" });
+    expect(listChannelsMock).not.toHaveBeenCalled();
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("refuses private sessions before bot token or settings lookup", async () => {
+    seedActiveSession({ visibility: "private" });
+
+    const res = await callHandler(
+      { channel: "#ops", text: "secret text" },
+      { SLACK_BOT_TOKEN: undefined }
+    );
+
+    expect(res.status).toBe(403);
+    await expect(res.json()).resolves.toMatchObject({ error: "session_scope_denied" });
+    expect(integrationStoreMock.getGlobal).not.toHaveBeenCalled();
+    expect(integrationStoreMock.getResolvedConfig).not.toHaveBeenCalled();
+    expect(listChannelsMock).not.toHaveBeenCalled();
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it.each(["team", "workspace"] as const)(
+    "refuses %s-visible cross-team targets by ID or resolved name",
+    async (visibility) => {
+      seedActiveSession({ visibility });
+      integrationStoreMock.getResolvedConfig.mockResolvedValue({
+        settings: { agentNotificationsEnabled: true },
+      });
+      channelBindingStoreMock.get.mockResolvedValue({ teamId: "team-b" });
+
+      for (const channel of ["C1", "#ops", "ops"]) {
+        const res = await callHandler({ channel, text: "secret text" });
+        expect(res.status).toBe(403);
+        await expect(res.json()).resolves.toMatchObject({ error: "session_scope_denied" });
+      }
+
+      expect(channelBindingStoreMock.get).toHaveBeenCalledWith("slack", "C1");
+      expect(fetchMock).not.toHaveBeenCalled();
+      expect(sessionFetchMock).not.toHaveBeenCalled();
+    }
+  );
+
+  it("refuses when name resolution races a session becoming private", async () => {
+    seedActiveSession();
+    integrationStoreMock.getResolvedConfig.mockResolvedValue({
+      settings: { agentNotificationsEnabled: true },
+    });
+    listChannelsMock.mockImplementationOnce(async () => {
+      seedActiveSession({ visibility: "private" });
+      return { ok: true, channels: [{ id: "C1", name: "ops" }] };
+    });
+
+    const res = await callHandler({ channel: "#ops", text: "secret text" });
+
+    expect(res.status).toBe(403);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("refuses when the session disappears during channel name resolution", async () => {
+    seedActiveSession();
+    integrationStoreMock.getResolvedConfig.mockResolvedValue({
+      settings: { agentNotificationsEnabled: true },
+    });
+    listChannelsMock.mockImplementationOnce(async () => {
+      sessionStoreMock.get.mockResolvedValue(null);
+      return { ok: true, channels: [{ id: "C1", name: "ops" }] };
+    });
+
+    const res = await callHandler({ channel: "#ops", text: "secret text" });
+
+    expect(res.status).toBe(403);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("does not post when a channel name cannot be resolved", async () => {
+    seedActiveSession();
+    integrationStoreMock.getResolvedConfig.mockResolvedValue({
+      settings: { agentNotificationsEnabled: true },
+    });
+
+    const res = await callHandler({ channel: "#unknown", text: "hello" });
+
+    expect(res.status).toBe(404);
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(channelBindingStoreMock.get).not.toHaveBeenCalled();
+  });
+
+  it("maps a channel listing failure without falling back to posting by name", async () => {
+    seedActiveSession();
+    integrationStoreMock.getResolvedConfig.mockResolvedValue({
+      settings: { agentNotificationsEnabled: true },
+    });
+    listChannelsMock.mockResolvedValueOnce({ ok: false, error: "ratelimited", retryAfter: 30 });
+
+    const res = await callHandler({ channel: "ops", text: "hello" });
+
+    expect(res.status).toBe(429);
+    await expect(res.json()).resolves.toMatchObject({ error: "rate_limited", retryAfter: 30 });
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("permits a matching-team target", async () => {
+    seedActiveSession({ visibility: "team" });
+    integrationStoreMock.getResolvedConfig.mockResolvedValue({
+      settings: { agentNotificationsEnabled: true },
+    });
+    channelBindingStoreMock.get.mockResolvedValue({ teamId: "team-a" });
+    mockSlackResponse({ body: { ok: true, channel: "C1", ts: "1.2" } });
+    mockSlackResponse({ body: { ok: true, permalink: "https://x.slack.com/p" } });
+
+    expect((await callHandler({ channel: "ops", text: "hello" })).status).toBe(200);
+  });
+
   it("happy path posts no events to the DO — the agent's tool_call is the source of truth", async () => {
     seedActiveSession();
     integrationStoreMock.getResolvedConfig.mockResolvedValue({
@@ -399,7 +548,7 @@ describe("handleSlackNotify", () => {
       channel: string;
       blocks: Array<{ type: string; text?: { text: string } }>;
     };
-    expect(sentBody.channel).toBe("#ops");
+    expect(sentBody.channel).toBe("C1");
     const sentText = sentBody.blocks.find((block) => block.type === "section")?.text?.text ?? "";
     expect(sentText).not.toContain("<!here>");
     expect(sentText).not.toContain("<@U999>");
@@ -536,7 +685,7 @@ describe("handleSlackNotify", () => {
     expect(logEntry?.request_reason).toBeNull();
   });
 
-  it("passes channel input verbatim to Slack — channel ID", async () => {
+  it("passes a channel ID without a Slack channel lookup", async () => {
     seedActiveSession();
     integrationStoreMock.getResolvedConfig.mockResolvedValue({
       enabledRepos: null,
@@ -551,9 +700,10 @@ describe("handleSlackNotify", () => {
       channel: string;
     };
     expect(sentBody.channel).toBe("C01ABC");
+    expect(listChannelsMock).not.toHaveBeenCalled();
   });
 
-  it("passes channel input verbatim to Slack — name with hash", async () => {
+  it("resolves a name with hash before checking its binding and posting by ID", async () => {
     seedActiveSession();
     integrationStoreMock.getResolvedConfig.mockResolvedValue({
       enabledRepos: null,
@@ -567,7 +717,9 @@ describe("handleSlackNotify", () => {
     const sentBody = JSON.parse(fetchMock.mock.calls[0][1].body as string) as {
       channel: string;
     };
-    expect(sentBody.channel).toBe("#ops");
+    expect(sentBody.channel).toBe("C1");
+    expect(listChannelsMock).toHaveBeenCalledWith("xoxb-test", { signal: expect.any(AbortSignal) });
+    expect(channelBindingStoreMock.get).toHaveBeenCalledWith("slack", "C1");
   });
 
   it("does not call Slack when feature is disabled", async () => {

@@ -4,11 +4,15 @@ import { handleAppHomeInteractionRoute } from "../app-home";
 import { handleSlackInteraction } from "../interactions/dispatcher";
 import { slackInteractionPayloadSchema } from "../interaction-payload";
 import { createLogger } from "../logger";
+import { getChannelBinding } from "../channel-bindings";
 import {
   SELECT_TARGET_ACTION_ID,
   countClarificationOptions,
   getTargetClarificationOptions,
+  parseTargetInteractionRequestId,
+  type TargetClarificationOptions,
 } from "../target-clarification";
+import { getPendingRequest } from "../pending-requests/pending-request-store";
 import type { Env } from "../types";
 
 const log = createLogger("handler");
@@ -66,20 +70,39 @@ interactionRoutes.post("/interactions", async (c) => {
     return c.json(appHomeResponse.body);
   }
   if (payload.type === "block_suggestion") {
-    const response =
-      payload.action_id === SELECT_TARGET_ACTION_ID
-        ? await getTargetClarificationOptions(c.env, payload.value, traceId).catch(
-            (e): { options: [] } => {
-              log.error("slack.target_clarification_options", {
-                trace_id: traceId,
-                query: payload.value,
-                error: e instanceof Error ? e : new Error(String(e)),
-                duration_ms: Date.now() - startTime,
-              });
-              return { options: [] };
-            }
-          )
-        : { options: [] };
+    const requestId = payload.block_id
+      ? parseTargetInteractionRequestId(payload.block_id, "picker")
+      : null;
+    const pending =
+      payload.action_id === SELECT_TARGET_ACTION_ID && requestId
+        ? await getPendingRequest(c.env, requestId).catch(() => null)
+        : null;
+    let response: TargetClarificationOptions = { options: [] };
+    if (
+      pending &&
+      pending.userId === payload.user?.id &&
+      pending.teamId !== undefined &&
+      payload.channel?.id === pending.channel
+    ) {
+      try {
+        const binding = await getChannelBinding(c.env, pending.channel, traceId);
+        if (binding.teamId === pending.teamId) {
+          response = await getTargetClarificationOptions(
+            c.env,
+            payload.value,
+            traceId,
+            pending.teamId
+          );
+        }
+      } catch (error) {
+        log.error("slack.target_clarification_options", {
+          trace_id: traceId,
+          query: payload.value,
+          error: error instanceof Error ? error : new Error(String(error)),
+          duration_ms: Date.now() - startTime,
+        });
+      }
+    }
     log.info("http.request", {
       trace_id: traceId,
       http_method: "POST",

@@ -44,6 +44,12 @@ describe("Team activity", () => {
     render(<TeamActivity teamId="team_one" />);
     const types = within(screen.getByRole("combobox", { name: "Event type" }));
     expect(types.getByRole("option", { name: "Session moved" })).toBeInTheDocument();
+    expect(types.getByRole("option", { name: "Team channel binding added" })).toHaveValue(
+      "team.binding_added"
+    );
+    expect(types.getByRole("option", { name: "Team channel binding removed" })).toHaveValue(
+      "team.binding_removed"
+    );
     expect(types.queryByRole("option", { name: "Authorization allowed" })).not.toBeInTheDocument();
     expect(types.queryByRole("option", { name: "Authorization denied" })).not.toBeInTheDocument();
     const cards = screen.getAllByRole("article");

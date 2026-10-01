@@ -149,6 +149,79 @@ beforeEach(() => {
 afterEach(cleanup);
 
 describe("MoveSessionDialog", () => {
+  it("warns when moving out of the Slack channel's bound team without changing the move request", async () => {
+    render(
+      <MoveSessionDialog
+        {...moveProps}
+        visibility="workspace"
+        slackThread={{ channelId: "C_SOURCE", teamId: "source" }}
+      />
+    );
+    expect(screen.queryByText(/will end the Slack thread/i)).not.toBeInTheDocument();
+    selectTarget();
+    expect(screen.getByRole("status")).toHaveTextContent("will end the Slack thread");
+    expect(screen.getByRole("status")).toHaveTextContent(
+      "Future work will continue in the web app"
+    );
+    expect(screen.getByRole("button", { name: "Move session" })).toBeEnabled();
+    fireEvent.click(screen.getByRole("button", { name: "Move session" }));
+    await waitFor(() => expect(mocks.updated).toHaveBeenCalledOnce());
+    expectMutation("/api/sessions/session%2Fid/scope", {
+      teamId: "target",
+      includeChildren: true,
+      joinTeam: false,
+    });
+  });
+
+  it("uses the current binding rather than session ownership and hides the warning for the same team", () => {
+    render(
+      <MoveSessionDialog {...moveProps} slackThread={{ channelId: "C_SOURCE", teamId: "target" }} />
+    );
+    expect(screen.getByText(/will end the Slack thread/i)).toBeInTheDocument();
+    selectTarget();
+    expect(screen.queryByText(/will end the Slack thread/i)).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Move session" })).toBeEnabled();
+  });
+
+  it("warns when moving a bound Slack thread to the workspace", () => {
+    render(
+      <MoveSessionDialog {...moveProps} slackThread={{ channelId: "C_SOURCE", teamId: "source" }} />
+    );
+    fireEvent.change(screen.getByRole("combobox", { name: "Destination" }), {
+      target: { value: "" },
+    });
+    expect(screen.getByText(/will end the Slack thread/i)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Move session" })).toBeEnabled();
+  });
+
+  it.each([undefined, null, { channelId: "C_UNBOUND", teamId: null }])(
+    "does not warn for a missing, null, or unbound Slack thread: %s",
+    (slackThread) => {
+      render(<MoveSessionDialog {...moveProps} slackThread={slackThread} />);
+      selectTarget();
+      expect(screen.queryByText(/will end the Slack thread/i)).not.toBeInTheDocument();
+      fireEvent.change(screen.getByRole("combobox", { name: "Destination" }), {
+        target: { value: "" },
+      });
+      expect(screen.queryByText(/will end the Slack thread/i)).not.toBeInTheDocument();
+    }
+  );
+
+  it("does not grant move capability when a Slack mismatch warning is shown", () => {
+    render(
+      <MoveSessionDialog
+        {...moveProps}
+        ownerTeamId="target"
+        canMove={false}
+        slackThread={{ channelId: "C_SOURCE", teamId: "source" }}
+      />
+    );
+    expect(screen.getByText(/will end the Slack thread/i)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Move session" })).toBeDisabled();
+    fireEvent.click(screen.getByRole("button", { name: "Move session" }));
+    expect(browserApiFetch).not.toHaveBeenCalled();
+  });
+
   it("moves a member's session with children by default and refreshes before closing", async () => {
     render(<MoveSessionDialog {...moveProps} />);
     selectTarget();

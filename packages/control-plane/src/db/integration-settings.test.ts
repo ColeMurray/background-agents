@@ -1232,6 +1232,25 @@ describe("IntegrationSettingsStore", () => {
   });
 
   describe("slack settings", () => {
+    it.each(["workspace", "reject"] as const)(
+      "round-trips global unboundChannels %s",
+      async (unboundChannels) => {
+        await store.setGlobal("slack", { defaults: { unboundChannels } });
+        expect((await store.getGlobal("slack"))?.defaults?.unboundChannels).toBe(unboundChannels);
+      }
+    );
+
+    it("rejects invalid and per-repository unboundChannels settings", async () => {
+      await expect(
+        store.setGlobal("slack", { defaults: { unboundChannels: "team" as "workspace" } })
+      ).rejects.toThrow(IntegrationSettingsValidationError);
+      await expect(
+        store.setRepoSettings("slack", "acme/widgets", {
+          unboundChannels: "reject",
+        } as unknown as { agentNotificationsEnabled?: boolean })
+      ).rejects.toThrow(IntegrationSettingsValidationError);
+    });
+
     it("round-trips global slack settings", async () => {
       await store.setGlobal("slack", {
         defaults: { agentNotificationsEnabled: true, mentionsPolicy: "escape" },

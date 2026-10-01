@@ -5,7 +5,11 @@ import { useSWRConfig } from "swr";
 import { teamCapabilitiesSchema, type SessionVisibility } from "@open-inspect/shared/types/teams";
 import { useMeTeams, useTeams } from "@/hooks/use-teams";
 import { useTeamCapabilities } from "@/hooks/use-team-capabilities";
-import { SessionScopeError, updateSessionScope } from "@/lib/session-scope";
+import {
+  SessionScopeError,
+  updateSessionScope,
+  type SessionScopeControls,
+} from "@/lib/session-scope";
 import { SessionTeamOwnerWarning } from "./session-visibility-control";
 import { Button } from "./ui/button";
 import { Checkbox } from "./ui/checkbox";
@@ -17,6 +21,7 @@ export interface MoveSessionDialogProps {
   ownerTeamId: string | null;
   ownerUserId: string | null;
   visibility: SessionVisibility;
+  slackThread?: SessionScopeControls["slackThread"];
   canMove: boolean;
   onUpdated: () => Promise<void>;
   open: boolean;
@@ -36,6 +41,7 @@ function MoveSessionForm({
   ownerTeamId,
   ownerUserId,
   visibility,
+  slackThread,
   canMove,
   onUpdated,
   onOpenChange,
@@ -168,6 +174,15 @@ function MoveSessionForm({
       {visibility === "team" && !teamId && (
         <p className="text-sm text-muted-foreground">
           Team visibility will change to workspace visibility when removing the team.
+        </p>
+      )}
+      {slackThread && slackThread.teamId !== null && slackThread.teamId !== (teamId || null) && (
+        <p
+          role="status"
+          className="rounded border border-warning/30 bg-warning-muted p-3 text-sm text-foreground"
+        >
+          This Slack channel is bound to a team other than the selected destination. Moving this
+          session will end the Slack thread. Future work will continue in the web app.
         </p>
       )}
       {failure && <ErrorBanner role="alert">{failure.message}</ErrorBanner>}

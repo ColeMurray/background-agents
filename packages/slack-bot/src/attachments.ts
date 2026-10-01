@@ -86,6 +86,7 @@ export interface SlackAttachmentUploadResult {
    * exists, so the failures are stale-session noise rather than real drops.
    */
   sessionMissing: boolean;
+  sessionForbidden?: true;
 }
 
 /**
@@ -377,7 +378,8 @@ async function uploadToSession(
   authorId: string,
   traceId?: string
 ): Promise<
-  { reference: SessionAttachmentReference } | { sessionMissing: boolean; reportDrop: boolean }
+  | { reference: SessionAttachmentReference }
+  | { sessionMissing: boolean; sessionForbidden?: true; reportDrop: boolean }
 > {
   const { attachment, bytes } = file;
   try {
@@ -411,7 +413,11 @@ async function uploadToSession(
         file_id: attachment.id,
         http_status: response.status,
       });
-      return { sessionMissing: response.status === 404, reportDrop: file.reportDrop !== false };
+      return {
+        sessionMissing: response.status === 404,
+        reportDrop: file.reportDrop !== false,
+        ...(response.status === 403 ? { sessionForbidden: true as const } : {}),
+      };
     }
     const parsed = sessionAttachmentUploadResponseSchema.safeParse(await response.json());
     if (!parsed.success) {
@@ -453,7 +459,7 @@ export async function uploadPreparedAttachments(
   );
   const references: SessionAttachmentReference[] = [];
   const dropped: SlackAttachmentDropReason[] = [...prepared.dropped];
-  const failures: Array<{ sessionMissing: boolean }> = [];
+  const failures: Array<{ sessionMissing: boolean; sessionForbidden?: true }> = [];
   for (const outcome of outcomes) {
     if ("reference" in outcome) references.push(outcome.reference);
     else {
@@ -466,14 +472,14 @@ export async function uploadPreparedAttachments(
     dropped,
     sessionMissing:
       references.length === 0 && failures.length > 0 && failures.every((f) => f.sessionMissing),
+    ...(failures.some((f) => f.sessionForbidden) ? { sessionForbidden: true as const } : {}),
   };
 }
 
 /**
  * Tell the user how many of their attached images could not be forwarded, with
- * guidance matched to why. Call this only once the prompt outcome is known —
- * uploads against a stale session fail spuriously and are retried against the
- * replacement session. Best effort — never blocks the message.
+ * guidance matched to why. Call this only once the session proves accessible.
+ * Best effort: never blocks the message.
  */
 export async function notifyDroppedAttachments(
   env: Env,

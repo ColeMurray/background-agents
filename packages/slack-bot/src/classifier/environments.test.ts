@@ -46,6 +46,40 @@ describe("getAvailableEnvironments", () => {
     vi.clearAllMocks();
   });
 
+  it("isolates team memory and KV caches from workspace environments", async () => {
+    const env = makeEnv(jsonResponse({ environments: [], total: 0 }));
+    const fetch = vi.mocked(env.CONTROL_PLANE.fetch);
+    fetch.mockImplementation(async (input) => {
+      const teamId = new URL(String(input)).searchParams.get("teamId");
+      return jsonResponse({
+        environments: [{ ...TEST_ENVIRONMENT, name: teamId ?? "workspace" }],
+        total: 1,
+      });
+    });
+    expect((await getAvailableEnvironments(env, "trace", null))[0].name).toBe("workspace");
+    expect((await getAvailableEnvironments(env, "trace", "team-a"))[0].name).toBe("team-a");
+    expect((await getAvailableEnvironments(env, "trace", "team-b"))[0].name).toBe("team-b");
+    await getAvailableEnvironments(env, "trace", "team-a");
+    expect(fetch).toHaveBeenCalledTimes(3);
+    expect(env.SLACK_KV.put).toHaveBeenCalledWith(
+      "slack:environments:team:team-a",
+      expect.any(String),
+      expect.anything()
+    );
+    clearEnvironmentsLocalCache();
+    fetch.mockImplementation(async () => new Response(null, { status: 503 }));
+    const stored = new Map(
+      vi.mocked(env.SLACK_KV.put).mock.calls.map(([key, value]) => [key, JSON.parse(String(value))])
+    );
+    vi.mocked(env.SLACK_KV.get).mockImplementation(async (key) =>
+      typeof key === "string" ? (stored.get(key) ?? null) : null
+    );
+    expect((await getAvailableEnvironments(env, "trace", "team-a"))[0].name).toBe("team-a");
+    expect((await getAvailableEnvironments(env, "trace", "team-b"))[0].name).toBe("team-b");
+    expect(await getAvailableEnvironments(env, "trace", "team-c")).toEqual([]);
+    expect(env.SLACK_KV.get).toHaveBeenCalledWith("slack:environments:team:team-a", "json");
+  });
+
   it("parses environments from the control-plane response", async () => {
     const env = makeEnv(jsonResponse({ environments: [TEST_ENVIRONMENT], total: 1 }));
     expect(await getAvailableEnvironments(env, "trace")).toEqual([TEST_ENVIRONMENT]);

@@ -15,6 +15,20 @@ terminal access or per-session caches. Visibility changes require a changed sele
 non-private child-session cascades. Workspace audit readers can filter by teams they do not belong
 to.
 
+### Added
+
+Team leads and administrators can manage primary and source Slack channel bindings in a team's
+Channels tab. Settings > Integrations > Slack now controls whether unbound channels create
+workspace-level sessions (the default) or reject requests until bound. Binding changes appear in
+team activity and the workspace audit log. The move dialog warns when moving a session away from its
+Slack channel's bound team will end the thread; future work continues in the web app.
+
+Slack-created sessions carry the channel's team and enforce the requesting user's membership.
+Unavailable threads close instead of starting replacement sessions. Session notifications and the
+`slack-notify` tool refuse private sessions and destinations bound to another team, including queued
+completion text and media. Slack-triggered automations run only in channels matching their
+ownership.
+
 ## September 30, 2026
 
 ### Added

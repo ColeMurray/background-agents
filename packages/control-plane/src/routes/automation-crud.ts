@@ -206,6 +206,20 @@ async function handleCreateAutomation(
       ...body.triggerConfig!,
       conditions: normalizeSlackChannelConditions(body.triggerConfig!.conditions),
     };
+    if (
+      !(await new SlackChannelStore(ctx.db).hasCompatibleBindings(
+        extractSlackChannels(body.triggerConfig),
+        null
+      ))
+    ) {
+      return json(
+        {
+          error: "Slack channels must belong to the automation's team",
+          code: "channel_team_mismatch",
+        },
+        409
+      );
+    }
   }
 
   // Validate harness and model
@@ -593,6 +607,22 @@ async function handleUpdateAutomation(
       conditions: normalizeSlackChannelConditions(body.triggerConfig.conditions),
     };
     triggerConfigToValidate = body.triggerConfig;
+  }
+
+  if (
+    existingTriggerType === "slack_event" &&
+    !(await new SlackChannelStore(ctx.db).hasCompatibleBindings(
+      extractSlackChannels(body.triggerConfig ?? existingTriggerConfig ?? undefined),
+      existing.owner_team_id
+    ))
+  ) {
+    return json(
+      {
+        error: "Slack channels must belong to the automation's team",
+        code: "channel_team_mismatch",
+      },
+      409
+    );
   }
 
   if (triggerConfigToValidate) {

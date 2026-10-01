@@ -20,7 +20,7 @@ vi.mock("./media-upload", async (importOriginal) => {
 
 function makeEnv(overrides: Partial<Env> = {}): Env {
   return {
-    SLACK_KV: {} as KVNamespace,
+    SLACK_KV: { get: vi.fn(async () => null) } as unknown as KVNamespace,
     SLACK_COMPLETION_QUEUE: {} as Queue,
     CONTROL_PLANE: { fetch: vi.fn() } as unknown as Fetcher,
     DEPLOYMENT_NAME: "test",
@@ -94,6 +94,14 @@ describe("processSlackCompletion", () => {
 
     await processSlackCompletion(job(), env);
 
+    expect(extractAgentResponse).toHaveBeenCalledWith(
+      env,
+      "session-1",
+      "message-1",
+      "C123",
+      "trace-1"
+    );
+
     expect(deliverMediaArtifacts).toHaveBeenCalledWith({
       env,
       sessionId: "session-1",
@@ -107,6 +115,42 @@ describe("processSlackCompletion", () => {
     expect(String(fetchMock.mock.calls[0]?.[0])).toContain("chat.postMessage");
     expect(String(fetchMock.mock.calls[1]?.[0])).toContain("chat.postMessage");
     expect(String(fetchMock.mock.calls[2]?.[0])).toContain("reactions.remove");
+  });
+
+  it("suppresses a queued completion after its thread mapping closes", async () => {
+    const fetch = vi.spyOn(globalThis, "fetch");
+    const env = makeEnv({
+      SLACK_KV: {
+        get: vi.fn(async () => ({
+          sessionId: "session-1",
+          repoId: "acme/app",
+          repoFullName: "acme/app",
+          model: "openai/gpt-5.4",
+          createdAt: 1,
+          teamId: null,
+          closed: true,
+        })),
+      } as unknown as KVNamespace,
+    });
+    await processSlackCompletion(job(), env);
+    expect(extractAgentResponse).not.toHaveBeenCalled();
+    expect(deliverMediaArtifacts).not.toHaveBeenCalled();
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it("suppresses an automation completion with only a coordinate/session tombstone", async () => {
+    const fetch = vi.spyOn(globalThis, "fetch");
+    const env = makeEnv({
+      SLACK_KV: {
+        get: vi.fn(async (key: string) =>
+          key === "thread-closed:C123:111.222:session-1" ? "1" : null
+        ),
+      } as unknown as KVNamespace,
+    });
+    await processSlackCompletion(job({ source: "automation" }), env);
+    expect(extractAgentResponse).not.toHaveBeenCalled();
+    expect(deliverMediaArtifacts).not.toHaveBeenCalled();
+    expect(fetch).not.toHaveBeenCalled();
   });
 
   it("skips media delivery when the response has no media artifacts", async () => {
@@ -143,8 +187,9 @@ describe("processSlackCompletion", () => {
     expect(body.blocks).toBeDefined();
   });
 
-  it("skips media when the ordinary completion post fails", async () => {
+  it("validates media before the ordinary completion post and stops after a failed post", async () => {
     vi.mocked(extractAgentResponse).mockResolvedValue(successfulAgentResponse());
+    vi.mocked(deliverMediaArtifacts).mockResolvedValue({ uploaded: 1, failed: 0, omitted: 0 });
     const fetchMock = vi
       .spyOn(globalThis, "fetch")
       .mockResolvedValueOnce(Response.json({ ok: false, error: "channel_not_found" }))
@@ -152,18 +197,90 @@ describe("processSlackCompletion", () => {
 
     await processSlackCompletion(job(), makeEnv());
 
-    expect(deliverMediaArtifacts).not.toHaveBeenCalled();
+    expect(deliverMediaArtifacts).toHaveBeenCalledOnce();
     expect(String(fetchMock.mock.calls[1]?.[0])).toContain("reactions.remove");
   });
 
-  it("clears the reaction when extraction throws", async () => {
+  it("emits no Slack side effects when extraction throws", async () => {
     vi.mocked(extractAgentResponse).mockRejectedValue(new Error("control plane unavailable"));
     const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(Response.json({ ok: true }));
 
     await expect(processSlackCompletion(job(), makeEnv())).resolves.toBeUndefined();
 
-    expect(fetchMock).toHaveBeenCalledOnce();
-    expect(String(fetchMock.mock.calls[0]?.[0])).toContain("reactions.remove");
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    "events-404",
+    "artifacts-404",
+    "events-network",
+    "artifacts-network",
+    "events-malformed",
+    "artifacts-malformed",
+  ])(
+    "suppresses failed-job errors and success metadata when protected reads fail: %s",
+    async (failure) => {
+      const actual = await vi.importActual<typeof ExtractorModule>("./extractor");
+      vi.mocked(extractAgentResponse).mockImplementation(actual.extractAgentResponse);
+      const fetch = vi
+        .spyOn(globalThis, "fetch")
+        .mockResolvedValue(Response.json({ ok: true, channel: "C123", ts: "333.444" }));
+      const env = makeEnv();
+      const cpFetch = vi.mocked(env.CONTROL_PLANE.fetch);
+      cpFetch.mockImplementation(async (input) => {
+        const url = new URL(String(input));
+        const endpoint = url.pathname.endsWith("/events") ? "events" : "artifacts";
+        if (failure.startsWith(endpoint)) {
+          if (failure.endsWith("network")) throw new Error("CP unavailable");
+          return failure.endsWith("404")
+            ? Response.json({}, { status: 404 })
+            : Response.json({ invalid: true });
+        }
+        return Response.json({
+          events: [
+            {
+              id: "secret",
+              type: "token",
+              data: { content: "SECRET CONTENT" },
+              messageId: "message-1",
+              createdAt: 1,
+            },
+          ],
+          hasMore: false,
+        });
+      });
+      for (const success of [false, true]) {
+        await processSlackCompletion(
+          job({
+            success,
+            error: "SECRET JOB ERROR",
+            context: { repoFullName: "private/repository", model: "openai/gpt-5.4" },
+          }),
+          env
+        );
+      }
+      expect(cpFetch).toHaveBeenCalled();
+      for (const [url] of cpFetch.mock.calls) {
+        expect(new URL(String(url)).searchParams.get("purpose")).toBe("slack-post");
+      }
+      expect(fetch).not.toHaveBeenCalled();
+      expect(deliverMediaArtifacts).not.toHaveBeenCalled();
+    }
+  );
+
+  it("suppresses completion blocks and unavailable-media notices when media reads are unavailable", async () => {
+    vi.mocked(extractAgentResponse).mockResolvedValue(successfulAgentResponse());
+    vi.mocked(deliverMediaArtifacts).mockResolvedValue({
+      uploaded: 0,
+      failed: 1,
+      omitted: 0,
+      unavailable: true,
+    });
+    const fetch = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValue(Response.json({ ok: true, channel: "C123", ts: "333.444" }));
+    await processSlackCompletion(job({ error: "SECRET JOB ERROR" }), makeEnv());
+    expect(fetch).not.toHaveBeenCalled();
   });
 
   it("posts nothing but still clears the reaction when an automation declines", async () => {
