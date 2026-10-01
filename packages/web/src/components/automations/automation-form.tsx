@@ -16,6 +16,7 @@ import { FieldDescription } from "./automation-form-field";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { useAutomationTargets } from "./use-automation-targets";
+import { sameEnvironmentIds } from "./automation-target-selection";
 import { AutomationAgentFields } from "./automation-agent-fields";
 import { AutomationTargetPicker } from "./automation-target-picker";
 import { AutomationInstructionsField } from "./automation-instructions-field";
@@ -79,6 +80,8 @@ export function AutomationForm({ mode, initialValues, onSubmit, submitting }: Au
   });
   const { selectedEnvironmentIds, buildRepositoriesPayload } = targets;
   const environmentsUsable =
+    (mode === "edit" &&
+      sameEnvironmentIds(selectedEnvironmentIds, initialValues?.environmentIds ?? [])) ||
     selectedEnvironmentIds.length === 0 ||
     (!loadingEnvironments &&
       selectedEnvironmentIds.every((id) =>

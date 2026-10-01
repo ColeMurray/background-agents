@@ -631,8 +631,68 @@ describe("environment binding", () => {
     ],
   };
 
-  it("disables environment choices and saved selections without server canUse", () => {
-    environmentsValue = [{ ...fullstackEnvironment, capabilities: undefined }];
+  it.each([undefined, false])(
+    "allows unchanged saved targets without canUse %s while disabling their choices",
+    (canUse) => {
+      environmentsValue = [
+        { ...fullstackEnvironment, capabilities: canUse === undefined ? undefined : { canUse } },
+      ];
+      const onSubmit = vi.fn();
+      const { container } = render(
+        <AutomationForm
+          mode="edit"
+          submitting={false}
+          onSubmit={onSubmit}
+          initialValues={{ ...scheduleBase, environmentIds: ["env_1"] }}
+        />
+      );
+      openRepositoryPicker();
+      expect(screen.getByRole("button", { name: /Fullstack/ })).toBeDisabled();
+      expect(screen.getByRole("button", { name: "Save Changes" })).toBeEnabled();
+      fireEvent.submit(container.querySelector("form")!);
+      expect(onSubmit).toHaveBeenCalledWith(expect.objectContaining({ environmentIds: ["env_1"] }));
+    }
+  );
+
+  it("does not exempt prefilled creation targets from use permission", () => {
+    environmentsValue = [{ ...fullstackEnvironment, capabilities: { canUse: false } }];
+    const onSubmit = vi.fn();
+    const { container } = render(
+      <AutomationForm
+        mode="create"
+        submitting={false}
+        onSubmit={onSubmit}
+        initialValues={{ ...scheduleBase, environmentIds: ["env_1"] }}
+      />
+    );
+    expect(screen.getByRole("button", { name: "Create Automation" })).toBeDisabled();
+    fireEvent.submit(container.querySelector("form")!);
+    expect(onSubmit).not.toHaveBeenCalled();
+  });
+
+  it("requires use permission for a changed nonempty environment selection", () => {
+    environmentsValue = [
+      { ...fullstackEnvironment, capabilities: { canUse: false } },
+      { ...fullstackEnvironment, id: "env_2", name: "Data", capabilities: { canUse: false } },
+    ];
+    const onSubmit = vi.fn();
+    const { container } = render(
+      <AutomationForm
+        mode="edit"
+        submitting={false}
+        onSubmit={onSubmit}
+        initialValues={{ ...scheduleBase, environmentIds: ["env_1", "env_2"] }}
+      />
+    );
+    openRepositoryPicker();
+    fireEvent.click(screen.getByRole("button", { name: "Select One" }));
+    expect(screen.getByRole("button", { name: "Save Changes" })).toBeDisabled();
+    fireEvent.submit(container.querySelector("form")!);
+    expect(onSubmit).not.toHaveBeenCalled();
+  });
+
+  it("allows clearing all saved environments without use permission", () => {
+    environmentsValue = [{ ...fullstackEnvironment, capabilities: { canUse: false } }];
     const onSubmit = vi.fn();
     const { container } = render(
       <AutomationForm
@@ -643,10 +703,10 @@ describe("environment binding", () => {
       />
     );
     openRepositoryPicker();
-    expect(screen.getByRole("button", { name: /Fullstack/ })).toBeDisabled();
-    expect(screen.getByRole("button", { name: "Save Changes" })).toBeDisabled();
+    fireEvent.click(screen.getByRole("button", { name: "No repository" }));
+    expect(screen.getByRole("button", { name: "Save Changes" })).toBeEnabled();
     fireEvent.submit(container.querySelector("form")!);
-    expect(onSubmit).not.toHaveBeenCalled();
+    expect(onSubmit).toHaveBeenCalledWith(expect.objectContaining({ environmentIds: [] }));
   });
 
   it("submits the selected environment in single-select mode", () => {

@@ -27,6 +27,7 @@ import { useAutomation, useAutomationInvocations, useAutomations } from "@/hooks
 import { useAutomationActions } from "@/hooks/use-automation-actions";
 import { browserApiFetch } from "./browser-api-fetch";
 import { invalidateAutomationCache } from "./automation-cache";
+import type { AutomationFormValues } from "@/components/automations/automation-form";
 
 expect.extend(matchers);
 afterEach(cleanup);
@@ -49,8 +50,26 @@ vi.mock("@/hooks/use-environments", () => ({
 }));
 vi.mock("@/lib/browser-api-fetch", () => ({ browserApiFetch: vi.fn() }));
 vi.mock("@/components/automations/automation-form", () => ({
-  AutomationForm: ({ onSubmit }: { onSubmit: (values: { name: string }) => void }) => (
-    <button onClick={() => onSubmit({ name: "Renamed" })}>Submit automation</button>
+  AutomationForm: ({ onSubmit }: { onSubmit: (values: AutomationFormValues) => void }) => (
+    <button
+      onClick={() =>
+        onSubmit({
+          name: "Renamed",
+          instructions: "Review code",
+          harness: "opencode",
+          model: "openai/gpt-5.4",
+          reasoningEffort: null,
+          triggerType: "schedule",
+          scheduleCron: "0 9 * * *",
+          scheduleTz: "UTC",
+          repositories: [],
+          environmentIds: [],
+          providerSelections: {},
+        })
+      }
+    >
+      Submit automation
+    </button>
   ),
 }));
 

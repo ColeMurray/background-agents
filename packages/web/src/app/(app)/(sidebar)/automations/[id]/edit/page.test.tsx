@@ -19,6 +19,7 @@ const push = vi.fn();
 const cacheMocks = vi.hoisted(() => ({ mutate: vi.fn(), cache: new Map() }));
 let search = "";
 const formProps = vi.fn();
+let submittedEnvironmentIds = ["env-1"];
 
 const automation = {
   id: "auto-1",
@@ -40,7 +41,7 @@ const automation = {
   eventType: null,
   triggerConfig: null,
   repositories: [],
-  environmentIds: [],
+  environmentIds: new Array<string>(),
   providerSelections: {},
   capabilities: undefined as Automation["capabilities"],
   ownerTeamId: "team-1",
@@ -82,7 +83,7 @@ vi.mock("@/components/automations/automation-form", () => ({
               triggerType: "schedule",
               instructions: "Review",
               repositories: [{ repoOwner: "acme", repoName: "app" }],
-              environmentIds: ["env-1"],
+              environmentIds: submittedEnvironmentIds,
               providerSelections: {},
             })
           }
@@ -113,6 +114,8 @@ beforeEach(() => {
   cacheMocks.cache.clear();
   cacheMocks.cache.set("/api/automations/auto-1", { data: automation });
   automation.capabilities = undefined;
+  automation.environmentIds = [];
+  submittedEnvironmentIds = ["env-1"];
   replace.mockReset();
   push.mockReset();
   cacheMocks.mutate.mockReset();
@@ -123,6 +126,29 @@ beforeEach(() => {
 afterEach(cleanup);
 
 describe("EditAutomationPage authorization", () => {
+  it.each([
+    { saved: ["env-1"], submitted: ["env-1"], unchanged: true },
+    { saved: ["env-1", "env-2"], submitted: ["env-2", "env-1"], unchanged: true },
+    { saved: [], submitted: [], unchanged: true },
+    { saved: ["env-1"], submitted: ["env-1", "env-2"], unchanged: false },
+    { saved: ["env-1", "env-2"], submitted: ["env-1"], unchanged: false },
+    { saved: ["env-1"], submitted: [], unchanged: false },
+  ])(
+    "only sends a replacement for changed environment IDs ($saved -> $submitted)",
+    async ({ saved, submitted, unchanged }) => {
+      automation.environmentIds = saved;
+      submittedEnvironmentIds = submitted;
+      automation.capabilities = { canRead: true, canManage: true, canTrigger: false };
+      await renderPage();
+      fireEvent.click(screen.getByRole("button", { name: "Save changes" }));
+      await waitFor(() => expect(push).toHaveBeenCalledWith("/automations/auto-1"));
+      const body = JSON.parse(String(vi.mocked(browserApiFetch).mock.calls[0][1]?.body));
+      if (unchanged) expect(body).not.toHaveProperty("environmentIds");
+      else expect(body.environmentIds).toEqual(submitted);
+      expect(body.repositories).toEqual([{ repoOwner: "acme", repoName: "app" }]);
+    }
+  );
+
   it("preserves navigation scope on back and save while editing the original owner", async () => {
     search = "teamId=team%2Fone";
     automation.capabilities = { canRead: true, canManage: true, canTrigger: false };

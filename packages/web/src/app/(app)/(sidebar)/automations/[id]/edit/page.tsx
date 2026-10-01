@@ -15,6 +15,7 @@ import { browserApiFetch } from "@/lib/browser-api-fetch";
 import { useSWRConfig } from "swr";
 import { invalidateAutomationCache } from "@/lib/automation-cache";
 import { automationNavigation } from "@/lib/automation-navigation";
+import { sameEnvironmentIds } from "@/components/automations/automation-target-selection";
 
 export default function EditAutomationPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = use(params);
@@ -40,10 +41,13 @@ export default function EditAutomationPage({ params }: { params: Promise<{ id: s
     setError("");
 
     try {
+      const { environmentIds, ...otherValues } = values;
       const res = await browserApiFetch(`/api/automations/${id}`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(values),
+        body: JSON.stringify(
+          sameEnvironmentIds(environmentIds, automation.environmentIds) ? otherValues : values
+        ),
       });
 
       if (!res.ok) {
