@@ -4,7 +4,7 @@ description: What an OpenInspect deployment consists of, what the operator confi
 audience: operator
 owner: platform
 status: published
-lastReviewed: "2026-10-01"
+lastReviewed: "2026-09-28"
 relatedCode:
   - README.md
   - docs/GETTING_STARTED.md
@@ -81,12 +81,6 @@ The exact commands are in the self-hosting guide linked below.
 ## Keeping a deployment current
 
 On the Cloudflare/Vercel path, updating means pulling the latest code, rebuilding the shared package if it changed, and applying Terraform again; it only changes what differs. If the web app is on Vercel it is redeployed separately; on Cloudflare, Terraform rebuilds it. The self-hosting guide also documents an optional GitHub Actions workflow for applying deployments from CI. For the AWS control plane, follow the [AWS bring-up guide](https://github.com/ColeMurray/background-agents/blob/main/docs/AWS_BRING_UP.md).
-
-### Modal restore authentication
-
-All supported Modal snapshots (v62+) already include the credential helper, which shipped in v51 in May 2026. There is no v72 authentication cutoff. Restores preserve VCS host/username identity and session broker context without resolving or injecting a static system clone token, including for repository-less sessions. Credentials are fetched on demand after launch. Unknown or incompatible snapshots remain under recovery hold without launch. User-supplied token overrides and one-shot image-build credentials are unchanged.
-
-Update the deployment normally; no staged restore-auth migration or maintenance window is needed. Modal no longer binds the `github-app` secret, and Terraform no longer provisions it. Delete an existing Modal secret after the new deployment is active and old functions have drained. Rolling back to an older version that binds it requires recreating the secret. Keep GitHub App credentials configured in the control plane and enabled GitHub bot. See the [deployment guide](https://github.com/ColeMurray/background-agents/blob/main/docs/GETTING_STARTED.md#modal-restore-authentication).
 
 ## Where the runbooks are
 

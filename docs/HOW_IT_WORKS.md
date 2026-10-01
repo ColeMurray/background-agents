@@ -688,20 +688,12 @@ was built for internal use where all employees have access to company repositori
 | WebSocket Token    | Authenticate client connections            | Single session                   |
 | Managed LLM Token  | Short-lived OpenAI or xAI model access     | Pinned session provider account  |
 
-Fresh, prebuilt-image, and restored session sandboxes fetch git credentials on demand through the
-control plane rather than receiving a static system token in the environment or remote URL. The
-helper authorizes HTTPS requests for the configured SCM host, preserving existing setup/start hooks
-that clone other private repositories available to the installation. This protects continuously
-running sessions and Daytona persistent resumes from expired embedded credentials. All supported
-Modal snapshots (v62+) include the helper, which shipped in v51 in May 2026; v72 is not an
-authentication boundary. Modal base, prebuilt-image, and snapshot launches share VCS host/username
-metadata and session broker context through a common sandbox configuration, including for
-repository-less sessions, without local minting, clone-token injection, or generated GitHub CLI
-aliases. Unknown or incompatible snapshots remain under recovery hold without launch. User-supplied
-token overrides remain intact. One-shot image builds still receive `VCS_CLONE_TOKEN` because they
-lack a session broker context. Modal no longer binds a `github-app` secret; GitHub App credentials
-remain configured in the control plane and enabled GitHub bot. The App private key is never injected
-into session sandboxes.
+Session sandboxes, whether fresh, prebuilt-image, or restored from a snapshot, fetch git credentials
+on demand through the control plane instead of relying on a token embedded in the environment or
+remote URL. The helper authorizes HTTPS requests for the configured SCM host, preserving existing
+setup/start hooks that clone other private repositories available to the installation. This protects
+continuously running sessions and persistent resumes from expired embedded credentials. One-shot
+image builds still receive `VCS_CLONE_TOKEN` because they have no session to broker through.
 
 ### Secrets
 

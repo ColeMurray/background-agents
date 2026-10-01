@@ -207,12 +207,6 @@ sandboxes as a deployment-wide default.
 Every deployment needs **one GitHub App** for repository access. The same App can also provide
 GitHub OAuth sign-in, but its client pair is optional when Google is the only sign-in provider.
 
-The control plane requires the App ID, PKCS#8 private key, and installation ID to mint repository
-credentials, and the enabled GitHub bot also uses the App credentials. Modal does not need a
-`github-app` secret: supported snapshot restores use the control-plane credential broker. The
-private key is never injected into session sandboxes. See
-[Modal Restore Authentication](#modal-restore-authentication) for existing-secret cleanup.
-
 1. Go to [GitHub Apps](https://github.com/settings/apps)
 2. Click **"New GitHub App"**
 3. Fill in the basics:
@@ -1427,25 +1421,6 @@ npm run build -w @open-inspect/shared
 cd terraform/environments/production
 terraform apply
 ```
-
-### Modal Restore Authentication
-
-All supported Modal snapshots (v62+) already have the credential helper, which shipped in v51 in
-May 2026. There is no v72 authentication cutoff or legacy restore-token migration. Base,
-prebuilt-image, and snapshot launches share VCS host/username metadata and session broker context
-through a common sandbox configuration, including for repository-less sessions, without resolving or
-injecting a static system clone token. Create and restore accept the same optional top-level
-`clone_host` and `clone_username` strings. Git and the GitHub CLI request credentials on demand
-after launch; a token mint is not a prerequisite for either session launch request. Unknown or
-incompatible snapshots remain under recovery hold without launch. User-supplied token overrides
-remain supported, and image builds retain their one-shot clone credentials.
-
-Apply the deployment normally; no separate restore-auth rollout phases or maintenance window are
-needed. Modal no longer binds the `github-app` secret, and Terraform no longer provisions it. Delete
-an existing Modal secret only after the new Modal deployment is active and old functions have
-drained. A rollback to an older version that binds the secret requires recreating it. Keep the
-control plane's and enabled GitHub bot's App credentials configured; their GitHub access is
-unchanged.
 
 ### Configure Provider Accounts
 

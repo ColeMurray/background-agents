@@ -6,18 +6,12 @@ New features, integrations, and notable improvements to Open-Inspect — newest 
 
 ### Changed
 
-**Modal restores now use brokered credentials without static system tokens.** All supported
-snapshots (v62+) already include the credential helper, which shipped in v51 in May 2026; v72 is not
-an authentication boundary. Create and restore share VCS host/username launch metadata through a
-common sandbox configuration for base, prebuilt-image, and snapshot launches, including for
-repository-less sessions. Session launches retain broker context without local token minting or
-generated GitHub CLI aliases. Unknown or incompatible snapshots remain under recovery hold without
-launch. User-supplied token overrides and one-shot image-build credentials are unchanged. Modal's
-`github-app` binding, local minting code, direct JWT dependencies, and Terraform secret provisioning
-are removed. Delete an existing Modal secret after the new deployment is active and old functions
-drain; rolling back to a version that binds it requires recreating it. The control plane and enabled
-GitHub bot still need their App credentials. No staged restore-auth migration is required. See the
-[deployment guide](docs/GETTING_STARTED.md#modal-restore-authentication).
+**Modal snapshot restores use brokered git credentials.** Restored sandboxes now fetch git
+credentials from the control plane like fresh sessions, instead of receiving a token minted by
+Modal. The control plane now sends the VCS host and clone username with every Modal create, restore,
+and image-build request, so Modal no longer reads `SCM_PROVIDER` or needs GitHub App credentials.
+Terraform no longer provisions Modal's `github-app` secret; you can delete the existing secret from
+Modal after upgrading.
 
 ### Removed
 

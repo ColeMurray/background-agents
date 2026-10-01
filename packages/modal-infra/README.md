@@ -55,9 +55,8 @@ Provided by `packages/sandbox-runtime/src/sandbox_runtime/auth/`:
 
 - **internal.py**: HMAC authentication for control plane requests
 
-The control plane supplies one-shot source-control credentials for image builds. Interactive
-sessions, including snapshot restores, fetch credentials on demand through the broker. Modal does
-not mint installation tokens or bind a GitHub App private key.
+Modal holds no source-control credentials. Session sandboxes fetch git credentials on demand from the
+control plane; image builds receive a one-shot clone token in the build request.
 
 ### API (`src/`)
 
@@ -92,9 +91,6 @@ modal secret create internal-api \
 
 See `.env.example` for a full list of environment variables.
 
-Modal no longer requires a `github-app` secret. Keep the control plane's GitHub App credentials, and
-the GitHub bot's credentials when enabled, configured for GitHub access.
-
 ### Install local packages
 
 `sandbox-runtime` is a sibling package in this monorepo (not published to PyPI).
@@ -125,21 +121,6 @@ modal run src/
 > Build the Sandbox image first, then use `deploy.py` or `-m src` to ensure all function modules
 > are registered.
 
-### Restore authentication
-
-All supported Modal snapshots (v62+) use brokered git credentials. The credential helper shipped in
-v51 in May 2026, before the current snapshot compatibility floor; v72 is not an authentication
-boundary. Base, prebuilt-image, and snapshot launches share VCS host/username metadata and the
-session's control-plane broker context through `SandboxConfig`, without resolving or injecting a
-static system clone token. Unknown or incompatible snapshots remain under recovery hold without
-launch.
-
-Update the deployment normally; no staged restore-auth migration is required. Terraform no longer
-provisions Modal's `github-app` secret. An existing secret can be deleted after the new Modal
-deployment is active and old functions have drained. Rolling back to a version that binds the secret
-requires recreating it. The control plane and enabled GitHub bot still need their GitHub App
-credentials.
-
 ## HTTP API
 
 The control plane communicates with Modal via HTTP endpoints. All endpoints (except health)
@@ -160,19 +141,9 @@ Endpoint URLs follow the pattern: `https://{workspace}--open-inspect-{endpoint}.
 | `api-snapshot-build-sandbox` | POST | Yes | Snapshot the exact tagged build sandbox |
 | `api-terminate-build-sandbox` | POST | Yes | Terminate the exact tagged build sandbox (idempotent when already absent) |
 
-### Session launch metadata
-
-`api-create-sandbox` and `api-restore-sandbox` accept the same optional top-level `clone_host` and
-`clone_username` strings from the control plane. Both forward this launch metadata through the
-common `SandboxConfig`, separate from `SessionConfig`, for base, prebuilt-image, and snapshot
-launches. A provided host/username pair sets `VCS_HOST` and `VCS_CLONE_USERNAME`; otherwise provider
-defaults apply, including for repository-less sessions. Obsolete top-level `clone_token` input is
-ignored by both request models and is never forwarded to the session launcher.
-
-Fresh, prebuilt-image, and restored sessions use the credential helper. Session launches do not
-generate `VCS_CLONE_TOKEN`, GitHub CLI token aliases, or a fallback marker. User-supplied tokens in
-`user_env_vars` remain unchanged. Image builds still accept a one-shot `clone_token` and inject
-`VCS_CLONE_TOKEN` because build sandboxes lack a session broker context.
+`api-create-sandbox`, `api-restore-sandbox`, and `api-create-build-sandbox` require `clone_host` and
+`clone_username`. The control plane resolves them from its `SCM_PROVIDER`, and Modal sets them as
+`VCS_HOST` and `VCS_CLONE_USERNAME` in the sandbox.
 
 ### Example: Create Sandbox
 
@@ -185,7 +156,9 @@ curl -X POST "https://${WORKSPACE}--open-inspect-api-create-sandbox.modal.run" \
     "repo_owner": "your-org",
     "repo_name": "your-repo",
     "control_plane_url": "https://your-control-plane.workers.dev",
-    "sandbox_auth_token": "your-token"
+    "sandbox_auth_token": "your-token",
+    "clone_host": "github.com",
+    "clone_username": "x-access-token"
   }'
 ```
 

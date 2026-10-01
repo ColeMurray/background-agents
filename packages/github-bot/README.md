@@ -107,12 +107,11 @@ For the agent to interact with GitHub from the sandbox, these prerequisites must
 2. **Git credential helper** configured in the sandbox image/runtime so git operations can request
    short-lived SCM credentials from the control plane
 
-Fresh, prebuilt-image, and supported snapshot-restored sandboxes get GitHub CLI credentials through
-the helper rather than system spawn-time token injection. User-supplied GitHub CLI tokens remain
-supported. One-shot image-build sandboxes retain the narrower `VCS_CLONE_TOKEN` fallback because
-they lack a session credential-broker context. For git operations, the helper keeps the existing
-installation-wide access model and can authenticate auxiliary private repos on the configured SCM
-host.
+Session sandboxes, including snapshot restores, get GitHub CLI credentials through the helper rather
+than spawn-time token injection; a user-supplied `GH_TOKEN` or `GITHUB_TOKEN` takes precedence.
+One-shot image-build sandboxes use only the narrower `VCS_CLONE_TOKEN` because they cannot call the
+control-plane credential broker. For git operations, the helper keeps the existing installation-wide
+access model and can authenticate auxiliary private repos on the configured SCM host.
 
 ## Webhook Events
 
