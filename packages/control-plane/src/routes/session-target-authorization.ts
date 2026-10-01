@@ -49,7 +49,10 @@ export async function authorizeSessionTarget(
     if (!access.allowed) {
       return access.reason === "not_member"
         ? json({ error: "Environment not found" }, 404)
-        : json({ error: "Forbidden", reason_code: access.reason }, 403);
+        : json(
+            { error: "Forbidden", code: "environment_action_denied", reason_code: access.reason },
+            403
+          );
     }
   }
   return null;

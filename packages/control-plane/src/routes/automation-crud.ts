@@ -573,7 +573,8 @@ async function handleUpdateAutomation(
         ctx.db,
         finalEnvironmentIds,
         existing.owner_team_id,
-        admission.viewer
+        admission.viewer,
+        replacementEnvironmentIds !== null
       );
     } catch (e) {
       if (e instanceof TargetSelectionError) return e.response();

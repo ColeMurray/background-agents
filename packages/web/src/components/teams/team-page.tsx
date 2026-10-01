@@ -20,13 +20,7 @@ import { TeamEnvironments } from "./team-environments";
 import { TeamAutomations } from "./team-automations";
 import { TeamSecrets } from "./team-secrets";
 
-type TeamTab =
-  | "Overview"
-  | "Members"
-  | "Environments"
-  | "Automations"
-  | "Secrets"
-  | "Settings";
+type TeamTab = "Overview" | "Members" | "Environments" | "Automations" | "Secrets" | "Settings";
 
 export function TeamPage({ slug }: { slug: string }) {
   const { teams, loading, error } = useTeams();

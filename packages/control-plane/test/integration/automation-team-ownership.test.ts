@@ -474,6 +474,53 @@ describe("automation team ownership", () => {
     }
   );
 
+  it("revalidates unchanged environment grants and scope without requiring viewer use permission", async () => {
+    const store = new AutomationStore(env.DB);
+    await environment("env_unchanged", TEAM_A, 91);
+    await store.create(automation("repository-edit", TEAM_A));
+    await sqlDatabase(env.DB).batch(
+      store.bindEnvironmentInserts("repository-edit", ["env_unchanged"], 1)
+    );
+    await customRole(LEAD, ["automations.manage.own", "automations.read"]);
+
+    const missingGrant = await request("/automations/repository-edit", LEAD, "PUT", {
+      repositories: [],
+    });
+    expect(missingGrant.status).toBe(409);
+    await expect(missingGrant.json()).resolves.toMatchObject({
+      reason_code: "target_team_missing_grant",
+    });
+
+    await grant(TEAM_A, 91, "acme", "env_unchanged");
+    const updated = await request("/automations/repository-edit", LEAD, "PUT", {
+      repositories: [],
+    });
+    expect(updated.status).toBe(200);
+    expect(
+      (await store.getEnvironmentsForAutomation("repository-edit")).map((row) => row.environment_id)
+    ).toEqual(["env_unchanged"]);
+
+    const replacement = await request("/automations/repository-edit", LEAD, "PUT", {
+      environmentIds: ["env_unchanged"],
+    });
+    expect(replacement.status).toBe(403);
+    await expect(replacement.json()).resolves.toMatchObject({
+      code: "permission_required",
+      permission: "environments.use",
+    });
+
+    await env.DB.prepare("UPDATE environments SET owner_team_id = ? WHERE id = ?")
+      .bind(TEAM_B, "env_unchanged")
+      .run();
+    const mismatch = await request("/automations/repository-edit", LEAD, "PUT", {
+      repositories: [],
+    });
+    expect(mismatch.status).toBe(409);
+    await expect(mismatch.json()).resolves.toMatchObject({
+      reason_code: "environment_team_mismatch",
+    });
+  });
+
   it("allows a null repository ID on target updates with an installation grant", async () => {
     const store = new AutomationStore(env.DB);
     await store.create(automation("grant-update", TEAM_A));

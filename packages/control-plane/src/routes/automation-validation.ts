@@ -285,7 +285,7 @@ export function getEnvironmentSelection(body: {
 
 /**
  * Verify selected environments exist, belong to the automation's team, and
- * admit use. Return their repositories for the owning team's grant check.
+ * admit use for replacements. Stored selections still supply the owning team's grant check.
  *
  * @throws TargetSelectionError naming every missing environment.
  */
@@ -293,7 +293,8 @@ export async function resolveEnvironmentSelection(
   db: SqlDatabase,
   environmentIds: string[],
   ownerTeamId: string | null,
-  viewer: SessionViewer
+  viewer: SessionViewer,
+  requireUse = true
 ): Promise<GrantRepository[]> {
   if (environmentIds.length === 0) return [];
   const store = new EnvironmentStore(db);
@@ -312,13 +313,15 @@ export async function resolveEnvironmentSelection(
         "environment_team_mismatch"
       );
     }
-    const access = checkEnvironmentAccess(
-      viewer,
-      { ownerTeamId: environment.owner_team_id },
-      "use"
-    );
-    if (!access.allowed) {
-      throw new TargetSelectionError("Environment use denied", 403, access.reason);
+    if (requireUse) {
+      const access = checkEnvironmentAccess(
+        viewer,
+        { ownerTeamId: environment.owner_team_id },
+        "use"
+      );
+      if (!access.allowed) {
+        throw new TargetSelectionError("Environment use denied", 403, access.reason);
+      }
     }
     if (ownerTeamId !== null) {
       repositories.push(

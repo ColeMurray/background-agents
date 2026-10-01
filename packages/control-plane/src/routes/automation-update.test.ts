@@ -141,6 +141,20 @@ describe("automation read, update, and delete routes", () => {
   });
 
   describe("PUT /automations/:id (update)", () => {
+    it("allows repository-only edits without use permission for unchanged environments", async () => {
+      mockStore.getEnvironmentsForAutomation.mockResolvedValue([{ environment_id: "env_1" }]);
+
+      const response = await callRoute("PUT", "/automations/auto-1", {
+        body: { repositories: [{ repoOwner: "acme", repoName: "web-app" }] },
+        permissions: PERMISSION_IDS.filter((permission) => permission !== "environments.use"),
+      });
+
+      expect(response.status).toBe(200);
+      expect(mockEnvironmentStore.getById).toHaveBeenCalledWith("env_1");
+      expect(mockStore.bindReplaceRepositories).toHaveBeenCalled();
+      expect(mockStore.bindReplaceEnvironments).not.toHaveBeenCalled();
+    });
+
     it.each([
       ["repository", { repositories: [] }, "repositories.use"],
       ["environment", { environmentIds: [] }, "environments.use"],

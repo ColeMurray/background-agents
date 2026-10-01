@@ -57,6 +57,43 @@ describe("automation environment selection", () => {
     expect(environments.getRepositoriesForEnvironment).not.toHaveBeenCalled();
   });
 
+  it("resolves unchanged environment repositories without requiring viewer use access", async () => {
+    await expect(
+      resolveEnvironmentSelection(
+        database(),
+        ["env_a"],
+        "team-a",
+        { ...viewer, permissions: [] },
+        false
+      )
+    ).resolves.toEqual([{ repoOwner: "group/subgroup", repoName: "api", repoId: 11 }]);
+  });
+
+  it("still checks the team of an unchanged environment", async () => {
+    await expect(
+      resolveEnvironmentSelection(
+        database(),
+        ["env_a"],
+        "team-b",
+        { ...viewer, permissions: [] },
+        false
+      )
+    ).rejects.toMatchObject({ status: 409, reasonCode: "environment_team_mismatch" });
+  });
+
+  it("still rejects missing unchanged environments", async () => {
+    environments.getById.mockResolvedValue(null);
+    await expect(
+      resolveEnvironmentSelection(
+        database(),
+        ["env_a"],
+        "team-a",
+        { ...viewer, permissions: [] },
+        false
+      )
+    ).rejects.toMatchObject({ status: 400, message: "Environment not found: env_a" });
+  });
+
   it.each([null, "team-b"])("rejects a different owner scope (%s)", async (ownerTeamId) => {
     await expect(
       resolveEnvironmentSelection(database(), ["env_a"], ownerTeamId, viewer)

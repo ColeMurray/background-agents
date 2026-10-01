@@ -32,11 +32,11 @@ falling back to other secret scopes.
 include Environments and Automations tabs. Team resources are visible to their members and
 administrators; controls use server capabilities. Automation leads can manage team work and reassign
 departed executors. Executions require active membership and an unarchived team, and their sessions
-inherit the team's default visibility. Environment names are unique within each team, targets are
-checked against team repository grants. Existing resources retain their original owning team.
-Existing workspace-level resources retain their ownership and visibility. The require-team creation
-setting also applies to new automations and environments. These owned-resource checks apply in every
-session enforcement mode; source-control token narrowing remains a separate change.
+inherit the team's default visibility. Environment names are unique within each team, and targets
+are checked against team repository grants. Existing resources retain their ownership and
+visibility. The require-team creation setting also applies to new automations and environments.
+These owned-resource checks apply in every session enforcement mode; source-control token narrowing
+remains a separate change.
 
 ### Removed
 
