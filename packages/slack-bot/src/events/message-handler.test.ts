@@ -5,6 +5,7 @@ import { createClassifier, RepoClassifier } from "../classifier";
 import { loadTargetCatalog } from "../classifier/catalog";
 import { startSessionAndSendPrompt } from "../sessions/session-launcher";
 import { deliverPrompt } from "../sessions/prompt-delivery";
+import { checkPublicationAccess } from "../sessions/control-plane-client";
 import {
   closeThreadSession,
   lookupThreadSession,
@@ -29,6 +30,7 @@ vi.mock("../sessions/session-launcher", () => ({
   loadAuthoritativeSlackLaunchSettings: vi.fn(),
 }));
 vi.mock("../sessions/prompt-delivery", () => ({ deliverPrompt: vi.fn() }));
+vi.mock("../sessions/control-plane-client", () => ({ checkPublicationAccess: vi.fn() }));
 vi.mock("../sessions/thread-session-store", () => ({
   THREAD_CLOSED_MESSAGE: "this session is no longer available from this channel",
   lookupThreadSession: vi.fn(),
@@ -69,6 +71,7 @@ function makeEnv(response = Response.json({ teamId: "team-a", kind: "primary" })
 beforeEach(() => {
   vi.clearAllMocks();
   vi.mocked(lookupThreadSession).mockResolvedValue(null);
+  vi.mocked(checkPublicationAccess).mockResolvedValue("denied");
   const classifier = new RepoClassifier(makeEnv());
   classifier.classify = classify;
   vi.mocked(createClassifier).mockReturnValue(classifier);
@@ -231,4 +234,34 @@ describe("closed follow-ups", () => {
     expect(classify).not.toHaveBeenCalled();
     expect(startSessionAndSendPrompt).not.toHaveBeenCalled();
   });
+
+  it.each(["allowed", "unavailable"] as const)(
+    "does not globally close an actor-concealed 404 when channel access is %s",
+    async (access) => {
+      vi.mocked(lookupThreadSession).mockResolvedValue(mapping);
+      vi.mocked(deliverPrompt)
+        .mockResolvedValueOnce({ ok: false, reason: "stale" })
+        .mockResolvedValueOnce({ ok: true, data: { messageId: "member-prompt" } });
+      vi.mocked(checkPublicationAccess).mockResolvedValue(access);
+      const env = makeEnv();
+      await handleDirectMessage({ ...event, thread_ts: "1.000001" }, env, "trace", vi.fn());
+      expect(checkPublicationAccess).toHaveBeenCalledWith(env, "s1", "C1", "trace");
+      expect(closeThreadSession).not.toHaveBeenCalled();
+      expect(postMessage).toHaveBeenCalledWith(
+        "bot-token",
+        "C1",
+        "this session is no longer available from this channel",
+        { thread_ts: "1.000001" }
+      );
+      await handleDirectMessage(
+        { ...event, user: "U2", ts: "2.000002", thread_ts: "1.000001" },
+        env,
+        "trace",
+        vi.fn()
+      );
+      expect(deliverPrompt).toHaveBeenCalledTimes(2);
+      expect(classify).not.toHaveBeenCalled();
+      expect(startSessionAndSendPrompt).not.toHaveBeenCalled();
+    }
+  );
 });

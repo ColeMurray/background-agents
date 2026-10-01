@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Environment } from "@open-inspect/shared/types/environments";
 import type { ControlPlaneEnv } from "../internal-auth";
-import { createSession, sendPrompt } from "./control-plane-client";
+import { checkPublicationAccess, createSession, sendPrompt } from "./control-plane-client";
 import { OUTBOUND_REQUEST_TIMEOUT_MS } from "../request-options";
 
 function makeEnv(fetch: ControlPlaneEnv["CONTROL_PLANE"]["fetch"]): ControlPlaneEnv {
@@ -115,6 +115,42 @@ describe("control plane client timeouts", () => {
         authorId: "slack:U123",
       })
     ).resolves.toEqual({ ok: false, reason: "transient" });
+  });
+});
+
+describe("publication access", () => {
+  it.each([
+    [200, { artifacts: [] }, "allowed"],
+    [403, { error: "Forbidden" }, "denied"],
+    [404, { error: "Session not found" }, "denied"],
+    [503, {}, "unavailable"],
+    [200, { invalid: true }, "unavailable"],
+  ] as const)(
+    "classifies a protected status %s without inferring access from cached metadata",
+    async (status, body, result) => {
+      const fetch = vi.fn(async (_url: RequestInfo | URL, _init?: RequestInit) =>
+        okJson(body, status)
+      );
+      expect(await checkPublicationAccess(makeEnv(fetch), "s1", "C1", "trace")).toBe(result);
+      const [url, request] = fetch.mock.calls[0];
+      expect(new URL(String(url)).pathname).toBe("/sessions/s1/artifacts");
+      expect(new URL(String(url)).searchParams.get("channel")).toBe("slack:C1");
+      expect(new URL(String(url)).searchParams.get("purpose")).toBe("slack-post");
+      expect(new Headers(request?.headers).get("X-OpenInspect-Service-Signature")).toMatch(
+        /^sig1\./
+      );
+      expect(new Headers(request?.headers).get("X-OpenInspect-Actor")).toBeNull();
+    }
+  );
+
+  it("fails closed on malformed JSON and network failures", async () => {
+    for (const failure of [new Response("{"), new Error("offline")]) {
+      const fetch = vi.fn(async () => {
+        if (failure instanceof Error) throw failure;
+        return failure;
+      });
+      expect(await checkPublicationAccess(makeEnv(fetch), "s1", "C1")).toBe("unavailable");
+    }
   });
 });
 

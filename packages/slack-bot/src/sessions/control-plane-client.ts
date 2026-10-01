@@ -5,6 +5,7 @@ import {
   type SendPromptResponse,
 } from "@open-inspect/shared/types/session-api";
 import type { SessionAttachmentReference } from "@open-inspect/shared/types/session-attachments";
+import { listArtifactsResponseSchema } from "@open-inspect/shared/types/artifacts";
 import { signedControlPlaneFetch, type ControlPlaneEnv } from "../internal-auth";
 import { createLogger } from "../logger";
 import { buildSessionTargetRequestFields, targetId, type SlackSessionTarget } from "../targets";
@@ -31,6 +32,31 @@ export type SendPromptResult =
 
 export interface CreateSessionFailure {
   error: { status: number; code?: string; reasonCode?: string; repository?: string };
+}
+
+export async function checkPublicationAccess(
+  env: ControlPlaneEnv,
+  sessionId: string,
+  channel: string,
+  traceId?: string
+): Promise<"allowed" | "denied" | "unavailable"> {
+  const url = new URL(`https://internal/sessions/${encodeURIComponent(sessionId)}/artifacts`);
+  url.searchParams.set("channel", `slack:${channel}`);
+  url.searchParams.set("purpose", "slack-post");
+  try {
+    const response = await signedControlPlaneFetch(
+      env,
+      { method: "GET", url: url.toString(), traceId },
+      { signal: AbortSignal.timeout(OUTBOUND_REQUEST_TIMEOUT_MS) }
+    );
+    if (response.status === 403 || response.status === 404) return "denied";
+    if (!response.ok) return "unavailable";
+    return listArtifactsResponseSchema.safeParse(await response.json()).success
+      ? "allowed"
+      : "unavailable";
+  } catch {
+    return "unavailable";
+  }
 }
 
 export async function createSession(

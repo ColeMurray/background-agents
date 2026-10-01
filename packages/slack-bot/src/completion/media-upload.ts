@@ -10,6 +10,7 @@ import type { Env } from "../types";
 import { signedControlPlaneFetch } from "../internal-auth";
 import { createLogger } from "../logger";
 import { OUTBOUND_REQUEST_TIMEOUT_MS } from "../request-options";
+import { checkPublicationAccess } from "../sessions/control-plane-client";
 import { isThreadSessionClosed } from "../sessions/thread-session-store";
 
 export const SLACK_MEDIA_MAX_FILES_PER_COMPLETION = 5;
@@ -77,13 +78,38 @@ export async function deliverMediaArtifacts(
       continue;
     }
 
-    const stage = await stageArtifact(input, artifact, attemptedBytes);
+    let stage: StageResult;
+    try {
+      stage = await stageArtifact(input, artifact, attemptedBytes);
+    } catch (error) {
+      log.warn("slack.media.stage", {
+        trace_id: input.traceId,
+        session_id: input.sessionId,
+        message_id: input.messageId,
+        artifact_id: artifact.id,
+        outcome: "error",
+        error: error instanceof Error ? error : new Error(String(error)),
+      });
+      stage = { kind: "failed" };
+    }
     if (stage.kind === "omitted") {
       result.omitted += 1;
       continue;
     }
     if (stage.sizeBytes !== undefined) attemptedBytes += stage.sizeBytes;
     if (stage.kind === "failed") {
+      // Failed staging may conceal revoked access to staged files or already-extracted text.
+      const access = await checkPublicationAccess(
+        input.env,
+        input.sessionId,
+        input.channel,
+        input.traceId
+      );
+      if (access !== "allowed")
+        throw new ProtectedReadError(
+          `Control plane publication access ${access}`,
+          access === "denied" ? 403 : undefined
+        );
       result.failed += 1;
       continue;
     }

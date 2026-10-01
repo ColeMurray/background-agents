@@ -14,11 +14,18 @@ function mediaResponse(sizeBytes = 9, body: BodyInit = "png-bytes"): Response {
   });
 }
 
-function makeEnv(fetchMedia: () => Promise<Response> = async () => mediaResponse()): Env {
+function makeEnv(
+  fetchMedia: () => Promise<Response> = async () => mediaResponse(),
+  fetchAccess: () => Promise<Response> = async () => Response.json({ artifacts: [] })
+): Env {
   return {
     SLACK_KV: { get: vi.fn(async () => null) } as unknown as KVNamespace,
     SLACK_COMPLETION_QUEUE: {} as Queue,
-    CONTROL_PLANE: { fetch: vi.fn(fetchMedia) } as unknown as Fetcher,
+    CONTROL_PLANE: {
+      fetch: vi.fn(async (input: RequestInfo | URL) =>
+        new URL(String(input)).pathname.endsWith("/artifacts") ? fetchAccess() : fetchMedia()
+      ),
+    } as unknown as Fetcher,
     DEPLOYMENT_NAME: "test",
     CONTROL_PLANE_URL: "https://control-plane.test",
     WEB_APP_URL: "https://app.test",
@@ -53,13 +60,18 @@ function input(env: Env, artifacts: MediaArtifactInfo[]) {
 }
 
 describe("deliverMediaArtifacts", () => {
-  it.each([403, 404, 503])(
-    "stops the batch and never shares staged files after a media read status %s",
-    async (status) => {
-      const env = makeEnv();
+  it.each([403, 404, 503, "network", "malformed", "invalid-json"] as const)(
+    "stops the batch and never shares staged files after a failed publication proof: %s",
+    async (proof) => {
+      const env = makeEnv(undefined, async () => {
+        if (proof === "network") throw new Error("access check unavailable");
+        if (proof === "malformed") return Response.json({ invalid: true });
+        if (proof === "invalid-json") return new Response("{");
+        return new Response(null, { status: proof });
+      });
       vi.mocked(env.CONTROL_PLANE.fetch)
         .mockResolvedValueOnce(mediaResponse())
-        .mockResolvedValueOnce(new Response(null, { status }));
+        .mockResolvedValueOnce(new Response(null, { status: 404 }));
       const fetch = vi
         .spyOn(globalThis, "fetch")
         .mockResolvedValue(Response.json({ ok: true, files: [{ id: "F1" }] }))
@@ -72,11 +84,16 @@ describe("deliverMediaArtifacts", () => {
         )
         .mockResolvedValueOnce(new Response("OK"));
       const delivery = input(env, [IMAGE, { ...IMAGE, id: "denied" }, { ...IMAGE, id: "later" }]);
-      await expect(deliverMediaArtifacts(delivery)).rejects.toMatchObject({
-        kind: status === 503 ? "unavailable" : "denied",
+      const pending = deliverMediaArtifacts(delivery);
+      await expect(pending).rejects.toBeInstanceOf(ProtectedReadError);
+      await expect(pending).rejects.toMatchObject({
+        kind: proof === 403 || proof === 404 ? "denied" : "unavailable",
       });
       expect(delivery.onShareAttempt).not.toHaveBeenCalled();
-      expect(env.CONTROL_PLANE.fetch).toHaveBeenCalledTimes(2);
+      expect(env.CONTROL_PLANE.fetch).toHaveBeenCalledTimes(3);
+      expect(new URL(String(vi.mocked(env.CONTROL_PLANE.fetch).mock.calls[2]?.[0])).pathname).toBe(
+        "/sessions/session-1/artifacts"
+      );
       expect(
         fetch.mock.calls.some(([url]) => String(url).includes("files.completeUploadExternal"))
       ).toBe(false);
@@ -191,7 +208,12 @@ describe("deliverMediaArtifacts", () => {
       failed: SLACK_MEDIA_MAX_FILES_PER_COMPLETION,
       omitted: 2,
     });
-    expect(env.CONTROL_PLANE.fetch).toHaveBeenCalledTimes(SLACK_MEDIA_MAX_FILES_PER_COMPLETION);
+    expect(env.CONTROL_PLANE.fetch).toHaveBeenCalledTimes(2 * SLACK_MEDIA_MAX_FILES_PER_COMPLETION);
+    expect(
+      vi
+        .mocked(env.CONTROL_PLANE.fetch)
+        .mock.calls.filter(([url]) => new URL(String(url)).pathname.endsWith("/artifacts"))
+    ).toHaveLength(SLACK_MEDIA_MAX_FILES_PER_COMPLETION);
   });
 
   it("skips known oversized media without fetching it", async () => {
@@ -215,10 +237,13 @@ describe("deliverMediaArtifacts", () => {
         })
     );
 
-    await expect(deliverMediaArtifacts(input(env, [IMAGE]))).rejects.toMatchObject({
-      kind: "unavailable",
+    await expect(deliverMediaArtifacts(input(env, [IMAGE]))).resolves.toEqual({
+      uploaded: 0,
+      failed: 1,
+      omitted: 0,
     });
     expect(cancel).toHaveBeenCalledOnce();
+    expect(env.CONTROL_PLANE.fetch).toHaveBeenCalledTimes(2);
   });
 
   it("counts failed upload attempts toward the total byte limit", async () => {
@@ -237,7 +262,7 @@ describe("deliverMediaArtifacts", () => {
     );
 
     expect(result).toEqual({ uploaded: 0, failed: 2, omitted: 1 });
-    expect(env.CONTROL_PLANE.fetch).toHaveBeenCalledTimes(2);
+    expect(env.CONTROL_PLANE.fetch).toHaveBeenCalledTimes(4);
   });
 
   it("finalizes the successful subset when another artifact fails", async () => {
@@ -260,6 +285,7 @@ describe("deliverMediaArtifacts", () => {
     );
 
     expect(result).toEqual({ uploaded: 1, failed: 1, omitted: 0 });
+    expect(env.CONTROL_PLANE.fetch).toHaveBeenCalledTimes(3);
     const completeCall = slackFetch.mock.calls.find(([url]) =>
       String(url).includes("files.completeUploadExternal")
     );
@@ -295,7 +321,7 @@ describe("deliverMediaArtifacts", () => {
     "body-network",
     "truncated",
     "oversized-body",
-  ])("classifies protected media reads before sharing: %s", async (failure) => {
+  ])("counts a failed media read after a fresh allowed publication proof: %s", async (failure) => {
     const env = makeEnv(async () => {
       if (failure === "network") throw new Error("binding unavailable");
       if (failure === "malformed") return new Response("bytes");
@@ -315,14 +341,140 @@ describe("deliverMediaArtifacts", () => {
     });
     const delivery = input(env, [IMAGE]);
     const fetch = vi.spyOn(globalThis, "fetch");
-    const pending = deliverMediaArtifacts(delivery);
-
-    await expect(pending).rejects.toBeInstanceOf(ProtectedReadError);
-    await expect(pending).rejects.toMatchObject({
-      kind: failure === "403" || failure === "404" ? "denied" : "unavailable",
+    await expect(deliverMediaArtifacts(delivery)).resolves.toEqual({
+      uploaded: 0,
+      failed: 1,
+      omitted: 0,
     });
     expect(delivery.onShareAttempt).not.toHaveBeenCalled();
     expect(fetch).not.toHaveBeenCalled();
+    expect(env.CONTROL_PLANE.fetch).toHaveBeenCalledTimes(2);
+    const [proofUrl, proofInit] = vi.mocked(env.CONTROL_PLANE.fetch).mock.calls[1]!;
+    const url = new URL(String(proofUrl));
+    expect(url.pathname).toBe("/sessions/session-1/artifacts");
+    expect(url.searchParams.get("channel")).toBe("slack:C123");
+    expect(url.searchParams.get("purpose")).toBe("slack-post");
+    expect(proofInit?.method).toBe("GET");
+    const headers = new Headers(proofInit?.headers);
+    expect(headers.get("X-OpenInspect-Service")).toBe("slack-bot");
+    expect(headers.get("X-OpenInspect-Service-Signature")).toMatch(/^sig1\./);
+    expect(headers.get("X-OpenInspect-Actor")).toBeNull();
+    expect(headers.get("x-trace-id")).toBe("trace-1");
+  });
+
+  it("rechecks access before continuing the batch or sharing files after a missing artifact", async () => {
+    let proofAllowed = false;
+    const env = makeEnv(undefined, async () => {
+      proofAllowed = true;
+      return Response.json({ artifacts: [] });
+    });
+    vi.mocked(env.CONTROL_PLANE.fetch)
+      .mockResolvedValueOnce(mediaResponse())
+      .mockResolvedValueOnce(new Response(null, { status: 404 }));
+    const delivery = input(env, [IMAGE, { ...IMAGE, id: "missing" }, { ...IMAGE, id: "later" }]);
+    delivery.onShareAttempt.mockImplementation(() => expect(proofAllowed).toBe(true));
+    const slackFetch = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(
+        Response.json({ ok: true, upload_url: "https://files.slack.com/upload/one", file_id: "F1" })
+      )
+      .mockResolvedValueOnce(new Response("OK"))
+      .mockImplementationOnce(async () => {
+        expect(proofAllowed).toBe(true);
+        return Response.json({
+          ok: true,
+          upload_url: "https://files.slack.com/upload/later",
+          file_id: "F3",
+        });
+      })
+      .mockResolvedValueOnce(new Response("OK"))
+      .mockImplementationOnce(async () => {
+        expect(proofAllowed).toBe(true);
+        expect(delivery.onShareAttempt).toHaveBeenCalledOnce();
+        return Response.json({ ok: true, files: [{ id: "F1" }, { id: "F3" }] });
+      });
+
+    await expect(deliverMediaArtifacts(delivery)).resolves.toEqual({
+      uploaded: 2,
+      failed: 1,
+      omitted: 0,
+    });
+    expect(
+      vi.mocked(env.CONTROL_PLANE.fetch).mock.calls.map(([url]) => new URL(String(url)).pathname)
+    ).toEqual([
+      "/sessions/session-1/media/image-1",
+      "/sessions/session-1/media/missing",
+      "/sessions/session-1/artifacts",
+      "/sessions/session-1/media/later",
+    ]);
+    const completeCall = slackFetch.mock.calls.find(([url]) =>
+      String(url).includes("files.completeUploadExternal")
+    );
+    expect(JSON.parse(String(completeCall?.[1]?.body)).files).toEqual([
+      { id: "F1", title: "Revenue chart" },
+      { id: "F3", title: "Revenue chart" },
+    ]);
+  });
+
+  it.each([
+    ["ticket", 403],
+    ["ticket", 503],
+    ["upload", 403],
+    ["upload", 503],
+  ] as const)(
+    "never shares staged files when a %s failure is followed by publication proof status %s",
+    async (stage, status) => {
+      const env = makeEnv(undefined, async () => new Response(null, { status }));
+      const delivery = input(env, [IMAGE, { ...IMAGE, id: "failed" }, { ...IMAGE, id: "later" }]);
+      const fetch = vi
+        .spyOn(globalThis, "fetch")
+        .mockResolvedValueOnce(
+          Response.json({
+            ok: true,
+            upload_url: "https://files.slack.com/upload/one",
+            file_id: "F1",
+          })
+        )
+        .mockResolvedValueOnce(new Response("OK"))
+        .mockResolvedValueOnce(
+          stage === "ticket"
+            ? Response.json({ ok: false, error: "missing_scope" })
+            : Response.json({
+                ok: true,
+                upload_url: "https://files.slack.com/upload/failed",
+                file_id: "F2",
+              })
+        )
+        .mockRejectedValueOnce(new Error("temporary file upload failure"));
+
+      await expect(deliverMediaArtifacts(delivery)).rejects.toMatchObject({
+        kind: status === 403 ? "denied" : "unavailable",
+      });
+      expect(delivery.onShareAttempt).not.toHaveBeenCalled();
+      expect(env.CONTROL_PLANE.fetch).toHaveBeenCalledTimes(3);
+      expect(fetch).toHaveBeenCalledTimes(stage === "ticket" ? 3 : 4);
+      expect(
+        fetch.mock.calls.some(([url]) => String(url).includes("files.completeUploadExternal"))
+      ).toBe(false);
+    }
+  );
+
+  it("counts a temporary file upload failure after an allowed publication proof", async () => {
+    const env = makeEnv();
+    const delivery = input(env, [IMAGE]);
+    vi.spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(
+        Response.json({ ok: true, upload_url: "https://files.slack.com/upload/one", file_id: "F1" })
+      )
+      .mockRejectedValueOnce(new Error("temporary file upload failure"));
+
+    await expect(deliverMediaArtifacts(delivery)).resolves.toEqual({
+      uploaded: 0,
+      failed: 1,
+      omitted: 0,
+    });
+    expect(env.CONTROL_PLANE.fetch).toHaveBeenCalledTimes(2);
+    expect(delivery.onShareAttempt).not.toHaveBeenCalled();
   });
 
   it.each(["success", "network", "malformed"])(
@@ -349,6 +501,7 @@ describe("deliverMediaArtifacts", () => {
 
       const result = await deliverMediaArtifacts(delivery);
       expect(delivery.onShareAttempt).toHaveBeenCalledOnce();
+      expect(env.CONTROL_PLANE.fetch).toHaveBeenCalledOnce();
       expect(result).toEqual({
         uploaded: outcome === "success" ? 1 : 0,
         failed: outcome === "success" ? 0 : 1,

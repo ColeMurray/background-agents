@@ -26,7 +26,15 @@ function makeEnv(overrides: Partial<Env> = {}): Env {
   return {
     SLACK_KV: { get: vi.fn(async () => null) } as unknown as KVNamespace,
     SLACK_COMPLETION_QUEUE: {} as Queue,
-    CONTROL_PLANE: { fetch: vi.fn() } as unknown as Fetcher,
+    CONTROL_PLANE: {
+      fetch: vi.fn(async (input: RequestInfo | URL) =>
+        new URL(String(input)).pathname.endsWith("/artifacts")
+          ? Response.json({ artifacts: [] })
+          : new Response("png-bytes", {
+              headers: { "Content-Type": "image/png", "Content-Length": "9" },
+            })
+      ),
+    } as unknown as Fetcher,
     DEPLOYMENT_NAME: "test",
     CONTROL_PLANE_URL: "https://control-plane.test",
     WEB_APP_URL: "https://app.test",
@@ -322,6 +330,84 @@ describe("processSlackCompletion", () => {
         kind: status === 403 || status === 404 ? "ack" : "retry",
       });
       expect(fetch).not.toHaveBeenCalled();
+    }
+  );
+
+  it.each([
+    ["404", "allowed"],
+    ["malformed", "allowed"],
+    ["network", "allowed"],
+    ["tempfile", "allowed"],
+    ["404", "denied"],
+    ["malformed", "denied"],
+    ["network", "denied"],
+    ["tempfile", "denied"],
+    ["404", "unavailable"],
+    ["malformed", "unavailable"],
+    ["network", "unavailable"],
+    ["tempfile", "unavailable"],
+  ])(
+    "gates cached completion text after a %s media failure on a fresh %s publication proof",
+    async (failure, access) => {
+      vi.mocked(extractAgentResponse).mockResolvedValue(successfulAgentResponse());
+      const actual = await vi.importActual<typeof MediaUploadModule>("./media-upload");
+      vi.mocked(deliverMediaArtifacts).mockImplementation(actual.deliverMediaArtifacts);
+      let proofChecked = false;
+      const fetch = vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
+        const url = String(input);
+        if (url.includes("files.getUploadURLExternal"))
+          return Response.json({
+            ok: true,
+            upload_url: "https://files.slack.com/upload/one",
+            file_id: "F1",
+          });
+        if (url === "https://files.slack.com/upload/one")
+          throw new Error("temporary file upload failure");
+        expect(proofChecked).toBe(true);
+        return Response.json({ ok: true, channel: "C123", ts: "333.444" });
+      });
+      const env = makeEnv();
+      vi.mocked(env.CONTROL_PLANE.fetch).mockImplementation(async (input) => {
+        const url = new URL(String(input));
+        if (url.pathname.endsWith("/artifacts")) {
+          proofChecked = true;
+          if (access === "allowed") return Response.json({ artifacts: [] });
+          return new Response(null, { status: access === "denied" ? 404 : 503 });
+        }
+        if (failure === "network") throw new Error("temporary media fetch failure");
+        if (failure === "malformed") return new Response("bytes");
+        if (failure === "404") return new Response(null, { status: 404 });
+        return new Response("png-bytes", {
+          headers: { "Content-Type": "image/png", "Content-Length": "9" },
+        });
+      });
+
+      await expect(
+        processSlackCompletion(job({ error: "SECRET JOB ERROR" }), env)
+      ).resolves.toEqual({ kind: access === "unavailable" ? "retry" : "ack" });
+      expect(env.CONTROL_PLANE.fetch).toHaveBeenCalledTimes(2);
+      const [proofUrl, proofInit] = vi.mocked(env.CONTROL_PLANE.fetch).mock.calls[1]!;
+      expect(new URL(String(proofUrl)).pathname).toBe("/sessions/session-1/artifacts");
+      expect(new URL(String(proofUrl)).searchParams.get("channel")).toBe("slack:C123");
+      expect(new URL(String(proofUrl)).searchParams.get("purpose")).toBe("slack-post");
+      const headers = new Headers(proofInit?.headers);
+      expect(headers.get("X-OpenInspect-Service-Signature")).toMatch(/^sig1\./);
+      expect(headers.get("X-OpenInspect-Actor")).toBeNull();
+      const posts = fetch.mock.calls.filter(([url]) => String(url).includes("chat.postMessage"));
+      if (access === "allowed") {
+        expect(posts).toHaveLength(2);
+        expect(String(posts[0]?.[1]?.body)).toContain("Generated the chart.");
+        expect(String(posts[1]?.[1]?.body)).toContain("could not be attached here");
+        expect(fetch.mock.calls.some(([url]) => String(url).includes("reactions.remove"))).toBe(
+          true
+        );
+      } else {
+        expect(posts).toHaveLength(0);
+        expect(fetch).toHaveBeenCalledTimes(failure === "tempfile" ? 2 : 0);
+      }
+      expect(
+        fetch.mock.calls.some(([url]) => String(url).includes("files.completeUploadExternal"))
+      ).toBe(false);
     }
   );
 

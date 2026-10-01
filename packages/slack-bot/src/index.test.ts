@@ -197,6 +197,7 @@ function makeSessionEnv(
     session?: unknown;
     prompt?: unknown | unknown[];
     promptStatus?: number | number[];
+    publicationStatus?: number;
     modelPreferencesStatus?: number;
   } = {}
 ): ReturnType<typeof makeEnv> {
@@ -205,6 +206,9 @@ function makeSessionEnv(
   env.CONTROL_PLANE.fetch.mockImplementation(async (input: RequestInfo | URL) => {
     const url = typeof input === "string" ? input : input.toString();
     if (url.includes("/channel-bindings/slack/")) return Response.json({ teamId: null });
+    if (new URL(url).pathname.endsWith("/artifacts")) {
+      return Response.json({ artifacts: [] }, { status: responses.publicationStatus ?? 200 });
+    }
     if (url.includes("/repos")) {
       order.push("repos");
       return new Response(
@@ -1238,6 +1242,7 @@ describe("POST /events", () => {
     const env = makeSessionEnv(order, {
       prompt: [{ error: "Session not found" }, { messageId: "msg-2" }],
       promptStatus: [404, 200],
+      publicationStatus: 404,
     });
     await (env.SLACK_KV as unknown as { put: (k: string, v: string) => Promise<void> }).put(
       "thread:C123:111.222",
@@ -1296,6 +1301,7 @@ describe("POST /events", () => {
     const env = makeSessionEnv([], {
       prompt: [{ error: "Session not found" }, { messageId: "msg-2" }],
       promptStatus: [404, 200],
+      publicationStatus: 404,
     });
     await (env.SLACK_KV as unknown as { put: (k: string, v: string) => Promise<void> }).put(
       "thread:C123:111.222",

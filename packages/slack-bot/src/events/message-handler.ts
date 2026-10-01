@@ -37,6 +37,7 @@ import {
 } from "../messages/context";
 import { storePendingRequest } from "../pending-requests/pending-request-store";
 import { deliverPrompt } from "../sessions/prompt-delivery";
+import { checkPublicationAccess } from "../sessions/control-plane-client";
 import {
   loadAuthoritativeSlackLaunchSettings,
   startSessionAndSendPrompt,
@@ -265,13 +266,18 @@ async function handleIncomingMessage(params: IncomingMessageParams): Promise<voi
       });
       return;
     }
-    log.warn("thread_session.closed", {
-      trace_id: traceId,
-      session_id: existingSession.sessionId,
-      channel,
-      thread_ts: threadTs,
-    });
-    await closeThreadSession(env, channel, threadTs, existingSession.sessionId);
+    // Actor-concealed 404s must not disable a thread that remains publishable for the channel.
+    if (
+      (await checkPublicationAccess(env, existingSession.sessionId, channel, traceId)) === "denied"
+    ) {
+      log.warn("thread_session.closed", {
+        trace_id: traceId,
+        session_id: existingSession.sessionId,
+        channel,
+        thread_ts: threadTs,
+      });
+      await closeThreadSession(env, channel, threadTs, existingSession.sessionId);
+    }
     await postMessage(env.SLACK_BOT_TOKEN, channel, THREAD_CLOSED_MESSAGE, { thread_ts: threadTs });
     return;
   }

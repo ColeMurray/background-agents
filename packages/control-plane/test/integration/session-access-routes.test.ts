@@ -139,6 +139,32 @@ describe("HTTP session access by enforcement mode", () => {
     ).toBe(200);
   });
 
+  it("keeps a participant's concealed prompt separate from trusted channel publication access", async () => {
+    const { sessionName, team } = await session("team");
+    await env.DB.prepare(
+      "INSERT INTO team_channel_bindings (provider, external_id, team_id, kind, created_at) VALUES ('slack', 'C1', ?, 'source', ?)"
+    )
+      .bind(team.id, Date.now())
+      .run();
+    const denied = await fetchMode(`/sessions/${sessionName}/prompt`, "on", {
+      as: { userId: MEMBER, role: "member" },
+      method: "POST",
+      body: JSON.stringify({ content: "not admitted" }),
+    });
+    expect(denied.status).toBe(404);
+    expect(await denied.json()).toEqual({ error: "Session not found" });
+    const proofPath = `/sessions/${sessionName}/artifacts?channel=slack:C1&purpose=slack-post`;
+    const proof = await fetchMode(proofPath, "on", { service: "slack-bot" });
+    expect(proof.status).toBe(200);
+    expect(await proof.json()).toMatchObject({ artifacts: [] });
+    await env.DB.prepare("UPDATE sessions SET visibility = 'private' WHERE id = ?")
+      .bind(sessionName)
+      .run();
+    const unavailable = await fetchMode(proofPath, "on", { service: "slack-bot" });
+    expect(unavailable.status).toBe(404);
+    expect(await unavailable.json()).toEqual({ error: "Session not found" });
+  });
+
   it.each(["slack:", "unknown:C1", "linear:C1", "slack:C1&channel=slack:C2"])(
     "fails closed for invalid actorless channel scope %s",
     async (channel) => {
