@@ -316,6 +316,10 @@ export function useSessionTransport(
       setPhase("reconnecting");
       if (!canRetryNow()) return;
       reconnectTimeoutRef.current = setTimeout(() => {
+        reconnectTimeoutRef.current = null;
+        // The tab can go hidden or offline while the timer runs; the retry
+        // then stays owed to the resume listener.
+        if (!canRetryNow()) return;
         retryPendingRef.current = false;
         if (mountedRef.current) retry();
       }, delayMs);

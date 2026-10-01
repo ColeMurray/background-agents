@@ -744,6 +744,37 @@ describe("useSessionTransport", () => {
     rendered.unmount();
   });
 
+  it("holds an armed retry when the browser goes offline before it fires", async () => {
+    // 4002 drops the credential, so an attempt made offline would start with a
+    // token mint that fails and strands the page behind an auth error.
+    vi.useFakeTimers();
+    const rendered = renderTransport();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    act(() => {
+      FakeWebSocket.instances[0].open();
+      FakeWebSocket.instances[0].serverClose(4002, true);
+    });
+
+    setOnline(false);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(60_000);
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(FakeWebSocket.instances).toHaveLength(1);
+    expect(rendered.result.current.reconnecting).toBe(true);
+
+    setOnline(true);
+    await act(async () => {
+      window.dispatchEvent(new Event("online"));
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(FakeWebSocket.instances).toHaveLength(2);
+    rendered.unmount();
+  });
+
   it("reconnects with backoff after an unclean close and reuses the cached token", async () => {
     vi.useFakeTimers();
     const rendered = renderTransport();
