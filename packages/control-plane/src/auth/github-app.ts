@@ -455,7 +455,9 @@ async function getOrRefreshCachedInstallationToken(
   if (!forceRefresh) {
     const memoryCached = installationTokenMemoryCache.get(cacheKey);
     if (memoryCached && isTokenUsable(memoryCached)) {
-      cacheInstallationTokenInMemory(cacheKey, memoryCached);
+      // Re-insert to mark most recently used; expired entries are pruned on insert.
+      installationTokenMemoryCache.delete(cacheKey);
+      installationTokenMemoryCache.set(cacheKey, memoryCached);
       return memoryCached;
     }
     installationTokenMemoryCache.delete(cacheKey);

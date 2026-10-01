@@ -8,7 +8,7 @@ import {
 } from "../db/environments";
 import type { SqlDatabase } from "../db/sql-database";
 import { TeamRepositoryGrantStore } from "../db/team-repository-grants";
-import { loadInstallationRepositories } from "../repos/cache";
+import { readCachedInstallationRepositories } from "../repos/cache";
 import type * as ReposCacheModule from "../repos/cache";
 import { createTestEnv } from "../router.test-support";
 import type * as SourceControlModule from "../source-control";
@@ -42,7 +42,7 @@ vi.mock("./scope", async (importOriginal) => ({
 
 vi.mock("../repos/cache", async (importOriginal) => ({
   ...(await importOriginal<typeof ReposCacheModule>()),
-  loadInstallationRepositories: vi.fn(),
+  readCachedInstallationRepositories: vi.fn(),
 }));
 
 const db = {} as SqlDatabase;
@@ -103,7 +103,7 @@ beforeEach(() => {
   vi.spyOn(EnvironmentStore.prototype, "getById").mockResolvedValue(null);
   vi.spyOn(EnvironmentStore.prototype, "getRepositoriesForEnvironment").mockResolvedValue([]);
   loadCatalog.mockResolvedValue(CATALOG);
-  vi.mocked(loadInstallationRepositories).mockResolvedValue(CATALOG);
+  vi.mocked(readCachedInstallationRepositories).mockResolvedValue(CATALOG);
   scmProvider.generateCredentialHelperAuth.mockResolvedValue({
     username: "x-access-token",
     password: "clone-token",
@@ -217,7 +217,7 @@ describe("resolveImageBuildTokenScope", () => {
     );
   });
 
-  it("uses stored member ids instead of replacing them with catalog ids", async () => {
+  it("uses stored member ids instead of replacing them with cached catalog ids", async () => {
     mockEnvironment(
       null,
       ENV_REPOSITORIES.map((row, index) => ({ ...row, repo_id: index === 0 ? 7 : 3 }))
@@ -399,11 +399,11 @@ describe("ImageBuildPlanner clone auth", () => {
       token: "clone-token",
     });
     expect(TeamRepositoryGrantStore.prototype.listForTeam).not.toHaveBeenCalled();
-    expect(loadInstallationRepositories).not.toHaveBeenCalled();
+    expect(readCachedInstallationRepositories).not.toHaveBeenCalled();
   });
 
   it.each([false, true])(
-    "loads the installation catalog only for NULL environment member ids (%s)",
+    "loads the cached catalog only for NULL environment member ids (%s)",
     async (missingIds) => {
       mockEnvironment(
         null,
@@ -421,9 +421,9 @@ describe("ImageBuildPlanner clone auth", () => {
       });
       expect(plan.cloneAuth.type).toBe("credential_helper");
       if (missingIds) {
-        expect(loadInstallationRepositories).toHaveBeenCalledExactlyOnceWith(env, db);
+        expect(readCachedInstallationRepositories).toHaveBeenCalledExactlyOnceWith(env);
       } else {
-        expect(loadInstallationRepositories).not.toHaveBeenCalled();
+        expect(readCachedInstallationRepositories).not.toHaveBeenCalled();
       }
     }
   );
@@ -474,7 +474,7 @@ describe("ImageBuildPlanner clone auth", () => {
 
     expect(plan.cloneAuth).toEqual({ type: "unavailable" });
     expect(scmProvider.generateCredentialHelperAuth).not.toHaveBeenCalled();
-    expect(loadInstallationRepositories).not.toHaveBeenCalled();
+    expect(readCachedInstallationRepositories).not.toHaveBeenCalled();
   });
 
   it.each(["unavailable", "unresolved"])(
@@ -485,11 +485,11 @@ describe("ImageBuildPlanner clone auth", () => {
         ENV_REPOSITORIES.map((row) => ({ ...row, repo_id: null }))
       );
       if (scenario === "unavailable") {
-        vi.mocked(loadInstallationRepositories).mockRejectedValueOnce(
+        vi.mocked(readCachedInstallationRepositories).mockRejectedValueOnce(
           new Error("Cache unavailable")
         );
       } else {
-        vi.mocked(loadInstallationRepositories).mockResolvedValueOnce([]);
+        vi.mocked(readCachedInstallationRepositories).mockResolvedValueOnce([]);
       }
 
       const plan = await new ImageBuildPlanner(createTestEnv(), db).planBuild(
