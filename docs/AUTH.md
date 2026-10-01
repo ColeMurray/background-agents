@@ -75,10 +75,11 @@ ownership, change who holds the Owner role, or suspend and restore an Owner.
 
 ### Member
 
-Members can create and use sessions, collaborate in sessions visible to them (except private
-sessions where they are not collaborators), use shared repositories and environments, and create
-automations. They can manage and manually trigger automations they own but cannot modify another
-person's automation or administer shared configuration. They can view workspace analytics.
+Members can create and use sessions, collaborate in sessions visible to them (with current
+owning-team membership for team-owned sessions, and private-session participation), use shared
+repositories and environments, and create automations. They can manage and manually trigger
+automations they own but cannot modify another person's automation or administer shared
+configuration. They can view workspace analytics.
 
 ### Viewer
 
@@ -103,11 +104,16 @@ membership in those teams. The team directory supports search and favorites, and
 team metadata and members. Archived teams and their member lists are available only to their members
 and workspace Owners and Administrators.
 
-A team's session overview and **Activity** are available to its members and workspace Owners and
-Administrators. Activity contains domain events, not HTTP authorization decisions. Session events
-are filtered by the viewer's current session visibility, so membership in the team alone does not
-expose another user's private-session events. The workspace audit log remains behind
-`workspace.audit.read`; its team filter includes teams the reader does not belong to.
+The team directory and the session collaborator picker identify people by display name and avatar.
+Email addresses are included only for viewers with `workspace.members.read` (Owners and
+Administrators in the built-in roles); all other viewers receive `email: null`, including team leads
+and session owners. An unnamed user is labeled with a short user ID suffix instead of an email
+address or full ID. This privacy rule applies in every team enforcement mode.
+
+A team's session overview is available to its members and workspace Owners and Administrators, with
+session visibility checks applied on the server. Team pages do not expose an audit activity feed.
+Team operations are still recorded in the workspace audit log behind `workspace.audit.read`; its
+team filter includes teams the reader does not belong to.
 
 The sidebar context defaults to **All my teams**, which leaves session lists unfiltered by team
 while preserving server visibility checks. Users with at least one active team can choose Workspace
@@ -132,8 +138,21 @@ Each session stores a visibility independently of its team:
 Private visibility is enforced in every enforcement mode. An Owner's break-glass read is audited,
 does not cause the session to appear in their lists, and does not grant prompt or sandbox access. An
 Owner with the required lifecycle or delete permission can manage a private session they opened by
-ID; being an Administrator alone does not grant access. Actorless bot services cannot read private
-sessions; user-backed integration requests still depend on the acting user's access.
+ID, but must also be a current member of the owning team if the session is team-owned; being an
+Administrator alone does not grant access. Actorless bot services cannot read private sessions;
+user-backed integration requests still depend on the acting user's access.
+
+For a team-owned session, **every non-read action requires current membership in the owning team**
+in `off`, `shadow`, and `on` modes. Session owners, team leads, workspace Owners, and Administrators
+are not exempt. This includes prompting, sandbox access, lifecycle operations, deletion, visibility
+changes, and collaborator management, in addition to the relevant workspace permissions and
+action-specific rules. Visibility still controls read access: a readable workspace-visible session
+or an explicit private-session collaborator grant does not grant team membership or authorize
+non-read actions. The sole exception is a collaborator removing themselves, which requires only
+session read access.
+
+Owners and Administrators must join the owning team before acting on its sessions; team membership
+changes are audited.
 
 The **Mine** filter helps find sessions you created but does not define who may access them. A
 session's owner is its creating workspace user, not its team. Explicit collaborators are an access
@@ -143,24 +162,25 @@ credentials; being a participant alone is not a visibility grant. Conversely, ma
 collaborator does not turn them into a runtime participant. Removing a collaborator revokes their
 private-session access on subsequent authorization checks. Adding collaborators or removing someone
 else requires `manageCollaborators`: after the session read check, only the session owner or a
-workspace Owner may do so. A collaborator may remove themselves with session read access alone;
-collaboration or lifecycle permission is not required for self-removal.
+workspace Owner may do so, with current owning-team membership for team-owned sessions. A
+collaborator may remove themselves with session read access alone; team membership, collaboration,
+or lifecycle permission is not required for self-removal.
 
 The collaborator picker is available to session owners and workspace Owners after the session read
-check and lists every active workspace user, including users outside the owning team. Selecting a
-collaborator is an explicit private-session access grant, not a team membership or workspace role
-change.
+and collaborator-management checks and lists every active workspace user, including users outside
+the owning team. Selecting a collaborator is an explicit private-session access grant, not a team
+membership or workspace role change.
 
 Session actions have additional rules after visibility: prompting requires collaboration permission,
 sandbox use requires sandbox permission, and lifecycle operations require lifecycle permission. With
-team enforcement on, deletion requires delete permission **and** session ownership, a lead role in
-the owning team, or a workspace Owner/Administrator role. Team leads do not gain access to private
-sessions simply by leading the team. Changes to team ownership require the session owner, an
-owning-team lead, or a workspace Owner/Administrator, as well as lifecycle permission; changing
-private visibility is reserved for the session owner or a workspace Owner. Private-session action
-rules apply even while team enforcement is off or in shadow mode.
+team enforcement on, or for team-owned sessions in any mode, deletion requires delete permission
+**and** session ownership, a lead role in the owning team, or a workspace Owner/Administrator role.
+Team leads do not gain access to private sessions simply by leading the team. Changing private
+visibility is reserved for the session owner or a workspace Owner. These role and ownership rules
+never bypass the current-membership requirement for team-owned actions. Private-session action rules
+apply even while team enforcement is off or in shadow mode.
 
-### Creating and Moving Sessions
+### Creating Sessions
 
 Session creation checks the selected repository or environment as well as the creator's workspace
 permission. Supplying a team requires active membership in that team and a grant covering **every**
@@ -175,19 +195,22 @@ selection; team selection in bots is a later phase, so their teamless creation A
 refused when the setting is enabled. Automation runs are exempt until automation team ownership is
 supported. The setting does not migrate or hide existing `ownerTeamId: null` workspace rows.
 
-There is no repository-grant creation API or UI yet. Repository-backed team sessions and moves
-without existing grants are refused with `target_team_missing_grant`; creating a team does not grant
-it repository access. Repository-less team sessions do not need repository grants.
+There is no repository-grant creation API or UI yet. Repository-backed team sessions without
+existing grants are refused with `target_team_missing_grant`; creating a team does not grant it
+repository access. Repository-less team sessions do not need repository grants.
 
-Moving a session to a team checks active membership in the destination (or an explicit join to an
-open team) and repository grants for every repository in the session and included descendants. A
-missing grant blocks the move. Moving to no team sets `ownerTeamId` to `null` and turns `team`
-visibility into `workspace`. Moving or changing visibility can include descendants. Team grants
-constrain selection and moves, not the source-control App token already available to a running
-sandbox. A cascading move or visibility change refuses the entire request if any included descendant
-is inaccessible or denies the requested action; it does not silently skip that descendant. The web
-visibility control requires a changed selection and asks for confirmation when applying non-private
-visibility to child sessions, since private descendants will receive that visibility too.
+Sessions, automations, and environments cannot move between teams or between a team and the
+workspace. A session's owning team is fixed at creation: a team-owned session never becomes
+workspace-owned. Changing its visibility to `workspace` changes who may read it, not its ownership
+or the team membership required for non-read actions.
+
+Visibility changes can include descendants. A cascading visibility change refuses the entire request
+if any included descendant is inaccessible or denies the requested action, including the
+current-membership check for each team-owned descendant; it does not silently skip that descendant.
+The web visibility control requires a changed selection and asks for confirmation when applying
+non-private visibility to child sessions, since private descendants will receive that visibility
+too. Team grants constrain repository selection, not the source-control App token already available
+to a running sandbox.
 
 Session discovery and inbox filters compose on the server: `ownerFilter=started` matches the
 creator, `participating` also includes explicit collaborators and users with persisted read state,
@@ -201,15 +224,18 @@ direct automation and GitHub-bot sessions, but retains eligible agent descendant
 
 Operators set `TEAMS_ENFORCEMENT` to `off`, `shadow` (the default), or `on`:
 
-- `off`: legacy workspace-wide session authorization for non-private sessions; private sessions
-  remain restricted.
-- `shadow`: continue legacy access for non-private sessions while recording where team or ownership
-  rules would deny access; private restrictions still take effect.
+- `off`: legacy read visibility for non-private sessions and legacy actions for non-private
+  workspace-owned sessions. Private access and the full action resolver for team-owned sessions
+  remain enforced.
+- `shadow`: continue those legacy reads and workspace-owned actions while auditing would-be denials.
+  Private access and the full action resolver for team-owned sessions remain enforced.
 - `on`: enforce visibility, team membership, and action/ownership rules for sessions.
 
-The visibility, scope, and collaborator mutation routes always enforce the session access resolver,
-including in `off` and `shadow` modes. Those modes do not relax these mutation checks or the checks
-on descendants included in a cascading operation.
+No mode relaxes current owning-team membership for non-read actions, including for workspace Owners
+and Administrators. The visibility and collaborator mutation routes always enforce the session
+access resolver, including in `off` and `shadow` modes. Those modes do not relax these mutation
+checks or the checks on descendants included in a cascading operation. Collaborator self-removal
+remains read-only-authorized in every mode.
 
 The session boundary covers four paths, not just the session page:
 
@@ -295,7 +321,7 @@ Owner can manage that session separately.
 
 Open-Inspect uses a shared source-control App installation for clone, fetch, and push operations.
 The App should be installed only on repositories intended for the workspace. Team repository grants
-check which repositories may be chosen for a team session or move; they do **not** narrow the shared
+check which repositories may be chosen for a team session; they do **not** narrow the shared
 installation token delivered to a sandbox. Token narrowing is a future phase, not a protection
 provided by team visibility today.
 

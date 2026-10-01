@@ -74,12 +74,11 @@ export async function updateSessionScope(
     const failure = await response.json().catch(() => null);
     const code = typeof failure?.code === "string" ? failure.code : undefined;
     const reason = typeof failure?.reason_code === "string" ? failure.reason_code : undefined;
-    const repository = typeof failure?.repository === "string" ? failure.repository : undefined;
     const message =
       typeof failure?.error === "string"
         ? failure.error
         : `Session update failed (${response.status})`;
-    const details = [code, reason, repository].filter(Boolean);
+    const details = [code, reason].filter(Boolean);
     throw new SessionScopeError(
       response.status,
       code,

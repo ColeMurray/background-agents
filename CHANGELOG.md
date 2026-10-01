@@ -2,6 +2,17 @@
 
 New features, integrations, and notable improvements to Open-Inspect — newest first.
 
+## Unreleased
+
+### Changed
+
+Team-owned session actions now require current owning-team membership in every `TEAMS_ENFORCEMENT`
+mode, including for Owners and Administrators. Visibility still determines read access; collaborator
+self-removal requires only read access. Sessions, automations, and environments cannot move between
+teams or to/from the workspace; a team-owned session never becomes workspace-owned. Visibility and
+collaborator controls remain available to authorized users. Historical `session.moved` audit events
+remain readable.
+
 ## October 1, 2026
 
 ### Changed
@@ -24,7 +35,18 @@ Token cache keys cover the sorted, de-duplicated repository set, the process cac
 overlapping refreshes share one mint per scope. Grant removal changes the next credential scope but
 does not revoke already-issued tokens; sandbox helpers cache them until shortly before expiry.
 
+### Removed
+
+Removed the team Activity tab and `GET /teams/:id/activity` endpoint. Team operations continue to be
+recorded in the workspace audit log, available to viewers with `workspace.audit.read` and filterable
+by team. No audit history is deleted.
+
 ### Fixed
+
+The team directory and collaborator picker now show email addresses only to viewers with
+`workspace.members.read` (Owners and Administrators in the built-in roles). Other viewers receive
+names and avatars with no email address, and unnamed users have a neutral label with a short ID
+suffix. This restriction applies in every team enforcement mode.
 
 Session navigation now defaults to **All my teams**, with the team selector available even for a
 single membership. Composer team and visibility choices stay local, including automatic team

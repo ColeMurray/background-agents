@@ -1,9 +1,6 @@
 import { auditEventSchema, type AuditEvent } from "@open-inspect/shared/types/audit-events";
 import type { AuditEventCursor } from "./audit-event-cursor";
 import type { SqlDatabase } from "./sql-database";
-import type { SessionViewer } from "@open-inspect/shared";
-import type { TeamsEnforcementMode } from "../authorization/teams-enforcement";
-import { visibleSessionsPredicate } from "./session-visibility";
 
 export interface AuditEventRow {
   id: string;
@@ -39,47 +36,16 @@ export function toAuditEvent(row: AuditEventRow): AuditEvent {
   });
 }
 
-/** Read-only access for workspace audit and visibility-scoped team activity. */
+/** Read-only access for the permission-gated workspace audit log. */
 export class AuditEventStore {
   constructor(private readonly db: SqlDatabase) {}
 
-  async list(options: {
-    limit: number;
-    cursor: AuditEventCursor | null;
-    teamId?: string;
-    action?: string;
-    visibilityScope?: { viewer: SessionViewer; mode: TeamsEnforcementMode };
-  }) {
+  async list(options: { limit: number; cursor: AuditEventCursor | null; teamId?: string }) {
     const conditions: string[] = [];
     const params: unknown[] = [];
     if (options.teamId !== undefined) {
       conditions.push("audit.team_id = ?");
       params.push(options.teamId);
-    }
-    if (options.action !== undefined) {
-      conditions.push("audit.action = ?");
-      params.push(options.action);
-    }
-    if (options.visibilityScope) {
-      const viewer = options.visibilityScope.viewer;
-      const visible = visibleSessionsPredicate("session", viewer, {
-        mode: options.visibilityScope.mode,
-      });
-      // Scoped activity contains domain events; HTTP decisions stay in workspace audit.
-      conditions.push(
-        "audit.resource_type != 'http_route'",
-        `(audit.resource_type != 'session' OR EXISTS (
-            SELECT 1 FROM sessions session
-            WHERE session.id = audit.resource_id AND ? = 1 AND ${visible.sql}
-          ))`
-      );
-      params.push(
-        viewer.kind === "service" ||
-          (!viewer.suspended && viewer.permissions.includes("sessions.read"))
-          ? 1
-          : 0,
-        ...visible.params
-      );
     }
     if (options.cursor) {
       conditions.push("(audit.occurred_at, audit.id) < (?, ?)");

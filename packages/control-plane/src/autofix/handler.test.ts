@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { GitHubAutofixEnvelope } from "@open-inspect/shared";
 import { SessionIndexStore, type SessionEntry } from "../db/session-index";
-import { SessionScopeStore } from "../db/session-scope-store";
+import { SessionRepositoryStore } from "../db/session-repositories";
 import type { SqlDatabase } from "../db/sql-database";
 import { TeamRepositoryGrantStore } from "../db/team-repository-grants";
 import type { JobDeps } from "../jobs";
@@ -38,7 +38,7 @@ function indexSession(ownerTeamId: string | null): SessionEntry {
 describe("autofix credential scope composition", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    vi.spyOn(SessionScopeStore.prototype, "listRepositoryIds").mockResolvedValue([
+    vi.spyOn(SessionRepositoryStore.prototype, "listRepositoryIds").mockResolvedValue([
       { repoOwner: "acme", repoName: "widgets", repoId: 99 },
       { repoOwner: "acme", repoName: "web", repoId: 123 },
     ]);
@@ -68,7 +68,7 @@ describe("autofix credential scope composition", () => {
       .mockResolvedValueOnce(indexSession("team-b"));
     const firstScope: CredentialScope = { kind: "repositories", repositoryIds: [99, 123] };
     const nextScope: CredentialScope = { kind: "repositories", repositoryIds: [456] };
-    vi.mocked(SessionScopeStore.prototype.listRepositoryIds)
+    vi.mocked(SessionRepositoryStore.prototype.listRepositoryIds)
       .mockResolvedValueOnce([
         { repoOwner: "acme", repoName: "widgets", repoId: 99 },
         { repoOwner: "acme", repoName: "web", repoId: 123 },
@@ -81,11 +81,11 @@ describe("autofix credential scope composition", () => {
 
     expect(getSession).toHaveBeenNthCalledWith(1, "owning-public-session");
     expect(getSession).toHaveBeenNthCalledWith(2, "owning-public-session");
-    expect(SessionScopeStore.prototype.listRepositoryIds).toHaveBeenNthCalledWith(
+    expect(SessionRepositoryStore.prototype.listRepositoryIds).toHaveBeenNthCalledWith(
       1,
       "owning-public-session"
     );
-    expect(SessionScopeStore.prototype.listRepositoryIds).toHaveBeenNthCalledWith(
+    expect(SessionRepositoryStore.prototype.listRepositoryIds).toHaveBeenNthCalledWith(
       2,
       "owning-public-session"
     );
@@ -113,7 +113,7 @@ describe("autofix credential scope composition", () => {
 
   it("loads the cached catalog only when the owner session has a NULL repository id", async () => {
     vi.spyOn(SessionIndexStore.prototype, "get").mockResolvedValue(indexSession("team-a"));
-    vi.mocked(SessionScopeStore.prototype.listRepositoryIds).mockResolvedValue([
+    vi.mocked(SessionRepositoryStore.prototype.listRepositoryIds).mockResolvedValue([
       { repoOwner: "acme", repoName: "widgets", repoId: null },
     ]);
     vi.mocked(readCachedInstallationRepositories).mockResolvedValue([
@@ -165,7 +165,7 @@ describe("autofix credential scope composition", () => {
     },
   ])("refuses an owner session with $label", async ({ repositories }) => {
     vi.spyOn(SessionIndexStore.prototype, "get").mockResolvedValue(indexSession(null));
-    vi.mocked(SessionScopeStore.prototype.listRepositoryIds).mockResolvedValue(repositories);
+    vi.mocked(SessionRepositoryStore.prototype.listRepositoryIds).mockResolvedValue(repositories);
     const h = await createHarness();
 
     await expect(h.resolveCredentialScope("owning-public-session")).rejects.toMatchObject({
@@ -175,7 +175,7 @@ describe("autofix credential scope composition", () => {
 
   it("propagates cached-catalog failures rather than broadening the scope", async () => {
     vi.spyOn(SessionIndexStore.prototype, "get").mockResolvedValue(indexSession(null));
-    vi.mocked(SessionScopeStore.prototype.listRepositoryIds).mockResolvedValue([
+    vi.mocked(SessionRepositoryStore.prototype.listRepositoryIds).mockResolvedValue([
       { repoOwner: "acme", repoName: "widgets", repoId: null },
     ]);
     const error = new SourceControlProviderError("Cached catalog unavailable", "permanent");
@@ -199,7 +199,7 @@ describe("autofix credential scope composition", () => {
       errorType: "permanent",
       message: "Cannot resolve credential scope: session not found",
     });
-    expect(SessionScopeStore.prototype.listRepositoryIds).not.toHaveBeenCalled();
+    expect(SessionRepositoryStore.prototype.listRepositoryIds).not.toHaveBeenCalled();
     expect(TeamRepositoryGrantStore.prototype.covers).not.toHaveBeenCalled();
     expect(readCachedInstallationRepositories).not.toHaveBeenCalled();
   });

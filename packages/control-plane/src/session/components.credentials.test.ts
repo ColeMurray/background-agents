@@ -1,7 +1,7 @@
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { SessionIndexStore, type SessionEntry } from "../db/session-index";
-import { SessionScopeStore } from "../db/session-scope-store";
+import { SessionRepositoryStore } from "../db/session-repositories";
 import { TeamRepositoryGrantStore } from "../db/team-repository-grants";
 import { createNodeSqlDatabase } from "../node/sqlite-database";
 import { createNodeSqlStorage } from "../node/sqlite-storage";
@@ -23,7 +23,7 @@ describe("session credential scope composition", () => {
 
   beforeEach(() => {
     sqlite = new DatabaseSync(":memory:");
-    vi.spyOn(SessionScopeStore.prototype, "listRepositoryIds").mockResolvedValue([
+    vi.spyOn(SessionRepositoryStore.prototype, "listRepositoryIds").mockResolvedValue([
       { repoOwner: "acme", repoName: "web", repoId: 123 },
       { repoOwner: "acme", repoName: "api", repoId: 456 },
     ]);
@@ -102,7 +102,9 @@ describe("session credential scope composition", () => {
       expect((await h.getCredentials()).status).toBe(200);
 
       expect(getSession).toHaveBeenCalledWith("public-session");
-      expect(SessionScopeStore.prototype.listRepositoryIds).toHaveBeenCalledWith("public-session");
+      expect(SessionRepositoryStore.prototype.listRepositoryIds).toHaveBeenCalledWith(
+        "public-session"
+      );
       expect(TeamRepositoryGrantStore.prototype.covers).toHaveBeenCalledExactlyOnceWith(
         "team-a",
         [123, 456]
@@ -119,7 +121,7 @@ describe("session credential scope composition", () => {
       .mockResolvedValueOnce(indexSession("team-b"));
     const firstScope: CredentialScope = { kind: "repositories", repositoryIds: [123, 456] };
     const nextScope: CredentialScope = { kind: "repositories", repositoryIds: [789] };
-    vi.mocked(SessionScopeStore.prototype.listRepositoryIds)
+    vi.mocked(SessionRepositoryStore.prototype.listRepositoryIds)
       .mockResolvedValueOnce([
         { repoOwner: "acme", repoName: "web", repoId: 123 },
         { repoOwner: "acme", repoName: "api", repoId: 456 },
@@ -131,7 +133,7 @@ describe("session credential scope composition", () => {
     expect((await h.getCredentials()).status).toBe(200);
 
     expect(getSession).toHaveBeenCalledTimes(2);
-    expect(SessionScopeStore.prototype.listRepositoryIds).toHaveBeenCalledTimes(2);
+    expect(SessionRepositoryStore.prototype.listRepositoryIds).toHaveBeenCalledTimes(2);
     expect(TeamRepositoryGrantStore.prototype.covers).toHaveBeenNthCalledWith(
       1,
       "team-a",
@@ -158,7 +160,7 @@ describe("session credential scope composition", () => {
 
   it("lazily reads the cached installation catalog for a NULL member id", async () => {
     vi.spyOn(SessionIndexStore.prototype, "get").mockResolvedValue(indexSession(null));
-    vi.mocked(SessionScopeStore.prototype.listRepositoryIds).mockResolvedValue([
+    vi.mocked(SessionRepositoryStore.prototype.listRepositoryIds).mockResolvedValue([
       { repoOwner: "acme", repoName: "web", repoId: null },
       { repoOwner: "acme", repoName: "api", repoId: 456 },
     ]);
@@ -220,7 +222,7 @@ describe("session credential scope composition", () => {
     },
   ])("refuses credential minting with $label", async ({ repositories }) => {
     vi.spyOn(SessionIndexStore.prototype, "get").mockResolvedValue(indexSession(null));
-    vi.mocked(SessionScopeStore.prototype.listRepositoryIds).mockResolvedValue(repositories);
+    vi.mocked(SessionRepositoryStore.prototype.listRepositoryIds).mockResolvedValue(repositories);
     const h = createHarness();
 
     expect((await h.getCredentials()).status).toBe(500);
@@ -248,7 +250,7 @@ describe("session credential scope composition", () => {
     expect(await response.json()).toEqual({
       error: "Cannot resolve credential scope: session not found",
     });
-    expect(SessionScopeStore.prototype.listRepositoryIds).not.toHaveBeenCalled();
+    expect(SessionRepositoryStore.prototype.listRepositoryIds).not.toHaveBeenCalled();
     expect(TeamRepositoryGrantStore.prototype.covers).not.toHaveBeenCalled();
     expect(readCachedInstallationRepositories).not.toHaveBeenCalled();
     expect(h.generateCredentialHelperAuth).not.toHaveBeenCalled();

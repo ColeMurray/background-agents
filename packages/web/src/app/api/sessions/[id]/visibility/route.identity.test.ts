@@ -2,8 +2,7 @@ import { sha256Hex, verifyServiceSignature } from "@open-inspect/shared/service-
 import { cookies, headers } from "next/headers";
 import { NextRequest } from "next/server";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { PUT as moveSession } from "./route";
-import { PUT as changeVisibility } from "../visibility/route";
+import { PUT as changeVisibility } from "./route";
 import {
   PUT as addCollaborator,
   DELETE as removeCollaborator,
@@ -36,12 +35,6 @@ afterEach(() => {
 
 describe("session scope BFF service identity", () => {
   it.each([
-    {
-      handler: moveSession,
-      path: "/sessions/session%2Fid/scope",
-      method: "PUT",
-      body: JSON.stringify({ teamId: "target", includeChildren: true, joinTeam: false }),
-    },
     {
       handler: changeVisibility,
       path: "/sessions/session%2Fid/visibility",

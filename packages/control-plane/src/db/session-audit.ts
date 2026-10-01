@@ -2,7 +2,6 @@ import type { SqlDatabase, SqlStatement } from "./sql-database";
 
 export type SessionAuditAction =
   | "session.visibility_changed"
-  | "session.moved"
   | "session.collaborator_added"
   | "session.collaborator_removed"
   | "session.created_private";

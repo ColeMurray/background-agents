@@ -1,6 +1,6 @@
 import type { InstallationRepository } from "@open-inspect/shared/types/repository-catalog";
 import { SessionIndexStore } from "../db/session-index";
-import { SessionScopeStore } from "../db/session-scope-store";
+import { SessionRepositoryStore } from "../db/session-repositories";
 import type { SqlDatabase } from "../db/sql-database";
 import type { CredentialScope } from "./credential-scope";
 import { SourceControlProviderError } from "./errors";
@@ -19,7 +19,12 @@ export async function resolveSessionCredentialScope(
       "permanent"
     );
   }
-  const repositories = await new SessionScopeStore(db).listRepositoryIds(sessionId);
+  const members = await new SessionRepositoryStore(db).listRepositoryIds(sessionId);
+  const repositories = members.length
+    ? members
+    : session.repoOwner && session.repoName
+      ? [{ repoOwner: session.repoOwner, repoName: session.repoName, repoId: null }]
+      : [];
   return await resolveRepositoryCredentialScope(
     db,
     repositories,

@@ -36,6 +36,8 @@ type DatabaseOptions = {
   /** Custom-role grants for user-1; omitted means the owner role with every permission. */
   permissions?: PermissionId[];
   visibility?: "private";
+  ownerTeamId?: string;
+  teamMember?: boolean;
   userId?: string | null;
   /** Answers every statement admission and the proxy's own reads do not own. */
   delegate?: SqlDatabase;
@@ -53,8 +55,9 @@ function createDatabase(options: DatabaseOptions = {}): SqlDatabase {
     if (sql.includes("FROM role_permissions")) {
       return (options.permissions ?? []).map((permission_id) => ({ permission_id }));
     }
-    if (sql.includes("FROM team_memberships") || sql.includes("FROM session_collaborators"))
-      return [];
+    if (sql.includes("FROM team_memberships"))
+      return options.teamMember ? [{ team_id: options.ownerTeamId, role: "member" }] : [];
+    if (sql.includes("FROM session_collaborators")) return [];
     return null;
   };
   const row = (sql: string): unknown => {
@@ -63,7 +66,11 @@ function createDatabase(options: DatabaseOptions = {}): SqlDatabase {
         options.visibility === "private"
           ? { ...TEST_SESSION_ROW, visibility: "private", user_id: "another-user" }
           : TEST_SESSION_ROW;
-      return options.userId === undefined ? session : { ...session, user_id: options.userId };
+      return {
+        ...session,
+        ...(options.ownerTeamId ? { owner_team_id: options.ownerTeamId } : {}),
+        ...(options.userId === undefined ? {} : { user_id: options.userId }),
+      };
     }
     if (sql.includes("FROM users u")) return { user_id: "user-1", suspended_at: null, ...role };
     if (sql.includes("FROM session_model_provider_auth")) {
@@ -273,6 +280,16 @@ describe("session runtime proxy routes", () => {
       mode,
       visibility: "private" as const,
     })),
+    ...(["off", "shadow", "on"] as const).flatMap((mode) =>
+      [false, true].map((teamMember) => ({
+        permissions: undefined,
+        exposed: teamMember,
+        mode,
+        visibility: "workspace" as const,
+        ownerTeamId: "team_one",
+        teamMember,
+      }))
+    ),
   ])(
     "scopes $mode $visibility snapshot sandbox locations to sandbox access ($exposed)",
     async (input) => {
@@ -305,6 +322,8 @@ describe("session runtime proxy routes", () => {
         ...createEnv(fetch, {
           permissions: input.permissions,
           visibility: input.visibility === "private" ? "private" : undefined,
+          ownerTeamId: "ownerTeamId" in input ? input.ownerTeamId : undefined,
+          teamMember: "teamMember" in input ? input.teamMember : undefined,
         }),
         TEAMS_ENFORCEMENT: input.mode,
       });
@@ -324,6 +343,28 @@ describe("session runtime proxy routes", () => {
         expect(snapshot.session).not.toHaveProperty("tunnelUrls");
         expect(snapshot.session).not.toHaveProperty("sandboxDashboardUrl");
       }
+      if ("ownerTeamId" in input) {
+        expect(snapshot.session.capabilities).toMatchObject({
+          canRead: true,
+          canCollaborate: input.teamMember,
+          canManageLifecycle: input.teamMember,
+          canSandbox: input.teamMember,
+        });
+      }
+    }
+  );
+
+  it.each(["off", "shadow", "on"] as const)(
+    "refuses non-member sandbox access before runtime dispatch in %s mode",
+    async (mode) => {
+      const fetch = vi.fn(async () => Response.json({ sessionId: "session-1" }));
+      const response = await dispatch(
+        new Request("https://test.local/sessions/session-1/sandbox-access"),
+        { ...createEnv(fetch, { ownerTeamId: "team_one" }), TEAMS_ENFORCEMENT: mode }
+      );
+      expect(response.status).toBe(403);
+      expect(await response.json()).toMatchObject({ reason_code: "not_member" });
+      expect(fetch).not.toHaveBeenCalled();
     }
   );
 
@@ -759,6 +800,8 @@ describe("session runtime proxy routes", () => {
       vi.spyOn(SessionIndexStore.prototype, "get").mockResolvedValue({
         id: "session-1",
         userId,
+        ownerTeamId: null,
+        visibility: "workspace",
       } as Awaited<ReturnType<SessionIndexStore["get"]>>);
     }
 

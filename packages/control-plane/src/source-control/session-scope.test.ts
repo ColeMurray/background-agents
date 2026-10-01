@@ -1,7 +1,7 @@
 import type { InstallationRepository } from "@open-inspect/shared/types/repository-catalog";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { SessionIndexStore, type SessionEntry } from "../db/session-index";
-import { SessionScopeStore } from "../db/session-scope-store";
+import { SessionRepositoryStore } from "../db/session-repositories";
 import type { SqlDatabase } from "../db/sql-database";
 import { TeamRepositoryGrantStore } from "../db/team-repository-grants";
 import { SourceControlProviderError } from "./errors";
@@ -18,7 +18,7 @@ function indexSession(ownerTeamId: string | null): SessionEntry {
 describe("resolveSessionCredentialScope", () => {
   beforeEach(() => {
     vi.spyOn(SessionIndexStore.prototype, "get").mockResolvedValue(indexSession(null));
-    vi.spyOn(SessionScopeStore.prototype, "listRepositoryIds").mockResolvedValue([
+    vi.spyOn(SessionRepositoryStore.prototype, "listRepositoryIds").mockResolvedValue([
       { repoOwner: "acme", repoName: "web", repoId: 12 },
     ]);
     vi.spyOn(TeamRepositoryGrantStore.prototype, "covers").mockResolvedValue(true);
@@ -40,7 +40,7 @@ describe("resolveSessionCredentialScope", () => {
       errorType: "permanent",
     });
     expect(SessionIndexStore.prototype.get).toHaveBeenCalledExactlyOnceWith(SESSION_ID);
-    expect(SessionScopeStore.prototype.listRepositoryIds).not.toHaveBeenCalled();
+    expect(SessionRepositoryStore.prototype.listRepositoryIds).not.toHaveBeenCalled();
     expect(TeamRepositoryGrantStore.prototype.covers).not.toHaveBeenCalled();
     expect(loadCatalog).not.toHaveBeenCalled();
   });
@@ -51,7 +51,7 @@ describe("resolveSessionCredentialScope", () => {
       repositoryIds: [12],
     });
 
-    expect(SessionScopeStore.prototype.listRepositoryIds).toHaveBeenCalledExactlyOnceWith(
+    expect(SessionRepositoryStore.prototype.listRepositoryIds).toHaveBeenCalledExactlyOnceWith(
       SESSION_ID
     );
     expect(TeamRepositoryGrantStore.prototype.covers).not.toHaveBeenCalled();
@@ -59,7 +59,7 @@ describe("resolveSessionCredentialScope", () => {
   });
 
   it("includes persisted session members instead of expanding the current environment", async () => {
-    vi.mocked(SessionScopeStore.prototype.listRepositoryIds).mockResolvedValue([
+    vi.mocked(SessionRepositoryStore.prototype.listRepositoryIds).mockResolvedValue([
       { repoOwner: "acme", repoName: "web", repoId: 30 },
       { repoOwner: "acme", repoName: "api", repoId: 12 },
     ]);
@@ -69,7 +69,7 @@ describe("resolveSessionCredentialScope", () => {
       repositoryIds: [12, 30],
     });
 
-    expect(SessionScopeStore.prototype.listRepositoryIds).toHaveBeenCalledWith(SESSION_ID);
+    expect(SessionRepositoryStore.prototype.listRepositoryIds).toHaveBeenCalledWith(SESSION_ID);
     expect(loadCatalog).not.toHaveBeenCalled();
   });
 
@@ -86,7 +86,7 @@ describe("resolveSessionCredentialScope", () => {
   });
 
   it("resolves the legacy primary fallback through the lazy catalog callback", async () => {
-    vi.mocked(SessionScopeStore.prototype.listRepositoryIds).mockResolvedValue([
+    vi.mocked(SessionRepositoryStore.prototype.listRepositoryIds).mockResolvedValue([
       { repoOwner: "acme", repoName: "web", repoId: null },
     ]);
     loadCatalog.mockResolvedValue([
@@ -111,7 +111,7 @@ describe("resolveSessionCredentialScope", () => {
 
   it("uses current team grants to drop revoked session repositories", async () => {
     vi.mocked(SessionIndexStore.prototype.get).mockResolvedValue(indexSession("team-a"));
-    vi.mocked(SessionScopeStore.prototype.listRepositoryIds).mockResolvedValue([
+    vi.mocked(SessionRepositoryStore.prototype.listRepositoryIds).mockResolvedValue([
       { repoOwner: "acme", repoName: "web", repoId: 12 },
       { repoOwner: "acme", repoName: "api", repoId: 30 },
     ]);
@@ -136,7 +136,7 @@ describe("resolveSessionCredentialScope", () => {
       .mockResolvedValueOnce(indexSession("team-a"))
       .mockResolvedValueOnce(indexSession("team-b"))
       .mockResolvedValueOnce(indexSession(null));
-    vi.mocked(SessionScopeStore.prototype.listRepositoryIds)
+    vi.mocked(SessionRepositoryStore.prototype.listRepositoryIds)
       .mockResolvedValueOnce([{ repoOwner: "acme", repoName: "web", repoId: 12 }])
       .mockResolvedValueOnce([{ repoOwner: "acme", repoName: "api", repoId: 30 }])
       .mockResolvedValueOnce([{ repoOwner: "acme", repoName: "cli", repoId: 50 }]);
@@ -155,7 +155,7 @@ describe("resolveSessionCredentialScope", () => {
     });
 
     expect(SessionIndexStore.prototype.get).toHaveBeenCalledTimes(3);
-    expect(SessionScopeStore.prototype.listRepositoryIds).toHaveBeenCalledTimes(3);
+    expect(SessionRepositoryStore.prototype.listRepositoryIds).toHaveBeenCalledTimes(3);
     expect(TeamRepositoryGrantStore.prototype.covers).toHaveBeenCalledTimes(2);
     expect(TeamRepositoryGrantStore.prototype.covers).toHaveBeenNthCalledWith(1, "team-a", [12]);
     expect(TeamRepositoryGrantStore.prototype.covers).toHaveBeenNthCalledWith(2, "team-b", [30]);
@@ -168,7 +168,7 @@ describe("resolveSessionCredentialScope", () => {
       repositories: [{ repoOwner: "acme", repoName: "web", repoId: null }],
     },
   ])("refuses $label without broadening credentials", async ({ repositories }) => {
-    vi.mocked(SessionScopeStore.prototype.listRepositoryIds).mockResolvedValue(repositories);
+    vi.mocked(SessionRepositoryStore.prototype.listRepositoryIds).mockResolvedValue(repositories);
 
     await expect(resolveSessionCredentialScope(db, SESSION_ID, loadCatalog)).rejects.toMatchObject({
       errorType: "permanent",
@@ -182,13 +182,13 @@ describe("resolveSessionCredentialScope", () => {
 
     await expect(resolveSessionCredentialScope(db, SESSION_ID, loadCatalog)).rejects.toBe(error);
 
-    expect(SessionScopeStore.prototype.listRepositoryIds).not.toHaveBeenCalled();
+    expect(SessionRepositoryStore.prototype.listRepositoryIds).not.toHaveBeenCalled();
     expect(loadCatalog).not.toHaveBeenCalled();
   });
 
   it("propagates membership-store failures without resolving a fallback scope", async () => {
     const error = new Error("Session membership unavailable");
-    vi.mocked(SessionScopeStore.prototype.listRepositoryIds).mockRejectedValueOnce(error);
+    vi.mocked(SessionRepositoryStore.prototype.listRepositoryIds).mockRejectedValueOnce(error);
 
     await expect(resolveSessionCredentialScope(db, SESSION_ID, loadCatalog)).rejects.toBe(error);
 
