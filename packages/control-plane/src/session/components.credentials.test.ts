@@ -27,7 +27,10 @@ describe("session credential scope composition", () => {
       { repoOwner: "acme", repoName: "web", repoId: 123 },
       { repoOwner: "acme", repoName: "api", repoId: 456 },
     ]);
-    vi.spyOn(TeamRepositoryGrantStore.prototype, "covers").mockResolvedValue(true);
+    vi.spyOn(TeamRepositoryGrantStore.prototype, "listForTeam").mockResolvedValue([
+      { grant_kind: "repository", repo_external_id: 123 },
+      { grant_kind: "repository", repo_external_id: 456 },
+    ]);
     vi.mocked(readCachedInstallationRepositories).mockReset().mockResolvedValue([]);
   });
 
@@ -105,9 +108,8 @@ describe("session credential scope composition", () => {
       expect(SessionRepositoryStore.prototype.listRepositoryIds).toHaveBeenCalledWith(
         "public-session"
       );
-      expect(TeamRepositoryGrantStore.prototype.covers).toHaveBeenCalledExactlyOnceWith(
-        "team-a",
-        [123, 456]
+      expect(TeamRepositoryGrantStore.prototype.listForTeam).toHaveBeenCalledExactlyOnceWith(
+        "team-a"
       );
       expect(h.generateCredentialHelperAuth).toHaveBeenCalledWith(scope);
       expect(readCachedInstallationRepositories).not.toHaveBeenCalled();
@@ -127,6 +129,12 @@ describe("session credential scope composition", () => {
         { repoOwner: "acme", repoName: "api", repoId: 456 },
       ])
       .mockResolvedValueOnce([{ repoOwner: "acme", repoName: "cli", repoId: 789 }]);
+    vi.mocked(TeamRepositoryGrantStore.prototype.listForTeam)
+      .mockResolvedValueOnce([
+        { grant_kind: "repository", repo_external_id: 123 },
+        { grant_kind: "repository", repo_external_id: 456 },
+      ])
+      .mockResolvedValueOnce([{ grant_kind: "repository", repo_external_id: 789 }]);
     const h = createHarness();
 
     expect((await h.getCredentials()).status).toBe(200);
@@ -134,12 +142,9 @@ describe("session credential scope composition", () => {
 
     expect(getSession).toHaveBeenCalledTimes(2);
     expect(SessionRepositoryStore.prototype.listRepositoryIds).toHaveBeenCalledTimes(2);
-    expect(TeamRepositoryGrantStore.prototype.covers).toHaveBeenNthCalledWith(
-      1,
-      "team-a",
-      [123, 456]
-    );
-    expect(TeamRepositoryGrantStore.prototype.covers).toHaveBeenNthCalledWith(2, "team-b", [789]);
+    expect(TeamRepositoryGrantStore.prototype.listForTeam).toHaveBeenCalledTimes(2);
+    expect(TeamRepositoryGrantStore.prototype.listForTeam).toHaveBeenNthCalledWith(1, "team-a");
+    expect(TeamRepositoryGrantStore.prototype.listForTeam).toHaveBeenNthCalledWith(2, "team-b");
     expect(h.generateCredentialHelperAuth).toHaveBeenNthCalledWith(1, firstScope);
     expect(h.generateCredentialHelperAuth).toHaveBeenNthCalledWith(2, nextScope);
   });
@@ -150,7 +155,7 @@ describe("session credential scope composition", () => {
 
     expect((await h.getCredentials()).status).toBe(200);
 
-    expect(TeamRepositoryGrantStore.prototype.covers).not.toHaveBeenCalled();
+    expect(TeamRepositoryGrantStore.prototype.listForTeam).not.toHaveBeenCalled();
     expect(h.generateCredentialHelperAuth).toHaveBeenCalledWith({
       kind: "repositories",
       repositoryIds: [123, 456],
@@ -200,17 +205,31 @@ describe("session credential scope composition", () => {
 
   it("drops revoked member grants instead of including the team's other repositories", async () => {
     vi.spyOn(SessionIndexStore.prototype, "get").mockResolvedValue(indexSession("team-a"));
-    vi.mocked(TeamRepositoryGrantStore.prototype.covers)
-      .mockResolvedValueOnce(false)
-      .mockResolvedValueOnce(true)
-      .mockResolvedValueOnce(false);
+    vi.mocked(TeamRepositoryGrantStore.prototype.listForTeam)
+      .mockResolvedValueOnce([
+        { grant_kind: "repository", repo_external_id: 123 },
+        { grant_kind: "repository", repo_external_id: 789 },
+      ])
+      .mockResolvedValueOnce([{ grant_kind: "repository", repo_external_id: 456 }]);
     const h = createHarness();
 
     expect((await h.getCredentials()).status).toBe(200);
 
-    expect(h.generateCredentialHelperAuth).toHaveBeenCalledWith({
+    expect(TeamRepositoryGrantStore.prototype.listForTeam).toHaveBeenCalledExactlyOnceWith(
+      "team-a"
+    );
+    expect(h.generateCredentialHelperAuth).toHaveBeenNthCalledWith(1, {
       kind: "repositories",
       repositoryIds: [123],
+    });
+
+    expect((await h.getCredentials()).status).toBe(200);
+
+    expect(TeamRepositoryGrantStore.prototype.listForTeam).toHaveBeenCalledTimes(2);
+    expect(TeamRepositoryGrantStore.prototype.listForTeam).toHaveBeenNthCalledWith(2, "team-a");
+    expect(h.generateCredentialHelperAuth).toHaveBeenNthCalledWith(2, {
+      kind: "repositories",
+      repositoryIds: [456],
     });
   });
 
@@ -221,22 +240,26 @@ describe("session credential scope composition", () => {
       repositories: [{ repoOwner: "acme", repoName: "web", repoId: null }],
     },
   ])("refuses credential minting with $label", async ({ repositories }) => {
-    vi.spyOn(SessionIndexStore.prototype, "get").mockResolvedValue(indexSession(null));
+    vi.spyOn(SessionIndexStore.prototype, "get").mockResolvedValue(indexSession("team-a"));
     vi.mocked(SessionRepositoryStore.prototype.listRepositoryIds).mockResolvedValue(repositories);
     const h = createHarness();
 
     expect((await h.getCredentials()).status).toBe(500);
 
+    expect(TeamRepositoryGrantStore.prototype.listForTeam).not.toHaveBeenCalled();
     expect(h.generateCredentialHelperAuth).not.toHaveBeenCalled();
   });
 
   it("refuses credential minting when every member grant has been revoked", async () => {
     vi.spyOn(SessionIndexStore.prototype, "get").mockResolvedValue(indexSession("team-a"));
-    vi.mocked(TeamRepositoryGrantStore.prototype.covers).mockResolvedValue(false);
+    vi.mocked(TeamRepositoryGrantStore.prototype.listForTeam).mockResolvedValue([]);
     const h = createHarness();
 
     expect((await h.getCredentials()).status).toBe(500);
 
+    expect(TeamRepositoryGrantStore.prototype.listForTeam).toHaveBeenCalledExactlyOnceWith(
+      "team-a"
+    );
     expect(h.generateCredentialHelperAuth).not.toHaveBeenCalled();
   });
 
@@ -251,7 +274,7 @@ describe("session credential scope composition", () => {
       error: "Cannot resolve credential scope: session not found",
     });
     expect(SessionRepositoryStore.prototype.listRepositoryIds).not.toHaveBeenCalled();
-    expect(TeamRepositoryGrantStore.prototype.covers).not.toHaveBeenCalled();
+    expect(TeamRepositoryGrantStore.prototype.listForTeam).not.toHaveBeenCalled();
     expect(readCachedInstallationRepositories).not.toHaveBeenCalled();
     expect(h.generateCredentialHelperAuth).not.toHaveBeenCalled();
   });

@@ -52,7 +52,7 @@ const ENV_REPOSITORIES: EnvironmentRepositoryRow[] = ENV_TARGET.repositories.map
 
 beforeEach(() => {
   vi.clearAllMocks();
-  vi.spyOn(TeamRepositoryGrantStore.prototype, "covers").mockResolvedValue(false);
+  vi.spyOn(TeamRepositoryGrantStore.prototype, "listForTeam").mockResolvedValue([]);
   vi.spyOn(EnvironmentStore.prototype, "getById").mockResolvedValue(null);
   vi.spyOn(EnvironmentStore.prototype, "getRepositoriesForEnvironment").mockResolvedValue(
     ENV_REPOSITORIES
@@ -356,14 +356,16 @@ describe("ImageBuildScheduler", () => {
       { owner: "acme", name: "web", branch: "main" },
       { kind: "repositories", repositoryIds: [1] }
     );
-    expect(TeamRepositoryGrantStore.prototype.covers).not.toHaveBeenCalled();
+    expect(TeamRepositoryGrantStore.prototype.listForTeam).not.toHaveBeenCalled();
     expect(readCachedInstallationRepositories).not.toHaveBeenCalled();
     expect(stats.branchMatched).toBe(1);
     expect(h.workflow.triggerBuildWithTarget).not.toHaveBeenCalled();
   });
 
   it("never broadens repo branch scope to installation coverage", async () => {
-    vi.mocked(TeamRepositoryGrantStore.prototype.covers).mockResolvedValue(true);
+    vi.mocked(TeamRepositoryGrantStore.prototype.listForTeam).mockResolvedValue([
+      { grant_kind: "installation", repo_external_id: null },
+    ]);
     const getBranchHead = vi.fn(async () => "abc123");
     const h = harness({ sourceControl: { getBranchHead } as unknown as SourceControlProvider });
     mockReadyImages(h);
@@ -374,7 +376,7 @@ describe("ImageBuildScheduler", () => {
       { owner: "acme", name: "web", branch: "main" },
       { kind: "repositories", repositoryIds: [1] }
     );
-    expect(TeamRepositoryGrantStore.prototype.covers).not.toHaveBeenCalled();
+    expect(TeamRepositoryGrantStore.prototype.listForTeam).not.toHaveBeenCalled();
   });
 
   it.each([null, "team_a"])(
@@ -384,7 +386,10 @@ describe("ImageBuildScheduler", () => {
         ...ENVIRONMENT,
         owner_team_id: ownerTeamId,
       });
-      vi.mocked(TeamRepositoryGrantStore.prototype.covers).mockResolvedValue(true);
+      vi.mocked(TeamRepositoryGrantStore.prototype.listForTeam).mockResolvedValue([
+        { grant_kind: "installation", repo_external_id: null },
+        { grant_kind: "repository", repo_external_id: 99 },
+      ]);
       const getBranchHead = vi.fn(async () => "abc123");
       const h = harness({ sourceControl: { getBranchHead } as unknown as SourceControlProvider });
       h.listScopes.mockResolvedValue([{ kind: "environment", id: "env_1" }]);
@@ -407,9 +412,11 @@ describe("ImageBuildScheduler", () => {
       expect(EnvironmentStore.prototype.getById).toHaveBeenCalledExactlyOnceWith("env_1");
       expect(readCachedInstallationRepositories).not.toHaveBeenCalled();
       if (ownerTeamId === null) {
-        expect(TeamRepositoryGrantStore.prototype.covers).not.toHaveBeenCalled();
+        expect(TeamRepositoryGrantStore.prototype.listForTeam).not.toHaveBeenCalled();
       } else {
-        expect(TeamRepositoryGrantStore.prototype.covers).toHaveBeenCalledWith(ownerTeamId, [1, 2]);
+        expect(TeamRepositoryGrantStore.prototype.listForTeam).toHaveBeenCalledExactlyOnceWith(
+          ownerTeamId
+        );
       }
       expect(stats.branchMatched).toBe(2);
     }
@@ -446,9 +453,10 @@ describe("ImageBuildScheduler", () => {
       ...ENVIRONMENT,
       owner_team_id: "team_a",
     });
-    vi.mocked(TeamRepositoryGrantStore.prototype.covers).mockImplementation(
-      async (teamId, ids) => teamId === "team_a" && ids.every((id) => id === 1)
-    );
+    vi.mocked(TeamRepositoryGrantStore.prototype.listForTeam).mockResolvedValue([
+      { grant_kind: "repository", repo_external_id: 1 },
+      { grant_kind: "repository", repo_external_id: 99 },
+    ]);
     const getBranchHead = vi.fn(async () => "abc123");
     const h = harness({ sourceControl: { getBranchHead } as unknown as SourceControlProvider });
     h.listScopes.mockResolvedValue([{ kind: "environment", id: "env_1" }]);
@@ -468,6 +476,9 @@ describe("ImageBuildScheduler", () => {
       { owner: "acme", name: "api", branch: "develop" },
       { kind: "repositories", repositoryIds: [1] }
     );
+    expect(TeamRepositoryGrantStore.prototype.listForTeam).toHaveBeenCalledExactlyOnceWith(
+      "team_a"
+    );
   });
 
   it("does not read branches or rebuild after all environment grants are revoked", async () => {
@@ -486,6 +497,9 @@ describe("ImageBuildScheduler", () => {
     expect(stats.branchLookups).toBe(0);
     expect(getBranchHead).not.toHaveBeenCalled();
     expect(h.workflow.triggerBuildWithTarget).not.toHaveBeenCalled();
+    expect(TeamRepositoryGrantStore.prototype.listForTeam).toHaveBeenCalledExactlyOnceWith(
+      "team_a"
+    );
   });
 
   it("skips branch reads and rebuilds after environment membership changes", async () => {

@@ -29,7 +29,6 @@ function catalogRepository(id: number, owner: string, name: string): Installatio
 describe("resolveRepositoryCredentialScope", () => {
   beforeEach(() => {
     vi.spyOn(TeamRepositoryGrantStore.prototype, "listForTeam").mockResolvedValue([]);
-    vi.spyOn(TeamRepositoryGrantStore.prototype, "covers");
     loadCatalog.mockReset().mockResolvedValue([]);
   });
 
@@ -44,7 +43,6 @@ describe("resolveRepositoryCredentialScope", () => {
     });
     expect(repositories.map((entry) => entry.repoId)).toEqual([30, 12, 30]);
     expect(loadCatalog).not.toHaveBeenCalled();
-    expect(TeamRepositoryGrantStore.prototype.covers).not.toHaveBeenCalled();
     expect(TeamRepositoryGrantStore.prototype.listForTeam).not.toHaveBeenCalled();
   });
 
@@ -105,7 +103,7 @@ describe("resolveRepositoryCredentialScope", () => {
         loadCatalog
       )
     ).rejects.toMatchObject({ errorType: "permanent" });
-    expect(TeamRepositoryGrantStore.prototype.covers).not.toHaveBeenCalled();
+    expect(TeamRepositoryGrantStore.prototype.listForTeam).not.toHaveBeenCalled();
   });
 
   it.each([0, -1, 1.5, NaN, Infinity, Number.MAX_SAFE_INTEGER + 1])(
@@ -115,7 +113,7 @@ describe("resolveRepositoryCredentialScope", () => {
         resolveRepositoryCredentialScope(db, [repository(id)], "team-a", loadCatalog)
       ).rejects.toMatchObject({ errorType: "permanent" });
       expect(loadCatalog).not.toHaveBeenCalled();
-      expect(TeamRepositoryGrantStore.prototype.covers).not.toHaveBeenCalled();
+      expect(TeamRepositoryGrantStore.prototype.listForTeam).not.toHaveBeenCalled();
     }
   );
 
@@ -135,7 +133,7 @@ describe("resolveRepositoryCredentialScope", () => {
     }
   );
 
-  it("uses one coverage check when all candidate repositories are granted", async () => {
+  it("uses one grant read when all candidate repositories are granted", async () => {
     vi.mocked(TeamRepositoryGrantStore.prototype.listForTeam).mockResolvedValue([
       { grant_kind: "repository", repo_external_id: 12 },
       { grant_kind: "repository", repo_external_id: 30 },
@@ -150,11 +148,9 @@ describe("resolveRepositoryCredentialScope", () => {
         loadCatalog
       )
     ).toEqual({ kind: "repositories", repositoryIds: [12, 30] });
-    expect(TeamRepositoryGrantStore.prototype.covers).toHaveBeenCalledExactlyOnceWith(
-      "team-a",
-      [12, 30]
+    expect(TeamRepositoryGrantStore.prototype.listForTeam).toHaveBeenCalledExactlyOnceWith(
+      "team-a"
     );
-    expect(TeamRepositoryGrantStore.prototype.listForTeam).toHaveBeenCalledTimes(1);
   });
 
   it("retains only candidates even when the team has an installation grant", async () => {
@@ -169,13 +165,12 @@ describe("resolveRepositoryCredentialScope", () => {
     expect(
       await resolveRepositoryCredentialScope(db, [repository(null)], "team-a", loadCatalog)
     ).toEqual({ kind: "repositories", repositoryIds: [12] });
-    expect(TeamRepositoryGrantStore.prototype.covers).toHaveBeenCalledExactlyOnceWith(
-      "team-a",
-      [12]
+    expect(TeamRepositoryGrantStore.prototype.listForTeam).toHaveBeenCalledExactlyOnceWith(
+      "team-a"
     );
   });
 
-  it("checks candidates individually after failed coverage and drops revoked grants", async () => {
+  it("filters candidates from one grant read and drops revoked grants", async () => {
     vi.mocked(TeamRepositoryGrantStore.prototype.listForTeam).mockResolvedValue([
       { grant_kind: "repository", repo_external_id: 12 },
       { grant_kind: "repository", repo_external_id: 99 },
@@ -189,14 +184,27 @@ describe("resolveRepositoryCredentialScope", () => {
         loadCatalog
       )
     ).toEqual({ kind: "repositories", repositoryIds: [12] });
-    expect(TeamRepositoryGrantStore.prototype.covers).toHaveBeenCalledTimes(3);
-    expect(TeamRepositoryGrantStore.prototype.covers).toHaveBeenNthCalledWith(
-      1,
-      "team-a",
-      [30, 12]
+    expect(TeamRepositoryGrantStore.prototype.listForTeam).toHaveBeenCalledExactlyOnceWith(
+      "team-a"
     );
-    expect(TeamRepositoryGrantStore.prototype.covers).toHaveBeenNthCalledWith(2, "team-a", [30]);
-    expect(TeamRepositoryGrantStore.prototype.covers).toHaveBeenNthCalledWith(3, "team-a", [12]);
+  });
+
+  it("uses a single grant snapshot even if a later read would return different grants", async () => {
+    vi.mocked(TeamRepositoryGrantStore.prototype.listForTeam)
+      .mockResolvedValueOnce([{ grant_kind: "repository", repo_external_id: 12 }])
+      .mockResolvedValue([{ grant_kind: "repository", repo_external_id: 30 }]);
+
+    expect(
+      await resolveRepositoryCredentialScope(
+        db,
+        [repository(12), repository(30, "acme", "api")],
+        "team-a",
+        loadCatalog
+      )
+    ).toEqual({ kind: "repositories", repositoryIds: [12] });
+    expect(TeamRepositoryGrantStore.prototype.listForTeam).toHaveBeenCalledExactlyOnceWith(
+      "team-a"
+    );
   });
 
   it("reads current grants on repeated calls instead of caching coverage", async () => {
@@ -210,7 +218,7 @@ describe("resolveRepositoryCredentialScope", () => {
     await expect(
       resolveRepositoryCredentialScope(db, [repository(12)], "team-a", loadCatalog)
     ).rejects.toMatchObject({ errorType: "permanent" });
-    expect(TeamRepositoryGrantStore.prototype.listForTeam).toHaveBeenCalledTimes(3);
+    expect(TeamRepositoryGrantStore.prototype.listForTeam).toHaveBeenCalledTimes(2);
   });
 
   it("does not turn a single-repository session into a large team's entire grant set", async () => {
@@ -224,9 +232,8 @@ describe("resolveRepositoryCredentialScope", () => {
     expect(
       await resolveRepositoryCredentialScope(db, [repository(12)], "team-a", loadCatalog)
     ).toEqual({ kind: "repositories", repositoryIds: [12] });
-    expect(TeamRepositoryGrantStore.prototype.covers).toHaveBeenCalledExactlyOnceWith(
-      "team-a",
-      [12]
+    expect(TeamRepositoryGrantStore.prototype.listForTeam).toHaveBeenCalledExactlyOnceWith(
+      "team-a"
     );
   });
 
@@ -235,7 +242,7 @@ describe("resolveRepositoryCredentialScope", () => {
       resolveRepositoryCredentialScope(db, [], ownerTeamId, loadCatalog)
     ).rejects.toMatchObject({ errorType: "permanent" });
     expect(loadCatalog).not.toHaveBeenCalled();
-    expect(TeamRepositoryGrantStore.prototype.covers).not.toHaveBeenCalled();
+    expect(TeamRepositoryGrantStore.prototype.listForTeam).not.toHaveBeenCalled();
   });
 
   it("accepts the maximum unique repository scope including duplicate candidates", async () => {
@@ -260,7 +267,9 @@ describe("resolveRepositoryCredentialScope", () => {
         { length: MAX_CREDENTIAL_SCOPE_REPOSITORY_IDS + 1 },
         (_, index) => repository(index + 1, "acme", `repo-${index}`)
       );
-      vi.mocked(TeamRepositoryGrantStore.prototype.covers).mockResolvedValue(true);
+      vi.mocked(TeamRepositoryGrantStore.prototype.listForTeam).mockResolvedValue([
+        { grant_kind: "installation", repo_external_id: null },
+      ]);
 
       await expect(
         resolveRepositoryCredentialScope(db, repositories, ownerTeamId, loadCatalog)
@@ -273,12 +282,15 @@ describe("resolveRepositoryCredentialScope", () => {
       { length: MAX_CREDENTIAL_SCOPE_REPOSITORY_IDS + 1 },
       (_, index) => repository(index + 1, "acme", `repo-${index}`)
     );
-    vi.mocked(TeamRepositoryGrantStore.prototype.covers).mockImplementation(
-      async (_teamId, ids) => ids.length === 1 && ids[0] === 12
-    );
+    vi.mocked(TeamRepositoryGrantStore.prototype.listForTeam).mockResolvedValue([
+      { grant_kind: "repository", repo_external_id: 12 },
+    ]);
 
     expect(await resolveRepositoryCredentialScope(db, repositories, "team-a", loadCatalog)).toEqual(
       { kind: "repositories", repositoryIds: [12] }
+    );
+    expect(TeamRepositoryGrantStore.prototype.listForTeam).toHaveBeenCalledExactlyOnceWith(
+      "team-a"
     );
   });
 
@@ -289,15 +301,12 @@ describe("resolveRepositoryCredentialScope", () => {
     await expect(
       resolveRepositoryCredentialScope(db, [repository(null)], "team-a", loadCatalog)
     ).rejects.toBe(error);
-    expect(TeamRepositoryGrantStore.prototype.covers).not.toHaveBeenCalled();
+    expect(TeamRepositoryGrantStore.prototype.listForTeam).not.toHaveBeenCalled();
   });
 
-  it("propagates failures during individual coverage checks without returning a partial scope", async () => {
+  it("propagates grant-read failures without returning a partial scope", async () => {
     const error = new Error("Grant store unavailable");
-    vi.mocked(TeamRepositoryGrantStore.prototype.covers)
-      .mockResolvedValueOnce(false)
-      .mockResolvedValueOnce(true)
-      .mockRejectedValueOnce(error);
+    vi.mocked(TeamRepositoryGrantStore.prototype.listForTeam).mockRejectedValueOnce(error);
 
     await expect(
       resolveRepositoryCredentialScope(

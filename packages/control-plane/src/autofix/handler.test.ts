@@ -42,7 +42,10 @@ describe("autofix credential scope composition", () => {
       { repoOwner: "acme", repoName: "widgets", repoId: 99 },
       { repoOwner: "acme", repoName: "web", repoId: 123 },
     ]);
-    vi.spyOn(TeamRepositoryGrantStore.prototype, "covers").mockResolvedValue(true);
+    vi.spyOn(TeamRepositoryGrantStore.prototype, "listForTeam").mockResolvedValue([
+      { grant_kind: "repository", repo_external_id: 99 },
+      { grant_kind: "repository", repo_external_id: 123 },
+    ]);
     vi.mocked(readCachedInstallationRepositories).mockReset().mockResolvedValue([]);
   });
 
@@ -74,6 +77,12 @@ describe("autofix credential scope composition", () => {
         { repoOwner: "acme", repoName: "web", repoId: 123 },
       ])
       .mockResolvedValueOnce([{ repoOwner: "acme", repoName: "api", repoId: 456 }]);
+    vi.mocked(TeamRepositoryGrantStore.prototype.listForTeam)
+      .mockResolvedValueOnce([
+        { grant_kind: "repository", repo_external_id: 99 },
+        { grant_kind: "repository", repo_external_id: 123 },
+      ])
+      .mockResolvedValueOnce([{ grant_kind: "repository", repo_external_id: 456 }]);
     const h = await createHarness();
 
     expect(await h.resolveCredentialScope("owning-public-session")).toEqual(firstScope);
@@ -89,12 +98,9 @@ describe("autofix credential scope composition", () => {
       2,
       "owning-public-session"
     );
-    expect(TeamRepositoryGrantStore.prototype.covers).toHaveBeenNthCalledWith(
-      1,
-      "team-a",
-      [99, 123]
-    );
-    expect(TeamRepositoryGrantStore.prototype.covers).toHaveBeenNthCalledWith(2, "team-b", [456]);
+    expect(TeamRepositoryGrantStore.prototype.listForTeam).toHaveBeenCalledTimes(2);
+    expect(TeamRepositoryGrantStore.prototype.listForTeam).toHaveBeenNthCalledWith(1, "team-a");
+    expect(TeamRepositoryGrantStore.prototype.listForTeam).toHaveBeenNthCalledWith(2, "team-b");
     expect(readCachedInstallationRepositories).not.toHaveBeenCalled();
   });
 
@@ -107,7 +113,7 @@ describe("autofix credential scope composition", () => {
       repositoryIds: [99, 123],
     });
 
-    expect(TeamRepositoryGrantStore.prototype.covers).not.toHaveBeenCalled();
+    expect(TeamRepositoryGrantStore.prototype.listForTeam).not.toHaveBeenCalled();
     expect(readCachedInstallationRepositories).not.toHaveBeenCalled();
   });
 
@@ -137,24 +143,35 @@ describe("autofix credential scope composition", () => {
     });
 
     expect(readCachedInstallationRepositories).toHaveBeenCalledExactlyOnceWith(h.env);
-    expect(TeamRepositoryGrantStore.prototype.covers).toHaveBeenCalledExactlyOnceWith(
-      "team-a",
-      [99]
+    expect(TeamRepositoryGrantStore.prototype.listForTeam).toHaveBeenCalledExactlyOnceWith(
+      "team-a"
     );
   });
 
   it("drops revoked member grants without widening the autofix credential scope", async () => {
     vi.spyOn(SessionIndexStore.prototype, "get").mockResolvedValue(indexSession("team-a"));
-    vi.mocked(TeamRepositoryGrantStore.prototype.covers)
-      .mockResolvedValueOnce(false)
-      .mockResolvedValueOnce(true)
-      .mockResolvedValueOnce(false);
+    vi.mocked(TeamRepositoryGrantStore.prototype.listForTeam)
+      .mockResolvedValueOnce([
+        { grant_kind: "repository", repo_external_id: 99 },
+        { grant_kind: "repository", repo_external_id: 456 },
+      ])
+      .mockResolvedValueOnce([{ grant_kind: "repository", repo_external_id: 123 }]);
     const h = await createHarness();
 
     expect(await h.resolveCredentialScope("owning-public-session")).toEqual({
       kind: "repositories",
       repositoryIds: [99],
     });
+    expect(TeamRepositoryGrantStore.prototype.listForTeam).toHaveBeenCalledExactlyOnceWith(
+      "team-a"
+    );
+
+    expect(await h.resolveCredentialScope("owning-public-session")).toEqual({
+      kind: "repositories",
+      repositoryIds: [123],
+    });
+    expect(TeamRepositoryGrantStore.prototype.listForTeam).toHaveBeenCalledTimes(2);
+    expect(TeamRepositoryGrantStore.prototype.listForTeam).toHaveBeenNthCalledWith(2, "team-a");
   });
 
   it.each([
@@ -164,13 +181,14 @@ describe("autofix credential scope composition", () => {
       repositories: [{ repoOwner: "acme", repoName: "widgets", repoId: null }],
     },
   ])("refuses an owner session with $label", async ({ repositories }) => {
-    vi.spyOn(SessionIndexStore.prototype, "get").mockResolvedValue(indexSession(null));
+    vi.spyOn(SessionIndexStore.prototype, "get").mockResolvedValue(indexSession("team-a"));
     vi.mocked(SessionRepositoryStore.prototype.listRepositoryIds).mockResolvedValue(repositories);
     const h = await createHarness();
 
     await expect(h.resolveCredentialScope("owning-public-session")).rejects.toMatchObject({
       errorType: "permanent",
     });
+    expect(TeamRepositoryGrantStore.prototype.listForTeam).not.toHaveBeenCalled();
   });
 
   it("propagates cached-catalog failures rather than broadening the scope", async () => {
@@ -200,7 +218,7 @@ describe("autofix credential scope composition", () => {
       message: "Cannot resolve credential scope: session not found",
     });
     expect(SessionRepositoryStore.prototype.listRepositoryIds).not.toHaveBeenCalled();
-    expect(TeamRepositoryGrantStore.prototype.covers).not.toHaveBeenCalled();
+    expect(TeamRepositoryGrantStore.prototype.listForTeam).not.toHaveBeenCalled();
     expect(readCachedInstallationRepositories).not.toHaveBeenCalled();
   });
 });

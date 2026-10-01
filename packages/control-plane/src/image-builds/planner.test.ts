@@ -99,7 +99,7 @@ const loadCatalog = vi.fn<() => Promise<InstallationRepository[]>>();
 
 beforeEach(() => {
   vi.clearAllMocks();
-  vi.spyOn(TeamRepositoryGrantStore.prototype, "covers").mockResolvedValue(false);
+  vi.spyOn(TeamRepositoryGrantStore.prototype, "listForTeam").mockResolvedValue([]);
   vi.spyOn(EnvironmentStore.prototype, "getById").mockResolvedValue(null);
   vi.spyOn(EnvironmentStore.prototype, "getRepositoriesForEnvironment").mockResolvedValue([]);
   loadCatalog.mockResolvedValue(CATALOG);
@@ -144,13 +144,15 @@ describe("resolveImageBuildTokenScope", () => {
   it.each([false, true])(
     "scopes a repository build to its one repository regardless of team coverage (%s)",
     async (covered) => {
-      vi.mocked(TeamRepositoryGrantStore.prototype.covers).mockResolvedValue(covered);
+      vi.mocked(TeamRepositoryGrantStore.prototype.listForTeam).mockResolvedValue(
+        covered ? [{ grant_kind: "installation", repo_external_id: null }] : []
+      );
 
       expect(await resolveImageBuildTokenScope(db, REPO_SCOPE, REPO_TARGET, loadCatalog)).toEqual({
         kind: "repositories",
         repositoryIds: [12],
       });
-      expect(TeamRepositoryGrantStore.prototype.covers).not.toHaveBeenCalled();
+      expect(TeamRepositoryGrantStore.prototype.listForTeam).not.toHaveBeenCalled();
       expect(EnvironmentStore.prototype.getById).not.toHaveBeenCalled();
       expect(loadCatalog).not.toHaveBeenCalled();
     }
@@ -167,32 +169,41 @@ describe("resolveImageBuildTokenScope", () => {
     expect(EnvironmentStore.prototype.getRepositoriesForEnvironment).toHaveBeenCalledWith(
       ENV_SCOPE.id
     );
-    expect(TeamRepositoryGrantStore.prototype.covers).not.toHaveBeenCalled();
+    expect(TeamRepositoryGrantStore.prototype.listForTeam).not.toHaveBeenCalled();
     expect(loadCatalog).not.toHaveBeenCalled();
   });
 
   it("excludes granted siblings under installation coverage", async () => {
     mockEnvironment("team_a");
-    vi.mocked(TeamRepositoryGrantStore.prototype.covers).mockResolvedValue(true);
+    vi.mocked(TeamRepositoryGrantStore.prototype.listForTeam).mockResolvedValue([
+      { grant_kind: "installation", repo_external_id: null },
+      { grant_kind: "repository", repo_external_id: 99 },
+    ]);
 
     expect(await resolveImageBuildTokenScope(db, ENV_SCOPE, ENV_TARGET, loadCatalog)).toEqual({
       kind: "repositories",
       repositoryIds: [12, 30],
     });
-    expect(TeamRepositoryGrantStore.prototype.covers).toHaveBeenCalledWith("team_a", [12, 30]);
+    expect(TeamRepositoryGrantStore.prototype.listForTeam).toHaveBeenCalledExactlyOnceWith(
+      "team_a"
+    );
     expect(loadCatalog).not.toHaveBeenCalled();
   });
 
   it("drops members revoked from the owning team's grants", async () => {
     mockEnvironment("team_a");
-    vi.mocked(TeamRepositoryGrantStore.prototype.covers).mockImplementation(
-      async (teamId, ids) => teamId === "team_a" && ids.every((id) => id === 12)
-    );
+    vi.mocked(TeamRepositoryGrantStore.prototype.listForTeam).mockResolvedValue([
+      { grant_kind: "repository", repo_external_id: 12 },
+      { grant_kind: "repository", repo_external_id: 99 },
+    ]);
 
     expect(await resolveImageBuildTokenScope(db, ENV_SCOPE, ENV_TARGET, loadCatalog)).toEqual({
       kind: "repositories",
       repositoryIds: [12],
     });
+    expect(TeamRepositoryGrantStore.prototype.listForTeam).toHaveBeenCalledExactlyOnceWith(
+      "team_a"
+    );
   });
 
   it("rejects a team-owned environment after all member grants are revoked", async () => {
@@ -201,6 +212,9 @@ describe("resolveImageBuildTokenScope", () => {
     await expect(
       resolveImageBuildTokenScope(db, ENV_SCOPE, ENV_TARGET, loadCatalog)
     ).rejects.toMatchObject({ name: "SourceControlProviderError", errorType: "permanent" });
+    expect(TeamRepositoryGrantStore.prototype.listForTeam).toHaveBeenCalledExactlyOnceWith(
+      "team_a"
+    );
   });
 
   it("uses stored member ids instead of replacing them with cached catalog ids", async () => {
@@ -234,14 +248,18 @@ describe("resolveImageBuildTokenScope", () => {
       "team_a",
       ENV_REPOSITORIES.map((row) => ({ ...row, repo_id: null }))
     );
-    vi.mocked(TeamRepositoryGrantStore.prototype.covers).mockImplementation(
-      async (teamId, ids) => teamId === "team_a" && ids.every((id) => id === 30)
-    );
+    vi.mocked(TeamRepositoryGrantStore.prototype.listForTeam).mockResolvedValue([
+      { grant_kind: "repository", repo_external_id: 30 },
+      { grant_kind: "repository", repo_external_id: 99 },
+    ]);
 
     expect(await resolveImageBuildTokenScope(db, ENV_SCOPE, ENV_TARGET, loadCatalog)).toEqual({
       kind: "repositories",
       repositoryIds: [30],
     });
+    expect(TeamRepositoryGrantStore.prototype.listForTeam).toHaveBeenCalledExactlyOnceWith(
+      "team_a"
+    );
     expect(loadCatalog).toHaveBeenCalledOnce();
   });
 
@@ -274,7 +292,7 @@ describe("resolveImageBuildTokenScope", () => {
     await expect(
       resolveImageBuildTokenScope(db, ENV_SCOPE, ENV_TARGET, loadCatalog)
     ).rejects.toBeInstanceOf(ImageBuildPlanningError);
-    expect(TeamRepositoryGrantStore.prototype.covers).not.toHaveBeenCalled();
+    expect(TeamRepositoryGrantStore.prototype.listForTeam).not.toHaveBeenCalled();
     expect(loadCatalog).not.toHaveBeenCalled();
   });
 
@@ -283,12 +301,12 @@ describe("resolveImageBuildTokenScope", () => {
       resolveImageBuildTokenScope(db, ENV_SCOPE, ENV_TARGET, loadCatalog)
     ).rejects.toBeInstanceOf(ImageBuildScopeNotFoundError);
     expect(EnvironmentStore.prototype.getRepositoriesForEnvironment).not.toHaveBeenCalled();
-    expect(TeamRepositoryGrantStore.prototype.covers).not.toHaveBeenCalled();
+    expect(TeamRepositoryGrantStore.prototype.listForTeam).not.toHaveBeenCalled();
     expect(loadCatalog).not.toHaveBeenCalled();
   });
 
   it("rejects an environment with no repositories", async () => {
-    mockEnvironment(null, []);
+    mockEnvironment("team_a", []);
     const target = { ...ENV_TARGET, repositories: [] };
 
     await expect(
@@ -300,6 +318,7 @@ describe("resolveImageBuildTokenScope", () => {
 
     expect(plan.cloneAuth).toEqual({ type: "unavailable" });
     expect(scmProvider.generateCredentialHelperAuth).not.toHaveBeenCalled();
+    expect(TeamRepositoryGrantStore.prototype.listForTeam).not.toHaveBeenCalled();
     expect(loadCatalog).not.toHaveBeenCalled();
   });
 
@@ -329,6 +348,7 @@ describe("resolveImageBuildTokenScope", () => {
 
     expect(plan.cloneAuth).toEqual({ type: "unavailable" });
     expect(scmProvider.generateCredentialHelperAuth).not.toHaveBeenCalled();
+    expect(TeamRepositoryGrantStore.prototype.listForTeam).not.toHaveBeenCalled();
     expect(loadCatalog).not.toHaveBeenCalled();
   });
 
@@ -357,7 +377,7 @@ describe("resolveImageBuildTokenScope", () => {
       resolveImageBuildTokenScope(db, scope, target, loadCatalog)
     ).rejects.toBeInstanceOf(ImageBuildPlanningError);
     expect(EnvironmentStore.prototype.getById).not.toHaveBeenCalled();
-    expect(TeamRepositoryGrantStore.prototype.covers).not.toHaveBeenCalled();
+    expect(TeamRepositoryGrantStore.prototype.listForTeam).not.toHaveBeenCalled();
     expect(loadCatalog).not.toHaveBeenCalled();
   });
 });
@@ -378,7 +398,7 @@ describe("ImageBuildPlanner clone auth", () => {
       username: "x-access-token",
       token: "clone-token",
     });
-    expect(TeamRepositoryGrantStore.prototype.covers).not.toHaveBeenCalled();
+    expect(TeamRepositoryGrantStore.prototype.listForTeam).not.toHaveBeenCalled();
     expect(readCachedInstallationRepositories).not.toHaveBeenCalled();
   });
 
@@ -419,7 +439,7 @@ describe("ImageBuildPlanner clone auth", () => {
 
   it("maps grant-read failures to unavailable auth without minting a fallback", async () => {
     mockEnvironment("team_a");
-    vi.mocked(TeamRepositoryGrantStore.prototype.covers).mockRejectedValue(
+    vi.mocked(TeamRepositoryGrantStore.prototype.listForTeam).mockRejectedValue(
       new Error("Grant store unavailable")
     );
 
@@ -429,6 +449,9 @@ describe("ImageBuildPlanner clone auth", () => {
 
     expect(plan.cloneAuth).toEqual({ type: "unavailable" });
     expect(scmProvider.generateCredentialHelperAuth).not.toHaveBeenCalled();
+    expect(TeamRepositoryGrantStore.prototype.listForTeam).toHaveBeenCalledExactlyOnceWith(
+      "team_a"
+    );
   });
 
   it("does not mint a token after all environment member grants are revoked", async () => {

@@ -36,10 +36,10 @@ export async function resolveRepositoryCredentialScope(
   ];
 
   if (ownerTeamId !== null && candidateIds.length > 0) {
-    const grants = new TeamRepositoryGrantStore(db);
-    if (!(await grants.covers(ownerTeamId, candidateIds))) {
-      const covered = await Promise.all(candidateIds.map((id) => grants.covers(ownerTeamId, [id])));
-      return repositoryCredentialScope(candidateIds.filter((_, index) => covered[index]));
+    const grants = await new TeamRepositoryGrantStore(db).listForTeam(ownerTeamId);
+    if (!grants.some((grant) => grant.grant_kind === "installation")) {
+      const allowed = new Set(grants.map((grant) => grant.repo_external_id));
+      return repositoryCredentialScope(candidateIds.filter((id) => allowed.has(id)));
     }
   }
   return repositoryCredentialScope(candidateIds);

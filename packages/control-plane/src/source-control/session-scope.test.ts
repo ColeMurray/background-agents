@@ -21,7 +21,9 @@ describe("resolveSessionCredentialScope", () => {
     vi.spyOn(SessionRepositoryStore.prototype, "listRepositoryIds").mockResolvedValue([
       { repoOwner: "acme", repoName: "web", repoId: 12 },
     ]);
-    vi.spyOn(TeamRepositoryGrantStore.prototype, "covers").mockResolvedValue(true);
+    vi.spyOn(TeamRepositoryGrantStore.prototype, "listForTeam").mockResolvedValue([
+      { grant_kind: "repository", repo_external_id: 12 },
+    ]);
     loadCatalog.mockReset().mockResolvedValue([]);
   });
 
@@ -41,7 +43,7 @@ describe("resolveSessionCredentialScope", () => {
     });
     expect(SessionIndexStore.prototype.get).toHaveBeenCalledExactlyOnceWith(SESSION_ID);
     expect(SessionRepositoryStore.prototype.listRepositoryIds).not.toHaveBeenCalled();
-    expect(TeamRepositoryGrantStore.prototype.covers).not.toHaveBeenCalled();
+    expect(TeamRepositoryGrantStore.prototype.listForTeam).not.toHaveBeenCalled();
     expect(loadCatalog).not.toHaveBeenCalled();
   });
 
@@ -54,7 +56,7 @@ describe("resolveSessionCredentialScope", () => {
     expect(SessionRepositoryStore.prototype.listRepositoryIds).toHaveBeenCalledExactlyOnceWith(
       SESSION_ID
     );
-    expect(TeamRepositoryGrantStore.prototype.covers).not.toHaveBeenCalled();
+    expect(TeamRepositoryGrantStore.prototype.listForTeam).not.toHaveBeenCalled();
     expect(loadCatalog).not.toHaveBeenCalled();
   });
 
@@ -115,20 +117,27 @@ describe("resolveSessionCredentialScope", () => {
       { repoOwner: "acme", repoName: "web", repoId: 12 },
       { repoOwner: "acme", repoName: "api", repoId: 30 },
     ]);
-    vi.mocked(TeamRepositoryGrantStore.prototype.covers)
-      .mockResolvedValueOnce(false)
-      .mockResolvedValueOnce(true)
-      .mockResolvedValueOnce(false);
+    vi.mocked(TeamRepositoryGrantStore.prototype.listForTeam)
+      .mockResolvedValueOnce([
+        { grant_kind: "repository", repo_external_id: 12 },
+        { grant_kind: "repository", repo_external_id: 50 },
+      ])
+      .mockResolvedValueOnce([{ grant_kind: "repository", repo_external_id: 30 }]);
 
     expect(await resolveSessionCredentialScope(db, SESSION_ID, loadCatalog)).toEqual({
       kind: "repositories",
       repositoryIds: [12],
     });
-    expect(TeamRepositoryGrantStore.prototype.covers).toHaveBeenNthCalledWith(
-      1,
-      "team-a",
-      [12, 30]
+    expect(TeamRepositoryGrantStore.prototype.listForTeam).toHaveBeenCalledExactlyOnceWith(
+      "team-a"
     );
+
+    expect(await resolveSessionCredentialScope(db, SESSION_ID, loadCatalog)).toEqual({
+      kind: "repositories",
+      repositoryIds: [30],
+    });
+    expect(TeamRepositoryGrantStore.prototype.listForTeam).toHaveBeenCalledTimes(2);
+    expect(TeamRepositoryGrantStore.prototype.listForTeam).toHaveBeenNthCalledWith(2, "team-a");
   });
 
   it("re-reads ownership and membership on every call", async () => {
@@ -140,6 +149,9 @@ describe("resolveSessionCredentialScope", () => {
       .mockResolvedValueOnce([{ repoOwner: "acme", repoName: "web", repoId: 12 }])
       .mockResolvedValueOnce([{ repoOwner: "acme", repoName: "api", repoId: 30 }])
       .mockResolvedValueOnce([{ repoOwner: "acme", repoName: "cli", repoId: 50 }]);
+    vi.mocked(TeamRepositoryGrantStore.prototype.listForTeam)
+      .mockResolvedValueOnce([{ grant_kind: "repository", repo_external_id: 12 }])
+      .mockResolvedValueOnce([{ grant_kind: "repository", repo_external_id: 30 }]);
 
     expect(await resolveSessionCredentialScope(db, SESSION_ID, loadCatalog)).toEqual({
       kind: "repositories",
@@ -156,9 +168,9 @@ describe("resolveSessionCredentialScope", () => {
 
     expect(SessionIndexStore.prototype.get).toHaveBeenCalledTimes(3);
     expect(SessionRepositoryStore.prototype.listRepositoryIds).toHaveBeenCalledTimes(3);
-    expect(TeamRepositoryGrantStore.prototype.covers).toHaveBeenCalledTimes(2);
-    expect(TeamRepositoryGrantStore.prototype.covers).toHaveBeenNthCalledWith(1, "team-a", [12]);
-    expect(TeamRepositoryGrantStore.prototype.covers).toHaveBeenNthCalledWith(2, "team-b", [30]);
+    expect(TeamRepositoryGrantStore.prototype.listForTeam).toHaveBeenCalledTimes(2);
+    expect(TeamRepositoryGrantStore.prototype.listForTeam).toHaveBeenNthCalledWith(1, "team-a");
+    expect(TeamRepositoryGrantStore.prototype.listForTeam).toHaveBeenNthCalledWith(2, "team-b");
   });
 
   it.each([
@@ -168,12 +180,13 @@ describe("resolveSessionCredentialScope", () => {
       repositories: [{ repoOwner: "acme", repoName: "web", repoId: null }],
     },
   ])("refuses $label without broadening credentials", async ({ repositories }) => {
+    vi.mocked(SessionIndexStore.prototype.get).mockResolvedValue(indexSession("team-a"));
     vi.mocked(SessionRepositoryStore.prototype.listRepositoryIds).mockResolvedValue(repositories);
 
     await expect(resolveSessionCredentialScope(db, SESSION_ID, loadCatalog)).rejects.toMatchObject({
       errorType: "permanent",
     });
-    expect(TeamRepositoryGrantStore.prototype.covers).not.toHaveBeenCalled();
+    expect(TeamRepositoryGrantStore.prototype.listForTeam).not.toHaveBeenCalled();
   });
 
   it("propagates session-store failures without reading membership", async () => {
@@ -192,15 +205,18 @@ describe("resolveSessionCredentialScope", () => {
 
     await expect(resolveSessionCredentialScope(db, SESSION_ID, loadCatalog)).rejects.toBe(error);
 
-    expect(TeamRepositoryGrantStore.prototype.covers).not.toHaveBeenCalled();
+    expect(TeamRepositoryGrantStore.prototype.listForTeam).not.toHaveBeenCalled();
     expect(loadCatalog).not.toHaveBeenCalled();
   });
 
   it("propagates grant-store failures without broadening credentials", async () => {
     vi.mocked(SessionIndexStore.prototype.get).mockResolvedValue(indexSession("team-a"));
     const error = new Error("Grant store unavailable");
-    vi.mocked(TeamRepositoryGrantStore.prototype.covers).mockRejectedValueOnce(error);
+    vi.mocked(TeamRepositoryGrantStore.prototype.listForTeam).mockRejectedValueOnce(error);
 
     await expect(resolveSessionCredentialScope(db, SESSION_ID, loadCatalog)).rejects.toBe(error);
+    expect(TeamRepositoryGrantStore.prototype.listForTeam).toHaveBeenCalledExactlyOnceWith(
+      "team-a"
+    );
   });
 });
