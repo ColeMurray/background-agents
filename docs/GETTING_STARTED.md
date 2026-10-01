@@ -378,7 +378,7 @@ modal_workspace             = "your-modal-workspace"
 modal_environment           = "your-modal-environment"
 modal_environment_web_suffix = "your-modal-web-suffix" # Lowercase letters, digits, dashes; empty for https://workspace--... endpoints
 
-# Sandbox provider: "modal" (default), "daytona", "vercel", "opencomputer", or "e2b"
+# Sandbox provider: "modal" (default), "modal-vm", "daytona", "vercel", "opencomputer", or "e2b"
 # sandbox_provider          = "modal"
 
 # Daytona (only required when sandbox_provider = "daytona")
@@ -737,8 +737,9 @@ Your core deployment is complete. Everything below is optional; follow only the 
 
 The core path uses Modal, the default `sandbox_provider`. To run sessions on another provider, set
 `sandbox_provider` in `terraform.tfvars` and follow the matching section below instead of the
-[Modal](#modal) credentials in Step 2. Terraform accepts `modal`, `daytona`, `vercel`,
-`opencomputer`, or `e2b`.
+[Modal](#modal) credentials in Step 2. Terraform accepts `modal`, `modal-vm`, `daytona`, `vercel`,
+`opencomputer`, or `e2b`. The `modal-vm` backend uses the same Modal credentials; see
+[Modal VM backend](MODAL_DOCKER.md).
 
 ### Daytona
 

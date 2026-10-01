@@ -124,13 +124,23 @@ credentials for pending cleanup, and rebuild images under the selected backend. 
 artifacts. Rollback to `modal` does not transparently resume VM sessions or prove old VMs have
 stopped.
 
-After changing `sandbox_provider` and applying Terraform, redeploy the web app. On Vercel, manually
-run the **Deploy Web** GitHub Actions workflow after the apply. Terraform updates
-`NEXT_PUBLIC_SANDBOX_PROVIDER`, but Vercel environment changes apply only to new deployments and
-`NEXT_PUBLIC_*` values are fixed at build time. Terraform-only changes do not trigger **Deploy
-Web**. Until the web app is redeployed, `GET /api/image-builds` still filters by the old provider,
-so the Pre-Built Images page shows the old provider's builds. This applies to any provider switch,
-not only switches to or from `modal-vm`.
+After changing `sandbox_provider`, apply Terraform and ensure the web app is deployed with the new
+provider. The deployment step depends on `web_platform`:
+
+- **Cloudflare**: `terraform apply` rebuilds and deploys the web Worker with the new provider. No
+  separate redeploy step is needed.
+- **Vercel**: after the apply, create a new production deployment through your configured CLI,
+  Git-linked, or GitHub Actions deployment path. If using Actions, manually run **Deploy Web**;
+  Terraform-only changes do not trigger it, and it skips deployment unless `VERCEL_API_TOKEN` and
+  `VERCEL_PROJECT_ID` are configured in GitHub. See
+  [Deploy the Web App](GETTING_STARTED.md#step-7-deploy-the-web-app) for the CLI and Git-linked
+  paths.
+
+Terraform updates `NEXT_PUBLIC_SANDBOX_PROVIDER`, but Vercel environment changes apply only to new
+deployments and `NEXT_PUBLIC_*` values are fixed at build time. Until the new Vercel deployment is
+live, `GET /api/image-builds` still filters by the old provider, so the Pre-Built Images page shows
+the old provider's builds. This applies to any provider switch, not only switches to or from
+`modal-vm`.
 
 PR #2007's earlier per-session Docker/variant design was not deployed. Its schema additions and
 settings are not part of this implementation, so no variant migration is required.
