@@ -9,7 +9,10 @@ New features, integrations, and notable improvements to Open-Inspect — newest 
 Team leads and workspace administrators can manage encrypted secrets from a team's Secrets tab.
 Team-owned sessions receive global secrets, then team secrets, then environment or repository
 secrets, with later scopes taking precedence. Environment image builds include the environment's
-team secrets; repository-shared images do not. Secret mutation audits contain key names only.
+team secrets; repository-shared images do not. Secret mutation audits contain key names only. Team
+secret changes atomically supersede affected environment images and request enabled rebuilds.
+Team-owned environment images require matching session ownership. Team-only legacy OAuth refresh
+tokens do not enable managed authentication; API keys remain usable.
 
 ## September 30, 2026
 

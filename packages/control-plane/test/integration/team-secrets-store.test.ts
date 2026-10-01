@@ -1,6 +1,7 @@
 import { env } from "cloudflare:test";
 import { beforeEach, describe, expect, it } from "vitest";
 import { decryptToken } from "../../src/auth/crypto";
+import { ImageBuildStore } from "../../src/db/image-builds";
 import {
   MAX_SECRETS_PER_SCOPE,
   MAX_TOTAL_VALUE_SIZE,
@@ -10,8 +11,15 @@ import {
 import type { SqlDatabase, SqlStatement } from "../../src/db/sql-database";
 import { TeamSecretsStore } from "../../src/db/team-secrets";
 import { TeamStore } from "../../src/db/teams";
+import { IMAGE_BUILD_PROVIDER_IDS } from "../../src/image-builds/model";
 import { cleanD1Tables } from "./cleanup";
 import { sqlDatabase } from "./helpers";
+import {
+  environmentScope,
+  getRow,
+  seedEnvironment,
+  seedImageRowForScope,
+} from "./image-build-helpers";
 
 const AUDIT = { requestId: "team-secret-request", actorUserId: "team-secret-actor" };
 
@@ -37,6 +45,30 @@ function failingAuditDatabase(): SqlDatabase {
       return db.batch<T>(statements);
     },
   };
+}
+
+function failingInvalidationDatabase(): SqlDatabase {
+  const db = sqlDatabase(env.DB);
+  return {
+    prepare(sql) {
+      return db.prepare(
+        sql.includes("UPDATE image_builds")
+          ? sql.replace("status = 'superseded'", "status = NULL")
+          : sql
+      );
+    },
+    batch<T>(statements: SqlStatement[]) {
+      return db.batch<T>(statements);
+    },
+  };
+}
+
+async function seedOwnedEnvironment(teamId: string, prebuildEnabled = false): Promise<string> {
+  const id = await seedEnvironment({ prebuildEnabled });
+  await env.DB.prepare("UPDATE environments SET owner_team_id = ? WHERE id = ?")
+    .bind(teamId, id)
+    .run();
+  return id;
 }
 
 describe("TeamSecretsStore", () => {
@@ -106,6 +138,103 @@ describe("TeamSecretsStore", () => {
     expect(await store.listSecretKeys(teamId)).toEqual([]);
     expect(await store.getDecryptedSecrets(other.id)).toEqual({ TOKEN: "second" });
   });
+
+  it.each(["set", "delete"] as const)(
+    "%s supersedes live images across providers only for the team's environments, even with prebuilds disabled",
+    async (mutation) => {
+      await store.setSecrets(teamId, { TOKEN: "original" });
+      const enabled = await seedOwnedEnvironment(teamId, true);
+      const disabled = await seedOwnedEnvironment(teamId);
+      const otherTeam = await new TeamStore(env.DB).create({
+        slug: "other-image-team",
+        name: "Other image team",
+        joinPolicy: "invite_only",
+      });
+      const other = await seedOwnedEnvironment(otherTeam.id);
+      const workspace = await seedEnvironment();
+      const expected: Record<string, string> = {};
+      for (const environmentId of [enabled, disabled]) {
+        for (const provider of IMAGE_BUILD_PROVIDER_IDS) {
+          for (const status of ["building", "ready"]) {
+            const id = `${environmentId}-${provider}-${status}`;
+            await seedImageRowForScope(environmentScope(environmentId), {
+              id,
+              provider,
+              status,
+              providerImageId: status === "ready" ? `image-${id}` : null,
+            });
+            expected[id] = "superseded";
+          }
+        }
+      }
+      for (const scope of [
+        environmentScope(other),
+        environmentScope(workspace),
+        { kind: "repo" as const, id: enabled },
+        { kind: "repo" as const, id: "acme/web" },
+      ]) {
+        for (const status of ["building", "ready"]) {
+          const id = `${scope.kind}-${scope.id}-${status}`;
+          await seedImageRowForScope(scope, { id, status });
+          expected[id] = status;
+        }
+      }
+      for (const status of ["failed", "superseded"]) {
+        await seedImageRowForScope(environmentScope(enabled), { id: status, status });
+        expected[status] = status;
+      }
+
+      if (mutation === "set") {
+        await store.setSecrets(teamId, { TOKEN: "rotated", NEW_KEY: "new" }, AUDIT);
+      } else {
+        expect(await store.deleteSecret(teamId, "token", AUDIT)).toBe(true);
+      }
+
+      const rows = (await env.DB.prepare("SELECT id, status FROM image_builds").all()).results;
+      expect(Object.fromEntries(rows.map((row) => [row.id, row.status]))).toEqual(expected);
+      expect(await secretAudits()).toHaveLength(1);
+    }
+  );
+
+  it.each([true, false])(
+    "does not invalidate images for empty writes or missing deletes (audit: %s)",
+    async (withAudit) => {
+      const environmentId = await seedOwnedEnvironment(teamId);
+      await seedImageRowForScope(environmentScope(environmentId), {
+        id: "unchanged-image",
+        status: "ready",
+        providerImageId: "unchanged-artifact",
+      });
+      const audit = withAudit ? AUDIT : undefined;
+      expect(await store.setSecrets(teamId, {}, audit)).toEqual({
+        created: 0,
+        updated: 0,
+        keys: [],
+      });
+      expect(await store.deleteSecret(teamId, "MISSING", audit)).toBe(false);
+      expect((await getRow("unchanged-image"))?.status).toBe("ready");
+      expect(await secretAudits()).toEqual([]);
+    }
+  );
+
+  it.each(["set", "delete"] as const)(
+    "invalidates images on a successful unaudited %s",
+    async (mutation) => {
+      await store.setSecrets(teamId, { TOKEN: "original" });
+      const environmentId = await seedOwnedEnvironment(teamId);
+      await seedImageRowForScope(environmentScope(environmentId), {
+        id: "unaudited-image",
+        status: "ready",
+      });
+      if (mutation === "set") {
+        await store.setSecrets(teamId, { TOKEN: "rotated" });
+      } else {
+        expect(await store.deleteSecret(teamId, "TOKEN")).toBe(true);
+      }
+      expect((await getRow("unaudited-image"))?.status).toBe("superseded");
+      expect(await secretAudits()).toEqual([]);
+    }
+  );
 
   it.each([
     { "BAD-KEY": "value" },
@@ -185,6 +314,11 @@ describe("TeamSecretsStore", () => {
 
   it("rolls back every upsert and deletion when the operation audit fails", async () => {
     await store.setSecrets(teamId, { TOKEN: "original" });
+    const environmentId = await seedOwnedEnvironment(teamId);
+    await seedImageRowForScope(environmentScope(environmentId), {
+      id: "audit-failure-image",
+      status: "ready",
+    });
     const failing = new TeamSecretsStore(failingAuditDatabase(), env.REPO_SECRETS_ENCRYPTION_KEY!);
     await expect(
       failing.setSecrets(teamId, { TOKEN: "changed", NEW_KEY: "new" }, AUDIT)
@@ -192,7 +326,36 @@ describe("TeamSecretsStore", () => {
     expect(await store.getDecryptedSecrets(teamId)).toEqual({ TOKEN: "original" });
     await expect(failing.deleteSecret(teamId, "TOKEN", AUDIT)).rejects.toThrow();
     expect(await store.getDecryptedSecrets(teamId)).toEqual({ TOKEN: "original" });
+    expect((await getRow("audit-failure-image"))?.status).toBe("ready");
     expect(await secretAudits()).toEqual([]);
+  });
+
+  it("rolls back secrets and key-only audits when image invalidation fails, leaving deletion retryable", async () => {
+    await store.setSecrets(teamId, { TOKEN: "original" });
+    const environmentId = await seedOwnedEnvironment(teamId);
+    const scope = environmentScope(environmentId);
+    await seedImageRowForScope(scope, {
+      id: "invalidation-failure-image",
+      status: "ready",
+      providerImageId: "original-artifact",
+    });
+    const failing = new TeamSecretsStore(
+      failingInvalidationDatabase(),
+      env.REPO_SECRETS_ENCRYPTION_KEY!
+    );
+    await expect(
+      failing.setSecrets(teamId, { TOKEN: "changed", NEW_KEY: "new" }, AUDIT)
+    ).rejects.toThrow();
+    expect(await store.getDecryptedSecrets(teamId)).toEqual({ TOKEN: "original" });
+    expect(await secretAudits()).toEqual([]);
+    await expect(failing.deleteSecret(teamId, "TOKEN", AUDIT)).rejects.toThrow();
+    expect(await store.getDecryptedSecrets(teamId)).toEqual({ TOKEN: "original" });
+    expect((await getRow("invalidation-failure-image"))?.status).toBe("ready");
+    expect(await secretAudits()).toEqual([]);
+
+    expect(await store.deleteSecret(teamId, "TOKEN", AUDIT)).toBe(true);
+    expect(await new ImageBuildStore(env.DB).getLatestReadyForSpawn(scope, "modal")).toBeNull();
+    expect(await secretAudits()).toHaveLength(1);
   });
 
   it("does not record an applied audit for a failed foreign-key mutation", async () => {

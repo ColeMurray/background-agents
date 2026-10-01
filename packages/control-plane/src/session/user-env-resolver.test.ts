@@ -356,7 +356,7 @@ describe("UserEnvResolver", () => {
   });
 
   describe("session-target secret fold", () => {
-    it("includes team broker secrets from the current public D1 session ownership", async () => {
+    it("loads team secrets from current D1 ownership without advertising team-only OAuth", async () => {
       const h = makeHarness();
       h.db.sessionIndexRow!.owner_team_id = "team_a";
       h.db.providerAuthRows = providerAuthRows({ ...API_KEY_MODES, xai: "legacy_scoped_oauth" });
@@ -368,9 +368,67 @@ describe("UserEnvResolver", () => {
           XAI_OAUTH_REFRESH_TOKEN: "team-refresh",
         })
       );
-      expect(await h.resolver.getUserEnvVars()).toEqual({ SHARED: "team", XAI_OAUTH_MANAGED: "1" });
+      expect(await h.resolver.getUserEnvVars()).toEqual({ SHARED: "team" });
       expect(h.db.sessionIndexBinds).toEqual(["sess-public-1"]);
     });
+
+    it.each([
+      ["openai", null],
+      ["openai", "env-1"],
+      ["xai", null],
+      ["xai", "env-1"],
+    ] as const)(
+      "retains the %s API key when only team OAuth is configured for %s",
+      async (provider, environmentId) => {
+        const h = makeHarness({ session: sessionRow({ environment_id: environmentId }) });
+        h.db.sessionIndexRow!.owner_team_id = "team_a";
+        h.db.providerAuthRows = providerAuthRows({
+          ...API_KEY_MODES,
+          [provider]: "legacy_scoped_oauth",
+        });
+        const prefix = provider.toUpperCase();
+        h.db.teamSecretRowsById.set(
+          "team_a",
+          await secretRows({
+            [`${prefix}_API_KEY`]: "team-api-key",
+            [`${prefix}_OAUTH_REFRESH_TOKEN`]: "unreadable-team-token",
+          })
+        );
+        expect(await h.resolver.getUserEnvVars()).toEqual({
+          [`${prefix}_API_KEY`]: "team-api-key",
+        });
+        expect(await h.resolver.getProviderAuthenticationError(`${provider}/model`)).toBeNull();
+        h.db.teamSecretRowsById.set(
+          "team_a",
+          await secretRows({
+            [`${prefix}_OAUTH_REFRESH_TOKEN`]: "unreadable-team-token",
+          })
+        );
+        expect(await h.resolver.getProviderAuthenticationError(`${provider}/model`)).toContain(
+          "authentication"
+        );
+      }
+    );
+
+    it.each([null, "env-1"])(
+      "still advertises readable global OAuth for target %s",
+      async (environmentId) => {
+        const h = makeHarness({ session: sessionRow({ environment_id: environmentId }) });
+        h.db.sessionIndexRow!.owner_team_id = "team_a";
+        h.db.providerAuthRows = providerAuthRows({ ...API_KEY_MODES, xai: "legacy_scoped_oauth" });
+        h.db.globalSecretRows = await secretRows({
+          XAI_OAUTH_REFRESH_TOKEN: "readable-global-token",
+        });
+        h.db.teamSecretRowsById.set(
+          "team_a",
+          await secretRows({
+            XAI_API_KEY: "team-key",
+            XAI_OAUTH_REFRESH_TOKEN: "unreadable-team-token",
+          })
+        );
+        expect(await h.resolver.getUserEnvVars()).toEqual({ XAI_OAUTH_MANAGED: "1" });
+      }
+    );
 
     it("does not query team secrets for workspace ownership", async () => {
       const h = makeHarness();

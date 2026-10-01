@@ -1,6 +1,8 @@
 import { Hono } from "hono";
+import { EnvironmentStore } from "../db/environments";
 import { TeamSecretsStore } from "../db/team-secrets";
 import { SecretsValidationError, normalizeKey } from "../db/secrets-validation";
+import { scheduleImageBuildOnSave } from "../image-builds/save-hooks";
 import { createLogger } from "../logger";
 import { admit, dispatch } from "../routing/admit";
 import type { ControlPlaneHonoEnv } from "../routing/hono-env";
@@ -33,6 +35,28 @@ function secretsError(cause: unknown, teamId: string, ctx: UserRouteContext): Re
     trace_id: ctx.trace_id,
   });
   return error("Secrets storage unavailable", 503);
+}
+
+async function scheduleTeamEnvironmentRebuilds(
+  env: Env,
+  teamId: string,
+  ctx: UserRouteContext
+): Promise<void> {
+  try {
+    const { environments } = await new EnvironmentStore(ctx.db).list();
+    for (const environment of environments) {
+      if (environment.owner_team_id === teamId && environment.prebuild_enabled === 1) {
+        scheduleImageBuildOnSave(env, { kind: "environment", id: environment.id }, ctx);
+      }
+    }
+  } catch {
+    // The mutation and invalidation are committed; rebuild failures must not fail the secret write.
+    logger.warn("Team secrets image rebuild scheduling unavailable", {
+      team_id: teamId,
+      request_id: ctx.request_id,
+      trace_id: ctx.trace_id,
+    });
+  }
 }
 
 async function listSecrets(
@@ -69,6 +93,7 @@ async function setSecrets(
       requestId: ctx.request_id,
       actorUserId: ctx.principal.userId,
     });
+    if (result.keys.length > 0) await scheduleTeamEnvironmentRebuilds(env, params.id, ctx);
     return json({ status: "updated", teamId: params.id, ...result });
   } catch (cause) {
     return secretsError(cause, params.id, ctx);
@@ -89,6 +114,7 @@ async function deleteSecret(
       actorUserId: ctx.principal.userId,
     });
     if (!deleted) return error("Secret not found", 404);
+    await scheduleTeamEnvironmentRebuilds(env, params.id, ctx);
     return json({ status: "deleted", teamId: params.id, key: normalizeKey(params.key) });
   } catch (cause) {
     return secretsError(cause, params.id, ctx);

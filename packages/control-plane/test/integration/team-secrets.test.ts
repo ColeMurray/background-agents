@@ -52,14 +52,13 @@ describe("team secret resolution", () => {
     return { ...session, vars: await getUserEnvVars(session.stub) };
   }
 
-  it("gives environment precedence over team and global and retains team broker credentials", async () => {
+  it("gives environment precedence over team and global without advertising team-only OAuth", async () => {
     const { vars } = await sessionEnv(TEAM_A, ENV_ID);
     expect(vars).toEqual({
       SHARED: "environment",
       GLOBAL_TEAM: "team-a",
       GLOBAL_ONLY: "global",
       TEAM_ONLY: "a",
-      XAI_OAUTH_MANAGED: "1",
     });
   });
 
@@ -70,7 +69,6 @@ describe("team secret resolution", () => {
       GLOBAL_TEAM: "team-a",
       GLOBAL_ONLY: "global",
       TEAM_ONLY: "a",
-      XAI_OAUTH_MANAGED: "1",
     });
   });
 

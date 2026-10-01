@@ -8,7 +8,7 @@ import {
   type SecretsWriteResult,
 } from "./scoped-secrets";
 import { normalizeKey, validateKey, type SecretMetadata } from "./secrets-validation";
-import type { SqlDatabase } from "./sql-database";
+import type { SqlDatabase, SqlStatement } from "./sql-database";
 import { TeamAuditStore, type TeamAuditInput } from "./team-audit";
 
 const keyRowSchema = z.object({ key: z.string().min(1) });
@@ -67,6 +67,7 @@ export class TeamSecretsStore {
           })
         );
       }
+      statements.push(this.bindSupersedeEnvironmentImages(teamId));
       await this.db.batch(statements);
     }
     return { created, updated, keys };
@@ -115,7 +116,21 @@ export class TeamSecretsStore {
         )
       );
     }
+    statements.push(this.bindSupersedeEnvironmentImages(teamId));
     const [deleted] = await this.db.batch(statements);
     return deleted.meta.changes > 0;
+  }
+
+  private bindSupersedeEnvironmentImages(teamId: string): SqlStatement {
+    // Keep this after the mutation and its audit: either changes one row, but a missing delete does not.
+    return this.db
+      .prepare(
+        `UPDATE image_builds SET status = 'superseded'
+         WHERE scope_kind = 'environment'
+           AND scope_id IN (SELECT id FROM environments WHERE owner_team_id = ?)
+           AND status IN ('building', 'ready')
+           AND changes() = 1`
+      )
+      .bind(teamId);
   }
 }

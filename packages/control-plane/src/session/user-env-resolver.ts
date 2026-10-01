@@ -209,14 +209,14 @@ export class UserEnvResolver {
     }
 
     const primary = members.find((member) => member.isPrimary);
-    const managedSources = session.environment_id
-      ? sources
-      : sources.filter(
-          (source) =>
-            source.label === "global" ||
-            source.label === "team" ||
-            (primary && source.label === `${primary.repoOwner}/${primary.repoName}`)
-        );
+    // Legacy OAuth brokers can read only global and target scopes, not team secrets.
+    const managedSources = sources.filter(
+      (source) =>
+        source.label === "global" ||
+        (session.environment_id
+          ? source.label === "environment"
+          : primary && source.label === `${primary.repoOwner}/${primary.repoName}`)
+    );
     const managedSecrets = mergeSecretSources(managedSources).merged;
     const sandboxEnv = prepareManagedProviderEnv({
       exposedSecrets: merge.merged,
