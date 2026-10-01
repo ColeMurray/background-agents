@@ -33,6 +33,7 @@ import {
   type AutomationRepositoryInsert,
 } from "../db/automation-store";
 import { SlackChannelStore } from "../db/slack-channel-store";
+import { EnvironmentStore } from "../db/environments";
 import {
   AutomationModelProviderAuthStore,
   toProviderSelections,
@@ -561,6 +562,21 @@ async function handleUpdateAutomation(
     } catch (e) {
       if (e instanceof TargetSelectionError) return error(e.message, 400);
       throw e;
+    }
+    if (existing.owner_team_id && replacementEnvironmentIds?.length) {
+      const environments = new EnvironmentStore(ctx.db);
+      for (const environmentId of replacementEnvironmentIds) {
+        const repositories = await environments.getRepositoriesForEnvironment(environmentId);
+        const denied = await authorizeTeamRepositories(ctx, {
+          teamId: existing.owner_team_id,
+          repositories: repositories.map((repository) => ({
+            owner: repository.repo_owner,
+            name: repository.repo_name,
+            repoId: repository.repo_id,
+          })),
+        });
+        if (denied) return denied;
+      }
     }
     if (selection.kind === "replace") {
       const resolved = await resolveRepositorySelection(

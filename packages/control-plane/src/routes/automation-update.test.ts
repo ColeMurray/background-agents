@@ -189,6 +189,7 @@ describe("automation read, update, and delete routes", () => {
         expect(mockBatch).not.toHaveBeenCalled();
         expect(resolveRepoOrError).not.toHaveBeenCalled();
         expect(mockEnvironmentStore.getById).not.toHaveBeenCalled();
+        expect(mockEnvironmentStore.getRepositoriesForEnvironment).not.toHaveBeenCalled();
       }
     );
 
@@ -212,6 +213,136 @@ describe("automation read, update, and delete routes", () => {
       expect(mockStore.bindAutomationUpdate).not.toHaveBeenCalled();
       expect(mockStore.bindReplaceRepositories).not.toHaveBeenCalled();
       expect(mockBatch).not.toHaveBeenCalled();
+    });
+
+    it.each([false, true])(
+      "denies an ungranted repository in a later replacement environment (mixed targets: %s)",
+      async (mixedTargets) => {
+        mockStore.getById.mockResolvedValue({ ...sampleRow, owner_team_id: "team_alpha" });
+        mockEnvironmentStore.getRepositoriesForEnvironment.mockImplementation(
+          async (id: string) => [
+            {
+              environment_id: id,
+              position: 0,
+              repo_owner: "acme",
+              repo_name: id === "env_granted" ? "web" : "api",
+              repo_id: id === "env_granted" ? 1 : 2,
+              base_branch: "main",
+            },
+          ]
+        );
+        const grants = vi
+          .spyOn(TeamRepositoryGrantStore.prototype, "listForTeam")
+          .mockResolvedValue([
+            { grant_kind: "repository", repo_external_id: 1 },
+            { grant_kind: "repository", repo_external_id: 12345 },
+          ]);
+
+        const res = await callRoute("PUT", "/automations/auto-1", {
+          body: {
+            name: "Updated",
+            environmentIds: ["env_granted", "env_ungranted"],
+            ...(mixedTargets ? { repositories: [{ repoOwner: "acme", repoName: "app" }] } : {}),
+          },
+        });
+
+        expect(res.status).toBe(409);
+        await expect(res.json()).resolves.toMatchObject({
+          code: "target_team_missing_grant",
+          repository: "acme/api",
+        });
+        expect(mockEnvironmentStore.getRepositoriesForEnvironment).toHaveBeenCalledWith(
+          "env_granted"
+        );
+        expect(mockEnvironmentStore.getRepositoriesForEnvironment).toHaveBeenCalledWith(
+          "env_ungranted"
+        );
+        expect(grants).toHaveBeenCalledWith("team_alpha");
+        expect(mockStore.bindAutomationUpdate).not.toHaveBeenCalled();
+        expect(mockStore.bindReplaceRepositories).not.toHaveBeenCalled();
+        expect(mockStore.bindReplaceEnvironments).not.toHaveBeenCalled();
+        expect(mockBatch).not.toHaveBeenCalled();
+      }
+    );
+
+    it.each([
+      { repoId: 7, grant: { grant_kind: "repository", repo_external_id: 7 } as const },
+      { repoId: null, grant: { grant_kind: "installation", repo_external_id: null } as const },
+    ])(
+      "accepts granted environment repositories without repositories.use",
+      async ({ repoId, grant }) => {
+        mockStore.getById.mockResolvedValue({ ...sampleRow, owner_team_id: "team_alpha" });
+        mockEnvironmentStore.getRepositoriesForEnvironment.mockResolvedValue([
+          {
+            environment_id: "env_1",
+            position: 0,
+            repo_owner: "acme",
+            repo_name: "app",
+            repo_id: repoId,
+            base_branch: "main",
+          },
+        ]);
+        const grants = vi
+          .spyOn(TeamRepositoryGrantStore.prototype, "listForTeam")
+          .mockResolvedValue([grant]);
+
+        const res = await callRoute("PUT", "/automations/auto-1", {
+          body: { environmentIds: ["env_1"] },
+          permissions: PERMISSION_IDS.filter((permission) => permission !== "repositories.use"),
+        });
+
+        expect(res.status).toBe(200);
+        expect(mockEnvironmentStore.getRepositoriesForEnvironment).toHaveBeenCalledWith("env_1");
+        expect(grants).toHaveBeenCalledWith("team_alpha");
+        expect(resolveRepoOrError).not.toHaveBeenCalled();
+        expect(mockStore.bindReplaceEnvironments).toHaveBeenCalledWith(
+          "auto-1",
+          ["env_1"],
+          expect.any(Number)
+        );
+        expect(mockBatch).toHaveBeenCalled();
+      }
+    );
+
+    it("requires an installation grant for an unresolved replacement environment repository", async () => {
+      mockStore.getById.mockResolvedValue({ ...sampleRow, owner_team_id: "team_alpha" });
+      mockEnvironmentStore.getRepositoriesForEnvironment.mockResolvedValue([
+        {
+          environment_id: "env_1",
+          position: 0,
+          repo_owner: "acme",
+          repo_name: "app",
+          repo_id: null,
+          base_branch: "main",
+        },
+      ]);
+      vi.spyOn(TeamRepositoryGrantStore.prototype, "listForTeam").mockResolvedValue([
+        { grant_kind: "repository", repo_external_id: 7 },
+      ]);
+
+      const res = await callRoute("PUT", "/automations/auto-1", {
+        body: { environmentIds: ["env_1"] },
+      });
+
+      expect(res.status).toBe(409);
+      await expect(res.json()).resolves.toMatchObject({
+        code: "target_team_missing_grant",
+        repository: "acme/app",
+      });
+      expect(mockBatch).not.toHaveBeenCalled();
+    });
+
+    it("leaves workspace-level automation environment replacements unscoped", async () => {
+      const grants = vi.spyOn(TeamRepositoryGrantStore.prototype, "listForTeam");
+
+      const res = await callRoute("PUT", "/automations/auto-1", {
+        body: { environmentIds: ["env_1"] },
+      });
+
+      expect(res.status).toBe(200);
+      expect(mockEnvironmentStore.getRepositoriesForEnvironment).not.toHaveBeenCalled();
+      expect(grants).not.toHaveBeenCalled();
+      expect(mockBatch).toHaveBeenCalled();
     });
 
     it.each([{ environmentIds: ["env_1"] }, { environmentIds: [] }])(
