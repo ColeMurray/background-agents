@@ -4,6 +4,14 @@ New features, integrations, and notable improvements to Open-Inspect — newest 
 
 ## Unreleased
 
+### Added
+
+The Slack and Linear classifiers can request a reasoning effort from an OpenAI classification model.
+Set `classification_reasoning_effort` (or the `CLASSIFICATION_REASONING_EFFORT` Actions variable) to
+a value such as `low`, and the classifiers send it as `reasoning_effort`. When it is blank, the
+classifiers send nothing and OpenAI uses the model's default, as before. An Anthropic classification
+model rejects the setting at plan time.
+
 ### Changed
 
 Team-owned session actions now require current owning-team membership in every `TEAMS_ENFORCEMENT`

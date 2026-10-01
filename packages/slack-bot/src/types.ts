@@ -32,6 +32,7 @@ export interface Env {
   WEB_APP_URL: string;
   DEFAULT_MODEL: string;
   CLASSIFICATION_MODEL: string;
+  CLASSIFICATION_REASONING_EFFORT?: string; // OpenAI classifiers only; unset keeps the model default
   APP_NAME?: string;
 
   // Secrets
