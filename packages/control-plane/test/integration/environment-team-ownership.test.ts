@@ -196,8 +196,107 @@ describe("environment team ownership", () => {
       canManage: true,
       canUse: true,
     });
-    expect((await memberRequest("/environments", "POST", CREATE_BODY)).status).toBe(403);
+    expect((await memberRequest("/environments", "POST", CREATE_BODY)).status).toBe(201);
   });
+
+  it.each([false, true])(
+    "allows workspace CRUD for a custom manage role without admin or lead rights, read grant %s",
+    async (canRead) => {
+      await env.DB.prepare(
+        "DELETE FROM role_permissions WHERE role_id = ? AND permission_id NOT IN (?, ?)"
+      )
+        .bind(
+          MANAGER_ROLE,
+          "environments.manage",
+          canRead ? "environments.read" : "environments.manage"
+        )
+        .run();
+      const capabilities = { canRead, canManage: true, canUse: false };
+
+      const response = await memberRequest("/environments", "POST", CREATE_BODY);
+      expect(response.status).toBe(201);
+      const { environment: created } = await response.json<{ environment: Environment }>();
+      expect(created.ownerTeamId).toBeNull();
+      expect(created.capabilities).toEqual(capabilities);
+      const store = new EnvironmentStore(env.DB);
+      expect(await store.getById(created.id)).toMatchObject({ owner_team_id: null });
+
+      const read = await memberRequest(`/environments/${created.id}`);
+      const list = await memberRequest("/environments?teamId=null");
+      expect(read.status).toBe(canRead ? 200 : 403);
+      expect(list.status).toBe(canRead ? 200 : 403);
+      if (canRead) {
+        expect(await read.json()).toMatchObject({
+          environment: { id: created.id, capabilities },
+        });
+        expect(await list.json()).toMatchObject({
+          total: 1,
+          environments: [{ id: created.id, capabilities }],
+        });
+      } else {
+        expect(await read.json()).toMatchObject({ reason_code: "missing_permission" });
+        expect(await list.json()).toMatchObject({
+          code: "permission_required",
+          permission: "environments.read",
+        });
+      }
+
+      const updated = await memberRequest(`/environments/${created.id}`, "PUT", {
+        description: "Custom-role edit",
+      });
+      expect(updated.status).toBe(200);
+      expect(await updated.json()).toMatchObject({
+        environment: { id: created.id, description: "Custom-role edit", capabilities },
+      });
+      expect(await store.getById(created.id)).toMatchObject({ description: "Custom-role edit" });
+      expect((await memberRequest(`/environments/${created.id}`, "DELETE")).status).toBe(200);
+      expect(await store.getById(created.id)).toBeNull();
+      expect(await store.getRepositoriesForEnvironment(created.id)).toEqual([]);
+    }
+  );
+
+  it.each(["missing manage grant", "suspended"] as const)(
+    "denies workspace management when the custom-role actor is %s",
+    async (denial) => {
+      const id = await environment(null, "Protected workspace");
+      const store = new EnvironmentStore(env.DB);
+      const original = await store.getById(id);
+      if (denial === "suspended") {
+        await env.DB.prepare("UPDATE users SET suspended_at = ? WHERE id = ?")
+          .bind(Date.now(), MEMBER)
+          .run();
+      } else {
+        await env.DB.prepare(
+          "DELETE FROM role_permissions WHERE role_id = ? AND permission_id = 'environments.manage'"
+        )
+          .bind(MANAGER_ROLE)
+          .run();
+        const read = await memberRequest(`/environments/${id}`);
+        expect(read.status).toBe(200);
+        expect(await read.json()).toMatchObject({
+          environment: { capabilities: { canRead: true, canManage: false, canUse: true } },
+        });
+      }
+
+      const create = await memberRequest("/environments", "POST", CREATE_BODY);
+      expect(create.status).toBe(403);
+      for (const method of ["PUT", "DELETE"]) {
+        const response = await memberRequest(
+          `/environments/${id}`,
+          method,
+          method === "PUT" ? { description: "Must not save" } : undefined
+        );
+        expect(response.status, method).toBe(403);
+        if (denial === "missing manage grant") {
+          expect(await response.json()).toMatchObject({ reason_code: "missing_permission" });
+        }
+      }
+      expect(repositoryResolution.resolveSessionRepositories).not.toHaveBeenCalled();
+      expect(await store.getById(id)).toEqual(original);
+      expect((await store.list()).total).toBe(1);
+      expect(await store.getRepositoriesForEnvironment(id)).toMatchObject([WEB]);
+    }
+  );
 
   it("refuses missing and archived create teams before repository resolution", async () => {
     expect(
@@ -277,7 +376,11 @@ describe("environment team ownership", () => {
     expect(list.total).toBe(2);
     expect(list.environments.map((row) => row.id).sort()).toEqual([workspaceId, visibleId].sort());
     for (const row of list.environments) {
-      expect(row.capabilities).toEqual({ canRead: true, canManage: false, canUse: true });
+      expect(row.capabilities).toEqual({
+        canRead: true,
+        canManage: row.ownerTeamId === null,
+        canUse: true,
+      });
     }
     expect(await (await memberRequest(`/environments?teamId=${visible.id}`)).json()).toMatchObject({
       total: 1,
@@ -321,6 +424,36 @@ describe("environment team ownership", () => {
       (await memberRequest(`/environments/${id}`, "PUT", { description: "Updated" })).status
     ).toBe(200);
     expect((await memberRequest(`/environments/${id}`, "DELETE")).status).toBe(200);
+  });
+
+  it("keeps ordinary team members without environments.manage read-only", async () => {
+    const target = await team("ordinary-member");
+    await new TeamMembershipStore(env.DB).add(target.id, MEMBER);
+    await env.DB.prepare(
+      "UPDATE user_role_assignments SET role_id = (SELECT id FROM roles WHERE key = 'member') WHERE user_id = ?"
+    )
+      .bind(MEMBER)
+      .run();
+    const id = await environment(target.id);
+    const read = await memberRequest(`/environments/${id}`);
+    expect(read.status).toBe(200);
+    expect(await read.json()).toMatchObject({
+      environment: { capabilities: { canRead: true, canManage: false, canUse: true } },
+    });
+    expect(
+      (await memberRequest("/environments", "POST", { ...CREATE_BODY, teamId: target.id })).status
+    ).toBe(403);
+    for (const method of ["PUT", "DELETE"]) {
+      const denied = await memberRequest(
+        `/environments/${id}`,
+        method,
+        method === "PUT" ? { description: "Must not save" } : undefined
+      );
+      expect(denied.status, method).toBe(403);
+      expect(await denied.json()).toMatchObject({ reason_code: "missing_permission" });
+    }
+    expect(repositoryResolution.resolveSessionRepositories).not.toHaveBeenCalled();
+    expect(await new EnvironmentStore(env.DB).getById(id)).toMatchObject({ description: null });
   });
 
   it("denies reads without read permission while preserving independent manage and use capabilities", async () => {
@@ -406,6 +539,7 @@ describe("environment team ownership", () => {
     const response = await memberRequest("/sessions", "POST", {
       title: "Use-only environment launch",
       environmentId: id,
+      teamId: target.id,
       model: "anthropic/claude-haiku-4-5",
     });
 

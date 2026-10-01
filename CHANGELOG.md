@@ -38,6 +38,12 @@ their ownership and visibility. The require-team creation setting also applies t
 and environments. These owned-resource checks apply in every session enforcement mode;
 source-control token narrowing remains a separate change.
 
+Team environments require matching session ownership, including inherited child targets. Slack
+follow-ups use the persisted session's collaboration decision, and automation history redacts
+inaccessible session metadata. Workspace environment management remains permission-based for custom
+roles. Secret imports recheck the source repository's team grant, and executor reassignment verifies
+the candidate's launch permissions before writing.
+
 ### Removed
 
 Removed the team Activity tab and `GET /teams/:id/activity` endpoint. Team operations continue to be

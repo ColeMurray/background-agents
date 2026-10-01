@@ -11,6 +11,7 @@ import type { ControlPlaneHonoEnv } from "../routing/hono-env";
 import { EnvironmentStore, type EnvironmentRow } from "../db/environments";
 import { EnvironmentSecretsStore } from "../db/environment-secrets";
 import { GlobalSecretsStore } from "../db/global-secrets";
+import { TeamRepositoryGrantStore } from "../db/team-repository-grants";
 import { SecretsValidationError, normalizeKey, validateKey } from "../db/secrets-validation";
 import {
   scheduleImageBuildOnSave,
@@ -220,8 +221,9 @@ async function handleDeleteEnvironmentSecret(
 /**
  * Import secrets from a member repo into the environment, ciphertext-verbatim.
  * Authorization: the source repo MUST be a current member (non-members are
- * rejected 403). The response carries key names only — never plaintext or
- * ciphertext values (design §7.4).
+ * rejected 403). Team-owned imports also require a current grant for the source's
+ * numeric repository ID. The response carries key names only — never plaintext
+ * or ciphertext values (design §7.4).
  */
 async function handleImportEnvironmentSecrets(
   request: Request,
@@ -262,6 +264,21 @@ async function handleImportEnvironmentSecrets(
   let repoId = sourceRepo.repo_id;
   if (repoId == null) {
     repoId = (await resolveRepoOrError(env, srcOwner, srcName, ctx, logger)).repoId;
+  }
+
+  if (
+    environment.owner_team_id !== null &&
+    !(await new TeamRepositoryGrantStore(ctx.db).covers(environment.owner_team_id, [repoId]))
+  ) {
+    return json(
+      {
+        error: "Target team lacks repository grant",
+        code: "target_team_missing_grant",
+        reason_code: "target_team_missing_grant",
+        repository: `${srcOwner}/${srcName}`,
+      },
+      409
+    );
   }
 
   const secretsStore = new EnvironmentSecretsStore(ctx.db, config.key);

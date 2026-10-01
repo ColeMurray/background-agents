@@ -1,5 +1,6 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { HarnessId } from "@open-inspect/shared/harnesses";
+import type { SessionVisibility } from "@open-inspect/shared/types/teams";
 import {
   fakeSessionRuntimeDispatch,
   handleRequest,
@@ -10,6 +11,9 @@ import {
 import { getEffectiveEnabledModels } from "./db/model-preferences";
 import { SessionIndexStore } from "./db/session-index";
 import { SessionInternalPaths } from "./session/contracts";
+import { TeamMembershipStore } from "./db/team-memberships";
+
+const environmentMocks = vi.hoisted(() => ({ getById: vi.fn() }));
 
 const integrationSettingsMocks = vi.hoisted(() => ({
   resolveCodeServerEnabled: vi.fn().mockResolvedValue(false),
@@ -23,7 +27,7 @@ vi.mock("./db/session-index", () => ({
 
 vi.mock("./db/environments", () => ({
   EnvironmentStore: vi.fn().mockImplementation(function () {
-    return { getById: vi.fn(async () => ({ id: "env_parent", owner_team_id: null })) };
+    return environmentMocks;
   }),
 }));
 
@@ -103,13 +107,15 @@ describe("handleSpawnChild prompt enqueue handling", () => {
   const makeStore = (
     parentUserId: string | null = null,
     context: typeof spawnContext = spawnContext,
-    environmentId: string | null = "env_parent"
+    environmentId: string | null = "env_parent",
+    ownerTeamId: string | null = null,
+    visibility: SessionVisibility = "workspace"
   ) => ({
     get: vi.fn().mockResolvedValue({
       id: parentId,
       userId: parentUserId,
-      ownerTeamId: null,
-      visibility: "workspace",
+      ownerTeamId,
+      visibility,
       repoOwner: context.repoOwner,
       repoName: context.repoName,
       environmentId,
@@ -129,11 +135,14 @@ describe("handleSpawnChild prompt enqueue handling", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    environmentMocks.getById.mockResolvedValue({ id: "env_parent", owner_team_id: null });
     vi.mocked(getEffectiveEnabledModels).mockResolvedValue(["anthropic/claude-sonnet-4-6"]);
     integrationSettingsMocks.resolveCodeServerEnabled.mockResolvedValue(false);
     integrationSettingsMocks.resolveVncEnabled.mockResolvedValue(false);
     integrationSettingsMocks.resolveSandboxSettings.mockResolvedValue({});
   });
+
+  afterEach(() => vi.restoreAllMocks());
 
   it("copies the exact parent provider auth snapshot with immediate inheritance", async () => {
     const store = makeStore();
@@ -289,6 +298,88 @@ describe("handleSpawnChild prompt enqueue handling", () => {
     });
     expect(store.create).not.toHaveBeenCalled();
   });
+
+  it.each([null, "team_b"])(
+    "rejects a visible environment when the parent's owner is %s before settings or initialization",
+    async (ownerTeamId) => {
+      const store = makeStore(
+        "canonical-user-123",
+        spawnContext,
+        "env_parent",
+        ownerTeamId,
+        "private"
+      );
+      vi.mocked(SessionIndexStore).mockImplementation(function () {
+        return store as never;
+      });
+      environmentMocks.getById.mockResolvedValue({ id: "env_parent", owner_team_id: "team_a" });
+      vi.spyOn(TeamMembershipStore.prototype, "listForUser").mockResolvedValue(
+        new Map([
+          ["team_a", "member"],
+          ["team_b", "member"],
+        ])
+      );
+      const { env, childStub } = makeSuccessfulEnv(spawnContext, [
+        "sessions.read",
+        "sessions.create",
+        "sessions.collaborate",
+        "environments.use",
+      ]);
+
+      const response = await makeRequest(env);
+
+      expect(response.status).toBe(409);
+      await expect(response.json()).resolves.toMatchObject({
+        code: "environment_team_mismatch",
+        reason_code: "environment_team_mismatch",
+      });
+      expect(integrationSettingsMocks.resolveSandboxSettings).not.toHaveBeenCalled();
+      expect(integrationSettingsMocks.resolveCodeServerEnabled).not.toHaveBeenCalled();
+      expect(integrationSettingsMocks.resolveVncEnabled).not.toHaveBeenCalled();
+      expect(store.getCompleteProviderAuth).not.toHaveBeenCalled();
+      expect(store.acquireChildAdmissionLease).not.toHaveBeenCalled();
+      expect(store.create).not.toHaveBeenCalled();
+      expect(childStub.fetch).not.toHaveBeenCalled();
+    }
+  );
+
+  it.each([
+    { environmentOwnerTeamId: "team_a", ownerTeamId: "team_a" },
+    { environmentOwnerTeamId: null, ownerTeamId: "team_a" },
+  ])(
+    "inherits compatible environment ownership from $environmentOwnerTeamId to $ownerTeamId",
+    async ({ environmentOwnerTeamId, ownerTeamId }) => {
+      const store = makeStore("canonical-user-123", spawnContext, "env_parent", ownerTeamId);
+      vi.mocked(SessionIndexStore).mockImplementation(function () {
+        return store as never;
+      });
+      environmentMocks.getById.mockResolvedValue({
+        id: "env_parent",
+        owner_team_id: environmentOwnerTeamId,
+      });
+      vi.spyOn(TeamMembershipStore.prototype, "listForUser").mockResolvedValue(
+        new Map([["team_a", "member"]])
+      );
+      const { env, childStub } = makeSuccessfulEnv(spawnContext, [
+        "sessions.read",
+        "sessions.create",
+        "sessions.collaborate",
+        "environments.use",
+      ]);
+
+      const response = await makeRequest(env);
+
+      expect(response.status).toBe(201);
+      expect(store.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          ownerTeamId,
+          visibility: "workspace",
+          environmentId: "env_parent",
+        })
+      );
+      await expect(getInitBody(childStub)).resolves.toMatchObject({ environmentId: "env_parent" });
+    }
+  );
 
   async function getInitBody(childStub: DurableObjectStub) {
     const initRequest = vi.mocked(childStub.fetch).mock.calls.find((call) => {

@@ -66,6 +66,8 @@ import { GitHubAttributionUnavailableError } from "../source-control/github-cred
 import { UserStore } from "../db/user-store";
 import { TeamStore } from "../db/teams";
 import { TeamRepositoryGrantStore } from "../db/team-repository-grants";
+import { AuthorizationService } from "../authorization/service";
+import { evaluateSessionAdmission } from "../authorization/session-admission";
 import { createRequestMetrics } from "../db/instrumented-sql-database";
 import { generateId } from "../auth/crypto";
 import { createLogger, parseLogLevel } from "../logger";
@@ -89,10 +91,7 @@ import {
   resolveAutomationSessionTarget,
   type AutomationSessionTarget,
 } from "../automation/session-target";
-import {
-  isAutomationExecutionAuthorized,
-  isPrincipalAuthorized,
-} from "../automation/authorization-guard";
+import { isAutomationExecutionAuthorized } from "../automation/authorization-guard";
 import type { RequestContext } from "../routes/shared";
 import { deliverWithRetry } from "../session/callback-delivery";
 import {
@@ -1130,8 +1129,10 @@ export class Scheduler {
       slackContextPromise ??= this.buildSlackContextWithThread(slackEvent);
       return slackContextPromise;
     };
-    let slackSteeringActorPromise: Promise<string | null> | undefined;
-    const slackSteeringActor = (slackEvent: SlackAutomationEvent): Promise<string | null> => {
+    let slackSteeringActorPromise: Promise<RequestContext | null> | undefined;
+    const slackSteeringActor = (
+      slackEvent: SlackAutomationEvent
+    ): Promise<RequestContext | null> => {
       slackSteeringActorPromise ??= (async () => {
         try {
           const identity = await new UserStore(this.db).getIdentity(
@@ -1139,9 +1140,23 @@ export class Scheduler {
             slackEvent.actorUserId
           );
           if (!identity) return null;
-          return (await isPrincipalAuthorized(this.db, identity.userId, "sessions.collaborate"))
-            ? identity.userId
-            : null;
+          const authorization = await new AuthorizationService(this.db).getEffectiveAuthorization(
+            identity.userId
+          );
+          if (
+            authorization.suspendedAt !== null ||
+            !authorization.permissions.includes("sessions.collaborate")
+          )
+            return null;
+          return {
+            db: this.db,
+            trace_id: `automation:slack-steering:${slackEvent.triggerKey}`,
+            request_id: slackEvent.triggerKey,
+            metrics: createRequestMetrics(),
+            executionCtx: this.backgroundJobs,
+            principal: { kind: "user", userId: identity.userId },
+            authorization,
+          } satisfies RequestContext;
         } catch (error) {
           this.log.warn("Failed to authorize slack actor for session steering", {
             event: "scheduler.slack_steer_authorization_failed",
@@ -1182,8 +1197,27 @@ export class Scheduler {
           now - SLACK_THREAD_CONTINUITY_WINDOW_MS
         );
         if (steerable?.session_id) {
-          const actorUserId = await slackSteeringActor(event);
-          if (!actorUserId) {
+          const actor = await slackSteeringActor(event);
+          let canSteer = false;
+          if (actor?.authorization) {
+            try {
+              const admission = await evaluateSessionAdmission(
+                actor,
+                this.env,
+                steerable.session_id,
+                "collaborate",
+                null
+              );
+              canSteer = admission.kind === "allowed";
+            } catch (error) {
+              this.log.warn("Failed to authorize slack actor for the thread session", {
+                event: "scheduler.slack_steer_authorization_failed",
+                session_id: steerable.session_id,
+                error: error instanceof Error ? error : new Error(String(error)),
+              });
+            }
+          }
+          if (!actor?.authorization || !canSteer) {
             this.log.warn("Blocked slack steering for unauthorized actor", {
               event: "scheduler.slack_steer_unauthorized",
               automation_id: automation.id,
@@ -1192,7 +1226,7 @@ export class Scheduler {
             });
             continue;
           }
-          if (await this.steerSession(steerable, automation, event, actorUserId)) {
+          if (await this.steerSession(steerable, automation, event, actor.authorization.userId)) {
             steered++;
             continue;
           }

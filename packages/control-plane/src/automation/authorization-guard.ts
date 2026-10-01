@@ -1,4 +1,3 @@
-import { type PermissionId } from "@open-inspect/shared/rbac";
 import { rolePermissionPredicate } from "../authorization/permission-sql";
 import type { SqlDatabase } from "../db/sql-database";
 
@@ -43,19 +42,6 @@ function executionPredicate(request: AutomationExecutionAuthorizationRequest): S
   };
 }
 
-function principalPredicate(userId: string, permission: PermissionId): SqlPredicate {
-  const permissionGuard = rolePermissionPredicate(permission);
-  return {
-    sql: `EXISTS (
-      SELECT 1 FROM users u
-      JOIN user_role_assignments ura ON ura.user_id = u.id
-      JOIN roles r ON r.id = ura.role_id
-      WHERE u.id = ? AND u.suspended_at IS NULL AND ${permissionGuard.sql}
-    )`,
-    values: [userId, ...permissionGuard.values],
-  };
-}
-
 /**
  * Revalidates that an automation's execution principal may create its session and use its targets.
  *
@@ -71,20 +57,6 @@ export async function isAutomationExecutionAuthorized(
   request: AutomationExecutionAuthorizationRequest
 ): Promise<boolean> {
   const predicate = executionPredicate(request);
-  const row = await db
-    .prepare(`SELECT CASE WHEN (${predicate.sql}) THEN 1 ELSE 0 END AS authorized`)
-    .bind(...predicate.values)
-    .first<{ authorized: number }>();
-  return row?.authorized === 1;
-}
-
-/** Check one canonical principal for a permission without imposing automation-launch grants. */
-export async function isPrincipalAuthorized(
-  db: SqlDatabase,
-  userId: string,
-  permission: PermissionId
-): Promise<boolean> {
-  const predicate = principalPredicate(userId, permission);
   const row = await db
     .prepare(`SELECT CASE WHEN (${predicate.sql}) THEN 1 ELSE 0 END AS authorized`)
     .bind(...predicate.values)

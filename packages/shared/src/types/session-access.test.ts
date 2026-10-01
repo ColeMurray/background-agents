@@ -444,7 +444,7 @@ describe("checkEnvironmentAccess", () => {
     });
   });
 
-  it("requires the manage grant and lead/admin role independently", () => {
+  it("requires the manage grant and lead/admin role independently on team-owned rows", () => {
     expect(
       checkEnvironmentAccess(
         viewer("team lead", null, false, ["environments.use"]),
@@ -464,13 +464,64 @@ describe("checkEnvironmentAccess", () => {
         allowed: true,
       }
     );
-    expect(
-      checkEnvironmentAccess(
-        viewer("team lead", "member", false, ["environments.manage"]),
-        { ownerTeamId: null },
-        "manage"
-      )
-    ).toEqual({ allowed: false, reason: "not_owner_or_lead" });
+  });
+
+  it.each(relations)(
+    "allows a %s to manage workspace rows with only environments.manage regardless of role key",
+    (relation) => {
+      const workspace = { ownerTeamId: null };
+      for (const roleKey of roles) {
+        const actor = viewer(relation, roleKey, false, ["environments.manage"]);
+        expect(checkEnvironmentAccess(actor, workspace, "manage")).toEqual({ allowed: true });
+        for (const action of ["read", "use"] as const) {
+          expect(checkEnvironmentAccess(actor, workspace, action)).toEqual({
+            allowed: false,
+            reason: "missing_permission",
+          });
+        }
+        expect(environmentCapabilities(actor, workspace)).toEqual({
+          canRead: false,
+          canManage: true,
+          canUse: false,
+        });
+      }
+    }
+  );
+
+  it("keeps workspace capabilities authoritative for independent grants and suspension", () => {
+    const workspace = { ownerTeamId: null };
+    for (const read of [false, true]) {
+      for (const manage of [false, true]) {
+        for (const use of [false, true]) {
+          for (const suspended of [false, true]) {
+            const permissions: PermissionId[] = [
+              "environments.secrets.manage",
+              "environments.settings.manage",
+              "environments.images.manage",
+            ];
+            if (read) permissions.push("environments.read");
+            if (manage) permissions.push("environments.manage");
+            if (use) permissions.push("environments.use");
+            const actor = viewer("non-member", null, suspended, permissions);
+            const permits = { read, manage, use };
+            for (const action of ENVIRONMENT_ACTIONS) {
+              expect(checkEnvironmentAccess(actor, workspace, action)).toEqual(
+                suspended
+                  ? { allowed: false, reason: "suspended" }
+                  : permits[action]
+                    ? { allowed: true }
+                    : { allowed: false, reason: "missing_permission" }
+              );
+            }
+            expect(environmentCapabilities(actor, workspace)).toEqual({
+              canRead: !suspended && read,
+              canManage: !suspended && manage,
+              canUse: !suspended && use,
+            });
+          }
+        }
+      }
+    }
   });
 
   it("denies suspended and outside-team users for every action", () => {

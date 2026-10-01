@@ -3,6 +3,7 @@ import { z } from "zod";
 import { isCanonicalUserId } from "@open-inspect/shared";
 import { AutomationStore } from "../db/automation-store";
 import { TeamAuditStore } from "../db/team-audit";
+import { isAutomationExecutionAuthorized } from "../automation/authorization-guard";
 import { dispatch } from "../routing/admit";
 import type { ControlPlaneHonoEnv } from "../routing/hono-env";
 import type { Env } from "../types";
@@ -48,10 +49,31 @@ async function changeExecutor(
   if (executorError) return executorError;
   const teamError = await validateAutomationTeam(ctx.db, automation.owner_team_id, body.userId);
   if (teamError) return teamError;
+  const store = new AutomationStore(ctx.db);
+  const [repositories, environments] = await Promise.all([
+    store.getRepositoriesForAutomation(params.id),
+    store.getEnvironmentsForAutomation(params.id),
+  ]);
+  if (
+    !(await isAutomationExecutionAuthorized(ctx.db, {
+      automationId: params.id,
+      executionUserId: body.userId,
+      requiresRepositoryUse: repositories.length > 0,
+      requiresEnvironmentUse: environments.length > 0,
+    }))
+  ) {
+    return json(
+      {
+        error: "Executor cannot launch this automation",
+        code: "automation_executor_unauthorized",
+        reason_code: "execution_authorization_denied",
+      },
+      403
+    );
+  }
   if (automation.user_id === body.userId) {
     return json({ automation: await hydrateAutomationResponse(ctx, automation, viewer) });
   }
-  const store = new AutomationStore(ctx.db);
   const results = await ctx.db.batch([
     store.bindExecutorChange(automation, body.userId),
     new TeamAuditStore(ctx.db).bind(

@@ -15,8 +15,15 @@ import { fakeSessionRuntimeDispatch } from "../router.test-support";
 import type { Logger } from "../logger";
 import type { AutomationRow, InvocationRunAggregate } from "../db/automation-store";
 import type { EnvironmentRepositoryRow, EnvironmentRow } from "../db/environments";
+import type { SessionEntry } from "../db/session-index";
 import type { SlackAutomationEvent } from "@open-inspect/shared/triggers";
-import type { Team } from "@open-inspect/shared/types/teams";
+import type { SessionVisibility, Team, TeamRole } from "@open-inspect/shared/types/teams";
+import {
+  BUILT_IN_ROLE_REGISTRY,
+  type BuiltInRoleKey,
+  type EffectiveAuthorization,
+  type PermissionId,
+} from "@open-inspect/shared/rbac";
 
 const mockCheckRepositoryAccess = vi.hoisted(() => vi.fn());
 const mockResolveSessionProviderAuth = vi.hoisted(() =>
@@ -26,7 +33,9 @@ const mockResolveSessionProviderAuth = vi.hoisted(() =>
   ])
 );
 const mockIsAutomationExecutionAuthorized = vi.hoisted(() => vi.fn().mockResolvedValue(true));
-const mockIsPrincipalAuthorized = vi.hoisted(() => vi.fn().mockResolvedValue(true));
+const mockGetEffectiveAuthorization = vi.hoisted(() => vi.fn());
+const mockMembershipListForUser = vi.hoisted(() => vi.fn());
+const mockCollaboratorListUserIds = vi.hoisted(() => vi.fn());
 const mockTeamGetById = vi.hoisted(() =>
   vi.fn<(id: string) => Promise<Team | null>>().mockResolvedValue(null)
 );
@@ -45,6 +54,33 @@ vi.mock("../db/teams", () => ({
 vi.mock("../db/team-repository-grants", () => ({
   TeamRepositoryGrantStore: vi.fn().mockImplementation(function () {
     return { covers: mockTeamGrantCovers };
+  }),
+}));
+
+vi.mock("../authorization/service", async (importOriginal) => {
+  const actual = (await importOriginal()) as Record<string, unknown>;
+  return {
+    ...actual,
+    AuthorizationService: vi.fn().mockImplementation(function () {
+      return { getEffectiveAuthorization: mockGetEffectiveAuthorization };
+    }),
+  };
+});
+
+// Keep session admission real; mock only the authorization and persisted inputs it consumes.
+vi.mock("../db/team-memberships", async (importOriginal) => {
+  const actual = (await importOriginal()) as Record<string, unknown>;
+  return {
+    ...actual,
+    TeamMembershipStore: vi.fn().mockImplementation(function () {
+      return { listForUser: mockMembershipListForUser };
+    }),
+  };
+});
+
+vi.mock("../db/session-collaborators", () => ({
+  SessionCollaboratorStore: vi.fn().mockImplementation(function () {
+    return { listUserIds: mockCollaboratorListUserIds };
   }),
 }));
 
@@ -71,7 +107,6 @@ vi.mock("../automation/authorization-guard", async (importOriginal) => {
   return {
     ...actual,
     isAutomationExecutionAuthorized: mockIsAutomationExecutionAuthorized,
-    isPrincipalAuthorized: mockIsPrincipalAuthorized,
   };
 });
 
@@ -179,11 +214,13 @@ vi.mock("../db/automation-model-provider-auth", async (importOriginal) => {
 
 const mockSessionStoreCreate = vi.fn().mockResolvedValue(undefined);
 const mockSessionStoreUpdateStatus = vi.fn().mockResolvedValue(undefined);
+const mockSessionStoreGet = vi.fn();
 vi.mock("../db/session-index", () => ({
   SessionIndexStore: vi.fn().mockImplementation(function () {
     return {
       create: mockSessionStoreCreate,
       updateStatus: mockSessionStoreUpdateStatus,
+      get: mockSessionStoreGet,
     };
   }),
 }));
@@ -516,6 +553,38 @@ function makeSlackEvent(overrides?: Partial<SlackAutomationEvent>): SlackAutomat
   };
 }
 
+function steeringSessionRow(id: string, overrides?: Partial<SessionEntry>): SessionEntry {
+  return {
+    id,
+    title: null,
+    repoOwner: null,
+    repoName: null,
+    model: sampleAutomation.model,
+    reasoningEffort: null,
+    baseBranch: null,
+    status: "completed",
+    ownerTeamId: null,
+    visibility: "workspace",
+    userId: "user-1",
+    createdAt: now,
+    updatedAt: now,
+    ...overrides,
+  };
+}
+
+function steeringAuthorization(
+  role: BuiltInRoleKey = "member",
+  overrides?: Partial<EffectiveAuthorization>
+): EffectiveAuthorization {
+  return {
+    userId: "slack-actor-user",
+    suspendedAt: null,
+    role: { ...BUILT_IN_ROLE_REGISTRY[role], name: role },
+    permissions: ["sessions.read", "sessions.collaborate"],
+    ...overrides,
+  };
+}
+
 /** All children handed to the last insertInvocationGuarded call, as inserted. */
 function lastInsertedChildren(): Array<Record<string, unknown>> {
   const params = capturedInvocationParams.at(-1);
@@ -536,7 +605,12 @@ describe("Scheduler", () => {
     ]);
     mockProviderAuthList.mockResolvedValue([]);
     mockIsAutomationExecutionAuthorized.mockResolvedValue(true);
-    mockIsPrincipalAuthorized.mockResolvedValue(true);
+    mockGetEffectiveAuthorization.mockReset().mockResolvedValue(steeringAuthorization());
+    mockMembershipListForUser.mockReset().mockResolvedValue(new Map<string, TeamRole>());
+    mockCollaboratorListUserIds.mockReset().mockResolvedValue([]);
+    mockSessionStoreGet
+      .mockReset()
+      .mockImplementation(async (id: string) => steeringSessionRow(id));
     mockTeamGetById.mockReset().mockResolvedValue(null);
     mockTeamGrantCovers.mockReset().mockResolvedValue(true);
     mockUserStoreGetIdentity.mockImplementation(async (provider: string) =>
@@ -2938,9 +3012,9 @@ describe("Scheduler", () => {
         sampleSlackAutomation,
         { ...sampleSlackAutomation, id: "auto-slack-2" },
       ]);
-      mockStore.getLatestSteerableRunForThread.mockResolvedValue(
-        sampleRunRow({ id: "active-run", session_id: "sess-running" })
-      );
+      mockStore.getLatestSteerableRunForThread
+        .mockResolvedValueOnce(sampleRunRow({ id: "active-run-1", session_id: "sess-running-1" }))
+        .mockResolvedValueOnce(sampleRunRow({ id: "active-run-2", session_id: "sess-running-2" }));
 
       expect(await createScheduler().event(makeSlackEvent({ text: "follow up" }))).toEqual({
         triggered: 0,
@@ -2949,7 +3023,313 @@ describe("Scheduler", () => {
       });
 
       expect(mockUserStoreGetIdentity).toHaveBeenCalledTimes(1);
-      expect(mockIsPrincipalAuthorized).toHaveBeenCalledTimes(1);
+      expect(mockGetEffectiveAuthorization).toHaveBeenCalledTimes(1);
+      expect(mockGetEffectiveAuthorization).toHaveBeenCalledWith("slack-actor-user");
+      expect(mockMembershipListForUser).toHaveBeenCalledTimes(1);
+      expect(mockSessionStoreGet.mock.calls).toEqual([["sess-running-1"], ["sess-running-2"]]);
+    });
+
+    describe("Slack steering session admission", () => {
+      const teamId = "team-steering";
+      const actorUserId = "slack-actor-user";
+      const sessionId = "sess-steering";
+      const modes = ["off", "shadow", "on"] as const;
+      const cases: Array<{
+        name: string;
+        visibility?: SessionVisibility;
+        ownerTeamId?: string | null;
+        userId?: string;
+        member?: boolean;
+        collaborator?: boolean;
+        role?: BuiltInRoleKey;
+        permissions?: PermissionId[];
+        suspendedAt?: number;
+        allowed: boolean;
+      }> = [
+        { name: "private owner who is a member", userId: actorUserId, member: true, allowed: true },
+        { name: "private member collaborator", member: true, collaborator: true, allowed: true },
+        { name: "private outsider", allowed: false },
+        { name: "private member without collaboration", member: true, allowed: false },
+        {
+          name: "private administrator without collaboration",
+          role: "administrator",
+          member: true,
+          allowed: false,
+        },
+        {
+          name: "private workspace owner with only break-glass access",
+          role: "owner",
+          member: true,
+          allowed: false,
+        },
+        { name: "private stale collaborator", collaborator: true, allowed: false },
+        { name: "private departed owner", userId: actorUserId, allowed: false },
+        {
+          name: "private owner without read permission",
+          userId: actorUserId,
+          member: true,
+          permissions: ["sessions.collaborate"],
+          allowed: false,
+        },
+        { name: "team member", visibility: "team", member: true, allowed: true },
+        { name: "team outsider", visibility: "team", allowed: false },
+        {
+          name: "team nonmember administrator",
+          visibility: "team",
+          role: "administrator",
+          allowed: false,
+        },
+        {
+          name: "team nonmember workspace owner",
+          visibility: "team",
+          role: "owner",
+          allowed: false,
+        },
+        {
+          name: "team member without read permission",
+          visibility: "team",
+          member: true,
+          permissions: ["sessions.collaborate"],
+          allowed: false,
+        },
+        {
+          name: "team-owned workspace session member",
+          visibility: "workspace",
+          member: true,
+          allowed: true,
+        },
+        {
+          name: "team-owned workspace session outsider",
+          visibility: "workspace",
+          allowed: false,
+        },
+        { name: "workspace-private owner", ownerTeamId: null, userId: actorUserId, allowed: true },
+        {
+          name: "workspace-private collaborator",
+          ownerTeamId: null,
+          collaborator: true,
+          allowed: true,
+        },
+        {
+          name: "suspended private owner",
+          userId: actorUserId,
+          member: true,
+          suspendedAt: 1,
+          allowed: false,
+        },
+        {
+          name: "private owner with revoked collaboration",
+          userId: actorUserId,
+          member: true,
+          permissions: ["sessions.read"],
+          allowed: false,
+        },
+      ];
+
+      beforeEach(() => {
+        mockGetSlackAutomationsForChannel.mockResolvedValue([sampleSlackAutomation]);
+        mockStore.getLatestSteerableRunForThread.mockResolvedValue(
+          sampleRunRow({ session_id: sessionId })
+        );
+      });
+
+      describe.each(modes)("%s mode", (mode) => {
+        it.each(cases)(
+          "admits $name only with session collaboration authority",
+          async (testCase) => {
+            mockSessionStoreGet.mockResolvedValue(
+              steeringSessionRow(sessionId, {
+                ownerTeamId: testCase.ownerTeamId === undefined ? teamId : testCase.ownerTeamId,
+                visibility: testCase.visibility ?? "private",
+                userId: testCase.userId ?? "user-1",
+              })
+            );
+            mockMembershipListForUser.mockResolvedValue(
+              new Map<string, TeamRole>(testCase.member ? [[teamId, "member"]] : [])
+            );
+            mockCollaboratorListUserIds.mockResolvedValue(
+              testCase.collaborator ? [actorUserId] : []
+            );
+            const authorization = steeringAuthorization(testCase.role, {
+              suspendedAt: testCase.suspendedAt ?? null,
+              permissions: testCase.permissions ?? ["sessions.read", "sessions.collaborate"],
+            });
+            mockGetEffectiveAuthorization.mockResolvedValue(authorization);
+            const stub = createMockSessionStub();
+            const scheduler = createScheduler(createEnv({ TEAMS_ENFORCEMENT: mode }, stub));
+
+            expect(await scheduler.event(makeSlackEvent())).toEqual({
+              triggered: 0,
+              skipped: 0,
+              steered: testCase.allowed ? 1 : 0,
+            });
+            expect(promptCallCount(vi.mocked(stub.fetch))).toBe(testCase.allowed ? 1 : 0);
+            expect(mockGetEffectiveAuthorization).toHaveBeenCalledTimes(1);
+            expect(mockGetEffectiveAuthorization).toHaveBeenCalledWith(actorUserId);
+            if (
+              authorization.suspendedAt !== null ||
+              !authorization.permissions.includes("sessions.collaborate")
+            ) {
+              expect(mockSessionStoreGet).not.toHaveBeenCalled();
+              expect(mockMembershipListForUser).not.toHaveBeenCalled();
+              expect(mockCollaboratorListUserIds).not.toHaveBeenCalled();
+            } else {
+              expect(mockSessionStoreGet).toHaveBeenCalledTimes(1);
+              expect(mockSessionStoreGet).toHaveBeenCalledWith(sessionId);
+            }
+            expect(mockStore.insertInvocationGuarded).not.toHaveBeenCalled();
+            expect(mockStore.insertSkippedInvocation).not.toHaveBeenCalled();
+            expect(mockIsAutomationExecutionAuthorized).not.toHaveBeenCalled();
+            if (testCase.allowed) {
+              await expect(getPromptBody(vi.mocked(stub.fetch))).resolves.toMatchObject({
+                authorId: "slack:U1",
+                canonicalUserId: actorUserId,
+              });
+            }
+          }
+        );
+
+        it("preserves workspace collaboration-only access except in on mode", async () => {
+          mockGetEffectiveAuthorization.mockResolvedValue(
+            steeringAuthorization("member", { permissions: ["sessions.collaborate"] })
+          );
+          const stub = createMockSessionStub();
+
+          expect(
+            await createScheduler(createEnv({ TEAMS_ENFORCEMENT: mode }, stub)).event(
+              makeSlackEvent()
+            )
+          ).toEqual({ triggered: 0, skipped: 0, steered: mode === "on" ? 0 : 1 });
+          expect(promptCallCount(vi.mocked(stub.fetch))).toBe(mode === "on" ? 0 : 1);
+          expect(mockStore.insertInvocationGuarded).not.toHaveBeenCalled();
+        });
+      });
+
+      it.each([
+        "unresolved actor",
+        "missing collaboration permission",
+        "suspended actor",
+        "authorization unavailable",
+      ])("fails closed before session admission for %s", async (scenario) => {
+        if (scenario === "unresolved actor") mockUserStoreGetIdentity.mockResolvedValue(null);
+        if (scenario === "missing collaboration permission") {
+          mockGetEffectiveAuthorization.mockResolvedValue(
+            steeringAuthorization("member", { permissions: [] })
+          );
+        }
+        if (scenario === "suspended actor") {
+          mockGetEffectiveAuthorization.mockResolvedValue(
+            steeringAuthorization("member", { suspendedAt: 1 })
+          );
+        }
+        if (scenario === "authorization unavailable") {
+          mockGetEffectiveAuthorization.mockRejectedValue(new Error("authorization unavailable"));
+        }
+        const stub = createMockSessionStub();
+
+        expect(await createScheduler(createEnv(undefined, stub)).event(makeSlackEvent())).toEqual({
+          triggered: 0,
+          skipped: 0,
+          steered: 0,
+        });
+        expect(stub.fetch).not.toHaveBeenCalled();
+        expect(mockSessionStoreGet).not.toHaveBeenCalled();
+        expect(mockMembershipListForUser).not.toHaveBeenCalled();
+        expect(mockCollaboratorListUserIds).not.toHaveBeenCalled();
+        expect(mockStore.insertInvocationGuarded).not.toHaveBeenCalled();
+        if (scenario === "unresolved actor") {
+          expect(mockGetEffectiveAuthorization).not.toHaveBeenCalled();
+        } else {
+          expect(mockGetEffectiveAuthorization).toHaveBeenCalledTimes(1);
+          expect(mockGetEffectiveAuthorization).toHaveBeenCalledWith(actorUserId);
+        }
+      });
+
+      it("does not steer or start a replacement run when the session index row is missing", async () => {
+        mockSessionStoreGet.mockResolvedValue(null);
+        const stub = createMockSessionStub();
+
+        expect(await createScheduler(createEnv(undefined, stub)).event(makeSlackEvent())).toEqual({
+          triggered: 0,
+          skipped: 0,
+          steered: 0,
+        });
+        expect(stub.fetch).not.toHaveBeenCalled();
+        expect(mockStore.insertInvocationGuarded).not.toHaveBeenCalled();
+      });
+
+      it("refreshes owner membership between events on the same scheduler", async () => {
+        mockSessionStoreGet.mockResolvedValue(
+          steeringSessionRow(sessionId, {
+            ownerTeamId: teamId,
+            visibility: "private",
+            userId: actorUserId,
+          })
+        );
+        mockMembershipListForUser
+          .mockResolvedValueOnce(new Map<string, TeamRole>([[teamId, "member"]]))
+          .mockResolvedValueOnce(new Map<string, TeamRole>());
+        const stub = createMockSessionStub();
+        const scheduler = createScheduler(createEnv({ TEAMS_ENFORCEMENT: "shadow" }, stub));
+
+        expect(await scheduler.event(makeSlackEvent())).toEqual({
+          triggered: 0,
+          skipped: 0,
+          steered: 1,
+        });
+        expect(
+          await scheduler.event(
+            makeSlackEvent({ ts: "1700000000.000300", triggerKey: "slack:msg:C1:revoked" })
+          )
+        ).toEqual({ triggered: 0, skipped: 0, steered: 0 });
+        expect(promptCallCount(vi.mocked(stub.fetch))).toBe(1);
+        expect(mockGetEffectiveAuthorization).toHaveBeenCalledTimes(2);
+        expect(mockMembershipListForUser).toHaveBeenCalledTimes(2);
+        expect(mockStore.insertInvocationGuarded).not.toHaveBeenCalled();
+      });
+
+      it.each([true, false])(
+        "checks each distinct session instead of caching the first allow (%s)",
+        async (allowedFirst) => {
+          const sessionIds = allowedFirst
+            ? ["sess-allowed", "sess-denied"]
+            : ["sess-denied", "sess-allowed"];
+          mockGetSlackAutomationsForChannel.mockResolvedValue([
+            sampleSlackAutomation,
+            { ...sampleSlackAutomation, id: "auto-slack-2" },
+          ]);
+          mockStore.getLatestSteerableRunForThread
+            .mockResolvedValueOnce(sampleRunRow({ session_id: sessionIds[0] }))
+            .mockResolvedValueOnce(sampleRunRow({ session_id: sessionIds[1] }));
+          mockSessionStoreGet.mockImplementation(async (id: string) =>
+            steeringSessionRow(id, { ownerTeamId: teamId, visibility: "private" })
+          );
+          mockMembershipListForUser.mockResolvedValue(
+            new Map<string, TeamRole>([[teamId, "member"]])
+          );
+          mockCollaboratorListUserIds.mockImplementation(async (id: string) =>
+            id === "sess-allowed" ? [actorUserId] : []
+          );
+          const requests = vi.fn(async (_request: Request, _sessionId: string) =>
+            Response.json({ messageId: "msg-steer", status: "queued" })
+          );
+          const env = createEnv({ TEAMS_ENFORCEMENT: "shadow" });
+          env.SESSION = fakeSessionRuntimeDispatch(requests);
+
+          expect(await createScheduler(env).event(makeSlackEvent())).toEqual({
+            triggered: 0,
+            skipped: 0,
+            steered: 1,
+          });
+          expect(requests).toHaveBeenCalledTimes(1);
+          expect(requests.mock.calls[0][1]).toBe("sess-allowed");
+          expect(mockSessionStoreGet.mock.calls).toEqual(sessionIds.map((id) => [id]));
+          expect(mockCollaboratorListUserIds.mock.calls).toEqual(sessionIds.map((id) => [id]));
+          expect(mockGetEffectiveAuthorization).toHaveBeenCalledTimes(1);
+          expect(mockMembershipListForUser).toHaveBeenCalledTimes(1);
+          expect(mockStore.insertInvocationGuarded).not.toHaveBeenCalled();
+        }
+      );
     });
 
     it("continues the same session on a reply after the run has completed", async () => {

@@ -9,8 +9,24 @@
 
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type * as AuthenticateModule from "../auth/authenticate";
-import { createTestRequestHandler } from "../router.test-support";
-import { MAX_AUTOMATION_INVOCATION_LIST_LIMIT } from "@open-inspect/shared/types/automations";
+import type { Principal } from "../auth/principal";
+import type { PermissionId } from "@open-inspect/shared/rbac";
+import {
+  authorizationDatabase,
+  createTestEnv,
+  createTestRequestHandler,
+  emptyStatement,
+  TEST_BACKGROUND_TASK_CONTEXT,
+  TEST_SESSION_ROW,
+} from "../router.test-support";
+import {
+  MAX_AUTOMATION_INVOCATION_LIST_LIMIT,
+  type AutomationRun,
+  type ListAutomationInvocationsResponse,
+} from "@open-inspect/shared/types/automations";
+import { toAutomationRun, type EnrichedRunRow } from "../db/automation-store";
+import type { SessionRow } from "../db/session-row";
+import type { SqlStatement } from "../db/sql-database";
 import { automationRoutes } from "./automations";
 import { DEFAULT_INVOCATION_LIST_LIMIT, MAX_INVOCATION_LIST_OFFSET } from "./automation-runs";
 import {
@@ -23,6 +39,7 @@ import {
   sampleRow,
   applyMockDefaults,
   automationRequest,
+  USER_PRINCIPAL,
 } from "./automations.test-support";
 
 vi.mock("../auth/authenticate", async (importOriginal) => ({
@@ -38,7 +55,6 @@ vi.mock("../db/automation-store", async (importOriginal) => {
       return mockStore;
     }),
     toAutomation: vi.fn((row: unknown) => row),
-    toAutomationRun: vi.fn((row: unknown) => row),
   };
 });
 
@@ -70,7 +86,35 @@ vi.mock("../db/environments", () => ({
   }),
 }));
 
-const callRoute = automationRequest(createTestRequestHandler([automationRoutes]));
+const handleRequest = createTestRequestHandler([automationRoutes]);
+const callRoute = automationRequest(handleRequest);
+const linkedRunRow: EnrichedRunRow = {
+  id: "run-1",
+  automation_id: "auto-1",
+  invocation_id: "inv-1",
+  session_id: "session-1",
+  status: "completed",
+  skip_reason: null,
+  failure_reason: null,
+  scheduled_at: 1000,
+  started_at: 1100,
+  execution_deadline_at: 3000,
+  completed_at: 2000,
+  created_at: 1000,
+  repo_owner: "group/subgroup",
+  repo_name: "app",
+  repo_id: 42,
+  base_branch: "main",
+  environment_id: "env_run_snapshot",
+  session_title: "Confidential session title",
+  artifact_summary: "Confidential pull request summary",
+};
+const privateSession: SessionRow = {
+  ...TEST_SESSION_ROW,
+  title: linkedRunRow.session_title,
+  user_id: "another-user",
+  visibility: "private",
+};
 
 describe("automation run routes", () => {
   beforeEach(() => {
@@ -171,7 +215,12 @@ describe("automation run routes", () => {
 
   describe("GET /automations/:id/runs/:runId (get run)", () => {
     it("returns a specific run", async () => {
-      mockStore.getRunById.mockResolvedValue({ id: "run-1", status: "completed" });
+      mockStore.getRunById.mockResolvedValue({
+        ...linkedRunRow,
+        session_id: null,
+        session_title: null,
+        artifact_summary: null,
+      });
 
       const res = await callRoute("GET", "/automations/auto-1/runs/run-1");
       expect(res.status).toBe(200);
@@ -186,5 +235,101 @@ describe("automation run routes", () => {
       const res = await callRoute("GET", "/automations/auto-1/runs/missing");
       expect(res.status).toBe(404);
     });
+  });
+
+  describe.each([
+    { name: "invocation list", path: "/automations/auto-1/invocations" },
+    { name: "run item", path: "/automations/auto-1/runs/run-1" },
+  ])("linked session privacy on $name", ({ path }) => {
+    it.each<{
+      name: string;
+      session: SessionRow | null;
+      permissions: readonly PermissionId[];
+      principal?: Principal;
+      readable?: boolean;
+    }>([
+      {
+        name: "an ordinary reader of another user's private session",
+        session: privateSession,
+        permissions: ["automations.read", "sessions.read"],
+      },
+      {
+        name: "a session owner without sessions.read",
+        session: { ...privateSession, user_id: "user-1", visibility: "workspace" },
+        permissions: ["automations.read"],
+      },
+      {
+        name: "an actorless Slack bot",
+        session: privateSession,
+        permissions: [],
+        principal: { kind: "service", service: "slack-bot", actor: null },
+      },
+      {
+        name: "a missing persisted session row",
+        session: null,
+        permissions: ["automations.read", "sessions.read"],
+      },
+      {
+        name: "the current private session owner",
+        session: { ...privateSession, user_id: "user-1" },
+        permissions: ["automations.read", "sessions.read"],
+        readable: true,
+      },
+    ])(
+      "enforces linked metadata privacy without changing the run for $name",
+      async ({ session, permissions, principal = USER_PRINCIPAL, readable = false }) => {
+        const run = toAutomationRun(linkedRunRow);
+        const invocation = {
+          id: "inv-1",
+          automationId: "auto-1",
+          status: "completed" as const,
+          source: "schedule" as const,
+          scheduledAt: 1000,
+          skipReason: null,
+          createdAt: 1000,
+          completedAt: 2000,
+          runs: [run],
+        };
+        mockStore.listInvocations.mockResolvedValue({
+          invocations: [{ ...invocation, runs: [{ ...run }] }],
+          total: 1,
+        });
+        mockStore.getRunById.mockResolvedValue({ ...linkedRunRow });
+        mocks.authenticate.mockImplementation(async (request: Request) => ({ principal, request }));
+        const db = authorizationDatabase({
+          permissions,
+          batch: async <T>(statements: SqlStatement[]) =>
+            Promise.all(statements.map((statement) => statement.all<T>())),
+          statement(sql) {
+            if (!sql.includes("FROM sessions") || !session) return emptyStatement();
+            const statement: SqlStatement = {
+              ...emptyStatement(),
+              bind: () => statement,
+              first: async <T>() => session as T,
+              all: async <T>() => ({ results: [session] as T[], meta: { changes: 0 } }),
+            };
+            return statement;
+          },
+        });
+
+        const res = await handleRequest(
+          new Request(`https://test.local${path}`),
+          createTestEnv({ DB: db }),
+          TEST_BACKGROUND_TASK_CONTEXT
+        );
+
+        expect(res.status).toBe(200);
+        const expectedRun = readable
+          ? run
+          : { ...run, sessionId: null, sessionTitle: null, artifactSummary: null };
+        if (path.endsWith("/invocations")) {
+          const body = await res.json<ListAutomationInvocationsResponse>();
+          expect(body).toEqual({ invocations: [{ ...invocation, runs: [expectedRun] }], total: 1 });
+        } else {
+          const body = await res.json<{ run: AutomationRun }>();
+          expect(body).toEqual({ run: expectedRun });
+        }
+      }
+    );
   });
 });

@@ -74,6 +74,13 @@ export async function handleSpawnChild(
 
   const parentSession = await sessionStore.get(parentId);
   const parentEnvironmentId = parentSession?.environmentId ?? null;
+  const targetAuthorizationError = await authorizeSessionTarget(ctx, {
+    environmentId: parentEnvironmentId,
+    hasRepository: Boolean(parentSession?.repoOwner && parentSession?.repoName),
+    ownerTeamId: parentSession?.ownerTeamId ?? null,
+  });
+  if (targetAuthorizationError) return targetAuthorizationError;
+
   // Children inherit the parent's settings scope: its primary repo plus, for
   // environment-launched parents, that environment's overrides (design §13.5).
   const resolvedChildSandboxSettings = parentSession
@@ -154,12 +161,6 @@ export async function handleSpawnChild(
       return error("Child sessions must use the same repository as the parent", 403);
     }
   }
-
-  const targetAuthorizationError = await authorizeSessionTarget(ctx, {
-    environmentId: parentEnvironmentId,
-    hasRepository: Boolean(parentRepoOwner && parentRepoName),
-  });
-  if (targetAuthorizationError) return targetAuthorizationError;
 
   let enabledModels: ValidModel[];
   try {
