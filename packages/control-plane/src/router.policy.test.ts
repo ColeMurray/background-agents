@@ -45,6 +45,7 @@ describe("route policy table", () => {
           },
         ],
         service: { kind: "deny" },
+        auditAllowed: false,
       },
       supportedScmProviders: "all",
       cacheControl: "private, no-store",
@@ -61,6 +62,7 @@ describe("route policy table", () => {
           ...(tab === "sessions" ? [{ kind: "permission", permission: "sessions.read" }] : []),
         ],
         service: { kind: "deny" },
+        auditAllowed: false,
       },
       cacheControl: "private, no-store",
     });
@@ -69,6 +71,21 @@ describe("route policy table", () => {
   it("keeps membership deletion behind member admission rather than directory read", () => {
     expect(routeFor("DELETE", "/teams/team-1/members/user-1")?.authorization).toMatchObject({
       allOf: [{ kind: "team", need: "member" }],
+      auditAllowed: true,
+    });
+  });
+
+  it.each(["/teams/team-1", "/teams/team-1/members"])(
+    "does not audit allowed directory reads at %s",
+    (path) => {
+      expect(routeFor("GET", path)?.authorization).toMatchObject({ auditAllowed: false });
+    }
+  );
+
+  it("still audits allowed team capability writes", () => {
+    expect(routeFor("PATCH", "/teams/team-1")?.authorization).toMatchObject({
+      allOf: [{ kind: "team", need: "canEditMetadata" }],
+      auditAllowed: true,
     });
   });
 

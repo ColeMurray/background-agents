@@ -67,7 +67,10 @@ export interface SessionConnectionAuthenticatorDeps {
   schedulePullRequestRefresh: (trigger: "open" | "manual") => void;
   scmProviderName: SourceControlProviderName;
   /** Resolve the current D1 session scope and user's authorization on every gated action. */
-  resolveSessionViewer: (userId: string) => Promise<SessionViewerResolution>;
+  resolveSessionViewer: (
+    userId: string,
+    options?: { includeMemberships?: boolean }
+  ) => Promise<SessionViewerResolution>;
   auditPrivateBreakGlass: (userId: string, row: SessionAccessRow) => Promise<void>;
   /** The session-scoped logger; upgrade/subscribe paths also receive request-scoped children. */
   log: Logger;
@@ -382,7 +385,9 @@ export class SessionConnectionAuthenticator implements SessionUpgradeAdmission {
       // Authorization is intentionally sampled once at the start of this
       // subscription request. A concurrent role change takes effect when this
       // bounded lease expires, not midway through an in-flight request.
-      const resolution = await this.deps.resolveSessionViewer(participant.canonical_user_id);
+      const resolution = await this.deps.resolveSessionViewer(participant.canonical_user_id, {
+        includeMemberships: true,
+      });
       const read = resolution.kind === "valid" ? this.decide(resolution, "read") : null;
       if (resolution.kind !== "valid" || !read?.allowed) {
         log.warn("ws.connect", {

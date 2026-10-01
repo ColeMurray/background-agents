@@ -51,6 +51,15 @@ async function auditEvents(teamId: string) {
   return result.results;
 }
 
+async function requestAuditEvents(response: Response) {
+  const result = await env.DB.prepare(
+    "SELECT action FROM authorization_audit_events WHERE request_id = ? ORDER BY action"
+  )
+    .bind(response.headers.get("x-request-id"))
+    .all();
+  return result.results;
+}
+
 async function modeRequest(
   path: string,
   mode: "off" | "shadow" | "on",
@@ -96,6 +105,76 @@ describe("team routes", () => {
     await seedActiveUser(MEMBER);
     await seedActiveUser(OTHER);
     await request("/me/authorization");
+  });
+
+  it.each(["", "/members", "/sessions", "/activity"])(
+    "does not audit an allowed team read at /teams/:id%s",
+    async (suffix) => {
+      await setRole(OWNER, "member");
+      const team = await new TeamStore(env.DB).create({
+        slug: "quiet-read",
+        name: "Quiet read",
+        joinPolicy: "invite_only",
+      });
+      const memberships = new TeamMembershipStore(env.DB);
+      await memberships.add(team.id, MEMBER, "lead");
+      if (suffix === "/sessions" || suffix === "/activity") await memberships.add(team.id, OWNER);
+
+      const response = await request(`/teams/${team.id}${suffix}`);
+      expect(response.status).toBe(200);
+      expect(await requestAuditEvents(response)).toEqual([]);
+    }
+  );
+
+  it("audits an allowed team capability write", async () => {
+    await setRole(OWNER, "member");
+    const team = await new TeamStore(env.DB).create({
+      slug: "audited-write",
+      name: "Audited write",
+      joinPolicy: "invite_only",
+    });
+    await new TeamMembershipStore(env.DB).add(team.id, OWNER, "lead");
+
+    const response = await request(`/teams/${team.id}`, "PATCH", { name: "Renamed" });
+    expect(response.status).toBe(200);
+    expect(await requestAuditEvents(response)).toEqual([
+      { action: "authorization.request_allowed" },
+      { action: "team.updated" },
+    ]);
+  });
+
+  it("still audits a denied team capability write", async () => {
+    await setRole(OWNER, "member");
+    const team = await new TeamStore(env.DB).create({
+      slug: "denied-write",
+      name: "Denied write",
+      joinPolicy: "invite_only",
+    });
+    const response = await request(`/teams/${team.id}`, "PATCH", { name: "Forbidden" });
+    expect(response.status).toBe(403);
+    expect(await response.json()).toMatchObject({ reason_code: "team_capability_required" });
+    expect(await requestAuditEvents(response)).toEqual([
+      { action: "authorization.request_denied" },
+    ]);
+  });
+
+  it("still audits leaving a team", async () => {
+    await setRole(OWNER, "member");
+    const team = await new TeamStore(env.DB).create({
+      slug: "audited-leave",
+      name: "Audited leave",
+      joinPolicy: "invite_only",
+    });
+    const memberships = new TeamMembershipStore(env.DB);
+    await memberships.add(team.id, MEMBER, "lead");
+    await memberships.add(team.id, OWNER);
+
+    const response = await request(`/teams/${team.id}/members/${OWNER}`, "DELETE");
+    expect(response.status).toBe(204);
+    expect(await requestAuditEvents(response)).toEqual([
+      { action: "authorization.request_allowed" },
+      { action: "team.member_removed" },
+    ]);
   });
 
   it("starts without teams and lets an administrator create, rename, archive and restore", async () => {

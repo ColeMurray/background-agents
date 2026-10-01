@@ -642,7 +642,9 @@ describe("route admission sentinel", { timeout: MATRIX_TIMEOUT_MS }, () => {
               ? 404
               : 403;
         const identity = `${route.method} ${route.path}`;
-        observed.push(`${identity} ${mode}/nonmember=${response.status}`);
+        observed.push(
+          `${identity} ${mode}/nonmember=${response.status} auditAllowed=${route.authorization.auditAllowed}`
+        );
         expect(response.status, identity).toBe(expected);
         if (expected === 403)
           await expect(response.json()).resolves.toMatchObject({

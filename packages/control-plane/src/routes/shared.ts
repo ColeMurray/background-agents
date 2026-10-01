@@ -186,13 +186,13 @@ export function requireAutomation(
 
 export function requireTeam(
   need: keyof TeamCapabilities | "read" | "member",
-  teamIdParam = "id"
+  options?: { teamIdParam?: string; auditAllowed?: boolean }
 ): RouteAuthorization {
   return {
     kind: "active-user",
-    allOf: [{ kind: "team", teamIdParam, need }],
+    allOf: [{ kind: "team", teamIdParam: options?.teamIdParam ?? "id", need }],
     service: { kind: "deny" },
-    auditAllowed: true,
+    auditAllowed: options?.auditAllowed ?? (need !== "read" && need !== "member"),
   };
 }
 
@@ -210,7 +210,7 @@ export function requireSession(
     actorlessGrants?: readonly ActorlessServiceGrant[];
     enforceAlways?: boolean;
   }
-): RouteAuthorization {
+): Extract<RouteAuthorization, { kind: "active-user" }> {
   return {
     kind: "active-user",
     allOf: [
@@ -227,7 +227,9 @@ export function requireSession(
 }
 
 /** Require an active user to satisfy every supplied authorization requirement. */
-export function requireAll(...allOf: readonly RouteAuthorizationRequirement[]): RouteAuthorization {
+export function requireAll(
+  ...allOf: readonly RouteAuthorizationRequirement[]
+): Extract<RouteAuthorization, { kind: "active-user" }> {
   return {
     kind: "active-user",
     allOf,

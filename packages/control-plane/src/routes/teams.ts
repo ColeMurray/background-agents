@@ -493,8 +493,10 @@ teamRoutes.post("/teams/:id/restore", archive, (c) =>
 );
 teamRoutes.get("/teams/:id/members", read, (c) => dispatch(c, members));
 teamRoutes.put("/teams/:id/members/:userId", membersManage, (c) => dispatch(c, putMember));
-teamRoutes.delete("/teams/:id/members/:userId", policy(requireTeam("member")), (c) =>
-  dispatch(c, deleteMember)
+teamRoutes.delete(
+  "/teams/:id/members/:userId",
+  policy(requireTeam("member", { auditAllowed: true })),
+  (c) => dispatch(c, deleteMember)
 );
 teamRoutes.post("/teams/:id/join", policy(requireTeam("canJoin")), (c) => dispatch(c, joinTeam));
 const member = admit({
@@ -513,6 +515,7 @@ teamRoutes.get(
         permissionRequirement("sessions.read")
       ),
       service: { kind: "deny" },
+      auditAllowed: false,
     },
   }),
   (c) => dispatch(c, teamSessions)
