@@ -6,7 +6,7 @@
  */
 
 import { Hono } from "hono";
-import type { Env, AgentSessionWebhook } from "./types";
+import { agentSessionWebhookSchema, type Env } from "./types";
 import {
   buildOAuthAuthorizeUrl,
   completeLinearOAuthInstallation,
@@ -40,30 +40,6 @@ export function buildOAuthSuccessHtml(appName: string, orgName: string): string 
         </body>
       </html>
     `;
-}
-
-function isAgentSessionWebhookPayload(payload: unknown): payload is AgentSessionWebhook {
-  if (!isObjectRecord(payload)) return false;
-
-  const type = readStringField(payload, "type");
-  const action = readStringField(payload, "action");
-  const organizationId = readStringField(payload, "organizationId");
-  const appUserId = readStringField(payload, "appUserId");
-  const webhookId = readStringField(payload, "webhookId");
-  const agentSession = payload.agentSession;
-
-  if (
-    !type ||
-    !action ||
-    !organizationId ||
-    !appUserId ||
-    !isObjectRecord(agentSession) ||
-    !webhookId
-  ) {
-    return false;
-  }
-
-  return typeof agentSession.id === "string";
 }
 
 // ─── Routes ──────────────────────────────────────────────────────────────────
@@ -119,7 +95,13 @@ app.post("/webhook", async (c) => {
     return c.json({ error: "Invalid signature" }, 401);
   }
 
-  const payload: unknown = JSON.parse(body);
+  let payload: unknown;
+  try {
+    payload = JSON.parse(body);
+  } catch {
+    log.warn("webhook.invalid_payload", { trace_id: traceId, reason: "malformed_json" });
+    return c.json({ error: "Invalid payload" }, 400);
+  }
   if (!isObjectRecord(payload)) {
     log.warn("webhook.invalid_payload", { trace_id: traceId, reason: "payload_not_object" });
     return c.json({ error: "Invalid payload" }, 400);
@@ -129,7 +111,8 @@ app.post("/webhook", async (c) => {
   const action = readStringField(payload, "action") ?? "unknown";
 
   if (eventType === "AgentSessionEvent") {
-    if (!isAgentSessionWebhookPayload(payload)) {
+    const parsedPayload = agentSessionWebhookSchema.safeParse(payload);
+    if (!parsedPayload.success) {
       log.warn("webhook.invalid_payload", {
         trace_id: traceId,
         reason: "invalid_agent_session_event_shape",
@@ -156,7 +139,7 @@ app.post("/webhook", async (c) => {
       return c.json({ ok: true, skipped: true, reason: "duplicate" });
     }
 
-    c.executionCtx.waitUntil(handleAgentSessionEvent(payload, c.env, traceId));
+    c.executionCtx.waitUntil(handleAgentSessionEvent(parsedPayload.data, c.env, traceId));
 
     log.info("http.request", {
       trace_id: traceId,

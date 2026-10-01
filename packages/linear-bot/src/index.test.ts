@@ -41,6 +41,10 @@ function makeAgentSessionPayload(webhookId = "webhook-config-1") {
 
 async function makeWebhookRequest(payload: unknown, deliveryId?: string): Promise<Request> {
   const body = JSON.stringify(payload);
+  return makeRawWebhookRequest(body, deliveryId);
+}
+
+async function makeRawWebhookRequest(body: string, deliveryId?: string): Promise<Request> {
   const headers: Record<string, string> = {
     "content-type": "application/json",
     "linear-signature": await signLinearWebhookRequest(body),
@@ -128,6 +132,24 @@ describe("POST /webhook", () => {
 
     const res = await app.fetch(
       await makeWebhookRequest(payload, "delivery-1"),
+      makeLinearBotEnv(kv),
+      ctx
+    );
+
+    expect(res.status).toBe(400);
+    expect(await res.json()).toEqual({ error: "Invalid payload" });
+    expect(kv.get).not.toHaveBeenCalled();
+    expect(kv.put).not.toHaveBeenCalled();
+    expect(ctx.waitUntil).not.toHaveBeenCalled();
+    expect(mocks.handleAgentSessionEvent).not.toHaveBeenCalled();
+  });
+
+  it("rejects malformed JSON before dedupe or enqueue", async () => {
+    const { kv } = createFakeKV();
+    const ctx = makeExecutionContext();
+
+    const res = await app.fetch(
+      await makeRawWebhookRequest("{not-json", "delivery-1"),
       makeLinearBotEnv(kv),
       ctx
     );
