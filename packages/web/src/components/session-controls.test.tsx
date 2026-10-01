@@ -5,9 +5,7 @@ import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-li
 import * as matchers from "@testing-library/jest-dom/matchers";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import type { TeamResponse } from "@/hooks/use-teams";
 import { browserApiFetch } from "@/lib/browser-api-fetch";
-import { MoveSessionDialog } from "./move-session-dialog";
 import { SessionVisibilityControl } from "./session-visibility-control";
 import { CollaboratorsSection } from "./sidebar/collaborators-section";
 
@@ -20,12 +18,6 @@ beforeAll(() => {
 });
 
 const mocks = vi.hoisted(() => ({
-  teams: [] as TeamResponse[],
-  memberships: [] as TeamResponse[],
-  teamsLoading: false,
-  teamsError: null as Error | null,
-  membershipsLoading: false,
-  membershipsError: null as Error | null,
   members: [] as Array<{ userId: string }>,
   membersLoading: false,
   membersError: null as Error | null,
@@ -41,7 +33,6 @@ const mocks = vi.hoisted(() => ({
   useCandidates: vi.fn(),
   mutate: vi.fn(),
   updated: vi.fn(),
-  openChange: vi.fn(),
 }));
 
 vi.mock("@/lib/browser-api-fetch", () => ({ browserApiFetch: vi.fn() }));
@@ -57,48 +48,12 @@ vi.mock("@/hooks/use-session-collaborator-candidates", () => ({
   },
 }));
 vi.mock("@/hooks/use-teams", () => ({
-  useTeams: () => ({
-    teams: mocks.teams,
-    loading: mocks.teamsLoading,
-    error: mocks.teamsError,
-  }),
-  useMeTeams: () => ({
-    teams: mocks.memberships,
-    loading: mocks.membershipsLoading,
-    error: mocks.membershipsError,
-  }),
   useTeamMembers: (id: string) => {
     mocks.useMembers(id);
     return { members: mocks.members, loading: mocks.membersLoading, error: mocks.membersError };
   },
 }));
 
-const capabilities = {
-  canJoin: false,
-  canLeave: false,
-  canEditMetadata: false,
-  canManageMembers: false,
-  canManageRepositories: false,
-  canManageBindings: false,
-  canManageAutomations: false,
-  canManageSecrets: false,
-  canArchive: false,
-};
-const team: TeamResponse = {
-  id: "target",
-  slug: "target",
-  name: "Target team",
-  description: null,
-  joinPolicy: "invite_only",
-  defaultVisibility: "workspace",
-  defaultEnvironmentId: null,
-  grantsVersion: 1,
-  archivedAt: null,
-  createdAt: 1,
-  updatedAt: 1,
-  memberCount: 1,
-  capabilities,
-};
 const baseProps = {
   sessionId: "session/id",
   ownerTeamId: "source",
@@ -106,18 +61,6 @@ const baseProps = {
   visibility: "team" as const,
   onUpdated: mocks.updated,
 };
-const moveProps = {
-  ...baseProps,
-  open: true,
-  onOpenChange: mocks.openChange,
-  canMove: true,
-};
-
-function selectTarget() {
-  fireEvent.change(screen.getByRole("combobox", { name: "Destination" }), {
-    target: { value: team.id },
-  });
-}
 async function selectVisibility(name: string) {
   fireEvent.keyDown(screen.getByRole("combobox", { name: "Visibility" }), { key: "Enter" });
   fireEvent.click(await screen.findByRole("option", { name }));
@@ -133,12 +76,6 @@ function expectMutation(path: string, body: object, method = "PUT") {
 beforeEach(() => {
   vi.resetAllMocks();
   Element.prototype.scrollIntoView = vi.fn();
-  mocks.teams = [team];
-  mocks.memberships = [team];
-  mocks.teamsLoading = false;
-  mocks.teamsError = null;
-  mocks.membershipsLoading = false;
-  mocks.membershipsError = null;
   mocks.members = [{ userId: "owner" }];
   mocks.membersLoading = false;
   mocks.membersError = null;
@@ -154,221 +91,6 @@ beforeEach(() => {
   vi.mocked(browserApiFetch).mockResolvedValue(Response.json({ ok: true }));
 });
 afterEach(cleanup);
-
-describe("MoveSessionDialog", () => {
-  it("moves a member's session with children by default and refreshes before closing", async () => {
-    render(<MoveSessionDialog {...moveProps} />);
-    selectTarget();
-    expect(screen.getByRole("checkbox", { name: "Include child sessions" })).toBeChecked();
-    expect(screen.queryByRole("checkbox", { name: /Join/ })).toBeNull();
-    fireEvent.click(screen.getByRole("button", { name: "Move session" }));
-    await waitFor(() => expect(mocks.openChange).toHaveBeenCalledWith(false));
-    expectMutation("/api/sessions/session%2Fid/scope", {
-      teamId: "target",
-      includeChildren: true,
-      joinTeam: false,
-    });
-    expect(mocks.updated).toHaveBeenCalledOnce();
-    expect(mocks.mutate).toHaveBeenCalledWith(expect.any(Function));
-  });
-
-  it("requires opt-in joining only for an open nonmember target with canJoin", async () => {
-    mocks.memberships = [];
-    mocks.teams = [
-      { ...team, joinPolicy: "open", capabilities: { ...capabilities, canJoin: true } },
-    ];
-    render(<MoveSessionDialog {...moveProps} />);
-    selectTarget();
-    expect(screen.getByRole("button", { name: "Move session" })).toBeDisabled();
-    fireEvent.click(screen.getByRole("checkbox", { name: "Join target team" }));
-    fireEvent.click(screen.getByRole("checkbox", { name: "Include child sessions" }));
-    fireEvent.click(screen.getByRole("button", { name: "Move session" }));
-    await waitFor(() => expect(mocks.updated).toHaveBeenCalledOnce());
-    expectMutation("/api/sessions/session%2Fid/scope", {
-      teamId: "target",
-      includeChildren: false,
-      joinTeam: true,
-    });
-  });
-
-  it.each([
-    { joinPolicy: "open" as const, caps: capabilities },
-    { joinPolicy: "invite_only" as const, caps: { ...capabilities, canJoin: true } },
-    { joinPolicy: "open" as const, caps: undefined },
-  ])(
-    "does not offer joining when policy or capabilities deny it: $joinPolicy $caps",
-    ({ joinPolicy, caps }) => {
-      mocks.memberships = [];
-      mocks.teams = [{ ...team, joinPolicy, capabilities: caps }];
-      render(<MoveSessionDialog {...moveProps} />);
-      selectTarget();
-      expect(screen.queryByRole("checkbox", { name: "Join target team" })).toBeNull();
-      expect(screen.getByRole("button", { name: "Move session" })).toBeDisabled();
-    }
-  );
-
-  it("does not treat team management as target membership for a move", () => {
-    mocks.memberships = [];
-    mocks.teams = [{ ...team, capabilities: { ...capabilities, canManageMembers: true } }];
-    render(<MoveSessionDialog {...moveProps} />);
-    selectTarget();
-    expect(screen.queryByRole("checkbox", { name: "Join target team" })).toBeNull();
-    expect(screen.getByRole("button", { name: "Move session" })).toBeDisabled();
-    expect(browserApiFetch).not.toHaveBeenCalled();
-  });
-
-  it.each(["loading", "error"])("does not offer joining while membership is %s", (state) => {
-    mocks.memberships = [];
-    mocks.teams = [
-      { ...team, joinPolicy: "open", capabilities: { ...capabilities, canJoin: true } },
-    ];
-    const { rerender } = render(<MoveSessionDialog {...moveProps} />);
-    selectTarget();
-    if (state === "loading") mocks.membershipsLoading = true;
-    else mocks.membershipsError = new Error("Membership unavailable");
-    rerender(<MoveSessionDialog {...moveProps} />);
-    expect(screen.queryByRole("checkbox", { name: "Join target team" })).toBeNull();
-    expect(screen.getByRole("button", { name: "Move session" })).toBeDisabled();
-  });
-
-  it("warns from target membership, not participants, when the team-visible owner is absent", () => {
-    mocks.members = [{ userId: "someone_else" }];
-    render(<MoveSessionDialog {...moveProps} />);
-    selectTarget();
-    expect(mocks.useMembers).toHaveBeenCalledWith("target");
-    expect(screen.getByText(/owner is not a member.*may lose access/i)).toBeInTheDocument();
-  });
-
-  it("moves to workspace with null scope and explains team visibility conversion", async () => {
-    render(<MoveSessionDialog {...moveProps} />);
-    fireEvent.change(screen.getByRole("combobox", { name: "Destination" }), {
-      target: { value: "" },
-    });
-    expect(screen.getByText(/visibility will change to workspace/i)).toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "Move session" }));
-    await waitFor(() => expect(mocks.updated).toHaveBeenCalledOnce());
-    expectMutation("/api/sessions/session%2Fid/scope", {
-      teamId: null,
-      includeChildren: true,
-      joinTeam: false,
-    });
-  });
-
-  it.each([
-    [403, { error: "Forbidden", reason_code: "not_owner" }],
-    [404, { error: "Session not found" }],
-    [409, { error: "Descendant inaccessible", code: "descendant_inaccessible" }],
-  ])(
-    "offers an explicit retry without children after cascade status %s",
-    async (status, failure) => {
-      vi.mocked(browserApiFetch).mockResolvedValueOnce(Response.json(failure, { status }));
-      render(<MoveSessionDialog {...moveProps} />);
-      selectTarget();
-      fireEvent.click(screen.getByRole("button", { name: "Move session" }));
-      const retry = await screen.findByRole("button", { name: "Retry without child sessions" });
-      expect(browserApiFetch).toHaveBeenCalledOnce();
-      expect(mocks.updated).not.toHaveBeenCalled();
-      fireEvent.click(retry);
-      await waitFor(() => expect(mocks.updated).toHaveBeenCalledOnce());
-      expectMutation("/api/sessions/session%2Fid/scope", {
-        teamId: "target",
-        includeChildren: false,
-        joinTeam: false,
-      });
-      expect(screen.getByRole("checkbox", { name: "Include child sessions" })).not.toBeChecked();
-    }
-  );
-
-  it("displays missing repository grants without offering a cascade retry", async () => {
-    vi.mocked(browserApiFetch).mockResolvedValue(
-      Response.json(
-        {
-          error: "Target team lacks repository grant",
-          code: "target_team_missing_grant",
-          repository: "group/subgroup/repo",
-        },
-        { status: 409 }
-      )
-    );
-    render(<MoveSessionDialog {...moveProps} />);
-    selectTarget();
-    fireEvent.click(screen.getByRole("button", { name: "Move session" }));
-    expect(await screen.findByRole("alert")).toHaveTextContent("group/subgroup/repo");
-    expect(screen.queryByRole("button", { name: "Retry without child sessions" })).toBeNull();
-  });
-
-  it.each(["capability", "team capabilities", "loading", "error"])(
-    "guards a move when %s is missing",
-    (missing) => {
-      if (missing === "team capabilities") mocks.teams = [{ ...team, capabilities: undefined }];
-      if (missing === "loading") mocks.teamsLoading = true;
-      if (missing === "error") mocks.teamsError = new Error("Unavailable");
-      render(<MoveSessionDialog {...moveProps} canMove={missing !== "capability"} />);
-      selectTarget();
-      fireEvent.click(screen.getByRole("button", { name: "Move session" }));
-      expect(browserApiFetch).not.toHaveBeenCalled();
-    }
-  );
-
-  it("does not retain join consent across target changes and resets on reopen", () => {
-    mocks.memberships = [];
-    mocks.teams = [
-      { ...team, joinPolicy: "open", capabilities: { ...capabilities, canJoin: true } },
-    ];
-    const { rerender } = render(<MoveSessionDialog {...moveProps} />);
-    selectTarget();
-    fireEvent.click(screen.getByRole("checkbox", { name: "Join target team" }));
-    fireEvent.change(screen.getByRole("combobox", { name: "Destination" }), {
-      target: { value: "" },
-    });
-    selectTarget();
-    expect(screen.getByRole("checkbox", { name: "Join target team" })).not.toBeChecked();
-    fireEvent.click(screen.getByRole("checkbox", { name: "Include child sessions" }));
-    rerender(<MoveSessionDialog {...moveProps} open={false} />);
-    rerender(<MoveSessionDialog {...moveProps} />);
-    expect(screen.getByRole("checkbox", { name: "Include child sessions" })).toBeChecked();
-  });
-
-  it("labels an unavailable current team instead of displaying workspace for a non-null scope", () => {
-    mocks.teams = [];
-    render(<MoveSessionDialog {...moveProps} />);
-    expect(screen.getByRole("combobox", { name: "Destination" })).toHaveValue("source");
-    expect(screen.getByRole("option", { name: "Current team unavailable" })).toBeDisabled();
-    expect(screen.getByRole("button", { name: "Move session" })).toBeDisabled();
-  });
-
-  it("does not offer cascade retry when children were already excluded", async () => {
-    vi.mocked(browserApiFetch).mockResolvedValue(
-      Response.json({ error: "Team not found" }, { status: 404 })
-    );
-    render(<MoveSessionDialog {...moveProps} />);
-    selectTarget();
-    fireEvent.click(screen.getByRole("checkbox", { name: "Include child sessions" }));
-    fireEvent.click(screen.getByRole("button", { name: "Move session" }));
-    expect(await screen.findByRole("alert")).toHaveTextContent("Team not found");
-    expect(screen.queryByRole("button", { name: "Retry without child sessions" })).toBeNull();
-  });
-
-  it("keeps the dialog pending until snapshot refresh finishes and prevents duplicate requests", async () => {
-    let finishRefresh!: () => void;
-    mocks.updated.mockImplementation(
-      () =>
-        new Promise<void>((resolve) => {
-          finishRefresh = resolve;
-        })
-    );
-    render(<MoveSessionDialog {...moveProps} />);
-    selectTarget();
-    fireEvent.click(screen.getByRole("button", { name: "Move session" }));
-    await waitFor(() => expect(mocks.updated).toHaveBeenCalledOnce());
-    expect(screen.getByRole("button", { name: "Moving..." })).toBeDisabled();
-    fireEvent.click(screen.getByRole("button", { name: "Moving..." }));
-    expect(browserApiFetch).toHaveBeenCalledOnce();
-    expect(mocks.openChange).not.toHaveBeenCalled();
-    finishRefresh();
-    await waitFor(() => expect(mocks.openChange).toHaveBeenCalledWith(false));
-  });
-});
 
 describe("SessionVisibilityControl", () => {
   it("uses the shared dropdown and saves the selected visibility and child-session scope", async () => {

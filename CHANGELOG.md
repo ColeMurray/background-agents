@@ -2,6 +2,17 @@
 
 New features, integrations, and notable improvements to Open-Inspect — newest first.
 
+## Unreleased
+
+### Changed
+
+Team-owned session actions now require current owning-team membership in every `TEAMS_ENFORCEMENT`
+mode, including for Owners and Administrators. Visibility still determines read access; collaborator
+self-removal requires only read access. Sessions, automations, and environments cannot move between
+teams or to/from the workspace; a team-owned session never becomes workspace-owned. Visibility and
+collaborator controls remain available to authorized users. Historical `session.moved` audit events
+remain readable.
+
 ## October 1, 2026
 
 ### Changed
@@ -12,6 +23,19 @@ Modal. The control plane now sends the VCS host and clone username with every Mo
 and image-build request, so Modal no longer reads `SCM_PROVIDER` or needs GitHub App credentials.
 Terraform no longer provisions Modal's `github-app` secret; you can delete the existing secret from
 Modal after upgrading.
+
+### Added
+
+Team leads and workspace administrators can manage encrypted secrets from a team's Secrets tab.
+Team-owned sessions receive global secrets, then team secrets, then environment or repository
+secrets, with later scopes taking precedence. Environment image builds include the environment's
+team secrets; repository-shared images do not. Secret mutation audits contain key names only. Team
+secret changes atomically supersede affected environment images. After the database batch, detached,
+best-effort rebuild scheduling is attempted for enabled team-owned environments; enumeration or
+trigger failures may leave no rebuild request. Team-owned environment images require matching
+session ownership. Team-only legacy OAuth refresh tokens do not enable managed authentication; API
+keys remain usable. Team-secret read and decryption errors abort environment builds rather than
+falling back to other secret scopes.
 
 ### Removed
 

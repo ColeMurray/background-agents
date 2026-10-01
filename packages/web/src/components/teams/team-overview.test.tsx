@@ -43,7 +43,6 @@ function item(id: string, ownerTeamId = "team_one") {
         canCollaborate: false,
         canManageLifecycle: false,
         canDelete: false,
-        canMove: false,
         canSandbox: false,
         canManageCollaborators: false,
         canChangeVisibility: false,
@@ -64,12 +63,15 @@ beforeEach(() => {
 afterEach(cleanup);
 
 describe("team session buckets", () => {
-  it("keeps two teams distinct and refreshes both after a server-side move", async () => {
-    let moved = false;
+  it("keeps two teams distinct and refreshes both after a visibility change", async () => {
+    let visibilityChanged = false;
     vi.mocked(browserApiFetch).mockImplementation(async (path) => {
       const source = path.includes("team_one");
       return Response.json({
-        items: source !== moved ? [item("session_moving", source ? "team_one" : "team_two")] : [],
+        items:
+          source && visibilityChanged
+            ? []
+            : [item(source ? "session_one" : "session_two", source ? "team_one" : "team_two")],
         hasMore: false,
         nextCursor: null,
       });
@@ -80,25 +82,27 @@ describe("team session buckets", () => {
         return {
           one: useTeamSessionBucket("team_one", "needs_attention"),
           two: useTeamSessionBucket("team_two", "needs_attention"),
-          refreshAfterMove: () => mutate(isSessionScopeCacheKey),
+          refreshAfterVisibilityChange: () => mutate(isSessionScopeCacheKey),
         };
       },
       { wrapper }
     );
-    await waitFor(() => expect(result.current.one.items).toHaveLength(1));
-    expect(result.current.two.items).toEqual([]);
+    await waitFor(() => {
+      expect(result.current.one.items[0]?.rootSession.id).toBe("session_one");
+      expect(result.current.two.items[0]?.rootSession.id).toBe("session_two");
+    });
     expect(browserApiFetch).toHaveBeenCalledWith(
       "/api/teams/team_one/sessions?bucket=needs_attention"
     );
     expect(browserApiFetch).toHaveBeenCalledWith(
       "/api/teams/team_two/sessions?bucket=needs_attention"
     );
-    moved = true;
+    visibilityChanged = true;
     await act(async () => {
-      await result.current.refreshAfterMove();
+      await result.current.refreshAfterVisibilityChange();
     });
     expect(result.current.one.items).toEqual([]);
-    expect(result.current.two.items[0]?.rootSession.id).toBe("session_moving");
+    expect(result.current.two.items[0]?.rootSession.id).toBe("session_two");
   });
 
   it("forwards an opaque cursor and validates inbox pages", async () => {

@@ -112,16 +112,21 @@ describe("updateSessionScope", () => {
       return [];
     });
     try {
-      const request = updateSessionScope("/api/sessions/s1/scope", { method: "PUT" }, refresh, {
-        mutate,
-        cache: new Map(),
-      });
+      const request = updateSessionScope(
+        "/api/sessions/s1/visibility",
+        { method: "PUT" },
+        refresh,
+        {
+          mutate,
+          cache: new Map(),
+        }
+      );
       expect(listener).not.toHaveBeenCalled();
       finishMutation(new Response(null, { status: 204 }));
       await request;
       expect(listener).toHaveBeenCalledOnce();
       expect(refresh).toHaveBeenCalledOnce();
-      expect(mutate).toHaveBeenCalledTimes(3);
+      expect(mutate).toHaveBeenCalledTimes(2);
     } finally {
       unsubscribe();
     }
@@ -133,7 +138,7 @@ describe("updateSessionScope", () => {
     const unsubscribe = subscribeSessionScopeChanges(listener);
     try {
       await expect(
-        updateSessionScope("/api/sessions/s1/scope", { method: "PUT" }, vi.fn(), {
+        updateSessionScope("/api/sessions/s1/visibility", { method: "PUT" }, vi.fn(), {
           mutate: vi.fn(),
           cache: new Map(),
         })
@@ -149,36 +154,34 @@ describe("updateSessionScope", () => {
     const listener = vi.fn();
     const unsubscribe = subscribeSessionScopeChanges(listener);
     unsubscribe();
-    await updateSessionScope("/api/sessions/s1/scope", { method: "PUT" }, async () => {}, {
+    await updateSessionScope("/api/sessions/s1/visibility", { method: "PUT" }, async () => {}, {
       mutate: vi.fn().mockResolvedValue(undefined),
       cache: new Map(),
     });
     expect(listener).not.toHaveBeenCalled();
   });
 
-  it("awaits snapshot, list, and membership refreshes even when timestamps do not change", async () => {
+  it("awaits snapshot and list refreshes even when timestamps do not change", async () => {
     vi.mocked(browserApiFetch).mockResolvedValue(Response.json({ updatedAt: 1 }));
     let finishSnapshot!: () => void;
     let finishLists!: () => void;
-    let finishMembership!: () => void;
     const refresh = vi.fn(
       () =>
         new Promise<void>((resolve) => {
           finishSnapshot = resolve;
         })
     );
-    const mutate = vi.fn().mockImplementation((key, _data, options) =>
+    const mutate = vi.fn().mockImplementation((_key, _data, options) =>
       options?.revalidate === false
         ? Promise.resolve()
         : new Promise<void>((resolve) => {
-            if (key === isMeTeamsCacheKey) finishMembership = resolve;
-            else finishLists = resolve;
+            finishLists = resolve;
           })
     );
     let done = false;
     const request = updateSessionScope(
-      "/api/sessions/s1/scope",
-      { method: "PUT", body: { teamId: null, includeChildren: true, joinTeam: false } },
+      "/api/sessions/s1/visibility",
+      { method: "PUT", body: { visibility: "private", includeChildren: true } },
       refresh,
       { mutate, cache: new Map() }
     ).then(() => {
@@ -189,17 +192,11 @@ describe("updateSessionScope", () => {
       revalidate: false,
     });
     expect(mutate).toHaveBeenCalledWith(isSessionScopeCacheKey);
-    expect(mutate).toHaveBeenCalledWith(isMeTeamsCacheKey);
-    expect(mutate).not.toHaveBeenCalledWith(isMeTeamsCacheKey, undefined, {
-      revalidate: false,
-    });
+    expect(mutate).not.toHaveBeenCalledWith(isMeTeamsCacheKey);
     finishSnapshot();
     await Promise.resolve();
     expect(done).toBe(false);
     finishLists();
-    await Promise.resolve();
-    expect(done).toBe(false);
-    finishMembership();
     await request;
     expect(done).toBe(true);
   });
@@ -226,7 +223,7 @@ describe("updateSessionScope", () => {
     const mutate = vi.fn().mockResolvedValue(undefined);
     const refresh = vi.fn().mockResolvedValue(undefined);
 
-    await updateSessionScope("/api/sessions/s1/scope", { method: "PUT" }, refresh, {
+    await updateSessionScope("/api/sessions/s1/visibility", { method: "PUT" }, refresh, {
       mutate,
       cache,
     });
@@ -241,7 +238,7 @@ describe("updateSessionScope", () => {
       expect(mutate).not.toHaveBeenCalledWith(key, undefined, { revalidate: false });
       expect(mutate).not.toHaveBeenCalledWith(key);
     }
-    expect(mutate).toHaveBeenCalledTimes(3 + infiniteKeys.length * 2);
+    expect(mutate).toHaveBeenCalledTimes(2 + infiniteKeys.length * 2);
   });
 
   it("refreshes even for an empty successful response", async () => {
@@ -253,7 +250,7 @@ describe("updateSessionScope", () => {
       cache: new Map(),
     });
     expect(refresh).toHaveBeenCalledOnce();
-    expect(mutate).toHaveBeenCalledTimes(3);
+    expect(mutate).toHaveBeenCalledTimes(2);
   });
 
   it("still revalidates lists when snapshot refresh rejects after a successful mutation", async () => {
@@ -261,13 +258,12 @@ describe("updateSessionScope", () => {
     const refresh = vi.fn().mockRejectedValue(new Error("Snapshot unavailable"));
     const mutate = vi.fn().mockResolvedValue(undefined);
     await expect(
-      updateSessionScope("/api/sessions/s1/scope", { method: "PUT" }, refresh, {
+      updateSessionScope("/api/sessions/s1/visibility", { method: "PUT" }, refresh, {
         mutate,
         cache: new Map(),
       })
     ).rejects.toThrow("Snapshot unavailable");
     expect(mutate).toHaveBeenCalledWith(isSessionScopeCacheKey);
-    expect(mutate).toHaveBeenCalledWith(isMeTeamsCacheKey);
   });
 
   it("reports non-JSON mutation failures without attempting a refresh", async () => {
@@ -275,7 +271,7 @@ describe("updateSessionScope", () => {
     const refresh = vi.fn();
     const mutate = vi.fn();
     await expect(
-      updateSessionScope("/api/sessions/s1/scope", { method: "PUT" }, refresh, {
+      updateSessionScope("/api/sessions/s1/visibility", { method: "PUT" }, refresh, {
         mutate,
         cache: new Map(),
       })
@@ -288,31 +284,24 @@ describe("updateSessionScope", () => {
     [403, { error: "Forbidden", code: "session_action_denied", reason_code: "not_owner" }, true],
     [404, { error: "Session not found" }, true],
     [409, { error: "Denied", code: "descendant_inaccessible" }, true],
-    [
-      409,
-      {
-        error: "Missing grant",
-        code: "target_team_missing_grant",
-        repository: "group/subgroup/repo",
-      },
-      false,
-    ],
+    [409, { error: "Conflict" }, false],
     [400, { error: "Owner required", code: "owner_required" }, false],
   ])("retains structured failure %s %j", async (status, body, retryable) => {
     vi.mocked(browserApiFetch).mockResolvedValue(Response.json(body, { status }));
     const refresh = vi.fn();
     const mutate = vi.fn();
-    const failure = await updateSessionScope("/api/sessions/s1/scope", { method: "PUT" }, refresh, {
-      mutate,
-      cache: new Map(),
-    }).catch((error) => error);
+    const failure = await updateSessionScope(
+      "/api/sessions/s1/visibility",
+      { method: "PUT" },
+      refresh,
+      { mutate, cache: new Map() }
+    ).catch((error) => error);
     expect(failure).toBeInstanceOf(SessionScopeError);
     expect(failure.status).toBe(status);
     expect(failure.canRetryWithoutChildren).toBe(retryable);
     expect(failure.message).toContain(body.error);
     if ("code" in body) expect(failure.message).toContain(body.code);
     if ("reason_code" in body) expect(failure.message).toContain(body.reason_code);
-    if ("repository" in body) expect(failure.message).toContain(body.repository);
     expect(refresh).not.toHaveBeenCalled();
     expect(mutate).not.toHaveBeenCalled();
   });

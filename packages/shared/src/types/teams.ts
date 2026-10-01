@@ -145,7 +145,6 @@ const teamInboxSessionSchema = z.object({
     canCollaborate: z.boolean(),
     canManageLifecycle: z.boolean(),
     canDelete: z.boolean(),
-    canMove: z.boolean(),
     canSandbox: z.boolean(),
     canManageCollaborators: z.boolean(),
     canChangeVisibility: z.boolean(),

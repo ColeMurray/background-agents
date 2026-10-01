@@ -57,7 +57,6 @@ exports[`route admission matrix > admits the workspace owner through every brows
   "PATCH /settings/teams owner=400",
   "POST /sessions owner=201",
   "PUT /sessions/:id/visibility owner=400",
-  "PUT /sessions/:id/scope owner=400",
   "PUT /sessions/:id/collaborators/:userId owner=404",
   "DELETE /sessions/:id/collaborators/:userId owner=200",
   "GET /sessions/:id/collaborator-candidates owner=200",
@@ -218,6 +217,9 @@ exports[`route admission matrix > admits the workspace owner through every brows
   "GET /members owner=200",
   "PUT /members/:id/role owner=400",
   "PUT /members/:id/status owner=400",
+  "GET /teams/:id/secrets owner=200",
+  "PUT /teams/:id/secrets owner=400",
+  "DELETE /teams/:id/secrets/:key owner=404",
 ]
 `;
 
@@ -247,7 +249,6 @@ exports[`route admission matrix > rejects every credentialed route anonymously b
   "PATCH /settings/teams anonymous=401",
   "POST /sessions anonymous=401",
   "PUT /sessions/:id/visibility anonymous=401",
-  "PUT /sessions/:id/scope anonymous=401",
   "PUT /sessions/:id/collaborators/:userId anonymous=401",
   "DELETE /sessions/:id/collaborators/:userId anonymous=401",
   "GET /sessions/:id/collaborator-candidates anonymous=401",
@@ -420,6 +421,9 @@ exports[`route admission matrix > rejects every credentialed route anonymously b
   "GET /members anonymous=401",
   "PUT /members/:id/role anonymous=401",
   "PUT /members/:id/status anonymous=401",
+  "GET /teams/:id/secrets anonymous=401",
+  "PUT /teams/:id/secrets anonymous=401",
+  "DELETE /teams/:id/secrets/:key anonymous=401",
   "POST /webhooks/sentry/:id anonymous=404",
   "POST /webhooks/automation/:id anonymous=415",
   "POST /internal/github-event anonymous=401",
@@ -446,6 +450,9 @@ exports[`route admission sentinel > admits team directory reads but conceals mem
   "DELETE /teams/:id/members/:userId off/nonmember=404 auditAllowed=true",
   "POST /teams/:id/join off/nonmember=200 auditAllowed=true",
   "GET /teams/:id/sessions off/nonmember=404 auditAllowed=false",
+  "GET /teams/:id/secrets off/nonmember=403 auditAllowed=true",
+  "PUT /teams/:id/secrets off/nonmember=403 auditAllowed=true",
+  "DELETE /teams/:id/secrets/:key off/nonmember=403 auditAllowed=true",
   "GET /teams/:id shadow/nonmember=200 auditAllowed=false",
   "PATCH /teams/:id shadow/nonmember=403 auditAllowed=true",
   "POST /teams/:id/archive shadow/nonmember=403 auditAllowed=true",
@@ -455,6 +462,9 @@ exports[`route admission sentinel > admits team directory reads but conceals mem
   "DELETE /teams/:id/members/:userId shadow/nonmember=404 auditAllowed=true",
   "POST /teams/:id/join shadow/nonmember=200 auditAllowed=true",
   "GET /teams/:id/sessions shadow/nonmember=404 auditAllowed=false",
+  "GET /teams/:id/secrets shadow/nonmember=403 auditAllowed=true",
+  "PUT /teams/:id/secrets shadow/nonmember=403 auditAllowed=true",
+  "DELETE /teams/:id/secrets/:key shadow/nonmember=403 auditAllowed=true",
   "GET /teams/:id on/nonmember=200 auditAllowed=false",
   "PATCH /teams/:id on/nonmember=403 auditAllowed=true",
   "POST /teams/:id/archive on/nonmember=403 auditAllowed=true",
@@ -464,6 +474,9 @@ exports[`route admission sentinel > admits team directory reads but conceals mem
   "DELETE /teams/:id/members/:userId on/nonmember=404 auditAllowed=true",
   "POST /teams/:id/join on/nonmember=200 auditAllowed=true",
   "GET /teams/:id/sessions on/nonmember=404 auditAllowed=false",
+  "GET /teams/:id/secrets on/nonmember=403 auditAllowed=true",
+  "PUT /teams/:id/secrets on/nonmember=403 auditAllowed=true",
+  "DELETE /teams/:id/secrets/:key on/nonmember=403 auditAllowed=true",
 ]
 `;
 
@@ -476,7 +489,6 @@ exports[`route admission sentinel > audits one workspace Owner break-glass admis
 exports[`route admission sentinel > conceals all team item routes from another team before any handler or DO call 1`] = `
 [
   "PUT /sessions/:id/visibility other-team=404",
-  "PUT /sessions/:id/scope other-team=404",
   "PUT /sessions/:id/collaborators/:userId other-team=404",
   "DELETE /sessions/:id/collaborators/:userId other-team=404",
   "GET /sessions/:id/collaborator-candidates other-team=404",
@@ -521,7 +533,6 @@ exports[`route admission sentinel > conceals all team item routes from another t
 exports[`route admission sentinel > reports action denials for a same-team Viewer and admits a private collaborator 1`] = `
 [
   "PUT /sessions/:id/visibility same-team-viewer=403",
-  "PUT /sessions/:id/scope same-team-viewer=403",
   "PUT /sessions/:id/collaborators/:userId same-team-viewer=403",
   "DELETE /sessions/:id/collaborators/:userId same-team-viewer=200",
   "GET /sessions/:id/collaborator-candidates same-team-viewer=403",

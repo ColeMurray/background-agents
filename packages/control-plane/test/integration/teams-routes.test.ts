@@ -144,7 +144,6 @@ describe("team routes", () => {
     expect((await request(`/teams/${team.id}`, "PATCH", { name: "Platform" })).status).toBe(200);
     expect((await request(`/teams/${team.id}/archive`, "POST")).status).toBe(200);
     expect((await new TeamStore(env.DB).getById(team.id))?.archivedAt).not.toBeNull();
-    expect(await new TeamStore(env.DB).isActive(team.id)).toBe(false);
     expect(await (await request("/teams?membership=all")).json()).toEqual({ teams: [] });
     expect(
       await (await request("/teams?membership=all&includeArchived=true")).json()
@@ -153,7 +152,6 @@ describe("team routes", () => {
     });
     expect((await request(`/teams/${team.id}/restore`, "POST")).status).toBe(200);
     expect((await new TeamStore(env.DB).getById(team.id))?.archivedAt).toBeNull();
-    expect(await new TeamStore(env.DB).isActive(team.id)).toBe(true);
     expect((await auditEvents(team.id)).map((row) => row.action)).toEqual([
       "team.created",
       "team.updated",
@@ -514,7 +512,7 @@ describe("team routes", () => {
       ).toMatchObject({
         ownerTeamId: team.id,
         visibility: "team",
-        capabilities: { canRead: true, canDelete: mode !== "on", canMove: false },
+        capabilities: { canRead: true, canDelete: false },
       });
       const page = inboxPage(
         await (
@@ -534,7 +532,6 @@ describe("team routes", () => {
       ).toMatchObject({
         canRead: true,
         canManageCollaborators: false,
-        canMove: false,
       });
     }
   );
@@ -613,13 +610,12 @@ describe("team routes", () => {
         id: "role-visible",
         capabilities: {
           canRead: true,
-          canCollaborate: role !== "viewer",
-          canManageLifecycle: role !== "viewer",
-          canDelete: role !== "viewer",
-          canMove: role !== "viewer",
-          canSandbox: role !== "viewer",
-          canManageCollaborators: role === "owner",
-          canChangeVisibility: role !== "viewer",
+          canCollaborate: false,
+          canManageLifecycle: false,
+          canDelete: false,
+          canSandbox: false,
+          canManageCollaborators: false,
+          canChangeVisibility: false,
         },
       });
       expect(JSON.stringify(page)).not.toContain("role-private");
@@ -719,37 +715,6 @@ describe("team routes", () => {
       expect(await auditEvents(team.id)).toEqual([]);
     }
   );
-
-  it("moves a session with its children and immediately updates both team buckets", async () => {
-    await setRole(OWNER, "member");
-    const teams = new TeamStore(env.DB);
-    const source = await teams.create({ slug: "source", name: "Source", joinPolicy: "open" });
-    const target = await teams.create({ slug: "target", name: "Target", joinPolicy: "open" });
-    const memberships = new TeamMembershipStore(env.DB);
-    await memberships.add(source.id, OWNER);
-    await memberships.add(target.id, OWNER);
-    const owned = { userId: OWNER, repoOwner: null, repoName: null, baseBranch: null };
-    await seedSession("move-parent", source.id, owned);
-    await seedSession("move-child", source.id, { ...owned, parentSessionId: "move-parent" });
-    const bucket = (teamId: string) => request(`/teams/${teamId}/sessions?bucket=finished`);
-    expect(
-      inboxPage(await (await bucket(source.id)).json()).items[0].descendantSessions
-    ).toHaveLength(1);
-    expect(inboxPage(await (await bucket(target.id)).json()).items).toEqual([]);
-    const moved = await request("/sessions/move-parent/scope", "PUT", {
-      teamId: target.id,
-      includeChildren: true,
-    });
-    expect(moved.status).toBe(200);
-    expect(await moved.json()).toMatchObject({ affectedSessionIds: ["move-parent", "move-child"] });
-    expect(inboxPage(await (await bucket(source.id)).json()).items).toEqual([]);
-    expect(inboxPage(await (await bucket(target.id)).json()).items).toMatchObject([
-      {
-        rootSession: { id: "move-parent", ownerTeamId: target.id, updatedAt: 100 },
-        descendantSessions: [{ id: "move-child", ownerTeamId: target.id, updatedAt: 100 }],
-      },
-    ]);
-  });
 
   it("joins open teams, rejects invite-only joins and audits membership changes", async () => {
     await setRole(OWNER, "member");

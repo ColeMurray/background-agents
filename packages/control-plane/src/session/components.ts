@@ -158,7 +158,7 @@ import { createSessionRuntimeClientForTrace } from "./runtime-client";
 import { SessionTitleService } from "./title-service";
 import { parseArtifactMetadata } from "./artifact-metadata";
 import { AuthorizationError, AuthorizationService } from "../authorization/service";
-import { parseTeamsEnforcementMode } from "../authorization/teams-enforcement";
+import { parseTeamsEnforcementMode, resolverDecides } from "../authorization/teams-enforcement";
 import { auditSocketPrivateBreakGlass } from "../authorization/session-socket-audit";
 import type { TeamRole } from "@open-inspect/shared/types/teams";
 import type { SessionWebSocket } from "../platform-ports";
@@ -853,9 +853,9 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
         ]);
         if (authorization.suspendedAt !== null) return { kind: "rejected" };
         if (!session) return { kind: "rejected" };
-        const enforceScope = mode === "on" || session.visibility === "private";
+        const enforceScope = resolverDecides(mode, session, "read");
         const [memberships, collaboratorIds] = await Promise.all([
-          enforceScope || options?.includeMemberships
+          resolverDecides(mode, session, "collaborate") || options?.includeMemberships
             ? teamMembershipStore.listForUser(userId)
             : new Map<string, TeamRole>(),
           enforceScope ? sessionCollaboratorStore.listUserIds(session.id) : [],
@@ -1160,7 +1160,7 @@ function createLifecycleManager(deps: LifecycleManagerDeps): SandboxLifecycleMan
   const imageBuildAdmission = resolveImageBuildAdmission(env);
   const imageBuildLookup: ImageBuildLookup | undefined =
     imageBuildAdmission.admitted && imageBuildAdmission.provider
-      ? createImageBuildLookup(db, imageBuildAdmission.provider)
+      ? createImageBuildLookup(db, imageBuildAdmission.provider, getSessionId)
       : undefined;
 
   return new SandboxLifecycleManager(
