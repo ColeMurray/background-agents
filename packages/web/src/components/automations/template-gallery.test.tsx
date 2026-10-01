@@ -15,6 +15,13 @@ vi.mock("next/link", () => ({
 }));
 
 describe("TemplateGallery", () => {
+  it("preserves team context when adding a template", () => {
+    render(<TemplateGallery teamId="team/one" />);
+    expect(screen.getByRole("link", { name: "Add Find bugs" })).toHaveAttribute(
+      "href",
+      "/automations/new?template=find-bugs&teamId=team%2Fone"
+    );
+  });
   it("filters the grid when another category is selected (without navigation)", () => {
     render(<TemplateGallery />);
     // "Generate docs" is code-review only, so it is hidden under Popular.

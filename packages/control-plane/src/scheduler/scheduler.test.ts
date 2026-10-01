@@ -369,6 +369,7 @@ const now = Date.now();
 
 const sampleAutomation = {
   id: "auto-1",
+  owner_team_id: null,
   name: "Daily sync",
   repo_owner: "acme",
   repo_name: "web-app",
@@ -527,6 +528,14 @@ describe("Scheduler", () => {
       repoOwner: "acme",
       repoName: "web-app",
       defaultBranch: "main",
+    });
+  });
+
+  it("defaults an unauthorized execution error to the generic denial reason", () => {
+    expect(new AutomationExecutionUnauthorizedError()).toMatchObject({
+      name: "AutomationExecutionUnauthorizedError",
+      message: "Automation execution principal is not authorized",
+      reason: "execution_authorization_denied",
     });
   });
 

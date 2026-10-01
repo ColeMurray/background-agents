@@ -68,6 +68,7 @@ function makeAutomation(overrides: Partial<AutomationListItem> = {}): Automation
     environmentIds: [],
     providerSelections: {},
     recentExecutions: [],
+    capabilities: { canRead: true, canManage: true, canTrigger: true },
     ...overrides,
   };
 }
@@ -147,13 +148,15 @@ describe("AutomationsList actions", () => {
       />
     );
 
-  it("uses canonical ownership for own-scoped controls", () => {
+  it("disables controls when capabilities are missing, regardless of ownership or global permissions", () => {
+    permissions = ["automations.manage.any", "automations.trigger.any"];
     render(
       <AutomationsList
         automations={[
           makeAutomation({
             createdBy: CURRENT_USER_ID,
             userId: "22222222222222222222222222222222",
+            capabilities: undefined,
           }),
         ]}
         emptyState={{ kind: "no-automations" }}
@@ -172,7 +175,12 @@ describe("AutomationsList actions", () => {
 
   it("gates manage and trigger controls independently", () => {
     permissions = ["automations.manage.any"];
-    renderListWithActions(makeAutomation({ userId: null }));
+    renderListWithActions(
+      makeAutomation({
+        userId: null,
+        capabilities: { canRead: true, canManage: true, canTrigger: false },
+      })
+    );
 
     expect(screen.getByRole("button", { name: "Pause" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Delete" })).toBeInTheDocument();

@@ -101,7 +101,7 @@ export async function handleCreateSession(
     throw e;
   }
 
-  const targetAuthorizationError = authorizeSessionTarget(ctx, {
+  const targetAuthorizationError = await authorizeSessionTarget(ctx, {
     environmentId: body.environmentId,
     hasRepository: Boolean(repositoryContext || body.repositories),
   });

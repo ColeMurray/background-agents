@@ -11,7 +11,8 @@ import type { ControlPlaneHonoEnv } from "../routing/hono-env";
 import { type RequestContext, json } from "./shared";
 import type { Env } from "../types";
 import { z } from "zod";
-import { AUTOMATIONS_READ } from "./automation-shared";
+import { AUTOMATIONS_READ, automationResponseCapabilities } from "./automation-shared";
+import { resourceViewer } from "../authorization/resource-viewer";
 import { parseQuery } from "./query";
 import {
   DEFAULT_AUTOMATION_LIST_PAGE_SIZE,
@@ -51,6 +52,11 @@ const automationListQuerySchema = z.object({
     .optional(),
   repoOwner: z.string().optional(),
   repoName: z.string().optional(),
+  teamId: z
+    .string()
+    .min(1, { error: "Invalid teamId" })
+    .optional()
+    .transform((teamId) => (teamId === "null" ? null : teamId)),
 });
 
 async function handleListAutomations(
@@ -64,12 +70,15 @@ async function handleListAutomations(
 
   const store = new AutomationStore(ctx.db);
   const providerAuthStore = new AutomationModelProviderAuthStore(ctx.db);
+  const viewer = await resourceViewer(ctx);
   const result = await store.list({
+    viewer,
     limit: query.limit,
     cursor: query.cursor,
     ...(query.search ? { nameSearch: query.search } : {}),
     ...(query.repoOwner ? { repoOwner: query.repoOwner } : {}),
     ...(query.repoName ? { repoName: query.repoName } : {}),
+    ...(query.teamId !== undefined ? { teamId: query.teamId } : {}),
   });
   const automationIds = result.automations.map((row) => row.id);
   const [
@@ -91,6 +100,8 @@ async function handleListAutomations(
       environmentsByAutomation.get(row.id) ?? [],
       providerAuthByAutomation.get(row.id) ?? []
     ),
+    ownerTeamId: row.owner_team_id,
+    capabilities: automationResponseCapabilities(viewer, row),
     recentExecutions: recentExecutionsByAutomation.get(row.id) ?? [],
   }));
   return json({

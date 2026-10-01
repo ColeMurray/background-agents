@@ -49,6 +49,12 @@ vi.mock("@/components/settings/team-detail", () => ({
   TeamDetail: () => <p>Team settings editor</p>,
 }));
 vi.mock("./team-overview", () => ({ TeamOverview: () => <p>Team session buckets</p> }));
+vi.mock("./team-environments", () => ({
+  TeamEnvironments: ({ teamId }: { teamId: string }) => <p>Environments for {teamId}</p>,
+}));
+vi.mock("./team-automations", () => ({
+  TeamAutomations: ({ teamId }: { teamId: string }) => <p>Automations for {teamId}</p>,
+}));
 vi.mock("./team-secrets", () => ({
   TeamSecrets: ({ teamId }: { teamId: string }) => <p>Team secrets editor for {teamId}</p>,
 }));
@@ -188,6 +194,8 @@ describe("Team page tabs", () => {
     expect(tabs.queryByRole("button", { name: "Overview" })).not.toBeInTheDocument();
     expect(tabs.queryByRole("button", { name: "Activity" })).not.toBeInTheDocument();
     expect(tabs.queryByRole("button", { name: "Secrets" })).not.toBeInTheDocument();
+    expect(tabs.queryByRole("button", { name: "Environments" })).not.toBeInTheDocument();
+    expect(tabs.queryByRole("button", { name: "Automations" })).not.toBeInTheDocument();
     expect(tabs.queryByRole("button", { name: "Settings" })).not.toBeInTheDocument();
     expect(screen.getByText("Team member table")).toBeInTheDocument();
     expect(screen.queryByText("Team session buckets")).not.toBeInTheDocument();
@@ -210,6 +218,32 @@ describe("Team page tabs", () => {
     expect(screen.queryByRole("button", { name: "Settings" })).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Members" }));
     expect(screen.getByText("Team member table")).toBeInTheDocument();
+  });
+
+  it("places scoped Environments and Automations after Members and before Secrets and Settings", () => {
+    mocks.mine = [team];
+    mocks.teams = [
+      { ...team, capabilities: { ...denied, canEditMetadata: true, canManageSecrets: true } },
+    ];
+    const view = render(<TeamPage slug="design" />);
+    const tabs = within(screen.getByRole("navigation", { name: "Team tabs" }));
+    expect(tabs.getAllByRole("button").map((button) => button.textContent)).toEqual([
+      "Overview",
+      "Members",
+      "Environments",
+      "Automations",
+      "Secrets",
+      "Settings",
+    ]);
+    fireEvent.click(tabs.getByRole("button", { name: "Environments" }));
+    expect(screen.getByText("Environments for team_design")).toBeInTheDocument();
+    fireEvent.click(tabs.getByRole("button", { name: "Automations" }));
+    expect(screen.getByText("Automations for team_design")).toBeInTheDocument();
+    mocks.mine = [];
+    view.rerender(<TeamPage slug="design" />);
+    expect(screen.queryByText("Automations for team_design")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Automations" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Environments" })).not.toBeInTheDocument();
   });
 
   it.each(["owner", "administrator"])(
@@ -289,6 +323,8 @@ describe("Team page tabs", () => {
       expect(tabs.getAllByRole("button").map((button) => button.textContent)).toEqual([
         "Overview",
         "Members",
+        "Environments",
+        "Automations",
         "Secrets",
       ]);
       expect(screen.queryByText("Team secrets editor for team_design")).not.toBeInTheDocument();

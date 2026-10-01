@@ -21,6 +21,12 @@ vi.mock("./db/session-index", () => ({
   SessionIndexStore: vi.fn(),
 }));
 
+vi.mock("./db/environments", () => ({
+  EnvironmentStore: vi.fn().mockImplementation(function () {
+    return { getById: vi.fn(async () => ({ id: "env_parent", owner_team_id: null })) };
+  }),
+}));
+
 vi.mock("./db/model-preferences", () => ({
   getEffectiveEnabledModels: vi.fn(),
 }));

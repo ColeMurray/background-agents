@@ -40,6 +40,18 @@ vi.mock("@/hooks/use-repos", () => ({
 vi.mock("@/hooks/use-environments", () => ({
   useEnvironments: () => ({ environments: [], loading: false }),
 }));
+vi.mock("@/hooks/use-resource-teams", () => ({
+  useResourceTeams: () => ({
+    teams: [{ id: "team-1", name: "Engineering" }],
+    allTeams: [{ id: "team-1", name: "Engineering" }],
+    loading: false,
+    error: null,
+    allowWorkspace: true,
+  }),
+}));
+vi.mock("@/hooks/use-provider-accounts", () => ({
+  useProviderAccounts: () => ({ accounts: [], defaults: [], loading: false }),
+}));
 
 vi.mock("@/hooks/use-branches", () => ({
   useBranches: () => ({ branches: [], loading: false }),
@@ -72,6 +84,12 @@ beforeEach(() => {
 });
 
 describe("NewAutomationPage template pre-fill", () => {
+  it("preserves team query context alongside the template", () => {
+    search = "template=find-bugs&teamId=team-1";
+    render(<NewAutomationPage />);
+    expect(screen.getByDisplayValue("Find bugs")).toBeInTheDocument();
+    expect(screen.getByRole("combobox", { name: "Team" })).toHaveValue("team-1");
+  });
   it("redirects a direct create link without automations.create", () => {
     canCreate = false;
     render(<NewAutomationPage />);

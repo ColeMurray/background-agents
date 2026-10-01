@@ -5,7 +5,10 @@ import { Suspense } from "react";
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import * as matchers from "@testing-library/jest-dom/matchers";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { MAX_AUTOMATION_INVOCATION_LIST_LIMIT } from "@open-inspect/shared/types/automations";
+import {
+  MAX_AUTOMATION_INVOCATION_LIST_LIMIT,
+  type Automation,
+} from "@open-inspect/shared/types/automations";
 import AutomationDetailPage from "./page";
 
 expect.extend(matchers);
@@ -39,6 +42,7 @@ const automation = {
   repositories: [],
   environmentIds: [],
   providerSelections: {},
+  capabilities: undefined as Automation["capabilities"],
 };
 
 vi.mock("next/navigation", () => ({ useRouter: () => ({ push: vi.fn() }) }));
@@ -91,6 +95,7 @@ async function renderPage() {
 
 beforeEach(() => {
   permissions = [];
+  automation.capabilities = undefined;
   history.total = 0;
   history.requestedLimits = [];
 });
@@ -117,8 +122,8 @@ describe("AutomationDetailPage run history", () => {
 });
 
 describe("AutomationDetailPage authorization", () => {
-  it("does not treat createdBy provenance as canonical ownership", async () => {
-    permissions = ["automations.manage.own", "automations.trigger.own"];
+  it("does not infer resource capabilities from global permissions", async () => {
+    permissions = ["automations.manage.any", "automations.trigger.any"];
     await renderPage();
     await screen.findByRole("heading", { name: "Nightly review" });
 
@@ -128,8 +133,8 @@ describe("AutomationDetailPage authorization", () => {
     expect(screen.queryByRole("button", { name: "Delete" })).not.toBeInTheDocument();
   });
 
-  it("shows manage and trigger controls with any-scoped capabilities", async () => {
-    permissions = ["automations.manage.any", "automations.trigger.any"];
+  it("shows manage and trigger controls using response capabilities", async () => {
+    automation.capabilities = { canRead: true, canManage: true, canTrigger: true };
     await renderPage();
     await screen.findByRole("heading", { name: "Nightly review" });
 

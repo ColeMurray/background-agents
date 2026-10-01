@@ -7,6 +7,7 @@ import type {
 
 export const ENVIRONMENTS_KEY = "/api/environments";
 
+/** Omitted scope lists all readable environments; null filters workspace ownership. */
 export function useEnvironments(teamId?: string | null): {
   environments: Environment[];
   loading: boolean;
@@ -16,8 +17,8 @@ export function useEnvironments(teamId?: string | null): {
 
   const { data, isLoading, error } = useSWR<ListEnvironmentsResponse>(
     session
-      ? teamId
-        ? `${ENVIRONMENTS_KEY}?teamId=${encodeURIComponent(teamId)}`
+      ? teamId !== undefined
+        ? `${ENVIRONMENTS_KEY}?teamId=${encodeURIComponent(teamId ?? "null")}`
         : ENVIRONMENTS_KEY
       : null
   );

@@ -157,7 +157,7 @@ export function useSessionTargetPicker({
   defaultEnvironmentId?: string | null;
 } = {}): SessionTargetSelection {
   const { repos, loading: loadingRepos } = useRepos(true, teamId);
-  const { environments, loading: loadingEnvironments } = useEnvironments(teamId);
+  const { environments, loading: loadingEnvironments } = useEnvironments(teamId ?? undefined);
   const [draftTarget, setSessionTarget] = useState<SessionTarget | null>(null);
   const [selectedBranch, updateSelectedBranch] = useState<string>("");
   const [selectionContext, setSelectionContext] = useState({ teamId, defaultEnvironmentId });

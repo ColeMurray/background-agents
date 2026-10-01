@@ -130,6 +130,11 @@ describe("useSessionTargetPicker", () => {
     localStorage.clear();
   });
 
+  it("keeps workspace session creation on the unfiltered environment catalog", () => {
+    renderHook(() => useSessionTargetPicker({ teamId: null }));
+    expect(mocks.environments).toHaveBeenLastCalledWith(undefined);
+  });
+
   it("passes teamId to the catalog hooks and prioritizes the team default over stored targets", () => {
     localStorage.setItem("open-inspect-last-selected-repo", "acme/web");
     const { result } = renderHook(() =>

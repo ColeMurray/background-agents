@@ -4,8 +4,10 @@ import type { SqlDatabase, SqlStatement } from "./sql-database";
 export interface TeamAuditInput {
   requestId: string;
   actorUserId: string;
-  action: Extract<AuditOperationAction, `team.${string}`>;
-  teamId: string;
+  action: Extract<AuditOperationAction, `team.${string}` | "automation.executor_changed">;
+  teamId: string | null;
+  resourceType?: "team" | "automation";
+  resourceId?: string;
   targetUserId?: string;
   before: unknown;
   after: unknown;
@@ -21,7 +23,7 @@ export class TeamAuditStore {
           (id, occurred_at, request_id, principal_kind, actor_user_id_snapshot,
            action, resource_type, resource_id, target_user_id_snapshot, team_id,
            reason_code, operation_result, metadata_json)
-          SELECT ?, ?, ?, 'user', ?, ?, 'team', ?, ?, ?, ?, 'applied', ?
+           SELECT ?, ?, ?, 'user', ?, ?, ?, ?, ?, ?, ?, 'applied', ?
           ${onlyIfPreviousChanged ? "WHERE changes() = 1" : ""}`
       )
       .bind(
@@ -30,7 +32,8 @@ export class TeamAuditStore {
         input.requestId,
         input.actorUserId,
         input.action,
-        input.teamId,
+        input.resourceType ?? "team",
+        input.resourceId ?? input.teamId,
         input.targetUserId ?? null,
         input.teamId,
         input.action,

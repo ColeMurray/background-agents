@@ -30,9 +30,13 @@ function AutomationsContent() {
   const searchParams = useSearchParams();
   const urlNameSearch = searchParams.get("search") ?? "";
   const committedNameSearch = urlNameSearch.trim();
+  const teamId = searchParams.get("teamId") || undefined;
+  const scopeQuery = teamId ? `?teamId=${encodeURIComponent(teamId)}` : "";
   const [nameSearch, setNameSearch] = useState(urlNameSearch);
-  const { automations, loading, loadingMore, error, hasMore, loadMore, mutate } =
-    useAutomations(committedNameSearch);
+  const { automations, loading, loadingMore, error, hasMore, loadMore, mutate } = useAutomations(
+    committedNameSearch,
+    teamId
+  );
   const { hasPermission } = useCurrentUserAuthorization();
   const canCreate = hasPermission("automations.create");
 
@@ -98,10 +102,13 @@ function AutomationsContent() {
             {canCreate && (
               <div className="flex items-center gap-2">
                 <Button variant="outline" size="sm" asChild>
-                  <Link href="/automations/templates">Browse templates</Link>
+                  <Link href={`/automations/templates${scopeQuery}`}>Browse templates</Link>
                 </Button>
                 <Button size="sm" asChild>
-                  <Link href="/automations/new" className="flex items-center gap-1.5">
+                  <Link
+                    href={`/automations/new${scopeQuery}`}
+                    className="flex items-center gap-1.5"
+                  >
                     <PlusIcon className="w-4 h-4" />
                     Create Automation
                   </Link>
@@ -150,6 +157,7 @@ function AutomationsContent() {
           ) : automations.length > 0 || !error ? (
             <AutomationsList
               automations={automations}
+              teamId={teamId}
               emptyState={
                 committedNameSearch
                   ? { kind: "no-search-results", nameSearch: committedNameSearch }

@@ -11,14 +11,19 @@ import type {
   ListAutomationInvocationsResponse,
 } from "@open-inspect/shared/types/automations";
 
-function buildAutomationListPath(nameSearch: string, cursor?: string): `/api/${string}` {
+function buildAutomationListPath(
+  nameSearch: string,
+  teamId?: string | null,
+  cursor?: string
+): `/api/${string}` {
   const searchParams = new URLSearchParams({ limit: String(DEFAULT_AUTOMATION_LIST_PAGE_SIZE) });
   if (nameSearch) searchParams.set("search", nameSearch);
+  if (teamId) searchParams.set("teamId", teamId);
   if (cursor) searchParams.set("cursor", cursor);
   return `/api/automations?${searchParams.toString()}`;
 }
 
-export function useAutomations(nameSearch: string) {
+export function useAutomations(nameSearch: string, teamId?: string | null) {
   const { data: session, status: authStatus } = useAuthSession();
   const { fetcher } = useSWRConfig();
   const normalizedNameSearch = nameSearch.trim();
@@ -34,9 +39,9 @@ export function useAutomations(nameSearch: string) {
     useSWRInfinite<ListAutomationsResponse>(
       (pageIndex, previousPage) => {
         if (!session) return null;
-        if (pageIndex === 0) return buildAutomationListPath(normalizedNameSearch);
+        if (pageIndex === 0) return buildAutomationListPath(normalizedNameSearch, teamId);
         if (!previousPage?.hasMore) return null;
-        return buildAutomationListPath(normalizedNameSearch, previousPage.nextCursor);
+        return buildAutomationListPath(normalizedNameSearch, teamId, previousPage.nextCursor);
       },
       fetchAutomationPage,
       { revalidateFirstPage: true }

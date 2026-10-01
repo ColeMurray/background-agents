@@ -12,7 +12,11 @@ import type { PermissionId } from "@open-inspect/shared/rbac";
 import { isValidReasoningEffort } from "@open-inspect/shared/models";
 import { type AutomationRepositoryInsert } from "../db/automation-store";
 import { EnvironmentStore } from "../db/environments";
-import { type RequestContext, json, resolveRepoOrError } from "./shared";
+import { TeamStore } from "../db/teams";
+import { TeamMembershipStore } from "../db/team-memberships";
+import { checkEnvironmentAccess, type SessionViewer } from "@open-inspect/shared";
+import { type RequestContext, error, json, resolveRepoOrError } from "./shared";
+import { missingTeamRepository, type GrantRepository } from "./session-team-grants";
 import type { Env } from "../types";
 import type { SqlDatabase } from "../db/sql-database";
 import { z } from "zod";
@@ -133,14 +137,103 @@ type RepositorySelectionRequest =
   | { kind: "replace"; repositories: NormalizedRepositoryInput[] };
 
 /**
- * Thrown when selection semantics cannot be satisfied. Route handlers catch it
- * and answer 400 while request shape validation remains in the shared schemas.
+ * Selection validation failures carry their HTTP status; request shape
+ * validation remains in the shared schemas.
  */
 export class TargetSelectionError extends Error {
-  constructor(message: string) {
+  constructor(
+    message: string,
+    readonly status: 400 | 403 | 409 = 400,
+    readonly reasonCode?: string
+  ) {
     super(message);
     this.name = "TargetSelectionError";
   }
+
+  response(): Response {
+    return json(
+      {
+        error: this.message,
+        ...(this.reasonCode ? { code: this.reasonCode, reason_code: this.reasonCode } : {}),
+      },
+      this.status
+    );
+  }
+}
+
+export async function validateAutomationTeam(
+  db: SqlDatabase,
+  teamId: string | null,
+  executorUserId: string | null
+): Promise<Response | null> {
+  if (teamId === null) return null;
+  const team = await new TeamStore(db).getById(teamId);
+  if (!team) return error("Team not found", 404);
+  if (team.archivedAt !== null) {
+    return json(
+      { error: "Team archived", code: "team_archived", reason_code: "team_archived" },
+      409
+    );
+  }
+  if (!executorUserId) {
+    return json({ error: "Canonical executor required", code: "executor_required" }, 409);
+  }
+  if (!(await new TeamMembershipStore(db).listForUser(executorUserId)).has(teamId)) {
+    return json(
+      {
+        error: "Executor must belong to the team",
+        code: "automation_action_denied",
+        reason_code: "not_member",
+      },
+      403
+    );
+  }
+  return null;
+}
+
+export async function validateAutomationExecutor(
+  db: SqlDatabase,
+  userId: string
+): Promise<Response | null> {
+  const user = z
+    .object({ suspended_at: z.number().nullable(), role_id: z.string().nullable() })
+    .nullable()
+    .parse(
+      await db
+        .prepare(
+          `SELECT u.suspended_at, a.role_id FROM users u
+       LEFT JOIN user_role_assignments a ON a.user_id = u.id WHERE u.id = ?`
+        )
+        .bind(userId)
+        .first()
+    );
+  if (!user) return error("User not found", 404);
+  if (user.suspended_at !== null || user.role_id === null) {
+    return json(
+      { error: "User inactive", code: "user_inactive", reason_code: "user_inactive" },
+      409
+    );
+  }
+  return null;
+}
+
+export async function validateAutomationRepositoryGrants(
+  db: SqlDatabase,
+  teamId: string | null,
+  repositories: readonly GrantRepository[]
+): Promise<Response | null> {
+  if (teamId === null || repositories.length === 0) return null;
+  const missing = await missingTeamRepository(db, teamId, repositories);
+  if (!missing) return null;
+  return json(
+    {
+      error: "Team lacks repository grant",
+      code: "target_team_missing_grant",
+      reason_code: "target_team_missing_grant",
+      repository: `${missing.repoOwner}/${missing.repoName}`,
+    },
+    409
+  );
 }
 
 /**
@@ -191,22 +284,53 @@ export function getEnvironmentSelection(body: {
 }
 
 /**
- * Verify every selected environment exists — a selection must not silently
- * point at deleted environments.
+ * Verify selected environments exist, belong to the automation's team, and
+ * admit use. Return their repositories for the owning team's grant check.
  *
  * @throws TargetSelectionError naming every missing environment.
  */
 export async function resolveEnvironmentSelection(
   db: SqlDatabase,
-  environmentIds: string[]
-): Promise<void> {
-  if (environmentIds.length === 0) return;
+  environmentIds: string[],
+  ownerTeamId: string | null,
+  viewer: SessionViewer
+): Promise<GrantRepository[]> {
+  if (environmentIds.length === 0) return [];
   const store = new EnvironmentStore(db);
   const found = await Promise.all(environmentIds.map((id) => store.getById(id)));
   const missing = environmentIds.filter((_, index) => !found[index]);
   if (missing.length > 0) {
     throw new TargetSelectionError(`Environment not found: ${missing.join(", ")}`);
   }
+  const repositories: GrantRepository[] = [];
+  for (const environment of found) {
+    if (!environment) continue;
+    if (environment.owner_team_id !== ownerTeamId) {
+      throw new TargetSelectionError(
+        "Environment must belong to the automation's owner team",
+        409,
+        "environment_team_mismatch"
+      );
+    }
+    const access = checkEnvironmentAccess(
+      viewer,
+      { ownerTeamId: environment.owner_team_id },
+      "use"
+    );
+    if (!access.allowed) {
+      throw new TargetSelectionError("Environment use denied", 403, access.reason);
+    }
+    if (ownerTeamId !== null) {
+      repositories.push(
+        ...(await store.getRepositoriesForEnvironment(environment.id)).map((repository) => ({
+          repoOwner: repository.repo_owner,
+          repoName: repository.repo_name,
+          repoId: repository.repo_id,
+        }))
+      );
+    }
+  }
+  return repositories;
 }
 
 /**

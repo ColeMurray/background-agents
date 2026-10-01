@@ -16,10 +16,10 @@ describe("useEnvironments", () => {
     mocks.useSWR.mockReturnValue({ data: undefined, isLoading: false, error: undefined });
   });
 
-  it("keys environment requests by team and returns to the workspace key", () => {
-    const initialProps: { teamId: string | null } = { teamId: "team/one" };
+  it("keys environment requests by team and returns to the unfiltered key", () => {
+    const initialProps: { teamId: string | undefined } = { teamId: "team/one" };
     const { rerender } = renderHook(
-      ({ teamId }: { teamId: string | null }) => useEnvironments(teamId),
+      ({ teamId }: { teamId: string | undefined }) => useEnvironments(teamId),
       {
         initialProps,
       }
@@ -27,7 +27,12 @@ describe("useEnvironments", () => {
     expect(mocks.useSWR).toHaveBeenLastCalledWith("/api/environments?teamId=team%2Fone");
     rerender({ teamId: "team-2" });
     expect(mocks.useSWR).toHaveBeenLastCalledWith("/api/environments?teamId=team-2");
-    rerender({ teamId: null });
+    rerender({ teamId: undefined });
     expect(mocks.useSWR).toHaveBeenLastCalledWith("/api/environments");
+  });
+
+  it("uses an exact workspace-ownership filter for explicit null", () => {
+    renderHook(() => useEnvironments(null));
+    expect(mocks.useSWR).toHaveBeenLastCalledWith("/api/environments?teamId=null");
   });
 });

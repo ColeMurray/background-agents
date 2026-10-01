@@ -69,6 +69,7 @@ export const mockUserStore = {
 
 export const mockEnvironmentStore = {
   getById: vi.fn(),
+  getRepositoriesForEnvironment: vi.fn(),
 };
 
 /** Shared D1 batch spy — createEnv wires it as env.DB.batch. */
@@ -169,6 +170,7 @@ export const sampleRow = {
   consecutive_failures: 0,
   created_by: "user-1",
   user_id: "user-1",
+  owner_team_id: null,
   created_at: now,
   updated_at: now,
   deleted_at: null,
@@ -208,7 +210,12 @@ export function applyMockDefaults(): void {
     invocationId: "inv-1",
     runs: [{ id: "run-1" }],
   });
-  mockEnvironmentStore.getById.mockResolvedValue({ id: "env_1", name: "Fullstack" });
+  mockEnvironmentStore.getById.mockResolvedValue({
+    id: "env_1",
+    name: "Fullstack",
+    owner_team_id: null,
+  });
+  mockEnvironmentStore.getRepositoriesForEnvironment.mockResolvedValue([]);
   mockProviderAccountStore.getById.mockResolvedValue({
     id: "0123456789abcdef0123456789abcdef",
     provider: "openai",

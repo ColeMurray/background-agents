@@ -10,7 +10,7 @@ import type { ControlPlaneHonoEnv } from "../routing/hono-env";
 import { type RequestContext, json, error } from "./shared";
 import type { Env } from "../types";
 import { z } from "zod";
-import { AUTOMATIONS_READ } from "./automation-shared";
+import { AUTOMATION_READ } from "./automation-shared";
 import { parseQuery } from "./query";
 
 export const DEFAULT_INVOCATION_LIST_LIMIT = 20;
@@ -46,9 +46,6 @@ async function handleListInvocations(
   if (query instanceof Response) return query;
 
   const store = new AutomationStore(ctx.db);
-  const automation = await store.getById(automationId);
-  if (!automation) return error("Automation not found", 404);
-
   const result = await store.listInvocations(automationId, query);
 
   return json({
@@ -74,9 +71,9 @@ async function handleGetRun(
 
 export const automationRunRoutes = new Hono<ControlPlaneHonoEnv>();
 
-automationRunRoutes.get("/automations/:id/invocations", AUTOMATIONS_READ, (c) =>
+automationRunRoutes.get("/automations/:id/invocations", AUTOMATION_READ, (c) =>
   dispatch(c, handleListInvocations)
 );
-automationRunRoutes.get("/automations/:id/runs/:runId", AUTOMATIONS_READ, (c) =>
+automationRunRoutes.get("/automations/:id/runs/:runId", AUTOMATION_READ, (c) =>
   dispatch(c, handleGetRun)
 );

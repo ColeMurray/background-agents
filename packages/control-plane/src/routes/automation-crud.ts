@@ -34,6 +34,8 @@ import {
   type AutomationRepositoryInsert,
 } from "../db/automation-store";
 import { SlackChannelStore } from "../db/slack-channel-store";
+import { TeamSettingsStore } from "../db/team-settings";
+import { resourceViewer } from "../authorization/resource-viewer";
 import {
   AutomationModelProviderAuthStore,
   toProviderSelections,
@@ -48,7 +50,6 @@ import {
   requireAdmittedCanonicalUserId,
 } from "../routing/identity-enforcement";
 import { generateWebhookApiKey, hashApiKey, encryptSentrySecret } from "../auth/webhook-key";
-import { hydrateAutomation } from "../automation/hydrate";
 import { Hono } from "hono";
 import { admit, dispatch } from "../routing/admit";
 import type { ControlPlaneHonoEnv } from "../routing/hono-env";
@@ -64,7 +65,12 @@ import type { Env } from "../types";
 import type { SqlDatabase, SqlStatement } from "../db/sql-database";
 import { ProviderAccountSelectionPolicyError } from "../model-provider-accounts/selection-policy";
 import { createLogger } from "../logger";
-import { AUTOMATIONS_READ, AUTOMATION_MANAGE, admittedAutomation } from "./automation-shared";
+import {
+  AUTOMATION_READ,
+  AUTOMATION_MANAGE,
+  admittedAutomation,
+  hydrateAutomationResponse,
+} from "./automation-shared";
 import {
   type CreateAutomationBody,
   FAR_FUTURE_THRESHOLD_MS,
@@ -81,6 +87,8 @@ import {
   resolveRepositorySelection,
   validateSlackTriggerConfig,
   validateTargetCounts,
+  validateAutomationTeam,
+  validateAutomationRepositoryGrants,
 } from "./automation-validation";
 
 const logger = createLogger("router:automations");
@@ -128,6 +136,18 @@ async function handleCreateAutomation(
     );
   }
 
+  // The scheduler replays only the canonical subject admitted before RBAC.
+  const resolution = requireAdmittedCanonicalUserId(ctx, enforced);
+  if (resolution instanceof Response) return resolution;
+  const resolvedUserId = resolution;
+  const ownerTeamId = body.teamId ?? null;
+  if (ownerTeamId === null && (await new TeamSettingsStore(ctx.db).get()).requireTeamOnCreate) {
+    return json({ error: "A team is required", code: "team_required" }, 400);
+  }
+  const teamError = await validateAutomationTeam(ctx.db, ownerTeamId, resolvedUserId);
+  if (teamError) return teamError;
+  const viewer = await resourceViewer(ctx);
+
   const selection = getRepositorySelection(body);
   const requestedRepositories = selection.kind === "replace" ? selection.repositories : [];
 
@@ -151,7 +171,7 @@ async function handleCreateAutomation(
       environmentSelection.kind === "replace" ? environmentSelection.environmentIds : [];
     validateTargetCounts(triggerType, requestedRepositories.length, requestedEnvironmentIds.length);
   } catch (e) {
-    if (e instanceof TargetSelectionError) return error(e.message, 400);
+    if (e instanceof TargetSelectionError) return e.response();
     throw e;
   }
   if (ctx.principal?.kind === "user") {
@@ -161,10 +181,16 @@ async function handleCreateAutomation(
     ]);
     if (targetAuthorizationError) return targetAuthorizationError;
   }
+  let environmentRepositories;
   try {
-    await resolveEnvironmentSelection(ctx.db, requestedEnvironmentIds);
+    environmentRepositories = await resolveEnvironmentSelection(
+      ctx.db,
+      requestedEnvironmentIds,
+      ownerTeamId,
+      viewer
+    );
   } catch (e) {
-    if (e instanceof TargetSelectionError) return error(e.message, 400);
+    if (e instanceof TargetSelectionError) return e.response();
     throw e;
   }
 
@@ -219,6 +245,15 @@ async function handleCreateAutomation(
   }
 
   const newRepositories = await resolveRepositorySelection(env, requestedRepositories, ctx);
+  const grantError = await validateAutomationRepositoryGrants(ctx.db, ownerTeamId, [
+    ...newRepositories.map((repository) => ({
+      repoOwner: repository.repo_owner,
+      repoName: repository.repo_name,
+      repoId: repository.repo_id,
+    })),
+    ...environmentRepositories,
+  ]);
+  if (grantError) return grantError;
 
   let providerSelections: ModelProviderSelections;
   try {
@@ -265,17 +300,11 @@ async function handleCreateAutomation(
     triggerAuthData = await encryptSentrySecret(sentrySecret, env.REPO_SECRETS_ENCRYPTION_KEY);
   }
 
-  // The scheduler replays user_id as session identity at fire time, so the
-  // handler may consume only the canonical subject admitted before RBAC.
-  const resolution = requireAdmittedCanonicalUserId(ctx, enforced);
-  if (resolution instanceof Response) return resolution;
-  const resolvedUserId = resolution;
-
   const db: SqlDatabase = ctx.db;
   const store = new AutomationStore(db);
   const providerAuthStore = new AutomationModelProviderAuthStore(db);
   const row: AutomationRow = {
-    owner_team_id: null,
+    owner_team_id: ownerTeamId,
     id,
     name: body.name.trim(),
     instructions: body.instructions,
@@ -316,7 +345,7 @@ async function handleCreateAutomation(
   }
   await ctx.db.batch(createStatements);
 
-  const automation = await hydrateAutomation(db, (await store.getById(id))!);
+  const automation = await hydrateAutomationResponse(ctx, (await store.getById(id))!, viewer);
 
   logger.info("automation.created", {
     event: "automation.created",
@@ -359,13 +388,8 @@ async function handleGetAutomation(
   params: { id: string },
   ctx: RequestContext
 ): Promise<Response> {
-  const id = params.id;
-
-  const store = new AutomationStore(ctx.db);
-  const row = await store.getById(id);
-  if (!row) return error("Automation not found", 404);
-
-  return json({ automation: await hydrateAutomation(ctx.db, row) });
+  const { automation, viewer } = admittedAutomation(ctx);
+  return json({ automation: await hydrateAutomationResponse(ctx, automation, viewer) });
 }
 
 async function handleUpdateAutomation(
@@ -533,26 +557,40 @@ async function handleUpdateAutomation(
   const replacementEnvironmentIds: string[] | null =
     environmentSelection.kind === "replace" ? environmentSelection.environmentIds : null;
   if (selection.kind === "replace" || replacementEnvironmentIds !== null) {
+    const finalRepositories =
+      selection.kind === "replace" ? [] : await store.getRepositoriesForAutomation(id);
+    const finalEnvironmentIds =
+      replacementEnvironmentIds ??
+      (await store.getEnvironmentsForAutomation(id)).map(
+        (environment) => environment.environment_id
+      );
+    let environmentRepositories;
     try {
       const finalRepositoryCount =
-        selection.kind === "replace"
-          ? selection.repositories.length
-          : (await store.getRepositoriesForAutomation(id)).length;
-      const finalEnvironmentCount =
-        replacementEnvironmentIds !== null
-          ? replacementEnvironmentIds.length
-          : (await store.getEnvironmentsForAutomation(id)).length;
-      validateTargetCounts(existingTriggerType, finalRepositoryCount, finalEnvironmentCount);
-      if (replacementEnvironmentIds !== null) {
-        await resolveEnvironmentSelection(ctx.db, replacementEnvironmentIds);
-      }
+        selection.kind === "replace" ? selection.repositories.length : finalRepositories.length;
+      validateTargetCounts(existingTriggerType, finalRepositoryCount, finalEnvironmentIds.length);
+      environmentRepositories = await resolveEnvironmentSelection(
+        ctx.db,
+        finalEnvironmentIds,
+        existing.owner_team_id,
+        admission.viewer
+      );
     } catch (e) {
-      if (e instanceof TargetSelectionError) return error(e.message, 400);
+      if (e instanceof TargetSelectionError) return e.response();
       throw e;
     }
     if (selection.kind === "replace") {
       replacementRepositories = await resolveRepositorySelection(env, selection.repositories, ctx);
     }
+    const grantError = await validateAutomationRepositoryGrants(ctx.db, existing.owner_team_id, [
+      ...(replacementRepositories ?? finalRepositories).map((repository) => ({
+        repoOwner: repository.repo_owner,
+        repoName: repository.repo_name,
+        repoId: repository.repo_id,
+      })),
+      ...environmentRepositories,
+    ]);
+    if (grantError) return grantError;
   }
 
   // Update event type — only for non-schedule types
@@ -680,7 +718,7 @@ async function handleUpdateAutomation(
     trace_id: ctx.trace_id,
   });
 
-  return json({ automation: await hydrateAutomation(db, updated) });
+  return json({ automation: await hydrateAutomationResponse(ctx, updated, admission.viewer) });
 }
 
 async function handleDeleteAutomation(
@@ -716,7 +754,7 @@ automationCrudRoutes.post(
   }),
   (c) => dispatch(c, handleCreateAutomation)
 );
-automationCrudRoutes.get("/automations/:id", AUTOMATIONS_READ, (c) =>
+automationCrudRoutes.get("/automations/:id", AUTOMATION_READ, (c) =>
   dispatch(c, handleGetAutomation)
 );
 automationCrudRoutes.put("/automations/:id", AUTOMATION_MANAGE, (c) =>

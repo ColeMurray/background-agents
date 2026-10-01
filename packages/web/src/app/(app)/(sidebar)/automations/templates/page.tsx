@@ -1,16 +1,25 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect } from "react";
-import { useRouter } from "next/navigation";
+import { Suspense, useEffect } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
 import { CollapsedSidebarControls, useSidebarContext } from "@/components/sidebar-layout";
 import { TemplateGallery } from "@/components/automations/template-gallery";
 import { BackIcon } from "@/components/ui/icons";
 import { useCurrentUserAuthorization } from "@/hooks/use-current-user-authorization";
 
 export default function AutomationTemplatesPage() {
+  return (
+    <Suspense fallback={null}>
+      <AutomationTemplatesContent />
+    </Suspense>
+  );
+}
+
+function AutomationTemplatesContent() {
   const { isOpen } = useSidebarContext();
   const router = useRouter();
+  const teamId = useSearchParams().get("teamId") || undefined;
   const { hasPermission, loading } = useCurrentUserAuthorization();
   const canCreate = hasPermission("automations.create");
 
@@ -49,7 +58,7 @@ export default function AutomationTemplatesPage() {
             </p>
           </div>
 
-          <TemplateGallery />
+          <TemplateGallery teamId={teamId} />
         </div>
       </div>
     </div>

@@ -25,7 +25,10 @@ function executionPredicate(request: AutomationExecutionAuthorizationRequest): S
       JOIN users u ON u.id = ${request.executionUserId ? "?" : "a.user_id"}
       JOIN user_role_assignments ura ON ura.user_id = u.id
       JOIN roles r ON r.id = ura.role_id
+      LEFT JOIN teams t ON t.id = a.owner_team_id
+      LEFT JOIN team_memberships tm ON tm.team_id = a.owner_team_id AND tm.user_id = u.id
       WHERE a.id = ? AND a.deleted_at IS NULL AND u.suspended_at IS NULL
+        AND (a.owner_team_id IS NULL OR (tm.user_id IS NOT NULL AND t.id IS NOT NULL AND t.archived_at IS NULL))
         AND ${createGuard.sql}
         ${request.requiresRepositoryUse ? `AND ${repositoryGuard.sql}` : ""}
         ${request.requiresEnvironmentUse ? `AND ${environmentGuard.sql}` : ""}

@@ -43,11 +43,12 @@ export type RouteAuthorizationRequirement =
   | { kind: "permission"; permission: PermissionId }
   | {
       kind: "automation";
-      operation: "manage" | "trigger";
+      operation: "read" | "manage" | "trigger";
       automationIdParam: string;
     }
   | { kind: "team"; teamIdParam: string; need: keyof TeamCapabilities | "read" | "member" }
   | { kind: "team"; teamIdParam: string; need: "removeMember"; targetUserIdParam: string }
+  | { kind: "environment"; idParam: string; need: "read" | "manage" | "use" }
   | { kind: "session"; sessionIdParam: string; action: SessionAction; enforceAlways?: boolean };
 
 type BotServiceName = Exclude<ServiceName, "web">;
@@ -148,6 +149,8 @@ function auditsAllowedRequirement(requirement: RouteAuthorizationRequirement): b
   if (requirement.kind === "team") {
     return requirement.need !== "read" && requirement.need !== "member";
   }
+  if (requirement.kind === "automation") return requirement.operation !== "read";
+  if (requirement.kind === "environment") return requirement.need !== "read";
   if (requirement.kind === "permission") {
     return AUDITED_ALLOWED_PERMISSIONS.has(requirement.permission);
   }
@@ -175,16 +178,39 @@ export function requirePermission(
   };
 }
 
-/** Require admission to manage or trigger the automation identified by a path parameter. */
+/** Require admission to the automation identified by a path parameter. */
 export function requireAutomation(
-  operation: "manage" | "trigger",
+  operation: "read" | "manage" | "trigger",
   automationIdParam = "id"
 ): RouteAuthorization {
   return {
     kind: "active-user",
     allOf: [{ kind: "automation", operation, automationIdParam }],
-    service: { kind: "deny" },
-    auditAllowed: true,
+    service:
+      operation === "read"
+        ? { kind: "actor", actorlessGrants: [{ service: "slack-bot" }] }
+        : { kind: "deny" },
+    auditAllowed: operation !== "read",
+  };
+}
+
+export function environmentRequirement(
+  need: "read" | "manage" | "use",
+  idParam = "id"
+): Extract<RouteAuthorizationRequirement, { kind: "environment" }> {
+  return { kind: "environment", idParam, need };
+}
+
+export function requireEnvironment(
+  need: "read" | "manage" | "use",
+  idParam = "id",
+  options?: { actorlessGrants?: readonly ActorlessServiceGrant[] }
+): RouteAuthorization {
+  return {
+    kind: "active-user",
+    allOf: [environmentRequirement(need, idParam)],
+    service: need === "manage" ? { kind: "deny" } : { kind: "actor", ...options },
+    auditAllowed: need !== "read",
   };
 }
 

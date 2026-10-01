@@ -8,6 +8,14 @@
 
 import { parseBody } from "./body";
 import { Hono } from "hono";
+import { z } from "zod";
+import {
+  checkEnvironmentAccess,
+  environmentCapabilities,
+  type SessionViewer,
+} from "@open-inspect/shared";
+import { formatRepositoryFullName } from "@open-inspect/shared/types/repositories";
+import { resourceViewer } from "../authorization/resource-viewer";
 import { admit, dispatch } from "../routing/admit";
 import type { ControlPlaneHonoEnv } from "../routing/hono-env";
 import {
@@ -22,19 +30,65 @@ import {
   type EnvironmentScalarFields,
 } from "../db/environments";
 import { generateId } from "../auth/crypto";
+import { isUniqueConstraintError } from "../db/errors";
+import { TeamSettingsStore } from "../db/team-settings";
+import { TeamStore } from "../db/teams";
 import { scheduleImageBuildOnSave } from "../image-builds/save-hooks";
 import { createLogger } from "../logger";
 import { resolveSessionRepositories } from "../repos/resolve";
+import { missingTeamRepository } from "./session-team-grants";
+import { parseQuery } from "./query";
 import {
   GITHUB_USER_OR_SERVICE_ROUTE,
   type RequestContext,
   json,
   error,
   requirePermission,
+  requireEnvironment,
 } from "./shared";
 import type { Env } from "../types";
 
 const logger = createLogger("router:environments");
+const listQuerySchema = z.object({
+  teamId: z.union([z.literal("null"), z.string().regex(/^team_[A-Za-z0-9_-]+$/)]).optional(),
+});
+
+function denied(reason: string): Response {
+  return json({ error: "Forbidden", code: "environment_action_denied", reason_code: reason }, 403);
+}
+
+function archivedTeam(): Response {
+  return json({ error: "Team archived", code: "team_archived", reason_code: "team_archived" }, 409);
+}
+
+function responseCapabilities(viewer: SessionViewer, ownerTeamId: string | null) {
+  const { canRead, canManage, canUse } = environmentCapabilities(viewer, { ownerTeamId });
+  return { canRead, canManage, canUse };
+}
+
+async function validateTeamRepositories(
+  ctx: RequestContext,
+  teamId: string | null,
+  repositories: EnvironmentRepositoryInsert[]
+): Promise<Response | null> {
+  if (teamId === null) return null;
+  const members = repositories.map((row) => ({
+    repoOwner: row.repo_owner,
+    repoName: row.repo_name,
+    repoId: row.repo_id,
+  }));
+  const missing = await missingTeamRepository(ctx.db, teamId, members);
+  return missing
+    ? json(
+        {
+          error: "Target team lacks repository grant",
+          code: "target_team_missing_grant",
+          repository: formatRepositoryFullName(missing),
+        },
+        409
+      )
+    : null;
+}
 
 /** Empty/whitespace description collapses to null (the column is nullable). */
 function normalizeDescription(description: string | null | undefined): string | null {
@@ -72,20 +126,29 @@ export async function resolveEnvironmentRepositories(
 }
 
 async function handleListEnvironments(
-  _request: Request,
+  request: Request,
   env: Env,
   _params: object,
   ctx: RequestContext
 ): Promise<Response> {
   const store = new EnvironmentStore(ctx.db);
-  const { environments, total } = await store.list();
+  const query = parseQuery(request, listQuerySchema);
+  if (query instanceof Response) return query;
+  const viewer = await resourceViewer(ctx);
+  const rows = await store.list(query.teamId === "null" ? null : query.teamId);
+  const environments = rows.environments.filter(
+    (row) => checkEnvironmentAccess(viewer, { ownerTeamId: row.owner_team_id }, "read").allowed
+  );
   const repositoriesById = await store.getRepositoriesForEnvironmentIds(
     environments.map((e) => e.id)
   );
 
   return json({
-    environments: environments.map((row) => toEnvironment(row, repositoriesById.get(row.id) ?? [])),
-    total,
+    environments: environments.map((row) => ({
+      ...toEnvironment(row, repositoriesById.get(row.id) ?? []),
+      capabilities: responseCapabilities(viewer, row.owner_team_id),
+    })),
+    total: environments.length,
   });
 }
 
@@ -98,19 +161,33 @@ async function handleCreateEnvironment(
   const parsed = await parseBody(request, createEnvironmentInputSchema);
   if (parsed instanceof Response) return parsed;
   const { name, description, prebuildEnabled, channelAssociations, repositories } = parsed;
+  const teamId = parsed.teamId ?? null;
+  if (teamId === null && (await new TeamSettingsStore(ctx.db).get()).requireTeamOnCreate) {
+    return json({ error: "A team is required", code: "team_required" }, 400);
+  }
+  if (teamId !== null) {
+    const team = await new TeamStore(ctx.db).getById(teamId);
+    if (!team) return error("Team not found", 404);
+    if (team.archivedAt !== null) return archivedTeam();
+  }
+  const viewer = await resourceViewer(ctx);
+  const access = checkEnvironmentAccess(viewer, { ownerTeamId: teamId }, "manage");
+  if (!access.allowed) return denied(access.reason);
 
   const store = new EnvironmentStore(ctx.db);
-  if (await store.getByName(name)) {
+  if (await store.getByName(name, teamId)) {
     return error(`An environment named "${name}" already exists`, 409);
   }
 
   const inserts = await resolveEnvironmentRepositories(env, repositories, ctx);
+  const grantError = await validateTeamRepositories(ctx, teamId, inserts);
+  if (grantError) return grantError;
 
   const now = Date.now();
   const id = `env_${generateId()}`;
   const row: EnvironmentRow = {
     id,
-    owner_team_id: null,
+    owner_team_id: teamId,
     name,
     description: normalizeDescription(description),
     prebuild_enabled: prebuildEnabled ? 1 : 0,
@@ -119,7 +196,13 @@ async function handleCreateEnvironment(
     updated_at: now,
   };
 
-  await store.create(row, inserts);
+  try {
+    await store.create(row, inserts);
+  } catch (cause) {
+    if (isUniqueConstraintError(cause))
+      return error(`An environment named "${name}" already exists`, 409);
+    throw cause;
+  }
 
   logger.info("environment.created", {
     event: "environment.created",
@@ -135,7 +218,12 @@ async function handleCreateEnvironment(
   }
 
   return json(
-    { environment: toEnvironment(row, await store.getRepositoriesForEnvironment(id)) },
+    {
+      environment: {
+        ...toEnvironment(row, await store.getRepositoriesForEnvironment(id)),
+        capabilities: responseCapabilities(viewer, teamId),
+      },
+    },
     201
   );
 }
@@ -149,10 +237,14 @@ async function handleGetEnvironment(
   const id = params.id;
 
   const store = new EnvironmentStore(ctx.db);
-  const row = await store.getById(id);
-  if (!row) return error("Environment not found", 404);
+  const { environment: row, viewer } = ctx.environmentAdmission!;
 
-  return json({ environment: toEnvironment(row, await store.getRepositoriesForEnvironment(id)) });
+  return json({
+    environment: {
+      ...toEnvironment(row, await store.getRepositoriesForEnvironment(id)),
+      capabilities: responseCapabilities(viewer, row.owner_team_id),
+    },
+  });
 }
 
 async function handleUpdateEnvironment(
@@ -164,15 +256,14 @@ async function handleUpdateEnvironment(
   const id = params.id;
 
   const store = new EnvironmentStore(ctx.db);
-  const existing = await store.getById(id);
-  if (!existing) return error("Environment not found", 404);
+  const { environment: existing, viewer } = ctx.environmentAdmission!;
 
   const parsed = await parseBody(request, updateEnvironmentInputSchema);
   if (parsed instanceof Response) return parsed;
   const { name, description, prebuildEnabled, channelAssociations, repositories } = parsed;
 
   if (name !== undefined) {
-    const other = await store.getByName(name);
+    const other = await store.getByName(name, existing.owner_team_id);
     if (other && other.id !== id) {
       return error(`An environment named "${name}" already exists`, 409);
     }
@@ -182,6 +273,12 @@ async function handleUpdateEnvironment(
     repositories !== undefined
       ? await resolveEnvironmentRepositories(env, repositories, ctx)
       : undefined;
+  const grantError = await validateTeamRepositories(
+    ctx,
+    existing.owner_team_id,
+    inserts ?? (await store.getRepositoriesForEnvironment(id))
+  );
+  if (grantError) return grantError;
 
   const fields: EnvironmentScalarFields = {};
   if (name !== undefined) fields.name = name;
@@ -192,7 +289,14 @@ async function handleUpdateEnvironment(
     fields.channel_associations = channelAssociationsColumn;
   }
 
-  const updated = await store.update(id, fields, inserts);
+  let updated: EnvironmentRow | null;
+  try {
+    updated = await store.update(id, fields, inserts);
+  } catch (cause) {
+    if (isUniqueConstraintError(cause))
+      return error(`An environment named "${name ?? existing.name}" already exists`, 409);
+    throw cause;
+  }
   if (!updated) return error("Environment not found", 404);
 
   logger.info("environment.updated", {
@@ -208,7 +312,10 @@ async function handleUpdateEnvironment(
   }
 
   return json({
-    environment: toEnvironment(updated, await store.getRepositoriesForEnvironment(id)),
+    environment: {
+      ...toEnvironment(updated, await store.getRepositoriesForEnvironment(id)),
+      capabilities: responseCapabilities(viewer, updated.owner_team_id),
+    },
   });
 }
 
@@ -236,7 +343,7 @@ async function handleDeleteEnvironment(
 
 const ENVIRONMENTS_MANAGE = admit({
   ...GITHUB_USER_OR_SERVICE_ROUTE,
-  authorization: requirePermission("environments.manage"),
+  authorization: requireEnvironment("manage"),
 });
 
 export const environmentRoutes = new Hono<ControlPlaneHonoEnv>();
@@ -251,14 +358,19 @@ environmentRoutes.get(
   }),
   (c) => dispatch(c, handleListEnvironments)
 );
-environmentRoutes.post("/environments", ENVIRONMENTS_MANAGE, (c) =>
-  dispatch(c, handleCreateEnvironment)
+environmentRoutes.post(
+  "/environments",
+  admit({
+    ...GITHUB_USER_OR_SERVICE_ROUTE,
+    authorization: requirePermission("environments.manage"),
+  }),
+  (c) => dispatch(c, handleCreateEnvironment)
 );
 environmentRoutes.get(
   "/environments/:id",
   admit({
     ...GITHUB_USER_OR_SERVICE_ROUTE,
-    authorization: requirePermission("environments.read", {
+    authorization: requireEnvironment("read", "id", {
       actorlessGrants: [{ service: "github-bot" }],
     }),
   }),

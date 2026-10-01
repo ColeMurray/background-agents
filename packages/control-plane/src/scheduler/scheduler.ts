@@ -64,6 +64,7 @@ import {
 import { getUserAuth } from "../auth/user/runtime";
 import { GitHubAttributionUnavailableError } from "../source-control/github-credential-authority";
 import { UserStore } from "../db/user-store";
+import { TeamStore } from "../db/teams";
 import { createRequestMetrics } from "../db/instrumented-sql-database";
 import { generateId } from "../auth/crypto";
 import { createLogger, parseLogLevel } from "../logger";
@@ -239,7 +240,7 @@ export class AutomationTriggerBlockedError extends Error {
 /** Raised when an automation's execution principal lacks required authorization. */
 export class AutomationExecutionUnauthorizedError extends Error {
   /** Create an error for an unauthorized automation execution principal. */
-  constructor() {
+  constructor(readonly reason = "execution_authorization_denied") {
     super("Automation execution principal is not authorized");
     this.name = "AutomationExecutionUnauthorizedError";
   }
@@ -290,7 +291,7 @@ type StartInvocationResult =
   /** Idempotency/dedup collision — another firing owns this slot or event. */
   | { outcome: "deduplicated" }
   /** The execution principal cannot launch the immutable target snapshot. */
-  | { outcome: "unauthorized" };
+  | { outcome: "unauthorized"; reason?: string };
 
 type SchedulerPromptRequest = Pick<
   EnqueuePromptRequest,
@@ -441,7 +442,14 @@ export class Scheduler {
         requiresEnvironmentUse: environmentSelection.length > 0,
       }))
     ) {
-      return { outcome: "unauthorized" };
+      const team =
+        automation.owner_team_id === null
+          ? null
+          : await new TeamStore(this.db).getById(automation.owner_team_id);
+      return {
+        outcome: "unauthorized",
+        reason: team?.archivedAt != null ? "team_archived" : "execution_authorization_denied",
+      };
     }
     const resolutions = await resolveAutomationRepositories(this.env, selection);
 
@@ -821,7 +829,7 @@ export class Scheduler {
                 trigger_key: null,
                 concurrency_key: null,
                 trigger_metadata: null,
-                skip_reason: "execution_authorization_denied",
+                skip_reason: result.reason ?? "execution_authorization_denied",
                 failure_counted_at: null,
                 created_at: deniedAt,
                 updated_at: deniedAt,
@@ -832,6 +840,7 @@ export class Scheduler {
               event: "scheduler.authorization_denied",
               automation_id: automation.id,
               scheduled_at: automation.next_run_at,
+              reason_code: result.reason ?? "execution_authorization_denied",
             });
             skipped++;
             break;
@@ -1213,6 +1222,7 @@ export class Scheduler {
             event: "scheduler.authorization_denied",
             automation_id: automation.id,
             source: event.source,
+            reason_code: result.reason ?? "execution_authorization_denied",
           });
           skipped++;
           break;
@@ -1262,7 +1272,7 @@ export class Scheduler {
     });
 
     if (result.outcome === "unauthorized") {
-      throw new AutomationExecutionUnauthorizedError();
+      throw new AutomationExecutionUnauthorizedError(result.reason);
     }
     if (result.outcome !== "started") {
       // Manual overlap (pre-check or lost race) records nothing.
@@ -1616,10 +1626,17 @@ export class Scheduler {
     );
 
     const scmEnrichment = executionPrincipal.scmEnrichment;
+    const team =
+      automation.owner_team_id === null
+        ? null
+        : await new TeamStore(this.db).getById(automation.owner_team_id);
+    if (automation.owner_team_id !== null && (!team || team.archivedAt !== null)) {
+      throw new AutomationExecutionUnauthorizedError("team_archived");
+    }
 
     const sessionInput: SessionInitInput = {
-      ownerTeamId: null,
-      visibility: "workspace",
+      ownerTeamId: automation.owner_team_id,
+      visibility: team?.defaultVisibility ?? "workspace",
       sessionId,
       ...target,
       title: `[Auto] ${automation.name}`,

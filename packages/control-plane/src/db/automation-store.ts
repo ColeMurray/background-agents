@@ -35,6 +35,7 @@ import type { SqlDatabase, SqlStatement } from "./sql-database";
 import type { CreatedAtCursor } from "../created-at-cursor";
 import { z } from "zod";
 import { UserStore } from "./user-store";
+import type { SessionViewer } from "@open-inspect/shared";
 
 function escapeLikePattern(value: string): string {
   return value.replace(/[\\%_]/g, "\\$&");
@@ -276,6 +277,7 @@ export function toAutomation(
     consecutiveFailures: row.consecutive_failures,
     createdBy: row.created_by,
     userId: row.user_id,
+    ownerTeamId: row.owner_team_id,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
     deletedAt: row.deleted_at,
@@ -470,9 +472,33 @@ export class AutomationStore {
     nameSearch?: string;
     repoOwner?: string;
     repoName?: string;
+    viewer?: SessionViewer;
+    teamId?: string | null;
   }): Promise<AutomationListResult> {
     const conditions: string[] = ["deleted_at IS NULL"];
     const params: unknown[] = [];
+
+    const viewer = options.viewer;
+    if (viewer?.kind === "user") {
+      if (viewer.suspended || !viewer.permissions.includes("automations.read")) {
+        conditions.push("0 = 1");
+      } else if (viewer.roleKey !== "owner" && viewer.roleKey !== "administrator") {
+        const teamIds = [...viewer.memberships.keys()];
+        conditions.push(
+          teamIds.length > 0
+            ? `(owner_team_id IS NULL OR owner_team_id IN (${teamIds.map(() => "?").join(", ")}))`
+            : "owner_team_id IS NULL"
+        );
+        params.push(...teamIds);
+      }
+    } else if (viewer?.kind === "service" && viewer.teamId !== null) {
+      conditions.push("(owner_team_id IS NULL OR owner_team_id = ?)");
+      params.push(viewer.teamId);
+    }
+    if (options.teamId !== undefined) {
+      conditions.push("owner_team_id IS ?");
+      params.push(options.teamId);
+    }
 
     if (options.nameSearch) {
       conditions.push("name LIKE ? ESCAPE '\\' COLLATE NOCASE");
@@ -608,6 +634,30 @@ export class AutomationStore {
     const statement = this.bindAutomationUpdate(id, fields);
     if (statement) await statement.run();
     return this.getById(id);
+  }
+
+  bindExecutorChange(automation: AutomationRow, userId: string): SqlStatement {
+    return this.db
+      .prepare(
+        `UPDATE automations SET user_id = ?, updated_at = ?
+         WHERE id = ? AND deleted_at IS NULL AND user_id IS ? AND owner_team_id IS ?
+           AND user_id IS NOT ?
+           AND EXISTS (SELECT 1 FROM users u JOIN user_role_assignments a ON a.user_id = u.id
+                       WHERE u.id = ? AND u.suspended_at IS NULL AND a.role_id IS NOT NULL)
+           AND (owner_team_id IS NULL OR (
+             EXISTS (SELECT 1 FROM teams t WHERE t.id = owner_team_id AND t.archived_at IS NULL)
+             AND EXISTS (SELECT 1 FROM team_memberships m WHERE m.team_id = owner_team_id AND m.user_id = ?)))`
+      )
+      .bind(
+        userId,
+        Date.now(),
+        automation.id,
+        automation.user_id,
+        automation.owner_team_id,
+        userId,
+        userId,
+        userId
+      );
   }
 
   /** Build a soft-delete statement for composition in an atomic batch. */

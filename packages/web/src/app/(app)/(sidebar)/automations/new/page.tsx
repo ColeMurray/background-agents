@@ -43,7 +43,10 @@ function NewAutomationContent() {
   // form coerces a template's suggested model against the user's enabled set.
   const templateId = searchParams.get("template");
   const template = automationTemplates.find((candidate) => candidate.id === templateId);
-  const initialValues: Partial<AutomationFormValues> | undefined = template?.prefill;
+  const initialValues: Partial<AutomationFormValues> = {
+    ...template?.prefill,
+    teamId: searchParams.get("teamId") || null,
+  };
 
   const handleSubmit = async (values: AutomationFormValues) => {
     setSubmitting(true);

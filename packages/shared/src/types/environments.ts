@@ -39,6 +39,11 @@ const environmentChannelAssociationsSchema = z
   .max(MAX_ENVIRONMENT_CHANNEL_ASSOCIATIONS);
 
 export const createEnvironmentInputSchema = z.object({
+  teamId: z
+    .string()
+    .regex(/^team_[A-Za-z0-9_-]+$/)
+    .nullable()
+    .optional(),
   name: z.string().trim().min(1).max(MAX_ENVIRONMENT_NAME_LENGTH),
   description: z.string().trim().max(MAX_ENVIRONMENT_DESCRIPTION_LENGTH).nullish(),
   prebuildEnabled: z.boolean().optional(),
@@ -74,6 +79,14 @@ export type EnvironmentRepository = z.infer<typeof environmentRepositorySchema>;
 /** An environment: a named, prebuildable repository set (design §7.1). */
 export const environmentSchema = z.object({
   id: z.string(),
+  ownerTeamId: z.string().nullable().optional(),
+  capabilities: z
+    .object({
+      canRead: z.boolean(),
+      canManage: z.boolean(),
+      canUse: z.boolean(),
+    })
+    .optional(),
   name: z.string(),
   description: z.string().nullable(),
   prebuildEnabled: z.boolean(),

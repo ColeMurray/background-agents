@@ -18,6 +18,9 @@ import {
   repositoryShaEntrySchema,
 } from "@open-inspect/shared/types/image-builds";
 import { z } from "zod";
+import { checkEnvironmentAccess } from "@open-inspect/shared";
+import { resourceViewer } from "../authorization/resource-viewer";
+import { EnvironmentStore } from "../db/environments";
 import { ImageBuildStore } from "../db/image-builds";
 import { RepoMetadataStore } from "../db/repo-metadata";
 import { createLogger } from "../logger";
@@ -54,6 +57,9 @@ import {
   json,
   NO_AUTHORIZATION,
   requirePermission,
+  requireAll,
+  permissionRequirement,
+  environmentRequirement,
 } from "./shared";
 import { parseQuery } from "./query";
 
@@ -400,11 +406,29 @@ function parseScopeParams(request: Request): ImageBuildScope | null | Response {
 
 async function readStatusRows(
   db: SqlDatabase,
-  scope: ImageBuildScope | null
+  scope: ImageBuildScope | null,
+  readableEnvironmentIds: ReadonlySet<string>
 ): Promise<ImageBuildStatusResponse["images"]> {
   const store = new ImageBuildStore(db);
   if (scope) return store.getStatus(scope);
-  return store.getStatusForEnabledScopes(await listEnabledScopes(db));
+  return store.getStatusForEnabledScopes(
+    (await listEnabledScopes(db)).filter(
+      (scope) => scope.kind !== "environment" || readableEnvironmentIds.has(scope.id)
+    )
+  );
+}
+
+/** Mixed-scope feeds must omit environment scopes the feature-permitted viewer cannot read. */
+async function readableEnvironmentIds(ctx: RequestContext): Promise<ReadonlySet<string>> {
+  const viewer = await resourceViewer(ctx);
+  const { environments } = await new EnvironmentStore(ctx.db).list();
+  return new Set(
+    environments
+      .filter(
+        (row) => checkEnvironmentAccess(viewer, { ownerTeamId: row.owner_team_id }, "read").allowed
+      )
+      .map((row) => row.id)
+  );
 }
 
 /**
@@ -427,9 +451,28 @@ async function handleGetStatus(
 
   const scope = parseScopeParams(request);
   if (scope instanceof Response) return scope;
+  if (scope?.kind === "environment") {
+    const environment = await new EnvironmentStore(ctx.db).getById(scope.id);
+    if (!environment) return error("Environment not found", 404);
+    const access = checkEnvironmentAccess(
+      await resourceViewer(ctx),
+      { ownerTeamId: environment.owner_team_id },
+      "read"
+    );
+    if (!access.allowed) {
+      if (access.reason === "not_member") return error("Environment not found", 404);
+      return json(
+        { error: "Forbidden", code: "environment_action_denied", reason_code: access.reason },
+        403
+      );
+    }
+  }
+  const readableIds = scope === null ? await readableEnvironmentIds(ctx) : new Set<string>();
 
   try {
-    const body = { images: await readStatusRows(ctx.db, scope) } satisfies ImageBuildStatusResponse;
+    const body = {
+      images: await readStatusRows(ctx.db, scope, readableIds),
+    } satisfies ImageBuildStatusResponse;
     return json(body);
   } catch (e) {
     logger.error("image_build.status_error", {
@@ -457,13 +500,16 @@ async function handleGetEnabledUnits(
 
   try {
     const units = await listEnabledScopeUnits(env, ctx.db);
+    const readableIds = await readableEnvironmentIds(ctx);
     const admission = resolveImageBuildAdmission(env);
     return json({
-      units: units.map((unit) => ({
-        scopeKind: unit.scope.kind,
-        scopeId: unit.scope.id,
-        repositoriesFingerprint: unit.repositoriesFingerprint,
-      })),
+      units: units
+        .filter((unit) => unit.scope.kind !== "environment" || readableIds.has(unit.scope.id))
+        .map((unit) => ({
+          scopeKind: unit.scope.kind,
+          scopeId: unit.scope.id,
+          repositoriesFingerprint: unit.repositoriesFingerprint,
+        })),
       // Scope toggles say what an operator wants; this says whether the
       // deployment will act on it, so the settings surfaces can stop
       // promising builds that will be refused.
@@ -534,7 +580,10 @@ imageBuildRoutes.post(
   "/image-builds/trigger/environment/:id",
   admit({
     ...GITHUB_USER_OR_SERVICE_ROUTE,
-    authorization: requirePermission("environments.images.manage"),
+    authorization: requireAll(
+      permissionRequirement("environments.images.manage"),
+      environmentRequirement("manage")
+    ),
   }),
   (c) => dispatch(c, handleTriggerEnvironmentBuild)
 );

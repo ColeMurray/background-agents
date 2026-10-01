@@ -12,28 +12,34 @@ import {
 import { ErrorBanner } from "@/components/ui/error-banner";
 import { BackIcon } from "@/components/ui/icons";
 import { browserApiFetch } from "@/lib/browser-api-fetch";
-import { useCurrentUserAuthorization } from "@/hooks/use-current-user-authorization";
-import { canAccessAutomation } from "@/lib/automation-authorization";
+import { useSWRConfig } from "swr";
 
 export default function EditAutomationPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = use(params);
   const { isOpen } = useSidebarContext();
   const router = useRouter();
   const { automation, loading } = useAutomation(id);
-  const { authorization, loading: authorizationLoading } = useCurrentUserAuthorization();
+  const { mutate } = useSWRConfig();
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState("");
-  const canManage = automation
-    ? canAccessAutomation("automations.manage", authorization, automation)
-    : false;
+  const canManage = automation?.capabilities?.canManage === true;
+  const refreshAutomations = () =>
+    mutate(
+      (key) =>
+        typeof key === "string" &&
+        (key.startsWith("/api/automations/") ||
+          key.startsWith("/api/automations?") ||
+          key.startsWith("$inf$/api/automations?"))
+    );
 
   useEffect(() => {
-    if (!loading && !authorizationLoading && automation && !canManage) {
+    if (!loading && automation && !canManage) {
       router.replace(`/automations/${id}`);
     }
-  }, [automation, authorizationLoading, canManage, id, loading, router]);
+  }, [automation, canManage, id, loading, router]);
 
   const handleSubmit = async (values: AutomationFormValues) => {
+    if (!canManage || !automation) return;
     setSubmitting(true);
     setError("");
 
@@ -44,20 +50,20 @@ export default function EditAutomationPage({ params }: { params: Promise<{ id: s
         body: JSON.stringify(values),
       });
 
-      if (res.ok) {
-        router.push(`/automations/${id}`);
-      } else {
+      if (!res.ok) {
         const data = await res.json();
-        setError(data.error || "Failed to update automation");
-        setSubmitting(false);
+        throw new Error(data.error || "Failed to update automation");
       }
-    } catch {
-      setError("Failed to update automation");
+      await refreshAutomations();
+      router.push(`/automations/${id}`);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Failed to update automation");
+    } finally {
       setSubmitting(false);
     }
   };
 
-  if (loading || authorizationLoading) {
+  if (loading) {
     return (
       <div className="h-full flex items-center justify-center">
         <div className="animate-spin rounded-full h-6 w-6 border-2 border-current border-t-transparent text-muted-foreground" />
@@ -112,6 +118,7 @@ export default function EditAutomationPage({ params }: { params: Promise<{ id: s
           <AutomationForm
             mode="edit"
             initialValues={{
+              teamId: automation.ownerTeamId ?? null,
               name: automation.name,
               repositories: automation.repositories,
               environmentIds: automation.environmentIds,

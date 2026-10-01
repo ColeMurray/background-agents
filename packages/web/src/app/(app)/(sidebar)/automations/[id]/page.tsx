@@ -19,8 +19,6 @@ import { formatModelNameLower } from "@/lib/format";
 import { getHarnessLabel } from "@open-inspect/shared/harnesses";
 import { formatAutomationTargetsLabel } from "@/lib/repo-label";
 import { browserApiFetch } from "@/lib/browser-api-fetch";
-import { useCurrentUserAuthorization } from "@/hooks/use-current-user-authorization";
-import { canAccessAutomation } from "@/lib/automation-authorization";
 
 const HISTORY_PAGE_SIZE = 20;
 
@@ -29,7 +27,6 @@ export default function AutomationDetailPage({ params }: { params: Promise<{ id:
   const { isOpen } = useSidebarContext();
   const router = useRouter();
   const { automation, loading, mutate } = useAutomation(id);
-  const { authorization } = useCurrentUserAuthorization();
   const { environments } = useEnvironments();
   // "Load more" grows the fetch limit rather than paging by offset: the
   // endpoint returns newest-first, so a larger limit re-fetches the head plus
@@ -106,8 +103,8 @@ export default function AutomationDetailPage({ params }: { params: Promise<{ id:
     );
   }
 
-  const canManage = canAccessAutomation("automations.manage", authorization, automation);
-  const canTrigger = canAccessAutomation("automations.trigger", authorization, automation);
+  const canManage = automation.capabilities?.canManage === true;
+  const canTrigger = automation.capabilities?.canTrigger === true;
 
   return (
     <div className="h-full flex flex-col">

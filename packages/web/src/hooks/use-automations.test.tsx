@@ -57,6 +57,22 @@ describe("useAutomations", () => {
     vi.clearAllMocks();
   });
 
+  it("retains response capabilities and scope without inferring missing capabilities", async () => {
+    const scoped = {
+      ...firstAutomation,
+      ownerTeamId: "team-1",
+      capabilities: { canRead: true, canManage: false, canTrigger: true },
+    };
+    const fetcher = vi.fn(async () => ({
+      automations: [scoped, secondAutomation],
+      hasMore: false,
+      nextCursor: null,
+    }));
+    const { result } = renderHook(() => useAutomations(""), { wrapper: wrapper(fetcher) });
+    await waitFor(() => expect(result.current.automations).toEqual([scoped, secondAutomation]));
+    expect(result.current.automations[1].capabilities).toBeUndefined();
+  });
+
   it("loads and appends cursor pages for a name search", async () => {
     const fetcher = vi.fn(async (path: string): Promise<ListAutomationsResponse> => {
       if (path.includes("cursor=")) {
@@ -100,6 +116,29 @@ describe("useAutomations", () => {
 
     await waitFor(() => expect(result.current.automations).toEqual([secondAutomation]));
     expect(result.current.automations).not.toContain(firstAutomation);
+  });
+
+  it("scopes every cursor page and replaces pages when the team changes", async () => {
+    const fetcher = vi.fn(async (path: string): Promise<ListAutomationsResponse> => {
+      if (path.includes("teamId=team-2")) {
+        return { automations: [secondAutomation], hasMore: false, nextCursor: null };
+      }
+      if (path.includes("cursor=")) {
+        return { automations: [firstAutomation], hasMore: false, nextCursor: null };
+      }
+      return { automations: [firstAutomation], hasMore: true, nextCursor: "next" };
+    });
+    const { result, rerender } = renderHook(({ teamId }) => useAutomations("Daily", teamId), {
+      initialProps: { teamId: "team/one" },
+      wrapper: wrapper(fetcher),
+    });
+    await waitFor(() => expect(result.current.automations).toEqual([firstAutomation]));
+    await act(() => result.current.loadMore());
+    expect(fetcher).toHaveBeenCalledWith(
+      "/api/automations?limit=25&search=Daily&teamId=team%2Fone&cursor=next"
+    );
+    rerender({ teamId: "team-2" });
+    await waitFor(() => expect(result.current.automations).toEqual([secondAutomation]));
   });
 
   it("rebuilds later cursor pages when the first page changes", async () => {

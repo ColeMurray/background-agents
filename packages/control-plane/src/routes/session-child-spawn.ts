@@ -155,7 +155,7 @@ export async function handleSpawnChild(
     }
   }
 
-  const targetAuthorizationError = authorizeSessionTarget(ctx, {
+  const targetAuthorizationError = await authorizeSessionTarget(ctx, {
     environmentId: parentEnvironmentId,
     hasRepository: Boolean(parentRepoOwner && parentRepoName),
   });

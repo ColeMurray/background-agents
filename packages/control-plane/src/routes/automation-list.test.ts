@@ -103,6 +103,7 @@ describe("automation listing routes", () => {
       expect(mockStore.list).toHaveBeenCalledWith({
         limit: DEFAULT_AUTOMATION_LIST_PAGE_SIZE,
         cursor: null,
+        viewer: expect.objectContaining({ kind: "user", userId: "user-1" }),
       });
       expect(mockStore.listRecentExecutionsForAutomationIds).toHaveBeenCalledWith(["auto-1"], 10);
       expect(body.automations[0]).toMatchObject({ recentExecutions: [] });
@@ -137,6 +138,7 @@ describe("automation listing routes", () => {
         nameSearch: "Daily sync",
         limit: 10,
         cursor: { createdAt: 123, id: "auto-9" },
+        viewer: expect.objectContaining({ kind: "user", userId: "user-1" }),
       });
     });
 
@@ -152,8 +154,24 @@ describe("automation listing routes", () => {
         cursor: null,
         repoOwner: "acme",
         repoName: "web-app",
+        viewer: expect.objectContaining({ kind: "user", userId: "user-1" }),
       });
     });
+
+    it.each(["team-a", "null"])(
+      "passes the exact team filter alongside the resource viewer (%s)",
+      async (teamId) => {
+        mockStore.list.mockResolvedValue({ automations: [], hasMore: false, nextCursor: null });
+        const response = await callRoute("GET", "/automations", { query: { teamId } });
+        expect(response.status).toBe(200);
+        expect(mockStore.list).toHaveBeenCalledWith(
+          expect.objectContaining({
+            teamId: teamId === "null" ? null : teamId,
+            viewer: expect.objectContaining({ kind: "user", userId: "user-1" }),
+          })
+        );
+      }
+    );
 
     it.each([
       [{ limit: "0" }, "limit"],

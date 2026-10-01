@@ -45,8 +45,30 @@ let environmentsValue: Array<{
   id: string;
   name: string;
   repositories: Array<{ repoOwner: string; repoName: string }>;
+  capabilities?: { canUse: boolean };
 }> = [];
+const scopeMocks = vi.hoisted(() => ({
+  repos: vi.fn(),
+  environments: vi.fn(),
+  allowWorkspace: true,
+}));
+vi.mock("@/hooks/use-resource-teams", () => ({
+  useResourceTeams: () => ({
+    teams: [
+      { id: "team-1", name: "Engineering" },
+      { id: "team-2", name: "Design" },
+    ],
+    allTeams: [
+      { id: "team-1", name: "Engineering" },
+      { id: "team-2", name: "Design" },
+    ],
+    loading: false,
+    error: null,
+    allowWorkspace: scopeMocks.allowWorkspace,
+  }),
+}));
 beforeEach(() => {
+  scopeMocks.allowWorkspace = true;
   enabledModelsValue = ["openai/gpt-5.4"];
   loadingModelsValue = false;
   environmentsValue = [];
@@ -58,17 +80,17 @@ beforeEach(() => {
 });
 
 vi.mock("@/hooks/use-repos", () => ({
-  useRepos: () => ({
-    repos: reposValue,
-    loading: false,
-  }),
+  useRepos: (enabled: boolean, teamId: string | null) => {
+    scopeMocks.repos(enabled, teamId);
+    return { repos: reposValue, loading: false };
+  },
 }));
 
 vi.mock("@/hooks/use-environments", () => ({
-  useEnvironments: () => ({
-    environments: environmentsValue,
-    loading: false,
-  }),
+  useEnvironments: (teamId: string | null) => {
+    scopeMocks.environments(teamId);
+    return { environments: environmentsValue, loading: false };
+  },
 }));
 
 vi.mock("@/hooks/use-branches", () => ({
@@ -114,6 +136,94 @@ const openRepositoryPicker = () =>
   fireEvent.click(screen.getByRole("button", { name: "Repository Configuration" }));
 
 describe("automation cron submission", () => {
+  it("scopes creation targets and clears selections when the team changes", () => {
+    environmentsValue = [
+      {
+        id: "env-draft",
+        name: "Draft environment",
+        repositories: [],
+        capabilities: { canUse: true },
+      },
+    ];
+    const onSubmit = vi.fn();
+    const { container } = render(
+      <AutomationForm
+        mode="create"
+        submitting={false}
+        onSubmit={onSubmit}
+        initialValues={{
+          name: "Review",
+          instructions: "Review code",
+          repositories: singleRepository,
+          environmentIds: [],
+          teamId: "team-1",
+        }}
+      />
+    );
+    expect(scopeMocks.repos).toHaveBeenLastCalledWith(true, "team-1");
+    expect(scopeMocks.environments).toHaveBeenLastCalledWith("team-1");
+    openRepositoryPicker();
+    fireEvent.click(screen.getByRole("button", { name: "Select Multiple" }));
+    fireEvent.click(screen.getByRole("checkbox", { name: /Draft environment/ }));
+    fireEvent.change(screen.getByRole("combobox", { name: "Team" }), {
+      target: { value: "team-2" },
+    });
+    expect(scopeMocks.repos).toHaveBeenLastCalledWith(true, "team-2");
+    expect(scopeMocks.environments).toHaveBeenLastCalledWith("team-2");
+    fireEvent.submit(container.querySelector("form")!);
+    expect(onSubmit).toHaveBeenCalledWith(
+      expect.objectContaining({ teamId: "team-2", repositories: [], environmentIds: [] })
+    );
+  });
+
+  it("shows team ownership read-only and excludes it from edit submissions", () => {
+    const onSubmit = vi.fn();
+    const initialValues = {
+      name: "Review",
+      instructions: "Review code",
+      teamId: "team-1",
+      repositories: singleRepository,
+    };
+    const { container } = render(
+      <AutomationForm
+        mode="edit"
+        submitting={false}
+        onSubmit={onSubmit}
+        initialValues={initialValues}
+      />
+    );
+    expect(screen.getByRole("combobox", { name: "Team" })).toBeDisabled();
+    expect(screen.getByRole("combobox", { name: "Team" })).toHaveValue("team-1");
+    fireEvent.change(screen.getByRole("combobox", { name: "Team" }), {
+      target: { value: "team-2" },
+    });
+    expect(scopeMocks.repos).toHaveBeenLastCalledWith(true, "team-1");
+    fireEvent.submit(container.querySelector("form")!);
+    expect(onSubmit).toHaveBeenCalledTimes(1);
+    expect(onSubmit.mock.calls[0][0]).not.toHaveProperty("teamId");
+    expect(onSubmit.mock.calls[0][0].repositories).toEqual(singleRepository);
+  });
+
+  it("requests workspace-owned environments for a workspace automation", () => {
+    render(<AutomationForm mode="create" submitting={false} onSubmit={vi.fn()} />);
+    expect(scopeMocks.environments).toHaveBeenLastCalledWith(null);
+  });
+
+  it("shows existing workspace ownership even when creation requires a team", () => {
+    scopeMocks.allowWorkspace = false;
+    render(
+      <AutomationForm
+        mode="edit"
+        submitting={false}
+        onSubmit={vi.fn()}
+        initialValues={{ teamId: null }}
+      />
+    );
+    expect(screen.getByRole("combobox", { name: "Team" })).toHaveValue("");
+    expect(screen.getByRole("option", { name: "Workspace (no team)" })).toBeInTheDocument();
+    expect(screen.getByRole("combobox", { name: "Team" })).toBeDisabled();
+  });
+
   it("locks provider authentication while submitting", () => {
     const props = {
       mode: "create" as const,
@@ -514,11 +624,30 @@ describe("environment binding", () => {
   const fullstackEnvironment = {
     id: "env_1",
     name: "Fullstack",
+    capabilities: { canUse: true },
     repositories: [
       { repoOwner: "acme", repoName: "web-app" },
       { repoOwner: "acme", repoName: "api" },
     ],
   };
+
+  it("disables environment choices and saved selections without server canUse", () => {
+    environmentsValue = [{ ...fullstackEnvironment, capabilities: undefined }];
+    const onSubmit = vi.fn();
+    const { container } = render(
+      <AutomationForm
+        mode="edit"
+        submitting={false}
+        onSubmit={onSubmit}
+        initialValues={{ ...scheduleBase, environmentIds: ["env_1"] }}
+      />
+    );
+    openRepositoryPicker();
+    expect(screen.getByRole("button", { name: /Fullstack/ })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Save Changes" })).toBeDisabled();
+    fireEvent.submit(container.querySelector("form")!);
+    expect(onSubmit).not.toHaveBeenCalled();
+  });
 
   it("submits the selected environment in single-select mode", () => {
     environmentsValue = [fullstackEnvironment];
@@ -677,7 +806,12 @@ describe("environment binding", () => {
   it("preserves hydrated multi-environment selections on untouched edits", () => {
     environmentsValue = [
       fullstackEnvironment,
-      { id: "env_2", name: "Data", repositories: [{ repoOwner: "acme", repoName: "data" }] },
+      {
+        id: "env_2",
+        name: "Data",
+        repositories: [{ repoOwner: "acme", repoName: "data" }],
+        capabilities: { canUse: true },
+      },
     ];
     const onSubmit = vi.fn();
     const { container } = render(

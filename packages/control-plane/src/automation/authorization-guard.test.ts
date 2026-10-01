@@ -43,6 +43,9 @@ describe("automation execution authorization", () => {
     expect(bindings).toHaveLength(1);
     expect(bindings[0]?.[0]).toBe("automation-1");
     expect(queries[0]).toContain("a.id = ? AND a.deleted_at IS NULL");
+    expect(queries[0]).toContain("tm.team_id = a.owner_team_id AND tm.user_id = u.id");
+    expect(queries[0]).toContain("t.archived_at IS NULL");
+    expect(queries[0]).toContain("a.owner_team_id IS NULL OR");
     expect(queries[0]).not.toContain("automation_repositories");
     expect(queries[0]).not.toContain("automation_environments");
   });

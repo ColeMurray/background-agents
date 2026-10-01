@@ -75,6 +75,12 @@ vi.mock("../db/environments", () => ({
   }),
 }));
 
+vi.mock("../db/team-settings", () => ({
+  TeamSettingsStore: vi.fn().mockImplementation(function () {
+    return { get: vi.fn(async () => ({ requireTeamOnCreate: false })) };
+  }),
+}));
+
 vi.mock("../auth/model-provider-account-default-adapters", () => ({
   modelProviderAccountAdapterRegistry: {
     get: (...args: unknown[]) => mockProviderAdapterGet(...args),

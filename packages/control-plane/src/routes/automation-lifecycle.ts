@@ -10,7 +10,6 @@ import {
   AutomationTriggerBlockedError,
   Scheduler,
 } from "../scheduler/scheduler";
-import { hydrateAutomation } from "../automation/hydrate";
 import { Hono } from "hono";
 import { admit, dispatch } from "../routing/admit";
 import type { ControlPlaneHonoEnv } from "../routing/hono-env";
@@ -25,7 +24,11 @@ import type { Env } from "../types";
 import { resolveGitHubCredentialAuthority } from "../source-control/github-credential-authority";
 import { resolveGitHubEnrichmentForRequest } from "../session/identity";
 import { createLogger } from "../logger";
-import { AUTOMATION_MANAGE, admittedAutomation } from "./automation-shared";
+import {
+  AUTOMATION_MANAGE,
+  admittedAutomation,
+  hydrateAutomationResponse,
+} from "./automation-shared";
 
 const logger = createLogger("router:automations");
 
@@ -51,7 +54,9 @@ async function handlePauseAutomation(
 
   const row = await store.getById(id);
   return json({
-    automation: row ? await hydrateAutomation(ctx.db, row) : null,
+    automation: row
+      ? await hydrateAutomationResponse(ctx, row, admittedAutomation(ctx).viewer)
+      : null,
   });
 }
 
@@ -92,7 +97,9 @@ async function handleResumeAutomation(
 
   const row = await store.getById(id);
   return json({
-    automation: row ? await hydrateAutomation(ctx.db, row) : null,
+    automation: row
+      ? await hydrateAutomationResponse(ctx, row, admittedAutomation(ctx).viewer)
+      : null,
   });
 }
 
@@ -133,7 +140,10 @@ async function handleTriggerAutomation(
       return error("A run is already active for this automation", 409);
     }
     if (triggerError instanceof AutomationExecutionUnauthorizedError) {
-      return json({ error: "Execution authorization required" }, 403);
+      return json(
+        { error: "Execution authorization required", reason_code: triggerError.reason },
+        403
+      );
     }
     return error("Failed to trigger automation", 500);
   }

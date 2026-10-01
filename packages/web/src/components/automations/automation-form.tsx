@@ -3,6 +3,8 @@
 import { useCallback, useState, useMemo } from "react";
 import { useRepos } from "@/hooks/use-repos";
 import { useEnvironments } from "@/hooks/use-environments";
+import { useResourceTeams } from "@/hooks/use-resource-teams";
+import { ResourceTeamField } from "@/components/resource-team-field";
 import { useEnabledModels } from "@/hooks/use-enabled-models";
 import { reconcileProviderSelectionsForHarness } from "@open-inspect/shared/harnesses";
 import { resolveHarnessModelSelection } from "@/lib/session-harness";
@@ -39,8 +41,15 @@ interface AutomationFormProps {
 }
 
 export function AutomationForm({ mode, initialValues, onSubmit, submitting }: AutomationFormProps) {
-  const { repos, loading: loadingRepos } = useRepos();
-  const { environments, loading: loadingEnvironments } = useEnvironments();
+  const [teamId, setTeamId] = useState(initialValues?.teamId ?? null);
+  const scope = useResourceTeams("automation");
+  const scopeValid =
+    mode === "edit" ||
+    (!scope.loading &&
+      !scope.error &&
+      (teamId ? scope.teams.some((team) => team.id === teamId) : scope.allowWorkspace));
+  const { repos, loading: loadingRepos } = useRepos(true, teamId);
+  const { environments, loading: loadingEnvironments } = useEnvironments(teamId);
   const { enabledModels, enabledModelOptions, loading: loadingModels } = useEnabledModels();
   const providerAccounts = useProviderAccounts();
   const initialDraft = useMemo(() => createAutomationFormDraft(initialValues), [initialValues]);
@@ -69,6 +78,14 @@ export function AutomationForm({ mode, initialValues, onSubmit, submitting }: Au
     repos,
   });
   const { selectedEnvironmentIds, buildRepositoriesPayload } = targets;
+  const environmentsUsable =
+    selectedEnvironmentIds.length === 0 ||
+    (!loadingEnvironments &&
+      selectedEnvironmentIds.every((id) =>
+        environments.some(
+          (environment) => environment.id === id && environment.capabilities?.canUse === true
+        )
+      ));
 
   // The model we display and submit, and whether it may be submitted. The
   // selector only lists enabled models the harness can run, so a disabled
@@ -134,12 +151,23 @@ export function AutomationForm({ mode, initialValues, onSubmit, submitting }: Au
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!formEvaluation.valid) return;
-    onSubmit(formEvaluation.values);
+    if (!formEvaluation.valid || !scopeValid || !environmentsUsable || submitting) return;
+    onSubmit({ ...formEvaluation.values, ...(mode === "create" ? { teamId } : {}) });
   };
 
   return (
     <form onSubmit={handleSubmit} className="space-y-6">
+      <ResourceTeamField
+        {...scope}
+        teamId={teamId}
+        disabled={submitting || mode === "edit"}
+        allowWorkspace={mode === "edit" || scope.allowWorkspace}
+        onChange={(nextTeamId) => {
+          if (submitting || mode === "edit") return;
+          setTeamId(nextTeamId);
+          targets.resetTargets();
+        }}
+      />
       <AutomationTriggerTypeField mode={mode} value={trigger} onChange={setTrigger} />
 
       {/* Name */}
@@ -223,7 +251,10 @@ export function AutomationForm({ mode, initialValues, onSubmit, submitting }: Au
 
       {/* Submit */}
       <div className="flex justify-end gap-2">
-        <Button type="submit" disabled={submitting || !formEvaluation.valid}>
+        <Button
+          type="submit"
+          disabled={submitting || !formEvaluation.valid || !scopeValid || !environmentsUsable}
+        >
           {submitting
             ? mode === "create"
               ? "Creating..."

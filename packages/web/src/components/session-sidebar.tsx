@@ -145,7 +145,7 @@ export function SessionSidebar({
   // Environment provenance for the cards, resolved once for the whole list.
   // Names are looked up so a deleted environment (or one still loading)
   // simply drops the chip instead of showing a raw id.
-  const { environments } = useEnvironments(activeTeamId);
+  const { environments } = useEnvironments(activeTeamId ?? undefined);
   const environmentNamesById = useMemo(
     () => new Map(environments.map((environment) => [environment.id, environment.name])),
     [environments]

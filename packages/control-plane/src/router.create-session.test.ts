@@ -56,6 +56,12 @@ vi.mock("./db/user-store", () => ({
   UserStore: vi.fn(),
 }));
 
+vi.mock("./db/environments", () => ({
+  EnvironmentStore: vi.fn().mockImplementation(function () {
+    return { getById: vi.fn(async () => ({ id: "env_1", owner_team_id: null })) };
+  }),
+}));
+
 vi.mock("./session/skill-resolution", async (importOriginal) => {
   const actual = (await importOriginal()) as Record<string, unknown>;
   return {
