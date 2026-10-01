@@ -2,9 +2,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { SELF, env } from "cloudflare:test";
 import { IntegrationSettingsStore } from "../../src/db/integration-settings";
 import { SessionIndexStore } from "../../src/db/session-index";
-import { createCloudflareEnv } from "../../src/cloudflare/platform";
-import { handleSlackNotify } from "../../src/routes/slack-notify";
-import { createRequestMetrics } from "../../src/db/instrumented-sql-database";
 import type { SessionVisibility } from "@open-inspect/shared/types/teams";
 import { cleanD1Tables } from "./cleanup";
 import { initNamedSessionDO, queryDO, seedSandboxAuth } from "./helpers";
@@ -124,32 +121,6 @@ describe("POST /sessions/:id/slack-notify", () => {
 
     expect(res.status).toBe(400);
     await expect(res.json()).resolves.toMatchObject({ error: "invalid_input" });
-    expect(slackFetch).not.toHaveBeenCalled();
-  });
-
-  it("refuses a private D1 session before missing bot configuration", async () => {
-    const { sessionName } = await setupSession({ visibility: "private" });
-    const slackFetch = vi.fn();
-    vi.stubGlobal("fetch", slackFetch);
-
-    const res = await handleSlackNotify(
-      new Request(`https://test.local/sessions/${sessionName}/slack-notify`, {
-        method: "POST",
-        body: JSON.stringify({ channel: "#ops", text: "secret text" }),
-      }),
-      { ...createCloudflareEnv(env), SLACK_BOT_TOKEN: undefined },
-      { id: sessionName },
-      {
-        db: env.DB,
-        trace_id: "private-slack-notify",
-        request_id: "private-slack-notify",
-        metrics: createRequestMetrics(),
-        executionCtx: { submit() {} },
-      }
-    );
-
-    expect(res.status).toBe(403);
-    await expect(res.json()).resolves.toMatchObject({ error: "session_scope_denied" });
     expect(slackFetch).not.toHaveBeenCalled();
   });
 

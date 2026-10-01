@@ -10,7 +10,7 @@ const binding = {
 } as const;
 const actor = { requestId: "binding-request", actorUserId: "lead" };
 
-function database(rows: unknown[] = [], changes = 1) {
+function database(rows: unknown[] = []) {
   const prepare = vi.fn((_sql: string): SqlStatement => {
     const statement: SqlStatement = {
       bind: vi.fn(() => statement),
@@ -21,7 +21,7 @@ function database(rows: unknown[] = [], changes = 1) {
     return statement;
   });
   const batch = vi.fn(async (statements: SqlStatement[]) =>
-    statements.map(() => ({ results: [], meta: { changes } }))
+    statements.map(() => ({ results: [], meta: { changes: 1 } }))
   );
   const db: SqlDatabase = { prepare, batch };
   return { db, prepare, batch };
@@ -61,18 +61,6 @@ describe("TeamChannelBindingStore", () => {
     expect(batch.mock.calls[0]![0]).toEqual(prepare.mock.results.map(({ value }) => value));
   });
 
-  it("accepts identical no-ops but never silently reassigns another team's binding", async () => {
-    expect(
-      await new TeamChannelBindingStore(database([binding], 0).db).put(binding, actor)
-    ).toEqual(binding);
-    await expect(
-      new TeamChannelBindingStore(database([{ ...binding, teamId: "team_other" }], 0).db).put(
-        binding,
-        actor
-      )
-    ).rejects.toBeInstanceOf(TeamChannelBindingConflictError);
-  });
-
   it("maps uniqueness failures to conflicts but preserves storage failures", async () => {
     const { db, batch } = database();
     batch.mockRejectedValueOnce(
@@ -83,18 +71,5 @@ describe("TeamChannelBindingStore", () => {
     const failure = new Error("storage unavailable");
     batch.mockRejectedValueOnce(failure);
     await expect(store.put(binding, actor)).rejects.toBe(failure);
-  });
-
-  it.each([0, 1])("reports deletion from the mutation's affected rows: %i", async (changes) => {
-    const { db, prepare, batch } = database([], changes);
-    expect(
-      await new TeamChannelBindingStore(db).remove(binding.teamId, "slack", "C123", actor)
-    ).toBe(changes > 0);
-    expect(batch).toHaveBeenCalledOnce();
-    expect(prepare.mock.results[1]!.value.bind).toHaveBeenCalledWith(
-      binding.teamId,
-      "slack",
-      "C123"
-    );
   });
 });

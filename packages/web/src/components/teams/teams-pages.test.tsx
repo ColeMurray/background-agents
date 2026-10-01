@@ -215,30 +215,6 @@ describe("Team page tabs", () => {
     expect(screen.getByText("Team member table")).toBeInTheDocument();
   });
 
-  it.each([
-    [false, false],
-    [true, false],
-    [false, true],
-    [true, true],
-  ])(
-    "places Channels after optional Secrets and before optional Settings (canManageSecrets: %s, canArchive: %s)",
-    (canManageSecrets, canArchive) => {
-      mocks.mine = [team];
-      mocks.teams = [{ ...team, capabilities: { ...denied, canManageSecrets, canArchive } }];
-      render(<TeamPage slug="design" />);
-      const tabs = within(screen.getByRole("navigation", { name: "Team tabs" }));
-      expect(tabs.getAllByRole("button").map((button) => button.textContent)).toEqual([
-        "Overview",
-        "Members",
-        ...(canManageSecrets ? ["Secrets"] : []),
-        "Channels",
-        ...(canArchive ? ["Settings"] : []),
-      ]);
-      fireEvent.click(tabs.getByRole("button", { name: "Channels" }));
-      expect(screen.getByText("Team channel bindings")).toBeInTheDocument();
-    }
-  );
-
   it.each(["owner", "administrator"])(
     "allows %s Overview but still requires settings capabilities",
     (role) => {
@@ -313,7 +289,12 @@ describe("Team page tabs", () => {
     (role) => {
       mocks.role = role === "lead" ? "member" : role;
       mocks.mine = role === "lead" ? [team] : [];
-      mocks.teams = [{ ...team, capabilities: { ...denied, canManageSecrets: true } }];
+      mocks.teams = [
+        {
+          ...team,
+          capabilities: { ...denied, canManageSecrets: true, canArchive: role === "lead" },
+        },
+      ];
       render(<TeamPage slug="design" />);
 
       const tabs = within(screen.getByRole("navigation", { name: "Team tabs" }));
@@ -322,7 +303,12 @@ describe("Team page tabs", () => {
         "Members",
         "Secrets",
         "Channels",
+        ...(role === "lead" ? ["Settings"] : []),
       ]);
+      if (role === "lead") {
+        fireEvent.click(tabs.getByRole("button", { name: "Channels" }));
+        expect(screen.getByText("Team channel bindings")).toBeInTheDocument();
+      }
       expect(screen.queryByText("Team secrets editor for team_design")).not.toBeInTheDocument();
       fireEvent.click(tabs.getByRole("button", { name: "Secrets" }));
       expect(screen.getByText("Team secrets editor for team_design")).toBeInTheDocument();

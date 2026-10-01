@@ -301,25 +301,11 @@ describe("extractAgentResponse", () => {
   it.each([undefined, "slack-post"] as const)(
     "signs channel and optional purpose on all reads: %s",
     async (readPurpose) => {
-      const urls: URL[] = [];
+      const requests: { url: URL; headers: Headers }[] = [];
       const fetcher: ControlPlaneFetcher = {
         async fetch(input, init) {
           const url = new URL(String(input));
-          urls.push(url);
-          const headers = new Headers(init?.headers);
-          expect(
-            await verifyServiceSignature({
-              signatureHeader: headers.get("X-OpenInspect-Service-Signature")!,
-              service: "slack-bot",
-              secret: "test-secret",
-              method: "GET",
-              url: url.toString(),
-              bodySha256Hex: await sha256Hex(""),
-              actor: "",
-            })
-          ).toMatchObject({ ok: true });
-          expect(url.searchParams.get("channel")).toBe("slack:C123");
-          expect(url.searchParams.get("purpose")).toBe(readPurpose ?? null);
+          requests.push({ url, headers: new Headers(init?.headers) });
           if (url.pathname.endsWith("/events")) {
             return Response.json({
               events: [],
@@ -337,32 +323,62 @@ describe("extractAgentResponse", () => {
         "trace",
         "slack:C123"
       );
-      expect(urls).toHaveLength(3);
+      expect(requests.map(({ url }) => url.pathname)).toEqual([
+        "/sessions/s1/events",
+        "/sessions/s1/events",
+        "/sessions/s1/artifacts",
+      ]);
+      expect(requests[1]?.url.searchParams.get("cursor")).toBe("next");
+      for (const { url, headers } of requests) {
+        expect(
+          await verifyServiceSignature({
+            signatureHeader: headers.get("X-OpenInspect-Service-Signature")!,
+            service: "slack-bot",
+            secret: "test-secret",
+            method: "GET",
+            url: url.toString(),
+            bodySha256Hex: await sha256Hex(""),
+            actor: "",
+          })
+        ).toMatchObject({ ok: true });
+        expect(url.searchParams.get("channel")).toBe("slack:C123");
+        expect(url.searchParams.get("purpose")).toBe(readPurpose ?? null);
+      }
     }
   );
 
   it.each([
-    ["events", "403"],
-    ["events", "404"],
-    ["events", "503"],
-    ["events", "malformed"],
-    ["events", "network"],
-    ["events", "invalid-JSON"],
-    ["artifacts", "403"],
-    ["artifacts", "404"],
-    ["artifacts", "503"],
-    ["artifacts", "malformed"],
-    ["artifacts", "network"],
-    ["artifacts", "invalid-JSON"],
+    ["events", "403", false],
+    ["events", "404", false],
+    ["events", "503", false],
+    ["events", "malformed", false],
+    ["events", "network", false],
+    ["events", "invalid-JSON", false],
+    ["events", "403", true],
+    ["events", "404", true],
+    ["events", "503", true],
+    ["events", "missing-cursor", false],
+    ["artifacts", "403", false],
+    ["artifacts", "404", false],
+    ["artifacts", "503", false],
+    ["artifacts", "malformed", false],
+    ["artifacts", "network", false],
+    ["artifacts", "invalid-JSON", false],
   ] as const)(
-    "rejects protected %s %s failures without returning collected secret content",
-    async (endpoint, failure) => {
+    "rejects protected %s %s failures (later page: %s) without returning collected content",
+    async (endpoint, failure, laterPage) => {
+      const urls: URL[] = [];
       const fetcher: ControlPlaneFetcher = {
         async fetch(input) {
           const url = new URL(String(input));
-          if (url.pathname.endsWith(`/${endpoint}`)) {
+          urls.push(url);
+          if (
+            url.pathname.endsWith(`/${endpoint}`) &&
+            (!laterPage || url.searchParams.has("cursor"))
+          ) {
             if (failure === "network") throw new Error("read unavailable");
             if (failure === "invalid-JSON") return new Response("{");
+            if (failure === "missing-cursor") return Response.json({ events: [], hasMore: true });
             return /^\d+$/.test(failure)
               ? Response.json({ error: "read failed" }, { status: Number(failure) })
               : Response.json({ invalid: true });
@@ -377,7 +393,8 @@ describe("extractAgentResponse", () => {
                 createdAt: 1,
               },
             ],
-            hasMore: false,
+            hasMore: laterPage,
+            cursor: "next",
           });
         },
       };
@@ -395,56 +412,22 @@ describe("extractAgentResponse", () => {
       await expect(extraction).rejects.toBeInstanceOf(ProtectedReadError);
       await expect(extraction).rejects.toMatchObject({
         kind: failure === "403" || failure === "404" ? "denied" : "unavailable",
+        ...(failure === "missing-cursor" ? { message: "Invalid events response" } : {}),
       });
+      expect(urls).toHaveLength(laterPage || endpoint === "artifacts" ? 2 : 1);
+      expect(urls.at(-1)?.pathname).toBe(`/sessions/s1/${endpoint}`);
+      expect(urls.at(-1)?.searchParams.get("cursor")).toBe(laterPage ? "next" : null);
     }
   );
 
-  it.each([403, 404, 503])(
-    "rejects a later event page status %s instead of returning earlier secret content",
-    async (status) => {
-      const fetcher: ControlPlaneFetcher = {
-        async fetch(input) {
-          const url = new URL(String(input));
-          return url.searchParams.has("cursor")
-            ? Response.json({}, { status })
-            : Response.json({
-                events: [
-                  {
-                    id: "secret",
-                    type: "token",
-                    data: { content: "SECRET CONTENT" },
-                    messageId: "m1",
-                    createdAt: 1,
-                  },
-                ],
-                hasMore: true,
-                cursor: "next",
-              });
-        },
-      };
-      await expect(
-        extractAgentResponse(
-          {
-            fetcher,
-            auth: { service: "slack-bot", secret: "test-secret" },
-            readPurpose: "slack-post",
-          },
-          "s1",
-          "m1",
-          undefined,
-          "slack:C1"
-        )
-      ).rejects.toMatchObject({ kind: status === 503 ? "unavailable" : "denied" });
-    }
-  );
-
-  it.each(["403", "404", "503", "network", "malformed", "invalid-JSON"])(
+  it.each(["403", "network", "malformed", "invalid-JSON"])(
     "keeps Linear's unprotected artifact fallback unchanged for %s",
     async (failure) => {
+      const urls: URL[] = [];
       const fetcher: ControlPlaneFetcher = {
         async fetch(input) {
           const url = new URL(String(input));
-          expect(url.searchParams.has("purpose")).toBe(false);
+          urls.push(url);
           if (url.pathname.endsWith("/artifacts")) {
             if (failure === "network") throw new Error("read unavailable");
             if (failure === "invalid-JSON") return new Response("{");
@@ -489,29 +472,9 @@ describe("extractAgentResponse", () => {
           { type: "branch", url: "https://example.com/tree/legacy", label: "Branch: legacy" },
         ],
       });
+      expect(urls.map((url) => url.searchParams.get("purpose"))).toEqual([null, null]);
     }
   );
-
-  it("rejects protected pagination that omits the continuation cursor", async () => {
-    const fetcher: ControlPlaneFetcher = {
-      async fetch() {
-        return Response.json({ events: [], hasMore: true });
-      },
-    };
-    await expect(
-      extractAgentResponse(
-        {
-          fetcher,
-          auth: { service: "slack-bot", secret: "test-secret" },
-          readPurpose: "slack-post",
-        },
-        "s1",
-        "m1",
-        undefined,
-        "slack:C1"
-      )
-    ).rejects.toMatchObject({ kind: "unavailable", message: "Invalid events response" });
-  });
 
   it("returns a failed response when the events response is malformed", async () => {
     const fetcher: ControlPlaneFetcher = {

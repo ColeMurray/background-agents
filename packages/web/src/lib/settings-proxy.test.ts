@@ -2,6 +2,11 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { NextRequest } from "next/server";
 import { controlPlaneUserFetch } from "./control-plane";
 import { SETTINGS_PROXY_MAX_BODY_BYTES, settingsProxy } from "./settings-proxy";
+import { GET as getChannelBindings } from "@/app/api/teams/[id]/channel-bindings/route";
+import {
+  DELETE as deleteChannelBinding,
+  PUT as putChannelBinding,
+} from "@/app/api/teams/[id]/channel-bindings/slack/[channelId]/route";
 
 vi.mock("./control-plane", () => ({ controlPlaneUserFetch: vi.fn() }));
 
@@ -158,4 +163,40 @@ describe("settingsProxy", () => {
     expect(response.status).toBe(500);
     await expect(response.json()).resolves.toEqual({ error: "Failed to fetch settings" });
   });
+
+  it.each(["GET", "PUT", "DELETE"] as const)(
+    "exports the channel-binding %s proxy with encoded identifiers",
+    async (method) => {
+      const body = JSON.stringify({ kind: "source" });
+      const payload =
+        method === "PUT"
+          ? { error: "Channel is not joinable", code: "channel_not_joinable" }
+          : { bindings: [] };
+      const status = method === "DELETE" ? 204 : method === "PUT" ? 409 : 200;
+      vi.mocked(controlPlaneUserFetch).mockResolvedValue(
+        method === "DELETE" ? new Response(null, { status }) : Response.json(payload, { status })
+      );
+      const handler = {
+        GET: getChannelBindings,
+        PUT: putChannelBinding,
+        DELETE: deleteChannelBinding,
+      }[method];
+      const response = await handler(
+        new NextRequest("http://localhost/api/teams/id/channel-bindings", {
+          method,
+          headers: { Cookie: "__Secure-openinspect.session_token=session.signature" },
+          ...(method === "PUT" ? { body } : {}),
+        }),
+        { params: Promise.resolve({ id: "team/id", channelId: "C/1" }) }
+      );
+      expect(controlPlaneUserFetch).toHaveBeenCalledWith(
+        `/teams/team%2Fid/channel-bindings${method === "GET" ? "" : "/slack/C%2F1"}`,
+        method === "GET" ? undefined : method === "PUT" ? { method, body } : { method }
+      );
+      expect(response.status).toBe(status);
+      expect(response.headers.get("Cache-Control")).toBe("private, no-store");
+      if (method === "DELETE") expect(await response.text()).toBe("");
+      else expect(await response.json()).toEqual(payload);
+    }
+  );
 });

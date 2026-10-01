@@ -2,7 +2,7 @@
 /// <reference types="@testing-library/jest-dom" />
 
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import * as matchers from "@testing-library/jest-dom/matchers";
 import type { EnrichedRepository } from "@open-inspect/shared/types/repository-catalog";
@@ -187,50 +187,6 @@ describe("SlackIntegrationSettings", () => {
     expect(screen.getByRole("combobox", { name: "Unbound channels" })).toHaveValue("workspace");
   });
 
-  it("saves rejection of unbound channels without dropping routing or notification settings", async () => {
-    const user = userEvent.setup();
-    setupSWR({
-      global: {
-        defaults: {
-          agentNotificationsEnabled: true,
-          mentionsPolicy: "strip",
-          routingRules: [{ keyword: "frontend", target: "acme/web" }],
-        },
-      },
-      availableRepos: [repo("acme/web")],
-    });
-    fetchMock.mockResolvedValue(okJson({}));
-    render(<SlackIntegrationSettings />);
-    await user.selectOptions(screen.getByRole("combobox", { name: "Unbound channels" }), "reject");
-    await user.click(screen.getByRole("button", { name: /^save$/i }));
-    expect(JSON.parse(fetchMock.mock.calls[0][1].body as string)).toEqual({
-      settings: {
-        defaults: {
-          agentNotificationsEnabled: true,
-          mentionsPolicy: "strip",
-          routingRules: [{ keyword: "frontend", target: "acme/web" }],
-          unboundChannels: "reject",
-        },
-      },
-    });
-  });
-
-  it("resyncs the unbound policy without overwriting dirty edits", async () => {
-    const user = userEvent.setup();
-    setupSWR({ global: null });
-    const view = render(<SlackIntegrationSettings />);
-    setupSWR({ global: { defaults: { unboundChannels: "reject" } } });
-    view.rerender(<SlackIntegrationSettings />);
-    expect(screen.getByRole("combobox", { name: "Unbound channels" })).toHaveValue("reject");
-    await user.selectOptions(
-      screen.getByRole("combobox", { name: "Unbound channels" }),
-      "workspace"
-    );
-    setupSWR({ global: { defaults: { unboundChannels: "reject", mentionsPolicy: "strip" } } });
-    view.rerender(<SlackIntegrationSettings />);
-    expect(screen.getByRole("combobox", { name: "Unbound channels" })).toHaveValue("workspace");
-  });
-
   it("disables the unbound policy without global integration-management permission", () => {
     authorization.canManageGlobal = false;
     setupSWR({ global: null });
@@ -268,28 +224,6 @@ describe("SlackIntegrationSettings", () => {
     );
   });
 
-  it("preserves the unbound policy when routing rules are saved", async () => {
-    const user = userEvent.setup();
-    setupSWR({
-      global: {
-        defaults: {
-          unboundChannels: "reject",
-          routingRules: [{ keyword: "frontend", target: "acme/web" }],
-        },
-      },
-      availableRepos: [repo("acme/web")],
-    });
-    fetchMock.mockResolvedValue(okJson({}));
-    render(<SlackIntegrationSettings />);
-    fireEvent.change(screen.getByRole("textbox", { name: "Routing keyword" }), {
-      target: { value: "web" },
-    });
-    await user.click(screen.getByRole("button", { name: "Save routing rules" }));
-    expect(
-      JSON.parse(fetchMock.mock.calls[0][1].body as string).settings.defaults.unboundChannels
-    ).toBe("reject");
-  });
-
   it("describes channel access via Slack bot membership in help copy", () => {
     setupSWR({ global: null });
     render(<SlackIntegrationSettings />);
@@ -319,6 +253,8 @@ describe("SlackIntegrationSettings", () => {
       mentionsPolicy: "allow",
       unboundChannels: "workspace",
     });
+    // The routing editor merges against this saved cache snapshot.
+    expect(mutateMock).toHaveBeenCalledWith("/api/integration-settings/slack", body);
   });
 
   it("changing mentions policy radio sends the new value on save", async () => {
@@ -390,6 +326,7 @@ describe("SlackIntegrationSettings", () => {
         defaults: {
           agentNotificationsEnabled: true,
           mentionsPolicy: "strip",
+          model: "openai/gpt-5.4",
           routingRules: [{ keyword: "frontend", target: "acme/web" }],
         },
       },
@@ -399,6 +336,9 @@ describe("SlackIntegrationSettings", () => {
 
     render(<SlackIntegrationSettings />);
 
+    expect(screen.getByRole("button", { name: /^save$/i })).toBeDisabled();
+    await user.selectOptions(screen.getByRole("combobox", { name: "Unbound channels" }), "reject");
+    expect(screen.getByRole("button", { name: /^save$/i })).toBeEnabled();
     await user.type(screen.getByLabelText(/session instructions/i), "Prefer minimal diffs.");
     await user.click(screen.getByRole("button", { name: /^save$/i }));
 
@@ -407,9 +347,10 @@ describe("SlackIntegrationSettings", () => {
     expect(body.settings.defaults).toEqual({
       agentNotificationsEnabled: true,
       mentionsPolicy: "strip",
+      model: "openai/gpt-5.4",
       routingRules: [{ keyword: "frontend", target: "acme/web" }],
       sessionInstructions: "Prefer minimal diffs.",
-      unboundChannels: "workspace",
+      unboundChannels: "reject",
     });
   });
 
@@ -419,30 +360,6 @@ describe("SlackIntegrationSettings", () => {
     render(<SlackIntegrationSettings />);
 
     expect(screen.getByLabelText(/session instructions/i)).toHaveAttribute("maxlength", "10000");
-  });
-
-  // Regression: a save must seed the SWR cache with the saved blob. The other
-  // global section merges against this snapshot, so leaving the pre-save data
-  // in place would let a back-to-back save silently drop the new values.
-  it("seeds the SWR cache with the saved defaults on save", async () => {
-    const user = userEvent.setup();
-    setupSWR({ global: null });
-    fetchMock.mockResolvedValue(okJson({}));
-
-    render(<SlackIntegrationSettings />);
-
-    await user.click(screen.getByRole("switch", { name: /enable agent notifications/i }));
-    await user.click(screen.getByRole("button", { name: /^save$/i }));
-
-    expect(mutateMock).toHaveBeenCalledWith("/api/integration-settings/slack", {
-      settings: {
-        defaults: {
-          agentNotificationsEnabled: true,
-          mentionsPolicy: "allow",
-          unboundChannels: "workspace",
-        },
-      },
-    });
   });
 
   it("clearing session instructions omits the key on save", async () => {
@@ -577,6 +494,7 @@ describe("SlackIntegrationSettings", () => {
             agentNotificationsEnabled: true,
             mentionsPolicy: "strip",
             sessionInstructions: "Prefer minimal diffs.",
+            unboundChannels: "reject",
           },
         },
       });
@@ -589,6 +507,7 @@ describe("SlackIntegrationSettings", () => {
     );
     expect((screen.getByRole("radio", { name: /strip/i }) as HTMLInputElement).checked).toBe(true);
     expect(screen.getByLabelText(/session instructions/i)).toHaveValue("Prefer minimal diffs.");
+    expect(screen.getByRole("combobox", { name: "Unbound channels" })).toHaveValue("reject");
   });
 
   // Regression: dirty edits must not be clobbered by SWR revalidation.
@@ -597,6 +516,7 @@ describe("SlackIntegrationSettings", () => {
     setupSWR({ global: null });
     const { rerender } = render(<SlackIntegrationSettings />);
 
+    await user.selectOptions(screen.getByRole("combobox", { name: "Unbound channels" }), "reject");
     await user.click(screen.getByRole("switch", { name: /enable agent notifications/i }));
     expect(screen.getByRole("switch", { name: /enable agent notifications/i })).toHaveAttribute(
       "aria-checked",
@@ -605,7 +525,13 @@ describe("SlackIntegrationSettings", () => {
 
     act(() => {
       setupSWR({
-        global: { defaults: { agentNotificationsEnabled: false, mentionsPolicy: "strip" } },
+        global: {
+          defaults: {
+            agentNotificationsEnabled: false,
+            mentionsPolicy: "strip",
+            unboundChannels: "workspace",
+          },
+        },
       });
     });
     rerender(<SlackIntegrationSettings />);
@@ -615,6 +541,7 @@ describe("SlackIntegrationSettings", () => {
       "true"
     );
     expect((screen.getByRole("radio", { name: /allow/i }) as HTMLInputElement).checked).toBe(true);
+    expect(screen.getByRole("combobox", { name: "Unbound channels" })).toHaveValue("reject");
   });
 
   // Regression: per-repo row must resync when entry.settings changes from SWR.
@@ -684,7 +611,15 @@ describe("SlackIntegrationSettings", () => {
     it("adds a routing rule and saves it merged into the defaults", async () => {
       const user = userEvent.setup();
       setupSWR({
-        global: { defaults: { agentNotificationsEnabled: true, mentionsPolicy: "allow" } },
+        global: {
+          defaults: {
+            agentNotificationsEnabled: true,
+            mentionsPolicy: "allow",
+            unboundChannels: "reject",
+            model: "openai/gpt-5.4",
+            sessionInstructions: "Prefer minimal diffs.",
+          },
+        },
         availableRepos: [repo("acme/web")],
       });
       fetchMock.mockResolvedValue(okJson({}));
@@ -709,6 +644,9 @@ describe("SlackIntegrationSettings", () => {
       expect(body.settings.defaults).toEqual({
         agentNotificationsEnabled: true,
         mentionsPolicy: "allow",
+        unboundChannels: "reject",
+        model: "openai/gpt-5.4",
+        sessionInstructions: "Prefer minimal diffs.",
         routingRules: [{ keyword: "Frontend", target: "acme/web" }],
       });
     });

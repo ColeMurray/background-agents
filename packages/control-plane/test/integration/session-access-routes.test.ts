@@ -84,6 +84,22 @@ describe("HTTP session access by enforcement mode", () => {
     return { sessionName, team, stub };
   }
 
+  async function otherTeam() {
+    return new TeamStore(env.DB).create({
+      slug: "other",
+      name: "Other",
+      joinPolicy: "invite_only",
+    });
+  }
+
+  async function bindSlackChannel(teamId: string) {
+    await env.DB.prepare(
+      "INSERT INTO team_channel_bindings (provider, external_id, team_id, kind, created_at) VALUES ('slack', 'C1', ?, 'source', ?)"
+    )
+      .bind(teamId, Date.now())
+      .run();
+  }
+
   it("conceals a team session on read and token mint when enforcement is on", async () => {
     const { sessionName, team } = await session("team");
     const as = { userId: MEMBER, role: "member" } as const;
@@ -102,16 +118,8 @@ describe("HTTP session access by enforcement mode", () => {
 
   it("uses the signed Slack channel binding for actorless event reads", async () => {
     const { sessionName, team } = await session("team");
-    const other = await new TeamStore(env.DB).create({
-      slug: "other",
-      name: "Other",
-      joinPolicy: "invite_only",
-    });
-    await env.DB.prepare(
-      "INSERT INTO team_channel_bindings (provider, external_id, team_id, kind, created_at) VALUES ('slack', 'C1', ?, 'source', ?)"
-    )
-      .bind(other.id, Date.now())
-      .run();
+    const other = await otherTeam();
+    await bindSlackChannel(other.id);
     const runtime = vi.spyOn(env.SESSION, "get");
     const hidden = await fetchMode(`/sessions/${sessionName}/events?channel=slack:C1`, "on", {
       service: "slack-bot",
@@ -141,11 +149,7 @@ describe("HTTP session access by enforcement mode", () => {
 
   it("keeps a participant's concealed prompt separate from trusted channel publication access", async () => {
     const { sessionName, team } = await session("team");
-    await env.DB.prepare(
-      "INSERT INTO team_channel_bindings (provider, external_id, team_id, kind, created_at) VALUES ('slack', 'C1', ?, 'source', ?)"
-    )
-      .bind(team.id, Date.now())
-      .run();
+    await bindSlackChannel(team.id);
     const denied = await fetchMode(`/sessions/${sessionName}/prompt`, "on", {
       as: { userId: MEMBER, role: "member" },
       method: "POST",
@@ -183,16 +187,8 @@ describe("HTTP session access by enforcement mode", () => {
     "retains %s semantics for channel-scoped service reads",
     async (mode) => {
       const { sessionName } = await session("team");
-      const other = await new TeamStore(env.DB).create({
-        slug: "other",
-        name: "Other",
-        joinPolicy: "invite_only",
-      });
-      await env.DB.prepare(
-        "INSERT INTO team_channel_bindings (provider, external_id, team_id, kind, created_at) VALUES ('slack', 'C1', ?, 'source', ?)"
-      )
-        .bind(other.id, Date.now())
-        .run();
+      const other = await otherTeam();
+      await bindSlackChannel(other.id);
       expect(
         (
           await fetchMode(`/sessions/${sessionName}/events?channel=slack:C1`, mode, {
@@ -207,16 +203,8 @@ describe("HTTP session access by enforcement mode", () => {
     "blocks queued Slack publication after channel rebinding in %s mode",
     async (mode) => {
       const { sessionName, team } = await session("workspace");
-      const other = await new TeamStore(env.DB).create({
-        slug: "other",
-        name: "Other",
-        joinPolicy: "invite_only",
-      });
-      await env.DB.prepare(
-        "INSERT INTO team_channel_bindings (provider, external_id, team_id, kind, created_at) VALUES ('slack', 'C1', ?, 'source', ?)"
-      )
-        .bind(team.id, Date.now())
-        .run();
+      const other = await otherTeam();
+      await bindSlackChannel(team.id);
       const path = `/sessions/${sessionName}/events?channel=slack:C1&purpose=slack-post`;
       expect((await fetchMode(path, mode, { service: "slack-bot" })).status).toBe(200);
       await env.DB.prepare(

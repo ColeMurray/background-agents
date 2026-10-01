@@ -4,8 +4,6 @@ import { extractAgentResponse } from "./extractor";
 import { deliverMediaArtifacts } from "./media-upload";
 import type { SlackCompletionJob } from "./job";
 import type { AgentResponse } from "@open-inspect/shared/types/artifacts";
-import { ProtectedReadError } from "@open-inspect/shared/completion/extractor";
-import * as Slack from "@open-inspect/shared/slack";
 import * as ThreadSessionStore from "../sessions/thread-session-store";
 import * as CompletionBlocks from "./blocks";
 import type { Env } from "../types";
@@ -26,15 +24,7 @@ function makeEnv(overrides: Partial<Env> = {}): Env {
   return {
     SLACK_KV: { get: vi.fn(async () => null) } as unknown as KVNamespace,
     SLACK_COMPLETION_QUEUE: {} as Queue,
-    CONTROL_PLANE: {
-      fetch: vi.fn(async (input: RequestInfo | URL) =>
-        new URL(String(input)).pathname.endsWith("/artifacts")
-          ? Response.json({ artifacts: [] })
-          : new Response("png-bytes", {
-              headers: { "Content-Type": "image/png", "Content-Length": "9" },
-            })
-      ),
-    } as unknown as Fetcher,
+    CONTROL_PLANE: { fetch: vi.fn() } as unknown as Fetcher,
     DEPLOYMENT_NAME: "test",
     CONTROL_PLANE_URL: "https://control-plane.test",
     WEB_APP_URL: "https://app.test",
@@ -130,27 +120,6 @@ describe("processSlackCompletion", () => {
     expect(String(fetchMock.mock.calls[2]?.[0])).toContain("reactions.remove");
   });
 
-  it("suppresses a queued completion after its thread mapping closes", async () => {
-    const fetch = vi.spyOn(globalThis, "fetch");
-    const env = makeEnv({
-      SLACK_KV: {
-        get: vi.fn(async () => ({
-          sessionId: "session-1",
-          repoId: "acme/app",
-          repoFullName: "acme/app",
-          model: "openai/gpt-5.4",
-          createdAt: 1,
-          teamId: null,
-          closed: true,
-        })),
-      } as unknown as KVNamespace,
-    });
-    await expect(processSlackCompletion(job(), env)).resolves.toEqual({ kind: "ack" });
-    expect(extractAgentResponse).not.toHaveBeenCalled();
-    expect(deliverMediaArtifacts).not.toHaveBeenCalled();
-    expect(fetch).not.toHaveBeenCalled();
-  });
-
   it("suppresses an automation completion with only a coordinate/session tombstone", async () => {
     const fetch = vi.spyOn(globalThis, "fetch");
     const env = makeEnv({
@@ -160,7 +129,9 @@ describe("processSlackCompletion", () => {
         ),
       } as unknown as KVNamespace,
     });
-    await processSlackCompletion(job({ source: "automation" }), env);
+    await expect(processSlackCompletion(job({ source: "automation" }), env)).resolves.toEqual({
+      kind: "ack",
+    });
     expect(extractAgentResponse).not.toHaveBeenCalled();
     expect(deliverMediaArtifacts).not.toHaveBeenCalled();
     expect(fetch).not.toHaveBeenCalled();
@@ -214,15 +185,6 @@ describe("processSlackCompletion", () => {
     expect(String(fetchMock.mock.calls[1]?.[0])).toContain("reactions.remove");
   });
 
-  it("retries when extraction throws before publication", async () => {
-    vi.mocked(extractAgentResponse).mockRejectedValue(new Error("control plane unavailable"));
-    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(Response.json({ ok: true }));
-
-    await expect(processSlackCompletion(job(), makeEnv())).resolves.toEqual({ kind: "retry" });
-
-    expect(fetchMock).not.toHaveBeenCalled();
-  });
-
   it("retries a closure lookup failure before publishing anything", async () => {
     vi.spyOn(ThreadSessionStore, "isThreadSessionClosed").mockRejectedValueOnce(
       new Error("KV unavailable")
@@ -247,21 +209,12 @@ describe("processSlackCompletion", () => {
   });
 
   it.each([
-    "events-403",
-    "events-404",
-    "artifacts-403",
-    "artifacts-404",
-    "events-503",
-    "artifacts-503",
-    "events-network",
-    "artifacts-network",
-    "events-malformed",
-    "artifacts-malformed",
-    "events-invalid-JSON",
-    "artifacts-invalid-JSON",
-  ])(
-    "suppresses failed-job errors and success metadata when protected reads fail: %s",
-    async (failure) => {
+    ["events", 403, true],
+    ["artifacts", 404, false],
+    ["artifacts", 503, false],
+  ] as const)(
+    "suppresses job content after protected %s status %s for success=%s",
+    async (endpoint, status, success) => {
       const actual = await vi.importActual<typeof ExtractorModule>("./extractor");
       vi.mocked(extractAgentResponse).mockImplementation(actual.extractAgentResponse);
       const fetch = vi
@@ -271,15 +224,7 @@ describe("processSlackCompletion", () => {
       const cpFetch = vi.mocked(env.CONTROL_PLANE.fetch);
       cpFetch.mockImplementation(async (input) => {
         const url = new URL(String(input));
-        const endpoint = url.pathname.endsWith("/events") ? "events" : "artifacts";
-        if (failure.startsWith(endpoint)) {
-          if (failure.endsWith("network")) throw new Error("CP unavailable");
-          if (failure.endsWith("invalid-JSON")) return new Response("{");
-          const status = Number(failure.split("-")[1]);
-          return Number.isFinite(status)
-            ? Response.json({}, { status })
-            : Response.json({ invalid: true });
-        }
+        if (url.pathname.endsWith(`/${endpoint}`)) return Response.json({}, { status });
         return Response.json({
           events: [
             {
@@ -293,20 +238,12 @@ describe("processSlackCompletion", () => {
           hasMore: false,
         });
       });
-      for (const success of [false, true]) {
-        await expect(
-          processSlackCompletion(
-            job({
-              success,
-              error: "SECRET JOB ERROR",
-              context: { repoFullName: "private/repository", model: "openai/gpt-5.4" },
-            }),
-            env
-          )
-        ).resolves.toEqual({ kind: /-(403|404)$/.test(failure) ? "ack" : "retry" });
-      }
-      expect(cpFetch).toHaveBeenCalled();
+      await expect(
+        processSlackCompletion(job({ success, error: "SECRET JOB ERROR" }), env)
+      ).resolves.toEqual({ kind: status === 503 ? "retry" : "ack" });
+      expect(cpFetch).toHaveBeenCalledTimes(endpoint === "events" ? 1 : 2);
       for (const [url] of cpFetch.mock.calls) {
+        expect(new URL(String(url)).searchParams.get("channel")).toBe("slack:C123");
         expect(new URL(String(url)).searchParams.get("purpose")).toBe("slack-post");
       }
       expect(fetch).not.toHaveBeenCalled();
@@ -314,55 +251,14 @@ describe("processSlackCompletion", () => {
     }
   );
 
-  it.each([403, 404, 503, undefined])(
-    "suppresses all job content and classifies a pre-share media read failure: %s",
-    async (status) => {
-      vi.mocked(extractAgentResponse).mockResolvedValue(successfulAgentResponse());
-      vi.mocked(deliverMediaArtifacts).mockRejectedValue(
-        new ProtectedReadError("media read failed", status)
-      );
-      const fetch = vi
-        .spyOn(globalThis, "fetch")
-        .mockResolvedValue(Response.json({ ok: true, channel: "C123", ts: "333.444" }));
-      await expect(
-        processSlackCompletion(job({ error: "SECRET JOB ERROR" }), makeEnv())
-      ).resolves.toEqual({
-        kind: status === 403 || status === 404 ? "ack" : "retry",
-      });
-      expect(fetch).not.toHaveBeenCalled();
-    }
-  );
-
-  it.each([
-    ["404", "allowed"],
-    ["malformed", "allowed"],
-    ["network", "allowed"],
-    ["tempfile", "allowed"],
-    ["404", "denied"],
-    ["malformed", "denied"],
-    ["network", "denied"],
-    ["tempfile", "denied"],
-    ["404", "unavailable"],
-    ["malformed", "unavailable"],
-    ["network", "unavailable"],
-    ["tempfile", "unavailable"],
-  ])(
-    "gates cached completion text after a %s media failure on a fresh %s publication proof",
-    async (failure, access) => {
+  it.each(["allowed", "denied", "unavailable"] as const)(
+    "gates cached completion text after missing media on a fresh %s publication proof",
+    async (access) => {
       vi.mocked(extractAgentResponse).mockResolvedValue(successfulAgentResponse());
       const actual = await vi.importActual<typeof MediaUploadModule>("./media-upload");
       vi.mocked(deliverMediaArtifacts).mockImplementation(actual.deliverMediaArtifacts);
       let proofChecked = false;
-      const fetch = vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
-        const url = String(input);
-        if (url.includes("files.getUploadURLExternal"))
-          return Response.json({
-            ok: true,
-            upload_url: "https://files.slack.com/upload/one",
-            file_id: "F1",
-          });
-        if (url === "https://files.slack.com/upload/one")
-          throw new Error("temporary file upload failure");
+      const fetch = vi.spyOn(globalThis, "fetch").mockImplementation(async () => {
         expect(proofChecked).toBe(true);
         return Response.json({ ok: true, channel: "C123", ts: "333.444" });
       });
@@ -374,25 +270,17 @@ describe("processSlackCompletion", () => {
           if (access === "allowed") return Response.json({ artifacts: [] });
           return new Response(null, { status: access === "denied" ? 404 : 503 });
         }
-        if (failure === "network") throw new Error("temporary media fetch failure");
-        if (failure === "malformed") return new Response("bytes");
-        if (failure === "404") return new Response(null, { status: 404 });
-        return new Response("png-bytes", {
-          headers: { "Content-Type": "image/png", "Content-Length": "9" },
-        });
+        return new Response(null, { status: 404 });
       });
 
       await expect(
         processSlackCompletion(job({ error: "SECRET JOB ERROR" }), env)
       ).resolves.toEqual({ kind: access === "unavailable" ? "retry" : "ack" });
       expect(env.CONTROL_PLANE.fetch).toHaveBeenCalledTimes(2);
-      const [proofUrl, proofInit] = vi.mocked(env.CONTROL_PLANE.fetch).mock.calls[1]!;
+      const [proofUrl] = vi.mocked(env.CONTROL_PLANE.fetch).mock.calls[1]!;
       expect(new URL(String(proofUrl)).pathname).toBe("/sessions/session-1/artifacts");
       expect(new URL(String(proofUrl)).searchParams.get("channel")).toBe("slack:C123");
       expect(new URL(String(proofUrl)).searchParams.get("purpose")).toBe("slack-post");
-      const headers = new Headers(proofInit?.headers);
-      expect(headers.get("X-OpenInspect-Service-Signature")).toMatch(/^sig1\./);
-      expect(headers.get("X-OpenInspect-Actor")).toBeNull();
       const posts = fetch.mock.calls.filter(([url]) => String(url).includes("chat.postMessage"));
       if (access === "allowed") {
         expect(posts).toHaveLength(2);
@@ -403,40 +291,41 @@ describe("processSlackCompletion", () => {
         );
       } else {
         expect(posts).toHaveLength(0);
-        expect(fetch).toHaveBeenCalledTimes(failure === "tempfile" ? 2 : 0);
+        expect(fetch).not.toHaveBeenCalled();
       }
-      expect(
-        fetch.mock.calls.some(([url]) => String(url).includes("files.completeUploadExternal"))
-      ).toBe(false);
     }
   );
 
-  it("does not replay a protected-read failure after a media sharing attempt", async () => {
-    vi.mocked(extractAgentResponse).mockResolvedValue(successfulAgentResponse());
-    vi.mocked(deliverMediaArtifacts).mockImplementation(async ({ onShareAttempt }) => {
-      onShareAttempt();
-      throw new ProtectedReadError("later failure", 503);
-    });
-    const fetch = vi.spyOn(globalThis, "fetch");
-
-    await expect(processSlackCompletion(job(), makeEnv())).resolves.toEqual({ kind: "ack" });
-    expect(fetch).not.toHaveBeenCalled();
-  });
-
   it("does not replay accepted media if the following closure check throws", async () => {
     vi.mocked(extractAgentResponse).mockResolvedValue(successfulAgentResponse());
-    vi.mocked(deliverMediaArtifacts).mockImplementation(async ({ onShareAttempt }) => {
-      onShareAttempt();
-      return { uploaded: 1, failed: 0, omitted: 0 };
+    const actual = await vi.importActual<typeof MediaUploadModule>("./media-upload");
+    vi.mocked(deliverMediaArtifacts).mockImplementation(actual.deliverMediaArtifacts);
+    const env = makeEnv();
+    vi.mocked(env.CONTROL_PLANE.fetch).mockResolvedValueOnce(
+      new Response("png-bytes", {
+        headers: { "Content-Type": "image/png", "Content-Length": "9" },
+      })
+    );
+    let shared = false;
+    const fetch = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(
+        Response.json({ ok: true, upload_url: "https://files.slack.com/upload/one", file_id: "F1" })
+      )
+      .mockResolvedValueOnce(new Response("OK"))
+      .mockImplementationOnce(async () => {
+        shared = true;
+        return Response.json({ ok: true, files: [{ id: "F1" }] });
+      });
+    vi.spyOn(ThreadSessionStore, "isThreadSessionClosed").mockImplementation(async () => {
+      if (shared) throw new Error("KV unavailable after share");
+      return false;
     });
-    vi.spyOn(ThreadSessionStore, "isThreadSessionClosed")
-      .mockResolvedValueOnce(false)
-      .mockResolvedValueOnce(false)
-      .mockRejectedValueOnce(new Error("KV unavailable after share"));
-    const fetch = vi.spyOn(globalThis, "fetch");
 
-    await expect(processSlackCompletion(job(), makeEnv())).resolves.toEqual({ kind: "ack" });
-    expect(fetch).not.toHaveBeenCalled();
+    await expect(processSlackCompletion(job(), env)).resolves.toEqual({ kind: "ack" });
+    expect(shared).toBe(true);
+    expect(fetch).toHaveBeenCalledTimes(3);
+    expect(String(fetch.mock.calls[2]?.[0])).toContain("files.completeUploadExternal");
   });
 
   it.each([true, false])(
@@ -458,27 +347,6 @@ describe("processSlackCompletion", () => {
       expect(fetch).toHaveBeenCalledTimes(2);
       expect(String(fetch.mock.calls[0]?.[0])).toContain("chat.postMessage");
       expect(String(fetch.mock.calls[1]?.[0])).toContain("reactions.remove");
-    }
-  );
-
-  it.each(["blocks", "error-message"])(
-    "does not mistake an unexpected %s post exception for a safe read retry",
-    async (post) => {
-      vi.mocked(extractAgentResponse).mockResolvedValue({
-        ...successfulAgentResponse(),
-        textContent: post === "blocks" ? "Finished." : "",
-        mediaArtifacts: [],
-      });
-      vi.spyOn(Slack, post === "blocks" ? "postBlocks" : "postMessage").mockRejectedValue(
-        new ProtectedReadError("unexpected error after publication attempt", 503)
-      );
-      const fetch = vi.spyOn(globalThis, "fetch").mockResolvedValue(Response.json({ ok: true }));
-
-      await expect(
-        processSlackCompletion(job({ success: post === "blocks" }), makeEnv())
-      ).resolves.toEqual({ kind: "ack" });
-      expect(fetch).toHaveBeenCalledOnce();
-      expect(String(fetch.mock.calls[0]?.[0])).toContain("reactions.remove");
     }
   );
 

@@ -177,6 +177,7 @@ describe("startSessionAndSendPrompt", () => {
         channel: "C123",
         threadTs: "111.222",
         messageText: "Fix the failing deploy",
+        teamId: "team-a",
         actor,
         previousMessages: ["[Alice]: Earlier request", "[Bot]: Earlier response"],
         channelName: "engineering",
@@ -192,7 +193,7 @@ describe("startSessionAndSendPrompt", () => {
     expect(getUserRepoBranchPreference).toHaveBeenCalledWith(env, "U123", "acme/app");
     expect(createSession).toHaveBeenCalledWith(env, {
       target: repositoryTarget,
-      teamId: undefined,
+      teamId: "team-a",
       model: "openai/gpt-5.4",
       reasoningEffort: "high",
       branch: "repo-override-branch",
@@ -228,7 +229,7 @@ describe("startSessionAndSendPrompt", () => {
       "openai/gpt-5.4",
       "high",
       undefined,
-      undefined
+      "team-a"
     );
     expect(storeThreadSession).toHaveBeenCalledWith(env, "C123", "111.222", {
       sessionId: "session-1",
@@ -239,30 +240,6 @@ describe("startSessionAndSendPrompt", () => {
       createdAt: 123,
     });
   });
-
-  it.each(["team-a", null])(
-    "passes team scope %s through launch and thread persistence",
-    async (teamId) => {
-      const env = makeEnv();
-      await startSessionAndSendPrompt(env, {
-        target: repositoryTarget,
-        channel: "C123",
-        threadTs: "111.222",
-        messageText: "Fix it",
-        actor,
-        teamId,
-      });
-      expect(createSession).toHaveBeenCalledWith(env, expect.objectContaining({ teamId }));
-      expect(buildThreadSession).toHaveBeenCalledWith(
-        "session-1",
-        repositoryTarget,
-        "openai/gpt-5.4",
-        "high",
-        undefined,
-        teamId
-      );
-    }
-  );
 
   it("adopts combined model and reasoning flags as the new session's defaults", async () => {
     const env = makeEnv();
@@ -488,13 +465,14 @@ describe("startSessionAndSendPrompt", () => {
       channel: "C123",
       threadTs: "111.222",
       messageText: "Research this without cloning a repository",
+      teamId: null,
       actor,
     });
 
     expect(getUserRepoBranchPreference).not.toHaveBeenCalled();
     expect(createSession).toHaveBeenCalledWith(
       env,
-      expect.objectContaining({ target: noRepositoryTarget, branch: undefined })
+      expect.objectContaining({ target: noRepositoryTarget, branch: undefined, teamId: null })
     );
     expect(deliverPrompt).toHaveBeenCalledWith(
       env,
@@ -508,7 +486,7 @@ describe("startSessionAndSendPrompt", () => {
       "openai/gpt-5.4",
       "high",
       undefined,
-      undefined
+      null
     );
   });
 

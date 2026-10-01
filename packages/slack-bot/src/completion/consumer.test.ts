@@ -1,5 +1,4 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { ProtectedReadError } from "@open-inspect/shared/completion/extractor";
 import { consumeSlackCompletions } from "./consumer";
 import { processSlackCompletion } from "./delivery";
 import type { SlackCompletionJob } from "./job";
@@ -87,15 +86,6 @@ describe("consumeSlackCompletions", () => {
     expect(input.message.ack).not.toHaveBeenCalled();
   });
 
-  it("does not infer replay safety from an unclassified return", async () => {
-    const input = batch(job());
-
-    await consumeSlackCompletions(input as unknown as MessageBatch<unknown>, makeEnv());
-
-    expect(input.message.ack).toHaveBeenCalledOnce();
-    expect(input.message.retry).not.toHaveBeenCalled();
-  });
-
   it("acknowledges invalid jobs without processing them", async () => {
     const input = batch({ version: 99 });
 
@@ -105,16 +95,13 @@ describe("consumeSlackCompletions", () => {
     expect(input.message.ack).toHaveBeenCalledOnce();
   });
 
-  it.each([new Error("unexpected"), new ProtectedReadError("stage unknown", 503)])(
-    "acknowledges unhandled %s instead of assuming replay safety",
-    async (error) => {
-      vi.mocked(processSlackCompletion).mockRejectedValue(error);
-      const input = batch(job());
+  it("acknowledges unhandled errors instead of assuming replay safety", async () => {
+    vi.mocked(processSlackCompletion).mockRejectedValue(new Error("unexpected"));
+    const input = batch(job());
 
-      await consumeSlackCompletions(input as unknown as MessageBatch<unknown>, makeEnv());
+    await consumeSlackCompletions(input as unknown as MessageBatch<unknown>, makeEnv());
 
-      expect(input.message.ack).toHaveBeenCalledOnce();
-      expect(input.message.retry).not.toHaveBeenCalled();
-    }
-  );
+    expect(input.message.ack).toHaveBeenCalledOnce();
+    expect(input.message.retry).not.toHaveBeenCalled();
+  });
 });

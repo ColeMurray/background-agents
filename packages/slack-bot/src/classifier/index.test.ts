@@ -112,24 +112,6 @@ describe("RepoClassifier", () => {
     mockBuildRepoDescriptions.mockReturnValue("- acme/prod\n- acme/web");
   });
 
-  it("resolves global routing rules only against the scoped catalog", async () => {
-    mockGetAvailableRepos.mockResolvedValue([TEST_REPOS[0]]);
-    mockGetRoutingRules.mockResolvedValue([
-      { keyword: "fix", target: "acme/web" },
-      { keyword: "fix", target: "acme/prod" },
-    ]);
-    const result = await new RepoClassifier(TEST_ENV).classify(
-      "fix this",
-      { channelId: "C1", teamId: "team-a" },
-      "trace"
-    );
-    expect(classifiedRepoFullName(result)).toBe("acme/prod");
-    expect(mockGetAvailableRepos).toHaveBeenCalledWith(TEST_ENV, "trace", "team-a");
-    expect(mockGetAvailableEnvironments).toHaveBeenCalledWith(TEST_ENV, "trace", "team-a");
-    expect(mockGetRoutingRules).toHaveBeenCalledWith(TEST_ENV, "trace");
-    expect(mockMessagesCreate).not.toHaveBeenCalled();
-  });
-
   it("uses tool output when provider returns valid structured classification", async () => {
     mockMessagesCreate.mockResolvedValue({
       content: [
@@ -270,15 +252,26 @@ describe("RepoClassifier", () => {
 
   describe("routing rules", () => {
     it("routes deterministically when a keyword matches, without calling the LLM", async () => {
-      mockGetRoutingRules.mockResolvedValue([{ keyword: "frontend", target: "acme/web" }]);
+      mockGetAvailableRepos.mockResolvedValue([TEST_REPOS[1]]);
+      mockGetRoutingRules.mockResolvedValue([
+        { keyword: "frontend", target: "acme/prod" },
+        { keyword: "frontend", target: "acme/web" },
+      ]);
 
       const classifier = new RepoClassifier(TEST_ENV);
-      const result = await classifier.classify("please fix the frontend nav bug", undefined, "t");
+      const result = await classifier.classify(
+        "please fix the frontend nav bug",
+        { teamId: "team-a", channelId: "C1" },
+        "t"
+      );
 
       expect(classifiedRepoFullName(result)).toBe("acme/web");
       expect(result.confidence).toBe("high");
       expect(result.needsClarification).toBe(false);
       expect(result.reasoning).toContain("routing rule");
+      expect(mockGetAvailableRepos).toHaveBeenCalledWith(TEST_ENV, "t", "team-a");
+      expect(mockGetAvailableEnvironments).toHaveBeenCalledWith(TEST_ENV, "t", "team-a");
+      expect(mockGetRoutingRules).toHaveBeenCalledWith(TEST_ENV, "t");
       expect(mockMessagesCreate).not.toHaveBeenCalled();
     });
 

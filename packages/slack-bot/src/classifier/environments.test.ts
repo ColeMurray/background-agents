@@ -60,6 +60,7 @@ describe("getAvailableEnvironments", () => {
     expect((await getAvailableEnvironments(env, "trace", "team-a"))[0].name).toBe("team-a");
     expect((await getAvailableEnvironments(env, "trace", "team-b"))[0].name).toBe("team-b");
     await getAvailableEnvironments(env, "trace", "team-a");
+    expect((await getAvailableEnvironments(env, "trace", null))[0].name).toBe("workspace");
     expect(fetch).toHaveBeenCalledTimes(3);
     expect(env.SLACK_KV.put).toHaveBeenCalledWith(
       "slack:environments:team:team-a",
@@ -77,24 +78,27 @@ describe("getAvailableEnvironments", () => {
     expect((await getAvailableEnvironments(env, "trace", "team-a"))[0].name).toBe("team-a");
     expect((await getAvailableEnvironments(env, "trace", "team-b"))[0].name).toBe("team-b");
     expect(await getAvailableEnvironments(env, "trace", "team-c")).toEqual([]);
+    expect(await getAvailableEnvironments(env, "trace", null)).toEqual(
+      stored.get("slack:environments")
+    );
     expect(env.SLACK_KV.get).toHaveBeenCalledWith("slack:environments:team:team-a", "json");
+    expect(env.SLACK_KV.get).toHaveBeenCalledWith("slack:environments", "json");
+    clearEnvironmentsLocalCache();
+    vi.mocked(env.SLACK_KV.get).mockRejectedValueOnce(new Error("KV unavailable"));
+    expect(await getAvailableEnvironments(env, "trace", "team-a")).toEqual([]);
   });
 
-  it("parses environments from the control-plane response", async () => {
+  it("parses environments and retains memory even if the KV write fails", async () => {
     const env = makeEnv(jsonResponse({ environments: [TEST_ENVIRONMENT], total: 1 }));
-    expect(await getAvailableEnvironments(env, "trace")).toEqual([TEST_ENVIRONMENT]);
+    vi.mocked(env.SLACK_KV.put).mockRejectedValueOnce(new Error("KV unavailable"));
+    expect(await getAvailableEnvironments(env, "trace", "team-a")).toEqual([TEST_ENVIRONMENT]);
+    expect(await getAvailableEnvironments(env, "trace", "team-a")).toEqual([TEST_ENVIRONMENT]);
+    expect(env.CONTROL_PLANE.fetch).toHaveBeenCalledTimes(1);
   });
 
   it("fails open when the control-plane response is malformed", async () => {
     const env = makeEnv(jsonResponse({ environments: [{ id: "env_bad" }], total: 1 }));
     expect(await getAvailableEnvironments(env, "trace")).toEqual([]);
-  });
-
-  it("serves the in-memory cache without refetching", async () => {
-    const env = makeEnv(jsonResponse({ environments: [TEST_ENVIRONMENT], total: 1 }));
-    await getAvailableEnvironments(env);
-    await getAvailableEnvironments(env);
-    expect(env.CONTROL_PLANE.fetch).toHaveBeenCalledTimes(1);
   });
 
   it("fails open to an empty list on a non-OK response", async () => {
@@ -105,21 +109,6 @@ describe("getAvailableEnvironments", () => {
   it("fails open to an empty list when the fetch throws", async () => {
     const env = makeEnv(new Error("control plane unreachable"));
     expect(await getAvailableEnvironments(env)).toEqual([]);
-  });
-
-  it("falls back to the KV cache when the control plane is down", async () => {
-    const env = {
-      SLACK_KV: {
-        get: vi.fn().mockResolvedValue([TEST_ENVIRONMENT]),
-        put: vi.fn().mockResolvedValue(undefined),
-      },
-      CONTROL_PLANE: {
-        fetch: vi.fn().mockResolvedValue(new Response("error", { status: 500 })),
-      },
-      SERVICE_AUTH_SECRET: "test-secret",
-    } as unknown as Env;
-
-    expect(await getAvailableEnvironments(env, "trace")).toEqual([TEST_ENVIRONMENT]);
   });
 
   it("ignores malformed environments in the KV fallback", async () => {

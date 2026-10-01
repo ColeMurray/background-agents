@@ -76,17 +76,17 @@ describe("deliverPrompt", () => {
     expect(sendOrder).toBeLessThan(notifyOrder);
   });
 
-  it("does not notify drops when the prompt send fails", async () => {
+  it.each(["stale", "forbidden"] as const)("propagates %s send failure", async (reason) => {
     vi.mocked(uploadPreparedAttachments).mockResolvedValue({
       references: [],
       dropped: ["download_failed"],
       sessionMissing: false,
     });
-    vi.mocked(sendPrompt).mockResolvedValue({ ok: false, reason: "stale" });
+    vi.mocked(sendPrompt).mockResolvedValue({ ok: false, reason });
 
     const result = await deliverPrompt(env, options());
 
-    expect(result).toEqual({ ok: false, reason: "stale" });
+    expect(result).toEqual({ ok: false, reason });
     expect(notifyDroppedAttachments).not.toHaveBeenCalled();
   });
 
@@ -110,31 +110,19 @@ describe("deliverPrompt", () => {
     );
   });
 
-  it("surfaces staleness instead of a drop notice when the session is gone", async () => {
+  it.each([
+    ["stale", { sessionMissing: true }],
+    ["forbidden", { sessionMissing: false, sessionForbidden: true }],
+  ] as const)("propagates %s upload refusal", async (reason, refusal) => {
     vi.mocked(uploadPreparedAttachments).mockResolvedValue({
       references: [],
       dropped: ["upload_rejected"],
-      sessionMissing: true,
+      ...refusal,
     });
 
     const result = await deliverPrompt(env, options({ imageOnly: true }));
 
-    expect(result).toEqual({ ok: false, reason: "stale" });
-    expect(sendPrompt).not.toHaveBeenCalled();
-    expect(notifyDroppedAttachments).not.toHaveBeenCalled();
-  });
-
-  it("surfaces attachment access denial without sending a prompt or posting drop notices", async () => {
-    vi.mocked(uploadPreparedAttachments).mockResolvedValue({
-      references: [],
-      dropped: ["upload_rejected"],
-      sessionMissing: false,
-      sessionForbidden: true,
-    });
-    expect(await deliverPrompt(env, options({ imageOnly: true }))).toEqual({
-      ok: false,
-      reason: "forbidden",
-    });
+    expect(result).toEqual({ ok: false, reason });
     expect(sendPrompt).not.toHaveBeenCalled();
     expect(notifyDroppedAttachments).not.toHaveBeenCalled();
   });

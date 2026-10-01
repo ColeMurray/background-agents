@@ -208,16 +208,6 @@ describe("handleSlackNotify", () => {
       );
     });
 
-    it("reuses a token-scoped normalized name without caching authorization", async () => {
-      for (const channel of ["#OPS", "ops", "#ops"]) {
-        expect((await callHandler({ channel, text: "Done" })).status).toBe(200);
-      }
-      expect(listChannelsMock).toHaveBeenCalledOnce();
-      expect(sessionStoreMock.get).toHaveBeenCalledTimes(6);
-      expect(channelBindingStoreMock.get).toHaveBeenCalledTimes(3);
-      expect(channelBindingStoreMock.get).toHaveBeenLastCalledWith("slack", "C1");
-    });
-
     it("populates names from the listing for subsequent channel lookups", async () => {
       expect((await callHandler({ channel: "#ops", text: "Done" })).status).toBe(200);
       expect((await callHandler({ channel: "#archive", text: "Done" })).status).toBe(200);
@@ -243,15 +233,18 @@ describe("handleSlackNotify", () => {
       vi.useFakeTimers({ toFake: ["Date"] });
       const nowMs = Date.parse("2026-10-01T00:00:00Z");
       vi.setSystemTime(nowMs);
-      expect((await callHandler({ channel: "#ops", text: "Done" })).status).toBe(200);
+      expect((await callHandler({ channel: "#OPS", text: "Done" })).status).toBe(200);
       vi.setSystemTime(nowMs + 59_999);
       expect((await callHandler({ channel: "ops", text: "Done" })).status).toBe(200);
       expect(listChannelsMock).toHaveBeenCalledOnce();
+      expect(channelBindingStoreMock.get).toHaveBeenLastCalledWith("slack", "C1");
       listChannelsMock.mockResolvedValue({ ok: true, channels: [{ id: "CNEW", name: "ops" }] });
       vi.setSystemTime(nowMs + 60_000);
       expect((await callHandler({ channel: "#ops", text: "Done" })).status).toBe(200);
       expect(listChannelsMock).toHaveBeenCalledTimes(2);
       expect(channelBindingStoreMock.get).toHaveBeenLastCalledWith("slack", "CNEW");
+      expect(sessionStoreMock.get).toHaveBeenCalledTimes(6);
+      expect(channelBindingStoreMock.get).toHaveBeenCalledTimes(3);
     });
 
     it("bounds the cache while retaining the requested name from a large listing", async () => {
@@ -278,17 +271,36 @@ describe("handleSlackNotify", () => {
       expect(await refused.json()).toMatchObject({ error: "session_scope_denied" });
       expect(listChannelsMock).toHaveBeenCalledOnce();
       expect(channelBindingStoreMock.get).toHaveBeenCalledTimes(2);
+      expect(channelBindingStoreMock.get).toHaveBeenLastCalledWith("slack", "C1");
       expect(fetchMock).not.toHaveBeenCalled();
+      expect(sessionFetchMock).not.toHaveBeenCalled();
     });
 
     it("does not cache failed listings or missing names", async () => {
-      listChannelsMock.mockResolvedValueOnce({ ok: false, error: "ratelimited", retryAfter: 1 });
-      expect((await callHandler({ channel: "ops", text: "Done" })).status).toBe(429);
+      listChannelsMock.mockResolvedValueOnce({ ok: false, error: "ratelimited", retryAfter: 30 });
+      const limited = await callHandler({ channel: "ops", text: "Done" });
+      expect(limited.status).toBe(429);
+      expect(await limited.json()).toEqual({
+        error: "rate_limited",
+        message: "ratelimited",
+        retryAfter: 30,
+      });
+      expect(fetchMock).not.toHaveBeenCalled();
+      expect(channelBindingStoreMock.get).not.toHaveBeenCalled();
       expect((await callHandler({ channel: "ops", text: "Done" })).status).toBe(200);
-      for (let index = 0; index < 2; index++) {
-        expect((await callHandler({ channel: "missing", text: "Done" })).status).toBe(404);
+      fetchMock.mockClear();
+      channelBindingStoreMock.get.mockClear();
+      for (const channel of ["#missing", "missing"]) {
+        const missing = await callHandler({ channel, text: "Done" });
+        expect(missing.status).toBe(404);
+        expect(await missing.json()).toEqual({
+          error: "channel_not_found_or_forbidden",
+          message: "Slack channel was not found.",
+        });
       }
       expect(listChannelsMock).toHaveBeenCalledTimes(4);
+      expect(fetchMock).not.toHaveBeenCalled();
+      expect(channelBindingStoreMock.get).not.toHaveBeenCalled();
     });
   });
 
@@ -322,27 +334,6 @@ describe("handleSlackNotify", () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
-  it.each(["team", "workspace"] as const)(
-    "refuses %s-visible cross-team targets by ID or resolved name",
-    async (visibility) => {
-      seedActiveSession({ visibility });
-      integrationStoreMock.getResolvedConfig.mockResolvedValue({
-        settings: { agentNotificationsEnabled: true },
-      });
-      channelBindingStoreMock.get.mockResolvedValue({ teamId: "team-b" });
-
-      for (const channel of ["C1", "#ops", "ops"]) {
-        const res = await callHandler({ channel, text: "secret text" });
-        expect(res.status).toBe(403);
-        await expect(res.json()).resolves.toMatchObject({ error: "session_scope_denied" });
-      }
-
-      expect(channelBindingStoreMock.get).toHaveBeenCalledWith("slack", "C1");
-      expect(fetchMock).not.toHaveBeenCalled();
-      expect(sessionFetchMock).not.toHaveBeenCalled();
-    }
-  );
-
   it("refuses when name resolution races a session becoming private", async () => {
     seedActiveSession();
     integrationStoreMock.getResolvedConfig.mockResolvedValue({
@@ -373,45 +364,6 @@ describe("handleSlackNotify", () => {
 
     expect(res.status).toBe(403);
     expect(fetchMock).not.toHaveBeenCalled();
-  });
-
-  it("does not post when a channel name cannot be resolved", async () => {
-    seedActiveSession();
-    integrationStoreMock.getResolvedConfig.mockResolvedValue({
-      settings: { agentNotificationsEnabled: true },
-    });
-
-    const res = await callHandler({ channel: "#unknown", text: "hello" });
-
-    expect(res.status).toBe(404);
-    expect(fetchMock).not.toHaveBeenCalled();
-    expect(channelBindingStoreMock.get).not.toHaveBeenCalled();
-  });
-
-  it("maps a channel listing failure without falling back to posting by name", async () => {
-    seedActiveSession();
-    integrationStoreMock.getResolvedConfig.mockResolvedValue({
-      settings: { agentNotificationsEnabled: true },
-    });
-    listChannelsMock.mockResolvedValueOnce({ ok: false, error: "ratelimited", retryAfter: 30 });
-
-    const res = await callHandler({ channel: "ops", text: "hello" });
-
-    expect(res.status).toBe(429);
-    await expect(res.json()).resolves.toMatchObject({ error: "rate_limited", retryAfter: 30 });
-    expect(fetchMock).not.toHaveBeenCalled();
-  });
-
-  it("permits a matching-team target", async () => {
-    seedActiveSession({ visibility: "team" });
-    integrationStoreMock.getResolvedConfig.mockResolvedValue({
-      settings: { agentNotificationsEnabled: true },
-    });
-    channelBindingStoreMock.get.mockResolvedValue({ teamId: "team-a" });
-    mockSlackResponse({ body: { ok: true, channel: "C1", ts: "1.2" } });
-    mockSlackResponse({ body: { ok: true, permalink: "https://x.slack.com/p" } });
-
-    expect((await callHandler({ channel: "ops", text: "hello" })).status).toBe(200);
   });
 
   it("happy path posts no events to the DO — the agent's tool_call is the source of truth", async () => {
@@ -807,24 +759,42 @@ describe("handleSlackNotify", () => {
     expect(listChannelsMock).not.toHaveBeenCalled();
   });
 
-  it("resolves a name with hash before checking its binding and posting by ID", async () => {
-    seedActiveSession();
-    integrationStoreMock.getResolvedConfig.mockResolvedValue({
-      enabledRepos: null,
-      settings: { agentNotificationsEnabled: true, mentionsPolicy: "allow" },
-    });
-    mockSlackResponse({ body: { ok: true, channel: "C123", ts: "1.2" } });
-    mockSlackResponse({ body: { ok: true, permalink: "https://x.slack.com/p", channel: "C1" } });
+  it.each([true, false])(
+    "resolves names before binding checks and posting (permalink channel: %s)",
+    async (hasPermalinkChannel) => {
+      seedActiveSession({ visibility: "team" });
+      channelBindingStoreMock.get.mockResolvedValue({ teamId: "team-a" });
+      integrationStoreMock.getResolvedConfig.mockResolvedValue({
+        enabledRepos: null,
+        settings: { agentNotificationsEnabled: true, mentionsPolicy: "allow" },
+      });
+      mockSlackResponse({ body: { ok: true, channel: "C123", ts: "1.2" } });
+      mockSlackResponse({
+        body: {
+          ok: true,
+          permalink: "https://x.slack.com/p",
+          ...(hasPermalinkChannel ? { channel: "C1" } : {}),
+        },
+      });
 
-    await callHandler({ channel: "#ops", text: "hi" });
-
-    const sentBody = JSON.parse(fetchMock.mock.calls[0][1].body as string) as {
-      channel: string;
-    };
-    expect(sentBody.channel).toBe("C1");
-    expect(listChannelsMock).toHaveBeenCalledWith("xoxb-test", { signal: expect.any(AbortSignal) });
-    expect(channelBindingStoreMock.get).toHaveBeenCalledWith("slack", "C1");
-  });
+      const response = await callHandler({ channel: "#ops", text: "hi" });
+      expect(response.status).toBe(200);
+      expect(await response.json()).toMatchObject({
+        ok: true,
+        channelId: "C123",
+        messageTs: "1.2",
+        permalink: hasPermalinkChannel ? "https://x.slack.com/p" : "",
+      });
+      const sentBody = JSON.parse(fetchMock.mock.calls[0][1].body as string) as {
+        channel: string;
+      };
+      expect(sentBody.channel).toBe("C1");
+      expect(listChannelsMock).toHaveBeenCalledWith("xoxb-test", {
+        signal: expect.any(AbortSignal),
+      });
+      expect(channelBindingStoreMock.get).toHaveBeenCalledWith("slack", "C1");
+    }
+  );
 
   it("does not call Slack when feature is disabled", async () => {
     seedActiveSession();

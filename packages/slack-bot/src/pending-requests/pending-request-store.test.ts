@@ -53,15 +53,9 @@ describe("pending request store", () => {
     mocks = makeEnv();
   });
 
-  it.each(["team-a", null])("persists and recovers team scope %s", async (teamId) => {
-    const pending = request({ teamId });
-    await storePendingRequest(mocks.env, pending);
-    mocks.get.mockResolvedValue(JSON.parse(mocks.put.mock.calls[0][1]));
-    expect(await getPendingRequest(mocks.env, REQUEST_ID)).toEqual(pending);
-  });
-
-  it("stores requests under the request id for one hour", async () => {
+  it.each(["team-a", null])("stores scope %s by request id for one hour", async (teamId) => {
     const pending = request({
+      teamId,
       unattributedPrompt: { forwardedMessages: ["Forwarded body"] },
       previousMessages: ["Earlier context"],
       channelName: "engineering",
@@ -77,6 +71,8 @@ describe("pending request store", () => {
       expirationTtl: 3600,
     });
     expect(JSON.parse(mocks.put.mock.calls[0][1])).toEqual(pending);
+    mocks.get.mockResolvedValue(JSON.parse(mocks.put.mock.calls[0][1]));
+    expect(await getPendingRequest(mocks.env, REQUEST_ID)).toEqual(pending);
   });
 
   it("keeps requests in the same thread distinct", async () => {
@@ -123,27 +119,19 @@ describe("pending request store", () => {
 
   it.each([
     {},
-    [],
-    { message: "Fix it" },
-    { userId: "U123" },
-    { message: 123, userId: "U123" },
-    { message: "Fix it", userId: "" },
-    { message: "Fix it", userId: "U123", previousMessages: ["valid", 123] },
-    { message: "Fix it", userId: "U123", unattributedPrompt: {} },
-    { message: "Fix it", userId: "U123", unattributedPrompt: { forwardedMessages: [123] } },
-    { message: "Fix it", userId: "U123", channelName: 123 },
-    { message: "Fix it", userId: "U123", turnPlan: {} },
+    { ...request(), requestId: "not-a-uuid" },
+    { ...request(), channel: "" },
+    { ...request(), threadTs: "" },
+    { ...request(), userId: "" },
+    { ...request(), teamId: "" },
+    { ...request(), previousMessages: ["valid", 123] },
     {
-      message: "Fix it",
-      userId: "U123",
+      ...request(),
       turnPlan: {
         ...TURN_PLAN,
         effective: { model: "openai/gpt-5.4", reasoningEffort: "high" },
       },
     },
-    { ...request(), requestId: "not-a-uuid" },
-    { ...request(), channel: "" },
-    { ...request(), threadTs: "" },
   ])("rejects malformed records: %j", async (record) => {
     mocks.get.mockResolvedValue(record);
 

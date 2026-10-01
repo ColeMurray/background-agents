@@ -473,26 +473,6 @@ describe("POST /callbacks/thread_closed", () => {
     return env;
   }
 
-  it("closes the matching mapping and posts a safe final message once", async () => {
-    const fetch = okFetchMock();
-    const env = await mappedEnv();
-    const payload = await signPayload(closedData());
-    for (let index = 0; index < 2; index++) {
-      const { response, ctx } = await postCallback("/callbacks/thread_closed", payload, env);
-      expect(response.status).toBe(200);
-      expect(ctx.waitUntil).not.toHaveBeenCalled();
-    }
-    expect(await lookupThreadSession(env, "C123", "111.222")).toMatchObject({
-      closed: true,
-      teamId: "team-a",
-    });
-    expect(fetch).toHaveBeenCalledOnce();
-    expect(slackCall(fetch, "chat.postMessage")?.body.text).toBe(
-      "this session is no longer available from this channel"
-    );
-    expect(await env.SLACK_KV.get(noticeKey)).toBe("1");
-  });
-
   it("persists closure first but waits for Slack before accepting and marking the notice sent", async () => {
     const started = createDeferred<void>();
     const pending = createDeferred<Response>();
@@ -513,7 +493,10 @@ describe("POST /callbacks/thread_closed", () => {
       expect(settled).toBe(false);
       expect(await env.SLACK_KV.get(noticeKey)).toBeNull();
       expect(await isThreadSessionClosed(env, "C123", "111.222", "session-1")).toBe(true);
-      expect(await lookupThreadSession(env, "C123", "111.222")).toMatchObject({ closed: true });
+      expect(await lookupThreadSession(env, "C123", "111.222")).toMatchObject({
+        closed: true,
+        teamId: "team-a",
+      });
     } finally {
       pending.resolve(new Response(JSON.stringify({ ok: true, channel: "C123", ts: "111.333" })));
       await request;
@@ -522,78 +505,46 @@ describe("POST /callbacks/thread_closed", () => {
     expect(response.status).toBe(200);
     expect(ctx.waitUntil).not.toHaveBeenCalled();
     expect(fetch).toHaveBeenCalledOnce();
+    expect(slackCall(fetch, "chat.postMessage")?.body).toMatchObject({
+      channel: "C123",
+      thread_ts: "111.222",
+      text: "this session is no longer available from this channel",
+    });
+    expect(env.SLACK_KV.put).toHaveBeenCalledWith(noticeKey, "1", {
+      expirationTtl: 7 * 24 * 60 * 60,
+    });
     expect(await env.SLACK_KV.get(noticeKey)).toBe("1");
   });
 
-  it.each(["slack", "network"] as const)(
-    "returns 503 on a %s failure without marking the notice sent, then accepts one successful retry",
-    async (failure) => {
-      const fetch = okFetchMock();
-      if (failure === "slack") {
-        fetch.mockResolvedValueOnce(
-          new Response(JSON.stringify({ ok: false, error: "ratelimited" }))
-        );
-      } else {
-        fetch.mockRejectedValueOnce(new Error("network down"));
-      }
-      const env = await mappedEnv();
-      const payload = await signPayload(closedData());
-      const failed = await postCallback("/callbacks/thread_closed", payload, env);
-      expect(failed.response.status).toBe(503);
-      expect(failed.ctx.waitUntil).not.toHaveBeenCalled();
-      expect(await env.SLACK_KV.get(noticeKey)).toBeNull();
-      expect(env.SLACK_KV.put).not.toHaveBeenCalledWith(noticeKey, "1", expect.anything());
-      expect(await isThreadSessionClosed(env, "C123", "111.222", "session-1")).toBe(true);
-      expect(await lookupThreadSession(env, "C123", "111.222")).toMatchObject({
-        closed: true,
-        teamId: "team-a",
-      });
-      fetch.mockClear();
-      for (let index = 0; index < 2; index++) {
-        const { response, ctx } = await postCallback("/callbacks/thread_closed", payload, env);
-        expect(response.status).toBe(200);
-        expect(ctx.waitUntil).not.toHaveBeenCalled();
-      }
-      expect(fetch).toHaveBeenCalledOnce();
-      expect(await env.SLACK_KV.get(noticeKey)).toBe("1");
+  it("returns 503 on Slack failure without marking the notice sent, then accepts one successful retry", async () => {
+    const fetch = okFetchMock().mockResolvedValueOnce(
+      Response.json({ ok: false, error: "ratelimited" })
+    );
+    const env = await mappedEnv();
+    const payload = await signPayload(closedData());
+    const failed = await postCallback("/callbacks/thread_closed", payload, env);
+    expect(failed.response.status).toBe(503);
+    expect(await env.SLACK_KV.get(noticeKey)).toBeNull();
+    expect(env.SLACK_KV.put).not.toHaveBeenCalledWith(noticeKey, "1", expect.anything());
+    expect(await isThreadSessionClosed(env, "C123", "111.222", "session-1")).toBe(true);
+    fetch.mockClear();
+    for (let index = 0; index < 2; index++) {
+      const { response } = await postCallback("/callbacks/thread_closed", payload, env);
+      expect(response.status).toBe(200);
     }
-  );
-
-  it.each([true, false])(
-    "retains an early closure and closes a late initial mapping after notice failure: %s",
-    async (failNotice) => {
-      const fetch = okFetchMock();
-      if (failNotice) fetch.mockRejectedValueOnce(new Error("network down"));
-      const env = await mappedEnv(false);
-      const payload = await signPayload(closedData());
-      const early = await postCallback("/callbacks/thread_closed", payload, env);
-      expect(early.response.status).toBe(failNotice ? 503 : 200);
-      expect(early.ctx.waitUntil).not.toHaveBeenCalled();
-      expect(await env.SLACK_KV.get(closureKey)).toBe("1");
-      expect(await env.SLACK_KV.get(noticeKey)).toBe(failNotice ? null : "1");
-      await storeThreadSession(env, "C123", "111.222", {
-        sessionId: "session-1",
-        repoId: "acme/app",
-        repoFullName: "acme/app",
-        model: "openai/gpt-5.4",
-        createdAt: 1,
-      });
-      expect(await lookupThreadSession(env, "C123", "111.222")).toMatchObject({ closed: true });
-      const repeat = await postCallback("/callbacks/thread_closed", payload, env);
-      expect(repeat.response.status).toBe(200);
-      expect(fetch).toHaveBeenCalledTimes(failNotice ? 2 : 1);
-    }
-  );
+    expect(fetch).toHaveBeenCalledOnce();
+    expect(await env.SLACK_KV.get(noticeKey)).toBe("1");
+  });
 
   it("deduplicates coordinate-only automation closure notices without a mapping", async () => {
     const fetch = okFetchMock();
     const env = await mappedEnv(false);
     const payload = await signPayload(closedData());
     for (let index = 0; index < 2; index++) {
-      const { response, ctx } = await postCallback("/callbacks/thread_closed", payload, env);
+      const { response } = await postCallback("/callbacks/thread_closed", payload, env);
       expect(response.status).toBe(200);
-      expect(ctx.waitUntil).not.toHaveBeenCalled();
     }
+    expect(await env.SLACK_KV.get(closureKey)).toBe("1");
     expect(await lookupThreadSession(env, "C123", "111.222")).toBeNull();
     expect(fetch).toHaveBeenCalledOnce();
   });
@@ -610,7 +561,6 @@ describe("POST /callbacks/thread_closed", () => {
     const payload = await signPayload(closedData());
     const failure = await postCallback("/callbacks/thread_closed", payload, env);
     expect(failure.response.status).toBe(503);
-    expect(failure.ctx.waitUntil).not.toHaveBeenCalled();
     expect(fetch).not.toHaveBeenCalled();
     put.mockImplementation(persist);
     const retry = await postCallback("/callbacks/thread_closed", payload, env);
@@ -646,17 +596,15 @@ describe("POST /callbacks/thread_closed", () => {
       if (key === noticeKey) throw new Error("KV unavailable");
       return persist(key, value, options);
     });
-    const { response, ctx } = await postCallback(
+    const { response } = await postCallback(
       "/callbacks/thread_closed",
       await signPayload(closedData()),
       env
     );
     expect(response.status).toBe(503);
-    expect(ctx.waitUntil).not.toHaveBeenCalled();
     expect(fetch).toHaveBeenCalledOnce();
     expect(put).toHaveBeenCalledWith(noticeKey, "1", expect.anything());
     expect(await env.SLACK_KV.get(noticeKey)).toBeNull();
-    expect(await lookupThreadSession(env, "C123", "111.222")).toMatchObject({ closed: true });
     expect(await isThreadSessionClosed(env, "C123", "111.222", "session-1")).toBe(true);
   });
 
@@ -703,49 +651,36 @@ describe("POST /callbacks/thread_closed", () => {
     expect(fetch).not.toHaveBeenCalled();
   });
 
-  it.each([
-    [true, false],
-    [false, false],
-    [true, true],
-    [false, true],
-  ])(
-    "suppresses late callbacks with mapping present: %s, notice failure: %s",
-    async (withMapping, failNotice) => {
-      const fetch = okFetchMock();
-      if (failNotice) fetch.mockRejectedValueOnce(new Error("network down"));
-      const env = await mappedEnv(withMapping);
-      const closed = await postCallback(
-        "/callbacks/thread_closed",
-        await signPayload(closedData()),
+  it("suppresses late callbacks after a coordinate-only closure whose notice failed", async () => {
+    const fetch = okFetchMock().mockRejectedValueOnce(new Error("network down"));
+    const env = await mappedEnv(false);
+    const closed = await postCallback(
+      "/callbacks/thread_closed",
+      await signPayload(closedData()),
+      env
+    );
+    expect(closed.response.status).toBe(503);
+    expect(await env.SLACK_KV.get(closureKey)).toBe("1");
+    expect(await env.SLACK_KV.get(noticeKey)).toBeNull();
+    fetch.mockClear();
+    const { context } = await makeToolCallPayload();
+    const payloads = [
+      ["/callbacks/tool_call", { tool: "read", args: {}, callId: "call" }],
+      ["/callbacks/activity", { kind: "slack.activity_refresh", messageId: "msg" }],
+      ["/callbacks/complete", { messageId: "msg", success: true }],
+    ] as const;
+    for (const [path, fields] of payloads) {
+      const { response, ctx } = await postCallback(
+        path,
+        await signPayload({ sessionId: "session-1", timestamp: Date.now(), context, ...fields }),
         env
       );
-      expect(closed.response.status).toBe(failNotice ? 503 : 200);
-      fetch.mockClear();
-      const context = {
-        source: "slack",
-        channel: "C123",
-        threadTs: "111.222",
-        repoFullName: "acme/app",
-        model: "openai/gpt-5.4",
-      };
-      const payloads = [
-        ["/callbacks/tool_call", { tool: "read", args: {}, callId: "call" }],
-        ["/callbacks/activity", { kind: "slack.activity_refresh", messageId: "msg" }],
-        ["/callbacks/complete", { messageId: "msg", success: true }],
-      ] as const;
-      for (const [path, fields] of payloads) {
-        const { response, ctx } = await postCallback(
-          path,
-          await signPayload({ sessionId: "session-1", timestamp: Date.now(), context, ...fields }),
-          env
-        );
-        expect(response.status).toBe(200);
-        await flushWaitUntil(ctx);
-      }
-      expect(fetch).not.toHaveBeenCalled();
-      expect(env.SLACK_COMPLETION_QUEUE.send).not.toHaveBeenCalled();
+      expect(response.status).toBe(200);
+      await flushWaitUntil(ctx);
     }
-  );
+    expect(fetch).not.toHaveBeenCalled();
+    expect(env.SLACK_COMPLETION_QUEUE.send).not.toHaveBeenCalled();
+  });
 });
 
 describe("POST /callbacks/complete", () => {

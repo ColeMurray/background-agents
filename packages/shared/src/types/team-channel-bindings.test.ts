@@ -1,11 +1,10 @@
 import { describe, expect, it } from "vitest";
-import * as shared from "../index";
 import {
   channelBindingResponseSchema,
   putTeamChannelBindingRequestSchema,
   teamChannelBindingSchema,
   teamChannelBindingsResponseSchema,
-} from "./team-channel-bindings";
+} from "../index";
 
 const binding = {
   provider: "slack",
@@ -46,11 +45,5 @@ describe("team channel binding contracts", () => {
     expect(channelBindingResponseSchema.safeParse({ teamId: null, kind: "source" }).success).toBe(
       false
     );
-  });
-
-  it("exports the binding contracts from the package root", () => {
-    expect(shared.teamChannelBindingSchema).toBe(teamChannelBindingSchema);
-    expect(shared.teamChannelBindingsResponseSchema).toBe(teamChannelBindingsResponseSchema);
-    expect(shared.channelBindingResponseSchema).toBe(channelBindingResponseSchema);
   });
 });

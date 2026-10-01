@@ -24,6 +24,10 @@ async function createTeam(slug: string) {
   return new TeamStore(env.DB).create({ slug, name: slug, joinPolicy: "invite_only" });
 }
 
+function slackBinding(teamId: string, kind: TeamChannelBinding["kind"]): TeamChannelBinding {
+  return { provider: "slack", externalId: "C123", teamId, kind };
+}
+
 async function bindingAudits(teamId: string) {
   const rows = await env.DB.prepare(
     `SELECT action, actor_user_id_snapshot, team_id, metadata_json
@@ -52,12 +56,7 @@ describe("team channel binding store", () => {
     const other = await createTeam("other");
     const store = new TeamChannelBindingStore(env.DB);
     expect(await store.get("slack", "C123")).toBeNull();
-    const slack: TeamChannelBinding = {
-      provider: "slack",
-      externalId: "C123",
-      teamId: team.id,
-      kind: "primary",
-    };
+    const slack = slackBinding(team.id, "primary");
     const linear: TeamChannelBinding = { ...slack, provider: "linear", kind: "source" };
     await store.put(slack, actor);
     await store.put(linear, actor);
@@ -71,12 +70,7 @@ describe("team channel binding store", () => {
     const team = await createTeam("engineering");
     const other = await createTeam("other");
     const store = new TeamChannelBindingStore(env.DB);
-    const binding: TeamChannelBinding = {
-      provider: "slack",
-      externalId: "C123",
-      teamId: team.id,
-      kind: "primary",
-    };
+    const binding = slackBinding(team.id, "primary");
     await store.put(binding, actor);
     await expect(store.put({ ...binding, teamId: other.id }, actor)).rejects.toBeInstanceOf(
       TeamChannelBindingConflictError
@@ -93,12 +87,7 @@ describe("team channel binding store", () => {
   it("updates kind, permits a replacement primary, and audits only applied mutations", async () => {
     const team = await createTeam("engineering");
     const store = new TeamChannelBindingStore(env.DB);
-    const binding: TeamChannelBinding = {
-      provider: "slack",
-      externalId: "C123",
-      teamId: team.id,
-      kind: "primary",
-    };
+    const binding = slackBinding(team.id, "primary");
     await store.put(binding, actor);
     await store.put(binding, actor);
     const created = await bindingAudits(team.id);
@@ -176,12 +165,7 @@ describe("team channel binding store", () => {
         return db.batch<T>(statements);
       },
     };
-    const binding: TeamChannelBinding = {
-      provider: "slack",
-      externalId: "C123",
-      teamId: team.id,
-      kind: "source",
-    };
+    const binding = slackBinding(team.id, "source");
     const failing = new TeamChannelBindingStore(failAudit);
     const store = new TeamChannelBindingStore(env.DB);
     await expect(failing.put(binding, actor)).rejects.toThrow();
@@ -347,27 +331,6 @@ describe("team channel binding routes", () => {
     expect(await bindingAudits(team.id)).toEqual([]);
   });
 
-  it("returns 409 when a team already has a primary channel", async () => {
-    const team = await createTeam("engineering");
-    const store = new TeamChannelBindingStore(env.DB);
-    await store.put(
-      { provider: "slack", externalId: "C123", teamId: team.id, kind: "primary" },
-      actor
-    );
-    const fetch = vi.fn().mockResolvedValue(Response.json({ ...channelInfo, id: "C456" }));
-    const response = await request(
-      `/teams/${team.id}/channel-bindings/slack/C456`,
-      "PUT",
-      { kind: "primary" },
-      {},
-      fetch
-    );
-    expect(response.status).toBe(409);
-    expect(await response.json()).toMatchObject({ code: "channel_binding_conflict" });
-    expect(await store.get("slack", "C456")).toBeNull();
-    expect(await bindingAudits(team.id)).toHaveLength(1);
-  });
-
   it("rejects unsupported providers and invalid kinds before checking Slack", async () => {
     const team = await createTeam("engineering");
     const fetch = vi.fn();
@@ -401,6 +364,11 @@ describe("team channel binding routes", () => {
 
 describe("service channel binding lookup", () => {
   it("allows unbound DMs under reject policy without exempting regular channels", async () => {
+    const unbound = await serviceFetch(`${BASE}/channel-bindings/slack/C123`, {
+      service: "slack-bot",
+    });
+    expect(unbound.status).toBe(200);
+    expect(await unbound.json()).toEqual({ teamId: null });
     await new IntegrationSettingsStore(env.DB).setGlobal("slack", {
       defaults: { unboundChannels: "reject" },
     });
@@ -412,7 +380,10 @@ describe("service channel binding lookup", () => {
         service: "slack-bot",
       });
       expect(rejected.status).toBe(404);
-      expect(await rejected.json()).toMatchObject({ code: "channel_unbound" });
+      expect(await rejected.json()).toEqual({
+        error: "Channel is not bound",
+        code: "channel_unbound",
+      });
     }
   });
 
@@ -467,15 +438,15 @@ describe("service channel binding lookup", () => {
 
   it("grants actorless lookup only to slack-bot and rejects unsupported providers", async () => {
     const team = await createTeam("engineering");
-    await new TeamChannelBindingStore(env.DB).put(
-      { provider: "slack", externalId: "C123", teamId: team.id, kind: "source" },
-      actor
-    );
+    await new TeamChannelBindingStore(env.DB).put(slackBinding(team.id, "primary"), actor);
+    await new IntegrationSettingsStore(env.DB).setGlobal("slack", {
+      defaults: { unboundChannels: "reject" },
+    });
     const response = await serviceFetch(`${BASE}/channel-bindings/slack/C123`, {
       service: "slack-bot",
     });
     expect(response.status).toBe(200);
-    expect(await response.json()).toEqual({ teamId: team.id, kind: "source" });
+    expect(await response.json()).toEqual({ teamId: team.id, kind: "primary" });
     expect(response.headers.get("Cache-Control")).toBe("private, no-store");
     for (const service of ["github-bot", "linear-bot"] as const) {
       expect((await serviceFetch(`${BASE}/channel-bindings/slack/C123`, { service })).status).toBe(
@@ -542,25 +513,4 @@ describe("service channel binding lookup", () => {
       expect(await denied.json()).toMatchObject({ code: "service_capability_required" });
     }
   );
-
-  it("defaults unbound channels to workspace, and returns a non-sensitive 404 when rejected", async () => {
-    const lookup = () =>
-      serviceFetch(`${BASE}/channel-bindings/slack/C123`, { service: "slack-bot" });
-    expect(await (await lookup()).json()).toEqual({ teamId: null });
-    await new IntegrationSettingsStore(env.DB).setGlobal("slack", {
-      defaults: { unboundChannels: "reject" },
-    });
-    const rejected = await lookup();
-    expect(rejected.status).toBe(404);
-    expect(await rejected.json()).toEqual({
-      error: "Channel is not bound",
-      code: "channel_unbound",
-    });
-    const team = await createTeam("engineering");
-    await new TeamChannelBindingStore(env.DB).put(
-      { provider: "slack", externalId: "C123", teamId: team.id, kind: "primary" },
-      actor
-    );
-    expect(await (await lookup()).json()).toEqual({ teamId: team.id, kind: "primary" });
-  });
 });

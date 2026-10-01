@@ -310,41 +310,27 @@ describe("getChannelInfo", () => {
     vi.restoreAllMocks();
   });
 
-  it("retains membership and external-sharing flags for binding validation", async () => {
-    vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
-      jsonResponse({
-        ok: true,
-        channel: { id: "C123", name: "ops", is_member: true, is_ext_shared: false },
-      })
-    );
-    const result = await getChannelInfo("xoxb-token", "C123");
-    expect(result.ok).toBe(true);
-    expect(result.channel).toEqual({
-      id: "C123",
-      name: "ops",
-      is_member: true,
-      is_ext_shared: false,
-    });
-  });
+  it.each([
+    { id: "C123", name: "ops" },
+    { id: "C123", name: "ops", is_member: true, is_ext_shared: false },
+  ])(
+    "fetches channel info via GET with bearer auth and retains channel fields: %j",
+    async (channel) => {
+      const fetchSpy = vi
+        .spyOn(globalThis, "fetch")
+        .mockResolvedValueOnce(jsonResponse({ ok: true, channel }));
 
-  it("fetches channel info via GET with bearer auth", async () => {
-    const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
-      jsonResponse({
-        ok: true,
-        channel: { id: "C123", name: "ops" },
-      })
-    );
+      const result = await getChannelInfo("xoxb-token", "C123");
 
-    const result = await getChannelInfo("xoxb-token", "C123");
-
-    expect(result.ok).toBe(true);
-    expect(result.channel).toEqual({ id: "C123", name: "ops" });
-    const [url, init] = fetchSpy.mock.calls[0]!;
-    expect(url).toBe("https://slack.com/api/conversations.info?channel=C123");
-    expect(init?.method ?? "GET").toBe("GET");
-    const headers = init?.headers as Record<string, string>;
-    expect(headers.Authorization).toBe("Bearer xoxb-token");
-  });
+      expect(result.ok).toBe(true);
+      expect(result.channel).toEqual(channel);
+      const [url, init] = fetchSpy.mock.calls[0]!;
+      expect(url).toBe("https://slack.com/api/conversations.info?channel=C123");
+      expect(init?.method ?? "GET").toBe("GET");
+      const headers = init?.headers as Record<string, string>;
+      expect(headers.Authorization).toBe("Bearer xoxb-token");
+    }
+  );
 
   it("returns Slack's error envelope on lookup failure", async () => {
     vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(

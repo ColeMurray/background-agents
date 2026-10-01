@@ -374,8 +374,8 @@ describe("uploadPreparedAttachments", () => {
     expect(result.sessionMissing).toBe(false);
   });
 
-  it("keeps context upload failures out of user drop notices but detects a stale session", async () => {
-    const controlPlaneFetch = vi.fn().mockResolvedValueOnce(new Response(null, { status: 404 }));
+  it.each([403, 404])("preserves context upload refusal %s", async (status) => {
+    const controlPlaneFetch = vi.fn().mockResolvedValueOnce(new Response(null, { status }));
     const env = makeEnv(controlPlaneFetch);
 
     const result = await uploadPreparedAttachments(
@@ -396,21 +396,8 @@ describe("uploadPreparedAttachments", () => {
 
     expect(result.references).toEqual([]);
     expect(result.dropped).toEqual([]);
-    expect(result.sessionMissing).toBe(true);
-  });
-
-  it("preserves attachment access denial for image-only follow-up routing", async () => {
-    const env = makeEnv(vi.fn(async () => new Response(null, { status: 403 })));
-    const result = await uploadPreparedAttachments(
-      env,
-      "s1",
-      {
-        files: [{ attachment: pngAttachment, bytes: new Uint8Array(16) }],
-        dropped: [],
-      },
-      "slack:U1"
-    );
-    expect(result).toMatchObject({ sessionForbidden: true, references: [] });
+    expect(result.sessionMissing).toBe(status === 404);
+    expect(result.sessionForbidden).toBe(status === 403 ? true : undefined);
   });
 
   it("counts malformed upload responses as dropped", async () => {

@@ -2057,56 +2057,6 @@ describe("Scheduler", () => {
       mockTeamChannelBindingGet.mockReset().mockResolvedValue(null);
     });
 
-    it.each([
-      { name: "missing session", session: null, binding: null },
-      {
-        name: "private session",
-        session: { ownerTeamId: "team-a", visibility: "private" },
-        binding: null,
-      },
-      {
-        name: "team-visible cross-team session",
-        session: { ownerTeamId: "team-a", visibility: "team" },
-        binding: { teamId: "team-b" },
-      },
-      {
-        name: "workspace-visible cross-team session",
-        session: { ownerTeamId: "team-a", visibility: "workspace" },
-        binding: { teamId: "team-b" },
-      },
-    ])("sends only a safe Slack closure for $name", async ({ session, binding }) => {
-      mockSessionStoreGet.mockResolvedValue(session);
-      mockTeamChannelBindingGet.mockResolvedValue(binding);
-      mockStore.getInvocationById.mockResolvedValue({
-        trigger_metadata: JSON.stringify({ channel: "C1", messageTs: "1700000000.000200" }),
-      });
-      mockStore.getById.mockResolvedValue(sampleSlackAutomation);
-      const slackFetch = vi.fn().mockResolvedValue(Response.json({ ok: true }));
-      const scheduler = createScheduler(
-        createEnv({
-          SLACK_BOT: { fetch: slackFetch },
-          SERVICE_AUTH_SECRET_SLACK_BOT: "test-secret",
-        })
-      );
-
-      await scheduler.runComplete(runCompletion({ success: false, error: "secret error" }));
-
-      expect(mockStore.updateRun).toHaveBeenCalled();
-      expect(mockSessionStoreGet).toHaveBeenCalledWith("sess-1");
-      expect(mockTeamChannelBindingGet).toHaveBeenCalledWith("slack", "C1");
-      expect(slackFetch).toHaveBeenCalledOnce();
-      expect(slackFetch.mock.calls[0][0]).toBe("https://internal/callbacks/thread_closed");
-      const body = JSON.parse(String(slackFetch.mock.calls[0][1]?.body));
-      expect(body).toEqual({
-        kind: "slack.thread_closed",
-        sessionId: "sess-1",
-        timestamp: expect.any(Number),
-        context: { channel: "C1", threadTs: "1700000000.000200" },
-        signature: expect.any(String),
-      });
-      expect(await verifyCallbackSignature(body, "test-secret")).toBe(true);
-    });
-
     describe("Slack publication preparation retries", () => {
       function createSlackCompletionHarness(overrides?: Partial<Env>) {
         mockStore.getInvocationById.mockResolvedValue({
@@ -2127,24 +2077,43 @@ describe("Scheduler", () => {
         return { scheduler, slackFetch, warn };
       }
 
-      it.each(["invocation", "automation", "session", "channel"] as const)(
-        "locally retries a transient %s read after winning the terminal CAS",
+      it.each(["none", "invocation", "automation", "session", "channel"] as const)(
+        "reads invocation coordinates and run-snapshot labels after %s preparation failure",
         async (lookup) => {
           const { scheduler, slackFetch, warn } = createSlackCompletionHarness();
-          const read = {
-            invocation: mockStore.getInvocationById,
-            automation: mockStore.getById,
-            session: mockSessionStoreGet,
-            channel: mockTeamChannelBindingGet,
-          }[lookup];
-          read.mockRejectedValueOnce(new Error("D1 unavailable"));
+          mockStore.getRunById.mockResolvedValue(
+            sampleRunRow({
+              automation_id: "auto-slack",
+              invocation_id: "inv-slack",
+              trigger_run_metadata: null,
+            })
+          );
+          mockStore.getById.mockResolvedValue({
+            ...sampleSlackAutomation,
+            repo_name: "changed-repository",
+          });
+          mockTeamChannelBindingGet.mockResolvedValue({ teamId: "team-a" });
+          const read =
+            lookup === "none"
+              ? null
+              : {
+                  invocation: mockStore.getInvocationById,
+                  automation: mockStore.getById,
+                  session: mockSessionStoreGet,
+                  channel: mockTeamChannelBindingGet,
+                }[lookup];
+          read?.mockRejectedValueOnce(new Error("D1 unavailable"));
 
-          await expect(scheduler.runComplete(runCompletion())).resolves.toBeUndefined();
+          await expect(
+            scheduler.runComplete(runCompletion({ automationId: "auto-slack" }))
+          ).resolves.toBeUndefined();
 
           expect(mockStore.updateRun).toHaveBeenCalledOnce();
           expect(mockStore.getInvocationRunAggregate).toHaveBeenCalledOnce();
-          expect(mockStore.getInvocationById).toHaveBeenCalledTimes(2);
-          expect(read).toHaveBeenCalledTimes(2);
+          expect(mockStore.getInvocationById).toHaveBeenCalledWith("inv-slack");
+          expect(mockStore.getInvocationById).toHaveBeenCalledTimes(read ? 2 : 1);
+          expect(mockSessionStoreGet).toHaveBeenCalledWith("sess-1");
+          expect(mockTeamChannelBindingGet).toHaveBeenCalledWith("slack", "C1");
           expect(slackFetch).toHaveBeenCalledOnce();
           expect(slackFetch.mock.calls[0][0]).toBe(
             "https://internal/callbacks/automation-complete"
@@ -2153,14 +2122,21 @@ describe("Scheduler", () => {
           expect(body).toMatchObject({
             channel: "C1",
             reactionMessageTs: "1700000000.000200",
+            repoFullName: "acme/web-app",
+            sessionId: "sess-1",
             messageId: "msg-1",
             success: true,
           });
           expect(await verifyCallbackSignature(body, "test-secret")).toBe(true);
-          expect(warn).toHaveBeenCalledExactlyOnceWith(
-            "Slack completion callback failed",
-            expect.objectContaining({ event: "scheduler.slack_complete_failed", attempt: 1 })
-          );
+          if (read) {
+            expect(read).toHaveBeenCalledTimes(2);
+            expect(warn).toHaveBeenCalledExactlyOnceWith(
+              "Slack completion callback failed",
+              expect.objectContaining({ event: "scheduler.slack_complete_failed", attempt: 1 })
+            );
+          } else {
+            expect(warn).not.toHaveBeenCalled();
+          }
         }
       );
 
@@ -2354,58 +2330,6 @@ describe("Scheduler", () => {
 
       expect(mockStore.resetConsecutiveFailures).not.toHaveBeenCalled();
       expect(mockStore.incrementConsecutiveFailures).not.toHaveBeenCalled();
-    });
-
-    it("reads slack coordinates from the invocation and labels from the run snapshot", async () => {
-      mockTeamChannelBindingGet.mockResolvedValue({ teamId: "team-a" });
-      mockStore.getRunById.mockResolvedValue(
-        sampleRunRow({
-          automation_id: "auto-slack",
-          invocation_id: "inv-slack",
-          trigger_run_metadata: null,
-        })
-      );
-      mockStore.getInvocationById.mockResolvedValue({
-        id: "inv-slack",
-        automation_id: "auto-slack",
-        source: "event",
-        scheduled_at: null,
-        trigger_key: "slack:msg:C1:1700000000.000200",
-        concurrency_key: "slack:C1:thread-root",
-        trigger_metadata: JSON.stringify({ channel: "C1", messageTs: "1700000000.000200" }),
-        skip_reason: null,
-        failure_counted_at: null,
-        created_at: now,
-        updated_at: now,
-      });
-      mockStore.getById.mockResolvedValue(sampleSlackAutomation);
-      mockStore.getInvocationRunAggregate.mockResolvedValue(
-        aggregate({ total: 1, active: 0, failed: 0, completed: 1 })
-      );
-
-      const slackFetch = vi.fn().mockResolvedValue(Response.json({ ok: true }));
-      const scheduler = createScheduler(
-        createEnv({
-          SLACK_BOT: { fetch: slackFetch } as FetchClient,
-          SERVICE_AUTH_SECRET_SLACK_BOT: "test-secret",
-        })
-      );
-
-      const result = await scheduler.runComplete(runCompletion({ automationId: "auto-slack" }));
-
-      expect(result).toBeUndefined();
-      expect(slackFetch).toHaveBeenCalledOnce();
-      const [, init] = slackFetch.mock.calls[0];
-      const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
-      expect(body).toMatchObject({
-        channel: "C1",
-        reactionMessageTs: "1700000000.000200",
-        // Label reads the run's snapshot, not the automation row.
-        repoFullName: "acme/web-app",
-        sessionId: "sess-1",
-        messageId: "msg-1",
-      });
-      expect(body.signature).toEqual(expect.any(String));
     });
 
     it("still posts to slack when a late success corrects a swept timeout", async () => {

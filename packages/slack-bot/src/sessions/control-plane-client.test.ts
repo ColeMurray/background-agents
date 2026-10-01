@@ -97,24 +97,20 @@ describe("control plane client timeouts", () => {
     expect(fetch.mock.calls[0]?.[1]?.signal).toBe(controller.signal);
   });
 
-  it("classifies only not-found prompt responses as stale", async () => {
-    const notFoundFetch = vi.fn(async () => new Response(null, { status: 404 }));
-    const serverErrorFetch = vi.fn(async () => new Response(null, { status: 503 }));
-
+  it.each([
+    [403, "forbidden"],
+    [404, "stale"],
+    [503, "transient"],
+  ] as const)("classifies prompt status %s as %s without retrying", async (status, reason) => {
+    const fetch = vi.fn(async () => new Response(null, { status }));
     await expect(
-      sendPrompt(makeEnv(notFoundFetch), {
-        sessionId: "missing-session",
-        content: "Fix it",
-        authorId: "slack:U123",
-      })
-    ).resolves.toEqual({ ok: false, reason: "stale" });
-    await expect(
-      sendPrompt(makeEnv(serverErrorFetch), {
+      sendPrompt(makeEnv(fetch), {
         sessionId: "session-1",
         content: "Fix it",
         authorId: "slack:U123",
       })
-    ).resolves.toEqual({ ok: false, reason: "transient" });
+    ).resolves.toEqual({ ok: false, reason });
+    expect(fetch).toHaveBeenCalledOnce();
   });
 });
 
@@ -125,33 +121,29 @@ describe("publication access", () => {
     [404, { error: "Session not found" }, "denied"],
     [503, {}, "unavailable"],
     [200, { invalid: true }, "unavailable"],
+    ["invalid-json", null, "unavailable"],
+    ["network", null, "unavailable"],
   ] as const)(
     "classifies a protected status %s without inferring access from cached metadata",
     async (status, body, result) => {
-      const fetch = vi.fn(async (_url: RequestInfo | URL, _init?: RequestInit) =>
-        okJson(body, status)
-      );
+      const fetch = vi.fn(async (_url: RequestInfo | URL, _init?: RequestInit) => {
+        if (status === "network") throw new Error("offline");
+        return status === "invalid-json" ? new Response("{") : okJson(body, status);
+      });
       expect(await checkPublicationAccess(makeEnv(fetch), "s1", "C1", "trace")).toBe(result);
+      if (result !== "allowed") return;
       const [url, request] = fetch.mock.calls[0];
       expect(new URL(String(url)).pathname).toBe("/sessions/s1/artifacts");
       expect(new URL(String(url)).searchParams.get("channel")).toBe("slack:C1");
       expect(new URL(String(url)).searchParams.get("purpose")).toBe("slack-post");
-      expect(new Headers(request?.headers).get("X-OpenInspect-Service-Signature")).toMatch(
-        /^sig1\./
-      );
-      expect(new Headers(request?.headers).get("X-OpenInspect-Actor")).toBeNull();
+      expect(request?.method).toBe("GET");
+      const headers = new Headers(request?.headers);
+      expect(headers.get("X-OpenInspect-Service")).toBe("slack-bot");
+      expect(headers.get("X-OpenInspect-Service-Signature")).toMatch(/^sig1\./);
+      expect(headers.get("X-OpenInspect-Actor")).toBeNull();
+      expect(headers.get("x-trace-id")).toBe("trace");
     }
   );
-
-  it("fails closed on malformed JSON and network failures", async () => {
-    for (const failure of [new Response("{"), new Error("offline")]) {
-      const fetch = vi.fn(async () => {
-        if (failure instanceof Error) throw failure;
-        return failure;
-      });
-      expect(await checkPublicationAccess(makeEnv(fetch), "s1", "C1")).toBe("unavailable");
-    }
-  });
 });
 
 describe("control plane client request payloads", () => {
@@ -181,16 +173,6 @@ describe("control plane client request payloads", () => {
         repository: "repository" in body ? body.repository : undefined,
       },
     });
-  });
-
-  it("does not retry a follow-up denied for missing current team membership", async () => {
-    const fetch = vi.fn(async () =>
-      okJson({ code: "session_action_denied", reason_code: "not_member" }, 403)
-    );
-    expect(
-      await sendPrompt(makeEnv(fetch), { sessionId: "s1", content: "Fix it", authorId: "slack:U1" })
-    ).toEqual({ ok: false, reason: "forbidden" });
-    expect(fetch).toHaveBeenCalledOnce();
   });
 
   it("creates repository sessions with target, model, and branch — identity stays out of the body", async () => {

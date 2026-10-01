@@ -20,6 +20,11 @@ const refusals: Array<{
 }> = [
   { name: "missing session", visibility: "workspace", boundTeamId: null, missing: true },
   { name: "private session", visibility: "private", boundTeamId: null },
+  {
+    name: "private session in its own team's channel",
+    visibility: "private",
+    boundTeamId: "team-a",
+  },
   { name: "team-visible cross-team session", visibility: "team", boundTeamId: "team-b" },
   { name: "workspace-visible cross-team session", visibility: "workspace", boundTeamId: "team-b" },
 ];
@@ -75,6 +80,7 @@ describe("Slack outbound post gates (real D1)", () => {
       const { stub, sessionName } = await initSession();
       await setScope(sessionName, scope);
       const slackFetch = vi.fn().mockResolvedValue(new Response("ok"));
+      const linearFetch = vi.fn();
 
       await runInSessionDO(stub, async (_instance, state) => {
         const author = state.storage.sql
@@ -94,7 +100,9 @@ describe("Slack outbound post gates (real D1)", () => {
         const runtime = createSessionRuntime(createDurableObjectSessionPlatform(state, env.DB), {
           ...createCloudflareEnv(env),
           SLACK_BOT: { fetch: slackFetch },
+          LINEAR_BOT: { fetch: linearFetch },
           SERVICE_AUTH_SECRET_SLACK_BOT: "outbound-test-secret",
+          SERVICE_AUTH_SECRET_LINEAR_BOT: "linear-test-secret",
         });
         const callbacks = runtime.internals.callbackService;
         if (path === "complete") {
@@ -112,6 +120,7 @@ describe("Slack outbound post gates (real D1)", () => {
       });
 
       await expectSafeClosure(slackFetch, sessionName);
+      expect(linearFetch).not.toHaveBeenCalled();
     });
   });
 
@@ -148,12 +157,15 @@ describe("Slack outbound post gates (real D1)", () => {
       .bind(JSON.stringify({ channel: "C1", messageTs: "1700000000.000200" }), run.invocation_id)
       .run();
     const slackFetch = vi.fn().mockResolvedValue(new Response("ok"));
+    const linearFetch = vi.fn();
     const scheduler = new Scheduler(
       env.DB,
       {
         ...createCloudflareEnv(env),
         SLACK_BOT: { fetch: slackFetch },
+        LINEAR_BOT: { fetch: linearFetch },
         SERVICE_AUTH_SECRET_SLACK_BOT: "outbound-test-secret",
+        SERVICE_AUTH_SECRET_LINEAR_BOT: "linear-test-secret",
       },
       { submit() {} }
     );
@@ -169,5 +181,6 @@ describe("Slack outbound post gates (real D1)", () => {
 
     expect((await store.getRunById("auto-1", run.id))?.status).toBe("failed");
     await expectSafeClosure(slackFetch, sessionName);
+    expect(linearFetch).not.toHaveBeenCalled();
   });
 });

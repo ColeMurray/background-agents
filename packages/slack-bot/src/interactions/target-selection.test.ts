@@ -152,22 +152,11 @@ beforeEach(() => {
 });
 
 describe("handleTargetSelection", () => {
-  it("resolves and launches within the pending request's team scope", async () => {
-    vi.mocked(getPendingRequest).mockResolvedValue(pendingRequest({ teamId: "team-a" }));
-    vi.mocked(resolveChannelBinding).mockResolvedValue({ teamId: "team-a", kind: "primary" });
-    const env = makeEnv();
-    await handleTargetSelection(selectionRequest(), env, "trace", vi.fn());
-    expect(resolveTargetValue).toHaveBeenCalledWith(env, DEFAULT_SELECTED_VALUE, "trace", "team-a");
-    expect(startSessionAndSendPrompt).toHaveBeenCalledWith(
-      env,
-      expect.objectContaining({ teamId: "team-a" })
-    );
-  });
-
   it("refuses selection after a binding changes or fails lookup", async () => {
     vi.mocked(getPendingRequest).mockResolvedValue(pendingRequest({ teamId: "team-a" }));
     const env = makeEnv();
     await handleTargetSelection(selectionRequest(), env, "trace", vi.fn());
+    expect(resolveChannelBinding).toHaveBeenCalledWith(env, "C123", "111.222", "trace");
     expect(postMessage).toHaveBeenCalledWith(
       "xoxb-test",
       "C123",
@@ -235,14 +224,22 @@ describe("handleTargetSelection", () => {
   });
 
   it("launches without images when the pending request has no source message", async () => {
-    vi.mocked(getPendingRequest).mockResolvedValue(pendingRequest());
+    vi.mocked(getPendingRequest).mockResolvedValue(pendingRequest({ teamId: "team-a" }));
+    vi.mocked(resolveChannelBinding).mockResolvedValue({ teamId: "team-a", kind: "primary" });
+    const env = makeEnv();
 
-    await handleTargetSelection(selectionRequest(), makeEnv(), "trace-1", vi.fn());
+    await handleTargetSelection(selectionRequest(), env, "trace-1", vi.fn());
 
     expect(getMessageDetails).not.toHaveBeenCalled();
+    expect(resolveTargetValue).toHaveBeenCalledWith(
+      env,
+      DEFAULT_SELECTED_VALUE,
+      "trace-1",
+      "team-a"
+    );
     expect(startSessionAndSendPrompt).toHaveBeenCalledWith(
-      expect.anything(),
-      expect.objectContaining({ messageText: "Fix the deploy", images: [] })
+      env,
+      expect.objectContaining({ messageText: "Fix the deploy", images: [], teamId: "team-a" })
     );
   });
 
@@ -466,14 +463,13 @@ describe("handleTargetSelection", () => {
       "Only the person who made the original request can choose its target.",
       { thread_ts: "111.222" }
     );
+    expect(resolveChannelBinding).not.toHaveBeenCalled();
     expect(postMessage).not.toHaveBeenCalled();
     expect(updateMessage).not.toHaveBeenCalled();
   });
 
-  it("rejects a request whose stored channel or thread does not match the interaction", async () => {
-    vi.mocked(getPendingRequest).mockResolvedValue(
-      pendingRequest({ channel: "C999", threadTs: "999.000" })
-    );
+  it.each([{ channel: "C999" }, { threadTs: "999.000" }])("rejects mismatched %j", async (row) => {
+    vi.mocked(getPendingRequest).mockResolvedValue(pendingRequest(row));
 
     await handleTargetSelection(selectionRequest(), makeEnv(), "trace-1", vi.fn());
 
@@ -486,6 +482,7 @@ describe("handleTargetSelection", () => {
       expect.stringContaining("no longer matches"),
       { thread_ts: "111.222" }
     );
+    expect(resolveChannelBinding).not.toHaveBeenCalled();
   });
 
   it("launches the request bound to the clicked picker when another request shares its thread", async () => {

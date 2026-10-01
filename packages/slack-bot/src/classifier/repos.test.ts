@@ -184,9 +184,11 @@ describe("getAvailableRepos", () => {
       });
     });
     expect((await getAvailableRepos(env, "trace", null))[0].name).toBe("workspace");
-    expect((await getAvailableRepos(env, "trace", "team-a"))[0].name).toBe("team-a");
+    const teamA = await getAvailableRepos(env, "trace", "team-a");
+    expect(teamA[0].name).toBe("team-a");
     expect((await getAvailableRepos(env, "trace", "team-b"))[0].name).toBe("team-b");
-    await getAvailableRepos(env, "trace", "team-a");
+    expect(await getAvailableRepos(env, "trace", "team-a")).toBe(teamA);
+    expect((await getAvailableRepos(env, "trace", null))[0].name).toBe("workspace");
     expect(fetch).toHaveBeenCalledTimes(3);
     expect(env.SLACK_KV.put).toHaveBeenCalledWith(
       "repos:cache:team:team-a",
@@ -203,11 +205,16 @@ describe("getAvailableRepos", () => {
     );
     expect((await getAvailableRepos(env, "trace", "team-a"))[0].name).toBe("team-a");
     expect((await getAvailableRepos(env, "trace", "team-b"))[0].name).toBe("team-b");
+    expect(await getAvailableRepos(env, "trace", null)).toEqual(stored.get("repos:cache"));
     expect(await getAvailableRepos(env, "trace", "team-c")).toEqual([]);
     expect(env.SLACK_KV.get).toHaveBeenCalledWith("repos:cache:team:team-a", "json");
+    expect(env.SLACK_KV.get).toHaveBeenCalledWith("repos:cache", "json");
+    clearLocalCache();
+    vi.mocked(env.SLACK_KV.get).mockRejectedValueOnce(new Error("KV unavailable"));
+    expect(await getAvailableRepos(env, "trace", "team-a")).toEqual([]);
   });
 
-  it("normalizes control-plane repositories and stores them in KV", async () => {
+  it("normalizes repositories and retains memory even if the KV write fails", async () => {
     const env = makeEnv(
       jsonResponse({
         repos: [
@@ -233,7 +240,8 @@ describe("getAvailableRepos", () => {
       })
     );
 
-    const repos = await getAvailableRepos(env, "trace-1");
+    vi.mocked(env.SLACK_KV.put).mockRejectedValueOnce(new Error("KV unavailable"));
+    const repos = await getAvailableRepos(env, "trace-1", "team-a");
 
     expect(repos).toEqual([
       {
@@ -250,38 +258,15 @@ describe("getAvailableRepos", () => {
         channelAssociations: ["C123"],
       },
     ]);
-    expect(env.SLACK_KV.put).toHaveBeenCalledWith("repos:cache", JSON.stringify(repos), {
-      expirationTtl: 300,
-    });
-  });
-
-  it("falls back to cached repos when the control plane returns an error", async () => {
-    const cachedRepos = [
+    expect(env.SLACK_KV.put).toHaveBeenCalledWith(
+      "repos:cache:team:team-a",
+      JSON.stringify(repos),
       {
-        id: "acme/web",
-        owner: "acme",
-        name: "web",
-        fullName: "acme/web",
-        displayName: "web",
-        description: "Cached repo",
-        defaultBranch: "main",
-        private: false,
-      },
-    ];
-    const env = {
-      SLACK_KV: {
-        get: vi.fn().mockResolvedValue(cachedRepos),
-        put: vi.fn().mockResolvedValue(undefined),
-        delete: vi.fn().mockResolvedValue(undefined),
-      },
-      CONTROL_PLANE: {
-        fetch: vi.fn().mockResolvedValue(new Response("error", { status: 503 })),
-      },
-      SERVICE_AUTH_SECRET: "test-secret",
-    } as unknown as Env;
-
-    await expect(getAvailableRepos(env, "trace-2")).resolves.toEqual(cachedRepos);
-    expect(env.SLACK_KV.get).toHaveBeenCalledWith("repos:cache", "json");
+        expirationTtl: 300,
+      }
+    );
+    expect(await getAvailableRepos(env, "trace-1", "team-a")).toBe(repos);
+    expect(env.CONTROL_PLANE.fetch).toHaveBeenCalledTimes(1);
   });
 
   it("bounds the catalog fetch and serves the KV fallback when it times out", async () => {
@@ -358,33 +343,6 @@ describe("getAvailableRepos", () => {
 
     await expect(getAvailableRepos(env, "trace-4")).resolves.toEqual([]);
     expect(env.SLACK_KV.get).toHaveBeenCalledWith("repos:cache", "json");
-  });
-
-  it("uses the in-memory cache after a successful fetch", async () => {
-    const env = makeEnv(
-      jsonResponse({
-        repos: [
-          {
-            id: 1,
-            owner: "acme",
-            name: "api",
-            fullName: "acme/api",
-            description: null,
-            private: false,
-            defaultBranch: "main",
-            archived: false,
-          },
-        ],
-        cached: false,
-        cachedAt: new Date().toISOString(),
-      })
-    );
-
-    const first = await getAvailableRepos(env);
-    const second = await getAvailableRepos(env);
-
-    expect(second).toBe(first);
-    expect(env.CONTROL_PLANE.fetch).toHaveBeenCalledTimes(1);
   });
 });
 

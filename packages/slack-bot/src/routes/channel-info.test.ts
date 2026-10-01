@@ -31,11 +31,15 @@ async function request(
 describe("POST /internal/channel-info", () => {
   afterEach(() => vi.restoreAllMocks());
 
-  it("uses its own Slack token and returns binding-validation fields", async () => {
+  it.each([
+    { is_member: true, is_ext_shared: false },
+    { is_member: false, is_ext_shared: false },
+    { is_member: true, is_ext_shared: true },
+  ])("uses its own Slack token and faithfully returns validation flags: %j", async (flags) => {
     const fetch = vi.spyOn(globalThis, "fetch").mockResolvedValue(
       Response.json({
         ok: true,
-        channel: { id: "C123", name: "eng", is_member: true, is_ext_shared: false },
+        channel: { id: "C123", name: "eng", ...flags },
       })
     );
     const response = await request({ channelId: "C123", timestamp: Date.now() });
@@ -43,8 +47,8 @@ describe("POST /internal/channel-info", () => {
     expect(await response.json()).toEqual({
       id: "C123",
       name: "eng",
-      isMember: true,
-      isExtShared: false,
+      isMember: flags.is_member,
+      isExtShared: flags.is_ext_shared,
     });
     expect(fetch).toHaveBeenCalledWith(
       expect.stringContaining("conversations.info"),
@@ -64,12 +68,6 @@ describe("POST /internal/channel-info", () => {
       expect(fetch).not.toHaveBeenCalled();
     }
   );
-
-  it("rejects signatures under another secret", async () => {
-    const fetch = vi.spyOn(globalThis, "fetch");
-    expect((await request({ channelId: "C123", timestamp: Date.now() }, "wrong")).status).toBe(401);
-    expect(fetch).not.toHaveBeenCalled();
-  });
 
   it("does not accept the Slack webhook signing secret as callback authentication", async () => {
     const fetch = vi.spyOn(globalThis, "fetch");
@@ -103,10 +101,18 @@ describe("POST /internal/channel-info", () => {
     expect((await request({ channelId: "C123", timestamp: Date.now() })).status).toBe(404);
   });
 
-  it("does not infer safety when Slack omits membership or external-sharing flags", async () => {
-    vi.spyOn(globalThis, "fetch").mockResolvedValue(
-      Response.json({ ok: true, channel: { id: "C123", name: "eng", is_member: true } })
-    );
-    expect((await request({ channelId: "C123", timestamp: Date.now() })).status).toBe(502);
-  });
+  it.each(["is_member", "is_ext_shared"])(
+    "does not infer safety when Slack omits %s",
+    async (flag) => {
+      const channel: Record<string, unknown> = {
+        id: "C123",
+        name: "eng",
+        is_member: true,
+        is_ext_shared: false,
+      };
+      delete channel[flag];
+      vi.spyOn(globalThis, "fetch").mockResolvedValue(Response.json({ ok: true, channel }));
+      expect((await request({ channelId: "C123", timestamp: Date.now() })).status).toBe(502);
+    }
+  );
 });

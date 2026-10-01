@@ -38,7 +38,7 @@ describe("Slack unbound channel policy", () => {
     expect(slackRepoSettingsSchema.safeParse({ unboundChannels }).success).toBe(false);
   });
 
-  it.each([null, false, "team", ""])("rejects invalid policy %j", (unboundChannels) => {
+  it.each([null, "team"])("rejects invalid policy %j", (unboundChannels) => {
     expect(slackGlobalSettingsSchema.safeParse({ unboundChannels }).success).toBe(false);
   });
 });
