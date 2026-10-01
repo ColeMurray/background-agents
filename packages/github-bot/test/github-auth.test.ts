@@ -3,7 +3,9 @@ import {
   generateAppJwt,
   generateInstallationToken,
   postReaction,
+  postCommitStatus,
   checkSenderPermission,
+  getReviewStatusState,
   GITHUB_API_REQUEST_TIMEOUT_MS,
 } from "../src/github-auth";
 
@@ -157,6 +159,110 @@ describe("postReaction", () => {
 
     await expect(resultPromise).resolves.toBe(false);
     expect(timeoutSpy).toHaveBeenCalledWith(GITHUB_API_REQUEST_TIMEOUT_MS);
+  });
+});
+
+describe("postCommitStatus", () => {
+  const originalFetch = globalThis.fetch;
+
+  beforeEach(() => {
+    globalThis.fetch = vi.fn();
+  });
+
+  afterEach(() => {
+    globalThis.fetch = originalFetch;
+  });
+
+  it("posts the status to the exact commit SHA", async () => {
+    vi.mocked(globalThis.fetch).mockResolvedValue(new Response("", { status: 201 }));
+
+    const result = await postCommitStatus(
+      "test-token",
+      "acme",
+      "widgets",
+      "abc123",
+      {
+        state: "pending",
+        context: "open-inspect",
+        description: "Review in progress",
+      },
+      "Acme Bot"
+    );
+
+    expect(result).toEqual({ ok: true });
+    expect(globalThis.fetch).toHaveBeenCalledWith(
+      "https://api.github.com/repos/acme/widgets/statuses/abc123",
+      {
+        method: "POST",
+        headers: {
+          Authorization: "Bearer test-token",
+          Accept: "application/vnd.github+json",
+          "X-GitHub-Api-Version": "2022-11-28",
+          "User-Agent": "Acme Bot",
+        },
+        body: JSON.stringify({
+          state: "pending",
+          context: "open-inspect",
+          description: "Review in progress",
+        }),
+        signal: expect.any(AbortSignal),
+      }
+    );
+  });
+
+  it("includes a review target URL when completing the status", async () => {
+    vi.mocked(globalThis.fetch).mockResolvedValue(new Response("", { status: 201 }));
+    const targetUrl = "https://github.com/acme/widgets/pull/42#pullrequestreview-100";
+
+    await postCommitStatus("test-token", "acme", "widgets", "abc123", {
+      state: "success",
+      context: "open-inspect",
+      description: "Review completed",
+      targetUrl,
+    });
+
+    const [, request] = vi.mocked(globalThis.fetch).mock.calls[0];
+    expect(JSON.parse(request?.body as string)).toEqual({
+      state: "success",
+      context: "open-inspect",
+      description: "Review completed",
+      target_url: targetUrl,
+    });
+  });
+
+  it("returns GitHub's status code when the status is rejected", async () => {
+    vi.mocked(globalThis.fetch).mockResolvedValue(
+      new Response(JSON.stringify({ message: "Resource not accessible by integration" }), {
+        status: 403,
+      })
+    );
+
+    const result = await postCommitStatus("test-token", "acme", "widgets", "abc123", {
+      state: "pending",
+      context: "open-inspect",
+      description: "Review in progress",
+    });
+
+    expect(result).toEqual({
+      ok: false,
+      status: 403,
+      error: "GitHub API returned 403",
+    });
+  });
+
+  it("returns the network error when the request fails", async () => {
+    vi.mocked(globalThis.fetch).mockRejectedValue(new Error("connection reset"));
+
+    const result = await postCommitStatus("test-token", "acme", "widgets", "abc123", {
+      state: "pending",
+      context: "open-inspect",
+      description: "Review in progress",
+    });
+
+    expect(result).toEqual({
+      ok: false,
+      error: "connection reset",
+    });
   });
 });
 
@@ -350,5 +456,91 @@ describe("checkSenderPermission", () => {
 
     await expect(resultPromise).resolves.toEqual({ hasPermission: false, error: true });
     expect(timeoutSpy).toHaveBeenCalledWith(GITHUB_API_REQUEST_TIMEOUT_MS);
+  });
+});
+
+describe("getReviewStatusState", () => {
+  const originalFetch = globalThis.fetch;
+
+  beforeEach(() => {
+    globalThis.fetch = vi.fn();
+  });
+
+  afterEach(() => {
+    globalThis.fetch = originalFetch;
+  });
+
+  it("reads the review context's latest state from the combined status endpoint", async () => {
+    vi.mocked(globalThis.fetch).mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          state: "pending",
+          statuses: [
+            { context: "ci/build", state: "success" },
+            { context: "open-inspect", state: "pending" },
+          ],
+        }),
+        { status: 200 }
+      )
+    );
+
+    const result = await getReviewStatusState(
+      "test-token",
+      "acme",
+      "widgets",
+      "abc123",
+      "Acme Bot"
+    );
+
+    expect(result).toEqual({ ok: true, state: "pending" });
+    expect(vi.mocked(globalThis.fetch).mock.calls[0][0]).toBe(
+      "https://api.github.com/repos/acme/widgets/commits/abc123/status?per_page=100"
+    );
+  });
+
+  it("reports null when the commit carries no review status", async () => {
+    vi.mocked(globalThis.fetch).mockResolvedValue(
+      new Response(JSON.stringify({ statuses: [{ context: "ci/build", state: "success" }] }), {
+        status: 200,
+      })
+    );
+
+    await expect(getReviewStatusState("test-token", "acme", "widgets", "abc123")).resolves.toEqual({
+      ok: true,
+      state: null,
+    });
+  });
+
+  it("reads the review context from a later page when the commit has many contexts", async () => {
+    // F5: the combined status serves at most 100 contexts per page.
+    const otherContexts = Array.from({ length: 100 }, (_, index) => ({
+      context: `ci/check-${index}`,
+      state: "success",
+    }));
+    vi.mocked(globalThis.fetch)
+      .mockResolvedValueOnce(Response.json({ total_count: 101, statuses: otherContexts }))
+      .mockResolvedValueOnce(
+        Response.json({
+          total_count: 101,
+          statuses: [{ context: "open-inspect", state: "success" }],
+        })
+      );
+
+    await expect(getReviewStatusState("test-token", "acme", "widgets", "abc123")).resolves.toEqual({
+      ok: true,
+      state: "success",
+    });
+    expect(vi.mocked(globalThis.fetch).mock.calls[1][0]).toBe(
+      "https://api.github.com/repos/acme/widgets/commits/abc123/status?per_page=100&page=2"
+    );
+  });
+
+  it("reports a non-2xx response as unreadable", async () => {
+    vi.mocked(globalThis.fetch).mockResolvedValue(new Response("", { status: 404 }));
+
+    await expect(getReviewStatusState("test-token", "acme", "widgets", "abc123")).resolves.toEqual({
+      ok: false,
+      error: "GitHub API returned 404",
+    });
   });
 });

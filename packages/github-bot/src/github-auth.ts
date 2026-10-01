@@ -7,9 +7,45 @@ const collaboratorPermissionResponseSchema = z.object({
   permission: z.string(),
 });
 
+const pullRequestSnapshotResponseSchema = z.object({
+  head: z.object({ sha: z.string() }),
+  state: z.string(),
+  draft: z.boolean(),
+});
+
 const installationTokenResponseSchema = z.object({
   token: z.string(),
 });
+
+const combinedStatusResponseSchema = z.object({
+  total_count: z.number().optional(),
+  statuses: z.array(z.object({ context: z.string(), state: z.string() })),
+});
+
+/** Largest page the combined status endpoint serves: one entry per context. */
+const COMBINED_STATUS_PAGE_SIZE = 100;
+/** GitHub rejects a commit status description longer than this. */
+export const COMMIT_STATUS_DESCRIPTION_MAX_CHARS = 140;
+
+export const REVIEW_STATUS_CONTEXT = "open-inspect";
+export const REVIEW_PENDING_DESCRIPTION = "Review in progress";
+export const REVIEW_COMPLETED_DESCRIPTION = "Review completed";
+export const REVIEW_START_FAILED_DESCRIPTION = "Review failed to start";
+export const REVIEW_STALE_DESCRIPTION = "Review skipped: PR changed before submission";
+/** Terminal status for the head a newer push replaced, so its pending status does not outlive it. */
+export const REVIEW_SUPERSEDED_DESCRIPTION = "Superseded by a newer commit";
+/**
+ * Terminal status for a review session that ended without publishing its verdict and left no
+ * reason of its own. "Pending" is written when a review starts, so an ending that never replaces it
+ * would leave the status pending forever: indistinguishable from a review still in progress.
+ */
+export const REVIEW_NOT_PUBLISHED_DESCRIPTION = "Review did not publish — push again to retry";
+/**
+ * Prefix of the terminal status for a review whose session ended without finishing — timed out,
+ * cancelled, or lost its sandbox. The session's own reason follows it, so the commit says the
+ * review process died rather than that the review found a problem.
+ */
+export const REVIEW_DID_NOT_FINISH_PREFIX = "Review did not finish: ";
 
 export interface GitHubAppConfig {
   appId: string;
@@ -18,6 +54,8 @@ export interface GitHubAppConfig {
   /** User-Agent header sent on outbound GitHub API requests. */
   userAgent?: string;
 }
+
+export type CommitStatusPostResult = { ok: true } | { ok: false; status?: number; error: string };
 
 function base64UrlEncode(input: Uint8Array | string): string {
   const bytes = typeof input === "string" ? new TextEncoder().encode(input) : input;
@@ -177,5 +215,150 @@ export async function postReaction(
     return response.ok;
   } catch {
     return false;
+  }
+}
+
+export async function postCommitStatus(
+  token: string,
+  owner: string,
+  repo: string,
+  sha: string,
+  status: {
+    state: "error" | "failure" | "pending" | "success";
+    context: string;
+    description: string;
+    targetUrl?: string;
+  },
+  userAgent: string = DEFAULT_APP_NAME
+): Promise<CommitStatusPostResult> {
+  const body = {
+    state: status.state,
+    context: status.context,
+    description: status.description,
+    ...(status.targetUrl ? { target_url: status.targetUrl } : {}),
+  };
+
+  try {
+    const response = await fetch(
+      `https://api.github.com/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/statuses/${encodeURIComponent(sha)}`,
+      {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${token}`,
+          Accept: "application/vnd.github+json",
+          "X-GitHub-Api-Version": "2022-11-28",
+          "User-Agent": userAgent,
+        },
+        body: JSON.stringify(body),
+        signal: AbortSignal.timeout(GITHUB_API_REQUEST_TIMEOUT_MS),
+      }
+    );
+    if (response.ok) return { ok: true };
+    return {
+      ok: false,
+      status: response.status,
+      error: `GitHub API returned ${response.status}`,
+    };
+  } catch (error) {
+    return {
+      ok: false,
+      error: error instanceof Error ? error.message : String(error),
+    };
+  }
+}
+
+export type ReviewStatusStateResult =
+  | { ok: true; state: string | null }
+  | { ok: false; error: string };
+
+/**
+ * Read the current state of the review's own status context on a commit, or null when the commit
+ * carries none. Uses the combined status endpoint, which reports only the latest status per
+ * context — `/statuses` lists every write, so a verdict can fall off its first page — and pages
+ * through it, since it serves at most 100 contexts per page.
+ */
+export async function getReviewStatusState(
+  token: string,
+  owner: string,
+  repo: string,
+  sha: string,
+  userAgent: string = DEFAULT_APP_NAME
+): Promise<ReviewStatusStateResult> {
+  const statusUrl = `https://api.github.com/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/commits/${encodeURIComponent(sha)}/status?per_page=${COMBINED_STATUS_PAGE_SIZE}`;
+  try {
+    for (let page = 1; ; page += 1) {
+      const response = await fetch(page === 1 ? statusUrl : `${statusUrl}&page=${page}`, {
+        headers: {
+          Authorization: `Bearer ${token}`,
+          Accept: "application/vnd.github+json",
+          "X-GitHub-Api-Version": "2022-11-28",
+          "User-Agent": userAgent,
+        },
+        signal: AbortSignal.timeout(GITHUB_API_REQUEST_TIMEOUT_MS),
+      });
+      if (!response.ok) {
+        return { ok: false, error: `GitHub API returned ${response.status}` };
+      }
+      const parsed = combinedStatusResponseSchema.safeParse(await response.json());
+      if (!parsed.success) {
+        return { ok: false, error: "invalid response" };
+      }
+      const { statuses, total_count: totalCount } = parsed.data;
+      const status = statuses.find((s) => s.context === REVIEW_STATUS_CONTEXT);
+      if (status) return { ok: true, state: status.state };
+      const lastPage =
+        statuses.length < COMBINED_STATUS_PAGE_SIZE ||
+        (totalCount !== undefined && page * COMBINED_STATUS_PAGE_SIZE >= totalCount);
+      if (lastPage) return { ok: true, state: null };
+    }
+  } catch (error) {
+    return { ok: false, error: error instanceof Error ? error.message : String(error) };
+  }
+}
+
+export type PullRequestSnapshotResult =
+  | { ok: true; headSha: string; state: string; draft: boolean }
+  | { ok: false; error: string };
+
+/**
+ * Fetch the PR's current head sha, state, and draft flag directly from
+ * GitHub — used as a freshness check immediately before starting (or
+ * re-verifying) a review, since the webhook payload can lag reality.
+ */
+export async function getPullRequestSnapshot(
+  token: string,
+  owner: string,
+  repo: string,
+  number: number,
+  userAgent: string = DEFAULT_APP_NAME
+): Promise<PullRequestSnapshotResult> {
+  try {
+    const response = await fetch(
+      `https://api.github.com/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/pulls/${number}`,
+      {
+        headers: {
+          Authorization: `Bearer ${token}`,
+          Accept: "application/vnd.github+json",
+          "X-GitHub-Api-Version": "2022-11-28",
+          "User-Agent": userAgent,
+        },
+        signal: AbortSignal.timeout(GITHUB_API_REQUEST_TIMEOUT_MS),
+      }
+    );
+    if (!response.ok) {
+      return { ok: false, error: `GitHub API returned ${response.status}` };
+    }
+    const parsed = pullRequestSnapshotResponseSchema.safeParse(await response.json());
+    if (!parsed.success) {
+      return { ok: false, error: "invalid response" };
+    }
+    return {
+      ok: true,
+      headSha: parsed.data.head.sha,
+      state: parsed.data.state,
+      draft: parsed.data.draft,
+    };
+  } catch (error) {
+    return { ok: false, error: error instanceof Error ? error.message : String(error) };
   }
 }

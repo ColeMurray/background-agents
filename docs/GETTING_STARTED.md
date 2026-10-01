@@ -267,7 +267,8 @@ GitHub OAuth sign-in, but its client pair is optional when Google is the only si
      session-created pull requests)_
    - Metadata: **Read-only**
    - If enabling the GitHub bot, also grant Actions: **Read-only** _(workflow-run automations)_,
-     Checks: **Read-only** _(check-suite automations)_, and Issues: **Read & Write**.
+     Checks: **Read-only** _(check-suite automations)_, Commit statuses: **Read & Write**, and
+     Issues: **Read & Write**.
 6. If using `ALLOWED_GITHUB_ORGS`/`allowed_github_orgs`, set **Organization permissions**:
    - Members: **Read-only**
    - For existing GitHub Apps, republish the permission change and request/approve installation
@@ -275,8 +276,9 @@ GitHub OAuth sign-in, but its client pair is optional when Google is the only si
 7. If enabling GitHub sign-in, set **Account permissions**:
    - Email addresses: **Read-only** _(every GitHub sign-in requires a verified email, including
      username-only, org-only, and intentionally open deployments)_
-   - For existing GitHub Apps, republish the permission change and request/approve installation
-     updates, otherwise the added permission does not apply to current installs.
+   - For existing GitHub Apps, republish each permission change. **Account permissions** are
+     user-scoped: each signing-in user must reauthorize the app before the new permission applies —
+     an installation approval does not grant it.
 8. Click **"Create GitHub App"**
 9. Note the **App ID** (top of page). If enabling GitHub sign-in, also note the **Client ID**.
 10. If enabling GitHub sign-in, under **"Client secrets"**, click **"Generate a new client secret"**
@@ -1107,6 +1109,11 @@ After the GitHub bot worker is deployed, configure the GitHub App for webhook de
    - **Check suites**
    - **Workflow runs** _(required for GitHub workflow-run automations)_
 5. Click **Save changes**
+
+**Commit statuses** is a repository permission, so changing it on an existing app creates an
+installation permission-review request. The owner of the account the app is installed on — an
+organization owner, or the user for a personal-account installation — must accept it before the bot
+can post commit statuses. Until then the installation keeps its previous, narrower permissions.
 
 ### Find Your Bot Username
 

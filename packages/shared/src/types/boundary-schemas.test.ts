@@ -600,6 +600,15 @@ describe("boundary schemas", () => {
           automationName: "Nightly sweep",
         }).success
       ).toBe(true);
+      expect(
+        callbackContextSchema.safeParse({
+          source: "github",
+          owner: "open-inspect",
+          repo: "background-agents",
+          prNumber: 42,
+          headSha: "abc123",
+        }).success
+      ).toBe(true);
     });
 
     it("rejects malformed or partial callback contexts", () => {
@@ -615,6 +624,15 @@ describe("boundary schemas", () => {
         }).success
       ).toBe(false);
       expect(callbackContextSchema.safeParse({ source: "github" }).success).toBe(false);
+      expect(
+        callbackContextSchema.safeParse({
+          source: "github",
+          owner: "open-inspect",
+          repo: "background-agents",
+          prNumber: 0,
+          headSha: "abc123",
+        }).success
+      ).toBe(false);
     });
   });
 
