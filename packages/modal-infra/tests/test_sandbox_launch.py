@@ -549,6 +549,7 @@ async def test_docker_launch_selects_vm_runtime_and_named_allocation(
     assert kwargs["tags"] == {
         **docker_allocation_tags("session-1", "sandbox-acme-repo-1700000000000"),
         **VMServiceLaunch(False, False, False, 8080, 6080, 7680, []).tags(),
+        "openinspect_generation_created_at_ms": "1700000000000",
     }
     assert kwargs["env"][DOCKER_ENABLED_ENV_VAR] == "true"
     assert handle.sandbox_backend == "modal-vm"
@@ -613,12 +614,26 @@ async def test_docker_launch_tags_record_effective_enabled_services_and_ports(mo
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("image_source", ["base", "snapshot"])
-async def test_expired_vm_launch_cannot_materialize_after_lookup(monkeypatch, image_source):
+@pytest.mark.parametrize("holder_exists", [False, True])
+async def test_expired_vm_launch_cannot_retire_or_create(monkeypatch, image_source, holder_exists):
     manager, captured, _ = _docker_manager(monkeypatch)
     monkeypatch.setattr("src.sandbox.launch.modal.Image.from_id", lambda _id: object())
+    holder = SimpleNamespace(
+        object_id="existing-holder",
+        get_tags=SimpleNamespace(
+            aio=AsyncMock(
+                return_value={
+                    **docker_allocation_tags("session-1", "sandbox-acme-repo-1699999999999"),
+                    "openinspect_generation_created_at_ms": "1699999999999",
+                }
+            )
+        ),
+        terminate=SimpleNamespace(aio=AsyncMock()),
+    )
+    lookup = AsyncMock(side_effect=[holder] if holder_exists else [NotFoundError("not found")])
     monkeypatch.setattr(
         "src.sandbox.launch.modal.Sandbox.from_name",
-        SimpleNamespace(aio=AsyncMock(side_effect=_not_found)),
+        SimpleNamespace(aio=lookup),
     )
     if image_source == "base":
         launch = manager.create_sandbox(_docker_config(launch_deadline_at_ms=1))
@@ -637,6 +652,8 @@ async def test_expired_vm_launch_cannot_materialize_after_lookup(monkeypatch, im
         await launch
     assert exc.value.detail == "window_closed"
     assert "kwargs" not in captured
+    lookup.assert_not_awaited()
+    holder.terminate.aio.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -661,9 +678,12 @@ async def test_malformed_docker_setting_fails_before_any_launch(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_docker_launch_adopts_an_existing_owned_allocation(monkeypatch):
+@pytest.mark.parametrize("has_generation_order", [False, True])
+async def test_docker_launch_adopts_an_existing_owned_allocation(monkeypatch, has_generation_order):
     manager, captured, _ = _docker_manager(monkeypatch)
     tags = docker_allocation_tags("session-1", "sandbox-acme-repo-1700000000000")
+    if has_generation_order:
+        tags["openinspect_generation_created_at_ms"] = "1700000000000"
     existing = SimpleNamespace(object_id="modal-existing", get_tags=AsyncMock(return_value=tags))
     existing.get_tags.aio = existing.get_tags
     from_name = AsyncMock(return_value=existing)
@@ -828,6 +848,12 @@ async def test_docker_adoption_fails_if_original_credentials_cannot_be_recovered
         ("openinspect_sandbox_id", "A" * 48),
         ("openinspect_sandbox_id", "0" * 47),
         ("openinspect_sandbox_id", "0" * 49),
+        ("openinspect_generation_created_at_ms", None),
+        ("openinspect_generation_created_at_ms", "1700000000000"),
+        ("openinspect_generation_created_at_ms", "1700000000001"),
+        ("openinspect_generation_created_at_ms", "invalid"),
+        ("openinspect_generation_created_at_ms", "-1"),
+        ("openinspect_generation_created_at_ms", "0"),
         ("unexpected_tag", "foreign"),
     ],
     ids=[
@@ -844,6 +870,12 @@ async def test_docker_adoption_fails_if_original_credentials_cannot_be_recovered
         "uppercase-generation",
         "short-generation",
         "long-generation",
+        "legacy-unnamed-generation",
+        "equal-generation-order",
+        "newer-generation",
+        "malformed-generation-order",
+        "negative-generation-order",
+        "zero-generation-order",
         "unexpected-tag",
     ],
 )
@@ -851,7 +883,10 @@ async def test_docker_launch_refuses_a_same_named_allocation_it_does_not_own(
     monkeypatch, create_race, invalid_tag, invalid_value
 ):
     manager, captured, _ = _docker_manager(monkeypatch)
-    tags = docker_allocation_tags("session-1", "stale-generation")
+    tags = {
+        **docker_allocation_tags("session-1", "sandbox-acme-repo-1699999999999"),
+        "openinspect_generation_created_at_ms": "1699999999999",
+    }
     if invalid_tag is None:
         tags = {}
     elif invalid_value is None:
@@ -881,6 +916,33 @@ async def test_docker_launch_refuses_a_same_named_allocation_it_does_not_own(
     assert "kwargs" not in captured
     foreign.terminate.aio.assert_not_awaited()
     assert create.await_count == int(create_race)
+
+
+@pytest.mark.asyncio
+async def test_unordered_launch_cannot_retire_an_ordered_holder(monkeypatch):
+    manager, captured, _ = _docker_manager(monkeypatch)
+    holder = SimpleNamespace(
+        object_id="existing-holder",
+        get_tags=SimpleNamespace(
+            aio=AsyncMock(
+                return_value={
+                    **docker_allocation_tags("session-1", "sandbox-acme-repo-1699999999999"),
+                    "openinspect_generation_created_at_ms": "1699999999999",
+                }
+            )
+        ),
+        terminate=SimpleNamespace(aio=AsyncMock()),
+    )
+    monkeypatch.setattr(
+        "src.sandbox.launch.modal.Sandbox.from_name",
+        SimpleNamespace(aio=AsyncMock(return_value=holder)),
+    )
+
+    with pytest.raises(VMAllocationOutcome, match="ownership mismatch"):
+        await manager.create_sandbox(_docker_config(sandbox_id="unversioned-generation"))
+
+    holder.terminate.aio.assert_not_awaited()
+    assert "kwargs" not in captured
 
 
 @pytest.mark.asyncio
@@ -958,7 +1020,12 @@ async def test_late_predecessor_cannot_materialize_beside_successor(monkeypatch,
     predecessor = SimpleNamespace(
         object_id="late-predecessor",
         get_tags=SimpleNamespace(
-            aio=AsyncMock(return_value=docker_allocation_tags("session-1", "prior"))
+            aio=AsyncMock(
+                return_value={
+                    **docker_allocation_tags("session-1", "sandbox-acme-repo-1699999999999"),
+                    "openinspect_generation_created_at_ms": "1699999999999",
+                }
+            )
         ),
         terminate=SimpleNamespace(aio=AsyncMock()),
     )
@@ -979,7 +1046,7 @@ async def test_late_predecessor_cannot_materialize_beside_successor(monkeypatch,
     monkeypatch.setattr("src.sandbox.launch._create_sandbox", create_mock)
     sandbox, adopted = await launcher._launch_docker_sandbox(
         session_id="session-1",
-        sandbox_id="successor",
+        sandbox_id="sandbox-acme-repo-1700000000000",
         create_kwargs={},
         repository_image=False,
         service_launch=VMServiceLaunch(False, False, False, 8080, 6080, 7680, []),
@@ -1002,8 +1069,9 @@ async def test_docker_launch_retires_an_older_same_session_generation(
         get_tags=SimpleNamespace(
             aio=AsyncMock(
                 return_value={
-                    **docker_allocation_tags("session-1", "older-generation"),
+                    **docker_allocation_tags("session-1", "sandbox-acme-repo-1699999999998"),
                     **VMServiceLaunch(False, False, False, 8080, 6080, 7680, []).tags(),
+                    "openinspect_generation_created_at_ms": "1699999999998",
                 }
             )
         ),
@@ -1028,7 +1096,12 @@ async def test_docker_launch_retries_a_name_race_at_most_once(monkeypatch, final
     stale = SimpleNamespace(
         object_id="stale-generation",
         get_tags=SimpleNamespace(
-            aio=AsyncMock(return_value=docker_allocation_tags("session-1", "stale-generation"))
+            aio=AsyncMock(
+                return_value={
+                    **docker_allocation_tags("session-1", "sandbox-acme-repo-1699999999999"),
+                    "openinspect_generation_created_at_ms": "1699999999999",
+                }
+            )
         ),
         terminate=SimpleNamespace(aio=AsyncMock()),
     )
@@ -1036,9 +1109,17 @@ async def test_docker_launch_retries_a_name_race_at_most_once(monkeypatch, final
         object_id="final-holder",
         get_tags=SimpleNamespace(
             aio=AsyncMock(
-                return_value=docker_allocation_tags(
-                    "session-1", "successor" if final_holder == "owned" else "another-generation"
-                )
+                return_value={
+                    **docker_allocation_tags(
+                        "session-1",
+                        "sandbox-acme-repo-1700000000000"
+                        if final_holder == "owned"
+                        else "sandbox-acme-repo-1699999999998",
+                    ),
+                    "openinspect_generation_created_at_ms": "1700000000000"
+                    if final_holder == "owned"
+                    else "1699999999998",
+                }
             )
         ),
         terminate=SimpleNamespace(aio=AsyncMock()),
@@ -1055,7 +1136,7 @@ async def test_docker_launch_retries_a_name_race_at_most_once(monkeypatch, final
     monkeypatch.setattr("src.sandbox.launch._create_sandbox", create)
     launch = SandboxLauncher()._launch_docker_sandbox(
         session_id="session-1",
-        sandbox_id="successor",
+        sandbox_id="sandbox-acme-repo-1700000000000",
         create_kwargs={},
         repository_image=False,
         service_launch=VMServiceLaunch(False, False, False, 8080, 6080, 7680, []),
@@ -1069,11 +1150,10 @@ async def test_docker_launch_retries_a_name_race_at_most_once(monkeypatch, final
     else:
         with pytest.raises(VMAllocationOutcome) as exc:
             await launch
-        assert exc.value.detail == "race_pending"
-        if final_holder == "stale":
-            final.terminate.aio.assert_awaited_once_with(wait=True)
-        else:
-            final.terminate.aio.assert_not_awaited()
+        assert exc.value.detail == (
+            "other_generation" if final_holder == "stale" else "race_pending"
+        )
+        final.terminate.aio.assert_not_awaited()
 
     stale.terminate.aio.assert_awaited_once_with(wait=True)
     assert create.await_count == 2
@@ -1082,10 +1162,16 @@ async def test_docker_launch_retries_a_name_race_at_most_once(monkeypatch, final
 @pytest.mark.asyncio
 async def test_docker_name_race_retry_respects_the_launch_deadline(monkeypatch):
     _docker_manager(monkeypatch)
+    now = [0.0]
     stale = SimpleNamespace(
         object_id="stale-generation",
         get_tags=SimpleNamespace(
-            aio=AsyncMock(return_value=docker_allocation_tags("session-1", "stale-generation"))
+            aio=AsyncMock(
+                return_value={
+                    **docker_allocation_tags("session-1", "sandbox-acme-repo-1699999999999"),
+                    "openinspect_generation_created_at_ms": "1699999999999",
+                }
+            )
         ),
         terminate=SimpleNamespace(aio=AsyncMock()),
     )
@@ -1093,14 +1179,19 @@ async def test_docker_name_race_retry_respects_the_launch_deadline(monkeypatch):
         "src.sandbox.launch.modal.Sandbox.from_name",
         SimpleNamespace(aio=AsyncMock(side_effect=[NotFoundError("not created"), stale])),
     )
-    monkeypatch.setattr("src.sandbox.launch.time", SimpleNamespace(time=Mock(side_effect=[0, 2])))
-    create = AsyncMock(side_effect=AlreadyExistsError("name occupied"))
+    monkeypatch.setattr("src.sandbox.launch.time", SimpleNamespace(time=lambda: now[0]))
+
+    async def create_race(*_args, **_kwargs):
+        now[0] = 2.0
+        raise AlreadyExistsError("name occupied")
+
+    create = AsyncMock(side_effect=create_race)
     monkeypatch.setattr("src.sandbox.launch._create_sandbox", create)
 
     with pytest.raises(VMAllocationOutcome) as exc:
         await SandboxLauncher()._launch_docker_sandbox(
             session_id="session-1",
-            sandbox_id="successor",
+            sandbox_id="sandbox-acme-repo-1700000000000",
             create_kwargs={},
             repository_image=False,
             service_launch=VMServiceLaunch(False, False, False, 8080, 6080, 7680, []),
@@ -1108,8 +1199,47 @@ async def test_docker_name_race_retry_respects_the_launch_deadline(monkeypatch):
         )
 
     assert exc.value.detail == "window_closed"
-    stale.terminate.aio.assert_awaited_once_with(wait=True)
+    stale.terminate.aio.assert_not_awaited()
     create.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("create_race", [False, True])
+async def test_docker_retirement_rechecks_deadline_after_lookup(monkeypatch, create_race):
+    _docker_manager(monkeypatch)
+    now = [0.0]
+
+    async def read_tags():
+        now[0] = 2.0
+        return {
+            **docker_allocation_tags("session-1", "sandbox-acme-repo-1699999999999"),
+            "openinspect_generation_created_at_ms": "1699999999999",
+        }
+
+    holder = SimpleNamespace(
+        object_id="existing-holder",
+        get_tags=SimpleNamespace(aio=AsyncMock(side_effect=read_tags)),
+        terminate=SimpleNamespace(aio=AsyncMock()),
+    )
+    lookup = AsyncMock(side_effect=[NotFoundError("racing"), holder] if create_race else [holder])
+    monkeypatch.setattr("src.sandbox.launch.modal.Sandbox.from_name", SimpleNamespace(aio=lookup))
+    monkeypatch.setattr("src.sandbox.launch.time", SimpleNamespace(time=lambda: now[0]))
+    create = AsyncMock(side_effect=AlreadyExistsError("name occupied"))
+    monkeypatch.setattr("src.sandbox.launch._create_sandbox", create)
+
+    with pytest.raises(VMAllocationOutcome) as exc:
+        await SandboxLauncher()._launch_docker_sandbox(
+            session_id="session-1",
+            sandbox_id="sandbox-acme-repo-1700000000000",
+            create_kwargs={},
+            repository_image=False,
+            service_launch=VMServiceLaunch(False, False, False, 8080, 6080, 7680, []),
+            launch_deadline_at_ms=1000,
+        )
+
+    assert exc.value.detail == "window_closed"
+    holder.terminate.aio.assert_not_awaited()
+    assert create.await_count == int(create_race)
 
 
 @pytest.mark.asyncio
@@ -1132,7 +1262,12 @@ async def test_docker_successor_waits_for_confirmed_predecessor_retirement(
     prior = SimpleNamespace(
         object_id="modal-prior",
         get_tags=SimpleNamespace(
-            aio=AsyncMock(return_value=docker_allocation_tags("session-1", "sandbox-prior"))
+            aio=AsyncMock(
+                return_value={
+                    **docker_allocation_tags("session-1", "sandbox-prior"),
+                    "openinspect_generation_created_at_ms": "1699999999999",
+                }
+            )
         ),
         terminate=SimpleNamespace(aio=terminate),
     )

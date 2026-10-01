@@ -152,6 +152,39 @@ function createLaunchFixture() {
 describe("launch input orchestration", () => {
   afterEach(() => vi.useRealTimers());
 
+  it.each([
+    { mode: "fresh", clockOffsetMs: 0 },
+    { mode: "fresh", clockOffsetMs: -1_000 },
+    { mode: "restore", clockOffsetMs: 0 },
+    { mode: "restore", clockOffsetMs: -1_000 },
+  ])(
+    "$mode reservations strictly advance the persisted generation (clock offset $clockOffsetMs ms)",
+    async ({ mode, clockOffsetMs }) => {
+      const { manager, provider, sandbox } = createLaunchFixture();
+      const previousCreatedAt = Date.now();
+      sandbox.status = "stopped";
+      sandbox.created_at = previousCreatedAt;
+      vi.setSystemTime(previousCreatedAt + clockOffsetMs);
+      if (mode === "restore") {
+        sandbox.snapshot_image_id = "saved-image";
+        sandbox.snapshot_runtime_version = COMPATIBLE_RUNTIME_VERSION;
+      }
+      vi.mocked(hashToken).mockResolvedValueOnce("new-hash");
+
+      await manager.spawnSandbox();
+
+      expect(sandbox.created_at).toBe(previousCreatedAt + 1);
+      expect(
+        mode === "fresh" ? provider.createSandbox : provider.restoreFromSnapshot
+      ).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({
+          sandboxId: `sandbox-group/subgroup-api-${sandbox.created_at}`,
+          generationCreatedAtMs: sandbox.created_at,
+        })
+      );
+    }
+  );
+
   it("fresh launch preserves the exact payload and env/image/MCP/Slack order", async () => {
     const {
       manager,

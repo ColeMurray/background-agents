@@ -26,6 +26,7 @@ from ..app import app
 from ..app_config import APP_NAME
 from ..images.base import base_image
 from .launch_policy import (
+    ALLOCATION_GENERATION_CREATED_AT_MS_TAG,
     ALLOCATION_SANDBOX_TAG,
     docker_allocation_name,
     docker_allocation_tags,
@@ -96,6 +97,15 @@ async def _create_sandbox(
         if repository_image:
             raise RepositoryImageUnavailableError("repository image is unavailable") from e
         raise
+
+
+def _check_launch_deadline(launch_deadline_at_ms: int | None) -> None:
+    if launch_deadline_at_ms is not None and time.time() * 1000 >= launch_deadline_at_ms:
+        raise VMAllocationOutcome("window_closed", "VM launch deadline expired")
+
+
+def _parse_generation_created_at_ms(value: str) -> int | None:
+    return int(value) if re.fullmatch(r"[1-9][0-9]{0,15}", value) else None
 
 
 def _session_identity(session_config: Any) -> str:
@@ -227,6 +237,7 @@ class SandboxLauncher:
             sandbox, adopted = await self._launch_docker_sandbox(
                 session_id=_session_identity(config.session_config),
                 sandbox_id=sandbox_id,
+                retire_sandbox_id=config.retire_sandbox_id,
                 create_kwargs=create_kwargs,
                 repository_image=repository_image,
                 launch_deadline_at_ms=config.launch_deadline_at_ms,
@@ -270,29 +281,55 @@ class SandboxLauncher:
         repository_image: bool,
         service_launch: VMServiceLaunch,
         launch_deadline_at_ms: int | None = None,
+        retire_sandbox_id: str | None = None,
     ) -> tuple[modal.Sandbox, bool]:
         """Retire superseded session VMs, then create or adopt this generation."""
+        _check_launch_deadline(launch_deadline_at_ms)
         name = docker_allocation_name(session_id)
         tags = docker_allocation_tags(session_id, sandbox_id)
-        existing, _ = await self._find_or_retire_docker_allocation(name, tags)
+        # Control-plane sandbox IDs end in their strictly increasing reservation timestamp.
+        generation_created_at_ms = (
+            _parse_generation_created_at_ms(sandbox_id.rsplit("-", 1)[-1])
+            if sandbox_id.startswith("sandbox-")
+            else None
+        )
+        allocation_tags = {**tags, **service_launch.tags()}
+        if generation_created_at_ms is not None:
+            allocation_tags[ALLOCATION_GENERATION_CREATED_AT_MS_TAG] = str(generation_created_at_ms)
+        retire_generation = (
+            docker_allocation_tags(session_id, retire_sandbox_id)[ALLOCATION_SANDBOX_TAG]
+            if retire_sandbox_id
+            else None
+        )
+        existing, _ = await self._find_or_retire_docker_allocation(
+            name,
+            tags,
+            generation_created_at_ms=generation_created_at_ms,
+            retire_generation=retire_generation,
+            launch_deadline_at_ms=launch_deadline_at_ms,
+        )
         if existing is None:
             for attempt in range(2):
-                if (
-                    launch_deadline_at_ms is not None
-                    and time.time() * 1000 >= launch_deadline_at_ms
-                ):
-                    raise VMAllocationOutcome("window_closed", "VM launch deadline expired")
+                _check_launch_deadline(launch_deadline_at_ms)
                 try:
                     sandbox = await _create_sandbox(
-                        {**create_kwargs, "name": name, "tags": {**tags, **service_launch.tags()}},
+                        {**create_kwargs, "name": name, "tags": allocation_tags},
                         repository_image=repository_image,
                     )
                     return sandbox, False
                 except modal.exception.AlreadyExistsError as e:
-                    existing, retired = await self._find_or_retire_docker_allocation(name, tags)
+                    _check_launch_deadline(launch_deadline_at_ms)
+                    existing, retired = await self._find_or_retire_docker_allocation(
+                        name,
+                        tags,
+                        generation_created_at_ms=generation_created_at_ms,
+                        retire_generation=retire_generation,
+                        launch_deadline_at_ms=launch_deadline_at_ms,
+                        allow_retirement=attempt == 0,
+                    )
                     if existing is not None:
                         break
-                    if not retired or attempt == 1:
+                    if not retired:
                         raise VMAllocationOutcome(
                             "race_pending", "VM allocation is not yet available"
                         ) from e
@@ -339,7 +376,13 @@ class SandboxLauncher:
 
     @staticmethod
     async def _find_or_retire_docker_allocation(
-        name: str, tags: dict[str, str]
+        name: str,
+        tags: dict[str, str],
+        *,
+        generation_created_at_ms: int | None,
+        retire_generation: str | None,
+        launch_deadline_at_ms: int | None,
+        allow_retirement: bool = True,
     ) -> tuple[modal.Sandbox | None, bool]:
         """Return this generation's VM and whether a superseded session VM was retired."""
         try:
@@ -358,7 +401,22 @@ class SandboxLauncher:
             )
         if generation == tags[ALLOCATION_SANDBOX_TAG]:
             return sandbox, False
-        # The control plane rotates credentials before launching a replacement generation.
+        holder_order = actual_tags.get(ALLOCATION_GENERATION_CREATED_AT_MS_TAG)
+        if holder_order is None:
+            # Legacy allocations have no ordering metadata; only the explicit predecessor is safe.
+            superseded = generation == retire_generation
+        else:
+            holder_created_at_ms = _parse_generation_created_at_ms(holder_order)
+            superseded = (
+                holder_created_at_ms is not None
+                and generation_created_at_ms is not None
+                and holder_created_at_ms < generation_created_at_ms
+            )
+        if not superseded or not allow_retirement:
+            raise VMAllocationOutcome(
+                "other_generation", "Docker sandbox allocation ownership mismatch"
+            )
+        _check_launch_deadline(launch_deadline_at_ms)
         await terminate_and_wait(sandbox)
         log.info("sandbox.docker_allocation_retired", modal_object_id=sandbox.object_id)
         return None, True

@@ -19,6 +19,7 @@ ALLOCATION_KIND_TAG = "openinspect_kind"
 ALLOCATION_SESSION_TAG = "openinspect_session_id"
 ALLOCATION_SANDBOX_TAG = "openinspect_sandbox_id"
 ALLOCATION_BACKEND_TAG = "openinspect_backend"
+ALLOCATION_GENERATION_CREATED_AT_MS_TAG = "openinspect_generation_created_at_ms"
 ModalBackend = Literal["modal", "modal-vm"]
 VM_DEFAULT_CPU_CORES = 2
 VM_DEFAULT_MEMORY_MIB = 4096
