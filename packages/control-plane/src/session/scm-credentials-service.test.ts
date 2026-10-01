@@ -1,8 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
 import type { Logger } from "../logger";
-import type { SourceControlProvider } from "../source-control";
+import type { CredentialScope, SourceControlProvider } from "../source-control";
 import { SourceControlProviderError } from "../source-control/errors";
 import { ScmCredentialsService } from "./scm-credentials-service";
+
+const credentialScope: CredentialScope = { kind: "repositories", repositoryIds: [99, 123] };
 
 function createTestLogger(): Logger {
   return {
@@ -36,7 +38,12 @@ describe("ScmCredentialsService", () => {
       }),
     });
 
-    const result = await new ScmCredentialsService(provider, createTestLogger()).getCredentials();
+    const resolveCredentialScope = vi.fn(async () => credentialScope);
+    const result = await new ScmCredentialsService(
+      provider,
+      createTestLogger(),
+      resolveCredentialScope
+    ).getCredentials();
 
     expect(result).toEqual({
       ok: true,
@@ -44,6 +51,10 @@ describe("ScmCredentialsService", () => {
       password: "ghs_token",
       expiresAtEpochMs,
     });
+    expect(provider.generateCredentialHelperAuth).toHaveBeenCalledWith(credentialScope);
+    expect(resolveCredentialScope).toHaveBeenCalledBefore(
+      vi.mocked(provider.generateCredentialHelperAuth)
+    );
   });
 
   it("rejects invalid provider credential payloads", async () => {
@@ -56,7 +67,11 @@ describe("ScmCredentialsService", () => {
       }),
     });
 
-    const result = await new ScmCredentialsService(provider, log).getCredentials();
+    const result = await new ScmCredentialsService(
+      provider,
+      log,
+      async () => credentialScope
+    ).getCredentials();
 
     expect(result).toEqual({
       ok: false,
@@ -78,7 +93,11 @@ describe("ScmCredentialsService", () => {
       }),
     });
 
-    const result = await new ScmCredentialsService(provider, createTestLogger()).getCredentials();
+    const result = await new ScmCredentialsService(
+      provider,
+      createTestLogger(),
+      async () => credentialScope
+    ).getCredentials();
 
     expect(result).toEqual({
       ok: false,
@@ -96,7 +115,11 @@ describe("ScmCredentialsService", () => {
         .mockRejectedValue(new SourceControlProviderError("App not configured", "permanent")),
     });
 
-    const result = await new ScmCredentialsService(provider, log).getCredentials();
+    const result = await new ScmCredentialsService(
+      provider,
+      log,
+      async () => credentialScope
+    ).getCredentials();
 
     expect(result).toEqual({
       ok: false,
@@ -120,7 +143,11 @@ describe("ScmCredentialsService", () => {
         .mockRejectedValue(new SourceControlProviderError("GitHub API unavailable", "transient")),
     });
 
-    const result = await new ScmCredentialsService(provider, createTestLogger()).getCredentials();
+    const result = await new ScmCredentialsService(
+      provider,
+      createTestLogger(),
+      async () => credentialScope
+    ).getCredentials();
 
     expect(result).toEqual({ ok: false, status: 502, error: "GitHub API unavailable" });
   });
@@ -131,7 +158,11 @@ describe("ScmCredentialsService", () => {
       generateCredentialHelperAuth: vi.fn().mockRejectedValue(new Error("network blew up")),
     });
 
-    const result = await new ScmCredentialsService(provider, log).getCredentials();
+    const result = await new ScmCredentialsService(
+      provider,
+      log,
+      async () => credentialScope
+    ).getCredentials();
 
     expect(result).toEqual({
       ok: false,
@@ -140,4 +171,50 @@ describe("ScmCredentialsService", () => {
     });
     expect(log.error).toHaveBeenCalled();
   });
+
+  it("resolves scope again for each credential request", async () => {
+    const nextScope: CredentialScope = { kind: "repositories", repositoryIds: [456] };
+    const resolveCredentialScope = vi
+      .fn()
+      .mockResolvedValueOnce(credentialScope)
+      .mockResolvedValueOnce(nextScope);
+    const provider = makeProvider({
+      generateCredentialHelperAuth: vi.fn().mockResolvedValue({
+        username: "x-access-token",
+        password: "ghs_token",
+        expiresAtEpochMs: Date.now() + 60 * 60 * 1000,
+      }),
+    });
+    const service = new ScmCredentialsService(provider, createTestLogger(), resolveCredentialScope);
+
+    await service.getCredentials();
+    await service.getCredentials();
+
+    expect(resolveCredentialScope).toHaveBeenCalledTimes(2);
+    expect(provider.generateCredentialHelperAuth).toHaveBeenNthCalledWith(1, credentialScope);
+    expect(provider.generateCredentialHelperAuth).toHaveBeenNthCalledWith(2, nextScope);
+  });
+
+  it.each(["permanent", "transient"] as const)(
+    "preserves %s credential scope error mapping without minting credentials",
+    async (errorType) => {
+      const provider = makeProvider();
+      const resolveCredentialScope = vi
+        .fn()
+        .mockRejectedValue(new SourceControlProviderError("Scope unavailable", errorType));
+
+      const result = await new ScmCredentialsService(
+        provider,
+        createTestLogger(),
+        resolveCredentialScope
+      ).getCredentials();
+
+      expect(result).toEqual({
+        ok: false,
+        status: errorType === "permanent" ? 500 : 502,
+        error: "Scope unavailable",
+      });
+      expect(provider.generateCredentialHelperAuth).not.toHaveBeenCalled();
+    }
+  );
 });

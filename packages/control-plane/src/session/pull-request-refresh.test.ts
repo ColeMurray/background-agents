@@ -1,5 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { PullRequestSnapshot } from "../source-control";
+import {
+  SourceControlProviderError,
+  type CredentialScope,
+  type PullRequestSnapshot,
+} from "../source-control";
 import { refreshSessionPullRequests } from "./pull-request-refresh";
 import type { ArtifactRepository } from "./artifact-repository";
 import type { ArtifactRow, SessionRow } from "./types";
@@ -95,6 +99,8 @@ function createHarness(artifacts: ArtifactRow[], session: SessionRow | null = cr
   } as unknown as ArtifactRepository;
   const getPullRequest = vi.fn(async () => createSnapshot());
   const upsert = vi.fn(async () => ({ applied: true }));
+  const credentialScope: CredentialScope = { kind: "repositories", repositoryIds: [123, 9001] };
+  const resolveCredentialScope = vi.fn(async () => credentialScope);
 
   return {
     repository,
@@ -102,8 +108,16 @@ function createHarness(artifacts: ArtifactRow[], session: SessionRow | null = cr
     rows,
     getPullRequest,
     upsert,
+    credentialScope,
+    resolveCredentialScope,
     refresh: () =>
-      refreshSessionPullRequests(repository, artifactRepository, { getPullRequest }, { upsert }),
+      refreshSessionPullRequests(
+        repository,
+        artifactRepository,
+        { getPullRequest },
+        { upsert },
+        resolveCredentialScope
+      ),
   };
 }
 
@@ -129,12 +143,11 @@ describe("refreshSessionPullRequests", () => {
       type: "pr",
       metadata: expect.objectContaining({ lifecycleState: "merged" }),
     });
-    expect(harness.getPullRequest).toHaveBeenCalledWith({
-      owner: "acme",
-      name: "web",
-      number: 7,
-      repositoryExternalId: "9001",
-    });
+    expect(harness.resolveCredentialScope).toHaveBeenCalledWith("public-session-1");
+    expect(harness.getPullRequest).toHaveBeenCalledWith(
+      { owner: "acme", name: "web", number: 7, repositoryExternalId: "9001" },
+      harness.credentialScope
+    );
     expect(harness.upsert).toHaveBeenCalledWith({
       artifactId: "artifact-1",
       sessionId: "public-session-1",
@@ -199,12 +212,10 @@ describe("refreshSessionPullRequests", () => {
 
     await harness.refresh();
 
-    expect(harness.getPullRequest).toHaveBeenCalledWith({
-      owner: "acme",
-      name: "web",
-      number: 7,
-      repositoryExternalId: undefined,
-    });
+    expect(harness.getPullRequest).toHaveBeenCalledWith(
+      { owner: "acme", name: "web", number: 7, repositoryExternalId: undefined },
+      harness.credentialScope
+    );
   });
 
   it("reports artifacts whose metadata carries no PR number as not refreshable", async () => {
@@ -257,6 +268,59 @@ describe("refreshSessionPullRequests", () => {
       }),
     ]);
     expect(harness.artifactRepository.updateArtifact).toHaveBeenCalledTimes(1);
+  });
+
+  it("reports scope resolution failure without reading the provider or updating the artifact", async () => {
+    const harness = createHarness([createPrArtifact()]);
+    const error = new SourceControlProviderError(
+      "Cannot resolve credential scope: session not found",
+      "permanent"
+    );
+    harness.resolveCredentialScope.mockRejectedValue(error);
+
+    const result = await harness.refresh();
+
+    expect(result).toEqual({
+      updated: [],
+      failures: [
+        {
+          artifactId: "artifact-1",
+          reason: "provider_read_failed",
+          prNumber: 7,
+          repoOwner: "acme",
+          repoName: "web",
+          error,
+        },
+      ],
+    });
+    expect(harness.getPullRequest).not.toHaveBeenCalled();
+    expect(harness.upsert).not.toHaveBeenCalled();
+    expect(harness.artifactRepository.updateArtifact).not.toHaveBeenCalled();
+  });
+
+  it("resolves scope freshly before each artifact read", async () => {
+    const harness = createHarness([
+      createPrArtifact(),
+      createPrArtifact({ id: "artifact-2", metadata: JSON.stringify({ number: 8 }) }),
+    ]);
+    const nextScope: CredentialScope = { kind: "repositories", repositoryIds: [456] };
+    harness.resolveCredentialScope
+      .mockResolvedValueOnce(harness.credentialScope)
+      .mockResolvedValueOnce(nextScope);
+
+    await harness.refresh();
+
+    expect(harness.resolveCredentialScope).toHaveBeenCalledTimes(2);
+    expect(harness.getPullRequest).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({ number: 7 }),
+      harness.credentialScope
+    );
+    expect(harness.getPullRequest).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({ number: 8 }),
+      nextScope
+    );
   });
 
   it("does not regress a mirror that a webhook push advanced during the pass's awaits", async () => {

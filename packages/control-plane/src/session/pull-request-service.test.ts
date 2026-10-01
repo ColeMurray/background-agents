@@ -1,7 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ScmSettings } from "@open-inspect/shared/types/integrations";
 import type { Logger } from "../logger";
-import type { SourceControlProvider } from "../source-control";
+import {
+  SourceControlProviderError,
+  type CredentialScope,
+  type SourceControlProvider,
+} from "../source-control";
 import * as branchResolution from "../source-control/branch-resolution";
 import type { SessionRepositoryRow } from "./types";
 import { buildSessionRepositories } from "./repository-target";
@@ -197,6 +201,7 @@ function createTestHarness(options: { scmSettings?: ScmSettings } = {}) {
   } as unknown as ArtifactRepository;
 
   const sessionPullRequests = { upsert: vi.fn(async () => ({ applied: true })) };
+  const credentialScope: CredentialScope = { kind: "repositories", repositoryIds: [123, 456] };
 
   let idCounter = 0;
   const deps: PullRequestServiceDeps = {
@@ -204,6 +209,7 @@ function createTestHarness(options: { scmSettings?: ScmSettings } = {}) {
     artifactRepository,
     claims: new PullRequestCreationClaims(),
     sourceControlProvider: provider,
+    resolveCredentialScope: vi.fn(async () => credentialScope),
     log,
     generateId: () => `id-${++idCounter}`,
     pushBranchToRemote: vi.fn(async () => ({ success: true as const })),
@@ -219,6 +225,7 @@ function createTestHarness(options: { scmSettings?: ScmSettings } = {}) {
     service,
     deps,
     provider,
+    credentialScope,
     artifacts,
     sessionPullRequests,
     log,
@@ -311,6 +318,8 @@ describe("SessionPullRequestService", () => {
     const createPrCall = (harness.provider.createPullRequest as ReturnType<typeof vi.fn>).mock
       .calls[0];
     expect(createPrCall[0]).toEqual({ authType: "app", token: "app-token" });
+    expect(harness.deps.resolveCredentialScope).toHaveBeenCalledWith("session-name-1");
+    expect(harness.provider.generatePushAuth).toHaveBeenCalledWith(harness.credentialScope);
     expect(artifactCreatedBroadcasts(harness.deps)).toHaveLength(1);
     expect(harness.deps.repository.updateSessionBranch).toHaveBeenCalledWith(
       "session-1",
@@ -419,6 +428,44 @@ describe("SessionPullRequestService", () => {
     });
     expect(harness.provider.generatePushAuth).not.toHaveBeenCalled();
     expect(harness.deps.pushBranchToRemote).not.toHaveBeenCalled();
+  });
+
+  it("maps credential scope failure through push auth handling and releases the claim", async () => {
+    vi.mocked(harness.deps.resolveCredentialScope).mockRejectedValueOnce(
+      new SourceControlProviderError(
+        "Cannot resolve credential scope: session not found",
+        "permanent"
+      )
+    );
+
+    const result = await harness.service.createPullRequest(createInput());
+
+    expect(result).toEqual({
+      kind: "error",
+      status: 500,
+      error: "Cannot resolve credential scope: session not found",
+    });
+    expect(harness.provider.generatePushAuth).not.toHaveBeenCalled();
+    expect(harness.provider.getRepository).not.toHaveBeenCalled();
+    expect(harness.provider.getPullRequest).not.toHaveBeenCalled();
+    expect(harness.deps.pushBranchToRemote).not.toHaveBeenCalled();
+    expect(await harness.service.createPullRequest(createInput())).toMatchObject({
+      kind: "created",
+    });
+  });
+
+  it("resolves fresh credential scope on each PR request", async () => {
+    const nextScope: CredentialScope = { kind: "repositories", repositoryIds: [789] };
+    vi.mocked(harness.deps.resolveCredentialScope)
+      .mockResolvedValueOnce(harness.credentialScope)
+      .mockResolvedValueOnce(nextScope);
+
+    await harness.service.createPullRequest(createInput({ headBranch: "feature-one" }));
+    await harness.service.createPullRequest(createInput({ headBranch: "feature-two" }));
+
+    expect(harness.deps.resolveCredentialScope).toHaveBeenCalledTimes(2);
+    expect(harness.provider.generatePushAuth).toHaveBeenNthCalledWith(1, harness.credentialScope);
+    expect(harness.provider.generatePushAuth).toHaveBeenNthCalledWith(2, nextScope);
   });
 
   it("passes the configured pull request label to the provider", async () => {

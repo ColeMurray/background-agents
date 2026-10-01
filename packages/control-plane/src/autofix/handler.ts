@@ -8,9 +8,12 @@ import { getGitHubAppConfig } from "../auth/github-app";
 import { IntegrationSettingsStore } from "../db/integration-settings";
 import { PrAutofixFeedbackStore } from "../db/pr-autofix-feedback-store";
 import { SessionPullRequestStore } from "../db/session-pull-request-store";
+import { SessionIndexStore } from "../db/session-index";
 import type { JobDelivery, JobDeps, JobOutcome } from "../jobs";
 import { createSessionRuntimeClient } from "../session/runtime-client";
 import { GitHubSourceControlProvider } from "../source-control/providers/github-provider";
+import { SourceControlProviderError, type CredentialScope } from "../source-control";
+import { resolveTeamTokenScope } from "../source-control/team-scope";
 import { AutofixJobHandler } from "./job-handler";
 import { AutofixService } from "./service";
 
@@ -48,6 +51,17 @@ export async function handleAutofixJob(
     userAgent: resolveAppName(env),
   });
   const sessions = createSessionRuntimeClient(env, correlation);
+  const sessionIndexStore = new SessionIndexStore(db);
+  const resolveCredentialScope = async (sessionId: string): Promise<CredentialScope> => {
+    const session = await sessionIndexStore.get(sessionId);
+    if (!session) {
+      throw new SourceControlProviderError(
+        "Cannot resolve credential scope: session not found",
+        "permanent"
+      );
+    }
+    return resolveTeamTokenScope(db, session.ownerTeamId);
+  };
   const service = new AutofixService(
     feedbackStore,
     new SessionPullRequestStore(db),
@@ -63,7 +77,8 @@ export async function handleAutofixJob(
     github,
     sessions,
     env.GITHUB_BOT_USERNAME,
-    () => Date.now()
+    () => Date.now(),
+    resolveCredentialScope
   );
   return new AutofixJobHandler(service, feedbackStore, () => Date.now()).handle(envelope, delivery);
 }

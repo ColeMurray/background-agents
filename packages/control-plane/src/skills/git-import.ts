@@ -122,12 +122,15 @@ async function readBlobs(
   async function worker(): Promise<void> {
     for (let index = next++; index < entries.length; index = next++) {
       const entry = entries[index];
-      const bytes = await provider.readBlob({
-        owner: repository.owner,
-        name: repository.name,
-        blobId: entry.blobId,
-        maxBytes: MAX_SKILL_FILE_BYTES,
-      });
+      const bytes = await provider.readBlob(
+        {
+          owner: repository.owner,
+          name: repository.name,
+          blobId: entry.blobId,
+          maxBytes: MAX_SKILL_FILE_BYTES,
+        },
+        { kind: "all" }
+      );
       const path = entry.path.slice(prefix.length);
       // The provider refuses an oversized blob before buffering when it can
       // tell the size up front. GitLab's tree carries no sizes, so this is the
@@ -295,7 +298,7 @@ export async function fetchSkillImport(
   const resolvedRef = requestedRef ?? access.defaultBranch;
   let commit: Awaited<ReturnType<RepositoryReader["resolveCommit"]>>;
   try {
-    commit = await provider.resolveCommit({ ...repository, ref: resolvedRef });
+    commit = await provider.resolveCommit({ ...repository, ref: resolvedRef }, { kind: "all" });
   } catch (error) {
     throw providerFailure(error, `Failed to resolve ${resolvedRef} in ${label}`);
   }
@@ -305,11 +308,14 @@ export async function fetchSkillImport(
 
   let tree: Awaited<ReturnType<RepositoryReader["listTree"]>>;
   try {
-    tree = await provider.listTree({
-      ...repository,
-      commitSha: commit.sha,
-      path: source.subdirectory,
-    });
+    tree = await provider.listTree(
+      {
+        ...repository,
+        commitSha: commit.sha,
+        path: source.subdirectory,
+      },
+      { kind: "all" }
+    );
   } catch (error) {
     throw providerFailure(error, `Failed to list ${label} at ${commit.sha}`);
   }

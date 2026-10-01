@@ -2,6 +2,22 @@
 
 New features, integrations, and notable improvements to Open-Inspect — newest first.
 
+## October 1, 2026
+
+### Changed
+
+GitHub App credentials for team-owned sessions now reach only the team's granted repositories,
+including PR refresh and autofix content reads. Empty grants refuse token minting; workspace-owned
+sessions and installation grants retain installation-wide access. Token caches use the exact
+repository set, so adding or removing a grant changes the cache key. Already-issued tokens remain
+valid until expiry, and sandbox helpers cache them until shortly before expiry.
+
+Environment image builds use their owning team's grants. Repository image builds use the union of
+grants from every team granted that repository; setup output, including cloned sibling repositories,
+is shared by those teams. A repository without any granting team gets no clone credential. GitLab
+still uses one deployment-wide PAT and cannot enforce per-team credential scope. Modal restore-token
+scoping remains a separate change.
+
 ## September 30, 2026
 
 ### Added

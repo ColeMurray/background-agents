@@ -6,6 +6,10 @@
 
 import type { InstallationRepository } from "@open-inspect/shared/types/repository-catalog";
 import type { PullRequestLifecycleState } from "@open-inspect/shared/types/artifacts";
+import type { TokenScope } from "../auth/github-app";
+
+/** Per-call scope for app-level credentials; providers are shared across sessions. */
+export type CredentialScope = TokenScope;
 
 /**
  * Repository information.
@@ -407,7 +411,10 @@ export interface SourceControlProvider {
    * Resolve one branch tip with app-level credentials. A confirmed 404 is
    * absence; authentication, throttling, and transport failures throw.
    */
-  getBranchHead(config: GetRepositoryConfig & { branch: string }): Promise<string | null>;
+  getBranchHead(
+    config: GetRepositoryConfig & { branch: string },
+    scope: CredentialScope
+  ): Promise<string | null>;
 
   /**
    * Resolve a branch, tag, or commit-ish to the commit it names.
@@ -419,7 +426,10 @@ export interface SourceControlProvider {
    * @returns The resolved commit, or null when the ref does not exist
    * @throws SourceControlProviderError
    */
-  resolveCommit(config: GetRepositoryConfig & { ref: string }): Promise<ResolvedCommit | null>;
+  resolveCommit(
+    config: GetRepositoryConfig & { ref: string },
+    scope: CredentialScope
+  ): Promise<ResolvedCommit | null>;
 
   /**
    * List every entry reachable from a commit, recursively.
@@ -432,7 +442,8 @@ export interface SourceControlProvider {
    * @throws SourceControlProviderError
    */
   listTree(
-    config: GetRepositoryConfig & { commitSha: string; path?: string | null }
+    config: GetRepositoryConfig & { commitSha: string; path?: string | null },
+    scope: CredentialScope
   ): Promise<RepositoryTree>;
 
   /**
@@ -451,13 +462,16 @@ export interface SourceControlProvider {
    *   largest body the caller is willing to accept
    * @throws SourceControlProviderError, including when the blob is too large
    */
-  readBlob(config: GetRepositoryConfig & { blobId: string; maxBytes: number }): Promise<Uint8Array>;
+  readBlob(
+    config: GetRepositoryConfig & { blobId: string; maxBytes: number },
+    scope: CredentialScope
+  ): Promise<Uint8Array>;
 
   /**
    * Read the current state of a pull request.
    *
-   * App-authenticated: credentials come from provider-level configuration
-   * (matching listRepositories), never a caller token — the webhook and
+   * App-authenticated: credentials come from provider-level configuration,
+   * limited by the caller's scope, never a caller token — the webhook and
    * read-through freshness paths run with no user in the loop.
    *
    * @param config - PR identifier; include repositoryExternalId when known
@@ -465,7 +479,10 @@ export interface SourceControlProvider {
    * @returns Current PR snapshot
    * @throws SourceControlProviderError
    */
-  getPullRequest(config: GetPullRequestConfig): Promise<PullRequestSnapshot>;
+  getPullRequest(
+    config: GetPullRequestConfig,
+    scope: CredentialScope
+  ): Promise<PullRequestSnapshot>;
 
   /**
    * Generate authentication for git push operations.
@@ -477,7 +494,7 @@ export interface SourceControlProvider {
    * @returns Git push authentication context with app token
    * @throws SourceControlProviderError
    */
-  generatePushAuth(): Promise<GitPushAuthContext>;
+  generatePushAuth(scope: CredentialScope): Promise<GitPushAuthContext>;
 
   /**
    * Generate credentials for the sandbox's git credential helper.
@@ -490,7 +507,7 @@ export interface SourceControlProvider {
    *
    * @throws SourceControlProviderError on configuration or upstream errors
    */
-  generateCredentialHelperAuth(): Promise<CredentialHelperAuth>;
+  generateCredentialHelperAuth(scope: CredentialScope): Promise<CredentialHelperAuth>;
 
   /**
    * Build provider-specific URL for manual pull request creation.

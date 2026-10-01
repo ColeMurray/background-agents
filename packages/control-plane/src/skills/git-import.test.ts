@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   MAX_SKILL_FILE_BYTES,
   MAX_SKILL_REVISION_BYTES,
@@ -102,6 +102,17 @@ const SKILL_MD = [
 ].join("\n");
 
 describe("fetchSkillImport", () => {
+  it("imports the workspace catalog with installation-wide content access", async () => {
+    const provider = fakeProvider({ "SKILL.md": { content: SKILL_MD } });
+    const resolveCommit = vi.spyOn(provider, "resolveCommit");
+    const listTree = vi.spyOn(provider, "listTree");
+    const readBlob = vi.spyOn(provider, "readBlob");
+    await fetchSkillImport(provider, source());
+    for (const method of [resolveCommit, listTree, readBlob]) {
+      expect(method).toHaveBeenCalledWith(expect.any(Object), { kind: "all" });
+    }
+  });
+
   it("maps SKILL.md and supporting files onto a validated revision", async () => {
     const provider = fakeProvider({
       "SKILL.md": { content: SKILL_MD },

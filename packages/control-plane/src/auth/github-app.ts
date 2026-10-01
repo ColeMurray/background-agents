@@ -28,7 +28,24 @@ export const INSTALLATION_TOKEN_MIN_REMAINING_MS = 5 * 60 * 1000;
 /** Upper bound for KV cache TTL (seconds). */
 const INSTALLATION_TOKEN_CACHE_MAX_TTL_SECONDS = 3600;
 
-const INSTALLATION_TOKEN_CACHE_KEY_PREFIX = "github:installation-token:v1";
+const INSTALLATION_TOKEN_CACHE_KEY_PREFIX = "github:installation-token:v2";
+
+export type TokenScope = { kind: "all" } | { kind: "repositories"; repositoryIds: number[] };
+
+interface InstallationTokenOptions {
+  scope: TokenScope;
+  forceRefresh?: boolean;
+}
+
+function canonicalRepositoryIds(repositoryIds: number[]): number[] {
+  if (repositoryIds.length === 0) {
+    throw new Error("Cannot mint installation token: no repository grants");
+  }
+  if (!z.array(z.number().int().positive()).safeParse(repositoryIds).success) {
+    throw new Error("Cannot mint installation token: invalid repository ids");
+  }
+  return [...new Set(repositoryIds)].sort((a, b) => a - b);
+}
 
 interface InstallationTokenCacheBindings {
   cacheStore?: CacheStore;
@@ -249,7 +266,8 @@ async function generateAppJwt(appId: string, privateKey: string): Promise<string
 async function getInstallationTokenWithMetadata(
   jwt: string,
   installationId: string,
-  userAgent: string
+  userAgent: string,
+  scope: TokenScope
 ): Promise<InstallationTokenResponse> {
   const url = `https://api.github.com/app/installations/${installationId}/access_tokens`;
 
@@ -260,7 +278,11 @@ async function getInstallationTokenWithMetadata(
       Accept: "application/vnd.github+json",
       "X-GitHub-Api-Version": "2022-11-28",
       "User-Agent": userAgent,
+      ...(scope.kind === "repositories" ? { "Content-Type": "application/json" } : {}),
     },
+    ...(scope.kind === "repositories"
+      ? { body: JSON.stringify({ repository_ids: scope.repositoryIds }) }
+      : {}),
   });
 
   if (!response.ok) {
@@ -287,8 +309,22 @@ async function getInstallationTokenWithMetadata(
   return parsed.data;
 }
 
-function getInstallationTokenCacheKey(config: GitHubAppConfig): string {
-  return `${INSTALLATION_TOKEN_CACHE_KEY_PREFIX}:${config.appId}:${config.installationId}`;
+export async function getInstallationTokenCacheKey(
+  config: GitHubAppConfig,
+  scope: TokenScope
+): Promise<string> {
+  let scopeHash = "all";
+  if (scope.kind === "repositories") {
+    const ids = canonicalRepositoryIds(scope.repositoryIds);
+    const digest = await crypto.subtle.digest(
+      "SHA-256",
+      new TextEncoder().encode(JSON.stringify(ids))
+    );
+    scopeHash = Array.from(new Uint8Array(digest), (byte) =>
+      byte.toString(16).padStart(2, "0")
+    ).join("");
+  }
+  return `${INSTALLATION_TOKEN_CACHE_KEY_PREFIX}:${config.appId}:${config.installationId}:${scopeHash}`;
 }
 
 function isTokenUsable(cached: CachedInstallationToken, nowEpochMs = Date.now()): boolean {
@@ -345,7 +381,7 @@ async function writeInstallationTokenToCache(
   }
 }
 
-async function invalidateInstallationTokenCache(
+export async function invalidateInstallationTokenCache(
   env: InstallationTokenCacheBindings | undefined,
   cacheKey: string
 ): Promise<void> {
@@ -366,14 +402,16 @@ async function invalidateInstallationTokenCache(
 async function refreshInstallationToken(
   config: GitHubAppConfig,
   env: InstallationTokenCacheBindings | undefined,
-  cacheKey: string
+  cacheKey: string,
+  scope: TokenScope
 ): Promise<CachedInstallationToken> {
   const nowEpochMs = Date.now();
   const jwt = await generateAppJwt(config.appId, config.privateKey);
   const tokenData = await getInstallationTokenWithMetadata(
     jwt,
     config.installationId,
-    resolveUserAgent(env)
+    resolveUserAgent(env),
+    scope
   );
   const cached: CachedInstallationToken = {
     token: tokenData.token,
@@ -388,11 +426,18 @@ async function refreshInstallationToken(
 
 async function getOrRefreshCachedInstallationToken(
   config: GitHubAppConfig,
-  env?: InstallationTokenCacheBindings,
-  options?: { forceRefresh?: boolean }
+  env: InstallationTokenCacheBindings | undefined,
+  options: InstallationTokenOptions
 ): Promise<CachedInstallationToken> {
-  const cacheKey = getInstallationTokenCacheKey(config);
-  const forceRefresh = options?.forceRefresh ?? false;
+  const scope: TokenScope =
+    options.scope.kind === "all"
+      ? options.scope
+      : {
+          kind: "repositories",
+          repositoryIds: canonicalRepositoryIds(options.scope.repositoryIds),
+        };
+  const cacheKey = await getInstallationTokenCacheKey(config, scope);
+  const forceRefresh = options.forceRefresh ?? false;
 
   if (!forceRefresh) {
     const memoryCached = installationTokenMemoryCache.get(cacheKey);
@@ -412,7 +457,7 @@ async function getOrRefreshCachedInstallationToken(
     }
   }
 
-  const refreshPromise = refreshInstallationToken(config, env, cacheKey).finally(() => {
+  const refreshPromise = refreshInstallationToken(config, env, cacheKey, scope).finally(() => {
     installationTokenRefreshInFlight.delete(cacheKey);
   });
   installationTokenRefreshInFlight.set(cacheKey, refreshPromise);
@@ -425,8 +470,8 @@ async function getOrRefreshCachedInstallationToken(
  */
 export async function getCachedInstallationToken(
   config: GitHubAppConfig,
-  env?: InstallationTokenCacheBindings,
-  options?: { forceRefresh?: boolean }
+  env: InstallationTokenCacheBindings | undefined,
+  options: InstallationTokenOptions
 ): Promise<string> {
   const cached = await getOrRefreshCachedInstallationToken(config, env, options);
   return cached.token;
@@ -440,8 +485,8 @@ export async function getCachedInstallationToken(
  */
 export async function getCachedInstallationTokenWithExpiry(
   config: GitHubAppConfig,
-  env?: InstallationTokenCacheBindings,
-  options?: { forceRefresh?: boolean }
+  env: InstallationTokenCacheBindings | undefined,
+  options: InstallationTokenOptions
 ): Promise<{ token: string; expiresAtEpochMs: number }> {
   const cached = await getOrRefreshCachedInstallationToken(config, env, options);
   return { token: cached.token, expiresAtEpochMs: cached.expiresAtEpochMs };
@@ -464,7 +509,8 @@ export async function listInstallationRepositories(
   env?: InstallationTokenCacheBindings
 ): Promise<{ repos: InstallationRepository[]; timing: ListReposTiming }> {
   const tokenStart = performance.now();
-  let token = await getCachedInstallationToken(config, env);
+  const scope: TokenScope = { kind: "all" };
+  let token = await getCachedInstallationToken(config, env, { scope });
   const tokenGenerationMs = performance.now() - tokenStart;
 
   const perPage = 100;
@@ -526,8 +572,8 @@ export async function listInstallationRepositories(
       throw error;
     }
 
-    await invalidateInstallationTokenCache(env, getInstallationTokenCacheKey(config));
-    token = await getCachedInstallationToken(config, env, { forceRefresh: true });
+    await invalidateInstallationTokenCache(env, await getInstallationTokenCacheKey(config, scope));
+    token = await getCachedInstallationToken(config, env, { scope, forceRefresh: true });
     headers.Authorization = `Bearer ${token}`;
     first = await fetchPage(1);
   }
@@ -571,12 +617,13 @@ export async function getInstallationRepository(
   repo: string,
   env?: InstallationTokenCacheBindings
 ): Promise<InstallationRepository | null> {
-  const cacheKey = getInstallationTokenCacheKey(config);
+  const scope: TokenScope = { kind: "all" };
+  const cacheKey = await getInstallationTokenCacheKey(config, scope);
   let forceRefresh = false;
   let response!: Response;
 
   for (let attempt = 0; attempt < 2; attempt++) {
-    const token = await getCachedInstallationToken(config, env, { forceRefresh });
+    const token = await getCachedInstallationToken(config, env, { scope, forceRefresh });
     response = await fetchWithTimeout(`https://api.github.com/repos/${owner}/${repo}`, {
       headers: {
         Authorization: `Bearer ${token}`,
@@ -631,7 +678,7 @@ export async function listRepositoryBranches(
   repo: string,
   env?: InstallationTokenCacheBindings
 ): Promise<{ name: string }[]> {
-  const token = await getCachedInstallationToken(config, env);
+  const token = await getCachedInstallationToken(config, env, { scope: { kind: "all" } });
   const branches: { name: string }[] = [];
   let page = 1;
 
