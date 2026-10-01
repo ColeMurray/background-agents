@@ -21,6 +21,10 @@ import {
   type EnvironmentRepositoryInsert,
   type EnvironmentScalarFields,
 } from "../db/environments";
+import { TeamRepositoryGrantStore } from "../db/team-repository-grants";
+import { TeamMembershipStore } from "../db/team-memberships";
+import { TeamStore } from "../db/teams";
+import { auditRouteAuthorizationDecision } from "../authorization/request-audit";
 import { generateId } from "../auth/crypto";
 import { scheduleImageBuildOnSave } from "../image-builds/save-hooks";
 import { createLogger } from "../logger";
@@ -33,6 +37,8 @@ import {
   requirePermission,
 } from "./shared";
 import type { Env } from "../types";
+import { authorizeSessionTarget } from "./session-target-authorization";
+import { authorizeTeamRepositories } from "./workspace-repository-authorization";
 
 const logger = createLogger("router:environments");
 
@@ -72,16 +78,63 @@ export async function resolveEnvironmentRepositories(
 }
 
 async function handleListEnvironments(
-  _request: Request,
+  request: Request,
   env: Env,
   _params: object,
   ctx: RequestContext
 ): Promise<Response> {
+  const teamId = new URL(request.url).searchParams.get("teamId");
+  let grants: Awaited<ReturnType<TeamRepositoryGrantStore["listForTeam"]>> | undefined;
+  if (teamId) {
+    const userId = ctx.authorization?.userId;
+    const roleKey = ctx.authorization?.role.key;
+    const allowed =
+      !!userId &&
+      (await new TeamStore(ctx.db).isActive(teamId)) &&
+      (roleKey === "owner" ||
+        roleKey === "administrator" ||
+        (await new TeamMembershipStore(ctx.db).listForUser(userId)).has(teamId));
+    if (!allowed) {
+      const response = error("Team not found", 404);
+      await auditRouteAuthorizationDecision({
+        ctx,
+        method: request.method,
+        path: "/environments",
+        response,
+        teamId,
+        decision: {
+          kind: "denied",
+          reasonCode: "team_not_visible",
+          reason: "Team not found",
+          requirements: [{ kind: "team", teamIdParam: "teamId", need: "member" }],
+          effectivePermissions: [],
+        },
+      });
+      return response;
+    }
+    grants = await new TeamRepositoryGrantStore(ctx.db).listForTeam(teamId);
+  }
+
   const store = new EnvironmentStore(ctx.db);
-  const { environments, total } = await store.list();
+  let { environments, total } = await store.list();
   const repositoriesById = await store.getRepositoriesForEnvironmentIds(
     environments.map((e) => e.id)
   );
+  if (grants) {
+    const installationGrant = grants.some((grant) => grant.grant_kind === "installation");
+    const grantedRepoIds = new Set(grants.map((grant) => grant.repo_external_id));
+    environments = environments.filter((row) => {
+      const repositories = repositoriesById.get(row.id) ?? [];
+      return (
+        repositories.length > 0 &&
+        (installationGrant ||
+          repositories.every(
+            (repository) => repository.repo_id !== null && grantedRepoIds.has(repository.repo_id)
+          ))
+      );
+    });
+    total = environments.length;
+  }
 
   return json({
     environments: environments.map((row) => toEnvironment(row, repositoriesById.get(row.id) ?? [])),
@@ -103,6 +156,15 @@ async function handleCreateEnvironment(
   if (await store.getByName(name)) {
     return error(`An environment named "${name}" already exists`, 409);
   }
+
+  const targetAuthorizationError = await authorizeSessionTarget(ctx, {
+    teamId: null,
+    repositories: repositories.map((repository) => ({
+      owner: repository.repoOwner,
+      name: repository.repoName,
+    })),
+  });
+  if (targetAuthorizationError) return targetAuthorizationError;
 
   const inserts = await resolveEnvironmentRepositories(env, repositories, ctx);
 
@@ -178,10 +240,54 @@ async function handleUpdateEnvironment(
     }
   }
 
-  const inserts =
-    repositories !== undefined
-      ? await resolveEnvironmentRepositories(env, repositories, ctx)
-      : undefined;
+  let inserts: EnvironmentRepositoryInsert[] | undefined;
+  if (repositories !== undefined) {
+    const targetAuthorizationError = await authorizeSessionTarget(ctx, {
+      teamId: null,
+      repositories: repositories.map((repository) => ({
+        owner: repository.repoOwner,
+        name: repository.repoName,
+      })),
+    });
+    if (targetAuthorizationError) return targetAuthorizationError;
+
+    inserts = await resolveEnvironmentRepositories(env, repositories, ctx);
+    const resolvedTargetAuthorizationError = await authorizeSessionTarget(ctx, {
+      teamId: existing.owner_team_id,
+      repositories: inserts.map((repository) => ({
+        owner: repository.repo_owner,
+        name: repository.repo_name,
+        repoId: repository.repo_id,
+      })),
+    });
+    if (resolvedTargetAuthorizationError) return resolvedTargetAuthorizationError;
+  }
+
+  if (
+    (prebuildEnabled ?? existing.prebuild_enabled === 1) &&
+    existing.owner_team_id !== null &&
+    inserts === undefined
+  ) {
+    const existingRepositories = await store.getRepositoriesForEnvironment(id);
+    const resolved = await resolveEnvironmentRepositories(
+      env,
+      existingRepositories.map((repository) => ({
+        repoOwner: repository.repo_owner,
+        repoName: repository.repo_name,
+        baseBranch: repository.base_branch,
+      })),
+      ctx
+    );
+    const denied = await authorizeTeamRepositories(ctx, {
+      teamId: existing.owner_team_id,
+      repositories: resolved.map((repository) => ({
+        owner: repository.repo_owner,
+        name: repository.repo_name,
+        repoId: repository.repo_id,
+      })),
+    });
+    if (denied) return denied;
+  }
 
   const fields: EnvironmentScalarFields = {};
   if (name !== undefined) fields.name = name;

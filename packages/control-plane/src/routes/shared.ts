@@ -191,7 +191,7 @@ export function requireAutomation(
 export function requireTeam(
   need: keyof TeamCapabilities | "read" | "member",
   options?: { teamIdParam?: string; auditAllowed?: boolean }
-): RouteAuthorization {
+): Extract<RouteAuthorization, { kind: "active-user" }> {
   const requirement: RouteAuthorizationRequirement = {
     kind: "team",
     teamIdParam: options?.teamIdParam ?? "id",

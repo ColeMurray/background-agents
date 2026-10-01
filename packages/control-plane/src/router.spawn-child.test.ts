@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { HarnessId } from "@open-inspect/shared/harnesses";
 import {
   fakeSessionRuntimeDispatch,
@@ -9,6 +9,9 @@ import {
 } from "./router.test-support";
 import { getEffectiveEnabledModels } from "./db/model-preferences";
 import { SessionIndexStore } from "./db/session-index";
+import { TeamMembershipStore } from "./db/team-memberships";
+import { resolveRepoOrError } from "./routes/shared";
+import type * as SharedRoutes from "./routes/shared";
 import { SessionInternalPaths } from "./session/contracts";
 
 const integrationSettingsMocks = vi.hoisted(() => ({
@@ -32,6 +35,11 @@ vi.mock("./db/user-store", () => ({
 }));
 
 vi.mock("./session/integration-settings-resolution", () => integrationSettingsMocks);
+
+vi.mock("./routes/shared", async (importOriginal) => {
+  const actual = await importOriginal<typeof SharedRoutes>();
+  return { ...actual, resolveRepoOrError: vi.fn() };
+});
 
 describe("handleSpawnChild prompt enqueue handling", () => {
   const parentId = "parent-session-1";
@@ -97,16 +105,17 @@ describe("handleSpawnChild prompt enqueue handling", () => {
   const makeStore = (
     parentUserId: string | null = null,
     context: typeof spawnContext = spawnContext,
-    environmentId: string | null = "env_parent"
+    environmentId: string | null = "env_parent",
+    ownerTeamId: string | null = null
   ) => ({
     get: vi.fn().mockResolvedValue({
       id: parentId,
       userId: parentUserId,
-      ownerTeamId: null,
       visibility: "workspace",
       repoOwner: context.repoOwner,
       repoName: context.repoName,
       environmentId,
+      ownerTeamId,
     }),
     getSpawnDepth: vi.fn().mockResolvedValue(0),
     getCompleteProviderAuth: vi.fn().mockResolvedValue(parentProviderAuth),
@@ -123,11 +132,15 @@ describe("handleSpawnChild prompt enqueue handling", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    vi.spyOn(TeamMembershipStore.prototype, "listForUser").mockResolvedValue(
+      new Map([["team_alpha", "member"]])
+    );
     vi.mocked(getEffectiveEnabledModels).mockResolvedValue(["anthropic/claude-sonnet-4-6"]);
     integrationSettingsMocks.resolveCodeServerEnabled.mockResolvedValue(false);
     integrationSettingsMocks.resolveVncEnabled.mockResolvedValue(false);
     integrationSettingsMocks.resolveSandboxSettings.mockResolvedValue({});
   });
+  afterEach(() => vi.restoreAllMocks());
 
   it("copies the exact parent provider auth snapshot with immediate inheritance", async () => {
     const store = makeStore();
@@ -247,11 +260,15 @@ describe("handleSpawnChild prompt enqueue handling", () => {
   }
 
   it("rejects a repository-backed child when the actor cannot use repositories", async () => {
-    const store = makeStore(null, spawnContext, null);
+    const store = makeStore(null, spawnContext, null, "team_alpha");
     vi.mocked(SessionIndexStore).mockImplementation(function () {
       return store as never;
     });
-    const { env } = makeSuccessfulEnv(spawnContext, ["sessions.create", "sessions.collaborate"]);
+    const { env } = makeSuccessfulEnv(spawnContext, [
+      "sessions.read",
+      "sessions.create",
+      "sessions.collaborate",
+    ]);
 
     const response = await makeRequest(env);
 
@@ -261,14 +278,17 @@ describe("handleSpawnChild prompt enqueue handling", () => {
       permission: "repositories.use",
     });
     expect(store.create).not.toHaveBeenCalled();
+    expect(resolveRepoOrError).not.toHaveBeenCalled();
+    expect(store.acquireChildAdmissionLease).not.toHaveBeenCalled();
   });
 
   it("rejects an environment-backed child when the actor cannot use environments", async () => {
-    const store = makeStore();
+    const store = makeStore(null, spawnContext, "env_parent", "team_alpha");
     vi.mocked(SessionIndexStore).mockImplementation(function () {
       return store as never;
     });
     const { env } = makeSuccessfulEnv(spawnContext, [
+      "sessions.read",
       "sessions.create",
       "sessions.collaborate",
       "repositories.use",
@@ -282,6 +302,8 @@ describe("handleSpawnChild prompt enqueue handling", () => {
       permission: "environments.use",
     });
     expect(store.create).not.toHaveBeenCalled();
+    expect(resolveRepoOrError).not.toHaveBeenCalled();
+    expect(store.acquireChildAdmissionLease).not.toHaveBeenCalled();
   });
 
   async function getInitBody(childStub: DurableObjectStub) {

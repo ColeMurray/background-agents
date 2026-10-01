@@ -20,7 +20,6 @@ import {
   updateAutomationRequestSchema,
 } from "@open-inspect/shared/types/automations";
 import type { ModelProviderSelections } from "@open-inspect/shared/types/provider-accounts";
-import type { PermissionId } from "@open-inspect/shared/rbac";
 import {
   checkHarnessCompatibility,
   getValidHarnessOrDefault,
@@ -34,6 +33,7 @@ import {
   type AutomationRepositoryInsert,
 } from "../db/automation-store";
 import { SlackChannelStore } from "../db/slack-channel-store";
+import { EnvironmentStore } from "../db/environments";
 import {
   AutomationModelProviderAuthStore,
   toProviderSelections,
@@ -75,13 +75,14 @@ import {
   getEnvironmentSelection,
   getRepositorySelection,
   getTriggerEventTypeError,
-  requireTargetPermissions,
   resolveEnvironmentSelection,
   resolveReasoningEffort,
   resolveRepositorySelection,
   validateSlackTriggerConfig,
   validateTargetCounts,
 } from "./automation-validation";
+import { authorizeSessionTarget } from "./session-target-authorization";
+import { authorizeTeamRepositories } from "./workspace-repository-authorization";
 
 const logger = createLogger("router:automations");
 
@@ -154,13 +155,19 @@ async function handleCreateAutomation(
     if (e instanceof TargetSelectionError) return error(e.message, 400);
     throw e;
   }
-  if (ctx.principal?.kind === "user") {
-    const targetAuthorizationError = requireTargetPermissions(ctx, [
-      ...(requestedRepositories.length > 0 ? (["repositories.use"] as const) : []),
-      ...(requestedEnvironmentIds.length > 0 ? (["environments.use"] as const) : []),
-    ]);
-    if (targetAuthorizationError) return targetAuthorizationError;
-  }
+  const repositoryAuthorizationError = await authorizeSessionTarget(ctx, {
+    teamId: null,
+    repositories: requestedRepositories.map((repository) => ({
+      owner: repository.repoOwner,
+      name: repository.repoName,
+    })),
+  });
+  if (repositoryAuthorizationError) return repositoryAuthorizationError;
+  const environmentAuthorizationError = await authorizeSessionTarget(ctx, {
+    teamId: null,
+    environmentId: requestedEnvironmentIds[0],
+  });
+  if (environmentAuthorizationError) return environmentAuthorizationError;
   try {
     await resolveEnvironmentSelection(ctx.db, requestedEnvironmentIds);
   } catch (e) {
@@ -218,7 +225,8 @@ async function handleCreateAutomation(
     return error("Invalid reasoning effort for selected model", 400);
   }
 
-  const newRepositories = await resolveRepositorySelection(env, requestedRepositories, ctx);
+  const newRepositories = await resolveRepositorySelection(env, requestedRepositories, ctx, null);
+  if (newRepositories instanceof Response) return newRepositories;
 
   let providerSelections: ModelProviderSelections;
   try {
@@ -511,18 +519,23 @@ async function handleUpdateAutomation(
   // it simply applies from the next invocation.
   const selection = getRepositorySelection(body);
   const environmentSelection = getEnvironmentSelection(body);
-  const requiredTargetPermissions: PermissionId[] = [
-    ...(selection.kind === "replace" && selection.repositories.length > 0
-      ? (["repositories.use"] as const)
-      : []),
-    ...(environmentSelection.kind === "replace" && environmentSelection.environmentIds.length > 0
-      ? (["environments.use"] as const)
-      : []),
-  ];
-  if (requiredTargetPermissions.length > 0) {
-    const targetAuthorizationError = requireTargetPermissions(ctx, requiredTargetPermissions);
-    if (targetAuthorizationError) return targetAuthorizationError;
-  }
+  const repositoryAuthorizationError = await authorizeSessionTarget(ctx, {
+    teamId: null,
+    repositories:
+      selection.kind === "replace"
+        ? selection.repositories.map((repository) => ({
+            owner: repository.repoOwner,
+            name: repository.repoName,
+          }))
+        : undefined,
+  });
+  if (repositoryAuthorizationError) return repositoryAuthorizationError;
+  const environmentAuthorizationError = await authorizeSessionTarget(ctx, {
+    teamId: null,
+    environmentId:
+      environmentSelection.kind === "replace" ? environmentSelection.environmentIds[0] : undefined,
+  });
+  if (environmentAuthorizationError) return environmentAuthorizationError;
 
   // The count rules span both selections, so when EITHER is replaced they are
   // validated against the automation's FINAL state (the replacement plus the
@@ -533,11 +546,11 @@ async function handleUpdateAutomation(
   const replacementEnvironmentIds: string[] | null =
     environmentSelection.kind === "replace" ? environmentSelection.environmentIds : null;
   if (selection.kind === "replace" || replacementEnvironmentIds !== null) {
+    const existingRepositories =
+      selection.kind === "unchanged" ? await store.getRepositoriesForAutomation(id) : [];
     try {
       const finalRepositoryCount =
-        selection.kind === "replace"
-          ? selection.repositories.length
-          : (await store.getRepositoriesForAutomation(id)).length;
+        selection.kind === "replace" ? selection.repositories.length : existingRepositories.length;
       const finalEnvironmentCount =
         replacementEnvironmentIds !== null
           ? replacementEnvironmentIds.length
@@ -550,8 +563,40 @@ async function handleUpdateAutomation(
       if (e instanceof TargetSelectionError) return error(e.message, 400);
       throw e;
     }
+    if (existing.owner_team_id && replacementEnvironmentIds?.length) {
+      const environments = new EnvironmentStore(ctx.db);
+      for (const environmentId of replacementEnvironmentIds) {
+        const repositories = await environments.getRepositoriesForEnvironment(environmentId);
+        const denied = await authorizeTeamRepositories(ctx, {
+          teamId: existing.owner_team_id,
+          repositories: repositories.map((repository) => ({
+            owner: repository.repo_owner,
+            name: repository.repo_name,
+            repoId: repository.repo_id,
+          })),
+        });
+        if (denied) return denied;
+      }
+    }
     if (selection.kind === "replace") {
-      replacementRepositories = await resolveRepositorySelection(env, selection.repositories, ctx);
+      const resolved = await resolveRepositorySelection(
+        env,
+        selection.repositories,
+        ctx,
+        existing.owner_team_id
+      );
+      if (resolved instanceof Response) return resolved;
+      replacementRepositories = resolved;
+    } else if (existing.owner_team_id) {
+      const targetAuthorizationError = await authorizeTeamRepositories(ctx, {
+        teamId: existing.owner_team_id,
+        repositories: existingRepositories.map((repository) => ({
+          owner: repository.repo_owner,
+          name: repository.repo_name,
+          repoId: repository.repo_id,
+        })),
+      });
+      if (targetAuthorizationError) return targetAuthorizationError;
     }
   }
 
