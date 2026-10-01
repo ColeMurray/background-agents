@@ -16,7 +16,7 @@ import type { ControlPlaneHonoEnv } from "../routing/hono-env";
 import type { Env } from "../types";
 import type { SqlStatement } from "../db/sql-database";
 import { parseBody } from "./body";
-import { missingTeamRepository } from "./session-team-grants";
+import { authorizeTeamRepositories } from "./workspace-repository-authorization";
 import {
   error,
   SCM_AGNOSTIC_HUMAN_USER_ROUTE,
@@ -144,20 +144,16 @@ async function moveSession(
     if (!member && (!body.joinTeam || team.joinPolicy !== "open")) return denied("not_member");
     requiredMemberUserId = actorUserId;
     for (const id of ids) {
-      const missing = await missingTeamRepository(
-        ctx.db,
-        body.teamId,
-        await scope.listRepositoryIds(id)
-      );
-      if (missing)
-        return json(
-          {
-            error: "Target team lacks repository grant",
-            code: "target_team_missing_grant",
-            repository: `${missing.repoOwner}/${missing.repoName}`,
-          },
-          409
-        );
+      const repositories = await scope.listRepositoryIds(id);
+      const grantDenial = await authorizeTeamRepositories(ctx, {
+        teamId: body.teamId,
+        repositories: repositories.map((repository) => ({
+          owner: repository.repoOwner,
+          name: repository.repoName,
+          repoId: repository.repoId,
+        })),
+      });
+      if (grantDenial) return grantDenial;
     }
     if (!member) {
       beforeStatements.push(

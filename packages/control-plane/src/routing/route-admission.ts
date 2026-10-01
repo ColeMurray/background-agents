@@ -610,7 +610,14 @@ async function enforceTeamRequirement(
   if (!teamId) return { response: json({ error: "Invalid team route" }, 400) };
   try {
     const team = await new TeamStore(ctx.db).getById(teamId);
-    if (!team) return { response: error("Team not found", 404) };
+    if (!team)
+      return authorizationDenial(
+        error("Team not found", 404),
+        evidence,
+        requirement,
+        "team_not_visible",
+        "Team not found"
+      );
     const memberships = new TeamMembershipStore(ctx.db);
     const viewer = viewerFromContext(
       ctx,
@@ -625,7 +632,13 @@ async function enforceTeamRequirement(
         requirement.need === "removeMember" ||
         (requirement.need === "read" && team.archivedAt !== null))
     )
-      return { response: error("Team not found", 404) };
+      return authorizationDenial(
+        error("Team not found", 404),
+        evidence,
+        requirement,
+        "team_not_visible",
+        "Team not found"
+      );
     const access = resolveTeamAccess(
       {
         userId: viewer.userId,

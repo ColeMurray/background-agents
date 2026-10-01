@@ -7,6 +7,10 @@ import { admit, dispatch } from "../routing/admit";
 import type { ControlPlaneHonoEnv } from "../routing/hono-env";
 import { repositoryParams } from "./repository-params";
 import { RepoMetadataStore } from "../db/repo-metadata";
+import { TeamRepositoryGrantStore } from "../db/team-repository-grants";
+import { TeamMembershipStore } from "../db/team-memberships";
+import { TeamStore } from "../db/teams";
+import { auditRouteAuthorizationDecision } from "../authorization/request-audit";
 import type { Env } from "../types";
 import type { SqlDatabase } from "../db/sql-database";
 import {
@@ -164,6 +168,43 @@ async function handleListRepos(
   _params: object,
   ctx: RequestContext
 ): Promise<Response> {
+  const teamId = new URL(request.url).searchParams.get("teamId");
+  let grants: Awaited<ReturnType<TeamRepositoryGrantStore["listForTeam"]>> | undefined;
+  if (teamId !== null) {
+    const userId = ctx.authorization?.userId;
+    const roleKey = ctx.authorization?.role.key;
+    const allowed =
+      !!userId &&
+      (await new TeamStore(ctx.db).isActive(teamId)) &&
+      (roleKey === "owner" ||
+        roleKey === "administrator" ||
+        (await new TeamMembershipStore(ctx.db).listForUser(userId)).has(teamId));
+    if (!allowed) {
+      const response = error("Team not found", 404);
+      await auditRouteAuthorizationDecision({
+        ctx,
+        method: request.method,
+        path: "/repos",
+        response,
+        teamId,
+        decision: {
+          kind: "denied",
+          reasonCode: "team_not_visible",
+          reason: "Team not found",
+          requirements: [{ kind: "team", teamIdParam: "teamId", need: "member" }],
+          effectivePermissions: [],
+        },
+      });
+      return response;
+    }
+    grants = await new TeamRepositoryGrantStore(ctx.db).listForTeam(teamId);
+  }
+  const filterRepos = (repos: EnrichedRepository[]) => {
+    if (!grants || grants.some((grant) => grant.grant_kind === "installation")) return repos;
+    const ids = new Set(grants.map((grant) => grant.repo_external_id));
+    return repos.filter((repo) => ids.has(repo.id));
+  };
+  const teamScope = grants ? { teamHasRepositoryGrants: grants.length > 0 } : {};
   const cacheStore = env.REPOS_CACHE;
   const scmIdentity = await reposCacheIdentity(env);
 
@@ -194,7 +235,8 @@ async function handleListRepos(
     }
 
     return json({
-      repos: cached.repos,
+      repos: filterRepos(cached.repos),
+      ...teamScope,
       cached: true,
       cachedAt: cached.cachedAt,
     });
@@ -225,7 +267,8 @@ async function handleListRepos(
   }
 
   return json({
-    repos: result.repos,
+    repos: filterRepos(result.repos),
+    ...teamScope,
     cached: false,
     cachedAt: result.cachedAt,
   });

@@ -169,6 +169,7 @@ export const sampleRow = {
   consecutive_failures: 0,
   created_by: "user-1",
   user_id: "user-1",
+  owner_team_id: null,
   created_at: now,
   updated_at: now,
   deleted_at: null,

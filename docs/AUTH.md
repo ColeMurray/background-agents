@@ -175,9 +175,20 @@ selection; team selection in bots is a later phase, so their teamless creation A
 refused when the setting is enabled. Automation runs are exempt until automation team ownership is
 supported. The setting does not migrate or hide existing `ownerTeamId: null` workspace rows.
 
-There is no repository-grant creation API or UI yet. Repository-backed team sessions and moves
-without existing grants are refused with `target_team_missing_grant`; creating a team does not grant
-it repository access. Repository-less team sessions do not need repository grants.
+Team leads and workspace Owners/Administrators manage repository grants in the team's Repositories
+tab or through `/teams/:id/repository-grants`. Members and administrators can read the grants. A
+team can have installation-wide access or named grants by SCM repository ID; creating a team does
+not grant repository access. Repository-backed team sessions and moves without grants are refused
+with `target_team_missing_grant`. Repository-less team sessions do not need repository grants.
+Removing a grant advances the team's grant version and leaves existing repository references intact;
+grants do not yet narrow or revoke sandbox installation tokens.
+
+Workspace-level skills, repository secrets, and repository image builds keep their existing
+permission checks when no team grants the repository. Once a team grants it, callers must belong to
+one of its granting teams (lead membership for repository secrets), or be a workspace Owner or
+Administrator. Installation grants count for every repository, including when importing repository
+secrets into an environment. Manual environment image builds follow the environment's owning team,
+with workspace-level environments unchanged. These checks are independent of `TEAMS_ENFORCEMENT`.
 
 Moving a session to a team checks active membership in the destination (or an explicit join to an
 open team) and repository grants for every repository in the session and included descendants. A

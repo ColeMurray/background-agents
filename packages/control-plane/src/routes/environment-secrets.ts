@@ -30,6 +30,10 @@ import {
   secretsRequestBodySchema,
 } from "./secret-request-schemas";
 import type { Env } from "../types";
+import {
+  authorizeTeamRepositories,
+  authorizeWorkspaceRepositories,
+} from "./workspace-repository-authorization";
 
 const logger = createLogger("router:environment-secrets");
 
@@ -261,6 +265,17 @@ async function handleImportEnvironmentSecrets(
   if (repoId == null) {
     repoId = (await resolveRepoOrError(env, srcOwner, srcName, ctx, logger)).repoId;
   }
+  const denied = await authorizeTeamRepositories(ctx, {
+    teamId: environment.owner_team_id,
+    repositories: [{ owner: srcOwner, name: srcName, repoId }],
+  });
+  if (denied) return denied;
+
+  const sourceDenied = await authorizeWorkspaceRepositories(ctx, {
+    repositories: [{ owner: srcOwner, name: srcName, repoId }],
+    requireLead: true,
+  });
+  if (sourceDenied) return sourceDenied;
 
   const secretsStore = new EnvironmentSecretsStore(ctx.db, config.key);
   try {

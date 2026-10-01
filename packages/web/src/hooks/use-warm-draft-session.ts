@@ -122,6 +122,13 @@ export function useWarmDraftSession(
           if (failure && typeof failure === "object") {
             if ("error" in failure && typeof failure.error === "string") message = failure.error;
             if ("code" in failure && typeof failure.code === "string") code = failure.code;
+            if (
+              code === "target_team_missing_grant" &&
+              "repository" in failure &&
+              typeof failure.repository === "string"
+            ) {
+              message = `This team has no repository grant for ${failure.repository}.`;
+            }
           }
           const creationError: WarmDraftSessionError = {
             message: code ? `${message} (${code})` : message,

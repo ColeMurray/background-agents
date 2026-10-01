@@ -15,6 +15,22 @@ terminal access or per-session caches. Visibility changes require a changed sele
 non-private child-session cascades. Workspace audit readers can filter by teams they do not belong
 to.
 
+### Added
+
+Teams now have a Repositories tab. Members can view grants; team leads and workspace administrators
+can grant all installation repositories or select named repositories, and remove grants. Team-scoped
+repository catalogs and repository-bearing writes check these grants, with explicit missing-grant
+errors and audited grant changes. Workspace-level session catalogs remain installation-wide. Grant
+changes advance the team's grant version but do not yet narrow or revoke sandbox installation
+tokens.
+
+Workspace-level skills, repository secrets, and image builds retain existing permissions on
+repositories granted to no team. Team-owned repositories additionally require membership (lead
+membership for repository secrets), or workspace Owner/Administrator access, in every enforcement
+mode. Manual team-owned environment builds require access to the owning team. Hidden and missing
+team requests now record identical denied authorization decisions without changing their 404
+responses.
+
 ## September 30, 2026
 
 ### Added

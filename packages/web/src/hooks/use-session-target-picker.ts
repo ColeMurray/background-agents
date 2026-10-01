@@ -108,6 +108,7 @@ export interface SessionTargetPickerProps {
   loadingBranches: boolean;
   repos: Repo[];
   loadingRepos: boolean;
+  repositoryGrantError: string | null;
 }
 
 /** Launch-facing selection state for the page: warming identity and request construction. */
@@ -116,6 +117,8 @@ export interface SessionTargetSelection {
   selectedBranch: string;
   repos: Repo[];
   loadingRepos: boolean;
+  teamHasRepositoryGrants?: boolean;
+  repositoryGrantError: string | null;
   /** The selected repository's metadata when the target is a single repo. */
   selectedRepo: Repo | undefined;
   isLaunchable: boolean;
@@ -156,7 +159,19 @@ export function useSessionTargetPicker({
   teamId?: string | null;
   defaultEnvironmentId?: string | null;
 } = {}): SessionTargetSelection {
-  const { repos, loading: loadingRepos } = useRepos(true, teamId);
+  const {
+    repos: catalogRepos,
+    loading: loadingRepos,
+    error: reposError,
+    teamHasRepositoryGrants,
+  } = useRepos(true, teamId);
+  const repos = useMemo(
+    () => (teamId && reposError ? [] : catalogRepos),
+    [teamId, reposError, catalogRepos]
+  );
+  const noRepositoryGrants =
+    !!teamId && !loadingRepos && !reposError && teamHasRepositoryGrants === false;
+  const repositoryGrantError = noRepositoryGrants ? "This team has no repository grants." : null;
   const { environments, loading: loadingEnvironments } = useEnvironments(teamId);
   const [draftTarget, setSessionTarget] = useState<SessionTarget | null>(null);
   const [selectedBranch, updateSelectedBranch] = useState<string>("");
@@ -167,6 +182,7 @@ export function useSessionTargetPicker({
     !loadingRepos &&
     !loadingEnvironments &&
     selectionContext.teamId === teamId &&
+    !(teamId && draftTarget?.kind === "none" && !hasExplicitSelection) &&
     (hasExplicitSelection || selectionContext.defaultEnvironmentId === defaultEnvironmentId) &&
     targetIsAvailable(draftTarget, repos, environments)
       ? draftTarget
@@ -202,7 +218,7 @@ export function useSessionTargetPicker({
     let nextTarget: SessionTarget | null = null;
     if (hasExplicitSelection) {
       if (targetIsAvailable(draftTarget, repos, environments)) nextTarget = draftTarget;
-      else if (draftTarget?.kind === "repos") {
+      else if (draftTarget?.kind === "repos" && !(teamId && reposError)) {
         nextTarget = {
           kind: "repos",
           repoFullNames: draftTarget.repoFullNames.filter((fullName) =>
@@ -220,14 +236,21 @@ export function useSessionTargetPicker({
     if (!nextTarget) {
       const storedValue = localStorage.getItem(LAST_SELECTED_TARGET_STORAGE_KEY);
       const storedTarget = storedValue ? parseTargetSelectValue(storedValue, null) : null;
-      nextTarget = targetIsAvailable(storedTarget, repos, environments)
-        ? storedTarget
-        : repos[0]
-          ? { kind: "repo", repoFullName: repos[0].fullName }
-          : { kind: "none" };
+      if (
+        targetIsAvailable(storedTarget, repos, environments) &&
+        !(teamId && storedTarget?.kind === "none")
+      ) {
+        nextTarget = storedTarget;
+      } else if (repos[0]) {
+        nextTarget = { kind: "repo", repoFullName: repos[0].fullName };
+      } else if (!teamId) {
+        nextTarget = { kind: "none" };
+        setHasExplicitSelection(false);
+      }
     }
+    if (!nextTarget) return;
 
-    if (nextTarget?.kind === "repo") {
+    if (nextTarget.kind === "repo") {
       if (draftTarget?.kind !== "repo" || draftTarget.repoFullName !== nextTarget.repoFullName) {
         updateSelectedBranch(
           repos.find((repo) => repo.fullName === nextTarget.repoFullName)?.defaultBranch ?? ""
@@ -244,6 +267,7 @@ export function useSessionTargetPicker({
     loadingEnvironments,
     loadingRepos,
     repos,
+    reposError,
     sessionTarget,
     teamId,
   ]);
@@ -355,6 +379,8 @@ export function useSessionTargetPicker({
     repos,
     loadingRepos,
     selectedRepo,
+    teamHasRepositoryGrants,
+    repositoryGrantError,
     isLaunchable: isSessionTargetLaunchable(sessionTarget),
     configKey: getTargetConfigKey(sessionTarget),
     buildRequestFields,
@@ -371,6 +397,7 @@ export function useSessionTargetPicker({
       loadingBranches,
       repos,
       loadingRepos,
+      repositoryGrantError,
     },
   };
 }

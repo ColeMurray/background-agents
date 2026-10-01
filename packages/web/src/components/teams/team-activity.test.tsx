@@ -44,6 +44,12 @@ describe("Team activity", () => {
     render(<TeamActivity teamId="team_one" />);
     const types = within(screen.getByRole("combobox", { name: "Event type" }));
     expect(types.getByRole("option", { name: "Session moved" })).toBeInTheDocument();
+    expect(types.getByRole("option", { name: "Team repository grant added" })).toHaveValue(
+      "team.grant_added"
+    );
+    expect(types.getByRole("option", { name: "Team repository grant removed" })).toHaveValue(
+      "team.grant_removed"
+    );
     expect(types.queryByRole("option", { name: "Authorization allowed" })).not.toBeInTheDocument();
     expect(types.queryByRole("option", { name: "Authorization denied" })).not.toBeInTheDocument();
     const cards = screen.getAllByRole("article");
@@ -55,6 +61,13 @@ describe("Team activity", () => {
     expect(useAuditEvents).toHaveBeenLastCalledWith({
       endpoint: "/api/teams/team_one/activity",
       action: "session.moved",
+    });
+    fireEvent.change(screen.getByRole("combobox", { name: "Event type" }), {
+      target: { value: "team.grant_added" },
+    });
+    expect(useAuditEvents).toHaveBeenLastCalledWith({
+      endpoint: "/api/teams/team_one/activity",
+      action: "team.grant_added",
     });
     fireEvent.click(screen.getByRole("button", { name: "Next" }));
     expect(next).toHaveBeenCalledOnce();

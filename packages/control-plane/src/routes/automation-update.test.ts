@@ -7,7 +7,9 @@
  * supply the principal.
  */
 
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { TeamRepositoryGrantStore } from "../db/team-repository-grants";
+import { TeamStore } from "../db/teams";
 import type * as AuthenticateModule from "../auth/authenticate";
 import { resolveRepoOrError } from "./shared";
 import { PERMISSION_IDS } from "@open-inspect/shared/rbac";
@@ -110,9 +112,11 @@ vi.mock("./shared", async (importOriginal) => {
 const callRoute = automationRequest(createTestRequestHandler([automationRoutes]));
 
 describe("automation read, update, and delete routes", () => {
+  afterEach(() => vi.restoreAllMocks());
   beforeEach(() => {
     vi.clearAllMocks();
     applyMockDefaults();
+    vi.spyOn(TeamStore.prototype, "isActive").mockResolvedValue(true);
     vi.mocked(resolveRepoOrError).mockResolvedValue({
       repoId: 12345,
       repoOwner: "acme",
@@ -183,8 +187,110 @@ describe("automation read, update, and delete routes", () => {
           permission,
         });
         expect(mockBatch).not.toHaveBeenCalled();
+        expect(resolveRepoOrError).not.toHaveBeenCalled();
+        expect(mockEnvironmentStore.getById).not.toHaveBeenCalled();
       }
     );
+
+    it("denies a repository replacement not granted to the persisted owner team", async () => {
+      mockStore.getById.mockResolvedValue({ ...sampleRow, owner_team_id: "team_alpha" });
+      const grants = vi
+        .spyOn(TeamRepositoryGrantStore.prototype, "listForTeam")
+        .mockResolvedValue([]);
+
+      const res = await callRoute("PUT", "/automations/auto-1", {
+        body: { repositories: [{ repoOwner: "acme", repoName: "api" }] },
+      });
+
+      expect(res.status).toBe(409);
+      await expect(res.json()).resolves.toEqual({
+        error: "Target team lacks repository grant",
+        code: "target_team_missing_grant",
+        repository: "acme/api",
+      });
+      expect(grants).toHaveBeenCalledWith("team_alpha");
+      expect(mockStore.bindAutomationUpdate).not.toHaveBeenCalled();
+      expect(mockStore.bindReplaceRepositories).not.toHaveBeenCalled();
+      expect(mockBatch).not.toHaveBeenCalled();
+    });
+
+    it.each([{ environmentIds: ["env_1"] }, { environmentIds: [] }])(
+      "validates unchanged repositories against team grants when environment targets change",
+      async ({ environmentIds }) => {
+        mockStore.getById.mockResolvedValue({ ...sampleRow, owner_team_id: "team_alpha" });
+        mockStore.getRepositoriesForAutomation.mockResolvedValue([
+          { repo_owner: "acme", repo_name: "app", repo_id: 7, base_branch: "main" },
+        ]);
+        vi.spyOn(TeamRepositoryGrantStore.prototype, "listForTeam").mockResolvedValue([]);
+
+        const res = await callRoute("PUT", "/automations/auto-1", {
+          body: { environmentIds },
+          permissions: PERMISSION_IDS.filter((permission) => permission !== "repositories.use"),
+        });
+
+        expect(res.status).toBe(409);
+        await expect(res.json()).resolves.toMatchObject({
+          code: "target_team_missing_grant",
+          repository: "acme/app",
+        });
+        expect(resolveRepoOrError).not.toHaveBeenCalled();
+        expect(mockStore.bindAutomationUpdate).not.toHaveBeenCalled();
+        expect(mockStore.bindReplaceEnvironments).not.toHaveBeenCalled();
+        expect(mockBatch).not.toHaveBeenCalled();
+      }
+    );
+
+    it.each([
+      {
+        repoId: 7,
+        grant: { grant_kind: "repository", repo_external_id: 7 } as const,
+      },
+      {
+        repoId: null,
+        grant: { grant_kind: "installation", repo_external_id: null } as const,
+      },
+    ])(
+      "clears environments without new use permissions for granted unchanged repositories",
+      async ({ repoId, grant }) => {
+        mockStore.getById.mockResolvedValue({ ...sampleRow, owner_team_id: "team_alpha" });
+        mockStore.getRepositoriesForAutomation.mockResolvedValue([
+          { repo_owner: "acme", repo_name: "app", repo_id: repoId, base_branch: "main" },
+        ]);
+        const grants = vi
+          .spyOn(TeamRepositoryGrantStore.prototype, "listForTeam")
+          .mockResolvedValue([grant]);
+
+        const res = await callRoute("PUT", "/automations/auto-1", {
+          body: { environmentIds: [] },
+          permissions: PERMISSION_IDS.filter(
+            (permission) => permission !== "repositories.use" && permission !== "environments.use"
+          ),
+        });
+
+        expect(res.status).toBe(200);
+        expect(TeamStore.prototype.isActive).toHaveBeenCalledWith("team_alpha");
+        expect(grants).toHaveBeenCalledWith("team_alpha");
+        expect(resolveRepoOrError).not.toHaveBeenCalled();
+        expect(mockStore.bindReplaceRepositories).not.toHaveBeenCalled();
+        expect(mockStore.bindReplaceEnvironments).toHaveBeenCalledWith(
+          "auto-1",
+          [],
+          expect.any(Number)
+        );
+        expect(mockBatch).toHaveBeenCalled();
+      }
+    );
+
+    it("does not revalidate unchanged targets for an unrelated team automation edit", async () => {
+      mockStore.getById.mockResolvedValue({ ...sampleRow, owner_team_id: "team_alpha" });
+      const grants = vi.spyOn(TeamRepositoryGrantStore.prototype, "listForTeam");
+
+      const res = await callRoute("PUT", "/automations/auto-1", { body: { name: "Updated" } });
+
+      expect(res.status).toBe(200);
+      expect(grants).not.toHaveBeenCalled();
+      expect(mockBatch).toHaveBeenCalled();
+    });
 
     it("updates automation fields", async () => {
       mockStore.getById.mockResolvedValue(sampleRow);

@@ -23,6 +23,7 @@ export function SessionTargetPicker({
   loadingBranches,
   repos,
   loadingRepos,
+  repositoryGrantError,
   disabled,
 }: SessionTargetPickerProps & { disabled: boolean }) {
   return (
@@ -49,6 +50,12 @@ export function SessionTargetPicker({
         </span>
         <ChevronDownIcon className="w-3 h-3" />
       </Combobox>
+
+      {repositoryGrantError && (
+        <p role="alert" className="max-w-full text-xs text-destructive">
+          {repositoryGrantError}
+        </p>
+      )}
 
       {/* Ad-hoc repository set editor */}
       {sessionTarget?.kind === "repos" && (

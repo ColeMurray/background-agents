@@ -31,7 +31,12 @@ import {
   buildValidatedSkillRevision,
   SkillRevisionValidationError,
 } from "../skills/content-addressing";
-import { fetchSkillImport, SkillImportError, type SkillImportResult } from "../skills/git-import";
+import {
+  fetchSkillImport,
+  resolveSkillImportRepository,
+  SkillImportError,
+  type SkillImportResult,
+} from "../skills/git-import";
 import { admit, dispatch } from "../routing/admit";
 import type { ControlPlaneHonoEnv } from "../routing/hono-env";
 import { z } from "zod";
@@ -44,7 +49,12 @@ import {
   SCM_AGNOSTIC_HUMAN_USER_ROUTE,
   SCM_AGNOSTIC_USER_OR_SERVICE_ROUTE,
   requirePermission,
+  resolveRepoOrError,
 } from "./shared";
+import {
+  authorizeWorkspaceRepositories,
+  type RepositoryAuthorizationTarget,
+} from "./workspace-repository-authorization";
 
 const log = createLogger("router:skills");
 
@@ -133,7 +143,7 @@ async function handleGetSkill(
 
 async function handleCreateSkill(
   request: Request,
-  _env: Env,
+  env: Env,
   _params: object,
   ctx: RequestContext
 ): Promise<Response> {
@@ -141,6 +151,14 @@ async function handleCreateSkill(
   if (!userId) return error("Canonical user required", 403);
   const parsed = await parseBody(request, createSkillInputSchema, "Invalid skill");
   if (parsed instanceof Response) return parsed;
+  const denied = await authorizeSkillRepositories(
+    env,
+    ctx,
+    parsed.assignments.flatMap((assignment) =>
+      assignment.type === "repository" ? [assignment.repository] : []
+    )
+  );
+  if (denied) return denied;
   try {
     const skill = await new SkillStore(ctx.db).create(parsed, userId);
     audit(ctx, {
@@ -152,6 +170,45 @@ async function handleCreateSkill(
   } catch (e) {
     return skillWriteError(e);
   }
+}
+
+async function authorizeSkillRepositories(
+  env: Env,
+  ctx: RequestContext,
+  repositories: readonly { repoOwner: string; repoName: string }[]
+): Promise<Response | null> {
+  if (repositories.length === 0) return null;
+  const resolved: RepositoryAuthorizationTarget[] = [];
+  const seen = new Set<string>();
+  for (const repository of repositories) {
+    const key = `${repository.repoOwner}/${repository.repoName}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    const access = await resolveRepoOrError(
+      env,
+      repository.repoOwner,
+      repository.repoName,
+      ctx,
+      log
+    );
+    resolved.push({ owner: access.repoOwner, name: access.repoName, repoId: access.repoId });
+  }
+  return authorizeWorkspaceRepositories(ctx, { repositories: resolved });
+}
+
+async function fetchAuthorizedSkillImport(
+  env: Env,
+  ctx: RequestContext,
+  source: SkillImportSourceInput,
+  name?: string | null
+): Promise<SkillImportResult | Response> {
+  const provider = createRouteSourceControlProvider(env);
+  const resolved = await resolveSkillImportRepository(provider, source);
+  const denied = await authorizeWorkspaceRepositories(ctx, {
+    repositories: [{ owner: resolved.repoOwner, name: resolved.repoName, repoId: resolved.repoId }],
+  });
+  if (denied) return denied;
+  return fetchSkillImport(provider, source, name, resolved);
 }
 
 async function handlePreviewSkill(
@@ -248,11 +305,8 @@ async function handlePreviewSkillImport(
   );
   if (parsed instanceof Response) return parsed;
   try {
-    const result = await fetchSkillImport(
-      createRouteSourceControlProvider(env),
-      parsed.source,
-      parsed.name
-    );
+    const result = await fetchAuthorizedSkillImport(env, ctx, parsed.source, parsed.name);
+    if (result instanceof Response) return result;
     return json(await importPreviewResponse(ctx, result));
   } catch (e) {
     return skillImportWriteError(e);
@@ -269,12 +323,17 @@ async function handleImportSkill(
   if (!userId) return error("Canonical user required", 403);
   const parsed = await parseBody(request, importSkillInputSchema, "Invalid skill import");
   if (parsed instanceof Response) return parsed;
+  const denied = await authorizeSkillRepositories(
+    env,
+    ctx,
+    parsed.assignments.flatMap((assignment) =>
+      assignment.type === "repository" ? [assignment.repository] : []
+    )
+  );
+  if (denied) return denied;
   try {
-    const result = await fetchSkillImport(
-      createRouteSourceControlProvider(env),
-      parsed.source,
-      parsed.name
-    );
+    const result = await fetchAuthorizedSkillImport(env, ctx, parsed.source, parsed.name);
+    if (result instanceof Response) return result;
     const stale = confirmedImport(result, parsed);
     if (stale) return stale;
     const skill = await new SkillStore(ctx.db).create(
@@ -342,7 +401,8 @@ async function handlePreviewSkillReimport(
     const provider = createRouteSourceControlProvider(env);
     const source = recordedImportSource(skill.source, parsed.ref, provider.name);
     if (source instanceof Response) return source;
-    const result = await fetchSkillImport(provider, source, skill.name);
+    const result = await fetchAuthorizedSkillImport(env, ctx, source, skill.name);
+    if (result instanceof Response) return result;
     return json(await importPreviewResponse(ctx, result, skill.name));
   } catch (e) {
     return skillImportWriteError(e);
@@ -372,7 +432,8 @@ async function handleReimportSkill(
     const provider = createRouteSourceControlProvider(env);
     const source = recordedImportSource(skill.source, parsed.ref, provider.name);
     if (source instanceof Response) return source;
-    const result = await fetchSkillImport(provider, source, skill.name);
+    const result = await fetchAuthorizedSkillImport(env, ctx, source, skill.name);
+    if (result instanceof Response) return result;
     const stale = confirmedImport(result, parsed);
     if (stale) return stale;
     const applied = await store.applyImportedRevision(
@@ -429,7 +490,7 @@ async function handleSetSkillEnabled(
 
 async function handleReplaceSkillContentAndAssignments(
   request: Request,
-  _env: Env,
+  env: Env,
   params: { id: string },
   ctx: RequestContext
 ): Promise<Response> {
@@ -444,6 +505,14 @@ async function handleReplaceSkillContentAndAssignments(
     "Invalid skill edit"
   );
   if (parsed instanceof Response) return parsed;
+  const denied = await authorizeSkillRepositories(
+    env,
+    ctx,
+    parsed.assignments.flatMap((assignment) =>
+      assignment.type === "repository" ? [assignment.repository] : []
+    )
+  );
+  if (denied) return denied;
   try {
     const skill = await new SkillStore(ctx.db).replaceContentAndAssignments(
       id,

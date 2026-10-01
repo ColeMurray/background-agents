@@ -33,6 +33,7 @@ import {
   requirePermission,
 } from "./shared";
 import type { Env } from "../types";
+import { authorizeSessionTarget } from "./session-target-authorization";
 
 const logger = createLogger("router:environments");
 
@@ -103,6 +104,15 @@ async function handleCreateEnvironment(
   if (await store.getByName(name)) {
     return error(`An environment named "${name}" already exists`, 409);
   }
+
+  const targetAuthorizationError = await authorizeSessionTarget(ctx, {
+    teamId: null,
+    repositories: repositories.map((repository) => ({
+      owner: repository.repoOwner,
+      name: repository.repoName,
+    })),
+  });
+  if (targetAuthorizationError) return targetAuthorizationError;
 
   const inserts = await resolveEnvironmentRepositories(env, repositories, ctx);
 
@@ -178,10 +188,28 @@ async function handleUpdateEnvironment(
     }
   }
 
-  const inserts =
-    repositories !== undefined
-      ? await resolveEnvironmentRepositories(env, repositories, ctx)
-      : undefined;
+  let inserts: EnvironmentRepositoryInsert[] | undefined;
+  if (repositories !== undefined) {
+    const targetAuthorizationError = await authorizeSessionTarget(ctx, {
+      teamId: null,
+      repositories: repositories.map((repository) => ({
+        owner: repository.repoOwner,
+        name: repository.repoName,
+      })),
+    });
+    if (targetAuthorizationError) return targetAuthorizationError;
+
+    inserts = await resolveEnvironmentRepositories(env, repositories, ctx);
+    const resolvedTargetAuthorizationError = await authorizeSessionTarget(ctx, {
+      teamId: existing.owner_team_id,
+      repositories: inserts.map((repository) => ({
+        owner: repository.repo_owner,
+        name: repository.repo_name,
+        repoId: repository.repo_id,
+      })),
+    });
+    if (resolvedTargetAuthorizationError) return resolvedTargetAuthorizationError;
+  }
 
   const fields: EnvironmentScalarFields = {};
   if (name !== undefined) fields.name = name;

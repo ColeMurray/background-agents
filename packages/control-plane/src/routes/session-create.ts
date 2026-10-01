@@ -21,7 +21,6 @@ import { UserStore } from "../db/user-store";
 import { TeamStore } from "../db/teams";
 import { TeamMembershipStore } from "../db/team-memberships";
 import { TeamSettingsStore } from "../db/team-settings";
-import { missingTeamRepository } from "./session-team-grants";
 import { createLogger } from "../logger";
 import { parseCreateSessionInput } from "../session/create-session-input";
 import { initializeSession, type SessionInitInput } from "../session/initialize";
@@ -101,9 +100,12 @@ export async function handleCreateSession(
     throw e;
   }
 
-  const targetAuthorizationError = authorizeSessionTarget(ctx, {
+  const targetAuthorizationError = await authorizeSessionTarget(ctx, {
+    teamId: null,
     environmentId: body.environmentId,
-    hasRepository: Boolean(repositoryContext || body.repositories),
+    repositories: (body.repositories ?? (repositoryContext ? [repositoryContext] : [])).map(
+      (repository) => ({ owner: repository.repoOwner, name: repository.repoName })
+    ),
   });
   if (targetAuthorizationError) return targetAuthorizationError;
 
@@ -182,21 +184,19 @@ export async function handleCreateSession(
     ) {
       return json({ error: "Not a team member", code: "not_member" }, 403);
     }
-    const missing = await missingTeamRepository(
-      ctx.db,
-      teamId,
-      repositories ?? (repoOwner && repoName ? [{ repoOwner, repoName, repoId }] : [])
-    );
-    if (missing)
-      return json(
-        {
-          error: "Target team lacks repository grant",
-          code: "target_team_missing_grant",
-          repository: `${missing.repoOwner}/${missing.repoName}`,
-        },
-        409
-      );
   }
+  const resolvedTargetAuthorizationError = await authorizeSessionTarget(ctx, {
+    teamId,
+    environmentId,
+    repositories: (
+      repositories ?? (repoOwner && repoName ? [{ repoOwner, repoName, repoId }] : [])
+    ).map((repository) => ({
+      owner: repository.repoOwner,
+      name: repository.repoName,
+      repoId: repository.repoId,
+    })),
+  });
+  if (resolvedTargetAuthorizationError) return resolvedTargetAuthorizationError;
   const visibility = body.visibility ?? team?.defaultVisibility ?? "workspace";
   if (visibility === "team" && !teamId)
     return json({ error: "A team is required", code: "team_required" }, 400);

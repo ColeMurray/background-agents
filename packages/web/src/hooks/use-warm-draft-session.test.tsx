@@ -123,6 +123,34 @@ describe("useWarmDraftSession", () => {
     expect(result.current.error).toBeNull();
   });
 
+  it("names the missing repository grant and treats the denial as terminal", async () => {
+    vi.mocked(browserApiFetch).mockResolvedValue(
+      Response.json(
+        {
+          error: "Target team lacks repository grant",
+          code: "target_team_missing_grant",
+          repository: "group/subgroup/api",
+        },
+        { status: 409 }
+      )
+    );
+    const { result } = renderHook(() => useWarmDraftSession({ ...request(), teamId: "team-1" }));
+    await act(async () => {
+      await result.current.warm();
+    });
+    expect(result.current.error).toEqual({
+      message:
+        "This team has no repository grant for group/subgroup/api. (target_team_missing_grant)",
+      code: "target_team_missing_grant",
+      status: 409,
+      terminal: true,
+    });
+    await act(async () => {
+      await result.current.warm();
+    });
+    expect(browserApiFetch).toHaveBeenCalledOnce();
+  });
+
   it("ignores a terminal denial from a superseded request", async () => {
     let resolveCreate: ((response: Response) => void) | undefined;
     vi.mocked(browserApiFetch).mockImplementation(

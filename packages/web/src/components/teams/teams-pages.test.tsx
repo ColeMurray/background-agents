@@ -50,6 +50,7 @@ vi.mock("@/components/settings/team-detail", () => ({
 }));
 vi.mock("./team-overview", () => ({ TeamOverview: () => <p>Team session buckets</p> }));
 vi.mock("./team-activity", () => ({ TeamActivity: () => <p>Team activity feed</p> }));
+vi.mock("./team-repositories", () => ({ TeamRepositories: () => <p>Team repository grants</p> }));
 
 const team: TeamResponse = {
   id: "team_design",
@@ -177,6 +178,7 @@ describe("Team page tabs", () => {
     expect(tabs.getByRole("button", { name: "Members" })).toBeInTheDocument();
     expect(tabs.queryByRole("button", { name: "Overview" })).not.toBeInTheDocument();
     expect(tabs.queryByRole("button", { name: "Activity" })).not.toBeInTheDocument();
+    expect(tabs.queryByRole("button", { name: "Repositories" })).not.toBeInTheDocument();
     expect(tabs.queryByRole("button", { name: "Settings" })).not.toBeInTheDocument();
     expect(screen.getByText("Team member table")).toBeInTheDocument();
     expect(screen.queryByText("Team session buckets")).not.toBeInTheDocument();
@@ -189,6 +191,8 @@ describe("Team page tabs", () => {
     expect(screen.queryByRole("button", { name: "Settings" })).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Activity" }));
     expect(screen.getByText("Team activity feed")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Repositories" }));
+    expect(screen.getByText("Team repository grants")).toBeInTheDocument();
   });
 
   it.each(["owner", "administrator"])(
@@ -198,6 +202,8 @@ describe("Team page tabs", () => {
       const view = render(<TeamPage slug="design" />);
       expect(screen.getByRole("button", { name: "Overview" })).toBeInTheDocument();
       expect(screen.getByRole("button", { name: "Activity" })).toBeInTheDocument();
+      fireEvent.click(screen.getByRole("button", { name: "Repositories" }));
+      expect(screen.getByText("Team repository grants")).toBeInTheDocument();
       expect(screen.queryByRole("button", { name: "Settings" })).not.toBeInTheDocument();
       mocks.teams = [{ ...team, capabilities: { ...denied, canArchive: true } }];
       view.rerender(<TeamPage slug="design" />);
@@ -214,6 +220,17 @@ describe("Team page tabs", () => {
     view.rerender(<TeamPage slug="design" />);
     expect(screen.queryByText("Team activity feed")).not.toBeInTheDocument();
     expect(screen.getByText("Team member table")).toBeInTheDocument();
+  });
+
+  it("unmounts repository grants when membership disappears", () => {
+    mocks.mine = [team];
+    const view = render(<TeamPage slug="design" />);
+    fireEvent.click(screen.getByRole("button", { name: "Repositories" }));
+    expect(screen.getByText("Team repository grants")).toBeInTheDocument();
+    mocks.mine = [];
+    view.rerender(<TeamPage slug="design" />);
+    expect(screen.queryByText("Team repository grants")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Repositories" })).not.toBeInTheDocument();
   });
 
   it.each(["loading", "failed"])("withholds private tabs while membership is %s", (state) => {
