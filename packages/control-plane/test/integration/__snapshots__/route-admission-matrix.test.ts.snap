@@ -61,7 +61,6 @@ exports[`route admission matrix > admits the workspace owner through every brows
   "PATCH /settings/teams owner=400",
   "POST /sessions owner=201",
   "PUT /sessions/:id/visibility owner=400",
-  "PUT /sessions/:id/scope owner=400",
   "PUT /sessions/:id/collaborators/:userId owner=404",
   "DELETE /sessions/:id/collaborators/:userId owner=200",
   "GET /sessions/:id/collaborator-candidates owner=200",
@@ -255,7 +254,6 @@ exports[`route admission matrix > rejects every credentialed route anonymously b
   "GET /channel-bindings/:provider/:externalId anonymous=401",
   "POST /sessions anonymous=401",
   "PUT /sessions/:id/visibility anonymous=401",
-  "PUT /sessions/:id/scope anonymous=401",
   "PUT /sessions/:id/collaborators/:userId anonymous=401",
   "DELETE /sessions/:id/collaborators/:userId anonymous=401",
   "GET /sessions/:id/collaborator-candidates anonymous=401",
@@ -493,7 +491,6 @@ exports[`route admission sentinel > audits one workspace Owner break-glass admis
 exports[`route admission sentinel > conceals all team item routes from another team before any handler or DO call 1`] = `
 [
   "PUT /sessions/:id/visibility other-team=404",
-  "PUT /sessions/:id/scope other-team=404",
   "PUT /sessions/:id/collaborators/:userId other-team=404",
   "DELETE /sessions/:id/collaborators/:userId other-team=404",
   "GET /sessions/:id/collaborator-candidates other-team=404",
@@ -538,7 +535,6 @@ exports[`route admission sentinel > conceals all team item routes from another t
 exports[`route admission sentinel > reports action denials for a same-team Viewer and admits a private collaborator 1`] = `
 [
   "PUT /sessions/:id/visibility same-team-viewer=403",
-  "PUT /sessions/:id/scope same-team-viewer=403",
   "PUT /sessions/:id/collaborators/:userId same-team-viewer=403",
   "DELETE /sessions/:id/collaborators/:userId same-team-viewer=200",
   "GET /sessions/:id/collaborator-candidates same-team-viewer=403",

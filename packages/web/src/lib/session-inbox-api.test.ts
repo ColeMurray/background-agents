@@ -111,7 +111,6 @@ describe("session inbox response parsing", () => {
       canCollaborate: false,
       canManageLifecycle: false,
       canDelete: false,
-      canMove: false,
       canSandbox: false,
       canManageCollaborators: false,
       canChangeVisibility: false,

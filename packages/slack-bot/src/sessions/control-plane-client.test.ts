@@ -147,11 +147,14 @@ describe("control plane client request payloads", () => {
     });
   });
 
-  it("distinguishes denied follow-ups from transient errors", async () => {
-    const fetch = vi.fn(async () => new Response(null, { status: 403 }));
+  it("does not retry a follow-up denied for missing current team membership", async () => {
+    const fetch = vi.fn(async () =>
+      okJson({ code: "session_action_denied", reason_code: "not_member" }, 403)
+    );
     expect(
       await sendPrompt(makeEnv(fetch), { sessionId: "s1", content: "Fix it", authorId: "slack:U1" })
     ).toEqual({ ok: false, reason: "forbidden" });
+    expect(fetch).toHaveBeenCalledOnce();
   });
 
   it("creates repository sessions with target, model, and branch — identity stays out of the body", async () => {

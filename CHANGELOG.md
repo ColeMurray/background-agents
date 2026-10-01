@@ -2,6 +2,17 @@
 
 New features, integrations, and notable improvements to Open-Inspect — newest first.
 
+## Unreleased
+
+### Changed
+
+Team-owned session actions now require current owning-team membership in every `TEAMS_ENFORCEMENT`
+mode, including for Owners and Administrators. Visibility still determines read access; collaborator
+self-removal requires only read access. Sessions, automations, and environments cannot move between
+teams or to/from the workspace; a team-owned session never becomes workspace-owned. Visibility and
+collaborator controls remain available to authorized users. Historical `session.moved` audit events
+remain readable.
+
 ## October 1, 2026
 
 ### Removed
@@ -31,8 +42,7 @@ to.
 Team leads and administrators can manage primary and source Slack channel bindings in a team's
 Channels tab. Settings > Integrations > Slack now controls whether unbound channels create
 workspace-level sessions (the default) or reject requests until bound. Binding changes appear in the
-workspace audit log. The move dialog warns when moving a session away from its Slack channel's bound
-team will end the thread; future work continues in the web app.
+workspace audit log.
 
 Slack-created sessions carry the channel's team and enforce the requesting user's membership.
 Unavailable threads close instead of starting replacement sessions. Session notifications and the

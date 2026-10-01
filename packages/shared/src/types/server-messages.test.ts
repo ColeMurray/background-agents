@@ -109,54 +109,6 @@ describe("session view contracts", () => {
     ).toBe(false);
   });
 
-  it.each([{ channelId: "C123", teamId: "team-1" }, { channelId: "C123", teamId: null }, null])(
-    "preserves optional Slack thread metadata in HTTP and subscribed snapshots (%j)",
-    (slackThread) => {
-      const snapshot = {
-        session: { ...snapshotState, slackThread },
-        artifacts: [],
-        promptQueue: [],
-        timeline: { events: [], hasMore: false, cursor: null },
-      };
-
-      expect(sessionSnapshotSchema.parse(snapshot).session).toHaveProperty(
-        "slackThread",
-        slackThread
-      );
-      expect(
-        serverMessageSchema.parse({
-          ...snapshot,
-          type: "subscribed",
-          participantId: "participant-1",
-        })
-      ).toMatchObject({ session: { slackThread } });
-    }
-  );
-
-  it("accepts snapshot state without Slack thread metadata", () => {
-    expect(sessionSnapshotStateSchema.parse(snapshotState)).not.toHaveProperty("slackThread");
-  });
-
-  it.each([
-    { channelId: "", teamId: null },
-    { channelId: 123, teamId: null },
-    { channelId: "C123", teamId: 123 },
-    { channelId: "C123" },
-  ])("rejects malformed Slack thread metadata (%j)", (slackThread) => {
-    expect(sessionSnapshotStateSchema.safeParse({ ...snapshotState, slackThread }).success).toBe(
-      false
-    );
-  });
-
-  it("does not expose raw Slack callback fields", () => {
-    expect(
-      sessionSnapshotStateSchema.parse({
-        ...snapshotState,
-        slackThread: { channelId: "C123", teamId: null, threadTs: "123.456", model: "secret" },
-      }).slackThread
-    ).toEqual({ channelId: "C123", teamId: null });
-  });
-
   it("parses a snapshot and removes access credentials", () => {
     const parsed = sessionSnapshotSchema.parse({
       session: {

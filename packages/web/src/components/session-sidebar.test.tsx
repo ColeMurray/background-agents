@@ -67,7 +67,6 @@ function session(id: string, title: string, parentSessionId: string | null = nul
       canCollaborate: true,
       canManageLifecycle: true,
       canDelete: true,
-      canMove: true,
       canSandbox: true,
       canManageCollaborators: true,
       canChangeVisibility: true,

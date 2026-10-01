@@ -99,13 +99,11 @@ beforeEach(() => {
       ownerUserId: "user_owner",
       visibility: "private",
       collaborators: ["user_collaborator"],
-      slackThread: { channelId: "C_ORIGIN", teamId: "team_origin" },
       capabilities: {
         canRead: true,
         canCollaborate: false,
         canManageLifecycle: false,
         canDelete: false,
-        canMove: true,
         canManageCollaborators: true,
         canChangeVisibility: true,
         canSandbox: false,
@@ -173,59 +171,33 @@ it("renders the existing not-found path before cached session content or action 
   expect(mocks.prompt).not.toHaveBeenCalled();
 });
 
-it("keeps desktop actions available to a mover without collaboration and forwards refreshed scope everywhere", () => {
+it("keeps desktop actions available without collaboration and refreshes sidebar and overlay scope", () => {
   const { rerender } = render(<SessionPage />);
   expect(mocks.composer).not.toHaveBeenCalled();
   expect(mocks.actionBar.mock.lastCall?.[0]).toMatchObject({
-    capabilities: { move: true, collaborate: false },
-    scope: {
-      ownerTeamId: "team_design",
-      visibility: "private",
-      collaborators: ["user_collaborator"],
-      slackThread: { channelId: "C_ORIGIN", teamId: "team_origin" },
-      onUpdated: mocks.refreshSnapshot,
-    },
+    capabilities: { collaborate: false, changeVisibility: true, manageCollaborators: true },
   });
-  expect(mocks.header.mock.lastCall?.[0].actions.scope.onUpdated).toBe(mocks.refreshSnapshot);
   expect(mocks.sidebar.mock.lastCall?.[0].scope.ownerTeamId).toBe("team_design");
 
   mocks.snapshot = {
     ...mocks.snapshot!,
     session: {
       ...mocks.snapshot!.session,
-      ownerTeamId: "team_new",
       visibility: "team",
       collaborators: [],
-      slackThread: { channelId: "C_ORIGIN", teamId: "team_rebound" },
     },
   };
   mocks.mobile = true;
   rerender(<SessionPage />);
   for (const scope of [
-    mocks.actionBar.mock.lastCall?.[0].scope,
-    mocks.header.mock.lastCall?.[0].actions.scope,
     mocks.sidebar.mock.lastCall?.[0].scope,
     mocks.overlay.mock.lastCall?.[0].scope,
   ]) {
     expect(scope).toMatchObject({
-      ownerTeamId: "team_new",
+      ownerTeamId: "team_design",
       visibility: "team",
       collaborators: [],
-      slackThread: { channelId: "C_ORIGIN", teamId: "team_rebound" },
       onUpdated: mocks.refreshSnapshot,
     });
-  }
-});
-
-it("preserves an unbound or absent Slack thread in refreshed session scope", () => {
-  const view = render(<SessionPage />);
-  for (const slackThread of [{ channelId: "C_ORIGIN", teamId: null }, null, undefined]) {
-    mocks.snapshot = {
-      ...mocks.snapshot!,
-      session: { ...mocks.snapshot!.session, slackThread },
-    };
-    view.rerender(<SessionPage />);
-    expect(mocks.actionBar.mock.lastCall?.[0].scope.slackThread).toEqual(slackThread);
-    expect(mocks.header.mock.lastCall?.[0].actions.scope.slackThread).toEqual(slackThread);
   }
 });

@@ -1,10 +1,6 @@
 import type { SandboxEvent } from "@open-inspect/shared/types/sandbox-events";
 import type { PromptQueueItem } from "@open-inspect/shared/types/server-messages";
 import {
-  automationCallbackContextSchema,
-  slackCallbackContextSchema,
-} from "@open-inspect/shared/types/session-api";
-import {
   messageStatusSchema,
   type MessageSource,
   type MessageStatus,
@@ -26,7 +22,6 @@ const messageStopConfirmationRowSchema = messageRowSchema
   .pick({ id: true, stop_confirmation_deadline: true })
   .extend({ stop_confirmation_deadline: z.number() });
 const messageCreatedAtRowSchema = messageRowSchema.pick({ id: true, created_at: true });
-const messageOriginRowSchema = messageRowSchema.pick({ source: true, callback_context: true });
 
 export interface RecordedMessageCompletion {
   messageId: string;
@@ -361,43 +356,6 @@ export class MessageRepository {
       source: string | null;
     }>;
     return rows[0] ?? null;
-  }
-
-  /** Only the first message can establish Slack provenance, not later follow-ups. */
-  getSlackThreadOrigin():
-    | { source: "slack"; channelId: string }
-    | { source: "automation"; automationId: string; runId: string }
-    | null {
-    const result = this.sql.exec(
-      `SELECT source, callback_context FROM messages ORDER BY created_at ASC, rowid ASC LIMIT 1`
-    );
-    const message = messageOriginRowSchema.safeParse(result.toArray()[0]);
-    if (!message.success || !message.data.callback_context) {
-      return null;
-    }
-    try {
-      const rawContext: unknown = JSON.parse(message.data.callback_context);
-      if (message.data.source === "slack") {
-        const context = slackCallbackContextSchema.safeParse(rawContext);
-        return context.success && context.data.channel.trim().length > 0
-          ? { source: "slack", channelId: context.data.channel }
-          : null;
-      }
-      if (message.data.source === "automation") {
-        const context = automationCallbackContextSchema.safeParse(rawContext);
-        if (!context.success || !context.data.automationId.trim() || !context.data.runId.trim()) {
-          return null;
-        }
-        return {
-          source: "automation",
-          automationId: context.data.automationId,
-          runId: context.data.runId,
-        };
-      }
-      return null;
-    } catch {
-      return null;
-    }
   }
 
   createMessage(data: CreateMessageData): void {

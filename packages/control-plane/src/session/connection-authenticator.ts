@@ -40,6 +40,7 @@ import { WS_AUTHORIZATION_LEASE_MS } from "./authorization-lease";
 import { canManageSessionBudget } from "./budget-authorization";
 import {
   legacyPermissionForAction,
+  resolverDecides,
   type TeamsEnforcementMode,
 } from "../authorization/teams-enforcement";
 import type { ClientCommandAuthorization } from "./message-router";
@@ -556,7 +557,7 @@ export class SessionConnectionAuthenticator implements SessionUpgradeAdmission {
     resolution: Extract<SessionViewerResolution, { kind: "valid" }>,
     action: SessionAction
   ): AccessDecision {
-    if (resolution.mode === "on" || resolution.row.visibility === "private") {
+    if (resolverDecides(resolution.mode, resolution.row, action)) {
       return checkSessionAccess(resolution.viewer, resolution.row, action);
     }
     return resolution.authorization.permissions.includes(legacyPermissionForAction(action))

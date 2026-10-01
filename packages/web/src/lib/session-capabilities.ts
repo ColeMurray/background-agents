@@ -6,7 +6,6 @@ export interface SessionCapabilities {
   collaborate: boolean;
   lifecycle: boolean;
   delete: boolean;
-  move: boolean;
   manageCollaborators: boolean;
   changeVisibility: boolean;
   sandboxAccess: boolean;
@@ -22,7 +21,6 @@ export function resolveSessionCapabilities(
     collaborate: capabilities?.canRead === true && capabilities.canCollaborate === true,
     lifecycle: capabilities?.canRead === true && capabilities.canManageLifecycle === true,
     delete: capabilities?.canRead === true && capabilities.canDelete === true,
-    move: capabilities?.canRead === true && capabilities.canMove === true,
     manageCollaborators:
       capabilities?.canRead === true && capabilities.canManageCollaborators === true,
     changeVisibility: capabilities?.canRead === true && capabilities.canChangeVisibility === true,

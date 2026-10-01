@@ -50,7 +50,6 @@ function createArchivedSession(index: number): ArchivedSession {
       canManageLifecycle: true,
       canSandbox: false,
       canDelete: false,
-      canMove: false,
       canManageCollaborators: false,
       canChangeVisibility: false,
     },

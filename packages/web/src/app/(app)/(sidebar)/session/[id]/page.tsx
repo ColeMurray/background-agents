@@ -92,7 +92,6 @@ function SessionContent({
           ownerUserId: initialSnapshot.session.ownerUserId ?? null,
           visibility: initialSnapshot.session.visibility,
           collaborators: initialSnapshot.session.collaborators ?? [],
-          slackThread: initialSnapshot.session.slackThread,
           onUpdated: refreshSnapshot,
         };
   const {
@@ -374,7 +373,6 @@ function SessionContent({
             onArchive={handleArchive}
             onUnarchive={handleUnarchive}
             capabilities={capabilities}
-            scope={scope}
           />
         </div>
       )}
@@ -388,7 +386,6 @@ function SessionContent({
             onArchive: handleArchive,
             onUnarchive: handleUnarchive,
             capabilities,
-            scope,
             harness: sessionHarness,
           }}
           prompt={{
@@ -462,7 +459,6 @@ function SessionContent({
           onArchive: handleArchive,
           onUnarchive: handleUnarchive,
           capabilities,
-          scope,
         }}
         optimisticTitle={optimisticTitle}
         renameSession={renameSession}
