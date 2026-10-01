@@ -12,7 +12,7 @@ import {
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { useAuditEvents } from "@/hooks/use-audit-events";
-import { useMeTeams } from "@/hooks/use-teams";
+import { useTeams } from "@/hooks/use-teams";
 import { useCurrentUserAuthorization } from "@/hooks/use-current-user-authorization";
 import { formatHttpStatus } from "@/lib/http-status";
 import { formatRelativeTime } from "@/lib/time";
@@ -187,7 +187,7 @@ export function AuditEventCard({ event }: { event: AuditEvent }) {
 export function AuditLogSettings() {
   const { hasPermission } = useCurrentUserAuthorization();
   const canReadAudit = hasPermission("workspace.audit.read");
-  const { teams, loading: teamsLoading, error: teamsError } = useMeTeams(canReadAudit);
+  const { teams, loading: teamsLoading, error: teamsError } = useTeams(canReadAudit);
   const [teamId, setTeamId] = useState("");
   const audit = useAuditEvents({ teamId: teamId || undefined, enabled: canReadAudit });
   const headingRef = useRef<HTMLHeadingElement>(null);

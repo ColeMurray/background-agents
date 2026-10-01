@@ -411,22 +411,11 @@ async function deleteMember(
   ctx: RequestContext
 ) {
   const team = admittedTeam(ctx);
-  const subject = viewer(ctx);
   const store = new TeamMembershipStore(ctx.db);
   const before = (await store.listMembers(team.id)).find(
     (member) => member.userId === params.userId
   );
   if (!before) return error("Team membership not found", 404);
-  if (subject.userId !== params.userId && !ctx.teamAdmission?.access.canManageMembers) {
-    return json(
-      {
-        error: "Forbidden",
-        code: "team_capability_required",
-        reason_code: "team_capability_required",
-      },
-      403
-    );
-  }
   try {
     await store.remove(team.id, params.userId);
     await auditTeamEvent({
@@ -493,8 +482,18 @@ teamRoutes.post("/teams/:id/restore", archive, (c) =>
 );
 teamRoutes.get("/teams/:id/members", read, (c) => dispatch(c, members));
 teamRoutes.put("/teams/:id/members/:userId", membersManage, (c) => dispatch(c, putMember));
-teamRoutes.delete("/teams/:id/members/:userId", policy(requireTeam("member")), (c) =>
-  dispatch(c, deleteMember)
+teamRoutes.delete(
+  "/teams/:id/members/:userId",
+  policy({
+    ...requireAll({
+      kind: "team",
+      teamIdParam: "id",
+      need: "removeMember",
+      targetUserIdParam: "userId",
+    }),
+    service: { kind: "deny" },
+  }),
+  (c) => dispatch(c, deleteMember)
 );
 teamRoutes.post("/teams/:id/join", policy(requireTeam("canJoin")), (c) => dispatch(c, joinTeam));
 const member = admit({

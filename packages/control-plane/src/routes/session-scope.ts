@@ -291,14 +291,10 @@ async function listCollaboratorCandidates(
 }
 
 export const sessionScopeRoutes = new Hono<ControlPlaneHonoEnv>();
-const always = (
-  action: "changeVisibility" | "move" | "manageCollaborators" | "read",
-  cacheControl?: "private, no-store"
-) =>
+const always = (action: "changeVisibility" | "move" | "manageCollaborators" | "read") =>
   admit({
     ...SCM_AGNOSTIC_HUMAN_USER_ROUTE,
     authorization: requireSession(action, { enforceAlways: true }),
-    cacheControl,
   });
 sessionScopeRoutes.put("/sessions/:id/visibility", always("changeVisibility"), (c) =>
   dispatch(c, changeVisibility)
@@ -312,6 +308,13 @@ sessionScopeRoutes.delete("/sessions/:id/collaborators/:userId", always("read"),
 );
 sessionScopeRoutes.get(
   "/sessions/:id/collaborator-candidates",
-  always("manageCollaborators", "private, no-store"),
+  admit({
+    ...SCM_AGNOSTIC_HUMAN_USER_ROUTE,
+    authorization: {
+      ...requireSession("manageCollaborators", { enforceAlways: true }),
+      auditAllowed: false,
+    },
+    cacheControl: "private, no-store",
+  }),
   (c) => dispatch(c, listCollaboratorCandidates)
 );

@@ -864,7 +864,7 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
     snapshotReader,
     schedulePullRequestRefresh,
     scmProviderName,
-    resolveSessionViewer: async (userId) => {
+    resolveSessionViewer: async (userId, options) => {
       try {
         const mode = parseTeamsEnforcementMode(env.TEAMS_ENFORCEMENT);
         const [authorization, session] = await Promise.all([
@@ -873,13 +873,13 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
         ]);
         if (authorization.suspendedAt !== null) return { kind: "rejected" };
         if (!session) return { kind: "rejected" };
-        const [memberships, collaboratorIds] =
-          mode === "on" || session.visibility === "private"
-            ? await Promise.all([
-                teamMembershipStore.listForUser(userId),
-                sessionCollaboratorStore.listUserIds(session.id),
-              ])
-            : [new Map<string, TeamRole>(), []];
+        const enforceScope = mode === "on" || session.visibility === "private";
+        const [memberships, collaboratorIds] = await Promise.all([
+          enforceScope || options?.includeMemberships
+            ? teamMembershipStore.listForUser(userId)
+            : new Map<string, TeamRole>(),
+          enforceScope ? sessionCollaboratorStore.listUserIds(session.id) : [],
+        ]);
         return {
           kind: "valid",
           mode,
