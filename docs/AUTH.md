@@ -95,6 +95,12 @@ create teams in **Settings > Teams**; the creator becomes the first lead. Team m
 replace the workspace role: a person still needs the relevant session permission in addition to any
 team access.
 
+The team directory and the session collaborator picker identify people by display name and avatar.
+Email addresses are included only for viewers with `workspace.members.read` (Owners and
+Administrators in the built-in roles); all other viewers receive `email: null`, including team leads
+and session owners. An unnamed user is labeled with a short user ID suffix instead of an email
+address or full ID. This privacy rule applies in every team enforcement mode.
+
 Each session stores a visibility independently of its team:
 
 | Visibility  | Who can read the session when team enforcement is on                                                                                                                                            |

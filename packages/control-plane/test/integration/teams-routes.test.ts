@@ -4,6 +4,7 @@ import { BUILT_IN_ROLE_REGISTRY } from "@open-inspect/shared/rbac";
 import {
   meTeamsResponseSchema,
   teamSessionsResponseSchema,
+  teamMemberSchema,
   type Team,
 } from "@open-inspect/shared/types/teams";
 import { auditEventListResponseSchema } from "@open-inspect/shared/types/audit-events";
@@ -303,6 +304,69 @@ describe("team routes", () => {
       expect((await request(`/teams/${open.id}/join`, "POST")).status).toBe(200);
     }
   );
+
+  it.each(["off", "shadow", "on"] as const)(
+    "returns directory emails only with workspace member read permission in %s mode",
+    async (mode) => {
+      const team = await new TeamStore(env.DB).create({
+        slug: "email-directory",
+        name: "Email directory",
+        joinPolicy: "open",
+      });
+      const memberships = new TeamMembershipStore(env.DB);
+      for (const userId of [MEMBER, OTHER]) {
+        await env.DB.prepare(
+          "UPDATE users SET display_name = ?, email = ?, avatar_url = ? WHERE id = ?"
+        )
+          .bind("Team member", `${userId}@example.com`, "https://example.com/avatar.png", userId)
+          .run();
+        await memberships.add(team.id, userId);
+      }
+      for (const role of ["member", "administrator"] as const) {
+        await setRole(OWNER, role);
+        const response = await modeRequest(`/teams/${team.id}/members`, mode, role);
+        expect(response.status).toBe(200);
+        const body = await response.json<{ members: unknown[] }>();
+        const members = teamMemberSchema.array().parse(body.members);
+        expect(members).toHaveLength(2);
+        for (const member of members) {
+          expect(member).toMatchObject({
+            displayName: "Team member",
+            email: role === "administrator" ? `${member.userId}@example.com` : null,
+            avatarUrl: "https://example.com/avatar.png",
+          });
+        }
+      }
+    }
+  );
+
+  it("redacts member emails for a non-administrator lead on add, role change, and unchanged role", async () => {
+    const team = await new TeamStore(env.DB).create({
+      slug: "email-lead",
+      name: "Email lead",
+      joinPolicy: "invite_only",
+    });
+    await new TeamMembershipStore(env.DB).add(team.id, OWNER, "lead");
+    await setRole(OWNER, "member");
+    await env.DB.prepare("UPDATE users SET email = ? WHERE id = ?")
+      .bind("member@example.com", MEMBER)
+      .run();
+    for (const role of ["member", "lead", "lead"] as const) {
+      const response = await request(`/teams/${team.id}/members/${MEMBER}`, "PUT", { role });
+      expect(response.status).toBe(200);
+      expect(await response.json()).toMatchObject({
+        member: { userId: MEMBER, role, email: null },
+      });
+    }
+    await setRole(OWNER, "administrator");
+    const response = await request(`/teams/${team.id}/members/${MEMBER}`, "PUT", {
+      role: "member",
+    });
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({
+      member: { userId: MEMBER, email: "member@example.com" },
+    });
+  });
 
   it.each(["off", "shadow", "on"] as const)(
     "always conceals member-only tabs from nonmembers in %s",

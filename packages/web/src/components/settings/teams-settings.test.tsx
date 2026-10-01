@@ -111,6 +111,38 @@ afterEach(() => {
 });
 
 describe("Teams settings", () => {
+  it.each([null, "ada@example.com"])(
+    "renders member names and avatars with only the returned email (%s)",
+    (email) => {
+      const { container } = render(
+        <TeamMembersTable
+          team={team}
+          members={[{ ...member, email, avatarUrl: "https://example.com/ada.png" }]}
+        />
+      );
+      expect(screen.getByText("Ada")).toBeInTheDocument();
+      expect(container.querySelector('img[src="https://example.com/ada.png"]')).toBeInTheDocument();
+      expect(screen.queryByText("ada@example.com")).toBe(email ? screen.getByText(email) : null);
+      expect(container.querySelector('[title="ada@example.com"]') !== null).toBe(email !== null);
+      expect(screen.queryByText(member.userId)).toBeNull();
+    }
+  );
+
+  it.each([null, "private@example.com"])(
+    "uses a short neutral label rather than email or full ID for an unnamed member (%s)",
+    (email) => {
+      const userId = "user_long_identity_a1b2c3";
+      render(
+        <TeamMembersTable team={team} members={[{ ...member, userId, displayName: null, email }]} />
+      );
+      expect(
+        screen.getByRole("combobox", { name: "Role for Unnamed user \u00b7 a1b2c3" })
+      ).toBeDisabled();
+      expect(screen.getByText("Unnamed user \u00b7 a1b2c3")).toBeInTheDocument();
+      expect(screen.queryByText(userId)).toBeNull();
+    }
+  );
+
   it("shows a lead's team with a singular member count", () => {
     mocks.hasPermission = false;
     mocks.teams = [

@@ -7,6 +7,7 @@ import { useTeamCapabilities } from "@/hooks/use-team-capabilities";
 import { useCurrentUserAuthorization } from "@/hooks/use-current-user-authorization";
 import { Button } from "@/components/ui/button";
 import { ErrorBanner } from "@/components/ui/error-banner";
+import { UserIdentity, userDisplayName } from "@/components/user-identity";
 
 export function TeamMembersTable({ team, members }: { team: TeamResponse; members: TeamMember[] }) {
   const capabilities = useTeamCapabilities(team);
@@ -42,18 +43,13 @@ export function TeamMembersTable({ team, members }: { team: TeamResponse; member
       <div className="divide-y divide-border rounded-lg border border-border">
         {members.length === 0 && <p className="p-4 text-sm text-muted-foreground">No members.</p>}
         {members.map((member) => {
-          const name = member.displayName ?? member.email ?? member.userId;
+          const name = userDisplayName(member);
           return (
             <div
               key={member.userId}
               className="grid gap-3 p-4 sm:grid-cols-[1fr_8rem_auto] sm:items-center"
             >
-              <div className="min-w-0">
-                <p className="truncate font-medium text-foreground">{name}</p>
-                <p className="truncate text-xs text-muted-foreground">
-                  {member.email ?? member.userId}
-                </p>
-              </div>
+              <UserIdentity {...member} />
               <select
                 aria-label={`Role for ${name}`}
                 value={member.role}
@@ -95,7 +91,7 @@ export function TeamMembersTable({ team, members }: { team: TeamResponse; member
             <option value="">Select a workspace member</option>
             {available.map((candidate) => (
               <option key={candidate.userId} value={candidate.userId}>
-                {candidate.displayName ?? candidate.email ?? candidate.userId}
+                {userDisplayName(candidate)}
               </option>
             ))}
           </select>

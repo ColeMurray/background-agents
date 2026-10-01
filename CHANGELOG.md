@@ -2,6 +2,15 @@
 
 New features, integrations, and notable improvements to Open-Inspect — newest first.
 
+## October 1, 2026
+
+### Fixed
+
+The team directory and collaborator picker now show email addresses only to viewers with
+`workspace.members.read` (Owners and Administrators in the built-in roles). Other viewers receive
+names and avatars with no email address, and unnamed users have a neutral label with a short ID
+suffix. This restriction applies in every team enforcement mode.
+
 ## September 30, 2026
 
 ### Added

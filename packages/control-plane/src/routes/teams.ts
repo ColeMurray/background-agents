@@ -354,7 +354,9 @@ async function setArchived(
 
 async function members(_request: Request, _env: Env, _params: { id: string }, ctx: RequestContext) {
   return json({
-    members: await new TeamMembershipStore(ctx.db).listMembersWithUsers(admittedTeam(ctx).id),
+    members: await new TeamMembershipStore(ctx.db).listMembersWithUsers(admittedTeam(ctx).id, {
+      includeEmail: ctx.authorization?.permissions.includes("workspace.members.read") ?? false,
+    }),
   });
 }
 
@@ -368,6 +370,7 @@ async function putMember(
   if (body instanceof Response) return body;
   const team = admittedTeam(ctx);
   const store = new TeamMembershipStore(ctx.db);
+  const includeEmail = ctx.authorization?.permissions.includes("workspace.members.read") ?? false;
   const user = await ctx.db
     .prepare("SELECT 1 AS ok FROM users WHERE id = ?")
     .bind(params.userId)
@@ -377,7 +380,7 @@ async function putMember(
     (member) => member.userId === params.userId
   );
   if (before?.role === body.role) {
-    const member = (await store.listMembersWithUsers(team.id)).find(
+    const member = (await store.listMembersWithUsers(team.id, { includeEmail })).find(
       (row) => row.userId === params.userId
     );
     return json({ member });
@@ -387,7 +390,7 @@ async function putMember(
     else if (!(await store.add(team.id, params.userId, body.role))) {
       return json({ error: "Membership changed concurrently", code: "membership_conflict" }, 409);
     }
-    const after = (await store.listMembersWithUsers(team.id)).find(
+    const after = (await store.listMembersWithUsers(team.id, { includeEmail })).find(
       (member) => member.userId === params.userId
     )!;
     await auditTeamEvent({

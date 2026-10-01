@@ -191,15 +191,16 @@ describe("SessionRightSidebar", () => {
     expect(screen.getByRole("link", { name: "Design" })).toHaveAttribute("href", "/teams/design");
     expect(screen.getByText("private")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Change visibility" })).toBeInTheDocument();
-    expect(screen.getByText("user_collaborator")).toBeInTheDocument();
+    expect(screen.getByText("Unnamed user \u00b7 orator")).toBeInTheDocument();
+    expect(screen.queryByText("user_collaborator")).not.toBeInTheDocument();
     rerender(<Overlay {...props} open isPhone onOpenChange={vi.fn()} />);
     expect(screen.getByRole("link", { name: "Design" })).toBeInTheDocument();
-    expect(screen.getByText("user_collaborator")).toBeInTheDocument();
+    expect(screen.getByText("Unnamed user \u00b7 orator")).toBeInTheDocument();
     rerender(
       <Overlay {...props} capabilities={FULL_CAPABILITIES} open isPhone onOpenChange={vi.fn()} />
     );
     expect(screen.queryByRole("button", { name: "Change visibility" })).not.toBeInTheDocument();
-    expect(screen.queryByText("user_collaborator")).not.toBeInTheDocument();
+    expect(screen.queryByText("Unnamed user \u00b7 orator")).not.toBeInTheDocument();
   });
 
   it("never mounts private collaborator management on workspace-visible sessions", () => {
