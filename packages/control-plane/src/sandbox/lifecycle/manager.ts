@@ -56,6 +56,7 @@ import { formatBootBudgetFailure } from "./boot-failure-message";
 import { createLogger, type Logger } from "../../logger";
 import { hashToken } from "../../auth/crypto";
 import { parseStoredSandboxBootPhase, sandboxBootPhaseLogFields } from "../boot-phase";
+import { parsePendingVmReference } from "../providers/pending-vm-reference";
 import type { ImageBuildLookup } from "./image-selection";
 import {
   SandboxLaunchContext,
@@ -474,6 +475,7 @@ export class SandboxLifecycleManager
       acceptResolvedStartup: (generation, providerObjectId, lifetime) =>
         this.claimProviderStartup(generation, providerObjectId, lifetime),
       getLogger: () => this.log,
+      alarmScheduler,
       backgroundTasks,
     });
     this.allocationCleanup = {
@@ -1872,15 +1874,30 @@ export class SandboxLifecycleManager
   }
 
   async handleShutdownAlarm(allowCaptureRetry = true): Promise<"continue" | "hold_watchdogs"> {
-    const rejected = this.storage.getSandbox();
-    if (rejected?.startup_rejected && rejected.modal_object_id) {
+    const row = this.storage.getSandbox();
+    if (row?.startup_rejected && row.modal_object_id) {
       await attemptRejectedStartupCleanup(
         this.allocationCleanup,
-        { sandboxId: rejected.modal_sandbox_id, createdAt: rejected.created_at },
-        rejected.modal_object_id
+        { sandboxId: row.modal_sandbox_id, createdAt: row.created_at },
+        row.modal_object_id
       );
       return "hold_watchdogs";
     }
+    // A connected bridge raises no new attach or ready event, so alarms resume
+    // its pending lookup; each delivery arms the next, starting from the one its
+    // attach's disconnect check guarantees. This precedes the watchdog hold, so
+    // it also serves a restore this instance still owns. A held sandbox gets no
+    // lookup, including a restore that a restart left with an unknown outcome.
+    if (
+      row?.modal_object_id &&
+      parsePendingVmReference(row.modal_object_id) &&
+      !this.shutdown.isHolding() &&
+      this.wsManager.getSandboxWebSocket()
+    )
+      await this.vmStartup.resumePendingBridge({
+        sandboxId: row.modal_sandbox_id,
+        createdAt: row.created_at,
+      });
     return this.shutdown.handleAlarm(allowCaptureRetry);
   }
 
