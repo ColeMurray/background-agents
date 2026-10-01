@@ -9,6 +9,7 @@ import {
 } from "./router.test-support";
 import { getEffectiveEnabledModels } from "./db/model-preferences";
 import { SessionIndexStore } from "./db/session-index";
+import { TeamMembershipStore } from "./db/team-memberships";
 import { resolveRepoOrError } from "./routes/shared";
 import type * as SharedRoutes from "./routes/shared";
 import { SessionInternalPaths } from "./session/contracts";
@@ -131,6 +132,9 @@ describe("handleSpawnChild prompt enqueue handling", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    vi.spyOn(TeamMembershipStore.prototype, "listForUser").mockResolvedValue(
+      new Map([["team_alpha", "member"]])
+    );
     vi.mocked(getEffectiveEnabledModels).mockResolvedValue(["anthropic/claude-sonnet-4-6"]);
     integrationSettingsMocks.resolveCodeServerEnabled.mockResolvedValue(false);
     integrationSettingsMocks.resolveVncEnabled.mockResolvedValue(false);
@@ -260,7 +264,11 @@ describe("handleSpawnChild prompt enqueue handling", () => {
     vi.mocked(SessionIndexStore).mockImplementation(function () {
       return store as never;
     });
-    const { env } = makeSuccessfulEnv(spawnContext, ["sessions.create", "sessions.collaborate"]);
+    const { env } = makeSuccessfulEnv(spawnContext, [
+      "sessions.read",
+      "sessions.create",
+      "sessions.collaborate",
+    ]);
 
     const response = await makeRequest(env);
 
@@ -280,6 +288,7 @@ describe("handleSpawnChild prompt enqueue handling", () => {
       return store as never;
     });
     const { env } = makeSuccessfulEnv(spawnContext, [
+      "sessions.read",
       "sessions.create",
       "sessions.collaborate",
       "repositories.use",

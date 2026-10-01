@@ -12,6 +12,7 @@ import { createRequestMetrics } from "./db/instrumented-sql-database";
 import { SessionIndexStore } from "./db/session-index";
 import { TeamRepositoryGrantStore } from "./db/team-repository-grants";
 import { TeamStore } from "./db/teams";
+import { TeamMembershipStore } from "./db/team-memberships";
 import { handleSpawnChild } from "./routes/session-child-spawn";
 import { withSessionRuntime } from "./routes/session-route";
 import { HttpError, resolveRepoOrError } from "./routes/shared";
@@ -37,6 +38,9 @@ describe("handleSpawnChild repository grants", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     vi.spyOn(TeamStore.prototype, "isActive").mockResolvedValue(true);
+    vi.spyOn(TeamMembershipStore.prototype, "listForUser").mockResolvedValue(
+      new Map([["team_alpha", "member"]])
+    );
     vi.spyOn(SessionIndexStore.prototype, "getSpawnDepth").mockResolvedValue(0);
     vi.spyOn(SessionIndexStore.prototype, "countTotalChildren").mockResolvedValue(0);
     vi.spyOn(integrationSettings, "resolveSandboxSettings").mockResolvedValue({});
@@ -103,6 +107,7 @@ describe("handleSpawnChild repository grants", () => {
       DB: authorizationDatabase({
         userId: "canonical-user-123",
         permissions: [
+          "sessions.read",
           "sessions.create",
           "repositories.use",
           "environments.use",
