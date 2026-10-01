@@ -202,6 +202,58 @@ describe("Team repository grants", () => {
     );
   });
 
+  it("treats an already-absent grant as removed and revalidates the list", async () => {
+    mocks.grants = [namedGrant];
+    vi.mocked(browserApiFetch).mockImplementation(async (_path, init) => {
+      if (init?.method === "DELETE") {
+        mocks.grants = [];
+        return Response.json({ error: "Repository grant not found" }, { status: 404 });
+      }
+      return Response.json({ grants: mocks.grants });
+    });
+    render(<TeamRepositories team={team} />, { wrapper });
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Remove grant for group/subgroup/api" })
+    );
+    expect(await screen.findByText("This team has no repository grants.")).toBeInTheDocument();
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    await waitFor(() =>
+      expect(
+        vi
+          .mocked(browserApiFetch)
+          .mock.calls.filter(([, init]) => !init?.method || init.method === "GET")
+      ).toHaveLength(2)
+    );
+  });
+
+  it.each([
+    [404, "Team not found"],
+    [403, "Repository grant not found"],
+    [500, "Repository grant not found"],
+  ] as const)("keeps grants and errors for DELETE %s %s", async (status, error) => {
+    mocks.grants = [namedGrant];
+    render(<TeamRepositories team={team} />, { wrapper });
+    await screen.findByText("Named repository grant");
+    vi.mocked(browserApiFetch).mockResolvedValueOnce(Response.json({ error }, { status }));
+    fireEvent.click(screen.getByRole("button", { name: "Remove grant for group/subgroup/api" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent(error);
+    expect(screen.getByText("Named repository grant")).toBeInTheDocument();
+  });
+
+  it("does not treat an already-absent grant response as a successful addition", async () => {
+    render(<TeamRepositories team={team} />, { wrapper });
+    await screen.findByText("This team has no repository grants.");
+    fireEvent.change(screen.getByRole("combobox", { name: "Repository" }), {
+      target: { value: "42" },
+    });
+    vi.mocked(browserApiFetch).mockResolvedValueOnce(
+      Response.json({ error: "Repository grant not found" }, { status: 404 })
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Add grant" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("Repository grant not found");
+    expect(screen.getByText("This team has no repository grants.")).toBeInTheDocument();
+  });
+
   it("keeps archived grants readable but disables every mutation", async () => {
     mocks.grants = [namedGrant];
     render(<TeamRepositories team={{ ...team, archivedAt: 2 }} />, { wrapper });

@@ -71,9 +71,13 @@ export function TeamRepositories({ team }: { team: TeamResponse }) {
       );
       if (!response.ok) {
         const failure = await response.json().catch(() => null);
-        const error =
-          typeof failure?.error === "string" ? failure.error : "Repository grant update failed";
-        throw new Error(typeof failure?.code === "string" ? `${error} (${failure.code})` : error);
+        const alreadyAbsent =
+          !adding && response.status === 404 && failure?.error === "Repository grant not found";
+        if (!alreadyAbsent) {
+          const error =
+            typeof failure?.error === "string" ? failure.error : "Repository grant update failed";
+          throw new Error(typeof failure?.code === "string" ? `${error} (${failure.code})` : error);
+        }
       }
       let nextGrants: TeamRepositoryGrant[];
       if (adding) {
