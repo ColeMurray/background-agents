@@ -30,4 +30,26 @@ describe("automation navigation", () => {
       expect(automationNavigation(url.searchParams.get("teamId")).list).toBe(navigation.list);
     }
   });
+
+  it.each([undefined, "team/one & two"])(
+    "encodes reserved ID characters with scope %s",
+    (teamId) => {
+      const id = "auto/one?next=other#section%2F";
+      const navigation = automationNavigation(teamId);
+      const scope = teamId ? "?teamId=team%2Fone%20%26%20two" : "";
+      expect(navigation.detail(id)).toBe(
+        `/automations/auto%2Fone%3Fnext%3Dother%23section%252F${scope}`
+      );
+      expect(navigation.edit(id)).toBe(
+        `/automations/auto%2Fone%3Fnext%3Dother%23section%252F/edit${scope}`
+      );
+      for (const link of [navigation.detail(id), navigation.edit(id)]) {
+        const url = new URL(link, "https://example.com");
+        expect(decodeURIComponent(url.pathname.split("/")[2])).toBe(id);
+        expect(url.searchParams.get("teamId")).toBe(teamId ?? null);
+        expect(url.searchParams.get("next")).toBeNull();
+        expect(url.hash).toBe("");
+      }
+    }
+  );
 });

@@ -3,8 +3,8 @@ export function automationNavigation(teamId?: string | null) {
   const scopeQuery = teamId ? `?teamId=${encodeURIComponent(teamId)}` : "";
   return {
     list: `/automations${scopeQuery}`,
-    detail: (id: string) => `/automations/${id}${scopeQuery}`,
-    edit: (id: string) => `/automations/${id}/edit${scopeQuery}`,
+    detail: (id: string) => `/automations/${encodeURIComponent(id)}${scopeQuery}`,
+    edit: (id: string) => `/automations/${encodeURIComponent(id)}/edit${scopeQuery}`,
     templates: `/automations/templates${scopeQuery}`,
     new: (templateId?: string) =>
       templateId
