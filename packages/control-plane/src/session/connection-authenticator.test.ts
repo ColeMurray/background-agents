@@ -804,15 +804,6 @@ describe("client session access", () => {
           row: { ...teamRow, visibility: "private" as const },
         },
         {
-          label: "nonmember private collaborator",
-          viewer: member,
-          row: {
-            ...teamRow,
-            visibility: "private" as const,
-            collaboratorIds: [member.userId],
-          },
-        },
-        {
           label: "private Owner break-glass reader",
           viewer: owner,
           row: { ...teamRow, visibility: "private" as const },
@@ -904,22 +895,25 @@ describe("client session access", () => {
     expect(resolveSessionViewer).toHaveBeenCalledTimes(4);
   });
 
-  it.each(["off", "shadow", "on"] as const)(
-    "refuses private non-collaborators in %s mode",
-    async (mode) => {
-      const { authenticator, close } = accessHarness(mode, member, {
-        ...teamRow,
-        visibility: "private",
-      });
-      await authenticator.handleSubscribe({} as WebSocket, { token: "token", clientId: "client" });
-      expect(close).toHaveBeenCalledWith({}, 4010, expect.any(String));
-      expect(
-        await authenticator.authorizeClientCommand({} as WebSocket, member.userId, "read")
-      ).toEqual({
-        kind: "revoked",
-      });
-    }
-  );
+  it.each(
+    (["off", "shadow", "on"] as const).flatMap((mode) => [
+      { mode, label: "non-collaborators", collaboratorIds: [] },
+      { mode, label: "nonmember collaborators", collaboratorIds: [member.userId] },
+    ])
+  )("refuses private $label in $mode mode", async ({ mode, collaboratorIds }) => {
+    const { authenticator, close } = accessHarness(mode, member, {
+      ...teamRow,
+      visibility: "private",
+      collaboratorIds,
+    });
+    await authenticator.handleSubscribe({} as WebSocket, { token: "token", clientId: "client" });
+    expect(close).toHaveBeenCalledWith({}, 4010, expect.any(String));
+    expect(
+      await authenticator.authorizeClientCommand({} as WebSocket, member.userId, "read")
+    ).toEqual({
+      kind: "revoked",
+    });
+  });
 
   it.each(["off", "shadow", "on"] as const)(
     "redacts workspace-owned Owner break-glass URLs in %s, permits lifecycle but not collaboration",

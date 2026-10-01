@@ -40,13 +40,14 @@ describe("session WebSocket D1 access", () => {
   }
 
   it("rejects a still-valid token after private access is removed and refuses re-mint", async () => {
-    const { name } = await scopedSession("private");
+    const { name, team } = await scopedSession("private");
     const userId = crypto.randomUUID().replaceAll("-", "");
     const url = `https://test.local/sessions/${name}/ws-token`;
     const headers = await serviceRequestHeaders(url, {
       method: "POST",
       as: { userId, role: "member" },
     });
+    await new TeamMembershipStore(env.DB).add(team.id, userId);
     const { token } = await issueClientWsToken(name, { userId, canonicalUserId: userId });
     const collaborators = new SessionCollaboratorStore(env.DB);
     await collaborators.add(name, userId, "user-1");
@@ -505,8 +506,10 @@ describe("session WebSocket D1 access", () => {
         userId,
         canonicalUserId: userId,
       });
-      if (userId !== "user-1")
+      if (userId !== "user-1") {
+        await new TeamMembershipStore(env.DB).add(team.id, userId);
         await new SessionCollaboratorStore(env.DB).add(name, userId, ownerId);
+      }
       const { ws: ownSocket } = await openClientWs(name);
       sockets.push(ownSocket);
       const subscribed = collectMessages(ownSocket, {

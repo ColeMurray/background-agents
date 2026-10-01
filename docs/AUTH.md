@@ -111,9 +111,9 @@ and session owners. An unnamed user is labeled with a short user ID suffix inste
 address or full ID. This privacy rule applies in every team enforcement mode.
 
 A team's session overview is available to its members and workspace Owners and Administrators, with
-session membership and visibility checks applied on the server. Team pages do not expose an audit
-activity feed. Team operations are still recorded in the workspace audit log behind
-`workspace.audit.read`; its team filter includes teams the reader does not belong to.
+session visibility checks applied on the server. Team pages do not expose an audit activity feed.
+Team operations are still recorded in the workspace audit log behind `workspace.audit.read`; its
+team filter includes teams the reader does not belong to.
 
 The sidebar context defaults to **All my teams**, which leaves session lists unfiltered by team
 while preserving server visibility checks. Users with at least one active team can choose Workspace
@@ -129,11 +129,11 @@ and the context does not name one, the composer selects the user's first active 
 
 Each session stores a visibility independently of its team:
 
-| Visibility  | Who can read the session when team enforcement is on                                                                                                                                                                                          |
-| ----------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `workspace` | Workspace users with session read permission; team-owned sessions also require current owning-team membership.                                                                                                                                |
-| `team`      | Current members of the owning team with session read permission. Requires an owning team; workspace Owners and Administrators are not exempt from membership.                                                                                 |
-| `private`   | The session owner and explicit collaborators with session read permission and, if team-owned, current owning-team membership. A workspace Owner may open it by ID under audited break-glass access; Administrators do not get this exception. |
+| Visibility  | Who can read the session when team enforcement is on                                                                                                                                                                                                             |
+| ----------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `workspace` | Workspace users with session read permission, even if the session has a team.                                                                                                                                                                                    |
+| `team`      | Members of the owning team, plus workspace Owners and Administrators, with session read permission. Requires an owning team.                                                                                                                                     |
+| `private`   | The session owner and explicit collaborators (who must be current owning-team members on team-owned sessions) with session read permission. A workspace Owner can also open it by ID under audited break-glass access; Administrators do not get this exception. |
 
 Private visibility is enforced in every enforcement mode. An Owner's break-glass read is audited,
 does not cause the session to appear in their lists, and does not grant prompt or sandbox access. An
@@ -142,19 +142,14 @@ ID, but must also be a current member of the owning team if the session is team-
 Administrator alone does not grant access. Actorless bot services cannot read private sessions;
 user-backed integration requests still depend on the acting user's access.
 
-Current membership in the owning team is required to read a team-owned session in `off`, `shadow`,
-and `on` modes, regardless of visibility. Session ownership, collaborator status, a lead role, or a
-workspace Owner/Administrator role does not replace membership. Audited workspace-Owner break-glass
-reads of private sessions are the only exception to this read-membership requirement.
-
 For a team-owned session, **every non-read action requires current membership in the owning team**
 in `off`, `shadow`, and `on` modes. Session owners, team leads, workspace Owners, and Administrators
 are not exempt. This includes prompting, sandbox access, lifecycle operations, deletion, visibility
 changes, and collaborator management, in addition to the relevant workspace permissions and
-action-specific rules. Visibility further limits read access: workspace visibility or an explicit
-private-session collaborator grant does not replace owning-team membership or authorize non-read
-actions. The sole exception to the non-read action checks is a collaborator removing themselves,
-which requires only session read access.
+action-specific rules. Visibility still controls read access: a readable workspace-visible session
+or an explicit private-session collaborator grant does not grant team membership or authorize
+non-read actions. The sole exception is a collaborator removing themselves, which requires only
+session read access.
 
 Owners and Administrators must join the owning team before acting on its sessions; team membership
 changes are audited.
@@ -162,20 +157,23 @@ changes are audited.
 The **Mine** filter helps find sessions you created but does not define who may access them. A
 session's owner is its creating workspace user, not its team. Explicit collaborators are an access
 grant for private sessions; they still need the relevant workspace permission to read, prompt, or
-use the sandbox, and current owning-team membership for team-owned sessions. Runtime participants
-record who connected or contributed and may carry runtime credentials; being a participant alone is
-not a visibility grant. Conversely, making someone a collaborator does not turn them into a runtime
-participant. Removing a collaborator revokes their private-session access on subsequent
-authorization checks. Adding collaborators or removing someone else requires `manageCollaborators`:
-after the session read check, only the session owner or a workspace Owner may do so, with current
-owning-team membership for team-owned sessions. A collaborator may remove themselves with session
-read access alone, including the owning-team membership check for team-owned sessions; no additional
-collaboration or lifecycle permission is required for self-removal.
+use the sandbox. Runtime participants record who connected or contributed and may carry runtime
+credentials; being a participant alone is not a visibility grant. Conversely, making someone a
+collaborator does not turn them into a runtime participant. Removing a collaborator revokes their
+private-session access on subsequent authorization checks. Adding collaborators or removing someone
+else requires `manageCollaborators`: after the session read check, only the session owner or a
+workspace Owner may do so, with current owning-team membership for team-owned sessions. A
+collaborator may remove themselves with session read access alone; team membership, collaboration,
+or lifecycle permission is not required for self-removal.
 
 The collaborator picker is available to session owners and workspace Owners after the session read
-and collaborator-management checks and lists every active workspace user, including users outside
-the owning team. Selecting a collaborator is an explicit private-session access grant, not a team
-membership or workspace role change.
+and collaborator-management checks. For a workspace-owned session it lists every active workspace
+user; for a team-owned session it lists only active members of the owning team, and adding anyone
+else is rejected with `not_team_member`. Selecting a collaborator is an explicit private-session
+access grant, not a team membership or workspace role change. On a team-owned session the grant is
+honored only while the collaborator remains a current member of the owning team: leaving or being
+removed from the team ends their collaborator access on the next authorization check, even though
+the collaborator record itself is kept.
 
 Session actions have additional rules after visibility: prompting requires collaboration permission,
 sandbox use requires sandbox permission, and lifecycle operations require lifecycle permission. With
@@ -227,7 +225,7 @@ every `TEAMS_ENFORCEMENT` mode.
 Sessions, automations, and environments cannot move between teams or between a team and the
 workspace. A session's owning team is fixed at creation: a team-owned session never becomes
 workspace-owned. Changing its visibility to `workspace` changes who may read it, not its ownership
-or the team membership required for ordinary reads and non-read actions.
+or the team membership required for non-read actions.
 
 Visibility changes can include descendants. A cascading visibility change refuses the entire request
 if any included descendant is inaccessible or denies the requested action, including the
@@ -247,21 +245,20 @@ direct automation and GitHub-bot sessions, but retains eligible agent descendant
 
 ### Enforcement and Access Paths
 
-Operators set `TEAMS_ENFORCEMENT` to `off`, `shadow`, or `on` (the default):
+Operators set `TEAMS_ENFORCEMENT` to `off`, `shadow` (the default), or `on`:
 
-- `off`: legacy reads and actions for non-private workspace-owned sessions. Private access and the
-  full access resolver for team-owned sessions, including owning-team membership for reads, remain
-  enforced.
+- `off`: legacy read visibility for non-private sessions and legacy actions for non-private
+  workspace-owned sessions. Private access and the full action resolver for team-owned sessions
+  remain enforced.
 - `shadow`: continue those legacy reads and workspace-owned actions while auditing would-be denials.
-  Private access and the full access resolver for team-owned sessions remain enforced.
+  Private access and the full action resolver for team-owned sessions remain enforced.
 - `on`: enforce visibility, team membership, and action/ownership rules for sessions.
 
-No mode relaxes current owning-team membership for ordinary reads or non-read actions, including for
-workspace Owners and Administrators; only audited Owner break-glass reads of private sessions bypass
-the read-membership requirement. The visibility and collaborator mutation routes always enforce the
-session access resolver, including in `off` and `shadow` modes. Those modes do not relax these
-mutation checks or the checks on descendants included in a cascading operation. Collaborator
-self-removal remains read-only-authorized in every mode.
+No mode relaxes current owning-team membership for non-read actions, including for workspace Owners
+and Administrators. The visibility and collaborator mutation routes always enforce the session
+access resolver, including in `off` and `shadow` modes. Those modes do not relax these mutation
+checks or the checks on descendants included in a cascading operation. Collaborator self-removal
+remains read-only-authorized in every mode.
 
 The session boundary covers four paths, not just the session page:
 

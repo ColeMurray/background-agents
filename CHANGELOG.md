@@ -15,6 +15,19 @@ remain readable.
 
 ## October 1, 2026
 
+### Added
+
+Team leads and workspace administrators can manage encrypted secrets from a team's Secrets tab.
+Team-owned sessions receive global secrets, then team secrets, then environment or repository
+secrets, with later scopes taking precedence. Environment image builds include the environment's
+team secrets; repository-shared images do not. Secret mutation audits contain key names only. Team
+secret changes atomically supersede affected environment images. After the database batch, detached,
+best-effort rebuild scheduling is attempted for enabled team-owned environments; enumeration or
+trigger failures may leave no rebuild request. Team-owned environment images require matching
+session ownership. Team-only legacy OAuth refresh tokens do not enable managed authentication; API
+keys remain usable. Team-secret read and decryption errors abort environment builds rather than
+falling back to other secret scopes.
+
 ### Removed
 
 Removed the team Activity tab and `GET /teams/:id/activity` endpoint. Team operations continue to be

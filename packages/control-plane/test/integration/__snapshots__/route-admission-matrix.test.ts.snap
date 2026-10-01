@@ -220,6 +220,9 @@ exports[`route admission matrix > admits the workspace owner through every brows
   "GET /members owner=200",
   "PUT /members/:id/role owner=400",
   "PUT /members/:id/status owner=400",
+  "GET /teams/:id/secrets owner=200",
+  "PUT /teams/:id/secrets owner=400",
+  "DELETE /teams/:id/secrets/:key owner=404",
 ]
 `;
 
@@ -424,6 +427,9 @@ exports[`route admission matrix > rejects every credentialed route anonymously b
   "GET /members anonymous=401",
   "PUT /members/:id/role anonymous=401",
   "PUT /members/:id/status anonymous=401",
+  "GET /teams/:id/secrets anonymous=401",
+  "PUT /teams/:id/secrets anonymous=401",
+  "DELETE /teams/:id/secrets/:key anonymous=401",
   "POST /webhooks/sentry/:id anonymous=404",
   "POST /webhooks/automation/:id anonymous=415",
   "POST /internal/github-event anonymous=401",
@@ -453,6 +459,9 @@ exports[`route admission sentinel > admits team directory reads but conceals mem
   "GET /teams/:id/repository-grants off/nonmember=404 auditAllowed=false",
   "PUT /teams/:id/repository-grants off/nonmember=403 auditAllowed=true",
   "DELETE /teams/:id/repository-grants/:grantId off/nonmember=403 auditAllowed=true",
+  "GET /teams/:id/secrets off/nonmember=403 auditAllowed=true",
+  "PUT /teams/:id/secrets off/nonmember=403 auditAllowed=true",
+  "DELETE /teams/:id/secrets/:key off/nonmember=403 auditAllowed=true",
   "GET /teams/:id shadow/nonmember=200 auditAllowed=false",
   "PATCH /teams/:id shadow/nonmember=403 auditAllowed=true",
   "POST /teams/:id/archive shadow/nonmember=403 auditAllowed=true",
@@ -465,6 +474,9 @@ exports[`route admission sentinel > admits team directory reads but conceals mem
   "GET /teams/:id/repository-grants shadow/nonmember=404 auditAllowed=false",
   "PUT /teams/:id/repository-grants shadow/nonmember=403 auditAllowed=true",
   "DELETE /teams/:id/repository-grants/:grantId shadow/nonmember=403 auditAllowed=true",
+  "GET /teams/:id/secrets shadow/nonmember=403 auditAllowed=true",
+  "PUT /teams/:id/secrets shadow/nonmember=403 auditAllowed=true",
+  "DELETE /teams/:id/secrets/:key shadow/nonmember=403 auditAllowed=true",
   "GET /teams/:id on/nonmember=200 auditAllowed=false",
   "PATCH /teams/:id on/nonmember=403 auditAllowed=true",
   "POST /teams/:id/archive on/nonmember=403 auditAllowed=true",
@@ -477,6 +489,9 @@ exports[`route admission sentinel > admits team directory reads but conceals mem
   "GET /teams/:id/repository-grants on/nonmember=404 auditAllowed=false",
   "PUT /teams/:id/repository-grants on/nonmember=403 auditAllowed=true",
   "DELETE /teams/:id/repository-grants/:grantId on/nonmember=403 auditAllowed=true",
+  "GET /teams/:id/secrets on/nonmember=403 auditAllowed=true",
+  "PUT /teams/:id/secrets on/nonmember=403 auditAllowed=true",
+  "DELETE /teams/:id/secrets/:key on/nonmember=403 auditAllowed=true",
 ]
 `;
 

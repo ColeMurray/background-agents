@@ -1160,7 +1160,7 @@ function createLifecycleManager(deps: LifecycleManagerDeps): SandboxLifecycleMan
   const imageBuildAdmission = resolveImageBuildAdmission(env);
   const imageBuildLookup: ImageBuildLookup | undefined =
     imageBuildAdmission.admitted && imageBuildAdmission.provider
-      ? createImageBuildLookup(db, imageBuildAdmission.provider)
+      ? createImageBuildLookup(db, imageBuildAdmission.provider, getSessionId)
       : undefined;
 
   return new SandboxLifecycleManager(

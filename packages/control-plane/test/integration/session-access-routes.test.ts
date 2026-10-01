@@ -262,7 +262,7 @@ describe("HTTP session access by enforcement mode", () => {
   );
 
   it.each(["off", "shadow", "on"] as const)(
-    "refuses a removed owner's private team prompt and permits collaborator self-removal in %s mode",
+    "refuses a removed owner's private team prompt and honors collaborators only as members in %s mode",
     async (mode) => {
       const { sessionName, team } = await session("private");
       const memberships = new TeamMembershipStore(env.DB);
@@ -283,13 +283,16 @@ describe("HTTP session access by enforcement mode", () => {
         method: "POST",
         body: JSON.stringify({ content: "Denied" }),
       });
-      expect(collaboratorPrompt.status).toBe(403);
-      expect(await collaboratorPrompt.json()).toMatchObject({ reason_code: "not_member" });
-      const removed = await fetchMode(`/sessions/${sessionName}/collaborators/${MEMBER}`, mode, {
-        as,
-        method: "DELETE",
-      });
-      expect(removed.status).toBe(200);
+      expect(collaboratorPrompt.status).toBe(404);
+      const selfRemove = () =>
+        fetchMode(`/sessions/${sessionName}/collaborators/${MEMBER}`, mode, {
+          as,
+          method: "DELETE",
+        });
+      expect((await selfRemove()).status).toBe(404);
+      expect(await collaborators.listUserIds(sessionName)).toEqual([MEMBER]);
+      await memberships.add(team.id, MEMBER);
+      expect((await selfRemove()).status).toBe(200);
       expect(await collaborators.listUserIds(sessionName)).toEqual([]);
     }
   );
@@ -571,6 +574,22 @@ describe("HTTP session access by enforcement mode", () => {
       expect(await response.json()).toEqual({
         results: [],
         skipped: [{ sessionId: sessionName, reason: "missing_permission" }],
+      });
+    }
+  );
+
+  it.each(["off", "shadow", "on"] as const)(
+    "reports team membership, not permission, when a workspace owner batch-archives a team session in %s mode",
+    async (mode) => {
+      const { sessionName } = await session("workspace");
+      const response = await fetchMode("/sessions/batch-archive", mode, {
+        method: "POST",
+        body: JSON.stringify({ sessionIds: [sessionName] }),
+      });
+      expect(response.status).toBe(200);
+      expect(await response.json()).toEqual({
+        results: [],
+        skipped: [{ sessionId: sessionName, reason: "not_member" }],
       });
     }
   );

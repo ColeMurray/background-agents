@@ -1,6 +1,7 @@
 import {
   checkSessionAccess,
   sessionCapabilities,
+  type AccessDenialReason,
   type SessionAccessRow,
   type SessionAction,
   type SessionCapabilities,
@@ -55,23 +56,23 @@ export function effectiveSessionCapabilities(
   if (viewer.kind !== "user" || resolverDecides(mode, row, "read")) {
     return capabilities;
   }
-  const has = (action: SessionAction) =>
+  const has = (action: SessionAction, resolved: boolean) =>
     resolverDecides(mode, row, action)
-      ? checkSessionAccess(viewer, row, action).allowed
+      ? resolved
       : viewer.permissions.includes(legacyPermissionForAction(action));
   return {
     ...capabilities,
-    canRead: has("read"),
-    canCollaborate: has("collaborate"),
-    canManageLifecycle: has("lifecycle"),
-    canDelete: has("delete"),
-    canSandbox: has("sandbox"),
+    canRead: has("read", capabilities.canRead),
+    canCollaborate: has("collaborate", capabilities.canCollaborate),
+    canManageLifecycle: has("lifecycle", capabilities.canManageLifecycle),
+    canDelete: has("delete", capabilities.canDelete),
+    canSandbox: has("sandbox", capabilities.canSandbox),
   };
 }
 
 export type SessionAdmissionOutcome =
   | { kind: "not_found" }
-  | { kind: "action_denied"; reason: string }
+  | { kind: "action_denied"; reason: AccessDenialReason }
   | { kind: "allowed"; legacyPermission: PermissionId | null };
 
 /** Resolve one D1 session; a null slot is used by body-ID batches, not item routes. */

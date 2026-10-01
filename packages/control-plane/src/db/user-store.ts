@@ -142,10 +142,13 @@ function toUserIdentity(row: UserIdentityRow): UserIdentity {
 export class UserStore {
   constructor(private readonly db: SqlDatabase) {}
 
+  /** Lists active users; a team ID restricts candidates to that team's members. */
   async listCollaboratorCandidates({
     includeEmail,
+    teamId = null,
   }: {
     includeEmail: boolean;
+    teamId?: string | null;
   }): Promise<SessionCollaboratorCandidate[]> {
     const { results } = await this.db
       .prepare(
@@ -153,9 +156,11 @@ export class UserStore {
                 ${includeEmail ? "users.email" : "NULL AS email"}, users.avatar_url AS avatarUrl
          FROM users
          JOIN user_role_assignments assignment ON assignment.user_id = users.id
+         ${teamId === null ? "" : "JOIN team_memberships m ON m.user_id = users.id AND m.team_id = ?"}
          WHERE users.suspended_at IS NULL AND assignment.role_id IS NOT NULL
          ORDER BY LOWER(COALESCE(users.display_name, ${includeEmail ? "users.email" : "NULL"}, users.id)), users.id`
       )
+      .bind(...(teamId === null ? [] : [teamId]))
       .all();
     return sessionCollaboratorCandidatesResponseSchema.parse(results);
   }

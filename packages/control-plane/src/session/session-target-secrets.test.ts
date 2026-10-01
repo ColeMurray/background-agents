@@ -5,6 +5,7 @@ import {
 } from "./session-target-secrets";
 import type { SessionRepositoryEntry } from "./repository-target";
 import type { SessionRow } from "./types";
+import { mergeSecretSources } from "../db/secrets-validation";
 
 function member(
   repoOwner: string,
@@ -113,6 +114,42 @@ describe("resolveSessionOAuthSecretScope", () => {
 });
 
 describe("buildSessionTargetSecretSources", () => {
+  it.each([null, "env_team"])(
+    "merges team after global and before target secrets for target %s",
+    async (environmentId) => {
+      const sources = await buildSessionTargetSecretSources({
+        environmentId,
+        globalSecrets: { SHARED: "global", GLOBAL_TEAM: "global" },
+        teamSecrets: { shared: "team", global_team: "team", TEAM_ONLY: "team" },
+        members: [member("acme", "web", 0, true)],
+        loadMemberSecrets: async () => ({ SHARED: "repo" }),
+        loadEnvironmentSecrets: async () => ({ SHARED: "environment" }),
+      });
+      expect(sources.map((source) => source.label)).toEqual([
+        "global",
+        "team",
+        environmentId ? "environment" : "acme/web",
+      ]);
+      expect(mergeSecretSources(sources).merged).toEqual({
+        SHARED: environmentId ? "environment" : "repo",
+        GLOBAL_TEAM: "team",
+        TEAM_ONLY: "team",
+      });
+    }
+  );
+
+  it("includes team secrets in an ad-hoc session without repositories", async () => {
+    const sources = await buildSessionTargetSecretSources({
+      environmentId: null,
+      globalSecrets: { SHARED: "global" },
+      teamSecrets: { SHARED: "team" },
+      members: [],
+      loadMemberSecrets: vi.fn(),
+      loadEnvironmentSecrets: noEnvironmentSecrets,
+    });
+    expect(mergeSecretSources(sources).merged).toEqual({ SHARED: "team" });
+  });
+
   it("folds members lowest-precedence-first with the primary (position 0) last", async () => {
     const secretsByRepo: Record<string, Record<string, string>> = {
       "acme/web": { A: "web" },
@@ -122,6 +159,7 @@ describe("buildSessionTargetSecretSources", () => {
     const sources = await buildSessionTargetSecretSources({
       environmentId: null,
       globalSecrets: { G: "g" },
+      teamSecrets: {},
       members: [member("acme", "web", 0, true), member("acme", "backend", 1, false)],
       loadMemberSecrets: async (m) => secretsByRepo[`${m.repoOwner}/${m.repoName}`] ?? {},
       loadEnvironmentSecrets: noEnvironmentSecrets,
@@ -137,6 +175,7 @@ describe("buildSessionTargetSecretSources", () => {
     const sources = await buildSessionTargetSecretSources({
       environmentId: "env_flagship",
       globalSecrets: { G: "g" },
+      teamSecrets: {},
       members: [member("acme", "web", 0, true)],
       loadMemberSecrets,
       loadEnvironmentSecrets: async (id): Promise<Record<string, string>> =>
@@ -152,6 +191,7 @@ describe("buildSessionTargetSecretSources", () => {
     const sources = await buildSessionTargetSecretSources({
       environmentId: "env_empty",
       globalSecrets: { G: "g" },
+      teamSecrets: {},
       members: [member("acme", "web", 0, true)],
       loadMemberSecrets: vi.fn(),
       loadEnvironmentSecrets: noEnvironmentSecrets,
@@ -164,6 +204,7 @@ describe("buildSessionTargetSecretSources", () => {
     const sources = await buildSessionTargetSecretSources({
       environmentId: null,
       globalSecrets: {},
+      teamSecrets: {},
       members: [member("acme", "web", 0, true), member("acme", "empty", 1, false)],
       loadMemberSecrets: async (m): Promise<Record<string, string>> =>
         m.repoName === "empty" ? {} : { A: "1" },
@@ -177,6 +218,7 @@ describe("buildSessionTargetSecretSources", () => {
     const sources = await buildSessionTargetSecretSources({
       environmentId: null,
       globalSecrets: { G: "g" },
+      teamSecrets: {},
       members: [],
       loadMemberSecrets: async () => ({}),
       loadEnvironmentSecrets: noEnvironmentSecrets,

@@ -92,6 +92,8 @@ export const AUDIT_OPERATION_ACTIONS = [
   "team.member_joined",
   "team.grant_added",
   "team.grant_removed",
+  "team.secret_set",
+  "team.secret_deleted",
 ] as const;
 
 export const AUTHORIZATION_DECISION_METADATA_SCHEMA = "authorization_decision.v1";
