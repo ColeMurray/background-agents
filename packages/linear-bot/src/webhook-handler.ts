@@ -292,7 +292,7 @@ function getNewSessionInput(webhook: AgentSessionWebhook): {
   clarificationReply: { body: string } | undefined;
   actorUserId: string | undefined;
 } {
-  const instructionComment = webhook.agentSession.comment;
+  const instructionComment = webhook.agentSession.comment ?? undefined;
   const sessionActor = instructionComment?.userId ?? webhook.agentSession.creatorId ?? undefined;
   const replyBody =
     webhook.action === "prompted" ? webhook.agentActivity?.content?.body?.trim() : undefined;

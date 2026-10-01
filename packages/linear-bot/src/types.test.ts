@@ -108,9 +108,9 @@ describe("agentSessionWebhookSchema", () => {
     expect(result.success).toBe(true);
     if (result.success) {
       expect(result.data.agentSession.issue?.description).toBeNull();
-      expect(result.data.agentSession.issue?.labels).toBeUndefined();
-      expect(result.data.agentSession.comment).toBeUndefined();
-      expect(result.data.agentActivity).toBeUndefined();
+      expect(result.data.agentSession.issue?.labels).toBeNull();
+      expect(result.data.agentSession.comment).toBeNull();
+      expect(result.data.agentActivity).toBeNull();
     }
   });
 
@@ -135,11 +135,11 @@ describe("agentSessionWebhookSchema", () => {
 
     expect(result.success).toBe(true);
     if (result.success) {
-      expect(result.data.promptContext).toBeUndefined();
-      expect(result.data.agentSession.comment?.userId).toBeUndefined();
-      expect(result.data.agentActivity?.signal).toBeUndefined();
-      expect(result.data.agentActivity?.userId).toBeUndefined();
-      expect(result.data.agentActivity?.content?.type).toBeUndefined();
+      expect(result.data.promptContext).toBeNull();
+      expect(result.data.agentSession.comment?.userId).toBeNull();
+      expect(result.data.agentActivity?.signal).toBeNull();
+      expect(result.data.agentActivity?.userId).toBeNull();
+      expect(result.data.agentActivity?.content?.type).toBeNull();
       expect(result.data.agentActivity?.content?.body).toBe("Follow up");
     }
   });

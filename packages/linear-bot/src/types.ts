@@ -209,8 +209,7 @@ export const linearUserResponseSchema = z.object({
 
 // ─── Webhook Payload Types ──────────────────────────────────────────────────
 
-const optionalNullable = <T extends z.ZodType>(schema: T) =>
-  z.preprocess((value) => (value === null ? undefined : value), schema.optional());
+const optionalNullable = <T extends z.ZodType>(schema: T) => schema.nullable().optional();
 
 const agentSessionWebhookNameSchema = z.object({ id: z.string(), name: z.string() });
 

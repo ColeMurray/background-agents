@@ -39,6 +39,35 @@ function makeAgentSessionPayload(webhookId = "webhook-config-1") {
   };
 }
 
+function makeCanonicalAgentSessionPayload() {
+  return {
+    type: "AgentSessionEvent",
+    action: "prompted",
+    organizationId: "org-1",
+    appUserId: "app-user-1",
+    webhookId: "webhook-config-1",
+    promptContext: null,
+    agentSession: {
+      id: "agent-session-1",
+      issue: {
+        id: "issue-1",
+        identifier: "ENG-1",
+        title: "Fix bug",
+        description: null,
+        url: "https://linear.app/acme/issue/ENG-1/fix-bug",
+        team: { id: "team-1", key: "ENG", name: "Engineering" },
+        teamId: "team-1",
+      },
+      comment: { body: "Original comment", userId: null },
+    },
+    agentActivity: {
+      userId: "user-1",
+      signal: null,
+      content: { body: "Follow up" },
+    },
+  };
+}
+
 async function makeWebhookRequest(payload: unknown, deliveryId?: string): Promise<Request> {
   const body = JSON.stringify(payload);
   return makeRawWebhookRequest(body, deliveryId);
@@ -117,6 +146,20 @@ describe("POST /webhook", () => {
     expect(ctx.waitUntil).toHaveBeenCalledTimes(2);
     expect(mocks.handleAgentSessionEvent).toHaveBeenCalledTimes(2);
     expect(putCalls.map((call) => call.key)).toEqual(["event:delivery-1", "event:delivery-2"]);
+  });
+
+  it("accepts canonical AgentSessionEvent issue payloads with nullable scalars", async () => {
+    const { kv } = createFakeKV();
+    const env = makeLinearBotEnv(kv);
+    const ctx = makeExecutionContext();
+    const payload = makeCanonicalAgentSessionPayload();
+
+    const res = await app.fetch(await makeWebhookRequest(payload, "delivery-1"), env, ctx);
+
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ ok: true });
+    expect(ctx.waitUntil).toHaveBeenCalledOnce();
+    expect(mocks.handleAgentSessionEvent).toHaveBeenCalledWith(payload, env, expect.any(String));
   });
 
   it("rejects malformed AgentSessionEvent payloads before dedupe", async () => {
