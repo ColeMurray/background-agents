@@ -30,6 +30,7 @@ import { resolveSandboxBackendName } from "../sandbox/provider-name";
 import { createSandboxProviderFromEnv } from "../sandbox/provider-factory";
 import { providerResumesAfterStop, type SandboxProvider } from "../sandbox/provider";
 import { resolveExecutionBudgetMs } from "../sandbox/execution-budget";
+import { scmCloneIdentity } from "../sandbox/sandbox-env";
 import { createImageBuildLookup } from "../image-builds/lookup";
 import { resolveImageBuildAdmission } from "../image-builds/provider-policy";
 import { createLogger, parseLogLevel } from "../logger";
@@ -481,6 +482,7 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
   });
   const lifecycleManager = createLifecycleManager({
     provider: sandboxProvider,
+    sourceControlProvider,
     shutdown,
     access,
     env,
@@ -1054,6 +1056,7 @@ interface LifecycleManagerDeps {
   shutdown: SandboxShutdownLifecycle;
   access: SandboxAccess;
   provider: SandboxProvider;
+  sourceControlProvider: () => SourceControlProvider;
   env: Env;
   db: SqlDatabase;
   /** The latched public-session-id resolver shared with the session logger. */
@@ -1072,6 +1075,7 @@ interface LifecycleManagerDeps {
 function createLifecycleManager(deps: LifecycleManagerDeps): SandboxLifecycleManager {
   const {
     provider,
+    sourceControlProvider,
     shutdown,
     access,
     env,
@@ -1150,6 +1154,18 @@ function createLifecycleManager(deps: LifecycleManagerDeps): SandboxLifecycleMan
     bootBudget: { timeoutMs: bootBudget.timeoutMs },
     mcpServerLookup,
     slackAgentNotifyLookup,
+    getRestoreCloneCredentials:
+      provider.name === "modal" || provider.name === "modal-vm"
+        ? async () => {
+            const scm = sourceControlProvider();
+            const auth = await scm.generateCredentialHelperAuth();
+            return {
+              cloneToken: auth.password,
+              cloneHost: scmCloneIdentity(scm.name).host,
+              cloneUsername: auth.username,
+            };
+          }
+        : undefined,
     recordWarning: deps.recordWarning,
   };
 

@@ -216,6 +216,9 @@ export interface RestoreSandboxRequest {
   provider: string;
   model: string;
   userEnvVars?: Record<string, string>;
+  cloneToken?: string;
+  cloneHost?: string;
+  cloneUsername?: string;
   timeoutSeconds?: number;
   branch?: string | null;
   codeServerEnabled?: boolean;
@@ -585,6 +588,9 @@ export class ModalClient {
         MODAL_SANDBOX_START_REQUEST_DEADLINE_MS,
         {
           snapshot_image_id: request.snapshotImageId,
+          clone_token: request.cloneToken ?? null,
+          clone_host: request.cloneHost ?? null,
+          clone_username: request.cloneUsername ?? null,
           session_config: buildSessionConfig(request),
           sandbox_id: request.sandboxId,
           control_plane_url: request.controlPlaneUrl,

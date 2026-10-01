@@ -30,7 +30,7 @@ def inject_vcs_env_vars(
         return
 
     env_vars["VCS_CLONE_TOKEN"] = clone_token
-    if include_github_cli_aliases and scm_provider == "github":
+    if include_github_cli_aliases and env_vars["VCS_HOST"] == "github.com":
         has_user_github_cli_token = any(
             env_vars.get(key) for key in ("GH_TOKEN", "GITHUB_TOKEN", "GITHUB_APP_TOKEN")
         )

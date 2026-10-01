@@ -207,6 +207,13 @@ sandboxes as a deployment-wide default.
 Every deployment needs **one GitHub App** for repository access. The same App can also provide
 GitHub OAuth sign-in, but its client pair is optional when Google is the only sign-in provider.
 
+The control plane requires the App ID, PKCS#8 private key, and installation ID to mint repository
+credentials. Modal receives short-lived credentials from the control plane, not the private key. The
+legacy Modal `github-app` secret is optional and unused by the updated Modal app; do not create it
+for a new deployment. For existing deployments, see
+[Retire the Legacy Modal GitHub App Secret](#retire-the-legacy-modal-github-app-secret) before
+deleting it.
+
 1. Go to [GitHub Apps](https://github.com/settings/apps)
 2. Click **"New GitHub App"**
 3. Fill in the basics:
@@ -1410,6 +1417,14 @@ override. For local applies, keep any existing `provider_accounts_encryption_key
 For Actions deployments, keep any existing `PROVIDER_ACCOUNTS_ENCRYPTION_KEY` repository or
 production-environment secret unchanged so stored provider credentials remain readable.
 
+> **Normal Terraform upgrades retiring Modal-side token minting require a maintenance window.** A
+> normal `terraform apply` deploys Modal before the control-plane Worker, because the Worker depends
+> on `module.modal_app`. Before starting the apply, pause legacy snapshot restores and avoid waking
+> legacy sessions. Keep them paused throughout the apply, and resume only after **both Modal and the
+> control plane deploy successfully**. If the Worker deployment fails, keep the maintenance window
+> open until it is fixed and deployed successfully. See
+> [Retire the Legacy Modal GitHub App Secret](#retire-the-legacy-modal-github-app-secret).
+
 ```bash
 # Pull latest changes
 git pull upstream main
@@ -1421,6 +1436,32 @@ npm run build -w @open-inspect/shared
 cd terraform/environments/production
 terraform apply
 ```
+
+### Retire the Legacy Modal GitHub App Secret
+
+The updated control plane sends `clone_token`, `clone_host`, and `clone_username` in restore
+requests. Old Modal deployments ignore these new fields and keep minting tokens; the updated Modal
+app only uses supplied credentials. Deploying Modal first leaves legacy snapshots without a fallback
+token until the control plane updates. Helper-capable snapshots continue to use the control plane's
+credential helper.
+
+**When the services can be deployed independently**, control-plane-first deployment is preferred to
+minimize legacy restore interruption. This is not the order of a normal Terraform upgrade:
+`workers-control-plane.tf` depends on `module.modal_app`, so Terraform deploys Modal first.
+`-target` cannot reverse that dependency.
+
+For a normal Terraform upgrade, establish a maintenance window **before** starting
+`terraform apply`: pause legacy snapshot restores and avoid waking legacy sessions throughout the
+apply. Resume only after **both Modal and the control plane deploy successfully**. If the Worker
+deployment fails after Modal updates, keep the maintenance window open until the failure is fixed
+and the Worker deploys successfully. Do not resume legacy restores just because the Modal deployment
+succeeded.
+
+After **both deployments are updated** and any old restore invocations have finished, the optional,
+unused Modal `github-app` secret is safe to delete in the intended Modal environment. Terraform
+stops provisioning it but does not delete an existing secret. Keep the control plane's GitHub App
+credentials configured; its App ID, private key, and installation ID remain required for repository
+access.
 
 ### Configure Provider Accounts
 

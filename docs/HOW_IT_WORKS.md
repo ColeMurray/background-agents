@@ -693,8 +693,11 @@ of relying on a token embedded in the environment or remote URL. Snapshot restor
 env-token fallbacks so legacy snapshots can boot through the credential-helper migration. The helper
 authorizes HTTPS requests for the configured SCM host, preserving existing setup/start hooks that
 clone other private repositories available to the installation. This primarily protects continuously
-running sessions and Daytona persistent resumes from expired embedded credentials; Modal snapshot
-restores still mint a fresh fallback token on restore.
+running sessions and Daytona persistent resumes from expired embedded credentials. For Modal
+snapshot restores, the control plane supplies a fresh fallback token and VCS host/username metadata.
+Modal injects `VCS_CLONE_TOKEN` and the existing GitHub CLI aliases for legacy snapshots, but never
+mints installation tokens or holds the GitHub App private key. Repository-less restores suppress the
+clone token. Restores without a token remain supported for helper-capable snapshots.
 
 ### Secrets
 

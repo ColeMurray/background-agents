@@ -113,9 +113,15 @@ describe("SandboxLaunchContext", () => {
     const slackAgentNotifyLookup = {
       isEnabledForRepo: vi.fn<SlackAgentNotifyLookup["isEnabledForRepo"]>(async () => true),
     };
+    const getRestoreCloneCredentials = vi.fn(async () => ({ cloneToken: "restore-token" }));
     const f = fixture({
       getLogger,
-      config: { model: CONFIGURED_MODEL, mcpServerLookup, slackAgentNotifyLookup },
+      config: {
+        model: CONFIGURED_MODEL,
+        mcpServerLookup,
+        slackAgentNotifyLookup,
+        getRestoreCloneCredentials,
+      },
     });
 
     for (const dependency of [
@@ -124,6 +130,7 @@ describe("SandboxLaunchContext", () => {
       ...Object.values(f.imageBuildLookup),
       mcpServerLookup.getDecryptedForSession,
       slackAgentNotifyLookup.isEnabledForRepo,
+      getRestoreCloneCredentials,
     ]) {
       expect(dependency).not.toHaveBeenCalled();
     }
@@ -140,6 +147,66 @@ describe("SandboxLaunchContext", () => {
     expect(f.logger.warn).toHaveBeenCalledOnce();
     expect(nextLogger.warn).toHaveBeenCalledOnce();
     expect(f.getLogger).toHaveBeenCalledTimes(2);
+  });
+
+  describe("resolveRestoreCloneCredentials", () => {
+    it("resolves credentials per restore rather than at construction", async () => {
+      const credentials = {
+        cloneToken: "restore-token",
+        cloneHost: "github.com",
+        cloneUsername: "x-access-token",
+      };
+      const getRestoreCloneCredentials = vi.fn(async () => credentials);
+      const { context } = fixture({
+        config: { model: CONFIGURED_MODEL, getRestoreCloneCredentials },
+      });
+      expect(getRestoreCloneCredentials).not.toHaveBeenCalled();
+
+      expect(await context.resolveRestoreCloneCredentials(createMockSession())).toEqual(
+        credentials
+      );
+      getRestoreCloneCredentials.mockResolvedValueOnce({ ...credentials, cloneToken: "new-token" });
+      expect(await context.resolveRestoreCloneCredentials(createMockSession())).toEqual({
+        ...credentials,
+        cloneToken: "new-token",
+      });
+      expect(getRestoreCloneCredentials).toHaveBeenCalledTimes(2);
+    });
+
+    it("never requests clone credentials for repository-less restores", async () => {
+      const getRestoreCloneCredentials = vi.fn(async () => ({ cloneToken: "restore-token" }));
+      const { context } = fixture({
+        config: { model: CONFIGURED_MODEL, getRestoreCloneCredentials },
+      });
+
+      expect(
+        await context.resolveRestoreCloneCredentials(
+          createMockSession({ repo_owner: null, repo_name: null })
+        )
+      ).toEqual({});
+      expect(getRestoreCloneCredentials).not.toHaveBeenCalled();
+    });
+
+    it("omits clone credentials without a lookup", async () => {
+      expect(await fixture().context.resolveRestoreCloneCredentials(createMockSession())).toEqual(
+        {}
+      );
+    });
+
+    it("logs credential resolution failures and leaves modern restores token-free", async () => {
+      const getRestoreCloneCredentials = vi.fn(async () => {
+        throw new Error("credentials unavailable");
+      });
+      const { context, logger } = fixture({
+        config: { model: CONFIGURED_MODEL, getRestoreCloneCredentials },
+      });
+
+      expect(await context.resolveRestoreCloneCredentials(createMockSession())).toEqual({});
+      expect(logger.warn).toHaveBeenCalledWith(
+        "Failed to resolve snapshot restore clone credentials",
+        { event: "sandbox.restore_clone_token_failed", error: "credentials unavailable" }
+      );
+    });
   });
 
   describe("resolveAgent", () => {

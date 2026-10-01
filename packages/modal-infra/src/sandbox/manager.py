@@ -319,6 +319,8 @@ class SandboxManager:
         retire_sandbox_id: str | None = None,
         sandbox_backend: ModalBackend = "modal",
         launch_deadline_at_ms: int | None = None,
+        clone_host: str | None = None,
+        clone_username: str | None = None,
     ) -> SandboxHandle:
         """
         Create a new sandbox from a filesystem snapshot Image.
@@ -332,7 +334,9 @@ class SandboxManager:
             sandbox_id: Optional sandbox ID (generated if not provided)
             control_plane_url: URL for the control plane
             sandbox_auth_token: Auth token for the sandbox
-            clone_token: VCS clone token for git operations
+            clone_token: Control-plane-provided VCS token for legacy snapshot compatibility
+            clone_host: Optional VCS host override
+            clone_username: Optional VCS clone username override
 
         Returns:
             SandboxHandle for the restored sandbox
@@ -347,8 +351,8 @@ class SandboxManager:
             repo_name = session_config.repo_name
         _has_repository(repo_owner, repo_name)
 
-        # Snapshot restore still passes the clone token through for
-        # repo-backed sandboxes. Snapshots taken before the credential-helper
+        # Snapshot restore still passes the control-plane-provided clone token
+        # through for repo-backed sandboxes. Snapshots before the credential-helper
         # migration ship an entrypoint that reads VCS_CLONE_TOKEN from env
         # and embeds it in the origin URL; without it, those legacy snapshots
         # can't fetch. GITHUB_TOKEN/GITHUB_APP_TOKEN aliases are restored too
@@ -377,6 +381,8 @@ class SandboxManager:
                 source=SnapshotImageSource(
                     image_id=snapshot_image_id,
                     clone_token=clone_token,
+                    clone_host=clone_host,
+                    clone_username=clone_username,
                 ),
             )
         )

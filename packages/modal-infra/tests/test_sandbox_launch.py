@@ -129,6 +129,8 @@ async def test_launch_matrix_preserves_common_and_source_specific_behavior(
                 "future_field": {"preserved": True},
             },
             clone_token="legacy-clone-token",
+            clone_host="github.example",
+            clone_username="provided-user",
             **common,
         )
         expected_image = images["snapshot-image-1"]
@@ -176,6 +178,7 @@ async def test_launch_matrix_preserves_common_and_source_specific_behavior(
     assert env["AGENT_SLACK_NOTIFY_ENABLED"] == "true"
     assert env["TERMINAL_ENABLED"] == "true"
     assert "IMAGE_BUILD_MODE" not in env
+    assert "GITHUB_APP_PRIVATE_KEY" not in env
 
     if image_source == "repository":
         assert env["FROM_REPO_IMAGE"] == "true"
@@ -187,8 +190,11 @@ async def test_launch_matrix_preserves_common_and_source_specific_behavior(
         assert env["RESTORED_FROM_SNAPSHOT"] == "true"
         assert '"future_field": {"preserved": true}' in env["SESSION_CONFIG"]
         assert env["VCS_CLONE_TOKEN"] == "legacy-clone-token"
-        assert env["GITHUB_TOKEN"] == "legacy-clone-token"
-        assert env["GITHUB_APP_TOKEN"] == "legacy-clone-token"
+        assert env["VCS_HOST"] == "github.example"
+        assert env["VCS_CLONE_USERNAME"] == "provided-user"
+        assert "GITHUB_TOKEN" not in env
+        assert "GITHUB_APP_TOKEN" not in env
+        assert "OI_GITHUB_TOKEN_IS_FALLBACK" not in env
     else:
         assert "RESTORED_FROM_SNAPSHOT" not in env
         assert "VCS_CLONE_TOKEN" not in env

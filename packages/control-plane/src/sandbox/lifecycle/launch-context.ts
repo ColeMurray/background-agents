@@ -12,6 +12,7 @@ import { sessionHasRepository, type SessionRow } from "../../session/types";
 import {
   SandboxProviderError,
   type CreateSandboxConfig,
+  type RestoreConfig,
   type SandboxProviderCapabilities,
   type SessionRepositoryInfo,
 } from "../provider";
@@ -45,6 +46,10 @@ export interface SandboxLaunchConfig {
   model: string;
   mcpServerLookup?: McpServerLookup;
   slackAgentNotifyLookup?: SlackAgentNotifyLookup;
+  /** Only Modal snapshot restores need static credentials for legacy runtimes. */
+  getRestoreCloneCredentials?: () => Promise<
+    Pick<RestoreConfig, "cloneToken" | "cloneHost" | "cloneUsername">
+  >;
 }
 
 export interface SandboxLaunchContextDependencies {
@@ -112,6 +117,21 @@ export class SandboxLaunchContext {
 
   getUserEnvVars(): Promise<Record<string, string> | undefined> {
     return this.sessionContext.getUserEnvVars();
+  }
+
+  async resolveRestoreCloneCredentials(
+    session: SessionRow
+  ): Promise<Pick<RestoreConfig, "cloneToken" | "cloneHost" | "cloneUsername">> {
+    if (!sessionHasRepository(session) || !this.config.getRestoreCloneCredentials) return {};
+    try {
+      return await this.config.getRestoreCloneCredentials();
+    } catch (error) {
+      this.getLogger().warn("Failed to resolve snapshot restore clone credentials", {
+        event: "sandbox.restore_clone_token_failed",
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return {};
+    }
   }
 
   resolveAgent(session: SessionRow): AgentLaunchFields {

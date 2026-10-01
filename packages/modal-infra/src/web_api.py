@@ -31,11 +31,9 @@ from sandbox_runtime.repo_config import RepoConfigError, parse_repositories
 from .app import (
     app,
     function_image,
-    github_app_secrets,
     internal_api_secret,
     validate_control_plane_url,
 )
-from .clone_token import resolve_clone_token
 from .log_config import configure_logging, get_logger
 from .sandbox.launch_policy import (
     DockerImageUnavailableError,
@@ -174,6 +172,9 @@ class RestoreSandboxRequest(_ModalRequestModel):
     sandbox_id: str | None = None
     control_plane_url: NonEmptyString
     sandbox_auth_token: NonEmptyString
+    clone_token: str | None = None
+    clone_host: str | None = None
+    clone_username: str | None = None
     user_env_vars: dict[str, str] | None = None
     timeout_seconds: int | None = Field(default=None, gt=0)
     code_server_enabled: bool = False
@@ -791,7 +792,7 @@ async def api_snapshot_build_sandbox(
         }
 
 
-@app.function(image=function_image, secrets=[github_app_secrets, internal_api_secret], timeout=150)
+@app.function(image=function_image, secrets=[internal_api_secret], timeout=150)
 @fastapi_endpoint(method="POST")
 async def api_restore_sandbox(
     request: dict,
@@ -822,7 +823,10 @@ async def api_restore_sandbox(
         },
         "sandbox_id": "...",
         "control_plane_url": "...",
-        "sandbox_auth_token": "..."
+        "sandbox_auth_token": "...",
+        "clone_token": "...",
+        "clone_host": "github.com",
+        "clone_username": "x-access-token"
     }
 
     Returns:
@@ -856,7 +860,6 @@ async def api_restore_sandbox(
         repo_name = parsed_request.session_config.repo_name
 
         manager = SandboxManager()
-        clone_token = resolve_clone_token() if repo_owner and repo_name else None
 
         # Restore sandbox from snapshot
         handle = await manager.restore_from_snapshot(
@@ -865,7 +868,9 @@ async def api_restore_sandbox(
             sandbox_id=parsed_request.sandbox_id,
             control_plane_url=parsed_request.control_plane_url,
             sandbox_auth_token=parsed_request.sandbox_auth_token,
-            clone_token=clone_token,
+            clone_token=parsed_request.clone_token if repo_owner and repo_name else None,
+            clone_host=parsed_request.clone_host or None,
+            clone_username=parsed_request.clone_username or None,
             user_env_vars=parsed_request.user_env_vars or None,
             timeout_seconds=(
                 parsed_request.timeout_seconds

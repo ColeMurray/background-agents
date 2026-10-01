@@ -420,7 +420,7 @@ describe("ModalClient", () => {
     );
   });
 
-  it("routes the restore session_config through buildSessionConfig (carries mcp_servers)", async () => {
+  it("sends restore clone credentials and routes session_config through buildSessionConfig", async () => {
     const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
       new Response(JSON.stringify({ success: true, data: { sandbox_id: "sb-1" } }), {
         status: 200,
@@ -441,9 +441,17 @@ describe("ModalClient", () => {
       provider: "anthropic",
       model: "anthropic/claude-sonnet-4-5",
       mcpServers: [{ id: "mcp-1", name: "Tool", type: "local", enabled: true }],
+      cloneToken: "restore-token",
+      cloneHost: "github.com",
+      cloneUsername: "x-access-token",
     });
 
     const body = JSON.parse((fetchMock.mock.calls[0]?.[1] as RequestInit).body as string);
+    expect(body).toMatchObject({
+      clone_token: "restore-token",
+      clone_host: "github.com",
+      clone_username: "x-access-token",
+    });
     expect(body.session_config).toEqual({
       session_id: "session-123",
       harness: "opencode",

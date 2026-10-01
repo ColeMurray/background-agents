@@ -507,8 +507,11 @@ credentials on demand. Legacy snapshots and one-shot image builds may still rece
 fallbacks for compatibility. The helper preserves the existing installation-wide model by serving
 credentials for HTTPS git requests to the configured SCM host, including setup/start hooks that
 clone auxiliary private repos. This avoids stale embedded credentials in long-running sessions and
-Daytona persistent resumes; Modal snapshot restores still mint a fresh fallback token during
-restore.
+Daytona persistent resumes. For Modal snapshot restores, the control plane supplies a fresh fallback
+token with VCS host/username metadata. Modal keeps legacy `VCS_CLONE_TOKEN` and GitHub CLI alias
+injection for repository-backed restores but no longer mints installation tokens or holds the GitHub
+App private key. Repository-less restores suppress the clone token, and helper-capable snapshots can
+restore without one.
 
 If a `create-pr` request is triggered by a participant without a user OAuth token (for example,
 Slack-created or Google-login sessions), the sandbox can still push the branch with brokered GitHub

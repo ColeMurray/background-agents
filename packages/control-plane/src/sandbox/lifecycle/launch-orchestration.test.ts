@@ -96,6 +96,14 @@ function createLaunchFixture() {
       return true;
     }),
   };
+  const getRestoreCloneCredentials = vi.fn(async () => {
+    effects.push("clone_credentials");
+    return {
+      cloneToken: "restore-token",
+      cloneHost: "gitlab.com",
+      cloneUsername: "oauth2",
+    };
+  });
   const shutdown = createUnmanagedShutdown();
   shutdown.reserveStartup.mockImplementation((_createdAt, _policy, persist) => {
     effects.push("reserve");
@@ -131,6 +139,7 @@ function createLaunchFixture() {
       model: "openai/gpt-5.4",
       mcpServerLookup,
       slackAgentNotifyLookup,
+      getRestoreCloneCredentials,
     },
     imageBuildLookup
   );
@@ -143,6 +152,7 @@ function createLaunchFixture() {
     imageBuildLookup,
     mcpServerLookup,
     slackAgentNotifyLookup,
+    getRestoreCloneCredentials,
     effects,
     repositories,
     servers,
@@ -160,6 +170,7 @@ describe("launch input orchestration", () => {
       imageBuildLookup,
       mcpServerLookup,
       slackAgentNotifyLookup,
+      getRestoreCloneCredentials,
       effects,
       repositories,
       servers,
@@ -241,9 +252,10 @@ describe("launch input orchestration", () => {
     ]);
     expect(shutdown.markRecoveryInvoked).not.toHaveBeenCalled();
     expect(provider.restoreFromSnapshot).not.toHaveBeenCalled();
+    expect(getRestoreCloneCredentials).not.toHaveBeenCalled();
   });
 
-  it("restore preserves the exact payload and env/Slack/MCP order before receipt and provider", async () => {
+  it("restore resolves wake-time clone credentials before receipt and provider", async () => {
     const {
       manager,
       provider,
@@ -251,6 +263,7 @@ describe("launch input orchestration", () => {
       shutdown,
       imageBuildLookup,
       slackAgentNotifyLookup,
+      getRestoreCloneCredentials,
       effects,
       repositories,
       servers,
@@ -274,6 +287,7 @@ describe("launch input orchestration", () => {
       return { success: true, sandboxId: config.sandboxId, lifetime: noLifetime() };
     });
     expect(effects).toEqual([]);
+    expect(getRestoreCloneCredentials).not.toHaveBeenCalled();
 
     const launching = manager.spawnSandbox();
     await slackEntered.promise;
@@ -281,6 +295,7 @@ describe("launch input orchestration", () => {
     expect(effects).toEqual(["reserve", "env", "repositories", "slack"]);
     expect(provider.restoreFromSnapshot).not.toHaveBeenCalled();
     expect(shutdown.markRecoveryInvoked).not.toHaveBeenCalled();
+    expect(getRestoreCloneCredentials).not.toHaveBeenCalled();
 
     slack.resolve(true);
     await launching;
@@ -289,6 +304,9 @@ describe("launch input orchestration", () => {
       [
         {
           snapshotImageId: "saved-image",
+          cloneToken: "restore-token",
+          cloneHost: "gitlab.com",
+          cloneUsername: "oauth2",
           sessionId: "test-session",
           generationCreatedAtMs: 2_000_000,
           retireSandboxId: "prior-sandbox",
@@ -318,12 +336,14 @@ describe("launch input orchestration", () => {
       "repositories",
       "slack",
       "mcp",
+      "clone_credentials",
       "pending_registration",
       "recovery_invoked",
       "restore",
     ]);
     expect(imageBuildLookup.getLatestReady).not.toHaveBeenCalled();
     expect(provider.createSandbox).not.toHaveBeenCalled();
+    expect(getRestoreCloneCredentials).toHaveBeenCalledOnce();
   });
 
   it.each(["expired", "superseded"] as const)(

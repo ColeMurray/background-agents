@@ -913,7 +913,7 @@ describe("ModalSandboxProvider", () => {
       });
     });
 
-    it("returns providerObjectId from restoreFromSnapshot", async () => {
+    it("forwards clone credentials and returns providerObjectId from restoreFromSnapshot", async () => {
       const client = createMockModalClient({
         restoreSandbox: vi.fn(async () => ({
           sandboxId: "restored-sandbox-123",
@@ -926,6 +926,9 @@ describe("ModalSandboxProvider", () => {
 
       const result = await provider.restoreFromSnapshot({
         snapshotImageId: "img-123",
+        cloneToken: "restore-token",
+        cloneHost: "github.com",
+        cloneUsername: "x-access-token",
         sessionId: "session-123",
         sandboxId: "sandbox-123",
         sandboxAuthToken: "token",
@@ -945,7 +948,12 @@ describe("ModalSandboxProvider", () => {
         vncAccess: { url: "https://vnc.test", password: "vnc-pw" },
       });
       expect(client.restoreSandbox).toHaveBeenCalledWith(
-        expect.objectContaining({ vncEnabled: true }),
+        expect.objectContaining({
+          vncEnabled: true,
+          cloneToken: "restore-token",
+          cloneHost: "github.com",
+          cloneUsername: "x-access-token",
+        }),
         undefined
       );
     });

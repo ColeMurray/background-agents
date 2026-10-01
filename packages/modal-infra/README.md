@@ -53,8 +53,10 @@ The in-sandbox runtime (entrypoint supervisor, control-plane bridge, shared type
 
 Provided by `packages/sandbox-runtime/src/sandbox_runtime/auth/`:
 
-- **github_app.py**: GitHub App token generation for repo access
 - **internal.py**: HMAC authentication for control plane requests
+
+The control plane mints source-control credentials for image builds and snapshot restores.
+Modal functions do not hold the GitHub App private key or mint installation tokens.
 
 ### API (`src/`)
 
@@ -81,12 +83,6 @@ snapshot, terminate, and delete provider operations.
 # instead. The secret itself must exist; Modal cannot hold one with no keys.
 modal secret create llm-api-keys ANTHROPIC_API_KEY="sk-ant-..."
 
-# GitHub App credentials (for repo access)
-modal secret create github-app \
-  GITHUB_APP_ID="123456" \
-  GITHUB_APP_PRIVATE_KEY="$(cat private-key-pkcs8.pem)" \
-  GITHUB_APP_INSTALLATION_ID="12345678"
-
 # Internal API secret (for control plane authentication)
 modal secret create internal-api \
   MODAL_API_SECRET="$(openssl rand -hex 32)" \
@@ -94,6 +90,9 @@ modal secret create internal-api \
 ```
 
 See `.env.example` for a full list of environment variables.
+
+The legacy Modal `github-app` secret is optional and unused by the updated app; do not create it
+for new deployments. The control plane's GitHub App credentials remain required for GitHub access.
 
 ### Install local packages
 
@@ -125,6 +124,25 @@ modal run src/
 > Build the Sandbox image first, then use `deploy.py` or `-m src` to ensure all function modules
 > are registered.
 
+### Upgrade from Modal-side token minting
+
+When the services can be deployed independently, updating the control plane first is preferred:
+old Modal deployments ignore the new restore credential fields and keep minting tokens. Normal
+Terraform upgrades instead deploy Modal first, because the control-plane Worker depends on
+`module.modal_app`; `-target` cannot reverse this dependency. Updated Modal deployments do not mint
+a fallback token when an old control plane omits it.
+
+For normal Terraform upgrades, open a maintenance window before `terraform apply`: pause legacy
+snapshot restores and avoid waking legacy sessions throughout the apply. Resume only after **both
+Modal and the control plane deploy successfully**. If the Worker deployment fails, keep the
+maintenance window open until it is fixed and deployed successfully. Helper-capable snapshots can
+still request credentials on demand, but legacy restores must remain paused until both updates
+succeed.
+
+Delete the legacy Modal `github-app` secret only **after both deployments are updated** and any old
+restore invocations have finished. Terraform no longer provisions it, but does not delete an
+existing secret. Keep the control plane's GitHub App ID, private key, and installation ID configured.
+
 ## HTTP API
 
 The control plane communicates with Modal via HTTP endpoints. All endpoints (except health)
@@ -144,6 +162,21 @@ Endpoint URLs follow the pattern: `https://{workspace}--open-inspect-{endpoint}.
 | `api-start-build-sandbox` | POST | Yes | Start the bound build runtime; results POST back to the control plane's `/image-builds/*` callbacks |
 | `api-snapshot-build-sandbox` | POST | Yes | Snapshot the exact tagged build sandbox |
 | `api-terminate-build-sandbox` | POST | Yes | Terminate the exact tagged build sandbox (idempotent when already absent) |
+
+### Restore credentials
+
+`api-restore-sandbox` accepts optional `clone_token`, `clone_host`, and `clone_username` strings
+from the control plane, like `api-create-build-sandbox`. A provided host/username pair sets
+`VCS_HOST` and `VCS_CLONE_USERNAME`; otherwise provider defaults apply. Modal does not resolve
+credentials from its own environment.
+
+Repository-backed restores still inject the supplied token as `VCS_CLONE_TOKEN` for snapshots
+predating the git credential helper. For effective `VCS_HOST=github.com`, `GITHUB_TOKEN` and
+`GITHUB_APP_TOKEN` aliases remain for snapshots predating the `gh` wrapper, without replacing a
+user-supplied CLI token. Restores without a token are accepted; helper-capable snapshots fetch
+credentials from the control plane.
+Repository-less restores never inject the supplied clone token. Fresh and prebuilt-image session
+boots continue to use only the credential helper.
 
 ### Example: Create Sandbox
 
@@ -174,9 +207,6 @@ Set via Modal secrets:
 | Variable | Secret | Description |
 |----------|--------|-------------|
 | `ANTHROPIC_API_KEY` | `llm-api-keys` | Anthropic API key for Claude; may be empty when sessions use other providers |
-| `GITHUB_APP_ID` | `github-app` | GitHub App ID for repo access |
-| `GITHUB_APP_PRIVATE_KEY` | `github-app` | GitHub App private key (PKCS#8) |
-| `GITHUB_APP_INSTALLATION_ID` | `github-app` | GitHub App installation ID |
 | `MODAL_API_SECRET` | `internal-api` | Shared secret for control plane auth |
 | `ALLOWED_CONTROL_PLANE_HOSTS` | `internal-api` | Comma-separated allowed hostnames for URL validation |
 

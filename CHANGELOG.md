@@ -2,6 +2,20 @@
 
 New features, integrations, and notable improvements to Open-Inspect — newest first.
 
+## October 1, 2026
+
+### Changed
+
+**Modal restores no longer need the GitHub App private key.** The control plane supplies the clone
+token, host, and username; Modal keeps the legacy snapshot token injection and GitHub CLI aliases
+without minting installation tokens itself. Repository-less restores still suppress clone tokens,
+and helper-capable snapshots can restore without one. Terraform no longer provisions Modal's
+`github-app` secret. GitHub CLI fallback aliases follow the effective VCS host rather than Modal's
+local provider setting. Normal Terraform upgrades deploy Modal first and require pausing legacy
+restores until both services update successfully. The unused Modal secret can then be deleted once
+old restore calls finish; the control plane's GitHub App credentials remain required. See the
+[upgrade instructions](docs/GETTING_STARTED.md#retire-the-legacy-modal-github-app-secret).
+
 ## September 30, 2026
 
 ### Added

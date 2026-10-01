@@ -4,7 +4,7 @@ description: What an OpenInspect deployment consists of, what the operator confi
 audience: operator
 owner: platform
 status: published
-lastReviewed: "2026-09-28"
+lastReviewed: "2026-10-01"
 relatedCode:
   - README.md
   - docs/GETTING_STARTED.md
@@ -81,6 +81,16 @@ The exact commands are in the self-hosting guide linked below.
 ## Keeping a deployment current
 
 On the Cloudflare/Vercel path, updating means pulling the latest code, rebuilding the shared package if it changed, and applying Terraform again; it only changes what differs. If the web app is on Vercel it is redeployed separately; on Cloudflare, Terraform rebuilds it. The self-hosting guide also documents an optional GitHub Actions workflow for applying deployments from CI. For the AWS control plane, follow the [AWS bring-up guide](https://github.com/ColeMurray/background-agents/blob/main/docs/AWS_BRING_UP.md).
+
+### Retiring the legacy Modal GitHub App secret
+
+The Modal `github-app` secret is optional and unused by the updated app. The control plane supplies short-lived clone credentials for builds and snapshot restores, so Modal no longer needs the GitHub App private key. Old Modal deployments ignore the new restore fields, while new Modal deployments do not mint a fallback token if an old control plane omits it.
+
+Control-plane-first deployment is preferred only when the services can be deployed independently. A normal Terraform upgrade deploys Modal first because the control-plane Worker depends on `module.modal_app`; `-target` cannot reverse that dependency.
+
+Before a normal upgrade's `terraform apply`, open a maintenance window: pause legacy snapshot restores and avoid waking legacy sessions throughout the apply. Resume only after **both Modal and the control plane deploy successfully**. If the Worker deployment fails after Modal updates, keep the maintenance window open until the failure is fixed and the Worker deploys successfully.
+
+Delete the secret only after **both deployments are updated** and old restore invocations have finished. Terraform stops provisioning it but does not delete an existing secret. Keep the control plane's GitHub App credentials configured; they remain required for GitHub-backed deployments. See the [upgrade instructions](https://github.com/ColeMurray/background-agents/blob/main/docs/GETTING_STARTED.md#retire-the-legacy-modal-github-app-secret).
 
 ## Where the runbooks are
 
