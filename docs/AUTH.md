@@ -51,7 +51,8 @@ Open-Inspect includes four built-in roles.
 | Create automations                                |  Yes  |      Yes      |  Yes   |   No   |
 | Manage and trigger own automations                |  Yes  |      Yes      |  Yes   |   No   |
 | Manage and trigger any automation                 |  Yes  |      Yes      |   No   |   No   |
-| View and manage workspace members                 |  Yes  |      Yes      |   No   |   No   |
+| View workspace members                            |  Yes  |      Yes      |  Yes   |  Yes   |
+| Manage workspace members                          |  Yes  |      Yes      |   No   |   No   |
 | Transfer workspace ownership                      |  Yes  |      No       |   No   |   No   |
 | View analytics                                    |  Yes  |      Yes      |  Yes   |  Yes   |
 | View provider accounts                            |  Yes  |      Yes      |  Yes   |   No   |
@@ -95,6 +96,31 @@ create teams in **Settings > Teams**; the creator becomes the first lead. Team m
 replace the workspace role: a person still needs the relevant session permission in addition to any
 team access.
 
+### Team Directory and Pages
+
+Every active workspace user can list active teams and read their member lists, even without
+membership in those teams. The team directory supports search and favorites, and team pages show
+team metadata and members. Archived teams and their member lists are available only to their members
+and workspace Owners and Administrators.
+
+A team's session overview and **Activity** are available to its members and workspace Owners and
+Administrators. Activity contains domain events, not HTTP authorization decisions. Session events
+are filtered by the viewer's current session visibility, so membership in the team alone does not
+expose another user's private-session events. The workspace audit log remains behind
+`workspace.audit.read`; its team filter includes teams the reader does not belong to.
+
+The sidebar context defaults to **All my teams**, which leaves session lists unfiltered by team
+while preserving server visibility checks. Users with at least one active team can choose Workspace
+(teamless rows), a team, or All my teams; Owners and Administrators can also choose All teams. Users
+without active teams have no selector and keep unfiltered lists. A stored Workspace or active-team
+choice is retained; unknown or archived selections fall back to All my teams.
+
+The new-session composer's team and visibility are draft-local choices initialized from the sidebar
+context. Changing them does not change the sidebar or command-menu recents. If a team is required
+and the context does not name one, the composer selects the user's first active team locally.
+
+### Session Visibility
+
 Each session stores a visibility independently of its team:
 
 | Visibility  | Who can read the session when team enforcement is on                                                                                                                                            |
@@ -119,6 +145,11 @@ private-session access on subsequent authorization checks. Adding collaborators 
 else requires `manageCollaborators`: after the session read check, only the session owner or a
 workspace Owner may do so. A collaborator may remove themselves with session read access alone;
 collaboration or lifecycle permission is not required for self-removal.
+
+The collaborator picker is available to session owners and workspace Owners after the session read
+check and lists every active workspace user, including users outside the owning team. Selecting a
+collaborator is an explicit private-session access grant, not a team membership or workspace role
+change.
 
 Session actions have additional rules after visibility: prompting requires collaboration permission,
 sandbox use requires sandbox permission, and lifecycle operations require lifecycle permission. With
@@ -154,7 +185,9 @@ missing grant blocks the move. Moving to no team sets `ownerTeamId` to `null` an
 visibility into `workspace`. Moving or changing visibility can include descendants. Team grants
 constrain selection and moves, not the source-control App token already available to a running
 sandbox. A cascading move or visibility change refuses the entire request if any included descendant
-is inaccessible or denies the requested action; it does not silently skip that descendant.
+is inaccessible or denies the requested action; it does not silently skip that descendant. The web
+visibility control requires a changed selection and asks for confirmation when applying non-private
+visibility to child sessions, since private descendants will receive that visibility too.
 
 Session discovery and inbox filters compose on the server: `ownerFilter=started` matches the
 creator, `participating` also includes explicit collaborators and users with persisted read state,

@@ -33,7 +33,7 @@ function useActiveTeamState() {
     authorization?.role.key === "owner" || authorization?.role.key === "administrator";
 
   useEffect(() => {
-    let stored = "workspace";
+    let stored = "all-my-teams";
     try {
       stored = localStorage.getItem(ACTIVE_TEAM_STORAGE_KEY) ?? stored;
     } catch {
@@ -46,24 +46,27 @@ function useActiveTeamState() {
   const activeSelection =
     !loading &&
     !error &&
-    (selection === "all-my-teams" ||
+    (selection === "workspace" ||
+      selection === "all-my-teams" ||
       (selection === "all-teams" && canListAllTeams) ||
       teams.some((team) => team.id === selection))
       ? selection
-      : "workspace";
+      : "all-my-teams";
   const activeTeamId = teams.some((team) => team.id === activeSelection) ? activeSelection : null;
   const scope =
-    activeSelection === "workspace"
-      ? ("workspace" as const)
-      : activeSelection === "all-teams"
-        ? ("all" as const)
-        : undefined;
+    teams.length === 0
+      ? undefined
+      : activeSelection === "workspace"
+        ? ("workspace" as const)
+        : activeSelection === "all-teams"
+          ? ("all" as const)
+          : undefined;
 
   useEffect(() => {
     if (loading || error) return;
     if (selection !== activeSelection) setSelection(activeSelection);
     try {
-      localStorage.setItem(ACTIVE_TEAM_STORAGE_KEY, activeSelection ?? "workspace");
+      localStorage.setItem(ACTIVE_TEAM_STORAGE_KEY, activeSelection ?? "all-my-teams");
     } catch {
       // Continue with the in-memory preference when storage is unavailable.
     }

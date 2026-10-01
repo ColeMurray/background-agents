@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { unstable_serialize } from "swr/infinite";
 import { browserApiFetch } from "./browser-api-fetch";
 import {
   isSessionScopeCacheKey,
@@ -18,20 +19,49 @@ describe("scope cache invalidation", () => {
       "/api/sessions?teamId=new",
       "/api/sessions/inbox",
       "/api/sessions/inbox?category=finished",
-      "/api/sessions/s1/children",
-      "/api/sessions/s1",
+      "/api/sessions/inbox/counts",
       "/api/teams",
       "/api/teams?membership=all",
-      "/api/me/teams",
       "/api/teams/team-id/sessions?cursor=page2",
       "/api/teams/team-id/activity",
+      "/api/activity",
       "/api/activity?teamId=old",
+      "/api/activity/team-id",
+      "/api/audit-events",
       "/api/audit-events?limit=25&cursor=page2",
+      "/api/audit-events/team-id",
+      unstable_serialize(() => "/api/sessions?teamId=old&offset=0"),
+      unstable_serialize(() => "/api/sessions/inbox?category=finished"),
+      unstable_serialize(() => "/api/teams/team-id/sessions?cursor=page2"),
+      unstable_serialize(() => "/api/activity?teamId=old"),
+      unstable_serialize(() => "/api/audit-events?cursor=page2"),
       ["/api/sessions/inbox?category=needs_attention", "cursor", "user"],
       ["/api/activity", "user"],
     ].map((key) => ({ key }))
-  )("revalidates affected cache key $key", ({ key }) => {
+  )("clears affected discovery cache key $key", ({ key }) => {
     expect(isSessionScopeCacheKey(key)).toBe(true);
+  });
+  it.each(
+    [
+      "/api/me/teams",
+      "/api/me/teams?membership=all",
+      "/api/sessions/",
+      "/api/sessions/s1",
+      "/api/sessions/s1?includeChildren=true",
+      "/api/sessions/s1/children",
+      "/api/sessions/s1/sandbox-access",
+      "/api/sessions/s1/diff",
+      "/api/sessions/s1/skills",
+      "/api/sessions/s1/participant-profiles",
+      "/api/sessions/s1/collaborator-candidates",
+      "/api/sessions/inbox-other",
+    ].flatMap((path) => [
+      { key: path },
+      { key: [path, "viewer"] },
+      { key: unstable_serialize(() => path) },
+    ])
+  )("does not clear membership or per-session cache key $key", ({ key }) => {
+    expect(isSessionScopeCacheKey(key)).toBe(false);
   });
   it.each(
     [
@@ -76,7 +106,7 @@ describe("updateSessionScope", () => {
       await request;
       expect(listener).toHaveBeenCalledOnce();
       expect(refresh).toHaveBeenCalledOnce();
-      expect(mutate).toHaveBeenCalledTimes(2);
+      expect(mutate).toHaveBeenCalledTimes(3);
     } finally {
       unsubscribe();
     }
@@ -111,21 +141,23 @@ describe("updateSessionScope", () => {
     expect(listener).not.toHaveBeenCalled();
   });
 
-  it("explicitly awaits snapshot refresh and predicate revalidation even when timestamps do not change", async () => {
+  it("awaits snapshot, list, and membership refreshes even when timestamps do not change", async () => {
     vi.mocked(browserApiFetch).mockResolvedValue(Response.json({ updatedAt: 1 }));
     let finishSnapshot!: () => void;
     let finishLists!: () => void;
+    let finishMembership!: () => void;
     const refresh = vi.fn(
       () =>
         new Promise<void>((resolve) => {
           finishSnapshot = resolve;
         })
     );
-    const mutate = vi.fn().mockImplementation((_predicate, _data, options) =>
+    const mutate = vi.fn().mockImplementation((key, _data, options) =>
       options?.revalidate === false
         ? Promise.resolve()
         : new Promise<void>((resolve) => {
-            finishLists = resolve;
+            if (key === "/api/me/teams") finishMembership = resolve;
+            else finishLists = resolve;
           })
     );
     let done = false;
@@ -138,11 +170,18 @@ describe("updateSessionScope", () => {
       done = true;
     });
     await vi.waitFor(() => expect(refresh).toHaveBeenCalledOnce());
+    expect(mutate).toHaveBeenCalledWith(isSessionScopeCacheKey, undefined, {
+      revalidate: false,
+    });
     expect(mutate).toHaveBeenCalledWith(isSessionScopeCacheKey);
+    expect(mutate).toHaveBeenCalledWith("/api/me/teams");
     finishSnapshot();
     await Promise.resolve();
     expect(done).toBe(false);
     finishLists();
+    await Promise.resolve();
+    expect(done).toBe(false);
+    finishMembership();
     await request;
     expect(done).toBe(true);
   });
@@ -156,7 +195,7 @@ describe("updateSessionScope", () => {
       cache: new Map(),
     });
     expect(refresh).toHaveBeenCalledOnce();
-    expect(mutate).toHaveBeenCalledTimes(2);
+    expect(mutate).toHaveBeenCalledTimes(3);
   });
 
   it("still revalidates lists when snapshot refresh rejects after a successful mutation", async () => {
@@ -170,6 +209,7 @@ describe("updateSessionScope", () => {
       })
     ).rejects.toThrow("Snapshot unavailable");
     expect(mutate).toHaveBeenCalledWith(isSessionScopeCacheKey);
+    expect(mutate).toHaveBeenCalledWith("/api/me/teams");
   });
 
   it("reports non-JSON mutation failures without attempting a refresh", async () => {

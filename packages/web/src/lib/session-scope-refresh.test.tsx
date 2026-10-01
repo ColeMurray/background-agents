@@ -1,9 +1,9 @@
 // @vitest-environment jsdom
 
-import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
-import type { ReactNode } from "react";
-import useSWR, { SWRConfig, useSWRConfig } from "swr";
-import useSWRInfinite from "swr/infinite";
+import { act, cleanup, fireEvent, render, renderHook, waitFor } from "@testing-library/react";
+import { useEffect, type ReactNode } from "react";
+import useSWR, { SWRConfig, unstable_serialize as serialize, useSWRConfig } from "swr";
+import useSWRInfinite, { unstable_serialize } from "swr/infinite";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { browserApiFetch } from "./browser-api-fetch";
 import { updateSessionScope } from "./session-scope";
@@ -20,6 +20,112 @@ beforeEach(() => vi.resetAllMocks());
 afterEach(cleanup);
 
 describe("scope refresh with real SWR caches", () => {
+  it.each(["success", "failure"] as const)(
+    "keeps sandbox access and the terminal mounted while membership refresh is pending and after %s",
+    async (outcome) => {
+      const sandboxAccess = { ttydUrl: "https://terminal.example", ttydToken: "token" };
+      const meTeams = { teams: [{ id: "source" }] };
+      const refreshedTeams = { teams: [{ id: "target" }] };
+      const membershipError = new Error("Membership unavailable");
+      let finishMembership!: (value: typeof meTeams) => void;
+      let failMembership!: (error: Error) => void;
+      const pendingMembership = new Promise<typeof meTeams>((resolve, reject) => {
+        finishMembership = resolve;
+        failMembership = reject;
+      });
+      const fetchMembership = vi
+        .fn()
+        .mockResolvedValueOnce(meTeams)
+        .mockImplementation(() => pendingMembership);
+      // An unexpected refetch must not mask a cleared sandbox-access cache.
+      const fetchSandboxAccess = vi
+        .fn()
+        .mockResolvedValueOnce(sandboxAccess)
+        .mockImplementation(() => new Promise<typeof sandboxAccess>(() => {}));
+      const terminalMounted = vi.fn();
+      const terminalUnmounted = vi.fn();
+      const snapshot = vi.fn().mockResolvedValue(undefined);
+      vi.mocked(browserApiFetch).mockResolvedValue(new Response(null, { status: 204 }));
+      let request!: Promise<void>;
+      let done = false;
+
+      function Terminal() {
+        useEffect(() => {
+          terminalMounted();
+          return () => terminalUnmounted();
+        }, []);
+        return <div data-testid="terminal">Terminal</div>;
+      }
+
+      function Session() {
+        const config = useSWRConfig();
+        const access = useSWR("/api/sessions/s1/sandbox-access", fetchSandboxAccess);
+        const membership = useSWR("/api/me/teams", fetchMembership, {
+          shouldRetryOnError: false,
+        });
+        return (
+          <>
+            <div data-testid="sandbox-access">{JSON.stringify(access.data)}</div>
+            <div data-testid="membership">{JSON.stringify(membership.data)}</div>
+            <div data-testid="membership-error">{membership.error?.message}</div>
+            {access.data?.ttydUrl && <Terminal />}
+            <button
+              onClick={() => {
+                request = updateSessionScope(
+                  "/api/sessions/s1/scope",
+                  { method: "PUT" },
+                  snapshot,
+                  config
+                ).then(() => {
+                  done = true;
+                });
+              }}
+            >
+              Update scope
+            </button>
+          </>
+        );
+      }
+
+      const view = render(<Session />, { wrapper });
+      await waitFor(() => {
+        expect(view.getByTestId("sandbox-access").textContent).toBe(JSON.stringify(sandboxAccess));
+        expect(view.getByTestId("membership").textContent).toBe(JSON.stringify(meTeams));
+        expect(view.getByTestId("terminal")).toBeTruthy();
+      });
+      await act(async () => {
+        fireEvent.click(view.getByRole("button", { name: "Update scope" }));
+      });
+      await waitFor(() => expect(fetchMembership).toHaveBeenCalledTimes(2));
+      expect(done).toBe(false);
+      expect(snapshot).toHaveBeenCalledOnce();
+      expect(view.getByTestId("sandbox-access").textContent).toBe(JSON.stringify(sandboxAccess));
+      expect(view.getByTestId("membership").textContent).toBe(JSON.stringify(meTeams));
+      expect(view.getByTestId("terminal")).toBeTruthy();
+      expect(fetchSandboxAccess).toHaveBeenCalledOnce();
+      expect(terminalMounted).toHaveBeenCalledOnce();
+      expect(terminalUnmounted).not.toHaveBeenCalled();
+
+      await act(async () => {
+        if (outcome === "failure") failMembership(membershipError);
+        else finishMembership(refreshedTeams);
+        await request;
+      });
+      expect(done).toBe(true);
+      expect(view.getByTestId("sandbox-access").textContent).toBe(JSON.stringify(sandboxAccess));
+      expect(view.getByTestId("membership").textContent).toBe(
+        JSON.stringify(outcome === "failure" ? meTeams : refreshedTeams)
+      );
+      expect(view.getByTestId("membership-error").textContent).toBe(
+        outcome === "failure" ? membershipError.message : ""
+      );
+      expect(view.getByTestId("terminal")).toBeTruthy();
+      expect(fetchSandboxAccess).toHaveBeenCalledOnce();
+      expect(terminalMounted).toHaveBeenCalledOnce();
+      expect(terminalUnmounted).not.toHaveBeenCalled();
+    }
+  );
+
   it("invalidates inactive pages even when no infinite discovery list has been loaded", async () => {
     vi.mocked(browserApiFetch).mockResolvedValue(Response.json({ affectedSessionIds: ["s1"] }));
     const { result, rerender } = renderHook(
@@ -47,6 +153,64 @@ describe("scope refresh with real SWR caches", () => {
       )
     ).toBe(false);
   });
+
+  it.each(["string", "array"] as const)(
+    "clears inactive infinite pages and their aggregate for %s keys without losing page size",
+    async (keyType) => {
+      let version = 1;
+      const pageKey = (page: number) => {
+        const path = `/api/sessions?teamId=source&offset=${page}`;
+        return keyType === "array" ? [path, "viewer"] : path;
+      };
+      const fetchPage = vi.fn(async () => ({ version }));
+      vi.mocked(browserApiFetch).mockImplementation(async () => {
+        version = 2;
+        return new Response(null, { status: 204 });
+      });
+      const { result, rerender } = renderHook(
+        ({ mounted }) => {
+          const config = useSWRConfig();
+          const list = useSWRInfinite((page) => (mounted ? pageKey(page) : null), fetchPage, {
+            initialSize: 1,
+          });
+          return {
+            list,
+            config,
+            update: () =>
+              updateSessionScope(
+                "/api/sessions/s1/scope",
+                { method: "PUT" },
+                async () => {},
+                config
+              ),
+          };
+        },
+        { wrapper, initialProps: { mounted: true } }
+      );
+      await waitFor(() => expect(result.current.list.data).toEqual([{ version: 1 }]));
+      await act(() => result.current.list.setSize(2));
+      await waitFor(() =>
+        expect(result.current.list.data).toEqual([{ version: 1 }, { version: 1 }])
+      );
+      rerender({ mounted: false });
+      await act(() => result.current.update());
+      const aggregateKey = unstable_serialize(() => pageKey(0));
+      for (const key of [serialize(pageKey(0)), serialize(pageKey(1)), aggregateKey]) {
+        expect(result.current.config.cache.get(key)?.data).toBeUndefined();
+      }
+      expect(result.current.config.cache.get(aggregateKey)).toEqual(
+        expect.objectContaining({ _l: 2 })
+      );
+      expect(fetchPage).toHaveBeenCalledTimes(3);
+      rerender({ mounted: true });
+      await waitFor(() =>
+        expect(result.current.list.data).toEqual([{ version: 2 }, { version: 2 }])
+      );
+      expect(result.current.list.size).toBe(2);
+      expect(fetchPage).toHaveBeenCalledTimes(5);
+    }
+  );
+
   it("refetches every discovery page and both team scopes, inbox, and activity without timestamp changes", async () => {
     let version = 1;
     const fetchPage = vi.fn(async (path: string) => ({ path, version, updatedAt: 1 }));
@@ -59,8 +223,8 @@ describe("scope refresh with real SWR caches", () => {
       () => {
         const { mutate, cache } = useSWRConfig();
         const source = useSWRInfinite(
-          (page) => `/api/sessions?teamId=source&offset=${page}`,
-          fetchPage,
+          (page) => [`/api/sessions?teamId=source&offset=${page}`, "viewer"],
+          ([path]) => fetchPage(path),
           { initialSize: 2 }
         );
         const target = useSWRInfinite(
@@ -74,6 +238,19 @@ describe("scope refresh with real SWR caches", () => {
         const sourceBucket = useSWR("/api/teams/source/sessions?bucket=in_progress", fetchPage);
         const targetBucket = useSWR("/api/teams/target/sessions?bucket=needs_attention", fetchPage);
         const activity = useSWR("/api/teams/target/activity?cursor=page2", fetchPage);
+        const sessionSnapshot = useSWR("/api/sessions/s1", fetchPage);
+        const children = useSWR("/api/sessions/s1/children", fetchPage);
+        const sandboxAccess = useSWR("/api/sessions/s1/sandbox-access", fetchPage);
+        const diff = useSWR("/api/sessions/s1/diff", fetchPage);
+        const skills = useSWRInfinite(
+          (page) => `/api/sessions/s1/skills?offset=${page}`,
+          fetchPage,
+          { initialSize: 2 }
+        );
+        const profiles = useSWR(["/api/sessions/s1/participant-profiles", "viewer"], ([path]) =>
+          fetchPage(path)
+        );
+        const candidates = useSWR("/api/sessions/s1/collaborator-candidates", fetchPage);
         const unrelated = useSWR("/api/repos", fetchPage);
         return {
           source,
@@ -82,12 +259,22 @@ describe("scope refresh with real SWR caches", () => {
           sourceBucket,
           targetBucket,
           activity,
+          sessionSnapshot,
+          children,
+          sandboxAccess,
+          diff,
+          skills,
+          profiles,
+          candidates,
           unrelated,
           update: () =>
             updateSessionScope(
               "/api/sessions/s1/scope",
               { method: "PUT", body: { teamId: "target", includeChildren: true, joinTeam: false } },
-              snapshot,
+              async () => {
+                await snapshot();
+                await sessionSnapshot.mutate();
+              },
               { mutate, cache }
             ),
         };
@@ -97,7 +284,18 @@ describe("scope refresh with real SWR caches", () => {
     await waitFor(() => {
       expect(result.current.source.data).toHaveLength(2);
       expect(result.current.target.data).toHaveLength(2);
+      expect(result.current.skills.data).toHaveLength(2);
       expect(result.current.activity.data?.version).toBe(1);
+      for (const resource of [
+        result.current.sessionSnapshot,
+        result.current.children,
+        result.current.sandboxAccess,
+        result.current.diff,
+        result.current.profiles,
+        result.current.candidates,
+      ]) {
+        expect(resource.data?.version).toBe(1);
+      }
       expect(result.current.unrelated.data?.version).toBe(1);
     });
     await act(() => result.current.update());
@@ -115,5 +313,21 @@ describe("scope refresh with real SWR caches", () => {
     }
     expect(result.current.unrelated.data?.version).toBe(1);
     expect(fetchPage.mock.calls.filter(([path]) => path === "/api/repos")).toHaveLength(1);
+    expect(result.current.sessionSnapshot.data?.version).toBe(2);
+    expect(fetchPage.mock.calls.filter(([path]) => path === "/api/sessions/s1")).toHaveLength(2);
+    for (const resource of [
+      result.current.children,
+      result.current.sandboxAccess,
+      result.current.diff,
+      result.current.profiles,
+      result.current.candidates,
+    ]) {
+      expect(resource.data?.version).toBe(1);
+      expect(fetchPage.mock.calls.filter(([path]) => path === resource.data?.path)).toHaveLength(1);
+    }
+    expect(result.current.skills.data?.map((page) => page.version)).toEqual([1, 1]);
+    for (const page of result.current.skills.data ?? []) {
+      expect(fetchPage.mock.calls.filter(([path]) => path === page.path)).toHaveLength(1);
+    }
   });
 });

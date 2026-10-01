@@ -2,6 +2,19 @@
 
 New features, integrations, and notable improvements to Open-Inspect — newest first.
 
+## October 1, 2026
+
+### Fixed
+
+Session navigation now defaults to **All my teams**, with the team selector available even for a
+single membership. Composer team and visibility choices stay local, including automatic team
+selection when new sessions require a team. Membership refresh failures retain loaded data, and
+changing draft configuration retires the old warm session without starting a replacement sandbox
+until typing begins again or the prompt is submitted. Scope changes refresh lists without clearing
+terminal access or per-session caches. Visibility changes require a changed selection and confirm
+non-private child-session cascades. Workspace audit readers can filter by teams they do not belong
+to.
+
 ## September 30, 2026
 
 ### Added

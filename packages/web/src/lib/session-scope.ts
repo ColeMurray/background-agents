@@ -19,18 +19,19 @@ export function subscribeSessionScopeChanges(listener: () => void): () => void {
   return () => scopeChangeListeners.delete(listener);
 }
 
-/** Includes paginated/filtered buckets and both sides of a move, not just the current list. */
+/** Includes paginated/filtered discovery buckets and aggregates, but not per-session data. */
 export function isSessionScopeCacheKey(key: unknown): boolean {
-  const path = Array.isArray(key) ? key[0] : key;
-  if (typeof path !== "string") return false;
-  return [
-    "/api/sessions",
-    "/api/teams",
-    "/api/me/teams",
-    "/api/activity",
-    "/api/audit-events",
-  ].some(
-    (prefix) => path === prefix || path.startsWith(`${prefix}?`) || path.startsWith(`${prefix}/`)
+  const rawPath = Array.isArray(key) ? key[0] : key;
+  if (typeof rawPath !== "string") return false;
+  const path = rawPath.startsWith(INFINITE_CACHE_PREFIX)
+    ? rawPath.slice(INFINITE_CACHE_PREFIX.length)
+    : rawPath;
+  return (
+    path === "/api/sessions" ||
+    path.startsWith("/api/sessions?") ||
+    ["/api/sessions/inbox", "/api/teams", "/api/activity", "/api/audit-events"].some(
+      (prefix) => path === prefix || path.startsWith(`${prefix}?`) || path.startsWith(`${prefix}/`)
+    )
   );
 }
 
@@ -86,22 +87,24 @@ export async function updateSessionScope(
     );
   }
   for (const listener of scopeChangeListeners) listener();
-  const infiniteKeys = [...cache.keys()].filter(
-    (key) =>
-      key.startsWith(INFINITE_CACHE_PREFIX) &&
-      isSessionScopeCacheKey(key.slice(INFINITE_CACHE_PREFIX.length))
-  );
+  const infiniteKeys = [...cache.keys()].filter((key) => {
+    if (!key.startsWith(INFINITE_CACHE_PREFIX)) return false;
+    const firstPageKey = key.slice(INFINITE_CACHE_PREFIX.length);
+    // Page metadata preserves array keys that SWR hashes in the aggregate key.
+    const firstPage = cache.get(firstPageKey) as { _k?: unknown } | undefined;
+    return isSessionScopeCacheKey(firstPage?._k ?? firstPageKey);
+  });
   // Invalidate inactive pages too: a predicate revalidation only fetches mounted hooks.
-  await mutate(isSessionScopeCacheKey, undefined, { revalidate: false });
+  // SWR skips aggregates in predicate mutations, so clear those explicitly as well.
+  await Promise.all([
+    mutate(isSessionScopeCacheKey, undefined, { revalidate: false }),
+    ...infiniteKeys.map((key) => mutate(key, undefined, { revalidate: false })),
+  ]);
   await Promise.all([
     Promise.resolve().then(onUpdated),
-    (async () => {
-      // SWR skips infinite aggregates in predicate mutations. Clear cached pages so
-      // revalidating each aggregate fetches every page, not just its first page.
-      await Promise.all([
-        mutate(isSessionScopeCacheKey),
-        ...infiniteKeys.map((key) => mutate(key)),
-      ]);
-    })(),
+    // Membership data drives access controls and must stay available during revalidation.
+    mutate("/api/me/teams"),
+    mutate(isSessionScopeCacheKey),
+    ...infiniteKeys.map((key) => mutate(key)),
   ]);
 }

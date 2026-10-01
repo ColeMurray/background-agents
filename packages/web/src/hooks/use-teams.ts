@@ -77,14 +77,16 @@ export function useMeTeams(enabled = true) {
     teams: result.data?.teams ?? [],
     requireTeamOnCreate: result.data?.requireTeamOnCreate ?? false,
     loading: enabled && Boolean(session?.user) && !result.data && !result.error,
-    error: result.error,
+    error: result.data ? undefined : result.error,
   };
 }
 
-export function useTeams() {
+export function useTeams(enabled = true) {
   const { data: session } = useAuthSession();
   const { mutate } = useSWRConfig();
-  const result = useSWR(session?.user ? TEAMS_KEY : null, () => get(TEAMS_KEY, teamsSchema));
+  const result = useSWR(session?.user && enabled ? TEAMS_KEY : null, () =>
+    get(TEAMS_KEY, teamsSchema)
+  );
 
   async function createTeam(input: z.input<typeof createTeamRequestSchema>) {
     const team = await write(TEAMS_KEY, "POST", input, teamSchema);

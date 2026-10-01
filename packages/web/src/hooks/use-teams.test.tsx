@@ -88,6 +88,15 @@ describe("team hooks", () => {
     expect(result.current.loading).toBe(false);
   });
 
+  it("does not load the team directory while disabled", () => {
+    vi.mocked(useAuthSession).mockReturnValue({
+      data: { user: { id: "user_one", name: "Ada", email: "ada@example.com", image: null } },
+      status: "authenticated",
+    });
+    renderHook(() => useTeams(false), { wrapper });
+    expect(browserApiFetch).not.toHaveBeenCalled();
+  });
+
   it("loads legacy memberships without capabilities while denying privileged team controls", async () => {
     vi.mocked(useAuthSession).mockReturnValue({
       data: { user: { id: "user_one", name: "Ada", email: "ada@example.com", image: null } },

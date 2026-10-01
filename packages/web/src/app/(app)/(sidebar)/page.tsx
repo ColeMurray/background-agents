@@ -109,39 +109,40 @@ export default function Home() {
   const teamContext = useActiveTeam();
   const {
     activeTeamId,
-    setActiveTeam,
     teams,
     requireTeamOnCreate,
     loading: loadingTeams,
     error: teamError,
   } = teamContext;
-  const selectedTeam = teams.find((team) => team.id === activeTeamId);
-  const teamCreationReady =
-    !loadingTeams && !teamError && (activeTeamId === null ? !requireTeamOnCreate : !!selectedTeam);
-  const [visibilityDraft, setVisibilityDraft] = useState<{
+  const [accessDraft, setAccessDraft] = useState<{
+    contextTeamId: string | null;
     teamId: string | null;
-    value: SessionVisibility;
+    visibility: SessionVisibility;
   } | null>(null);
-  const visibility =
-    visibilityDraft && visibilityDraft.teamId === activeTeamId
-      ? visibilityDraft.value
-      : (selectedTeam?.defaultVisibility ?? "workspace");
+  const draft = accessDraft?.contextTeamId === activeTeamId ? accessDraft : null;
+  const teamId = draft
+    ? draft.teamId
+    : (activeTeamId ?? (requireTeamOnCreate ? (teams[0]?.id ?? null) : null));
+  const selectedTeam = teams.find((team) => team.id === teamId);
+  const teamCreationReady =
+    !loadingTeams && !teamError && (teamId === null ? !requireTeamOnCreate : !!selectedTeam);
+  const visibility = draft?.visibility ?? selectedTeam?.defaultVisibility ?? "workspace";
   const picker = useSessionTargetPicker({
-    teamId: activeTeamId,
+    teamId,
     defaultEnvironmentId: selectedTeam?.defaultEnvironmentId,
   });
   const { sessionTarget, buildRequestFields, isLaunchable } = picker;
 
-  useEffect(() => {
-    if (!loadingTeams && !teamError && requireTeamOnCreate && activeTeamId === null && teams[0]) {
-      setActiveTeam(teams[0].id);
-    }
-  }, [activeTeamId, loadingTeams, requireTeamOnCreate, setActiveTeam, teamError, teams]);
-
   // Composer context changes preserve the audience; sidebar changes use team defaults.
   useEffect(() => {
-    setVisibilityDraft((draft) => (draft?.teamId === activeTeamId ? draft : null));
-  }, [activeTeamId]);
+    if (loadingTeams || teamError) return;
+    setAccessDraft((draft) =>
+      draft?.contextTeamId === activeTeamId &&
+      (draft.teamId === null || teams.some((team) => team.id === draft.teamId))
+        ? draft
+        : null
+    );
+  }, [activeTeamId, loadingTeams, teamError, teams]);
   const [storedPreference, setStoredPreference] = useState<ModelPreference>({
     model: DEFAULT_MODEL,
     reasoningEffort: getDefaultReasoningEffort(DEFAULT_MODEL),
@@ -274,7 +275,7 @@ export default function Home() {
           reasoningEffort,
           skillSelection,
           providerSelections: availableProviderSelections,
-          teamId: activeTeamId,
+          teamId,
           visibility,
         }
       : null;
@@ -284,17 +285,12 @@ export default function Home() {
     providerAccounts.accounts
   );
   const {
-    identity: warmIdentity,
     sessionId: pendingSessionId,
     isWarming: isCreatingSession,
     warm: createSessionForWarming,
     consume: consumeWarmSession,
     error: creationError,
   } = useWarmDraftSession(warmRequest, warmRoutingIdentity);
-  const hasDraftContent = prompt.length > 0 || sessionAttachments.attachments.length > 0;
-  useEffect(() => {
-    if (hasDraftContent && warmIdentity) void createSessionForWarming();
-  }, [createSessionForWarming, hasDraftContent, warmIdentity]);
 
   const saveModelPreferenceDraft = useCallback((preference: ModelPreference) => {
     setModelPreferenceDraft(preference);
@@ -429,15 +425,15 @@ export default function Home() {
       canCreateSession={canCreateSession}
       picker={picker}
       teamContext={teamContext}
+      teamId={teamId}
       teamCreationReady={teamCreationReady}
       visibility={visibility}
       onTeamChange={(teamId) => {
-        setVisibilityDraft({ teamId, value: visibility });
-        setActiveTeam(teamId);
+        setAccessDraft({ contextTeamId: activeTeamId, teamId, visibility });
       }}
       onVisibilityChange={(value) => {
-        if (activeTeamId !== null || value !== "team")
-          setVisibilityDraft({ teamId: activeTeamId, value });
+        if (teamId !== null || value !== "team")
+          setAccessDraft({ contextTeamId: activeTeamId, teamId, visibility: value });
       }}
       selectedModel={selectedModel}
       setSelectedModel={handleModelChange}
@@ -446,7 +442,10 @@ export default function Home() {
       harness={harness}
       setHarness={handleHarnessChange}
       prompt={prompt}
-      handlePromptChange={setPrompt}
+      handlePromptChange={(value) => {
+        setPrompt(value);
+        if (prompt.length === 0 && value.length > 0) void createSessionForWarming();
+      }}
       attachments={{
         items: sessionAttachments.attachments,
         error: sessionAttachments.attachmentError,
@@ -478,6 +477,7 @@ function HomeContent({
   canCreateSession,
   picker,
   teamContext,
+  teamId,
   teamCreationReady,
   visibility,
   onTeamChange,
@@ -511,6 +511,7 @@ function HomeContent({
   canCreateSession: boolean;
   picker: SessionTargetSelection;
   teamContext: ReturnType<typeof useActiveTeam>;
+  teamId: string | null;
   teamCreationReady: boolean;
   visibility: SessionVisibility;
   onTeamChange: (teamId: string | null) => void;
@@ -744,7 +745,7 @@ function HomeContent({
               </div>
 
               <SessionAccessSelector
-                teamId={teamContext.activeTeamId}
+                teamId={teamId}
                 teams={teamContext.teams}
                 visibility={visibility}
                 onTeamChange={onTeamChange}

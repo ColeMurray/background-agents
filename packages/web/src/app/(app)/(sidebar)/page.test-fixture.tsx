@@ -170,10 +170,12 @@ vi.mock("@/components/model-reasoning-selector", () => ({
     disabled,
     harness,
     onHarnessChange,
+    onModelChange,
   }: {
     disabled?: boolean;
     harness?: string | null;
     onHarnessChange?: (harness: "opencode" | "claude") => void;
+    onModelChange: (model: string) => void;
   }) => (
     <>
       <button
@@ -183,6 +185,9 @@ vi.mock("@/components/model-reasoning-selector", () => ({
         data-agent-editable={onHarnessChange ? "true" : "false"}
       >
         Model and effort
+      </button>
+      <button type="button" onClick={() => onModelChange("openai/gpt-5.4")}>
+        Switch model to GPT-5.4
       </button>
       {onHarnessChange && (
         <>
