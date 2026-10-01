@@ -6,14 +6,14 @@ resource "cloudflare_queue" "github_autofix" {
   count = var.enable_github_bot ? 1 : 0
 
   account_id = var.cloudflare_account_id
-  queue_name = "open-inspect-github-autofix-${local.name_suffix}"
+  queue_name = "${local.name_prefix}-github-autofix-${local.name_suffix}"
 }
 
 resource "cloudflare_queue" "github_autofix_dlq" {
   count = var.enable_github_bot ? 1 : 0
 
   account_id = var.cloudflare_account_id
-  queue_name = "open-inspect-github-autofix-dlq-${local.name_suffix}"
+  queue_name = "${local.name_prefix}-github-autofix-dlq-${local.name_suffix}"
 }
 
 # Build github-bot worker bundle (only runs during apply, not plan)
@@ -35,7 +35,7 @@ module "github_bot_worker" {
   source = "../../modules/cloudflare-worker"
 
   account_id       = var.cloudflare_account_id
-  worker_name      = "open-inspect-github-bot-${local.name_suffix}"
+  worker_name      = "${local.name_prefix}-github-bot-${local.name_suffix}"
   worker_subdomain = var.cloudflare_worker_subdomain
   script_path      = local.github_bot_script_path
 
@@ -47,7 +47,7 @@ module "github_bot_worker" {
 
   service_bindings = {
     CONTROL_PLANE = {
-      service_name = "open-inspect-control-plane-${local.name_suffix}"
+      service_name = "${local.name_prefix}-control-plane-${local.name_suffix}"
     }
   }
 

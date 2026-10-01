@@ -1,5 +1,6 @@
 locals {
   name_suffix              = var.deployment_name
+  name_prefix              = var.resource_name_prefix
   use_modal_backend        = contains(["modal", "modal-vm"], var.sandbox_provider)
   use_daytona_backend      = var.sandbox_provider == "daytona"
   use_vercel_backend       = var.sandbox_provider == "vercel"
@@ -22,12 +23,12 @@ locals {
   unsafe_allow_all_effective  = var.unsafe_allow_all_users && !local.admission_allowlist_enabled
 
   # URLs for cross-service configuration
-  control_plane_host = "open-inspect-control-plane-${local.name_suffix}.${var.cloudflare_worker_subdomain}.workers.dev"
+  control_plane_host = "${local.name_prefix}-control-plane-${local.name_suffix}.${var.cloudflare_worker_subdomain}.workers.dev"
   control_plane_url  = "https://${local.control_plane_host}"
   ws_url             = "wss://${local.control_plane_host}"
 
   # Must match the deployed Worker's `name` and the custom-domain `service` binding.
-  web_worker_name = "open-inspect-web-${local.name_suffix}"
+  web_worker_name = "${local.name_prefix}-web-${local.name_suffix}"
 
   # Custom-domain inputs normalized to "" when unset. coalesce() must not be
   # used here: it errors when all arguments are null or empty strings, which is
@@ -88,7 +89,7 @@ locals {
   # Web app URL depends on deployment platform
   web_app_url = (var.web_platform == "cloudflare"
     ? "https://${local.web_cloudflare_host}"
-    : "https://open-inspect-${local.name_suffix}.vercel.app"
+    : "https://${local.name_prefix}-${local.name_suffix}.vercel.app"
   )
   effective_web_app_url = (
     var.web_platform == "vercel" ? module.web_app[0].production_url : local.web_app_url

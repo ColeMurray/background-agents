@@ -77,7 +77,7 @@ resource "local_file" "web_app_wrangler_production" {
 
     [[services]]
     binding = "CONTROL_PLANE_WORKER"
-    service = "open-inspect-control-plane-${local.name_suffix}"
+    service = "${local.name_prefix}-control-plane-${local.name_suffix}"
   TOML
 }
 

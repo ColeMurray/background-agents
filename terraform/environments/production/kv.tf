@@ -6,7 +6,7 @@ module "session_index_kv" {
   source = "../../modules/cloudflare-kv"
 
   account_id     = var.cloudflare_account_id
-  namespace_name = "open-inspect-session-index-${local.name_suffix}"
+  namespace_name = "${local.name_prefix}-session-index-${local.name_suffix}"
 }
 
 module "slack_kv" {
@@ -14,7 +14,7 @@ module "slack_kv" {
   source = "../../modules/cloudflare-kv"
 
   account_id     = var.cloudflare_account_id
-  namespace_name = "open-inspect-slack-kv-${local.name_suffix}"
+  namespace_name = "${local.name_prefix}-slack-kv-${local.name_suffix}"
 }
 
 module "github_kv" {
@@ -22,7 +22,7 @@ module "github_kv" {
   source = "../../modules/cloudflare-kv"
 
   account_id     = var.cloudflare_account_id
-  namespace_name = "open-inspect-github-kv-${local.name_suffix}"
+  namespace_name = "${local.name_prefix}-github-kv-${local.name_suffix}"
 }
 
 module "linear_kv" {
@@ -30,5 +30,5 @@ module "linear_kv" {
   source = "../../modules/cloudflare-kv"
 
   account_id     = var.cloudflare_account_id
-  namespace_name = "open-inspect-linear-kv-${local.name_suffix}"
+  namespace_name = "${local.name_prefix}-linear-kv-${local.name_suffix}"
 }

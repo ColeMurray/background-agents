@@ -4,12 +4,12 @@
 
 resource "cloudflare_queue" "image_build_finalization" {
   account_id = var.cloudflare_account_id
-  queue_name = "open-inspect-image-build-finalization-${local.name_suffix}"
+  queue_name = "${local.name_prefix}-image-build-finalization-${local.name_suffix}"
 }
 
 resource "cloudflare_queue" "image_build_finalization_dlq" {
   account_id = var.cloudflare_account_id
-  queue_name = "open-inspect-image-build-finalization-dlq-${local.name_suffix}"
+  queue_name = "${local.name_prefix}-image-build-finalization-dlq-${local.name_suffix}"
 }
 
 # Build control-plane worker bundle (only runs during apply, not plan)
@@ -30,7 +30,7 @@ module "control_plane_worker" {
   source = "../../modules/cloudflare-worker"
 
   account_id       = var.cloudflare_account_id
-  worker_name      = "open-inspect-control-plane-${local.name_suffix}"
+  worker_name      = "${local.name_prefix}-control-plane-${local.name_suffix}"
   worker_subdomain = var.cloudflare_worker_subdomain
   script_path      = local.control_plane_script_path
 
@@ -75,12 +75,12 @@ module "control_plane_worker" {
   service_bindings = merge(
     var.enable_slack_bot ? {
       SLACK_BOT = {
-        service_name = "open-inspect-slack-bot-${local.name_suffix}"
+        service_name = "${local.name_prefix}-slack-bot-${local.name_suffix}"
       }
     } : {},
     var.enable_linear_bot ? {
       LINEAR_BOT = {
-        service_name = "open-inspect-linear-bot-${local.name_suffix}"
+        service_name = "${local.name_prefix}-linear-bot-${local.name_suffix}"
       }
     } : {}
   )

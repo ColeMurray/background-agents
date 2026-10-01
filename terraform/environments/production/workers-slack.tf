@@ -6,14 +6,14 @@ resource "cloudflare_queue" "slack_completion_delivery" {
   count = var.enable_slack_bot ? 1 : 0
 
   account_id = var.cloudflare_account_id
-  queue_name = "open-inspect-slack-completion-${local.name_suffix}"
+  queue_name = "${local.name_prefix}-slack-completion-${local.name_suffix}"
 }
 
 resource "cloudflare_queue" "slack_completion_delivery_dlq" {
   count = var.enable_slack_bot ? 1 : 0
 
   account_id = var.cloudflare_account_id
-  queue_name = "open-inspect-slack-completion-dlq-${local.name_suffix}"
+  queue_name = "${local.name_prefix}-slack-completion-dlq-${local.name_suffix}"
 }
 
 # Build slack-bot worker bundle (only runs during apply, not plan)
@@ -37,7 +37,7 @@ module "slack_bot_worker" {
   source = "../../modules/cloudflare-worker"
 
   account_id       = var.cloudflare_account_id
-  worker_name      = "open-inspect-slack-bot-${local.name_suffix}"
+  worker_name      = "${local.name_prefix}-slack-bot-${local.name_suffix}"
   worker_subdomain = var.cloudflare_worker_subdomain
   script_path      = local.slack_bot_script_path
 
@@ -49,7 +49,7 @@ module "slack_bot_worker" {
 
   service_bindings = {
     CONTROL_PLANE = {
-      service_name = "open-inspect-control-plane-${local.name_suffix}"
+      service_name = "${local.name_prefix}-control-plane-${local.name_suffix}"
     }
   }
 

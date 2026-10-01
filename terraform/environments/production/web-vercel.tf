@@ -6,7 +6,7 @@ module "web_app" {
   count  = var.web_platform == "vercel" ? 1 : 0
   source = "../../modules/vercel-project"
 
-  project_name = "open-inspect-${local.name_suffix}"
+  project_name = "${local.name_prefix}-${local.name_suffix}"
   team_id      = var.vercel_team_id
   framework    = "nextjs"
 

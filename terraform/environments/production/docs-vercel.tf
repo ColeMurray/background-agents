@@ -8,7 +8,7 @@ module "docs_site" {
   count  = var.docs_site_enabled ? 1 : 0
   source = "../../modules/vercel-project"
 
-  project_name = "open-inspect-docs-${local.name_suffix}"
+  project_name = "${local.name_prefix}-docs-${local.name_suffix}"
   team_id      = var.vercel_team_id
   framework    = "nextjs"
 

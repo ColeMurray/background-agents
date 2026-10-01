@@ -854,3 +854,9 @@ variable "docs_custom_domain" {
   type        = string
   default     = null
 }
+
+variable "resource_name_prefix" {
+  description = "Prefix for every Cloudflare resource name, e.g. '<prefix>-control-plane-<deployment_name>'."
+  type        = string
+  default     = "open-inspect"
+}

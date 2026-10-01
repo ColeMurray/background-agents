@@ -21,7 +21,7 @@ module "linear_bot_worker" {
   source = "../../modules/cloudflare-worker"
 
   account_id       = var.cloudflare_account_id
-  worker_name      = "open-inspect-linear-bot-${local.name_suffix}"
+  worker_name      = "${local.name_prefix}-linear-bot-${local.name_suffix}"
   worker_subdomain = var.cloudflare_worker_subdomain
   script_path      = local.linear_bot_script_path
 
@@ -33,7 +33,7 @@ module "linear_bot_worker" {
 
   service_bindings = {
     CONTROL_PLANE = {
-      service_name = "open-inspect-control-plane-${local.name_suffix}"
+      service_name = "${local.name_prefix}-control-plane-${local.name_suffix}"
     }
   }
 
@@ -47,7 +47,7 @@ module "linear_bot_worker" {
     DEFAULT_MODEL        = { value = var.linear_bot_default_model }
     CLASSIFICATION_MODEL = { value = var.classification_model }
     LINEAR_CLIENT_ID     = { value = var.linear_client_id }
-    WORKER_URL           = { value = "https://open-inspect-linear-bot-${local.name_suffix}.${var.cloudflare_worker_subdomain}.workers.dev" }
+    WORKER_URL           = { value = "https://${local.name_prefix}-linear-bot-${local.name_suffix}.${var.cloudflare_worker_subdomain}.workers.dev" }
   }
 
   secrets = merge(
