@@ -113,7 +113,7 @@ def docker_allocation_name(session_id: str) -> str:
 
 
 def docker_allocation_tags(session_id: str, sandbox_id: str) -> dict[str, str]:
-    """Ownership tags a found allocation must match exactly before adoption or retirement."""
+    """Session and generation ownership tags for named VM allocations."""
     return {
         ALLOCATION_KIND_TAG: "session",
         ALLOCATION_SESSION_TAG: _identity_digest(session_id)[:48],

@@ -420,7 +420,7 @@ async def test_vm_launch_reports_typed_outcomes(monkeypatch, endpoint, case, det
     monkeypatch.setattr("src.images.base.docker_image", object())
     monkeypatch.setattr(manager_module.modal.Image, "from_id", lambda _id: object())
     lookup = (
-        AsyncMock(return_value=_sandbox(docker_allocation_tags(SESSION, "other")))
+        AsyncMock(return_value=_sandbox(docker_allocation_tags("other-session", "other")))
         if case == "foreign"
         else AsyncMock(side_effect=NotFoundError("not visible"))
     )

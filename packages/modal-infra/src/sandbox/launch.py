@@ -1,6 +1,7 @@
 """Translate a session launch into Modal image, environment, and resource arguments."""
 
 import json
+import re
 import secrets
 import time
 from dataclasses import dataclass
@@ -25,6 +26,7 @@ from ..app import app
 from ..app_config import APP_NAME
 from ..images.base import base_image
 from .launch_policy import (
+    ALLOCATION_SANDBOX_TAG,
     docker_allocation_name,
     docker_allocation_tags,
     docker_base_image,
@@ -36,7 +38,7 @@ from .models import SandboxConfig, SandboxHandle
 from .termination import terminate_and_wait
 from .tunnels import SandboxTunnels
 from .vcs_env import inject_vcs_env_vars
-from .vm_recovery import VMAllocationOutcome, VMServiceLaunch, find_owned_vm, owned_vm_tags_match
+from .vm_recovery import VMAllocationOutcome, VMServiceLaunch, owned_vm_tags_match
 
 _RESERVED_LAUNCH_ENV_VARS = {
     "RESTORED_FROM_SNAPSHOT",
@@ -225,7 +227,6 @@ class SandboxLauncher:
             sandbox, adopted = await self._launch_docker_sandbox(
                 session_id=_session_identity(config.session_config),
                 sandbox_id=sandbox_id,
-                retire_sandbox_id=config.retire_sandbox_id,
                 create_kwargs=create_kwargs,
                 repository_image=repository_image,
                 launch_deadline_at_ms=config.launch_deadline_at_ms,
@@ -265,33 +266,37 @@ class SandboxLauncher:
         *,
         session_id: str,
         sandbox_id: str,
-        retire_sandbox_id: str | None,
         create_kwargs: dict[str, Any],
         repository_image: bool,
         service_launch: VMServiceLaunch,
         launch_deadline_at_ms: int | None = None,
     ) -> tuple[modal.Sandbox, bool]:
-        """Create a named VM or adopt only the allocation owned by this generation."""
-        if retire_sandbox_id:
-            await self._retire_docker_allocation(session_id, retire_sandbox_id)
+        """Retire superseded session VMs, then create or adopt this generation."""
         name = docker_allocation_name(session_id)
         tags = docker_allocation_tags(session_id, sandbox_id)
-        existing = await self._find_owned_docker_allocation(name, tags)
+        existing, _ = await self._find_or_retire_docker_allocation(name, tags)
         if existing is None:
-            if launch_deadline_at_ms is not None and time.time() * 1000 >= launch_deadline_at_ms:
-                raise VMAllocationOutcome("window_closed", "VM launch deadline expired")
-            try:
-                sandbox = await _create_sandbox(
-                    {**create_kwargs, "name": name, "tags": {**tags, **service_launch.tags()}},
-                    repository_image=repository_image,
-                )
-                return sandbox, False
-            except modal.exception.AlreadyExistsError as e:
-                existing = await self._find_owned_docker_allocation(name, tags)
-                if existing is None:
-                    raise VMAllocationOutcome(
-                        "race_pending", "VM allocation is not yet visible"
-                    ) from e
+            for attempt in range(2):
+                if (
+                    launch_deadline_at_ms is not None
+                    and time.time() * 1000 >= launch_deadline_at_ms
+                ):
+                    raise VMAllocationOutcome("window_closed", "VM launch deadline expired")
+                try:
+                    sandbox = await _create_sandbox(
+                        {**create_kwargs, "name": name, "tags": {**tags, **service_launch.tags()}},
+                        repository_image=repository_image,
+                    )
+                    return sandbox, False
+                except modal.exception.AlreadyExistsError as e:
+                    existing, retired = await self._find_or_retire_docker_allocation(name, tags)
+                    if existing is not None:
+                        break
+                    if not retired or attempt == 1:
+                        raise VMAllocationOutcome(
+                            "race_pending", "VM allocation is not yet available"
+                        ) from e
+        assert existing is not None
         log.info(
             "sandbox.docker_allocation_adopted",
             sandbox_id=sandbox_id,
@@ -333,27 +338,27 @@ class SandboxLauncher:
         return {key: passwords[key] for key in keys}
 
     @staticmethod
-    async def _find_owned_docker_allocation(
+    async def _find_or_retire_docker_allocation(
         name: str, tags: dict[str, str]
-    ) -> modal.Sandbox | None:
-        found = await find_owned_vm(name, tags)
-        return found[0] if found else None
-
-    async def _retire_docker_allocation(self, session_id: str, sandbox_id: str) -> None:
-        """Terminate a prior named VM only when its ownership tags match."""
-        name = docker_allocation_name(session_id)
+    ) -> tuple[modal.Sandbox | None, bool]:
+        """Return this generation's VM and whether a superseded session VM was retired."""
         try:
             sandbox = await modal.Sandbox.from_name.aio(APP_NAME, name)
         except modal.exception.NotFoundError:
-            return
-        if not owned_vm_tags_match(
-            await sandbox.get_tags.aio(), docker_allocation_tags(session_id, sandbox_id)
+            return None, False
+        actual_tags = await sandbox.get_tags.aio()
+        generation = actual_tags.get(ALLOCATION_SANDBOX_TAG)
+        if (
+            not generation
+            or not re.fullmatch(r"[0-9a-f]{48}", generation)
+            or not owned_vm_tags_match(actual_tags, {**tags, ALLOCATION_SANDBOX_TAG: generation})
         ):
-            log.warn("sandbox.docker_allocation_retire_mismatch", sandbox_id=sandbox_id)
-            return
+            raise VMAllocationOutcome(
+                "other_generation", "Docker sandbox allocation ownership mismatch"
+            )
+        if generation == tags[ALLOCATION_SANDBOX_TAG]:
+            return sandbox, False
+        # The control plane rotates credentials before launching a replacement generation.
         await terminate_and_wait(sandbox)
-        log.info(
-            "sandbox.docker_allocation_retired",
-            sandbox_id=sandbox_id,
-            modal_object_id=sandbox.object_id,
-        )
+        log.info("sandbox.docker_allocation_retired", modal_object_id=sandbox.object_id)
+        return None, True
