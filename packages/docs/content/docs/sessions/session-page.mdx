@@ -26,7 +26,7 @@ A session page has four areas: the header at the top, the timeline in the middle
 The header shows the session title with the repository name under it on desktop.
 
 - **Title.** Click the title to rename the session (the tooltip says "Click to rename"). Press Enter to save or Escape to cancel. Renaming needs the `sessions.lifecycle` permission; without it the title is plain text.
-- **Connection dot.** A small dot reports your browser's connection to the session: Connected, Connecting..., Reconnecting..., or Disconnected. A reconnect can take a few minutes; the page says "Reconnecting..." rather than "Disconnected" while it waits.
+- **Connection dot.** A small dot reports your browser's connection to the session: Connected, Connecting..., Reconnecting..., or Disconnected. After a dropped connection the page reconnects on its own and says "Reconnecting..." rather than "Disconnected" while it waits. A background tab or an offline browser holds the retry, then reconnects as soon as the tab is visible and online again.
 - **Sandbox status.** The boxed icon opens a "Sandbox" popover with the current status and a one-line explanation; while the sandbox boots, the label shows the phase in progress ("Starting runtime", "Cloning repository", "Running setup.sh", "Starting services", "Installing skills", or "Starting agent"). After a failed boot the popover names the failed phase and shows the provider's reason, and people with sandbox access get "Open provider dashboard"; see [Lifecycle and statuses](/sessions/lifecycle-and-statuses) for what each status means.
 - **Session details toggle.** On large screens a sidebar icon shows or hides the right sidebar. On medium screens a "Details" button opens the details overlay instead.
 
