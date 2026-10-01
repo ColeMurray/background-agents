@@ -1,5 +1,5 @@
 import type { Logger } from "../../logger";
-import type { BackgroundTasks } from "../../platform-ports";
+import type { AlarmScheduler, BackgroundTasks } from "../../platform-ports";
 import type { SandboxRow, SessionRow } from "../../session/types";
 import {
   SandboxProviderError,
@@ -18,6 +18,8 @@ import type { SandboxAccess } from "./sandbox-access";
 import { SandboxLaunchExpiredError, SpawnSupersededError } from "./startup-errors";
 
 const VM_RESOLVE_RETRY_MS = 10_000;
+/** Interval between alarm-driven lookups once a connected bridge's retry window has closed. */
+const VM_RESOLVE_ALARM_RETRY_MS = 60_000;
 
 type PendingStartupConfig = Pick<
   CreateSandboxConfig,
@@ -77,12 +79,18 @@ export interface VmStartupReconciliationDependencies {
     lifetime: SandboxLifetime
   ): Promise<boolean>;
   getLogger: () => Pick<Logger, "warn">;
+  alarmScheduler: Pick<AlarmScheduler, "schedule">;
   backgroundTasks?: BackgroundTasks;
 }
 
 /** Reconciles an already-authorized startup; owns no admission or preservation policy. */
 export class VmStartupReconciliation {
   private bridgeResolution: SandboxGeneration | null = null;
+  /**
+   * When an alarm may next repeat a connected bridge's lookup for its generation; null once a
+   * lookup for that generation failed non-retryably, which ends its alarm lookups.
+   */
+  private bridgeAlarmRetry: { generation: SandboxGeneration; atMs: number | null } | null = null;
   private bridgeRetryGeneration: SandboxGeneration | null = null;
   private bridgeStartupClaim: SandboxGeneration | null = null;
   private bridgeResolvedStartup: {
@@ -256,8 +264,14 @@ export class VmStartupReconciliation {
     }
   }
 
-  /** Synchronous bridge entry submits lookup-only work without holding readiness. */
-  resolvePendingBridge(generation: SandboxGeneration): void {
+  /**
+   * Synchronous bridge entry submits lookup-only work without holding readiness.
+   * Retryable failures repeat within `retryWindowMs`; `resumePendingBridge` continues after it.
+   */
+  resolvePendingBridge(
+    generation: SandboxGeneration,
+    retryWindowMs = PENDING_VM_REFERENCE_MATERIALIZE_BOUND_MS
+  ): void {
     if (this.bridgeResolution) {
       if (
         this.bridgeResolution.sandboxId !== generation.sandboxId ||
@@ -266,33 +280,17 @@ export class VmStartupReconciliation {
         this.bridgeRetryGeneration = generation;
       return;
     }
-    const { provider, storage, sessionContext, launchContext, access, shutdown, backgroundTasks } =
-      this.deps;
-    if (!provider.resolveSandbox) return;
-    const row = storage.getSandbox();
-    const reference = row?.modal_object_id;
-    const pending = reference ? parsePendingVmReference(reference) : null;
-    const session = sessionContext.getSession();
-    if (
-      !row ||
-      row.fenced ||
-      !["spawning", "connecting", "ready"].includes(row.status) ||
-      row.created_at !== generation.createdAt ||
-      row.modal_sandbox_id !== generation.sandboxId ||
-      !reference ||
-      !pending ||
-      !session ||
-      pending.sandboxId !== row.modal_sandbox_id ||
-      pending.sessionId !== (session.session_name || session.id)
-    )
-      return;
+    const target = this.pendingBridgeTarget(generation);
+    if (!target) return;
+    const { reference, pending, session } = target;
+    const { provider, storage, launchContext, access, shutdown, backgroundTasks } = this.deps;
     const config = {
       sessionId: pending.sessionId,
       sandboxId: pending.sandboxId,
       generationCreatedAtMs: generation.createdAt,
       timeoutSeconds: launchContext.resolveSandboxSettings(session).timeoutSeconds,
     };
-    const retryDeadlineAtMs = Date.now() + PENDING_VM_REFERENCE_MATERIALIZE_BOUND_MS;
+    const retryDeadlineAtMs = Date.now() + retryWindowMs;
     this.bridgeResolution = generation;
     const work = () =>
       (async () => {
@@ -312,14 +310,16 @@ export class VmStartupReconciliation {
             break;
           } catch (error) {
             const detail = modalVmAllocationDetail(error);
-            if (detail !== "not_visible" && !provider.isUnknownStartupError?.(error)) throw error;
-            if (
-              Date.now() >= retryDeadlineAtMs ||
-              (detail === "not_visible" &&
-                Date.now() - generation.createdAt >= PENDING_VM_REFERENCE_MATERIALIZE_BOUND_MS) ||
-              this.bridgeRetryGeneration
-            )
-              return;
+            const retryable =
+              detail === "not_visible"
+                ? Date.now() - generation.createdAt < PENDING_VM_REFERENCE_MATERIALIZE_BOUND_MS
+                : !!provider.isUnknownStartupError?.(error);
+            if (!retryable) {
+              this.bridgeAlarmRetry = { generation, atMs: null };
+              if (detail === "not_visible") return;
+              throw error;
+            }
+            if (Date.now() >= retryDeadlineAtMs || this.bridgeRetryGeneration) return;
             await new Promise<void>((resolve) => setTimeout(resolve, VM_RESOLVE_RETRY_MS));
           }
         }
@@ -398,5 +398,60 @@ export class VmStartupReconciliation {
         });
     if (backgroundTasks) backgroundTasks.submit(work, { name: "sandbox.vm_resolve" });
     else void work();
+  }
+
+  /**
+   * Alarm entry for a connected bridge's pending lookup. The next attempt is armed on the
+   * awaited alarm path before any provider I/O, so a rejected schedule fails the delivery and
+   * the platform retries it. An alarm before that time only re-arms it, so neither the second
+   * preservation hook of a delivery nor an unrelated earlier alarm repeats the lookup. After a
+   * non-retryable failure for the generation, alarms neither look up nor re-arm. This state is
+   * in memory, so an alarm in a restarted instance looks up again before it is relearned.
+   */
+  async resumePendingBridge(generation: SandboxGeneration): Promise<void> {
+    if (!this.pendingBridgeTarget(generation)) return;
+    const retry = this.bridgeAlarmRetry;
+    const now = Date.now();
+    if (
+      retry?.generation.sandboxId === generation.sandboxId &&
+      retry.generation.createdAt === generation.createdAt &&
+      (retry.atMs === null || now < retry.atMs)
+    ) {
+      if (retry.atMs !== null) await this.deps.alarmScheduler.schedule(retry.atMs);
+      return;
+    }
+    const atMs = now + VM_RESOLVE_ALARM_RETRY_MS;
+    await this.deps.alarmScheduler.schedule(atMs);
+    this.bridgeAlarmRetry = { generation, atMs };
+    // Rechecks the row after that await and leaves a lookup already in flight to finish.
+    this.resolvePendingBridge(generation, 0);
+  }
+
+  /** The generation's own pending VM reference, while a bridge lookup may resolve it. */
+  private pendingBridgeTarget(generation: SandboxGeneration): {
+    reference: string;
+    pending: { sessionId: string; sandboxId: string };
+    session: SessionRow;
+  } | null {
+    const { provider, storage, sessionContext } = this.deps;
+    if (!provider.resolveSandbox) return null;
+    const row = storage.getSandbox();
+    const reference = row?.modal_object_id;
+    const pending = reference ? parsePendingVmReference(reference) : null;
+    const session = sessionContext.getSession();
+    if (
+      !row ||
+      row.fenced ||
+      !["spawning", "connecting", "ready"].includes(row.status) ||
+      row.created_at !== generation.createdAt ||
+      row.modal_sandbox_id !== generation.sandboxId ||
+      !reference ||
+      !pending ||
+      !session ||
+      pending.sandboxId !== row.modal_sandbox_id ||
+      pending.sessionId !== (session.session_name || session.id)
+    )
+      return null;
+    return { reference, pending, session };
   }
 }
