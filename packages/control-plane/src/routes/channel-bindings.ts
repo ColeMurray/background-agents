@@ -20,6 +20,10 @@ async function getBinding(
   if (binding) {
     return json(channelBindingResponseSchema.parse({ teamId: binding.teamId, kind: binding.kind }));
   }
+  // Unbound DMs are personal conversations, not team routing destinations.
+  if (/^D[A-Z0-9]+$/.test(params.externalId)) {
+    return json(channelBindingResponseSchema.parse({ teamId: null }));
+  }
   const settings = await new IntegrationSettingsStore(ctx.db).getGlobal("slack");
   if ((settings?.defaults?.unboundChannels ?? DEFAULT_SLACK_UNBOUND_CHANNELS) === "reject") {
     return json({ error: "Channel is not bound", code: "channel_unbound" }, 404);

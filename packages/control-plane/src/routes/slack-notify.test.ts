@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SessionStatus } from "@open-inspect/shared/types/sessions";
 import type { SessionVisibility } from "@open-inspect/shared/types/teams";
 import { SECTION_TEXT_MAX_CHARS } from "@open-inspect/shared/slack";
-import { handleSlackNotify } from "./slack-notify";
+import type * as SlackNotify from "./slack-notify";
 import type { RequestContext } from "./shared";
 import type { SqlDatabase } from "../db/sql-database";
 import type { Env } from "../types";
@@ -56,6 +56,7 @@ const sessionFetchMock = vi.fn();
 
 const PATH = "/sessions/sess-1/slack-notify";
 const PATTERN = /^\/sessions\/(?<id>[^/]+)\/slack-notify$/;
+let handleSlackNotify: typeof SlackNotify.handleSlackNotify;
 
 function createCtx(): RequestContext {
   return {
@@ -143,7 +144,9 @@ let consoleLogSpy: ReturnType<typeof vi.spyOn>;
 let consoleWarnSpy: ReturnType<typeof vi.spyOn>;
 let consoleErrorSpy: ReturnType<typeof vi.spyOn>;
 
-beforeEach(() => {
+beforeEach(async () => {
+  vi.resetModules();
+  ({ handleSlackNotify } = await import("./slack-notify"));
   vi.clearAllMocks();
   channelBindingStoreMock.get.mockResolvedValue(null);
   listChannelsMock.mockResolvedValue({
@@ -162,6 +165,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  vi.useRealTimers();
   vi.unstubAllGlobals();
   consoleLogSpy.mockRestore();
   consoleWarnSpy.mockRestore();
@@ -188,6 +192,106 @@ function lastLogPayload(
 }
 
 describe("handleSlackNotify", () => {
+  describe("channel-name cache", () => {
+    beforeEach(() => {
+      seedActiveSession();
+      integrationStoreMock.getResolvedConfig.mockResolvedValue({
+        settings: { agentNotificationsEnabled: true },
+      });
+      fetchMock.mockImplementation(async () =>
+        Response.json({
+          ok: true,
+          channel: "C1",
+          ts: "1.2",
+          permalink: "https://x.slack.com/p",
+        })
+      );
+    });
+
+    it("reuses a token-scoped normalized name without caching authorization", async () => {
+      for (const channel of ["#OPS", "ops", "#ops"]) {
+        expect((await callHandler({ channel, text: "Done" })).status).toBe(200);
+      }
+      expect(listChannelsMock).toHaveBeenCalledOnce();
+      expect(sessionStoreMock.get).toHaveBeenCalledTimes(6);
+      expect(channelBindingStoreMock.get).toHaveBeenCalledTimes(3);
+      expect(channelBindingStoreMock.get).toHaveBeenLastCalledWith("slack", "C1");
+    });
+
+    it("populates names from the listing for subsequent channel lookups", async () => {
+      expect((await callHandler({ channel: "#ops", text: "Done" })).status).toBe(200);
+      expect((await callHandler({ channel: "#archive", text: "Done" })).status).toBe(200);
+      expect(listChannelsMock).toHaveBeenCalledOnce();
+      expect(channelBindingStoreMock.get).toHaveBeenLastCalledWith("slack", "C3");
+    });
+
+    it("does not reuse another bot token's channel IDs", async () => {
+      listChannelsMock.mockImplementation(async (token: string) => ({
+        ok: true,
+        channels: [{ id: token === "xoxb-test" ? "C1" : "CSECOND", name: "ops" }],
+      }));
+      expect((await callHandler({ channel: "#ops", text: "Done" })).status).toBe(200);
+      expect(
+        (await callHandler({ channel: "ops", text: "Done" }, { SLACK_BOT_TOKEN: "xoxb-second" }))
+          .status
+      ).toBe(200);
+      expect(listChannelsMock).toHaveBeenCalledTimes(2);
+      expect(channelBindingStoreMock.get).toHaveBeenLastCalledWith("slack", "CSECOND");
+    });
+
+    it("refreshes expired entries rather than extending their TTL on a hit", async () => {
+      vi.useFakeTimers({ toFake: ["Date"] });
+      const nowMs = Date.parse("2026-10-01T00:00:00Z");
+      vi.setSystemTime(nowMs);
+      expect((await callHandler({ channel: "#ops", text: "Done" })).status).toBe(200);
+      vi.setSystemTime(nowMs + 59_999);
+      expect((await callHandler({ channel: "ops", text: "Done" })).status).toBe(200);
+      expect(listChannelsMock).toHaveBeenCalledOnce();
+      listChannelsMock.mockResolvedValue({ ok: true, channels: [{ id: "CNEW", name: "ops" }] });
+      vi.setSystemTime(nowMs + 60_000);
+      expect((await callHandler({ channel: "#ops", text: "Done" })).status).toBe(200);
+      expect(listChannelsMock).toHaveBeenCalledTimes(2);
+      expect(channelBindingStoreMock.get).toHaveBeenLastCalledWith("slack", "CNEW");
+    });
+
+    it("bounds the cache while retaining the requested name from a large listing", async () => {
+      listChannelsMock.mockResolvedValue({
+        ok: true,
+        channels: Array.from({ length: 1001 }, (_, index) => ({
+          id: `C${index}`,
+          name: `channel-${index}`,
+        })),
+      });
+      expect((await callHandler({ channel: "channel-0", text: "Done" })).status).toBe(200);
+      expect((await callHandler({ channel: "channel-0", text: "Done" })).status).toBe(200);
+      expect(listChannelsMock).toHaveBeenCalledOnce();
+      expect((await callHandler({ channel: "channel-1", text: "Done" })).status).toBe(200);
+      expect(listChannelsMock).toHaveBeenCalledTimes(2);
+    });
+
+    it("checks the current binding even when the channel name is cached", async () => {
+      expect((await callHandler({ channel: "#ops", text: "Done" })).status).toBe(200);
+      channelBindingStoreMock.get.mockResolvedValue({ teamId: "team-b" });
+      fetchMock.mockClear();
+      const refused = await callHandler({ channel: "ops", text: "secret text" });
+      expect(refused.status).toBe(403);
+      expect(await refused.json()).toMatchObject({ error: "session_scope_denied" });
+      expect(listChannelsMock).toHaveBeenCalledOnce();
+      expect(channelBindingStoreMock.get).toHaveBeenCalledTimes(2);
+      expect(fetchMock).not.toHaveBeenCalled();
+    });
+
+    it("does not cache failed listings or missing names", async () => {
+      listChannelsMock.mockResolvedValueOnce({ ok: false, error: "ratelimited", retryAfter: 1 });
+      expect((await callHandler({ channel: "ops", text: "Done" })).status).toBe(429);
+      expect((await callHandler({ channel: "ops", text: "Done" })).status).toBe(200);
+      for (let index = 0; index < 2; index++) {
+        expect((await callHandler({ channel: "missing", text: "Done" })).status).toBe(404);
+      }
+      expect(listChannelsMock).toHaveBeenCalledTimes(4);
+    });
+  });
+
   it("refuses a missing authoritative session before bot configuration", async () => {
     sessionStoreMock.get.mockResolvedValue(null);
 

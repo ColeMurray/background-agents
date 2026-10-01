@@ -38,6 +38,19 @@ const RAW_TEXT_INPUT_MAX_LENGTH = 12_000;
 const CHANNEL_INPUT_MAX_LENGTH = 80;
 /** Reason field cap; recorded for audit only. */
 const REASON_MAX_LENGTH = 500;
+const CHANNEL_NAME_CACHE_TTL_MS = 60_000;
+const CHANNEL_NAME_CACHE_MAX_ENTRIES = 1_000;
+const channelNameCache = new Map<string, { id: string; expiresAt: number }>();
+
+function cacheChannelName(token: string, channel: { id: string; name: string }, expiresAt: number) {
+  const key = JSON.stringify([token, channel.name.toLowerCase()]);
+  channelNameCache.delete(key);
+  channelNameCache.set(key, { id: channel.id, expiresAt });
+  if (channelNameCache.size > CHANNEL_NAME_CACHE_MAX_ENTRIES) {
+    const oldestKey = channelNameCache.keys().next().value;
+    if (oldestKey !== undefined) channelNameCache.delete(oldestKey);
+  }
+}
 
 interface ParsedBody {
   channel: string;
@@ -131,19 +144,30 @@ export async function handleSlackNotify(
 
   let targetChannelId = parsed.channel;
   if (!/^[CDG][A-Z0-9]+$/.test(targetChannelId)) {
-    const listing = await listChannels(token, { signal: request.signal });
-    if (!listing.ok) {
-      const reason = mapSlackError(listing.error);
-      logDenial(sessionId, ctx, parsed, audit, reason, listing.retryAfter);
-      return failureResponse(reason, listing.error, listing.retryAfter);
+    const name = parsed.channel.replace(/^#/, "").toLowerCase();
+    const cacheKey = JSON.stringify([token, name]);
+    const cached = channelNameCache.get(cacheKey);
+    if (cached && cached.expiresAt > Date.now()) {
+      targetChannelId = cached.id;
+    } else {
+      channelNameCache.delete(cacheKey);
+      const listing = await listChannels(token, { signal: request.signal });
+      if (!listing.ok) {
+        const reason = mapSlackError(listing.error);
+        logDenial(sessionId, ctx, parsed, audit, reason, listing.retryAfter);
+        return failureResponse(reason, listing.error, listing.retryAfter);
+      }
+      const expiresAt = Date.now() + CHANNEL_NAME_CACHE_TTL_MS;
+      for (const channel of listing.channels) cacheChannelName(token, channel, expiresAt);
+      const channel = listing.channels.find((candidate) => candidate.name.toLowerCase() === name);
+      if (!channel) {
+        logDenial(sessionId, ctx, parsed, audit, "channel_not_found_or_forbidden");
+        return failureResponse("channel_not_found_or_forbidden", "Slack channel was not found.");
+      }
+      // A large listing must not evict the name this request actually resolved.
+      cacheChannelName(token, channel, expiresAt);
+      targetChannelId = channel.id;
     }
-    const name = parsed.channel.replace(/^#/, "");
-    const channel = listing.channels.find((candidate) => candidate.name === name);
-    if (!channel) {
-      logDenial(sessionId, ctx, parsed, audit, "channel_not_found_or_forbidden");
-      return failureResponse("channel_not_found_or_forbidden", "Slack channel was not found.");
-    }
-    targetChannelId = channel.id;
   }
 
   // Re-read after name resolution: only the authoritative, current row permits publication.

@@ -83,6 +83,29 @@ beforeEach(() => {
 });
 
 describe("channel-bound routing", () => {
+  it("launches a new DM with the workspace scope returned by the binding service", async () => {
+    const env = makeEnv(Response.json({ teamId: null }));
+    await handleDirectMessage(
+      { ...event, channel: "D123", channel_type: "im" },
+      env,
+      "trace",
+      vi.fn()
+    );
+    expect(classify).toHaveBeenCalledWith(
+      "Fix it",
+      expect.objectContaining({ channelId: "D123", teamId: null }),
+      "trace"
+    );
+    expect(startSessionAndSendPrompt).toHaveBeenCalledWith(
+      env,
+      expect.objectContaining({ channel: "D123", teamId: null })
+    );
+    expect(env.CONTROL_PLANE.fetch).toHaveBeenCalledWith(
+      "https://internal/channel-bindings/slack/D123",
+      expect.anything()
+    );
+  });
+
   it.each([404, 503])("refuses a new request when binding lookup returns %s", async (status) => {
     const env = makeEnv(new Response(null, { status }));
     await handleDirectMessage(event, env, "trace", vi.fn());

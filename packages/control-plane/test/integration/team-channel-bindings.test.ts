@@ -400,6 +400,36 @@ describe("team channel binding routes", () => {
 });
 
 describe("service channel binding lookup", () => {
+  it("allows unbound DMs under reject policy without exempting regular channels", async () => {
+    await new IntegrationSettingsStore(env.DB).setGlobal("slack", {
+      defaults: { unboundChannels: "reject" },
+    });
+    const dm = await serviceFetch(`${BASE}/channel-bindings/slack/D123`, { service: "slack-bot" });
+    expect(dm.status).toBe(200);
+    expect(await dm.json()).toEqual({ teamId: null });
+    for (const channel of ["C123", "G123", "Dinvalid"]) {
+      const rejected = await serviceFetch(`${BASE}/channel-bindings/slack/${channel}`, {
+        service: "slack-bot",
+      });
+      expect(rejected.status).toBe(404);
+      expect(await rejected.json()).toMatchObject({ code: "channel_unbound" });
+    }
+  });
+
+  it("preserves any explicit DM binding rather than bypassing its team scope", async () => {
+    const team = await createTeam("engineering");
+    await new TeamChannelBindingStore(env.DB).put(
+      { provider: "slack", externalId: "D123", teamId: team.id, kind: "source" },
+      actor
+    );
+    await new IntegrationSettingsStore(env.DB).setGlobal("slack", {
+      defaults: { unboundChannels: "reject" },
+    });
+    const dm = await serviceFetch(`${BASE}/channel-bindings/slack/D123`, { service: "slack-bot" });
+    expect(dm.status).toBe(200);
+    expect(await dm.json()).toEqual({ teamId: team.id, kind: "source" });
+  });
+
   it("round-trips unboundChannels through the settings API and rejects invalid or repo-scoped policies", async () => {
     const endpoint = `${BASE}/integration-settings/slack`;
     for (const unboundChannels of ["workspace", "reject"]) {

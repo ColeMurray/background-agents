@@ -190,10 +190,14 @@ describe("POST /sessions/:id/slack-notify", () => {
         visibility,
         agentNotificationsEnabled: true,
       });
-      const slackFetch = buildSlackFetchMock({});
+      const channelName = `${visibility}-ops`;
+      const slackFetch = buildSlackFetchMock({
+        listChannels: () =>
+          Response.json({ ok: true, channels: [{ id: "C1", name: channelName }] }),
+      });
       vi.stubGlobal("fetch", slackFetch);
 
-      for (const channel of ["C1", "#ops", "ops"]) {
+      for (const channel of ["C1", `#${channelName}`, channelName]) {
         const res = await SELF.fetch(`https://test.local/sessions/${sessionName}/slack-notify`, {
           method: "POST",
           headers: { Authorization: `Bearer ${sandboxToken}` },
@@ -203,7 +207,7 @@ describe("POST /sessions/:id/slack-notify", () => {
         await expect(res.json()).resolves.toMatchObject({ error: "session_scope_denied" });
       }
 
-      expect(slackFetch).toHaveBeenCalledTimes(2);
+      expect(slackFetch).toHaveBeenCalledOnce();
       for (const [input] of slackFetch.mock.calls) {
         expect(String(input)).toContain("conversations.list");
       }
