@@ -1,6 +1,6 @@
 import type { InstallationRepository } from "@open-inspect/shared/types/repository-catalog";
 import type { SqlDatabase } from "../db/sql-database";
-import { TeamRepositoryGrantStore } from "../db/team-repository-grants";
+import { coveredRepositoryIds, TeamRepositoryGrantStore } from "../db/team-repository-grants";
 import { repositoryCredentialScope, type CredentialScope } from "./credential-scope";
 import { SourceControlProviderError } from "./errors";
 
@@ -37,10 +37,7 @@ export async function resolveRepositoryCredentialScope(
 
   if (ownerTeamId !== null && candidateIds.length > 0) {
     const grants = await new TeamRepositoryGrantStore(db).listForTeam(ownerTeamId);
-    if (!grants.some((grant) => grant.grant_kind === "installation")) {
-      const allowed = new Set(grants.map((grant) => grant.repo_external_id));
-      return repositoryCredentialScope(candidateIds.filter((id) => allowed.has(id)));
-    }
+    return repositoryCredentialScope(coveredRepositoryIds(grants, candidateIds));
   }
   return repositoryCredentialScope(candidateIds);
 }

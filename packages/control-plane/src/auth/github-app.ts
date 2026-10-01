@@ -12,6 +12,7 @@
 import type { InstallationRepository } from "@open-inspect/shared/types/repository-catalog";
 import { DEFAULT_APP_NAME } from "@open-inspect/shared/app-name";
 import type { CacheStore } from "@open-inspect/shared/cache-store";
+import { sha256Hex } from "@open-inspect/shared/service-auth";
 import { z } from "zod";
 import {
   repositoryCredentialScope,
@@ -316,13 +317,7 @@ export async function getInstallationTokenCacheKey(
   let scopeHash = "all";
   if (scope.kind === "repositories") {
     const ids = repositoryCredentialScope(scope.repositoryIds).repositoryIds;
-    const digest = await crypto.subtle.digest(
-      "SHA-256",
-      new TextEncoder().encode(JSON.stringify(ids))
-    );
-    scopeHash = Array.from(new Uint8Array(digest), (byte) =>
-      byte.toString(16).padStart(2, "0")
-    ).join("");
+    scopeHash = await sha256Hex(JSON.stringify(ids));
   }
   return `${INSTALLATION_TOKEN_CACHE_KEY_PREFIX}:${config.appId}:${config.installationId}:${scopeHash}`;
 }

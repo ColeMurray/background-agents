@@ -31,9 +31,9 @@ still use one deployment-wide PAT and cannot provide this credential boundary.
 
 Removing a grant does not revoke a credential already issued to a sandbox. Installation tokens
 remain valid until expiry, and credential helpers refresh shortly before expiry. Legacy session or
-environment rows without numeric repository IDs require an identity-matching cached repository
-catalog; loading the repository list populates that cache. Credentials fail closed if an ID cannot
-be resolved from it.
+environment rows without numeric repository IDs are resolved from the cached repository catalog,
+which is refreshed from the installation when missing. Credentials fail closed if an ID cannot be
+resolved from it.
 
 ---
 

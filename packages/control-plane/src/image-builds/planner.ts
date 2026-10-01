@@ -1,6 +1,6 @@
 import { resolveBuildTimeoutSeconds } from "@open-inspect/shared/types/integrations";
 import { createLogger, type CorrelationContext } from "../logger";
-import { readCachedInstallationRepositories } from "../repos/cache";
+import { loadInstallationRepositories } from "../repos/cache";
 import { createSourceControlProviderFromEnv, resolveScmProviderFromEnv } from "../source-control";
 import { scmCloneIdentity } from "../sandbox/sandbox-env";
 import { prepareLegacyManagedProviderEnv } from "../sandbox/managed-provider-env";
@@ -127,7 +127,7 @@ export class ImageBuildPlanner implements ImageBuildPlannerPort {
   ): Promise<ImageBuildCloneAuth> {
     try {
       const tokenScope = await resolveImageBuildTokenScope(this.db, scope, target, () =>
-        readCachedInstallationRepositories(this.env)
+        loadInstallationRepositories(this.env, this.db)
       );
       const provider = createSourceControlProviderFromEnv(this.env);
       const auth = await provider.generateCredentialHelperAuth(tokenScope);

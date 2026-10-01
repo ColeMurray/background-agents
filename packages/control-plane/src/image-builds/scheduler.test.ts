@@ -4,7 +4,7 @@ import type { ImageBuildStore } from "../db/image-builds";
 import type { SqlDatabase } from "../db/sql-database";
 import { TeamRepositoryGrantStore } from "../db/team-repository-grants";
 import type { Job } from "../jobs";
-import { readCachedInstallationRepositories } from "../repos/cache";
+import { loadInstallationRepositories } from "../repos/cache";
 import type * as ReposCacheModule from "../repos/cache";
 import { createTestEnv } from "../router.test-support";
 import type { SourceControlProvider } from "../source-control";
@@ -18,7 +18,7 @@ import type { ImageBuildWorkflow } from "./workflow";
 
 vi.mock("../repos/cache", async (importOriginal) => ({
   ...(await importOriginal<typeof ReposCacheModule>()),
-  readCachedInstallationRepositories: vi.fn(),
+  loadInstallationRepositories: vi.fn(),
 }));
 
 const ENVIRONMENT = {
@@ -57,7 +57,7 @@ beforeEach(() => {
   vi.spyOn(EnvironmentStore.prototype, "getRepositoriesForEnvironment").mockResolvedValue(
     ENV_REPOSITORIES
   );
-  vi.mocked(readCachedInstallationRepositories).mockResolvedValue(
+  vi.mocked(loadInstallationRepositories).mockResolvedValue(
     [
       { id: 1, name: "web" },
       { id: 2, name: "api" },
@@ -357,7 +357,7 @@ describe("ImageBuildScheduler", () => {
       { kind: "repositories", repositoryIds: [1] }
     );
     expect(TeamRepositoryGrantStore.prototype.listForTeam).not.toHaveBeenCalled();
-    expect(readCachedInstallationRepositories).not.toHaveBeenCalled();
+    expect(loadInstallationRepositories).not.toHaveBeenCalled();
     expect(stats.branchMatched).toBe(1);
     expect(h.workflow.triggerBuildWithTarget).not.toHaveBeenCalled();
   });
@@ -410,7 +410,7 @@ describe("ImageBuildScheduler", () => {
         expectedScope
       );
       expect(EnvironmentStore.prototype.getById).toHaveBeenCalledExactlyOnceWith("env_1");
-      expect(readCachedInstallationRepositories).not.toHaveBeenCalled();
+      expect(loadInstallationRepositories).not.toHaveBeenCalled();
       if (ownerTeamId === null) {
         expect(TeamRepositoryGrantStore.prototype.listForTeam).not.toHaveBeenCalled();
       } else {
@@ -422,7 +422,7 @@ describe("ImageBuildScheduler", () => {
     }
   );
 
-  it("resolves NULL environment ids lazily from the cached catalog for branch reads", async () => {
+  it("resolves NULL environment ids lazily from the installation catalog for branch reads", async () => {
     vi.mocked(EnvironmentStore.prototype.getById).mockResolvedValue(ENVIRONMENT);
     vi.mocked(EnvironmentStore.prototype.getRepositoriesForEnvironment).mockResolvedValue(
       ENV_REPOSITORIES.map((row) => ({ ...row, repo_id: null }))
@@ -439,7 +439,7 @@ describe("ImageBuildScheduler", () => {
 
     const stats = await h.scheduler.run({ request_id: "cron-1", trace_id: "cron-1" });
 
-    expect(readCachedInstallationRepositories).toHaveBeenCalledExactlyOnceWith(env);
+    expect(loadInstallationRepositories).toHaveBeenCalledExactlyOnceWith(env, expect.anything());
     expect(getBranchHead).toHaveBeenCalledTimes(2);
     expect(getBranchHead).toHaveBeenCalledWith(expect.any(Object), {
       kind: "repositories",
@@ -520,7 +520,7 @@ describe("ImageBuildScheduler", () => {
     expect(stats.branchLookups).toBe(0);
     expect(getBranchHead).not.toHaveBeenCalled();
     expect(h.workflow.triggerBuildWithTarget).not.toHaveBeenCalled();
-    expect(readCachedInstallationRepositories).not.toHaveBeenCalled();
+    expect(loadInstallationRepositories).not.toHaveBeenCalled();
   });
 
   it("skips branch reads and rebuilds for NULL ids missing from the catalog", async () => {
@@ -528,7 +528,7 @@ describe("ImageBuildScheduler", () => {
     vi.mocked(EnvironmentStore.prototype.getRepositoriesForEnvironment).mockResolvedValue(
       ENV_REPOSITORIES.map((row) => ({ ...row, repo_id: null }))
     );
-    vi.mocked(readCachedInstallationRepositories).mockResolvedValueOnce([]);
+    vi.mocked(loadInstallationRepositories).mockResolvedValueOnce([]);
     const getBranchHead = vi.fn(async () => "abc123");
     const h = harness({ sourceControl: { getBranchHead } as unknown as SourceControlProvider });
     h.listScopes.mockResolvedValue([{ kind: "environment", id: "env_1" }]);

@@ -8,16 +8,11 @@ import type { ControlPlaneHonoEnv } from "../routing/hono-env";
 import { repositoryParams } from "./repository-params";
 import { RepoMetadataStore } from "../db/repo-metadata";
 import type { Env } from "../types";
-import type { SqlDatabase } from "../db/sql-database";
-import {
-  repoMetadataSchema,
-  type EnrichedRepository,
-  type InstallationRepository,
-  type RepoMetadata,
-} from "@open-inspect/shared/types/repository-catalog";
+import { repoMetadataSchema } from "@open-inspect/shared/types/repository-catalog";
 import {
   REPOS_CACHE_KEY,
   cachedReposListSchema,
+  refreshReposCache,
   reposCacheIdentity,
   type CachedReposList,
 } from "../repos/cache";
@@ -35,94 +30,6 @@ import {
 export { REPOS_CACHE_KEY, reposCacheIdentity } from "../repos/cache";
 
 const logger = createLogger("router:repos");
-
-const REPOS_CACHE_FRESH_MS = 5 * 60 * 1000;
-const REPOS_CACHE_KV_TTL_SECONDS = 3600;
-
-type ReposRefreshResult =
-  | { ok: true; repos: EnrichedRepository[]; cachedAt: string }
-  | { ok: false; reason: "not_configured" | "fetch_failed" };
-
-/** Times the SCM call when a request context is available; identity otherwise. */
-type ScmApiTimer = <T>(fn: () => Promise<T>) => Promise<T>;
-
-/**
- * Fetch repos via the source control provider, enrich with D1 metadata, and write to KV cache.
- * Runs either in the foreground (cache miss) or background (stale-while-revalidate).
- */
-async function refreshReposCache(
-  env: Env,
-  db: SqlDatabase,
-  scmIdentity: string,
-  traceId?: string,
-  timeScmApi: ScmApiTimer = (fn) => fn()
-): Promise<ReposRefreshResult> {
-  const provider = createRouteSourceControlProvider(env);
-  const cacheStore = env.REPOS_CACHE;
-
-  let repos: InstallationRepository[];
-  try {
-    repos = await timeScmApi(() => provider.listRepositories());
-
-    logger.info("Repo fetch completed", {
-      trace_id: traceId,
-      total_repos: repos.length,
-    });
-  } catch (e) {
-    if (e instanceof SourceControlProviderError && e.errorType === "permanent" && !e.httpStatus) {
-      logger.warn("SCM provider not configured, skipping repo refresh", {
-        trace_id: traceId,
-      });
-      return { ok: false, reason: "not_configured" };
-    }
-    logger.error("Failed to list installation repositories (background refresh)", {
-      trace_id: traceId,
-      error: e instanceof Error ? e : String(e),
-    });
-    return { ok: false, reason: "fetch_failed" };
-  }
-
-  const metadataStore = new RepoMetadataStore(db);
-  let metadataMap: Map<string, RepoMetadata>;
-  try {
-    metadataMap = await metadataStore.getBatch(
-      repos.map((r) => ({ owner: r.owner, name: r.name }))
-    );
-  } catch (e) {
-    logger.warn("Failed to fetch repo metadata batch (background refresh)", {
-      trace_id: traceId,
-      error: e instanceof Error ? e : String(e),
-    });
-    metadataMap = new Map();
-  }
-
-  const enrichedRepos: EnrichedRepository[] = repos.map((repo) => {
-    const key = `${repo.owner.toLowerCase()}/${repo.name.toLowerCase()}`;
-    const metadata = metadataMap.get(key);
-    return metadata ? { ...repo, metadata } : repo;
-  });
-
-  const cachedAt = new Date().toISOString();
-  const freshUntil = Date.now() + REPOS_CACHE_FRESH_MS;
-  try {
-    await cacheStore.put(
-      REPOS_CACHE_KEY,
-      JSON.stringify({ repos: enrichedRepos, cachedAt, scmIdentity, freshUntil }),
-      { expirationTtl: REPOS_CACHE_KV_TTL_SECONDS }
-    );
-    logger.info("Repos cache refreshed", {
-      trace_id: traceId,
-      repo_count: enrichedRepos.length,
-    });
-  } catch (e) {
-    logger.warn("Failed to write repos cache", {
-      trace_id: traceId,
-      error: e instanceof Error ? e : String(e),
-    });
-  }
-
-  return { ok: true, repos: enrichedRepos, cachedAt };
-}
 
 /**
  * List all repositories accessible via the SCM provider's app-level credentials.
@@ -164,10 +71,20 @@ async function handleListRepos(
         trace_id: ctx.trace_id,
         cached_at: cached.cachedAt,
       });
-      ctx.executionCtx.submit(() => refreshReposCache(env, ctx.db, scmIdentity, ctx.trace_id), {
-        name: "repos_cache.refresh",
-        context: { trace_id: ctx.trace_id },
-      });
+      ctx.executionCtx.submit(
+        () =>
+          refreshReposCache(
+            env,
+            ctx.db,
+            createRouteSourceControlProvider(env),
+            scmIdentity,
+            ctx.trace_id
+          ),
+        {
+          name: "repos_cache.refresh",
+          context: { trace_id: ctx.trace_id },
+        }
+      );
     }
 
     return json({
@@ -185,8 +102,13 @@ async function handleListRepos(
   // because the stale-while-revalidate branch above needs an entry to exist.
   // The refresh promise is created once and shared: the factory hands it to
   // waitUntil while the response below awaits the same run.
-  const refresh = refreshReposCache(env, ctx.db, scmIdentity, ctx.trace_id, (fn) =>
-    ctx.metrics.time("scm_api", fn)
+  const refresh = refreshReposCache(
+    env,
+    ctx.db,
+    createRouteSourceControlProvider(env),
+    scmIdentity,
+    ctx.trace_id,
+    (fn) => ctx.metrics.time("scm_api", fn)
   );
   ctx.executionCtx.submit(() => refresh, {
     name: "repos_cache.refresh",

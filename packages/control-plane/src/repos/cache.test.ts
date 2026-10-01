@@ -1,12 +1,30 @@
 import type { EnrichedRepository } from "@open-inspect/shared/types/repository-catalog";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { SourceControlProviderError } from "../source-control/errors";
+import type { SqlDatabase } from "../db/sql-database";
+import type { Env } from "../types";
 import {
   REPOS_CACHE_KEY,
+  loadInstallationRepositories,
   readCachedInstallationRepositories,
   reposCacheIdentity,
   type CachedReposList,
 } from "./cache";
+
+const { mockGetBatch, mockListRepositories } = vi.hoisted(() => ({
+  mockGetBatch: vi.fn(),
+  mockListRepositories: vi.fn(),
+}));
+
+vi.mock("../source-control/provider-from-env", () => ({
+  createSourceControlProviderFromEnv: () => ({ listRepositories: mockListRepositories }),
+}));
+
+vi.mock("../db/repo-metadata", () => ({
+  RepoMetadataStore: class {
+    getBatch = mockGetBatch;
+  },
+}));
 
 type CacheEnv = Parameters<typeof readCachedInstallationRepositories>[0];
 
@@ -200,5 +218,69 @@ describe("readCachedInstallationRepositories", () => {
       cause: cause instanceof Error ? cause : undefined,
     });
     expect(cacheStore.get).toHaveBeenCalledOnce();
+  });
+});
+
+describe("loadInstallationRepositories", () => {
+  const db = {} as SqlDatabase;
+  const { metadata: _metadata, ...listedRepository } = repository;
+
+  beforeEach(() => {
+    vi.resetAllMocks();
+    mockGetBatch.mockResolvedValue(new Map());
+  });
+
+  it("returns the cached catalog without listing repositories", async () => {
+    const env = createEnv();
+    cacheStore.get.mockResolvedValue(await cachedCatalog(env));
+
+    await expect(loadInstallationRepositories(env as Env, db)).resolves.toEqual([repository]);
+
+    expect(mockListRepositories).not.toHaveBeenCalled();
+    expect(cacheStore.put).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["missing", async () => null],
+    ["mismatched", async () => cachedCatalog(createEnv({ GITHUB_APP_INSTALLATION_ID: "other" }))],
+  ])("refreshes and repopulates a %s cache", async (_name, cached) => {
+    const env = createEnv();
+    cacheStore.get.mockResolvedValue(await cached());
+    mockListRepositories.mockResolvedValue([listedRepository]);
+
+    await expect(loadInstallationRepositories(env as Env, db)).resolves.toEqual([listedRepository]);
+
+    expect(mockListRepositories).toHaveBeenCalledOnce();
+    expect(cacheStore.put).toHaveBeenCalledOnce();
+    const [key, body] = cacheStore.put.mock.calls[0];
+    expect(key).toBe(REPOS_CACHE_KEY);
+    expect(JSON.parse(body)).toMatchObject({
+      repos: [listedRepository],
+      scmIdentity: await reposCacheIdentity(env),
+    });
+  });
+
+  it("refreshes when the cache read fails", async () => {
+    cacheStore.get.mockRejectedValue(new Error("KV read failed"));
+    mockListRepositories.mockResolvedValue([listedRepository]);
+
+    await expect(loadInstallationRepositories(createEnv() as Env, db)).resolves.toEqual([
+      listedRepository,
+    ]);
+  });
+
+  it.each([
+    ["transient", new Error("GitHub unavailable")],
+    ["permanent", new SourceControlProviderError("GitHub App not configured", "permanent")],
+  ])("fails %s when the refresh fails", async (errorType, cause) => {
+    cacheStore.get.mockResolvedValue(null);
+    mockListRepositories.mockRejectedValue(cause);
+
+    await expect(loadInstallationRepositories(createEnv() as Env, db)).rejects.toMatchObject({
+      name: "SourceControlProviderError",
+      errorType,
+      message: "Failed to load installation repository catalog",
+    });
+    expect(cacheStore.put).not.toHaveBeenCalled();
   });
 });

@@ -5,14 +5,14 @@ import { SessionRepositoryStore } from "../db/session-repositories";
 import { TeamRepositoryGrantStore } from "../db/team-repository-grants";
 import { createNodeSqlDatabase } from "../node/sqlite-database";
 import { createNodeSqlStorage } from "../node/sqlite-storage";
-import { readCachedInstallationRepositories } from "../repos/cache";
+import { loadInstallationRepositories } from "../repos/cache";
 import type { CredentialScope, SourceControlProvider } from "../source-control";
 import type { Env } from "../types";
 import { createSessionRuntime } from "./components";
 import { buildSessionInternalRequest, SessionInternalPaths } from "./contracts";
 import { initSchema } from "./schema";
 
-vi.mock("../repos/cache", () => ({ readCachedInstallationRepositories: vi.fn() }));
+vi.mock("../repos/cache", () => ({ loadInstallationRepositories: vi.fn() }));
 
 function indexSession(ownerTeamId: string | null): SessionEntry {
   return { id: "public-session", ownerTeamId } as SessionEntry;
@@ -31,7 +31,7 @@ describe("session credential scope composition", () => {
       { grant_kind: "repository", repo_external_id: 123 },
       { grant_kind: "repository", repo_external_id: 456 },
     ]);
-    vi.mocked(readCachedInstallationRepositories).mockReset().mockResolvedValue([]);
+    vi.mocked(loadInstallationRepositories).mockReset().mockResolvedValue([]);
   });
 
   afterEach(() => {
@@ -112,7 +112,7 @@ describe("session credential scope composition", () => {
         "team-a"
       );
       expect(h.generateCredentialHelperAuth).toHaveBeenCalledWith(scope);
-      expect(readCachedInstallationRepositories).not.toHaveBeenCalled();
+      expect(loadInstallationRepositories).not.toHaveBeenCalled();
     }
   );
 
@@ -160,16 +160,16 @@ describe("session credential scope composition", () => {
       kind: "repositories",
       repositoryIds: [123, 456],
     });
-    expect(readCachedInstallationRepositories).not.toHaveBeenCalled();
+    expect(loadInstallationRepositories).not.toHaveBeenCalled();
   });
 
-  it("lazily reads the cached installation catalog for a NULL member id", async () => {
+  it("lazily loads the installation catalog for a NULL member id", async () => {
     vi.spyOn(SessionIndexStore.prototype, "get").mockResolvedValue(indexSession(null));
     vi.mocked(SessionRepositoryStore.prototype.listRepositoryIds).mockResolvedValue([
       { repoOwner: "acme", repoName: "web", repoId: null },
       { repoOwner: "acme", repoName: "api", repoId: 456 },
     ]);
-    vi.mocked(readCachedInstallationRepositories).mockResolvedValue([
+    vi.mocked(loadInstallationRepositories).mockResolvedValue([
       {
         id: 123,
         owner: "ACME",
@@ -192,11 +192,11 @@ describe("session credential scope composition", () => {
       },
     ]);
     const h = createHarness();
-    expect(readCachedInstallationRepositories).not.toHaveBeenCalled();
+    expect(loadInstallationRepositories).not.toHaveBeenCalled();
 
     expect((await h.getCredentials()).status).toBe(200);
 
-    expect(readCachedInstallationRepositories).toHaveBeenCalledExactlyOnceWith(h.env);
+    expect(loadInstallationRepositories).toHaveBeenCalledExactlyOnceWith(h.env, expect.anything());
     expect(h.generateCredentialHelperAuth).toHaveBeenCalledWith({
       kind: "repositories",
       repositoryIds: [123, 456],
@@ -275,7 +275,7 @@ describe("session credential scope composition", () => {
     });
     expect(SessionRepositoryStore.prototype.listRepositoryIds).not.toHaveBeenCalled();
     expect(TeamRepositoryGrantStore.prototype.listForTeam).not.toHaveBeenCalled();
-    expect(readCachedInstallationRepositories).not.toHaveBeenCalled();
+    expect(loadInstallationRepositories).not.toHaveBeenCalled();
     expect(h.generateCredentialHelperAuth).not.toHaveBeenCalled();
   });
 });

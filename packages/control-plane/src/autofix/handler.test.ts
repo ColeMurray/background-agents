@@ -5,13 +5,13 @@ import { SessionRepositoryStore } from "../db/session-repositories";
 import type { SqlDatabase } from "../db/sql-database";
 import { TeamRepositoryGrantStore } from "../db/team-repository-grants";
 import type { JobDeps } from "../jobs";
-import { readCachedInstallationRepositories } from "../repos/cache";
+import { loadInstallationRepositories } from "../repos/cache";
 import { SourceControlProviderError, type CredentialScope } from "../source-control";
 import type { Env } from "../types";
 import { handleAutofixJob } from "./handler";
 import { AutofixService } from "./service";
 
-vi.mock("../repos/cache", () => ({ readCachedInstallationRepositories: vi.fn() }));
+vi.mock("../repos/cache", () => ({ loadInstallationRepositories: vi.fn() }));
 vi.mock("./service", () => ({
   AutofixService: vi.fn(function () {
     return {
@@ -46,7 +46,7 @@ describe("autofix credential scope composition", () => {
       { grant_kind: "repository", repo_external_id: 99 },
       { grant_kind: "repository", repo_external_id: 123 },
     ]);
-    vi.mocked(readCachedInstallationRepositories).mockReset().mockResolvedValue([]);
+    vi.mocked(loadInstallationRepositories).mockReset().mockResolvedValue([]);
   });
 
   afterEach(() => {
@@ -101,7 +101,7 @@ describe("autofix credential scope composition", () => {
     expect(TeamRepositoryGrantStore.prototype.listForTeam).toHaveBeenCalledTimes(2);
     expect(TeamRepositoryGrantStore.prototype.listForTeam).toHaveBeenNthCalledWith(1, "team-a");
     expect(TeamRepositoryGrantStore.prototype.listForTeam).toHaveBeenNthCalledWith(2, "team-b");
-    expect(readCachedInstallationRepositories).not.toHaveBeenCalled();
+    expect(loadInstallationRepositories).not.toHaveBeenCalled();
   });
 
   it("limits workspace-owned autofix credentials to session members", async () => {
@@ -114,15 +114,15 @@ describe("autofix credential scope composition", () => {
     });
 
     expect(TeamRepositoryGrantStore.prototype.listForTeam).not.toHaveBeenCalled();
-    expect(readCachedInstallationRepositories).not.toHaveBeenCalled();
+    expect(loadInstallationRepositories).not.toHaveBeenCalled();
   });
 
-  it("loads the cached catalog only when the owner session has a NULL repository id", async () => {
+  it("loads the installation catalog only when the owner session has a NULL repository id", async () => {
     vi.spyOn(SessionIndexStore.prototype, "get").mockResolvedValue(indexSession("team-a"));
     vi.mocked(SessionRepositoryStore.prototype.listRepositoryIds).mockResolvedValue([
       { repoOwner: "acme", repoName: "widgets", repoId: null },
     ]);
-    vi.mocked(readCachedInstallationRepositories).mockResolvedValue([
+    vi.mocked(loadInstallationRepositories).mockResolvedValue([
       {
         id: 99,
         owner: "ACME",
@@ -135,14 +135,14 @@ describe("autofix credential scope composition", () => {
       },
     ]);
     const h = await createHarness();
-    expect(readCachedInstallationRepositories).not.toHaveBeenCalled();
+    expect(loadInstallationRepositories).not.toHaveBeenCalled();
 
     expect(await h.resolveCredentialScope("owning-public-session")).toEqual({
       kind: "repositories",
       repositoryIds: [99],
     });
 
-    expect(readCachedInstallationRepositories).toHaveBeenCalledExactlyOnceWith(h.env);
+    expect(loadInstallationRepositories).toHaveBeenCalledExactlyOnceWith(h.env, expect.anything());
     expect(TeamRepositoryGrantStore.prototype.listForTeam).toHaveBeenCalledExactlyOnceWith(
       "team-a"
     );
@@ -197,11 +197,11 @@ describe("autofix credential scope composition", () => {
       { repoOwner: "acme", repoName: "widgets", repoId: null },
     ]);
     const error = new SourceControlProviderError("Cached catalog unavailable", "permanent");
-    vi.mocked(readCachedInstallationRepositories).mockRejectedValue(error);
+    vi.mocked(loadInstallationRepositories).mockRejectedValue(error);
     const h = await createHarness();
 
     await expect(h.resolveCredentialScope("owning-public-session")).rejects.toBe(error);
-    expect(readCachedInstallationRepositories).toHaveBeenCalledExactlyOnceWith(h.env);
+    expect(loadInstallationRepositories).toHaveBeenCalledExactlyOnceWith(h.env, expect.anything());
   });
 
   it("throws a permanent credential error rather than defaulting a missing D1 session to all", async () => {
@@ -219,6 +219,6 @@ describe("autofix credential scope composition", () => {
     });
     expect(SessionRepositoryStore.prototype.listRepositoryIds).not.toHaveBeenCalled();
     expect(TeamRepositoryGrantStore.prototype.listForTeam).not.toHaveBeenCalled();
-    expect(readCachedInstallationRepositories).not.toHaveBeenCalled();
+    expect(loadInstallationRepositories).not.toHaveBeenCalled();
   });
 });

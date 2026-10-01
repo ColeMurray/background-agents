@@ -9,7 +9,7 @@ import { IntegrationSettingsStore } from "../db/integration-settings";
 import { PrAutofixFeedbackStore } from "../db/pr-autofix-feedback-store";
 import { SessionPullRequestStore } from "../db/session-pull-request-store";
 import type { JobDelivery, JobDeps, JobOutcome } from "../jobs";
-import { readCachedInstallationRepositories } from "../repos/cache";
+import { loadInstallationRepositories } from "../repos/cache";
 import { createSessionRuntimeClient } from "../session/runtime-client";
 import { GitHubSourceControlProvider } from "../source-control/providers/github-provider";
 import { resolveSessionCredentialScope } from "../source-control/session-scope";
@@ -51,7 +51,7 @@ export async function handleAutofixJob(
   });
   const sessions = createSessionRuntimeClient(env, correlation);
   const resolveCredentialScope = (sessionId: string) =>
-    resolveSessionCredentialScope(db, sessionId, () => readCachedInstallationRepositories(env));
+    resolveSessionCredentialScope(db, sessionId, () => loadInstallationRepositories(env, db));
   const service = new AutofixService(
     feedbackStore,
     new SessionPullRequestStore(db),
