@@ -3,6 +3,7 @@ import { z } from "zod";
 import { resolveTeamAccess } from "@open-inspect/shared/types/team-access";
 import {
   createTeamRequestSchema,
+  teamMembershipSchema,
   teamRoleSchema,
   teamSessionsResponseSchema,
   teamActivityResponseSchema,
@@ -292,6 +293,7 @@ async function teamActivity(
 ) {
   const query = parseQuery(request, activityQuerySchema);
   if (query instanceof Response) return query;
+  const includeEmail = ctx.authorization?.permissions.includes("workspace.members.read") ?? false;
   const result = await new AuditEventStore(ctx.db).list({
     ...query,
     teamId: admittedTeam(ctx).id,
@@ -302,7 +304,23 @@ async function teamActivity(
   });
   return json(
     teamActivityResponseSchema.parse({
-      events: result.rows.map(toAuditEvent),
+      events: result.rows.map((row) => {
+        const event = toAuditEvent(row);
+        if (!includeEmail && event.action.startsWith("team.member_")) {
+          for (const field of ["before", "after"]) {
+            const state = event.metadata[field];
+            if (
+              typeof state === "object" &&
+              state !== null &&
+              !Array.isArray(state) &&
+              "email" in state
+            ) {
+              event.metadata[field] = { ...state, email: null };
+            }
+          }
+        }
+        return event;
+      }),
       hasMore: result.hasMore,
       nextCursor: result.nextCursor ? encodeAuditEventCursor(result.nextCursor) : null,
     })
@@ -399,7 +417,7 @@ async function putMember(
       targetUserId: params.userId,
       action: before ? "team.member_role_changed" : "team.member_added",
       before: before ?? {},
-      after,
+      after: teamMembershipSchema.parse(after),
     });
     return json({ member: after });
   } catch (cause) {

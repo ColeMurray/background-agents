@@ -975,7 +975,13 @@ describe("team routes", () => {
     expect(await auditEvents(team.id)).toEqual([]);
   });
 
-  it("audits adding, changing and removing members with team and target IDs", async () => {
+  it("audits membership changes without recording administrator-visible profile fields", async () => {
+    await setRole(OWNER, "administrator");
+    await env.DB.prepare(
+      "UPDATE users SET display_name = ?, email = ?, avatar_url = ? WHERE id = ?"
+    )
+      .bind("Ada", "ada@example.com", "https://example.com/ada.png", MEMBER)
+      .run();
     const team = await new TeamStore(env.DB).create({
       slug: "roles",
       name: "Roles",
@@ -1000,8 +1006,82 @@ describe("team routes", () => {
       expect(row.team_id).toBe(team.id);
       expect(row.target_user_id_snapshot).toBe(MEMBER);
       expect(JSON.parse(String(row.metadata_json))).toMatchObject({ before: {}, after: {} });
+      for (const field of ["displayName", "email", "avatarUrl"]) {
+        expect(String(row.metadata_json)).not.toContain(`"${field}"`);
+      }
     }
   });
+
+  it.each(["off", "shadow", "on"] as const)(
+    "redacts historical membership audit emails in activity only without member read permission in %s",
+    async (mode) => {
+      const team = await new TeamStore(env.DB).create({
+        slug: "historical-email",
+        name: "Historical email",
+        joinPolicy: "invite_only",
+      });
+      await new TeamMembershipStore(env.DB).add(team.id, OWNER);
+      const member = {
+        teamId: team.id,
+        userId: MEMBER,
+        role: "member",
+        source: "manual",
+        createdAt: 1,
+        displayName: "Ada",
+        email: "historical@example.com",
+        avatarUrl: "https://example.com/ada.png",
+      };
+      const audit = new TeamAuditStore(env.DB);
+      const actions = [
+        "team.member_added",
+        "team.member_role_changed",
+        "team.member_removed",
+      ] as const;
+      for (const action of actions) {
+        await audit.write({
+          requestId: action,
+          actorUserId: OTHER,
+          teamId: team.id,
+          targetUserId: MEMBER,
+          action,
+          before: action === "team.member_added" ? {} : member,
+          after: action === "team.member_removed" ? {} : { ...member, role: "lead" },
+        });
+      }
+      for (const role of ["member", "administrator"] as const) {
+        await setRole(OWNER, role);
+        for (const action of actions) {
+          const response = await modeRequest(
+            `/teams/${team.id}/activity?action=${action}`,
+            mode,
+            role
+          );
+          expect(response.status).toBe(200);
+          const feed = auditEventListResponseSchema.parse(await response.json());
+          expect(feed.events).toHaveLength(1);
+          expect(feed.events[0].metadata).toEqual({
+            before:
+              action === "team.member_added"
+                ? {}
+                : { ...member, email: role === "administrator" ? member.email : null },
+            requested: {},
+            after:
+              action === "team.member_removed"
+                ? {}
+                : {
+                    ...member,
+                    role: "lead",
+                    email: role === "administrator" ? member.email : null,
+                  },
+          });
+          if (role === "member") expect(JSON.stringify(feed)).not.toContain(member.email);
+        }
+      }
+      const rows = await auditEvents(team.id);
+      expect(rows).toHaveLength(3);
+      for (const row of rows) expect(String(row.metadata_json)).toContain(member.email);
+    }
+  );
 
   it("records a single addition when membership requests race", async () => {
     await setRole(OWNER, "member");
