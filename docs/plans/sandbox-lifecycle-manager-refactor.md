@@ -6,6 +6,11 @@ refactor. [ADR 0004](../adr/0004-sandbox-checkpoint-and-shutdown.md) governs lif
 shutdown authority. The [characterization matrix](sandbox-lifecycle-refactor-baseline.md) records
 compatibility evidence and separate behavior gaps, not fixes claimed by extraction.
 
+**Status:** T1 through T6 are integrated. T7's combined audit, real-storage wiring evidence and full
+local validation passed; review/merge remains pending. Command results and release limits are in the
+[closure report](sandbox-lifecycle-refactor-verification.md). A green local suite is not deployment
+authorization or exhaustive interleaving safety.
+
 ## Ownership
 
 Paths are relative to `packages/control-plane/src/`.
@@ -258,11 +263,13 @@ The shared `AlarmScheduler` remains the only alarm/deadline owner.
   capture precedes runtime shutdown, explicit destroy-stop and final detach/warning. Existing
   post-capture hold/generation and post-stop generation checks remain unchanged.
 
-Stops receive the observed provider handle and generation timestamp, not a replacement row's target.
-This does not strengthen every current publication or ownership handoff: connect-timeout publication
-after stop, legacy effects after unmanaged shutdown ownership, and retirement exceptions keep their
-existing boundaries. The baseline's separate gaps remain separate behavior work, not extraction
-fixes or exhaustive interleaving guarantees.
+Stops receive the observed provider handle and generation timestamp when the captured handle exists.
+An inherited exception remains: a captured absent handle is passed as `undefined`, which permits the
+manager's stop adapter to reread the current row. This can retarget a replacement after an awaited
+unmanaged shutdown decision. T7 characterizes that trace, including unscoped successor access/status
+retirement, and connect-timeout error publication after replacement. Neither is fixed by extraction.
+Other retirement exceptions retain their existing boundaries. The baseline's separate gaps remain
+separate behavior work, not extraction fixes or exhaustive interleaving guarantees.
 
 Related-work reconciliation at T6's starting `60930ce`: COL-245 is integrated via PR #2170, after
 the launch/access/VM increments. COL-238 remains In Progress and PR #2141 is open/unmerged; its
@@ -319,6 +326,25 @@ replace the existing half-boot/ready, destructive-snapshot, detached-capture, la
 checkpoint-replacement, queue-result, duplicate-alarm and shared-deadline tests. ESLint keeps
 watchdog internals unavailable to public consumers.
 
+T7's `test/integration/sandbox-vm-reconciliation.test.ts` assembles the production runtime with real
+Workerd SQL/encryption and substituted provider/socket transport. It reconstructs a persisted
+foreground reservation, completes bridge lookup through attachment/readiness, and separately changes
+the pending reference or reservation timestamp after real ciphertext is produced. A refused atomic
+completion causes no shutdown adoption or access publication. Successful reconstruction preserves
+early readiness and conservative lifetime, decrypts access through a reconstructed repository, and
+cannot mint terminal access from the persisted hash. It also pins current admission semantics:
+acknowledgement plus known pending lifetime can admit work before lookup finishes after
+reconstruction; the original instance's foreground-pending flag still blocks it. These gates are not
+equivalent.
+
+The rejected-reconstruction test now enters `SessionServer.onScheduledDeadline()` rather than
+calling only manager shutdown processing. It covers the production pre/post-projection passes,
+durable retry-before-stop, delivery acknowledgement and duplicate wake-ups under a retained shutdown
+hold. Existing assembled-manager, real-SQL, Workerd, scheduler and Node conformance suites remain
+intact. ESLint additionally protects launch-context and startup-error internals using the existing
+import rules, including extension-bearing imports; composition alone supplies launch integration
+ports.
+
 `manager-shutdown.test.ts` isolates the assembled shutdown/recovery cases, including the committed
 access/publication failure matrix, from the manager's orchestration suite. It retains real
 manager/access/shutdown composition with test storage/provider ports; real SQLite and Workerd checks
@@ -330,15 +356,17 @@ Build shared first, then run sequentially from the repository root:
 
 ```bash
 npm run build -w @open-inspect/shared
-npm test -w @open-inspect/control-plane -- src/sandbox/lifecycle src/session/alarm src/session/sandbox-shutdown
-npm run test:integration -w @open-inspect/control-plane -- session-lifecycle-alarm-recovery sandbox-early-connect sandbox-shutdown sandbox-state-retention
+npm test -w @open-inspect/control-plane -- --maxWorkers=1
+npm run test:integration -w @open-inspect/control-plane -- --maxWorkers=1
 npm run typecheck -w @open-inspect/control-plane
+npm run build -w @open-inspect/control-plane
 npm run lint -w @open-inspect/control-plane
 npm run test:lint-sandbox-boundaries
+npm run format:check
 git diff --check
 ```
 
-Check formatting of touched files. Record checkout details, exact command results and blockers in
-the PR/issue handoff rather than this enduring ownership guide. Full-story/package/bundle checks
-remain the final increment's scope. Provider substitutes are not live-provider verification, and
-this refactor does not authorize deployment or claim exhaustive interleaving safety.
+The worker flag bounds sandbox resource use without selecting a subset of tests. Record checkout
+details, exact command results and blockers in the closure report and PR/issue handoff rather than
+this enduring ownership guide. Provider substitutes are not live-provider verification, and this
+refactor does not authorize deployment or claim exhaustive interleaving safety.

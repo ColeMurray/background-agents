@@ -45,6 +45,8 @@ import {
   type SandboxShutdownLifecycle,
 } from "../sandbox/lifecycle/manager";
 import type { ImageBuildLookup } from "../sandbox/lifecycle/image-selection";
+// The composition root supplies launch integration ports, not consumer-facing launch mechanics.
+// eslint-disable-next-line no-restricted-imports
 import type { McpServerLookup, SlackAgentNotifyLookup } from "../sandbox/lifecycle/launch-context";
 // The composition root shares the internal access collaborator with shutdown and lifecycle only.
 // eslint-disable-next-line no-restricted-imports
