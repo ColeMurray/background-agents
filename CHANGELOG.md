@@ -11,6 +11,15 @@ The team directory and collaborator picker now show email addresses only to view
 names and avatars with no email address, and unnamed users have a neutral label with a short ID
 suffix. This restriction applies in every team enforcement mode.
 
+Session navigation now defaults to **All my teams**, with the team selector available even for a
+single membership. Composer team and visibility choices stay local, including automatic team
+selection when new sessions require a team. Transient membership refresh failures retain loaded
+data, and changing draft configuration retires the old warm session without starting a replacement
+sandbox until the next prompt input or submission. Scope changes refresh lists without clearing
+terminal access or per-session caches. Visibility changes require a changed selection and confirm
+non-private child-session cascades. Workspace audit readers can filter by teams they do not belong
+to.
+
 ## September 30, 2026
 
 ### Added
