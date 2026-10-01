@@ -142,46 +142,62 @@ describe("active team context", () => {
     expect(localStorage.getItem("open-inspect-active-team")).toBe("all-my-teams");
   });
 
-  it("keeps the sidebar populated when membership revalidation fails", async () => {
-    localStorage.setItem("open-inspect-active-team", "team_alpha");
-    const fetcher = vi.fn(async (_key: string) => inboxSnapshot());
-    const { result } = renderHook(
-      () => ({
-        context: useActiveTeam(),
-        sidebar: useSidebarSessions(),
-        mutate: useSWRConfig().mutate,
-      }),
-      {
-        wrapper: ({ children }) => (
-          <SWRConfig
-            value={{
-              provider: () => new Map(),
-              fetcher,
-              dedupingInterval: 0,
-              shouldRetryOnError: false,
-            }}
-          >
-            <ActiveTeamProvider>{children}</ActiveTeamProvider>
-          </SWRConfig>
-        ),
+  it.each([503, 401, 403, "network", "invalid-json", "invalid-schema"] as const)(
+    "retains memberships and sidebar rows only for transient refresh failure %s",
+    async (failure) => {
+      localStorage.setItem("open-inspect-active-team", "team_alpha");
+      const fetcher = vi.fn(async (_key: string) => inboxSnapshot());
+      const { result } = renderHook(
+        () => ({
+          context: useActiveTeam(),
+          sidebar: useSidebarSessions(),
+          mutate: useSWRConfig().mutate,
+        }),
+        {
+          wrapper: ({ children }) => (
+            <SWRConfig
+              value={{
+                provider: () => new Map(),
+                fetcher,
+                dedupingInterval: 0,
+                shouldRetryOnError: false,
+              }}
+            >
+              <ActiveTeamProvider>{children}</ActiveTeamProvider>
+            </SWRConfig>
+          ),
+        }
+      );
+      await waitFor(() => expect(result.current.sidebar.loading).toBe(false));
+      vi.mocked(browserApiFetch).mockImplementation(async () => {
+        if (failure === "network") throw new TypeError("Network unavailable");
+        if (failure === "invalid-json") return new Response("Invalid JSON");
+        if (failure === "invalid-schema") return Response.json({ teams: null });
+        return Response.json({ error: "Unavailable" }, { status: failure });
+      });
+      await act(async () => {
+        await result.current.mutate("/api/me/teams");
+      });
+      if (failure === 503 || failure === "network") {
+        expect(result.current.context.error).toBeUndefined();
+        expect(result.current.context.activeTeamId).toBe("team_alpha");
+        expect(result.current.context.teams).toHaveLength(2);
+        expect(result.current.context.requireTeamOnCreate).toBe(true);
+        expect(result.current.sidebar.loading).toBe(false);
+        expect(result.current.sidebar.finished.map((row) => row.id)).toEqual(["team-session"]);
+      } else {
+        expect(result.current.context.error).toBeInstanceOf(Error);
+        expect(result.current.context.activeTeamId).toBeNull();
+        expect(result.current.context.teams).toEqual([]);
+        expect(result.current.sidebar.finished).toEqual([]);
+        expect(result.current.sidebar.sessionsError).toBeInstanceOf(Error);
+        expect(localStorage.getItem("open-inspect-active-team")).toBe("team_alpha");
       }
-    );
-    await waitFor(() => expect(result.current.sidebar.loading).toBe(false));
-    vi.mocked(browserApiFetch).mockResolvedValue(
-      Response.json({ error: "Unavailable" }, { status: 503 })
-    );
-    await act(async () => {
-      await result.current.mutate("/api/me/teams");
-    });
-    expect(result.current.context.error).toBeUndefined();
-    expect(result.current.context.activeTeamId).toBe("team_alpha");
-    expect(result.current.context.teams).toHaveLength(2);
-    expect(result.current.sidebar.loading).toBe(false);
-    expect(result.current.sidebar.finished.map((row) => row.id)).toEqual(["team-session"]);
-    expect(
-      fetcher.mock.calls.every(([key]) => key === "/api/sessions/inbox?teamIds%5B%5D=team_alpha")
-    ).toBe(true);
-  });
+      expect(
+        fetcher.mock.calls.every(([key]) => key === "/api/sessions/inbox?teamIds%5B%5D=team_alpha")
+      ).toBe(true);
+    }
+  );
 
   it("preserves a stored Workspace context for team members", async () => {
     localStorage.setItem("open-inspect-active-team", "workspace");

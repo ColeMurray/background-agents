@@ -45,6 +45,99 @@ function team(overrides: Partial<TeamResponse> = {}): TeamResponse & { role: Tea
 }
 
 describe("Home team context", () => {
+  it.each([
+    [undefined, "workspace"],
+    [undefined, "all"],
+    ["workspace", undefined],
+    ["workspace", "all"],
+    ["all", undefined],
+    ["all", "workspace"],
+  ] as const)(
+    "reconciles composer access when aggregate scope changes from %s to %s",
+    async (from, to) => {
+      const user = userEvent.setup();
+      mocks.teams = [team()];
+      mocks.scope = from;
+      const view = render(<Home />);
+      await user.click(screen.getByRole("button", { name: /^Session access:/ }));
+      await selectTeam(user, "Engineering");
+      await user.keyboard("{Escape}");
+      await selectAudience(user, "Private");
+      await user.type(screen.getByPlaceholderText("What do you want to build?"), "Ship it");
+      await waitFor(() =>
+        expect(sessionCreateBody()).toMatchObject({ teamId: "team-1", visibility: "private" })
+      );
+
+      mocks.scope = to;
+      view.rerender(<Home />);
+      expect(screen.getByRole("button", { name: /^Session access:/ })).toHaveAccessibleName(
+        "Session access: Workspace; team context: No team"
+      );
+      await waitFor(() =>
+        expect(fetch).toHaveBeenCalledWith("/api/sessions/session-1/archive", expect.anything())
+      );
+      expect(
+        vi.mocked(fetch).mock.calls.filter(([url]) => String(url) === "/api/sessions")
+      ).toHaveLength(1);
+      mocks.scope = from;
+      view.rerender(<Home />);
+      expect(screen.getByRole("button", { name: /^Session access:/ })).toHaveAccessibleName(
+        "Session access: Workspace; team context: No team"
+      );
+      await user.click(screen.getByRole("button", { name: /send/i }));
+      await waitFor(() => expect(mocks.routerPush).toHaveBeenCalledWith("/session/session-1"));
+      const calls = vi.mocked(fetch).mock.calls.filter(([url]) => String(url) === "/api/sessions");
+      expect(calls).toHaveLength(2);
+      expect(JSON.parse(String(calls[1][1]?.body))).toMatchObject({
+        teamId: null,
+        visibility: "workspace",
+      });
+      expect(mocks.setActiveTeam).not.toHaveBeenCalled();
+    }
+  );
+
+  it("re-warms a retired draft on continued input without duplicating session creation", async () => {
+    const user = userEvent.setup();
+    render(<Home />);
+    const input = screen.getByPlaceholderText("What do you want to build?");
+    await user.type(input, "Ship it");
+    await waitFor(() => expect(sessionCreateBody()).toBeDefined());
+    await selectAudience(user, "Private");
+    await waitFor(() =>
+      expect(fetch).toHaveBeenCalledWith("/api/sessions/session-1/archive", expect.anything())
+    );
+    expect(
+      vi.mocked(fetch).mock.calls.filter(([url]) => String(url) === "/api/sessions")
+    ).toHaveLength(1);
+    await user.type(input, " again");
+    await waitFor(() => {
+      const calls = vi.mocked(fetch).mock.calls.filter(([url]) => String(url) === "/api/sessions");
+      expect(calls).toHaveLength(2);
+      expect(JSON.parse(String(calls[1][1]?.body))).toMatchObject({ visibility: "private" });
+    });
+  });
+
+  it("retries warming on continued input after memberships become ready", async () => {
+    const user = userEvent.setup();
+    mocks.teamsLoading = true;
+    mocks.teams = [team()];
+    mocks.requireTeamOnCreate = true;
+    const view = render(<Home />);
+    const input = screen.getByPlaceholderText("What do you want to build?");
+    await user.type(input, "Ship it");
+    expect(fetch).not.toHaveBeenCalled();
+    mocks.teamsLoading = false;
+    view.rerender(<Home />);
+    expect(fetch).not.toHaveBeenCalled();
+    await user.type(input, " again");
+    await waitFor(() =>
+      expect(sessionCreateBody()).toMatchObject({ teamId: "team-1", visibility: "team" })
+    );
+    expect(
+      vi.mocked(fetch).mock.calls.filter(([url]) => String(url) === "/api/sessions")
+    ).toHaveLength(1);
+  });
+
   it("preselects the first required team locally without changing All my teams", async () => {
     mocks.teams = [team()];
     mocks.requireTeamOnCreate = true;
@@ -382,7 +475,7 @@ describe("Home team context", () => {
     });
   });
 
-  it("waits for a team's default environment before warming the composed draft", async () => {
+  it("warms on continued input after a team's default environment becomes ready", async () => {
     const user = userEvent.setup();
     mocks.teams = [team({ defaultEnvironmentId: "env-1" })];
     mocks.activeTeamId = "team-1";
@@ -395,7 +488,7 @@ describe("Home team context", () => {
     mocks.environmentsValue = [environment];
     view.rerender(<Home />);
     expect(fetch).not.toHaveBeenCalled();
-    await user.click(screen.getByRole("button", { name: /send/i }));
+    await user.type(screen.getByPlaceholderText("What do you want to build?"), " again");
     await waitFor(() =>
       expect(sessionCreateBody()).toMatchObject({
         environmentId: "env-1",

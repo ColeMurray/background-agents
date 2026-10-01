@@ -14,12 +14,14 @@ expect.extend(matchers);
 const mocks = vi.hoisted(() => {
   const teamContext: {
     activeTeamId: string | null;
+    scope: "workspace" | "all" | undefined;
     teams: (TeamResponse & { role: TeamRole })[];
     teamsLoading: boolean;
     teamsError: unknown;
     requireTeamOnCreate: boolean;
   } = {
     activeTeamId: null,
+    scope: undefined,
     teams: [],
     teamsLoading: false,
     teamsError: undefined,
@@ -135,7 +137,7 @@ vi.mock("@/hooks/use-active-team", () => ({
     activeTeamId: mocks.activeTeamId,
     setActiveTeam: mocks.setActiveTeam,
     teams: mocks.teams,
-    scope: undefined,
+    scope: mocks.scope,
     requireTeamOnCreate: mocks.requireTeamOnCreate,
     loading: mocks.teamsLoading,
     error: mocks.teamsError,
@@ -274,6 +276,7 @@ beforeEach(() => {
   mocks.keyboardShortcuts = DEFAULT_KEYBOARD_SHORTCUTS;
   mocks.canCreateSession = true;
   mocks.activeTeamId = null;
+  mocks.scope = undefined;
   mocks.teams = [];
   mocks.teamsLoading = false;
   mocks.teamsError = undefined;

@@ -31,9 +31,25 @@ const meTeamsSchema = meTeamsResponseSchema.extend({
 });
 const membersSchema = z.object({ members: z.array(teamMemberSchema) });
 
+class TeamRequestError extends Error {
+  constructor(
+    message: string,
+    readonly retryable: boolean
+  ) {
+    super(message);
+    this.name = "TeamRequestError";
+  }
+}
+
 async function get<T>(path: BrowserApiPath, schema: z.ZodType<T>): Promise<T> {
-  const response = await browserApiFetch(path);
-  if (!response.ok) throw new Error(`Failed to load teams (${response.status})`);
+  let response: Response;
+  try {
+    response = await browserApiFetch(path);
+  } catch (cause) {
+    throw new TeamRequestError(`Failed to load teams (${String(cause)})`, true);
+  }
+  if (!response.ok)
+    throw new TeamRequestError(`Failed to load teams (${response.status})`, response.status >= 500);
   return schema.parse(await response.json());
 }
 
@@ -73,11 +89,15 @@ export function useMeTeams(enabled = true) {
   const result = useSWR(session?.user && enabled ? ME_TEAMS_KEY : null, () =>
     get(ME_TEAMS_KEY, meTeamsSchema)
   );
+  const data =
+    result.error && !(result.error instanceof TeamRequestError && result.error.retryable)
+      ? undefined
+      : result.data;
   return {
-    teams: result.data?.teams ?? [],
-    requireTeamOnCreate: result.data?.requireTeamOnCreate ?? false,
-    loading: enabled && Boolean(session?.user) && !result.data && !result.error,
-    error: result.data ? undefined : result.error,
+    teams: data?.teams ?? [],
+    requireTeamOnCreate: data?.requireTeamOnCreate ?? false,
+    loading: enabled && Boolean(session?.user) && !data && !result.error,
+    error: data ? undefined : result.error,
   };
 }
 

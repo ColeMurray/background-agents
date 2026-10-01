@@ -109,6 +109,7 @@ export default function Home() {
   const teamContext = useActiveTeam();
   const {
     activeTeamId,
+    scope,
     teams,
     requireTeamOnCreate,
     loading: loadingTeams,
@@ -116,10 +117,14 @@ export default function Home() {
   } = teamContext;
   const [accessDraft, setAccessDraft] = useState<{
     contextTeamId: string | null;
+    contextScope: typeof scope;
     teamId: string | null;
     visibility: SessionVisibility;
   } | null>(null);
-  const draft = accessDraft?.contextTeamId === activeTeamId ? accessDraft : null;
+  const draft =
+    accessDraft?.contextTeamId === activeTeamId && accessDraft.contextScope === scope
+      ? accessDraft
+      : null;
   const teamId = draft
     ? draft.teamId
     : (activeTeamId ?? (requireTeamOnCreate ? (teams[0]?.id ?? null) : null));
@@ -138,11 +143,12 @@ export default function Home() {
     if (loadingTeams || teamError) return;
     setAccessDraft((draft) =>
       draft?.contextTeamId === activeTeamId &&
+      draft.contextScope === scope &&
       (draft.teamId === null || teams.some((team) => team.id === draft.teamId))
         ? draft
         : null
     );
-  }, [activeTeamId, loadingTeams, teamError, teams]);
+  }, [activeTeamId, scope, loadingTeams, teamError, teams]);
   const [storedPreference, setStoredPreference] = useState<ModelPreference>({
     model: DEFAULT_MODEL,
     reasoningEffort: getDefaultReasoningEffort(DEFAULT_MODEL),
@@ -429,11 +435,16 @@ export default function Home() {
       teamCreationReady={teamCreationReady}
       visibility={visibility}
       onTeamChange={(teamId) => {
-        setAccessDraft({ contextTeamId: activeTeamId, teamId, visibility });
+        setAccessDraft({ contextTeamId: activeTeamId, contextScope: scope, teamId, visibility });
       }}
       onVisibilityChange={(value) => {
         if (teamId !== null || value !== "team")
-          setAccessDraft({ contextTeamId: activeTeamId, teamId, visibility: value });
+          setAccessDraft({
+            contextTeamId: activeTeamId,
+            contextScope: scope,
+            teamId,
+            visibility: value,
+          });
       }}
       selectedModel={selectedModel}
       setSelectedModel={handleModelChange}
@@ -444,7 +455,7 @@ export default function Home() {
       prompt={prompt}
       handlePromptChange={(value) => {
         setPrompt(value);
-        if (prompt.length === 0 && value.length > 0) void createSessionForWarming();
+        if (value.length > 0) void createSessionForWarming();
       }}
       attachments={{
         items: sessionAttachments.attachments,
