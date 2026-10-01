@@ -1,7 +1,8 @@
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { env } from "cloudflare:test";
 import { UserStore } from "../../src/db/user-store";
 import { cleanD1Tables } from "./cleanup";
+import { sqlDatabase } from "./helpers";
 
 const providerIssuers = [
   ["github", "https://github.com"],
@@ -20,7 +21,7 @@ describe("UserStore", () => {
 
   describe("listCollaboratorCandidates", () => {
     it("returns an empty list when there are no active users", async () => {
-      expect(await store.listCollaboratorCandidates()).toEqual([]);
+      expect(await store.listCollaboratorCandidates({ includeEmail: true })).toEqual([]);
     });
 
     it("returns only active picker identities ordered by name with email fallback", async () => {
@@ -37,7 +38,7 @@ describe("UserStore", () => {
         env.DB.prepare("DELETE FROM user_role_assignments WHERE user_id = ?").bind(unassigned.id),
       ]);
 
-      expect(await store.listCollaboratorCandidates()).toEqual([
+      expect(await store.listCollaboratorCandidates({ includeEmail: true })).toEqual([
         {
           userId: alice.id,
           displayName: "ALICE",
@@ -47,6 +48,21 @@ describe("UserStore", () => {
         { userId: bob.id, displayName: null, email: "bob@example.com", avatarUrl: null },
         { userId: zed.id, displayName: "zed", email: null, avatarUrl: null },
       ]);
+    });
+
+    it("does not read or sort by email when email is excluded", async () => {
+      const user = await store.createUser({ email: "private@example.com" });
+      const db = sqlDatabase(env.DB);
+      const prepare = vi.fn((sql: string) => db.prepare(sql));
+      const candidates = await new UserStore({
+        prepare,
+        batch: db.batch.bind(db),
+      }).listCollaboratorCandidates({ includeEmail: false });
+      expect(candidates).toEqual([
+        { userId: user.id, displayName: null, email: null, avatarUrl: null },
+      ]);
+      expect(prepare).toHaveBeenCalledWith(expect.stringContaining("NULL AS email"));
+      expect(prepare.mock.calls[0][0]).not.toContain("users.email");
     });
   });
 

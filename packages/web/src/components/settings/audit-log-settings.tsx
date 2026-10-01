@@ -71,11 +71,6 @@ const ACTION_LABELS = new Map<string, string>([
   ...Object.entries(OPERATION_LABELS),
 ]);
 
-export const AUDIT_OPERATION_OPTIONS = Object.entries(OPERATION_LABELS).map(([value, label]) => ({
-  value,
-  label,
-}));
-
 function auditActionLabel(action: string): string {
   return ACTION_LABELS.get(action) ?? action;
 }

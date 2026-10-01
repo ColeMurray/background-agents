@@ -5,7 +5,7 @@ import { cleanup, render, screen, waitFor, within } from "@testing-library/react
 import userEvent from "@testing-library/user-event";
 import * as matchers from "@testing-library/jest-dom/matchers";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { AUDIT_OPERATION_OPTIONS, AuditLogSettings } from "./audit-log-settings";
+import { AuditLogSettings } from "./audit-log-settings";
 
 expect.extend(matchers);
 
@@ -197,11 +197,10 @@ describe("AuditLogSettings", () => {
   it.each([
     ["team.grant_added", "Team repository grant added"],
     ["team.grant_removed", "Team repository grant removed"],
-  ])("labels %s as an operation and exposes it in Activity options", (action, label) => {
+  ])("labels %s as an operation in the workspace audit viewer", (action, label) => {
     const article = renderSingle(createEvent("applied", { action }));
     expect(article.getByText(label)).toBeInTheDocument();
     expect(article.getByText("Applied")).toBeInTheDocument();
-    expect(AUDIT_OPERATION_OPTIONS).toContainEqual({ value: action, label });
   });
 
   it("labels private session break-glass reads as operations", () => {

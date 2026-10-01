@@ -19,6 +19,7 @@ const mocks = vi.hoisted(() => ({
   membershipError: null as Error | null,
   currentTeam: undefined as TeamResponse | undefined,
   join: vi.fn(),
+  repositories: vi.fn(),
 }));
 
 vi.mock("@/lib/auth-session", () => ({
@@ -49,8 +50,12 @@ vi.mock("@/components/settings/team-detail", () => ({
   TeamDetail: () => <p>Team settings editor</p>,
 }));
 vi.mock("./team-overview", () => ({ TeamOverview: () => <p>Team session buckets</p> }));
-vi.mock("./team-activity", () => ({ TeamActivity: () => <p>Team activity feed</p> }));
-vi.mock("./team-repositories", () => ({ TeamRepositories: () => <p>Team repository grants</p> }));
+vi.mock("./team-repositories", () => ({
+  TeamRepositories: (props: { team: TeamResponse }) => {
+    mocks.repositories(props);
+    return <p>Team repository grants</p>;
+  },
+}));
 
 const team: TeamResponse = {
   id: "team_design",
@@ -184,24 +189,34 @@ describe("Team page tabs", () => {
     expect(screen.queryByText("Team session buckets")).not.toBeInTheDocument();
   });
 
-  it("shows member Overview and Activity but no Settings without capabilities", () => {
+  it.each(["member", "administrator", "owner"])("never offers an Activity tab to a %s", (role) => {
+    mocks.role = role;
+    mocks.mine = role === "member" ? [team] : [];
+    render(<TeamPage slug="design" />);
+    const tabs = within(screen.getByRole("navigation", { name: "Team tabs" }));
+    expect(tabs.getByRole("button", { name: "Overview" })).toBeInTheDocument();
+    expect(tabs.getByRole("button", { name: "Members" })).toBeInTheDocument();
+    expect(tabs.queryByRole("button", { name: "Activity" })).not.toBeInTheDocument();
+  });
+
+  it("shows member Overview, Members, and Repositories but no Settings without capabilities", () => {
     mocks.mine = [team];
     render(<TeamPage slug="design" />);
     expect(screen.getByText("Team session buckets")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Settings" })).not.toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "Activity" }));
-    expect(screen.getByText("Team activity feed")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Repositories" }));
     expect(screen.getByText("Team repository grants")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Members" }));
+    expect(screen.getByText("Team member table")).toBeInTheDocument();
   });
 
   it.each(["owner", "administrator"])(
-    "allows %s private tabs but still requires settings capabilities",
+    "allows %s Overview but still requires settings capabilities",
     (role) => {
       mocks.role = role;
       const view = render(<TeamPage slug="design" />);
       expect(screen.getByRole("button", { name: "Overview" })).toBeInTheDocument();
-      expect(screen.getByRole("button", { name: "Activity" })).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "Members" })).toBeInTheDocument();
       fireEvent.click(screen.getByRole("button", { name: "Repositories" }));
       expect(screen.getByText("Team repository grants")).toBeInTheDocument();
       expect(screen.queryByRole("button", { name: "Settings" })).not.toBeInTheDocument();
@@ -212,13 +227,26 @@ describe("Team page tabs", () => {
     }
   );
 
-  it("unmounts private content when membership disappears", () => {
+  it("passes fresh server repository capabilities to the repository tab", () => {
+    mocks.mine = [team];
+    mocks.teams = [{ ...team, capabilities: { ...denied, canManageRepositories: true } }];
+    const view = render(<TeamPage slug="design" />);
+    fireEvent.click(screen.getByRole("button", { name: "Repositories" }));
+    expect(mocks.repositories).toHaveBeenLastCalledWith({ team: mocks.teams[0] });
+    mocks.currentTeam = { ...team, capabilities: denied };
+    view.rerender(<TeamPage slug="design" />);
+    expect(mocks.repositories).toHaveBeenLastCalledWith({ team: mocks.currentTeam });
+    expect(screen.getByText("Team repository grants")).toBeInTheDocument();
+  });
+
+  it("unmounts Overview when membership disappears", () => {
     mocks.mine = [team];
     const view = render(<TeamPage slug="design" />);
-    fireEvent.click(screen.getByRole("button", { name: "Activity" }));
+    expect(screen.getByText("Team session buckets")).toBeInTheDocument();
     mocks.mine = [];
     view.rerender(<TeamPage slug="design" />);
-    expect(screen.queryByText("Team activity feed")).not.toBeInTheDocument();
+    expect(screen.queryByText("Team session buckets")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Overview" })).not.toBeInTheDocument();
     expect(screen.getByText("Team member table")).toBeInTheDocument();
   });
 
@@ -231,6 +259,7 @@ describe("Team page tabs", () => {
     view.rerender(<TeamPage slug="design" />);
     expect(screen.queryByText("Team repository grants")).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Repositories" })).not.toBeInTheDocument();
+    expect(screen.getByText("Team member table")).toBeInTheDocument();
   });
 
   it.each(["loading", "failed"])("withholds private tabs while membership is %s", (state) => {
@@ -240,7 +269,7 @@ describe("Team page tabs", () => {
     render(<TeamPage slug="design" />);
     expect(screen.getByText("Team member table")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Overview" })).not.toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "Activity" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Repositories" })).not.toBeInTheDocument();
   });
 
   it("unmounts Settings when the server revokes metadata and archive capabilities", () => {
@@ -260,7 +289,7 @@ describe("Team page tabs", () => {
     mocks.suspendedAt = 1;
     render(<TeamPage slug="design" />);
     expect(screen.queryByText("Team session buckets")).not.toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "Activity" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Overview" })).not.toBeInTheDocument();
   });
 
   it("unmounts private content when fresh team metadata reports an archive", () => {

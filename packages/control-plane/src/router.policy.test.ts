@@ -15,12 +15,20 @@ function routeFor(method: string, path: string) {
 }
 
 describe("route policy table", () => {
+  it("does not expose a member-facing team activity route", () => {
+    expect(routeFor("GET", "/teams/team-1/activity")).toBeUndefined();
+    expect(routeFor("GET", "/audit-events")?.authorization).toMatchObject({
+      allOf: [{ kind: "permission", permission: "workspace.audit.read" }],
+      service: { kind: "deny" },
+    });
+  });
+
   it("publishes the complete canonical route catalog", () => {
-    expect(routes).toHaveLength(205);
+    expect(routes).toHaveLength(203);
 
     const paths = routes.map((route) => route.path);
-    expect(new Set(paths).size).toBe(156);
-    expect(new Set(routes.map((route) => `${route.method}:${route.path}`)).size).toBe(205);
+    expect(new Set(paths).size).toBe(154);
+    expect(new Set(routes.map((route) => `${route.method}:${route.path}`)).size).toBe(203);
   });
 
   it("gates run analytics with analytics.read", () => {
@@ -52,14 +60,14 @@ describe("route policy table", () => {
     });
   });
 
-  it.each(["sessions", "activity"])("requires human team membership for team %s", (tab) => {
-    expect(routeFor("GET", `/teams/team-1/${tab}`)).toMatchObject({
+  it("requires human team membership and session read permission for team sessions", () => {
+    expect(routeFor("GET", "/teams/team-1/sessions")).toMatchObject({
       authentication: { kind: "user" },
       authorization: {
         kind: "active-user",
         allOf: [
           { kind: "team", teamIdParam: "id", need: "member" },
-          ...(tab === "sessions" ? [{ kind: "permission", permission: "sessions.read" }] : []),
+          { kind: "permission", permission: "sessions.read" },
         ],
         service: { kind: "deny" },
         auditAllowed: false,

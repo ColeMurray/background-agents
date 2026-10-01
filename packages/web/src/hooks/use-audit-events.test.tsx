@@ -89,28 +89,26 @@ describe("useAuditEvents", () => {
     expect(result.current.error).toMatchObject({ message: "Invalid audit log response" });
   });
 
-  it("encodes team and action filters", () => {
-    expect(auditEventsKey(undefined, { teamId: "team/one", action: "session.moved" })).toBe(
-      "/api/audit-events?limit=25&teamId=team%2Fone&action=session.moved"
+  it("encodes the team filter", () => {
+    expect(auditEventsKey(undefined, { teamId: "team/one" })).toBe(
+      "/api/audit-events?limit=25&teamId=team%2Fone"
     );
   });
 
-  it("resets cursor history immediately when the team or action filter changes", async () => {
+  it("resets cursor history immediately when the team filter changes", async () => {
     vi.mocked(browserApiFetch).mockImplementation(async () =>
       Response.json({ events: [event], hasMore: true, nextCursor: "page-two" })
     );
-    const { result, rerender } = renderHook(
-      ({ teamId, action }) => useAuditEvents({ teamId, action }),
-      { wrapper, initialProps: { teamId: "team_one", action: "" } }
-    );
+    const { result, rerender } = renderHook(({ teamId }) => useAuditEvents({ teamId }), {
+      wrapper,
+      initialProps: { teamId: "team_one" },
+    });
     await waitFor(() => expect(result.current.hasNext).toBe(true));
     act(() => result.current.next());
     await waitFor(() => expect(result.current.page).toBe(2));
-    rerender({ teamId: "team_two", action: "team.member_joined" });
+    rerender({ teamId: "team_two" });
     await waitFor(() =>
-      expect(browserApiFetch).toHaveBeenCalledWith(
-        "/api/audit-events?limit=25&teamId=team_two&action=team.member_joined"
-      )
+      expect(browserApiFetch).toHaveBeenCalledWith("/api/audit-events?limit=25&teamId=team_two")
     );
     expect(result.current.page).toBe(1);
     expect(result.current.hasPrevious).toBe(false);
@@ -119,115 +117,97 @@ describe("useAuditEvents", () => {
     );
   });
 
-  describe.each([undefined, "/api/teams/team_one/activity"] as const)(
-    "viewer-scoped feed %s",
-    (endpoint) => {
-      it("isolates cached events and resets cursors when the viewer changes in the same provider", async () => {
-        let userId = "user_one";
-        vi.mocked(useAuthSession).mockImplementation(() => ({
-          data: { user: { id: userId, name: "Viewer", email: "viewer@example.com", image: null } },
-          status: "authenticated",
-        }));
-        let resolveNewUser!: (response: Response) => void;
-        const newUserResponse = new Promise<Response>((resolve) => {
-          resolveNewUser = resolve;
-        });
-        vi.mocked(browserApiFetch).mockImplementation(async (path) => {
-          if (userId === "user_two") return newUserResponse;
-          return Response.json({
-            events: [
-              {
-                ...event,
-                id: path.includes("cursor=") ? "user_one_page_two" : "user_one_page_one",
-              },
-            ],
-            hasMore: true,
-            nextCursor: "user_one_cursor",
-          });
-        });
-        const { result, rerender } = renderHook(() => useAuditEvents({ endpoint }), { wrapper });
-        await waitFor(() => expect(result.current.events[0]?.id).toBe("user_one_page_one"));
-        act(() => result.current.next());
-        await waitFor(() => expect(result.current.events[0]?.id).toBe("user_one_page_two"));
-
-        vi.mocked(browserApiFetch).mockClear();
-        userId = "user_two";
-        rerender();
-        expect(result.current.events).toEqual([]);
-        expect(result.current.page).toBe(1);
-        expect(result.current.hasPrevious).toBe(false);
-        await waitFor(() =>
-          expect(browserApiFetch).toHaveBeenCalledWith(auditEventsKey(undefined, { endpoint }))
-        );
-        expect(browserApiFetch).not.toHaveBeenCalledWith(expect.stringContaining("cursor="));
-        await act(async () => {
-          resolveNewUser(
-            Response.json({
-              events: [{ ...event, id: "user_two_row" }],
-              hasMore: false,
-              nextCursor: null,
-            })
-          );
-        });
-        await waitFor(() => expect(result.current.events[0]?.id).toBe("user_two_row"));
-
-        vi.mocked(useAuthSession).mockReturnValue({ data: null, status: "unauthenticated" });
-        vi.mocked(browserApiFetch).mockClear();
-        rerender();
-        expect(result.current.events).toEqual([]);
-        expect(result.current.page).toBe(1);
-        expect(browserApiFetch).not.toHaveBeenCalled();
+  it("isolates cached events and resets cursors when the viewer changes in the same provider", async () => {
+    let userId = "user_one";
+    vi.mocked(useAuthSession).mockImplementation(() => ({
+      data: { user: { id: userId, name: "Viewer", email: "viewer@example.com", image: null } },
+      status: "authenticated",
+    }));
+    let resolveNewUser!: (response: Response) => void;
+    const newUserResponse = new Promise<Response>((resolve) => {
+      resolveNewUser = resolve;
+    });
+    vi.mocked(browserApiFetch).mockImplementation(async (path) => {
+      if (userId === "user_two") return newUserResponse;
+      return Response.json({
+        events: [
+          {
+            ...event,
+            id: path.includes("cursor=") ? "user_one_page_two" : "user_one_page_one",
+          },
+        ],
+        hasMore: true,
+        nextCursor: "user_one_cursor",
       });
+    });
+    const { result, rerender } = renderHook(useAuditEvents, { wrapper });
+    await waitFor(() => expect(result.current.events[0]?.id).toBe("user_one_page_one"));
+    act(() => result.current.next());
+    await waitFor(() => expect(result.current.events[0]?.id).toBe("user_one_page_two"));
 
-      it.each([401, 403, 404, 500])(
-        "withholds cached events on access denial but retains them on transient failure (%s)",
-        async (failureStatus) => {
-          let status = 200;
-          vi.mocked(browserApiFetch).mockImplementation(async () =>
-            Response.json(
-              status === 200
-                ? { events: [event], hasMore: true, nextCursor: "next_page" }
-                : { error: "failed" },
-              { status }
-            )
-          );
-          const { result } = renderHook(() => useAuditEvents({ endpoint }), { wrapper });
-          await waitFor(() => expect(result.current.events).toHaveLength(1));
-          status = failureStatus;
-          await act(async () => {
-            await result.current.retry();
-          });
-          await waitFor(() =>
-            expect(result.current.error).toMatchObject({ status: failureStatus })
-          );
-          expect(result.current.events.map(({ id }) => id)).toEqual(
-            failureStatus === 500 ? [event.id] : []
-          );
-          expect(result.current.hasNext).toBe(failureStatus === 500);
-        }
+    vi.mocked(browserApiFetch).mockClear();
+    userId = "user_two";
+    rerender();
+    expect(result.current.events).toEqual([]);
+    expect(result.current.page).toBe(1);
+    expect(result.current.hasPrevious).toBe(false);
+    await waitFor(() => expect(browserApiFetch).toHaveBeenCalledWith(auditEventsKey()));
+    expect(browserApiFetch).not.toHaveBeenCalledWith(expect.stringContaining("cursor="));
+    await act(async () => {
+      resolveNewUser(
+        Response.json({
+          events: [{ ...event, id: "user_two_row" }],
+          hasMore: false,
+          nextCursor: null,
+        })
       );
+    });
+    await waitFor(() => expect(result.current.events[0]?.id).toBe("user_two_row"));
+
+    vi.mocked(useAuthSession).mockReturnValue({ data: null, status: "unauthenticated" });
+    vi.mocked(browserApiFetch).mockClear();
+    rerender();
+    expect(result.current.events).toEqual([]);
+    expect(result.current.page).toBe(1);
+    expect(browserApiFetch).not.toHaveBeenCalled();
+  });
+
+  it.each([401, 403, 404, 500])(
+    "withholds cached events on access denial but retains them on transient failure (%s)",
+    async (failureStatus) => {
+      let status = 200;
+      vi.mocked(browserApiFetch).mockImplementation(async () =>
+        Response.json(
+          status === 200
+            ? { events: [event], hasMore: true, nextCursor: "next_page" }
+            : { error: "failed" },
+          { status }
+        )
+      );
+      const { result } = renderHook(useAuditEvents, { wrapper });
+      await waitFor(() => expect(result.current.events).toHaveLength(1));
+      status = failureStatus;
+      await act(async () => {
+        await result.current.retry();
+      });
+      await waitFor(() => expect(result.current.error).toMatchObject({ status: failureStatus }));
+      expect(result.current.events.map(({ id }) => id)).toEqual(
+        failureStatus === 500 ? [event.id] : []
+      );
+      expect(result.current.hasNext).toBe(failureStatus === 500);
     }
   );
 
-  it("uses the team activity endpoint without a workspace audit read and does not fetch while disabled", async () => {
+  it("does not fetch workspace audit events while disabled", async () => {
     vi.mocked(browserApiFetch).mockResolvedValue(
       Response.json({ events: [], hasMore: false, nextCursor: null })
     );
-    const { rerender } = renderHook(
-      ({ enabled }) =>
-        useAuditEvents({
-          endpoint: "/api/teams/team_one/activity",
-          action: "session.moved",
-          enabled,
-        }),
-      { wrapper, initialProps: { enabled: false } }
-    );
+    const { rerender } = renderHook(({ enabled }) => useAuditEvents({ enabled }), {
+      wrapper,
+      initialProps: { enabled: false },
+    });
     expect(browserApiFetch).not.toHaveBeenCalled();
     rerender({ enabled: true });
-    await waitFor(() =>
-      expect(browserApiFetch).toHaveBeenCalledWith(
-        "/api/teams/team_one/activity?limit=25&action=session.moved"
-      )
-    );
+    await waitFor(() => expect(browserApiFetch).toHaveBeenCalledWith("/api/audit-events?limit=25"));
   });
 });

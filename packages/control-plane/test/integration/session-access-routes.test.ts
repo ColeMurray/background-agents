@@ -6,6 +6,7 @@ import { SessionCollaboratorStore } from "../../src/db/session-collaborators";
 import { cleanD1Tables } from "./cleanup";
 import {
   initSession,
+  queryDO,
   routeRequest,
   seedActiveUser,
   serviceRequestHeaders,
@@ -22,7 +23,7 @@ async function fetchMode(
   mode: string,
   options: {
     method?: string;
-    as?: { userId: string; role: "owner" | "member" | "viewer" };
+    as?: { userId: string; role: "owner" | "administrator" | "member" | "viewer" };
     body?: string;
     service?: "linear-bot";
   } = {}
@@ -69,7 +70,7 @@ describe("HTTP session access by enforcement mode", () => {
     await seedActiveUser(CREATOR);
   });
 
-  async function session(visibility: "team" | "private") {
+  async function session(visibility: "team" | "private" | "workspace") {
     const team = await new TeamStore(env.DB).create({
       slug: `access-${crypto.randomUUID()}`,
       name: "Access Team",
@@ -80,7 +81,7 @@ describe("HTTP session access by enforcement mode", () => {
     await env.DB.prepare("UPDATE sessions SET owner_team_id = ?, visibility = ? WHERE id = ?")
       .bind(team.id, visibility, sessionName)
       .run();
-    return { sessionName, team };
+    return { sessionName, team, stub };
   }
 
   it("conceals a team session on read and token mint when enforcement is on", async () => {
@@ -127,7 +128,7 @@ describe("HTTP session access by enforcement mode", () => {
     ).toBe(200);
   });
 
-  it("writes one shadow audit row with the real status for reads and mutations", async () => {
+  it("audits shadow read observations and enforced team action denials with the real status", async () => {
     const { sessionName } = await session("team");
     for (const [path, method, body] of [
       [`/sessions/${sessionName}`, "GET", undefined],
@@ -140,39 +141,158 @@ describe("HTTP session access by enforcement mode", () => {
       });
       const rows = (
         await env.DB.prepare(
-          "SELECT reason_code, metadata_json FROM authorization_audit_events WHERE request_id = ? AND action = 'authorization.request_allowed'"
+          "SELECT action, reason_code, metadata_json FROM authorization_audit_events WHERE request_id = ?"
         )
           .bind(response.headers.get("x-request-id"))
           .all()
       ).results;
       expect(response.status).toBe(method === "GET" ? 200 : 403);
       expect(rows).toHaveLength(1);
-      expect(rows[0].reason_code).toBe("shadow_denied:not_member");
+      const reason = method === "GET" ? "shadow_denied:not_member" : "not_member";
+      expect(rows[0].reason_code).toBe(reason);
+      expect(rows[0].action).toBe(
+        method === "GET" ? "authorization.request_allowed" : "authorization.request_denied"
+      );
       expect(JSON.parse(String(rows[0].metadata_json))).toMatchObject({
         httpStatus: response.status,
-        responseCode: "shadow_denied:not_member",
+        responseCode: reason,
       });
     }
   });
 
-  it("allows legacy deletion in shadow and off while shadow audits the ownership denial", async () => {
+  it("enforces team deletion ownership in shadow and off", async () => {
     const as = { userId: MEMBER, role: "member" } as const;
     const shadow = await session("team");
     await new TeamMembershipStore(env.DB).add(shadow.team.id, MEMBER);
     expect(
       (await fetchMode(`/sessions/${shadow.sessionName}`, "shadow", { method: "DELETE", as }))
         .status
-    ).toBe(200);
+    ).toBe(403);
     expect(
-      (await auditRows("authorization.request_allowed")).filter(
-        (row) => row.reason_code === "shadow_denied:not_owner_or_lead"
+      (await auditRows("authorization.request_denied")).filter(
+        (row) => row.reason_code === "not_owner_or_lead"
       )
     ).toHaveLength(1);
     const off = await session("team");
     expect(
       (await fetchMode(`/sessions/${off.sessionName}`, "off", { method: "DELETE", as })).status
-    ).toBe(200);
+    ).toBe(403);
   });
+
+  it.each(["off", "shadow", "on"] as const)(
+    "requires current membership for workspace-visible team interaction in %s mode",
+    async (mode) => {
+      const { sessionName, team, stub } = await session("workspace");
+      await queryDO(
+        stub,
+        "UPDATE sandbox SET status = 'ready', code_server_url = ?, vnc_url = ?, ttyd_url = ?, tunnel_urls = ?, modal_object_id = ?",
+        "https://code.example.test",
+        "https://vnc.example.test",
+        "https://terminal.example.test",
+        JSON.stringify({ "3000": "https://app.example.test" }),
+        "team-access-sandbox"
+      );
+      for (const as of [
+        { userId: MEMBER, role: "member" },
+        { userId: CREATOR, role: "member" },
+        { userId: OWNER, role: "owner" },
+        { userId: "44444444444444444444444444444444", role: "administrator" },
+      ] as const) {
+        for (const [path, method] of [
+          ["prompt", "POST"],
+          ["sandbox-access", "GET"],
+        ] as const) {
+          const response = await fetchMode(`/sessions/${sessionName}/${path}`, mode, {
+            as,
+            method,
+            body: method === "POST" ? JSON.stringify({ content: "Denied" }) : undefined,
+          });
+          expect(response.status).toBe(403);
+          expect(await response.json()).toEqual({
+            error: "Forbidden",
+            code: "session_action_denied",
+            reason_code: "not_member",
+          });
+        }
+        const snapshot = await fetchMode(`/sessions/${sessionName}`, mode, { as });
+        expect(snapshot.status).toBe(200);
+        const body = await snapshot.json();
+        expect(body).toMatchObject({
+          session: {
+            capabilities: {
+              canRead: true,
+              canCollaborate: false,
+              canManageLifecycle: false,
+              canDelete: false,
+              canSandbox: false,
+              canManageCollaborators: false,
+              canChangeVisibility: false,
+            },
+          },
+        });
+        for (const field of [
+          "codeServerUrl",
+          "sandboxDashboardUrl",
+          "vncUrl",
+          "ttydUrl",
+          "tunnelUrls",
+        ]) {
+          expect(body).not.toHaveProperty(`session.${field}`);
+        }
+      }
+      await new TeamMembershipStore(env.DB).add(team.id, MEMBER);
+      const as = { userId: MEMBER, role: "member" } as const;
+      expect(
+        (await fetchMode(`/sessions/${sessionName}/sandbox-access`, mode, { as })).status
+      ).toBe(200);
+      const prompt = await fetchMode(`/sessions/${sessionName}/prompt`, mode, {
+        as,
+        method: "POST",
+        body: JSON.stringify({ content: "Allowed" }),
+      });
+      expect(prompt.status).toBe(200);
+      expect(
+        await (await fetchMode(`/sessions/${sessionName}`, mode, { as })).json()
+      ).toMatchObject({
+        session: {
+          capabilities: { canCollaborate: true, canManageLifecycle: true, canSandbox: true },
+        },
+      });
+    }
+  );
+
+  it.each(["off", "shadow", "on"] as const)(
+    "refuses a removed owner's private team prompt and permits collaborator self-removal in %s mode",
+    async (mode) => {
+      const { sessionName, team } = await session("private");
+      const memberships = new TeamMembershipStore(env.DB);
+      await memberships.add(team.id, CREATOR);
+      await memberships.remove(team.id, CREATOR);
+      const prompt = await fetchMode(`/sessions/${sessionName}/prompt`, mode, {
+        as: { userId: CREATOR, role: "member" },
+        method: "POST",
+        body: JSON.stringify({ content: "Denied" }),
+      });
+      expect(prompt.status).toBe(403);
+      expect(await prompt.json()).toMatchObject({ reason_code: "not_member" });
+      const collaborators = new SessionCollaboratorStore(env.DB);
+      await collaborators.add(sessionName, MEMBER, CREATOR);
+      const as = { userId: MEMBER, role: "member" } as const;
+      const collaboratorPrompt = await fetchMode(`/sessions/${sessionName}/prompt`, mode, {
+        as,
+        method: "POST",
+        body: JSON.stringify({ content: "Denied" }),
+      });
+      expect(collaboratorPrompt.status).toBe(403);
+      expect(await collaboratorPrompt.json()).toMatchObject({ reason_code: "not_member" });
+      const removed = await fetchMode(`/sessions/${sessionName}/collaborators/${MEMBER}`, mode, {
+        as,
+        method: "DELETE",
+      });
+      expect(removed.status).toBe(200);
+      expect(await collaborators.listUserIds(sessionName)).toEqual([]);
+    }
+  );
 
   it("conceals another team's export even when the viewer holds sessions.export", async () => {
     const { sessionName } = await session("team");
@@ -229,7 +349,7 @@ describe("HTTP session access by enforcement mode", () => {
       expect(await response.json()).toEqual({
         error: "Forbidden",
         code: "session_action_denied",
-        reason_code: "not_collaborator",
+        reason_code: "not_member",
       });
     }
   );
@@ -251,13 +371,13 @@ describe("HTTP session access by enforcement mode", () => {
     }
   });
 
-  it("loads collaborators but not memberships for an off-mode private session", async () => {
+  it("loads collaborators and memberships for an off-mode private team session", async () => {
     const { sessionName } = await session("private");
     const members = vi.spyOn(TeamMembershipStore.prototype, "listForUser");
     const collaborators = vi.spyOn(SessionCollaboratorStore.prototype, "listUserIds");
     try {
       expect((await fetchMode(`/sessions/${sessionName}`, "off")).status).toBe(200);
-      expect(members).not.toHaveBeenCalled();
+      expect(members).toHaveBeenCalledOnce();
       expect(collaborators).toHaveBeenCalledOnce();
     } finally {
       members.mockRestore();
@@ -423,7 +543,7 @@ describe("HTTP session access by enforcement mode", () => {
   });
 
   it.each(["off", "shadow", "on"] as const)(
-    "preserves bulk-only custom-role archiving in %s mode",
+    "refuses bulk-only custom-role team archiving without lifecycle permission in %s mode",
     async (mode) => {
       const { sessionName, team } = await session("team");
       await new TeamMembershipStore(env.DB).add(team.id, MEMBER);
@@ -448,18 +568,10 @@ describe("HTTP session access by enforcement mode", () => {
         body: JSON.stringify({ sessionIds: [sessionName] }),
       });
       expect(response.status).toBe(200);
-      expect(await response.json()).toEqual(
-        mode === "on"
-          ? { results: [], skipped: [{ sessionId: sessionName, reason: "missing_permission" }] }
-          : { results: [{ sessionId: sessionName, outcome: "archived" }], skipped: [] }
-      );
-      if (mode === "shadow") {
-        expect(
-          (await auditRows("authorization.request_allowed")).some(
-            (row) => row.reason_code === "shadow_denied:batch"
-          )
-        ).toBe(true);
-      }
+      expect(await response.json()).toEqual({
+        results: [],
+        skipped: [{ sessionId: sessionName, reason: "missing_permission" }],
+      });
     }
   );
 

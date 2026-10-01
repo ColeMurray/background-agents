@@ -51,7 +51,6 @@ function session(unread = false): SessionItem {
       canCollaborate: false,
       canManageLifecycle: mocks.canManageLifecycle,
       canDelete: false,
-      canMove: false,
       canSandbox: false,
       canManageCollaborators: false,
       canChangeVisibility: false,

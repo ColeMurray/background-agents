@@ -6,6 +6,7 @@ import { useSessionCollaboratorCandidates } from "@/hooks/use-session-collaborat
 import { updateSessionScope } from "@/lib/session-scope";
 import { Button } from "../ui/button";
 import { ErrorBanner } from "../ui/error-banner";
+import { UserIdentity, UserIdentityPicker, userDisplayName } from "../user-identity";
 import { CollapsibleSection } from "./collapsible-section";
 
 export interface CollaboratorsSectionProps {
@@ -73,12 +74,11 @@ export function CollaboratorsSection({
         )}
         {collaborators.map((collaboratorId) => {
           const candidate = candidates.find((candidate) => candidate.userId === collaboratorId);
-          const name = candidate?.displayName ?? candidate?.email ?? collaboratorId;
+          const user = candidate ?? { userId: collaboratorId };
+          const name = userDisplayName(user);
           return (
             <div key={collaboratorId} className="flex items-center justify-between gap-2">
-              <span className="min-w-0 truncate text-sm" title={candidate?.email ?? collaboratorId}>
-                {name}
-              </span>
+              <UserIdentity {...user} />
               <Button
                 size="sm"
                 variant="outline"
@@ -95,20 +95,13 @@ export function CollaboratorsSection({
           Add collaborator
         </label>
         <div className="flex flex-wrap gap-2">
-          <select
+          <UserIdentityPicker
             id={`${id}-add`}
             value={userId}
             disabled={pending || loading || !!error}
-            onChange={(event) => setUserId(event.target.value)}
-            className="min-w-0 flex-1 rounded border border-border bg-background px-2 py-2 text-sm disabled:opacity-50"
-          >
-            <option value="">Select a workspace member</option>
-            {available.map((candidate) => (
-              <option key={candidate.userId} value={candidate.userId}>
-                {candidate.displayName ?? candidate.email ?? candidate.userId}
-              </option>
-            ))}
-          </select>
+            onValueChange={setUserId}
+            candidates={available}
+          />
           <Button
             size="sm"
             disabled={

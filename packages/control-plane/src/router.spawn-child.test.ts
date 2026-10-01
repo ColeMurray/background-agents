@@ -108,7 +108,9 @@ describe("handleSpawnChild prompt enqueue handling", () => {
     ownerTeamId: string | null = null
   ) => ({
     get: vi.fn().mockResolvedValue({
+      id: parentId,
       userId: parentUserId,
+      visibility: "workspace",
       repoOwner: context.repoOwner,
       repoName: context.repoName,
       environmentId,

@@ -727,7 +727,7 @@ describe("scoped inbox routes", () => {
         items: [
           {
             rootSession: {
-              capabilities: { canRead: true, canDelete: mode !== "on", canMove: false },
+              capabilities: { canRead: true, canDelete: mode !== "on" },
             },
             descendantSessions: [
               {

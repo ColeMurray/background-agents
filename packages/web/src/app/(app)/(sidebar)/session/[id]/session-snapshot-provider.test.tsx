@@ -46,7 +46,6 @@ const snapshot: SessionSnapshot = {
       canCollaborate: true,
       canManageLifecycle: true,
       canDelete: true,
-      canMove: true,
       canSandbox: true,
       canManageCollaborators: true,
       canChangeVisibility: true,
@@ -66,7 +65,9 @@ function Probe() {
         {current.session.ownerTeamId} / {current.session.visibility}
       </p>
       <p>{current.session.collaborators?.join(",")}</p>
-      <button disabled={!current.session.capabilities?.canMove}>Move</button>
+      <button disabled={!current.session.capabilities?.canChangeVisibility}>
+        Change visibility
+      </button>
       <button onClick={() => void refresh().catch(() => {})}>Refresh</button>
     </>
   );
@@ -110,7 +111,7 @@ describe("SessionSnapshotProvider", () => {
     vi.mocked(browserApiFetch).mockResolvedValue(
       Response.json({
         ...snapshot,
-        session: { ...snapshot.session, ownerTeamId: "team_cached" },
+        session: { ...snapshot.session, visibility: "team" },
       })
     );
     const { rerender } = render(
@@ -124,14 +125,17 @@ describe("SessionSnapshotProvider", () => {
       }
     );
     fireEvent.click(screen.getByRole("button", { name: "Refresh" }));
-    await waitFor(() => expect(screen.getByText("team_cached / private")).toBeInTheDocument());
-    const incoming = { ...snapshot, session: { ...snapshot.session, ownerTeamId: "team_fresh" } };
+    await waitFor(() => expect(screen.getByText("team_old / team")).toBeInTheDocument());
+    const incoming = {
+      ...snapshot,
+      session: { ...snapshot.session, visibility: "workspace" as const },
+    };
     rerender(
       <SessionSnapshotProvider snapshot={incoming}>
         <Probe />
       </SessionSnapshotProvider>
     );
-    expect(screen.getByText("team_fresh / private")).toBeInTheDocument();
+    expect(screen.getByText("team_old / workspace")).toBeInTheDocument();
   });
   it("renders the SSR snapshot without an extra initial request", () => {
     render(
@@ -151,10 +155,9 @@ describe("SessionSnapshotProvider", () => {
         ...snapshot,
         session: {
           ...snapshot.session,
-          ownerTeamId: "team_new",
           visibility: "team",
           collaborators: ["user_added"],
-          capabilities: { ...snapshot.session.capabilities, canMove: false },
+          capabilities: { ...snapshot.session.capabilities, canChangeVisibility: false },
         },
       })
     );
@@ -166,9 +169,9 @@ describe("SessionSnapshotProvider", () => {
       </SWRConfig>
     );
     fireEvent.click(screen.getByRole("button", { name: "Refresh" }));
-    await waitFor(() => expect(screen.getByText("team_new / team")).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText("team_old / team")).toBeInTheDocument());
     expect(screen.getByText("user_added")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Move" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Change visibility" })).toBeDisabled();
     expect(browserApiFetch).toHaveBeenCalledWith("/api/sessions/session-1");
   });
 });

@@ -21,7 +21,6 @@ const SERVER_CAPABILITIES: NonNullable<SessionState["capabilities"]> = {
   canManageLifecycle: true,
   canSandbox: true,
   canDelete: false,
-  canMove: false,
   canManageCollaborators: false,
   canChangeVisibility: false,
 };
