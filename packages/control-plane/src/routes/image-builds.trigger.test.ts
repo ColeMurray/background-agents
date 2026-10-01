@@ -6,8 +6,6 @@ import {
 } from "../background-tasks.test-support";
 import { ImageBuildStore } from "../db/image-builds";
 import { RepoMetadataStore } from "../db/repo-metadata";
-import { TeamRepositoryGrantStore } from "../db/team-repository-grants";
-import { TeamStore } from "../db/teams";
 import { imageBuildRoutes } from "./image-builds";
 import type { Env } from "../types";
 import type { RepositoryAccessResult } from "../source-control";
@@ -210,8 +208,6 @@ const markBuildFailedSpy = vi.spyOn(ImageBuildStore.prototype, "markBuildFailed"
 const markSourceCreateIntentSpy = vi.spyOn(ImageBuildStore.prototype, "markSourceCreateIntent");
 const bindProviderSessionSpy = vi.spyOn(ImageBuildStore.prototype, "bindProviderSession");
 const setImageBuildEnabledSpy = vi.spyOn(RepoMetadataStore.prototype, "setImageBuildEnabled");
-const listTeamsSpy = vi.spyOn(TeamStore.prototype, "list");
-const listTeamGrantsSpy = vi.spyOn(TeamRepositoryGrantStore.prototype, "listForTeam");
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -224,25 +220,6 @@ beforeEach(() => {
   hasReadyImageSpy.mockResolvedValue(false);
   markBuildFailedSpy.mockResolvedValue(true);
   setImageBuildEnabledSpy.mockResolvedValue(undefined);
-  listTeamsSpy.mockResolvedValue([
-    {
-      id: "team-1",
-      slug: "team-1",
-      name: "Team 1",
-      description: null,
-      joinPolicy: "invite_only",
-      defaultVisibility: "team",
-      defaultEnvironmentId: null,
-      grantsVersion: 1,
-      archivedAt: null,
-      createdAt: 1,
-      updatedAt: 1,
-    },
-  ]);
-  listTeamGrantsSpy.mockResolvedValue([
-    { grant_kind: "repository", repo_external_id: RESOLVED_REPO.repoId },
-    { grant_kind: "repository", repo_external_id: 456 },
-  ]);
   bindProviderSessionSpy.mockResolvedValue(true);
   markSourceCreateIntentSpy.mockResolvedValue(true);
   modalClient.createImageBuildSandbox.mockResolvedValue({
@@ -299,7 +276,7 @@ describe("POST /image-builds/trigger/repo/:owner/:name", () => {
     expect(modalClient.startImageBuildSandbox).toHaveBeenCalledTimes(1);
     expect(scmProvider.generateCredentialHelperAuth).toHaveBeenCalledExactlyOnceWith({
       kind: "repositories",
-      repositoryIds: [123, 456],
+      repositoryIds: [123],
     });
 
     // ...and is baked into the persisted fingerprint.
@@ -318,6 +295,10 @@ describe("POST /image-builds/trigger/repo/:owner/:name", () => {
     const response = await callTrigger(createVercelEnv());
 
     expect(response.status).toBe(200);
+    expect(scmProvider.generateCredentialHelperAuth).toHaveBeenCalledExactlyOnceWith({
+      kind: "repositories",
+      repositoryIds: [123],
+    });
     expect(vercelProvider.triggerImageBuild).toHaveBeenCalledTimes(1);
     expect(vercelProvider.triggerImageBuild).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -344,7 +325,7 @@ describe("POST /image-builds/trigger/repo/:owner/:name", () => {
     expect(response.status).toBe(200);
     expect(scmProvider.generateCredentialHelperAuth).toHaveBeenCalledExactlyOnceWith({
       kind: "repositories",
-      repositoryIds: [123, 456],
+      repositoryIds: [123],
     });
     expect(openComputerProvider.triggerImageBuild).toHaveBeenCalledTimes(1);
     expect(openComputerProvider.triggerImageBuild).toHaveBeenCalledWith(

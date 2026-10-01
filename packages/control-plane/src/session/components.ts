@@ -60,6 +60,7 @@ import { parsePersistedSandboxSettings } from "../sandbox/settings";
 import type { SandboxSettings } from "@open-inspect/shared/types/integrations";
 import { createSourceControlProviderFromEnv, type SourceControlProvider } from "../source-control";
 import { resolveSessionCredentialScope } from "../source-control/session-scope";
+import { readCachedInstallationRepositories } from "../repos/cache";
 import { requireRepoSecretsEncryptionKey } from "../env-validation";
 import type { Env, ClientInfo } from "../types";
 import type { SessionRow } from "./types";
@@ -325,7 +326,7 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
   // rather than re-deriving its own copy.
   const sessionIndexStore = new SessionIndexStore(db);
   const resolveCredentialScope = (sessionId: string) =>
-    resolveSessionCredentialScope(db, sessionId);
+    resolveSessionCredentialScope(db, sessionId, () => readCachedInstallationRepositories(env));
   const teamMembershipStore = new TeamMembershipStore(db);
   const sessionCollaboratorStore = new SessionCollaboratorStore(db);
   const sessionPullRequestStore = new SessionPullRequestStore(db);

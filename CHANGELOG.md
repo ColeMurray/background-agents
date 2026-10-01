@@ -6,18 +6,23 @@ New features, integrations, and notable improvements to Open-Inspect — newest 
 
 ### Changed
 
-GitHub App credentials for team-owned sessions now reach only the team's granted repositories,
-including PR refresh and autofix content reads. Empty grants refuse token minting; workspace-owned
-sessions and installation grants retain installation-wide access. Token caches use the exact
-repository set, so adding or removing a grant changes the cache key. Already-issued tokens remain
-valid until expiry, and sandbox helpers cache them until shortly before expiry. The process token
-cache is bounded, and overlapping refreshes share one mint per scope.
+GitHub App sandbox credentials now reach only the session's repositories, including workspace-owned
+sessions and members snapshotted from an environment. Team-owned sessions also intersect that set
+with their team's current repository grants; an installation grant does not widen the credential
+beyond the session's members. Sessions with no repositories or no remaining granted repositories
+receive no token. Unresolved repository IDs and scopes exceeding GitHub's repository limit are
+refused rather than falling back to installation-wide access.
 
-Environment image builds use their owning team's grants. Repository image builds use the union of
-grants from every team granted that repository; setup output, including cloned sibling repositories,
-is shared by those teams. A repository without any granting team gets no clone credential. GitLab
-still uses one deployment-wide PAT and cannot enforce per-team credential scope. Modal restore-token
-scoping remains a separate change.
+This breaks private submodule, repository-backed dependency, and sibling-clone setups unless those
+repositories are included in the session's environment and, for team sessions, granted to its team.
+Repository image builds receive a token for that repository alone; environment builds use only their
+member repositories, intersected with the environment team's grants. Metadata and workspace-catalog
+operations retain installation-wide access. GitLab still uses a deployment-wide PAT and does not
+enforce repository-scoped credentials. Modal restore-token scoping remains a separate change.
+
+Token cache keys cover the sorted, de-duplicated repository set, the process cache is bounded, and
+overlapping refreshes share one mint per scope. Grant removal changes the next credential scope but
+does not revoke already-issued tokens; sandbox helpers cache them until shortly before expiry.
 
 ### Fixed
 

@@ -1,11 +1,11 @@
-import type { Team } from "@open-inspect/shared/types/teams";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { EnvironmentStore } from "../db/environments";
+import { EnvironmentStore, type EnvironmentRepositoryRow } from "../db/environments";
 import type { ImageBuildStore } from "../db/image-builds";
 import type { SqlDatabase } from "../db/sql-database";
 import { TeamRepositoryGrantStore } from "../db/team-repository-grants";
-import { TeamStore } from "../db/teams";
 import type { Job } from "../jobs";
+import { readCachedInstallationRepositories } from "../repos/cache";
+import type * as ReposCacheModule from "../repos/cache";
 import { createTestEnv } from "../router.test-support";
 import type { SourceControlProvider } from "../source-control";
 import type { Env } from "../types";
@@ -16,27 +16,62 @@ import type { ResolvedImageBuildTarget } from "./scope";
 import { COMPATIBLE_RUNTIME_VERSION } from "./test-helpers";
 import type { ImageBuildWorkflow } from "./workflow";
 
-const TEAM: Team = {
-  id: "team_a",
-  slug: "team-a",
-  name: "Team A",
+vi.mock("../repos/cache", async (importOriginal) => ({
+  ...(await importOriginal<typeof ReposCacheModule>()),
+  readCachedInstallationRepositories: vi.fn(),
+}));
+
+const ENVIRONMENT = {
+  id: "env_1",
+  name: "Environment",
   description: null,
-  joinPolicy: "invite_only",
-  defaultVisibility: "team",
-  defaultEnvironmentId: null,
-  grantsVersion: 1,
-  archivedAt: null,
-  createdAt: 1,
-  updatedAt: 1,
+  prebuild_enabled: 1,
+  channel_associations: null,
+  owner_team_id: null,
+  created_at: 1,
+  updated_at: 1,
 };
+const ENV_TARGET: ResolvedImageBuildTarget = {
+  kind: "environment",
+  repositories: [
+    { repoOwner: "acme", repoName: "web", baseBranch: "main" },
+    { repoOwner: "acme", repoName: "api", baseBranch: "develop" },
+  ],
+  repositoriesFingerprint: "fp-env",
+};
+const ENV_REPOSITORIES: EnvironmentRepositoryRow[] = ENV_TARGET.repositories.map(
+  (repository, position) => ({
+    environment_id: ENVIRONMENT.id,
+    position,
+    repo_owner: repository.repoOwner,
+    repo_name: repository.repoName,
+    repo_id: position + 1,
+    base_branch: repository.baseBranch,
+  })
+);
 
 beforeEach(() => {
-  vi.spyOn(TeamStore.prototype, "list").mockResolvedValue([TEAM]);
-  vi.spyOn(TeamRepositoryGrantStore.prototype, "listForTeam").mockResolvedValue([
-    { grant_kind: "repository", repo_external_id: 1 },
-    { grant_kind: "repository", repo_external_id: 2 },
-  ]);
+  vi.clearAllMocks();
+  vi.spyOn(TeamRepositoryGrantStore.prototype, "covers").mockResolvedValue(false);
   vi.spyOn(EnvironmentStore.prototype, "getById").mockResolvedValue(null);
+  vi.spyOn(EnvironmentStore.prototype, "getRepositoriesForEnvironment").mockResolvedValue(
+    ENV_REPOSITORIES
+  );
+  vi.mocked(readCachedInstallationRepositories).mockResolvedValue(
+    [
+      { id: 1, name: "web" },
+      { id: 2, name: "api" },
+      { id: 99, name: "sibling" },
+    ].map((repository) => ({
+      ...repository,
+      owner: "acme",
+      fullName: `acme/${repository.name}`,
+      description: null,
+      private: true,
+      defaultBranch: "main",
+      archived: false,
+    }))
+  );
 });
 
 afterEach(() => vi.restoreAllMocks());
@@ -306,27 +341,11 @@ describe("ImageBuildScheduler", () => {
     expect(stats.branchLookups).toBe(41);
     expect(getBranchHead).toHaveBeenCalledWith(
       { owner: "acme", name: "repo-40", branch: "main" },
-      { kind: "repositories", repositoryIds: [1, 2] }
+      { kind: "repositories", repositoryIds: [1] }
     );
   });
 
-  it("uses the union of every granting team's repositories for branch reads", async () => {
-    vi.mocked(TeamStore.prototype.list).mockResolvedValue([
-      TEAM,
-      { ...TEAM, id: "team_b", archivedAt: 2 },
-      { ...TEAM, id: "team_unrelated" },
-    ]);
-    const grants = new Map([
-      [TEAM.id, [1, 30]],
-      ["team_b", [1, 2]],
-      ["team_unrelated", [99]],
-    ]);
-    vi.mocked(TeamRepositoryGrantStore.prototype.listForTeam).mockImplementation(async (teamId) => {
-      return (grants.get(teamId) ?? []).map((repo_external_id) => ({
-        grant_kind: "repository" as const,
-        repo_external_id,
-      }));
-    });
+  it("reads a repo branch with exactly one repository even without teams or grants", async () => {
     const getBranchHead = vi.fn(async () => "abc123");
     const h = harness({ sourceControl: { getBranchHead } as unknown as SourceControlProvider });
     mockReadyImages(h);
@@ -335,17 +354,16 @@ describe("ImageBuildScheduler", () => {
 
     expect(getBranchHead).toHaveBeenCalledExactlyOnceWith(
       { owner: "acme", name: "web", branch: "main" },
-      { kind: "repositories", repositoryIds: [1, 2, 30] }
+      { kind: "repositories", repositoryIds: [1] }
     );
-    expect(TeamStore.prototype.list).toHaveBeenCalledExactlyOnceWith({ includeArchived: true });
+    expect(TeamRepositoryGrantStore.prototype.covers).not.toHaveBeenCalled();
+    expect(readCachedInstallationRepositories).not.toHaveBeenCalled();
     expect(stats.branchMatched).toBe(1);
     expect(h.workflow.triggerBuildWithTarget).not.toHaveBeenCalled();
   });
 
-  it("uses installation scope for branch reads when a team has an installation grant", async () => {
-    vi.mocked(TeamRepositoryGrantStore.prototype.listForTeam).mockResolvedValue([
-      { grant_kind: "installation", repo_external_id: null },
-    ]);
+  it("never broadens repo branch scope to installation coverage", async () => {
+    vi.mocked(TeamRepositoryGrantStore.prototype.covers).mockResolvedValue(true);
     const getBranchHead = vi.fn(async () => "abc123");
     const h = harness({ sourceControl: { getBranchHead } as unknown as SourceControlProvider });
     mockReadyImages(h);
@@ -354,40 +372,28 @@ describe("ImageBuildScheduler", () => {
 
     expect(getBranchHead).toHaveBeenCalledExactlyOnceWith(
       { owner: "acme", name: "web", branch: "main" },
-      { kind: "all" }
+      { kind: "repositories", repositoryIds: [1] }
     );
+    expect(TeamRepositoryGrantStore.prototype.covers).not.toHaveBeenCalled();
   });
 
   it.each([null, "team_a"])(
-    "uses one environment owner scope for all branch reads (owner %s)",
+    "uses only environment members for all branch reads (owner %s)",
     async (ownerTeamId) => {
       vi.mocked(EnvironmentStore.prototype.getById).mockResolvedValue({
-        id: "env_1",
-        name: "Environment",
-        description: null,
-        prebuild_enabled: 1,
-        channel_associations: null,
+        ...ENVIRONMENT,
         owner_team_id: ownerTeamId,
-        created_at: 1,
-        updated_at: 1,
       });
+      vi.mocked(TeamRepositoryGrantStore.prototype.covers).mockResolvedValue(true);
       const getBranchHead = vi.fn(async () => "abc123");
       const h = harness({ sourceControl: { getBranchHead } as unknown as SourceControlProvider });
       h.listScopes.mockResolvedValue([{ kind: "environment", id: "env_1" }]);
-      h.resolveTarget.mockResolvedValue({
-        kind: "environment",
-        repositories: [
-          { repoOwner: "acme", repoName: "web", baseBranch: "main" },
-          { repoOwner: "acme", repoName: "api", baseBranch: "develop" },
-        ],
-        repositoriesFingerprint: "fp-env",
-      });
+      h.resolveTarget.mockResolvedValue(ENV_TARGET);
       mockReadyImages(h);
 
       const stats = await h.scheduler.run({ request_id: "cron-1", trace_id: "cron-1" });
 
-      const expectedScope =
-        ownerTeamId === null ? { kind: "all" } : { kind: "repositories", repositoryIds: [1, 2] };
+      const expectedScope = { kind: "repositories", repositoryIds: [1, 2] };
       expect(getBranchHead).toHaveBeenNthCalledWith(
         1,
         { owner: "acme", name: "web", branch: "main" },
@@ -399,10 +405,128 @@ describe("ImageBuildScheduler", () => {
         expectedScope
       );
       expect(EnvironmentStore.prototype.getById).toHaveBeenCalledExactlyOnceWith("env_1");
-      expect(TeamStore.prototype.list).not.toHaveBeenCalled();
+      expect(readCachedInstallationRepositories).not.toHaveBeenCalled();
+      if (ownerTeamId === null) {
+        expect(TeamRepositoryGrantStore.prototype.covers).not.toHaveBeenCalled();
+      } else {
+        expect(TeamRepositoryGrantStore.prototype.covers).toHaveBeenCalledWith(ownerTeamId, [1, 2]);
+      }
       expect(stats.branchMatched).toBe(2);
     }
   );
+
+  it("resolves NULL environment ids lazily from the cached catalog for branch reads", async () => {
+    vi.mocked(EnvironmentStore.prototype.getById).mockResolvedValue(ENVIRONMENT);
+    vi.mocked(EnvironmentStore.prototype.getRepositoriesForEnvironment).mockResolvedValue(
+      ENV_REPOSITORIES.map((row) => ({ ...row, repo_id: null }))
+    );
+    const getBranchHead = vi.fn(async () => "abc123");
+    const env = createTestEnv();
+    const h = harness({
+      env,
+      sourceControl: { getBranchHead } as unknown as SourceControlProvider,
+    });
+    h.listScopes.mockResolvedValue([{ kind: "environment", id: "env_1" }]);
+    h.resolveTarget.mockResolvedValue(ENV_TARGET);
+    mockReadyImages(h);
+
+    const stats = await h.scheduler.run({ request_id: "cron-1", trace_id: "cron-1" });
+
+    expect(readCachedInstallationRepositories).toHaveBeenCalledExactlyOnceWith(env);
+    expect(getBranchHead).toHaveBeenCalledTimes(2);
+    expect(getBranchHead).toHaveBeenCalledWith(expect.any(Object), {
+      kind: "repositories",
+      repositoryIds: [1, 2],
+    });
+    expect(stats.branchMatched).toBe(2);
+  });
+
+  it("drops members revoked from the owning team's branch credential scope", async () => {
+    vi.mocked(EnvironmentStore.prototype.getById).mockResolvedValue({
+      ...ENVIRONMENT,
+      owner_team_id: "team_a",
+    });
+    vi.mocked(TeamRepositoryGrantStore.prototype.covers).mockImplementation(
+      async (teamId, ids) => teamId === "team_a" && ids.every((id) => id === 1)
+    );
+    const getBranchHead = vi.fn(async () => "abc123");
+    const h = harness({ sourceControl: { getBranchHead } as unknown as SourceControlProvider });
+    h.listScopes.mockResolvedValue([{ kind: "environment", id: "env_1" }]);
+    h.resolveTarget.mockResolvedValue(ENV_TARGET);
+    mockReadyImages(h);
+
+    await h.scheduler.run({ request_id: "cron-1", trace_id: "cron-1" });
+
+    expect(getBranchHead).toHaveBeenCalledTimes(2);
+    expect(getBranchHead).toHaveBeenNthCalledWith(
+      1,
+      { owner: "acme", name: "web", branch: "main" },
+      { kind: "repositories", repositoryIds: [1] }
+    );
+    expect(getBranchHead).toHaveBeenNthCalledWith(
+      2,
+      { owner: "acme", name: "api", branch: "develop" },
+      { kind: "repositories", repositoryIds: [1] }
+    );
+  });
+
+  it("does not read branches or rebuild after all environment grants are revoked", async () => {
+    vi.mocked(EnvironmentStore.prototype.getById).mockResolvedValue({
+      ...ENVIRONMENT,
+      owner_team_id: "team_a",
+    });
+    const getBranchHead = vi.fn(async () => "abc123");
+    const h = harness({ sourceControl: { getBranchHead } as unknown as SourceControlProvider });
+    h.listScopes.mockResolvedValue([{ kind: "environment", id: "env_1" }]);
+    h.resolveTarget.mockResolvedValue(ENV_TARGET);
+    mockReadyImages(h);
+
+    const stats = await h.scheduler.run({ request_id: "cron-1", trace_id: "cron-1" });
+
+    expect(stats.branchLookups).toBe(0);
+    expect(getBranchHead).not.toHaveBeenCalled();
+    expect(h.workflow.triggerBuildWithTarget).not.toHaveBeenCalled();
+  });
+
+  it("skips branch reads and rebuilds after environment membership changes", async () => {
+    vi.mocked(EnvironmentStore.prototype.getById).mockResolvedValue(ENVIRONMENT);
+    vi.mocked(EnvironmentStore.prototype.getRepositoriesForEnvironment).mockResolvedValue([
+      ENV_REPOSITORIES[0],
+      { ...ENV_REPOSITORIES[1], repo_name: "sibling", repo_id: null },
+    ]);
+    const getBranchHead = vi.fn(async () => "abc123");
+    const h = harness({ sourceControl: { getBranchHead } as unknown as SourceControlProvider });
+    h.listScopes.mockResolvedValue([{ kind: "environment", id: "env_1" }]);
+    h.resolveTarget.mockResolvedValue(ENV_TARGET);
+    mockReadyImages(h);
+
+    const stats = await h.scheduler.run({ request_id: "cron-1", trace_id: "cron-1" });
+
+    expect(stats.scopesScanned).toBe(1);
+    expect(stats.branchLookups).toBe(0);
+    expect(getBranchHead).not.toHaveBeenCalled();
+    expect(h.workflow.triggerBuildWithTarget).not.toHaveBeenCalled();
+    expect(readCachedInstallationRepositories).not.toHaveBeenCalled();
+  });
+
+  it("skips branch reads and rebuilds for NULL ids missing from the catalog", async () => {
+    vi.mocked(EnvironmentStore.prototype.getById).mockResolvedValue(ENVIRONMENT);
+    vi.mocked(EnvironmentStore.prototype.getRepositoriesForEnvironment).mockResolvedValue(
+      ENV_REPOSITORIES.map((row) => ({ ...row, repo_id: null }))
+    );
+    vi.mocked(readCachedInstallationRepositories).mockResolvedValueOnce([]);
+    const getBranchHead = vi.fn(async () => "abc123");
+    const h = harness({ sourceControl: { getBranchHead } as unknown as SourceControlProvider });
+    h.listScopes.mockResolvedValue([{ kind: "environment", id: "env_1" }]);
+    h.resolveTarget.mockResolvedValue(ENV_TARGET);
+    mockReadyImages(h);
+
+    const stats = await h.scheduler.run({ request_id: "cron-1", trace_id: "cron-1" });
+
+    expect(stats.branchLookups).toBe(0);
+    expect(getBranchHead).not.toHaveBeenCalled();
+    expect(h.workflow.triggerBuildWithTarget).not.toHaveBeenCalled();
+  });
 
   it("does not read branches or rebuild when the environment no longer exists", async () => {
     const getBranchHead = vi.fn(async () => "abc123");
@@ -423,10 +547,9 @@ describe("ImageBuildScheduler", () => {
     expect(h.workflow.triggerBuildWithTarget).not.toHaveBeenCalled();
   });
 
-  it("does not broaden empty scope when the provider refuses branch auth", async () => {
-    vi.mocked(TeamRepositoryGrantStore.prototype.listForTeam).mockResolvedValue([]);
+  it("does not broaden repository scope when the provider refuses branch auth", async () => {
     const getBranchHead = vi.fn(async () => {
-      throw new Error("Empty token scope");
+      throw new Error("Token scope denied");
     });
     const h = harness({ sourceControl: { getBranchHead } as unknown as SourceControlProvider });
     mockReadyImages(h);
@@ -435,7 +558,7 @@ describe("ImageBuildScheduler", () => {
 
     expect(getBranchHead).toHaveBeenCalledExactlyOnceWith(
       { owner: "acme", name: "web", branch: "main" },
-      { kind: "repositories", repositoryIds: [] }
+      { kind: "repositories", repositoryIds: [1] }
     );
     expect(stats.branchUnknown).toBe(1);
     expect(h.workflow.triggerBuildWithTarget).not.toHaveBeenCalled();

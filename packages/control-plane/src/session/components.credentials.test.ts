@@ -1,16 +1,18 @@
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { SessionIndexStore, type SessionEntry } from "../db/session-index";
+import { SessionScopeStore } from "../db/session-scope-store";
+import { TeamRepositoryGrantStore } from "../db/team-repository-grants";
 import { createNodeSqlDatabase } from "../node/sqlite-database";
 import { createNodeSqlStorage } from "../node/sqlite-storage";
+import { readCachedInstallationRepositories } from "../repos/cache";
 import type { CredentialScope, SourceControlProvider } from "../source-control";
-import { resolveTeamTokenScope } from "../source-control/team-scope";
 import type { Env } from "../types";
 import { createSessionRuntime } from "./components";
 import { buildSessionInternalRequest, SessionInternalPaths } from "./contracts";
 import { initSchema } from "./schema";
 
-vi.mock("../source-control/team-scope", () => ({ resolveTeamTokenScope: vi.fn() }));
+vi.mock("../repos/cache", () => ({ readCachedInstallationRepositories: vi.fn() }));
 
 function indexSession(ownerTeamId: string | null): SessionEntry {
   return { id: "public-session", ownerTeamId } as SessionEntry;
@@ -21,7 +23,12 @@ describe("session credential scope composition", () => {
 
   beforeEach(() => {
     sqlite = new DatabaseSync(":memory:");
-    vi.mocked(resolveTeamTokenScope).mockReset();
+    vi.spyOn(SessionScopeStore.prototype, "listRepositoryIds").mockResolvedValue([
+      { repoOwner: "acme", repoName: "web", repoId: 123 },
+      { repoOwner: "acme", repoName: "api", repoId: 456 },
+    ]);
+    vi.spyOn(TeamRepositoryGrantStore.prototype, "covers").mockResolvedValue(true);
+    vi.mocked(readCachedInstallationRepositories).mockReset().mockResolvedValue([]);
   });
 
   afterEach(() => {
@@ -37,6 +44,13 @@ describe("session credential scope composition", () => {
        VALUES ('internal-session', 'public-session', 'acme', 'web', 1, 1)`
     );
     const db = createNodeSqlDatabase(sqlite);
+    const env = {
+      REPO_SECRETS_ENCRYPTION_KEY: btoa("0".repeat(32)),
+      MODAL_API_SECRET: "modal-secret",
+      MODAL_WORKSPACE: "test-workspace",
+      TEAMS_ENFORCEMENT: teamsEnforcement,
+      LOG_LEVEL: "error",
+    } as Env;
     const runtime = createSessionRuntime(
       {
         id: "durable-object-id",
@@ -55,13 +69,7 @@ describe("session credential scope composition", () => {
         },
         createBackgroundTasks: () => ({ submit: () => {} }),
       },
-      {
-        REPO_SECRETS_ENCRYPTION_KEY: btoa("0".repeat(32)),
-        MODAL_API_SECRET: "modal-secret",
-        MODAL_WORKSPACE: "test-workspace",
-        TEAMS_ENFORCEMENT: teamsEnforcement,
-        LOG_LEVEL: "error",
-      } as Env
+      env
     );
     const generateCredentialHelperAuth = vi.fn(async () => ({
       username: "x-access-token",
@@ -73,7 +81,7 @@ describe("session credential scope composition", () => {
       generateCredentialHelperAuth,
     } as unknown as SourceControlProvider;
     return {
-      db,
+      env,
       generateCredentialHelperAuth,
       getCredentials: () =>
         runtime.server.onRequest(
@@ -83,54 +91,151 @@ describe("session credential scope composition", () => {
   }
 
   it.each(["off", "shadow", "on"])(
-    "scopes credentials from D1 public-session ownership with TEAMS_ENFORCEMENT=%s",
+    "scopes credentials to D1 session members and team grants with TEAMS_ENFORCEMENT=%s",
     async (mode) => {
       const getSession = vi
         .spyOn(SessionIndexStore.prototype, "get")
         .mockResolvedValue(indexSession("team-a"));
       const scope: CredentialScope = { kind: "repositories", repositoryIds: [123, 456] };
-      vi.mocked(resolveTeamTokenScope).mockResolvedValue(scope);
       const h = createHarness(mode);
 
       expect((await h.getCredentials()).status).toBe(200);
 
       expect(getSession).toHaveBeenCalledWith("public-session");
-      expect(resolveTeamTokenScope).toHaveBeenCalledWith(h.db, "team-a");
+      expect(SessionScopeStore.prototype.listRepositoryIds).toHaveBeenCalledWith("public-session");
+      expect(TeamRepositoryGrantStore.prototype.covers).toHaveBeenCalledExactlyOnceWith(
+        "team-a",
+        [123, 456]
+      );
       expect(h.generateCredentialHelperAuth).toHaveBeenCalledWith(scope);
+      expect(readCachedInstallationRepositories).not.toHaveBeenCalled();
     }
   );
 
-  it("re-reads D1 ownership for every credential request", async () => {
+  it("re-reads D1 ownership and membership for every credential request", async () => {
     const getSession = vi
       .spyOn(SessionIndexStore.prototype, "get")
       .mockResolvedValueOnce(indexSession("team-a"))
       .mockResolvedValueOnce(indexSession("team-b"));
     const firstScope: CredentialScope = { kind: "repositories", repositoryIds: [123, 456] };
     const nextScope: CredentialScope = { kind: "repositories", repositoryIds: [789] };
-    vi.mocked(resolveTeamTokenScope)
-      .mockResolvedValueOnce(firstScope)
-      .mockResolvedValueOnce(nextScope);
+    vi.mocked(SessionScopeStore.prototype.listRepositoryIds)
+      .mockResolvedValueOnce([
+        { repoOwner: "acme", repoName: "web", repoId: 123 },
+        { repoOwner: "acme", repoName: "api", repoId: 456 },
+      ])
+      .mockResolvedValueOnce([{ repoOwner: "acme", repoName: "cli", repoId: 789 }]);
     const h = createHarness();
 
     expect((await h.getCredentials()).status).toBe(200);
     expect((await h.getCredentials()).status).toBe(200);
 
     expect(getSession).toHaveBeenCalledTimes(2);
-    expect(resolveTeamTokenScope).toHaveBeenNthCalledWith(1, h.db, "team-a");
-    expect(resolveTeamTokenScope).toHaveBeenNthCalledWith(2, h.db, "team-b");
+    expect(SessionScopeStore.prototype.listRepositoryIds).toHaveBeenCalledTimes(2);
+    expect(TeamRepositoryGrantStore.prototype.covers).toHaveBeenNthCalledWith(
+      1,
+      "team-a",
+      [123, 456]
+    );
+    expect(TeamRepositoryGrantStore.prototype.covers).toHaveBeenNthCalledWith(2, "team-b", [789]);
     expect(h.generateCredentialHelperAuth).toHaveBeenNthCalledWith(1, firstScope);
     expect(h.generateCredentialHelperAuth).toHaveBeenNthCalledWith(2, nextScope);
   });
 
-  it("passes null ownership to the team resolver only for an existing workspace session", async () => {
+  it("limits an existing workspace session to its own repositories", async () => {
     vi.spyOn(SessionIndexStore.prototype, "get").mockResolvedValue(indexSession(null));
-    vi.mocked(resolveTeamTokenScope).mockResolvedValue({ kind: "all" });
     const h = createHarness();
 
     expect((await h.getCredentials()).status).toBe(200);
 
-    expect(resolveTeamTokenScope).toHaveBeenCalledWith(h.db, null);
-    expect(h.generateCredentialHelperAuth).toHaveBeenCalledWith({ kind: "all" });
+    expect(TeamRepositoryGrantStore.prototype.covers).not.toHaveBeenCalled();
+    expect(h.generateCredentialHelperAuth).toHaveBeenCalledWith({
+      kind: "repositories",
+      repositoryIds: [123, 456],
+    });
+    expect(readCachedInstallationRepositories).not.toHaveBeenCalled();
+  });
+
+  it("lazily reads the cached installation catalog for a NULL member id", async () => {
+    vi.spyOn(SessionIndexStore.prototype, "get").mockResolvedValue(indexSession(null));
+    vi.mocked(SessionScopeStore.prototype.listRepositoryIds).mockResolvedValue([
+      { repoOwner: "acme", repoName: "web", repoId: null },
+      { repoOwner: "acme", repoName: "api", repoId: 456 },
+    ]);
+    vi.mocked(readCachedInstallationRepositories).mockResolvedValue([
+      {
+        id: 123,
+        owner: "ACME",
+        name: "Web",
+        fullName: "ACME/Web",
+        description: null,
+        private: true,
+        defaultBranch: "main",
+        archived: false,
+      },
+      {
+        id: 999,
+        owner: "acme",
+        name: "not-in-session",
+        fullName: "acme/not-in-session",
+        description: null,
+        private: true,
+        defaultBranch: "main",
+        archived: false,
+      },
+    ]);
+    const h = createHarness();
+    expect(readCachedInstallationRepositories).not.toHaveBeenCalled();
+
+    expect((await h.getCredentials()).status).toBe(200);
+
+    expect(readCachedInstallationRepositories).toHaveBeenCalledExactlyOnceWith(h.env);
+    expect(h.generateCredentialHelperAuth).toHaveBeenCalledWith({
+      kind: "repositories",
+      repositoryIds: [123, 456],
+    });
+  });
+
+  it("drops revoked member grants instead of including the team's other repositories", async () => {
+    vi.spyOn(SessionIndexStore.prototype, "get").mockResolvedValue(indexSession("team-a"));
+    vi.mocked(TeamRepositoryGrantStore.prototype.covers)
+      .mockResolvedValueOnce(false)
+      .mockResolvedValueOnce(true)
+      .mockResolvedValueOnce(false);
+    const h = createHarness();
+
+    expect((await h.getCredentials()).status).toBe(200);
+
+    expect(h.generateCredentialHelperAuth).toHaveBeenCalledWith({
+      kind: "repositories",
+      repositoryIds: [123],
+    });
+  });
+
+  it.each([
+    { label: "no repositories", repositories: [] },
+    {
+      label: "an unresolved NULL id",
+      repositories: [{ repoOwner: "acme", repoName: "web", repoId: null }],
+    },
+  ])("refuses credential minting with $label", async ({ repositories }) => {
+    vi.spyOn(SessionIndexStore.prototype, "get").mockResolvedValue(indexSession(null));
+    vi.mocked(SessionScopeStore.prototype.listRepositoryIds).mockResolvedValue(repositories);
+    const h = createHarness();
+
+    expect((await h.getCredentials()).status).toBe(500);
+
+    expect(h.generateCredentialHelperAuth).not.toHaveBeenCalled();
+  });
+
+  it("refuses credential minting when every member grant has been revoked", async () => {
+    vi.spyOn(SessionIndexStore.prototype, "get").mockResolvedValue(indexSession("team-a"));
+    vi.mocked(TeamRepositoryGrantStore.prototype.covers).mockResolvedValue(false);
+    const h = createHarness();
+
+    expect((await h.getCredentials()).status).toBe(500);
+
+    expect(h.generateCredentialHelperAuth).not.toHaveBeenCalled();
   });
 
   it("fails closed when the D1 session is missing despite an existing local session", async () => {
@@ -143,7 +248,9 @@ describe("session credential scope composition", () => {
     expect(await response.json()).toEqual({
       error: "Cannot resolve credential scope: session not found",
     });
-    expect(resolveTeamTokenScope).not.toHaveBeenCalled();
+    expect(SessionScopeStore.prototype.listRepositoryIds).not.toHaveBeenCalled();
+    expect(TeamRepositoryGrantStore.prototype.covers).not.toHaveBeenCalled();
+    expect(readCachedInstallationRepositories).not.toHaveBeenCalled();
     expect(h.generateCredentialHelperAuth).not.toHaveBeenCalled();
   });
 });

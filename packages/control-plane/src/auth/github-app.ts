@@ -13,7 +13,10 @@ import type { InstallationRepository } from "@open-inspect/shared/types/reposito
 import { DEFAULT_APP_NAME } from "@open-inspect/shared/app-name";
 import type { CacheStore } from "@open-inspect/shared/cache-store";
 import { z } from "zod";
-import type { CredentialScope } from "../source-control/credential-scope";
+import {
+  repositoryCredentialScope,
+  type CredentialScope,
+} from "../source-control/credential-scope";
 
 import { base64UrlEncode } from "./encoding";
 
@@ -39,16 +42,6 @@ export type TokenScope = CredentialScope;
 interface InstallationTokenOptions {
   scope: TokenScope;
   forceRefresh?: boolean;
-}
-
-function canonicalRepositoryIds(repositoryIds: number[]): number[] {
-  if (repositoryIds.length === 0) {
-    throw new Error("Cannot mint installation token: no repository grants");
-  }
-  if (!z.array(z.number().int().positive()).safeParse(repositoryIds).success) {
-    throw new Error("Cannot mint installation token: invalid repository ids");
-  }
-  return [...new Set(repositoryIds)].sort((a, b) => a - b);
 }
 
 interface InstallationTokenCacheBindings {
@@ -322,7 +315,7 @@ export async function getInstallationTokenCacheKey(
 ): Promise<string> {
   let scopeHash = "all";
   if (scope.kind === "repositories") {
-    const ids = canonicalRepositoryIds(scope.repositoryIds);
+    const ids = repositoryCredentialScope(scope.repositoryIds).repositoryIds;
     const digest = await crypto.subtle.digest(
       "SHA-256",
       new TextEncoder().encode(JSON.stringify(ids))
@@ -454,10 +447,7 @@ async function getOrRefreshCachedInstallationToken(
   const scope: TokenScope =
     options.scope.kind === "all"
       ? options.scope
-      : {
-          kind: "repositories",
-          repositoryIds: canonicalRepositoryIds(options.scope.repositoryIds),
-        };
+      : repositoryCredentialScope(options.scope.repositoryIds);
   const cacheKey = await getInstallationTokenCacheKey(config, scope);
   const forceRefresh = options.forceRefresh ?? false;
 

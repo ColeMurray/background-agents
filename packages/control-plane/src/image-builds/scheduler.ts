@@ -1,5 +1,6 @@
 import { ImageBuildStore } from "../db/image-builds";
 import { createLogger, type CorrelationContext } from "../logger";
+import { readCachedInstallationRepositories } from "../repos/cache";
 import { createSourceControlProviderFromEnv, type SourceControlProvider } from "../source-control";
 import { errorMessage } from "./errors";
 import { imageBuildFinalizationJob } from "./finalization-job";
@@ -255,7 +256,9 @@ export class ImageBuildScheduler {
 
         let rebuild = decision.type === "rebuild";
         if (decision.type === "check_branches") {
-          const tokenScope = await resolveImageBuildTokenScope(this.db, scope, target);
+          const tokenScope = await resolveImageBuildTokenScope(this.db, scope, target, () =>
+            readCachedInstallationRepositories(this.env)
+          );
           const heads: Array<string | null> = [];
           for (const repository of target.repositories) {
             stats.branchLookups += 1;

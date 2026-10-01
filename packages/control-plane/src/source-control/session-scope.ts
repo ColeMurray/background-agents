@@ -1,13 +1,16 @@
+import type { InstallationRepository } from "@open-inspect/shared/types/repository-catalog";
 import { SessionIndexStore } from "../db/session-index";
+import { SessionScopeStore } from "../db/session-scope-store";
 import type { SqlDatabase } from "../db/sql-database";
 import type { CredentialScope } from "./credential-scope";
 import { SourceControlProviderError } from "./errors";
-import { resolveTeamTokenScope } from "./team-scope";
+import { resolveRepositoryCredentialScope } from "./repository-scope";
 
-/** Resolve scope from fresh D1 session ownership before reading current team grants. */
+/** Resolve fresh ownership and persisted session members, never environment provenance. */
 export async function resolveSessionCredentialScope(
   db: SqlDatabase,
-  sessionId: string
+  sessionId: string,
+  loadInstallationRepositories: () => Promise<InstallationRepository[]>
 ): Promise<CredentialScope> {
   const session = await new SessionIndexStore(db).get(sessionId);
   if (!session) {
@@ -16,5 +19,11 @@ export async function resolveSessionCredentialScope(
       "permanent"
     );
   }
-  return resolveTeamTokenScope(db, session.ownerTeamId);
+  const repositories = await new SessionScopeStore(db).listRepositoryIds(sessionId);
+  return await resolveRepositoryCredentialScope(
+    db,
+    repositories,
+    session.ownerTeamId,
+    loadInstallationRepositories
+  );
 }

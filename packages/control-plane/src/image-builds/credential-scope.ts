@@ -1,19 +1,22 @@
-import { z } from "zod";
+import type { InstallationRepository } from "@open-inspect/shared/types/repository-catalog";
 import { EnvironmentStore } from "../db/environments";
 import type { SqlDatabase } from "../db/sql-database";
-import { TeamRepositoryGrantStore } from "../db/team-repository-grants";
-import { TeamStore } from "../db/teams";
-import type { CredentialScope } from "../source-control/credential-scope";
-import { resolveTeamTokenScope } from "../source-control/team-scope";
+import {
+  repositoryCredentialScope,
+  type CredentialScope,
+} from "../source-control/credential-scope";
+import { resolveRepositoryCredentialScope } from "../source-control/repository-scope";
 import { ImageBuildPlanningError, ImageBuildScopeNotFoundError } from "./errors";
 import type { ImageBuildScope } from "./model";
+import { repositoryIdentityKey } from "./provenance";
 import type { ResolvedImageBuildTarget } from "./scope";
 
-/** Token access follows environment ownership or the union of teams granted a repo. */
+/** Credentials cover only planned repositories, intersected with the environment owner's grants. */
 export async function resolveImageBuildTokenScope(
   db: SqlDatabase,
   scope: ImageBuildScope,
-  target: ResolvedImageBuildTarget
+  target: ResolvedImageBuildTarget,
+  loadCatalog: () => Promise<InstallationRepository[]>
 ): Promise<CredentialScope> {
   if (scope.kind !== target.kind) {
     throw new ImageBuildPlanningError("Image build scope and target kinds do not match");
@@ -21,33 +24,36 @@ export async function resolveImageBuildTokenScope(
 
   switch (target.kind) {
     case "environment": {
-      const environment = await new EnvironmentStore(db).getById(scope.id);
+      const store = new EnvironmentStore(db);
+      const environment = await store.getById(scope.id);
       if (!environment) throw new ImageBuildScopeNotFoundError(scope.kind, scope.id);
-      return resolveTeamTokenScope(db, environment.owner_team_id);
+      const rows = await store.getRepositoriesForEnvironment(scope.id);
+      const repositories = rows.map((row) => ({
+        repoOwner: row.repo_owner,
+        repoName: row.repo_name,
+        repoId: row.repo_id,
+      }));
+      const currentIdentities = repositories.map(repositoryIdentityKey).sort();
+      const plannedIdentities = target.repositories.map(repositoryIdentityKey).sort();
+      // An edit after target resolution must not put unplanned repositories in the token.
+      if (
+        currentIdentities.length !== plannedIdentities.length ||
+        currentIdentities.some((identity, index) => identity !== plannedIdentities[index])
+      ) {
+        throw new ImageBuildPlanningError(`Environment repositories changed: ${scope.id}`);
+      }
+      return await resolveRepositoryCredentialScope(
+        db,
+        repositories,
+        environment.owner_team_id,
+        loadCatalog
+      );
     }
     case "repo": {
-      const teams = await new TeamStore(db).list({ includeArchived: true });
-      const store = new TeamRepositoryGrantStore(db);
-      const grantsByTeam = await Promise.all(teams.map((team) => store.listForTeam(team.id)));
-      if (
-        grantsByTeam.some((grants) => grants.some((grant) => grant.grant_kind === "installation"))
-      ) {
-        return { kind: "all" };
+      if (target.repositories.length !== 1) {
+        throw new ImageBuildPlanningError("Repository image build must contain one repository");
       }
-
-      const repositoryIds = grantsByTeam
-        .filter((grants) =>
-          grants.some(
-            (grant) => grant.grant_kind === "repository" && grant.repo_external_id === target.repoId
-          )
-        )
-        .flatMap((grants) =>
-          grants.map((grant) => z.number().int().positive().parse(grant.repo_external_id))
-        );
-      return {
-        kind: "repositories",
-        repositoryIds: [...new Set(repositoryIds)].sort((a, b) => a - b),
-      };
+      return repositoryCredentialScope([target.repoId]);
     }
   }
 }

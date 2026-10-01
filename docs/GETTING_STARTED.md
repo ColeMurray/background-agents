@@ -6,8 +6,34 @@ This guide walks you through deploying your own instance of Open-Inspect using T
 > [SETUP_GUIDE.md](./SETUP_GUIDE.md).
 
 > **Important**: This system is designed for **single-tenant deployment only**. All users share the
-> same GitHub App credentials and can access any repository the App is installed on. See the
+> deployment's GitHub App installation and workspace catalog. GitHub sandbox credentials reach only
+> the session's repositories, further restricted by current grants for team-owned sessions. See the
 > [Security Model](../README.md#security-model-single-tenant-only) for details.
+
+### Sandbox Repository Access
+
+GitHub credentials issued to a sandbox cover its primary repository and session members, including
+the repository snapshot copied from an environment at creation. Workspace-owned sessions are scoped
+the same way. For team-owned sessions, repositories no longer covered by the team's current grants
+are removed from the next credential scope. An installation grant retains all session members but
+does not grant the sandbox access to other repositories in the installation.
+
+Private submodules, repository-backed private dependencies, and setup scripts that clone sibling
+repositories now fail unless those repositories are included in the session's environment. Team
+sessions also need grants for those members. Add the dependencies to the environment before creating
+the session; editing an environment does not expand an existing session's repository snapshot.
+
+Sessions with no repositories, no remaining granted members, or unresolved repository IDs receive no
+token. Scopes with more than 500 unique IDs are refused. Repository image builds use that repository
+alone, while environment image builds use their member repositories and the environment owner's
+current grants. Metadata and catalog calls retain installation-wide credentials. GitLab deployments
+still use one deployment-wide PAT and cannot provide this credential boundary.
+
+Removing a grant does not revoke a credential already issued to a sandbox. Installation tokens
+remain valid until expiry, and credential helpers refresh shortly before expiry. Legacy session or
+environment rows without numeric repository IDs require an identity-matching cached repository
+catalog; loading the repository list populates that cache. Credentials fail closed if an ID cannot
+be resolved from it.
 
 ---
 

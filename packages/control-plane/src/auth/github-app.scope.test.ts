@@ -5,6 +5,7 @@ import {
   getInstallationTokenCacheKey,
   type GitHubAppConfig,
 } from "./github-app";
+import { SourceControlProviderError } from "../source-control/errors";
 
 const config: GitHubAppConfig = {
   appId: "scope-test-app",
@@ -73,16 +74,39 @@ describe("installation token scope keys", () => {
 });
 
 describe("empty and invalid installation token scopes", () => {
+  it("refuses 501 unique repository ids before reading cache or minting", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch");
+    const cacheStore = { get: vi.fn(), put: vi.fn(), delete: vi.fn() };
+    const scope = {
+      kind: "repositories" as const,
+      repositoryIds: Array.from({ length: 501 }, (_, i) => i + 1),
+    };
+    await expect(
+      getCachedInstallationToken(config, { cacheStore }, { scope })
+    ).rejects.toBeInstanceOf(SourceControlProviderError);
+    expect(cacheStore.get).not.toHaveBeenCalled();
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("refuses an unmintable scope when deriving its cache key", async () => {
+    await expect(
+      getInstallationTokenCacheKey(config, {
+        kind: "repositories",
+        repositoryIds: Array.from({ length: 501 }, (_, i) => i + 1),
+      })
+    ).rejects.toThrow("500");
+  });
+
   it("refuses an empty scope before reading cache or making a request", async () => {
     const fetchMock = vi.spyOn(globalThis, "fetch");
     const cacheStore = { get: vi.fn(), put: vi.fn(), delete: vi.fn() };
     const scope = { kind: "repositories" as const, repositoryIds: [] };
     await expect(getCachedInstallationToken(config, { cacheStore }, { scope })).rejects.toThrow(
-      "no repository grants"
+      "no repositories"
     );
     await expect(
       getCachedInstallationTokenWithExpiry(config, { cacheStore }, { scope })
-    ).rejects.toThrow("no repository grants");
+    ).rejects.toThrow("no repositories");
     expect(cacheStore.get).not.toHaveBeenCalled();
     expect(fetchMock).not.toHaveBeenCalled();
   });
