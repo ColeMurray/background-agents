@@ -39,6 +39,7 @@ export interface Env {
    */
   ANTHROPIC_API_KEY?: string;
   CLASSIFICATION_MODEL?: string; // Optional override; defaults to DEFAULT_CLASSIFICATION_MODEL
+  CLASSIFICATION_REASONING_EFFORT?: string; // OpenAI classifiers only; unset keeps the model default
   OPENAI_API_KEY?: string;
   SERVICE_AUTH_SECRET?: string; // Per-service sig1 signing secret; also verifies CP callbacks
   LOG_LEVEL?: string;

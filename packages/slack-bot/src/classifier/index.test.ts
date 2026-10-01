@@ -804,6 +804,7 @@ describe("RepoClassifier", () => {
       // gpt-5-family models accept only the default temperature and reject an
       // explicit value with HTTP 400 `unsupported_value`.
       expect(body).not.toHaveProperty("temperature");
+      expect(body).not.toHaveProperty("reasoning_effort");
       expect(body.max_completion_tokens).toBe(OPENAI_CLASSIFICATION_MAX_COMPLETION_TOKENS);
       // gpt-5.x rejects `max_tokens` outright ("Unsupported parameter").
       expect(body).not.toHaveProperty("max_tokens");
@@ -819,6 +820,24 @@ describe("RepoClassifier", () => {
         "alternatives",
       ]);
       expect(jsonSchema.schema.properties.targetId.type).toEqual(["string", "null"]);
+    });
+
+    it("sends CLASSIFICATION_REASONING_EFFORT as reasoning_effort", async () => {
+      const fetchMock = vi.fn().mockResolvedValue(
+        openAiFetchResponse({
+          targetId: "acme/prod",
+          confidence: "high",
+          reasoning: "Mentions prod.",
+          alternatives: [],
+        })
+      );
+      vi.stubGlobal("fetch", fetchMock);
+
+      const classifier = new RepoClassifier(openAiEnv({ CLASSIFICATION_REASONING_EFFORT: "low" }));
+      await classifier.classify("please fix prod slack alerts");
+
+      const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+      expect(JSON.parse(init.body as string).reasoning_effort).toBe("low");
     });
 
     it("degrades to the picker on a non-2xx OpenAI response", async () => {

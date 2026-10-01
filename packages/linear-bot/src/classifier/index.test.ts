@@ -298,6 +298,7 @@ describe("classifyRepo provider dispatch", () => {
     expect(body.model).toBe("gpt-5.4-mini");
     // gpt-5-family models reject an explicit temperature with HTTP 400.
     expect(body).not.toHaveProperty("temperature");
+    expect(body).not.toHaveProperty("reasoning_effort");
     expect(body.max_completion_tokens).toBe(OPENAI_CLASSIFICATION_MAX_COMPLETION_TOKENS);
     expect(body).not.toHaveProperty("max_tokens");
     expect(body.response_format.type).toBe("json_schema");
@@ -306,6 +307,40 @@ describe("classifyRepo provider dispatch", () => {
     expect(schema.additionalProperties).toBe(false);
     expect(schema.required).toEqual(["repoId", "confidence", "reasoning", "alternatives"]);
     expect(schema.properties.repoId.type).toEqual(["string", "null"]);
+  });
+
+  it("sends CLASSIFICATION_REASONING_EFFORT as reasoning_effort", async () => {
+    const { kv } = createFakeKV();
+    const env = makeLinearBotEnv(kv, {
+      CONTROL_PLANE: twoRepoControlPlane(),
+      CLASSIFICATION_MODEL: "openai/gpt-6.1-sol",
+      CLASSIFICATION_REASONING_EFFORT: "low",
+      OPENAI_API_KEY: "openai-key",
+    });
+
+    const fetchMock = vi.fn<typeof fetch>(async () =>
+      Response.json({
+        choices: [
+          {
+            message: {
+              content: JSON.stringify({
+                repoId: "acme/alpha",
+                confidence: "high",
+                reasoning: "Matches",
+                alternatives: [],
+              }),
+            },
+          },
+        ],
+      })
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await classify(env);
+
+    const body = JSON.parse(fetchMock.mock.calls[0][1]!.body as string);
+    expect(body.model).toBe("gpt-6.1-sol");
+    expect(body.reasoning_effort).toBe("low");
   });
 
   it("degrades to a clarification result with alternatives on a non-2xx OpenAI response", async () => {

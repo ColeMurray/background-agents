@@ -15,6 +15,12 @@ Completion results post only while the issue remains in its launching Linear tea
 when the session can no longer be read for that team, Linear receives a notice without session
 content.
 
+The Slack and Linear classifiers can request a reasoning effort from an OpenAI classification model.
+Set `classification_reasoning_effort` (or the `CLASSIFICATION_REASONING_EFFORT` Actions variable) to
+a value such as `low`, and the classifiers send it as `reasoning_effort`. When it is blank, the
+classifiers send nothing and OpenAI uses the model's default, as before. An Anthropic classification
+model rejects the setting at plan time.
+
 ### Changed
 
 **Team-aware GitHub routing.** GitHub routing uses numeric repository IDs so renames do not change

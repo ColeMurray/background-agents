@@ -193,12 +193,19 @@ async function callAnthropic(
 async function callOpenAI(
   apiKey: string,
   prompt: string,
-  model: string
+  model: string,
+  reasoningEffort?: string
 ): Promise<ClassifyToolInput> {
-  const parsed = await callOpenAIStructured(apiKey, model, prompt, {
-    name: CLASSIFY_REPO_TOOL_NAME,
-    schema: classifyRepoStrictJsonSchema,
-  });
+  const parsed = await callOpenAIStructured(
+    apiKey,
+    model,
+    prompt,
+    {
+      name: CLASSIFY_REPO_TOOL_NAME,
+      schema: classifyRepoStrictJsonSchema,
+    },
+    reasoningEffort
+  );
 
   const input = classifyToolInputSchema.safeParse(parsed);
   if (!input.success) throw new Error("Malformed OpenAI tool input");
@@ -265,7 +272,8 @@ export async function classifyRepo(
         : await callOpenAI(
             requireClassificationProviderKey(env.OPENAI_API_KEY, "OPENAI_API_KEY", modelId),
             prompt,
-            model
+            model,
+            env.CLASSIFICATION_REASONING_EFFORT
           );
 
     let matchedRepo: RepoConfig | null = null;
