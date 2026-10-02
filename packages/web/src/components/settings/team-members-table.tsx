@@ -7,6 +7,13 @@ import { useTeamCapabilities } from "@/hooks/use-team-capabilities";
 import { useCurrentUserAuthorization } from "@/hooks/use-current-user-authorization";
 import { Button } from "@/components/ui/button";
 import { ErrorBanner } from "@/components/ui/error-banner";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { UserIdentity, UserIdentityPicker, userDisplayName } from "@/components/user-identity";
 
 export function TeamMembersTable({ team, members }: { team: TeamResponse; members: TeamMember[] }) {
@@ -50,20 +57,21 @@ export function TeamMembersTable({ team, members }: { team: TeamResponse; member
               className="grid gap-3 p-4 sm:grid-cols-[1fr_8rem_auto] sm:items-center"
             >
               <UserIdentity {...member} />
-              <select
-                aria-label={`Role for ${name}`}
+              <Select
                 value={member.role}
                 disabled={!capabilities.canManageMembers || pending}
-                onChange={(event) =>
-                  void run(() =>
-                    setMember(member.userId, event.target.value === "lead" ? "lead" : "member")
-                  )
+                onValueChange={(value) =>
+                  void run(() => setMember(member.userId, value === "lead" ? "lead" : "member"))
                 }
-                className="rounded border border-border bg-background px-2 py-1.5 text-sm disabled:opacity-50"
               >
-                <option value="member">Member</option>
-                <option value="lead">Lead</option>
-              </select>
+                <SelectTrigger aria-label={`Role for ${name}`} density="compact">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="member">Member</SelectItem>
+                  <SelectItem value="lead">Lead</SelectItem>
+                </SelectContent>
+              </Select>
               <Button
                 variant="outline"
                 disabled={!capabilities.canManageMembers || pending}

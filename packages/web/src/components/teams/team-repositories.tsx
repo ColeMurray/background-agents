@@ -17,6 +17,13 @@ import { browserApiFetch, type BrowserApiPath } from "@/lib/browser-api-fetch";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { ErrorBanner } from "@/components/ui/error-banner";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 
 export function TeamRepositories({ team }: { team: TeamResponse }) {
   const { data: session, status } = useAuthSession();
@@ -194,44 +201,49 @@ export function TeamRepositories({ team }: { team: TeamResponse }) {
             <label htmlFor="team-grant-kind" className="text-sm font-medium">
               Grant scope
             </label>
-            <select
-              id="team-grant-kind"
+            <Select
               value={kind}
               disabled={disabled || grants.length > 0}
-              onChange={(event) =>
-                setDraftKind(event.target.value === "installation" ? "installation" : "repository")
+              onValueChange={(value) =>
+                setDraftKind(value === "installation" ? "installation" : "repository")
               }
-              className="max-w-full rounded border border-border bg-background px-2 py-2 text-sm disabled:opacity-50"
             >
-              <option value="repository" disabled={installationWide}>
-                Named repositories
-              </option>
-              <option
-                value="installation"
-                disabled={grants.some((grant) => grant.kind === "repository")}
-              >
-                All installation repositories
-              </option>
-            </select>
+              <SelectTrigger id="team-grant-kind" className="w-auto max-w-full">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="repository" disabled={installationWide}>
+                  Named repositories
+                </SelectItem>
+                <SelectItem
+                  value="installation"
+                  disabled={grants.some((grant) => grant.kind === "repository")}
+                >
+                  All installation repositories
+                </SelectItem>
+              </SelectContent>
+            </Select>
             {kind === "repository" && (
               <>
                 <label htmlFor="team-grant-repository" className="text-sm font-medium">
                   Repository
                 </label>
-                <select
-                  id="team-grant-repository"
+                <Select
                   value={selectedRepo ? repoId : ""}
                   disabled={disabled || catalog.loading || !!catalog.error}
-                  onChange={(event) => setRepoId(event.target.value)}
-                  className="min-w-0 max-w-full flex-1 rounded border border-border bg-background px-2 py-2 text-sm disabled:opacity-50"
+                  onValueChange={setRepoId}
                 >
-                  <option value="">Select an installation repository</option>
-                  {available.map((repo) => (
-                    <option key={repo.id} value={repo.id}>
-                      {repo.fullName}
-                    </option>
-                  ))}
-                </select>
+                  <SelectTrigger id="team-grant-repository" className="min-w-0 flex-1">
+                    <SelectValue placeholder="Select an installation repository" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {available.map((repo) => (
+                      <SelectItem key={repo.id} value={String(repo.id)}>
+                        {repo.fullName}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
               </>
             )}
             <Button

@@ -1,17 +1,30 @@
 // @vitest-environment jsdom
 /// <reference types="@testing-library/jest-dom" />
 
-import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import * as matchers from "@testing-library/jest-dom/matchers";
+import userEvent from "@testing-library/user-event";
 import type { ReactNode } from "react";
 import { SWRConfig } from "swr";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { TeamRepositoryGrant } from "@open-inspect/shared/types/teams";
 import type { TeamResponse } from "@/hooks/use-teams";
 import { browserApiFetch } from "@/lib/browser-api-fetch";
 import { TeamRepositories } from "./team-repositories";
 
 expect.extend(matchers);
+
+beforeAll(() => {
+  Element.prototype.hasPointerCapture = () => false;
+  Element.prototype.releasePointerCapture = () => {};
+  Element.prototype.scrollIntoView = () => {};
+});
+
+async function chooseOption(combobox: string, option: string) {
+  const user = userEvent.setup();
+  await user.click(screen.getByRole("combobox", { name: combobox }));
+  await user.click(await screen.findByRole("option", { name: option }));
+}
 const mocks = vi.hoisted(() => ({
   repos: vi.fn(),
   authStatus: "authenticated" as "authenticated" | "loading" | "unauthenticated",
@@ -140,9 +153,7 @@ describe("Team repository grants", () => {
     render(<TeamRepositories team={team} />, { wrapper });
     await screen.findByText("This team has no repository grants.");
     expect(mocks.repos).toHaveBeenCalledWith(true);
-    fireEvent.change(screen.getByRole("combobox", { name: "Repository" }), {
-      target: { value: "42" },
-    });
+    await chooseOption("Repository", "group/subgroup/api");
     fireEvent.click(screen.getByRole("button", { name: "Add grant" }));
     await waitFor(() =>
       expect(browserApiFetch).toHaveBeenCalledWith(
@@ -159,18 +170,17 @@ describe("Team repository grants", () => {
       )
     );
     expect(await screen.findByText("Named repository grant")).toBeInTheDocument();
-    const options = within(screen.getByRole("combobox", { name: "Repository" }));
-    expect(options.queryByRole("option", { name: "group/subgroup/api" })).not.toBeInTheDocument();
-    expect(options.getByRole("option", { name: "acme/web" })).toBeInTheDocument();
-    expect(screen.getByRole("option", { name: "All installation repositories" })).toBeDisabled();
+    // Existing grants lock the scope until removed.
+    expect(screen.getByRole("combobox", { name: "Grant scope" })).toBeDisabled();
+    await userEvent.setup().click(screen.getByRole("combobox", { name: "Repository" }));
+    expect(await screen.findByRole("option", { name: "acme/web" })).toBeInTheDocument();
+    expect(screen.queryByRole("option", { name: "group/subgroup/api" })).not.toBeInTheDocument();
   });
 
   it("adds installation-wide access and disables mixing named grants", async () => {
     render(<TeamRepositories team={team} />, { wrapper });
     await screen.findByText("This team has no repository grants.");
-    fireEvent.change(screen.getByRole("combobox", { name: "Grant scope" }), {
-      target: { value: "installation" },
-    });
+    await chooseOption("Grant scope", "All installation repositories");
     fireEvent.click(screen.getByRole("button", { name: "Add grant" }));
     await waitFor(() =>
       expect(browserApiFetch).toHaveBeenCalledWith(
@@ -179,7 +189,10 @@ describe("Team repository grants", () => {
       )
     );
     expect(await screen.findByText("Installation-wide grant")).toBeInTheDocument();
-    expect(screen.getByRole("option", { name: "Named repositories" })).toBeDisabled();
+    expect(screen.getByRole("combobox", { name: "Grant scope" })).toBeDisabled();
+    expect(screen.getByRole("combobox", { name: "Grant scope" })).toHaveTextContent(
+      "All installation repositories"
+    );
     expect(screen.queryByRole("combobox", { name: "Repository" })).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Add grant" })).toBeDisabled();
   });
@@ -196,10 +209,12 @@ describe("Team repository grants", () => {
       { method: "DELETE" }
     );
     await waitFor(() =>
-      expect(
-        screen.getByRole("option", { name: "All installation repositories" })
-      ).not.toBeDisabled()
+      expect(screen.getByRole("combobox", { name: "Grant scope" })).toBeEnabled()
     );
+    await userEvent.setup().click(screen.getByRole("combobox", { name: "Grant scope" }));
+    expect(
+      await screen.findByRole("option", { name: "All installation repositories" })
+    ).not.toHaveAttribute("aria-disabled");
   });
 
   it("treats an already-absent grant as removed and revalidates the list", async () => {
@@ -243,9 +258,7 @@ describe("Team repository grants", () => {
   it("does not treat an already-absent grant response as a successful addition", async () => {
     render(<TeamRepositories team={team} />, { wrapper });
     await screen.findByText("This team has no repository grants.");
-    fireEvent.change(screen.getByRole("combobox", { name: "Repository" }), {
-      target: { value: "42" },
-    });
+    await chooseOption("Repository", "group/subgroup/api");
     vi.mocked(browserApiFetch).mockResolvedValueOnce(
       Response.json({ error: "Repository grant not found" }, { status: 404 })
     );
