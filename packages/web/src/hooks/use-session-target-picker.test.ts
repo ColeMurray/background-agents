@@ -682,6 +682,57 @@ describe("useSessionTargetPicker", () => {
     expect(result.current.pickerProps.selectionError).toBeNull();
   });
 
+  it("does not launch an automatic environment target from stale catalog data after an error", () => {
+    const { result, rerender } = renderHook(() =>
+      useSessionTargetPicker({ teamId: "team-1", defaultEnvironmentId: "env-1" })
+    );
+    expect(result.current.buildRequestFields()).toEqual({ environmentId: "env-1" });
+    mocks.environments.mockReturnValue({
+      environments: [environment()],
+      loading: false,
+      error: new Error("Forbidden"),
+    });
+    rerender();
+    expect(result.current.isLaunchable).toBe(false);
+    expect(result.current.buildRequestFields()).toBeNull();
+    mocks.environments.mockReturnValue({ environments: [environment()], loading: false });
+    rerender();
+    expect(result.current.buildRequestFields()).toEqual({ environmentId: "env-1" });
+  });
+
+  it("falls back to the next team's loaded repositories when its environment catalog fails", () => {
+    const { result, rerender } = renderHook((options) => useSessionTargetPicker(options), {
+      initialProps: { teamId: "team-1", defaultEnvironmentId: "env-1" as string | null },
+    });
+    expect(result.current.buildRequestFields()).toEqual({ environmentId: "env-1" });
+    mocks.environments.mockReturnValue({
+      environments: [],
+      loading: false,
+      error: new Error("Unavailable"),
+    });
+    rerender({ teamId: "team-2", defaultEnvironmentId: null });
+    expect(result.current.buildRequestFields()).toEqual({
+      repoOwner: "acme",
+      repoName: "web",
+      branch: "main",
+    });
+  });
+
+  it("selects the next team's default environment when its repository catalog fails", () => {
+    mocks.environments.mockReturnValue({ environments: [], loading: false });
+    const { result, rerender } = renderHook((options) => useSessionTargetPicker(options), {
+      initialProps: { teamId: "team-1", defaultEnvironmentId: null as string | null },
+    });
+    expect(result.current.sessionTarget).toEqual({ kind: "repo", repoFullName: "acme/web" });
+    mocks.repos.mockReturnValue({ repos: [], loading: false, error: new Error("Unavailable") });
+    mocks.environments.mockReturnValue({
+      environments: [environment({ id: "env-2" })],
+      loading: false,
+    });
+    rerender({ teamId: "team-2", defaultEnvironmentId: "env-2" });
+    expect(result.current.buildRequestFields()).toEqual({ environmentId: "env-2" });
+  });
+
   it("preserves normalized multi-repository selections when the catalog uses mixed case", () => {
     mocks.repos.mockReturnValue({
       repos: [repo({ fullName: "Acme/Web", owner: "Acme", name: "Web" })],
