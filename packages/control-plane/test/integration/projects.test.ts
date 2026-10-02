@@ -720,3 +720,45 @@ it("rejects a project subscription that differs from explicit automation ownersh
   expect(await response.json()).toMatchObject({ code: "project_team_mismatch" });
   expect((await env.DB.prepare("SELECT id FROM automations").all()).results).toHaveLength(0);
 });
+
+it.each(["associated", "unassigned", "reassigned"])(
+  "withholds protected historical snapshot content when %s",
+  async (association) => {
+    const project = await create({ brief: "Protected creation brief" });
+    const response = await req("/sessions", "POST", {
+      projectId: project.id,
+      repoOwner: null,
+      repoName: null,
+    });
+    expect(response.status).toBe(201);
+    const { sessionId } = await response.json<{ sessionId: string }>();
+    expect(await (await req(`/sessions/${sessionId}/project-snapshot`)).json()).toMatchObject({
+      snapshot: { text: expect.stringContaining("Protected creation brief") },
+    });
+    if (association !== "associated") {
+      const next =
+        association === "reassigned" ? await create({ slug: "other", name: "Other" }) : null;
+      expect(
+        (await req(`/sessions/${sessionId}/project`, "PUT", { projectId: next?.id ?? null })).status
+      ).toBe(200);
+    }
+    await req("/me/authorization", "GET", undefined, B);
+    await env.DB.prepare(
+      "INSERT INTO roles (id,name,normalized_name,is_system) VALUES ('snapshot-reader','Snapshot reader','snapshot reader',0)"
+    ).run();
+    await env.DB.prepare(
+      "INSERT INTO role_permissions (role_id,permission_id) VALUES ('snapshot-reader','sessions.read')"
+    ).run();
+    await env.DB.prepare(
+      "UPDATE user_role_assignments SET role_id='snapshot-reader' WHERE user_id=?"
+    )
+      .bind(B)
+      .run();
+    const restricted = await req(`/sessions/${sessionId}/project-snapshot`, "GET", undefined, B);
+    expect(restricted.status).toBe(200);
+    expect(await restricted.json()).toMatchObject({ snapshot: null });
+    expect((await new SessionProjectStore(env.DB).snapshot(sessionId))?.text).toContain(
+      "Protected creation brief"
+    );
+  }
+);

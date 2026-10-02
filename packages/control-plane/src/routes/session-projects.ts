@@ -75,8 +75,10 @@ async function snapshot(_request: Request, _env: Env, params: { id: string }, ct
   const session = await new SessionIndexStore(ctx.db).get(params.id);
   const project = session?.projectId ? await new ProjectStore(ctx.db).get(session.projectId) : null;
   const viewer = await resourceViewer(ctx);
+  const pinned = await new SessionProjectStore(ctx.db).snapshot(params.id);
+  const sourceProject = pinned ? await new ProjectStore(ctx.db).get(pinned.projectId) : null;
   return json({
-    snapshot: await new SessionProjectStore(ctx.db).snapshot(params.id),
+    snapshot: sourceProject && canReadProject(viewer, sourceProject) ? pinned : null,
     project:
       project && canReadProject(viewer, project)
         ? { ...project, capabilities: projectCapabilities(viewer, project) }
