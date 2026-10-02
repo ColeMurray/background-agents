@@ -138,7 +138,7 @@ export default function Home() {
   const memoryPreferences = useMemoryPreferences(!!session);
   const [personalMemoryOverride, setPersonalMemoryOverride] = useState<boolean | null>(null);
   const includePersonalMemories =
-    personalMemoryOverride ?? memoryPreferences.data?.includePersonalMemories ?? false;
+    personalMemoryOverride ?? memoryPreferences.data?.includePersonalMemories;
   const [warmRequested, setWarmRequested] = useState(false);
   const [skillSelection, setSkillSelection] = useState<SessionSkillSelection>({ mode: "all" });
   const [providerSelections, setProviderSelections] = useState<ModelProviderSelections>({});
@@ -153,8 +153,8 @@ export default function Home() {
   const targetRequestFields = buildRequestFields();
   const currentSkillPreviewTarget = session ? skillPreviewTarget(targetRequestFields) : null;
   const memoryPreview = useMemoryPreview(
-    memoryPreferences.data ? currentSkillPreviewTarget : null,
-    includePersonalMemories
+    currentSkillPreviewTarget,
+    personalMemoryOverride ?? undefined
   );
   const {
     preview: skillPreview,
@@ -258,7 +258,6 @@ export default function Home() {
     teamCreationReady &&
     session &&
     providerSelectionsHydrated &&
-    memoryPreferences.data &&
     !providerAccounts.loading &&
     !loadingEnabledModels &&
     harnessHasModels &&
@@ -269,7 +268,7 @@ export default function Home() {
           model: selectedModel,
           reasoningEffort,
           skillSelection,
-          includePersonalMemories,
+          includePersonalMemories: personalMemoryOverride ?? undefined,
           providerSelections: availableProviderSelections,
           teamId,
           visibility,

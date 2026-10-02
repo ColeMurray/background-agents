@@ -33,19 +33,40 @@ function activeOpenAiAccount(id: string): (typeof mocks.providerAccountsValue)[n
 }
 
 describe("Home", () => {
-  it("waits for the personal default before warming and forwards an explicit opt-out", async () => {
-    mocks.memoryPreferencesLoading = true;
-    const view = render(<Home />);
+  it.each(["loading", "error"])(
+    "creates sessions while preferences are %s using the server default",
+    async (state) => {
+      mocks.memoryPreferencesLoading = state === "loading";
+      mocks.memoryPreferencesError = state === "error" ? new Error("Unavailable") : undefined;
+      render(<Home />);
+      expect(
+        screen.getByRole("checkbox", { name: "Include my personal memories" })
+      ).toHaveAttribute("aria-checked", "mixed");
+      fireEvent.change(screen.getByPlaceholderText("What do you want to build?"), {
+        target: { value: "Do some work" },
+      });
+      await waitFor(() => expect(fetch).toHaveBeenCalledWith("/api/sessions", expect.anything()));
+      expect(sessionCreateBody()).not.toHaveProperty("includePersonalMemories");
+      fireEvent.click(screen.getByRole("button", { name: /send/i }));
+      await waitFor(() => expect(mocks.routerPush).toHaveBeenCalledWith("/session/session-1"));
+    }
+  );
+
+  it("allows explicit opt-out after a preference error", async () => {
+    mocks.memoryPreferencesError = new Error("Unavailable");
+    render(<Home />);
+    const toggle = screen.getByRole("checkbox", { name: "Include my personal memories" });
+    fireEvent.click(toggle);
+    fireEvent.click(toggle);
+    expect(toggle).not.toBeChecked();
     fireEvent.change(screen.getByPlaceholderText("What do you want to build?"), {
       target: { value: "Do some work" },
     });
-    expect(vi.mocked(fetch).mock.calls.filter(([url]) => url === "/api/sessions")).toHaveLength(0);
-    mocks.memoryPreferencesLoading = false;
-    mocks.includePersonalMemories = false;
-    view.rerender(<Home />);
     await waitFor(() =>
       expect(sessionCreateBody()).toMatchObject({ includePersonalMemories: false })
     );
+    fireEvent.click(screen.getByRole("button", { name: /send/i }));
+    await waitFor(() => expect(mocks.routerPush).toHaveBeenCalledWith("/session/session-1"));
   });
 
   it("shows the first prompt's server denial reason in a toast without navigating", async () => {

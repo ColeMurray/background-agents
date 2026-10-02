@@ -10,7 +10,7 @@ export function MemoryPreview({
   error,
   onRetry,
 }: {
-  includePersonalMemories: boolean;
+  includePersonalMemories: boolean | undefined;
   onChange: (value: boolean) => void;
   preview?: SessionMemoryManifest;
   loading: boolean;
@@ -22,16 +22,21 @@ export function MemoryPreview({
       <label className="flex items-center gap-2">
         <input
           type="checkbox"
-          checked={includePersonalMemories}
-          disabled={loading}
+          checked={includePersonalMemories ?? false}
+          aria-checked={includePersonalMemories === undefined ? "mixed" : includePersonalMemories}
+          ref={(input) => {
+            if (input) input.indeterminate = includePersonalMemories === undefined;
+          }}
           onChange={(event) => onChange(event.target.checked)}
         />
         Include my personal memories
       </label>
       <p>
-        {includePersonalMemories
-          ? "Included memories may appear in responses and be visible to collaborators."
-          : "Personal memories will not be loaded or available to memory tools."}
+        {includePersonalMemories === undefined
+          ? "Using your saved personal-memory preference. Choose explicitly to override it for this session."
+          : includePersonalMemories
+            ? "Included memories may appear in responses and be visible to collaborators."
+            : "Personal memories will not be loaded or available to memory tools."}
       </p>
       {loading ? (
         <p>Loading memory preferences…</p>

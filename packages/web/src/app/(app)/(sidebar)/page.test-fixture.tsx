@@ -78,6 +78,7 @@ const mocks = vi.hoisted(() => {
     }>,
     providerAccountsLoadingValue: false,
     memoryPreferencesLoading: false,
+    memoryPreferencesError: undefined as Error | undefined,
     includePersonalMemories: true,
     skillPreview: {
       skills: [
@@ -250,10 +251,13 @@ vi.mock("@/hooks/use-provider-accounts", () => ({
 
 vi.mock("@/hooks/use-memories", () => ({
   useMemoryPreferences: () => ({
-    data: mocks.memoryPreferencesLoading
-      ? undefined
-      : { includePersonalMemories: mocks.includePersonalMemories },
+    data:
+      mocks.memoryPreferencesLoading || mocks.memoryPreferencesError
+        ? undefined
+        : { includePersonalMemories: mocks.includePersonalMemories },
     isLoading: mocks.memoryPreferencesLoading,
+    error: mocks.memoryPreferencesError,
+    mutate: vi.fn(),
   }),
   useMemoryPreview: () => ({ data: undefined }),
 }));
@@ -274,6 +278,7 @@ beforeAll(() => {
 
 beforeEach(() => {
   mocks.memoryPreferencesLoading = false;
+  mocks.memoryPreferencesError = undefined;
   mocks.includePersonalMemories = true;
   mocks.reposValue = [repo];
   mocks.loadingReposValue = false;

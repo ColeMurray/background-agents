@@ -78,7 +78,7 @@ export function useMemoryPreview(
     repositories?: readonly { repoOwner: string; repoName: string }[];
     environmentId?: string | null;
   } | null,
-  includePersonalMemories: boolean
+  includePersonalMemories?: boolean
 ) {
   const body = target
     ? JSON.stringify({
