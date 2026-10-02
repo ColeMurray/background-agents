@@ -8,7 +8,10 @@ const field = "w-full rounded border border-border bg-background p-2";
 export function ProjectAutomations({ project }: { project: ProjectView }) {
   const { automations, error, mutate, loading, loadingMore, hasMore, loadMore } = useAutomations(
     "",
-    project.ownerTeamId ?? undefined
+    project.ownerTeamId ?? "null"
+  );
+  const scopedAutomations = automations.filter(
+    (automation) => automation.ownerTeamId === project.ownerTeamId
   );
   const [failure, setFailure] = useState("");
   const write = useProjectMutations();
@@ -25,12 +28,12 @@ export function ProjectAutomations({ project }: { project: ProjectView }) {
       <h2 className="text-xl font-semibold">Subscribed automations</h2>
       {loading && <p role="status">Loading automations…</p>}
       {(error || failure) && <p role="alert">{failure || String(error)}</p>}
-      {automations
+      {scopedAutomations
         .filter((automation) => automation.projectId === project.id)
         .map((automation) => (
           <div className="flex gap-3" key={automation.id}>
             <Link href={`/automations/${automation.id}`}>{automation.name}</Link>
-            {project.capabilities.canSubscribeAutomations && (
+            {project.capabilities.canSubscribeAutomations && automation.capabilities.canManage && (
               <Button variant="ghost" onClick={() => assign(automation.id, null)}>
                 Unsubscribe
               </Button>
@@ -47,8 +50,11 @@ export function ProjectAutomations({ project }: { project: ProjectView }) {
           }}
         >
           <option value="">Subscribe an automation…</option>
-          {automations
-            .filter((automation) => automation.projectId !== project.id)
+          {scopedAutomations
+            .filter(
+              (automation) =>
+                automation.projectId !== project.id && automation.capabilities.canManage
+            )
             .map((automation) => (
               <option key={automation.id} value={automation.id}>
                 {automation.name}

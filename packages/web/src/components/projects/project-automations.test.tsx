@@ -6,24 +6,66 @@ import type { ProjectView } from "@/hooks/use-projects";
 import { ProjectAutomations } from "./project-automations";
 expect.extend(matchers);
 afterEach(cleanup);
-const mocks = vi.hoisted(() => ({ pages: 1, loadMore: vi.fn(), write: vi.fn(), mutate: vi.fn() }));
+const mocks = vi.hoisted(() => ({
+  pages: 1,
+  loadMore: vi.fn(),
+  write: vi.fn(),
+  mutate: vi.fn(),
+  scope: vi.fn(),
+}));
 vi.mock("@/hooks/use-projects", () => ({ useProjectMutations: () => mocks.write }));
 vi.mock("@/hooks/use-automations", () => ({
-  useAutomations: () => ({
-    automations:
-      mocks.pages === 1
-        ? []
-        : [
-            { id: "older-subscribed", name: "Older subscribed", projectId: "project" },
-            { id: "older-candidate", name: "Older candidate", projectId: null },
-          ],
-    error: undefined,
-    mutate: mocks.mutate,
-    loading: false,
-    loadingMore: false,
-    hasMore: mocks.pages === 1,
-    loadMore: mocks.loadMore,
-  }),
+  useAutomations: (...args: unknown[]) => {
+    mocks.scope(...args);
+    return {
+      automations:
+        mocks.pages === 1
+          ? []
+          : [
+              {
+                id: "older-subscribed",
+                name: "Older subscribed",
+                projectId: "project",
+                ownerTeamId: null,
+                capabilities: { canManage: true },
+              },
+              {
+                id: "older-candidate",
+                name: "Older candidate",
+                projectId: null,
+                ownerTeamId: null,
+                capabilities: { canManage: true },
+              },
+              {
+                id: "other-team",
+                name: "Other team",
+                projectId: null,
+                ownerTeamId: "team",
+                capabilities: { canManage: true },
+              },
+              {
+                id: "read-only",
+                name: "Read only candidate",
+                projectId: null,
+                ownerTeamId: null,
+                capabilities: { canManage: false },
+              },
+              {
+                id: "read-only-subscribed",
+                name: "Read only subscribed",
+                projectId: "project",
+                ownerTeamId: null,
+                capabilities: { canManage: false },
+              },
+            ],
+      error: undefined,
+      mutate: mocks.mutate,
+      loading: false,
+      loadingMore: false,
+      hasMore: mocks.pages === 1,
+      loadMore: mocks.loadMore,
+    };
+  },
 }));
 it("makes older subscriptions and candidates reachable through pagination", () => {
   mocks.pages = 1;
@@ -42,6 +84,11 @@ it("makes older subscriptions and candidates reachable through pagination", () =
     "href",
     "/automations/older-subscribed"
   );
+  expect(mocks.scope).toHaveBeenLastCalledWith("", "null");
+  expect(screen.queryByRole("option", { name: "Other team" })).not.toBeInTheDocument();
+  expect(screen.queryByRole("option", { name: "Read only candidate" })).not.toBeInTheDocument();
+  expect(screen.getByRole("link", { name: "Read only subscribed" })).toBeInTheDocument();
+  expect(screen.getAllByRole("button", { name: "Unsubscribe" })).toHaveLength(1);
   fireEvent.change(screen.getByRole("combobox", { name: "Subscribe automation" }), {
     target: { value: "older-candidate" },
   });
