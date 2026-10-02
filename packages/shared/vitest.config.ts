@@ -1,4 +1,5 @@
 import { defineConfig } from "vitest/config";
+import { coverageExclusions, coverageThresholds } from "../../scripts/coverage-policy";
 
 export default defineConfig({
   test: {
@@ -9,8 +10,8 @@ export default defineConfig({
       reporter: ["text", "json", "json-summary"],
       reportsDirectory: "./coverage",
       include: ["src/**/*.ts"],
-      exclude: ["src/**/*.test.ts", "src/**/*.d.ts", "src/index.ts"],
-      thresholds: { statements: 90.58, branches: 80.89, functions: 88.82, lines: 91.56 },
+      exclude: coverageExclusions("shared"),
+      thresholds: coverageThresholds("shared"),
     },
   },
 });

@@ -1,4 +1,5 @@
 import { defineConfig } from "vitest/config";
+import { coverageExclusions, coverageThresholds } from "../../scripts/coverage-policy";
 import integrationConfig from "./vitest.integration.config";
 
 export default defineConfig({
@@ -15,8 +16,8 @@ export default defineConfig({
       reporter: ["text", "json", "json-summary"],
       reportsDirectory: "./coverage",
       include: ["src/**/*.ts"],
-      exclude: ["src/**/*.test.ts", "src/**/*.test-support.ts", "src/**/*.d.ts", "src/index.ts"],
-      thresholds: { statements: 89.47, branches: 81.84, functions: 93.79, lines: 91.12 },
+      exclude: coverageExclusions("control-plane"),
+      thresholds: coverageThresholds("control-plane"),
     },
   },
 });

@@ -1,4 +1,5 @@
 import { defineConfig } from "vitest/config";
+import { coverageExclusions, coverageThresholds } from "../../scripts/coverage-policy";
 
 export default defineConfig({
   test: {
@@ -9,8 +10,8 @@ export default defineConfig({
       reporter: ["text", "json", "json-summary"],
       reportsDirectory: "./coverage",
       include: ["src/**/*.ts"],
-      exclude: ["src/**/*.test.ts", "src/**/*.d.ts", "src/index.ts"],
-      thresholds: { statements: 87.24, branches: 78.09, functions: 92.48, lines: 87.42 },
+      exclude: coverageExclusions("slack-bot"),
+      thresholds: coverageThresholds("slack-bot"),
     },
   },
 });

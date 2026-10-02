@@ -1,4 +1,5 @@
 import { defineConfig } from "vitest/config";
+import { coverageExclusions, coverageThresholds } from "../../scripts/coverage-policy";
 
 export default defineConfig({
   test: {
@@ -9,8 +10,8 @@ export default defineConfig({
       reporter: ["text", "json", "json-summary"],
       reportsDirectory: "./coverage",
       include: ["src/**/*.ts"],
-      exclude: ["src/**/*.test.ts", "src/**/*.d.ts", "src/index.ts"],
-      thresholds: { statements: 90.65, branches: 85.57, functions: 90.75, lines: 91.69 },
+      exclude: coverageExclusions("github-bot"),
+      thresholds: coverageThresholds("github-bot"),
     },
   },
 });

@@ -1,5 +1,6 @@
 import path from "path";
 import { defineConfig } from "vitest/config";
+import { coverageExclusions, coverageThresholds } from "../../scripts/coverage-policy";
 
 export default defineConfig({
   resolve: {
@@ -15,8 +16,8 @@ export default defineConfig({
       reporter: ["text", "json", "json-summary"],
       reportsDirectory: "./coverage",
       include: ["src/**/*.ts", "src/**/*.tsx"],
-      exclude: ["src/**/*.test.ts", "src/**/*.d.ts", "src/index.ts"],
-      thresholds: { statements: 72.97, branches: 71.56, functions: 72.58, lines: 74.01 },
+      exclude: coverageExclusions("web"),
+      thresholds: coverageThresholds("web"),
     },
   },
 });

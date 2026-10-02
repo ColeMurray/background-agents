@@ -12,16 +12,17 @@ suites decreased from 14,587 to 11,173 cases, a **23.4% reduction**. Counts incl
 skipped tests.
 
 The limit is a maximum **three-percentage-point decrease in each coverage metric, per package**, not
-an aggregate average that could hide a large loss in one package. Fresh before/after runs passed,
-and every statement, branch, function, and line denominator remained unchanged.
+an aggregate average that could hide a large loss in one package. The historical comparisons below
+were recomputed from saved counters with identical production-only exclusions on both sides. Every
+statement, branch, function, and line denominator remains unchanged within that comparison.
 
 | Package                   | Before | After | Removed | Largest Coverage Drop |
 | ------------------------- | -----: | ----: | ------: | --------------------: |
-| control-plane, both hosts |  7,916 | 5,841 |   2,075 |               2.36 pp |
-| web                       |  2,708 | 1,881 |     827 |               2.38 pp |
-| shared                    |  1,093 |   903 |     190 |               2.25 pp |
+| control-plane, both hosts |  7,916 | 5,841 |   2,075 |               2.34 pp |
+| web                       |  2,708 | 1,881 |     827 |               2.40 pp |
+| shared                    |  1,093 |   903 |     190 |               2.28 pp |
 | slack-bot                 |    512 |   397 |     115 |               2.27 pp |
-| linear-bot                |    267 |   228 |      39 |               1.85 pp |
+| linear-bot                |    267 |   228 |      39 |               2.04 pp |
 | github-bot                |    146 |   134 |      12 |               0.57 pp |
 | sandbox-runtime           |  1,404 | 1,278 |     126 |               0.90 pp |
 | modal-infra               |    541 |   511 |      30 |               0.00 pp |
@@ -35,11 +36,11 @@ Each cell shows baseline coverage followed by coverage after removal, in percent
 
 | Package       | Statements     | Branches       | Functions      | Lines          |
 | ------------- | -------------- | -------------- | -------------- | -------------- |
-| control-plane | 92.47 -> 90.79 | 84.84 -> 82.48 | 96.79 -> 95.79 | 94.12 -> 92.64 |
-| web           | 75.97 -> 73.60 | 74.56 -> 72.18 | 75.58 -> 73.39 | 77.01 -> 74.77 |
-| shared        | 93.58 -> 91.87 | 83.89 -> 81.81 | 91.82 -> 89.57 | 94.56 -> 92.87 |
-| slack-bot     | 90.24 -> 88.72 | 81.09 -> 78.82 | 95.48 -> 93.67 | 90.42 -> 89.48 |
-| linear-bot    | 86.81 -> 85.43 | 74.24 -> 72.45 | 91.35 -> 89.50 | 88.13 -> 86.84 |
+| control-plane | 92.45 -> 90.78 | 84.82 -> 82.48 | 96.95 -> 96.09 | 94.11 -> 92.63 |
+| web           | 75.79 -> 73.39 | 74.55 -> 72.17 | 75.28 -> 73.05 | 76.84 -> 74.59 |
+| shared        | 93.63 -> 91.91 | 84.02 -> 81.94 | 91.90 -> 89.62 | 94.62 -> 92.93 |
+| slack-bot     | 90.24 -> 88.71 | 81.09 -> 78.82 | 95.46 -> 93.65 | 90.41 -> 89.47 |
+| linear-bot    | 86.61 -> 85.18 | 74.06 -> 72.19 | 90.47 -> 88.43 | 87.82 -> 86.48 |
 | github-bot    | 93.65 -> 93.65 | 88.57 -> 88.00 | 93.75 -> 93.75 | 94.69 -> 94.69 |
 
 ### Python Coverage
@@ -76,10 +77,21 @@ preserve every old assertion or to be a mathematically optimal minimum test set.
 
 ## Reproducing Coverage
 
-Build shared first and run heavyweight checks sequentially. Coverage commands fail if a TypeScript
-metric falls below its recorded baseline minus three percentage points. These floors are in the
-package Vitest configs; the existing CI test commands are unchanged and do not enable coverage
-automatically.
+Build shared first and run heavyweight checks sequentially. `scripts/coverage-baseline.json` stores
+the normalized baseline counters and the three-point budget. `scripts/coverage-policy.ts` derives
+floors from those exact counters, rounding up to two decimals rather than loosening the budget. The
+Vitest configs and report checker share this policy. Python statement and branch floors are enforced
+independently; a high combined score cannot hide a branch regression.
+
+`.github/workflows/coverage.yml` runs the entire policy on every PR targeting `main` and every push
+to `main`, without path filters or `continue-on-error`. Its single `Coverage` check fails on test
+failures, missing/invalid reports, or any metric below its floor, and uploads coverage artifacts.
+The workflow also tests its gate, including CLI failure on low Python branch coverage.
+
+Repository rules are separate from workflow files: an administrator must add `Coverage` as a
+required status check in the main ruleset. The authenticated integration cannot administer rules
+(HTTP 403), and the current effective main rules have no required-status-check rule. This external
+setting remains outstanding; the workflow alone is not claimed to make GitHub merges conditional.
 
 ```bash
 npm run build -w @open-inspect/shared
@@ -91,18 +103,29 @@ npm run test:coverage -w @open-inspect/linear-bot -- --maxWorkers=1
 npm run test:coverage -w @open-inspect/github-bot -- --maxWorkers=1
 
 uv run --frozen --project packages/modal-infra --extra dev pytest packages/modal-infra/tests --cov=packages/modal-infra/src --cov-branch --cov-report=json:packages/modal-infra/coverage/coverage.json
+node scripts/check-coverage.mjs modal-infra packages/modal-infra/coverage/coverage.json
 uv run --frozen --project packages/sandbox-runtime --extra dev pytest packages/sandbox-runtime/tests --cov=packages/sandbox-runtime/src --cov-branch --cov-report=json:packages/sandbox-runtime/coverage/coverage.json
+node scripts/check-coverage.mjs sandbox-runtime packages/sandbox-runtime/coverage/coverage.json
+npm run test:coverage-gate
 ```
 
 TypeScript JSON summaries are written to each package's `coverage/coverage-summary.json`. For
-Python, inspect both statement and branch percentages in the JSON `totals`, rather than treating
-`percent_covered` as line coverage. Python coverage is measured but has no new automatic threshold.
+Python, both statement and branch percentages in the JSON `totals` are checked, rather than treating
+`percent_covered` as line coverage. Missing branch counters fail closed.
 
 The control-plane coverage command now runs both Node and workerd projects in one Istanbul report.
 V8 coverage cannot run inside workerd because Workers lack its inspector API. Both control-plane
-measurements used the same Istanbul provider and source scope, excluding `.test-support.ts` files
-that otherwise break uncovered-file instrumentation. Other packages retain their existing V8 source
-scopes. Established test-helper/fixture inclusion was not changed between measurements.
+measurements used the same Istanbul provider. Other packages retain V8. Both sides of the normalized
+comparison exclude `.test`/`.spec` implementations, named test helpers/support/fixtures, declaration
+files, and the existing `src/index.ts` entrypoint exclusions. Shared additionally excludes its
+test-only `src/triggers/testing.ts`. No generic `*helper*` pattern excludes production credential
+helpers. Python reports still measure only production `src/` files, so their baselines are
+unchanged.
+
+Vitest 4 already excluded discovered `.test.tsx` suites before this correction: the original web
+report contains zero `.test.tsx` or `.test.ts` files. The actual normalization removes two web
+fixtures, three control-plane helpers, and one helper each from shared, Slack, and Linear. Counter
+filtering, not averages of per-file percentages, produces the recorded baselines.
 
 ## Merge Validation
 
@@ -111,8 +134,8 @@ upstream regressions for canonical automation owners, bounded D1 parameters, lin
 synchronous archive failures, executor audit events, and environment selection equality. The old
 redundant cases remain removed, and all upstream integration additions are retained.
 
-The following are current coverage percentages, not a new before/after benchmark. All configured
-TypeScript coverage floors pass.
+The following are historical validation percentages from that merge, before helper/fixture
+normalization, not a new before/after benchmark.
 
 | Package                   | Passed | Skipped | Statements | Branches | Functions | Lines |
 | ------------------------- | -----: | ------: | ---------: | -------: | --------: | ----: |
@@ -132,3 +155,30 @@ prompt route rejects caller-provided `authorId` before runtime dispatch; and fai
 repository-scoped credential minting remains unavailable without retrying with broader credentials.
 The route checks use real D1/DO sessions and verified browser credentials. The planner check injects
 only the mint failure and retains the real scope resolver and planning path.
+
+## Deep Review Follow-Up
+
+Compact tests now preserve the contracts aggregate coverage cannot establish:
+
+- Real D1 environment membership/current-team grant intersection and TOCTOU rejection, including
+  unavailable credentials without broad-auth retry.
+- Real SQLite post-encryption generation, status, fence, and provider-reference predicates, with
+  successor URLs/secrets unchanged and successful controls.
+- Shutdown-handler-before-ACK and no-ACK-on-failure for both critical shutdown event types.
+- Incoming bridge ACK routing through the real forwarder, including boot-time passthrough.
+- Gated same-repository PR conflicts, claim release after failure, and independent-repository
+  concurrency through the real service and claims object.
+
+Fresh production-only runs pass all floors. These current-source results are separate from the
+historical fixed-denominator comparison above.
+
+| Package                   | Passed | Skipped | Statements | Branches | Functions | Lines |
+| ------------------------- | -----: | ------: | ---------: | -------: | --------: | ----: |
+| control-plane, both hosts |  6,038 |       1 |      90.97 |    82.74 |     96.21 | 92.77 |
+| web                       |  1,965 |       0 |      74.15 |    73.04 |     73.83 | 75.37 |
+| shared                    |    909 |       0 |      92.10 |    82.04 |     89.89 | 93.13 |
+| slack-bot                 |    397 |       0 |      88.71 |    78.95 |     93.65 | 89.47 |
+| linear-bot                |    228 |       0 |      85.18 |    72.19 |     88.43 | 86.48 |
+| github-bot                |    134 |       0 |      93.65 |    88.00 |     93.75 | 94.69 |
+| modal-infra               |    511 |       0 |      96.20 |    89.92 |       N/A | 96.20 |
+| sandbox-runtime           |  1,285 |       3 |      89.56 |    80.70 |       N/A | 89.56 |
