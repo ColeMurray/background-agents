@@ -5,6 +5,7 @@ import { ModelProviderAccountStore } from "../../src/db/model-provider-accounts"
 import { ProviderDefaultStore } from "../../src/db/provider-account-defaults";
 import { SessionIndexStore } from "../../src/db/session-index";
 import { initializeSession } from "../../src/session/initialize";
+import { resolveSessionMemory } from "../../src/session/memory-resolution";
 import { resolveSessionProviderAuth } from "../../src/session/provider-account-resolution";
 import { cleanD1Tables } from "./cleanup";
 
@@ -56,6 +57,11 @@ describe("session provider auth persistence", () => {
         participantUserId: "user-1",
         platformUserId: null,
         participantCanonicalUserId: null,
+        memoryManifest: await resolveSessionMemory(env.DB, {
+          canonicalUserId: null,
+          repositories: [],
+          environmentId: null,
+        }),
         managedSkillsManifest: {
           selection: { mode: "all" },
           resolverVersion: 1,
