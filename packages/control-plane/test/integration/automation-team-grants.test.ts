@@ -173,6 +173,47 @@ describe("automation current team repository grants (integration)", () => {
     }
   );
 
+  it.each(["manual", "schedule"] as const)(
+    "refuses %s admission when grants are revoked after the coverage check",
+    async (source) => {
+      await seedGrant(TEAM, WEB);
+      const row = await saveAutomation(source);
+      const covers = TeamRepositoryGrantStore.prototype.covers;
+      vi.mocked(TeamRepositoryGrantStore.prototype.covers).mockImplementationOnce(async function (
+        this: TeamRepositoryGrantStore,
+        teamId,
+        repoIds
+      ) {
+        const covered = await covers.call(this, teamId, repoIds);
+        // A concurrent revocation lands between coverage and the guarded insert.
+        await env.DB.prepare("DELETE FROM team_repository_grants WHERE team_id = ?")
+          .bind(TEAM)
+          .run();
+        await env.DB.prepare("UPDATE teams SET grants_version = grants_version + 1 WHERE id = ?")
+          .bind(TEAM)
+          .run();
+        return covered;
+      });
+      const scheduler = new Scheduler(sqlDatabase(env.DB), createCloudflareEnv(env), {
+        submit() {},
+      });
+      if (source === "manual") {
+        await expect(scheduler.trigger(row.id, REQUESTER)).rejects.toThrow();
+      } else {
+        expect(await scheduler.tick()).toEqual({ processed: 0, skipped: 1, failed: 0 });
+      }
+      const store = new AutomationStore(env.DB);
+      expect(AutomationStore.prototype.insertInvocationGuarded).toHaveBeenCalledOnce();
+      expect(await fetchRuns(row.id)).toEqual([]);
+      expect((await store.listInvocations(row.id, { limit: 10, offset: 0 })).invocations).toEqual(
+        []
+      );
+      expect(sessionInitialization.initializeSession).not.toHaveBeenCalled();
+      // The slot stays due, so the next tick re-authorizes against current grants.
+      expect((await store.getById(row.id))?.next_run_at).toBe(row.next_run_at);
+    }
+  );
+
   it("rechecks all environment grants against current resolved member IDs", async () => {
     await seedGrant(TEAM, WEB);
     await seedGrant(TEAM, API);

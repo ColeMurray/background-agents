@@ -12,6 +12,8 @@ import { TeamMembershipStore } from "../db/team-memberships";
 import { TeamRepositoryGrantStore } from "../db/team-repository-grants";
 import { TeamStore } from "../db/teams";
 import type * as AuthenticateModule from "../auth/authenticate";
+import type * as AuthorizationGuardModule from "../automation/authorization-guard";
+import { isAutomationExecutionAuthorized } from "../automation/authorization-guard";
 import { resolveRepoOrError } from "./shared";
 import { PERMISSION_IDS } from "@open-inspect/shared/rbac";
 import { createTestRequestHandler } from "../router.test-support";
@@ -97,6 +99,11 @@ vi.mock("../auth/crypto", () => ({
   generateId: vi.fn(() => "generated-id"),
 }));
 
+vi.mock("../automation/authorization-guard", async (importOriginal) => ({
+  ...(await importOriginal<typeof AuthorizationGuardModule>()),
+  isAutomationExecutionAuthorized: vi.fn(),
+}));
+
 vi.mock("./shared", async (importOriginal) => {
   const actual = (await importOriginal()) as Record<string, unknown>;
   return {
@@ -134,6 +141,7 @@ describe("automation read, update, and delete routes", () => {
     vi.clearAllMocks();
     applyMockDefaults();
     vi.spyOn(TeamStore.prototype, "isActive").mockResolvedValue(true);
+    vi.mocked(isAutomationExecutionAuthorized).mockResolvedValue(true);
     vi.mocked(resolveRepoOrError).mockResolvedValue({
       repoId: 12345,
       repoOwner: "acme",
@@ -162,6 +170,25 @@ describe("automation read, update, and delete routes", () => {
   });
 
   describe("PUT /automations/:id (update)", () => {
+    it("refuses target edits the current executor could not launch", async () => {
+      mockStore.getById.mockResolvedValue({ ...sampleRow, user_id: "executor-1" });
+      vi.mocked(isAutomationExecutionAuthorized).mockResolvedValue(false);
+
+      const res = await callRoute("PUT", "/automations/auto-1", {
+        body: { repositories: [{ repoOwner: "acme", repoName: "web-app" }] },
+      });
+
+      expect(res.status).toBe(409);
+      expect(await res.json()).toMatchObject({ code: "automation_executor_unauthorized" });
+      expect(isAutomationExecutionAuthorized).toHaveBeenCalledWith(expect.anything(), {
+        automationId: "auto-1",
+        executionUserId: "executor-1",
+        requiresRepositoryUse: true,
+        requiresEnvironmentUse: false,
+      });
+      expect(mockBatch).not.toHaveBeenCalled();
+    });
+
     it.each([
       ["repository", { repositories: [] }, "repositories.use"],
       ["environment", { environmentIds: [] }, "environments.use"],

@@ -87,6 +87,7 @@ import {
   validateTargetCounts,
   validateAutomationTeam,
 } from "./automation-validation";
+import { isAutomationExecutionAuthorized } from "../automation/authorization-guard";
 import { authorizeSessionTarget } from "./session-target-authorization";
 import { authorizeTeamRepositories } from "./workspace-repository-authorization";
 
@@ -615,6 +616,24 @@ async function handleUpdateAutomation(
       ],
     });
     if (grantError) return grantError;
+    // Target edits must leave the automation runnable by its current executor.
+    if (
+      !(await isAutomationExecutionAuthorized(ctx.db, {
+        automationId: id,
+        ...(existing.user_id ? { executionUserId: existing.user_id } : {}),
+        requiresRepositoryUse: (replacementRepositories ?? finalRepositories).length > 0,
+        requiresEnvironmentUse: finalEnvironmentIds.length > 0,
+      }))
+    ) {
+      return json(
+        {
+          error: "The automation's executor cannot launch these targets",
+          code: "automation_executor_unauthorized",
+          reason_code: "execution_authorization_denied",
+        },
+        409
+      );
+    }
   }
 
   // Update event type — only for non-schedule types

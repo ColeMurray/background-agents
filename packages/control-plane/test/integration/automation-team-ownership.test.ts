@@ -429,6 +429,8 @@ describe("automation team ownership", () => {
       "automations.create",
       "automations.manage.own",
       "environments.use",
+      // The lead is also the executor, which target edits require to stay runnable.
+      "sessions.create",
     ]);
     const created = await request("/automations", LEAD, "POST", {
       ...createBody,

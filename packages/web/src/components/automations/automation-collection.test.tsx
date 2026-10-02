@@ -151,7 +151,11 @@ describe("automation collection", () => {
         within(screen.getByRole("alertdialog")).getByRole("button", { name: "Delete" })
       );
     }
-    await waitFor(() => expect(mocks.invalidate).toHaveBeenCalledWith(mocks, "auto-1"));
+    await waitFor(() =>
+      expect(mocks.invalidate).toHaveBeenCalledWith(mocks, "auto-1", {
+        deleted: action === "delete",
+      })
+    );
     expect(browserApiFetch).toHaveBeenCalledWith(`/api/automations/auto-1${suffix}`, { method });
   });
 
@@ -162,7 +166,9 @@ describe("automation collection", () => {
     expect(await screen.findByRole("alert")).toHaveTextContent("Failed to trigger automation");
     expect(mocks.invalidate).not.toHaveBeenCalled();
     fireEvent.click(screen.getByRole("button", { name: "Trigger" }));
-    await waitFor(() => expect(mocks.invalidate).toHaveBeenCalledWith(mocks, "auto-1"));
+    await waitFor(() =>
+      expect(mocks.invalidate).toHaveBeenCalledWith(mocks, "auto-1", { deleted: false })
+    );
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
   });
 });

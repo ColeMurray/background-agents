@@ -289,7 +289,10 @@ type StartInvocationResult =
   | { outcome: "started"; invocationId: string; runs: AutomationRunRow[]; launched: number }
   /** Overlap — a childless skipped invocation was recorded (schedule/event). */
   | { outcome: "skipped" }
-  /** Overlap on a manual firing — nothing recorded; the caller answers 409. */
+  /**
+   * Overlap on a manual firing, or team grants changed during admission — nothing
+   * recorded; manual callers answer 409.
+   */
   | { outcome: "blocked" }
   /** Idempotency/dedup collision — another firing owns this slot or event. */
   | { outcome: "deduplicated" }
@@ -515,7 +518,13 @@ export class Scheduler {
       string,
       { target: AutomationSessionTarget } | { error: unknown }
     >();
+    let teamGrantsVersion: { teamId: string; version: number } | undefined;
     if (automation.owner_team_id !== null) {
+      // Snapshot the grants version before checking coverage; the guarded insert
+      // refuses admission if grants change in between.
+      const team = await new TeamStore(this.db).getById(automation.owner_team_id);
+      if (!team) return { outcome: "unauthorized", reason: "execution_authorization_denied" };
+      teamGrantsVersion = { teamId: team.id, version: team.grantsVersion };
       // Pin the exact environment members authorized here; never re-read a
       // different workspace after invocation admission.
       await Promise.all(
@@ -596,6 +605,7 @@ export class Scheduler {
         invocation,
         children,
         overlapScope,
+        teamGrantsVersion,
         advanceSchedule:
           source === "schedule" &&
           params.scheduledAt !== undefined &&
@@ -618,6 +628,14 @@ export class Scheduler {
       throw e;
     }
 
+    if (!inserted && teamGrantsVersion) {
+      const team = await new TeamStore(this.db).getById(teamGrantsVersion.teamId);
+      if (team?.grantsVersion !== teamGrantsVersion.version) {
+        // Grants changed after coverage was checked. Nothing was recorded or
+        // advanced, so a schedule slot refires and re-authorizes on the next tick.
+        return { outcome: "blocked" };
+      }
+    }
     if (!inserted) {
       // Raced an active invocation between the pre-check and the batch. The
       // batch's schedule advance already ran (deliberately unconditional), so

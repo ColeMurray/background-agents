@@ -25,6 +25,7 @@ import { useAutomation, useAutomationInvocations, useAutomations } from "@/hooks
 import { useAutomationActions } from "@/hooks/use-automation-actions";
 import { browserApiFetch } from "./browser-api-fetch";
 import { invalidateAutomationCache } from "./automation-cache";
+import { SwrFetchError } from "./swr-fetch-error";
 
 expect.extend(matchers);
 afterEach(cleanup);
@@ -140,6 +141,55 @@ describe("automation cache invalidation", () => {
     for (const key of [...resourceKeys, ...unrelated]) {
       expect(cache.get(key)?.data).toBe("retained");
     }
+  });
+
+  it("evicts a deleted automation's detail and history instead of refreshing them", async () => {
+    const collectionKey = "/api/automations?teamId=team-1";
+    const resourceKeys = [
+      "/api/automations/auto-1",
+      "/api/automations/auto-1/invocations?limit=20&offset=0",
+    ];
+    const cache = new Map<string, { data: string | undefined }>(
+      [collectionKey, ...resourceKeys].map((key) => [key, { data: "retained" }])
+    );
+    const mutate = vi
+      .fn()
+      .mockImplementation(
+        async (key: string, data?: undefined, options?: { revalidate: boolean }) => {
+          if (options?.revalidate === false) cache.set(key, { data });
+        }
+      );
+
+    await invalidateAutomationCache({ cache, mutate }, "auto-1", { deleted: true });
+
+    for (const key of resourceKeys) {
+      expect(cache.get(key)?.data).toBeUndefined();
+      expect(mutate).not.toHaveBeenCalledWith(key);
+    }
+    expect(mutate).toHaveBeenCalledWith(collectionKey);
+  });
+
+  it.each([401, 403, 404])("hides cached detail and history after a %s refresh", async (status) => {
+    const cache: Cache = new Map();
+    let revoked = false;
+    const fetcher = vi.fn(async (path: string) => {
+      if (revoked) throw new SwrFetchError(status);
+      return path.includes("/invocations?")
+        ? { invocations: [], total: 3 }
+        : { automation: original };
+    });
+    const { result } = renderHook(
+      () => ({ detail: useAutomation("auto-1"), history: useAutomationInvocations("auto-1") }),
+      { wrapper: wrapper(cache, fetcher) }
+    );
+    await waitFor(() => expect(result.current.detail.automation?.name).toBe("Original"));
+    await waitFor(() => expect(result.current.history.total).toBe(3));
+    revoked = true;
+    await act(() => Promise.all([result.current.detail.mutate(), result.current.history.mutate()]));
+    await waitFor(() => {
+      expect(result.current.detail.automation).toBeNull();
+      expect(result.current.history.total).toBe(0);
+    });
   });
 
   it("remounts inactive paged and filtered SWR lists without stale records", async () => {

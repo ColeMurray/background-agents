@@ -329,6 +329,26 @@ describe("AutomationStore", () => {
       expect(result.hasMore).toBe(false);
     });
 
+    it("projects legacy canonical owners in one lookup without repairing rows", async () => {
+      const { db, statements } = createFakeD1({
+        allResults: [{ provider_user_id: "4242", user_id: "user-legacy" }],
+      });
+      const legacy = { ...sampleRow, id: "legacy", user_id: null, created_by: "4242" };
+      const anonymous = { ...sampleRow, id: "anon", user_id: null, created_by: "anonymous" };
+      const canonical = { ...sampleRow, id: "canonical", user_id: "user-1" };
+
+      const rows = await new AutomationStore(db).projectCanonicalOwners([
+        legacy,
+        anonymous,
+        canonical,
+      ]);
+
+      expect(rows.map((row) => row.user_id)).toEqual(["user-legacy", null, "user-1"]);
+      expect(statements).toHaveLength(1);
+      expect(statements[0].sql).toContain("FROM user_identities");
+      expect(statements[0].params).toEqual(["4242"]);
+    });
+
     it("binds team visibility once, regardless of how many teams the viewer joined", async () => {
       const { db, statements } = createFakeD1();
       const memberships = new Map(

@@ -80,7 +80,8 @@ async function handleListAutomations(
     ...(query.repoName ? { repoName: query.repoName } : {}),
     ...(query.teamId !== undefined ? { teamId: query.teamId } : {}),
   });
-  const automationIds = result.automations.map((row) => row.id);
+  const rows = await store.projectCanonicalOwners(result.automations);
+  const automationIds = rows.map((row) => row.id);
   const [
     repositoriesByAutomation,
     environmentsByAutomation,
@@ -93,7 +94,7 @@ async function handleListAutomations(
     store.listRecentExecutionsForAutomationIds(automationIds, RECENT_EXECUTION_COUNT),
   ]);
 
-  const automations = result.automations.map((row) => ({
+  const automations = rows.map((row) => ({
     ...toAutomation(
       row,
       repositoriesByAutomation.get(row.id) ?? [],

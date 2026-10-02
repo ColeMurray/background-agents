@@ -18,7 +18,7 @@ export function useAutomationActions() {
         method: action === "delete" ? "DELETE" : "POST",
       });
       if (!response.ok) throw new Error(`Failed to ${action} automation`);
-      await invalidateAutomationCache(swr, id);
+      await invalidateAutomationCache(swr, id, { deleted: action === "delete" });
       return true;
     } catch {
       setActionError(`Failed to ${action} automation`);

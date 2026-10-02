@@ -32,12 +32,18 @@ import {
   type AutomationModelProviderAuthRow,
 } from "./automation-model-provider-auth";
 import type { SqlDatabase, SqlStatement } from "./sql-database";
+import { MAX_D1_QUERY_PARAMETERS } from "./query-limits";
 import type { CreatedAtCursor } from "../created-at-cursor";
 import { z } from "zod";
 import { UserStore } from "./user-store";
 import { rolePermissionPredicate } from "../authorization/permission-sql";
 import { automationExecutionPredicate } from "../automation/authorization-guard";
 import type { SessionViewer } from "@open-inspect/shared";
+
+/** Legacy rows predate canonical executors; their GitHub creator may now map to a user. */
+function needsCanonicalOwner(row: AutomationRow): boolean {
+  return !row.user_id && !!row.created_by && row.created_by !== "anonymous";
+}
 
 function escapeLikePattern(value: string): string {
   return value.replace(/[\\%_]/g, "\\$&");
@@ -451,9 +457,7 @@ export class AutomationStore {
    * a storage invariant rather than a side effect of starting an invocation.
    */
   async resolveCanonicalOwner(automation: AutomationRow): Promise<AutomationRow> {
-    if (automation.user_id || !automation.created_by || automation.created_by === "anonymous") {
-      return automation;
-    }
+    if (!needsCanonicalOwner(automation)) return automation;
 
     const identity = await new UserStore(this.db).getIdentity("github", automation.created_by);
     if (!identity) return automation;
@@ -466,6 +470,34 @@ export class AutomationStore {
       return { ...automation, user_id: identity.userId };
     }
     return (await this.getById(automation.id)) ?? automation;
+  }
+
+  /**
+   * Project the canonical owner that {@link resolveCanonicalOwner} would repair, for a page of
+   * rows in one bounded lookup, so collection capabilities agree with item admission.
+   */
+  async projectCanonicalOwners(rows: readonly AutomationRow[]): Promise<AutomationRow[]> {
+    const legacyCreators = [
+      ...new Set(rows.filter(needsCanonicalOwner).map((row) => row.created_by)),
+    ];
+    const owners = new Map<string, string>();
+    for (let offset = 0; offset < legacyCreators.length; offset += MAX_D1_QUERY_PARAMETERS) {
+      const chunk = legacyCreators.slice(offset, offset + MAX_D1_QUERY_PARAMETERS);
+      const result = await this.db
+        .prepare(
+          `SELECT provider_user_id, user_id FROM user_identities
+           WHERE provider = 'github' AND provider_user_id IN (${chunk.map(() => "?").join(", ")})`
+        )
+        .bind(...chunk)
+        .all<{ provider_user_id: string; user_id: string }>();
+      for (const identity of result.results ?? []) {
+        owners.set(identity.provider_user_id, identity.user_id);
+      }
+    }
+    return rows.map((row) => {
+      const owner = needsCanonicalOwner(row) ? owners.get(row.created_by) : undefined;
+      return owner ? { ...row, user_id: owner } : row;
+    });
   }
 
   async list(options: {
@@ -1132,9 +1164,18 @@ export class AutomationStore {
     children: AutomationRunRow[];
     overlapScope: InvocationOverlapScope;
     advanceSchedule?: ScheduleAdvance;
+    /** Team grants version the targets were authorized against; a change refuses admission. */
+    teamGrantsVersion?: { teamId: string; version: number };
   }): Promise<{ inserted: boolean }> {
     const invocation = params.invocation;
     const overlap = this.overlapPredicate(invocation.automation_id, params.overlapScope);
+    const grants = params.teamGrantsVersion;
+    const grantsGuard = grants
+      ? {
+          sql: "AND EXISTS (SELECT 1 FROM teams WHERE id = ? AND grants_version = ?)",
+          params: [grants.teamId, grants.version],
+        }
+      : { sql: "", params: [] };
     const statements: SqlStatement[] = [];
     statements.push(
       this.db
@@ -1143,7 +1184,7 @@ export class AutomationStore {
            (id, automation_id, source, scheduled_at, trigger_key, concurrency_key,
             trigger_metadata, skip_reason, failure_counted_at, created_at, updated_at)
            SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
-           WHERE NOT EXISTS (${overlap.sql})`
+           WHERE NOT EXISTS (${overlap.sql}) ${grantsGuard.sql}`
         )
         .bind(
           invocation.id,
@@ -1157,7 +1198,8 @@ export class AutomationStore {
           invocation.failure_counted_at,
           invocation.created_at,
           invocation.updated_at,
-          ...overlap.params
+          ...overlap.params,
+          ...grantsGuard.params
         )
     );
 
@@ -1198,14 +1240,16 @@ export class AutomationStore {
       statements.push(
         this.db
           .prepare(
+            // A grants change leaves the slot due, so the next tick re-authorizes it.
             `UPDATE automations SET next_run_at = ?, updated_at = ?
-             WHERE id = ? AND deleted_at IS NULL AND next_run_at = ?`
+             WHERE id = ? AND deleted_at IS NULL AND next_run_at = ? ${grantsGuard.sql}`
           )
           .bind(
             params.advanceSchedule.nextRunAt,
             Date.now(),
             invocation.automation_id,
-            params.advanceSchedule.fromSlot
+            params.advanceSchedule.fromSlot,
+            ...grantsGuard.params
           )
       );
     }

@@ -1,6 +1,7 @@
 import useSWR, { useSWRConfig } from "swr";
 import useSWRInfinite from "swr/infinite";
 import { useAuthSession } from "@/lib/auth-session";
+import { SwrFetchError } from "@/lib/swr-fetch-error";
 import {
   DEFAULT_AUTOMATION_LIST_PAGE_SIZE,
   listAutomationsResponseSchema,
@@ -10,6 +11,14 @@ import type {
   ListAutomationsResponse,
   ListAutomationInvocationsResponse,
 } from "@open-inspect/shared/types/automations";
+
+/**
+ * Deleted or inaccessible resources must not render from cache; only transient failures
+ * (network, 5xx) keep the last loaded data.
+ */
+function isTerminalAutomationError(error: unknown): boolean {
+  return error instanceof SwrFetchError && [401, 403, 404].includes(error.status);
+}
 
 function buildAutomationListPath(
   nameSearch: string,
@@ -71,12 +80,12 @@ export function useAutomations(nameSearch: string, teamId?: string | null) {
 export function useAutomation(id: string | undefined) {
   const { data: session } = useAuthSession();
 
-  const { data, isLoading, mutate } = useSWR<{ automation: Automation }>(
+  const { data, error, isLoading, mutate } = useSWR<{ automation: Automation }>(
     session && id ? `/api/automations/${id}` : null
   );
 
   return {
-    automation: data?.automation ?? null,
+    automation: isTerminalAutomationError(error) ? null : (data?.automation ?? null),
     loading: isLoading,
     mutate,
   };
@@ -85,13 +94,14 @@ export function useAutomation(id: string | undefined) {
 export function useAutomationInvocations(id: string | undefined, limit = 20, offset = 0) {
   const { data: session } = useAuthSession();
 
-  const { data, isLoading, mutate } = useSWR<ListAutomationInvocationsResponse>(
+  const { data, error, isLoading, mutate } = useSWR<ListAutomationInvocationsResponse>(
     session && id ? `/api/automations/${id}/invocations?limit=${limit}&offset=${offset}` : null
   );
+  const visible = isTerminalAutomationError(error) ? undefined : data;
 
   return {
-    invocations: data?.invocations ?? [],
-    total: data?.total ?? 0,
+    invocations: visible?.invocations ?? [],
+    total: visible?.total ?? 0,
     loading: isLoading,
     mutate,
   };
