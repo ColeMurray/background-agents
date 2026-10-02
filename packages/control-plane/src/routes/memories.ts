@@ -76,7 +76,8 @@ async function list(request: Request, env: Env, _params: object, ctx: UserRouteC
   const records = await new MemoryStore(ctx.db).list(
     scopeResult.data,
     ctx.principal.userId,
-    status.data
+    status.data,
+    access.repoId
   );
   return json({
     memories: records.map((record) => view(record, access.canManage)),
@@ -177,6 +178,7 @@ async function preview(request: Request, env: Env, _params: object, ctx: UserRou
       await new EnvironmentStore(ctx.db).getRepositoriesForEnvironment(body.environmentId)
     ).map((repo) => ({ repoOwner: repo.repo_owner, repoName: repo.repo_name, baseBranch: null }));
   }
+  const resolvedRepositories = [];
   for (const repo of repositories) {
     const access = await authorizeMemoryScope(
       ctx,
@@ -185,13 +187,14 @@ async function preview(request: Request, env: Env, _params: object, ctx: UserRou
       false
     );
     if (access instanceof Response) return access;
+    resolvedRepositories.push({ ...repo, repoId: access.repoId });
   }
   return json(
     await resolveSessionMemory(
       ctx.db,
       {
         canonicalUserId: ctx.principal.userId,
-        repositories,
+        repositories: resolvedRepositories,
         environmentId: body.environmentId ?? null,
       },
       body.includePersonalMemories

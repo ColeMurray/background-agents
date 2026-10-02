@@ -69,10 +69,11 @@ describe("memory persistence", () => {
       ...personal,
       scope: { type: "repository" as const, repoOwner: "group/subgroup", repoName: "api" },
     };
-    const original = await store.create(input, human);
+    const original = await store.create(input, human, 123);
     const replacement = await store.create(
       { ...input, content: "Updated", supersedesMemoryId: original.id },
-      agent
+      agent,
+      123
     );
     expect(replacement.status).toBe("proposed");
     expect((await store.get(original.id))?.status).toBe("active");

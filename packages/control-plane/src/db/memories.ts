@@ -86,7 +86,8 @@ export function memoryFromRow(row: MemoryRow): MemoryRecord {
 }
 function scopePredicate(
   scope: MemoryScope,
-  ownerUserId: string | null
+  ownerUserId: string | null,
+  repoId: number | null = null
 ): { sql: string; values: unknown[] } {
   if (scope.type === "personal")
     return { sql: "m.scope_type = 'personal' AND m.owner_user_id = ?", values: [ownerUserId] };
@@ -96,17 +97,24 @@ function scopePredicate(
       values: [scope.environmentId],
     };
   return {
-    sql: "m.scope_type = 'repository' AND lower(m.repo_owner) = lower(?) AND lower(m.repo_name) = lower(?)",
-    values: [scope.repoOwner, scope.repoName],
+    sql: "m.scope_type = 'repository' AND lower(m.repo_owner) = lower(?) AND lower(m.repo_name) = lower(?) AND m.repo_id = ?",
+    values: [scope.repoOwner, scope.repoName, repoId],
   };
 }
-function sameScope(a: MemoryRecord, scope: MemoryScope, owner: string | null): boolean {
+function sameScope(
+  a: MemoryRecord,
+  scope: MemoryScope,
+  owner: string | null,
+  repoId: number | null
+): boolean {
   if (a.scope.type !== scope.type) return false;
   if (scope.type === "personal") return a.ownerUserId === owner;
   if (scope.type === "environment")
     return a.scope.type === "environment" && a.scope.environmentId === scope.environmentId;
   return (
     a.scope.type === "repository" &&
+    repoId !== null &&
+    a.repoId === repoId &&
     a.scope.repoOwner.toLowerCase() === scope.repoOwner.toLowerCase() &&
     a.scope.repoName.toLowerCase() === scope.repoName.toLowerCase()
   );
@@ -131,9 +139,10 @@ export class MemoryStore {
   async list(
     scope: MemoryScope,
     ownerUserId: string | null,
-    status: MemoryStatus = "active"
+    status: MemoryStatus = "active",
+    repoId: number | null = null
   ): Promise<MemoryRecord[]> {
-    const predicate = scopePredicate(scope, ownerUserId);
+    const predicate = scopePredicate(scope, ownerUserId, repoId);
     const result = await this.db
       .prepare(
         `${MEMORY_SELECT} WHERE ${predicate.sql} AND m.status = ? ORDER BY m.updated_at DESC, m.id`
@@ -171,7 +180,9 @@ export class MemoryStore {
       ...(target.canonicalUserId && target.includePersonalMemories
         ? [scopePredicate({ type: "personal" }, target.canonicalUserId)]
         : []),
-      ...target.repositories.map((repo) => scopePredicate({ type: "repository", ...repo }, null)),
+      ...target.repositories.map((repo) =>
+        scopePredicate({ type: "repository", ...repo }, null, repo.repoId)
+      ),
       ...(target.environmentId
         ? [scopePredicate({ type: "environment", environmentId: target.environmentId }, null)]
         : []),
@@ -264,7 +275,9 @@ export class MemoryStore {
     const previous = input.supersedesMemoryId ? await this.get(input.supersedesMemoryId) : null;
     if (
       input.supersedesMemoryId &&
-      (!previous || previous.status !== "active" || !sameScope(previous, scope, actor.userId))
+      (!previous ||
+        previous.status !== "active" ||
+        !sameScope(previous, scope, actor.userId, repoId))
     )
       throw new MemoryConflictError(
         "Replacement must reference an active memory in the same scope"

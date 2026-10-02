@@ -28,7 +28,7 @@ function record(id: string, overrides: Partial<MemoryRecord> = {}): MemoryRecord
 }
 const target = {
   canonicalUserId: "user_a",
-  repositories: [{ repoOwner: "group/subgroup", repoName: "api" }],
+  repositories: [{ repoOwner: "group/subgroup", repoName: "api", repoId: 123 }],
   environmentId: "env_a",
   includePersonalMemories: true,
 };
@@ -42,6 +42,7 @@ describe("memory resolution", () => {
       record("repo", {
         scope: { type: "repository", repoOwner: "GROUP/SUBGROUP", repoName: "api" },
         ownerUserId: null,
+        repoId: 123,
       }),
     ];
     expect((await resolveMemoryRecords(records, target)).items.map((i) => i.memoryId)).toEqual([
@@ -100,7 +101,10 @@ describe("memory resolution", () => {
 });
 
 it("prioritizes environment then ordered repositories then personal within the aggregate directive cap", async () => {
-  const repositories = [target.repositories[0], { repoOwner: "acme", repoName: "web" }];
+  const repositories = [
+    target.repositories[0],
+    { repoOwner: "acme", repoName: "web", repoId: 456 },
+  ];
   const scopes = [
     { type: "environment" as const, environmentId: "env_a" },
     ...repositories.map((repo) => ({ type: "repository" as const, ...repo })),
@@ -110,6 +114,7 @@ it("prioritizes environment then ordered repositories then personal within the a
     Array.from({ length: 3 }, (_, n) =>
       record(`${i}-${n}`, {
         scope,
+        repoId: scope.type === "repository" ? scope.repoId : null,
         memoryType: "directive",
         content: "x".repeat(2000),
         createdAt: n,

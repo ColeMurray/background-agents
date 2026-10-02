@@ -11,7 +11,7 @@ import type { SqlDatabase } from "../db/sql-database";
 /** Caller-authorized scopes in session priority order; canonicalUserId identifies the personal owner. */
 export interface MemoryTarget {
   canonicalUserId: string | null;
-  repositories: readonly { repoOwner: string; repoName: string }[];
+  repositories: readonly { repoOwner: string; repoName: string; repoId: number | null }[];
   environmentId: string | null;
   includePersonalMemories: boolean;
 }
@@ -23,7 +23,7 @@ export function memoryScopeKey(scope: MemoryScope): string {
 }
 /** Match scope membership and personal opt-out; current team/environment grants are checked by callers. */
 export function matchesMemoryTarget(
-  record: Pick<MemoryRecord, "scope" | "ownerUserId">,
+  record: Pick<MemoryRecord, "scope" | "ownerUserId" | "repoId">,
   target: MemoryTarget
 ): boolean {
   const scope = record.scope;
@@ -35,7 +35,10 @@ export function matchesMemoryTarget(
     );
   if (scope.type === "environment") return scope.environmentId === target.environmentId;
   return target.repositories.some(
-    (repo) => memoryScopeKey({ type: "repository", ...repo }) === memoryScopeKey(scope)
+    (repo) =>
+      repo.repoId !== null &&
+      repo.repoId === record.repoId &&
+      memoryScopeKey({ type: "repository", ...repo }) === memoryScopeKey(scope)
   );
 }
 const FRAMING =

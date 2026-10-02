@@ -64,6 +64,52 @@ describe("memory shared-scope authorization", () => {
   });
   afterEach(() => vi.restoreAllMocks());
 
+  it.each([123, null])(
+    "does not transfer records with repo ID %s to a reused repository name",
+    async (repoId) => {
+      const scope = {
+        type: "repository" as const,
+        repoOwner: repo.repoOwner,
+        repoName: repo.repoName,
+      };
+      const record = await new MemoryStore(env.DB).create({ ...content, scope }, actor, repoId);
+      vi.mocked(GitHubSourceControlProvider.prototype.checkRepositoryAccess).mockResolvedValue({
+        ...repo,
+        repoId: 456,
+        defaultBranch: "main",
+      });
+      expect((await request(`/memories/${record.id}`)).status).toBe(404);
+      expect((await request(`/memories/${record.id}/revisions`)).status).toBe(404);
+      const query = new URLSearchParams({
+        scope: "repository",
+        repoOwner: repo.repoOwner,
+        repoName: repo.repoName,
+      });
+      expect(await (await request(`/memories?${query}`)).json()).toMatchObject({ memories: [] });
+      const preview = await request("/memories/preview", "POST", {
+        repositories: [{ repoOwner: repo.repoOwner, repoName: repo.repoName }],
+      });
+      expect(preview.status).toBe(200);
+      expect(await preview.json()).toMatchObject({ items: [] });
+      expect(
+        (
+          await resolveSessionMemory(env.DB, {
+            canonicalUserId: MEMBER,
+            environmentId: null,
+            repositories: [{ ...repo, repoId: 456 }],
+          })
+        ).items
+      ).toEqual([]);
+      await expect(
+        new MemoryStore(env.DB).create(
+          { ...content, scope, supersedesMemoryId: record.id },
+          actor,
+          456
+        )
+      ).rejects.toThrow(/same scope/);
+    }
+  );
+
   it("denies workspace creation before resolving a repository owned by another team", async () => {
     const denied = await request(
       "/sessions",

@@ -192,10 +192,10 @@ export class SessionMemoryStore {
     const repositories = (
       await this.db
         .prepare(
-          "SELECT repo_owner, repo_name FROM session_repositories WHERE session_id = ? ORDER BY position"
+          "SELECT repo_owner, repo_name, repo_id FROM session_repositories WHERE session_id = ? ORDER BY position"
         )
         .bind(sessionId)
-        .all<{ repo_owner: string; repo_name: string }>()
+        .all<{ repo_owner: string; repo_name: string; repo_id: number | null }>()
     ).results;
     return {
       inherited: session.parent_session_id !== null,
@@ -203,9 +203,13 @@ export class SessionMemoryStore {
       includePersonalMemories: session.include_personal_memories === 1,
       environmentId: session.environment_id,
       repositories: repositories.length
-        ? repositories.map((repo) => ({ repoOwner: repo.repo_owner, repoName: repo.repo_name }))
+        ? repositories.map((repo) => ({
+            repoOwner: repo.repo_owner,
+            repoName: repo.repo_name,
+            repoId: repo.repo_id,
+          }))
         : session.repo_owner && session.repo_name
-          ? [{ repoOwner: session.repo_owner, repoName: session.repo_name }]
+          ? [{ repoOwner: session.repo_owner, repoName: session.repo_name, repoId: null }]
           : [],
     };
   }

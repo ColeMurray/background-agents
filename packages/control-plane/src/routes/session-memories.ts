@@ -128,24 +128,25 @@ async function write(
   const store = new SessionMemoryStore(ctx.db);
   const target = await store.target(params.id);
   const session = await new SessionIndexStore(ctx.db).get(params.id);
+  const repoId =
+    body.scope.type === "repository"
+      ? (target?.repositories.find(
+          (repo) =>
+            body.scope.type === "repository" &&
+            repo.repoOwner.toLowerCase() === body.scope.repoOwner.toLowerCase() &&
+            repo.repoName.toLowerCase() === body.scope.repoName.toLowerCase()
+        )?.repoId ?? null)
+      : null;
   if (
     !target ||
     !session ||
-    !matchesMemoryTarget({ scope: body.scope, ownerUserId: target.canonicalUserId }, target)
+    !matchesMemoryTarget({ scope: body.scope, ownerUserId: target.canonicalUserId, repoId }, target)
   )
     return error("Memory scope is outside this session", 403);
   // A collaborator-owned child can consume inherited context but cannot mutate its original owner's personal store.
   if (body.scope.type === "personal" && session.userId !== target.canonicalUserId)
     return error("Personal memory owner differs from this session owner", 403);
-  let repoId: number | null = null;
   if (body.scope.type === "repository") {
-    const row = await ctx.db
-      .prepare(
-        "SELECT repo_id FROM session_repositories WHERE session_id = ? AND lower(repo_owner) = lower(?) AND lower(repo_name) = lower(?)"
-      )
-      .bind(params.id, body.scope.repoOwner, body.scope.repoName)
-      .first<{ repo_id: number | null }>();
-    repoId = row?.repo_id ?? null;
     if (
       session.ownerTeamId &&
       !(await new TeamRepositoryGrantStore(ctx.db).covers(session.ownerTeamId, [repoId]))

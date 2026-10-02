@@ -43,6 +43,9 @@ export async function authorizeMemoryScope(
   if (!ctx.authorization?.permissions.includes("repositories.read"))
     return error("Repository read permission required", 403);
   const repo = await resolveRepoOrError(env, scope.repoOwner, scope.repoName, ctx, logger);
+  // Names may be reused after deletion/rename; unknown legacy IDs never grant continuity.
+  if (record && (record.repoId == null || record.repoId !== repo.repoId))
+    return error("Memory not found", 404);
   const repositories = [{ owner: repo.repoOwner, name: repo.repoName, repoId: repo.repoId }];
   const denied = await authorizeWorkspaceRepositories(ctx, { repositories });
   if (denied) return denied;
