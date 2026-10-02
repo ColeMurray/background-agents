@@ -86,6 +86,7 @@ export async function handleSpawnChild(
     const environmentError = await authorizeEnvironmentTarget(ctx, {
       environmentId: parentEnvironmentId,
       ownerTeamId: parentSession?.ownerTeamId ?? null,
+      inherited: true,
     });
     if (environmentError) return environmentError;
   }

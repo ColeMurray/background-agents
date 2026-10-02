@@ -184,6 +184,39 @@ describe("owned-resource admission outcomes", () => {
     expect(EnvironmentStore.prototype.getById).toHaveBeenCalledOnce();
   });
 
+  it("tolerates a deleted inherited environment for a user, but admits existing ones", async () => {
+    vi.mocked(EnvironmentStore.prototype.getById).mockResolvedValue(null);
+    const ctx = context();
+    ctx.authorization!.permissions = ["environments.use"];
+    await expect(
+      authorizeEnvironmentTarget(ctx, {
+        environmentId: "env_deleted",
+        ownerTeamId: "team",
+        inherited: true,
+      })
+    ).resolves.toBeNull();
+    // A newly chosen target still gets the canonical 404.
+    expect(
+      (await authorizeEnvironmentTarget(ctx, { environmentId: "env_deleted", ownerTeamId: "team" }))
+        ?.status
+    ).toBe(404);
+
+    vi.mocked(EnvironmentStore.prototype.getById).mockResolvedValue(environment);
+    const mismatch = await authorizeEnvironmentTarget(ctx, {
+      environmentId: "environment",
+      ownerTeamId: null,
+      inherited: true,
+    });
+    expect(mismatch?.status).toBe(409);
+    ctx.sessionMemberships = new Map();
+    const hidden = await authorizeEnvironmentTarget(ctx, {
+      environmentId: "environment",
+      ownerTeamId: "team",
+      inherited: true,
+    });
+    expect(hidden?.status).toBe(404);
+  });
+
   it("binds a sandbox's inherited team environment to the destination team", async () => {
     const ctx = context();
     ctx.principal = { kind: "sandbox", sessionId: "parent" };
