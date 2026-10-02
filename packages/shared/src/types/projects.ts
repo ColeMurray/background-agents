@@ -43,6 +43,7 @@ export type UpdateProjectInput = z.infer<typeof updateProjectSchema>;
 
 export const projectSchema = z.object({
   ...fields,
+  defaultRepoId: z.number().int().positive().nullable().optional(),
   id: projectIdSchema,
   ownerTeamId: z.string().nullable(),
   ownerUserId: z.string(),

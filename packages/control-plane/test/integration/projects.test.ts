@@ -9,7 +9,8 @@ import { Scheduler } from "../../src/scheduler/scheduler";
 import { SessionIndexStore } from "../../src/db/session-index";
 import { SessionProjectStore } from "../../src/db/session-project-store";
 import { buildInjectionBlock } from "@open-inspect/shared/project-context";
-import { SELF, env } from "cloudflare:test";
+import { GitHubSourceControlProvider } from "../../src/source-control/providers/github-provider";
+import { SELF, env, createExecutionContext } from "cloudflare:test";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanD1Tables } from "./cleanup";
 import { AnalyticsStore } from "../../src/db/analytics-store";
@@ -17,6 +18,8 @@ import { projectViewer, loadProjectContext } from "../../src/session/project-con
 import { projectSubscriptionReceipt } from "../../src/db/project-subscription";
 import {
   serviceFetch,
+  routeRequest,
+  serviceRequestHeaders,
   sqlDatabase,
   initSession,
   seedSandboxAuth,
@@ -1112,3 +1115,67 @@ it.each(["actor", "executor"])(
     expect(detach.status, await detach.clone().text()).toBe(200);
   }
 );
+
+it("resolves and commits canonical repository defaults against current team grants", async () => {
+  await req("/me/authorization");
+  await env.DB.prepare(
+    "INSERT INTO teams (id,slug,name,created_at,updated_at) VALUES ('repo-team','repo-team','Repositories',1,1)"
+  ).run();
+  await env.DB.prepare(
+    "INSERT INTO team_memberships (team_id,user_id,role,created_at) VALUES ('repo-team',?,'member',1)"
+  )
+    .bind(A)
+    .run();
+  await env.DB.prepare(
+    "INSERT INTO team_repository_grants (id,team_id,grant_kind,repo_external_id,repo_owner,repo_name,created_at) VALUES ('grant','repo-team','repository',123,'acme','web',1)"
+  ).run();
+  const resolve = vi
+    .spyOn(GitHubSourceControlProvider.prototype, "checkRepositoryAccess")
+    .mockResolvedValue({ repoId: 123, repoOwner: "acme", repoName: "web", defaultBranch: "main" });
+  const input = {
+    name: "Default repo",
+    slug: "default-repo",
+    ownerTeamId: "repo-team",
+    defaultRepoOwner: "Acme",
+    defaultRepoName: "Web",
+  };
+  const send = async (body: object) => {
+    const url = "https://test.local/projects";
+    const init = {
+      method: "POST",
+      body: JSON.stringify(body),
+      as: { userId: A, role: "member" as const },
+    };
+    return routeRequest(
+      new Request(url, { ...init, headers: await serviceRequestHeaders(url, init) }),
+      env,
+      createExecutionContext()
+    );
+  };
+  try {
+    const response = await send(input);
+    expect(response.status, await response.clone().text()).toBe(201);
+    const { project } = await response.json<{ project: { id: string; defaultRepoId: number } }>();
+    expect(project.defaultRepoId).toBe(123);
+    const store = new ProjectStore(env.DB);
+    const before = (await store.get(project.id))!;
+    await env.DB.prepare("DELETE FROM team_repository_grants").run();
+    await expect(
+      store.update(before, { brief: "Stale grant" }, { userId: A, requestId: "revoked" })
+    ).rejects.toThrow("authorization changed");
+    expect((await store.get(project.id))?.brief).toBeNull();
+    await expect(
+      store.create(
+        { ...input, slug: "revoked", defaultRepoId: 123 },
+        { userId: A, requestId: "revoked-create" }
+      )
+    ).rejects.toThrow("authorization changed");
+    await env.DB.prepare(
+      "INSERT INTO team_repository_grants (id,team_id,grant_kind,created_at) VALUES ('installation','repo-team','installation',1)"
+    ).run();
+    resolve.mockResolvedValueOnce(null);
+    expect((await send({ ...input, slug: "missing" })).status).toBe(404);
+  } finally {
+    resolve.mockRestore();
+  }
+});

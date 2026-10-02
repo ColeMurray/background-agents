@@ -10,6 +10,7 @@ CREATE TABLE projects (
   owner_team_id TEXT REFERENCES teams(id),                        -- NULL for workspace ownership
   owner_user_id TEXT NOT NULL,               -- creator; also manageable by the owning team lead
   default_environment_id TEXT,               -- FK-less, like sessions.environment_id
+  default_repo_id INTEGER,
   default_repo_owner TEXT,
   default_repo_name TEXT,
   default_agent_profile_id TEXT,             -- Profiles hook; NULL until Profiles lands

@@ -31,6 +31,7 @@ const columns = {
   ownerTeamId: "owner_team_id",
   ownerUserId: "owner_user_id",
   defaultEnvironmentId: "default_environment_id",
+  defaultRepoId: "default_repo_id",
   defaultRepoOwner: "default_repo_owner",
   defaultRepoName: "default_repo_name",
   defaultAgentProfileId: "default_agent_profile_id",
@@ -130,6 +131,17 @@ export function projectAudit(
     );
 }
 
+function defaultRepositoryGuard(project: Project, userId: string) {
+  if (!project.defaultRepoOwner) return { sql: "1 = 1", params: [] as unknown[] };
+  if (!project.defaultRepoId) return { sql: "0 = 1", params: [] as unknown[] };
+  const permission = activePermissionPredicate(userId, ["repositories.use"]);
+  if (!project.ownerTeamId) return permission;
+  return {
+    sql: `${permission.sql} AND EXISTS (SELECT 1 FROM teams t JOIN team_repository_grants g ON g.team_id = t.id WHERE t.id = ? AND t.archived_at IS NULL AND (g.grant_kind = 'installation' OR (g.grant_kind = 'repository' AND g.repo_external_id = ?)))`,
+    params: [...permission.params, project.ownerTeamId, project.defaultRepoId],
+  };
+}
+
 export class ProjectStore {
   constructor(private readonly db: SqlDatabase) {}
   async get(id: string): Promise<Project | null> {
@@ -191,7 +203,10 @@ export class ProjectStore {
       .all();
     return result.results.map((row) => projectSchema.parse(row));
   }
-  async create(input: CreateProjectInput, actor: ProjectActor): Promise<Project> {
+  async create(
+    input: CreateProjectInput & { defaultRepoId?: number | null },
+    actor: ProjectActor
+  ): Promise<Project> {
     const now = Date.now();
     const id = `proj_${crypto.randomUUID()}`;
     const project: Project = {
@@ -205,6 +220,7 @@ export class ProjectStore {
       ownerTeamId: input.ownerTeamId ?? null,
       ownerUserId: actor.userId,
       defaultEnvironmentId: input.defaultEnvironmentId ?? null,
+      defaultRepoId: input.defaultRepoId ?? null,
       defaultRepoOwner: input.defaultRepoOwner ?? null,
       defaultRepoName: input.defaultRepoName ?? null,
       defaultAgentProfileId: null,
@@ -224,16 +240,18 @@ export class ProjectStore {
       team === null
         ? "1"
         : `EXISTS (SELECT 1 FROM teams t WHERE t.id = ? AND t.archived_at IS NULL AND EXISTS (SELECT 1 FROM team_memberships tm WHERE tm.team_id = t.id AND tm.user_id = ?))`;
+    const target = defaultRepositoryGuard(project, actor.userId);
     const entries = Object.entries(columns) as [keyof Project, string][];
     const results = await this.db.batch([
       this.db
         .prepare(
-          `INSERT INTO projects (${entries.map(([, col]) => col).join(",")}) SELECT ${entries.map(() => "?").join(",")} WHERE ${active.sql} AND ${teamSql}`
+          `INSERT INTO projects (${entries.map(([, col]) => col).join(",")}) SELECT ${entries.map(() => "?").join(",")} WHERE ${active.sql} AND ${teamSql} AND ${target.sql}`
         )
         .bind(
           ...entries.map(([key]) => project[key]),
           ...active.params,
-          ...(team === null ? [] : [team, actor.userId])
+          ...(team === null ? [] : [team, actor.userId]),
+          ...target.params
         ),
       projectAudit(this.db, actor, project, "project.created", null, project),
     ]);
@@ -243,7 +261,7 @@ export class ProjectStore {
   async update(
     project: Project,
     input:
-      | UpdateProjectInput
+      | (UpdateProjectInput & { defaultRepoId?: number | null })
       | Partial<
           Pick<
             Project,
@@ -261,12 +279,19 @@ export class ProjectStore {
     const after = { ...project, ...input, updatedAt: Math.max(Date.now(), project.updatedAt + 1) };
     const keys = [...Object.keys(input), "updatedAt"] as (keyof Project)[];
     const access = projectAccessPredicate(actor.userId, "manage", "projects");
+    const target = defaultRepositoryGuard(after, actor.userId);
     const results = await this.db.batch([
       this.db
         .prepare(
-          `UPDATE projects SET ${keys.map((key) => `${columns[key]} = ?`).join(", ")} WHERE id = ? AND updated_at = ? AND ${access.sql}`
+          `UPDATE projects SET ${keys.map((key) => `${columns[key]} = ?`).join(", ")} WHERE id = ? AND updated_at = ? AND ${access.sql} AND ${target.sql}`
         )
-        .bind(...keys.map((key) => after[key]), project.id, project.updatedAt, ...access.params),
+        .bind(
+          ...keys.map((key) => after[key]),
+          project.id,
+          project.updatedAt,
+          ...access.params,
+          ...target.params
+        ),
       projectAudit(this.db, actor, project, "project.updated", project, after),
     ]);
     if (!results[0].meta.changes) throw new ProjectWriteConflict();

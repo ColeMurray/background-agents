@@ -1,3 +1,4 @@
+import { createLogger } from "../logger";
 import { authorizeEnvironmentTarget, authorizeSessionTarget } from "./session-target-authorization";
 import { loadProjectContext } from "../session/project-context";
 import { createSessionRuntimeClient } from "../session/runtime-client";
@@ -28,6 +29,7 @@ import { parseQuery } from "./query";
 import {
   SCM_AGNOSTIC_HUMAN_USER_ROUTE,
   requirePermission,
+  resolveRepoOrError,
   requireProject,
   json,
   error,
@@ -139,16 +141,16 @@ async function handleCreate(request: Request, _env: Env, _params: object, ctx: R
     return error("Choose either an environment or a complete repository pair", 400);
   const team = await resolveCreationOwnerTeam(ctx, input.ownerTeamId ?? null);
   if (team instanceof Response) return team;
-  const defaultError = await validateProjectDefaults(ctx, {
+  const defaults = await validateProjectDefaults(ctx, _env, {
     ...input,
     ownerTeamId: team?.id ?? null,
   });
-  if (defaultError) return defaultError;
+  if (defaults instanceof Response) return defaults;
   const viewer = await resourceViewer(ctx);
   if (team && (viewer.kind !== "user" || !viewer.memberships.has(team.id)))
     return error("Team membership required", 403);
   return writeResult(async () => {
-    const project = await new ProjectStore(ctx.db).create(input, actor(ctx));
+    const project = await new ProjectStore(ctx.db).create({ ...input, ...defaults }, actor(ctx));
     return json(
       { project: { ...project, capabilities: projectCapabilities(viewer, project) } },
       201
@@ -175,10 +177,15 @@ async function handleUpdate(request: Request, _env: Env, _params: object, ctx: R
   const project = admittedProject(ctx).project;
   if (!validDefaults({ ...project, ...input }))
     return error("Choose either an environment or a complete repository pair", 400);
-  const defaultError = await validateProjectDefaults(ctx, { ...project, ...input });
-  if (defaultError) return defaultError;
+  const defaults = await validateProjectDefaults(ctx, _env, { ...project, ...input });
+  if (defaults instanceof Response) return defaults;
   return writeResult(async () =>
-    json({ project: view(await new ProjectStore(ctx.db).update(project, input, actor(ctx)), ctx) })
+    json({
+      project: view(
+        await new ProjectStore(ctx.db).update(project, { ...input, ...defaults }, actor(ctx)),
+        ctx
+      ),
+    })
   );
 }
 async function handleStatus(request: Request, _env: Env, _params: object, ctx: RequestContext) {
@@ -389,6 +396,7 @@ projectRoutes.delete("/projects/:id/pins/:pinId", manage, (c) => dispatch(c, han
 
 async function validateProjectDefaults(
   ctx: RequestContext,
+  env: Env,
   project: {
     ownerTeamId?: string | null;
     defaultEnvironmentId?: string | null;
@@ -402,17 +410,40 @@ async function validateProjectDefaults(
       environmentId: project.defaultEnvironmentId,
     });
     if (permission) return permission;
-    return authorizeEnvironmentTarget(ctx, {
+    const denied = await authorizeEnvironmentTarget(ctx, {
       environmentId: project.defaultEnvironmentId,
       ownerTeamId: project.ownerTeamId ?? null,
     });
+    return denied ?? { defaultRepoId: null };
   }
-  if (project.defaultRepoOwner && project.defaultRepoName)
-    return authorizeSessionTarget(ctx, {
-      teamId: project.ownerTeamId ?? null,
+  if (project.defaultRepoOwner && project.defaultRepoName) {
+    const preflight = await authorizeSessionTarget(ctx, {
+      teamId: null,
       repositories: [{ owner: project.defaultRepoOwner, name: project.defaultRepoName }],
     });
-  return null;
+    if (preflight) return preflight;
+    const resolved = await resolveRepoOrError(
+      env,
+      project.defaultRepoOwner,
+      project.defaultRepoName,
+      ctx,
+      createLogger("router:projects")
+    );
+    const denied = await authorizeSessionTarget(ctx, {
+      teamId: project.ownerTeamId ?? null,
+      repositories: [
+        { owner: project.defaultRepoOwner, name: project.defaultRepoName, repoId: resolved.repoId },
+      ],
+    });
+    return (
+      denied ?? {
+        defaultRepoId: resolved.repoId,
+        defaultRepoOwner: resolved.repoOwner,
+        defaultRepoName: resolved.repoName,
+      }
+    );
+  }
+  return { defaultRepoId: null };
 }
 
 async function artifactIds(env: Env, ctx: RequestContext, sessionId: string): Promise<Set<string>> {
