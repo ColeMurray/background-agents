@@ -232,6 +232,59 @@ describe("openHostAlarmIndex", () => {
     expect(index.get("legacy")).toBe(100);
   });
 
+  it("reports malformed armed deadlines without losing the claim", () => {
+    const first = open();
+    first.close();
+
+    const db = new DatabaseSync(join(dataDir, "host-alarms.db"));
+    db.exec("INSERT INTO session_deadlines (session_id, deadline) VALUES ('bad', 'not-a-number')");
+    db.close();
+
+    const index = open();
+    expect(() => index.get("bad")).toThrow("Malformed deadline row");
+    expect(() => index.earliest()).toThrow("Malformed armed deadline row");
+    expect(() => index.claim("bad", LEASE_UNTIL)).toThrow("Malformed claimed deadline row");
+    const after = new DatabaseSync(join(dataDir, "host-alarms.db"));
+    expect(
+      after
+        .prepare("SELECT deadline, in_flight FROM session_deadlines WHERE session_id = 'bad'")
+        .get()
+    ).toEqual({
+      deadline: "not-a-number",
+      in_flight: null,
+    });
+    after.close();
+  });
+
+  it("reports malformed failures without disarming a valid deadline", () => {
+    const first = open();
+    first.close();
+
+    const db = new DatabaseSync(join(dataDir, "host-alarms.db"));
+    db.exec(
+      "INSERT INTO session_deadlines (session_id, deadline, failures) VALUES ('bad', 100, 'invalid')"
+    );
+    db.close();
+
+    const index = open();
+    expect(() => index.claim("bad", LEASE_UNTIL)).toThrow("Malformed claimed deadline row");
+    expect(index.get("bad")).toBe(100);
+    expect(index.due(100, [], 1)).toEqual([{ sessionId: "bad", deadline: 100 }]);
+  });
+
+  it("reports malformed persisted lease rows", () => {
+    const first = open();
+    first.close();
+
+    const db = new DatabaseSync(join(dataDir, "host-alarms.db"));
+    db.exec(
+      "INSERT INTO session_deadlines (session_id, in_flight, lease_expires_at) VALUES ('bad', 100, 'not-a-number')"
+    );
+    db.close();
+
+    expect(() => open().earliestLease()).toThrow("Malformed lease row");
+  });
+
   it("leaves excluded sessions out of earliest and due", () => {
     const index = open();
     index.set("a", 100);
