@@ -226,6 +226,8 @@ export class SessionInboxStore {
   private inboxCtes(
     options: Pick<
       ListSessionInboxOptions,
+      | "projectId"
+      | "hasProject"
       | "createdByUserIds"
       | "excludeAutomatedSessions"
       | "teamIds"

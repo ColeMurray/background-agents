@@ -1,3 +1,4 @@
+import { SessionInboxStore } from "../../src/db/session-inbox-store";
 import { resolvePromptReferences } from "../../src/session/session-references";
 import { createCloudflareEnv } from "../../src/cloudflare/platform";
 import { Scheduler } from "../../src/scheduler/scheduler";
@@ -906,3 +907,56 @@ it.each(["private", "workspace"])(
     expect(content).not.toContain("Private source secret");
   }
 );
+
+it("partitions multi-project inbox pages, snapshots, and project boards", async () => {
+  const first = await create();
+  const second = await create({ name: "Other", slug: "other" });
+  const store = new SessionIndexStore(env.DB);
+  const base = {
+    repoOwner: null,
+    repoName: null,
+    model: "anthropic/claude-haiku-4-5",
+    reasoningEffort: null,
+    baseBranch: null,
+    status: "created" as const,
+    userId: A,
+    ownerTeamId: null,
+    visibility: "workspace" as const,
+    createdAt: 1,
+    updatedAt: 1,
+  };
+  for (const [id, projectId] of [
+    ["first-project", first.id],
+    ["second-project", second.id],
+    ["no-project", null],
+  ] as const)
+    await store.create({ ...base, id, title: id, projectId });
+  for (const [filters, expected] of [
+    [{ projectId: first.id }, "first-project"],
+    [{ projectId: second.id }, "second-project"],
+    [{ hasProject: false }, "no-project"],
+  ] as const) {
+    const inbox = new SessionInboxStore(env.DB);
+    const options = {
+      ...filters,
+      viewerUserId: A,
+      readScope: await projectViewer(env.DB, A),
+      mode: "on" as const,
+      limit: 10,
+    };
+    const snapshot = await inbox.snapshot(options);
+    expect(
+      Object.values(snapshot).flatMap((page) => page.items.map((item) => item.rootSession.id))
+    ).toEqual([expected]);
+    const response = await req(
+      `/sessions/inbox?category=finished&${"projectId" in filters ? `projectId=${filters.projectId}` : "hasProject=false"}`
+    );
+    expect(response.status).toBe(200);
+    const page = await response.json<{ items: { rootSession: { id: string } }[] }>();
+    expect(page.items.map((item) => item.rootSession.id)).toEqual([expected]);
+  }
+  const board = await (
+    await req(`/projects/${first.id}/sessions?bucket=board`)
+  ).json<{ items: { rootSession: { id: string } }[] }>();
+  expect(board.items.map((item) => item.rootSession.id)).toEqual(["first-project"]);
+});
