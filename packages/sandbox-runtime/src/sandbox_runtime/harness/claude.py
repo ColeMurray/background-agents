@@ -16,6 +16,7 @@ import os
 import uuid
 from collections.abc import AsyncIterator, Callable, Mapping
 from dataclasses import dataclass, field
+from functools import partial
 from typing import TYPE_CHECKING, Any, Final, Protocol
 
 from claude_agent_sdk import (
@@ -28,10 +29,6 @@ from claude_agent_sdk import (
     ResultMessage,
     StreamEvent,
     SystemMessage,
-    TaskNotificationMessage,
-    TaskProgressMessage,
-    TaskStartedMessage,
-    TaskUpdatedMessage,
     TextBlock,
     ToolResultBlock,
     ToolUseBlock,
@@ -47,7 +44,7 @@ from ..credentials.provider_credential_client import (
     RuntimeCredentialDenied,
     RuntimeCredentialUnavailable,
 )
-from ..log_safety import register_log_secret, sanitize_log_value, unregister_log_secret
+from ..log_safety import register_log_secret, unregister_log_secret
 from .base import (
     BridgeEvent,
     EventSink,
@@ -66,6 +63,7 @@ from .claude_env import (
     write_clean_env_wrapper,
 )
 from .claude_tools import OI_TOOL_SERVER_NAME, ControlPlaneToolClient, ToolServerConfig
+from .claude_trajectory import observe_events, observe_message, observe_stderr, observe_turn
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -335,7 +333,6 @@ class ClaudeHarness:
         self._tool_client: ControlPlaneToolClient | None = None
         self._tool_server: Any = None
         self.init_info: dict[str, Any] | None = None
-        self._active_message_id: str | None = None
 
     # --- lifecycle -----------------------------------------------------------
 
@@ -444,7 +441,7 @@ class ClaudeHarness:
             "include_partial_messages": True,
             "forward_subagent_text": False,
             "max_buffer_size": MAX_STDOUT_MESSAGE_BYTES,
-            "stderr": self._log_stderr,
+            "stderr": partial(observe_stderr, self.log, client_agent_session_id=self.session_id),
             **reasoning_options(model, reasoning_effort),
         }
         if self._resume_on_connect:
@@ -520,35 +517,12 @@ class ClaudeHarness:
     # --- prompt ------------------------------------------------------------
 
     async def run_prompt(self, prompt: HarnessPrompt, emit: EventSink) -> TurnOutcome:
-        self._active_message_id = prompt.message_id
-        started_at = asyncio.get_running_loop().time()
-        outcome: TurnOutcome | None = None
-        status = "failed"
-        detail: str | None = None
-        try:
+        with observe_turn(
+            self.log, agent_session_id=self.session_id, message_id=prompt.message_id
+        ) as finished:
             outcome = await self._run_prompt(prompt, emit)
-            status = (
-                "cancelled" if outcome.cancelled else "completed" if outcome.success else "failed"
-            )
-            detail = outcome.error
+            finished(outcome)
             return outcome
-        except asyncio.CancelledError:
-            status = "cancelled"
-            raise
-        except Exception as error:
-            detail = str(error)
-            raise
-        finally:
-            self._log_diagnostic(
-                "claude.turn_end",
-                warning=status == "failed",
-                message_id=prompt.message_id,
-                outcome=status,
-                duration_seconds=asyncio.get_running_loop().time() - started_at,
-                message_cost_usd=outcome.message_cost_usd if outcome else None,
-                error=detail,
-            )
-            self._active_message_id = None
 
     async def _run_prompt(self, prompt: HarnessPrompt, emit: EventSink) -> TurnOutcome:
         try:
@@ -596,11 +570,29 @@ class ClaudeHarness:
                         break
                     except TimeoutError as error:
                         raise _InactivityTimeout from error
-                    self._log_task_lifecycle(state, message)
                     if self._belongs_to_injected_turn(state, message):
+                        observe_message(
+                            self.log,
+                            message,
+                            agent_session_id=self.session_id,
+                            message_id=state.message_id,
+                            injected_turn=True,
+                        )
                         continue
                     events, outcome = self._translate(state, message)
-                    self._log_trajectory(state, message, events, outcome)
+                    observe_message(
+                        self.log,
+                        message,
+                        agent_session_id=self.session_id,
+                        message_id=state.message_id,
+                        outcome=outcome,
+                    )
+                    observe_events(
+                        self.log,
+                        events,
+                        agent_session_id=self.session_id,
+                        message_id=state.message_id,
+                    )
                     for event in events:
                         await emit(event)
                     if outcome is not None:
@@ -633,131 +625,6 @@ class ClaudeHarness:
             self.log.error("claude.turn_error", exc=error, message_id=prompt.message_id)
             self._needs_reconnect = True
             return TurnOutcome.failed(f"Claude agent transport failed: {error}")
-
-    def _log_diagnostic(self, event: str, *, warning: bool = False, **fields: Any) -> None:
-        """Observability must not change a turn's outcome or SDK transport."""
-        try:
-            log = self.log.warn if warning else self.log.info
-            log(
-                event,
-                harness=self.id.value,
-                agent_session_id=self.session_id,
-                **sanitize_log_value(fields),
-            )
-        except Exception:
-            # A failing formatter/handler must not break tool-event delivery.
-            pass
-
-    def _log_stderr(self, line: str) -> None:
-        self._log_diagnostic(
-            "claude.stderr", message_id=self._active_message_id, stream="stderr", output=line
-        )
-
-    def _log_task_lifecycle(self, state: _TurnState, message: Any) -> None:
-        """Typed background-task metadata, even during an ignored injected turn.
-
-        Descriptions, summaries, output paths, and arbitrary patches are not
-        trajectory metadata and are deliberately excluded.
-        """
-        if not isinstance(
-            message,
-            (
-                TaskStartedMessage,
-                TaskProgressMessage,
-                TaskNotificationMessage,
-                TaskUpdatedMessage,
-            ),
-        ):
-            return
-        fields: dict[str, Any] = {"message_id": state.message_id, "task_id": message.task_id}
-        status: str | None = None
-        if isinstance(message, TaskUpdatedMessage):
-            candidate = message.status or message.patch.get("status")
-            if candidate in ("pending", "running", "paused", "completed", "failed", "killed"):
-                status = candidate
-        else:
-            fields["tool_use_id"] = message.tool_use_id
-            if isinstance(message, TaskStartedMessage):
-                status = "running"
-                fields["task_type"] = message.task_type
-            elif isinstance(message, TaskNotificationMessage):
-                status = message.status
-            else:
-                status = "running"
-                fields["last_tool_name"] = message.last_tool_name
-            if (
-                isinstance(message, (TaskProgressMessage, TaskNotificationMessage))
-                and message.usage
-            ):
-                for key, value in (
-                    ("total_tokens", message.usage.get("total_tokens")),
-                    ("tool_uses", message.usage.get("tool_uses")),
-                ):
-                    if isinstance(value, int):
-                        fields[key] = value
-                duration_ms = message.usage.get("duration_ms")
-                if isinstance(duration_ms, int):
-                    fields["duration_seconds"] = duration_ms / 1000
-        fields["status"] = status
-        self._log_diagnostic(f"claude.{message.subtype}", warning=status == "failed", **fields)
-
-    def _log_trajectory(
-        self,
-        state: _TurnState,
-        message: Any,
-        events: list[BridgeEvent],
-        outcome: TurnOutcome | None,
-    ) -> None:
-        """Mirror selected translated events before delivery, never token deltas."""
-        for event in events:
-            kind = event["type"]
-            if kind == "tool_call":
-                fields: dict[str, Any] = {
-                    "message_id": state.message_id,
-                    "call_id": event["callId"],
-                    "tool": event["tool"],
-                    "status": event["status"],
-                    "parent_tool_use_id": event.get("taskCallId"),
-                }
-                # Arguments are repeated on the wire for UI state, not in logs.
-                if event["status"] == "running":
-                    # ``args`` itself is reserved by Python's LogRecord.
-                    fields["args_preview"] = event["args"]
-                else:
-                    fields["output"] = event["output"]
-                self._log_diagnostic(
-                    "claude.tool_call", warning=event["status"] == "error", **fields
-                )
-            elif kind in ("context_compacted", "warning", "error"):
-                self._log_diagnostic(
-                    f"claude.{kind}",
-                    warning=kind in ("warning", "error"),
-                    message_id=state.message_id,
-                    scope=event.get("scope"),
-                    detail=event.get("message", event.get("error")),
-                )
-        if isinstance(message, AssistantMessage) and not message.parent_tool_use_id:
-            text = "".join(block.text for block in message.content if isinstance(block, TextBlock))
-            if text:
-                self._log_diagnostic(
-                    "claude.assistant_message",
-                    message_id=state.message_id,
-                    assistant_message_id=message.message_id,
-                    text=text,
-                )
-        if outcome is not None and isinstance(message, ResultMessage):
-            self._log_diagnostic(
-                "claude.result",
-                message_id=state.message_id,
-                outcome="completed" if outcome.success else "failed",
-                reason=message.subtype,
-                duration_seconds=message.duration_ms / 1000,
-                api_duration_seconds=message.duration_api_ms / 1000,
-                num_turns=message.num_turns,
-                message_cost_usd=outcome.message_cost_usd,
-                tokens=_usage_tokens(message.usage),
-                error=outcome.error,
-            )
 
     def _belongs_to_injected_turn(self, state: _TurnState, message: Any) -> bool:
         """Every message of a turn the session injected, not of this prompt.

@@ -101,3 +101,20 @@ async def test_opencode_log_handler_failure_does_not_stop_pipe_drain():
     await server._forward_opencode_logs()
     assert server.log.info.call_count == 2
     assert not process.stdout._steps
+
+
+async def test_opencode_json_credential_fields_are_redacted_without_registered_values(caplog):
+    server = object.__new__(OpenCodeServer)
+    server.log = get_logger("oc-json-log-test", sandbox_id="sb", session_id="session")
+    process = MagicMock()
+    process.stdout = _ScriptedStream(
+        [b'{"api_key":"unknown-json-credential","access_token":"unknown-json-token"}\n']
+    )
+    server._opencode_process = process
+    with caplog.at_level(logging.INFO, logger="oc-json-log-test"):
+        await server._forward_opencode_logs()
+    entries = [JSONFormatter().format(record) for record in caplog.records]
+    assert len(entries) == 1
+    assert "unknown-json-credential" not in entries[0]
+    assert "unknown-json-token" not in entries[0]
+    assert REDACTED in entries[0]

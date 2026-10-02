@@ -7,6 +7,7 @@ The formatter applies this to every record, including third-party exceptions.
 
 from __future__ import annotations
 
+import math
 import os
 import re
 from collections import Counter
@@ -31,8 +32,10 @@ _BEARER = re.compile(r"\b(Bearer\s+)[^\s,;\"']+", re.I)
 _URL_CREDENTIAL = re.compile(r"(https?://)[^/\s@]+@", re.I)
 _TOKEN = re.compile(r"\b(?:sk-ant-[A-Za-z0-9_-]+|gh[pousr]_[A-Za-z0-9_]+)\b")
 _ASSIGNMENT = re.compile(
-    r"(?i)\b([\w-]*(?:token|secret|password|api[_-]?key|authorization)\s*[=:]\s*)"
-    r"(?:\"[^\"]*\"|'[^']*'|[^\s,;]+)"
+    r"(?i)\b((?:[\w-]*(?:token|secret|password|passwd|api[_-]?key|authorization|cookie|"
+    r"private[_-]?key|credentials?|access[_-]?key)|key|auth)[\"']?\s*[=:]\s*)"
+    r"(?:\"(?:\\[\s\S]|[^\"\\])*(?:\"|\\?\Z)|'(?:\\[\s\S]|[^'\\])*(?:'|\\?\Z)|"
+    r"[{\[][\s\S]*\Z|[^\s,;}\]]+)"
 )
 _PRIVATE_KEY = re.compile(
     r"-----BEGIN (?:[A-Z]+ )?PRIVATE KEY-----.*?(?:-----END (?:[A-Z]+ )?PRIVATE KEY-----|\Z)",
@@ -67,16 +70,31 @@ def _known_secrets() -> tuple[str, ...]:
     return tuple(sorted(secrets, key=len, reverse=True))
 
 
-def _redact_text(text: str, secrets: tuple[str, ...]) -> str:
-    # Redact before truncation: even a secret crossing the preview boundary
-    # must not leave its prefix behind.
-    for secret in secrets:
-        text = text.replace(secret, REDACTED)
-    text = _BEARER.sub(r"\1" + REDACTED, text)
-    text = _URL_CREDENTIAL.sub(r"\1" + REDACTED + "@", text)
-    text = _ASSIGNMENT.sub(r"\1" + REDACTED, text)
-    text = _PRIVATE_KEY.sub(REDACTED, text)
-    return _TOKEN.sub(REDACTED, text)
+def _redact_text(
+    text: str,
+    source_limit: int,
+    secret_pattern: re.Pattern[str] | None,
+    secret_lookahead: int,
+) -> tuple[str, bool]:
+    # Keep the cutoff in source coordinates. Replacing an earlier credential
+    # must never pull partially scanned later credentials into the preview.
+    parts: list[str] = []
+    cursor = 0
+    source_end = min(source_limit, len(text))
+    if secret_pattern is not None:
+        for match in secret_pattern.finditer(text[: source_limit + secret_lookahead]):
+            if match.start() >= source_limit:
+                break
+            parts.extend((text[cursor : match.start()], REDACTED))
+            cursor = match.end()
+            source_end = max(source_end, cursor)
+    parts.append(text[cursor:source_limit])
+    preview = "".join(parts)
+    preview = _BEARER.sub(r"\1" + REDACTED, preview)
+    preview = _URL_CREDENTIAL.sub(r"\1" + REDACTED + "@", preview)
+    preview = _ASSIGNMENT.sub(r"\1" + REDACTED, preview)
+    preview = _PRIVATE_KEY.sub(REDACTED, preview)
+    return _TOKEN.sub(REDACTED, preview), len(text) > source_end
 
 
 def sanitize_log_value(value: Any) -> Any:
@@ -87,18 +105,20 @@ def sanitize_log_value(value: Any) -> Any:
     """
     secrets = _known_secrets()
     secret_lookahead = max((len(secret) for secret in secrets), default=0)
+    secret_pattern = (
+        re.compile("|".join(re.escape(secret) for secret in secrets)) if secrets else None
+    )
     remaining_chars = MAX_LOG_TOTAL_CHARS
     remaining_nodes = MAX_LOG_NODES
 
     def text_preview(text: str) -> str:
         nonlocal remaining_chars
         limit = min(MAX_LOG_TEXT_CHARS, remaining_chars)
-        # Look far enough past the preview boundary to redact any known
-        # credential crossing it, without scanning a multi-megabyte tool result.
-        scan_limit = limit + secret_lookahead
-        redacted = _redact_text(text[:scan_limit], secrets)
+        # Lookahead completes known matches, but never adds raw characters
+        # beyond the original preview cutoff to the rendered output.
+        redacted, source_truncated = _redact_text(text, limit, secret_pattern, secret_lookahead)
         remaining_chars -= min(len(redacted), limit)
-        if len(text) > scan_limit or len(redacted) > limit:
+        if source_truncated or len(redacted) > limit:
             return redacted[: max(0, limit - len(TRUNCATED))] + TRUNCATED
         return redacted
 
@@ -113,7 +133,9 @@ def sanitize_log_value(value: Any) -> Any:
             return text_preview(str(item))
         if isinstance(item, int) and item.bit_length() > 256:
             return "<large integer>"
-        if item is None or isinstance(item, (bool, int, float)):
+        if isinstance(item, float):
+            return item if math.isfinite(item) else "<non-finite float>"
+        if item is None or isinstance(item, (bool, int)):
             return item
         if isinstance(item, Mapping):
             result: dict[str, Any] = {}

@@ -8,6 +8,7 @@ import pytest
 
 from sandbox_runtime.log_config import (
     JSONFormatter,
+    SafeStreamHandler,
     StructuredLogger,
     configure_logging,
     get_logger,
@@ -48,6 +49,22 @@ def _capture_log(logger: StructuredLogger, level: str = "info", **kwargs) -> dic
 
 
 class TestJSONFormatter:
+    def test_nonfinite_numeric_payloads_produce_standard_json(self):
+        record = logging.LogRecord("runtime", logging.INFO, __file__, 1, "agent.usage", (), None)
+        record.usage = {"cost": float("nan"), "duration": float("inf")}
+        rendered = JSONFormatter().format(record)
+        safe = json.loads(rendered, parse_constant=lambda value: pytest.fail(f"Non-JSON {value}"))
+        assert safe["usage"] == {"cost": "<non-finite float>", "duration": "<non-finite float>"}
+
+    @pytest.mark.parametrize("event", ["agent.tool", "claude.stderr", "opencode.process_output"])
+    def test_json_string_credentials_are_redacted_in_output_records(self, event):
+        record = logging.LogRecord("runtime", logging.INFO, __file__, 1, event, (), None)
+        record.output = '{"api_key":"opaque-json-value","access_token":"opaque-token-value"}'
+        rendered = JSONFormatter().format(record)
+        assert "opaque-json-value" not in rendered
+        assert "opaque-token-value" not in rendered
+        assert REDACTED in rendered
+
     def test_aggregate_json_byte_bound_and_cycles(self):
         record = logging.LogRecord("bounded", logging.INFO, __file__, 1, "test.bound", (), None)
         record.payload = {f"field-{i}": "\x00😀" * 10_000 for i in range(100)}
@@ -206,6 +223,16 @@ class TestJSONFormatter:
 
 
 class TestStructuredLogger:
+    def test_custom_handler_failure_remains_nonfatal(self):
+        class RaisingHandler(logging.Handler):
+            def emit(self, record):
+                raise OSError("custom handler failed")
+
+        log = get_logger("custom-handler-failure")
+        log._logger = logging.Logger("isolated-custom-handler", logging.INFO)
+        log._logger.addHandler(RaisingHandler())
+        log.info("agent.tool", output="opaque diagnostic")
+
     def test_get_logger_factory(self):
         log = get_logger("my-component", sandbox_id="sb-1")
         assert isinstance(log, StructuredLogger)
@@ -260,6 +287,30 @@ class TestStructuredLogger:
 
 
 class TestConfigureLogging:
+    @pytest.mark.parametrize("failure", ["write", "flush"])
+    def test_failed_stream_never_prints_third_party_raw_record(self, failure, monkeypatch, capsys):
+        class FailingStream:
+            def write(self, value):
+                if failure == "write":
+                    raise OSError("stream write failed")
+                return len(value)
+
+            def flush(self):
+                if failure == "flush":
+                    raise OSError("stream flush failed")
+
+        monkeypatch.setattr(logging, "raiseExceptions", True)
+        configure_logging()
+        handler = logging.root.handlers[0]
+        assert isinstance(handler, SafeStreamHandler)
+        original_stream = handler.stream
+        try:
+            handler.stream = FailingStream()
+            logging.getLogger("third-party-broken-stream").error("token=%s", "raw-super-secret")
+            assert capsys.readouterr().err == ""
+        finally:
+            handler.stream = original_stream
+
     def test_configures_root_logger(self):
         configure_logging()
         assert len(logging.root.handlers) == 1

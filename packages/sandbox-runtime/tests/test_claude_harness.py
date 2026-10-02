@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import asyncio
 import json
-import logging
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 from unittest.mock import MagicMock
@@ -24,12 +23,8 @@ from claude_agent_sdk import (
     ResultMessage,
     StreamEvent,
     SystemMessage,
-    TaskNotificationMessage,
-    TaskProgressMessage,
-    TaskStartedMessage,
     TaskUpdatedMessage,
     TextBlock,
-    ThinkingBlock,
     ToolResultBlock,
     ToolUseBlock,
     UserMessage,
@@ -54,8 +49,6 @@ from sandbox_runtime.harness.claude import (
     reasoning_options,
 )
 from sandbox_runtime.harness.claude_env import ClaudeAuthMode
-from sandbox_runtime.log_config import JSONFormatter, get_logger
-from sandbox_runtime.log_safety import REDACTED, TRUNCATED
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
@@ -368,40 +361,6 @@ class TestOptions:
         assert "mcp__linear__*" in options["allowed_tools"]
         assert "mcp__local__*" in options["allowed_tools"]
         assert "Bash" in options["allowed_tools"]
-
-    async def test_stderr_callback_has_prompt_context_and_redacts_brokered_secret(
-        self, tmp_path: Path
-    ) -> None:
-        h = Harness(
-            tmp_path,
-            turns=[[_result(0.1)]],
-            oauth_managed=True,
-            credential_client=FakeCredentialClient(Issued("opaque-brokered-credential")),
-        )
-        await h.harness.open()
-        await h.harness.create_session()
-        client = await h.harness._ensure_client("claude-sonnet-4-6", None)
-        original_query = client.query
-
-        async def query_with_stderr(prompt, session_id="default"):
-            h.client.options["stderr"]("failure opaque-brokered-credential")
-            await original_query(prompt, session_id)
-
-        h.client.query = query_with_stderr
-        await _run(h.harness)
-        entry = next(
-            call.kwargs
-            for call in h.harness.log.info.call_args_list
-            if call.args[0] == "claude.stderr"
-        )
-        assert entry == {
-            "harness": "claude",
-            "agent_session_id": h.harness.session_id,
-            "message_id": "m1",
-            "stream": "stderr",
-            "output": f"failure {REDACTED}",
-        }
-        assert h.harness._active_message_id is None
 
     async def test_stdout_ceiling_clears_the_whole_attachment_budget(self, tmp_path: Path) -> None:
         """One NDJSON line carries every attachment the runtime accepts.
@@ -1013,252 +972,3 @@ class TestDefaultTranscriptLookup:
         )
         assert not _default_transcript_exists("not-a-uuid", tmp_path / "repo", config_dir)
         assert not _default_transcript_exists(session_id, tmp_path / "repo", tmp_path / "missing")
-
-
-class TestTrajectoryLogging:
-    async def test_real_logger_accepts_tool_arguments_and_preserves_context(self, tmp_path, caplog):
-        h = Harness(
-            tmp_path,
-            turns=[
-                [
-                    AssistantMessage(
-                        content=[
-                            ToolUseBlock(
-                                id="tool-real",
-                                name="Bash",
-                                input={"command": "ls", "api_key": "unknown-key"},
-                            )
-                        ],
-                        model="m",
-                    ),
-                    _result(0.1),
-                ]
-            ],
-        )
-        h.harness.log = get_logger("claude-real-log", session_id="session", sandbox_id="sb")
-        await h.harness.open()
-        await h.harness.create_session()
-        with caplog.at_level(logging.INFO, logger="claude-real-log"):
-            _, outcome = await _run(h.harness)
-        entries = [json.loads(JSONFormatter().format(record)) for record in caplog.records]
-        tool = next(entry for entry in entries if entry["event"] == "claude.tool_call")
-        assert tool["args_preview"] == {"command": "ls", "api_key": REDACTED}
-        assert tool["call_id"] == "tool-real" and tool["message_id"] == "m1"
-        assert tool["session_id"] == "session" and tool["sandbox_id"] == "sb"
-        assert outcome.success
-
-    @pytest.mark.parametrize("status", ["completed", "failed", "stopped", "killed"])
-    async def test_typed_background_task_lifecycle_is_metadata_only(self, tmp_path, status):
-        usage = {"total_tokens": 22, "tool_uses": 3, "duration_ms": 1500}
-        start = TaskStartedMessage(
-            subtype="task_started",
-            data={"raw": "must not log"},
-            task_id="task-1",
-            description="private task description",
-            uuid="u-start",
-            session_id="sess",
-            tool_use_id="agent-1",
-            task_type="local_agent",
-        )
-        progress = TaskProgressMessage(
-            subtype="task_progress",
-            data={},
-            task_id="task-1",
-            description="private progress",
-            usage=usage,
-            uuid="u-progress",
-            session_id="sess",
-            tool_use_id="agent-1",
-            last_tool_name="Bash",
-        )
-        if status == "killed":
-            terminal = TaskUpdatedMessage(
-                subtype="task_updated",
-                data={},
-                task_id="task-1",
-                status="killed",
-                patch={"status": "killed", "summary": "private terminal summary"},
-            )
-        else:
-            terminal = TaskNotificationMessage(
-                subtype="task_notification",
-                data={},
-                task_id="task-1",
-                status=status,
-                output_file="private/output.txt",
-                summary="private terminal summary",
-                uuid="u-end",
-                session_id="sess",
-                tool_use_id="agent-1",
-                usage=usage,
-            )
-        h = Harness(tmp_path, turns=[[start, progress, terminal, _result(0.1)]])
-        await h.harness.open()
-        await h.harness.create_session()
-        events, outcome = await _run(h.harness)
-        logs = [
-            call.kwargs
-            for call in h.harness.log.method_calls
-            if call.args[0].startswith("claude.task_")
-        ]
-        assert len(logs) == 3
-        assert all(entry["task_id"] == "task-1" and entry["message_id"] == "m1" for entry in logs)
-        assert logs[0]["tool_use_id"] == logs[1]["tool_use_id"] == "agent-1"
-        assert logs[1]["total_tokens"] == 22 and logs[1]["tool_uses"] == 3
-        assert logs[1]["duration_seconds"] == 1.5
-        assert logs[-1]["status"] == status
-        assert "private" not in str(logs) and "must not log" not in str(logs)
-        assert outcome.success
-        assert [event["type"] for event in events] == ["step_finish"]
-        if status == "failed":
-            assert any(
-                call.args[0] == "claude.task_notification"
-                for call in h.harness.log.warn.call_args_list
-            )
-
-    @pytest.mark.parametrize(
-        "turn,detail",
-        [
-            ([], "stream ended"),
-            (
-                [_result(0.1, subtype="error_max_turns", is_error=True, errors=["too many turns"])],
-                "too many turns",
-            ),
-        ],
-    )
-    async def test_failed_outcomes_have_reason_in_final_diagnostic(self, tmp_path, turn, detail):
-        h = Harness(tmp_path, turns=[turn])
-        await h.harness.open()
-        await h.harness.create_session()
-        _, outcome = await _run(h.harness)
-        assert not outcome.success
-        final = next(
-            call.kwargs
-            for call in h.harness.log.warn.call_args_list
-            if call.args[0] == "claude.turn_end"
-        )
-        assert final["outcome"] == "failed" and detail in final["error"]
-        assert final["message_id"] == "m1"
-        assert final["duration_seconds"] >= 0
-
-    async def test_completed_messages_tools_and_subagent_ids_without_stream_delta_logs(
-        self, tmp_path: Path
-    ) -> None:
-        turn = [
-            _stream("message_start", message={"id": "assistant-1"}),
-            _text_delta("Hi"),
-            _text_delta(" there"),
-            AssistantMessage(
-                content=[
-                    TextBlock("Hi there"),
-                    ThinkingBlock("hidden thinking", "signature"),
-                    ToolUseBlock(
-                        id="tool-1", name="Bash", input={"command": "ls", "api_key": "unknown"}
-                    ),
-                ],
-                model="m",
-                message_id="assistant-1",
-            ),
-            UserMessage(content=[ToolResultBlock(tool_use_id="tool-1", content="x" * 4000)]),
-            AssistantMessage(
-                content=[
-                    TextBlock("not logged child text"),
-                    ToolUseBlock(id="child-1", name="Read", input={"file_path": "f"}),
-                ],
-                model="m",
-                message_id="child-msg",
-                parent_tool_use_id="parent-1",
-            ),
-            UserMessage(
-                content=[ToolResultBlock(tool_use_id="child-1", content="failed", is_error=True)],
-                parent_tool_use_id="parent-1",
-            ),
-            SystemMessage(subtype="compact_boundary", data={}),
-            _result(0.2, usage={"input_tokens": 3, "output_tokens": 4}),
-        ]
-        h = Harness(tmp_path, turns=[turn])
-        await h.harness.open()
-        await h.harness.create_session()
-        events, outcome = await _run(h.harness)
-        logs = [
-            (call.args[0], call.kwargs)
-            for call in h.harness.log.method_calls
-            if call[0] in ("info", "warn")
-        ]
-        assert "hidden thinking" not in str(logs)
-        tools = [fields for event, fields in logs if event == "claude.tool_call"]
-        assert [(entry["call_id"], entry["status"]) for entry in tools] == [
-            ("tool-1", "running"),
-            ("tool-1", "completed"),
-            ("child-1", "running"),
-            ("child-1", "error"),
-        ]
-        assert tools[0]["args_preview"]["api_key"] == REDACTED
-        assert tools[1]["output"].endswith(TRUNCATED)
-        assert tools[2]["parent_tool_use_id"] == tools[3]["parent_tool_use_id"] == "parent-1"
-        assistants = [fields for event, fields in logs if event == "claude.assistant_message"]
-        assert len(assistants) == 1
-        assert assistants[0]["text"] == "Hi there"
-        assert assistants[0]["assistant_message_id"] == "assistant-1"
-        assert all(fields["message_id"] == "m1" for fields in tools + assistants)
-        assert any(event == "claude.context_compacted" for event, _ in logs)
-        result = next(fields for event, fields in logs if event == "claude.result")
-        assert result["message_cost_usd"] == 0.2
-        assert result["tokens"] == {"input": 3, "output": 4}
-        assert result["outcome"] == "completed" and outcome.success
-        # Logging operates on copies: the UI still receives complete original payloads.
-        wire_tool = next(event for event in events if event["type"] == "tool_call")
-        assert wire_tool["args"]["api_key"] == "unknown"
-        assert (
-            next(event for event in events if event.get("status") == "completed")["output"]
-            == "x" * 4000
-        )
-        assert h.harness._active_message_id is None
-
-    async def test_logging_handler_failure_does_not_change_delivery(self, tmp_path: Path) -> None:
-        h = Harness(
-            tmp_path,
-            turns=[
-                [
-                    AssistantMessage(
-                        content=[ToolUseBlock(id="t", name="Bash", input={})], model="m"
-                    ),
-                    _result(0.1),
-                ]
-            ],
-        )
-        await h.harness.open()
-        await h.harness.create_session()
-
-        def fail_diagnostics(event, **fields):
-            if event in ("claude.tool_call", "claude.result", "claude.stderr"):
-                raise RuntimeError("log handler failed")
-
-        h.harness.log.info.side_effect = fail_diagnostics
-        events, outcome = await _run(h.harness)
-        h.client.options["stderr"]("diagnostic")
-        assert outcome.success
-        assert any(event["type"] == "tool_call" for event in events)
-
-    async def test_tool_activity_is_logged_before_delivery_failure(self, tmp_path: Path) -> None:
-        h = Harness(
-            tmp_path,
-            turns=[
-                [
-                    AssistantMessage(
-                        content=[ToolUseBlock(id="t", name="Bash", input={})], model="m"
-                    ),
-                ]
-            ],
-        )
-        await h.harness.open()
-        await h.harness.create_session()
-
-        async def failed_delivery(event):
-            raise RuntimeError("websocket failed")
-
-        outcome = await h.harness.run_prompt(
-            HarnessPrompt(message_id="m1", text="hi"), failed_delivery
-        )
-        assert not outcome.success
-        assert any(call.args[0] == "claude.tool_call" for call in h.harness.log.info.call_args_list)

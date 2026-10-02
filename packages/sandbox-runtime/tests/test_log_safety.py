@@ -2,6 +2,8 @@
 
 import json
 
+import pytest
+
 from sandbox_runtime.log_safety import (
     MAX_LOG_TEXT_CHARS,
     REDACTED,
@@ -54,6 +56,62 @@ def test_redacts_before_truncating_and_handles_multiline_unicode(monkeypatch):
     assert sanitize_log_value("😀\nline-one-credential") == f"😀\n{REDACTED}"
 
 
+def test_earlier_redaction_cannot_pull_a_later_partial_secret_into_preview():
+    first, second = "A" * 100, "B" * 100
+    register_log_secret(first)
+    register_log_secret(second)
+    try:
+        result = sanitize_log_value(first + "x" * 2000 + second)
+        assert "A" not in result
+        assert "B" not in result
+        assert result.startswith(REDACTED)
+        assert result.endswith(TRUNCATED)
+        assert len(result) <= MAX_LOG_TEXT_CHARS
+        # Also complete a match that begins before, but ends beyond, the cutoff.
+        crossing = sanitize_log_value(first + "x" * 1940 + second)
+        assert "A" not in crossing and "B" not in crossing
+        assert crossing.endswith(REDACTED)
+    finally:
+        unregister_log_secret(first)
+        unregister_log_secret(second)
+
+
+@pytest.mark.parametrize(
+    "key", ["api_key", "access_token", "Authorization", "password", "X-Api-Key", "auth"]
+)
+def test_quoted_json_credential_fields_in_string_output_are_redacted(key):
+    output = json.dumps({"nested": {key: 'opaque "quoted" credential'}, "note": "keep-me"})
+    result = sanitize_log_value(output)
+    assert "opaque" not in result and "credential" not in result
+    assert REDACTED in result
+    assert "keep-me" in result
+
+
+def test_incomplete_quoted_json_value_is_redacted_to_preview_end():
+    output = '{"api_key":"' + "opaque-value " * MAX_LOG_TEXT_CHARS
+    result = sanitize_log_value(output)
+    assert "opaque-value" not in result
+    assert REDACTED in result
+    assert result.endswith(TRUNCATED)
+
+
+def test_quoted_credential_cut_off_mid_escape_is_redacted_to_preview_end():
+    prefix = '{"api_key":"'
+    source = prefix + "opaque-value " + "x" * (MAX_LOG_TEXT_CHARS - len(prefix) - 14) + "\\escaped"
+    assert source[MAX_LOG_TEXT_CHARS - 1] == "\\"
+    result = sanitize_log_value(source)
+    assert "opaque-value" not in result
+    assert "x" not in result
+    assert REDACTED in result
+    assert result.endswith(TRUNCATED)
+
+
+def test_nested_credential_object_in_string_output_is_conservatively_redacted():
+    result = sanitize_log_value('{"auth": {"custom": "opaque-object-value"}, "note": "later"}')
+    assert "opaque-object-value" not in result
+    assert REDACTED in result
+
+
 def test_recognizable_free_text_credentials_are_redacted():
     text = (
         "Bearer totally-opaque https://user:pass@example.test/x "
@@ -94,3 +152,9 @@ def test_unknown_objects_do_not_call_repr_or_str():
             raise AssertionError("must not repr arbitrary objects")
 
     assert sanitize_log_value(SecretObject()) == "<SecretObject>"
+
+
+def test_nonfinite_floats_become_strict_json_safe_markers():
+    safe = sanitize_log_value([float("nan"), float("inf"), -float("inf"), 1.5])
+    assert safe == ["<non-finite float>"] * 3 + [1.5]
+    assert json.loads(json.dumps(safe, allow_nan=False)) == safe

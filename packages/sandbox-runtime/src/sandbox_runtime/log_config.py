@@ -18,7 +18,7 @@ import contextlib
 import json
 import logging
 import sys
-from typing import Any
+from typing import Any, TextIO
 
 from .log_safety import MAX_LOG_JSON_BYTES, TRUNCATED, sanitize_log_value
 
@@ -113,13 +113,22 @@ class JSONFormatter(logging.Formatter):
         return rendered
 
 
+class SafeStreamHandler(logging.StreamHandler[TextIO]):
+    """Drop failed writes without stdlib's raw-record stderr fallback."""
+
+    def handleError(self, record: logging.LogRecord) -> None:
+        # StreamHandler.emit handles write/flush failures internally. Its
+        # default handleError prints unsanitized record.msg/args to stderr.
+        pass
+
+
 def configure_logging() -> None:
     """Configure root logger with JSON output to stdout.
 
     Call once at process startup (entrypoint, bridge, web_api module load).
     Replaces any existing handlers on the root logger.
     """
-    handler = logging.StreamHandler(sys.stdout)
+    handler = SafeStreamHandler(sys.stdout)
     handler.setFormatter(JSONFormatter())
     logging.root.handlers = [handler]
     logging.root.setLevel(logging.INFO)
@@ -183,7 +192,8 @@ class StructuredLogger:
             "_component": self._component,
             "_service": self._service,
         }
-        # A broken handler must not break sandbox execution. No raw fallback.
+        # Custom handlers may raise directly; keep them nonfatal too. The
+        # configured SafeStreamHandler separately owns stdlib's fallback path.
         with contextlib.suppress(Exception):
             self._logger.log(
                 level,
