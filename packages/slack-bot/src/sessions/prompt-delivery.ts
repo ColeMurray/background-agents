@@ -41,11 +41,15 @@ export type DeliverPromptResult =
   /**
    * "stale": close the thread mapping; never start a replacement.
    * "forbidden": refuse this user's prompt without closing the thread for others.
+   * "channel_scope_denied": close the thread for everyone; its channel authority no longer matches.
    * "transient": the prompt send failed; the user should be told to retry.
    * "no_images_delivered": an image-only request lost every image, so no
    * prompt was sent — the user has already been notified.
    */
-  | { ok: false; reason: "stale" | "forbidden" | "transient" | "no_images_delivered" };
+  | {
+      ok: false;
+      reason: "stale" | "forbidden" | "transient" | "no_images_delivered" | "channel_scope_denied";
+    };
 
 /** Deliver one prompt and its image attachments to a session. */
 export async function deliverPrompt(
@@ -65,7 +69,15 @@ export async function deliverPrompt(
     threadTs,
     traceId,
   } = options;
-  const upload = await uploadPreparedAttachments(env, sessionId, attachments, authorId, traceId);
+  const upload = await uploadPreparedAttachments(
+    env,
+    sessionId,
+    attachments,
+    authorId,
+    channel,
+    traceId
+  );
+  if (upload.channelScopeDenied) return { ok: false, reason: "channel_scope_denied" };
   if (upload.sessionForbidden) return { ok: false, reason: "forbidden" };
 
   if (imageOnly && upload.references.length === 0) {
@@ -80,6 +92,7 @@ export async function deliverPrompt(
 
   const promptResult = await sendPrompt(env, {
     sessionId,
+    channel,
     content,
     authorId,
     model,

@@ -3,6 +3,7 @@ import type { Environment } from "@open-inspect/shared/types/environments";
 import type { ControlPlaneEnv } from "../internal-auth";
 import { checkPublicationAccess, createSession, sendPrompt } from "./control-plane-client";
 import { OUTBOUND_REQUEST_TIMEOUT_MS } from "../request-options";
+import { sha256Hex, verifyServiceSignature } from "@open-inspect/shared/service-auth";
 
 function makeEnv(fetch: ControlPlaneEnv["CONTROL_PLANE"]["fetch"]): ControlPlaneEnv {
   return {
@@ -85,6 +86,7 @@ describe("control plane client timeouts", () => {
     });
     const result = sendPrompt(makeEnv(fetch), {
       sessionId: "session-1",
+      channel: "C123",
       content: "Fix it",
       authorId: "slack:U123",
     });
@@ -106,12 +108,30 @@ describe("control plane client timeouts", () => {
     await expect(
       sendPrompt(makeEnv(fetch), {
         sessionId: "session-1",
+        channel: "C123",
         content: "Fix it",
         authorId: "slack:U123",
       })
     ).resolves.toEqual({ ok: false, reason });
     expect(fetch).toHaveBeenCalledOnce();
   });
+});
+
+describe("prompt channel scope", () => {
+  it.each([400, 403, 404, 503])(
+    "distinguishes a channel-wide scope refusal at %s",
+    async (status) => {
+      const fetch = vi.fn(async () => okJson({ code: "slack_channel_scope_denied" }, status));
+      expect(
+        await sendPrompt(makeEnv(fetch), {
+          sessionId: "session-1",
+          channel: "C123",
+          content: "Do not forward",
+          authorId: "slack:U123",
+        })
+      ).toEqual({ ok: false, reason: "channel_scope_denied" });
+    }
+  );
 });
 
 describe("publication access", () => {
@@ -252,6 +272,7 @@ describe("control plane client request payloads", () => {
 
     await sendPrompt(makeEnv(fetch), {
       sessionId: "session-1",
+      channel: "C123",
       content: "Use the screenshot",
       authorId: "slack:U123",
       model: "openai/gpt-5.6-sol",
@@ -260,6 +281,7 @@ describe("control plane client request payloads", () => {
     });
     await sendPrompt(makeEnv(fetch), {
       sessionId: "session-1",
+      channel: "C123",
       content: "No attachments",
       authorId: "slack:U123",
       attachments: [],
@@ -308,10 +330,11 @@ describe("service credential headers", () => {
     expect(headers["Authorization"]).toBeUndefined();
   });
 
-  it("signs prompts with the author as the asserted actor", async () => {
+  it("signs prompts with the author and channel coordinate", async () => {
     const fetch = vi.fn(async () => new Response(JSON.stringify({ messageId: "m1" })));
     await sendPrompt(makeServiceEnv(fetch), {
       sessionId: "session-1",
+      channel: "C123",
       content: "Fix it",
       authorId: "slack:U456",
     });
@@ -319,6 +342,23 @@ describe("service credential headers", () => {
     const headers = sentHeaders(fetch);
     expect(headers["X-OpenInspect-Service-Signature"]).toMatch(/^sig1\./);
     expect(headers["X-OpenInspect-Actor"]).toBe("slack:U456");
+    const [url, init] = fetch.mock.calls[0] as unknown as [string, RequestInit];
+    expect(new URL(url).searchParams.get("channel")).toBe("slack:C123");
+    const signed = {
+      signatureHeader: headers["X-OpenInspect-Service-Signature"],
+      service: "slack-bot" as const,
+      secret: "slack-service-secret",
+      method: "POST",
+      url,
+      bodySha256Hex: await sha256Hex(String(init.body)),
+      actor: "slack:U456",
+    };
+    expect(await verifyServiceSignature(signed)).toMatchObject({ ok: true });
+    const changed = new URL(url);
+    changed.searchParams.set("channel", "slack:C_OTHER");
+    expect(await verifyServiceSignature({ ...signed, url: changed.toString() })).toMatchObject({
+      ok: false,
+    });
   });
 
   it("sends no request at all when SERVICE_AUTH_SECRET is unset", async () => {
@@ -329,6 +369,7 @@ describe("service credential headers", () => {
 
     const result = await sendPrompt(env, {
       sessionId: "session-1",
+      channel: "C123",
       content: "Fix it",
       authorId: "slack:U456",
     });

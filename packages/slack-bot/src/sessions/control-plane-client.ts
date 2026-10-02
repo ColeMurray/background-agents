@@ -28,7 +28,7 @@ interface CreateSessionOptions {
 
 export type SendPromptResult =
   | { ok: true; data: SendPromptResponse }
-  | { ok: false; reason: "stale" | "forbidden" | "transient" };
+  | { ok: false; reason: "stale" | "forbidden" | "transient" | "channel_scope_denied" };
 
 export interface CreateSessionFailure {
   error: { status: number; code?: string; reasonCode?: string; repository?: string };
@@ -154,6 +154,7 @@ export async function createSession(
 
 export interface SendPromptOptions {
   sessionId: string;
+  channel: string;
   content: string;
   authorId: string;
   model?: string;
@@ -169,6 +170,7 @@ export async function sendPrompt(
 ): Promise<SendPromptResult> {
   const {
     sessionId,
+    channel,
     content,
     authorId,
     model,
@@ -180,7 +182,8 @@ export async function sendPrompt(
   const startTime = Date.now();
   const base = { trace_id: traceId, session_id: sessionId, source: "slack" };
   try {
-    const url = `https://internal/sessions/${sessionId}/prompt`;
+    const url = new URL(`https://internal/sessions/${sessionId}/prompt`);
+    url.searchParams.set("channel", `slack:${channel}`);
     const body = JSON.stringify({
       content,
       source: "slack",
@@ -193,7 +196,7 @@ export async function sendPrompt(
       env,
       {
         method: "POST",
-        url,
+        url: url.toString(),
         body,
         actor: authorId.startsWith("slack:") ? authorId : undefined,
         traceId,
@@ -207,10 +210,20 @@ export async function sendPrompt(
         http_status: response.status,
         duration_ms: Date.now() - startTime,
       });
+      const details = await response.json().catch(() => null);
       return {
         ok: false,
         reason:
-          response.status === 404 ? "stale" : response.status === 403 ? "forbidden" : "transient",
+          details !== null &&
+          typeof details === "object" &&
+          "code" in details &&
+          details.code === "slack_channel_scope_denied"
+            ? "channel_scope_denied"
+            : response.status === 404
+              ? "stale"
+              : response.status === 403
+                ? "forbidden"
+                : "transient",
       };
     }
     const result = sendPromptResponseSchema.safeParse(await response.json());

@@ -87,6 +87,7 @@ export interface SlackAttachmentUploadResult {
    */
   sessionMissing: boolean;
   sessionForbidden?: true;
+  channelScopeDenied?: true;
 }
 
 /**
@@ -376,10 +377,16 @@ async function uploadToSession(
   sessionId: string,
   file: PreparedImageAttachments["files"][number],
   authorId: string,
+  channel: string,
   traceId?: string
 ): Promise<
   | { reference: SessionAttachmentReference }
-  | { sessionMissing: boolean; sessionForbidden?: true; reportDrop: boolean }
+  | {
+      sessionMissing: boolean;
+      sessionForbidden?: true;
+      channelScopeDenied?: true;
+      reportDrop: boolean;
+    }
 > {
   const { attachment, bytes } = file;
   try {
@@ -395,11 +402,13 @@ async function uploadToSession(
     if (!contentType) {
       throw new Error("FormData serialization produced no Content-Type");
     }
+    const url = new URL(`https://internal/sessions/${sessionId}/attachments`);
+    url.searchParams.set("channel", `slack:${channel}`);
     const response = await signedControlPlaneFetch(
       env,
       {
         method: "POST",
-        url: `https://internal/sessions/${sessionId}/attachments`,
+        url: url.toString(),
         body: { bytes: multipartBytes, contentType },
         actor: authorId.startsWith("slack:") ? authorId : undefined,
         traceId,
@@ -413,10 +422,17 @@ async function uploadToSession(
         file_id: attachment.id,
         http_status: response.status,
       });
+      const details = await response.json().catch(() => null);
       return {
         sessionMissing: response.status === 404,
         reportDrop: file.reportDrop !== false,
         ...(response.status === 403 ? { sessionForbidden: true as const } : {}),
+        ...(details !== null &&
+        typeof details === "object" &&
+        "code" in details &&
+        details.code === "slack_channel_scope_denied"
+          ? { channelScopeDenied: true as const }
+          : {}),
       };
     }
     const parsed = sessionAttachmentUploadResponseSchema.safeParse(await response.json());
@@ -452,14 +468,19 @@ export async function uploadPreparedAttachments(
   sessionId: string,
   prepared: PreparedImageAttachments,
   authorId: string,
+  channel: string,
   traceId?: string
 ): Promise<SlackAttachmentUploadResult> {
   const outcomes = await Promise.all(
-    prepared.files.map((file) => uploadToSession(env, sessionId, file, authorId, traceId))
+    prepared.files.map((file) => uploadToSession(env, sessionId, file, authorId, channel, traceId))
   );
   const references: SessionAttachmentReference[] = [];
   const dropped: SlackAttachmentDropReason[] = [...prepared.dropped];
-  const failures: Array<{ sessionMissing: boolean; sessionForbidden?: true }> = [];
+  const failures: Array<{
+    sessionMissing: boolean;
+    sessionForbidden?: true;
+    channelScopeDenied?: true;
+  }> = [];
   for (const outcome of outcomes) {
     if ("reference" in outcome) references.push(outcome.reference);
     else {
@@ -473,6 +494,7 @@ export async function uploadPreparedAttachments(
     sessionMissing:
       references.length === 0 && failures.length > 0 && failures.every((f) => f.sessionMissing),
     ...(failures.some((f) => f.sessionForbidden) ? { sessionForbidden: true as const } : {}),
+    ...(failures.some((f) => f.channelScopeDenied) ? { channelScopeDenied: true as const } : {}),
   };
 }
 

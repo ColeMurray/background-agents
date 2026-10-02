@@ -19,6 +19,7 @@ import { legacyPermissionForAction } from "../authorization/teams-enforcement";
 import { TeamStore } from "../db/teams";
 import { TeamChannelBindingStore } from "../db/team-channel-bindings";
 import { TeamMembershipStore } from "../db/team-memberships";
+import { SessionIndexStore } from "../db/session-index";
 import { resolveTeamAccess } from "@open-inspect/shared/types/team-access";
 import { UserStore } from "../db/user-store";
 import type { RequestContext } from "../http/request-context";
@@ -368,6 +369,55 @@ function enforceStaticServicePermissionCeiling(
     }
   }
   return null;
+}
+
+async function enforceSlackWriteScope(
+  params: RouteParams,
+  request: Request,
+  pathname: string,
+  ctx: RequestContext,
+  evidence: AuthorizationEvidence
+): Promise<AuthorizationFailure | null> {
+  if (
+    ctx.principal?.kind !== "service" ||
+    ctx.principal.service !== "slack-bot" ||
+    request.method !== "POST" ||
+    !/^\/sessions\/[^/]+\/(prompt|attachments)$/.test(pathname)
+  ) {
+    return null;
+  }
+
+  const refusal = { error: "Slack channel scope denied", code: "slack_channel_scope_denied" };
+  const deny = (status: 400 | 403 | 404): AuthorizationFailure =>
+    authorizationDenial(
+      json(refusal, status),
+      evidence,
+      { kind: "session", sessionIdParam: "id", action: "collaborate" },
+      refusal.code,
+      refusal.error
+    );
+  const channels = new URL(request.url).searchParams.getAll("channel");
+  const scope = channels.length === 1 ? parseChannelScope(channels[0]) : null;
+  if (!scope || scope.provider !== "slack") return deny(400);
+
+  try {
+    const [binding, session] = await Promise.all([
+      new TeamChannelBindingStore(ctx.db).get("slack", scope.externalId),
+      new SessionIndexStore(ctx.db).get(params.id),
+    ]);
+    if (!session) return deny(404);
+    if ((binding?.teamId ?? null) !== session.ownerTeamId) return deny(403);
+    // Actor collaboration is authorized separately after this live channel check.
+    return null;
+  } catch (cause) {
+    logger.error("Slack channel scope authorization unavailable", {
+      event: "authorization.slack_channel_scope_unavailable",
+      error: cause instanceof Error ? cause : String(cause),
+      request_id: ctx.request_id,
+      trace_id: ctx.trace_id,
+    });
+    return { response: json(refusal, 503) };
+  }
 }
 
 /**
@@ -776,7 +826,7 @@ function allowed(
 
 /**
  * Ordered trust transition for an authenticated request: principal kind,
- * sandbox capability, service capability and ceiling, actor finalization,
+ * sandbox capability, service capability and ceiling, Slack write scope, actor finalization,
  * active canonical subject, then route permission and resource requirements.
  */
 async function enforceRouteAuthorization(
@@ -813,6 +863,9 @@ async function enforceRouteAuthorization(
 
   const ceilingFailure = enforceStaticServicePermissionCeiling(policy, ctx, evidence);
   if (ceilingFailure) return resultForFailure(ceilingFailure);
+
+  const scopeFailure = await enforceSlackWriteScope(params, request, pathname, ctx, evidence);
+  if (scopeFailure) return resultForFailure(scopeFailure);
 
   const actorFailure = await finalizeServiceActor(policy, request, pathname, env, ctx);
   if (actorFailure) return resultForFailure(actorFailure);

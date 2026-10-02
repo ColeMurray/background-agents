@@ -14,7 +14,7 @@ import {
   type SlackImageAttachment,
 } from "../attachments";
 import { createClassifier } from "../classifier";
-import { resolveChannelBinding } from "../channel-bindings";
+import { getChannelBinding, resolveChannelBinding } from "../channel-bindings";
 import { loadTargetCatalog } from "../classifier/catalog";
 import { stripMentions } from "../dm-utils";
 import {
@@ -51,7 +51,7 @@ import {
 } from "../sessions/thread-session-store";
 import { buildTargetClarificationBlocks, getTargetCatalogNotice } from "../target-clarification";
 import { targetId } from "../targets";
-import type { BackgroundTaskScheduler, Env } from "../types";
+import type { BackgroundTaskScheduler, Env, ThreadSession } from "../types";
 import { resolveSlackActorIdentity, type SlackActorIdentity } from "../user-identity";
 import {
   EMPTY_INLINE_PROMPT_OPTIONS,
@@ -82,6 +82,7 @@ function hasRunnableContent(content: IncomingMessageContent): boolean {
 
 interface IncomingMessageParams {
   content: IncomingMessageContent;
+  existingSession: ThreadSession | null;
   user: string;
   channel: string;
   ts: string;
@@ -93,6 +94,32 @@ interface IncomingMessageParams {
   scheduleBackground: BackgroundTaskScheduler;
 }
 
+async function resolveExistingThreadSession(
+  env: Env,
+  channel: string,
+  threadTs: string | undefined,
+  traceId?: string
+): Promise<ThreadSession | null> {
+  if (!threadTs) return null;
+  let session = await lookupThreadSession(env, channel, threadTs);
+  if (!session) return null;
+  if (!session.closed) {
+    const binding = await getChannelBinding(env, channel, traceId).catch((error) => {
+      log.warn("channel_binding.followup_unavailable", { trace_id: traceId, channel, error });
+      return null;
+    });
+    // Legacy mappings predate team ownership and represent workspace sessions.
+    if (!binding || binding.teamId !== (session.teamId ?? null)) {
+      await closeThreadSession(env, channel, threadTs, session.sessionId);
+      session = { ...session, closed: true };
+    }
+  }
+  if (session.closed) {
+    await postMessage(env.SLACK_BOT_TOKEN, channel, THREAD_CLOSED_MESSAGE, { thread_ts: threadTs });
+  }
+  return session;
+}
+
 /**
  * Route one user message: follow up on the thread's existing session when there
  * is one, otherwise classify the target and launch a new session (or ask for
@@ -102,6 +129,7 @@ interface IncomingMessageParams {
 async function handleIncomingMessage(params: IncomingMessageParams): Promise<void> {
   const {
     content,
+    existingSession,
     user,
     channel,
     ts,
@@ -114,11 +142,6 @@ async function handleIncomingMessage(params: IncomingMessageParams): Promise<voi
   } = params;
   const { text: messageText, images, forwarded, inlinePromptOptions, inlineFlagError } = content;
   const hasInlineOverrides = hasInlinePromptOptions(inlinePromptOptions);
-  const existingSession = threadTs ? await lookupThreadSession(env, channel, threadTs) : null;
-  if (existingSession?.closed) {
-    await postMessage(env.SLACK_BOT_TOKEN, channel, THREAD_CLOSED_MESSAGE, { thread_ts: threadTs });
-    return;
-  }
   if (inlineFlagError) {
     await postMessage(env.SLACK_BOT_TOKEN, channel, inlineFlagError, {
       thread_ts: threadTs || ts,
@@ -246,6 +269,13 @@ async function handleIncomingMessage(params: IncomingMessageParams): Promise<voi
           slack_error: reactionResult.error,
         });
       }
+      return;
+    }
+    if (promptResult.reason === "channel_scope_denied") {
+      await closeThreadSession(env, channel, threadTs, existingSession.sessionId);
+      await postMessage(env.SLACK_BOT_TOKEN, channel, THREAD_CLOSED_MESSAGE, {
+        thread_ts: threadTs,
+      });
       return;
     }
     // An image-only follow-up that lost every image sends no prompt; the
@@ -461,6 +491,13 @@ export async function handleAppMention(
   traceId: string | undefined,
   scheduleBackground: BackgroundTaskScheduler
 ): Promise<void> {
+  const existingSession = await resolveExistingThreadSession(
+    env,
+    event.channel,
+    event.thread_ts,
+    traceId
+  );
+  if (existingSession?.closed) return;
   const parsedFlags = parseInlinePromptFlags(stripMentions(event.text));
   const messageText = parsedFlags.ok ? parsedFlags.text : "";
   const threadKey = event.thread_ts || event.ts;
@@ -534,6 +571,7 @@ export async function handleAppMention(
   }
   await handleIncomingMessage({
     content,
+    existingSession,
     user: event.user,
     channel: event.channel,
     ts: event.ts,
@@ -564,6 +602,13 @@ export async function handleDirectMessage(
   scheduleBackground: BackgroundTaskScheduler
 ): Promise<void> {
   log.info("slack.dm.received", { trace_id: traceId, user: event.user, channel: event.channel });
+  const existingSession = await resolveExistingThreadSession(
+    env,
+    event.channel,
+    event.thread_ts,
+    traceId
+  );
+  if (existingSession?.closed) return;
   const parsedFlags = parseInlinePromptFlags(stripMentions(event.text));
   const messageText = parsedFlags.ok ? parsedFlags.text : "";
   const forwarded = collectForwardedMessages(event.attachments);
@@ -580,6 +625,7 @@ export async function handleDirectMessage(
     scheduleStartingStatus(scheduleBackground, env, event.channel, threadKey, traceId);
   await handleIncomingMessage({
     content,
+    existingSession,
     user: event.user,
     channel: event.channel,
     ts: event.ts,

@@ -443,6 +443,14 @@ Existing sessions remain pinned to their stored authentication mode.
 > **Single-Tenant Only**: This control plane is designed for single-tenant deployment where all
 > users are trusted members of the same organization.
 
+Slack-bot `POST /sessions/:id/prompt` and `POST /sessions/:id/attachments` requests require exactly
+one `channel=slack:<channelId>` query coordinate covered by the service signature. Before actor
+enrollment or session writes, admission compares the live channel binding with the session's
+persisted owning team in every `TEAMS_ENFORCEMENT` mode. Matching workspace/unbound scopes remain
+valid; this check does not replace the user's collaboration or membership authorization. Scope
+refusals return `slack_channel_scope_denied`, which closes the bot's thread mapping rather than
+treating the refusal as a per-user denial or retrying with cached ownership.
+
 Bulk archiving uses `POST /sessions/batch-archive` with an explicit selection:
 
 ```json
