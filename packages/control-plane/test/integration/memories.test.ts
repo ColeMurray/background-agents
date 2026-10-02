@@ -230,6 +230,33 @@ describe("memory persistence", () => {
       )?.n
     ).toBe(5);
   });
+  it.each(["human", "proposal"])(
+    "audits the predecessor revision for a %s replacement",
+    async (kind) => {
+      const store = new MemoryStore(env.DB);
+      const original = await store.create(personal, human);
+      const replacement = await store.create(
+        { ...personal, supersedesMemoryId: original.id },
+        kind === "human" ? human : { ...agent, allowPersonalAutoSave: false }
+      );
+      if (kind === "proposal")
+        await store.transition(replacement.id, "approve", replacement.currentRevisionId, human);
+      const audit = await env.DB.prepare(
+        "SELECT metadata_json FROM authorization_audit_events WHERE action = 'memory.superseded' AND resource_id = ?"
+      )
+        .bind(original.id)
+        .first<{ metadata_json: string }>();
+      expect(JSON.parse(audit!.metadata_json).after).toMatchObject({
+        revisionId: original.currentRevisionId,
+        status: "archived",
+      });
+      expect(
+        (await store.revisions(original.id)).some(
+          (revision) => revision.id === JSON.parse(audit!.metadata_json).after.revisionId
+        )
+      ).toBe(true);
+    }
+  );
   it("keeps content and personal archive reasons out of workspace audit metadata", async () => {
     const store = new MemoryStore(env.DB);
     const record = await store.create({ ...personal, content: "private-content" }, human);

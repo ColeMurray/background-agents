@@ -380,7 +380,9 @@ export class MemoryStore {
       this.audit("created", id, operationId, actor, revisionId, status),
     ];
     if (active && previous)
-      statements.push(...this.supersede(previous.id, id, operationId, actor, now));
+      statements.push(
+        ...this.supersede(previous.id, previous.currentRevisionId, id, operationId, actor, now)
+      );
     const result = await this.db.batch(statements);
     if (!result[0].meta.changes)
       throw new MemoryConflictError(
@@ -479,6 +481,11 @@ export class MemoryStore {
     const operationId = generateId();
     const now = Date.now();
     const replacementGuard = action === "approve" && current.supersedesMemoryId !== null;
+    const predecessorRevisionId = replacementGuard
+      ? (await this.get(current.supersedesMemoryId!))?.currentRevisionId
+      : null;
+    if (replacementGuard && !predecessorRevisionId)
+      throw new MemoryConflictError("Replacement predecessor is unavailable");
     const results = await this.db.batch([
       this.db
         .prepare(
@@ -533,7 +540,14 @@ export class MemoryStore {
         status
       ),
       ...(replacementGuard
-        ? this.supersede(current.supersedesMemoryId!, id, operationId, actor, now)
+        ? this.supersede(
+            current.supersedesMemoryId!,
+            predecessorRevisionId!,
+            id,
+            operationId,
+            actor,
+            now
+          )
         : []),
     ]);
     if (!results[0].meta.changes)
@@ -611,6 +625,7 @@ export class MemoryStore {
   }
   private supersede(
     oldId: string,
+    oldRevisionId: string,
     id: string,
     operationId: string,
     actor: MemoryActor,
@@ -623,7 +638,7 @@ export class MemoryStore {
       WHERE id = ? AND status = 'active' AND EXISTS (SELECT 1 FROM memories replacement WHERE replacement.id = ? AND replacement.last_operation_id = ? AND replacement.status = 'active')`
         )
         .bind(now, actor.userId, operationId, now, oldId, id, operationId),
-      this.audit("superseded", oldId, operationId, actor, "superseded", "archived"),
+      this.audit("superseded", oldId, operationId, actor, oldRevisionId, "archived"),
     ];
   }
 }
