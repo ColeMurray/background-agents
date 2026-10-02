@@ -762,3 +762,41 @@ it.each(["associated", "unassigned", "reassigned"])(
     );
   }
 );
+
+it("stores audit identifiers and changed fields without protected project content", async () => {
+  const project = await create({ name: "Protected name", brief: "Original protected brief" });
+  await req(`/projects/${project.id}`, "PATCH", { brief: "Updated protected brief" });
+  await req(`/projects/${project.id}/sources`, "PUT", {
+    sourceType: "url",
+    externalIdOrUrl: "https://private.example/secret",
+    title: "Protected source",
+    role: "reference",
+  });
+  await req(`/projects/${project.id}/pins`, "PUT", {
+    kind: "decision",
+    title: "Protected decision",
+    body: "Confidential decision body",
+    decidedAt: 1,
+  });
+  const { results } = await env.DB.prepare(
+    "SELECT action,metadata_json FROM authorization_audit_events WHERE resource_type='project'"
+  ).all<{ action: string; metadata_json: string }>();
+  expect(results).toHaveLength(4);
+  const serialized = JSON.stringify(results);
+  for (const value of [
+    "Protected name",
+    "Original protected brief",
+    "Updated protected brief",
+    "private.example",
+    "Protected source",
+    "Protected decision",
+    "Confidential decision body",
+  ])
+    expect(serialized).not.toContain(value);
+  expect(
+    JSON.parse(results.find((row) => row.action === "project.updated")!.metadata_json).changedFields
+  ).toContain("brief");
+  expect(
+    JSON.parse(results.find((row) => row.action === "project.created")!.metadata_json).after
+  ).toEqual({ id: project.id });
+});

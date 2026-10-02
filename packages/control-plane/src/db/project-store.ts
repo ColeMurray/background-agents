@@ -79,6 +79,15 @@ const pinColumns = {
   updatedAt: "updated_at",
 };
 
+function auditIdentifiers(value: unknown): Record<string, unknown> {
+  if (!value || typeof value !== "object") return {};
+  return Object.fromEntries(
+    Object.entries(value).filter(([key]) =>
+      ["id", "projectId", "sessionId", "artifactId"].includes(key)
+    )
+  );
+}
+
 export function projectAudit(
   db: SqlDatabase,
   actor: ProjectActor,
@@ -103,7 +112,21 @@ export function projectAudit(
       project.id,
       project.ownerTeamId,
       action,
-      JSON.stringify({ before: before ?? {}, requested: after ?? {}, after: after ?? {} })
+      JSON.stringify({
+        before: auditIdentifiers(before),
+        requested: auditIdentifiers(after),
+        after: auditIdentifiers(after),
+        changedFields: [
+          ...new Set([
+            ...Object.keys((before ?? {}) as object),
+            ...Object.keys((after ?? {}) as object),
+          ]),
+        ].filter(
+          (key) =>
+            JSON.stringify((before as Record<string, unknown> | null)?.[key]) !==
+            JSON.stringify((after as Record<string, unknown> | null)?.[key])
+        ),
+      })
     );
 }
 
