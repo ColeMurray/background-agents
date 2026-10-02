@@ -4,8 +4,9 @@ description: How follow-up prompts queue behind a running turn, what Stop does, 
 audience: user
 owner: control-plane
 status: published
-lastReviewed: "2026-09-28"
+lastReviewed: "2026-10-02"
 relatedCode:
+  - packages/shared/src/types/session-access.ts
   - docs/HOW_IT_WORKS.md
   - packages/shared/src/types/session-activity.ts
   - packages/web/src/components/queued-prompt-stack.tsx
@@ -14,6 +15,8 @@ relatedCode:
 ---
 
 This page explains what happens when you send another prompt into a session that is already working, how to stop a turn, and which session states can still be prompted.
+
+These actions require access to the specific session as well as the relevant workspace permission. On team-owned sessions, current owning-team membership is required even for Administrators and Owners. Private prompting also requires being the owning user or an explicit collaborator; Owner break-glass read access alone is not enough. See [Multiplayer and sharing](/sessions/multiplayer-and-sharing).
 
 ## Sending a follow-up while a turn runs
 

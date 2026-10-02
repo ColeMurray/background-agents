@@ -1,11 +1,16 @@
 ---
 title: Inbox, sessions list, and search
-description: How the sidebar inbox groups your sessions, and how to find any session on the Sessions page.
+description: How team scope and filters shape the sidebar inbox and Sessions search, without changing session access.
 audience: user
 owner: web
 status: published
-lastReviewed: "2026-09-23"
+lastReviewed: "2026-10-02"
 relatedCode:
+  - packages/web/src/components/team-switcher.tsx
+  - packages/web/src/hooks/use-active-team.ts
+  - packages/control-plane/src/db/session-list-predicates.ts
+  - packages/control-plane/src/db/session-visibility.ts
+  - packages/control-plane/src/authorization/teams-enforcement.ts
   - packages/shared/src/types/session-inbox.ts
   - packages/control-plane/src/db/session-inbox-store.ts
   - packages/web/src/components/session-sidebar.tsx
@@ -14,9 +19,17 @@ relatedCode:
   - packages/web/src/hooks/use-mark-session-read.ts
 ---
 
-The sidebar inbox shows what needs you now; the Sessions page finds anything, including archived work.
+The sidebar inbox shows what needs you now; the Sessions page searches current and archived work within your access and discovery scope.
 
 ![The Sessions page with search, owner, repository, environment, lifecycle, and origin filters above a list of sessions](/images/sessions/sessions-page.webp "The Sessions page: full-history search with owner, repository, environment, lifecycle, and origin filters.")
+
+## Choose a discovery scope
+
+The sidebar's team switcher offers **Workspace**, an individual team, **All my teams**, and, for workspace Administrators and Owners, **All teams**. Selecting a team also exposes a **Team page** link. See [Teams](/administration/teams).
+
+Workspace selects sessions with no owning team. A team scope selects sessions owned by that team, including its workspace-visible sessions. All my teams removes the single-team filter and uses your readable session set, including workspace-visible work; it is not a membership-only filter. All teams is the administrative discovery scope and still applies session read checks. A session's **Workspace visibility** is not the same as **Workspace discovery scope**: a workspace-visible team session remains team-owned and is excluded from the Workspace scope.
+
+Scope and filters narrow discovery; they do not grant access or change visibility. Private-session checks still apply, and non-private Team read isolation depends on the deployment's enforcement mode (default `shadow`). See [Multiplayer and sharing](/sessions/multiplayer-and-sharing) and [Deployment](/administration/deployment).
 
 ## The sidebar inbox
 
@@ -51,7 +64,7 @@ Sessions the agent spawned are nested under their parent, so a parent and its ch
 
 ### The owner filter
 
-The **All / Mine** toggle above the list limits the inbox to sessions you started. When Mine is empty the list reads "No sessions started by you". Mine is a convenience for finding your own work, not an access boundary: anyone with session read access can see every session in the workspace.
+The **All / Mine** toggle above the list limits the inbox to sessions you started. When Mine is empty the list reads "No sessions started by you". Mine is a convenience for finding your own work within the active scope, not an access boundary. All does not bypass session visibility or membership checks.
 
 ### Row actions
 
@@ -61,7 +74,7 @@ Open a row's menu (or long-press it on a phone) for:
 - **Mark as read**: clears the unread mark without opening the session.
 - **Archive**: opens the confirmation dialog. Archiving the session you are viewing returns you to the home page.
 
-Rename and Archive require session lifecycle permission.
+Rename and Archive require session lifecycle permission and access to act on that session, including current owning-team membership for team-owned sessions.
 
 ## The Sessions page
 
@@ -75,11 +88,15 @@ The search box reads "Search title, ID or repository…". Typing commits to the 
 
 | Filter      | Options                                                                                            |
 | ----------- | -------------------------------------------------------------------------------------------------- |
-| Owner       | All, Mine                                                                                          |
+| Creator     | All, Mine                                                                                          |
+| Owner       | Anyone, Started by me, Participating                                                               |
+| Visibility  | Any visibility, Team, Workspace, Private                                                           |
 | Repository  | Any repository, or one repository you can access                                                   |
 | Environment | Any environment, or one saved environment                                                          |
 | Lifecycle   | Not archived (default), Archived, All                                                              |
 | Origin      | Any origin, Started by a person, Automation run, Agent sub-task, GitHub bot, Linear bot, Slack bot |
+
+**Participating** includes sessions you own, sessions with an explicit collaborator grant for you, and sessions you have read or marked as read, still subject to access checks. The Visibility filter selects a saved visibility value; it does not change who can read a session.
 
 Origins map to how the session was created: from the web, an automation run, a child spawned by an agent, or one of the GitHub, Linear, or Slack bots. The status text under the filters reports "Showing N sessions", with "More available" when there is another page; **Load more** fetches it. A link with unsupported filter parameters shows no sessions and offers **Reset filters**.
 
@@ -109,12 +126,12 @@ All of these can be rebound under Settings › Keyboard. See [Keyboard shortcuts
 
 ## Troubleshooting
 
-| Symptom                                                   | Cause                                                                         | Fix                                                                                               |
-| --------------------------------------------------------- | ----------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------- |
-| A session stays under Needs attention after you opened it | The latest turn is read only while the tab is visible; a background tab waits | Bring the tab to the front, or use **Mark as read** from the sidebar row menu.                    |
-| A session you expect is missing from the inbox            | It is archived, or the Mine filter is on and someone else started it          | Switch the owner filter to All, or open Sessions with Lifecycle set to Archived.                  |
-| "You do not have permission to view sessions."            | Your role has no session read access                                          | Ask a workspace Owner or Administrator. See [Workspace access](/administration/workspace-access). |
-| Search finds nothing for a repository                     | Search matches title, ID, or repository text                                  | Use the Repository filter instead of typing the repository name.                                  |
+| Symptom                                                   | Cause                                                                              | Fix                                                                                                                                        |
+| --------------------------------------------------------- | ---------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
+| A session stays under Needs attention after you opened it | The latest turn is read only while the tab is visible; a background tab waits      | Bring the tab to the front, or use **Mark as read** from the sidebar row menu.                                                             |
+| A session you expect is missing from the inbox            | It is archived, outside your selected team scope or filters, or no longer readable | Check the team switcher, select All, and try Sessions with Lifecycle set to Archived. If access changed, ask the owning user or team lead. |
+| "You do not have permission to view sessions."            | Your role has no session read access                                               | Ask a workspace Owner or Administrator. See [Workspace access](/administration/workspace-access).                                          |
+| Search finds nothing for a repository                     | Search matches title, ID, or repository text                                       | Use the Repository filter instead of typing the repository name.                                                                           |
 
 ## Next steps
 

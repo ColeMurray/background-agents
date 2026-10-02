@@ -4,8 +4,11 @@ description: A tour of the session page, from the header and timeline to the com
 audience: user
 owner: web
 status: published
-lastReviewed: "2026-09-23"
+lastReviewed: "2026-10-02"
 relatedCode:
+  - packages/shared/src/types/session-access.ts
+  - packages/web/src/components/session-visibility-control.tsx
+  - packages/web/src/components/sidebar/collaborators-section.tsx
   - packages/web/src/lib/session-socket/boot-phase.ts
   - packages/web/src/components/session-header.tsx
   - packages/web/src/components/session-timeline.tsx
@@ -20,6 +23,8 @@ This page walks through everything on a session page so you know where to look w
 ![A session page showing the timeline in the middle and the details sidebar on the right with Tasks, Managed skills, and Changes sections](/images/sessions/session-page.webp "A finished session: the timeline, the composer for follow-ups, and the right sidebar with the pull request, branch, cost limit, tasks, skills, and changes.")
 
 A session page has four areas: the header at the top, the timeline in the middle, the composer at the bottom, and a right sidebar with session details. On phones and tablets the sidebar becomes a details overlay.
+
+The page and its controls reflect your access to this particular session, not just your workspace role. Team-owned actions require current owning-team membership even for administrators. Private prompting and sandbox access require the owning user or an explicit collaborator with the relevant permission. See [Multiplayer and sharing](/sessions/multiplayer-and-sharing).
 
 ## The header
 
@@ -76,6 +81,8 @@ Archive asks for confirmation: "Archive this session? You can restore archived s
 ## The right sidebar
 
 The sidebar shows session details in sections. Some sections appear only when they have content or when you have the permission to use them.
+
+Session details include the owning team and visibility. If authorized, use **Visibility** to choose Workspace, Team, or Private and click **Save**. **Include child sessions** is checked by default: changing to Workspace or Team can widen access to private children, so review the confirmation carefully. Private sessions also show **Collaborators** to people allowed to manage sharing. These controls change access, not the session's fixed ownership. See [Change visibility](/sessions/multiplayer-and-sharing#change-visibility).
 
 | Section              | What it shows                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                | When it appears                                                                                                           |
 | -------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------- |

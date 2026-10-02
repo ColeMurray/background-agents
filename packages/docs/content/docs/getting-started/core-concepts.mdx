@@ -4,8 +4,10 @@ description: The vocabulary the rest of the documentation uses, one short sectio
 audience: user
 owner: platform
 status: published
-lastReviewed: "2026-09-28"
+lastReviewed: "2026-10-02"
 relatedCode:
+  - packages/shared/src/types/session-access.ts
+  - packages/control-plane/src/session/session-target-secrets.ts
   - packages/shared/src/types/sessions.ts
   - packages/shared/src/types/session-activity.ts
   - packages/shared/src/harnesses.ts
@@ -19,9 +21,9 @@ This page defines the terms you will meet everywhere else in these docs.
 
 ## Session
 
-A session is the unit of work: one conversation with the agent about one target. It is a durable record that holds your prompts, the event timeline, artifacts, participants, and a reference to the current sandbox. It survives your browser closing and outlives any single sandbox. Every session is visible to the whole workspace, and anyone with collaboration access can prompt it. A session can be archived and later restored.
+A session is the unit of work: one conversation with the agent about one target. It is a durable record that holds your prompts, the event timeline, artifacts, participants, and a reference to the current sandbox. It survives your browser closing and outlives any single sandbox. Ownership, visibility, collaborators, and workspace permissions determine access; reading does not automatically permit prompting. A session can be archived and later restored by someone with lifecycle access.
 
-Learn more: [Session page](/sessions/session-page), [Lifecycle and statuses](/sessions/lifecycle-and-statuses).
+Learn more: [Session page](/sessions/session-page), [Lifecycle and statuses](/sessions/lifecycle-and-statuses), [Multiplayer and sharing](/sessions/multiplayer-and-sharing).
 
 ## Sandbox
 
@@ -37,7 +39,7 @@ Learn more: [Quickstart](/getting-started/quickstart), [Environments](/configure
 
 ## Environment
 
-An environment is a saved, named repository set with a base branch per repository. It carries its own secrets (global secrets plus the environment's, never the member repositories' secrets) and can have prebuilt images so sessions boot in seconds. Sessions snapshot the environment at creation; editing or deleting the environment later does not change what an existing session works on.
+An environment is a saved, named repository set with a base branch per repository, owned by the workspace or a team. Environment sessions receive global secrets, then the session's owning-team secrets when present, then environment secrets, never the member repositories' secrets. Environments can have prebuilt images so sessions boot faster. Sessions snapshot the environment at creation; editing or deleting the environment later does not change what an existing session works on.
 
 Learn more: [Environments](/configure/environments), [Prebuilt images](/configure/prebuilt-images).
 
@@ -67,7 +69,7 @@ Learn more: [Managed skills](/configure/managed-skills).
 
 ## Automation
 
-An automation starts a new session without a person typing a prompt. Its trigger is a cron schedule or an event: an inbound webhook, a GitHub event, a Slack message, or a Sentry alert. The automation carries the target, harness, model, and instructions for the sessions it creates, and its run history shows each session it started.
+An automation starts a new session without a person typing a prompt. Its trigger is a cron schedule or an event: an inbound webhook, a GitHub event, a Slack message, or a Sentry alert. The automation carries the target, harness, model, and instructions for the sessions it creates. It has workspace or team ownership and a separate executor identity. Run history links to sessions only when you can read them.
 
 Learn more: [Automations](/automations).
 
@@ -91,9 +93,15 @@ Learn more: [Multiplayer and sharing](/sessions/multiplayer-and-sharing).
 
 ## Workspace and roles
 
-A deployment is one workspace. On a GitHub-backed deployment, the GitHub App installation defines the repositories available to it. Every admitted user has exactly one of four roles: **Owner**, **Administrator**, **Member**, or **Viewer**. Members create and prompt sessions and manage their own automations. Administrators also manage shared settings, integrations, secrets, and members. Owners additionally control who holds the Owner role. Viewers have read-only access. New users start as Members.
+A deployment is one workspace. On a GitHub-backed deployment, the GitHub App installation defines its maximum repository reach. Every admitted user has one workspace role; the built-in roles are **Owner**, **Administrator**, **Member**, and **Viewer**. Members create and prompt eligible sessions and manage automations as executor or owning-team lead. Administrators also manage shared configuration and members. Owners additionally control who holds the Owner role. Viewers have read-only workspace feature permissions. New users start as Members. Resource-specific access rules apply in addition to these permissions.
 
 Learn more: [Workspace access](/administration/workspace-access).
+
+## Team
+
+A team groups members and leads, owns sessions, environments, and automations, and holds repository grants and secrets. Ownership is fixed at creation and is separate from session visibility: making a team session Workspace-visible does not let non-members act on it. Team visibility's read boundary depends on deployment enforcement; the default `shadow` mode does not enforce non-private team-session read isolation. Private access and team-owned actions remain enforced in every mode.
+
+Learn more: [Teams](/administration/teams), [Teams enforcement](/administration/deployment#teams-enforcement).
 
 ## How the concepts fit together
 

@@ -26,6 +26,16 @@ Navigate to **Automations** in the sidebar, then click **Create Automation**.
 
 Start by choosing a **Trigger Type**. The rest of the form adjusts based on that choice.
 
+Choose workspace ownership or an owning team; team pages also expose an **Automations** tab. The
+creator must belong to the selected active team, and that team's grants must cover the selected
+repositories, including repositories resolved from environment targets. Newly created teams have no
+repository grants. When `requireTeamOnCreate` is enabled, new automation definitions must have a
+team. Existing workspace automations are not migrated or blocked from running by that setting alone.
+
+Ownership is fixed at creation: an automation cannot move between teams or between a team and the
+workspace. Its **executor**, initially the creator, is a separate user identity that can be
+reassigned without changing ownership.
+
 ### Required Fields
 
 | Field                        | Description                                                                                                                                                                                                                                      |
@@ -359,6 +369,30 @@ Examples:
 
 ## Managing Automations
 
+Workspace automations are readable with `automations.read`; team automations additionally require
+owning-team membership or a workspace Owner/Administrator role. Executors and owning-team leads can
+manage and trigger eligible automations with the corresponding `own` permissions; `any` permissions
+allow those actions across eligible automations. Built-in Owners and Administrators have the latter;
+Viewers cannot manage or trigger. These resource checks apply even in `off` or `shadow` session
+enforcement mode.
+
+Scheduled and event runs use the executor's authority. Each run checks that the execution user is
+active, can create sessions and use its targets, and, for team automations, is a current member of
+the active owning team. Current team grants must cover all repositories being launched. Generated
+sessions inherit the automation's owning team and that team's default visibility; workspace runs
+remain workspace-owned and workspace-visible. Environment targets must have the same ownership as
+the automation; unlike the team session picker, a team automation cannot select a workspace-owned
+environment.
+
+### Executor Reassignment
+
+A team lead or workspace Owner/Administrator with automation management access can use
+`PATCH /automations/:id` with `{"userId":"<canonical-user-id>"}` to change the executor. Being the
+executor alone does not permit reassignment. The replacement must be active, able to launch the
+stored targets, and a member of the active owning team for a team automation. The change is audited
+as `automation.executor_changed`. Reassignment allows recovery when the old executor loses access
+without recreating the definition; it does not move ownership or rewrite existing sessions.
+
 ### Pause and Resume
 
 **Pausing** an automation stops it from firing. Scheduled automations will not run on their cron,
@@ -376,6 +410,11 @@ selection. For scheduled automations, this does not affect the next scheduled ru
 triggers follow the same concurrency rules as all other runs: if a run is already active, the
 trigger is rejected. Trigger Now also works while the automation is paused, so you can verify a fix
 before resuming.
+
+Manual runs use the requester's authority and linked source-control credentials, not the stored
+executor's. In addition to trigger permission, the requester must pass runtime session/target checks
+and be a current member of the active owning team for a team automation, even if they are a
+workspace Owner or Administrator.
 
 ### Edit
 
@@ -415,7 +454,10 @@ reason, and session link.
 | **Partial failure** | A multi-repository run where some repositories completed and some failed.                              |
 | **Skipped**         | The run was skipped because a previous run was still active (see [Concurrent Runs](#concurrent-runs)). |
 
-Click **View session** on any run to jump to the full session with its output and artifacts.
+When authorized, click **View session** to open the session with its output and artifacts.
+Automation read access is not session read access: history redacts session IDs, titles, and artifact
+summaries for sessions the viewer cannot read. Lists do not expose private sessions solely through
+an Owner's break-glass privilege; a qualifying single-run read audits that access.
 
 ---
 

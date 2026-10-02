@@ -37,6 +37,25 @@ be resolved from it.
 
 ---
 
+## Teams Enforcement
+
+Production Terraform's `teams_enforcement` sets the control-plane `TEAMS_ENFORCEMENT` value.
+Accepted values are `off`, `shadow`, and `on`, with **`shadow` as the default**. Set
+`teams_enforcement = "on"` in `terraform.tfvars` to enforce non-private Team-visibility reads. The
+AWS configuration also explicitly sets `shadow`. Do not assume a deployed instance has full team
+read isolation simply because it includes Teams.
+
+Private-session access and current owning-team membership for non-read session actions remain
+enforced in every mode. Environment/automation ownership, repository grants, and team-secret checks
+also remain enforced. See [Enforcement and Access Paths](AUTH.md#enforcement-and-access-paths).
+
+Separately, administrators can enable `requireTeamOnCreate` in **Settings > Teams**. It defaults off
+and requires a team for new sessions, environments, and automation definitions, including teamless
+bot session creation requests. It does not migrate existing workspace resources or prevent existing
+workspace automations from running when their runtime authorization checks pass. New teams start
+without repository grants; configure named or installation-wide grants before selecting
+repositories.
+
 ## Overview
 
 Open-Inspect uses Terraform to automate deployment across multiple cloud providers:
@@ -1199,6 +1218,7 @@ ENABLE_LINEAR_BOT
 LINEAR_CLIENT_ID
 
 # Access control and branding
+TEAMS_ENFORCEMENT
 ALLOWED_USERS
 ALLOWED_EMAIL_DOMAINS
 ALLOWED_EMAILS
@@ -1243,6 +1263,10 @@ workflow default exists. Existing secret-only deployments need no migration. If 
 variable wins; delete it to return to the secret. An empty variable does not clear an existing
 secret. Values such as `false` and `0` are strings in Actions variables and are preserved.
 
+For Teams, both Terraform plan and apply use the repository variable `TEAMS_ENFORCEMENT`, then the
+same-named secret, then `shadow`. Set the variable to `on` when enabling non-private team read
+enforcement through CI; a local `terraform.tfvars` choice alone does not configure the workflow.
+
 Keep credentials in the **Secrets** tab: API tokens/keys, OAuth client secrets, signing secrets,
 private keys, encryption keys, and both `MODAL_TOKEN_ID` and `MODAL_TOKEN_SECRET`. Allowlist values
 may contain personal information; leave them in secrets if you prefer masking in workflow logs.
@@ -1258,6 +1282,7 @@ Secrets for credentials:
 | `R2_MEDIA_LOCATION`                | R2 location hint for the media bucket (defaults to `ENAM`)                                      |
 | `R2_MEDIA_BUCKET_NAME`             | Optional media bucket name override for a pre-created bucket                                    |
 | `DEPLOYMENT_NAME`                  | Your deployment name                                                                            |
+| `TEAMS_ENFORCEMENT`                | Session enforcement: `off`, `shadow` (default), or `on`; prefer a repository variable           |
 | `R2_ACCESS_KEY_ID`                 | R2 access key ID                                                                                |
 | `R2_SECRET_ACCESS_KEY`             | R2 secret access key                                                                            |
 | `WEB_PLATFORM`                     | `vercel` or `cloudflare`                                                                        |

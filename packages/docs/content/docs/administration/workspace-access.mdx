@@ -4,10 +4,15 @@ description: How people are admitted to an OpenInspect workspace, what each role
 audience: admin
 owner: security
 status: published
-lastReviewed: "2026-09-23"
+lastReviewed: "2026-10-02"
 relatedCode:
   - docs/AUTH.md
   - packages/shared/src/rbac.ts
+  - packages/shared/src/types/session-access.ts
+  - packages/control-plane/src/authorization/teams-enforcement.ts
+  - packages/control-plane/src/routes/automation-executor.ts
+  - packages/control-plane/src/routes/environment-secrets.ts
+  - packages/control-plane/src/routes/session-target-authorization.ts
   - packages/web/src/components/settings/workspace-settings.tsx
   - packages/control-plane/src/db/authorization-store.ts
 ---
@@ -19,8 +24,9 @@ This page explains who can get into your workspace, what each role permits, and 
 <Callout type="info" title="One workspace, one trusted organization">
   An OpenInspect deployment is a single workspace. The source-control App installation defines which
   repositories the workspace can reach. Roles control which OpenInspect features a person can use;
-  they are not per-repository access lists. See [Security and trust
-  model](/administration/security).
+  they are not per-repository access lists. Team membership, repository grants, resource ownership,
+  and session visibility add resource-specific checks. See [Teams](/administration/teams) and
+  [Security and trust model](/administration/security).
 </Callout>
 
 ## Signing in and admission
@@ -57,46 +63,47 @@ Signing in does not make anyone an Owner or Administrator. Every admitted user h
 
 ## Roles
 
-OpenInspect has four built-in roles.
+OpenInspect has four built-in roles. This table describes workspace feature permissions, not unconditional access to every resource. The session, automation, and environment rules below also apply.
 
-| Capability                                        | Owner | Administrator | Member | Viewer |
-| ------------------------------------------------- | :---: | :-----------: | :----: | :----: |
-| View repositories and environments                |  Yes  |      Yes      |  Yes   |  Yes   |
-| Use repositories and environments in sessions     |  Yes  |      Yes      |  Yes   |   No   |
-| Manage shared settings, integrations, and secrets |  Yes  |      Yes      |   No   |   No   |
-| Create sessions                                   |  Yes  |      Yes      |  Yes   |   No   |
-| View every session                                |  Yes  |      Yes      |  Yes   |  Yes   |
-| Collaborate in and manage sessions                |  Yes  |      Yes      |  Yes   |   No   |
-| View automations                                  |  Yes  |      Yes      |  Yes   |  Yes   |
-| Create automations                                |  Yes  |      Yes      |  Yes   |   No   |
-| Manage and trigger own automations                |  Yes  |      Yes      |  Yes   |   No   |
-| Manage and trigger any automation                 |  Yes  |      Yes      |   No   |   No   |
-| View and manage workspace members                 |  Yes  |      Yes      |   No   |   No   |
-| View the audit log                                |  Yes  |      Yes      |   No   |   No   |
-| Transfer workspace ownership                      |  Yes  |      No       |   No   |   No   |
-| View analytics                                    |  Yes  |      Yes      |  Yes   |  Yes   |
-| View provider accounts                            |  Yes  |      Yes      |  Yes   |   No   |
-| View image-build history                          |  Yes  |      Yes      |  Yes   |  Yes   |
-| Manage personal skill profiles                    |  Yes  |      Yes      |  Yes   |   No   |
+| Capability                                              | Owner | Administrator | Member | Viewer |
+| ------------------------------------------------------- | :---: | :-----------: | :----: | :----: |
+| View repositories and environments                      |  Yes  |      Yes      |  Yes   |  Yes   |
+| Use repositories and environments in sessions           |  Yes  |      Yes      |  Yes   |   No   |
+| Manage shared settings, integrations, and secrets       |  Yes  |      Yes      |   No   |   No   |
+| Create sessions                                         |  Yes  |      Yes      |  Yes   |   No   |
+| Read sessions permitted by visibility rules             |  Yes  |      Yes      |  Yes   |  Yes   |
+| Collaborate in and manage sessions                      |  Yes  |      Yes      |  Yes   |   No   |
+| View automations                                        |  Yes  |      Yes      |  Yes   |  Yes   |
+| Create automations                                      |  Yes  |      Yes      |  Yes   |   No   |
+| Manage and trigger automations as executor or team lead |  Yes  |      Yes      |  Yes   |   No   |
+| Manage and trigger any automation                       |  Yes  |      Yes      |   No   |   No   |
+| View and manage workspace members                       |  Yes  |      Yes      |   No   |   No   |
+| View the audit log                                      |  Yes  |      Yes      |   No   |   No   |
+| Transfer workspace ownership                            |  Yes  |      No       |   No   |   No   |
+| View analytics                                          |  Yes  |      Yes      |  Yes   |  Yes   |
+| View provider accounts                                  |  Yes  |      Yes      |  Yes   |   No   |
+| View image-build history                                |  Yes  |      Yes      |  Yes   |  Yes   |
+| Manage personal skill profiles                          |  Yes  |      Yes      |  Yes   |   No   |
 
-**Owner.** Full access to the workspace. Only Owners can grant or remove the Owner role or suspend and restore another Owner. The final active Owner cannot be suspended or demoted, so the workspace cannot lose all ownership by accident.
+**Owner.** All workspace feature permissions, subject to resource-specific checks. Only Owners can grant or remove the Owner role or suspend and restore another Owner. The final active Owner cannot be suspended or demoted, so the workspace cannot lose all ownership by accident.
 
 **Administrator.** Runs the workspace day to day: members, sessions, automations, repositories, environments, provider accounts, integrations, secrets, and the audit log. Administrators cannot transfer ownership, change who holds the Owner role, or suspend and restore an Owner.
 
-**Member.** Creates and uses sessions, collaborates in existing sessions, uses shared repositories and environments, and creates automations. Members manage and manually trigger the automations they own but cannot modify someone else's automation or change shared configuration. They can view [analytics](/administration/analytics).
+**Member.** Creates and uses eligible sessions, repositories, environments, and automations. Members manage and manually trigger automations for which they are the executor or an owning-team lead. Team leads also have team-specific administration capabilities; that does not grant workspace-wide configuration access. Members can view [analytics](/administration/analytics).
 
-**Viewer.** Read-only access to shared workspace resources: sessions, automations, analytics, repositories, environments, skills, and MCP servers. Viewers cannot create or prompt sessions, access sandboxes, manage personal skill profiles, trigger automations, or change shared configuration.
+**Viewer.** Read access to eligible sessions, automations, repositories, and environments, plus shared analytics, skills, and MCP servers. The workspace role does not permit session creation or prompting, sandbox access, personal skill-profile management, automation triggering, or shared configuration changes. Team-lead capabilities are separate from the workspace role.
 
 ## How session access works
 
-Sessions are workspace resources, not private resources owned by their creator.
+Session ownership and visibility are separate. Ownership is fixed at creation; a team-owned session remains team-owned even when its visibility is **Workspace**.
 
-- Anyone with session read access can view every session in the workspace.
-- Anyone with collaboration access can prompt and contribute to every session.
-- Anyone with lifecycle access can stop, retry, archive, and restore every session.
-- Anyone with sandbox access can use supported sandbox tools in every session.
+- **Workspace** visibility allows workspace users with session read permission to read the session.
+- **Team** visibility limits reads to owning-team members and workspace Administrators/Owners when Teams enforcement is `on`. Non-private read isolation is not fully enforced in `off` or the default `shadow` mode; see [Teams enforcement](/administration/deployment#teams-enforcement).
+- **Private** visibility permits the session owner and explicit collaborators. A collaborator on a team-owned session must still belong to that team. Private access is enforced in every mode.
+- Every non-read action on a team-owned session requires current owning-team membership, including for Administrators and Owners. Feature permissions and action-specific checks still apply; being able to read does not grant collaboration, lifecycle, deletion, or sandbox access.
+- A workspace Owner, but not an Administrator, can read another person's private session through audited break-glass access. That read does not make the Owner a collaborator or grant sandbox access, and it does not bypass membership requirements for team-owned session actions.
 
-The creator shown on a session is attribution, not an access list. Participant labels identify who contributed but grant nothing. The **Mine** filter on the Sessions page is a convenience for finding your own sessions, not a security boundary.
+The recorded session owner matters for private access and sharing controls. Participant labels grant nothing. The **Mine** filter and team discovery scope help find sessions; neither is a substitute for authorization. See [Multiplayer and sharing](/sessions/multiplayer-and-sharing).
 
 Creating a session also requires permission to use the selected repository or environment. A role can therefore view an existing session without being allowed to create a new one.
 
@@ -104,14 +111,24 @@ New HTTP requests reflect role changes and suspension immediately. Live browser 
 
 ## How automation access works
 
-Automation definitions and run history are visible workspace-wide to any role with automation read access. Creating, changing, and manually triggering automations follow ownership rules: Members manage and trigger their own, Administrators and Owners manage and trigger any, Viewers only inspect.
+Workspace-owned automation definitions are readable with automation read permission. Team-owned definitions require that permission plus owning-team membership or workspace Administrator/Owner status. Run history does not grant access to linked sessions: unreadable session IDs, titles, and artifact summaries are redacted.
 
-Ownership follows the signed-in account that created the automation, not a display name or an external provider username.
+The owning team and executor are different identities. The executor is the canonical workspace user whose authority is used for scheduled and event-driven runs, initially the creator. With the relevant feature permission, the executor or an owning-team lead can manage and trigger an eligible automation; Administrators and Owners have workspace-wide management and trigger permissions. Manual execution still requires the requester to qualify for the resulting session.
 
 | Run type                   | Runs under whose authority                                                                                                                                                                                                                                      |
 | -------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Scheduled and event-driven | The automation owner. At run time the owner must still be active and allowed to create sessions and use every selected repository or environment. If not, the run does not start.                                                                               |
+| Scheduled and event-driven | The configured executor. At run time the executor must be active, allowed to create sessions and use the selected targets, and, for team automations, a current member of the active owning team. Target repository grants are rechecked.                       |
 | Manual (**Trigger Now**)   | The person who clicked **Trigger Now**, even when an Administrator or Owner triggers someone else's automation. The requester must be allowed to trigger it and to create the resulting session; their identity and linked source-control credentials are used. |
+
+Generated sessions inherit the automation's owning team and that team's current default visibility. A team lead or workspace Administrator/Owner with automation management access can reassign the executor through `PATCH /automations/:id` with `{ "userId": "<canonical-user-id>" }`. The replacement must qualify to execute the automation. Being the current executor alone does not authorize reassignment. See [Automations](/automations#who-can-create-and-manage-automations).
+
+## How environment access works
+
+Workspace environments use workspace feature permissions. Team environments additionally require owning-team membership or workspace Administrator/Owner status to read or use; managing them requires `environments.manage` plus owning-team lead or workspace Administrator/Owner status. A team environment can launch only into a session owned by the same team. Eligible workspace environments can also appear in a team's session catalog.
+
+Environment secret writes/imports/deletes, settings changes, and image-build actions require environment management access **as well as** their respective feature permission (`environments.secrets.manage`, `environments.settings.manage`, or `environments.images.manage`). This includes workspace environments: a custom role with only a feature permission is insufficient. Secret-key listing instead requires the secrets permission and environment read access; it never returns values.
+
+The workspace's require-team-on-create policy applies to new sessions, environment definitions, and automation definitions. It does not by itself prohibit runs of existing workspace-owned automations. See [Teams](/administration/teams).
 
 ## Bots and integrations
 
@@ -126,10 +143,10 @@ There is no action to remove a member from the workspace; suspension is the way 
 - New browser and bot operations are denied.
 - Existing browser sign-in sessions are invalidated.
 - Live browser session connections close within five minutes.
-- Scheduled and event-driven automations the member owns no longer pass run authorization.
+- Scheduled and event-driven automations using the member as executor no longer pass run authorization.
 - Existing session history and authorship remain intact.
 
-Suspension does not stop a sandbox that is already executing. An Administrator or Owner can stop or archive that session separately.
+Suspension does not stop a sandbox that is already executing. A user with the required session action access can stop or archive it separately; Administrators and Owners still need membership for team-owned session actions.
 
 ## Managing members
 
@@ -180,15 +197,17 @@ The first person to sign in receives the Member role and is not promoted automat
 
 </Accordion>
   <Accordion title="A scheduled automation stopped running after a role change">
-    Scheduled and event-driven runs execute under the owner's authority. If the owner was suspended
-    or lost session-creation or repository-use permission, runs do not start. Restore the permission
-    or have another user recreate the automation.
+    Scheduled and event-driven runs execute under the configured executor's authority. Suspension,
+    lost permissions or team membership, an archived team, or removed repository grants can prevent
+    execution. Restore the required access, or have an authorized team lead or workspace
+    Administrator/Owner reassign the executor through the API. Recreating the automation is not required.
 
 </Accordion>
 </Accordions>
 
 ## Next steps
 
+- [Teams](/administration/teams)
 - [Audit log](/administration/audit-log)
 - [Security and trust model](/administration/security)
 - [Multiplayer and sharing](/sessions/multiplayer-and-sharing)

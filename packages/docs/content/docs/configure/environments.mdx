@@ -4,7 +4,7 @@ description: Save a named, ordered set of repositories with its own secrets, pre
 audience: team-owner
 owner: platform
 status: published
-lastReviewed: "2026-09-23"
+lastReviewed: "2026-10-02"
 relatedCode:
   - docs/HOW_IT_WORKS.md
   - docs/IMAGE_PREBUILD.md
@@ -16,6 +16,14 @@ relatedCode:
   - packages/web/src/components/settings/environment-integration-settings.tsx
   - packages/github-bot/src/session-target.ts
   - packages/linear-bot/README.md
+  - packages/shared/src/types/session-access.ts
+  - packages/control-plane/src/routes/environments.ts
+  - packages/control-plane/src/routes/team-ownership.ts
+  - packages/control-plane/src/routes/session-target-authorization.ts
+  - packages/control-plane/src/routes/environment-secrets.ts
+  - packages/control-plane/src/routes/integration-settings.ts
+  - packages/control-plane/src/routes/image-builds.ts
+  - packages/control-plane/src/session/session-target-secrets.ts
 ---
 
 This page shows how to create an environment, what a session launched from one receives, and how environments interact with secrets, prebuilt images, and integrations.
@@ -32,7 +40,7 @@ An environment defines:
 | ----------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Ordered repository list | Up to 10 repositories, each with a base branch. The base branch defaults to the repository's default branch. Two repositories with the same name cannot be in one environment, because each is checked out at `/workspace/<repo-name>`. |
 | Primary repository      | The first repository in the list. It supplies the sandbox and editor settings that the environment inherits unless you override them.                                                                                                   |
-| Environment secrets     | Sessions launched from the environment receive global secrets plus the environment's secrets.                                                                                                                                           |
+| Environment secrets     | Sessions receive global secrets, their owning team's secrets if team-owned, then the environment's secrets.                                                                                                                             |
 | Prebuilt images         | Optional. The whole environment (all clones, all setup scripts) is built ahead of time so sessions boot from the image.                                                                                                                 |
 | Settings overrides      | Per-environment overrides for the code editor, VNC desktop, and sandbox settings.                                                                                                                                                       |
 
@@ -52,11 +60,25 @@ flowchart TB
     picker["New-session<br/>picker"] -- "pick the environment" --> session["Session"]
     env --> session
     session --> ws["Every repository<br/>cloned side by<br/>side under<br/>/workspace, each<br/>on its base branch"]
-    session --> inj["Global secrets +<br/>environment<br/>secrets"]
+    session --> inj["Global secrets +<br/>session's owning team<br/>(if any) +<br/>environment secrets"]
     session --> img["Boots from the<br/>ready image when<br/>the set matches"]
 ```
 
-A name is limited to 200 characters and a description to 2,000.
+A name is limited to 200 characters and a description to 2,000. Names are unique within the owning team or workspace scope, not across the whole deployment; two teams can each have an environment named `full-stack`.
+
+## Ownership and access
+
+Choose **Team** when creating an environment, or **Workspace (no team)** if workspace policy permits it. Ownership is fixed after creation. Team environments also appear on their team's **Environments** tab. See [Teams](/administration/teams) for membership, repository grants, and the policy that can require a team for new resources.
+
+| Action                         | Requirements                                                                                                                             |
+| ------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------- |
+| Read a workspace environment   | `environments.read`                                                                                                                      |
+| Read a team environment        | `environments.read` plus either current owning-team membership or workspace Administrator/Owner authority                                |
+| Use an environment             | `environments.use`, access to the environment, and compatible session ownership; team sessions need grants for every included repository |
+| Manage a workspace environment | `environments.manage`                                                                                                                    |
+| Manage a team environment      | `environments.manage` plus either owning-team lead or workspace Administrator/Owner authority                                            |
+
+A team-owned environment can launch only into a session owned by **that same team**, even for an administrator. A workspace-owned environment can also be used by an eligible team session; the team's session catalog can include those workspace environments when its repository grants cover the full set. An unbound bot cannot discover team environments.
 
 ## Create an environment
 
@@ -64,7 +86,7 @@ A name is limited to 200 characters and a description to 2,000.
 <Step>
 ### Open the form
 
-Go to Settings › Environments and click **New environment**. You need the `environments.manage` permission to see the button.
+Go to Settings › Environments and click **New environment**, or use your team's **Environments** tab. You need `environments.manage`; creating for a team also requires team lead or workspace Administrator/Owner authority. Select the owning **Team** before choosing repositories. If workspace policy requires team ownership, **Workspace (no team)** is unavailable.
 
 </Step>
 <Step>
@@ -87,7 +109,7 @@ Click **Create environment**. The page opens the new environment's **Secrets** t
 </Step>
 </Steps>
 
-Editing an environment later shows three tabs, each gated by its own permission: **Configuration** (`environments.manage`), **Secrets** (`environments.secrets.manage`), and **Overrides** (`integrations.read` to view, `environments.settings.manage` to change).
+Editing an environment later shows **Configuration**, **Secrets**, and **Overrides** tabs. Changes to secrets require `environments.secrets.manage`, settings changes require `environments.settings.manage`, and manual image builds require `environments.images.manage`. **Each also requires environment management access**, including `environments.manage` and the team lead/admin check for team environments. A custom role with only the feature-specific permission cannot make these changes, even on a workspace environment. Reading secret keys requires `environments.secrets.manage` plus environment read access; viewing overrides requires `integrations.read` plus environment read access.
 
 The environment list shows each environment's name, its repositories, its description, the image build status, the prebuild toggle, a **Rebuild image** button, **Edit**, and **Delete** (which asks you to **Confirm**).
 
@@ -95,15 +117,15 @@ The environment list shows each environment's name, its repositories, its descri
 
 Environments appear at the top of the new-session picker, alongside single repositories. Pick one and the session clones every repository into one workspace, with each repository on the base branch the environment defines. There is no per-repository branch selector for an environment session; the branches come from the environment.
 
-The picker also offers **Multiple repositories**, the ad-hoc counterpart. An ad-hoc set has the same workspace shape (each repository cloned side by side, one PR per repository possible) but it is not saved anywhere: it has no environment secrets, gets global secrets plus each selected repository's secrets instead, and never uses prebuilt images. The picker says so under the selection and links to Settings › Environments so you can save the set as an environment.
+The picker also offers **Multiple repositories**, the ad-hoc counterpart. An ad-hoc set has the same workspace shape (each repository cloned side by side, one PR per repository possible) but it is not saved anywhere: it has no environment secrets, gets global secrets plus its owning team's secrets (if any) plus each selected repository's secrets instead, and never uses prebuilt images. The picker says so under the selection and links to Settings › Environments so you can save the set as an environment.
 
 ## Secrets
 
-A session launched from an environment receives global secrets plus the environment's secrets, and nothing else. The repositories inside the environment do not contribute their repository secrets. Environments are curated, so a key added to a repository never silently lands in every environment containing it. The picker states this under an environment selection.
+A session launched from an environment receives **global + the session's owning team (if any) + environment secrets**, with later values winning. The repositories inside the environment do not contribute their repository secrets. This also applies when a team session uses a workspace-owned environment: the session's team supplies the team layer. Environments are curated, so a key added to a repository never silently lands in every environment containing it.
 
 To reuse a repository secret in an environment, open the environment's **Secrets** tab and use **Import from a repository**:
 
-1. Pick a source repository. Only repositories that belong to the environment are offered.
+1. Pick a source repository. Only repositories that belong to the environment are offered; source-repository authorization and the destination team's grants are still checked.
 2. Tick the keys to copy.
 3. Click the **Import** button (its label shows how many keys are selected).
 
@@ -124,6 +146,8 @@ Two environment-specific rules:
 - **Editing the set retires the image.** Every image records the ordered list of repositories and their base branches. Changing a repository, the order, or a base branch means the image no longer matches; sessions fall back to a normal boot until the rebuild finishes.
 - **Saving a prebuild-enabled environment triggers a build.** So does changing its secrets, toggling prebuilds on, or clicking **Rebuild image** on the environment row.
 
+Build secrets follow the environment's ownership: global + its owning team (if any) + environment secrets. Workspace environment builds do not receive the secrets of teams that later use them. Changing or deleting an owning team's secrets invalidates that team's environment images and schedules best-effort rebuilds when enabled.
+
 ## Sessions snapshot the environment
 
 A session copies the environment's repository set at creation time. Editing or deleting the environment afterwards never changes what an existing session works on. If the source environment is gone, the session's Repositories and Pull requests sidebar section shows an "Environment deleted" notice; the session itself keeps working.
@@ -140,6 +164,8 @@ An edit does affect new sessions and the prebuilt image, as described above.
 
 Sessions started by integrations run on the OpenCode harness.
 
+An integration mapping does not bypass environment access or ownership checks. Team environments require a session owned by the same team; an unbound bot's workspace session cannot use one.
+
 ## Per-environment overrides
 
 The **Overrides** tab layers environment-specific settings above the primary repository's settings. Anything left unset inherits from the primary repository. Overrides apply to sessions launched from the environment and to its image builds.
@@ -153,6 +179,12 @@ The **Overrides** tab layers environment-specific settings above the primary rep
 ## Troubleshooting
 
 <Accordions>
+<Accordion title="An environment is missing or cannot be used with this team">
+Check its owner, your current team membership and environment-use permission, and grants for every repository. A team environment cannot launch for another team or the workspace. Choose the matching session team, or use an eligible workspace environment. A duplicate name in another ownership scope is a different environment.
+</Accordion>
+<Accordion title="A custom role can see a tab but cannot save or rebuild">
+Feature-specific permissions do not replace `environments.manage`. Ask an administrator to check both the feature permission and environment management access; team environments also require team lead or workspace Administrator/Owner authority.
+</Accordion>
 <Accordion title="A session from the environment is missing a repository secret">
 Repository secrets do not flow into environment sessions. Import the key on the environment's Secrets tab, or move it to global scope.
 </Accordion>

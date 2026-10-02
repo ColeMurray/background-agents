@@ -4,7 +4,7 @@ description: Trigger an automation from any system with an authenticated JSON PO
 audience: team-owner
 owner: control-plane
 status: published
-lastReviewed: "2026-09-23"
+lastReviewed: "2026-10-02"
 relatedCode:
   - docs/AUTOMATIONS.md
   - packages/shared/src/triggers/types.ts
@@ -15,6 +15,7 @@ relatedCode:
   - packages/control-plane/src/webhooks/automation-webhook.ts
   - packages/control-plane/src/routes/automation-keys.ts
   - packages/control-plane/src/scheduler/scheduler.ts
+  - packages/control-plane/src/automation/authorization-guard.ts
 ---
 
 An Inbound Webhook automation gives you a URL and API key; any system that can send a JSON `POST` can start a session.
@@ -163,9 +164,9 @@ A paused automation accepts the request but starts nothing.
 
 ## Security
 
-- Treat the API key like a password. Anyone holding it can start sessions against the automation's repository under the owner's authority. Use **Regenerate Key** if it is exposed.
+- Treat the API key like a password. Anyone holding it can submit events that start sessions against the automation's repository under the stored executor's authority, subject to conditions and runtime authorization. Use **Regenerate Key** if it is exposed.
 - The payload reaches the agent as untrusted data inside the prompt. Keep instructions specific about which fields to act on, and do not ask the agent to follow instructions contained in the payload.
-- Runs execute with the automation owner's permissions; the sender's identity is not checked beyond the key.
+- Runs execute with the stored executor's permissions; the sender's identity is not checked beyond the key. For team automations, the executor must still belong to the active owning team, and current repository grants must cover the target. The key does not bypass these checks. Created sessions inherit the owning team and its default visibility; see [Ownership and execution](/automations/first-automation#ownership-and-execution).
 
 ## Troubleshooting
 

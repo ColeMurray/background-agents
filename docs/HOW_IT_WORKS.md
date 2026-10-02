@@ -107,14 +107,24 @@ high performance even with hundreds of concurrent sessions.
 An **environment** is a named, reusable set of repositories — the thing you reach for when the same
 multi-repository workspace comes up again and again (a frontend + its API, a service + its shared
 library). Environments are managed under **Settings > Environments** and appear at the top of the
-new-session picker.
+new-session picker when accessible. They can be workspace-owned or team-owned, with names unique
+within that ownership scope. Ownership is immutable. Team pages also list their own environments.
+
+Team environments require membership in the owning team or a workspace Owner/Administrator role,
+plus the appropriate environment permission. Managing one requires a lead or workspace
+Owner/Administrator and `environments.manage`; secrets, settings, and image mutations also require
+their respective feature permissions. A team environment can launch only into a session owned by
+that team. A team's session catalog can include eligible workspace environments too, provided its
+repository grants cover their members. Unbound bot catalogs do not expose team environments.
+`requireTeamOnCreate`, when enabled, also requires a team for new environment definitions. See
+[Authentication and Authorization](AUTH.md#environment-access).
 
 An environment defines:
 
 - **An ordered repository list** (up to 10) with a base branch per repository; the first repository
   is the primary
-- **Environment secrets** — sessions launched from the environment receive global secrets plus the
-  environment's secrets (repository secrets do not flow in; see
+- **Environment secrets** — sessions receive global secrets, then their owning team's secrets (if
+  any), then the environment's secrets; later scopes win. Repository secrets do not flow in (see
   [Secrets Management](./SECRETS.md#which-secrets-a-session-receives))
 - **Optional prebuilt images** — the whole environment (all clones + all setup scripts) is built
   ahead of time so sessions boot in seconds (see [Pre-Built Images](./IMAGE_PREBUILD.md))
@@ -670,8 +680,9 @@ same organization.
 
 The system uses a shared GitHub App installation for all git operations. This means:
 
-- Any user can access any repository the GitHub App is installed on
-- There's no per-user repository access validation
+- The installation defines the workspace's maximum repository reach; workspace permissions and team
+  repository grants further constrain access
+- Open-Inspect does not compare a user's personal GitHub repository permissions with that scope
 - The trust boundary is your organization, not individual users
 
 This follows
@@ -680,31 +691,36 @@ was built for internal use where all employees have access to company repositori
 
 ### Token Architecture
 
-| Token              | Purpose                                    | Scope                            |
-| ------------------ | ------------------------------------------ | -------------------------------- |
-| GitHub App Token   | Mint brokered git credentials              | All repos where App is installed |
-| User OAuth Token   | Create PRs, identify users                 | Repos the user has access to     |
-| Sandbox Auth Token | Authenticate sandbox → control plane calls | Single session                   |
-| WebSocket Token    | Authenticate client connections            | Single session                   |
-| Managed LLM Token  | Short-lived OpenAI or xAI model access     | Pinned session provider account  |
+| Token              | Purpose                                    | Scope                                                     |
+| ------------------ | ------------------------------------------ | --------------------------------------------------------- |
+| GitHub App Token   | Mint brokered git credentials              | Session repositories, intersected with owning-team grants |
+| User OAuth Token   | Create PRs, identify users                 | Repos the user has access to                              |
+| Sandbox Auth Token | Authenticate sandbox → control plane calls | Single session                                            |
+| WebSocket Token    | Authenticate client connections            | Single session                                            |
+| Managed LLM Token  | Short-lived OpenAI or xAI model access     | Pinned session provider account                           |
 
 Session sandboxes, whether fresh, prebuilt-image, or restored from a snapshot, fetch git credentials
 on demand through the control plane instead of relying on a token embedded in the environment or
-remote URL. The helper authorizes HTTPS requests for the configured SCM host, preserving existing
-setup/start hooks that clone other private repositories available to the installation. This protects
-continuously running sessions and persistent resumes from expired embedded credentials. One-shot
-image builds still receive `VCS_CLONE_TOKEN` because they have no session to broker through.
+remote URL. GitHub credentials cover only the session's persisted repositories, further restricted
+by current owning-team grants. Private submodules, dependencies, and sibling clones must be included
+in that set before session creation; editing an environment does not expand existing sessions. Grant
+removal changes subsequent credential scopes but does not immediately revoke issued tokens.
+Installation metadata/catalog operations remain installation-wide; GitLab retains its
+deployment-wide PAT limitation. One-shot image builds receive `VCS_CLONE_TOKEN` scoped to their
+build repositories because they have no session to broker through.
 
 ### Secrets
 
-You can configure environment variables (API keys, credentials) at global, per-repository, or
-per-environment scope. A session receives global secrets plus its **session target's** secrets:
+You can configure environment variables (API keys, credentials) at global, team, repository, or
+environment scope. Precedence is global, then owning team when present, then the **session
+target's** secrets; later layers win collisions:
 
 - **Global secrets** apply to all sessions (e.g., `ANTHROPIC_API_KEY`, `DEEPSEEK_API_KEY`,
   `ZHIPU_API_KEY`, `OPENCODE_API_KEY`)
-- **Repository secrets** apply to sessions launched from that repo (including all bot-created
-  sessions) and override global secrets with the same key; ad-hoc multi-repository sessions receive
-  each selected repository's secrets, with the primary winning collisions
+- **Team secrets** apply to sessions owned by that team, overriding global values
+- **Repository secrets** apply to repository-targeted sessions and override global and team secrets
+  with the same key; ad-hoc multi-repository sessions receive each selected repository's secrets,
+  with the primary winning collisions
 - **Environment secrets** apply to sessions launched from that environment — its repositories'
   repository secrets do not flow in
 - Stored encrypted (AES-256-GCM) in D1 database

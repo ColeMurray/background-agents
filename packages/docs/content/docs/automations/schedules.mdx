@@ -4,7 +4,7 @@ description: Schedule presets, custom cron expressions, timezones, next-run beha
 audience: team-owner
 owner: control-plane
 status: published
-lastReviewed: "2026-09-23"
+lastReviewed: "2026-10-02"
 relatedCode:
   - docs/AUTOMATIONS.md
   - docs/MULTI_REPO_AUTOMATIONS.md
@@ -13,6 +13,7 @@ relatedCode:
   - packages/web/src/components/automations/automation-trigger-fields.tsx
   - packages/control-plane/src/routes/automation-lifecycle.ts
   - packages/control-plane/src/scheduler/scheduler.ts
+  - packages/control-plane/src/automation/authorization-guard.ts
 ---
 
 A Schedule automation fires on a cron cadence in the timezone you choose; this page covers the picker, the cron rules, and what happens around each firing.
@@ -72,7 +73,10 @@ The **Timezone** field defaults to your browser's timezone when you create an au
 - It does not move the next scheduled run; the cron cadence stays fixed.
 - It is rejected with "A run is already active for this automation" when a run is in progress. Nothing is recorded for the rejected attempt.
 - It works while the automation is paused, so you can verify a fix before resuming. A successful manual run resets the consecutive-failure counter without resuming the automation; a failed one counts toward auto-pause like any other run.
-- It runs under the authority and identity of the person who clicked it, not the automation's owner.
+- It runs under the authority and identity of the person who clicked it, not the stored executor used by scheduled runs.
+- For a team automation, the requester must currently belong to its active owning team, including Administrators and Owners. Session-creation and target-use permissions and current team repository grants are checked at execution time. Editing or reading the automation is not enough to run it.
+
+Both scheduled and manual runs keep the automation's team ownership and use the team's default session visibility at launch. See [Ownership and execution](/automations/first-automation#ownership-and-execution) for access rules and API-only executor reassignment.
 
 ## One active run at a time
 

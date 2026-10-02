@@ -4,8 +4,12 @@ description: How an agent splits work into parallel child sessions, what childre
 audience: user
 owner: control-plane
 status: published
-lastReviewed: "2026-09-23"
+lastReviewed: "2026-10-02"
 relatedCode:
+  - packages/control-plane/src/routes/session-scope.ts
+  - packages/control-plane/src/db/session-index.ts
+  - packages/shared/src/types/session-access.ts
+  - packages/web/src/components/session-visibility-control.tsx
   - packages/sandbox-runtime/src/sandbox_runtime/harness/claude_tools.py
   - packages/control-plane/src/routes/session-child-spawn.ts
   - packages/web/src/components/sidebar/child-sessions-section.tsx
@@ -55,6 +59,7 @@ flowchart TB
 
 | Property                           | Behavior                                                                                                                                                                                                |
 | ---------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Team and visibility                | The parent's owning team and visibility at creation. Collaborator grants are copied from the parent.                                                                                                    |
 | Repository and environment         | The parent's primary repository and, for environment-launched parents, the same environment. Because secrets are scoped by repository and environment, the child sees the same secrets the parent does. |
 | Branch                             | A new branch cut from the parent's base branch. Children do not share the parent's working branch.                                                                                                      |
 | Harness                            | Always the parent's harness (OpenCode or Claude Agent).                                                                                                                                                 |
@@ -63,6 +68,8 @@ flowchart TB
 | Managed skills                     | The parent's pinned skills, at the same revisions.                                                                                                                                                      |
 | Sandbox settings, code-server, VNC | Resolved from the child's repository and environment, so a child on the same repository gets the same tools as its parent.                                                                              |
 | Automation                         | If the parent was started by an automation run, the child is linked to the same run.                                                                                                                    |
+
+A later visibility change on the parent includes child sessions by default. Changing the parent to Workspace or Team can also widen access to **private children**; the UI asks for confirmation. Clear **Include child sessions** to keep their visibility unchanged. Owning-team membership and session permissions still govern human actions on each child. See [Multiplayer and sharing](/sessions/multiplayer-and-sharing).
 
 ## Limits
 

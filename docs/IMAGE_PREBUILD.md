@@ -64,6 +64,12 @@ the pre-built image automatically — no changes to your workflow needed.
 3. Saving the environment triggers the first build immediately; you can also click the rebuild
    button on the environment row at any time
 
+Environment image actions require environment management access plus `environments.images.manage`.
+For team environments, management requires a team lead or workspace Owner/Administrator with
+`environments.manage`, and manual builds require the active owning team's grants to cover every
+current repository. Another team's grants do not substitute. These checks are independent of the
+session enforcement mode; repository images remain workspace resources with their own grant checks.
+
 ### What You'll See in the UI
 
 The Images settings page (and the environment rows under Settings > Environments) show the status of
@@ -127,6 +133,9 @@ Builds also trigger immediately, outside the schedule, when:
 - You **change an environment's secrets** — this additionally retires the existing ready image
   before the rebuild, so rotated values can't keep serving from an old image (see
   [Secrets Management](SECRETS.md#secrets-and-prebuilt-images))
+- You **write or delete an owning team's secrets**: images for that team's environments are
+  invalidated, with best-effort rebuild scheduling for prebuild-enabled environments. Shared
+  repository images are unaffected because they never receive team secrets.
 - You click the **manual rebuild** button — next to the repository in Settings > Images, or on the
   environment row in Settings > Environments
 
@@ -192,8 +201,10 @@ Queue and stores build state in D1; Node delivers it with the `jobs.db` poller a
 state in `global.db`. Both hosts run the same finalization handler and retry contract.
 
 A failing setup script fails the whole build, and for environment builds the error names the
-repository. Build-time secrets are exactly what the scope's sessions get: global + repository
-secrets for a repository scope, global + environment secrets for an environment scope
+repository. Repository builds receive global + repository secrets, **never team secrets**, because
+their images are shared across teams. Environment builds receive global + the environment's owning
+team (if any) + environment secrets; member-repository secrets do not flow in. Later scopes win. A
+workspace environment build has no team layer, even when a team session later launches from it
 ([session-target scoping](SECRETS.md#which-secrets-a-session-receives)).
 
 Everything your setup scripts install — dependencies, build artifacts, caches — is captured in the
@@ -218,7 +229,13 @@ the Worker until Modal's provider-session endpoints are available.
 
 A session boots from the ready image when the image's fingerprint matches the session's own
 repository snapshot (same repositories, same order, same base branches — for a single-repository
-session that means the default branch):
+session that means the default branch).
+
+Team environment images additionally require the session to have the same owning team, since setup
+scripts may have persisted that team's secrets in the image. This check does not depend on session
+visibility or the enforcement rollout mode.
+
+When an eligible image is ready:
 
 1. The sandbox starts from the saved image artifact (code + dependencies already present)
 2. A fast git sync pulls any commits pushed since the image was built (per repository)
@@ -231,8 +248,9 @@ If no matching ready image is available (disabled, first build hasn't finished, 
 succeeded, a non-default branch was selected, or the environment was edited after the session was
 created), the session falls back to the normal startup flow automatically. A **failed rebuild does
 not retire the image it was replacing**: an older ready image that still matches keeps serving
-sessions until a newer build succeeds. If the saved artifact itself fails to restore, the image is
-marked failed and the session retries from the base image. Either way, you'll never be blocked from
+sessions until a newer build succeeds, unless already invalidated (for example, by an environment or
+owning-team secret change). If the saved artifact itself fails to restore, the image is marked
+failed and the session retries from the base image. Either way, you'll never be blocked from
 starting a session.
 
 **Ad-hoc multi-repository sessions never use prebuilt images.** Picking "Multiple repositories" in

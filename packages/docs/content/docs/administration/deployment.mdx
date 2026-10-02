@@ -4,7 +4,7 @@ description: What an OpenInspect deployment consists of, what the operator confi
 audience: operator
 owner: platform
 status: published
-lastReviewed: "2026-09-28"
+lastReviewed: "2026-10-02"
 relatedCode:
   - README.md
   - docs/GETTING_STARTED.md
@@ -12,6 +12,12 @@ relatedCode:
   - docs/SETUP_GUIDE.md
   - docs/HOW_IT_WORKS.md
   - docs/DEBUGGING_PLAYBOOK.md
+  - terraform/environments/production/variables.tf
+  - terraform/environments/production/workers-control-plane.tf
+  - terraform/environments/aws-production/main.tf
+  - .github/workflows/terraform.yml
+  - packages/control-plane/src/authorization/teams-enforcement.ts
+  - packages/control-plane/src/authorization/session-admission.ts
 ---
 
 This page orients an operator: the parts of a deployment, the decisions made once at setup, and where the full runbooks are. It is not a step-by-step guide; those live in the repository.
@@ -27,7 +33,7 @@ This page orients an operator: the parts of a deployment, the decisions made onc
 | GitHub bot (optional) | Cloudflare Worker                                                          | Automatic PR reviews and `@mention` handling from GitHub webhooks.                                                                                  |
 | Linear bot (optional) | Cloudflare Worker                                                          | Starts sessions from Linear issue activity.                                                                                                         |
 
-Every client sees the same session state because state lives in the control plane, not in the client. A prompt sent from Slack or GitHub shows up on the web in real time.
+Authorized clients see the same session state because state lives in the control plane, not in the client. A prompt sent from Slack or GitHub shows up on the web in real time for users who can access that session.
 
 The AWS control plane can be deployed, but its runbook does not yet provide a supported first-Owner bootstrap. Until that is available, treat AWS as an incomplete deployment path rather than a production-ready alternative.
 
@@ -62,10 +68,33 @@ Provider differences that users notice (which resource and timeout settings appl
 | Branding: `app_name`         | Shown in the web tab title, sign-in page, landing hero, Slack and Linear messages, the pull request footer, and outbound User-Agent headers.                                                                                                                                        |
 | Branding: `app_icon_url`     | Optional. Replaces the built-in icon and favicon.                                                                                                                                                                                                                                   |
 | Execution timeout            | Optional control-plane variable `EXECUTION_TIMEOUT_MS`: the longest one prompt may run when the session's [sandbox settings](/configure/sandbox-settings) set no timeout. When unset, the limit is 2 hours.                                                                         |
+| Teams enforcement            | Terraform `teams_enforcement`, exposed to the control plane as `TEAMS_ENFORCEMENT`: `off`, `shadow` (default), or `on`. This is a session authorization rollout setting, not a switch disabling all team restrictions.                                                              |
 
 Web branding values are inlined at build time, so a rebrand needs a fresh web build; the bot and control-plane workers read the name at request time.
 
 For the Cloudflare/Vercel path, update the relevant configuration or secrets and apply Terraform. On AWS, changing an SSM secret requires `systemctl restart open-inspect` to load it into the running service; changing a `config` entry requires `terraform apply` and then that restart. `EXECUTION_TIMEOUT_MS` is set in the control plane's environment.
+
+## Teams enforcement
+
+The production Terraform input `teams_enforcement` accepts exactly three values:
+
+| Value    | Session access behavior                                                                                                                                                                   |
+| -------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `off`    | Uses legacy role-permission checks where the rollout applies, without evaluating the Teams decision for that action.                                                                      |
+| `shadow` | Default. Evaluates Teams decisions and records would-deny decisions while retaining legacy admission where the rollout applies. Non-private Team-visibility reads are not fully isolated. |
+| `on`     | Enforces the Teams session resolver, including non-private Team-visibility read isolation.                                                                                                |
+
+**Not all team restrictions are gated.** Private-session access and every non-read action on a team-owned session use the Teams resolver in all three modes. Repository grants, team-owned environment and automation access, runtime automation membership checks, scoped GitHub credentials, and require-team-on-create policy are separate controls; `off` and `shadow` do not turn them off. See [Workspace access](/administration/workspace-access) and [Teams](/administration/teams).
+
+For a direct production Terraform apply, set `teams_enforcement` in the deployment's Terraform inputs. Terraform writes it to the control-plane environment as `TEAMS_ENFORCEMENT`. In the repository's GitHub Actions Terraform workflow, both plan and apply resolve the value in this order:
+
+1. Repository Actions variable `TEAMS_ENFORCEMENT`.
+2. Repository Actions secret `TEAMS_ENFORCEMENT`, if the variable is unset or empty.
+3. `shadow`, if neither is set.
+
+The workflow passes that result as `TF_VAR_teams_enforcement`; a stale repository variable therefore overrides the secret. The control plane also defaults an unset or empty runtime value to `shadow` and rejects other values. The AWS production configuration currently sets `TEAMS_ENFORCEMENT = "shadow"` explicitly in its `config` map; changing it requires the AWS configuration update and service restart described above.
+
+Do not infer production read isolation from Teams being visible in the UI or a change having merged. Confirm the deployed version and effective value before relying on Team visibility as a read boundary. `shadow` audit entries are observations of would-deny decisions, not proof that a request was blocked.
 
 ## Initial Owner bootstrap
 
