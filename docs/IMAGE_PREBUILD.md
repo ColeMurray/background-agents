@@ -64,11 +64,12 @@ the pre-built image automatically — no changes to your workflow needed.
 3. Saving the environment triggers the first build immediately; you can also click the rebuild
    button on the environment row at any time
 
-Environment image actions require environment management access plus `environments.images.manage`.
-For team environments, management requires a team lead or workspace Owner/Administrator with
-`environments.manage`, and manual builds require the active owning team's grants to cover every
-current repository. Another team's grants do not substitute. These checks are independent of the
-session enforcement mode; repository images remain workspace resources with their own grant checks.
+Saving the prebuild toggle and scheduling its build require environment management access. Manual
+rebuilds additionally require `environments.images.manage`. For team environments, management
+requires a team lead or workspace Owner/Administrator with `environments.manage`, and manual builds
+require the active owning team's grants to cover every current repository. Another team's grants do
+not substitute. These checks are independent of the session enforcement mode; repository images
+remain workspace resources with their own grant checks.
 
 ### What You'll See in the UI
 
