@@ -10,6 +10,33 @@ import type { SandboxRuntimeEventHandler } from "./runtime.handler";
 import type { SandboxStreamingEventHandler } from "./streaming.handler";
 
 type SandboxEventWithAck = SandboxEvent & { ackId?: string };
+const LOG_METADATA_MAX_CHARS = 256;
+
+/** Metadata only: never copy event content, arguments, results, or error text. */
+function eventLogContext(event: SandboxEventWithAck, messageId: string | null) {
+  const fields: Record<string, unknown> = {
+    event_type: event.type,
+    message_id: messageId,
+  };
+  if ("sandboxId" in event) fields.sandbox_id = event.sandboxId;
+  if (event.ackId) fields.ack_id = event.ackId;
+  if ("callId" in event) fields.call_id = event.callId;
+  if ("taskCallId" in event) fields.task_call_id = event.taskCallId;
+  if ("childSessionId" in event) fields.child_session_id = event.childSessionId;
+  if ("stepId" in event) fields.step_id = event.stepId;
+  if ("operationId" in event) fields.operation_id = event.operationId;
+  if ("isSubtask" in event) fields.is_subtask = event.isSubtask;
+  if ("status" in event) fields.status = event.status;
+  if ("success" in event) fields.success = event.success;
+  if ("tool" in event) fields.tool = event.tool;
+  for (const [key, value] of Object.entries(fields)) {
+    if (typeof value === "string" && value.length > LOG_METADATA_MAX_CHARS) {
+      fields[key] = value.slice(0, LOG_METADATA_MAX_CHARS);
+      fields.metadata_truncated = true;
+    }
+  }
+  return fields;
+}
 
 /** Event types that require delivery acknowledgement. */
 const CRITICAL_EVENT_TYPES: ReadonlySet<string> = new Set([
@@ -46,12 +73,6 @@ export class SessionSandboxEventProcessor {
   ) {}
 
   async processSandboxEvent(event: SandboxEventWithAck): Promise<void> {
-    if (event.type === "heartbeat" || event.type === "token") {
-      this.log.debug("Sandbox event", { event_type: event.type });
-    } else if (event.type !== "execution_complete") {
-      this.log.info("Sandbox event", { event_type: event.type });
-    }
-
     const now = Date.now();
     const eventMessageId = "messageId" in event ? event.messageId : null;
     const processingMessage = this.messageRepository.getProcessingMessage();
@@ -61,10 +82,28 @@ export class SessionSandboxEventProcessor {
       processingMessage,
     };
 
-    await this.dispatch(event, context);
+    const fields = eventLogContext(event, context.messageId);
+    const level = event.type === "heartbeat" || event.type === "token" ? "debug" : "info";
+    this.log[level]("sandbox.event.received", fields);
+    const startedAt = performance.now();
+    try {
+      await this.dispatch(event, context);
+    } catch (error) {
+      this.log.error("sandbox.event.processing_failed", {
+        ...fields,
+        duration_ms: Math.round(performance.now() - startedAt),
+        error_type: error instanceof Error ? error.constructor.name : typeof error,
+      });
+      throw error;
+    }
+    // Dispatch finished; background callbacks and client delivery may still be pending.
+    this.log[level]("sandbox.event.processed", {
+      ...fields,
+      duration_ms: Math.round(performance.now() - startedAt),
+    });
 
     if (CRITICAL_EVENT_TYPES.has(event.type)) {
-      this.sendAck(event.ackId);
+      this.sendAck(event.ackId, fields);
     }
   }
 
@@ -143,13 +182,20 @@ export class SessionSandboxEventProcessor {
     }
   }
 
-  private sendAck(ackId: string | undefined): void {
-    if (!ackId) return;
-    const sandboxWs = this.wsManager.getSandboxSocket();
-    if (sandboxWs) {
-      this.wsManager.send(sandboxWs, { type: "ack", ackId });
-    } else {
-      this.log.debug("Cannot send ACK: no sandbox socket", { ack_id: ackId });
+  private sendAck(ackId: string | undefined, fields: Record<string, unknown>): void {
+    if (!ackId) {
+      this.log.debug("sandbox.event.ack", { ...fields, outcome: "missing_id" });
+      return;
     }
+    const sandboxWs = this.wsManager.getSandboxSocket();
+    if (!sandboxWs) {
+      this.log.warn("sandbox.event.ack", { ...fields, outcome: "no_socket" });
+      return;
+    }
+    const sent = this.wsManager.send(sandboxWs, { type: "ack", ackId });
+    this.log[sent ? "info" : "warn"]("sandbox.event.ack", {
+      ...fields,
+      outcome: sent ? "sent" : "send_failed",
+    });
   }
 }

@@ -210,6 +210,145 @@ function createProcessor(
 }
 
 describe("SessionSandboxEventProcessor", () => {
+  describe("event diagnostics", () => {
+    it("correlates tool processing without logging content or credentials", async () => {
+      const h = createProcessor();
+      const event = {
+        type: "tool_call",
+        sandboxId: "sb-1",
+        timestamp: 1000,
+        messageId: "msg-1",
+        callId: "call-1",
+        taskCallId: "parent-1",
+        childSessionId: "child-1",
+        isSubtask: true,
+        tool: "Bash",
+        status: "completed",
+        args: { command: "secret-command", token: "secret-token" },
+        output: "secret-output",
+      } satisfies SandboxEvent;
+      await h.processor.processSandboxEvent(event);
+
+      const expected = {
+        event_type: "tool_call",
+        sandbox_id: "sb-1",
+        message_id: "msg-1",
+        call_id: "call-1",
+        task_call_id: "parent-1",
+        child_session_id: "child-1",
+        is_subtask: true,
+        tool: "Bash",
+        status: "completed",
+      };
+      expect(h.log.info).toHaveBeenCalledWith("sandbox.event.received", expected);
+      expect(h.log.info).toHaveBeenCalledWith("sandbox.event.processed", {
+        ...expected,
+        duration_ms: expect.any(Number),
+      });
+      expect(JSON.stringify(h.log.info.mock.calls)).not.toContain("secret-");
+      expect(h.eventRepository.upsertToolCallEvent).toHaveBeenCalledWith(
+        "msg-1",
+        event,
+        expect.any(Number)
+      );
+    });
+
+    it("uses resolved message attribution and bounds oversized metadata", async () => {
+      const h = createProcessor();
+      h.repository.getProcessingMessage.mockReturnValue({ id: "fallback-message" });
+      await h.processor.processSandboxEvent({
+        type: "snapshot_ready",
+        sandboxId: "s".repeat(1000),
+        timestamp: 1000,
+      });
+      expect(h.log.info).toHaveBeenCalledWith("sandbox.event.received", {
+        event_type: "snapshot_ready",
+        sandbox_id: "s".repeat(256),
+        message_id: "fallback-message",
+        metadata_truncated: true,
+      });
+    });
+
+    it.each(["token", "heartbeat"] as const)("keeps %s diagnostics at DEBUG", async (type) => {
+      const h = createProcessor();
+      const event =
+        type === "token"
+          ? { type, sandboxId: "sb-1", timestamp: 1000, messageId: "msg-1", content: "secret-text" }
+          : { type, sandboxId: "sb-1", timestamp: 1000 };
+      await h.processor.processSandboxEvent(event);
+      expect(h.log.debug).toHaveBeenCalledWith(
+        "sandbox.event.received",
+        expect.objectContaining({ event_type: type })
+      );
+      expect(h.log.debug).toHaveBeenCalledWith(
+        "sandbox.event.processed",
+        expect.objectContaining({ event_type: type })
+      );
+      expect(h.log.info).not.toHaveBeenCalled();
+      expect(JSON.stringify(h.log.debug.mock.calls)).not.toContain("secret-text");
+    });
+
+    it("logs processing failure without leaking the error or acknowledging the event", async () => {
+      const failure = new TypeError("secret-error-detail");
+      const h = createProcessor({
+        generationReady: vi.fn(() => {
+          throw failure;
+        }),
+        prepared: vi.fn(),
+      });
+      h.wsManager.getSandboxSocket.mockReturnValue({} as WebSocket);
+      await expect(
+        h.processor.processSandboxEvent({
+          type: "sandbox_generation_ready",
+          sandboxId: "sb-1",
+          timestamp: 1000,
+          generation: { sandboxId: "sb-1", createdAt: 4000 },
+          ackId: "ack-1",
+        })
+      ).rejects.toBe(failure);
+      expect(h.log.error).toHaveBeenCalledWith("sandbox.event.processing_failed", {
+        event_type: "sandbox_generation_ready",
+        sandbox_id: "sb-1",
+        message_id: null,
+        ack_id: "ack-1",
+        error_type: "TypeError",
+        duration_ms: expect.any(Number),
+      });
+      expect(JSON.stringify(h.log.error.mock.calls)).not.toContain("secret-error-detail");
+      expect(h.log.info).not.toHaveBeenCalledWith("sandbox.event.processed", expect.anything());
+      expect(h.wsManager.send).not.toHaveBeenCalled();
+    });
+
+    it.each(["sent", "send_failed", "no_socket", "missing_id"] as const)(
+      "logs ACK outcome %s only after processing",
+      async (outcome) => {
+        const h = createProcessor();
+        if (outcome !== "no_socket") h.wsManager.getSandboxSocket.mockReturnValue({} as WebSocket);
+        h.wsManager.send.mockReturnValue(outcome !== "send_failed");
+        await h.processor.processSandboxEvent({
+          type: "snapshot_ready",
+          sandboxId: "sb-1",
+          timestamp: 1000,
+          ...(outcome === "missing_id" ? {} : { ackId: "ack-1" }),
+        });
+        const method =
+          outcome === "missing_id" ? h.log.debug : outcome === "sent" ? h.log.info : h.log.warn;
+        expect(method).toHaveBeenCalledWith(
+          "sandbox.event.ack",
+          expect.objectContaining({ outcome, event_type: "snapshot_ready" })
+        );
+        if (outcome === "sent" || outcome === "send_failed") {
+          expect(h.wsManager.send).toHaveBeenCalledOnce();
+          expect(h.log.info.mock.invocationCallOrder[1]).toBeLessThan(
+            h.wsManager.send.mock.invocationCallOrder[0]
+          );
+        } else {
+          expect(h.wsManager.send).not.toHaveBeenCalled();
+        }
+      }
+    );
+  });
+
   it("releases the next prompt without waiting for diff work", async () => {
     const h = createProcessor();
     h.repository.getProcessingMessage.mockReturnValue({ id: "msg-1" });
