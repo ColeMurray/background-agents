@@ -14,6 +14,7 @@ import type {
 } from "@open-inspect/shared/types/integrations";
 import {
   MODEL_REASONING_CONFIG,
+  getValidModelOrDefault,
   isValidReasoningEffort,
   type ModelCategory,
   type ValidModel,
@@ -635,8 +636,10 @@ function RepoOverrideRow({
   const effectiveHarness =
     harness !== "__global__" && isValidHarness(harness) ? harness : (defaultHarness ?? "opencode");
   const effectiveModel = model || defaultModel;
+  // Same rule as the bot: judge the canonical model session creation runs, so
+  // a stale stored model does not produce a false fallback warning.
   const harnessMismatch = effectiveModel
-    ? checkHarnessCompatibility(effectiveHarness, effectiveModel)
+    ? checkHarnessCompatibility(effectiveHarness, getValidModelOrDefault(effectiveModel))
     : null;
   const visibleModelOptions = filterModelOptionsForHarness(effectiveHarness, enabledModelOptions);
 

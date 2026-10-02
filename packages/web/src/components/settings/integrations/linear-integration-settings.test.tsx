@@ -286,4 +286,27 @@ describe("LinearIntegrationSettings", () => {
       })
     );
   }, 20000);
+
+  it("shows no fallback warning when a stale model canonicalizes to a compatible one", async () => {
+    setupSWR({
+      global: {
+        defaults: {
+          allowUserPreferenceOverride: true,
+          allowLabelModelOverride: true,
+          emitToolProgressActivities: true,
+          model: "openai/gpt-5",
+        },
+      },
+      repos: [{ repo: "acme/web", settings: { harness: "claude" } }],
+      availableRepos: [repo("acme/web")],
+    });
+    fetchMock.mockResolvedValue(okJson({}));
+
+    render(<LinearIntegrationSettings />);
+
+    // openai/gpt-5 is absent from the catalog: the bot resolves it to the
+    // default Claude model and keeps the harness, so no warning may show.
+    const row = repoOverrideRow("acme/web");
+    expect(within(row).queryByText(/cannot run on the .* harness/)).toBeNull();
+  }, 20000);
 });
