@@ -335,6 +335,27 @@ function buildQueue(
 }
 
 describe("SessionMessageQueue", () => {
+  it("keeps the original prompt when reference enrichment fails", async () => {
+    const resolve = vi.fn().mockRejectedValue(new Error("Referenced session unavailable"));
+    const h = buildQueue(
+      () => false,
+      () => null,
+      resolve
+    );
+    await h.queue.handlePromptMessage({} as WebSocket, createClientInfo(), {
+      content: "#[Work](session:other)",
+      clientRequestId: "reference-failure",
+    });
+    expect(h.repository.createMessageWithAttachments).toHaveBeenCalledWith(
+      expect.objectContaining({ content: "#[Work](session:other)" }),
+      expect.anything()
+    );
+    expect(h.wsManager.send).not.toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ type: "error" })
+    );
+  });
+
   it("resolves references for the immutable prompt participant, not the session owner", async () => {
     const resolve = vi.fn(
       async (userId: string, content: string) => `${content}\nSummary for ${userId}`
@@ -929,8 +950,13 @@ describe("SessionMessageQueue", () => {
     expect(h.sessionStatus.transition).toHaveBeenCalledWith("active");
   });
 
-  it("deduplicates a correlated web prompt before attachment lookup or mutation", async () => {
-    const h = buildQueue();
+  it("deduplicates a correlated web prompt before reference or attachment lookup", async () => {
+    const resolve = vi.fn().mockRejectedValue(new Error("Unavailable"));
+    const h = buildQueue(
+      () => true,
+      () => null,
+      resolve
+    );
     h.repository.getMessageByClientRequestId.mockReturnValue(
       createMessage({
         id: "msg-existing",
@@ -952,6 +978,7 @@ describe("SessionMessageQueue", () => {
       attachments: [{ name: "shot.png", attachmentId: "up-1" }],
     });
 
+    expect(resolve).not.toHaveBeenCalled();
     expect(h.attachmentRepository.getUnreferenced).not.toHaveBeenCalled();
     expect(h.repository.createMessageWithAttachments).not.toHaveBeenCalled();
     expect(h.repository.createEvent).not.toHaveBeenCalled();
