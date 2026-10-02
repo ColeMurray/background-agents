@@ -27,6 +27,13 @@ describe("normalizeWebhookEvent", () => {
     expect(event.contextBlock).not.toContain("idempotencyKey");
     expect(event.contextBlock).toContain("value");
   });
+
+  it("does not treat malformed non-object payloads as idempotency objects", () => {
+    const event = normalizeWebhookEvent("auto-1", ["idempotencyKey", "key-1"], "key-1");
+
+    expect(event.body).toEqual(["idempotencyKey", "key-1"]);
+    expect(event.contextBlock).toContain("idempotencyKey");
+  });
 });
 
 describe("resolveJsonPath", () => {
@@ -45,6 +52,18 @@ describe("resolveJsonPath", () => {
 
   it("handles null in path", () => {
     expect(resolveJsonPath("$.a.b", { a: null })).toBeUndefined();
+  });
+
+  it("preserves numeric array segments in existing dot paths", () => {
+    expect(resolveJsonPath("$.items.0.id", { items: [{ id: "evt-1" }] })).toBe("evt-1");
+    expect(resolveJsonPath("$.0.id", [{ id: "evt-1" }])).toBe("evt-1");
+    expect(resolveJsonPath("$.items.length", { items: [{ id: "evt-1" }] })).toBe(1);
+    expect(resolveJsonPath("$.items.map", { items: [{ id: "evt-1" }] })).toBeUndefined();
+  });
+
+  it("does not resolve inherited properties", () => {
+    expect(resolveJsonPath("$.toString", {})).toBeUndefined();
+    expect(resolveJsonPath("$.items.constructor", { items: {} })).toBeUndefined();
   });
 });
 
@@ -134,6 +153,16 @@ describe("evaluateJsonPathFilter", () => {
     expect(evaluateJsonPathFilter({ path: "$.event.missing", comparison: "exists" }, body)).toBe(
       false
     );
+  });
+
+  it("matches saved array-indexed filters but not inherited properties", () => {
+    expect(
+      evaluateJsonPathFilter(
+        { path: "$.items.0.id", comparison: "eq", value: "evt-1" },
+        { items: [{ id: "evt-1" }] }
+      )
+    ).toBe(true);
+    expect(evaluateJsonPathFilter({ path: "$.toString", comparison: "exists" }, {})).toBe(false);
   });
 
   it("returns false for undefined values (non-exists comparisons)", () => {

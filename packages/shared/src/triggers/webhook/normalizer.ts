@@ -4,6 +4,9 @@
 
 import type { JsonPathFilter, WebhookAutomationEvent } from "../types";
 import { buildWebhookContextBlock } from "./context";
+import { z } from "zod";
+
+const webhookObjectSchema = z.record(z.string(), z.unknown());
 
 /**
  * Normalize a webhook payload into a WebhookAutomationEvent.
@@ -18,8 +21,9 @@ export function normalizeWebhookEvent(
 
   // Strip idempotencyKey from body before including in context
   let contextBody = body;
-  if (body && typeof body === "object" && "idempotencyKey" in (body as Record<string, unknown>)) {
-    const { idempotencyKey: _, ...rest } = body as Record<string, unknown>;
+  const parsedBody = webhookObjectSchema.safeParse(body);
+  if (parsedBody.success && "idempotencyKey" in parsedBody.data) {
+    const { idempotencyKey: _, ...rest } = parsedBody.data;
     contextBody = rest;
   }
 
@@ -37,15 +41,21 @@ export function normalizeWebhookEvent(
 
 /**
  * Resolve a dot-notation JSONPath against an object.
- * Supports only `$.dot.path.notation` (no array indexing, no recursive descent).
+ * Supports dot notation and array properties (no recursive descent).
  */
 export function resolveJsonPath(path: string, obj: unknown): unknown {
   if (!path.startsWith("$.")) return undefined;
   const keys = path.slice(2).split(".");
   let current: unknown = obj;
   for (const key of keys) {
-    if (current == null || typeof current !== "object") return undefined;
-    current = (current as Record<string, unknown>)[key];
+    if (Array.isArray(current)) {
+      if (!Object.hasOwn(current, key)) return undefined;
+      current = Reflect.get(current, key);
+      continue;
+    }
+    const parsedCurrent = webhookObjectSchema.safeParse(current);
+    if (!parsedCurrent.success || !Object.hasOwn(parsedCurrent.data, key)) return undefined;
+    current = parsedCurrent.data[key];
   }
   return current;
 }
