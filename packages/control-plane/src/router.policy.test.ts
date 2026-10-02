@@ -24,11 +24,11 @@ describe("route policy table", () => {
   });
 
   it("publishes the complete canonical route catalog", () => {
-    expect(routes).toHaveLength(211);
+    expect(routes).toHaveLength(212);
 
     const paths = routes.map((route) => route.path);
     expect(new Set(paths).size).toBe(160);
-    expect(new Set(routes.map((route) => `${route.method}:${route.path}`)).size).toBe(211);
+    expect(new Set(routes.map((route) => `${route.method}:${route.path}`)).size).toBe(212);
   });
 
   it("gates run analytics with analytics.read", () => {
@@ -241,6 +241,11 @@ describe("route policy table", () => {
     ],
     ["GET", "/integration-settings/slack/watched-channels", [{ service: "slack-bot" }]],
     ["GET", "/model-preferences", [{ service: "slack-bot" }]],
+    ["GET", "/automations", [{ service: "slack-bot" }]],
+    ["GET", "/automations/auto-1", [{ service: "slack-bot" }]],
+    ["GET", "/automations/auto-1/invocations", [{ service: "slack-bot" }]],
+    ["GET", "/automations/auto-1/runs/run-1", [{ service: "slack-bot" }]],
+    ["GET", "/integration-settings/slack/channels", [{ service: "slack-bot" }]],
     ["GET", "/sessions/session-1/events", [{ service: "slack-bot" }, { service: "linear-bot" }]],
     ["GET", "/sessions/session-1/artifacts", [{ service: "slack-bot" }, { service: "linear-bot" }]],
   ])("declares the exact actorless grants for %s %s", (method, path, expected) => {
@@ -264,6 +269,11 @@ describe("route policy table", () => {
       routeFor("GET", "/integration-settings/github/resolved/acme/widgets"),
       routeFor("GET", "/integration-settings/slack/watched-channels"),
       routeFor("GET", "/model-preferences"),
+      routeFor("GET", "/automations"),
+      routeFor("GET", "/automations/auto-1"),
+      routeFor("GET", "/automations/auto-1/invocations"),
+      routeFor("GET", "/automations/auto-1/runs/run-1"),
+      routeFor("GET", "/integration-settings/slack/channels"),
       routeFor("GET", "/sessions/session-1/events"),
       routeFor("GET", "/sessions/session-1/artifacts"),
       routeFor("POST", "/sessions/session-1/stop"),

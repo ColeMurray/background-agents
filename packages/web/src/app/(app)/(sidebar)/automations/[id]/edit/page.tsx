@@ -12,52 +12,57 @@ import {
 import { ErrorBanner } from "@/components/ui/error-banner";
 import { BackIcon } from "@/components/ui/icons";
 import { browserApiFetch } from "@/lib/browser-api-fetch";
-import { useCurrentUserAuthorization } from "@/hooks/use-current-user-authorization";
-import { canAccessAutomation } from "@/lib/automation-authorization";
+import { useSWRConfig } from "swr";
+import { invalidateAutomationCache } from "@/lib/automation-cache";
+import { useAutomationScope } from "@/hooks/use-automation-scope";
+import { sameEnvironmentIds } from "@/components/automations/automation-target-selection";
 
 export default function EditAutomationPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = use(params);
   const { isOpen } = useSidebarContext();
   const router = useRouter();
+  const { navigation } = useAutomationScope();
   const { automation, loading } = useAutomation(id);
-  const { authorization, loading: authorizationLoading } = useCurrentUserAuthorization();
+  const swr = useSWRConfig();
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState("");
-  const canManage = automation
-    ? canAccessAutomation("automations.manage", authorization, automation)
-    : false;
+  const canManage = automation?.capabilities.canManage ?? false;
 
   useEffect(() => {
-    if (!loading && !authorizationLoading && automation && !canManage) {
-      router.replace(`/automations/${id}`);
+    if (!loading && automation && !canManage) {
+      router.replace(navigation.detail(id));
     }
-  }, [automation, authorizationLoading, canManage, id, loading, router]);
+  }, [automation, canManage, id, loading, navigation, router]);
 
   const handleSubmit = async (values: AutomationFormValues) => {
+    if (!canManage || !automation) return;
     setSubmitting(true);
     setError("");
 
     try {
+      const { environmentIds, ...otherValues } = values;
       const res = await browserApiFetch(`/api/automations/${id}`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(values),
+        body: JSON.stringify(
+          sameEnvironmentIds(environmentIds, automation.environmentIds) ? otherValues : values
+        ),
       });
 
-      if (res.ok) {
-        router.push(`/automations/${id}`);
-      } else {
+      if (!res.ok) {
         const data = await res.json();
-        setError(data.error || "Failed to update automation");
-        setSubmitting(false);
+        throw new Error(data.error || "Failed to update automation");
       }
-    } catch {
-      setError("Failed to update automation");
+      await invalidateAutomationCache(swr, id);
+      router.push(navigation.detail(id));
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Failed to update automation");
+    } finally {
       setSubmitting(false);
     }
   };
 
-  if (loading || authorizationLoading) {
+  if (loading) {
     return (
       <div className="h-full flex items-center justify-center">
         <div className="animate-spin rounded-full h-6 w-6 border-2 border-current border-t-transparent text-muted-foreground" />
@@ -69,7 +74,7 @@ export default function EditAutomationPage({ params }: { params: Promise<{ id: s
     return (
       <div className="h-full flex flex-col items-center justify-center gap-4">
         <p className="text-muted-foreground">Automation not found.</p>
-        <Link href="/automations">
+        <Link href={navigation.list}>
           <button type="button" className="text-sm text-accent hover:underline">
             Back to Automations
           </button>
@@ -87,7 +92,7 @@ export default function EditAutomationPage({ params }: { params: Promise<{ id: s
           <div className="px-4 py-3 flex items-center gap-2">
             <CollapsedSidebarControls />
             <Link
-              href={`/automations/${id}`}
+              href={navigation.detail(id)}
               className="p-1.5 text-muted-foreground hover:text-foreground hover:bg-muted transition"
               aria-label="Back to automation"
             >
@@ -112,6 +117,7 @@ export default function EditAutomationPage({ params }: { params: Promise<{ id: s
           <AutomationForm
             mode="edit"
             initialValues={{
+              teamId: automation.ownerTeamId ?? null,
               name: automation.name,
               repositories: automation.repositories,
               environmentIds: automation.environmentIds,

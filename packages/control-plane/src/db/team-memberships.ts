@@ -6,7 +6,8 @@ import {
   type TeamMembership,
   type TeamRole,
 } from "@open-inspect/shared/types/teams";
-import type { SqlDatabase, SqlStatement } from "./sql-database";
+import { TeamAuditStore, type TeamAuditActor, type TeamAuditInput } from "./team-audit";
+import type { SqlDatabase, SqlResult, SqlStatement } from "./sql-database";
 
 export class LastLeadError extends Error {
   constructor() {
@@ -122,27 +123,51 @@ export class TeamMembershipStore {
     );
   }
 
+  /** With `audit`, the insert and its `team.member_added` row commit or roll back together. */
   async add(
     teamId: string,
     userId: string,
     role: TeamRole = "member",
-    source: TeamMembership["source"] = "manual"
+    source: TeamMembership["source"] = "manual",
+    audit?: TeamAuditActor
   ): Promise<boolean> {
-    const result = await this.db
-      .prepare(
-        "INSERT INTO team_memberships (team_id, user_id, role, source, created_at) VALUES (?, ?, ?, ?, ?) ON CONFLICT DO NOTHING"
-      )
-      .bind(teamId, userId, teamRoleSchema.parse(role), source, Date.now())
-      .run();
+    const createdAt = Date.now();
+    const result = await this.runAudited(
+      this.db
+        .prepare(
+          "INSERT INTO team_memberships (team_id, user_id, role, source, created_at) VALUES (?, ?, ?, ?, ?) ON CONFLICT DO NOTHING"
+        )
+        .bind(teamId, userId, teamRoleSchema.parse(role), source, createdAt),
+      audit && {
+        ...audit,
+        teamId,
+        targetUserId: userId,
+        action: "team.member_added",
+        before: {},
+        after: { teamId, userId, role, source, createdAt },
+      }
+    );
     return result.meta.changes > 0;
   }
 
-  async addIfJoinable(teamId: string, userId: string): Promise<boolean> {
-    const result = await this.bindAddIfJoinable(teamId, userId).run();
+  /** With `audit`, the join and its `team.member_joined` row commit or roll back together. */
+  async addIfJoinable(teamId: string, userId: string, audit?: TeamAuditActor): Promise<boolean> {
+    const createdAt = Date.now();
+    const result = await this.runAudited(
+      this.bindAddIfJoinable(teamId, userId, createdAt),
+      audit && {
+        ...audit,
+        teamId,
+        targetUserId: userId,
+        action: "team.member_joined",
+        before: {},
+        after: { teamId, userId, role: "member", source: "manual", createdAt },
+      }
+    );
     return result.meta.changes > 0;
   }
 
-  private bindAddIfJoinable(teamId: string, userId: string): SqlStatement {
+  private bindAddIfJoinable(teamId: string, userId: string, createdAt: number): SqlStatement {
     return this.db
       .prepare(
         `INSERT INTO team_memberships (team_id, user_id, role, source, created_at)
@@ -150,29 +175,67 @@ export class TeamMembershipStore {
          WHERE id = ? AND join_policy = 'open' AND archived_at IS NULL
          ON CONFLICT DO NOTHING`
       )
-      .bind(userId, Date.now(), teamId);
+      .bind(userId, createdAt, teamId);
   }
 
-  async setRole(teamId: string, userId: string, role: TeamRole): Promise<void> {
-    const result = await this.db
-      .prepare(
-        `UPDATE team_memberships SET role = ? WHERE team_id = ? AND user_id = ?
+  /** With `audit`, the change and its `team.member_role_changed` row commit or roll back together. */
+  async setRole(
+    teamId: string,
+    userId: string,
+    role: TeamRole,
+    audit?: TeamAuditActor & { before: TeamMembership }
+  ): Promise<void> {
+    const result = await this.runAudited(
+      this.db
+        .prepare(
+          `UPDATE team_memberships SET role = ? WHERE team_id = ? AND user_id = ?
                 AND (? = 'lead' OR role != 'lead' OR (SELECT COUNT(*) FROM team_memberships WHERE team_id = ? AND role = 'lead') > 1)`
-      )
-      .bind(teamRoleSchema.parse(role), teamId, userId, role, teamId)
-      .run();
+        )
+        .bind(teamRoleSchema.parse(role), teamId, userId, role, teamId),
+      audit && {
+        ...audit,
+        teamId,
+        targetUserId: userId,
+        action: "team.member_role_changed",
+        after: { ...audit.before, role },
+      }
+    );
     if (result.meta.changes === 0) await this.throwMembershipUpdateError(teamId, userId);
   }
 
-  async remove(teamId: string, userId: string): Promise<void> {
-    const result = await this.db
-      .prepare(
-        `DELETE FROM team_memberships WHERE team_id = ? AND user_id = ?
+  /** With `audit`, the removal and its `team.member_removed` row commit or roll back together. */
+  async remove(
+    teamId: string,
+    userId: string,
+    audit?: TeamAuditActor & { before: TeamMembership }
+  ): Promise<void> {
+    const result = await this.runAudited(
+      this.db
+        .prepare(
+          `DELETE FROM team_memberships WHERE team_id = ? AND user_id = ?
                 AND (role != 'lead' OR (SELECT COUNT(*) FROM team_memberships WHERE team_id = ? AND role = 'lead') > 1)`
-      )
-      .bind(teamId, userId, teamId)
-      .run();
+        )
+        .bind(teamId, userId, teamId),
+      audit && {
+        ...audit,
+        teamId,
+        targetUserId: userId,
+        action: "team.member_removed",
+        after: {},
+      }
+    );
     if (result.meta.changes === 0) await this.throwMembershipUpdateError(teamId, userId);
+  }
+
+  /** Runs `mutation`, audited in the same batch only when it changed a row. */
+  private async runAudited(
+    mutation: SqlStatement,
+    audit: TeamAuditInput | undefined
+  ): Promise<SqlResult> {
+    const [result] = await this.db.batch(
+      audit ? [mutation, new TeamAuditStore(this.db).bind(audit, true)] : [mutation]
+    );
+    return result;
   }
 
   private async throwMembershipUpdateError(teamId: string, userId: string): Promise<never> {

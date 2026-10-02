@@ -78,6 +78,18 @@ holding only `environments.secrets.manage`, `environments.settings.manage`, or
 `environments.images.manage` lose those actions. Actorless bots see only workspace environments,
 both in lists and by ID.
 
+**Team-owned automations.** The automation form offers team ownership, and team pages include an
+Automations tab. Team automations are visible to their members and administrators, and controls use
+server capabilities. Automation leads can manage team work and reassign departed executors; executor
+reassignment verifies the candidate's launch permissions before writing and is audited as
+`automation.executor_changed`. Selected environments must belong to the automation's team.
+Executions require active membership, an unarchived team, and current repository grants, and their
+sessions inherit the team's default visibility. Slack follow-ups use the persisted session's
+collaboration decision, and automation history redacts inaccessible session metadata. Existing
+automations retain their ownership and visibility. The require-team creation setting also applies to
+new automations. These owned-resource checks apply in every session enforcement mode; source-control
+token narrowing remains a separate change.
+
 ### Removed
 
 Removed the team Activity tab and `GET /teams/:id/activity` endpoint. Team operations continue to be

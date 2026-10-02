@@ -8,9 +8,12 @@
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { TeamMembershipStore } from "../db/team-memberships";
 import { TeamRepositoryGrantStore } from "../db/team-repository-grants";
 import { TeamStore } from "../db/teams";
 import type * as AuthenticateModule from "../auth/authenticate";
+import type * as AuthorizationGuardModule from "../automation/authorization-guard";
+import { isAutomationExecutionAuthorized } from "../automation/authorization-guard";
 import { resolveRepoOrError } from "./shared";
 import { PERMISSION_IDS } from "@open-inspect/shared/rbac";
 import { createTestRequestHandler } from "../router.test-support";
@@ -96,6 +99,11 @@ vi.mock("../auth/crypto", () => ({
   generateId: vi.fn(() => "generated-id"),
 }));
 
+vi.mock("../automation/authorization-guard", async (importOriginal) => ({
+  ...(await importOriginal<typeof AuthorizationGuardModule>()),
+  isAutomationExecutionAuthorized: vi.fn(),
+}));
+
 vi.mock("./shared", async (importOriginal) => {
   const actual = (await importOriginal()) as Record<string, unknown>;
   return {
@@ -111,12 +119,29 @@ vi.mock("./shared", async (importOriginal) => {
 
 const callRoute = automationRequest(createTestRequestHandler([automationRoutes]));
 
+/** Selected environments must share the automation's owner team. */
+function ownEnvironmentsByTeamAlpha(): void {
+  mockEnvironmentStore.getById.mockImplementation(async (id: string) => ({
+    id,
+    name: id,
+    owner_team_id: "team_alpha",
+  }));
+}
+
+/** Callers without the built-in owner role are admitted to team automations only as members. */
+function joinTeamAlpha(): void {
+  vi.spyOn(TeamMembershipStore.prototype, "listForUser").mockResolvedValue(
+    new Map([["team_alpha", "member"]])
+  );
+}
+
 describe("automation read, update, and delete routes", () => {
   afterEach(() => vi.restoreAllMocks());
   beforeEach(() => {
     vi.clearAllMocks();
     applyMockDefaults();
     vi.spyOn(TeamStore.prototype, "isActive").mockResolvedValue(true);
+    vi.mocked(isAutomationExecutionAuthorized).mockResolvedValue(true);
     vi.mocked(resolveRepoOrError).mockResolvedValue({
       repoId: 12345,
       repoOwner: "acme",
@@ -145,6 +170,25 @@ describe("automation read, update, and delete routes", () => {
   });
 
   describe("PUT /automations/:id (update)", () => {
+    it("refuses target edits the current executor could not launch", async () => {
+      mockStore.getById.mockResolvedValue({ ...sampleRow, user_id: "executor-1" });
+      vi.mocked(isAutomationExecutionAuthorized).mockResolvedValue(false);
+
+      const res = await callRoute("PUT", "/automations/auto-1", {
+        body: { repositories: [{ repoOwner: "acme", repoName: "web-app" }] },
+      });
+
+      expect(res.status).toBe(409);
+      expect(await res.json()).toMatchObject({ code: "automation_executor_unauthorized" });
+      expect(isAutomationExecutionAuthorized).toHaveBeenCalledWith(expect.anything(), {
+        automationId: "auto-1",
+        executionUserId: "executor-1",
+        requiresRepositoryUse: true,
+        requiresEnvironmentUse: false,
+      });
+      expect(mockBatch).not.toHaveBeenCalled();
+    });
+
     it.each([
       ["repository", { repositories: [] }, "repositories.use"],
       ["environment", { environmentIds: [] }, "environments.use"],
@@ -219,6 +263,7 @@ describe("automation read, update, and delete routes", () => {
       "denies an ungranted repository in a later replacement environment (mixed targets: %s)",
       async (mixedTargets) => {
         mockStore.getById.mockResolvedValue({ ...sampleRow, owner_team_id: "team_alpha" });
+        ownEnvironmentsByTeamAlpha();
         mockEnvironmentStore.getRepositoriesForEnvironment.mockImplementation(
           async (id: string) => [
             {
@@ -272,6 +317,8 @@ describe("automation read, update, and delete routes", () => {
       "accepts granted environment repositories without repositories.use",
       async ({ repoId, grant }) => {
         mockStore.getById.mockResolvedValue({ ...sampleRow, owner_team_id: "team_alpha" });
+        ownEnvironmentsByTeamAlpha();
+        joinTeamAlpha();
         mockEnvironmentStore.getRepositoriesForEnvironment.mockResolvedValue([
           {
             environment_id: "env_1",
@@ -306,6 +353,7 @@ describe("automation read, update, and delete routes", () => {
 
     it("requires an installation grant for an unresolved replacement environment repository", async () => {
       mockStore.getById.mockResolvedValue({ ...sampleRow, owner_team_id: "team_alpha" });
+      ownEnvironmentsByTeamAlpha();
       mockEnvironmentStore.getRepositoriesForEnvironment.mockResolvedValue([
         {
           environment_id: "env_1",
@@ -349,6 +397,8 @@ describe("automation read, update, and delete routes", () => {
       "validates unchanged repositories against team grants when environment targets change",
       async ({ environmentIds }) => {
         mockStore.getById.mockResolvedValue({ ...sampleRow, owner_team_id: "team_alpha" });
+        ownEnvironmentsByTeamAlpha();
+        joinTeamAlpha();
         mockStore.getRepositoriesForAutomation.mockResolvedValue([
           { repo_owner: "acme", repo_name: "app", repo_id: 7, base_branch: "main" },
         ]);
@@ -384,6 +434,7 @@ describe("automation read, update, and delete routes", () => {
       "clears environments without new use permissions for granted unchanged repositories",
       async ({ repoId, grant }) => {
         mockStore.getById.mockResolvedValue({ ...sampleRow, owner_team_id: "team_alpha" });
+        joinTeamAlpha();
         mockStore.getRepositoriesForAutomation.mockResolvedValue([
           { repo_owner: "acme", repo_name: "app", repo_id: repoId, base_branch: "main" },
         ]);

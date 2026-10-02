@@ -2,11 +2,12 @@
 
 import Link from "next/link";
 import { useState, type FormEvent } from "react";
-import useSWR from "swr";
+import useSWR, { useSWRConfig } from "swr";
 import { createTeamRequestSchema, teamSettingsSchema } from "@open-inspect/shared/types/teams";
 import { useCurrentUserAuthorization } from "@/hooks/use-current-user-authorization";
 import { useTeams } from "@/hooks/use-teams";
 import { browserApiFetch } from "@/lib/browser-api-fetch";
+import { isMeTeamsCacheKey } from "@/lib/me-teams-cache";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog";
 import { ErrorBanner } from "@/components/ui/error-banner";
@@ -19,6 +20,7 @@ const TEAM_SETTINGS_KEY = "/api/settings/teams";
 export function TeamsSettings() {
   const { hasPermission } = useCurrentUserAuthorization();
   const { teams, loading, error, createTeam } = useTeams();
+  const { mutate } = useSWRConfig();
   const canCreate = hasPermission("workspace.members.manage");
   const {
     data: teamSettings,
@@ -52,6 +54,8 @@ export function TeamsSettings() {
       await mutateTeamSettings(teamSettingsSchema.parse(await response.json()), {
         revalidate: false,
       });
+      // The session composer reads this policy from the membership response.
+      await mutate(isMeTeamsCacheKey);
     } catch (cause) {
       setSettingsMessage(cause instanceof Error ? cause.message : "Failed to update team settings");
     } finally {

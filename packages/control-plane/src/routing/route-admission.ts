@@ -1,10 +1,6 @@
 /** Framework-neutral authentication and authorization for a matched route. */
 
-import {
-  SCOPED_PERMISSION_PAIRS,
-  resolveScopedPermission,
-  type PermissionId,
-} from "@open-inspect/shared/rbac";
+import { isWorkspaceAdmin, type PermissionId } from "@open-inspect/shared/rbac";
 import { authenticate, isAuthError } from "../auth/authenticate";
 import type { Principal } from "../auth/principal";
 import {
@@ -20,7 +16,6 @@ import { serviceAllowsPermission } from "../authorization/service-permissions";
 import { parseChannelScope } from "../authorization/channel-scope";
 import { evaluateSessionAdmission, viewerFromContext } from "../authorization/session-admission";
 import { legacyPermissionForAction } from "../authorization/teams-enforcement";
-import { AutomationStore } from "../db/automation-store";
 import { TeamStore } from "../db/teams";
 import { TeamChannelBindingStore } from "../db/team-channel-bindings";
 import { TeamMembershipStore } from "../db/team-memberships";
@@ -358,7 +353,9 @@ function enforceStaticServicePermissionCeiling(
           ? legacyPermissionForAction(requirement.action)
           : requirement.kind === "environment"
             ? (`environments.${requirement.need}` as const)
-            : null;
+            : requirement.kind === "automation" && requirement.operation === "read"
+              ? "automations.read"
+              : null;
     if (permission && !serviceAllowsPermission(principal.service, permission)) {
       return authorizationDenial(
         json({ error: "Forbidden", code: "service_capability_required" }, 403),
@@ -546,8 +543,8 @@ async function enforcePermissionRequirement(
   );
 }
 
-async function enforceEnvironmentRequirement(
-  requirement: Extract<RouteAuthorizationRequirement, { kind: "environment" }>,
+async function enforceOwnedResourceRequirement(
+  requirement: Extract<RouteAuthorizationRequirement, { kind: "automation" | "environment" }>,
   params: RouteParams,
   ctx: RequestContext,
   evidence: AuthorizationEvidence
@@ -555,7 +552,9 @@ async function enforceEnvironmentRequirement(
   try {
     const result = await evaluateOwnedResourceAdmission(requirement, params, ctx);
     // Denials keep the loaded environment too, so the audit attributes its owner team.
-    if (result.kind !== "error" && result.admission) ctx.environmentAdmission = result.admission;
+    if (result.kind !== "error" && "admission" in result && result.admission) {
+      ctx.environmentAdmission = result.admission;
+    }
     if (result.kind === "error") {
       return { response: ownedResourceAdmissionResponse(result) };
     }
@@ -571,59 +570,6 @@ async function enforceEnvironmentRequirement(
     }
     evidence.requirements.push(requirement);
     if (result.effectivePermission) evidence.effectivePermissions.push(result.effectivePermission);
-    return null;
-  } catch {
-    return authorizationUnavailable();
-  }
-}
-
-async function enforceAutomationRequirement(
-  requirement: Extract<RouteAuthorizationRequirement, { kind: "automation" }>,
-  params: RouteParams,
-  ctx: RequestContext,
-  evidence: AuthorizationEvidence
-): Promise<AuthorizationFailure | null> {
-  if (ctx.principal?.kind !== "user") {
-    // Ownership is defined for canonical human users only. Service policy
-    // normally rejects bots earlier; this keeps a future `requireAll`
-    // composition from skipping the ownership check.
-    return authorizationDenial(
-      json({ error: "Forbidden", code: "service_capability_required" }, 403),
-      evidence,
-      requirement,
-      "service_capability_required",
-      "Forbidden"
-    );
-  }
-  const automationId = params[requirement.automationIdParam];
-  if (!automationId) return { response: json({ error: "Invalid automation route" }, 400) };
-
-  try {
-    const authorization = ctx.authorization;
-    if (!authorization) throw new Error("Missing request authorization");
-    const store = new AutomationStore(ctx.db);
-    const storedAutomation = await store.getById(automationId);
-    if (!storedAutomation) return { response: error("Automation not found", 404) };
-    const automation = await store.resolveCanonicalOwner(storedAutomation);
-
-    const permissionStem = `automations.${requirement.operation}` as const;
-    const pair = SCOPED_PERMISSION_PAIRS[permissionStem];
-    const isOwner = automation.user_id === ctx.principal.userId;
-    const scope = resolveScopedPermission(permissionStem, authorization.permissions);
-    if (!scope || (scope === "own" && !isOwner)) {
-      return authorizationDenial(
-        json({ error: "Forbidden", code: "permission_required", permission: pair.own }, 403),
-        evidence,
-        requirement,
-        "permission_required",
-        "Forbidden",
-        pair.own
-      );
-    }
-
-    evidence.requirements.push(requirement);
-    evidence.effectivePermissions.push(pair[scope]);
-    ctx.automationAdmission = { automation };
     return null;
   } catch {
     return authorizationUnavailable();
@@ -663,7 +609,7 @@ async function enforceTeamRequirement(
       (ctx.sessionMemberships ??= await memberships.listForUser(ctx.principal.userId))
     );
     if (viewer.kind !== "user") throw new Error("Missing team viewer");
-    const isAdmin = viewer.roleKey === "owner" || viewer.roleKey === "administrator";
+    const isAdmin = isWorkspaceAdmin(viewer.roleKey);
     const isMember = isAdmin || viewer.memberships.has(teamId);
     if (
       !isMember &&
@@ -882,10 +828,8 @@ async function enforceRouteAuthorization(
           failure = await enforcePermissionRequirement(requirement, ctx, evidence);
           break;
         case "automation":
-          failure = await enforceAutomationRequirement(requirement, params, ctx, evidence);
-          break;
         case "environment":
-          failure = await enforceEnvironmentRequirement(requirement, params, ctx, evidence);
+          failure = await enforceOwnedResourceRequirement(requirement, params, ctx, evidence);
           break;
         case "team":
           failure = await enforceTeamRequirement(requirement, params, ctx, evidence);

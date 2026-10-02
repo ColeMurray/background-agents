@@ -45,6 +45,9 @@ vi.mock("@/hooks/use-current-user-authorization", () => ({
     hasPermission: (permission: string) => mockPermissions.has(permission),
   }),
 }));
+vi.mock("@/hooks/use-teams", () => ({
+  useMeTeams: () => ({ teams: [{ id: "team/one" }], loading: false, error: undefined }),
+}));
 
 vi.mock("@/components/automations/automations-list", () => ({
   AutomationsList: ({ automations }: { automations: Array<{ name: string }> }) => (
@@ -84,14 +87,14 @@ describe("AutomationsPage", () => {
       target: { value: "release" },
     });
 
-    expect(mockUseAutomations).toHaveBeenLastCalledWith("");
+    expect(mockUseAutomations).toHaveBeenLastCalledWith("", undefined);
     act(() => vi.runOnlyPendingTimers());
 
     expect(mockReplace).toHaveBeenCalledWith("/automations?search=release", { scroll: false });
 
     mockSearchParamsState.value = new URLSearchParams({ search: "release" });
     rerender(<AutomationsPage />);
-    expect(mockUseAutomations).toHaveBeenLastCalledWith("release");
+    expect(mockUseAutomations).toHaveBeenLastCalledWith("release", undefined);
   });
 
   it("shows retry and load-more controls for their respective states", () => {
@@ -136,7 +139,7 @@ describe("AutomationsPage", () => {
     expect(screen.getByRole("searchbox", { name: "Search automations by name" })).toHaveValue(
       "weekly"
     );
-    expect(mockUseAutomations).toHaveBeenLastCalledWith("weekly");
+    expect(mockUseAutomations).toHaveBeenLastCalledWith("weekly", undefined);
   });
 
   it("hides create and template entry points without automations.create", () => {
@@ -145,5 +148,19 @@ describe("AutomationsPage", () => {
 
     expect(screen.queryByRole("link", { name: "Browse templates" })).not.toBeInTheDocument();
     expect(screen.queryByRole("link", { name: "Create Automation" })).not.toBeInTheDocument();
+  });
+
+  it("forwards a team filter and preserves creation context", () => {
+    mockSearchParamsState.value = new URLSearchParams({ teamId: "team/one" });
+    render(<AutomationsPage />);
+    expect(mockUseAutomations).toHaveBeenLastCalledWith("", "team/one");
+    expect(screen.getByRole("link", { name: "Create Automation" })).toHaveAttribute(
+      "href",
+      "/automations/new?teamId=team%2Fone"
+    );
+    expect(screen.getByRole("link", { name: "Browse templates" })).toHaveAttribute(
+      "href",
+      "/automations/templates?teamId=team%2Fone"
+    );
   });
 });

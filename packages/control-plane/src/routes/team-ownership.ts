@@ -3,6 +3,7 @@
  * routes (which resources a team's sessions may launch with).
  */
 
+import { isWorkspaceAdmin } from "@open-inspect/shared/rbac";
 import type { Team } from "@open-inspect/shared/types/teams";
 import { auditRouteAuthorizationDecision } from "../authorization/request-audit";
 import { TeamMembershipStore } from "../db/team-memberships";
@@ -32,7 +33,15 @@ export async function resolveCreationOwnerTeam(
       ? teamRequiredResponse()
       : null;
   }
-  const team = await new TeamStore(ctx.db).getById(ownerTeamId);
+  return resolveActiveTeam(ctx, ownerTeamId);
+}
+
+/** Resolve a team that will own or keep owning a resource; archived teams accept no changes. */
+export async function resolveActiveTeam(
+  ctx: RequestContext,
+  teamId: string
+): Promise<Team | Response> {
+  const team = await new TeamStore(ctx.db).getById(teamId);
   if (!team) return error("Team not found", 404);
   if (team.archivedAt !== null) {
     return json(
@@ -59,8 +68,7 @@ export async function admitTeamCatalog(
   const allowed =
     !!authorization &&
     (await new TeamStore(ctx.db).isActive(catalogTeamId)) &&
-    (roleKey === "owner" ||
-      roleKey === "administrator" ||
+    (isWorkspaceAdmin(roleKey) ||
       (ctx.sessionMemberships ??= await new TeamMembershipStore(ctx.db).listForUser(
         authorization.userId
       )).has(catalogTeamId));

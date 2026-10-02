@@ -52,6 +52,8 @@ export interface UseAutomationTargetsResult {
   toggleEnvironment: (environmentId: string) => void;
   /** The "No repository" selection; ignored while a repository is required. */
   clearTargets: () => void;
+  /** Scope changes discard targets, including required repositories. */
+  resetTargets: () => void;
   /** Switches single/multi-select, collapsing a multi-selection to one target. */
   toggleSelectionMode: () => void;
   /** The `repositories` payload field: full selection with branch rules applied. */
@@ -209,6 +211,10 @@ export function useAutomationTargets(
     toggleRepository,
     toggleEnvironment,
     clearTargets,
+    resetTargets: () => {
+      commitTargets([]);
+      setBaseBranch("");
+    },
     toggleSelectionMode,
     buildRepositoriesPayload: buildPayload,
   };
