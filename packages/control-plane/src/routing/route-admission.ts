@@ -1,6 +1,6 @@
 /** Framework-neutral authentication and authorization for a matched route. */
 
-import type { PermissionId } from "@open-inspect/shared/rbac";
+import { isWorkspaceAdmin, type PermissionId } from "@open-inspect/shared/rbac";
 import { authenticate, isAuthError } from "../auth/authenticate";
 import type { Principal } from "../auth/principal";
 import {
@@ -607,7 +607,7 @@ async function enforceTeamRequirement(
       (ctx.sessionMemberships ??= await memberships.listForUser(ctx.principal.userId))
     );
     if (viewer.kind !== "user") throw new Error("Missing team viewer");
-    const isAdmin = viewer.roleKey === "owner" || viewer.roleKey === "administrator";
+    const isAdmin = isWorkspaceAdmin(viewer.roleKey);
     const isMember = isAdmin || viewer.memberships.has(teamId);
     if (
       !isMember &&

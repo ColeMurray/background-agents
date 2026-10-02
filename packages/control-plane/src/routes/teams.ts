@@ -1,3 +1,4 @@
+import { isWorkspaceAdmin } from "@open-inspect/shared/rbac";
 import { Hono } from "hono";
 import { z } from "zod";
 import { resolveTeamAccess } from "@open-inspect/shared/types/team-access";
@@ -140,7 +141,7 @@ async function listTeams(request: Request, _env: Env, _params: object, ctx: Requ
   const query = parseQuery(request, querySchema);
   if (query instanceof Response) return query;
   const subject = viewer(ctx);
-  const isAdmin = subject.roleKey === "owner" || subject.roleKey === "administrator";
+  const isAdmin = isWorkspaceAdmin(subject.roleKey);
   const membershipStore = new TeamMembershipStore(ctx.db);
   const memberships = await membershipStore.listForUser(subject.userId);
   const teams = await new TeamStore(ctx.db).list({

@@ -1,5 +1,6 @@
 "use client";
 
+import { isWorkspaceAdmin } from "@open-inspect/shared/rbac";
 import { useState } from "react";
 import Link from "next/link";
 import {
@@ -36,8 +37,7 @@ export function TeamPage({ slug }: { slug: string }) {
   const { authorization, hasPermission } = useCurrentUserAuthorization();
   const team = teams.find((candidate) => candidate.slug === slug && candidate.archivedAt === null);
   const role = authorization?.role.key;
-  const admin =
-    authorization?.suspendedAt === null && (role === "owner" || role === "administrator");
+  const admin = authorization?.suspendedAt === null && isWorkspaceAdmin(role);
   const member =
     authorization?.suspendedAt === null &&
     !mine.loading &&

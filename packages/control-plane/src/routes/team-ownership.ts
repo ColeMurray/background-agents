@@ -3,6 +3,7 @@
  * routes (which resources a team's sessions may launch with).
  */
 
+import { isWorkspaceAdmin } from "@open-inspect/shared/rbac";
 import type { Team } from "@open-inspect/shared/types/teams";
 import { auditRouteAuthorizationDecision } from "../authorization/request-audit";
 import { TeamMembershipStore } from "../db/team-memberships";
@@ -67,8 +68,7 @@ export async function admitTeamCatalog(
   const allowed =
     !!authorization &&
     (await new TeamStore(ctx.db).isActive(catalogTeamId)) &&
-    (roleKey === "owner" ||
-      roleKey === "administrator" ||
+    (isWorkspaceAdmin(roleKey) ||
       (ctx.sessionMemberships ??= await new TeamMembershipStore(ctx.db).listForUser(
         authorization.userId
       )).has(catalogTeamId));
