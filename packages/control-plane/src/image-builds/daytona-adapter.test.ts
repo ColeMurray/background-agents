@@ -61,7 +61,7 @@ function plan(overrides: Partial<ImageBuildPlan> = {}): ImageBuildPlan {
     buildTimeoutMs: 1_800_000,
     correlation,
     callbackToken: "a".repeat(64),
-    cloneAuth: { type: "credential_helper", host: "github.com", username: "x", token: "clone-1" },
+    cloneAuth: { type: "credential_helper", token: "clone-1" },
     ...overrides,
   };
 }

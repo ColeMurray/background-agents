@@ -50,7 +50,7 @@ export async function evaluateOwnedResourceAdmission(
 
     const store = new AutomationStore(ctx.db);
     const storedAutomation = await store.getById(automationId);
-    const viewer = await resourceViewer(ctx);
+    const viewer = await resourceViewer(ctx, storedAutomation?.owner_team_id ?? null);
     const row = storedAutomation && {
       ownerTeamId: storedAutomation.owner_team_id,
       executorUserId: storedAutomation.user_id,
@@ -118,7 +118,7 @@ export async function evaluateOwnedResourceAdmission(
     };
   }
   const environment = await new EnvironmentStore(ctx.db).getById(id);
-  const viewer = await resourceViewer(ctx);
+  const viewer = await resourceViewer(ctx, environment?.owner_team_id ?? null);
   if (environment) ctx.environmentAdmission = { environment, viewer };
   const read =
     environment &&

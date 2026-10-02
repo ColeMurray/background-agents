@@ -4,28 +4,29 @@ import { checkEnvironmentAccess } from "@open-inspect/shared";
 import { resourceViewer } from "../authorization/resource-viewer";
 import { EnvironmentStore } from "../db/environments";
 import { json, type RequestContext } from "./shared";
+import { authorizeTeamRepositories } from "./workspace-repository-authorization";
 
 export interface SessionTarget {
+  teamId: string | null;
   environmentId?: string | null;
-  hasRepository: boolean;
-  ownerTeamId: string | null;
+  repositories?: readonly { owner: string; name: string; repoId?: number | null }[];
+  enforceEnvironmentOwnership?: boolean;
+  environmentOwnerTeamId?: string | null;
 }
 
-/** Authorize target use and bind environment ownership to the destination session. */
+/** Preflight permissions with teamId: null; check team grants after resolving repository IDs. */
 export async function authorizeSessionTarget(
   ctx: RequestContext,
   target: SessionTarget
 ): Promise<Response | null> {
-  if (!ctx.principal) return null;
-  const sandbox = ctx.principal.kind === "sandbox";
-  if (!sandbox) {
-    const permission: PermissionId | null = target.environmentId
-      ? "environments.use"
-      : target.hasRepository
-        ? "repositories.use"
-        : null;
-    if (!permission) return null;
+  const sandbox = ctx.principal?.kind === "sandbox";
+  const permission: PermissionId | null = target.environmentId
+    ? "environments.use"
+    : target.repositories?.length
+      ? "repositories.use"
+      : null;
 
+  if (permission && (ctx.principal?.kind === "user" || ctx.principal?.kind === "service")) {
     if (
       ctx.principal.kind === "service" &&
       !serviceAllowsPermission(ctx.principal.service, permission)
@@ -39,13 +40,15 @@ export async function authorizeSessionTarget(
       return json({ error: "Forbidden", code: "permission_required", permission }, 403);
     }
   }
-  if (target.environmentId) {
+  if (target.environmentId && target.enforceEnvironmentOwnership) {
     const environment = await new EnvironmentStore(ctx.db).getById(target.environmentId);
     // Dangling environment provenance does not invalidate a sandbox's inherited clone context.
-    if (!environment) return sandbox ? null : json({ error: "Environment not found" }, 404);
-    if (!sandbox) {
+    if (!environment) {
+      if (!sandbox) return json({ error: "Environment not found" }, 404);
+      if (!target.repositories?.length) return null;
+    } else if (!sandbox) {
       const access = checkEnvironmentAccess(
-        await resourceViewer(ctx),
+        await resourceViewer(ctx, environment.owner_team_id),
         {
           ownerTeamId: environment.owner_team_id,
         },
@@ -60,7 +63,12 @@ export async function authorizeSessionTarget(
             );
       }
     }
-    if (environment.owner_team_id !== null && environment.owner_team_id !== target.ownerTeamId) {
+    const environmentOwnerTeamId = target.environmentOwnerTeamId ?? target.teamId;
+    if (
+      environment &&
+      environment.owner_team_id !== null &&
+      environment.owner_team_id !== environmentOwnerTeamId
+    ) {
       return json(
         {
           error: "Environment must belong to the session's owner team",
@@ -71,5 +79,13 @@ export async function authorizeSessionTarget(
       );
     }
   }
-  return null;
+
+  return authorizeTeamRepositories(ctx, {
+    teamId: target.teamId,
+    repositories: (target.repositories ?? []).map((repository) => ({
+      owner: repository.owner,
+      name: repository.name,
+      repoId: repository.repoId ?? null,
+    })),
+  });
 }

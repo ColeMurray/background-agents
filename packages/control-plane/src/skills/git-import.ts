@@ -21,7 +21,11 @@ import {
   type SkillImportSourceInput,
   type SkillImportWarning,
 } from "@open-inspect/shared/types/skills";
-import type { RepositoryReader, RepositoryTreeEntry } from "../source-control";
+import type {
+  RepositoryAccessResult,
+  RepositoryReader,
+  RepositoryTreeEntry,
+} from "../source-control";
 import { SourceControlProviderError } from "../source-control";
 import { buildValidatedSkillRevision, hashImportedSourceTree } from "./content-addressing";
 import { parseSkillMarkdown, SkillMarkdownError, type ParsedSkillMarkdown } from "./skill-markdown";
@@ -122,12 +126,15 @@ async function readBlobs(
   async function worker(): Promise<void> {
     for (let index = next++; index < entries.length; index = next++) {
       const entry = entries[index];
-      const bytes = await provider.readBlob({
-        owner: repository.owner,
-        name: repository.name,
-        blobId: entry.blobId,
-        maxBytes: MAX_SKILL_FILE_BYTES,
-      });
+      const bytes = await provider.readBlob(
+        {
+          owner: repository.owner,
+          name: repository.name,
+          blobId: entry.blobId,
+          maxBytes: MAX_SKILL_FILE_BYTES,
+        },
+        { kind: "all" }
+      );
       const path = entry.path.slice(prefix.length);
       // The provider refuses an oversized blob before buffering when it can
       // tell the size up front. GitLab's tree carries no sizes, so this is the
@@ -265,22 +272,19 @@ function resolveName(
   return parsed.data;
 }
 
-/**
- * Fetch, map, and validate one skill directory at a resolved commit.
- *
- * @param nameOverride - Canonical name to store under, overriding the source.
- * @throws SkillImportError with the status the caller should return.
- */
-export async function fetchSkillImport(
+/** Resolve source access with the importer's HTTP error semantics, before reading content. */
+export async function resolveSkillImportRepository(
   provider: RepositoryReader,
-  source: SkillImportSourceInput,
-  nameOverride?: string | null
-): Promise<SkillImportResult> {
-  const repository = { owner: source.repository.repoOwner, name: source.repository.repoName };
-  const label = `${repository.owner}/${repository.name}`;
+  source: SkillImportSourceInput
+): Promise<RepositoryAccessResult> {
+  const requestedRepository = {
+    owner: source.repository.repoOwner,
+    name: source.repository.repoName,
+  };
+  const label = `${requestedRepository.owner}/${requestedRepository.name}`;
   let access: Awaited<ReturnType<RepositoryReader["checkRepositoryAccess"]>>;
   try {
-    access = await provider.checkRepositoryAccess(repository);
+    access = await provider.checkRepositoryAccess(requestedRepository);
   } catch (error) {
     throw providerFailure(error, `Failed to reach ${label}`);
   }
@@ -290,12 +294,30 @@ export async function fetchSkillImport(
       404
     );
   }
+  return access;
+}
 
+/**
+ * Fetch, map, and validate one skill directory at a resolved commit.
+ *
+ * @param nameOverride - Canonical name to store under, overriding the source.
+ * @param resolvedRepository - Reuse the SCM identity already authorized by the route.
+ * @throws SkillImportError with the status the caller should return.
+ */
+export async function fetchSkillImport(
+  provider: RepositoryReader,
+  source: SkillImportSourceInput,
+  nameOverride?: string | null,
+  resolvedRepository?: RepositoryAccessResult
+): Promise<SkillImportResult> {
+  const label = `${source.repository.repoOwner}/${source.repository.repoName}`;
+  const access = resolvedRepository ?? (await resolveSkillImportRepository(provider, source));
+  const repository = { owner: access.repoOwner, name: access.repoName };
   const requestedRef = source.ref ?? null;
   const resolvedRef = requestedRef ?? access.defaultBranch;
   let commit: Awaited<ReturnType<RepositoryReader["resolveCommit"]>>;
   try {
-    commit = await provider.resolveCommit({ ...repository, ref: resolvedRef });
+    commit = await provider.resolveCommit({ ...repository, ref: resolvedRef }, { kind: "all" });
   } catch (error) {
     throw providerFailure(error, `Failed to resolve ${resolvedRef} in ${label}`);
   }
@@ -305,11 +327,14 @@ export async function fetchSkillImport(
 
   let tree: Awaited<ReturnType<RepositoryReader["listTree"]>>;
   try {
-    tree = await provider.listTree({
-      ...repository,
-      commitSha: commit.sha,
-      path: source.subdirectory,
-    });
+    tree = await provider.listTree(
+      {
+        ...repository,
+        commitSha: commit.sha,
+        path: source.subdirectory,
+      },
+      { kind: "all" }
+    );
   } catch (error) {
     throw providerFailure(error, `Failed to list ${label} at ${commit.sha}`);
   }
@@ -392,7 +417,7 @@ export async function fetchSkillImport(
     nameOverride,
     mapped.frontmatterName,
     source.subdirectory ?? null,
-    repository.name,
+    source.repository.repoName,
     warnings
   );
   const revision = await buildValidatedSkillRevision(name, mapped.content);

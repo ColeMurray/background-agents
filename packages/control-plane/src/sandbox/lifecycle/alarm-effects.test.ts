@@ -169,6 +169,170 @@ describe("cross-path alarm effects", () => {
     }
   );
 
+  describe.each(["heartbeat", "inactivity"] as const)("%s continuation", (trigger) => {
+    it.each([
+      { resumable: false, change: "id" },
+      { resumable: false, change: "timestamp" },
+      { resumable: false, change: "metadata" },
+      { resumable: true, change: "id" },
+      { resumable: true, change: "timestamp" },
+      { resumable: true, change: "metadata" },
+    ] as const)(
+      "revalidates $change changes during stop using fresh rows (resumable=$resumable)",
+      async ({ resumable, change }) => {
+        vi.useFakeTimers();
+        vi.setSystemTime(10_000_000);
+        const now = Date.now();
+        const sandbox = createMockSandbox({
+          last_heartbeat: trigger === "heartbeat" ? now - 100_000 : now,
+          last_activity: now - DEFAULT_LIFECYCLE_CONFIG.inactivity.timeoutMs - 1,
+        });
+        const providerObjectId = sandbox.modal_object_id;
+        const createdAt = sandbox.created_at;
+        const initialRow = { ...sandbox };
+        let stopStarted!: () => void;
+        const started = new Promise<void>((resolve) => {
+          stopStarted = resolve;
+        });
+        let releaseStop!: () => void;
+        const stopGate = new Promise<void>((resolve) => {
+          releaseStop = resolve;
+        });
+        const stopSandbox = vi.fn(async () => {
+          stopStarted();
+          await stopGate;
+          return { success: true };
+        });
+        const h = createAlarmFixture(
+          sandbox,
+          createMockProvider({
+            capabilities: { supportsExplicitStop: true, supportsPersistentResume: resumable },
+            stopSandbox,
+          })
+        );
+        // Repository reads are snapshots; writes only mutate the persisted fixture row.
+        vi.mocked(h.storage.getSandbox).mockImplementation(() => ({ ...sandbox }));
+        const pending = h.manager.handleAlarm();
+        try {
+          await started;
+          const alarmRow = vi.mocked(h.storage.getSandbox).mock.results[0].value;
+          expect(alarmRow).not.toBe(sandbox);
+          expect(alarmRow).toEqual(initialRow);
+          expect(sandbox.status).toBe(trigger === "heartbeat" ? "stale" : "stopped");
+          // These paths intentionally don't share the boot-budget termination guard.
+          expect(h.manager.isSpawning()).toBe(false);
+          expect(stopSandbox).toHaveBeenCalledExactlyOnceWith(
+            expect.objectContaining({
+              providerObjectId,
+              generationCreatedAtMs: createdAt,
+              intent: resumable ? "preserve" : "destroy",
+            })
+          );
+          Object.assign(sandbox, {
+            modal_sandbox_id: change === "id" ? "replacement" : sandbox.modal_sandbox_id,
+            created_at: change === "timestamp" ? createdAt + 1 : createdAt,
+            modal_object_id: "updated-provider-object",
+            status: "connecting",
+            last_heartbeat: now,
+            last_activity: now,
+            code_server_url: "https://code.test/updated",
+          });
+          const updatedRow = { ...sandbox };
+          const publications = [...h.broadcaster.messages];
+          releaseStop();
+
+          const continues = change === "metadata";
+          await expect(pending).resolves.toBe(continues ? "sandbox_terminated" : "no_action");
+
+          expect(alarmRow).toEqual(initialRow);
+          expect(sandbox).toEqual(updatedRow);
+          expect(h.storage.getSandbox()).not.toBe(alarmRow);
+          expect(h.broadcaster.messages).toEqual([
+            ...publications,
+            ...(continues && trigger === "inactivity"
+              ? [
+                  {
+                    type: "sandbox_warning",
+                    message: resumable
+                      ? "Sandbox stopped due to inactivity"
+                      : "Sandbox stopped due to inactivity, snapshot saved",
+                  },
+                ]
+              : []),
+          ]);
+          if (continues) {
+            expect(h.wsManager.detachSandboxWebSocket).toHaveBeenCalledExactlyOnceWith(
+              1000,
+              trigger === "heartbeat" ? "Heartbeat stale" : "Inactivity timeout"
+            );
+          } else {
+            expect(h.wsManager.detachSandboxWebSocket).not.toHaveBeenCalled();
+          }
+          expect(h.wsManager.sendToSandbox).toHaveBeenCalledTimes(
+            !resumable && (trigger === "inactivity" || continues) ? 1 : 0
+          );
+          expect(h.provider.takeSnapshot).toHaveBeenCalledTimes(resumable ? 0 : 1);
+        } finally {
+          releaseStop();
+          await pending;
+        }
+      }
+    );
+
+    it("abandons teardown when checkpoint uncertainty takes ownership", async () => {
+      vi.useFakeTimers();
+      vi.setSystemTime(10_000_000);
+      const now = Date.now();
+      const sandbox = createMockSandbox({
+        last_heartbeat: trigger === "heartbeat" ? now - 100_000 : now,
+        last_activity: now - DEFAULT_LIFECYCLE_CONFIG.inactivity.timeoutMs - 1,
+      });
+      let captureStarted!: () => void;
+      const started = new Promise<void>((resolve) => {
+        captureStarted = resolve;
+      });
+      let releaseCapture!: () => void;
+      const captureGate = new Promise<void>((resolve) => {
+        releaseCapture = resolve;
+      });
+      const takeSnapshot = vi.fn(async () => {
+        captureStarted();
+        await captureGate;
+        throw new Error("checkpoint response lost");
+      });
+      const stopSandbox = vi.fn(async () => ({ success: true }));
+      const h = createAlarmFixture(
+        sandbox,
+        createMockProvider({
+          capabilities: { supportsExplicitStop: true },
+          takeSnapshot,
+          stopSandbox,
+        })
+      );
+      const pending = h.manager.handleAlarm();
+      try {
+        await started;
+        expect(h.shutdown.isHolding()).toBe(true);
+        await expect(h.manager.handleAlarm()).resolves.toBe("no_action");
+        await expect(h.manager.terminateFailedSandbox("competing fatal report")).resolves.toBe(
+          false
+        );
+        await h.manager.terminateUnresponsiveSandbox("stop_send_failed");
+      } finally {
+        releaseCapture();
+        await pending;
+      }
+
+      await expect(pending).resolves.toBe("no_action");
+      expect(h.shutdown.isHolding()).toBe(true);
+      await expect(h.manager.handleAlarm()).resolves.toBe("no_action");
+      expect(takeSnapshot).toHaveBeenCalledOnce();
+      expect(stopSandbox).not.toHaveBeenCalled();
+      expect(h.wsManager.sendToSandbox).not.toHaveBeenCalled();
+      expect(h.wsManager.detachSandboxWebSocket).not.toHaveBeenCalled();
+    });
+  });
+
   it.each(["heartbeat", "budget"] as const)(
     "continues the failure streak and blocks replacement after a long %s boot",
     async (trigger) => {

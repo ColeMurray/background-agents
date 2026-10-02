@@ -15,6 +15,33 @@ remain readable.
 
 ## October 1, 2026
 
+### Changed
+
+GitHub App sandbox credentials now reach only the session's repositories, including workspace-owned
+sessions and members snapshotted from an environment. Team-owned sessions also intersect that set
+with their team's current repository grants; an installation grant does not widen the credential
+beyond the session's members. Sessions with no repositories or no remaining granted repositories
+receive no token. Unresolved repository IDs and scopes exceeding GitHub's repository limit are
+refused rather than falling back to installation-wide access.
+
+This breaks private submodule, repository-backed dependency, and sibling-clone setups unless those
+repositories are included in the session's environment and, for team sessions, granted to its team.
+Repository image builds receive a token for that repository alone; environment builds use only their
+member repositories, intersected with the environment team's grants. Metadata and workspace-catalog
+operations retain installation-wide access. GitLab still uses a deployment-wide PAT and does not
+enforce repository-scoped credentials.
+
+Token cache keys cover the sorted, de-duplicated repository set, the process cache is bounded, and
+overlapping refreshes share one mint per scope. Grant removal changes the next credential scope but
+does not revoke already-issued tokens; sandbox helpers cache them until shortly before expiry.
+
+**Modal snapshot restores use brokered git credentials.** Restored sandboxes now fetch git
+credentials from the control plane like fresh sessions, instead of receiving a token minted by
+Modal. The control plane now sends the VCS host and clone username with every Modal create, restore,
+and image-build request, so Modal no longer reads `SCM_PROVIDER` or needs GitHub App credentials.
+Terraform no longer provisions Modal's `github-app` secret; you can delete the existing secret from
+Modal after upgrading.
+
 ### Added
 
 Team leads and workspace administrators can manage encrypted secrets from a team's Secrets tab.
@@ -65,6 +92,22 @@ sandbox until the next prompt input or submission. Scope changes refresh lists w
 terminal access or per-session caches. Visibility changes require a changed selection and confirm
 non-private child-session cascades. Workspace audit readers can filter by teams they do not belong
 to.
+
+### Added
+
+Teams now have a Repositories tab. Members can view grants; team leads and workspace administrators
+can grant all installation repositories or select named repositories, and remove grants. Team-scoped
+repository catalogs and repository-bearing writes check these grants, with explicit missing-grant
+errors and audited grant changes. Workspace-level session catalogs remain installation-wide. Grant
+changes advance the team's grant version but do not yet narrow or revoke sandbox installation
+tokens.
+
+Workspace-level skills, repository secrets, and image builds retain existing permissions on
+repositories granted to no team. Team-owned repositories additionally require membership (lead
+membership for repository secrets), or workspace Owner/Administrator access, in every enforcement
+mode. Manual team-owned environment builds require access to the owning team. Hidden and missing
+team requests now record identical denied authorization decisions without changing their 404
+responses.
 
 ## September 30, 2026
 

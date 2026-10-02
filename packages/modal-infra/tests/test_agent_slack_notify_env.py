@@ -40,6 +40,8 @@ class TestCreateSandboxAgentSlackNotify:
 
         manager = SandboxManager()
         config = SandboxConfig(
+            clone_host="github.com",
+            clone_username="x-access-token",
             repo_owner="acme",
             repo_name="repo",
             control_plane_url="https://cp.example.com",
@@ -58,6 +60,8 @@ class TestCreateSandboxAgentSlackNotify:
 
         manager = SandboxManager()
         config = SandboxConfig(
+            clone_host="github.com",
+            clone_username="x-access-token",
             repo_owner="acme",
             repo_name="repo",
             control_plane_url="https://cp.example.com",
@@ -85,6 +89,8 @@ class TestRestoreFromSnapshotAgentSlackNotify:
 
         manager = SandboxManager()
         await manager.restore_from_snapshot(
+            clone_host="github.com",
+            clone_username="x-access-token",
             snapshot_image_id="img-123",
             session_config={"repo_owner": "acme", "repo_name": "repo"},
             sandbox_id="sb-1",

@@ -10,8 +10,12 @@ import {
 } from "./router.test-support";
 import { getEffectiveEnabledModels } from "./db/model-preferences";
 import { SessionIndexStore } from "./db/session-index";
-import { SessionInternalPaths } from "./session/contracts";
+import { TeamRepositoryGrantStore } from "./db/team-repository-grants";
 import { TeamMembershipStore } from "./db/team-memberships";
+import { TeamStore } from "./db/teams";
+import { resolveRepoOrError } from "./routes/shared";
+import type * as SharedRoutes from "./routes/shared";
+import { SessionInternalPaths } from "./session/contracts";
 
 const environmentMocks = vi.hoisted(() => ({ getById: vi.fn() }));
 
@@ -42,6 +46,11 @@ vi.mock("./db/user-store", () => ({
 }));
 
 vi.mock("./session/integration-settings-resolution", () => integrationSettingsMocks);
+
+vi.mock("./routes/shared", async (importOriginal) => {
+  const actual = await importOriginal<typeof SharedRoutes>();
+  return { ...actual, resolveRepoOrError: vi.fn() };
+});
 
 describe("handleSpawnChild prompt enqueue handling", () => {
   const parentId = "parent-session-1";
@@ -136,11 +145,23 @@ describe("handleSpawnChild prompt enqueue handling", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     environmentMocks.getById.mockResolvedValue({ id: "env_parent", owner_team_id: null });
+    vi.spyOn(TeamMembershipStore.prototype, "listForUser").mockResolvedValue(
+      new Map([["team_alpha", "member"]])
+    );
+    vi.spyOn(TeamStore.prototype, "isActive").mockResolvedValue(true);
+    vi.spyOn(TeamRepositoryGrantStore.prototype, "covers").mockResolvedValue(true);
+    vi.mocked(resolveRepoOrError).mockResolvedValue({
+      repoId: 12345,
+      repoOwner: "acme",
+      repoName: "web-app",
+      defaultBranch: "main",
+    });
     vi.mocked(getEffectiveEnabledModels).mockResolvedValue(["anthropic/claude-sonnet-4-6"]);
     integrationSettingsMocks.resolveCodeServerEnabled.mockResolvedValue(false);
     integrationSettingsMocks.resolveVncEnabled.mockResolvedValue(false);
     integrationSettingsMocks.resolveSandboxSettings.mockResolvedValue({});
   });
+  afterEach(() => vi.restoreAllMocks());
 
   afterEach(() => vi.restoreAllMocks());
 
@@ -262,11 +283,15 @@ describe("handleSpawnChild prompt enqueue handling", () => {
   }
 
   it("rejects a repository-backed child when the actor cannot use repositories", async () => {
-    const store = makeStore(null, spawnContext, null);
+    const store = makeStore(null, spawnContext, null, "team_alpha");
     vi.mocked(SessionIndexStore).mockImplementation(function () {
       return store as never;
     });
-    const { env } = makeSuccessfulEnv(spawnContext, ["sessions.create", "sessions.collaborate"]);
+    const { env } = makeSuccessfulEnv(spawnContext, [
+      "sessions.read",
+      "sessions.create",
+      "sessions.collaborate",
+    ]);
 
     const response = await makeRequest(env);
 
@@ -276,14 +301,17 @@ describe("handleSpawnChild prompt enqueue handling", () => {
       permission: "repositories.use",
     });
     expect(store.create).not.toHaveBeenCalled();
+    expect(resolveRepoOrError).not.toHaveBeenCalled();
+    expect(store.acquireChildAdmissionLease).not.toHaveBeenCalled();
   });
 
   it("rejects an environment-backed child when the actor cannot use environments", async () => {
-    const store = makeStore();
+    const store = makeStore(null, spawnContext, "env_parent", "team_alpha");
     vi.mocked(SessionIndexStore).mockImplementation(function () {
       return store as never;
     });
     const { env } = makeSuccessfulEnv(spawnContext, [
+      "sessions.read",
       "sessions.create",
       "sessions.collaborate",
       "repositories.use",
@@ -297,6 +325,8 @@ describe("handleSpawnChild prompt enqueue handling", () => {
       permission: "environments.use",
     });
     expect(store.create).not.toHaveBeenCalled();
+    expect(resolveRepoOrError).not.toHaveBeenCalled();
+    expect(store.acquireChildAdmissionLease).not.toHaveBeenCalled();
   });
 
   const actorTargetPermissions = [
@@ -304,6 +334,7 @@ describe("handleSpawnChild prompt enqueue handling", () => {
     "sessions.create",
     "sessions.collaborate",
     "environments.use",
+    "repositories.use",
   ];
 
   it("rejects a service actor's incompatible inherited target before settings or child admission", async () => {

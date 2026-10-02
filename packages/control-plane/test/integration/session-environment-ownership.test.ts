@@ -8,6 +8,7 @@ import { RepoSecretsStore } from "../../src/db/repo-secrets";
 import { SessionIndexStore } from "../../src/db/session-index";
 import * as repositoryResolution from "../../src/repos/resolve";
 import * as integrationSettings from "../../src/session/integration-settings-resolution";
+import * as routeShared from "../../src/routes/shared";
 import { cleanD1Tables } from "./cleanup";
 import {
   initSession,
@@ -146,6 +147,12 @@ describe("session environment ownership compatibility", () => {
           baseBranch: repo.baseBranch ?? BASE_BRANCH,
         }))
     );
+    vi.spyOn(routeShared, "resolveRepoOrError").mockResolvedValue({
+      repoId: WEB.repoId,
+      repoOwner: WEB.repoOwner,
+      repoName: WEB.repoName,
+      defaultBranch: BASE_BRANCH,
+    });
   });
   afterEach(() => vi.restoreAllMocks());
 

@@ -4,7 +4,10 @@ import type { StopResult } from "../provider";
 import { createAlarmFixture, createMockSandbox, createMockProvider } from "./test-helpers";
 
 describe("boot budget alarm effects", () => {
-  afterEach(() => vi.restoreAllMocks());
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+  });
 
   it("shuts down before fencing and failing the generation, then publishes the persisted phase error", async () => {
     const sandbox = createMockSandbox({
@@ -127,6 +130,8 @@ describe("boot budget alarm effects", () => {
   });
 
   it("holds the termination guard only for provider stop, after publishing and detaching", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(10_000_000);
     const sandbox = createMockSandbox({
       status: "connecting",
       created_at: Date.now() - DEFAULT_LIFECYCLE_CONFIG.bootBudget.timeoutMs,
@@ -151,11 +156,34 @@ describe("boot budget alarm effects", () => {
       sandbox.fenced = 1;
     });
     vi.spyOn(h.storage, "updateSandboxStatus").mockImplementation((status) => {
-      observations.push(`status:${h.manager.isSpawning()}`);
+      observations.push(`status:${status}:${h.manager.isSpawning()}`);
       sandbox.status = status;
     });
-    vi.spyOn(h.broadcaster, "broadcast").mockImplementation(() => {
-      observations.push(`broadcast:${h.manager.isSpawning()}`);
+    const countFailure = vi
+      .mocked(h.storage.incrementCircuitBreakerFailure)
+      .getMockImplementation()!;
+    vi.mocked(h.storage.incrementCircuitBreakerFailure).mockImplementation((timestamp) => {
+      observations.push(`failure:${h.manager.isSpawning()}`);
+      countFailure(timestamp);
+    });
+    const clearAccess = vi.mocked(h.storage.clearSandboxAccess).getMockImplementation()!;
+    vi.mocked(h.storage.clearSandboxAccess).mockImplementation((kind) => {
+      observations.push(`clear:${kind}:${h.manager.isSpawning()}`);
+      clearAccess(kind);
+    });
+    const clearTunnels = vi.mocked(h.storage.clearSandboxTunnelUrls).getMockImplementation()!;
+    vi.mocked(h.storage.clearSandboxTunnelUrls).mockImplementation(() => {
+      observations.push(`clear:tunnels:${h.manager.isSpawning()}`);
+      clearTunnels();
+    });
+    const persistError = vi.mocked(h.storage.setLastSpawnError).getMockImplementation()!;
+    vi.mocked(h.storage.setLastSpawnError).mockImplementation((reason, timestamp) => {
+      observations.push(`persist:error:${h.manager.isSpawning()}`);
+      persistError(reason, timestamp);
+    });
+    vi.spyOn(h.broadcaster, "broadcast").mockImplementation((message) => {
+      observations.push(`broadcast:${message.type}:${h.manager.isSpawning()}`);
+      h.broadcaster.messages.push(message);
     });
     vi.spyOn(h.wsManager, "detachSandboxWebSocket").mockImplementation(() => {
       observations.push(`detach:${h.manager.isSpawning()}`);
@@ -167,13 +195,26 @@ describe("boot budget alarm effects", () => {
     expect(observations).toEqual([
       "send:false",
       "fence:false",
-      "status:false",
-      "broadcast:false",
-      "broadcast:false",
-      "broadcast:false",
+      "status:failed:false",
+      "failure:false",
+      "clear:codeServer:false",
+      "clear:vnc:false",
+      "clear:ttyd:false",
+      "clear:tunnels:false",
+      "broadcast:sandbox_access_changed:false",
+      "broadcast:sandbox_status:false",
+      "persist:error:false",
+      "broadcast:sandbox_error:false",
       "detach:false",
       "stop:true",
     ]);
+    expect(h.broadcaster.messages).toEqual([
+      { type: "sandbox_access_changed" },
+      { type: "sandbox_status", status: "failed" },
+      { type: "sandbox_error", error: sandbox.last_spawn_error },
+    ]);
+    expect(sandbox.spawn_failure_count).toBe(1);
+    expect(sandbox.last_spawn_error_at).toBe(Date.now());
     expect(h.manager.isSpawning()).toBe(false);
   });
 
@@ -185,7 +226,7 @@ describe("boot budget alarm effects", () => {
         created_at: Date.now() - DEFAULT_LIFECYCLE_CONFIG.bootBudget.timeoutMs,
         code_server_url: "https://code.test",
       });
-      const stopSandbox = vi.fn(async () => {
+      const stopSandbox = vi.fn(async (): Promise<StopResult> => {
         if (failure === "rejected") throw new Error("provider stop unavailable");
         return { success: false, error: "provider stop unavailable" };
       });
@@ -223,6 +264,13 @@ describe("boot budget alarm effects", () => {
         1000,
         "Boot budget exceeded"
       );
+
+      stopSandbox.mockResolvedValue({ success: true });
+      await h.manager.spawnSandbox();
+      expect(h.storage.updateSandboxForSpawn).toHaveBeenCalledOnce();
+      expect(h.provider.createSandbox).toHaveBeenCalledOnce();
+      expect(sandbox.status).toBe("connecting");
+      expect(h.manager.isSpawning()).toBe(false);
     }
   );
 

@@ -59,6 +59,8 @@ import { SessionCollaboratorStore } from "../db/session-collaborators";
 import { parsePersistedSandboxSettings } from "../sandbox/settings";
 import type { SandboxSettings } from "@open-inspect/shared/types/integrations";
 import { createSourceControlProviderFromEnv, type SourceControlProvider } from "../source-control";
+import { resolveSessionCredentialScope } from "../source-control/session-scope";
+import { readCachedInstallationRepositories } from "../repos/cache";
 import { requireRepoSecretsEncryptionKey } from "../env-validation";
 import type { Env, ClientInfo } from "../types";
 import type { SessionRow } from "./types";
@@ -323,6 +325,8 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
   // Shared single instances/closures — every consumer below takes these
   // rather than re-deriving its own copy.
   const sessionIndexStore = new SessionIndexStore(db);
+  const resolveCredentialScope = (sessionId: string) =>
+    resolveSessionCredentialScope(db, sessionId, () => readCachedInstallationRepositories(env));
   const teamMembershipStore = new TeamMembershipStore(db);
   const sessionCollaboratorStore = new SessionCollaboratorStore(db);
   const sessionPullRequestStore = new SessionPullRequestStore(db);
@@ -660,7 +664,8 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
           sessionCoreRepository,
           artifactRepository,
           sourceControlProvider(),
-          sessionPullRequestStore
+          sessionPullRequestStore,
+          resolveCredentialScope
         ).then(({ updated, failures }) => {
           for (const artifact of updated) {
             messenger.broadcast({ type: "artifact_updated", artifact });
@@ -725,7 +730,9 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
     return service.refresh(sessionRow);
   };
   const getScmCredentials = (requestLog: Logger) =>
-    new ScmCredentialsService(sourceControlProvider(), requestLog).getCredentials();
+    new ScmCredentialsService(sourceControlProvider(), requestLog, () =>
+      resolveCredentialScope(getPublicSessionId())
+    ).getCredentials();
 
   const sandboxHandler = new SandboxHandler(
     messageRepository,
@@ -791,6 +798,7 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
         artifactRepository,
         claims: prCreationClaims,
         sourceControlProvider: sourceControlProvider(),
+        resolveCredentialScope,
         log: requestLog,
         generateId: () => generateId(),
         pushBranchToRemote: (pushSpec) => pushService.pushBranchToRemote(pushSpec),

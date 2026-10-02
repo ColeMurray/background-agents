@@ -4,10 +4,19 @@ import type { RequestContext } from "../http/request-context";
 import { viewerFromContext } from "./session-admission";
 
 /** Reuse one membership snapshot for owned-resource decisions in a request. */
-export async function resourceViewer(ctx: RequestContext): Promise<SessionViewer> {
-  const memberships = ctx.authorization
+export async function resourceViewer(
+  ctx: RequestContext,
+  ownerTeamId?: string | null
+): Promise<SessionViewer> {
+  const authorization = ctx.authorization;
+  const needsMembership =
+    authorization !== undefined &&
+    ownerTeamId !== null &&
+    authorization.role.key !== "owner" &&
+    authorization.role.key !== "administrator";
+  const memberships = needsMembership
     ? (ctx.sessionMemberships ??= await new TeamMembershipStore(ctx.db).listForUser(
-        ctx.authorization.userId
+        authorization.userId
       ))
     : new Map();
   return viewerFromContext(ctx, memberships);

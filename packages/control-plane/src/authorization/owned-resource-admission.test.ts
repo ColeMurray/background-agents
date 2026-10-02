@@ -3,6 +3,7 @@ import { createTestBackgroundTasks } from "../background-tasks.test-support";
 import { AutomationStore, type AutomationRow } from "../db/automation-store";
 import { EnvironmentStore, type EnvironmentRow } from "../db/environments";
 import { createRequestMetrics } from "../db/instrumented-sql-database";
+import { TeamStore } from "../db/teams";
 import type { RequestContext } from "../http/request-context";
 import { authorizeSessionTarget } from "../routes/session-target-authorization";
 import { evaluateOwnedResourceAdmission } from "./owned-resource-admission";
@@ -53,6 +54,7 @@ describe("owned-resource admission outcomes", () => {
       canonicalAutomation
     );
     vi.spyOn(EnvironmentStore.prototype, "getById").mockResolvedValue(environment);
+    vi.spyOn(TeamStore.prototype, "isActive").mockResolvedValue(true);
   });
   afterEach(() => vi.restoreAllMocks());
 
@@ -193,9 +195,10 @@ describe("owned-resource admission outcomes", () => {
     ctx.authorization!.permissions = ["environments.use"];
     ctx.authorization!.suspendedAt = 1;
     const response = await authorizeSessionTarget(ctx, {
+      teamId: null,
       environmentId: "environment",
-      hasRepository: false,
-      ownerTeamId: null,
+      repositories: [],
+      enforceEnvironmentOwnership: true,
     });
     expect(response?.status).toBe(403);
     await expect(response?.json()).resolves.toEqual({
@@ -213,7 +216,12 @@ describe("owned-resource admission outcomes", () => {
       ctx.principal = { kind: "sandbox", sessionId: "parent" };
       delete ctx.authorization;
       await expect(
-        authorizeSessionTarget(ctx, { environmentId, hasRepository: true, ownerTeamId: "team" })
+        authorizeSessionTarget(ctx, {
+          teamId: "team",
+          environmentId,
+          repositories: [],
+          enforceEnvironmentOwnership: true,
+        })
       ).resolves.toBeNull();
       expect(EnvironmentStore.prototype.getById).toHaveBeenCalledTimes(
         environmentId === null ? 0 : 1

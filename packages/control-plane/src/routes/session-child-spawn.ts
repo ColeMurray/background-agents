@@ -39,6 +39,7 @@ import {
   permissionRequirement,
   sessionRequirement,
   requireAll,
+  resolveRepoOrError,
 } from "./shared";
 import { type SessionRouteContext, dispatchSession } from "./session-route";
 import { DEFAULT_BASE_BRANCH } from "../repos/default-branch";
@@ -74,12 +75,14 @@ export async function handleSpawnChild(
 
   const parentSession = await sessionStore.get(parentId);
   const parentEnvironmentId = parentSession?.environmentId ?? null;
-  const targetAuthorizationError = await authorizeSessionTarget(ctx, {
+  const parentTargetAuthorizationError = await authorizeSessionTarget(ctx, {
+    teamId: null,
     environmentId: parentEnvironmentId,
-    hasRepository: Boolean(parentSession?.repoOwner && parentSession?.repoName),
-    ownerTeamId: parentSession?.ownerTeamId ?? null,
+    enforceEnvironmentOwnership: true,
+    environmentOwnerTeamId: parentSession?.ownerTeamId ?? null,
+    repositories: [],
   });
-  if (targetAuthorizationError) return targetAuthorizationError;
+  if (parentTargetAuthorizationError) return parentTargetAuthorizationError;
 
   // Children inherit the parent's settings scope: its primary repo plus, for
   // environment-launched parents, that environment's overrides (design §13.5).
@@ -161,6 +164,32 @@ export async function handleSpawnChild(
       return error("Child sessions must use the same repository as the parent", 403);
     }
   }
+
+  const inheritedRepositories =
+    parentRepoOwner && parentRepoName ? [{ owner: parentRepoOwner, name: parentRepoName }] : [];
+  const targetAuthorizationError = await authorizeSessionTarget(ctx, {
+    teamId: null,
+    environmentId: null,
+    repositories: inheritedRepositories,
+  });
+  if (targetAuthorizationError) return targetAuthorizationError;
+
+  const teamId = parentSession?.ownerTeamId ?? null;
+  let childRepoId = spawnContext.repoId;
+  if (teamId && parentRepoOwner && parentRepoName) {
+    const resolved = await resolveRepoOrError(env, parentRepoOwner, parentRepoName, ctx, logger);
+    childRepoId = resolved.repoId;
+  }
+  const resolvedTargetAuthorizationError = await authorizeSessionTarget(ctx, {
+    teamId,
+    environmentId: parentEnvironmentId,
+    enforceEnvironmentOwnership: true,
+    repositories: inheritedRepositories.map((repository) => ({
+      ...repository,
+      repoId: childRepoId,
+    })),
+  });
+  if (resolvedTargetAuthorizationError) return resolvedTargetAuthorizationError;
 
   let enabledModels: ValidModel[];
   try {
@@ -257,7 +286,7 @@ export async function handleSpawnChild(
     sessionId: childId,
     repoOwner: spawnContext.repoOwner,
     repoName: spawnContext.repoName,
-    repoId: spawnContext.repoId,
+    repoId: childRepoId,
     environmentId: parentEnvironmentId,
     branch:
       spawnContext.repoOwner && spawnContext.repoName

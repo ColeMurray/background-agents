@@ -9,10 +9,10 @@ afterEach(() => {
 });
 
 describe("useSessionInspectorTab", () => {
-  it("opens on Changes by default", () => {
+  it("opens on Info by default", () => {
     const { result } = renderHook(() => useSessionInspectorTab());
 
-    expect(result.current.tab).toBe("changes");
+    expect(result.current.tab).toBe("info");
   });
 
   it("persists and restores the chosen tab", async () => {
@@ -43,7 +43,7 @@ describe("useSessionInspectorTab", () => {
     localStorage.setItem("open-inspect-session-inspector-tab", "pull-requests");
     const { result } = renderHook(() => useSessionInspectorTab());
 
-    await waitFor(() => expect(result.current.tab).toBe("changes"));
+    await waitFor(() => expect(result.current.tab).toBe("info"));
   });
 
   it("keeps working when browser storage is unavailable", () => {

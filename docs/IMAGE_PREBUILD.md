@@ -34,9 +34,11 @@ few minutes of changes.
 ## Getting Started
 
 Pre-built images are available when the deployment uses `sandbox_provider = "modal"`,
-`sandbox_provider = "vercel"`, `sandbox_provider = "opencomputer"`, `sandbox_provider = "e2b"`, or
-`sandbox_provider = "daytona"`. The artifact is stored per provider as a Modal image, Vercel
-snapshot, OpenComputer checkpoint, or E2B/Daytona snapshot.
+`sandbox_provider = "modal-vm"`, `sandbox_provider = "vercel"`, `sandbox_provider = "opencomputer"`,
+`sandbox_provider = "e2b"`, or `sandbox_provider = "daytona"`. The artifact is stored per provider
+as a Modal image, Vercel snapshot, OpenComputer checkpoint, or E2B/Daytona snapshot. With
+`modal-vm`, the artifact is a Modal image built on the VM backend. Images built under `modal` are
+not used by `modal-vm` sessions.
 
 Daytona additionally requires an operator to open admission (`daytona_prebuilds_enabled`, default
 off) — see [Daytona prebuilds](#daytona-prebuilds) below. While admission is closed the settings

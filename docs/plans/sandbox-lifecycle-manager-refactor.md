@@ -30,6 +30,10 @@ Paths are relative to `packages/control-plane/src/`.
   admission flags and prior-generation replacement retirement remain in the manager.
 - `sandbox/lifecycle/provider-stop.ts` owns the shared local stop bound, abort/timer mechanics and
   explicit `confirmed`/`not_stopped` outcome contract, not either caller's retirement policy.
+- `sandbox/lifecycle/watchdog-effects.ts` owns stateless connect-timeout, stale-heartbeat, stale
+  snapshot/stop and inactivity effects. The manager retains the complete boot-budget effect,
+  captures alarm facts, evaluates/dispatches policy, schedules healthy/warning checks and owns the
+  termination guard.
 - `session/sandbox-repository.ts` owns conditional SQL and encrypted access storage.
   `session/sandbox-shutdown.ts` and `sandbox-shutdown-repository.ts` own the durable
   shutdown/checkpoint protocol, receipts, holds, source retirement and recovery.
@@ -37,9 +41,10 @@ Paths are relative to `packages/control-plane/src/`.
   ports remain in `sandbox/lifecycle/ports.ts`; consumers do not gain launch, access or shutdown
   internals. Session access readers retain authentication/read eligibility and decryption rechecks.
 
-Watchdog effects remain manager responsibilities until their serial extraction increment lands. Each
-increment must integrate before its successor; the manager is not intended to become a tiny facade
-or lose lifecycle arbitration.
+Each increment must integrate before its successor; the manager is not intended to become a tiny
+facade or lose lifecycle arbitration. Fatal/unresponsive termination, generic startup claims,
+failure accounting and public checkpoint/admission/recovery policies remain manager
+responsibilities.
 
 ## Launch Contract
 
@@ -210,6 +215,61 @@ These inherited semantics, along with prior-generation unscoped clearing and acc
 failure boundaries recorded in the baseline, are unchanged; no stronger retirement/exactly-once
 guarantee is claimed.
 
+## Watchdog Contract
+
+`failConnectTimeout`, `terminateStaleHeartbeat`, `snapshotAndStopStaleSandbox` and
+`stopForInactivity` are stateless functions. Their dependencies are narrowed storage, broadcast,
+socket, shutdown and access ports plus named failure accounting/reporting, checkpoint triggering,
+provider capability checks and generation-targeted best-effort stop operations. Each function takes
+only its dependency subset; there is no manager reference, flag setter, scheduler or lifecycle
+class. Construction does not call dependencies, and logger resolution remains lazy, including
+detached snapshot rejection logging. Existing boot-phase parsing and failure text are reused without
+new vocabulary, defaults or messages.
+
+Review follow-up keeps `failBootBudget` entirely in the manager, alongside its termination/admission
+state. This replaces the effect-to-manager `stopBootBudgetSandbox` callback and private guard
+wrapper; the complete ordering and guarded stop are visible in one method. Moving termination
+ownership or splitting this operation behind a one-off reverse callback is not part of this
+increment.
+
+`handleAlarm` retains the initial shutdown hold check, pre-await sandbox/time/client/provider-handle
+capture, ID-plus-reservation-timestamp generation predicate, `evaluateAlarmPolicy` dispatch,
+healthy/warning scheduling and `SandboxAlarmResult`. `session/alarm/handler.ts` still prioritizes
+shutdown before and after other alarm work and uses those same results to fail/redrive the queue.
+The shared `AlarmScheduler` remains the only alarm/deadline owner.
+
+- Connect timeout fails/counts/clears access before explicit stop, fences only when stop is
+  available and the retained source is not held, then publishes status/error after stop. Without
+  explicit stop, a late bridge may still self-heal the unfenced failed boot.
+- Heartbeat retires incomplete boots without snapshotting, preserves provider-managed resumable
+  state, and delegates shutdown-required ready-workspace capture to shutdown in emergency mode.
+  Legacy ready-workspace capture precedes explicit destroy-stop, then runtime shutdown and final
+  detach. Without explicit stop, capture stays detached. Existing hold/generation checks after
+  awaited capture and generation checks after stop remain where they were; no new confirmation
+  episode is introduced.
+- Boot budget holds a failed retained source without runtime shutdown, fencing, detach or provider
+  destruction. Otherwise it sends runtime shutdown, fences, fails/counts/retires access, publishes
+  and persists the failure, then detaches. Within the same manager method, only explicit
+  destroy-stop runs inside the `isTerminatingSandbox` try/finally interval. Concurrent spawn is
+  excluded during that stop, not during earlier publication/detachment. Other watchdog paths
+  intentionally do not acquire this guard; fatal termination keeps its own interval.
+- Inactivity awaits shutdown ownership first and falls back only when unmanaged. Access retirement
+  retains capability-based URL/secret rules. Resumable stop skips snapshot/runtime shutdown; legacy
+  capture precedes runtime shutdown, explicit destroy-stop and final detach/warning. Existing
+  post-capture hold/generation and post-stop generation checks remain unchanged.
+
+Stops receive the observed provider handle and generation timestamp, not a replacement row's target.
+This does not strengthen every current publication or ownership handoff: connect-timeout publication
+after stop, legacy effects after unmanaged shutdown ownership, and retirement exceptions keep their
+existing boundaries. The baseline's separate gaps remain separate behavior work, not extraction
+fixes or exhaustive interleaving guarantees.
+
+Related-work reconciliation at T6's starting `60930ce`: COL-245 is integrated via PR #2170, after
+the launch/access/VM increments. COL-238 remains In Progress and PR #2141 is open/unmerged; its
+proposed heartbeat confirmation is absent from this checkout and is not imported. COL-150's alarm
+policy and the current COL-151 boot-phase helpers are reused unchanged. Recheck independently landed
+heartbeat work when integrating subsequent increments.
+
 ## Verification
 
 Keep direct narrow-dependency tests for input resolution and lookup effects. Keep assembled tests
@@ -243,6 +303,22 @@ hold, exercises the actual rehydration hook/shared deadline storage, and confirm
 failed/successful/repeated cleanup preserves the hold and recovery receipt. ESLint keeps cleanup
 internals unavailable to public consumers.
 
+Watchdog coverage retains all assembled manager/policy/effect suites and real-storage/Workerd alarm
+recovery and shutdown checks. The boot-budget trace names failure accounting, access retirement,
+status/error publication and persistence before detachment and guarded stop; actual spawn remains
+blocked during stop and resumes after stop failure. Retained-source tests assert no send/detach and
+no duplicate failure charge under the hold. Deferred heartbeat/inactivity stop tests independently
+replace ID or timestamp for legacy and resumable providers and assert post-stop abandonment without
+successor mutation, detachment or new publication. Reads return fresh row snapshots rather than
+aliases of the persisted fixture row; the captured alarm row remains unchanged across writes.
+Same-ID/timestamp continuations vary status, provider handle, heartbeat/activity and access URL to
+prove non-identity changes do not abandon the generation. Deferred ordinary captures prove in-flight
+and uncertain ownership blocks competing generic teardown and subsequent stop; inactivity ownership
+tests pin the absence of fallback effects before a held/owned decision. These extend rather than
+replace the existing half-boot/ready, destructive-snapshot, detached-capture, late-bridge,
+checkpoint-replacement, queue-result, duplicate-alarm and shared-deadline tests. ESLint keeps
+watchdog internals unavailable to public consumers.
+
 `manager-shutdown.test.ts` isolates the assembled shutdown/recovery cases, including the committed
 access/publication failure matrix, from the manager's orchestration suite. It retains real
 manager/access/shutdown composition with test storage/provider ports; real SQLite and Workerd checks
@@ -254,8 +330,8 @@ Build shared first, then run sequentially from the repository root:
 
 ```bash
 npm run build -w @open-inspect/shared
-npm test -w @open-inspect/control-plane -- src/sandbox/lifecycle src/sandbox/providers src/session/sandbox-access src/session/sandbox-repository src/session/sandbox-shutdown
-npm run test:integration -w @open-inspect/control-plane -- sandbox-early-connect sandbox-shutdown sandbox-state-retention session-components
+npm test -w @open-inspect/control-plane -- src/sandbox/lifecycle src/session/alarm src/session/sandbox-shutdown
+npm run test:integration -w @open-inspect/control-plane -- session-lifecycle-alarm-recovery sandbox-early-connect sandbox-shutdown sandbox-state-retention
 npm run typecheck -w @open-inspect/control-plane
 npm run lint -w @open-inspect/control-plane
 npm run test:lint-sandbox-boundaries

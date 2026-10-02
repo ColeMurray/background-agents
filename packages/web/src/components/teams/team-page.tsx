@@ -19,8 +19,16 @@ import { TeamOverview } from "./team-overview";
 import { TeamEnvironments } from "./team-environments";
 import { TeamAutomations } from "./team-automations";
 import { TeamSecrets } from "./team-secrets";
+import { TeamRepositories } from "./team-repositories";
 
-type TeamTab = "Overview" | "Members" | "Environments" | "Automations" | "Secrets" | "Settings";
+type TeamTab =
+  | "Overview"
+  | "Members"
+  | "Repositories"
+  | "Environments"
+  | "Automations"
+  | "Secrets"
+  | "Settings";
 
 export function TeamPage({ slug }: { slug: string }) {
   const { teams, loading, error } = useTeams();
@@ -59,7 +67,7 @@ function TeamContent({
   const capabilities = useTeamCapabilities(team);
   const [tab, setTab] = useState<TeamTab>("Overview");
   const tabs: TeamTab[] = canViewWork
-    ? ["Overview", "Members", "Environments", "Automations"]
+    ? ["Overview", "Members", "Repositories", "Environments", "Automations"]
     : ["Members"];
   if (canViewWork && capabilities.canManageSecrets) tabs.push("Secrets");
   if (canViewWork && (capabilities.canEditMetadata || capabilities.canArchive))
@@ -106,6 +114,7 @@ function TeamContent({
       </nav>
       {activeTab === "Overview" && <TeamOverview teamId={team.id} />}
       {activeTab === "Members" && <TeamMembers team={team} />}
+      {activeTab === "Repositories" && <TeamRepositories team={team} />}
       {activeTab === "Environments" && <TeamEnvironments teamId={team.id} />}
       {activeTab === "Automations" && <TeamAutomations teamId={team.id} />}
       {activeTab === "Secrets" && canViewWork && capabilities.canManageSecrets && (

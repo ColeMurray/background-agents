@@ -11,7 +11,9 @@ describe("repositories list proxy", () => {
   beforeEach(() => {
     vi.resetAllMocks();
     vi.mocked(getServerAuthSession).mockResolvedValue({ user: { id: "user-1" } });
-    vi.mocked(controlPlaneUserFetch).mockResolvedValue(Response.json({ repos: [] }));
+    vi.mocked(controlPlaneUserFetch).mockResolvedValue(
+      Response.json({ repos: [], cached: false, cachedAt: "2026-10-01T00:00:00Z" })
+    );
   });
 
   it("forwards only teamId", async () => {
@@ -24,6 +26,27 @@ describe("repositories list proxy", () => {
   it("keeps workspace requests unscoped", async () => {
     await GET(new NextRequest("http://localhost/api/repos"));
     expect(controlPlaneUserFetch).toHaveBeenCalledWith("/repos");
+  });
+
+  it.each([true, false])(
+    "preserves authoritative team grant metadata (%s)",
+    async (teamHasRepositoryGrants) => {
+      vi.mocked(controlPlaneUserFetch).mockResolvedValue(
+        Response.json({
+          repos: [],
+          cached: false,
+          cachedAt: "2026-10-01T00:00:00Z",
+          teamHasRepositoryGrants,
+        })
+      );
+      const response = await GET(new NextRequest("http://localhost/api/repos?teamId=team-1"));
+      await expect(response.json()).resolves.toEqual({ repos: [], teamHasRepositoryGrants });
+    }
+  );
+
+  it("does not invent grant metadata for the installation catalog", async () => {
+    const response = await GET(new NextRequest("http://localhost/api/repos"));
+    await expect(response.json()).resolves.toEqual({ repos: [] });
   });
 
   it("does not fetch without authentication", async () => {

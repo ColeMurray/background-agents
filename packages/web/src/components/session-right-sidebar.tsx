@@ -71,8 +71,8 @@ const DEFAULT_CAN_MANAGE_BUDGET = false;
 const TRACE_DOWNLOAD_TIMEOUT_MS = 60_000;
 
 const INSPECTOR_TAB_LABELS: Record<SessionInspectorTab, string> = {
-  changes: "Changes",
   info: "Info",
+  changes: "Changes",
   tasks: "Tasks",
   tools: "Tools",
 };
@@ -226,7 +226,7 @@ export function SessionRightSidebarContent({
         ))}
       </TabsList>
 
-      {/* Canonical durable checkout changes, plus media the agent captured */}
+      {/* Canonical durable checkout changes */}
       <InspectorPanel value="changes" activeTab={activeTab}>
         <div className="mb-5">
           <h3 className="text-sm font-semibold">Files changed</h3>
@@ -288,17 +288,6 @@ export function SessionRightSidebarContent({
             />
           )}
         </div>
-        {mediaArtifacts.length > 0 && (
-          <div className="mt-5">
-            <CollapsibleSection title={`Media (${mediaArtifacts.length})`} defaultOpen={true}>
-              <MediaSection
-                sessionId={sessionId}
-                mediaArtifacts={mediaArtifacts}
-                onOpenMedia={onOpenMedia}
-              />
-            </CollapsibleSection>
-          </div>
-        )}
       </InspectorPanel>
 
       <InspectorPanel value="info" activeTab={activeTab} className="space-y-6">
@@ -330,6 +319,16 @@ export function SessionRightSidebarContent({
                 canManageBudget={canManageBudget}
               />
             </MetadataSection>
+            {/* Media the agent captured */}
+            {mediaArtifacts.length > 0 && (
+              <CollapsibleSection title={`Artifacts (${mediaArtifacts.length})`}>
+                <MediaSection
+                  sessionId={sessionId}
+                  mediaArtifacts={mediaArtifacts}
+                  onOpenMedia={onOpenMedia}
+                />
+              </CollapsibleSection>
+            )}
             {scope && capabilities.changeVisibility && (
               <SessionVisibilityControl
                 {...scope}

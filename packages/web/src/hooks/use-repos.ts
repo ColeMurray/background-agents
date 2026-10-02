@@ -13,6 +13,7 @@ export interface Repo {
 
 interface ReposResponse {
   repos: Repo[];
+  teamHasRepositoryGrants?: boolean;
 }
 
 /**
@@ -31,6 +32,7 @@ export function useRepos(enabled = true, teamId?: string | null) {
 
   return {
     repos: data?.repos ?? [],
+    teamHasRepositoryGrants: data?.teamHasRepositoryGrants,
     // The fetch is gated on the auth session, so the list is still loading
     // while the session itself resolves — don't report an authoritative [].
     loading: enabled && (status === "loading" || isLoading),

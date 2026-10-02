@@ -149,6 +149,23 @@ describe("automation create route", () => {
       instructions: "Run tests",
     };
 
+    it("denies repository targets before SCM lookup or persistence", async () => {
+      const res = await callRoute("POST", "/automations", {
+        body: validBody,
+        permissions: PERMISSION_IDS.filter((permission) => permission !== "repositories.use"),
+      });
+
+      expect(res.status).toBe(403);
+      await expect(res.json()).resolves.toEqual({
+        error: "Forbidden",
+        code: "permission_required",
+        permission: "repositories.use",
+      });
+      expect(resolveRepoOrError).not.toHaveBeenCalled();
+      expect(mockStore.bindAutomationInsert).not.toHaveBeenCalled();
+      expect(mockBatch).not.toHaveBeenCalled();
+    });
+
     it("rejects a Slack channel condition with the wrong operator", async () => {
       const res = await callRoute("POST", "/automations", {
         body: {

@@ -143,6 +143,8 @@ class TestCreateSandboxTerminal:
 
         manager = SandboxManager()
         config = SandboxConfig(
+            clone_host="github.com",
+            clone_username="x-access-token",
             repo_owner="acme",
             repo_name="repo",
             control_plane_url="https://cp.example.com",
@@ -180,6 +182,8 @@ class TestCreateSandboxTerminal:
 
         manager = SandboxManager()
         config = SandboxConfig(
+            clone_host="github.com",
+            clone_username="x-access-token",
             repo_owner="acme",
             repo_name="repo",
             control_plane_url="https://cp.example.com",
@@ -231,6 +235,8 @@ class TestRestoreSandboxTerminal:
 
         manager = SandboxManager()
         handle = await manager.restore_from_snapshot(
+            clone_host="github.com",
+            clone_username="x-access-token",
             snapshot_image_id="img-abc",
             session_config={
                 "repo_owner": "acme",
@@ -278,6 +284,8 @@ class TestRestoreSandboxTerminal:
 
         manager = SandboxManager()
         handle = await manager.restore_from_snapshot(
+            clone_host="github.com",
+            clone_username="x-access-token",
             snapshot_image_id="img-abc",
             session_config={
                 "repo_owner": "acme",

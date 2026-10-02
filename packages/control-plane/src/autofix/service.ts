@@ -13,6 +13,7 @@ import type {
   GetGitHubPullRequestFeedbackConfig,
 } from "../source-control/providers/github-provider";
 import { SourceControlProviderError } from "../source-control/errors";
+import type { CredentialScope } from "../source-control";
 import { SessionInternalPaths, type SessionInternalPath } from "../session/contracts";
 
 interface FeedbackReceipt {
@@ -72,24 +73,31 @@ interface AutofixSettingsResolver {
 }
 
 interface GitHubAutofixProvider {
-  getPullRequest(config: {
-    owner: string;
-    name: string;
-    number: number;
-    repositoryExternalId: string;
-  }): Promise<{
+  getPullRequest(
+    config: {
+      owner: string;
+      name: string;
+      number: number;
+      repositoryExternalId: string;
+    },
+    scope: CredentialScope
+  ): Promise<{
     lifecycleState: "open" | "closed" | "merged";
     repoOwner: string;
     repoName: string;
   }>;
   getPullRequestFeedback(
-    config: GetGitHubPullRequestFeedbackConfig
+    config: GetGitHubPullRequestFeedbackConfig,
+    scope: CredentialScope
   ): Promise<GitHubPullRequestFeedback>;
-  hasPullRequestWritePermission(config: {
-    owner: string;
-    name: string;
-    authorLogin: string;
-  }): Promise<boolean>;
+  hasPullRequestWritePermission(
+    config: {
+      owner: string;
+      name: string;
+      authorLogin: string;
+    },
+    scope: CredentialScope
+  ): Promise<boolean>;
 }
 
 interface SessionClient {
@@ -194,7 +202,8 @@ export class AutofixService {
     private readonly github: GitHubAutofixProvider,
     private readonly sessions: SessionClient,
     private readonly botUsername: string,
-    private readonly now: () => number
+    private readonly now: () => number,
+    private readonly resolveCredentialScope: (sessionId: string) => Promise<CredentialScope>
   ) {}
 
   async process(envelope: GitHubAutofixEnvelope): Promise<AutofixProcessResult> {
@@ -289,12 +298,16 @@ export class AutofixService {
       return this.skip(receipt.feedbackKey, "reviews_disabled", decidedAt);
     }
 
-    const pullRequest = await this.github.getPullRequest({
-      owner: owner.repoOwner,
-      name: owner.repoName,
-      number: owner.prNumber,
-      repositoryExternalId: envelope.repository.id,
-    });
+    const credentialScope = await this.resolveCredentialScope(owner.sessionId);
+    const pullRequest = await this.github.getPullRequest(
+      {
+        owner: owner.repoOwner,
+        name: owner.repoName,
+        number: owner.prNumber,
+        repositoryExternalId: envelope.repository.id,
+      },
+      credentialScope
+    );
     if (pullRequest.lifecycleState !== "open") {
       return this.skip(receipt.feedbackKey, "pull_request_not_open", decidedAt);
     }
@@ -304,22 +317,17 @@ export class AutofixService {
       name: pullRequest.repoName,
       pullRequestNumber: owner.prNumber,
     };
-    const feedback =
+    const feedbackConfig: GetGitHubPullRequestFeedbackConfig =
       envelope.providerObject.kind === "pr_comment"
-        ? await this.github.getPullRequestFeedback({
+        ? {
             ...feedbackLocation,
-            providerObject: {
-              kind: "pr_comment",
-              id: envelope.providerObject.id,
-            },
-          })
-        : await this.github.getPullRequestFeedback({
+            providerObject: { kind: "pr_comment", id: envelope.providerObject.id },
+          }
+        : {
             ...feedbackLocation,
-            providerObject: {
-              kind: "review",
-              id: envelope.providerObject.id,
-            },
-          });
+            providerObject: { kind: "review", id: envelope.providerObject.id },
+          };
+    const feedback = await this.github.getPullRequestFeedback(feedbackConfig, credentialScope);
     await this.feedbackStore.attachContext(receipt.feedbackKey, {
       artifactId: owner.artifactId,
       sessionId: owner.sessionId,
@@ -333,7 +341,8 @@ export class AutofixService {
       feedback,
       resolved.autofix,
       pullRequest.repoOwner,
-      pullRequest.repoName
+      pullRequest.repoName,
+      credentialScope
     );
     if (eligibilityReason) {
       return this.skip(receipt.feedbackKey, eligibilityReason, decidedAt);
@@ -431,7 +440,8 @@ export class AutofixService {
     feedback: GitHubPullRequestFeedback,
     settings: ResolvedGitHubAutofixSettings,
     owner: string,
-    name: string
+    name: string,
+    credentialScope: CredentialScope
   ): Promise<string | null> {
     const authorType = feedback.author.type.toLowerCase();
     const authorLogin = feedback.author.login.toLowerCase();
@@ -452,11 +462,14 @@ export class AutofixService {
       ) {
         return "explicit_mention";
       }
-      const canWrite = await this.github.hasPullRequestWritePermission({
-        owner,
-        name,
-        authorLogin: feedback.author.login,
-      });
+      const canWrite = await this.github.hasPullRequestWritePermission(
+        {
+          owner,
+          name,
+          authorLogin: feedback.author.login,
+        },
+        credentialScope
+      );
       if (!canWrite) return "author_lacks_write_permission";
     } else if (authorType === "bot") {
       if (feedback.kind !== "review") return "bot_pr_comment";

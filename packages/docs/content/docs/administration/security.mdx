@@ -4,7 +4,7 @@ description: The trust boundaries of an OpenInspect deployment, which tokens exi
 audience: admin
 owner: security
 status: published
-lastReviewed: "2026-09-28"
+lastReviewed: "2026-10-01"
 relatedCode:
   - README.md
   - docs/AUTH.md
@@ -82,10 +82,7 @@ flowchart TB
 
 Git credentials are brokered on demand. The helper authorizes HTTPS requests for the configured source-control host, so setup and start scripts that clone other private repositories available to the installation keep working.
 
-| Sandbox start           | How it gets git credentials                                                                                                                         |
-| ----------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Fresh or prebuilt image | Fetches a short-lived credential from the control plane through a git credential helper. No token is embedded in the environment or the remote URL. |
-| Snapshot restore        | May still receive an environment-token fallback so older snapshots can boot. Modal snapshot restores mint a fresh fallback token on restore.        |
+Session sandboxes never receive a system git token in the environment or remote URL, whether they start fresh, from a prebuilt image, or from a snapshot. Each one fetches a short-lived credential from the control plane through a git credential helper. Image builds, which have no session, receive a one-shot clone token instead. The GitHub App private key is held only by the control plane and the GitHub bot, never by Modal or a sandbox.
 
 Pull requests use the prompting user's GitHub OAuth token when it is available. A missing token, failed refresh or decryption, or an ordinary retrieval failure falls back to the App identity even for a GitHub-signed-in user. Unexpected token-resolution errors fail PR creation instead. Google-signed-in users without a GitHub token also use the App. Branch pushes use App credentials regardless of who opens the pull request.
 

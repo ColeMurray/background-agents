@@ -4,7 +4,7 @@ description: Enable prebuilt images for a repository or an environment so sessio
 audience: team-owner
 owner: platform
 status: published
-lastReviewed: "2026-09-28"
+lastReviewed: "2026-10-01"
 relatedCode:
   - docs/IMAGE_PREBUILD.md
   - docs/HOW_IT_WORKS.md
@@ -53,6 +53,7 @@ The artifact is stored by the deployment's sandbox provider:
 | Provider         | Artifact                                                                                                                                                                                                                                                                                                                            |
 | ---------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Modal            | Modal image                                                                                                                                                                                                                                                                                                                         |
+| `modal-vm`       | Modal image built on the VM backend. Images built under `modal` are not used by `modal-vm` sessions.                                                                                                                                                                                                                                |
 | Vercel Sandboxes | Vercel snapshot                                                                                                                                                                                                                                                                                                                     |
 | OpenComputer     | Checkpoint                                                                                                                                                                                                                                                                                                                          |
 | E2B              | Snapshot                                                                                                                                                                                                                                                                                                                            |

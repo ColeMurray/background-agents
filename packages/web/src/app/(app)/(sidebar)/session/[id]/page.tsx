@@ -267,6 +267,12 @@ function SessionContent({
   const openMobileDetails = useCallback(() => {
     setIsDetailsOpen(true);
   }, []);
+  const openMobileMedia = useCallback(() => {
+    setIsDetailsOpen(true);
+    // Media lives in Info's Artifacts section. Showing it is navigation, so the
+    // viewer's remembered tab stays as it was.
+    showInspectorTab("info");
+  }, [showInspectorTab]);
   const focusDetailsTrigger = useCallback(
     () => focusSessionDetailsTrigger(isPhone, actionsButtonRef.current, detailsButtonRef.current),
     [isPhone]
@@ -451,6 +457,7 @@ function SessionContent({
         onToggleDetails={toggleDetails}
         onToggleDesktopDetails={toggleDesktopDetails}
         onOpenMobileDetails={openMobileDetails}
+        onOpenMobileMedia={openMobileMedia}
         actions={{
           sessionId,
           sessionStatus: sessionState?.status ?? DEFAULT_SESSION_STATUS,

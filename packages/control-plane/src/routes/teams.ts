@@ -7,6 +7,8 @@ import {
   teamRoleSchema,
   teamSessionsResponseSchema,
   updateTeamRequestSchema,
+  addTeamRepositoryGrantRequestSchema,
+  teamRepositoryGrantsResponseSchema,
   type Team,
   type TeamRole,
 } from "@open-inspect/shared/types/teams";
@@ -31,6 +33,10 @@ import {
 } from "../db/team-memberships";
 import { TeamSlugConflictError, TeamStore } from "../db/teams";
 import { TeamSettingsStore } from "../db/team-settings";
+import {
+  TeamRepositoryGrantConflictError,
+  TeamRepositoryGrantStore,
+} from "../db/team-repository-grants";
 import type { RequestContext } from "../http/request-context";
 import { admit, dispatch } from "../routing/admit";
 import type { ControlPlaneHonoEnv } from "../routing/hono-env";
@@ -47,9 +53,13 @@ import {
   requireTeam,
   requireAll,
   permissionRequirement,
+  resolveRepoOrError,
+  type RouteAuthorization,
 } from "./shared";
+import { createLogger } from "../logger";
 
 const PRIVATE = { cacheControl: "private, no-store" } as const;
+const logger = createLogger("router:teams");
 const ACTIVE_USER = {
   kind: "active-global",
   service: { kind: "deny" },
@@ -112,6 +122,9 @@ async function auditTeamEvent(
 }
 
 function mutationError(cause: unknown): Response {
+  if (cause instanceof TeamRepositoryGrantConflictError) {
+    return json({ error: cause.message, code: cause.code }, 409);
+  }
   if (cause instanceof LastLeadError) return json({ error: cause.message, code: "last_lead" }, 409);
   if (cause instanceof TeamMembershipNotFoundError) return error("Team membership not found", 404);
   if (cause instanceof TeamSlugConflictError) {
@@ -426,8 +439,69 @@ async function joinTeam(
   return json(await responseTeam(ctx, team));
 }
 
+async function repositoryGrants(
+  _request: Request,
+  _env: Env,
+  _params: { id: string },
+  ctx: RequestContext
+) {
+  return json(
+    teamRepositoryGrantsResponseSchema.parse({
+      grants: await new TeamRepositoryGrantStore(ctx.db).listDetailsForTeam(admittedTeam(ctx).id),
+    })
+  );
+}
+
+async function putRepositoryGrant(
+  request: Request,
+  env: Env,
+  _params: { id: string },
+  ctx: RequestContext
+) {
+  const body = await parseBody(request, addTeamRepositoryGrantRequestSchema);
+  if (body instanceof Response) return body;
+  const team = admittedTeam(ctx);
+  if (body.kind === "repository") {
+    const repository = await resolveRepoOrError(env, body.owner, body.name, ctx, logger);
+    if (repository.repoId !== body.repoExternalId) {
+      return json(
+        { error: "Repository identity changed", code: "repository_identity_mismatch" },
+        409
+      );
+    }
+    body.owner = repository.repoOwner;
+    body.name = repository.repoName;
+  }
+  try {
+    const grant = await new TeamRepositoryGrantStore(ctx.db).add(team.id, body, {
+      actorUserId: viewer(ctx).userId,
+      requestId: ctx.request_id,
+    });
+    return json({ grant });
+  } catch (cause) {
+    return mutationError(cause);
+  }
+}
+
+async function deleteRepositoryGrant(
+  _request: Request,
+  _env: Env,
+  params: { id: string; grantId: string },
+  ctx: RequestContext
+) {
+  if (admittedTeam(ctx).archivedAt !== null) {
+    return json({ error: "Team is not active", code: "team_not_active" }, 409);
+  }
+  const deleted = await new TeamRepositoryGrantStore(ctx.db).remove(
+    admittedTeam(ctx).id,
+    params.grantId,
+    { actorUserId: viewer(ctx).userId, requestId: ctx.request_id }
+  );
+  return deleted ? new Response(null, { status: 204 }) : error("Repository grant not found", 404);
+}
+
 export const teamRoutes = new Hono<ControlPlaneHonoEnv>();
-const policy = (authorization: ReturnType<typeof requireTeam>) =>
+const policy = (authorization: RouteAuthorization) =>
   admit({ ...SCM_AGNOSTIC_USER_OR_SERVICE_ROUTE, ...PRIVATE, authorization });
 const read = policy(requireTeam("read"));
 const manage = policy(requireTeam("canEditMetadata"));
@@ -482,4 +556,16 @@ teamRoutes.get(
     },
   }),
   (c) => dispatch(c, teamSessions)
+);
+teamRoutes.get(
+  "/teams/:id/repository-grants",
+  policy({ ...requireTeam("member"), auditAllowed: false }),
+  (c) => dispatch(c, repositoryGrants)
+);
+const repositoriesManage = policy(requireTeam("canManageRepositories"));
+teamRoutes.put("/teams/:id/repository-grants", repositoriesManage, (c) =>
+  dispatch(c, putRepositoryGrant)
+);
+teamRoutes.delete("/teams/:id/repository-grants/:grantId", repositoriesManage, (c) =>
+  dispatch(c, deleteRepositoryGrant)
 );

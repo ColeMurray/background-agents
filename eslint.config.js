@@ -37,6 +37,11 @@ const sandboxImplementationImports = [
     message:
       "Bounded provider-stop mechanics are internal to lifecycle. Consumers use lifecycle ports.",
   },
+  {
+    regex: "(?:^|/)lifecycle/watchdog-effects(?:\\.[cm]?[jt]sx?)?$",
+    message:
+      "Watchdog effects are internal to the lifecycle manager. Consumers use lifecycle ports.",
+  },
 ];
 
 export default tseslint.config(

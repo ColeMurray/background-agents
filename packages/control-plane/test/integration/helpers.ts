@@ -267,7 +267,14 @@ export async function initSession(overrides?: {
     model: defaults.model ?? "anthropic/claude-haiku-4-5",
     reasoningEffort: defaults.reasoningEffort ?? null,
     baseBranch: defaults.defaultBranch ?? "main",
-    repositories: defaults.repositories,
+    repositories: defaults.repositories ?? [
+      {
+        repoOwner: defaults.repoOwner,
+        repoName: defaults.repoName,
+        repoId: defaults.repoId,
+        baseBranch: defaults.defaultBranch ?? "main",
+      },
+    ],
     environmentId: defaults.environmentId ?? null,
     status: "created",
     userId: defaults.userId,
@@ -424,6 +431,18 @@ export async function initNamedSession(
     model: defaults.model ?? "anthropic/claude-haiku-4-5",
     reasoningEffort: defaults.reasoningEffort ?? null,
     baseBranch: defaults.defaultBranch ?? "main",
+    repositories:
+      defaults.repositories ??
+      (defaults.repoOwner && defaults.repoName && defaults.repoId !== null
+        ? [
+            {
+              repoOwner: defaults.repoOwner,
+              repoName: defaults.repoName,
+              repoId: defaults.repoId,
+              baseBranch: defaults.defaultBranch ?? "main",
+            },
+          ]
+        : []),
     status: "created",
     parentSessionId: defaults.parentSessionId ?? null,
     spawnSource: defaults.spawnSource ?? "user",

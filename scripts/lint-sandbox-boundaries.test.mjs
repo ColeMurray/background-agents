@@ -19,6 +19,7 @@ test("new consumers and platform adapters cannot import sandbox implementations"
       ["VmStartupReconciliation", "../sandbox/lifecycle/vm-startup-reconciliation"],
       ["AllocationCleanupDependencies", "../sandbox/lifecycle/allocation-cleanup"],
       ["ProviderStopOutcome", "../sandbox/lifecycle/provider-stop"],
+      ["WatchdogEffectsDependencies", "../sandbox/lifecycle/watchdog-effects"],
     ]) {
       const [result] = await eslint.lintText(
         `import type { ${name} } from "${source}"; export type Dependency = ${name};`,
@@ -58,4 +59,9 @@ test("focused ports remain usable by consumers and extracted lifecycle modules",
     { filePath: "packages/control-plane/src/sandbox/lifecycle/manager.ts" }
   );
   assert.equal(cleanup.errorCount, 0, JSON.stringify(cleanup.messages));
+  const [watchdog] = await eslint.lintText(
+    'import { terminateStaleHeartbeat } from "./watchdog-effects"; export const effect = terminateStaleHeartbeat;',
+    { filePath: "packages/control-plane/src/sandbox/lifecycle/manager.ts" }
+  );
+  assert.equal(watchdog.errorCount, 0, JSON.stringify(watchdog.messages));
 });

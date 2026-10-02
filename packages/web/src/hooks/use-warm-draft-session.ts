@@ -122,12 +122,22 @@ export function useWarmDraftSession(
           if (failure && typeof failure === "object") {
             if ("error" in failure && typeof failure.error === "string") message = failure.error;
             if ("code" in failure && typeof failure.code === "string") code = failure.code;
+            if (
+              code === "target_team_missing_grant" &&
+              "repository" in failure &&
+              typeof failure.repository === "string"
+            ) {
+              message = `This team has no repository grant for ${failure.repository}.`;
+            }
           }
           const creationError: WarmDraftSessionError = {
             message: code ? `${message} (${code})` : message,
             code,
             status: response.status,
-            terminal: [400, 403, 404, 409].includes(response.status),
+            // Grants can be restored without changing the draft's identity.
+            terminal:
+              code !== "target_team_missing_grant" &&
+              [400, 403, 404, 409].includes(response.status),
           };
           errorRef.current = creationError;
           setError(creationError);

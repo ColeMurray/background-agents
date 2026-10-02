@@ -53,7 +53,11 @@ describe("rejected provider allocation", () => {
         throw new Error("response lost");
       }),
     };
-    const provider = new ModalSandboxProvider(client as unknown as ModalClient, "modal-vm");
+    const provider = new ModalSandboxProvider(
+      client as unknown as ModalClient,
+      "modal-vm",
+      "github"
+    );
     const fixture = createAlarmFixture(sandbox, provider);
     await fixture.manager.spawnSandbox();
     expect(sandbox.status).toBe("ready");
@@ -90,7 +94,7 @@ describe("rejected provider allocation", () => {
     };
     const fixture = createAlarmFixture(
       sandbox,
-      new ModalSandboxProvider(client as unknown as ModalClient, "modal-vm")
+      new ModalSandboxProvider(client as unknown as ModalClient, "modal-vm", "github")
     );
     const spawning = fixture.manager.spawnSandbox();
     try {
@@ -422,7 +426,11 @@ describe("rejected provider allocation", () => {
           throw new ModalApiError("not visible", 409, "pending_reference_not_visible");
         }),
       };
-      const provider = new ModalSandboxProvider(client as unknown as ModalClient, "modal-vm");
+      const provider = new ModalSandboxProvider(
+        client as unknown as ModalClient,
+        "modal-vm",
+        "github"
+      );
       const stop = vi.spyOn(provider, "stopSandbox");
       const fixture = createAlarmFixture(sandbox, provider);
       expect(await fixture.manager.handleShutdownAlarm()).toBe("hold_watchdogs");

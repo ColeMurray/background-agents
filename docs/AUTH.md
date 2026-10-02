@@ -199,9 +199,28 @@ selection; team selection in bots is a later phase, so their teamless creation A
 refused when the setting is enabled. Automation runs are exempt until automation team ownership is
 supported. The setting does not migrate or hide existing `ownerTeamId: null` workspace rows.
 
-There is no repository-grant creation API or UI yet. Repository-backed team sessions without
-existing grants are refused with `target_team_missing_grant`; creating a team does not grant it
-repository access. Repository-less team sessions do not need repository grants.
+Team leads and workspace Owners/Administrators manage repository grants in the team's Repositories
+tab or through `/teams/:id/repository-grants`. Team members and workspace Owners/Administrators can
+read the grants. A team can have either installation-wide access or named grants by SCM repository
+ID, but not both. Creating a team does not grant repository access. Repository-backed team sessions
+without covering grants are refused with `target_team_missing_grant`. Repository-less team sessions
+do not need grants. Removing a grant advances the team's grant version and leaves existing
+repository references intact; grants do not yet narrow or revoke sandbox installation tokens.
+
+Repository skills, repository secrets, and repository image builds remain workspace-level resources;
+grants do not assign them to an owning team. They keep their existing permission checks when no team
+grants the repository. Once any team grants it, callers must be current members of an active
+granting team (leads for repository secrets), or be a workspace Owner or Administrator. Installation
+grants count for every repository. Importing repository secrets into an environment checks the
+source repository's workspace-level grant access as well as the destination owning team's coverage,
+if the environment has an owning team. These checks apply in every `TEAMS_ENFORCEMENT` mode.
+
+Manual environment image builds instead follow the environment's owning team. For a team-owned
+environment, the caller must be a current member of that team or a workspace Owner/Administrator,
+and the active owning team must have grants covering every current repository in the environment.
+Membership or grants in another team cannot replace that coverage, including for Owners and
+Administrators. Workspace-level environment builds keep their existing checks. These rules apply in
+every `TEAMS_ENFORCEMENT` mode.
 
 Sessions, automations, and environments cannot move between teams or between a team and the
 workspace. A session's owning team is fixed at creation: a team-owned session never becomes

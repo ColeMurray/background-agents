@@ -58,7 +58,7 @@ describe("Modal backend images over real D1", () => {
     const factory = {
       create: () =>
         new ModalImageBuildAdapter(
-          new ModalSandboxProvider(client as unknown as ModalClient, "modal-vm")
+          new ModalSandboxProvider(client as unknown as ModalClient, "modal-vm", "github")
         ),
     };
     const planner: ImageBuildPlannerPort = {
