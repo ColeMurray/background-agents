@@ -47,6 +47,7 @@ const mockEvaluateSessionAdmission = vi.hoisted(() => vi.fn());
 const mockTeamGetById = vi.hoisted(() =>
   vi.fn<(id: string) => Promise<Team | null>>().mockResolvedValue(null)
 );
+const mockListTeamsForRepository = vi.hoisted(() => vi.fn().mockResolvedValue([]));
 const mockTeamGrantCovers = vi.hoisted(() =>
   vi
     .fn<(teamId: string, repoIds: readonly (number | null)[]) => Promise<boolean>>()
@@ -61,7 +62,7 @@ vi.mock("../db/teams", () => ({
 
 vi.mock("../db/team-repository-grants", () => ({
   TeamRepositoryGrantStore: vi.fn().mockImplementation(function () {
-    return { covers: mockTeamGrantCovers };
+    return { covers: mockTeamGrantCovers, listTeamsForRepository: mockListTeamsForRepository };
   }),
 }));
 
@@ -579,6 +580,7 @@ describe("Scheduler", () => {
     ]);
     mockProviderAuthList.mockResolvedValue([]);
     mockIsAutomationExecutionAuthorized.mockResolvedValue(true);
+    mockListTeamsForRepository.mockReset().mockResolvedValue([]);
     mockGetEffectiveAuthorization.mockReset().mockResolvedValue(steeringAuthorization());
     mockEvaluateSessionAdmission
       .mockReset()
