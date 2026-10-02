@@ -1,6 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SessionStatus } from "@open-inspect/shared/types/sessions";
 import { SECTION_TEXT_MAX_CHARS } from "@open-inspect/shared/slack";
+import { computeHmacHex } from "@open-inspect/shared/auth";
+import { SLACK_THREAD_BINDING_KIND } from "@open-inspect/shared/types/session-api";
 import { handleSlackNotify } from "./slack-notify";
 import type { RequestContext } from "./shared";
 import type { SqlDatabase } from "../db/sql-database";
@@ -642,5 +644,104 @@ describe("handleSlackNotify", () => {
     expect(body.error).toBe("invalid_input");
     expect(fetchMock).not.toHaveBeenCalled();
     expect(sessionFetchMock).not.toHaveBeenCalled();
+  });
+
+  describe("thread binding", () => {
+    const SLACK_BOT_SECRET = "slack-bot-secret";
+    const slackBotFetch = vi.fn();
+
+    function bindingEnv(): Partial<Env> {
+      return {
+        SLACK_BOT: { fetch: slackBotFetch },
+        SERVICE_AUTH_SECRET_SLACK_BOT: SLACK_BOT_SECRET,
+      };
+    }
+
+    function seedPostedMessage() {
+      integrationStoreMock.getResolvedConfig.mockResolvedValue({
+        enabledRepos: null,
+        settings: { agentNotificationsEnabled: true, mentionsPolicy: "allow" },
+      });
+      mockSlackResponse({ body: { ok: true, channel: "C1", ts: "12345.67890" } });
+      mockSlackResponse({ body: { ok: true, permalink: "https://x.slack.com/p", channel: "C1" } });
+    }
+
+    beforeEach(() => {
+      slackBotFetch.mockReset();
+      slackBotFetch.mockResolvedValue(Response.json({ ok: true, bound: true }));
+    });
+
+    it("binds a top-level post's thread to the session so replies continue it", async () => {
+      seedActiveSession();
+      seedPostedMessage();
+
+      const res = await callHandler(
+        { channel: "#ops", text: "Which fix do you want?" },
+        bindingEnv()
+      );
+
+      expect(res.status).toBe(200);
+      expect(slackBotFetch).toHaveBeenCalledTimes(1);
+      const [url, init] = slackBotFetch.mock.calls[0] as [string, RequestInit];
+      expect(url).toBe("https://internal/internal/thread-binding");
+      const { signature, ...body } = JSON.parse(init.body as string) as Record<string, unknown>;
+      expect(body).toEqual({
+        kind: SLACK_THREAD_BINDING_KIND,
+        // The resolved channel ID, never the agent's "#ops" input: replies
+        // arrive keyed by the ID.
+        channel: "C1",
+        threadTs: "12345.67890",
+        sessionId: "sess-1",
+        repoFullName: "acme/web-app",
+        model: "anthropic/claude-sonnet-4-6",
+        timestamp: expect.any(Number),
+      });
+      expect(signature).toBe(await computeHmacHex(JSON.stringify(body), SLACK_BOT_SECRET));
+    });
+
+    it("sends a null repository for a session without one", async () => {
+      seedActiveSession({ repoOwner: null, repoName: null });
+      integrationStoreMock.getGlobal.mockResolvedValue({
+        defaults: { agentNotificationsEnabled: true, mentionsPolicy: "allow" },
+      });
+      mockSlackResponse({ body: { ok: true, channel: "C1", ts: "12345.67890" } });
+      mockSlackResponse({ body: { ok: true, permalink: "https://x.slack.com/p", channel: "C1" } });
+
+      await callHandler({ channel: "#ops", text: "hello" }, bindingEnv());
+
+      const [, init] = slackBotFetch.mock.calls[0] as [string, RequestInit];
+      expect(JSON.parse(init.body as string)).toMatchObject({ repoFullName: null });
+    });
+
+    it("leaves an existing thread to whoever owns it when the agent replies in it", async () => {
+      seedActiveSession();
+      seedPostedMessage();
+
+      await callHandler({ channel: "#ops", text: "update", thread_ts: "111.222" }, bindingEnv());
+
+      expect(slackBotFetch).not.toHaveBeenCalled();
+    });
+
+    it("still reports the post as delivered when the binding call fails", async () => {
+      seedActiveSession();
+      seedPostedMessage();
+      slackBotFetch.mockRejectedValue(new Error("service binding unavailable"));
+
+      const res = await callHandler({ channel: "#ops", text: "hello" }, bindingEnv());
+
+      expect(res.status).toBe(200);
+      expect(((await res.json()) as { ok: boolean }).ok).toBe(true);
+      expect(lastLogPayload(consoleLogSpy, "Slack notification posted")?.thread_bound).toBe(false);
+    });
+
+    it("skips binding when the slack-bot is not deployed", async () => {
+      seedActiveSession();
+      seedPostedMessage();
+
+      const res = await callHandler({ channel: "#ops", text: "hello" });
+
+      expect(res.status).toBe(200);
+      expect(lastLogPayload(consoleLogSpy, "Slack notification posted")?.thread_bound).toBe(false);
+    });
   });
 });

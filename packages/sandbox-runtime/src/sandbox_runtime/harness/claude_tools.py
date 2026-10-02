@@ -852,7 +852,11 @@ def build_tools(client: ControlPlaneToolClient) -> list[Any]:
                 "other humans will see. The user must tell you which channel; do not guess. The bot must "
                 "already be invited to the channel; if you get channel_not_found_or_forbidden, ask the user "
                 "to invite the bot. Plain text + Slack mrkdwn formatting only. The server attaches the "
-                "attribution footer and View Session button — do not fabricate them.",
+                "attribution footer and View Session button — do not fabricate them. A post without "
+                "thread_ts starts a thread linked to this session: when someone @mentions the bot in that "
+                "thread, their reply arrives here as your next prompt, so you can ask a question and end "
+                "your turn. Linking is best-effort: if it fails, the post still succeeds and a reply "
+                "starts a new session.",
                 {
                     "type": "object",
                     "properties": {
