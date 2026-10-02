@@ -100,6 +100,8 @@ export function GitHubIntegrationSettings() {
             enabledModelOptions={enabledModelOptions}
             defaultAutoReviewOnOpen={defaultAutoReviewOnOpen}
             defaultAutofix={defaultAutofix}
+            defaultHarness={settings?.defaults?.harness ?? null}
+            defaultModel={settings?.defaults?.model ?? ""}
           />
         </fieldset>
       </IntegrationSettingsSection>
