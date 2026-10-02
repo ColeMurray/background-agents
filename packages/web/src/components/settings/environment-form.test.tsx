@@ -129,13 +129,33 @@ describe("EnvironmentForm", () => {
       return;
     }
     expect(onSubmit).toHaveBeenCalledWith(expect.objectContaining({ teamId }));
+    // Creating from a team's page keeps the environment on that page.
+    expect(screen.getByRole("combobox", { name: "Team" })).toBeDisabled();
+    await user.click(screen.getByRole("combobox", { name: "Team" }));
+    expect(screen.queryByRole("option", { name: "Design" })).not.toBeInTheDocument();
+  });
+
+  it("discards stale selections when an unscoped creation changes owner", async () => {
+    mocks.allowWorkspace = true;
+    mocks.reposValue = [repo("acme", "web", 1)];
+    const onSubmit = vi.fn();
+    const user = userEvent.setup();
+    const { container } = render(
+      <EnvironmentForm
+        mode="create"
+        submitting={false}
+        onSubmit={onSubmit}
+        onCancel={vi.fn()}
+        initialValues={environment([{ repoOwner: "acme", repoName: "web" }])}
+      />
+    );
     await user.click(screen.getByRole("combobox", { name: "Team" }));
     await user.click(screen.getByRole("option", { name: "Design" }));
     expect(mocks.useRepos).toHaveBeenLastCalledWith(true, "team-2");
     expect(screen.queryByTitle("acme/web")).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Create environment" })).toBeDisabled();
     fireEvent.submit(container.querySelector("form")!);
-    expect(onSubmit).toHaveBeenCalledTimes(1);
+    expect(onSubmit).not.toHaveBeenCalled();
   });
 
   it("shows existing team ownership read-only and excludes it from edit submissions", () => {

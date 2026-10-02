@@ -55,6 +55,8 @@ export function EnvironmentForm({
   teamId?: string | null;
 }) {
   const [teamId, setTeamId] = useState(initialValues?.ownerTeamId ?? initialTeamId ?? null);
+  // Owner is fixed when editing, or when creating from a team's page.
+  const ownerLocked = mode === "edit" || !!initialTeamId;
   const scope = useResourceTeams("environment");
   const scopeValid =
     mode === "edit" ||
@@ -153,10 +155,10 @@ export function EnvironmentForm({
       <ResourceTeamField
         {...scope}
         teamId={teamId}
-        disabled={submitting || mode === "edit"}
+        disabled={submitting || ownerLocked}
         allowWorkspace={mode === "edit" || scope.allowWorkspace}
         onChange={(nextTeamId) => {
-          if (submitting || mode === "edit") return;
+          if (submitting || ownerLocked) return;
           setTeamId(nextTeamId);
           setSelectedKeys([]);
           setBranchByKey({});
