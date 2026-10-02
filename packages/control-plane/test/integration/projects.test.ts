@@ -1064,3 +1064,51 @@ it("paginates project lists past 200 with stable timestamp ties and team scoping
   );
   expect((await req("/projects?cursor=invalid")).status).toBe(400);
 });
+
+it.each(["actor", "executor"])(
+  "reauthorizes retained project subscriptions for the %s",
+  async (revoked) => {
+    const project = await create();
+    const response = await req("/automations", "POST", {
+      name: "Retained",
+      instructions: "Check",
+      triggerType: "schedule",
+      scheduleCron: "0 0 * * *",
+      scheduleTz: "UTC",
+      projectId: project.id,
+    });
+    expect(response.status).toBe(201);
+    const { automation } = await response.json<{ automation: { id: string } }>();
+    await req("/me/authorization", "GET", undefined, B);
+    await env.DB.prepare(
+      "INSERT INTO roles (id,name,normalized_name,is_system) VALUES ('manage-no-project','Manage no project','manage no project',0)"
+    ).run();
+    await env.DB.prepare(
+      "INSERT INTO role_permissions (role_id,permission_id) VALUES ('manage-no-project','automations.manage.any'),('manage-no-project','automations.read')"
+    ).run();
+    await env.DB.prepare(
+      "UPDATE user_role_assignments SET role_id='manage-no-project' WHERE user_id=?"
+    )
+      .bind(revoked === "actor" ? B : A)
+      .run();
+    const edit = await req(
+      `/automations/${automation.id}`,
+      "PUT",
+      { instructions: "Changed" },
+      revoked === "actor" ? B : A
+    );
+    expect(edit.status, await edit.clone().text()).toBe(403);
+    expect(
+      await env.DB.prepare("SELECT instructions FROM automations WHERE id=?")
+        .bind(automation.id)
+        .first("instructions")
+    ).toBe("Check");
+    const detach = await req(
+      `/automations/${automation.id}`,
+      "PUT",
+      { projectId: null },
+      revoked === "actor" ? B : A
+    );
+    expect(detach.status, await detach.clone().text()).toBe(200);
+  }
+);

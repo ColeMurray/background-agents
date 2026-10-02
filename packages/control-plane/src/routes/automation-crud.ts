@@ -475,9 +475,11 @@ async function handleUpdateAutomation(
     return error(formatAutomationRequestError(parsedBody.error, rawBody), 400);
   }
   const body = parsedBody.data;
-  const subscribedProject = body.projectId ? await new ProjectStore(db).get(body.projectId) : null;
+  const finalProjectId =
+    body.projectId === undefined ? (existing.project_id ?? null) : body.projectId;
+  const subscribedProject = finalProjectId ? await new ProjectStore(db).get(finalProjectId) : null;
   if (
-    body.projectId &&
+    finalProjectId &&
     (!subscribedProject ||
       !existing.user_id ||
       !canReadProject(await projectViewer(db, existing.user_id), subscribedProject))
@@ -824,13 +826,13 @@ async function handleUpdateAutomation(
       ...slackStore.bindChannelStatements(id, extractSlackChannels(body.triggerConfig))
     );
   }
-  if (body.projectId !== undefined && existing.user_id)
+  if ((finalProjectId || body.projectId !== undefined) && existing.user_id)
     statements.push(
       projectSubscriptionReceipt(
         db,
         { userId: ctx.authorization!.userId, requestId: ctx.request_id },
         id,
-        body.projectId,
+        finalProjectId,
         existing.project_id ?? null,
         existing.user_id
       )
