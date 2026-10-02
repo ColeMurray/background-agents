@@ -15,6 +15,7 @@ from sandbox_runtime.constants import (
     NOVNC_PORT_ENV_VAR,
     SANDBOX_TIMEOUT_ENV_VAR,
     TTYD_PROXY_PORT_ENV_VAR,
+    USER_SECRET_KEYS_ENV_VAR,
     VNC_PASSWORD_ENV_VAR,
     VNC_PASSWORD_MAX_BYTES,
 )
@@ -204,6 +205,23 @@ class SandboxLauncher:
             settings=config.settings,
         )
         env_vars.update(tunnels.environment)
+        env_vars[USER_SECRET_KEYS_ENV_VAR] = json.dumps(
+            [
+                key
+                for key, value in (config.user_env_vars or {}).items()
+                if key != USER_SECRET_KEYS_ENV_VAR
+                and not (
+                    value == "1"
+                    and key
+                    in {
+                        "OPENAI_OAUTH_MANAGED",
+                        "XAI_OAUTH_MANAGED",
+                        "ANTHROPIC_OAUTH_MANAGED",
+                    }
+                )
+                and env_vars.get(key) == value
+            ]
+        )
 
         # A fresh handle avoids Modal caching the ID of a deleted/recreated secret.
         llm_secrets = modal.Secret.from_name("llm-api-keys")

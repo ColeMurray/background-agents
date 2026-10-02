@@ -4,6 +4,7 @@ import pytest
 
 from sandbox_runtime.constants import (
     NOVNC_PORT_ENV_VAR,
+    USER_SECRET_KEYS_ENV_VAR,
     VNC_PASSWORD_ENV_VAR,
     VNC_PASSWORD_MAX_BYTES,
 )
@@ -109,6 +110,9 @@ async def test_user_env_vars_override_order(monkeypatch):
         user_env_vars={
             "CONTROL_PLANE_URL": "https://malicious.example",
             "CUSTOM_SECRET": "value",
+            "FOO": "x",
+            "STRIPE_ACCOUNT": "12",
+            USER_SECRET_KEYS_ENV_VAR: '["FORGED"]',
             VNC_PASSWORD_ENV_VAR: "user-password",
             NOVNC_PORT_ENV_VAR: "6099",
         },
@@ -120,6 +124,13 @@ async def test_user_env_vars_override_order(monkeypatch):
     assert env_vars["CONTROL_PLANE_URL"] == "https://control-plane.example"
     assert env_vars["SANDBOX_TIMEOUT_SECONDS"] == str(DEFAULT_SANDBOX_TIMEOUT_SECONDS)
     assert env_vars["CUSTOM_SECRET"] == "value"
+    assert env_vars["FOO"] == "x"
+    assert env_vars["STRIPE_ACCOUNT"] == "12"
+    assert json.loads(env_vars[USER_SECRET_KEYS_ENV_VAR]) == [
+        "CUSTOM_SECRET",
+        "FOO",
+        "STRIPE_ACCOUNT",
+    ]
     assert VNC_PASSWORD_ENV_VAR not in env_vars
     assert NOVNC_PORT_ENV_VAR not in env_vars
 
@@ -165,6 +176,9 @@ async def test_restore_user_env_vars_override_order(monkeypatch):
             "CONTROL_PLANE_URL": "https://malicious.example",
             "SANDBOX_AUTH_TOKEN": "evil-token",
             "CUSTOM_SECRET": "value",
+            "FOO": "x",
+            "STRIPE_ACCOUNT": "12",
+            USER_SECRET_KEYS_ENV_VAR: '["FORGED"]',
             VNC_PASSWORD_ENV_VAR: "user-password",
             NOVNC_PORT_ENV_VAR: "6099",
         },
@@ -177,6 +191,13 @@ async def test_restore_user_env_vars_override_order(monkeypatch):
     assert env_vars["SANDBOX_TIMEOUT_SECONDS"] == str(DEFAULT_SANDBOX_TIMEOUT_SECONDS)
     # User vars that don't collide are preserved
     assert env_vars["CUSTOM_SECRET"] == "value"
+    assert env_vars["FOO"] == "x"
+    assert env_vars["STRIPE_ACCOUNT"] == "12"
+    assert json.loads(env_vars[USER_SECRET_KEYS_ENV_VAR]) == [
+        "CUSTOM_SECRET",
+        "FOO",
+        "STRIPE_ACCOUNT",
+    ]
     assert VNC_PASSWORD_ENV_VAR not in env_vars
     assert NOVNC_PORT_ENV_VAR not in env_vars
 
@@ -187,6 +208,7 @@ async def test_restore_user_env_vars_override_order(monkeypatch):
     [
         ("OPENAI_OAUTH_MANAGED", "OPENAI_API_KEY"),
         ("XAI_OAUTH_MANAGED", "XAI_API_KEY"),
+        ("ANTHROPIC_OAUTH_MANAGED", "ANTHROPIC_API_KEY"),
     ],
 )
 async def test_create_preserves_managed_provider_env_isolation(
@@ -207,6 +229,7 @@ async def test_create_preserves_managed_provider_env_isolation(
 
     assert captured["env"][managed_marker] == "1"
     assert suppressed_api_key not in captured["env"]
+    assert json.loads(captured["env"][USER_SECRET_KEYS_ENV_VAR]) == ["CUSTOM_SECRET"]
 
 
 @pytest.mark.asyncio
@@ -215,6 +238,7 @@ async def test_create_preserves_managed_provider_env_isolation(
     [
         ("OPENAI_OAUTH_MANAGED", "OPENAI_API_KEY"),
         ("XAI_OAUTH_MANAGED", "XAI_API_KEY"),
+        ("ANTHROPIC_OAUTH_MANAGED", "ANTHROPIC_API_KEY"),
     ],
 )
 async def test_restore_preserves_managed_provider_env_isolation(
@@ -232,6 +256,40 @@ async def test_restore_preserves_managed_provider_env_isolation(
 
     assert captured["env"][managed_marker] == "1"
     assert suppressed_api_key not in captured["env"]
+    assert json.loads(captured["env"][USER_SECRET_KEYS_ENV_VAR]) == ["CUSTOM_SECRET"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("launch_mode", ["create", "repo-image", "restore"])
+@pytest.mark.parametrize("user_env_vars", [None, {}, {USER_SECRET_KEYS_ENV_VAR: '["FORGED"]'}])
+async def test_empty_user_secret_inventory_overwrites_forged_metadata(
+    monkeypatch, launch_mode, user_env_vars
+):
+    captured = _fake_restore_setup(monkeypatch)
+    monkeypatch.setenv(USER_SECRET_KEYS_ENV_VAR, '["INHERITED"]')
+    manager = SandboxManager()
+
+    if launch_mode == "restore":
+        await manager.restore_from_snapshot(
+            clone_host="github.com",
+            clone_username="x-access-token",
+            snapshot_image_id="img-abc",
+            session_config={"session_id": "sess-1"},
+            user_env_vars=user_env_vars,
+        )
+    else:
+        await manager.create_sandbox(
+            SandboxConfig(
+                clone_host="github.com",
+                clone_username="x-access-token",
+                repo_owner="acme",
+                repo_name="repo",
+                repo_image_id="repo-img-1" if launch_mode == "repo-image" else None,
+                user_env_vars=user_env_vars,
+            )
+        )
+
+    assert captured["env"][USER_SECRET_KEYS_ENV_VAR] == "[]"
 
 
 def test_generated_vnc_password_respects_protocol_limit():
@@ -517,10 +575,23 @@ async def test_create_injects_control_plane_identity_without_tokens(monkeypatch,
     monkeypatch.setattr("src.sandbox.launch.modal.Sandbox.create", _fake_sandbox_create(captured))
 
     await SandboxManager().create_sandbox(
-        SandboxConfig(clone_host="gitlab.example", clone_username="oauth2", **repo_fields)
+        SandboxConfig(
+            clone_host="gitlab.example",
+            clone_username="oauth2",
+            user_env_vars={"FOO": "x", "STRIPE_ACCOUNT": "12", "EMPTY": ""},
+            **repo_fields,
+        )
     )
 
     _assert_identity_without_system_tokens(captured["env"])
+    assert captured["env"]["FOO"] == "x"
+    assert captured["env"]["STRIPE_ACCOUNT"] == "12"
+    assert captured["env"]["EMPTY"] == ""
+    assert json.loads(captured["env"][USER_SECRET_KEYS_ENV_VAR]) == [
+        "FOO",
+        "STRIPE_ACCOUNT",
+        "EMPTY",
+    ]
 
 
 @pytest.mark.asyncio
@@ -545,6 +616,7 @@ async def test_repo_image_boot_preserves_user_github_cli_token(monkeypatch, toke
     env = captured["env"]
     assert env[token_key] == "user_token"
     assert "VCS_CLONE_TOKEN" not in env
+    assert json.loads(env[USER_SECRET_KEYS_ENV_VAR]) == [token_key]
 
 
 @pytest.mark.asyncio
@@ -601,6 +673,7 @@ async def test_restore_preserves_user_tokens_without_generating_gh_cli_aliases(
     )
 
     env = captured["env"]
+    assert json.loads(env[USER_SECRET_KEYS_ENV_VAR]) == ([user_token_key] if user_token_key else [])
     for key in _SYSTEM_TOKEN_KEYS:
         if key == user_token_key:
             assert env[key] == "user-token"

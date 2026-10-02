@@ -19,11 +19,13 @@ import {
   REPO_IMAGE_CALLBACK_ENV,
   RESERVED_REPO_IMAGE_CALLBACK_ENV_KEYS,
   scmCloneIdentity,
+  USER_SECRET_KEYS_ENV_VAR,
 } from "./sandbox-env";
 import {
   DEFAULT_SANDBOX_TIMEOUT_SECONDS,
   type CreateSandboxConfig,
   type ImageBuildProviderTriggerConfig,
+  type RestoreConfig,
 } from "./provider";
 
 const baseInput = {
@@ -197,6 +199,7 @@ describe("buildSandboxEnvVars", () => {
       SESSION_CONFIG: expect.any(String),
       VCS_HOST: "github.com",
       VCS_CLONE_USERNAME: "x-access-token",
+      [USER_SECRET_KEYS_ENV_VAR]: JSON.stringify(["USER_SECRET"]),
     });
     expect(JSON.parse(envVars.SESSION_CONFIG)).toEqual({
       session_id: "session-123",
@@ -233,6 +236,7 @@ describe("buildSandboxEnvVars", () => {
 
     expect(envVars.SANDBOX_ID).toBe("sandbox-456");
     expect(envVars.VCS_HOST).toBe("github.com");
+    expect(envVars[USER_SECRET_KEYS_ENV_VAR]).toBe("[]");
   });
 
   it("serializes null repo identity to empty strings", () => {
@@ -322,6 +326,7 @@ describe("buildSandboxEnvVars", () => {
       expect(envVars).not.toHaveProperty(marker);
     }
     expect(envVars.LEGITIMATE_SECRET).toBe("keep-me");
+    expect(JSON.parse(envVars[USER_SECRET_KEYS_ENV_VAR])).toEqual(["LEGITIMATE_SECRET"]);
   });
 
   it("sets the slack-notify flag only when enabled", () => {
@@ -349,6 +354,125 @@ describe("buildSandboxEnvVars", () => {
     expect(envVars.LLM_KEY).toBe("sk-provider");
     expect(envVars.SANDBOX_ID).toBe("sandbox-456");
     expect(envVars).not.toHaveProperty("IGNORED");
+    expect(envVars[USER_SECRET_KEYS_ENV_VAR]).toBe("[]");
+  });
+
+  describe.each(["create", "restore"] as const)("user secret inventory on %s", (mode) => {
+    const config: CreateSandboxConfig | RestoreConfig =
+      mode === "restore" ? { ...baseConfig, snapshotImageId: "snapshot-123" } : baseConfig;
+
+    it("lists arbitrary names and short secrets without including their values", () => {
+      const userEnvVars = { FOO: "x", STRIPE_ACCOUNT: "12", OPENAI_API_KEY: "sk-user", EMPTY: "" };
+      const envVars = buildSandboxEnvVars(
+        { ...config, userEnvVars },
+        { scmIdentity: scmCloneIdentity("github") }
+      );
+
+      expect(envVars).toMatchObject(userEnvVars);
+      expect(JSON.parse(envVars[USER_SECRET_KEYS_ENV_VAR])).toEqual([
+        "FOO",
+        "STRIPE_ACCOUNT",
+        "OPENAI_API_KEY",
+        "EMPTY",
+      ]);
+    });
+
+    it("excludes user values overridden or removed by the final system env", () => {
+      const envVars = buildSandboxEnvVars(
+        {
+          ...config,
+          codeServerEnabled: true,
+          vncEnabled: true,
+          sandboxSettings: { terminalEnabled: true },
+          userEnvVars: {
+            FOO: "x",
+            SANDBOX_ID: "user-id",
+            CONTROL_PLANE_URL: "https://malicious.example",
+            VCS_HOST: "evil.example",
+            CODE_SERVER_PASSWORD: "user-password",
+            CODE_SERVER_PORT: "9999",
+            VNC_PASSWORD: "user-password",
+            NOVNC_PORT: "9999",
+            TERMINAL_ENABLED: "false",
+            TTYD_PROXY_PORT: "9999",
+            IMAGE_BUILD_MODE: "true",
+          },
+        },
+        {
+          scmIdentity: scmCloneIdentity("github"),
+          codeServerPassword: "platform-code-password",
+          vncPassword: "platform-vnc-password",
+        }
+      );
+
+      expect(envVars.CODE_SERVER_PASSWORD).toBe("platform-code-password");
+      expect(envVars.VNC_PASSWORD).toBe("platform-vnc-password");
+      expect(JSON.parse(envVars[USER_SECRET_KEYS_ENV_VAR])).toEqual(["FOO"]);
+    });
+
+    it.each(["OPENAI_OAUTH_MANAGED", "XAI_OAUTH_MANAGED", "ANTHROPIC_OAUTH_MANAGED"])(
+      "excludes generated %s without changing auth routing",
+      (marker) => {
+        const envVars = buildSandboxEnvVars(
+          { ...config, userEnvVars: { [marker]: "1", FOO: "x" } },
+          { scmIdentity: scmCloneIdentity("github") }
+        );
+
+        expect(envVars[marker]).toBe("1");
+        expect(JSON.parse(envVars[USER_SECRET_KEYS_ENV_VAR])).toEqual(["FOO"]);
+      }
+    );
+
+    it.each<Record<string, string> | undefined>([
+      undefined,
+      {},
+      { [USER_SECRET_KEYS_ENV_VAR]: '["FORGED"]' },
+    ])(
+      "always emits an empty inventory when there are no surviving secrets (%j)",
+      (userEnvVars) => {
+        const envVars = buildSandboxEnvVars(
+          { ...config, userEnvVars },
+          { scmIdentity: scmCloneIdentity("github") }
+        );
+
+        expect(envVars[USER_SECRET_KEYS_ENV_VAR]).toBe("[]");
+      }
+    );
+
+    it("overwrites inherited metadata and inventories only unchanged config user secrets", () => {
+      const envVars = buildSandboxEnvVars(
+        {
+          ...config,
+          userEnvVars: {
+            FOO: "x",
+            STRIPE_ACCOUNT: "12",
+            OPENAI_API_KEY: "sk-user",
+            CHANGED: "original",
+            DROPPED: "missing",
+          },
+        },
+        {
+          scmIdentity: scmCloneIdentity("github"),
+          baseEnvVars: {
+            FOO: "x",
+            STRIPE_ACCOUNT: "12",
+            OPENAI_API_KEY: "sk-user",
+            ANTHROPIC_API_KEY: "sk-provider",
+            CHANGED: "replacement",
+            [USER_SECRET_KEYS_ENV_VAR]: '["FORGED"]',
+          },
+        }
+      );
+
+      expect(envVars.ANTHROPIC_API_KEY).toBe("sk-provider");
+      expect(envVars.CHANGED).toBe("replacement");
+      expect(envVars).not.toHaveProperty("DROPPED");
+      expect(JSON.parse(envVars[USER_SECRET_KEYS_ENV_VAR])).toEqual([
+        "FOO",
+        "STRIPE_ACCOUNT",
+        "OPENAI_API_KEY",
+      ]);
+    });
   });
 });
 
