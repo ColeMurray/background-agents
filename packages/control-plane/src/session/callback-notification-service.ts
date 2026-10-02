@@ -229,7 +229,7 @@ export class CallbackNotificationService {
       const message = this.messageRepository.getMessageCallbackContext(messageId);
       if (!message?.callback_context) {
         if (message && this.notifyProjectComplete)
-          result.delivered = await this.notifyProjectComplete(messageId, success);
+          result.delivered = await this.notifyProjectBestEffort(messageId, success);
         result.rejectReason = result.delivered ? undefined : "no_callback_context";
         return;
       }
@@ -253,7 +253,7 @@ export class CallbackNotificationService {
           error,
           messageId
         );
-        if (result.delivered) await this.notifyProjectComplete?.(messageId, success);
+        if (result.delivered) await this.notifyProjectBestEffort(messageId, success);
         return;
       }
 
@@ -338,6 +338,18 @@ export class CallbackNotificationService {
       };
       if (outcome === "error") this.log.error("callback.complete_delivery", fields);
       else this.log.info("callback.complete_delivery", fields);
+    }
+  }
+
+  private async notifyProjectBestEffort(messageId: string, success: boolean): Promise<boolean> {
+    try {
+      return (await this.notifyProjectComplete?.(messageId, success)) ?? false;
+    } catch (error) {
+      this.log.warn("project.notification_failed", {
+        message_id: messageId,
+        error: error instanceof Error ? error : new Error(String(error)),
+      });
+      return false;
     }
   }
 

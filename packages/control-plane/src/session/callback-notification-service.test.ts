@@ -55,6 +55,7 @@ function createTestHarness(overrides?: {
   env?: Partial<CallbackServiceEnv>;
   getSessionId?: () => string;
   completeAutomationRun?: CallbackServiceDeps["completeAutomationRun"];
+  notifyProjectComplete?: CallbackServiceDeps["notifyProjectComplete"];
 }) {
   const log = createMockLogger();
   const repository = createMockRepository();
@@ -78,6 +79,7 @@ function createTestHarness(overrides?: {
     log,
     getSessionId: overrides?.getSessionId ?? (() => "session-123"),
     completeAutomationRun: overrides?.completeAutomationRun,
+    notifyProjectComplete: overrides?.notifyProjectComplete,
     sleep,
   };
 
@@ -102,6 +104,41 @@ describe("CallbackNotificationService", () => {
   });
 
   describe("notifyComplete", () => {
+    it.each(["automation", "web"])(
+      "isolates project notification errors for %s",
+      async (source) => {
+        const completeAutomationRun = vi.fn().mockResolvedValue(undefined);
+        const notifyProjectComplete = vi.fn().mockRejectedValue(new Error("Slack unavailable"));
+        const h = createTestHarness({ completeAutomationRun, notifyProjectComplete });
+        h.repository.getMessageCallbackContext.mockReturnValue({
+          source,
+          callback_context:
+            source === "automation"
+              ? JSON.stringify({
+                  source,
+                  automationId: "auto-1",
+                  runId: "run-1",
+                  automationName: "Daily sync",
+                })
+              : null,
+        });
+        await h.service.notifyComplete("msg-1", true);
+        expect(notifyProjectComplete).toHaveBeenCalledOnce();
+        expect(h.log.warn).toHaveBeenCalledWith(
+          "project.notification_failed",
+          expect.objectContaining({ message_id: "msg-1" })
+        );
+        expect(h.log.error).not.toHaveBeenCalled();
+        expect(h.log.info).toHaveBeenCalledWith(
+          "callback.complete_delivery",
+          expect.objectContaining({
+            outcome: source === "automation" ? "success" : "rejected",
+          })
+        );
+        expect(completeAutomationRun).toHaveBeenCalledTimes(source === "automation" ? 1 : 0);
+      }
+    );
+
     it("skips when no callback context", async () => {
       vi.mocked(harness.repository.getMessageCallbackContext).mockReturnValue(null);
 
