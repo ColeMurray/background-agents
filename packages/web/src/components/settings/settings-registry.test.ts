@@ -35,7 +35,11 @@ describe("settings registry", () => {
   });
 
   it("keeps public categories independent of permissions", () => {
-    const publicCategories: SettingsCategory[] = ["appearance", "keyboard-shortcuts"];
+    const publicCategories: SettingsCategory[] = [
+      "appearance",
+      "keyboard-shortcuts",
+      "access-tokens",
+    ];
 
     for (const category of publicCategories) {
       expect(canViewSettingsCategory(category, () => false)).toBe(true);

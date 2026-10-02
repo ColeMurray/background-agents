@@ -12,6 +12,7 @@ import {
   type Team,
   type TeamRole,
 } from "@open-inspect/shared/types/teams";
+import { isSelfActingPrincipal } from "../auth/principal";
 import {
   SESSION_INBOX_CATEGORIES,
   sessionInboxCategorySchema,
@@ -75,8 +76,10 @@ const sessionsQuerySchema = z.object({
   cursor: z.string().min(1, { error: "Invalid cursor" }).optional(),
 });
 
+// A personal access token is its owner, so it sees that owner's teams. The
+// read-only method gate keeps it out of every mutating team route.
 function viewer(ctx: RequestContext) {
-  if (ctx.principal?.kind !== "user" || !ctx.authorization)
+  if (!isSelfActingPrincipal(ctx.principal) || !ctx.authorization)
     throw new Error("Team route not admitted");
   return { userId: ctx.principal.userId, roleKey: ctx.authorization.role.key };
 }
