@@ -185,11 +185,13 @@ export async function handleSpawnChild(
   const teamId = parentSession?.ownerTeamId ?? null;
   // Sandbox callers skip route authorization. Require the active author's own
   // team membership rather than borrowing the parent's ownership fallback.
-  const authorUserId = spawnContext.promptAuthor.canonicalUserId;
+  const childOwnerUserId =
+    spawnContext.promptAuthor.canonicalUserId ??
+    (teamId === null ? (parentSession?.userId ?? null) : null);
   if (
     teamId &&
-    (!authorUserId ||
-      !(await new TeamMembershipStore(ctx.db).listForUser(authorUserId)).has(teamId))
+    (!childOwnerUserId ||
+      !(await new TeamMembershipStore(ctx.db).listForUser(childOwnerUserId)).has(teamId))
   ) {
     return json({ error: "Not a team member", code: "not_member" }, 403);
   }
@@ -315,7 +317,7 @@ export async function handleSpawnChild(
     model,
     reasoningEffort,
     participantUserId: spawnContext.promptAuthor.userId,
-    platformUserId: spawnContext.promptAuthor.canonicalUserId ?? parentSession?.userId ?? null,
+    platformUserId: childOwnerUserId,
     participantCanonicalUserId: spawnContext.promptAuthor.canonicalUserId ?? null,
     collaboratorSourceSessionId: parentId,
     scmLogin: spawnContext.promptAuthor.scmLogin,

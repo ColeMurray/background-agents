@@ -27,7 +27,7 @@ import {
   seedGrant,
   seedTeam,
 } from "./ownership-test-helpers";
-import { getUserEnvVars, runInSessionDO } from "./session-do-access";
+import { getUserEnvVars } from "./session-do-access";
 
 const BASE = "https://test.local";
 const MEMBER = "22222222222222222222222222222222";
@@ -62,6 +62,7 @@ async function sandboxParent(
     defaultBranch: BASE_BRANCH,
     environmentId,
     userId: MEMBER,
+    canonicalUserId: MEMBER,
     scmLogin: "environment-member",
   });
   await env.DB.prepare("UPDATE sessions SET owner_team_id = ?, visibility = ? WHERE id = ?")
@@ -77,13 +78,6 @@ async function sandboxParent(
     "SELECT id FROM participants WHERE role = 'owner'"
   );
   if (!owner) throw new Error("Expected parent owner participant");
-  await runInSessionDO(parent.stub, (_instance, state) => {
-    state.storage.sql.exec(
-      "UPDATE participants SET canonical_user_id = ? WHERE id = ?",
-      MEMBER,
-      owner.id
-    );
-  });
   await seedMessage(parent.stub, {
     id: `processing-${parent.sessionName}`,
     authorId: owner.id,
