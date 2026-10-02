@@ -57,7 +57,8 @@ import {
   GITHUB_USER_OR_SERVICE_ROUTE,
   json,
   error,
-  requirePermission,
+  permissionRequirement,
+  requireAll,
 } from "./shared";
 import { parseJsonBody } from "./body";
 import type { Env } from "../types";
@@ -824,7 +825,11 @@ automationCrudRoutes.post(
   "/automations",
   admit({
     ...GITHUB_USER_OR_SERVICE_ROUTE,
-    authorization: requirePermission("automations.create"),
+    // The creator becomes the executor, whose runs create sessions under its authority.
+    authorization: requireAll(
+      permissionRequirement("automations.create"),
+      permissionRequirement("sessions.create")
+    ),
   }),
   (c) => dispatch(c, handleCreateAutomation)
 );
