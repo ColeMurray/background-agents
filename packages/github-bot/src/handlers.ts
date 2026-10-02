@@ -2,27 +2,59 @@ import { encodeRepositoryPathSegments } from "@open-inspect/shared/types/reposit
 import {
   createSessionResponseSchema,
   sendPromptResponseSchema,
+  type GitHubReviewCallbackContext,
 } from "@open-inspect/shared/types/session-api";
 import { resolveAppName } from "@open-inspect/shared/app-name";
 import { signedControlPlaneFetch } from "./internal-auth";
 import type {
   Env,
-  PullRequestOpenedPayload,
+  PullRequestReviewTriggerPayload,
   ReviewRequestedPayload,
   IssueCommentPayload,
   ReviewCommentPayload,
 } from "./types";
 import type { Logger } from "./logger";
-import { generateInstallationToken, postReaction, checkSenderPermission } from "./github-auth";
+import {
+  generateInstallationToken,
+  postCommitStatus,
+  postReaction,
+  checkSenderPermission,
+  getPullRequestSnapshot,
+  REVIEW_PENDING_DESCRIPTION,
+  REVIEW_START_FAILED_DESCRIPTION,
+  REVIEW_STATUS_CONTEXT,
+} from "./github-auth";
 import { buildCodeReviewPrompt, buildCommentActionPrompt } from "./prompts";
 import { resolveSessionTarget, type SessionTargetFields } from "./session-target";
 import { getGitHubConfig, type ResolvedGitHubConfig } from "./utils/integration-config";
 import { requestedReviewerPayloadSchema } from "./payload-schemas";
 import { containsBotMention, stripBotMention } from "./github-mention";
+import { closeOutReviewStatus } from "./review-close-out";
+import {
+  claimReviewGeneration,
+  leaseWriteDeadline,
+  releaseReviewGeneration,
+  releaseStartMarkerLease,
+  requestStartMarkerLease,
+  sweepStaleReviews,
+  type StartMarkerGrant,
+  type StartMarkerLeaseResult,
+} from "./review-supersession";
 
 export type HandlerResult =
-  | { outcome: "processed"; session_id: string; message_id: string; handler_action: string }
+  | {
+      outcome: "processed";
+      handler_action: string;
+      session_id?: string;
+      message_id?: string;
+    }
   | { outcome: "skipped"; skip_reason: string };
+
+/** Session creation was rejected because a newer review claimed the PR's generation first. */
+class ReviewSupersededError extends Error {}
+
+/** The control plane answered a prompt with a 4xx: the prompt was definitely not accepted. */
+class PromptRejectedError extends Error {}
 
 export function isReviewRequestedForBot(payload: unknown, botUsername: string): boolean {
   const parsed = requestedReviewerPayloadSchema.safeParse(payload);
@@ -41,6 +73,14 @@ async function createSession(
     scmLogin: string;
     scmUserId: string;
     scmAvatarUrl: string;
+    githubReview?: {
+      repoId: number;
+      prNumber: number;
+      generation: number;
+      headSha: string;
+      owner: string;
+      repo: string;
+    };
   }
 ): Promise<string> {
   const body: Record<string, unknown> = {
@@ -53,6 +93,9 @@ async function createSession(
   if (params.reasoningEffort) {
     body.reasoningEffort = params.reasoningEffort;
   }
+  if (params.githubReview) {
+    body.githubReview = params.githubReview;
+  }
   const url = "https://internal/sessions";
   const bodyText = JSON.stringify(body);
   const response = await signedControlPlaneFetch(env, {
@@ -63,8 +106,11 @@ async function createSession(
     traceId,
   });
   if (!response.ok) {
-    const body = await response.text();
-    throw new Error(`Session creation failed: ${response.status} ${body}`);
+    const errorBody = await response.text();
+    if (params.githubReview && response.status === 409) {
+      throw new ReviewSupersededError(`Session creation superseded: ${errorBody}`);
+    }
+    throw new Error(`Session creation failed: ${response.status} ${errorBody}`);
   }
   const result = createSessionResponseSchema.safeParse(await response.json());
   if (!result.success) {
@@ -77,10 +123,14 @@ async function sendPrompt(
   env: Env,
   traceId: string,
   sessionId: string,
-  params: { content: string; authorId: string }
+  params: { content: string; authorId: string; callbackContext?: GitHubReviewCallbackContext }
 ): Promise<string> {
   const url = `https://internal/sessions/${sessionId}/prompt`;
-  const bodyText = JSON.stringify({ content: params.content, source: "github" });
+  const bodyText = JSON.stringify({
+    content: params.content,
+    source: "github",
+    ...(params.callbackContext ? { callbackContext: params.callbackContext } : {}),
+  });
   const response = await signedControlPlaneFetch(env, {
     method: "POST",
     url,
@@ -90,7 +140,10 @@ async function sendPrompt(
   });
   if (!response.ok) {
     const body = await response.text();
-    throw new Error(`Prompt delivery failed: ${response.status} ${body}`);
+    const message = `Prompt delivery failed: ${response.status} ${body}`;
+    throw response.status >= 400 && response.status < 500
+      ? new PromptRejectedError(message)
+      : new Error(message);
   }
   const result = sendPromptResponseSchema.safeParse(await response.json());
   if (!result.success) {
@@ -118,6 +171,182 @@ async function withReaction<T>(
     return await action();
   } finally {
     await reaction;
+  }
+}
+
+interface ReviewStatusTarget {
+  owner: string;
+  repo: string;
+  prNumber: number;
+  headSha: string;
+}
+
+/**
+ * How long a start marker may take to get the PR's submission lease before its review starts
+ * without one: long enough to wait out another holder's live lease, since holders release right
+ * after their own writes. A request the control plane has not answered by then is abandoned, so a
+ * stalled control plane holds the prompt back no longer than a busy lease does.
+ */
+export const START_MARKER_LEASE_WAIT_MS = 5_000;
+
+/** Pause between start-marker lease requests while another holder's lease is live. */
+const START_MARKER_LEASE_RETRY_MS = 1_000;
+
+/**
+ * The PR's submission lease for a review's start marker, or null when the marker must not or
+ * cannot be written now. Another holder's live lease is waited out for a few seconds: holders
+ * release right after their own writes.
+ */
+async function acquireStartMarkerLease(
+  env: Env,
+  log: Logger,
+  traceId: string,
+  sessionId: string,
+  meta: Record<string, unknown>
+): Promise<StartMarkerGrant | null> {
+  const giveUpAt = Date.now() + START_MARKER_LEASE_WAIT_MS;
+  // On setTimeout rather than AbortSignal.timeout, so it runs on the same clock as the retries.
+  const deadline = new AbortController();
+  const timer = setTimeout(
+    () => deadline.abort(new DOMException("Start-marker lease wait ran out", "TimeoutError")),
+    START_MARKER_LEASE_WAIT_MS
+  );
+  try {
+    for (;;) {
+      let result: StartMarkerLeaseResult;
+      try {
+        result = await requestStartMarkerLease(env, traceId, sessionId, deadline.signal);
+      } catch (error) {
+        log.warn("review_status.lease_request_failed", {
+          ...meta,
+          error: error instanceof Error ? error : new Error(String(error)),
+        });
+        return null;
+      }
+      switch (result.outcome) {
+        case "granted":
+          return result.grant;
+        case "superseded":
+          log.info("review_status.superseded", meta);
+          return null;
+        case "request_failed":
+          log.warn("review_status.lease_request_failed", { ...meta, status: result.status });
+          return null;
+        case "busy":
+          if (Date.now() + START_MARKER_LEASE_RETRY_MS > giveUpAt) {
+            log.warn("review_status.lease_busy", meta);
+            return null;
+          }
+          await new Promise((resolve) => setTimeout(resolve, START_MARKER_LEASE_RETRY_MS));
+      }
+    }
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/**
+ * Mark a just-admitted review as in progress. The start marker is written like every other status
+ * on a review's head: holding the PR's submission lease, which is granted only while this review
+ * is still its PR's latest and its turn has not been closed out. So a review superseded or closed
+ * out before it gets here writes none. And none lands after its review's close-out has read the
+ * head — that close-out would finalize the review's fence and leave "pending" behind for good —
+ * given that GitHub lands a write within the request timeout or never: the assumption
+ * leaseWriteDeadline, a close-out's write deadline too, rests on.
+ *
+ * Best-effort, as the start marker always was: when the lease cannot be had, the review runs
+ * without one, and its verdict or close-out still writes the terminal status.
+ */
+async function postPendingReviewStatus(
+  env: Env,
+  log: Logger,
+  traceId: string,
+  sessionId: string,
+  token: string,
+  target: ReviewStatusTarget,
+  userAgent: string,
+  meta: Record<string, unknown>
+): Promise<void> {
+  const statusMeta = { ...meta, head_sha: target.headSha, state: "pending" };
+  const grant = await acquireStartMarkerLease(env, log, traceId, sessionId, statusMeta);
+  if (!grant) return;
+  // Like a close-out's write, never started so late that it could land after the lease expires.
+  if (Date.now() > leaseWriteDeadline(grant)) {
+    log.warn("review_status.lease_budget_exhausted", statusMeta);
+    await releaseStartMarkerLease(env, log, traceId, sessionId, grant.grantId);
+    return;
+  }
+
+  const result = await postCommitStatus(
+    token,
+    target.owner,
+    target.repo,
+    target.headSha,
+    {
+      state: "pending",
+      context: REVIEW_STATUS_CONTEXT,
+      description: REVIEW_PENDING_DESCRIPTION,
+    },
+    userAgent
+  );
+  // Released once GitHub has settled the write: landed it, or refused it with a 4xx. After a 5xx,
+  // a transport error or a timeout the write may still land, so the lease is left to expire: a
+  // close-out then reads the head only once the write has landed or never will.
+  const settled =
+    result.ok || (result.status !== undefined && result.status >= 400 && result.status < 500);
+  if (settled) {
+    await releaseStartMarkerLease(env, log, traceId, sessionId, grant.grantId);
+  }
+  if (result.ok) {
+    log.debug("review_status.posted", statusMeta);
+    return;
+  }
+  log.warn("review_status.failed", {
+    ...statusMeta,
+    ...(result.status === undefined ? {} : { github_status: result.status }),
+    error: result.error,
+  });
+}
+
+/**
+ * Deliver a review prompt with a callback context naming the commit its "pending" status sits on,
+ * so the session's end comes back to `/callbacks/complete` however the agent stops — including the
+ * endings (timeout, cancel, a lost sandbox) that never reach the prompt's own submission step.
+ *
+ * A session whose prompt never arrives has no turn to end, so no callback will ever close it out.
+ * When the control plane definitively rejected the prompt (a 4xx), its close-out is requested
+ * here, through the same lease as every other. Any other failure — a transport error, a 5xx, an
+ * unreadable answer — is ambiguous: the prompt may have been accepted, and recording a close-out
+ * would fence out a live review. Those are left to the control plane's reaper, which asks the
+ * session itself after a grace period and closes it out only if it holds no prompt.
+ */
+async function sendReviewPrompt(
+  env: Env,
+  log: Logger,
+  traceId: string,
+  sessionId: string,
+  params: { content: string; authorId: string },
+  target: ReviewStatusTarget
+): Promise<string> {
+  const callbackContext: GitHubReviewCallbackContext = { source: "github", ...target };
+  try {
+    return await sendPrompt(env, traceId, sessionId, {
+      content: params.content,
+      authorId: params.authorId,
+      callbackContext,
+    });
+  } catch (error) {
+    if (error instanceof PromptRejectedError) {
+      await closeOutReviewStatus(env, log, traceId, {
+        sessionId,
+        request: {
+          owner: target.owner,
+          repo: target.repo,
+          description: REVIEW_START_FAILED_DESCRIPTION,
+        },
+      });
+    }
+    throw error;
   }
 }
 
@@ -219,11 +448,12 @@ export async function handleReviewRequested(
   const { ghToken } = gating;
 
   const meta = { trace_id: traceId, repo: repoFullName, pull_number: pr.number };
+  const userAgent = resolveAppName(env);
   return withReaction(
     log,
     ghToken,
     `https://api.github.com/repos/${repositoryPath}/issues/${pr.number}/reactions`,
-    resolveAppName(env),
+    userAgent,
     meta,
     async () => {
       const target = await resolveSessionTarget(env, log, {
@@ -234,15 +464,92 @@ export async function handleReviewRequested(
         ghToken,
         traceId,
       });
-      const sessionId = await createSession(env, traceId, {
-        target,
-        title: `GitHub: Review PR #${pr.number}`,
-        model: config.model,
-        reasoningEffort: config.reasoningEffort,
-        scmLogin: sender.login,
-        scmUserId: String(sender.id),
-        scmAvatarUrl: sender.avatar_url,
+
+      // Freshness runs as the last await before claim: any earlier network-bound
+      // step (target resolution) widens the window in which a close/draft
+      // tombstone or newer push could outrank this snapshot.
+      const freshness = await getPullRequestSnapshot(
+        ghToken,
+        owner,
+        repoName,
+        pr.number,
+        userAgent
+      );
+      if (!freshness.ok) {
+        log.warn("handler.freshness_check_failed", { ...meta, error: freshness.error });
+        return { outcome: "skipped", skip_reason: "freshness_check_failed" };
+      }
+      if (freshness.headSha !== pr.head.sha || freshness.state !== "open") {
+        log.debug("handler.stale_head_sha", {
+          ...meta,
+          current_head_sha: freshness.headSha,
+          expected_head_sha: pr.head.sha,
+          state: freshness.state,
+          draft: freshness.draft,
+        });
+        return { outcome: "skipped", skip_reason: "stale_head_sha" };
+      }
+
+      const generation = await claimReviewGeneration(env, traceId, {
+        repoId: repo.id,
+        prNumber: pr.number,
       });
+
+      let sessionId: string;
+      try {
+        sessionId = await createSession(env, traceId, {
+          target,
+          title: `GitHub: Review PR #${pr.number}`,
+          model: config.model,
+          reasoningEffort: config.reasoningEffort,
+          scmLogin: sender.login,
+          scmUserId: String(sender.id),
+          scmAvatarUrl: sender.avatar_url,
+          githubReview: {
+            repoId: repo.id,
+            prNumber: pr.number,
+            generation,
+            headSha: pr.head.sha,
+            owner,
+            repo: repoName,
+          },
+        });
+      } catch (error) {
+        if (error instanceof ReviewSupersededError) {
+          // A newer trigger already owns the fence; its claim must stand.
+          log.info("handler.review_superseded", { ...meta, generation });
+          return { outcome: "skipped", skip_reason: "superseded" };
+        }
+        // The claim bumped the fence but no session will ever carry it. Roll it
+        // back so a review still running on the previous generation is not
+        // permanently locked out of submitting.
+        await releaseReviewGeneration(env, log, traceId, {
+          repoId: repo.id,
+          prNumber: pr.number,
+          generation,
+        });
+        throw error;
+      }
+
+      await sweepStaleReviews(env, log, traceId, {
+        repoId: repo.id,
+        prNumber: pr.number,
+        generation,
+        owner,
+        repo: repoName,
+      });
+
+      const statusTarget = { owner, repo: repoName, prNumber: pr.number, headSha: pr.head.sha };
+      await postPendingReviewStatus(
+        env,
+        log,
+        traceId,
+        sessionId,
+        ghToken,
+        statusTarget,
+        userAgent,
+        meta
+      );
       log.info("session.created", { ...meta, session_id: sessionId, action: "review" });
 
       const prompt = buildCodeReviewPrompt({
@@ -254,14 +561,20 @@ export async function handleReviewRequested(
         author: pr.user.login,
         base: pr.base.ref,
         head: pr.head.ref,
+        headSha: pr.head.sha,
+        isDraft: freshness.draft,
         isPublic: !repo.private,
         codeReviewInstructions: config.codeReviewInstructions,
       });
 
-      const messageId = await sendPrompt(env, traceId, sessionId, {
-        content: prompt,
-        authorId: `github:${payload.sender.id}`,
-      });
+      const messageId = await sendReviewPrompt(
+        env,
+        log,
+        traceId,
+        sessionId,
+        { content: prompt, authorId: `github:${payload.sender.id}` },
+        statusTarget
+      );
       log.info("prompt.sent", {
         ...meta,
         session_id: sessionId,
@@ -280,10 +593,10 @@ export async function handleReviewRequested(
   );
 }
 
-export async function handlePullRequestOpened(
+export async function handlePullRequestReviewTrigger(
   env: Env,
   log: Logger,
-  payload: PullRequestOpenedPayload,
+  payload: PullRequestReviewTriggerPayload,
   traceId: string
 ): Promise<HandlerResult> {
   const { pull_request: pr, repository: repo, sender } = payload;
@@ -323,11 +636,12 @@ export async function handlePullRequestOpened(
   const { ghToken } = gating;
 
   const meta = { trace_id: traceId, repo: repoFullName, pull_number: pr.number };
+  const userAgent = resolveAppName(env);
   return withReaction(
     log,
     ghToken,
     `https://api.github.com/repos/${repositoryPath}/issues/${pr.number}/reactions`,
-    resolveAppName(env),
+    userAgent,
     meta,
     async () => {
       const target = await resolveSessionTarget(env, log, {
@@ -338,15 +652,92 @@ export async function handlePullRequestOpened(
         ghToken,
         traceId,
       });
-      const sessionId = await createSession(env, traceId, {
-        target,
-        title: `GitHub: Review PR #${pr.number}`,
-        model: config.model,
-        reasoningEffort: config.reasoningEffort,
-        scmLogin: sender.login,
-        scmUserId: String(sender.id),
-        scmAvatarUrl: sender.avatar_url,
+
+      // Freshness runs as the last await before claim: any earlier network-bound
+      // step (target resolution) widens the window in which a close/draft
+      // tombstone or newer push could outrank this snapshot.
+      const freshness = await getPullRequestSnapshot(
+        ghToken,
+        owner,
+        repoName,
+        pr.number,
+        userAgent
+      );
+      if (!freshness.ok) {
+        log.warn("handler.freshness_check_failed", { ...meta, error: freshness.error });
+        return { outcome: "skipped", skip_reason: "freshness_check_failed" };
+      }
+      if (freshness.headSha !== pr.head.sha || freshness.state !== "open" || freshness.draft) {
+        log.debug("handler.stale_head_sha", {
+          ...meta,
+          current_head_sha: freshness.headSha,
+          expected_head_sha: pr.head.sha,
+          state: freshness.state,
+          draft: freshness.draft,
+        });
+        return { outcome: "skipped", skip_reason: "stale_head_sha" };
+      }
+
+      const generation = await claimReviewGeneration(env, traceId, {
+        repoId: repo.id,
+        prNumber: pr.number,
       });
+
+      let sessionId: string;
+      try {
+        sessionId = await createSession(env, traceId, {
+          target,
+          title: `GitHub: Review PR #${pr.number}`,
+          model: config.model,
+          reasoningEffort: config.reasoningEffort,
+          scmLogin: sender.login,
+          scmUserId: String(sender.id),
+          scmAvatarUrl: sender.avatar_url,
+          githubReview: {
+            repoId: repo.id,
+            prNumber: pr.number,
+            generation,
+            headSha: pr.head.sha,
+            owner,
+            repo: repoName,
+          },
+        });
+      } catch (error) {
+        if (error instanceof ReviewSupersededError) {
+          // A newer trigger already owns the fence; its claim must stand.
+          log.info("handler.review_superseded", { ...meta, generation });
+          return { outcome: "skipped", skip_reason: "superseded" };
+        }
+        // The claim bumped the fence but no session will ever carry it. Roll it
+        // back so a review still running on the previous generation is not
+        // permanently locked out of submitting.
+        await releaseReviewGeneration(env, log, traceId, {
+          repoId: repo.id,
+          prNumber: pr.number,
+          generation,
+        });
+        throw error;
+      }
+
+      await sweepStaleReviews(env, log, traceId, {
+        repoId: repo.id,
+        prNumber: pr.number,
+        generation,
+        owner,
+        repo: repoName,
+      });
+
+      const statusTarget = { owner, repo: repoName, prNumber: pr.number, headSha: pr.head.sha };
+      await postPendingReviewStatus(
+        env,
+        log,
+        traceId,
+        sessionId,
+        ghToken,
+        statusTarget,
+        userAgent,
+        meta
+      );
       log.info("session.created", { ...meta, session_id: sessionId, action: "auto_review" });
 
       const prompt = buildCodeReviewPrompt({
@@ -358,15 +749,21 @@ export async function handlePullRequestOpened(
         author: pr.user.login,
         base: pr.base.ref,
         head: pr.head.ref,
+        headSha: pr.head.sha,
+        isDraft: freshness.draft,
         isPublic: !repo.private,
         codeReviewInstructions: config.codeReviewInstructions,
         isSelfReview: pr.user.login.toLowerCase() === env.GITHUB_BOT_USERNAME.toLowerCase(),
       });
 
-      const messageId = await sendPrompt(env, traceId, sessionId, {
-        content: prompt,
-        authorId: `github:${sender.id}`,
-      });
+      const messageId = await sendReviewPrompt(
+        env,
+        log,
+        traceId,
+        sessionId,
+        { content: prompt, authorId: `github:${sender.id}` },
+        statusTarget
+      );
       log.info("prompt.sent", {
         ...meta,
         session_id: sessionId,
