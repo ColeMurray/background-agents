@@ -23,6 +23,8 @@ import {
   SkillProfileValidationError,
 } from "../db/skill-profiles";
 import { SkillConflictError, SkillStore, SkillValidationError } from "../db/skills";
+import { checkEnvironmentAccess } from "@open-inspect/shared";
+import { resourceViewer } from "../authorization/resource-viewer";
 import { EnvironmentStore } from "../db/environments";
 import { resolveManagedSkills, SkillResolutionError } from "../session/skill-resolution";
 import type { Env } from "../types";
@@ -634,7 +636,16 @@ async function handleResolvePreview(
       : []);
   if (parsed.environmentId) {
     const environments = new EnvironmentStore(ctx.db);
-    if (!(await environments.getById(parsed.environmentId))) {
+    const environment = await environments.getById(parsed.environmentId);
+    const access =
+      environment &&
+      checkEnvironmentAccess(
+        await resourceViewer(ctx),
+        { ownerTeamId: environment.owner_team_id },
+        "read"
+      );
+    // Another team's environment is indistinguishable from a missing one.
+    if (!access || (!access.allowed && access.reason === "not_member")) {
       return error("Environment not found", 404);
     }
     repositories = (await environments.getRepositoriesForEnvironment(parsed.environmentId)).map(

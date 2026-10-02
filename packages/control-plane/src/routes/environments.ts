@@ -152,6 +152,8 @@ async function handleListEnvironments(
   let environments = rows.environments.filter(
     (row) =>
       checkEnvironmentAccess(viewer, { ownerTeamId: row.owner_team_id }, "read").allowed &&
+      // Actorless bots launch workspace sessions only, so they see workspace environments.
+      (viewer.kind !== "service" || row.owner_team_id === null) &&
       // A team's session catalog excludes environments other teams own.
       (!teamId || row.owner_team_id === null || row.owner_team_id === teamId)
   );

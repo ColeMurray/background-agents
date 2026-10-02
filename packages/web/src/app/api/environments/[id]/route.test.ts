@@ -32,3 +32,16 @@ it("omits ownership and unknown fields from configuration updates", async () => 
     body: JSON.stringify({ name: "Stack" }),
   });
 });
+
+it.each([null, [], "name"])("rejects a non-object update body %j", async (body) => {
+  const response = await PUT(
+    new NextRequest("http://localhost/api/environments/env-1", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    }),
+    { params: Promise.resolve({ id: "env-1" }) }
+  );
+  expect(response.status).toBe(400);
+  expect(controlPlaneUserFetch).not.toHaveBeenCalled();
+});

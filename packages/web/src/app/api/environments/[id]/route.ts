@@ -31,6 +31,9 @@ export async function PUT(request: NextRequest, { params }: { params: Promise<{ 
 
   try {
     const body = await request.json();
+    if (typeof body !== "object" || body === null || Array.isArray(body)) {
+      return NextResponse.json({ error: "Invalid request body" }, { status: 400 });
+    }
     const environmentBody = Object.fromEntries(
       ["name", "description", "prebuildEnabled", "repositories", "channelAssociations"]
         .filter((field) => body[field] !== undefined)

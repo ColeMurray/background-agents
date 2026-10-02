@@ -421,11 +421,16 @@ describe("environment team ownership", () => {
 
   it("preserves distinct actorless list/item ceilings and service capabilities", async () => {
     const id = await environment(await team("bot-read"));
+    const workspaceId = await environment(null, "Workspace");
     const capabilities = { canRead: true, canManage: false, canUse: true };
     for (const service of ["slack-bot", "linear-bot"] as const) {
+      // Actorless catalogs omit team environments; bot sessions are workspace-owned.
       const list = await request("/environments", "GET", undefined, { service });
       expect(list.status).toBe(200);
-      expect(await list.json()).toMatchObject({ environments: [{ id, capabilities }], total: 1 });
+      expect(await list.json()).toMatchObject({
+        environments: [{ id: workspaceId, capabilities }],
+        total: 1,
+      });
       await expectStatus(request(`/environments/${id}`, "GET", undefined, { service }), 403);
     }
     await expectStatus(request("/environments", "GET", undefined, { service: "github-bot" }), 403);
@@ -434,5 +439,21 @@ describe("environment team ownership", () => {
     });
     expect(response.status).toBe(200);
     expect(await response.json()).toMatchObject({ environment: { id, capabilities } });
+  });
+
+  it("conceals another team's environment from skill resolution previews", async () => {
+    await addPermission("skills.read");
+    const hidden = await environment(await team("preview-hidden"));
+    const visibleTeam = await team("preview-visible");
+    await memberships.add(visibleTeam, MEMBER, "member");
+    const visible = await environment(visibleTeam);
+    const preview = (environmentId: string) =>
+      memberRequest("/skills/resolve-preview", "POST", { environmentId });
+
+    const missing = await preview("env_missing");
+    const concealed = await preview(hidden);
+    expect(concealed.status).toBe(404);
+    expect(await concealed.json()).toEqual(await missing.json());
+    await expectStatus(preview(visible), 200);
   });
 });
