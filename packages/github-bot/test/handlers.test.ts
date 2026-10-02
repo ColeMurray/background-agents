@@ -304,6 +304,7 @@ describe.each(routedHandlers)("GitHub routing: $name", ({ run, senderId }) => {
       skip_reason: "sender_not_allowed",
     });
     expect(getControlPlaneFetch(env)).not.toHaveBeenCalled();
+    expect(generateInstallationToken).not.toHaveBeenCalled();
     expect(postReaction).not.toHaveBeenCalled();
   });
 });
@@ -330,37 +331,30 @@ describe("GitHub routing", () => {
     expect(getGitHubConfig).toHaveBeenCalledWith(env, "acme/renamed-widgets", expect.any(Object));
   });
 
-  it("keeps auto-review workspace-level and omits sender and PR routing context", async () => {
+  it("keeps auto-review workspace-level without a routing lookup", async () => {
     const env = createMockEnv();
     await handlePullRequestOpened(env, createMockLogger(), pullRequestOpenedPayload, "trace-auto");
 
     const cpFetch = getControlPlaneFetch(env);
-    expect(Object.fromEntries(new URL(cpFetch.mock.calls[0][0]).searchParams)).toEqual({
-      repositoryId: "99",
-    });
+    expect(cpFetch.mock.calls.some(([url]) => String(url).includes("/github/route?"))).toBe(false);
     expect(sessionCreateBody(cpFetch).teamId).toBeNull();
   });
 
-  it("does not let a route response put auto-review in a team", async () => {
+  it.each([
+    { name: "network failure", respond: () => Promise.reject(new Error("unavailable")) },
+    { name: "HTTP outage", respond: () => new Response("unavailable", { status: 503 }) },
+    { name: "invalid JSON", respond: () => new Response("not JSON") },
+    { name: "invalid contract", respond: () => Response.json({ teamId: null }) },
+  ])("auto-review succeeds despite an unused route $name", async ({ respond }) => {
     const env = createMockEnv();
-    mockControlPlaneResponse(env, /\/github\/route\?/, () =>
-      Response.json({ teamId: "team_sender", via: "sender_membership" })
-    );
-    await handlePullRequestOpened(env, createMockLogger(), pullRequestOpenedPayload, "trace-auto");
-    expect(sessionCreateBody(getControlPlaneFetch(env)).teamId).toBeNull();
-  });
-
-  it("fails closed when the auto-review route cannot be fetched", async () => {
-    const env = createMockEnv();
-    mockControlPlaneResponse(
-      env,
-      /\/github\/route\?/,
-      () => new Response("unavailable", { status: 503 })
-    );
-    await expect(
-      handlePullRequestOpened(env, createMockLogger(), pullRequestOpenedPayload, "trace-auto")
-    ).rejects.toThrow("GitHub routing lookup failed: 503");
-    expect(getControlPlaneFetch(env)).toHaveBeenCalledTimes(1);
+    mockControlPlaneResponse(env, /\/github\/route\?/, respond);
+    expect(
+      await handlePullRequestOpened(env, createMockLogger(), pullRequestOpenedPayload, "trace-auto")
+    ).toMatchObject({ outcome: "processed", handler_action: "auto_review" });
+    const cpFetch = getControlPlaneFetch(env);
+    expect(cpFetch.mock.calls.some(([url]) => String(url).includes("/github/route?"))).toBe(false);
+    expect(sessionCreateBody(cpFetch).teamId).toBeNull();
+    expect(promptSendBody(cpFetch).content).toContain("Pull Request #42");
   });
 });
 
@@ -381,7 +375,7 @@ describe.each([
     async ({ status, code, message }) => {
       const env = createMockEnv();
       mockControlPlaneResponse(env, /^https:\/\/internal\/sessions$/, () =>
-        Response.json({ code }, { status })
+        Response.json({ code, repository: "private/secondary" }, { status })
       );
       const githubFetch = vi.fn().mockResolvedValue(new Response("", { status: 201 }));
       vi.stubGlobal("fetch", githubFetch);
@@ -403,6 +397,7 @@ describe.each([
         })
       );
       expect(JSON.parse(githubFetch.mock.calls[0][1].body).body).toMatch(message);
+      expect(JSON.parse(githubFetch.mock.calls[0][1].body).body).not.toContain("private/secondary");
     }
   );
 
@@ -542,7 +537,7 @@ describe("handlePullRequestOpened", () => {
     );
 
     const cpFetch = getControlPlaneFetch(env);
-    expect(cpFetch).toHaveBeenCalledTimes(4);
+    expect(cpFetch).toHaveBeenCalledTimes(3);
 
     const sessionBody = sessionCreateBody(cpFetch);
     expect(sessionBody.repoOwner).toBe("acme");
@@ -588,7 +583,7 @@ describe("handlePullRequestOpened", () => {
       handlePullRequestOpened(env, log, pullRequestOpenedPayload, "trace-0")
     ).rejects.toThrow("Session creation failed: invalid response");
 
-    expect(cpFetch).toHaveBeenCalledTimes(3);
+    expect(cpFetch).toHaveBeenCalledTimes(2);
   });
 
   it("returns early for draft PRs", async () => {

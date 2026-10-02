@@ -92,6 +92,7 @@ import {
   type AutomationSessionTarget,
 } from "../automation/session-target";
 import { isAutomationExecutionAuthorized } from "../automation/authorization-guard";
+import { admitGitHubEvent } from "../automation/github-event-admission";
 import type { RequestContext } from "../routes/shared";
 import { deliverWithRetry } from "../session/callback-delivery";
 import {
@@ -293,7 +294,7 @@ interface ExecutionPrincipal {
   scmEnrichment: GitHubEnrichment | null;
 }
 
-type StartInvocationResult =
+export type StartInvocationResult =
   /** Invocation inserted; children launched (some may have pre-failed). */
   | { outcome: "started"; invocationId: string; runs: AutomationRunRow[]; launched: number }
   /** Overlap — a childless skipped invocation was recorded (schedule/event). */
@@ -1102,10 +1103,29 @@ export class Scheduler {
   /** Match an inbound event to authorized automations and start or steer their invocations. */
   async event(event: AutomationEvent): Promise<SchedulerEventResult> {
     const store = new AutomationStore(this.db);
+    if (event.source === "github") {
+      return admitGitHubEvent(
+        this.db,
+        event,
+        (automation, repositories) =>
+          this.startInvocation(store, {
+            automation,
+            repositories,
+            source: "event",
+            triggerKey: event.triggerKey,
+            concurrencyKey: event.concurrencyKey,
+            eventRepositoryId: event.repositoryId,
+            instructionsOverride: composeAutomationPrompt(
+              event.contextBlock,
+              automation.instructions
+            ),
+          }),
+        this.log
+      );
+    }
 
     // 1. Find matching automations
     let candidates: AutomationRow[];
-    let grantedGitHubAutomationIds: ReadonlySet<string> | undefined;
     switch (event.source) {
       case "webhook": {
         const automation = await store.getById(event.automationId);
@@ -1122,17 +1142,6 @@ export class Scheduler {
           automation.event_type === event.eventType
             ? [automation]
             : [];
-        break;
-      }
-      case "github": {
-        const matches = await store.getGitHubAutomationsForEvent(
-          event.repositoryId,
-          event.eventType
-        );
-        candidates = matches.map((match) => match.automation);
-        grantedGitHubAutomationIds = new Set(
-          matches.filter((match) => match.repositoryGranted).map((match) => match.automation.id)
-        );
         break;
       }
       case "linear":
@@ -1281,29 +1290,6 @@ export class Scheduler {
         continue;
       }
 
-      if (
-        event.source === "github" &&
-        !grantedGitHubAutomationIds?.has(automation.id) &&
-        (await store.recordGitHubGrantDenied(automation.id, event))
-      ) {
-        skipped++;
-        continue;
-      }
-
-      let githubRepositories: AutomationRepositoryInsert[] | undefined;
-      if (event.source === "github") {
-        const selection = await store.getRepositoriesForAutomation(automation.id);
-        if (selection.length !== 1 || selection[0].repo_id !== event.repositoryId) {
-          skipped++;
-          continue;
-        }
-        githubRepositories = selection.map((repository) => ({
-          ...repository,
-          repo_owner: event.repoOwner,
-          repo_name: event.repoName,
-        }));
-      }
-
       if (event.source === "slack" && !slackSettingsLoaded) {
         slackSessionInstructions = await getSlackSessionInstructions(this.db);
         slackSettingsLoaded = true;
@@ -1327,12 +1313,6 @@ export class Scheduler {
         concurrencyKey: event.concurrencyKey,
         triggerMetadata: event.source === "slack" ? serializeSlackTriggerMetadata(event) : null,
         instructionsOverride,
-        ...(event.source === "github"
-          ? {
-              eventRepositoryId: event.repositoryId,
-              repositories: githubRepositories,
-            }
-          : {}),
         ...(event.source === "slack"
           ? {
               instructionsOverrideFactory: async () =>
@@ -1359,22 +1339,9 @@ export class Scheduler {
           skipped++;
           break;
         case "blocked":
-          if (
-            event.source === "github" &&
-            result.reason === "team_grants_changed" &&
-            automation.owner_team_id !== null &&
-            !(await new TeamRepositoryGrantStore(this.db).covers(automation.owner_team_id, [
-              event.repositoryId,
-            ]))
-          ) {
-            await store.recordGitHubGrantDenied(automation.id, event);
-          }
           skipped++;
           break;
         case "unauthorized":
-          if (event.source === "github" && result.reason === "target_team_missing_grant") {
-            await store.recordGitHubGrantDenied(automation.id, event);
-          }
           this.log.warn("Skipped event automation after execution authorization denial", {
             event: "scheduler.authorization_denied",
             automation_id: automation.id,

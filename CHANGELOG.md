@@ -17,6 +17,12 @@ ownership. Trigger-user allowlists, membership checks, and creation-time reposit
 still apply. Autofix continues in the pull request's existing session. `requireTeamOnCreate` remains
 enforced: workspace fallback does not bypass the require-team creation policy.
 
+GitHub grant-version races are retried with fresh admission checks. If they do not settle, the event
+remains eligible for redelivery rather than being finalized as skipped. Forwarding retries retain
+completed bot startup/refusal progress without storing session data or repeating those effects.
+Redelivery is not scheduled automatically; partial startup failures and KV consistency still prevent
+an exactly-once guarantee. Neutral grant denials no longer hide a missed successful failure reset.
+
 GitHub automation selections with unresolved repository IDs no longer match events by name. Reselect
 and save their repositories to resolve IDs. Upgrade the GitHub bot and control plane together: event
 envelopes without a numeric repository ID are rejected rather than routed by display names.

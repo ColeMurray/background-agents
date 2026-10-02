@@ -5,6 +5,7 @@ import * as automationRepositories from "../../src/automation/repository";
 import * as automationSessionTargets from "../../src/automation/session-target";
 import { createCloudflareEnv } from "../../src/cloudflare/platform";
 import { AutomationStore, type AutomationRepositoryInsert } from "../../src/db/automation-store";
+import { GitHubAutomationStore } from "../../src/db/github-automation-store";
 import { SessionIndexStore } from "../../src/db/session-index";
 import { TeamMembershipStore } from "../../src/db/team-memberships";
 import { TeamRepositoryGrantStore } from "../../src/db/team-repository-grants";
@@ -12,7 +13,7 @@ import { Scheduler } from "../../src/scheduler/scheduler";
 import * as sessionInitialization from "../../src/session/initialize";
 import { cleanD1Tables } from "./cleanup";
 import { queryDO, seedActiveUser, sqlDatabase } from "./helpers";
-import { seedGrant, seedTeam } from "./ownership-test-helpers";
+import { ownershipRequest, seedGrant, seedTeam } from "./ownership-test-helpers";
 import { fetchRuns, makeRunRow, seedRun } from "./run-helpers";
 
 const EXECUTOR_A = "11111111111111111111111111111111";
@@ -292,7 +293,12 @@ describe("GitHub automation routing (real D1 and SessionDO)", () => {
         await seedGrant(TEAM_A, "installation");
       }
 
-      expect(await store.getGitHubAutomationsForEvent(101, "pull_request.opened")).toEqual([
+      expect(
+        await new GitHubAutomationStore(env.DB).getGitHubAutomationsForEvent(
+          101,
+          "pull_request.opened"
+        )
+      ).toEqual([
         {
           automation: expect.objectContaining({ id }),
           repositoryGranted: grantKind !== "none",
@@ -364,16 +370,17 @@ describe("GitHub automation routing (real D1 and SessionDO)", () => {
     const id = "auto-github-raced-revocation";
     await saveAutomation(id, TEAM_A, EXECUTOR_A);
     await seedGrant(TEAM_A, STORED_REPOSITORY);
-    const getCandidates = AutomationStore.prototype.getGitHubAutomationsForEvent;
-    vi.spyOn(AutomationStore.prototype, "getGitHubAutomationsForEvent").mockImplementationOnce(
-      async function (this: AutomationStore, repositoryId, eventType) {
-        const candidates = await getCandidates.call(this, repositoryId, eventType);
-        await env.DB.prepare("DELETE FROM team_repository_grants WHERE team_id = ?")
-          .bind(TEAM_A)
-          .run();
-        return candidates;
-      }
-    );
+    const getCandidates = GitHubAutomationStore.prototype.getGitHubAutomationsForEvent;
+    vi.spyOn(
+      GitHubAutomationStore.prototype,
+      "getGitHubAutomationsForEvent"
+    ).mockImplementationOnce(async function (this: GitHubAutomationStore, repositoryId, eventType) {
+      const candidates = await getCandidates.call(this, repositoryId, eventType);
+      await env.DB.prepare("DELETE FROM team_repository_grants WHERE team_id = ?")
+        .bind(TEAM_A)
+        .run();
+      return candidates;
+    });
     const event = githubEvent();
     expect(await createScheduler().event(event)).toEqual({ triggered: 0, skipped: 1, steered: 0 });
     await expectUnauthorizedRun(id, event);
@@ -393,19 +400,24 @@ describe("GitHub automation routing (real D1 and SessionDO)", () => {
           name: STORED_REPOSITORY.repo_name,
         });
       if (window === "after candidate lookup") {
-        const lookup = AutomationStore.prototype.getGitHubAutomationsForEvent;
-        vi.spyOn(AutomationStore.prototype, "getGitHubAutomationsForEvent").mockImplementationOnce(
-          async function (this: AutomationStore, repositoryId, eventType) {
-            const candidates = await lookup.call(this, repositoryId, eventType);
-            expect(candidates[0].repositoryGranted).toBe(false);
-            await addGrant();
-            return candidates;
-          }
-        );
+        const lookup = GitHubAutomationStore.prototype.getGitHubAutomationsForEvent;
+        vi.spyOn(
+          GitHubAutomationStore.prototype,
+          "getGitHubAutomationsForEvent"
+        ).mockImplementationOnce(async function (
+          this: GitHubAutomationStore,
+          repositoryId,
+          eventType
+        ) {
+          const candidates = await lookup.call(this, repositoryId, eventType);
+          expect(candidates[0].repositoryGranted).toBe(false);
+          await addGrant();
+          return candidates;
+        });
       } else {
-        const recordDenial = AutomationStore.prototype.recordGitHubGrantDenied;
-        vi.spyOn(AutomationStore.prototype, "recordGitHubGrantDenied").mockImplementationOnce(
-          async function (this: AutomationStore, automationId, event) {
+        const recordDenial = GitHubAutomationStore.prototype.recordGitHubGrantDenied;
+        vi.spyOn(GitHubAutomationStore.prototype, "recordGitHubGrantDenied").mockImplementationOnce(
+          async function (this: GitHubAutomationStore, automationId, event) {
             await addGrant();
             return recordDenial.call(this, automationId, event);
           }
@@ -458,31 +470,137 @@ describe("GitHub automation routing (real D1 and SessionDO)", () => {
     const id = "auto-github-grants-version";
     await saveAutomation(id, TEAM_A, EXECUTOR_A);
     await seedGrant(TEAM_A, STORED_REPOSITORY);
-    const covers = TeamRepositoryGrantStore.prototype.covers;
-    vi.spyOn(TeamRepositoryGrantStore.prototype, "covers").mockImplementationOnce(async function (
-      this: TeamRepositoryGrantStore,
-      teamId,
-      repoIds
-    ) {
-      const covered = await covers.call(this, teamId, repoIds);
-      await env.DB.prepare("DELETE FROM team_repository_grants WHERE team_id = ?")
-        .bind(teamId)
-        .run();
-      await env.DB.prepare("UPDATE teams SET grants_version = grants_version + 1 WHERE id = ?")
-        .bind(teamId)
-        .run();
-      return covered;
-    });
+    const insert = AutomationStore.prototype.insertInvocationGuarded;
+    vi.spyOn(AutomationStore.prototype, "insertInvocationGuarded").mockImplementationOnce(
+      async function (this: AutomationStore, params) {
+        const [grant] = await new TeamRepositoryGrantStore(env.DB).listDetailsForTeam(TEAM_A);
+        await new TeamRepositoryGrantStore(env.DB).remove(TEAM_A, grant.id);
+        return insert.call(this, params);
+      }
+    );
     const event = githubEvent();
     expect(await createScheduler().event(event)).toEqual({ triggered: 0, skipped: 1, steered: 0 });
     await expectUnauthorizedRun(id, event);
     expect(sessionInitialization.initializeSession).not.toHaveBeenCalled();
   });
 
-  it("records revoked grants before same-key concurrency without changing the active run", async () => {
+  it("retries an unrelated grant-version change without losing the authorized event", async () => {
+    const id = "auto-github-unrelated-grant";
+    await saveAutomation(id, TEAM_A, EXECUTOR_A);
+    await seedGrant(TEAM_A, STORED_REPOSITORY);
+    const insert = AutomationStore.prototype.insertInvocationGuarded;
+    vi.spyOn(AutomationStore.prototype, "insertInvocationGuarded").mockImplementationOnce(
+      async function (this: AutomationStore, params) {
+        await new TeamRepositoryGrantStore(env.DB).add(TEAM_A, {
+          kind: "repository",
+          repoExternalId: 909,
+          owner: "acme",
+          name: "unrelated",
+        });
+        return insert.call(this, params);
+      }
+    );
+    const event = githubEvent();
+    expect(await createScheduler().event(event)).toEqual({ triggered: 1, skipped: 0, steered: 0 });
+    await expectLaunchedSession(id, TEAM_A, EXECUTOR_A, event);
+    expect(sessionInitialization.initializeSession).toHaveBeenCalledOnce();
+  });
+
+  it("rejects repeated version churn without claiming the trigger and allows redelivery", async () => {
+    const id = "auto-github-version-churn";
+    await saveAutomation(id, TEAM_A, EXECUTOR_A);
+    await seedGrant(TEAM_A, STORED_REPOSITORY);
+    const stableId = "auto-github-stable-team";
+    await saveAutomation(stableId, TEAM_B, EXECUTOR_B);
+    await seedGrant(TEAM_B, STORED_REPOSITORY);
+    const covers = TeamRepositoryGrantStore.prototype.covers;
+    const churn = vi
+      .spyOn(TeamRepositoryGrantStore.prototype, "covers")
+      .mockImplementation(async function (this: TeamRepositoryGrantStore, teamId, repoIds) {
+        const covered = await covers.call(this, teamId, repoIds);
+        if (teamId !== TEAM_A) return covered;
+        const unrelated = await this.add(teamId, {
+          kind: "repository",
+          repoExternalId: 909,
+          owner: "acme",
+          name: "unrelated",
+        });
+        await this.remove(teamId, unrelated.id);
+        return covered;
+      });
+    const event = githubEvent();
+    const scheduler = createScheduler();
+    await expect(scheduler.event(event)).rejects.toThrow("GitHub admission did not stabilize");
+    await expectNoRecords(id);
+    await expectLaunchedSession(stableId, TEAM_B, EXECUTOR_B, event);
+    expect(await new AutomationStore(env.DB).getById(id)).toMatchObject({
+      enabled: 1,
+      consecutive_failures: 2,
+    });
+    const forwarded = await ownershipRequest("/internal/github-event", {
+      service: "github-bot",
+      method: "POST",
+      body: JSON.stringify(event),
+    });
+    expect(forwarded.status).toBe(502);
+    expect(await forwarded.json()).toEqual({ ok: false, error: "Failed to reach scheduler" });
+    churn.mockRestore();
+    expect(await scheduler.event(event)).toEqual({ triggered: 1, skipped: 1, steered: 0 });
+    await expectLaunchedSession(id, TEAM_A, EXECUTOR_A, event);
+  });
+
+  it("retries when a revoked grant returns before the post-admission denial write", async () => {
+    const id = "auto-github-returned-coverage";
+    await saveAutomation(id, TEAM_A, EXECUTOR_A);
+    await seedGrant(TEAM_A, STORED_REPOSITORY);
+    const covers = TeamRepositoryGrantStore.prototype.covers;
+    let coverageReads = 0;
+    vi.spyOn(TeamRepositoryGrantStore.prototype, "covers").mockImplementation(async function (
+      this: TeamRepositoryGrantStore,
+      teamId,
+      repoIds
+    ) {
+      const covered = await covers.call(this, teamId, repoIds);
+      if (++coverageReads !== 2) return covered;
+      expect(covered).toBe(true);
+      const [grant] = await this.listDetailsForTeam(teamId);
+      await this.remove(teamId, grant.id);
+      return false;
+    });
+    const recordDenial = GitHubAutomationStore.prototype.recordGitHubGrantDenied;
+    vi.spyOn(GitHubAutomationStore.prototype, "recordGitHubGrantDenied").mockImplementationOnce(
+      async function (this: GitHubAutomationStore, automationId, event) {
+        await new TeamRepositoryGrantStore(env.DB).add(TEAM_A, {
+          kind: "repository",
+          repoExternalId: 101,
+          owner: "old-owner",
+          name: "old-repository",
+        });
+        return recordDenial.call(this, automationId, event);
+      }
+    );
+    const event = githubEvent();
+    expect(await createScheduler().event(event)).toEqual({ triggered: 1, skipped: 0, steered: 0 });
+    await expectLaunchedSession(id, TEAM_A, EXECUTOR_A, event);
+    expect(sessionInitialization.initializeSession).toHaveBeenCalledOnce();
+  });
+
+  it("records grants revoked after matching before same-key concurrency without changing the active run", async () => {
     const id = "auto-github-active-revoked";
     await saveAutomation(id, TEAM_C, EXECUTOR_C);
-    await revokeGrant(TEAM_C);
+    await seedGrant(TEAM_C, STORED_REPOSITORY);
+    const lookup = GitHubAutomationStore.prototype.getGitHubAutomationsForEvent;
+    vi.spyOn(
+      GitHubAutomationStore.prototype,
+      "getGitHubAutomationsForEvent"
+    ).mockImplementationOnce(async function (this: GitHubAutomationStore, repositoryId, eventType) {
+      const candidates = await lookup.call(this, repositoryId, eventType);
+      expect(candidates[0].repositoryGranted).toBe(true);
+      const grants = new TeamRepositoryGrantStore(env.DB);
+      const [grant] = await grants.listDetailsForTeam(TEAM_C);
+      await grants.remove(TEAM_C, grant.id);
+      return candidates;
+    });
     const event = githubEvent();
     const activeRun = makeRunRow(id, {
       id: "run-github-active-revoked",
