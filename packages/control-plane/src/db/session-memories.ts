@@ -2,6 +2,8 @@ import {
   memoryScopeSchema,
   type MemoryRecord,
   type SessionMemoryManifest,
+  type SessionMemoryDiagnostics,
+  type PinnedMemoryRevision,
 } from "@open-inspect/shared/types/memories";
 import {
   matchesMemoryTarget,
@@ -9,7 +11,7 @@ import {
   type MemoryTarget,
 } from "../session/memory-resolution";
 import { bulkInsertStatements } from "./bulk-insert";
-import { memoryFromRow, MemoryStore, type MemoryRow } from "./memories";
+import { MemoryStore, type MemoryRow } from "./memories";
 import type { SqlDatabase, SqlStatement } from "./sql-database";
 
 interface ManifestRow {
@@ -130,7 +132,11 @@ export class SessionMemoryStore {
    */
   async load(
     sessionId: string
-  ): Promise<{ manifest: SessionMemoryManifest; records: MemoryRecord[] } | null> {
+  ): Promise<{
+    manifest: SessionMemoryManifest;
+    diagnostics: SessionMemoryDiagnostics;
+    revisions: PinnedMemoryRevision[];
+  } | null> {
     const [headers, rows] = await this.db.batch<ManifestRow | ItemRow>([
       this.db
         .prepare("SELECT * FROM session_memory_manifests WHERE session_id = ?")
@@ -158,43 +164,55 @@ export class SessionMemoryStore {
         environmentId: null,
         includePersonalMemories: false,
       });
-      return { manifest: { ...manifest, resolvedAt: session.created_at }, records: [] };
+      const empty = { ...manifest, resolvedAt: session.created_at, items: [] };
+      return { manifest: empty, diagnostics: empty, revisions: [] };
     }
     if (header.resolver_version !== 1) throw new Error("Unsupported memory resolver version");
     const items = rows.results as ItemRow[];
+    const manifest: SessionMemoryManifest = {
+      resolverVersion: header.resolver_version,
+      manifestSha256: header.manifest_sha256,
+      resolvedAt: header.resolved_at,
+      includePersonalMemories: header.include_personal_memories === 1,
+      personalOwnerUserId: header.personal_owner_user_id,
+      directiveChars: header.directive_chars,
+      catalogChars: header.catalog_chars,
+      estimatedTokens: header.estimated_tokens,
+      truncatedCount: header.truncated_count,
+      items: items.map((row) => ({
+        memoryId: row.id,
+        revisionId: row.pinned_revision_id,
+        revisionNumber: row.revision_number,
+        scope: memoryScopeSchema.parse(JSON.parse(row.scope_json)),
+        memoryType: row.pinned_memory_type,
+        title: row.title,
+        inclusion: row.inclusion,
+        estimatedTokens: row.estimated_tokens,
+      })),
+    };
     return {
-      manifest: {
-        resolverVersion: header.resolver_version,
-        manifestSha256: header.manifest_sha256,
-        resolvedAt: header.resolved_at,
-        includePersonalMemories: header.include_personal_memories === 1,
-        personalOwnerUserId: header.personal_owner_user_id,
-        directiveChars: header.directive_chars,
-        catalogChars: header.catalog_chars,
-        estimatedTokens: header.estimated_tokens,
-        truncatedCount: header.truncated_count,
-        items: items.map((row) => ({
-          memoryId: row.id,
-          revisionId: row.pinned_revision_id,
-          revisionNumber: row.revision_number,
-          scope: memoryScopeSchema.parse(JSON.parse(row.scope_json)),
-          memoryType: row.pinned_memory_type,
-          title: row.title,
-          inclusion: row.inclusion,
-          estimatedTokens: row.estimated_tokens,
-          changed: row.current_revision_id !== row.pinned_revision_id,
-          archived: row.status === "archived",
+      manifest,
+      diagnostics: {
+        ...manifest,
+        items: manifest.items.map((item, index) => ({
+          ...item,
+          changed: items[index].current_revision_id !== item.revisionId,
+          archived: items[index].status === "archived",
         })),
       },
-      records: items.map((row) =>
-        memoryFromRow({
-          ...row,
-          memory_type: row.pinned_memory_type,
-          current_revision_id: row.pinned_revision_id,
-        })
-      ),
+      revisions: items.map((row, index) => ({
+        memoryId: row.id,
+        revisionId: row.pinned_revision_id,
+        memoryType: row.pinned_memory_type,
+        scope: manifest.items[index].scope,
+        repoId: row.repo_id,
+        title: row.title,
+        description: row.description,
+        content: row.content,
+      })),
     };
   }
+
   /** Recover tool scope from session metadata and the pinned personal owner, not current preferences. */
   async target(sessionId: string): Promise<(MemoryTarget & { inherited: boolean }) | null> {
     const session = await this.db

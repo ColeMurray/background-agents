@@ -102,7 +102,7 @@ export interface MemoryCapabilities {
   canApprove: boolean;
 }
 export type MemoryView = MemoryRecord & { capabilities: MemoryCapabilities };
-/** A pinned revision, including budget omissions; optional drift flags describe current store state. */
+/** One selected revision; omitted records are counted, never persisted as items. */
 export interface SessionMemoryItem {
   memoryId: string;
   revisionId: string;
@@ -110,10 +110,8 @@ export interface SessionMemoryItem {
   scope: MemoryScope;
   memoryType: MemoryType;
   title: string;
-  inclusion: "directive" | "catalog" | "truncated";
+  inclusion: "directive" | "catalog";
   estimatedTokens: number;
-  changed?: boolean;
-  archived?: boolean;
 }
 /**
  * Session-lifetime selection inherited by children and reused on sandbox restore.
@@ -131,6 +129,18 @@ export interface SessionMemoryManifest {
   estimatedTokens: number;
   truncatedCount: number;
   items: SessionMemoryItem[];
+}
+
+/** Live diagnostics are required at the inspection boundary, not part of the immutable selection. */
+export interface SessionMemoryDiagnostics extends Omit<SessionMemoryManifest, "items"> {
+  items: (SessionMemoryItem & { changed: boolean; archived: boolean })[];
+}
+/** Renderable pinned data with no misleading live status, timestamps, or revision provenance. */
+export interface PinnedMemoryRevision extends MemoryContent {
+  memoryId: string;
+  revisionId: string;
+  scope: MemoryScope;
+  repoId: number | null;
 }
 
 const authorFields = {
@@ -168,7 +178,17 @@ export const memoryViewSchema: z.ZodType<MemoryView> = memoryRecordSchema.safeEx
     canApprove: z.boolean(),
   }),
 });
-export const sessionMemoryManifestSchema: z.ZodType<SessionMemoryManifest> = z.object({
+const sessionMemoryItemSchema = z.object({
+  memoryId: z.string(),
+  revisionId: z.string(),
+  revisionNumber: z.number().int(),
+  scope: memoryScopeSchema,
+  memoryType: memoryTypeSchema,
+  title: z.string(),
+  inclusion: z.enum(["directive", "catalog"]),
+  estimatedTokens: z.number(),
+});
+export const sessionMemoryManifestSchema = z.object({
   resolverVersion: z.number().int(),
   manifestSha256: z.string(),
   resolvedAt: z.number(),
@@ -178,18 +198,13 @@ export const sessionMemoryManifestSchema: z.ZodType<SessionMemoryManifest> = z.o
   catalogChars: z.number(),
   estimatedTokens: z.number(),
   truncatedCount: z.number(),
-  items: z.array(
-    z.object({
-      memoryId: z.string(),
-      revisionId: z.string(),
-      revisionNumber: z.number().int(),
-      scope: memoryScopeSchema,
-      memoryType: memoryTypeSchema,
-      title: z.string(),
-      inclusion: z.enum(["directive", "catalog", "truncated"]),
-      estimatedTokens: z.number(),
-      changed: z.boolean().optional(),
-      archived: z.boolean().optional(),
-    })
-  ),
+  items: z
+    .array(sessionMemoryItemSchema)
+    .max(MEMORY_LIMITS.directiveRecords + MEMORY_LIMITS.catalogRecords),
 });
+export const sessionMemoryDiagnosticsSchema: z.ZodType<SessionMemoryDiagnostics> =
+  sessionMemoryManifestSchema.extend({
+    items: z
+      .array(sessionMemoryItemSchema.extend({ changed: z.boolean(), archived: z.boolean() }))
+      .max(MEMORY_LIMITS.directiveRecords + MEMORY_LIMITS.catalogRecords),
+  });

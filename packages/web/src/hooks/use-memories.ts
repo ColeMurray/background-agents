@@ -5,6 +5,7 @@ import {
   memoryRevisionSchema,
   memoryViewSchema,
   sessionMemoryManifestSchema,
+  sessionMemoryDiagnosticsSchema,
   type MemoryScope,
   type MemoryStatus,
 } from "@open-inspect/shared/types/memories";
@@ -68,7 +69,7 @@ export function useMemoryPreferences(enabled = true) {
 export function useSessionMemories(sessionId: string) {
   return useSWR(
     `/api/sessions/${encodeURIComponent(sessionId)}/memories` as const,
-    (path) => memoryRequest(path, sessionMemoryManifestSchema),
+    (path) => memoryRequest(path, sessionMemoryDiagnosticsSchema),
     { refreshInterval: 30_000 }
   );
 }

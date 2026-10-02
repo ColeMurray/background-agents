@@ -1,6 +1,10 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { env, SELF } from "cloudflare:test";
-import { memoryViewSchema, sessionMemoryManifestSchema } from "@open-inspect/shared/types/memories";
+import {
+  memoryViewSchema,
+  sessionMemoryManifestSchema,
+  sessionMemoryDiagnosticsSchema,
+} from "@open-inspect/shared/types/memories";
 import { MemoryStore } from "../../src/db/memories";
 import { mergeUsers } from "../../src/db/user-merge";
 import { SessionIndexStore } from "../../src/db/session-index";
@@ -135,7 +139,7 @@ describe("memory HTTP lifecycle and session boundaries", () => {
       expect(manifest.items.map((item) => item.memoryId)).toEqual(override ? [record.id] : []);
       const view = await request(`/sessions/${sessionId}/memories`);
       expect(view.status).toBe(200);
-      expect(sessionMemoryManifestSchema.parse(await view.json()).manifestSha256).toBe(
+      expect(sessionMemoryDiagnosticsSchema.parse(await view.json()).manifestSha256).toBe(
         manifest.manifestSha256
       );
     }
@@ -153,6 +157,19 @@ describe("memory HTTP lifecycle and session boundaries", () => {
       expectedRevisionId: record.currentRevisionId,
     });
     expect(revision.status).toBe(200);
+    const loaded = (await new SessionMemoryStore(env.DB).load("pinned"))!;
+    expect(loaded.manifest.items[0]).not.toHaveProperty("changed");
+    expect(loaded.manifest.items[0]).not.toHaveProperty("archived");
+    const diagnostic = sessionMemoryDiagnosticsSchema.parse(
+      await (await request("/sessions/pinned/memories")).json()
+    );
+    expect(diagnostic.items[0]).toMatchObject({
+      revisionId: record.currentRevisionId,
+      changed: true,
+      archived: false,
+    });
+    expect(loaded.revisions[0]).not.toHaveProperty("status");
+    expect(loaded.revisions[0]).not.toHaveProperty("updatedAt");
     const changed = memoryViewSchema.parse(((await revision.json()) as { memory: unknown }).memory);
     expect(await (await sandbox("")).json()).toMatchObject({
       rendered: (original as { rendered: string }).rendered,
@@ -169,6 +186,10 @@ describe("memory HTTP lifecycle and session boundaries", () => {
       expectedRevisionId: changed.currentRevisionId,
       reason: "Outdated",
     });
+    const archivedDiagnostic = sessionMemoryDiagnosticsSchema.parse(
+      await (await request("/sessions/pinned/memories")).json()
+    );
+    expect(archivedDiagnostic.items[0]).toMatchObject({ changed: true, archived: true });
     expect(await (await sandbox(`/${record.id}`)).json()).toEqual({
       id: record.id,
       status: "archived",

@@ -9,10 +9,7 @@ export function MemoriesSection({ sessionId }: { sessionId: string }) {
   if (error) return <p className="text-xs text-muted-foreground">Memories unavailable.</p>;
   if (!data) return null;
   return (
-    <CollapsibleSection
-      title={`Memories (${data.items.length - data.truncatedCount})`}
-      defaultOpen={false}
-    >
+    <CollapsibleSection title={`Memories (${data.items.length})`} defaultOpen={false}>
       <div className="space-y-3 text-xs">
         <p className="text-muted-foreground">
           About {data.estimatedTokens.toLocaleString()} tokens ·{" "}

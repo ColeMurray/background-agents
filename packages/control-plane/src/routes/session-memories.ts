@@ -91,7 +91,7 @@ async function currentSharedAccess(
 }
 async function view(_request: Request, _env: Env, params: { id: string }, ctx: UserRouteContext) {
   const loaded = await new SessionMemoryStore(ctx.db).load(params.id);
-  return loaded ? json(loaded.manifest) : error("Session not found", 404);
+  return loaded ? json(loaded.diagnostics) : error("Session not found", 404);
 }
 /** Return pinned boot context only after validating all referenced shared scopes. */
 async function installation(
@@ -103,12 +103,12 @@ async function installation(
   const store = new SessionMemoryStore(ctx.db);
   const loaded = await store.load(params.id);
   if (!loaded) return error("Session not found", 404);
-  if (!(await currentSharedAccess(ctx, params.id, loaded.records)))
+  if (!(await currentSharedAccess(ctx, params.id, loaded.revisions)))
     return error("Memory scope is no longer available", 403);
   return json({
     schemaVersion: 1,
     manifestSha256: loaded.manifest.manifestSha256,
-    rendered: renderMemorySection(loaded.manifest, loaded.records),
+    rendered: renderMemorySection(loaded.manifest, loaded.revisions),
   });
 }
 /** Expose only live facts or pinned archive notices after current shared-scope admission. */

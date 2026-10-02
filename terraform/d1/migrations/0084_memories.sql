@@ -86,7 +86,7 @@ CREATE TABLE session_memory_items (
   memory_id TEXT NOT NULL REFERENCES memories(id) ON DELETE RESTRICT,
   revision_id TEXT NOT NULL,
   scope_json TEXT NOT NULL,
-  inclusion TEXT NOT NULL CHECK (inclusion IN ('directive', 'catalog', 'truncated')),
+  inclusion TEXT NOT NULL CHECK (inclusion IN ('directive', 'catalog')),
   estimated_tokens INTEGER NOT NULL,
   PRIMARY KEY(session_id, memory_id),
   UNIQUE(session_id, position),

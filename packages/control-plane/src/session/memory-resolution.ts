@@ -1,6 +1,7 @@
 import {
   MEMORY_LIMITS,
   type MemoryRecord,
+  type PinnedMemoryRevision,
   type MemoryScope,
   type SessionMemoryManifest,
 } from "@open-inspect/shared/types/memories";
@@ -51,16 +52,15 @@ const FRAMING =
  */
 export function renderMemorySection(
   manifest: SessionMemoryManifest,
-  records: readonly MemoryRecord[]
+  records: readonly PinnedMemoryRevision[]
 ): string {
   if (manifest.items.length === 0) return "";
-  const revisions = new Map(records.map((record) => [record.currentRevisionId, record]));
+  const revisions = new Map(records.map((record) => [record.revisionId, record]));
   const directives: string[] = [];
   const facts: string[] = [];
   for (const item of manifest.items) {
-    if (item.inclusion === "truncated") continue;
     const record = revisions.get(item.revisionId);
-    if (!record || record.id !== item.memoryId)
+    if (!record || record.memoryId !== item.memoryId)
       throw new Error(`Missing pinned memory revision ${item.revisionId}`);
     // JSON string quoting prevents a record from syntactically terminating its data entry.
     const label = `[${memoryScopeKey(item.scope)}]`;
@@ -174,7 +174,21 @@ export async function resolveMemoryRecords(
       estimatedTokens: Math.ceil(chars / 4),
     });
   }
-  manifest.estimatedTokens = Math.ceil(renderMemorySection(manifest, ordered).length / 4);
+  manifest.estimatedTokens = Math.ceil(
+    renderMemorySection(
+      manifest,
+      ordered.map((record) => ({
+        memoryId: record.id,
+        revisionId: record.currentRevisionId,
+        scope: record.scope,
+        repoId: record.repoId ?? null,
+        memoryType: record.memoryType,
+        title: record.title,
+        description: record.description,
+        content: record.content,
+      }))
+    ).length / 4
+  );
   // Hash the pinned selection, not mutable user aliases (account merges retain this hash).
   manifest.manifestSha256 = await hashToken(
     `OPEN_INSPECT_MEMORY_MANIFEST_V1\0${JSON.stringify([manifest.includePersonalMemories, manifest.items.map((item) => [item.memoryId, item.revisionId, item.inclusion])])}`

@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 import type { MemoryRecord } from "@open-inspect/shared/types/memories";
-import { resolveMemoryRecords, renderMemorySection } from "./memory-resolution";
+import {
+  resolveMemoryRecords,
+  renderMemorySection as renderPinnedMemorySection,
+} from "./memory-resolution";
 
 function record(id: string, overrides: Partial<MemoryRecord> = {}): MemoryRecord {
   return {
@@ -26,6 +29,21 @@ function record(id: string, overrides: Partial<MemoryRecord> = {}): MemoryRecord
     ...overrides,
   };
 }
+function renderMemorySection(
+  manifest: Parameters<typeof renderPinnedMemorySection>[0],
+  records: MemoryRecord[]
+) {
+  return renderPinnedMemorySection(
+    manifest,
+    records.map((record) => ({
+      ...record,
+      memoryId: record.id,
+      revisionId: record.currentRevisionId,
+      repoId: record.repoId ?? null,
+    }))
+  );
+}
+
 const target = {
   canonicalUserId: "user_a",
   repositories: [{ repoOwner: "group/subgroup", repoName: "api", repoId: 123 }],
