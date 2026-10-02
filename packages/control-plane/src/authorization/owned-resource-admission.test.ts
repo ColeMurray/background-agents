@@ -124,6 +124,10 @@ describe("owned-resource admission outcomes", () => {
     expect(EnvironmentStore.prototype.getById).not.toHaveBeenCalled();
     ctx.principal = { kind: "service", service: "slack-bot", actor: null };
     ctx.authorization = undefined;
+    vi.mocked(EnvironmentStore.prototype.getById).mockResolvedValue({
+      ...environment,
+      owner_team_id: null,
+    });
     await expect(
       evaluateOwnedResourceAdmission(
         { ...environmentRequirement, need: "use" },
@@ -131,6 +135,17 @@ describe("owned-resource admission outcomes", () => {
         ctx
       )
     ).resolves.toEqual({ kind: "allowed", effectivePermission: null });
+  });
+
+  it("hides team environments from actorless bots like missing ones", async () => {
+    const ctx = context();
+    ctx.principal = { kind: "service", service: "github-bot", actor: null };
+    ctx.authorization = undefined;
+    for (const need of ["read", "use"] as const) {
+      await expect(
+        evaluateOwnedResourceAdmission({ ...environmentRequirement, need }, { id: "resource" }, ctx)
+      ).resolves.toMatchObject({ kind: "denied", status: 404 });
+    }
   });
 
   it("applies canonical admission to session targets before owner mismatch", async () => {

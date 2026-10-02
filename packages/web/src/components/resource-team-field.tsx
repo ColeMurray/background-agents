@@ -2,6 +2,16 @@
 
 import { useId } from "react";
 import type { TeamResponse } from "@/hooks/use-teams";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+
+// Radix reserves the empty string for "no selection", so workspace ownership needs a sentinel.
+const WORKSPACE_VALUE = "workspace";
 
 export function ResourceTeamField({
   teamId,
@@ -28,27 +38,28 @@ export function ResourceTeamField({
       <label htmlFor={id} className="block text-sm font-medium text-foreground mb-1.5">
         Team
       </label>
-      <select
-        id={id}
-        value={teamId ?? ""}
+      <Select
+        value={teamId ?? (allowWorkspace ? WORKSPACE_VALUE : "")}
         disabled={disabled || loading || !!error}
-        onChange={(event) => onChange(event.target.value || null)}
-        className="w-full rounded-sm border border-border bg-input px-3 py-2 text-sm text-foreground disabled:opacity-50"
+        onValueChange={(value) => onChange(value === WORKSPACE_VALUE ? null : value)}
       >
-        <option value="" disabled={!allowWorkspace}>
-          {allowWorkspace ? "Workspace (no team)" : "Select a team"}
-        </option>
-        {teamId && !teams.some((team) => team.id === teamId) && (
-          <option value={teamId} disabled>
-            {allTeams.find((team) => team.id === teamId)?.name ?? "Current team unavailable"}
-          </option>
-        )}
-        {teams.map((team) => (
-          <option key={team.id} value={team.id}>
-            {team.name}
-          </option>
-        ))}
-      </select>
+        <SelectTrigger id={id}>
+          <SelectValue placeholder="Select a team" />
+        </SelectTrigger>
+        <SelectContent>
+          {allowWorkspace && <SelectItem value={WORKSPACE_VALUE}>Workspace (no team)</SelectItem>}
+          {teamId && !teams.some((team) => team.id === teamId) && (
+            <SelectItem value={teamId} disabled>
+              {allTeams.find((team) => team.id === teamId)?.name ?? "Current team unavailable"}
+            </SelectItem>
+          )}
+          {teams.map((team) => (
+            <SelectItem key={team.id} value={team.id}>
+              {team.name}
+            </SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
       {error ? (
         <p role="alert" className="mt-1 text-xs text-destructive">
           Unable to load teams.

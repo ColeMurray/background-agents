@@ -434,11 +434,22 @@ describe("environment team ownership", () => {
       await expectStatus(request(`/environments/${id}`, "GET", undefined, { service }), 403);
     }
     await expectStatus(request("/environments", "GET", undefined, { service: "github-bot" }), 403);
-    const response = await request(`/environments/${id}`, "GET", undefined, {
+    // Item reads match the catalog: team environments look missing to actorless bots.
+    const hidden = await request(`/environments/${id}`, "GET", undefined, {
+      service: "github-bot",
+    });
+    const missing = await request("/environments/env_missing", "GET", undefined, {
+      service: "github-bot",
+    });
+    expect(hidden.status).toBe(404);
+    expect(await hidden.json()).toEqual(await missing.json());
+    const response = await request(`/environments/${workspaceId}`, "GET", undefined, {
       service: "github-bot",
     });
     expect(response.status).toBe(200);
-    expect(await response.json()).toMatchObject({ environment: { id, capabilities } });
+    expect(await response.json()).toMatchObject({
+      environment: { id: workspaceId, capabilities },
+    });
   });
 
   it("conceals another team's environment from skill resolution previews", async () => {

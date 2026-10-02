@@ -79,6 +79,7 @@ export const teamCapabilitiesSchema = z.object({
   canManageRepositories: z.boolean(),
   canManageBindings: z.boolean(),
   canManageAutomations: z.boolean(),
+  canManageEnvironments: z.boolean(),
   canManageSecrets: z.boolean(),
   canArchive: z.boolean(),
 });

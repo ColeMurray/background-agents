@@ -12,3 +12,11 @@ export async function resourceViewer(ctx: RequestContext): Promise<SessionViewer
     : new Map();
   return viewerFromContext(ctx, memberships);
 }
+
+/** Actorless bots launch workspace sessions only, so team-owned resources are hidden from them. */
+export function hiddenFromActorlessService(
+  viewer: SessionViewer,
+  ownerTeamId: string | null
+): boolean {
+  return viewer.kind === "service" && ownerTeamId !== null;
+}

@@ -12,7 +12,7 @@ export function TeamEnvironments({ teamId }: { teamId: string }) {
   return (
     <EnvironmentsSettings
       teamId={teamId}
-      canCreate={capabilities.canEditMetadata && hasPermission("environments.manage")}
+      canCreate={capabilities.canManageEnvironments && hasPermission("environments.manage")}
     />
   );
 }

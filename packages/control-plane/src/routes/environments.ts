@@ -14,7 +14,7 @@ import {
   environmentCapabilities,
   type SessionViewer,
 } from "@open-inspect/shared";
-import { resourceViewer } from "../authorization/resource-viewer";
+import { hiddenFromActorlessService, resourceViewer } from "../authorization/resource-viewer";
 import { admit, dispatch } from "../routing/admit";
 import type { ControlPlaneHonoEnv } from "../routing/hono-env";
 import {
@@ -152,8 +152,7 @@ async function handleListEnvironments(
   let environments = rows.environments.filter(
     (row) =>
       checkEnvironmentAccess(viewer, { ownerTeamId: row.owner_team_id }, "read").allowed &&
-      // Actorless bots launch workspace sessions only, so they see workspace environments.
-      (viewer.kind !== "service" || row.owner_team_id === null) &&
+      !hiddenFromActorlessService(viewer, row.owner_team_id) &&
       // A team's session catalog excludes environments other teams own.
       (!teamId || row.owner_team_id === null || row.owner_team_id === teamId)
   );

@@ -61,7 +61,11 @@ use server capabilities. Environment names are unique within each team. Sessions
 inherited child targets, can use a team environment only when they belong to that team. Environment
 secrets, settings, and image routes also require access to the owning environment. Workspace
 environment management remains permission-based for custom roles, and existing environments retain
-their ownership. The require-team creation setting also applies to new environments.
+their ownership. The require-team creation setting also applies to new environments. Changing
+environment secrets, settings, or images now also requires `environments.manage`, so custom roles
+holding only `environments.secrets.manage`, `environments.settings.manage`, or
+`environments.images.manage` lose those actions. Actorless bots see only workspace environments,
+both in lists and by ID.
 
 ### Removed
 

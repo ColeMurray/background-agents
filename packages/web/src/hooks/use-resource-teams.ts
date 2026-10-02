@@ -17,7 +17,7 @@ export function useResourceTeams(resource: "automation" | "environment") {
             team.archivedAt === null &&
             (resource === "automation"
               ? membership.teams.some((member) => member.id === team.id)
-              : team.capabilities?.canEditMetadata === true)
+              : team.capabilities?.canManageEnvironments === true)
         );
   return {
     teams,

@@ -4,7 +4,7 @@ import { EnvironmentStore } from "../db/environments";
 import { json } from "../http/responses";
 import type { RequestContext } from "../http/request-context";
 import type { RouteAuthorizationRequirement, RouteParams } from "../routes/shared";
-import { resourceViewer } from "./resource-viewer";
+import { hiddenFromActorlessService, resourceViewer } from "./resource-viewer";
 import { serviceAllowsPermission } from "./service-permissions";
 
 /** Resource decisions without accumulated route evidence or HTTP response construction. */
@@ -62,7 +62,11 @@ export async function evaluateEnvironmentAdmission(
   const read =
     environment &&
     checkEnvironmentAccess(viewer, { ownerTeamId: environment.owner_team_id }, "read");
-  if (!environment || (read && !read.allowed && read.reason !== "missing_permission")) {
+  if (
+    !environment ||
+    hiddenFromActorlessService(viewer, environment.owner_team_id) ||
+    (read && !read.allowed && read.reason !== "missing_permission")
+  ) {
     return {
       kind: "denied",
       response: { error: "Environment not found" },

@@ -11,6 +11,7 @@ const mocks = vi.hoisted(() => ({
     capabilities?: {
       canManageAutomations?: boolean;
       canManageBindings?: boolean;
+      canManageEnvironments?: boolean;
       canEditMetadata?: boolean;
     };
   }>,
@@ -39,19 +40,31 @@ beforeEach(() => {
       id: "managed",
       name: "Managed",
       archivedAt: null,
-      capabilities: { canManageAutomations: true, canManageBindings: false, canEditMetadata: true },
+      capabilities: {
+        canManageAutomations: true,
+        canManageBindings: false,
+        canManageEnvironments: true,
+      },
     },
     {
       id: "archived",
       name: "Archived",
       archivedAt: 1,
-      capabilities: { canManageAutomations: true, canManageBindings: true, canEditMetadata: true },
+      capabilities: {
+        canManageAutomations: true,
+        canManageBindings: true,
+        canManageEnvironments: true,
+      },
     },
     {
       id: "bindings-only",
       name: "Bindings only",
       archivedAt: null,
-      capabilities: { canManageBindings: true, canEditMetadata: false },
+      capabilities: {
+        canManageBindings: true,
+        canEditMetadata: true,
+        canManageEnvironments: false,
+      },
     },
   ];
   mocks.memberships = [mocks.teams[0], mocks.teams[3]];
@@ -62,7 +75,7 @@ it("offers only automation creation memberships, not merely visible or administr
   expect(result.current.teams.map((team) => team.id)).toEqual(["mine"]);
 });
 
-it("requires metadata capability rather than binding management for environment creation", () => {
+it("requires the environment capability, not metadata or binding management, for creation", () => {
   const { result } = renderHook(() => useResourceTeams("environment"));
   expect(result.current.teams.map((team) => team.id)).toEqual(["managed"]);
 });

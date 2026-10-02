@@ -43,6 +43,7 @@ describe("resolveTeamAccess", () => {
               canManageRepositories: manages,
               canManageBindings: manages,
               canManageAutomations: manages,
+              canManageEnvironments: manages,
               canManageSecrets: manages,
               canArchive: manages,
             });

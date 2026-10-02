@@ -16,7 +16,7 @@ const mocks = vi.hoisted(() => ({
   fetch: vi.fn(),
   mutate: vi.fn(),
   imagesSupported: false,
-  canEditMetadata: false,
+  canManageEnvironments: false,
   canManageBindings: false,
 }));
 vi.mock("swr", () => ({ useSWRConfig: () => ({ mutate: mocks.mutate }) }));
@@ -94,7 +94,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   mocks.permissions = [];
   mocks.imagesSupported = false;
-  mocks.canEditMetadata = false;
+  mocks.canManageEnvironments = false;
   mocks.canManageBindings = false;
   mocks.environments = [
     {
@@ -120,14 +120,14 @@ it("uses the exact team list and row capabilities, not global manage", () => {
   expect(screen.queryByRole("button", { name: "Delete" })).not.toBeInTheDocument();
 });
 
-it("requires metadata and environment grants, not bindings, for team creation", () => {
+it("requires team environment and global manage grants, not bindings, for team creation", () => {
   mocks.permissions = ["environments.manage"];
   mocks.canManageBindings = true;
   const view = render(<TeamEnvironments teamId="team/one" />);
   expect(mocks.useEnvironments).toHaveBeenCalledWith({ ownerTeamId: "team/one" });
   expect(screen.queryByRole("button", { name: "New environment" })).not.toBeInTheDocument();
   mocks.canManageBindings = false;
-  mocks.canEditMetadata = true;
+  mocks.canManageEnvironments = true;
   view.rerender(<TeamEnvironments teamId="team/one" />);
   expect(screen.getByRole("button", { name: "New environment" })).toBeInTheDocument();
   mocks.permissions = [];

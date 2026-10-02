@@ -51,6 +51,9 @@ vi.mock("@/hooks/use-branches", () => ({
 }));
 
 beforeAll(() => {
+  // Radix Select uses pointer capture, which jsdom lacks.
+  Element.prototype.hasPointerCapture = () => false;
+  Element.prototype.releasePointerCapture = () => {};
   Element.prototype.scrollIntoView = vi.fn();
   // Radix Switch measures itself via ResizeObserver, which jsdom lacks.
   vi.stubGlobal(
@@ -100,10 +103,11 @@ function environment(
 }
 
 describe("EnvironmentForm", () => {
-  it.each(["team-1", null])("validates owner %s and discards stale selections", (teamId) => {
+  it.each(["team-1", null])("validates owner %s and discards stale selections", async (teamId) => {
     mocks.allowWorkspace = teamId !== null;
     mocks.reposValue = [repo("acme", "web", 1)];
     const onSubmit = vi.fn();
+    const user = userEvent.setup();
     const { container } = render(
       <EnvironmentForm
         mode="create"
@@ -115,7 +119,9 @@ describe("EnvironmentForm", () => {
       />
     );
     expect(mocks.useRepos).toHaveBeenLastCalledWith(true, teamId);
-    expect(screen.getByRole("combobox", { name: "Team" })).toHaveValue(teamId ?? "");
+    expect(screen.getByRole("combobox", { name: "Team" })).toHaveTextContent(
+      teamId ? "Engineering" : "Select a team"
+    );
     fireEvent.submit(container.querySelector("form")!);
     if (!teamId) {
       expect(screen.getByRole("button", { name: "Create environment" })).toBeDisabled();
@@ -123,9 +129,8 @@ describe("EnvironmentForm", () => {
       return;
     }
     expect(onSubmit).toHaveBeenCalledWith(expect.objectContaining({ teamId }));
-    fireEvent.change(screen.getByRole("combobox", { name: "Team" }), {
-      target: { value: "team-2" },
-    });
+    await user.click(screen.getByRole("combobox", { name: "Team" }));
+    await user.click(screen.getByRole("option", { name: "Design" }));
     expect(mocks.useRepos).toHaveBeenLastCalledWith(true, "team-2");
     expect(screen.queryByTitle("acme/web")).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Create environment" })).toBeDisabled();
@@ -147,7 +152,7 @@ describe("EnvironmentForm", () => {
         })}
       />
     );
-    expect(screen.getByRole("combobox", { name: "Team" })).toHaveValue("team-1");
+    expect(screen.getByRole("combobox", { name: "Team" })).toHaveTextContent("Engineering");
     expect(screen.getByRole("combobox", { name: "Team" })).toBeDisabled();
     fireEvent.submit(container.querySelector("form")!);
     expect(onSubmit).toHaveBeenCalledTimes(1);
