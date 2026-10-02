@@ -2,7 +2,7 @@
 
 import { useState, use } from "react";
 import Link from "next/link";
-import { useRouter, useSearchParams } from "next/navigation";
+import { useRouter } from "next/navigation";
 import { MAX_AUTOMATION_INVOCATION_LIST_LIMIT } from "@open-inspect/shared/types/automations";
 import { describeCron } from "@open-inspect/shared/cron";
 import { getReasoningConfig } from "@open-inspect/shared/models";
@@ -19,7 +19,7 @@ import { formatModelNameLower } from "@/lib/format";
 import { getHarnessLabel } from "@open-inspect/shared/harnesses";
 import { formatAutomationTargetsLabel } from "@/lib/repo-label";
 import { useAutomationActions } from "@/hooks/use-automation-actions";
-import { automationNavigation, automationScopeTeamId } from "@/lib/automation-navigation";
+import { useAutomationScope } from "@/hooks/use-automation-scope";
 
 const HISTORY_PAGE_SIZE = 20;
 
@@ -27,7 +27,7 @@ export default function AutomationDetailPage({ params }: { params: Promise<{ id:
   const { id } = use(params);
   const { isOpen } = useSidebarContext();
   const router = useRouter();
-  const navigation = automationNavigation(automationScopeTeamId(useSearchParams().get("teamId")));
+  const { navigation } = useAutomationScope();
   const { automation, loading } = useAutomation(id);
   const { environments } = useEnvironments({ ownerTeamId: automation?.ownerTeamId });
   // "Load more" grows the fetch limit rather than paging by offset: the
@@ -82,8 +82,7 @@ export default function AutomationDetailPage({ params }: { params: Promise<{ id:
     );
   }
 
-  const canManage = automation.capabilities?.canManage === true;
-  const canTrigger = automation.capabilities?.canTrigger === true;
+  const { canManage, canTrigger } = automation.capabilities;
 
   return (
     <div className="h-full flex flex-col">

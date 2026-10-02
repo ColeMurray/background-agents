@@ -8,15 +8,18 @@ export function automationScopeTeamId(value: string | null): string | undefined 
 
 /** Entry-page scope is independent of the resource owner or create-form selection. */
 export function automationNavigation(teamId?: string | null) {
-  const scopeQuery = teamId ? `?teamId=${encodeURIComponent(teamId)}` : "";
+  const withScope = (path: string, query: Record<string, string> = {}) => {
+    const params = new URLSearchParams(query);
+    if (teamId) params.set("teamId", teamId);
+    const search = params.toString();
+    return search ? `${path}?${search}` : path;
+  };
   return {
-    list: `/automations${scopeQuery}`,
-    detail: (id: string) => `/automations/${encodeURIComponent(id)}${scopeQuery}`,
-    edit: (id: string) => `/automations/${encodeURIComponent(id)}/edit${scopeQuery}`,
-    templates: `/automations/templates${scopeQuery}`,
+    list: withScope("/automations"),
+    detail: (id: string) => withScope(`/automations/${encodeURIComponent(id)}`),
+    edit: (id: string) => withScope(`/automations/${encodeURIComponent(id)}/edit`),
+    templates: withScope("/automations/templates"),
     new: (templateId?: string) =>
-      templateId
-        ? `/automations/new?template=${encodeURIComponent(templateId)}${teamId ? `&teamId=${encodeURIComponent(teamId)}` : ""}`
-        : `/automations/new${scopeQuery}`,
+      withScope("/automations/new", templateId ? { template: templateId } : {}),
   };
 }

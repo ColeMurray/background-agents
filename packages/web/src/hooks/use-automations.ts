@@ -8,7 +8,7 @@ import {
   listAutomationsResponseSchema,
 } from "@open-inspect/shared";
 import type {
-  Automation,
+  AutomationView,
   ListAutomationsResponse,
   ListAutomationInvocationsResponse,
 } from "@open-inspect/shared/types/automations";
@@ -98,7 +98,7 @@ export function useAutomations(nameSearch: string, teamId?: string | null) {
 export function useAutomation(id: string | undefined) {
   const { data: session } = useAuthSession();
 
-  const { data, error, isLoading, mutate } = useSWR<{ automation: Automation }>(
+  const { data, error, isLoading, mutate } = useSWR<{ automation: AutomationView }>(
     session && id ? `/api/automations/${id}` : null
   );
 

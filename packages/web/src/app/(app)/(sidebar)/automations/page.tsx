@@ -8,7 +8,7 @@ import { AutomationCollection } from "@/components/automations/automation-collec
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { PlusIcon, SearchIcon } from "@/components/ui/icons";
-import { automationNavigation, automationScopeTeamId } from "@/lib/automation-navigation";
+import { useAutomationScope } from "@/hooks/use-automation-scope";
 
 const SEARCH_DEBOUNCE_MS = 300;
 
@@ -27,8 +27,7 @@ function AutomationsContent() {
   const searchParams = useSearchParams();
   const urlNameSearch = searchParams.get("search") ?? "";
   const committedNameSearch = urlNameSearch.trim();
-  const teamId = automationScopeTeamId(searchParams.get("teamId"));
-  const navigation = automationNavigation(teamId);
+  const { teamId, navigation } = useAutomationScope();
   const [nameSearch, setNameSearch] = useState(urlNameSearch);
 
   useEffect(() => {

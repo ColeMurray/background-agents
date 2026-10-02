@@ -35,7 +35,9 @@ function automation(id: string, name: string): AutomationListItem {
     repositories: [],
     environmentIds: [],
     providerSelections: {},
+    ownerTeamId: null,
     recentExecutions: [],
+    capabilities: { canRead: true, canManage: true, canTrigger: true },
   };
 }
 
@@ -124,7 +126,6 @@ describe("useAutomations", () => {
     await waitFor(() => expect(result.current.automations).toEqual([scoped]));
     await act(() => result.current.loadMore());
     await waitFor(() => expect(result.current.automations).toEqual([scoped, secondAutomation]));
-    expect(result.current.automations[1].capabilities).toBeUndefined();
     expect(fetcher).toHaveBeenCalledWith(
       "/api/automations?limit=25&search=Daily&teamId=team%2Fone&cursor=next"
     );

@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 /// <reference types="@testing-library/jest-dom" />
 
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import * as matchers from "@testing-library/jest-dom/matchers";
 import type { ComponentProps } from "react";
@@ -27,21 +27,7 @@ vi.mock("@/hooks/use-environments", () => ({
 
 const noop = () => {};
 const CURRENT_USER_ID = "11111111111111111111111111111111";
-let permissions = ["automations.create", "automations.manage.own", "automations.trigger.own"];
-
-vi.mock("@/hooks/use-current-user-authorization", () => ({
-  useCurrentUserAuthorization: () => ({
-    authorization: {
-      userId: CURRENT_USER_ID,
-      permissions,
-    },
-    hasPermission: (permission: string) => permissions.includes(permission),
-  }),
-}));
-
-beforeEach(() => {
-  permissions = ["automations.create", "automations.manage.own", "automations.trigger.own"];
-});
+const NO_CAPABILITIES = { canRead: false, canManage: false, canTrigger: false };
 
 function makeAutomation(overrides: Partial<AutomationListItem> = {}): AutomationListItem {
   return {
@@ -59,6 +45,7 @@ function makeAutomation(overrides: Partial<AutomationListItem> = {}): Automation
     consecutiveFailures: 0,
     createdBy: "user-1",
     userId: CURRENT_USER_ID,
+    ownerTeamId: null,
     createdAt: Date.now(),
     updatedAt: Date.now(),
     deletedAt: null,
@@ -77,6 +64,7 @@ describe("AutomationsList repository labels", () => {
   const renderList = (automations: AutomationListItem[]) =>
     render(
       <AutomationsList
+        canCreate
         automations={automations}
         emptyState={{ kind: "no-automations" }}
         onPause={noop}
@@ -121,6 +109,7 @@ describe("AutomationsList schedule metadata", () => {
 
     render(
       <AutomationsList
+        canCreate
         automations={[makeAutomation({ nextRunAt: Date.now() + 2 * 60 * 60 * 1000 })]}
         emptyState={{ kind: "no-automations" }}
         onPause={noop}
@@ -139,6 +128,7 @@ describe("AutomationsList actions", () => {
   const renderListWithActions = (automation: AutomationListItem) =>
     render(
       <AutomationsList
+        canCreate
         automations={[automation]}
         emptyState={{ kind: "no-automations" }}
         onPause={noop}
@@ -148,15 +138,15 @@ describe("AutomationsList actions", () => {
       />
     );
 
-  it("disables controls when capabilities are missing, regardless of ownership or global permissions", () => {
-    permissions = ["automations.manage.any", "automations.trigger.any"];
+  it("disables controls without capabilities, regardless of ownership", () => {
     render(
       <AutomationsList
+        canCreate
         automations={[
           makeAutomation({
             createdBy: CURRENT_USER_ID,
             userId: "22222222222222222222222222222222",
-            capabilities: undefined,
+            capabilities: NO_CAPABILITIES,
           }),
         ]}
         emptyState={{ kind: "no-automations" }}
@@ -174,7 +164,6 @@ describe("AutomationsList actions", () => {
   });
 
   it("gates manage and trigger controls independently", () => {
-    permissions = ["automations.manage.any"];
     renderListWithActions(
       makeAutomation({
         userId: null,
@@ -191,6 +180,7 @@ describe("AutomationsList actions", () => {
     const onTrigger = vi.fn();
     render(
       <AutomationsList
+        canCreate
         automations={[makeAutomation()]}
         emptyState={{ kind: "no-automations" }}
         onPause={noop}
@@ -213,6 +203,7 @@ describe("AutomationsList actions", () => {
     const onDelete = vi.fn();
     render(
       <AutomationsList
+        canCreate
         automations={[makeAutomation()]}
         emptyState={{ kind: "no-automations" }}
         onPause={noop}
@@ -238,6 +229,7 @@ describe("AutomationsList execution activity", () => {
   it("shows recent execution statuses from oldest to newest", () => {
     render(
       <AutomationsList
+        canCreate
         automations={[
           makeAutomation({
             recentExecutions: [
@@ -270,6 +262,7 @@ describe("AutomationsList execution activity", () => {
   it("shows an explicit empty history state", () => {
     render(
       <AutomationsList
+        canCreate
         automations={[makeAutomation()]}
         emptyState={{ kind: "no-automations" }}
         onPause={noop}
@@ -287,6 +280,7 @@ describe("AutomationsList empty state", () => {
   it("offers a template path and a from-scratch path when there are no automations", () => {
     render(
       <AutomationsList
+        canCreate
         automations={[]}
         emptyState={{ kind: "no-automations" }}
         onPause={noop}
@@ -306,10 +300,10 @@ describe("AutomationsList empty state", () => {
     );
   });
 
-  it("hides creation entry points without automations.create", () => {
-    permissions = [];
+  it("hides creation entry points when creation is not allowed", () => {
     render(
       <AutomationsList
+        canCreate={false}
         automations={[]}
         emptyState={{ kind: "no-automations" }}
         onPause={noop}
@@ -326,6 +320,7 @@ describe("AutomationsList empty state", () => {
   it("describes an empty name search without showing creation prompts", () => {
     render(
       <AutomationsList
+        canCreate
         automations={[]}
         emptyState={{ kind: "no-search-results", nameSearch: "release" }}
         onPause={noop}

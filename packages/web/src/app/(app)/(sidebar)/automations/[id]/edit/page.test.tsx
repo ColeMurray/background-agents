@@ -6,7 +6,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-libra
 import * as matchers from "@testing-library/jest-dom/matchers";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import EditAutomationPage from "./page";
-import type { Automation } from "@open-inspect/shared/types/automations";
+import type { AutomationCapabilities } from "@open-inspect/shared/types/automations";
 import type { AutomationFormValues } from "@/components/automations/automation-form";
 import { browserApiFetch } from "@/lib/browser-api-fetch";
 import { invalidateAutomationCache } from "@/lib/automation-cache";
@@ -20,6 +20,8 @@ const push = vi.fn();
 let search = "";
 const formProps = vi.fn();
 let submittedEnvironmentIds = ["env-1"];
+
+const NO_CAPABILITIES = { canRead: false, canManage: false, canTrigger: false };
 
 const automation = {
   id: "auto-1",
@@ -43,7 +45,7 @@ const automation = {
   repositories: [],
   environmentIds: new Array<string>(),
   providerSelections: {},
-  capabilities: undefined as Automation["capabilities"],
+  capabilities: NO_CAPABILITIES as AutomationCapabilities,
   ownerTeamId: "team-1",
 };
 
@@ -111,7 +113,7 @@ beforeEach(() => {
   permissions = [];
   search = "";
   formProps.mockClear();
-  automation.capabilities = undefined;
+  automation.capabilities = NO_CAPABILITIES;
   automation.environmentIds = [];
   submittedEnvironmentIds = ["env-1"];
   replace.mockReset();

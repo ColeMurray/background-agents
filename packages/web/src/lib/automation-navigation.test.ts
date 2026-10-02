@@ -36,7 +36,7 @@ describe("automation navigation", () => {
     (teamId) => {
       const id = "auto/one?next=other#section%2F";
       const navigation = automationNavigation(teamId);
-      const scope = teamId ? "?teamId=team%2Fone%20%26%20two" : "";
+      const scope = teamId ? "?teamId=team%2Fone+%26+two" : "";
       expect(navigation.detail(id)).toBe(
         `/automations/auto%2Fone%3Fnext%3Dother%23section%252F${scope}`
       );

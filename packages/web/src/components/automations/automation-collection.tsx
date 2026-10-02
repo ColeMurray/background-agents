@@ -3,8 +3,7 @@
 import type { ReactNode } from "react";
 import { useAutomations } from "@/hooks/use-automations";
 import { useAutomationActions } from "@/hooks/use-automation-actions";
-import { useCurrentUserAuthorization } from "@/hooks/use-current-user-authorization";
-import { useMeTeams } from "@/hooks/use-teams";
+import { useCanCreateAutomation } from "@/hooks/use-can-create-automation";
 import { AutomationsList } from "./automations-list";
 import { Button } from "@/components/ui/button";
 import { ErrorBanner } from "@/components/ui/error-banner";
@@ -22,14 +21,7 @@ export function AutomationCollection({
     nameSearch,
     teamId
   );
-  const { hasPermission } = useCurrentUserAuthorization();
-  const membership = useMeTeams(Boolean(teamId));
-  const canCreate =
-    hasPermission("automations.create") &&
-    (!teamId ||
-      (!membership.loading &&
-        !membership.error &&
-        membership.teams.some((team) => team.id === teamId)));
+  const { canCreate } = useCanCreateAutomation(teamId);
   const { act, actionError } = useAutomationActions();
 
   return (

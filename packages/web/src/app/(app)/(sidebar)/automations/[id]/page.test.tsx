@@ -7,7 +7,7 @@ import * as matchers from "@testing-library/jest-dom/matchers";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   MAX_AUTOMATION_INVOCATION_LIST_LIMIT,
-  type Automation,
+  type AutomationCapabilities,
 } from "@open-inspect/shared/types/automations";
 import AutomationDetailPage from "./page";
 import { browserApiFetch } from "@/lib/browser-api-fetch";
@@ -23,6 +23,8 @@ const push = vi.fn();
 const history = vi.hoisted(() => ({ total: 0, requestedLimits: [] as number[] }));
 /** Set when a mutation has evicted the cached automation. */
 const detail = vi.hoisted(() => ({ evicted: false }));
+
+const NO_CAPABILITIES = { canRead: false, canManage: false, canTrigger: false };
 
 const automation = {
   id: "auto-1",
@@ -47,7 +49,7 @@ const automation = {
   repositories: [],
   environmentIds: [],
   providerSelections: {},
-  capabilities: undefined as Automation["capabilities"],
+  capabilities: NO_CAPABILITIES as AutomationCapabilities,
 };
 
 vi.mock("next/navigation", () => ({
@@ -117,7 +119,7 @@ beforeEach(() => {
   push.mockReset();
   vi.mocked(browserApiFetch).mockReset();
   vi.mocked(browserApiFetch).mockResolvedValue(Response.json({}));
-  automation.capabilities = undefined;
+  automation.capabilities = NO_CAPABILITIES;
   history.total = 0;
   history.requestedLimits = [];
   detail.evicted = false;

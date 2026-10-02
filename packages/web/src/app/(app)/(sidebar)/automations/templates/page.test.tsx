@@ -17,6 +17,13 @@ vi.mock("next/navigation", () => ({
   useSearchParams: () => new URLSearchParams(search),
 }));
 
+vi.mock("@/hooks/use-teams", () => ({
+  useMeTeams: () => ({
+    teams: [{ id: "team-1" }, { id: "team-2" }, { id: "team/one" }],
+    loading: false,
+    error: undefined,
+  }),
+}));
 vi.mock("@/hooks/use-current-user-authorization", () => ({
   useCurrentUserAuthorization: () => ({
     hasPermission: (permission: string) => permission === "automations.create" && canCreate,

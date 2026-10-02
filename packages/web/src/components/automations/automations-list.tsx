@@ -26,14 +26,13 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { FolderIcon, BoxIcon, ClockIcon, BoltIcon, MoreIcon } from "@/components/ui/icons";
 import { useEnvironments } from "@/hooks/use-environments";
-import { useCurrentUserAuthorization } from "@/hooks/use-current-user-authorization";
 import { formatFutureRelativeTime } from "@/lib/time";
 import { formatAutomationTargetsLabel } from "@/lib/repo-label";
 import { automationNavigation } from "@/lib/automation-navigation";
 
 interface AutomationsListProps {
   teamId?: string;
-  canCreate?: boolean;
+  canCreate: boolean;
   automations: AutomationListItem[];
   emptyState: { kind: "no-automations" } | { kind: "no-search-results"; nameSearch: string };
   onPause: (id: string) => void;
@@ -94,15 +93,13 @@ export function AutomationsList({
   onTrigger,
   onDelete,
   teamId,
-  canCreate: createAllowed,
+  canCreate,
 }: AutomationsListProps) {
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
   const { environments } = useEnvironments({ ownerTeamId: teamId });
-  const { hasPermission } = useCurrentUserAuthorization();
-  const canCreate = createAllowed ?? hasPermission("automations.create");
   const navigation = automationNavigation(teamId);
   const automationToDelete = automations.find(
-    (automation) => automation.id === confirmDeleteId && automation.capabilities?.canManage === true
+    (automation) => automation.id === confirmDeleteId && automation.capabilities.canManage
   );
 
   if (automations.length === 0) {
@@ -141,8 +138,7 @@ export function AutomationsList({
     <>
       <div className="border border-border-muted rounded-md bg-card divide-y divide-border-muted">
         {automations.map((automation) => {
-          const canManage = automation.capabilities?.canManage === true;
-          const canTrigger = automation.capabilities?.canTrigger === true;
+          const { canManage, canTrigger } = automation.capabilities;
           return (
             <div key={automation.id} className="px-4 py-4">
               {/* Header: Name + badge | Actions */}

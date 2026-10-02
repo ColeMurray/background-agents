@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState, use } from "react";
-import { useRouter, useSearchParams } from "next/navigation";
+import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { CollapsedSidebarControls, useSidebarContext } from "@/components/sidebar-layout";
 import { useAutomation } from "@/hooks/use-automations";
@@ -14,26 +14,25 @@ import { BackIcon } from "@/components/ui/icons";
 import { browserApiFetch } from "@/lib/browser-api-fetch";
 import { useSWRConfig } from "swr";
 import { invalidateAutomationCache } from "@/lib/automation-cache";
-import { automationNavigation, automationScopeTeamId } from "@/lib/automation-navigation";
+import { useAutomationScope } from "@/hooks/use-automation-scope";
 import { sameEnvironmentIds } from "@/components/automations/automation-target-selection";
 
 export default function EditAutomationPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = use(params);
   const { isOpen } = useSidebarContext();
   const router = useRouter();
-  const teamId = automationScopeTeamId(useSearchParams().get("teamId"));
-  const navigation = automationNavigation(teamId);
+  const { navigation } = useAutomationScope();
   const { automation, loading } = useAutomation(id);
   const swr = useSWRConfig();
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState("");
-  const canManage = automation?.capabilities?.canManage === true;
+  const canManage = automation?.capabilities.canManage ?? false;
 
   useEffect(() => {
     if (!loading && automation && !canManage) {
-      router.replace(automationNavigation(teamId).detail(id));
+      router.replace(navigation.detail(id));
     }
-  }, [automation, canManage, id, loading, router, teamId]);
+  }, [automation, canManage, id, loading, navigation, router]);
 
   const handleSubmit = async (values: AutomationFormValues) => {
     if (!canManage || !automation) return;

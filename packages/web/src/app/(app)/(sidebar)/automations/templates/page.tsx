@@ -2,12 +2,12 @@
 
 import Link from "next/link";
 import { Suspense, useEffect } from "react";
-import { useRouter, useSearchParams } from "next/navigation";
+import { useRouter } from "next/navigation";
 import { CollapsedSidebarControls, useSidebarContext } from "@/components/sidebar-layout";
 import { TemplateGallery } from "@/components/automations/template-gallery";
 import { BackIcon } from "@/components/ui/icons";
-import { useCurrentUserAuthorization } from "@/hooks/use-current-user-authorization";
-import { automationNavigation, automationScopeTeamId } from "@/lib/automation-navigation";
+import { useAutomationScope } from "@/hooks/use-automation-scope";
+import { useCanCreateAutomation } from "@/hooks/use-can-create-automation";
 
 export default function AutomationTemplatesPage() {
   return (
@@ -20,14 +20,12 @@ export default function AutomationTemplatesPage() {
 function AutomationTemplatesContent() {
   const { isOpen } = useSidebarContext();
   const router = useRouter();
-  const teamId = automationScopeTeamId(useSearchParams().get("teamId"));
-  const navigation = automationNavigation(teamId);
-  const { hasPermission, loading } = useCurrentUserAuthorization();
-  const canCreate = hasPermission("automations.create");
+  const { teamId, navigation } = useAutomationScope();
+  const { canCreate, loading } = useCanCreateAutomation(teamId);
 
   useEffect(() => {
-    if (!loading && !canCreate) router.replace(automationNavigation(teamId).list);
-  }, [canCreate, loading, router, teamId]);
+    if (!loading && !canCreate) router.replace(navigation.list);
+  }, [canCreate, loading, navigation, router]);
 
   if (loading || !canCreate) return null;
 

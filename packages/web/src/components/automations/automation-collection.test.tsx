@@ -50,6 +50,7 @@ const automation: AutomationListItem = {
   consecutiveFailures: 0,
   createdBy: "user-1",
   userId: null,
+  ownerTeamId: null,
   createdAt: 1,
   updatedAt: 1,
   deletedAt: null,

@@ -31,6 +31,13 @@ vi.mock("@/components/automations/webhook-config", () => ({
   WebhookConfig: () => <div>Webhook configuration</div>,
 }));
 
+vi.mock("@/hooks/use-teams", () => ({
+  useMeTeams: () => ({
+    teams: [{ id: "team-1" }, { id: "team-2" }, { id: "team/one" }],
+    loading: false,
+    error: undefined,
+  }),
+}));
 vi.mock("@/hooks/use-current-user-authorization", () => ({
   useCurrentUserAuthorization: () => ({
     hasPermission: (permission: string) => permission === "automations.create" && canCreate,
@@ -187,6 +194,14 @@ describe("NewAutomationPage template pre-fill", () => {
     render(<NewAutomationPage />);
 
     expect(replace).toHaveBeenCalledWith(`/automations${query}`);
+    expect(screen.queryByRole("heading", { name: "Create Automation" })).not.toBeInTheDocument();
+  });
+
+  it("redirects a team-scoped create link for a team the user does not belong to", () => {
+    search = "teamId=team-3";
+    render(<NewAutomationPage />);
+
+    expect(replace).toHaveBeenCalledWith("/automations?teamId=team-3");
     expect(screen.queryByRole("heading", { name: "Create Automation" })).not.toBeInTheDocument();
   });
 

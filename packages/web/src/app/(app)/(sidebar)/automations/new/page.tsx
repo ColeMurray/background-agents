@@ -14,20 +14,18 @@ import { ErrorBanner } from "@/components/ui/error-banner";
 import { BackIcon } from "@/components/ui/icons";
 import { browserApiFetch } from "@/lib/browser-api-fetch";
 import Link from "next/link";
-import { useCurrentUserAuthorization } from "@/hooks/use-current-user-authorization";
 import { useSWRConfig } from "swr";
 import { invalidateAutomationCache } from "@/lib/automation-cache";
-import { automationNavigation, automationScopeTeamId } from "@/lib/automation-navigation";
+import { useAutomationScope } from "@/hooks/use-automation-scope";
+import { useCanCreateAutomation } from "@/hooks/use-can-create-automation";
 
 function NewAutomationContent() {
   const { isOpen } = useSidebarContext();
   const router = useRouter();
   const searchParams = useSearchParams();
-  const teamId = automationScopeTeamId(searchParams.get("teamId"));
-  const navigation = automationNavigation(teamId);
+  const { teamId, navigation } = useAutomationScope();
   const swr = useSWRConfig();
-  const { hasPermission, loading: authorizationLoading } = useCurrentUserAuthorization();
-  const canCreate = hasPermission("automations.create");
+  const { canCreate, loading: authorizationLoading } = useCanCreateAutomation(teamId);
 
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState("");
@@ -39,8 +37,8 @@ function NewAutomationContent() {
   } | null>(null);
 
   useEffect(() => {
-    if (!authorizationLoading && !canCreate) router.replace(automationNavigation(teamId).list);
-  }, [authorizationLoading, canCreate, router, teamId]);
+    if (!authorizationLoading && !canCreate) router.replace(navigation.list);
+  }, [authorizationLoading, canCreate, navigation, router]);
 
   if (authorizationLoading || !canCreate) return null;
 
