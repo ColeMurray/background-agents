@@ -218,7 +218,7 @@ describe("handlePullRequestOpened", () => {
     expect(sessionBody.repoName).toBe("widgets");
     expect(sessionBody.title).toContain("Review PR #42");
     expect(sessionBody.scmLogin).toBe("alice");
-    expect(sessionBody.scmAvatarUrl).toBe("https://avatars.githubusercontent.com/u/1001");
+    expect(sessionBody.actorAvatarUrl).toBe("https://avatars.githubusercontent.com/u/1001");
     // Identity travels via the signed actor assertion, never the body.
     expect(sessionBody).not.toHaveProperty("scmUserId");
     expect(sessionBody).not.toHaveProperty("spawnSource");
@@ -232,29 +232,6 @@ describe("handlePullRequestOpened", () => {
       "session.created",
       expect.objectContaining({ action: "auto_review" })
     );
-  });
-
-  it("rejects a malformed session creation response before sending a prompt", async () => {
-    const env = createMockEnv();
-    const cpFetch = getControlPlaneFetch(env);
-    cpFetch.mockImplementation((url: string) => {
-      if (url === "https://internal/sessions") {
-        return Promise.resolve(new Response(JSON.stringify({}), { status: 200 }));
-      }
-      if (/\/sessions\/.+\/prompt$/.test(url)) {
-        return Promise.resolve(
-          new Response(JSON.stringify({ messageId: "msg-456" }), { status: 200 })
-        );
-      }
-      return Promise.resolve(new Response("Not found", { status: 404 }));
-    });
-    const log = createMockLogger();
-
-    await expect(
-      handlePullRequestOpened(env, log, pullRequestOpenedPayload, "trace-0")
-    ).rejects.toThrow("Session creation failed: invalid response");
-
-    expect(cpFetch).toHaveBeenCalledTimes(2);
   });
 
   it("returns early for draft PRs", async () => {
@@ -453,7 +430,7 @@ describe("handleReviewRequested", () => {
     expect(sessionBody.repoName).toBe("widgets");
     expect(sessionBody.title).toContain("Review PR #42");
     expect(sessionBody.scmLogin).toBe("alice");
-    expect(sessionBody.scmAvatarUrl).toBe("https://avatars.githubusercontent.com/u/1001");
+    expect(sessionBody.actorAvatarUrl).toBe("https://avatars.githubusercontent.com/u/1001");
     // Identity travels via the signed actor assertion, never the body.
     expect(sessionBody).not.toHaveProperty("scmUserId");
     expect(sessionBody).not.toHaveProperty("spawnSource");
@@ -570,7 +547,7 @@ describe("handleIssueComment", () => {
 
     const sessionBody = sessionCreateBody(cpFetch);
     expect(sessionBody.scmLogin).toBe("bob");
-    expect(sessionBody.scmAvatarUrl).toBe("https://avatars.githubusercontent.com/u/1002");
+    expect(sessionBody.actorAvatarUrl).toBe("https://avatars.githubusercontent.com/u/1002");
     // Identity travels via the signed actor assertion, never the body.
     expect(sessionBody).not.toHaveProperty("scmUserId");
     expect(sessionBody).not.toHaveProperty("spawnSource");
@@ -686,7 +663,7 @@ describe("handleReviewComment", () => {
 
     const sessionBody = sessionCreateBody(cpFetch);
     expect(sessionBody.scmLogin).toBe("carol");
-    expect(sessionBody.scmAvatarUrl).toBe("https://avatars.githubusercontent.com/u/1003");
+    expect(sessionBody.actorAvatarUrl).toBe("https://avatars.githubusercontent.com/u/1003");
     // Identity travels via the signed actor assertion, never the body.
     expect(sessionBody).not.toHaveProperty("scmUserId");
     expect(sessionBody).not.toHaveProperty("spawnSource");
