@@ -28,6 +28,8 @@ const mocks = vi.hoisted(() => {
     requireTeamOnCreate: false,
   };
   return {
+    projectPreview: { bytes: 1234 } as { bytes: number } | undefined,
+    projectPreviewError: undefined as Error | undefined,
     projectsValue: [] as Array<{
       id: string;
       name: string;
@@ -161,7 +163,8 @@ vi.mock("sonner", () => ({ toast: { error: mocks.toastError } }));
 vi.mock("swr", () => ({
   // Home uses the default export only for the picker's prebuild-status text.
   default: (key: string | null) => ({
-    data: key?.endsWith("/context/preview") ? { bytes: 1234 } : undefined,
+    data: key?.endsWith("/context/preview") ? mocks.projectPreview : undefined,
+    error: key?.endsWith("/context/preview") ? mocks.projectPreviewError : undefined,
     isLoading: false,
   }),
   mutate: mocks.mutateMock,
@@ -278,6 +281,8 @@ beforeAll(() => {
 
 beforeEach(() => {
   mocks.projectsValue = [];
+  mocks.projectPreview = { bytes: 1234 };
+  mocks.projectPreviewError = undefined;
   mocks.reposValue = [repo];
   mocks.loadingReposValue = false;
   mocks.environmentsLoadingValue = false;

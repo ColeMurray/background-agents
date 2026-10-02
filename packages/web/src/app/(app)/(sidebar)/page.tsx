@@ -378,6 +378,7 @@ export default function Home() {
     e.preventDefault();
     if (
       !canCreateSession ||
+      !projectReady ||
       !teamCreationReady ||
       creationError?.terminal ||
       submitInFlightRef.current ||
@@ -503,6 +504,7 @@ export default function Home() {
       picker={picker}
       teamContext={teamContext}
       teamId={teamId}
+      projectReady={projectReady}
       teamCreationReady={teamCreationReady}
       visibility={visibility}
       onTeamChange={(teamId) => {
@@ -562,6 +564,7 @@ function HomeContent({
   teamContext,
   teamId,
   teamCreationReady,
+  projectReady,
   visibility,
   onTeamChange,
   onVisibilityChange,
@@ -597,6 +600,7 @@ function HomeContent({
   teamContext: ReturnType<typeof useActiveTeam>;
   teamId: string | null;
   teamCreationReady: boolean;
+  projectReady: boolean;
   visibility: SessionVisibility;
   onTeamChange: (teamId: string | null) => void;
   onVisibilityChange: (value: SessionVisibility) => void;
@@ -771,7 +775,8 @@ function HomeContent({
                         !providerSelectionsHydrated ||
                         providerAccounts.loading ||
                         !isLaunchable ||
-                        !teamCreationReady
+                        !teamCreationReady ||
+                        !projectReady
                       }
                       className="p-2 text-secondary-foreground hover:text-foreground disabled:opacity-30 disabled:cursor-not-allowed transition"
                       title={`Send (${labels["send-prompt"]})`}
