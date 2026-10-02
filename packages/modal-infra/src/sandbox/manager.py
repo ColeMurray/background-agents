@@ -1,5 +1,6 @@
 """Provider lifecycle operations for Open-Inspect session sandboxes."""
 
+import asyncio
 import time
 from typing import Any
 
@@ -186,15 +187,52 @@ class SandboxManager:
             raise TimeoutError("Insufficient time remains for a filesystem snapshot")
         if handle.sandbox_backend == "modal-vm":
             preparation_started = time.monotonic()
-            probe = await handle.modal_sandbox.exec.aio(
-                "python",
-                "-m",
-                "sandbox_runtime.docker_control",
-                "prepare",
-                timeout=min(snapshot_timeout_seconds, int(CONTROL_TIMEOUT_SECONDS)),
+            preparation_timeout_seconds = min(
+                snapshot_timeout_seconds, int(CONTROL_TIMEOUT_SECONDS)
             )
-            if await probe.wait.aio() != 0:
-                raise RuntimeError("Modal VM Docker shutdown preparation was not confirmed")
+            preparation_context = {
+                "sandbox_id": handle.sandbox_id,
+                "modal_object_id": handle.modal_object_id,
+                "timeout_seconds": preparation_timeout_seconds,
+            }
+            log.info("sandbox.snapshot_preparation.started", **preparation_context)
+            phase = "exec"
+            exit_code = None
+            try:
+                probe = await handle.modal_sandbox.exec.aio(
+                    "python",
+                    "-m",
+                    "sandbox_runtime.docker_control",
+                    "prepare",
+                    timeout=preparation_timeout_seconds,
+                )
+                phase = "wait"
+                exit_code = await probe.wait.aio()
+                if exit_code != 0:
+                    raise RuntimeError("Modal VM Docker shutdown preparation was not confirmed")
+            except (Exception, asyncio.CancelledError) as error:
+                # Helper/daemon output may contain repository secrets. Keep
+                # diagnostics to fixed metadata, without exception text.
+                fields: dict[str, Any] = {
+                    **preparation_context,
+                    "phase": phase,
+                    "error_type": type(error).__name__,
+                    "exit_code": exit_code,
+                    "acknowledgement": "not_confirmed",
+                    "duration_ms": int((time.monotonic() - preparation_started) * 1000),
+                }
+                if isinstance(error, asyncio.CancelledError):
+                    log.debug("sandbox.snapshot_preparation.cancelled", **fields)
+                else:
+                    log.error("sandbox.snapshot_preparation.failed", **fields)
+                raise
+            log.info(
+                "sandbox.snapshot_preparation.completed",
+                **preparation_context,
+                exit_code=exit_code,
+                acknowledgement="confirmed",
+                duration_ms=int((time.monotonic() - preparation_started) * 1000),
+            )
             snapshot_timeout_seconds = min(
                 int(timeout_seconds - (time.monotonic() - preparation_started)),
                 SNAPSHOT_FILESYSTEM_TIMEOUT_SECONDS,
