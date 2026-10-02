@@ -1,5 +1,8 @@
 "use client";
 
+import { useProjects, projectRequest } from "@/hooks/use-projects";
+import useSWR from "swr";
+import type { ReactNode } from "react";
 import { useAuthSession } from "@/lib/auth-session";
 import { browserApiFetch } from "@/lib/browser-api-fetch";
 import { toast } from "sonner";
@@ -111,6 +114,24 @@ export default function Home() {
   const { teams, requireTeamOnCreate, loading: loadingTeams, error: teamError } = teamContext;
   const [accessDraft, setAccessDraft] = useState<ComposerAccessDraft | null>(null);
   const { contextKey, teamId, visibility } = resolveComposerAccess(teamContext, accessDraft);
+  const [projectId, setProjectId] = useState("");
+  const [appliedProjectId, setAppliedProjectId] = useState("");
+  const { projects, loading: projectsLoading, hasMore, loadingMore, loadMore } = useProjects();
+  const selectedProject = projects.find((project) => project.id === projectId);
+  useEffect(() => {
+    setProjectId(new URLSearchParams(window.location.search).get("projectId") ?? "");
+  }, []);
+  const { data: projectPreview, error: projectPreviewError } = useSWR<{ bytes: number }>(
+    projectId ? `/api/projects/${projectId}/context/preview` : null,
+    projectRequest
+  );
+  const projectReady =
+    !projectId ||
+    (!!selectedProject &&
+      appliedProjectId === projectId &&
+      teamId === selectedProject.ownerTeamId &&
+      !!projectPreview &&
+      !projectPreviewError);
   const selectedTeam = teams.find((team) => team.id === teamId);
   const teamCreationReady =
     !loadingTeams && !teamError && (teamId === null ? !requireTeamOnCreate : !!selectedTeam);
@@ -119,6 +140,37 @@ export default function Home() {
     defaultEnvironmentId: selectedTeam?.defaultEnvironmentId,
   });
   const { sessionTarget, buildRequestFields, isLaunchable } = picker;
+  useEffect(() => {
+    if (!projectId) {
+      setAppliedProjectId("");
+      return;
+    }
+    if (!selectedProject || appliedProjectId === projectId) return;
+    if (teamId !== selectedProject.ownerTeamId) {
+      setAccessDraft({
+        contextKey,
+        teamId: selectedProject.ownerTeamId,
+        visibility: selectedProject.ownerTeamId ? "team" : "workspace",
+      });
+      return;
+    }
+    if (picker.loadingRepos) return;
+    const target = selectedProject.defaultEnvironmentId
+      ? `env:${selectedProject.defaultEnvironmentId}`
+      : selectedProject.defaultRepoOwner && selectedProject.defaultRepoName
+        ? `${selectedProject.defaultRepoOwner}/${selectedProject.defaultRepoName}`
+        : "__no_repository__";
+    picker.pickerProps.onTargetSelectValueChange(target);
+    setAppliedProjectId(projectId);
+  }, [
+    projectId,
+    selectedProject,
+    appliedProjectId,
+    teamId,
+    contextKey,
+    picker.loadingRepos,
+    picker.pickerProps,
+  ]);
 
   // Composer context changes preserve the audience; sidebar changes use team defaults.
   useEffect(() => {
@@ -244,6 +296,7 @@ export default function Home() {
 
   const warmRequest: WarmDraftSessionRequest | null =
     canCreateSession &&
+    projectReady &&
     teamCreationReady &&
     session &&
     providerSelectionsHydrated &&
@@ -253,6 +306,7 @@ export default function Home() {
     targetRequestFields
       ? {
           ...targetRequestFields,
+          projectId: projectId || null,
           harness,
           model: selectedModel,
           reasoningEffort,
@@ -324,6 +378,7 @@ export default function Home() {
     e.preventDefault();
     if (
       !canCreateSession ||
+      !projectReady ||
       !teamCreationReady ||
       creationError?.terminal ||
       submitInFlightRef.current ||
@@ -413,12 +468,52 @@ export default function Home() {
     <HomeContent
       isAuthenticated={!!session}
       canCreateSession={canCreateSession}
+      projectControl={
+        <div className="flex flex-wrap items-center gap-2">
+          <label>
+            Project{" "}
+            <select
+              aria-label="Project"
+              className="rounded border bg-background p-2"
+              value={projectId}
+              disabled={projectsLoading}
+              onChange={(event) => {
+                setAppliedProjectId("");
+                setProjectId(event.target.value);
+              }}
+            >
+              <option value="">No project</option>
+              {projects.map((project) => (
+                <option key={project.id} value={project.id}>
+                  {project.name}
+                </option>
+              ))}
+            </select>
+          </label>
+          {hasMore && (
+            <button type="button" disabled={loadingMore} onClick={() => void loadMore()}>
+              Load more projects
+            </button>
+          )}
+          {selectedProject && (
+            <span className="rounded border px-2 py-1 text-xs">
+              Context: {selectedProject.name} (
+              {projectPreview ? `${(projectPreview.bytes / 1000).toFixed(1)} KB` : "loading…"})
+            </span>
+          )}
+          {(projectPreviewError || (projectId && !projectsLoading && !selectedProject)) && (
+            <span role="alert">Project unavailable. Select another project or No project.</span>
+          )}
+        </div>
+      }
       picker={picker}
       teamContext={teamContext}
       teamId={teamId}
+      projectReady={projectReady}
       teamCreationReady={teamCreationReady}
       visibility={visibility}
       onTeamChange={(teamId) => {
+        setProjectId("");
         setAccessDraft({ contextKey, teamId, visibility });
       }}
       onVisibilityChange={(value) => {
@@ -469,10 +564,12 @@ export default function Home() {
 function HomeContent({
   isAuthenticated,
   canCreateSession,
+  projectControl,
   picker,
   teamContext,
   teamId,
   teamCreationReady,
+  projectReady,
   visibility,
   onTeamChange,
   onVisibilityChange,
@@ -503,10 +600,12 @@ function HomeContent({
 }: {
   isAuthenticated: boolean;
   canCreateSession: boolean;
+  projectControl: ReactNode;
   picker: SessionTargetSelection;
   teamContext: ReturnType<typeof useActiveTeam>;
   teamId: string | null;
   teamCreationReady: boolean;
+  projectReady: boolean;
   visibility: SessionVisibility;
   onTeamChange: (teamId: string | null) => void;
   onVisibilityChange: (value: SessionVisibility) => void;
@@ -615,6 +714,7 @@ function HomeContent({
               ) : null}
 
               <div className="mb-3 flex flex-wrap items-center gap-2 px-4 sm:gap-4">
+                {projectControl}
                 <SessionTargetPicker {...picker.pickerProps} disabled={creating} />
               </div>
 
@@ -680,7 +780,8 @@ function HomeContent({
                         !providerSelectionsHydrated ||
                         providerAccounts.loading ||
                         !isLaunchable ||
-                        !teamCreationReady
+                        !teamCreationReady ||
+                        !projectReady
                       }
                       className="p-2 text-secondary-foreground hover:text-foreground disabled:opacity-30 disabled:cursor-not-allowed transition"
                       title={`Send (${labels["send-prompt"]})`}

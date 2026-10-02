@@ -94,6 +94,7 @@ export async function auditRouteAuthorizationDecision(input: {
         : (input.ctx.sessionAdmission?.row.ownerTeamId ??
           input.ctx.automationAdmission?.automation.owner_team_id ??
           input.ctx.environmentAdmission?.environment.owner_team_id ??
+          input.ctx.projectAdmission?.project.ownerTeamId ??
           null);
   const metadata = {
     schema: AUTHORIZATION_DECISION_METADATA_SCHEMA,

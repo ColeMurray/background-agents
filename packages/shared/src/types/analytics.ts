@@ -4,6 +4,7 @@ export const ANALYTICS_DAYS = [7, 14, 30, 90] as const;
 export type AnalyticsDays = (typeof ANALYTICS_DAYS)[number];
 
 export const ANALYTICS_BREAKDOWN_BY = [
+  "project",
   "user",
   "repo",
   "model",
@@ -228,6 +229,7 @@ export interface AnalyticsDashboardResponse {
     harness: AnalyticsBreakdownResponse;
     provider: AnalyticsBreakdownResponse;
     automation: AnalyticsBreakdownResponse;
+    project?: AnalyticsBreakdownResponse;
   };
   pullRequests: AnalyticsPullRequestsResponse;
   runs: SessionRun[];

@@ -162,6 +162,8 @@
               "type": {
                 "type": "string",
                 "enum": [
+                  "project.notification_attempt",
+                  "project_context.read",
                   "heartbeat",
                   "ready",
                   "sandbox_generation_ready",

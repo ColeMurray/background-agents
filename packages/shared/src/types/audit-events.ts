@@ -71,6 +71,14 @@ export const AUTHORIZATION_DECISION_ACTIONS = {
 
 /** Actions written by the operation owner alongside the change; their result is the domain outcome. */
 export const AUDIT_OPERATION_ACTIONS = [
+  "project.created",
+  "project.updated",
+  "project.source_saved",
+  "project.source_removed",
+  "project.pin_saved",
+  "project.pin_removed",
+  "project.session_associated",
+  "project.automation_subscribed",
   "session.private_break_glass",
   "session.visibility_changed",
   "session.moved",

@@ -16,6 +16,7 @@ from .constants import OPENCODE_PORT
 from .git_excludes import install_runtime_git_excludes
 from .mcp_packages import McpPackageInstaller
 from .process_output import iter_process_lines
+from .project_context import PROJECT_CONTEXT_PATH, project_context_text
 from .sandbox_bin import install_bin_scripts
 
 if TYPE_CHECKING:
@@ -25,7 +26,10 @@ if TYPE_CHECKING:
     from .runtime_config import OpenCodeConfig
 
 _LOG_FORWARD_STREAM_LIMIT_BYTES = 1024 * 1024
-AGENT_TOOLS_GATED_ON_ENV = {"slack-notify.js": "AGENT_SLACK_NOTIFY_ENABLED"}
+AGENT_TOOLS_GATED_ON_ENV = {
+    "slack-notify.js": "AGENT_SLACK_NOTIFY_ENABLED",
+    "read_project_context.js": "AGENT_PROJECT_CONTEXT_ENABLED",
+}
 AGENT_TOOLS_REQUIRING_REPOSITORY: set[str] = set()
 
 
@@ -152,6 +156,7 @@ class OpenCodeServer:
                     continue
                 gate_env = AGENT_TOOLS_GATED_ON_ENV.get(tool_file.name)
                 if gate_env and os.environ.get(gate_env, "").lower() != "true":
+                    (tool_dest / tool_file.name).unlink(missing_ok=True)
                     continue
                 if tool_file.name in AGENT_TOOLS_REQUIRING_REPOSITORY and not self.has_repository:
                     continue
@@ -413,6 +418,9 @@ class OpenCodeServer:
                 }
             },
         }
+
+        if project_context_text():
+            opencode_config.setdefault("instructions", []).append(str(PROJECT_CONTEXT_PATH))
 
         # Inject MCP servers
         mcp_servers = self._resolve_mcp_servers()

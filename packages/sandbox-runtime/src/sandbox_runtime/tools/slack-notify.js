@@ -65,13 +65,14 @@ async function readErrorBody(response) {
 export default tool({
   name: "slack-notify",
   description:
-    "Post a message to a Slack channel that the user has authorized. Use this only when the user has explicitly asked you to notify Slack — this is an externally-visible action that other humans will see. The user must tell you which channel; do not guess. The bot must already be invited to the channel; if you get channel_not_found_or_forbidden, ask the user to invite the bot. Plain text + Slack mrkdwn formatting only (bold *...*, italic _..._, inline code `...`, fenced blocks, lists, blockquotes). The server attaches the attribution footer and View Session button — do not fabricate them.",
+    "Post a message to a Slack channel that the user has authorized. Use this only when the user has explicitly asked you to notify Slack — this is an externally-visible action that other humans will see. Use the user-specified channel, or omit channel to use the configured project primary channel when there is no originating Slack channel; never guess another destination. The bot must already be invited to the channel; if you get channel_not_found_or_forbidden, ask the user to invite the bot. Plain text + Slack mrkdwn formatting only (bold *...*, italic _..._, inline code `...`, fenced blocks, lists, blockquotes). The server attaches the attribution footer and View Session button — do not fabricate them.",
   args: {
     channel: z
       .string()
       .describe(
-        "Target channel as either a channel ID (e.g. C01ABC) or the channel name as the user said it (e.g. ops or #ops). Passed verbatim to Slack — no resolution or lookup."
-      ),
+        "Optional; omit to use the configured project primary channel. Target channel as either a channel ID (e.g. C01ABC) or the channel name as the user said it (e.g. ops or #ops). Passed verbatim to Slack — no resolution or lookup."
+      )
+      .optional(),
     text: z
       .string()
       .describe(

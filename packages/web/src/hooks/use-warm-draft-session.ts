@@ -17,6 +17,7 @@ export type WarmDraftSessionRequest = SessionTargetRequestFields & {
   reasoningEffort?: string;
   skillSelection: SessionSkillSelection;
   providerSelections: ModelProviderSelections;
+  projectId?: string | null;
   teamId: string | null;
   visibility: SessionVisibility;
 };

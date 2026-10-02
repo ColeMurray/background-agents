@@ -48,6 +48,8 @@ import type { TeamsEnforcementMode } from "../authorization/teams-enforcement";
 import type { ListSessionInboxResult } from "../db/session-inbox-store";
 
 const sessionInboxQuerySchema = z.object({
+  projectId: z.string().trim().min(1).max(100).optional(),
+  hasProject: z.enum(["true", "false"]).optional(),
   category: z
     .string()
     .optional()
@@ -123,6 +125,8 @@ export async function handleListSessions(
     repoOwner,
     repoName,
     environmentId,
+    projectId,
+    hasProject,
     origin,
     limit,
     offset,
@@ -170,6 +174,8 @@ export async function handleListSessions(
   const listStartedAt = Date.now();
   const result = await readSessionList(() =>
     store.list({
+      projectId,
+      hasProject,
       status,
       excludeStatus,
       excludeAutomationLineage,
@@ -239,6 +245,8 @@ export async function handleListSessionInbox(
   const query = parseQuery(request, sessionInboxQuerySchema);
   if (query instanceof Response) return query;
   const { category, mine, ownerFilter, visibility, scope } = query;
+  if (query.projectId && query.hasProject === "false")
+    return error("Conflicting project filters", 400);
   if (query.cursor !== undefined && category === null) {
     return error("Category required for pagination", 400);
   }
@@ -262,6 +270,8 @@ export async function handleListSessionInbox(
   const store = new SessionIndexStore(ctx.db);
   const mode = teamsEnforcementMode(ctx, env);
   const commonOptions = {
+    projectId: query.projectId,
+    hasProject: query.hasProject === undefined ? undefined : query.hasProject === "true",
     limit: SESSION_INBOX_LIMIT,
     createdByUserIds: mine === "true" ? [ctx.principal.userId] : [],
     excludeAutomatedSessions: mine === "true",

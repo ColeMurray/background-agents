@@ -52,6 +52,23 @@ const scopeMocks = vi.hoisted(() => ({
   repos: vi.fn(),
   environments: vi.fn(),
   allowWorkspace: true,
+  projects: vi.fn(),
+  loadMoreProjects: vi.fn(),
+  moreProjects: false,
+}));
+vi.mock("@/hooks/use-projects", () => ({
+  useProjects: (filters: unknown) => {
+    scopeMocks.projects(filters);
+    return {
+      hasMore: scopeMocks.moreProjects,
+      loadMore: scopeMocks.loadMoreProjects,
+      projects: [
+        { id: "project-eng", name: "Engineering project", ownerTeamId: "team-1" },
+        { id: "project-design", name: "Design project", ownerTeamId: "team-2" },
+        { id: "project-workspace", name: "Workspace project", ownerTeamId: null },
+      ],
+    };
+  },
 }));
 vi.mock("@/hooks/use-resource-teams", () => ({
   useResourceTeams: () => ({
@@ -67,6 +84,8 @@ vi.mock("@/hooks/use-resource-teams", () => ({
 }));
 beforeEach(() => {
   scopeMocks.allowWorkspace = true;
+  scopeMocks.moreProjects = false;
+  scopeMocks.loadMoreProjects.mockClear();
   enabledModelsValue = ["openai/gpt-5.4"];
   loadingModelsValue = false;
   environmentsValue = [];
@@ -146,6 +165,22 @@ async function chooseTeam(user: ReturnType<typeof userEvent.setup>, name: string
 }
 
 describe("automation cron submission", () => {
+  it("loads additional projects in the selected ownership scope without submitting", () => {
+    scopeMocks.moreProjects = true;
+    const onSubmit = vi.fn();
+    render(
+      <AutomationForm
+        mode="create"
+        submitting={false}
+        onSubmit={onSubmit}
+        initialValues={{ teamId: "team-1" }}
+      />
+    );
+    expect(scopeMocks.projects).toHaveBeenLastCalledWith({ teamId: "team-1" });
+    fireEvent.click(screen.getByRole("button", { name: "Load more projects" }));
+    expect(scopeMocks.loadMoreProjects).toHaveBeenCalledTimes(1);
+    expect(onSubmit).not.toHaveBeenCalled();
+  });
   it("scopes creation targets and clears selections when the team changes", async () => {
     const user = userEvent.setup();
     environmentsValue = [
@@ -173,15 +208,33 @@ describe("automation cron submission", () => {
     );
     expect(scopeMocks.repos).toHaveBeenLastCalledWith(true, "team-1");
     expect(scopeMocks.environments).toHaveBeenLastCalledWith({ ownerTeamId: "team-1" });
+    const projectPicker = screen.getByRole("combobox", { name: "Project" });
+    expect(
+      within(projectPicker).getByRole("option", { name: "Engineering project" })
+    ).toBeInTheDocument();
+    expect(
+      within(projectPicker).queryByRole("option", { name: "Design project" })
+    ).not.toBeInTheDocument();
+    fireEvent.change(projectPicker, { target: { value: "project-eng" } });
     openRepositoryPicker();
     fireEvent.click(screen.getByRole("button", { name: "Select Multiple" }));
     fireEvent.click(screen.getByRole("checkbox", { name: /Draft environment/ }));
     await chooseTeam(user, "Design");
+    expect(projectPicker).toHaveValue("");
+    expect(
+      within(projectPicker).queryByRole("option", { name: "Engineering project" })
+    ).not.toBeInTheDocument();
+    fireEvent.change(projectPicker, { target: { value: "project-design" } });
     expect(scopeMocks.repos).toHaveBeenLastCalledWith(true, "team-2");
     expect(scopeMocks.environments).toHaveBeenLastCalledWith({ ownerTeamId: "team-2" });
     fireEvent.submit(container.querySelector("form")!);
     expect(onSubmit).toHaveBeenCalledWith(
-      expect.objectContaining({ teamId: "team-2", repositories: [], environmentIds: [] })
+      expect.objectContaining({
+        teamId: "team-2",
+        projectId: "project-design",
+        repositories: [],
+        environmentIds: [],
+      })
     );
     scopeMocks.allowWorkspace = false;
     await chooseTeam(user, "Workspace (no team)");
@@ -264,6 +317,7 @@ describe("automation cron submission", () => {
     fireEvent.submit(container.querySelector("form")!);
 
     expect(onSubmit.mock.calls[0][0].providerSelections).toEqual(providerSelections);
+    expect(onSubmit.mock.calls[0][0]).not.toHaveProperty("projectId");
   });
 
   it("groups conditions under an accessible name", () => {

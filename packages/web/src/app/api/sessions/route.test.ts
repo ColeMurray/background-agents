@@ -169,7 +169,7 @@ describe("sessions API route (POST)", () => {
     expect(sent).toEqual({ repoOwner: "o", repoName: "r", model: "m", harness: "claude" });
   });
 
-  it("forwards environmentId for environment launches", async () => {
+  it("forwards project identity with an explicit environment override", async () => {
     vi.mocked(getServerAuthSession).mockResolvedValue({
       user: { id: "0123456789abcdef0123456789abcdef" },
     } as never);
@@ -177,11 +177,14 @@ describe("sessions API route (POST)", () => {
       Response.json({ id: "sess3" }, { status: 201 })
     );
 
-    const response = await POST(postRequest({ environmentId: "env-1", model: "m" }));
+    const response = await POST(
+      postRequest({ environmentId: "env-1", model: "m", projectId: "proj-1" })
+    );
 
     expect(response.status).toBe(201);
     const sent = controlPlaneBody();
     expect(sent.environmentId).toBe("env-1");
+    expect(sent.projectId).toBe("proj-1");
     expect(sent.repositories).toBeUndefined();
     expect(sent.repoOwner).toBeUndefined();
     expect(sent.repoName).toBeUndefined();

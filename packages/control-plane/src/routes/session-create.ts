@@ -1,3 +1,5 @@
+import { resolveProjectCreation } from "../session/project-context";
+import { evaluateProjectAdmission } from "../authorization/project-admission";
 import { Hono } from "hono";
 import { admit, dispatch } from "../routing/admit";
 import type { ControlPlaneHonoEnv } from "../routing/hono-env";
@@ -81,6 +83,30 @@ export async function handleCreateSession(
   const parsed = await parseCreateSessionInput(request);
   if (!parsed.ok) return error(parsed.message, 400);
   const body = parsed.input;
+  if (body.projectId) {
+    const admission = await evaluateProjectAdmission(ctx, body.projectId, "read");
+    if (admission instanceof Response) return admission;
+    const project = admission.project;
+    if (body.teamId === undefined) body.teamId = project.ownerTeamId;
+    if ((body.teamId ?? null) !== project.ownerTeamId)
+      return json(
+        { error: "Project and session teams differ", code: "project_team_mismatch" },
+        409
+      );
+    // An explicit null repository pair means "No repository", not "use project defaults".
+    if (
+      body.environmentId === undefined &&
+      body.repoOwner === undefined &&
+      body.repoName === undefined &&
+      body.repositories === undefined
+    ) {
+      if (project.defaultEnvironmentId) body.environmentId = project.defaultEnvironmentId;
+      else if (project.defaultRepoOwner && project.defaultRepoName) {
+        body.repoOwner = project.defaultRepoOwner;
+        body.repoName = project.defaultRepoName;
+      }
+    }
+  }
 
   // Identity comes from the verified principal; caller-asserted identity/SCM
   // body fields are rejected. SCM credentials flow only through
@@ -283,7 +309,13 @@ export async function handleCreateSession(
     throw e;
   }
 
+  const projectContext = await resolveProjectCreation(ctx.db, {
+    projectId: body.projectId,
+    userId: resolvedUserId,
+    ownerTeamId: teamId,
+  });
   const input: SessionInitInput = {
+    ...projectContext,
     ownerTeamId: teamId,
     visibility,
     sessionId,

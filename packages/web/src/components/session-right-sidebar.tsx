@@ -1,5 +1,6 @@
 "use client";
 
+import { SessionProjectControl } from "./projects/session-project-control";
 import { useMemo, useState, type ReactNode } from "react";
 import { CollapsibleSection } from "./sidebar/collapsible-section";
 import { ParticipantsSection } from "./sidebar/participants-section";
@@ -343,6 +344,7 @@ export function SessionRightSidebarContent({
                 canManageCollaborators={capabilities.manageCollaborators}
               />
             )}
+            <SessionProjectControl sessionId={sessionId} canAssociate={capabilities.lifecycle} />
             <ManagedSkillsSection sessionId={sessionState.id} />
             {(!presenceSynced || participants.length > 0) && (
               <DetailsSection title="Participants">

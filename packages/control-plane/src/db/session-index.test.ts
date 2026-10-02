@@ -404,6 +404,7 @@ describe("SessionIndexStore", () => {
       const result = await store.get("test-id");
       expect(result).toEqual({
         ...session,
+        projectId: null,
         // Defaults applied for missing optional fields
         harness: "opencode",
         parentSessionId: null,

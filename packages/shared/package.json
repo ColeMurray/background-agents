@@ -213,6 +213,18 @@
     "./types/audit-events": {
       "import": "./dist/types/audit-events.js",
       "types": "./dist/types/audit-events.d.ts"
+    },
+    "./types/projects": {
+      "import": "./dist/types/projects.js",
+      "types": "./dist/types/projects.d.ts"
+    },
+    "./project-context": {
+      "import": "./dist/project-context.js",
+      "types": "./dist/project-context.d.ts"
+    },
+    "./session-references": {
+      "import": "./dist/session-references.js",
+      "types": "./dist/session-references.d.ts"
     }
   },
   "scripts": {

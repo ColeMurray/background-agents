@@ -172,7 +172,8 @@ export class SessionMessageQueue {
     /** Resolved per use so it honors settings persisted after construction. */
     private readonly getExecutionTimeoutMs: () => number,
     private readonly mayDispatch: () => boolean,
-    private readonly getSandboxPromptBlockReason: () => string | null
+    private readonly getSandboxPromptBlockReason: () => string | null,
+    private readonly resolveReferences?: (userId: string, content: string) => Promise<string>
   ) {}
 
   async enqueueAutofix(
@@ -749,20 +750,11 @@ export class SessionMessageQueue {
     return { messageId: enqueued.messageId, status: "queued" };
   }
 
-  private async enqueuePromptCore(data: EnqueuePromptCoreData): Promise<EnqueuedPrompt> {
-    let requestFingerprint: string | undefined;
-    if (data.clientRequestId) {
-      requestFingerprint = await fingerprintWebPrompt(data.participant.id, data);
-    }
-
-    // Keep the promptability check, idempotency lookup, budget and capacity
-    // checks, and insert in one synchronous turn so concurrent requests cannot
-    // race between them. The fingerprint hash above is a non-storage await: a
-    // cancel or archive can land while this request is suspended, so the
-    // session is read after it, not before.
-    this.assertPromptableSession();
-    this.assertSandboxAcceptingPrompts();
-    const queueDepthBefore = this.messageRepository.getPendingOrProcessingCount();
+  private findExistingPrompt(
+    data: EnqueuePromptCoreData,
+    requestFingerprint: string | undefined,
+    queueDepthBefore: number
+  ): EnqueuedPrompt | null {
     if (data.clientRequestId) {
       const existing = this.messageRepository.getMessageByClientRequestId(data.clientRequestId);
       if (existing) {
@@ -792,6 +784,45 @@ export class SessionMessageQueue {
         };
       }
     }
+    return null;
+  }
+
+  private async enqueuePromptCore(data: EnqueuePromptCoreData): Promise<EnqueuedPrompt> {
+    let requestFingerprint: string | undefined;
+    if (data.clientRequestId) {
+      requestFingerprint = await fingerprintWebPrompt(data.participant.id, data);
+    }
+
+    if (data.clientRequestId) {
+      const duplicate = this.findExistingPrompt(
+        data,
+        requestFingerprint,
+        this.messageRepository.getPendingOrProcessingCount()
+      );
+      if (duplicate) return duplicate;
+    }
+
+    let resolvedContent = data.content;
+    if (this.resolveReferences) {
+      try {
+        resolvedContent = await this.resolveReferences(
+          data.participant.canonical_user_id ?? data.userId,
+          data.content
+        );
+      } catch {
+        // Reference lookup is optional enrichment. Never drop the user's prompt
+        // or partially append summaries when a lookup is unavailable.
+        this.log.warn("prompt.references_unavailable", { source: data.source });
+      }
+    }
+
+    // Recheck after asynchronous enrichment, including duplicates admitted while
+    // this request was suspended. Admission and insertion below remain synchronous.
+    this.assertPromptableSession();
+    this.assertSandboxAcceptingPrompts();
+    const queueDepthBefore = this.messageRepository.getPendingOrProcessingCount();
+    const existing = this.findExistingPrompt(data, requestFingerprint, queueDepthBefore);
+    if (existing) return existing;
     this.assertBudgetAvailable();
     this.assertQueueCapacity(queueDepthBefore);
     const resolvedAttachments = resolveSessionAttachments(
@@ -828,7 +859,7 @@ export class SessionMessageQueue {
         {
           id: messageId,
           authorId: data.participant.id,
-          content: data.content,
+          content: resolvedContent,
           source: data.source,
           model: messageModel,
           reasoningEffort: messageReasoningEffort,

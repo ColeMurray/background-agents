@@ -62,6 +62,10 @@ export const PERMISSION_IDS = [
   "mcp_servers.manage",
   "mcp_servers.read",
   "models.preferences.manage",
+  "projects.create",
+  "projects.manage.any",
+  "projects.manage.own",
+  "projects.read",
   "provider_accounts.manage",
   "provider_accounts.read",
   "repositories.images.manage",
@@ -96,6 +100,7 @@ export const SESSION_WEBSOCKET_CONNECT_PERMISSION = "sessions.read" as const sat
 
 /** Maps ownership-sensitive capabilities to their workspace-wide and owner-only grants. */
 export const SCOPED_PERMISSION_PAIRS = {
+  "projects.manage": { any: "projects.manage.any", own: "projects.manage.own" },
   "automations.manage": {
     any: "automations.manage.any",
     own: "automations.manage.own",
@@ -133,6 +138,7 @@ export function hasScopedPermission(
 }
 
 const VIEWER_PERMISSIONS = new Set<PermissionId>([
+  "projects.read",
   "analytics.read",
   "automations.read",
   "environments.read",
@@ -145,6 +151,8 @@ const VIEWER_PERMISSIONS = new Set<PermissionId>([
 
 const MEMBER_PERMISSIONS = new Set<PermissionId>([
   ...VIEWER_PERMISSIONS,
+  "projects.create",
+  "projects.manage.own",
   "automations.create",
   "automations.manage.own",
   "automations.trigger.own",

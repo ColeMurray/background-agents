@@ -58,6 +58,7 @@ export async function POST(request: NextRequest) {
       skillSelection: body.skillSelection,
       providerSelections: body.providerSelections,
       teamId: body.teamId,
+      projectId: body.projectId,
       visibility: body.visibility,
     };
 

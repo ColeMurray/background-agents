@@ -50,6 +50,10 @@ vi.mock("@/components/sidebar-layout", () => ({
   useSidebarContext: () => ({ isOpen: false, toggle: vi.fn() }),
 }));
 
+vi.mock("@/hooks/use-projects", () => ({
+  useProjects: () => ({ projects: [], loading: false }),
+}));
+
 vi.mock("@/hooks/use-repos", () => ({
   useRepos: () => ({ repos: [], loading: false }),
 }));

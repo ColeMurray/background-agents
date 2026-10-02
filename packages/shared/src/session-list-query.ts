@@ -30,6 +30,8 @@ export const SESSION_LIST_QUERY_PARAMS = [
   "repoOwner",
   "repoName",
   "environmentId",
+  "projectId",
+  "hasProject",
   "origin",
   "teamIds[]",
   "ownerFilter",
@@ -58,6 +60,8 @@ export interface SessionListQuery {
   repoName?: string;
   /** Sessions launched from this environment (`sessions.environment_id`). */
   environmentId?: string;
+  projectId?: string;
+  hasProject?: boolean;
   /**
    * Automation-origin filter over the persisted `spawn_source` provenance:
    * `user` was started by a person in the app, `automation` is an automation
@@ -176,6 +180,13 @@ export function parseSessionListQuery(searchParams: URLSearchParams): SessionLis
   const environmentId = parseIdentifier(searchParams.get("environmentId"));
   if (environmentId === null) return { success: false, invalidParam: "environmentId" };
 
+  const projectId = parseIdentifier(searchParams.get("projectId"));
+  if (projectId === null) return { success: false, invalidParam: "projectId" };
+  const hasProject = searchParams.get("hasProject");
+  if (hasProject !== null && hasProject !== "true" && hasProject !== "false")
+    return { success: false, invalidParam: "hasProject" };
+  if (projectId && hasProject === "false") return { success: false, invalidParam: "hasProject" };
+
   const originParam = searchParams.get("origin");
   const origin = originParam ? spawnSourceSchema.safeParse(originParam) : undefined;
   if (origin && !origin.success) return { success: false, invalidParam: "origin" };
@@ -216,6 +227,8 @@ export function parseSessionListQuery(searchParams: URLSearchParams): SessionLis
       ...(q ? { q } : {}),
       ...(repoOwner !== undefined && repoName !== undefined ? { repoOwner, repoName } : {}),
       ...(environmentId !== undefined ? { environmentId } : {}),
+      ...(projectId !== undefined ? { projectId } : {}),
+      ...(hasProject !== null ? { hasProject: hasProject === "true" } : {}),
       ...(origin ? { origin: origin.data } : {}),
       ...(teamIds.length ? { teamIds } : {}),
       ...(ownerFilter !== null ? { ownerFilter } : {}),
@@ -243,6 +256,8 @@ export function serializeSessionListQuery(query: SessionListQuery): URLSearchPar
     searchParams.set("repoName", query.repoName);
   }
   if (query.environmentId) searchParams.set("environmentId", query.environmentId);
+  if (query.projectId) searchParams.set("projectId", query.projectId);
+  if (query.hasProject !== undefined) searchParams.set("hasProject", String(query.hasProject));
   if (query.origin) searchParams.set("origin", query.origin);
   for (const teamId of query.teamIds ?? []) searchParams.append("teamIds[]", teamId);
   if (query.ownerFilter) searchParams.set("ownerFilter", query.ownerFilter);

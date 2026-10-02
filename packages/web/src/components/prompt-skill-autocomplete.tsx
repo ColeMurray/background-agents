@@ -10,6 +10,10 @@ import {
   type KeyboardEvent,
   type TextareaHTMLAttributes,
 } from "react";
+import useSWR from "swr";
+import { sessionReferences, referenceMarker } from "@open-inspect/shared/session-references";
+import { findSessionCompletion } from "@/lib/prompt-session-completion";
+import { buildSessionsPageKey, fetchSessionListPage } from "@/lib/session-list";
 import { PromptSkillSuggestionPanel } from "@/components/prompt-skill-suggestion-panel";
 import {
   applySkillCompletion,
@@ -78,6 +82,39 @@ export const PromptSkillTextarea = forwardRef<HTMLTextAreaElement, PromptSkillTe
       cursor !== null &&
       sameCursor(dismissedAt.cursor, cursor);
     const open = completion !== null && !dismissed;
+    const referenceCompletion =
+      cursor && !disabled && sessionReferences(value).length < 3
+        ? findSessionCompletion(value, cursor.start, cursor.end)
+        : null;
+    const referenceOpen = referenceCompletion !== null && !dismissed;
+    const referenceQuery = useSWR(
+      referenceOpen ? buildSessionsPageKey({ q: referenceCompletion.query, limit: 10 }) : null,
+      fetchSessionListPage
+    );
+    const referenceSessions = (referenceQuery.data?.sessions ?? []).filter(
+      (session) => !sessionReferences(value).some((reference) => reference.id === session.id)
+    );
+    const [activeReferenceIndex, setActiveReferenceIndex] = useState(0);
+    const referenceIndex = Math.min(
+      activeReferenceIndex,
+      Math.max(referenceSessions.length - 1, 0)
+    );
+    const selectReference = (id: string, label: string) => {
+      if (!referenceCompletion) return;
+      const marker = referenceMarker(id, label) + " ";
+      const next =
+        value.slice(0, referenceCompletion.start) + marker + value.slice(referenceCompletion.end);
+      if (maxLength && next.length > maxLength) return;
+      const caret = referenceCompletion.start + marker.length;
+      onValueChange(next);
+      setCursor({ start: caret, end: caret });
+      setActiveReferenceIndex(0);
+      requestAnimationFrame(() => {
+        inputRef.current?.focus();
+        inputRef.current?.setSelectionRange(caret, caret);
+      });
+    };
+
     const suggestionStatus = !open
       ? ""
       : suggestionSource.status === "loading"
@@ -148,6 +185,35 @@ export const PromptSkillTextarea = forwardRef<HTMLTextAreaElement, PromptSkillTe
         return;
       }
       const unmodified = !event.metaKey && !event.ctrlKey && !event.altKey && !event.shiftKey;
+      if (
+        referenceOpen &&
+        unmodified &&
+        (event.key === "ArrowDown" || event.key === "ArrowUp") &&
+        referenceSessions.length
+      ) {
+        event.preventDefault();
+        setActiveReferenceIndex(
+          (referenceIndex + (event.key === "ArrowDown" ? 1 : -1) + referenceSessions.length) %
+            referenceSessions.length
+        );
+        return;
+      }
+      if (
+        referenceOpen &&
+        unmodified &&
+        (event.key === "Enter" || event.key === "Tab") &&
+        referenceSessions[referenceIndex]
+      ) {
+        event.preventDefault();
+        const session = referenceSessions[referenceIndex];
+        selectReference(session.id, session.title ?? session.id);
+        return;
+      }
+      if (referenceOpen && event.key === "Escape" && cursor) {
+        event.preventDefault();
+        setDismissedAt({ value, cursor });
+        return;
+      }
       if (open && activeSkill && unmodified && event.key === "ArrowDown") {
         event.preventDefault();
         const index = Math.max(0, matchingSkills.indexOf(activeSkill));
@@ -186,8 +252,12 @@ export const PromptSkillTextarea = forwardRef<HTMLTextAreaElement, PromptSkillTe
           disabled={disabled}
           maxLength={maxLength}
           aria-autocomplete="list"
-          aria-controls={open ? listboxId : undefined}
-          aria-activedescendant={activeOptionId}
+          aria-controls={referenceOpen ? `${instanceId}-references` : open ? listboxId : undefined}
+          aria-activedescendant={
+            referenceOpen && referenceSessions.length
+              ? `${instanceId}-reference-${referenceIndex}`
+              : activeOptionId
+          }
           onBlur={(event) => {
             setCursor(null);
             onBlur?.(event);
@@ -226,6 +296,57 @@ export const PromptSkillTextarea = forwardRef<HTMLTextAreaElement, PromptSkillTe
             onSelect?.(event);
           }}
         />
+        {referenceOpen && (
+          <div
+            id={`${instanceId}-references`}
+            role="listbox"
+            aria-label="Session references"
+            className="border border-border bg-background p-2 max-h-60 overflow-auto"
+          >
+            {referenceQuery.isLoading ? (
+              <p role="status">Loading sessions…</p>
+            ) : referenceQuery.error ? (
+              <p role="alert">Session references unavailable.</p>
+            ) : !referenceSessions.length ? (
+              <p>No matching sessions.</p>
+            ) : (
+              referenceSessions.map((session, index) => (
+                <button
+                  key={session.id}
+                  id={`${instanceId}-reference-${index}`}
+                  type="button"
+                  role="option"
+                  aria-selected={index === referenceIndex}
+                  onMouseDown={(event) => event.preventDefault()}
+                  onMouseEnter={() => setActiveReferenceIndex(index)}
+                  onClick={() => selectReference(session.id, session.title ?? session.id)}
+                  className={`block w-full text-left px-3 py-2 ${index === referenceIndex ? "bg-muted" : ""}`}
+                >
+                  <span>{session.title ?? session.id}</span>
+                  <span className="ml-2 text-xs text-muted-foreground">
+                    {session.repoOwner}/{session.repoName} · {session.status}
+                  </span>
+                </button>
+              ))
+            )}
+          </div>
+        )}
+        {!!sessionReferences(value).length && (
+          <div aria-label="Attached session references" className="flex flex-wrap gap-2 px-3 py-2">
+            {sessionReferences(value).map((reference) => (
+              <button
+                key={reference.marker}
+                type="button"
+                disabled={disabled}
+                onClick={() => onValueChange(value.replace(reference.marker, ""))}
+                className="rounded border border-border px-2 py-1 text-xs"
+                aria-label={`Remove reference ${reference.label}`}
+              >
+                #{reference.label} ×
+              </button>
+            ))}
+          </div>
+        )}
         <span role="status" className="sr-only">
           {suggestionStatus}
         </span>

@@ -15,7 +15,15 @@ import type { SqlDatabase, SqlStatement } from "./sql-database";
 /** Viewer, filtering, and pagination inputs for an inbox query. */
 export interface ListSessionInboxOptions extends Pick<
   SessionListFilters,
-  "createdByUserIds" | "teamIds" | "ownerFilter" | "visibility" | "scope" | "readScope" | "mode"
+  | "projectId"
+  | "hasProject"
+  | "createdByUserIds"
+  | "teamIds"
+  | "ownerFilter"
+  | "visibility"
+  | "scope"
+  | "readScope"
+  | "mode"
 > {
   category: SessionInboxCategory;
   excludeAutomatedSessions?: boolean;
@@ -56,6 +64,7 @@ interface InboxSessionRow extends ViewerReadStateRow {
   root_session_id: string;
   spawn_source: SpawnSource;
   environment_id: string | null;
+  project_id: string | null;
   created_at: number;
   updated_at: number;
   effective_root_session_id: string;
@@ -83,6 +92,7 @@ function toListItem(row: InboxSessionRow): ScopedInboxSession {
     parentSessionId: row.parent_session_id,
     spawnSource: row.spawn_source,
     environmentId: row.environment_id,
+    projectId: row.project_id,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
     readState: readStateFromRow(row),
@@ -216,6 +226,8 @@ export class SessionInboxStore {
   private inboxCtes(
     options: Pick<
       ListSessionInboxOptions,
+      | "projectId"
+      | "hasProject"
       | "createdByUserIds"
       | "excludeAutomatedSessions"
       | "teamIds"

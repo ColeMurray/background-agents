@@ -334,6 +334,23 @@ class TestInstallTools:
         assert (tool_dest / "slack-notify.js").exists()
         assert (tool_dest / "spawn-child.js").exists()
 
+    def test_project_tool_gate_removes_stale_restore_copy(self, tmp_path, monkeypatch):
+        sup = _make_opencode_server()
+        workdir = tmp_path / "workspace"
+        workdir.mkdir()
+        tools_dir = tmp_path / "tools"
+        tools_dir.mkdir()
+        (tools_dir / "read_project_context.js").write_text("// project context")
+        monkeypatch.setenv("AGENT_PROJECT_CONTEXT_ENABLED", "true")
+        with _patch_paths(legacy=tmp_path / "no-legacy", tools=tools_dir):
+            sup._install_tools(workdir)
+        destination = workdir / ".opencode" / "tool" / "read_project_context.js"
+        assert destination.exists()
+        monkeypatch.delenv("AGENT_PROJECT_CONTEXT_ENABLED")
+        with _patch_paths(legacy=tmp_path / "no-legacy", tools=tools_dir):
+            sup._install_tools(workdir)
+        assert not destination.exists()
+
 
 class TestInstallBinScripts:
     """Cases for install_bin_scripts(): standalone CLIs both harnesses share."""

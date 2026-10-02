@@ -663,3 +663,54 @@ describe("Home", () => {
     ).toHaveLength(0);
   });
 });
+
+it("applies project defaults before warming and carries the project identity", async () => {
+  mocks.projectsValue = [
+    {
+      id: "p1",
+      name: "Billing",
+      ownerTeamId: null,
+      defaultEnvironmentId: null,
+      defaultRepoOwner: repo.owner,
+      defaultRepoName: repo.name,
+    },
+  ];
+  render(<Home />);
+  fireEvent.change(screen.getByLabelText("Project"), { target: { value: "p1" } });
+  expect(await screen.findByText(/Context: Billing/)).toHaveTextContent("1.2 KB");
+  fireEvent.change(screen.getByPlaceholderText("What do you want to build?"), {
+    target: { value: "Ship it" },
+  });
+  await waitFor(() => expect(fetch).toHaveBeenCalledWith("/api/sessions", expect.anything()));
+  expect(sessionCreateBody()).toMatchObject({
+    projectId: "p1",
+    repoOwner: repo.owner,
+    repoName: repo.name,
+  });
+});
+
+it.each(["loading", "failed"])("blocks project submission while preview is %s", async (state) => {
+  mocks.projectsValue = [
+    {
+      id: "p1",
+      name: "Billing",
+      ownerTeamId: null,
+      defaultEnvironmentId: null,
+      defaultRepoOwner: repo.owner,
+      defaultRepoName: repo.name,
+    },
+  ];
+  mocks.projectPreview = state === "loading" ? undefined : { bytes: 1234 };
+  mocks.projectPreviewError = state === "failed" ? new Error("Unavailable") : undefined;
+  const { container } = render(<Home />);
+  fireEvent.change(screen.getByLabelText("Project"), { target: { value: "p1" } });
+  fireEvent.change(screen.getByPlaceholderText("What do you want to build?"), {
+    target: { value: "Ship it" },
+  });
+  expect(screen.getByRole("button", { name: /^Send/ })).toBeDisabled();
+  fireEvent.submit(container.querySelector("form")!);
+  expect(
+    vi.mocked(fetch).mock.calls.filter(([input]) => String(input) === "/api/sessions")
+  ).toHaveLength(0);
+  expect(mocks.toastError).not.toHaveBeenCalled();
+});

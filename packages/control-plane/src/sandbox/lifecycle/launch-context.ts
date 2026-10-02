@@ -45,6 +45,7 @@ export interface SandboxLaunchConfig {
   model: string;
   mcpServerLookup?: McpServerLookup;
   slackAgentNotifyLookup?: SlackAgentNotifyLookup;
+  projectLookup?: (sessionId: string) => Promise<CreateSandboxConfig["project"]>;
 }
 
 export interface SandboxLaunchContextDependencies {
@@ -90,6 +91,10 @@ export function resolveImageBuildScope(
  * resolve integrations in different orders, while resume/bridge use only settings and timeouts.
  */
 export class SandboxLaunchContext {
+  async resolveProject(sessionId: string): Promise<CreateSandboxConfig["project"]> {
+    return this.config.projectLookup?.(sessionId);
+  }
+
   private readonly sessionContext: SandboxLaunchContextReader;
   private readonly provider: SandboxLaunchContextDependencies["provider"];
   private readonly config: SandboxLaunchConfig;

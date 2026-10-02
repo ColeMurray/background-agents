@@ -52,7 +52,7 @@ describe("applyMigrations", () => {
 
   it("leaves existing resources workspace-owned without creating teams or memberships", () => {
     for (const name of readdirSync(MIGRATIONS_DIR).filter(
-      (file) => file.endsWith(".sql") && !file.startsWith("0083_")
+      (file) => file.endsWith(".sql") && !file.startsWith("0083_") && !file.startsWith("0086_")
     )) {
       copyFileSync(join(MIGRATIONS_DIR, name), join(dir, name));
     }
@@ -77,7 +77,7 @@ describe("applyMigrations", () => {
     ).run();
     db.prepare("INSERT INTO environments (id, name) VALUES ('old-env', 'Old')").run();
 
-    expect(applyMigrations(db, MIGRATIONS_DIR)).toEqual(["0083_teams.sql"]);
+    expect(applyMigrations(db, MIGRATIONS_DIR)).toEqual(["0083_teams.sql", "0086_projects.sql"]);
     for (const table of ["sessions", "automations", "environments"]) {
       expect(
         db.prepare(`SELECT COUNT(*) AS n FROM ${table} WHERE owner_team_id IS NOT NULL`).get()

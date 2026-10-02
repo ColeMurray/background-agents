@@ -48,6 +48,7 @@ export type RouteAuthorizationRequirement =
     }
   | { kind: "team"; teamIdParam: string; need: keyof TeamCapabilities | "read" | "member" }
   | { kind: "team"; teamIdParam: string; need: "removeMember"; targetUserIdParam: string }
+  | { kind: "project"; idParam: string; need: "read" | "manage" }
   | { kind: "environment"; idParam: string; need: "read" | "manage" | "use" }
   | { kind: "session"; sessionIdParam: string; action: SessionAction; enforceAlways?: boolean };
 
@@ -462,4 +463,13 @@ export async function resolveRepoOrError(
     throw new HttpError("Repository is not installed for the GitHub App", 404);
   }
   return resolved;
+}
+
+export function requireProject(need: "read" | "manage", idParam = "id"): RouteAuthorization {
+  return {
+    kind: "active-user",
+    allOf: [{ kind: "project", idParam, need }],
+    service: { kind: "deny" },
+    auditAllowed: need !== "read",
+  };
 }

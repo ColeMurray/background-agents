@@ -38,6 +38,7 @@ export function automationExecutionPredicate(
   request: AutomationExecutionAuthorizationRequest
 ): SqlPredicate {
   const createGuard = rolePermissionPredicate("sessions.create");
+  const projectGuard = rolePermissionPredicate("projects.read");
   const repositoryGuard = targetUseGuard(
     request.requiresRepositoryUse,
     "automation_repositories",
@@ -59,6 +60,10 @@ export function automationExecutionPredicate(
       WHERE a.id = ? AND a.deleted_at IS NULL AND u.suspended_at IS NULL
         AND (a.owner_team_id IS NULL OR (tm.user_id IS NOT NULL AND t.id IS NOT NULL AND t.archived_at IS NULL))
         AND ${createGuard.sql}
+        AND (a.project_id IS NULL OR EXISTS (
+          SELECT 1 FROM projects p WHERE p.id = a.project_id
+            AND p.owner_team_id IS a.owner_team_id AND ${projectGuard.sql}
+        ))
         ${repositoryGuard.sql}
         ${environmentGuard.sql}
     )`,
@@ -66,6 +71,7 @@ export function automationExecutionPredicate(
       ...(request.executionUserId ? [request.executionUserId] : []),
       request.automationId,
       ...createGuard.values,
+      ...projectGuard.values,
       ...repositoryGuard.values,
       ...environmentGuard.values,
     ],

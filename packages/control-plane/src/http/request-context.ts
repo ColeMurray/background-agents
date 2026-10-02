@@ -1,3 +1,4 @@
+import type { ProjectAdmission } from "../authorization/project-admission";
 import type { EffectiveAuthorization } from "@open-inspect/shared/rbac";
 import type { TeamCapabilities } from "@open-inspect/shared/types/team-access";
 import type { Team } from "@open-inspect/shared/types/teams";
@@ -34,6 +35,7 @@ export type RequestContext = AuthenticationRequestServices & {
   automationAdmission?: AutomationRouteAdmission;
   /** Written only by route admission; read via `admittedEnvironment`. */
   environmentAdmission?: EnvironmentAdmission;
+  projectAdmission?: ProjectAdmission;
   teamAdmission?: { team: Team; access: TeamCapabilities };
   sessionAdmission?: { row: SessionEntry & SessionAccessRow; viewer: SessionViewer };
   childSessionAdmission?: { row: SessionEntry & SessionAccessRow; viewer: SessionViewer };

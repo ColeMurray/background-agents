@@ -59,7 +59,11 @@ vi.mock("@/components/analytics/dimension-table", () => ({
   }) => (
     <div
       data-testid={
-        title === "Providers" ? "analytics-provider-table" : "analytics-automation-table"
+        title === "Providers"
+          ? "analytics-provider-table"
+          : title === "Projects"
+            ? "analytics-project-table"
+            : "analytics-automation-table"
       }
       data-entries={JSON.stringify(entries)}
     />

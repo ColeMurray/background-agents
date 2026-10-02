@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useState, useMemo } from "react";
+import { useProjects } from "@/hooks/use-projects";
 import { useRepos } from "@/hooks/use-repos";
 import { useEnvironments } from "@/hooks/use-environments";
 import { useResourceTeams } from "@/hooks/use-resource-teams";
@@ -42,7 +43,9 @@ interface AutomationFormProps {
 }
 
 export function AutomationForm({ mode, initialValues, onSubmit, submitting }: AutomationFormProps) {
+  const [projectId, setProjectId] = useState(initialValues?.projectId ?? "");
   const [teamId, setTeamId] = useState(initialValues?.teamId ?? null);
+  const { projects, hasMore, loadingMore, loadMore } = useProjects({ teamId: teamId ?? "null" });
   const scope = useResourceTeams("automation");
   const scopeValid =
     mode === "edit" ||
@@ -155,7 +158,11 @@ export function AutomationForm({ mode, initialValues, onSubmit, submitting }: Au
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (!formEvaluation.valid || !scopeValid || !environmentsUsable || submitting) return;
-    onSubmit({ ...formEvaluation.values, ...(mode === "create" ? { teamId } : {}) });
+    onSubmit({
+      ...formEvaluation.values,
+      ...(mode === "create" ? { teamId } : {}),
+      ...(projectId || initialValues?.projectId ? { projectId: projectId || null } : {}),
+    });
   };
 
   return (
@@ -168,6 +175,7 @@ export function AutomationForm({ mode, initialValues, onSubmit, submitting }: Au
         onChange={(nextTeamId) => {
           if (submitting || mode === "edit") return;
           setTeamId(nextTeamId);
+          setProjectId("");
           targets.resetTargets();
         }}
       />
@@ -191,6 +199,36 @@ export function AutomationForm({ mode, initialValues, onSubmit, submitting }: Au
           required
         />
       </div>
+
+      <label className="block text-sm">
+        Project
+        <select
+          aria-label="Project"
+          className="block w-full border border-border bg-input p-2 mt-1"
+          value={projectId}
+          onChange={(event) => setProjectId(event.target.value)}
+        >
+          <option value="">No project</option>
+          {projects
+            .filter((item) => item.ownerTeamId === teamId)
+            .map((item) => (
+              <option key={item.id} value={item.id}>
+                {item.name}
+              </option>
+            ))}
+        </select>
+      </label>
+
+      {hasMore && (
+        <Button
+          type="button"
+          variant="ghost"
+          disabled={loadingMore}
+          onClick={() => void loadMore()}
+        >
+          Load more projects
+        </Button>
+      )}
 
       <AutomationTargetPicker
         targets={targets}

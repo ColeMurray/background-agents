@@ -1,3 +1,6 @@
+import { ProjectStore } from "../db/project-store";
+import { resolveProjectCreation, projectViewer } from "../session/project-context";
+import { authorizeTeamRepositories } from "../routes/workspace-repository-authorization";
 /**
  * Request-driven automation scheduler backed entirely by D1.
  *
@@ -465,14 +468,13 @@ export class Scheduler {
       automation.owner_team_id === null
         ? null
         : await new TeamStore(this.db).getById(automation.owner_team_id);
-    if (
-      !(await isAutomationExecutionAuthorized(this.db, {
-        automationId: automation.id,
-        executionUserId: executionPrincipal.platformUserId,
-        requiresRepositoryUse: selection.length > 0,
-        requiresEnvironmentUse: environmentSelection.length > 0,
-      }))
-    ) {
+    const executionAuthorization = {
+      automationId: automation.id,
+      executionUserId: executionPrincipal.platformUserId,
+      requiresRepositoryUse: selection.length > 0,
+      requiresEnvironmentUse: environmentSelection.length > 0,
+    };
+    if (!(await isAutomationExecutionAuthorized(this.db, executionAuthorization))) {
       return {
         outcome: "unauthorized",
         reason: team?.archivedAt != null ? "team_archived" : "execution_authorization_denied",
@@ -594,6 +596,7 @@ export class Scheduler {
         children,
         overlapScope,
         teamGrantsVersion,
+        executionAuthorization,
         advanceSchedule:
           source === "schedule" &&
           params.scheduledAt !== undefined &&
@@ -616,6 +619,9 @@ export class Scheduler {
       throw e;
     }
 
+    if (!inserted && !(await isAutomationExecutionAuthorized(this.db, executionAuthorization))) {
+      return { outcome: "unauthorized", reason: "execution_authorization_denied" };
+    }
     if (!inserted && teamGrantsVersion) {
       const current = await new TeamStore(this.db).getById(teamGrantsVersion.teamId);
       if (current?.grantsVersion !== teamGrantsVersion.version) {
@@ -1760,7 +1766,32 @@ export class Scheduler {
       throw new AutomationExecutionUnauthorizedError("team_archived");
     }
 
+    const project = automation.project_id
+      ? await new ProjectStore(this.db).get(automation.project_id)
+      : null;
+    if (automation.project_id && !project) throw new Error("Automation project unavailable");
+    const projectContext = await resolveProjectCreation(this.db, {
+      projectId: automation.project_id,
+      userId: executionPrincipal.platformUserId,
+      ownerTeamId: automation.owner_team_id,
+      repositories: scopeMembers.map((repo) => ({ owner: repo.repoOwner, name: repo.repoName })),
+    });
+    if (project?.ownerTeamId) {
+      const viewer = await projectViewer(this.db, executionPrincipal.platformUserId!);
+      if (viewer.kind !== "user" || !viewer.memberships.has(project.ownerTeamId))
+        throw new Error("Automation executor is no longer a project team member");
+      const denied = await authorizeTeamRepositories(ctx, {
+        teamId: project.ownerTeamId,
+        repositories: scopeMembers.map((repo) => ({
+          owner: repo.repoOwner,
+          name: repo.repoName,
+          repoId: "repoId" in repo ? repo.repoId : null,
+        })),
+      });
+      if (denied) throw new Error("Project team cannot use the automation target");
+    }
     const sessionInput: SessionInitInput = {
+      ...projectContext,
       ownerTeamId: automation.owner_team_id,
       visibility: team?.defaultVisibility ?? "workspace",
       sessionId,

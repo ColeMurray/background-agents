@@ -55,6 +55,7 @@ export function parseSessionRow(row: unknown): SessionRow | null {
 export function toSessionFields(row: SessionRow) {
   return {
     id: row.id,
+    projectId: row.project_id,
     title: row.title,
     repoOwner: row.repo_owner,
     repoName: row.repo_name,

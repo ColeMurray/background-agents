@@ -1,3 +1,4 @@
+import { evaluateProjectAdmission } from "../authorization/project-admission";
 /** Framework-neutral authentication and authorization for a matched route. */
 
 import { isWorkspaceAdmin, type PermissionId } from "@open-inspect/shared/rbac";
@@ -798,6 +799,31 @@ async function enforceRouteAuthorization(
         case "environment":
           failure = await enforceOwnedResourceRequirement(requirement, params, ctx, evidence);
           break;
+        case "project": {
+          try {
+            const result = await evaluateProjectAdmission(
+              ctx,
+              params[requirement.idParam],
+              requirement.need
+            );
+            if (result instanceof Response) {
+              failure = authorizationDenial(
+                result,
+                evidence,
+                requirement,
+                "project_action_denied",
+                "Project access denied"
+              );
+            } else {
+              ctx.projectAdmission = result;
+              evidence.requirements.push(requirement);
+              failure = null;
+            }
+          } catch {
+            failure = authorizationUnavailable();
+          }
+          break;
+        }
         case "team":
           failure = await enforceTeamRequirement(requirement, params, ctx, evidence);
           break;

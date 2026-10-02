@@ -1,3 +1,10 @@
+import {
+  projectSubscriptionReceipt,
+  isProjectSubscriptionConflict,
+} from "../db/project-subscription";
+import { ProjectStore } from "../db/project-store";
+import { projectViewer } from "../session/project-context";
+import { canReadProject } from "@open-inspect/shared/types/projects";
 /**
  * Automation create, read, update, and delete routes.
  */
@@ -140,9 +147,25 @@ async function handleCreateAutomation(
   const resolution = requireAdmittedCanonicalUserId(ctx, enforced);
   if (resolution instanceof Response) return resolution;
   const resolvedUserId = resolution;
-  const ownerTeam = await resolveCreationOwnerTeam(ctx, body.teamId ?? null);
+  const project = body.projectId ? await new ProjectStore(ctx.db).get(body.projectId) : null;
+  if (
+    body.projectId &&
+    (!project ||
+      !ctx.authorization ||
+      !canReadProject(await projectViewer(ctx.db, ctx.authorization.userId), project))
+  )
+    return error("Project unavailable", 403);
+  const ownerTeam = await resolveCreationOwnerTeam(
+    ctx,
+    body.teamId === undefined ? (project?.ownerTeamId ?? null) : body.teamId
+  );
   if (ownerTeam instanceof Response) return ownerTeam;
   const ownerTeamId = ownerTeam?.id ?? null;
+  if (project && project.ownerTeamId !== ownerTeamId)
+    return json(
+      { error: "Project and automation teams differ", code: "project_team_mismatch" },
+      409
+    );
   if (ownerTeamId !== null) {
     const executorError = await validateTeamExecutor(ctx.db, ownerTeamId, resolvedUserId);
     if (executorError) return executorError;
@@ -312,7 +335,16 @@ async function handleCreateAutomation(
   const db: SqlDatabase = ctx.db;
   const store = new AutomationStore(db);
   const providerAuthStore = new AutomationModelProviderAuthStore(db);
+
+  if (
+    body.projectId &&
+    (!project ||
+      !resolvedUserId ||
+      !canReadProject(await projectViewer(db, resolvedUserId), project))
+  )
+    return error("Project unavailable to executor", 403);
   const row: AutomationRow = {
+    project_id: project?.id ?? null,
     owner_team_id: ownerTeamId,
     id,
     name: body.name.trim(),
@@ -352,7 +384,28 @@ async function handleCreateAutomation(
       ...slackStore.bindChannelStatements(row.id, extractSlackChannels(body.triggerConfig))
     );
   }
-  await ctx.db.batch(createStatements);
+  if (project && resolvedUserId)
+    createStatements.push(
+      projectSubscriptionReceipt(
+        db,
+        { userId: ctx.authorization!.userId, requestId: ctx.request_id },
+        id,
+        project.id,
+        null,
+        resolvedUserId,
+        true
+      )
+    );
+  try {
+    await ctx.db.batch(createStatements);
+  } catch (cause) {
+    if (isProjectSubscriptionConflict(cause))
+      return json(
+        { error: "Project or authorization changed; refresh and retry", code: "project_changed" },
+        409
+      );
+    throw cause;
+  }
 
   const automation = await hydrateAutomationResponse(ctx, (await store.getById(id))!, viewer);
 
@@ -422,6 +475,27 @@ async function handleUpdateAutomation(
     return error(formatAutomationRequestError(parsedBody.error, rawBody), 400);
   }
   const body = parsedBody.data;
+  const finalProjectId =
+    body.projectId === undefined ? (existing.project_id ?? null) : body.projectId;
+  const subscribedProject = finalProjectId ? await new ProjectStore(db).get(finalProjectId) : null;
+  if (
+    finalProjectId &&
+    (!subscribedProject ||
+      !existing.user_id ||
+      !canReadProject(await projectViewer(db, existing.user_id), subscribedProject))
+  )
+    return error("Project unavailable to executor", 403);
+  if (
+    subscribedProject &&
+    (!ctx.authorization ||
+      !canReadProject(await projectViewer(db, ctx.authorization.userId), subscribedProject))
+  )
+    return error("Project unavailable", 403);
+  if (subscribedProject && subscribedProject.ownerTeamId !== existing.owner_team_id)
+    return json(
+      { error: "Project and automation teams differ", code: "project_team_mismatch" },
+      409
+    );
 
   let existingTriggerFields: ReturnType<typeof parseAutomationTriggerFields>;
   try {
@@ -528,6 +602,7 @@ async function handleUpdateAutomation(
 
   // Build update fields
   const updateFields: Record<string, unknown> = {};
+  if (body.projectId !== undefined) updateFields.project_id = body.projectId;
   if (body.name !== undefined) updateFields.name = body.name.trim();
   if (body.instructions !== undefined) updateFields.instructions = body.instructions;
   if (body.scheduleCron !== undefined) updateFields.schedule_cron = body.scheduleCron;
@@ -731,7 +806,9 @@ async function handleUpdateAutomation(
     existingTriggerType === "slack_event" && body.triggerConfig !== undefined;
   const statements: SqlStatement[] = [];
   const updateStatement = store.bindAutomationUpdate(id, updateFields);
-  if (updateStatement) statements.push(updateStatement);
+  if (updateStatement) {
+    statements.push(updateStatement);
+  }
   if (replacementRepositories !== null) {
     statements.push(...store.bindReplaceRepositories(id, replacementRepositories, Date.now()));
   }
@@ -749,8 +826,28 @@ async function handleUpdateAutomation(
       ...slackStore.bindChannelStatements(id, extractSlackChannels(body.triggerConfig))
     );
   }
+  if ((finalProjectId || body.projectId !== undefined) && existing.user_id)
+    statements.push(
+      projectSubscriptionReceipt(
+        db,
+        { userId: ctx.authorization!.userId, requestId: ctx.request_id },
+        id,
+        finalProjectId,
+        existing.project_id ?? null,
+        existing.user_id
+      )
+    );
   if (statements.length > 0) {
-    await ctx.db.batch(statements);
+    try {
+      await ctx.db.batch(statements);
+    } catch (cause) {
+      if (isProjectSubscriptionConflict(cause))
+        return json(
+          { error: "Project or authorization changed; refresh and retry", code: "project_changed" },
+          409
+        );
+      throw cause;
+    }
   }
   const updated = await store.getById(id);
   if (!updated) return error("Automation not found", 404);

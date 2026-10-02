@@ -4,6 +4,7 @@ import { getServerAuthSession } from "@/lib/server-auth-session";
 import { controlPlaneUserFetch } from "@/lib/control-plane";
 
 const UPDATE_FIELDS = [
+  "projectId",
   "name",
   "instructions",
   "scheduleCron",

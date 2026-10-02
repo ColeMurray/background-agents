@@ -5,6 +5,7 @@ import { usePathname, useRouter } from "next/navigation";
 import { useMemo, useCallback, useEffect, useState } from "react";
 import { useAuthSession } from "@/lib/auth-session";
 import { useKeyboardShortcuts } from "@/hooks/use-keyboard-shortcuts";
+import { useProjects } from "@/hooks/use-projects";
 import { useIsMobile } from "@/hooks/use-media-query";
 import { useSidebarSessions } from "@/hooks/use-sidebar-sessions";
 import type { SessionItem } from "@/hooks/use-sidebar-sessions";
@@ -24,6 +25,7 @@ import { UserMenu } from "@/components/sidebar-user-menu";
 import { useCurrentUserAuthorization } from "@/hooks/use-current-user-authorization";
 import { buildSessionsHref } from "@/lib/session-discovery";
 import { useActiveTeam } from "@/hooks/use-active-team";
+import type { SessionInboxFilters } from "@/lib/session-inbox-api";
 import { TeamSwitcher } from "./team-switcher";
 
 export type { SessionItem } from "@/hooks/use-sidebar-sessions";
@@ -72,6 +74,9 @@ export function NewSessionButton({ onClick }: SidebarActionButtonProps) {
 }
 
 interface SessionSidebarProps {
+  filters?: SessionInboxFilters;
+  projectFilter?: string;
+  onProjectFilterChange?: (value: string) => void;
   onNewSession?: () => void;
   onSearchSessions?: () => void;
   onToggle?: () => void;
@@ -86,12 +91,17 @@ export function SessionSidebar({
   onSearchSessions,
   onToggle,
   onSessionSelect,
+  filters,
+  projectFilter = "",
+  onProjectFilterChange,
 }: SessionSidebarProps) {
   const { labels } = useKeyboardShortcuts();
   const { data: authSession } = useAuthSession();
   const { hasPermission } = useCurrentUserAuthorization();
   const { activeTeamId, scope } = useActiveTeam();
-  const teamQuery = { teamIds: activeTeamId ? [activeTeamId] : undefined, scope };
+  const teamQuery = filters
+    ? { ...filters, teamIds: filters.teamIds ? [...filters.teamIds] : undefined }
+    : { teamIds: activeTeamId ? [activeTeamId] : undefined, scope };
   const pathname = usePathname();
   const router = useRouter();
   const isMobile = useIsMobile();
@@ -129,8 +139,9 @@ export function SessionSidebar({
     setSessionCreatorFilter,
     handleSessionArchived,
     handleMarkLatestMessageRead,
-  } = useSidebarSessions();
+  } = useSidebarSessions(filters);
 
+  const { projects } = useProjects();
   // Archiving the session on screen leaves nothing to show, so fall back to the home page.
   const handleArchivedSession = useCallback(
     async (sessionId: string) => {
@@ -326,6 +337,20 @@ export function SessionSidebar({
       </div>
 
       <div className="px-3 py-2">
+        <select
+          aria-label="Session project filter"
+          value={projectFilter ?? ""}
+          onChange={(event) => onProjectFilterChange?.(event.target.value)}
+          className="mb-2 w-full border border-border bg-input p-1 text-xs"
+        >
+          <option value="">All projects</option>
+          <option value="none">No project</option>
+          {projects.map((project) => (
+            <option key={project.id} value={project.id}>
+              {project.name}
+            </option>
+          ))}
+        </select>
         <ToggleGroup
           type="single"
           value={sessionCreatorFilter ?? ""}

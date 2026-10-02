@@ -38,7 +38,10 @@ import type { CreatedAtCursor } from "../created-at-cursor";
 import { z } from "zod";
 import { UserStore } from "./user-store";
 import { rolePermissionPredicate } from "../authorization/permission-sql";
-import { automationExecutionPredicate } from "../automation/authorization-guard";
+import {
+  automationExecutionPredicate,
+  type AutomationExecutionAuthorizationRequest,
+} from "../automation/authorization-guard";
 import type { SessionViewer } from "@open-inspect/shared";
 
 /** Legacy rows predate canonical executors; their GitHub creator may now map to a user. */
@@ -76,6 +79,7 @@ function appendRepositoryFilter(
 // ─── Internal row types ──────────────────────────────────────────────────────
 
 export interface AutomationRow {
+  project_id?: string | null;
   id: string;
   name: string;
   instructions: string;
@@ -273,6 +277,7 @@ export function toAutomation(
 
   return {
     id: row.id,
+    projectId: row.project_id ?? null,
     name: row.name,
     instructions: row.instructions,
     triggerType,
@@ -412,8 +417,8 @@ export class AutomationStore {
          (id, name, instructions,
           trigger_type, schedule_cron, schedule_tz, harness, model, reasoning_effort, enabled, next_run_at,
           consecutive_failures, created_by, user_id, created_at, updated_at, deleted_at,
-           event_type, trigger_config, trigger_auth_data, owner_team_id)
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+           event_type, trigger_config, trigger_auth_data, owner_team_id, project_id)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
       )
       .bind(
         row.id,
@@ -436,7 +441,8 @@ export class AutomationStore {
         row.event_type,
         row.trigger_config,
         row.trigger_auth_data,
-        row.owner_team_id
+        row.owner_team_id,
+        row.project_id ?? null
       );
   }
 
@@ -630,6 +636,7 @@ export class AutomationStore {
     // Repository fields are deliberately absent: the selection lives in
     // automation_repositories, written only by bindReplaceRepositories.
     const allowedFields: (keyof AutomationRow)[] = [
+      "project_id",
       "name",
       "instructions",
       "schedule_cron",
@@ -1168,6 +1175,7 @@ export class AutomationStore {
     advanceSchedule?: ScheduleAdvance;
     /** Team grants version the targets were authorized against; a change refuses admission. */
     teamGrantsVersion?: { teamId: string; version: number };
+    executionAuthorization?: AutomationExecutionAuthorizationRequest;
   }): Promise<{ inserted: boolean }> {
     const invocation = params.invocation;
     const overlap = this.overlapPredicate(invocation.automation_id, params.overlapScope);
@@ -1178,6 +1186,9 @@ export class AutomationStore {
           params: [grants.teamId, grants.version],
         }
       : { sql: "", params: [] };
+    const execution = params.executionAuthorization
+      ? automationExecutionPredicate(params.executionAuthorization)
+      : { sql: "1 = 1", values: [] };
     const statements: SqlStatement[] = [];
     statements.push(
       this.db
@@ -1186,7 +1197,7 @@ export class AutomationStore {
            (id, automation_id, source, scheduled_at, trigger_key, concurrency_key,
             trigger_metadata, skip_reason, failure_counted_at, created_at, updated_at)
            SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
-           WHERE NOT EXISTS (${overlap.sql}) ${grantsGuard.sql}`
+           WHERE NOT EXISTS (${overlap.sql}) ${grantsGuard.sql} AND ${execution.sql}`
         )
         .bind(
           invocation.id,
@@ -1201,7 +1212,8 @@ export class AutomationStore {
           invocation.created_at,
           invocation.updated_at,
           ...overlap.params,
-          ...grantsGuard.params
+          ...grantsGuard.params,
+          ...execution.values
         )
     );
 
@@ -1244,14 +1256,15 @@ export class AutomationStore {
           .prepare(
             // A grants change leaves the slot due, so the next tick re-authorizes it.
             `UPDATE automations SET next_run_at = ?, updated_at = ?
-             WHERE id = ? AND deleted_at IS NULL AND next_run_at = ? ${grantsGuard.sql}`
+             WHERE id = ? AND deleted_at IS NULL AND next_run_at = ? ${grantsGuard.sql} AND ${execution.sql}`
           )
           .bind(
             params.advanceSchedule.nextRunAt,
             Date.now(),
             invocation.automation_id,
             params.advanceSchedule.fromSlot,
-            ...grantsGuard.params
+            ...grantsGuard.params,
+            ...execution.values
           )
       );
     }

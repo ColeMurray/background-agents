@@ -22,6 +22,7 @@ export function useAnalyticsDashboard(days: AnalyticsDays, scope: AnalyticsScope
     modelBreakdown: dashboard.data?.breakdowns.model,
     harnessBreakdown: dashboard.data?.breakdowns.harness,
     providerBreakdown: dashboard.data?.breakdowns.provider,
+    projectBreakdown: dashboard.data?.breakdowns.project,
     automationBreakdown: dashboard.data?.breakdowns.automation,
     runs: dashboard.data?.runs,
     pullRequests: dashboard.data?.pullRequests,

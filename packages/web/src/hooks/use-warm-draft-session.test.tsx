@@ -42,6 +42,7 @@ describe("useWarmDraftSession", () => {
 
   it.each([
     { teamId: "team-2", visibility: "team" as const },
+    { projectId: "project-next", teamId: "team-1", visibility: "team" as const },
     { teamId: "team-1", visibility: "private" as const },
   ])("retires and recreates a draft when team or visibility changes: %j", async (next) => {
     vi.mocked(browserApiFetch)

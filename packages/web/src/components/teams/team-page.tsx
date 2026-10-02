@@ -24,6 +24,7 @@ import { ErrorBanner } from "@/components/ui/error-banner";
 import { TeamOverview } from "./team-overview";
 import { TeamRepositories } from "./team-repositories";
 import { TeamEnvironments } from "./team-environments";
+import { useProjects } from "@/hooks/use-projects";
 import { TeamAutomations } from "./team-automations";
 import { TeamSecrets } from "./team-secrets";
 
@@ -32,6 +33,7 @@ type TeamTab =
   | "Members"
   | "Repositories"
   | "Environments"
+  | "Projects"
   | "Automations"
   | "Secrets"
   | "Settings";
@@ -114,10 +116,12 @@ function TeamContent({
   }, [router, mutate, slug, canonicalSlug, currentTeam]);
   const team = currentTeam ?? initialTeam;
   const capabilities = useTeamCapabilities(team);
+  const { hasPermission } = useCurrentUserAuthorization();
   const [tab, setTab] = useState<TeamTab>("Overview");
   const tabs: TeamTab[] = canViewWork
     ? ["Overview", "Members", "Repositories", "Environments"]
     : ["Members"];
+  if (canViewWork && hasPermission("projects.read")) tabs.push("Projects");
   if (canViewWork && canReadAutomations) tabs.push("Automations");
   if (canViewWork && capabilities.canManageSecrets) tabs.push("Secrets");
   if (canViewWork && (capabilities.canEditMetadata || capabilities.canArchive))
@@ -162,6 +166,7 @@ function TeamContent({
           </Button>
         ))}
       </nav>
+      {activeTab === "Projects" && <TeamProjects teamId={team.id} />}
       {activeTab === "Overview" && <TeamOverview teamId={team.id} />}
       {activeTab === "Members" && <TeamMembers team={team} />}
       {activeTab === "Repositories" && <TeamRepositories team={team} />}
@@ -185,5 +190,34 @@ function TeamMembers({ team }: { team: TeamResponse }) {
     <ErrorBanner role="alert">Unable to load members.</ErrorBanner>
   ) : (
     <TeamMembersTable team={team} members={members} />
+  );
+}
+
+function TeamProjects({ teamId }: { teamId: string }) {
+  const { projects, loading, error, hasMore, loadingMore, loadMore } = useProjects({ teamId });
+  if (loading) return <p role="status">Loading projects…</p>;
+  if (error) return <ErrorBanner role="alert">Unable to load projects.</ErrorBanner>;
+  return (
+    <div className="space-y-3">
+      {projects.length ? (
+        projects.map((project) => (
+          <Link
+            className="block border border-border p-4"
+            key={project.id}
+            href={`/projects/${project.slug}`}
+          >
+            {project.name}
+            <span className="ml-2 text-muted-foreground">{project.status}</span>
+          </Link>
+        ))
+      ) : (
+        <p>No projects yet.</p>
+      )}
+      {hasMore && (
+        <Button variant="ghost" disabled={loadingMore} onClick={() => void loadMore()}>
+          Load more projects
+        </Button>
+      )}
+    </div>
   );
 }

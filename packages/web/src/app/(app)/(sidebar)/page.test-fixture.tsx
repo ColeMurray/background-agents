@@ -28,6 +28,16 @@ const mocks = vi.hoisted(() => {
     requireTeamOnCreate: false,
   };
   return {
+    projectPreview: { bytes: 1234 } as { bytes: number } | undefined,
+    projectPreviewError: undefined as Error | undefined,
+    projectsValue: [] as Array<{
+      id: string;
+      name: string;
+      ownerTeamId: null;
+      defaultEnvironmentId: string | null;
+      defaultRepoOwner: string | null;
+      defaultRepoName: string | null;
+    }>,
     routerPush: vi.fn(),
     toastError: vi.fn(),
     mutateMock: vi.fn(),
@@ -152,8 +162,17 @@ vi.mock("sonner", () => ({ toast: { error: mocks.toastError } }));
 
 vi.mock("swr", () => ({
   // Home uses the default export only for the picker's prebuild-status text.
-  default: () => ({ data: undefined, isLoading: false }),
+  default: (key: string | null) => ({
+    data: key?.endsWith("/context/preview") ? mocks.projectPreview : undefined,
+    error: key?.endsWith("/context/preview") ? mocks.projectPreviewError : undefined,
+    isLoading: false,
+  }),
   mutate: mocks.mutateMock,
+}));
+
+vi.mock("@/hooks/use-projects", () => ({
+  useProjects: () => ({ projects: mocks.projectsValue, loading: false }),
+  projectRequest: vi.fn(),
 }));
 
 vi.mock("@/hooks/use-environments", () => ({
@@ -261,6 +280,9 @@ beforeAll(() => {
 });
 
 beforeEach(() => {
+  mocks.projectsValue = [];
+  mocks.projectPreview = { bytes: 1234 };
+  mocks.projectPreviewError = undefined;
   mocks.reposValue = [repo];
   mocks.loadingReposValue = false;
   mocks.environmentsLoadingValue = false;

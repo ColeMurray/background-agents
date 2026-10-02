@@ -35,6 +35,13 @@ const SESSIONS_DESTINATION = {
 export const PRIMARY_APP_DESTINATIONS = [
   SESSIONS_DESTINATION,
   {
+    label: "Projects",
+    description: "Outcome briefs, decisions, and related work",
+    href: "/projects",
+    icon: SessionsIcon,
+    requiredPermission: "projects.read",
+  },
+  {
     label: "Teams",
     description: "Browse teams, members, and shared work",
     href: "/teams",

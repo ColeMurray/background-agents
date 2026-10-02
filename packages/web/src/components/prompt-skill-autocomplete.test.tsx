@@ -9,6 +9,24 @@ import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { PromptSkillTextarea } from "./prompt-skill-autocomplete";
 
 expect.extend(matchers);
+vi.mock("swr", () => ({
+  default: (key: string | null) => ({
+    data: key
+      ? {
+          sessions: [
+            {
+              id: "s1",
+              title: "Prior work",
+              status: "completed",
+              repoOwner: "acme",
+              repoName: "app",
+            },
+          ],
+        }
+      : undefined,
+    isLoading: false,
+  }),
+}));
 
 const skills = [
   { skillId: "review", name: "review-pr", description: "Review a pull request" },
@@ -181,4 +199,16 @@ describe("PromptSkillTextarea", () => {
     fireEvent.compositionEnd(input, { target: { selectionStart: 3, selectionEnd: 3 } });
     expect(await screen.findByRole("option", { name: /review-pr/i })).toBeInTheDocument();
   });
+});
+
+it("inserts a keyboard-selected session reference and removes its chip", async () => {
+  const user = userEvent.setup();
+  render(<Harness />);
+  const input = screen.getByRole("textbox", { name: "Prompt" });
+  await user.type(input, "Use #Prior");
+  expect(screen.getByRole("listbox", { name: "Session references" })).toBeInTheDocument();
+  await user.keyboard("{Enter}");
+  expect(input).toHaveValue("Use #[Prior work](session:s1) ");
+  await user.click(screen.getByRole("button", { name: "Remove reference Prior work" }));
+  expect(input).toHaveValue("Use  ");
 });

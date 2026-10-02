@@ -456,6 +456,7 @@ export class SandboxLifecycleManager
         model: config.model,
         mcpServerLookup: config.mcpServerLookup,
         slackAgentNotifyLookup: config.slackAgentNotifyLookup,
+        projectLookup: config.projectLookup,
       },
       imageBuildLookup,
       getLogger: () => this.log,
@@ -748,6 +749,7 @@ export class SandboxLifecycleManager
         await this.launchContext.resolveAgentSlackNotifyEnabled(session);
       const { sandboxSettings, timeoutSeconds } =
         this.launchContext.resolveSandboxSettings(session);
+      const project = await this.launchContext.resolveProject(session.session_name || session.id);
       const createConfig: CreateSandboxConfig = {
         sessionId,
         generationCreatedAtMs: generation.createdAt,
@@ -765,6 +767,7 @@ export class SandboxLifecycleManager
         codeServerEnabled,
         vncEnabled,
         agentSlackNotifyEnabled,
+        ...(project ? { project } : {}),
         mcpServers,
         sandboxSettings,
         ...repositoryFields,
@@ -1058,6 +1061,7 @@ export class SandboxLifecycleManager
       const mcpServers = await this.launchContext.loadMcpServers(repositories);
       const { sandboxSettings, timeoutSeconds } =
         this.launchContext.resolveSandboxSettings(session);
+      const project = await this.launchContext.resolveProject(session.session_name || session.id);
       const restoreConfig = {
         snapshotImageId,
         generationCreatedAtMs: generation.createdAt,
@@ -1074,6 +1078,7 @@ export class SandboxLifecycleManager
         codeServerEnabled,
         vncEnabled,
         agentSlackNotifyEnabled,
+        ...(project ? { project } : {}),
         mcpServers,
         sandboxSettings,
         ...repositoryFields,

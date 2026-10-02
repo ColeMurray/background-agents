@@ -50,6 +50,7 @@ export class AnalyticsDashboardStore {
       model,
       harness,
       automation,
+      project,
       billing,
       ...pullRequestAndRunResults
     ] = await this.db.batch([
@@ -60,6 +61,7 @@ export class AnalyticsDashboardStore {
       modelStatement,
       analytics.prepareBreakdown(sessionFilters, "harness"),
       analytics.prepareBreakdown(sessionFilters, "automation"),
+      analytics.prepareBreakdown(sessionFilters, "project"),
       billingStatement,
       ...pullRequestStatements,
       runs.prepareList({ ...sessionFilters, limit: DASHBOARD_RUNS_LIMIT, orderBy: "cost" }),
@@ -84,6 +86,7 @@ export class AnalyticsDashboardStore {
         model: modelBreakdown,
         harness: analytics.decodeBreakdown(harness, "harness"),
         automation: analytics.decodeBreakdown(automation, "automation"),
+        project: analytics.decodeBreakdown(project, "project"),
         provider: analytics.decodeProviderBreakdown(modelBreakdown, billing),
       },
       pullRequests: pullRequests.decode(pullRequestAndRunResults),

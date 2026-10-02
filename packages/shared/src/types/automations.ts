@@ -113,6 +113,7 @@ export type AutomationRepositoryInput = RepositoryInput;
 export const automationRepositoriesInputSchema = repositoriesInputSchema;
 
 const automationSchema = z.object({
+  projectId: z.string().nullable().optional(),
   id: z.string(),
   name: z.string(),
   instructions: z.string(),
@@ -196,6 +197,7 @@ export const sentryClientSecretSchema = z.string().refine((secret) => secret.tri
 });
 
 export const createAutomationRequestSchema = z.object({
+  projectId: z.string().trim().min(1).nullable().optional(),
   teamId: z
     .string()
     .regex(/^team_[A-Za-z0-9_-]+$/)
@@ -223,6 +225,7 @@ export const createAutomationRequestSchema = z.object({
 export type CreateAutomationRequest = z.input<typeof createAutomationRequestSchema>;
 
 export const updateAutomationRequestSchema = z.object({
+  projectId: z.string().trim().min(1).nullable().optional(),
   name: z.string().optional(),
   instructions: z.string().optional(),
   scheduleCron: z.string().optional(),

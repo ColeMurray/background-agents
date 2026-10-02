@@ -44,7 +44,11 @@ vi.mock("@/hooks/use-teams", () => ({
 }));
 vi.mock("@/hooks/use-current-user-authorization", () => ({
   useCurrentUserAuthorization: () => ({
-    authorization: { role: { key: mocks.role }, suspendedAt: mocks.suspendedAt },
+    authorization: {
+      role: { key: mocks.role },
+      suspendedAt: mocks.suspendedAt,
+      permissions: mocks.permissions,
+    },
     hasPermission: (permission: string) => mocks.permissions.includes(permission),
   }),
 }));

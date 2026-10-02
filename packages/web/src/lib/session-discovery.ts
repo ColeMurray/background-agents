@@ -44,6 +44,8 @@ export interface SessionDiscoveryQuery {
   creator: SessionCreatorFilter;
   repository: SessionRepositoryFilter | null;
   environmentId: string | null;
+  projectId?: string;
+  hasProject?: boolean;
   lifecycle: SessionLifecycle;
   origin: SpawnSource | null;
   teamIds: string[] | undefined;
@@ -108,6 +110,8 @@ const SESSION_DISCOVERY_TRANSPORT_PARAMS = [
   "repoOwner",
   "repoName",
   "environmentId",
+  "projectId",
+  "hasProject",
   "origin",
   "teamIds[]",
   "scope",
@@ -171,6 +175,8 @@ export function parseSessionDiscoveryQuery(
     repoOwner,
     repoName,
     environmentId,
+    projectId,
+    hasProject,
     origin,
     teamIds,
     scope,
@@ -184,6 +190,8 @@ export function parseSessionDiscoveryQuery(
       creator: createdBy.length > 0 ? "mine" : "all",
       repository: repoOwner && repoName ? { repoOwner, repoName } : null,
       environmentId: environmentId ?? null,
+      ...(projectId ? { projectId } : {}),
+      ...(hasProject !== undefined ? { hasProject } : {}),
       lifecycle: isLifecycle(lifecycleParam)
         ? lifecycleParam
         : DEFAULT_SESSION_DISCOVERY_QUERY.lifecycle,
@@ -206,6 +214,8 @@ export function serializeSessionDiscoveryQuery(query: SessionDiscoveryQuery): UR
     searchParams.set("repoName", query.repository.repoName);
   }
   if (query.environmentId) searchParams.set("environmentId", query.environmentId);
+  if (query.projectId) searchParams.set("projectId", query.projectId);
+  if (query.hasProject !== undefined) searchParams.set("hasProject", String(query.hasProject));
   if (query.lifecycle !== DEFAULT_SESSION_DISCOVERY_QUERY.lifecycle) {
     searchParams.set("lifecycle", query.lifecycle);
   }
@@ -252,6 +262,8 @@ export function toSessionListQuery(
     ...(q ? { q } : {}),
     ...(query.repository ?? {}),
     ...(query.environmentId ? { environmentId: query.environmentId } : {}),
+    ...(query.projectId ? { projectId: query.projectId } : {}),
+    ...(query.hasProject !== undefined ? { hasProject: query.hasProject } : {}),
     ...(query.origin ? { origin: query.origin } : {}),
     ...(query.teamIds?.length ? { teamIds: query.teamIds } : {}),
     ...(query.scope ? { scope: query.scope } : {}),

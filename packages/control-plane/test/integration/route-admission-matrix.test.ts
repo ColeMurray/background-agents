@@ -18,6 +18,7 @@ import { listRouteContracts, type RouteContract } from "../../src/routing/route-
 import { createCloudflareEnv } from "../../src/cloudflare/platform";
 import { AutomationStore, type AutomationRow } from "../../src/db/automation-store";
 import { EnvironmentStore } from "../../src/db/environments";
+import { ProjectStore } from "../../src/db/project-store";
 import { TeamStore } from "../../src/db/teams";
 import { TeamMembershipStore } from "../../src/db/team-memberships";
 import { SessionCollaboratorStore } from "../../src/db/session-collaborators";
@@ -55,6 +56,7 @@ interface MatrixFixtures {
   automationId: string;
   teamId: string;
   environmentId: string;
+  projectId: string;
 }
 
 function automation(id: string, userId: string): AutomationRow {
@@ -98,6 +100,10 @@ function materialize(route: RouteContract, values: Record<string, string>): stri
 
 function isSessionRoute(route: RouteContract): boolean {
   return route.path.startsWith("/sessions/:id");
+}
+
+function isProjectRoute(route: RouteContract): boolean {
+  return route.path.startsWith("/projects/:id");
 }
 
 function isAutomationRoute(route: RouteContract): boolean {
@@ -144,6 +150,7 @@ describe("route admission matrix", { timeout: MATRIX_TIMEOUT_MS }, () => {
     readonlySessionId: "",
     sandboxSessionId: "",
     automationId: "",
+    projectId: "",
     teamId: "",
     environmentId: "",
   };
@@ -159,6 +166,12 @@ describe("route admission matrix", { timeout: MATRIX_TIMEOUT_MS }, () => {
     fixtures.sandboxSessionId = sessionName;
 
     fixtures.automationId = await createAutomation();
+    fixtures.projectId = (
+      await new ProjectStore(env.DB).create(
+        { name: "Matrix project", slug: "matrix-project" },
+        { userId: BROWSER_USER_ID, requestId: "matrix-seed" }
+      )
+    ).id;
     fixtures.teamId = (
       await new TeamStore(env.DB).create({
         slug: "matrix-team",
@@ -210,15 +223,17 @@ describe("route admission matrix", { timeout: MATRIX_TIMEOUT_MS }, () => {
 
       // Mutating routes get a fresh resource so an earlier DELETE or state
       // change cannot turn later routes into handler-owned 404s.
-      const id = isTeamRoute(route)
-        ? fixtures.teamId
-        : isAutomationRoute(route)
-          ? isMutation(route)
-            ? await createAutomation()
-            : fixtures.automationId
-          : isSessionRoute(route) && isMutation(route)
-            ? await createReadySession()
-            : fixtures.readonlySessionId;
+      const id = isProjectRoute(route)
+        ? fixtures.projectId
+        : isTeamRoute(route)
+          ? fixtures.teamId
+          : isAutomationRoute(route)
+            ? isMutation(route)
+              ? await createAutomation()
+              : fixtures.automationId
+            : isSessionRoute(route) && isMutation(route)
+              ? await createReadySession()
+              : fixtures.readonlySessionId;
       const url = `${BASE}${materialize(route, { id })}`;
       const response = await serviceFetch(url, {
         method: route.method,
@@ -412,6 +427,7 @@ describe("route admission sentinel", { timeout: MATRIX_TIMEOUT_MS }, () => {
     readonlySessionId: "",
     sandboxSessionId: "",
     automationId: "",
+    projectId: "",
     teamId: "",
     environmentId: "env_sentinel",
   };
@@ -438,6 +454,12 @@ describe("route admission sentinel", { timeout: MATRIX_TIMEOUT_MS }, () => {
     await seedSandboxAuth(stub, { authToken: SANDBOX_TOKEN, sandboxId: "sb-sentinel" });
     fixtures.sandboxSessionId = sessionName;
     fixtures.automationId = await createAutomation();
+    fixtures.projectId = (
+      await new ProjectStore(env.DB).create(
+        { name: "Matrix project", slug: "matrix-project" },
+        { userId: BROWSER_USER_ID, requestId: "matrix-seed" }
+      )
+    ).id;
     fixtures.teamId = (
       await new TeamStore(env.DB).create({
         slug: "sentinel-team",
@@ -524,13 +546,15 @@ describe("route admission sentinel", { timeout: MATRIX_TIMEOUT_MS }, () => {
         ...(environmentRequirementFor(route)?.kind === "environment"
           ? { [environmentRequirementFor(route)!.idParam]: fixtures.environmentId }
           : {}),
-        id: isTeamRoute(route)
-          ? fixtures.teamId
-          : isAutomationRoute(route)
-            ? fixtures.automationId
-            : environmentRequirementFor(route)?.idParam === "id"
-              ? fixtures.environmentId
-              : sessionId,
+        id: isProjectRoute(route)
+          ? fixtures.projectId
+          : isTeamRoute(route)
+            ? fixtures.teamId
+            : isAutomationRoute(route)
+              ? fixtures.automationId
+              : environmentRequirementFor(route)?.idParam === "id"
+                ? fixtures.environmentId
+                : sessionId,
         childId: fixtures.sandboxSessionId,
       })}`;
       const method = route.method;

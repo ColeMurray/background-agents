@@ -186,6 +186,7 @@ export interface CreateSandboxRequest {
   codeServerEnabled?: boolean;
   vncEnabled?: boolean;
   agentSlackNotifyEnabled?: boolean;
+  project?: { id: string; slug: string; injectionBytes: number; toolEnabled?: boolean };
   mcpServers?: McpServerConfig[];
   sandboxSettings?: SandboxSettings;
   repositories?: SessionRepositoryInfo[];
@@ -227,6 +228,7 @@ export interface RestoreSandboxRequest {
   codeServerEnabled?: boolean;
   vncEnabled?: boolean;
   agentSlackNotifyEnabled?: boolean;
+  project?: { id: string; slug: string; injectionBytes: number; toolEnabled?: boolean };
   mcpServers?: McpServerConfig[];
   sandboxSettings?: SandboxSettings;
   repositories?: SessionRepositoryInfo[];
@@ -525,6 +527,7 @@ export class ModalClient {
           code_server_enabled: request.codeServerEnabled ?? false,
           vnc_enabled: request.vncEnabled ?? false,
           agent_slack_notify_enabled: request.agentSlackNotifyEnabled ?? false,
+          project: request.project,
           mcp_servers: request.mcpServers || null,
           sandbox_settings: request.sandboxSettings ?? null,
           sandbox_backend: request.sandboxBackend,
@@ -603,6 +606,7 @@ export class ModalClient {
           code_server_enabled: request.codeServerEnabled ?? false,
           vnc_enabled: request.vncEnabled ?? false,
           agent_slack_notify_enabled: request.agentSlackNotifyEnabled ?? false,
+          project: request.project,
           sandbox_settings: request.sandboxSettings ?? null,
           sandbox_backend: request.sandboxBackend,
           retire_sandbox_id: request.retireSandboxId,
