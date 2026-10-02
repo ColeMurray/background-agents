@@ -13,8 +13,8 @@ const BASE = "https://test.local";
 const OWNER = "11111111111111111111111111111111";
 const OTHER = "22222222222222222222222222222222";
 const content = {
-  scope: { type: "personal" },
-  memoryType: "fact",
+  scope: { type: "personal" as const },
+  memoryType: "fact" as const,
   title: "Test setup",
   description: "How to run integration tests",
   content: "Original body",
@@ -177,6 +177,30 @@ describe("memory HTTP lifecycle and session boundaries", () => {
         .includePersonalMemories
     ).toBe(false);
   });
+  it.each(["archive", "reject"] as const)(
+    "conceals an unpinned record after %s, even when the sandbox knows its ID",
+    async (action) => {
+      await createMemory();
+      const sandbox = await session(`unpinned-${action}`);
+      const record =
+        action === "archive"
+          ? await createMemory()
+          : await new MemoryStore(env.DB).create(content, {
+              kind: "agent",
+              userId: OWNER,
+              sessionId: `unpinned-${action}`,
+              requestId: "proposal",
+            });
+      const decision = await request(`/memories/${record.id}/${action}`, "POST", {
+        expectedRevisionId: record.currentRevisionId,
+        reason: "Private archive reason",
+      });
+      expect(decision.status).toBe(200);
+      const response = await sandbox(`/${record.id}`);
+      expect(response.status).toBe(404);
+      expect(await response.text()).not.toContain("Private archive reason");
+    }
+  );
   it("shared-session personal learning is proposed, approved, loaded next session, then archived", async () => {
     await createMemory();
     const sandbox = await session("learning");

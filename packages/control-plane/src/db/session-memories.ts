@@ -211,7 +211,7 @@ export class SessionMemoryStore {
   }
   /**
    * Read the live revision within session scope, rather than the injected pinned revision.
-   * Reject proposals, personal opt-out, and unpinned personal reads from inherited children.
+   * Reject proposals, unpinned archives, personal opt-out, and unpinned personal reads from children.
    * The route must still check current shared access and redact archived bodies to a notice.
    */
   async read(sessionId: string, memoryId: string): Promise<MemoryRecord | null> {
@@ -228,7 +228,8 @@ export class SessionMemoryStore {
     if (!target || !record || record.status === "proposed") return null;
     if (record.scope.type === "personal" && !target.includePersonalMemories) return null;
     if (!pinned && record.scope.type === "personal" && target.inherited) return null;
-    if (!pinned && !matchesMemoryTarget(record, target)) return null;
+    if (!pinned && (record.status !== "active" || !matchesMemoryTarget(record, target)))
+      return null;
     return record;
   }
 }
