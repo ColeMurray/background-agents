@@ -462,17 +462,9 @@ function RepoOverridesSection({
   availableRepos: EnrichedRepository[];
   enabledModelOptions: ModelCategory[];
 }) {
-  const [addingRepo, setAddingRepo] = useState("");
-
-  const overriddenRepos = new Set(overrides.map((o) => o.repo));
-  const availableForOverride = availableRepos.filter(
-    (r) => !overriddenRepos.has(r.fullName.toLowerCase())
-  );
-
-  const handleAdd = async () => {
-    if (!addingRepo) return;
-    const repository = parseRepositoryFullName(addingRepo);
-    if (!repository) return;
+  const handleAdd = async (repositoryKey: string) => {
+    const repository = parseRepositoryFullName(repositoryKey);
+    if (!repository) return false;
 
     try {
       const res = await browserApiFetch(
@@ -486,8 +478,8 @@ function RepoOverridesSection({
 
       if (res.ok) {
         mutate(REPO_SETTINGS_KEY);
-        setAddingRepo("");
         toast.success("Override added.");
+        return true;
       } else {
         const data = await res.json();
         toast.error(data.error || "Failed to add override");
@@ -495,6 +487,7 @@ function RepoOverridesSection({
     } catch {
       toast.error("Failed to add override");
     }
+    return false;
   };
 
   return (
@@ -516,9 +509,8 @@ function RepoOverridesSection({
       )}
 
       <RepositoryOverrideSelector
-        repositories={availableForOverride}
-        value={addingRepo}
-        onValueChange={setAddingRepo}
+        repositories={availableRepos}
+        overriddenRepositories={overrides.map((entry) => entry.repo)}
         onAdd={handleAdd}
       />
     </div>
