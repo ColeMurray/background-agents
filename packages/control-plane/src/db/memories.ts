@@ -13,6 +13,7 @@ import {
 import { generateId, hashToken } from "../auth/crypto";
 import type { MemoryTarget } from "../session/memory-resolution";
 import type { SqlDatabase, SqlStatement } from "./sql-database";
+import { sessionMemoryWriteGuard } from "./session-memory-write-guard";
 import { MAX_D1_QUERY_PARAMETERS } from "./query-limits";
 
 export class MemoryConflictError extends Error {}
@@ -124,7 +125,8 @@ function sameScope(
  * Persist revisioned memories after the caller has authorized the target scope.
  * Mutations claim a unique operation ID in an atomic batch; dependent revision,
  * supersession, and audit statements check that ID so a lost race leaves no side effects.
- * This store enforces lifecycle/quota invariants, not general user or team authorization.
+ * Agent inserts also enforce current session-scope authority at the write boundary.
+ * Human management authorization remains the responsibility of the caller.
  */
 export class MemoryStore {
   constructor(private readonly db: SqlDatabase) {}
@@ -319,6 +321,10 @@ export class MemoryStore {
     const revisionId = `mrev_${generateId()}`;
     const operationId = generateId();
     const now = Date.now();
+    const access =
+      actor.kind === "agent"
+        ? sessionMemoryWriteGuard(actor.sessionId!, actor.userId, scope, repoId)
+        : { sql: "", values: [] };
     const guard =
       actor.kind === "agent"
         ? `AND (SELECT COUNT(*) FROM memories WHERE author_session_id = ?) < ?
@@ -329,7 +335,7 @@ export class MemoryStore {
         .prepare(
           `INSERT INTO memories
       (id, scope_type, owner_user_id, repo_owner, repo_name, repo_id, environment_id, memory_type, status, current_revision_id, author_kind, author_user_id, author_session_id, supersedes_memory_id, supersedes_revision_id, approved_at, last_operation_id, created_at, updated_at)
-      SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ? WHERE 1 = 1 ${guard}
+      SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ? WHERE 1 = 1 ${access.sql} ${guard}
       ${actor.kind === "agent" && active ? "AND EXISTS (SELECT 1 FROM session_memory_manifests m JOIN sessions s ON s.id = m.session_id WHERE m.session_id = ? AND personal_auto_save_eligible = 1 AND include_personal_memories = 1 AND personal_owner_user_id = ? AND s.visibility = 'private' AND s.user_id = m.personal_owner_user_id)" : ""}
       ${previous ? "AND EXISTS (SELECT 1 FROM memories WHERE id = ? AND current_revision_id = ? AND status = 'active')" : ""}`
         )
@@ -352,6 +358,7 @@ export class MemoryStore {
           operationId,
           now,
           now,
+          ...access.values,
           ...(actor.kind === "agent"
             ? [
                 actor.sessionId,

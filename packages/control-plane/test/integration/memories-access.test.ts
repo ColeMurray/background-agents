@@ -252,6 +252,99 @@ describe("memory shared-scope authorization", () => {
     }
   );
 
+  it.each([
+    "team archive",
+    "grant removal",
+    "workspace membership removal",
+    "environment transfer",
+    "suspension",
+    "failed",
+    "completed",
+    "cancelled",
+    "archived",
+  ])("rejects a write when %s wins after route authorization", async (change) => {
+    const sessionId = `race-${change.replaceAll(" ", "-")}`;
+    await new SessionIndexStore(env.DB).create({
+      id: sessionId,
+      title: null,
+      userId: MEMBER,
+      ownerTeamId: change === "workspace membership removal" ? null : "engineering",
+      visibility: change === "workspace membership removal" ? "workspace" : "team",
+      repoOwner: repo.repoOwner,
+      repoName: repo.repoName,
+      repositories: [repo],
+      environmentId: change === "workspace membership removal" ? null : "dev",
+      model: "anthropic/claude-sonnet-4-6",
+      reasoningEffort: null,
+      baseBranch: "main",
+      status: "active",
+      createdAt: 1,
+      updatedAt: 1,
+      memoryManifest: await resolveSessionMemory(env.DB, {
+        canonicalUserId: MEMBER,
+        repositories: [repo],
+        environmentId: "dev",
+      }),
+    });
+    const { stub } = await initNamedSessionDO(sessionId);
+    await seedSandboxAuthHash(stub, { authToken: "race-token", sandboxId: "sandbox-race" });
+    const original = MemoryStore.prototype.create;
+    vi.spyOn(MemoryStore.prototype, "create").mockImplementationOnce(async function (
+      this: MemoryStore,
+      input,
+      author,
+      repoId
+    ) {
+      if (change === "team archive")
+        await env.DB.prepare("UPDATE teams SET archived_at = 1 WHERE id = 'engineering'").run();
+      else if (change === "workspace membership removal")
+        await env.DB.prepare("DELETE FROM team_memberships WHERE user_id = ?").bind(MEMBER).run();
+      else if (change === "grant removal")
+        await env.DB.prepare(
+          "DELETE FROM team_repository_grants WHERE team_id = 'engineering'"
+        ).run();
+      else if (change === "environment transfer") {
+        await seedTeam("other-team");
+        await env.DB.prepare(
+          "UPDATE environments SET owner_team_id = 'other-team' WHERE id = 'dev'"
+        ).run();
+      } else if (change === "suspension")
+        await env.DB.prepare("UPDATE users SET suspended_at = 1 WHERE id = ?").bind(MEMBER).run();
+      else
+        await env.DB.prepare("UPDATE sessions SET status = ? WHERE id = ?")
+          .bind(change, sessionId)
+          .run();
+      return original.call(this, input, author, repoId);
+    });
+    const response = await routeRequest(
+      new Request(`https://test.local/sessions/${sessionId}/sandbox-memory`, {
+        method: "POST",
+        headers: { Authorization: "Bearer race-token", "Content-Type": "application/json" },
+        body: JSON.stringify({
+          ...content,
+          scope:
+            change === "environment transfer"
+              ? { type: "environment", environmentId: "dev" }
+              : { type: "repository", repoOwner: repo.repoOwner, repoName: repo.repoName },
+        }),
+      }),
+      env,
+      createExecutionContext()
+    );
+    expect(response.status).toBe(409);
+    expect(await env.DB.prepare("SELECT COUNT(*) AS count FROM memories").first()).toEqual({
+      count: 0,
+    });
+    expect(await env.DB.prepare("SELECT COUNT(*) AS count FROM memory_revisions").first()).toEqual({
+      count: 0,
+    });
+    expect(
+      await env.DB.prepare(
+        "SELECT COUNT(*) AS count FROM authorization_audit_events WHERE action = 'memory.created'"
+      ).first()
+    ).toEqual({ count: 0 });
+  });
+
   it("permanently revokes personal autosave when a collaborator was added and removed", async () => {
     const manifest = await resolveSessionMemory(env.DB, {
       canonicalUserId: MEMBER,

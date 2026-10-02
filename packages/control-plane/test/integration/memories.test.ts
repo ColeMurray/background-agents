@@ -4,6 +4,7 @@ import { MemoryStore, type MemoryActor } from "../../src/db/memories";
 import { cleanD1Tables } from "./cleanup";
 import { SessionIndexStore } from "../../src/db/session-index";
 import { resolveMemoryRecords, resolveSessionMemory } from "../../src/session/memory-resolution";
+import { seedActiveUser } from "./helpers";
 import { SessionScopeStore } from "../../src/db/session-scope-store";
 
 const human: MemoryActor = { kind: "user", userId: "user_a", requestId: "test" };
@@ -25,6 +26,7 @@ const personal = {
 describe("memory persistence", () => {
   beforeEach(async () => {
     await cleanD1Tables();
+    await seedActiveUser("user_a");
     await new SessionIndexStore(env.DB).create({
       id: "session_a",
       title: null,
@@ -33,6 +35,9 @@ describe("memory persistence", () => {
       visibility: "private",
       repoOwner: null,
       repoName: null,
+      repositories: [
+        { repoOwner: "group/subgroup", repoName: "api", repoId: 123, baseBranch: "main" },
+      ],
       model: "anthropic/claude-sonnet-4-6",
       reasoningEffort: null,
       baseBranch: null,
