@@ -299,10 +299,11 @@ describe("McpServerStore", () => {
     });
 
     async function storedCredentialsAfterUpdate(
-      patch: Parameters<McpServerStore["update"]>[1]
+      patch: Parameters<McpServerStore["update"]>[1],
+      server: typeof sampleRow | typeof remoteRow = remoteRow
     ): Promise<Record<string, string>> {
       const row = {
-        ...remoteRow,
+        ...server,
         env: await encryptToken(
           JSON.stringify({ "x-api-key": "old-key", Accept: "text/event-stream" }),
           TEST_ENCRYPTION_KEY
@@ -333,6 +334,24 @@ describe("McpServerStore", () => {
       expect(
         await storedCredentialsAfterUpdate({ headers: { Authorization: "Bearer t" } })
       ).toEqual({ Authorization: "Bearer t" });
+    });
+
+    it("replaces a kept header sent under another letter case", async () => {
+      expect(
+        await storedCredentialsAfterUpdate({
+          headers: { "X-Api-Key": "new-key" },
+          keepCredentialKeys: ["x-api-key", "Accept"],
+        })
+      ).toEqual({ Accept: "text/event-stream", "X-Api-Key": "new-key" });
+    });
+
+    it("keeps env var names case-sensitive", async () => {
+      expect(
+        await storedCredentialsAfterUpdate(
+          { env: { "X-API-KEY": "new-key" }, keepCredentialKeys: ["x-api-key"] },
+          sampleRow
+        )
+      ).toEqual({ "x-api-key": "old-key", "X-API-KEY": "new-key" });
     });
   });
 

@@ -275,10 +275,14 @@ export class McpServerStore {
       const existing = await this.decryptRow(row);
       const stored = (mergedType === "remote" ? existing.headers : existing.env) ?? {};
       const incoming = mergedType === "remote" ? patch.headers : patch.env;
+      // Header names are case-insensitive, so a sent header replaces a kept one
+      // in any case; env var names stay exact.
+      const nameOf = (key: string) => (mergedType === "remote" ? key.toLowerCase() : key);
+      const sent = new Set(Object.keys(incoming ?? {}).map(nameOf));
       const kept = patch.keepCredentialKeys
         ? Object.fromEntries(
             patch.keepCredentialKeys
-              .filter((key) => Object.hasOwn(stored, key))
+              .filter((key) => Object.hasOwn(stored, key) && !sent.has(nameOf(key)))
               .map((key) => [key, stored[key]])
           )
         : undefined;
