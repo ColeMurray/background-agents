@@ -468,14 +468,13 @@ export class Scheduler {
       automation.owner_team_id === null
         ? null
         : await new TeamStore(this.db).getById(automation.owner_team_id);
-    if (
-      !(await isAutomationExecutionAuthorized(this.db, {
-        automationId: automation.id,
-        executionUserId: executionPrincipal.platformUserId,
-        requiresRepositoryUse: selection.length > 0,
-        requiresEnvironmentUse: environmentSelection.length > 0,
-      }))
-    ) {
+    const executionAuthorization = {
+      automationId: automation.id,
+      executionUserId: executionPrincipal.platformUserId,
+      requiresRepositoryUse: selection.length > 0,
+      requiresEnvironmentUse: environmentSelection.length > 0,
+    };
+    if (!(await isAutomationExecutionAuthorized(this.db, executionAuthorization))) {
       return {
         outcome: "unauthorized",
         reason: team?.archivedAt != null ? "team_archived" : "execution_authorization_denied",
@@ -597,6 +596,7 @@ export class Scheduler {
         children,
         overlapScope,
         teamGrantsVersion,
+        executionAuthorization,
         advanceSchedule:
           source === "schedule" &&
           params.scheduledAt !== undefined &&
@@ -619,6 +619,9 @@ export class Scheduler {
       throw e;
     }
 
+    if (!inserted && !(await isAutomationExecutionAuthorized(this.db, executionAuthorization))) {
+      return { outcome: "unauthorized", reason: "execution_authorization_denied" };
+    }
     if (!inserted && teamGrantsVersion) {
       const current = await new TeamStore(this.db).getById(teamGrantsVersion.teamId);
       if (current?.grantsVersion !== teamGrantsVersion.version) {

@@ -38,7 +38,10 @@ import type { CreatedAtCursor } from "../created-at-cursor";
 import { z } from "zod";
 import { UserStore } from "./user-store";
 import { rolePermissionPredicate } from "../authorization/permission-sql";
-import { automationExecutionPredicate } from "../automation/authorization-guard";
+import {
+  automationExecutionPredicate,
+  type AutomationExecutionAuthorizationRequest,
+} from "../automation/authorization-guard";
 import type { SessionViewer } from "@open-inspect/shared";
 
 /** Legacy rows predate canonical executors; their GitHub creator may now map to a user. */
@@ -1172,6 +1175,7 @@ export class AutomationStore {
     advanceSchedule?: ScheduleAdvance;
     /** Team grants version the targets were authorized against; a change refuses admission. */
     teamGrantsVersion?: { teamId: string; version: number };
+    executionAuthorization?: AutomationExecutionAuthorizationRequest;
   }): Promise<{ inserted: boolean }> {
     const invocation = params.invocation;
     const overlap = this.overlapPredicate(invocation.automation_id, params.overlapScope);
@@ -1182,6 +1186,9 @@ export class AutomationStore {
           params: [grants.teamId, grants.version],
         }
       : { sql: "", params: [] };
+    const execution = params.executionAuthorization
+      ? automationExecutionPredicate(params.executionAuthorization)
+      : { sql: "1 = 1", values: [] };
     const statements: SqlStatement[] = [];
     statements.push(
       this.db
@@ -1190,7 +1197,7 @@ export class AutomationStore {
            (id, automation_id, source, scheduled_at, trigger_key, concurrency_key,
             trigger_metadata, skip_reason, failure_counted_at, created_at, updated_at)
            SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
-           WHERE NOT EXISTS (${overlap.sql}) ${grantsGuard.sql}`
+           WHERE NOT EXISTS (${overlap.sql}) ${grantsGuard.sql} AND ${execution.sql}`
         )
         .bind(
           invocation.id,
@@ -1205,7 +1212,8 @@ export class AutomationStore {
           invocation.created_at,
           invocation.updated_at,
           ...overlap.params,
-          ...grantsGuard.params
+          ...grantsGuard.params,
+          ...execution.values
         )
     );
 
@@ -1248,14 +1256,15 @@ export class AutomationStore {
           .prepare(
             // A grants change leaves the slot due, so the next tick re-authorizes it.
             `UPDATE automations SET next_run_at = ?, updated_at = ?
-             WHERE id = ? AND deleted_at IS NULL AND next_run_at = ? ${grantsGuard.sql}`
+             WHERE id = ? AND deleted_at IS NULL AND next_run_at = ? ${grantsGuard.sql} AND ${execution.sql}`
           )
           .bind(
             params.advanceSchedule.nextRunAt,
             Date.now(),
             invocation.automation_id,
             params.advanceSchedule.fromSlot,
-            ...grantsGuard.params
+            ...grantsGuard.params,
+            ...execution.values
           )
       );
     }

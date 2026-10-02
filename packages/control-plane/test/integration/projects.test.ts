@@ -1004,3 +1004,36 @@ it("advances the project version for same-millisecond item saves and deletes", a
     clock.mockRestore();
   }
 });
+
+it("rejects a project-revoked executor before recording an invocation", async () => {
+  const project = await create();
+  const response = await req("/automations", "POST", {
+    name: "Revoked",
+    instructions: "Check",
+    triggerType: "schedule",
+    scheduleCron: "0 0 * * *",
+    scheduleTz: "UTC",
+    projectId: project.id,
+  });
+  expect(response.status).toBe(201);
+  const { automation } = await response.json<{ automation: { id: string } }>();
+  await env.DB.prepare(
+    "INSERT INTO roles (id,name,normalized_name,is_system) VALUES ('executor-no-project','Executor no project','executor no project',0)"
+  ).run();
+  await env.DB.prepare(
+    "INSERT INTO role_permissions (role_id,permission_id) VALUES ('executor-no-project','sessions.create')"
+  ).run();
+  await env.DB.prepare(
+    "UPDATE user_role_assignments SET role_id='executor-no-project' WHERE user_id=?"
+  )
+    .bind(A)
+    .run();
+  const scheduler = new Scheduler(sqlDatabase(env.DB), createCloudflareEnv(env), { submit() {} });
+  await expect(scheduler.trigger(automation.id, A)).rejects.toMatchObject({
+    name: "AutomationExecutionUnauthorizedError",
+  });
+  expect(
+    (await env.DB.prepare("SELECT id FROM automation_invocations").all()).results
+  ).toHaveLength(0);
+  expect((await env.DB.prepare("SELECT id FROM automation_runs").all()).results).toHaveLength(0);
+});
