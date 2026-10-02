@@ -27,18 +27,24 @@ interface UseSessionDiffSelectionOptions {
 }
 
 /**
- * The file shown in the diff view. Closing it returns focus to the current
- * file's row in the details sidebar, else to whatever opened the diff, else to
- * `focusFallback`.
+ * The file shown in the diff view. Closing it returns focus to the control
+ * passed to `openDiff`, such as a timeline file link, else to the current file's
+ * row in the details sidebar, else to whatever had focus when the diff opened,
+ * else to `focusFallback`.
  */
 export function useSessionDiffSelection({ onOpen, focusFallback }: UseSessionDiffSelectionOptions) {
   const [selectedDiff, setSelectedDiff] = useState<DiffSelection | null>(null);
-  const openerRef = useRef<HTMLElement | null>(null);
+  const openerRef = useRef<{ element: HTMLElement | null; explicit: boolean } | null>(null);
 
   const openDiff = useCallback(
-    (selection: DiffSelection) => {
-      openerRef.current =
-        document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    (selection: DiffSelection, opener?: HTMLElement) => {
+      // Safari does not focus a clicked button, so callers that know the control pass it.
+      openerRef.current = opener
+        ? { element: opener, explicit: true }
+        : {
+            element: document.activeElement instanceof HTMLElement ? document.activeElement : null,
+            explicit: false,
+          };
       setSelectedDiff(selection);
       onOpen();
     },
@@ -51,7 +57,11 @@ export function useSessionDiffSelection({ onOpen, focusFallback }: UseSessionDif
     setSelectedDiff(null);
     // Choose a target once the session layout is back on screen.
     requestAnimationFrame(() => {
-      const target = (current && findDiffRow(current)) || (canTakeFocus(opener) ? opener : null);
+      const visibleOpener = canTakeFocus(opener?.element) ? opener.element : null;
+      const target =
+        (opener?.explicit ? visibleOpener : null) ||
+        (current && findDiffRow(current)) ||
+        visibleOpener;
       if (target) target.focus();
       else focusFallback();
     });
