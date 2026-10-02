@@ -686,11 +686,23 @@ class TestTranslation:
             UserMessage(
                 content=[ToolResultBlock(tool_use_id="call_bg", content="x", is_error=False)]
             ),
-            _result(0.1, origin={"kind": "task-notification"}),
+            _result(
+                0.1,
+                origin={"kind": "task-notification"},
+                usage={
+                    "input_tokens": 10,
+                    "output_tokens": 4,
+                    "cache_read_input_tokens": 3,
+                },
+            ),
         ]
         our_turn = [
             AssistantMessage(content=[TextBlock("real answer")], model="m", message_id="msg_1"),
-            _result(0.3, origin={"kind": "human"}),
+            _result(
+                0.3,
+                origin={"kind": "human"},
+                usage={"input_tokens": 2, "output_tokens": 1, "cache_creation_input_tokens": 5},
+            ),
         ]
         h = Harness(tmp_path, turns=[injected_turn + our_turn])
         await h.harness.open()
@@ -701,12 +713,203 @@ class TestTranslation:
         # so the session's cost still adds up.
         assert outcome.success is True and outcome.message_cost_usd == pytest.approx(0.3)
         assert [e["content"] for e in events if e["type"] == "token"] == ["real answer"]
-        assert [e for e in events if e["type"] == "tool"] == []
-        assert len([e for e in events if e["type"] == "step_finish"]) == 1
+        assert [e for e in events if e["type"] == "tool_call"] == []
+        finishes = [e for e in events if e["type"] == "step_finish"]
+        assert len(finishes) == 1
+        assert finishes[0]["messageId"] == "m1"
+        assert finishes[0]["tokens"] == {
+            "input": 12,
+            "output": 5,
+            "cache": {"read": 3, "write": 5},
+        }
+
+    @pytest.mark.asyncio
+    async def test_multiple_injected_results_with_partial_usage_count_once(
+        self, tmp_path: Path
+    ) -> None:
+        turn = [
+            UserMessage(content="first notification", origin={"kind": "task-notification"}),
+            _result(
+                0.1,
+                origin={"kind": "task-notification"},
+                subtype="error_during_execution",
+                is_error=True,
+                result="injected failed",
+                usage={"input_tokens": 7, "cache_read_input_tokens": 2},
+            ),
+            UserMessage(content="second notification", origin={"kind": "channel"}),
+            AssistantMessage(content=[TextBlock("secret")], model="m", message_id="injected"),
+            _result(0.2, usage={"output_tokens": 3, "cache_creation_input_tokens": 4}),
+            UserMessage(content="third notification", origin={"kind": "peer"}),
+            _result(0.25, origin={"kind": "peer"}, usage=None),
+            AssistantMessage(content=[TextBlock("answer")], model="m", message_id="human"),
+            _result(0.4, origin={"kind": "human"}, usage={"output_tokens": 5}),
+        ]
+        h = Harness(tmp_path, turns=[turn, [_result(0.5, usage={"input_tokens": 2})]])
+        await h.harness.open()
+        await h.harness.create_session()
+        events, outcome = await _run(h.harness)
+
+        assert outcome.success is True and outcome.message_cost_usd == pytest.approx(0.4)
+        assert [e["content"] for e in events if e["type"] == "token"] == ["answer"]
+        assert [e["type"] for e in events] == ["step_start", "token", "step_finish"]
+        assert events[-1]["tokens"] == {
+            "input": 7,
+            "output": 8,
+            "cache": {"read": 2, "write": 4},
+        }
+        next_events, _ = await _run(h.harness, HarnessPrompt(message_id="m2", text="next"))
+        assert next_events[0]["tokens"] == {"input": 2}
+
+    @pytest.mark.asyncio
+    async def test_invalid_boolean_human_usage_does_not_add_to_injected_tokens(
+        self, tmp_path: Path
+    ) -> None:
+        h = Harness(
+            tmp_path,
+            turns=[
+                [
+                    UserMessage(content="notification", origin={"kind": "task-notification"}),
+                    _result(
+                        0.1,
+                        origin={"kind": "task-notification"},
+                        usage={"input_tokens": 3, "output_tokens": 2},
+                    ),
+                    _result(
+                        0.2,
+                        origin={"kind": "human"},
+                        usage={"input_tokens": True, "output_tokens": 4},
+                    ),
+                ]
+            ],
+        )
+        await h.harness.open()
+        await h.harness.create_session()
+        events, _ = await _run(h.harness)
+
+        assert events[-1]["tokens"] == {"input": 3, "output": 6}
+
+    @pytest.mark.asyncio
+    async def test_reset_inside_injected_turn_preserves_usage_and_rotates_session(
+        self, tmp_path: Path
+    ) -> None:
+        h = Harness(
+            tmp_path,
+            turns=[
+                [_result(0.5, usage={"input_tokens": 2})],
+                [
+                    UserMessage(content="notification", origin={"kind": "task-notification"}),
+                    ConversationResetMessage(new_conversation_id="c2", uuid="u", session_id="s"),
+                    _result(
+                        0.1,
+                        session_id="rotated-id",
+                        origin={"kind": "task-notification"},
+                        usage={"input_tokens": 3},
+                    ),
+                    _result(
+                        0.2,
+                        session_id="rotated-id",
+                        origin={"kind": "human"},
+                        usage={"output_tokens": 4},
+                    ),
+                ],
+            ],
+        )
+        await h.harness.open()
+        await h.harness.create_session()
+        await _run(h.harness, HarnessPrompt(message_id="m1", text="first"))
+        events, outcome = await _run(h.harness, HarnessPrompt(message_id="m2", text="second"))
+
+        assert outcome.success is True and outcome.message_cost_usd == pytest.approx(0.2)
+        assert h.harness.session_id == "rotated-id"
+        assert next(e for e in events if e["type"] == "step_finish")["tokens"] == {
+            "input": 3,
+            "output": 4,
+        }
+
+    @pytest.mark.asyncio
+    async def test_injected_result_rotates_session_even_without_a_human_result(
+        self, tmp_path: Path
+    ) -> None:
+        h = Harness(
+            tmp_path,
+            turns=[
+                [_result(0.5)],
+                [
+                    UserMessage(content="notification", origin={"kind": "task-notification"}),
+                    ConversationResetMessage(new_conversation_id="c2", uuid="u", session_id="s"),
+                    _result(
+                        0.1,
+                        session_id="rotated-id",
+                        origin={"kind": "task-notification"},
+                        usage={"input_tokens": 3},
+                    ),
+                ],
+                [_result(0.1, session_id="rotated-id")],
+            ],
+        )
+        await h.harness.open()
+        await h.harness.create_session()
+        await _run(h.harness, HarnessPrompt(message_id="m1", text="first"))
+        events, outcome = await _run(h.harness, HarnessPrompt(message_id="m2", text="second"))
+
+        assert outcome.success is False and "stream ended" in (outcome.error or "")
+        assert events == []
+        assert h.harness.session_id == "rotated-id"
+        await _run(h.harness, HarnessPrompt(message_id="m3", text="third"))
+        assert h.clients[1].options["resume"] == "rotated-id"
+
+    @pytest.mark.asyncio
+    async def test_missing_injected_usage_does_not_invent_tokens(self, tmp_path: Path) -> None:
+        h = Harness(
+            tmp_path,
+            turns=[
+                [
+                    UserMessage(content="notification", origin={"kind": "task-notification"}),
+                    _result(0.1, origin={"kind": "task-notification"}),
+                    _result(0.2, origin={"kind": "human"}),
+                ]
+            ],
+        )
+        await h.harness.open()
+        await h.harness.create_session()
+        events, outcome = await _run(h.harness)
+
+        assert outcome.success is True and outcome.message_cost_usd == pytest.approx(0.2)
+        assert len(events) == 1 and events[0]["type"] == "step_finish"
+        assert "tokens" not in events[0]
 
 
 class TestCostBaseline:
-    """§5.3: messageCostUsd = running total at turn end - baseline."""
+    """§5.3: messageCostUsd sums running-total deltas across resets."""
+
+    @pytest.mark.asyncio
+    async def test_injected_spend_before_reset_is_included_in_prompt_cost(
+        self, tmp_path: Path
+    ) -> None:
+        h = Harness(
+            tmp_path,
+            turns=[
+                [_result(0.5)],
+                [
+                    UserMessage(content="first", origin={"kind": "task-notification"}),
+                    _result(0.6, origin={"kind": "task-notification"}),
+                    UserMessage(content="second", origin={"kind": "channel"}),
+                    ConversationResetMessage(new_conversation_id="c2", uuid="u", session_id="s"),
+                    _result(0.05, session_id="rotated-id", origin={"kind": "channel"}),
+                    _result(0.2, session_id="rotated-id", origin={"kind": "human"}),
+                ],
+            ],
+        )
+        await h.harness.open()
+        await h.harness.create_session()
+        await _run(h.harness, HarnessPrompt(message_id="m1", text="first"))
+        events, outcome = await _run(h.harness, HarnessPrompt(message_id="m2", text="second"))
+
+        assert outcome.message_cost_usd == pytest.approx(0.3)
+        finish = next(e for e in events if e["type"] == "step_finish")
+        assert finish["messageCostUsd"] == pytest.approx(0.3)
+        assert finish["cost"] == pytest.approx(0.3)
 
     @pytest.mark.asyncio
     async def test_two_turns_then_restart_then_a_third(self, tmp_path: Path) -> None:

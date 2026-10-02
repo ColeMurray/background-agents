@@ -175,8 +175,8 @@ def _injected_origin(origin: MessageOrigin | None) -> MessageOrigin | None:
 @dataclass
 class _TurnState:
     message_id: str
-    # None: the previous turn reported no running total, so the next total
-    # cannot be split between the two turns.
+    # None: no known running total to separate the next result's cost from
+    # earlier turns. Otherwise updated at each injected result.
     cost_baseline: float | None
     texts: list[_MessageText] = field(default_factory=list)
     last_token_content: str = ""
@@ -187,6 +187,8 @@ class _TurnState:
     # Inside a turn the session injected (background task, channel, peer):
     # skip everything until that turn's result.
     injected: bool = False
+    injected_cost: float = 0.0
+    injected_usage: dict[str, int] = field(default_factory=dict)
 
     def turn_text(self) -> str:
         return "\n\n".join(entry.text for entry in self.texts if entry.text)
@@ -549,6 +551,8 @@ class ClaudeHarness:
                     except TimeoutError as error:
                         raise _InactivityTimeout from error
                     if self._belongs_to_injected_turn(state, message):
+                        if isinstance(message, ConversationResetMessage):
+                            self._translate(state, message)
                         continue
                     events, outcome = self._translate(state, message)
                     for event in events:
@@ -589,13 +593,11 @@ class ClaudeHarness:
 
         The streaming connection can interleave turns the CLI starts on its
         own (task notifications, channel and peer messages). Only the user
-        message that opens such a turn and the result that closes it carry
-        ``origin``; the assistant messages, stream events and tool results
-        between them do not. So a non-human user message opens the skip, its
-        result closes it, and nothing in between reaches the timeline. Our
-        own prompts are stamped ``origin: human``. The injected turn's spend
-        stays in the running total and lands on the prompt in flight, so the
-        session's cost still adds up.
+        message that opens such a turn and usually the result that closes it
+        carry ``origin``; the assistant messages, stream events and tool
+        results between them do not. Our own prompts are stamped ``origin:
+        human``. The injected turn's cost stays in the running total, while
+        its per-turn usage is added to the in-flight prompt's final step.
         """
         if isinstance(message, UserMessage):
             if (origin := _injected_origin(message.origin)) is not None:
@@ -603,9 +605,29 @@ class ClaudeHarness:
                 self.log.info("claude.injected_turn_started", origin_kind=origin["kind"])
             return state.injected
         if isinstance(message, ResultMessage):
-            if (origin := _injected_origin(message.origin)) is not None:
+            origin = _injected_origin(message.origin)
+            if origin is not None or (state.injected and message.origin is None):
                 state.injected = False
-                self.log.info("claude.injected_turn_ignored", origin_kind=origin["kind"])
+                self._adopt_rotated_session(message)
+                if message.total_cost_usd is not None:
+                    if state.cost_baseline is not None:
+                        state.injected_cost += max(
+                            message.total_cost_usd - state.cost_baseline, 0.0
+                        )
+                    state.cost_baseline = message.total_cost_usd
+                for key in (
+                    "input_tokens",
+                    "output_tokens",
+                    "cache_read_input_tokens",
+                    "cache_creation_input_tokens",
+                ):
+                    value = (message.usage or {}).get(key)
+                    if isinstance(value, int) and not isinstance(value, bool) and value >= 0:
+                        state.injected_usage[key] = state.injected_usage.get(key, 0) + value
+                self.log.info(
+                    "claude.injected_turn_ignored",
+                    origin_kind=origin["kind"] if origin else "unknown",
+                )
                 return True
             state.injected = False
             return False
@@ -714,6 +736,16 @@ class ClaudeHarness:
         }
 
     # --- translation (§5.2) -------------------------------------------------
+
+    def _adopt_rotated_session(self, message: ResultMessage) -> None:
+        if self._session_rotated and message.session_id and message.session_id != self.session_id:
+            self.log.info(
+                "claude.session.rotated",
+                agent_session_id=message.session_id,
+                previous_session_id=self.session_id,
+            )
+            self.session_id = message.session_id
+            self._session_rotated = False
 
     def _translate(
         self, state: _TurnState, message: Any
@@ -829,34 +861,25 @@ class ClaudeHarness:
             return events, None
 
         if isinstance(message, ResultMessage):
-            if (
-                self._session_rotated
-                and message.session_id
-                and message.session_id != self.session_id
-            ):
-                self.log.info(
-                    "claude.session.rotated",
-                    agent_session_id=message.session_id,
-                    previous_session_id=self.session_id,
-                )
-                self.session_id = message.session_id
-                self._session_rotated = False
+            self._adopt_rotated_session(message)
             total = message.total_cost_usd
+            message_cost = state.injected_cost
             if total is None:
                 # No total means no baseline for the next turn either.
-                message_cost = 0.0
                 self._cost_baseline = None
                 events.append(
                     {
                         "type": "warning",
                         "scope": "provider",
-                        "message": "The Claude agent reported no cost for this turn; it is recorded as 0.",
+                        "message": (
+                            "The Claude agent reported no cost for this result; its additional "
+                            "cost is recorded as 0."
+                        ),
                     }
                 )
             elif state.cost_baseline is None:
-                # The previous turn's share of this total is unknowable, so
-                # neither turn is charged and the baseline re-anchors here.
-                message_cost = 0.0
+                # The previous turn's share is unknowable; re-anchor without
+                # charging this result's unknown share.
                 self._cost_baseline = total
                 events.append(
                     {
@@ -864,12 +887,12 @@ class ClaudeHarness:
                         "scope": "provider",
                         "message": (
                             "The Claude agent reported no cost for the previous turn, so this "
-                            "turn's cost cannot be separated from it; it is recorded as 0."
+                            "result's cost cannot be separated from it; it is recorded as 0."
                         ),
                     }
                 )
             else:
-                message_cost = max(total - state.cost_baseline, 0.0)
+                message_cost += max(total - state.cost_baseline, 0.0)
                 self._cost_baseline = total
             finish: BridgeEvent = {
                 "type": "step_finish",
@@ -879,7 +902,15 @@ class ClaudeHarness:
                 "messageCostUsd": message_cost,
                 "reason": message.subtype,
             }
-            tokens = _usage_tokens(message.usage)
+            usage = dict(message.usage or {})
+            for key, value in state.injected_usage.items():
+                current = usage.get(key)
+                usage[key] = (
+                    value + current
+                    if isinstance(current, int) and not isinstance(current, bool) and current >= 0
+                    else value
+                )
+            tokens = _usage_tokens(usage)
             if tokens:
                 finish["tokens"] = tokens
             events.append(finish)
