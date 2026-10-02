@@ -670,6 +670,7 @@ export class SandboxLifecycleManager
   ): SandboxGeneration & {
     sandboxId: string;
   } {
+    createdAt = Math.max(createdAt, (this.storage.getSandbox()?.created_at ?? 0) + 1);
     return { sandboxId: buildSandboxIdForSession(session, createdAt), createdAt };
   }
 

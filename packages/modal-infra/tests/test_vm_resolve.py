@@ -62,7 +62,10 @@ def _sandbox(tags, env=None):
 
 
 @pytest.mark.asyncio
-async def test_resolve_returns_owned_vm_id_access_and_tunnels_without_mutation(monkeypatch):
+@pytest.mark.parametrize("has_generation_order", [False, True])
+async def test_resolve_returns_owned_vm_id_access_and_tunnels_without_mutation(
+    monkeypatch, has_generation_order
+):
     monkeypatch.setattr(web_api, "require_auth", lambda _token: None)
     env = {
         "CODE_SERVER_PASSWORD": "original-code-password",
@@ -73,7 +76,10 @@ async def test_resolve_returns_owned_vm_id_access_and_tunnels_without_mutation(m
         EXPECTED_TUNNEL_PORTS_ENV_VAR: "3000,3001",
         "TERMINAL_ENABLED": "true",
     }
-    sandbox = _sandbox(_tags(), env)
+    tags = _tags()
+    if has_generation_order:
+        tags["openinspect_generation_created_at_ms"] = "1700000000000"
+    sandbox = _sandbox(tags, env)
     from_name = AsyncMock(return_value=sandbox)
     create = AsyncMock(side_effect=AssertionError("resolve must not create"))
     monkeypatch.setattr(manager_module.modal.Sandbox, "from_name", SimpleNamespace(aio=from_name))
@@ -420,7 +426,7 @@ async def test_vm_launch_reports_typed_outcomes(monkeypatch, endpoint, case, det
     monkeypatch.setattr("src.images.base.docker_image", object())
     monkeypatch.setattr(manager_module.modal.Image, "from_id", lambda _id: object())
     lookup = (
-        AsyncMock(return_value=_sandbox(docker_allocation_tags(SESSION, "other")))
+        AsyncMock(return_value=_sandbox(docker_allocation_tags("other-session", "other")))
         if case == "foreign"
         else AsyncMock(side_effect=NotFoundError("not visible"))
     )
@@ -447,4 +453,4 @@ async def test_vm_launch_reports_typed_outcomes(monkeypatch, endpoint, case, det
 
     assert (exc.value.status_code, exc.value.detail) == (409, detail)
     assert create.await_count == (1 if case == "race" else 0)
-    assert lookup.await_count == (2 if case == "race" else 1)
+    assert lookup.await_count == {"race": 2, "expired": 0, "foreign": 1}[case]

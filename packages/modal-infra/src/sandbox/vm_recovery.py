@@ -9,11 +9,12 @@ import modal
 from sandbox_runtime.constants import VNC_PASSWORD_ENV_VAR
 
 from ..app_config import APP_NAME
+from .launch_policy import ALLOCATION_GENERATION_CREATED_AT_MS_TAG
 from .tunnels import SandboxTunnels
 
 VM_LAUNCH_TAG = "openinspect_vm_launch"
 VM_PORTS_TAG = "openinspect_vm_ports"
-_METADATA_TAGS = {VM_LAUNCH_TAG, VM_PORTS_TAG}
+_METADATA_TAGS = {VM_LAUNCH_TAG, VM_PORTS_TAG, ALLOCATION_GENERATION_CREATED_AT_MS_TAG}
 
 type VMAllocationDetail = Literal[
     "not_visible", "other_generation", "window_closed", "race_pending"
@@ -57,7 +58,7 @@ class VMServiceLaunch:
 
 
 def owned_vm_tags_match(actual: dict[str, str], expected: dict[str, str]) -> bool:
-    """Keep exact generation ownership, allowing only the two launch metadata tags."""
+    """Keep exact generation ownership, allowing only provider-owned launch metadata."""
     return all(actual.get(key) == value for key, value in expected.items()) and (
         actual.keys() <= expected.keys() | _METADATA_TAGS
     )

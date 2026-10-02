@@ -19,6 +19,7 @@ ALLOCATION_KIND_TAG = "openinspect_kind"
 ALLOCATION_SESSION_TAG = "openinspect_session_id"
 ALLOCATION_SANDBOX_TAG = "openinspect_sandbox_id"
 ALLOCATION_BACKEND_TAG = "openinspect_backend"
+ALLOCATION_GENERATION_CREATED_AT_MS_TAG = "openinspect_generation_created_at_ms"
 ModalBackend = Literal["modal", "modal-vm"]
 VM_DEFAULT_CPU_CORES = 2
 VM_DEFAULT_MEMORY_MIB = 4096
@@ -113,7 +114,7 @@ def docker_allocation_name(session_id: str) -> str:
 
 
 def docker_allocation_tags(session_id: str, sandbox_id: str) -> dict[str, str]:
-    """Ownership tags a found allocation must match exactly before adoption or retirement."""
+    """Session and generation ownership tags for named VM allocations."""
     return {
         ALLOCATION_KIND_TAG: "session",
         ALLOCATION_SESSION_TAG: _identity_digest(session_id)[:48],
