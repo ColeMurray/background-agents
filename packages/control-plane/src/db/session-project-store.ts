@@ -3,6 +3,12 @@ import { projectAccessPredicate, activePermissionPredicate } from "./project-acc
 import { projectAudit, type ProjectActor, ProjectWriteConflict } from "./project-store";
 import type { SqlDatabase } from "./sql-database";
 
+export class ProjectAssociationError extends ProjectWriteConflict {
+  constructor(readonly reason: "not_visible" | "team_mismatch" | "conflict") {
+    super();
+  }
+}
+
 export class SessionProjectStore {
   constructor(private readonly db: SqlDatabase) {}
   async associate(
@@ -56,7 +62,21 @@ export class SessionProjectStore {
         { sessionId, projectId: project?.id ?? null, includeChildren }
       ),
     ]);
-    if (!result[0].meta.changes) throw new ProjectWriteConflict();
+    if (!result[0].meta.changes) {
+      // Only classify a rejected write. The committing recursive guard above remains
+      // authoritative, including if authorization changes again before this read.
+      const failure = await this.db
+        .prepare(
+          `${tree} SELECT CASE
+        WHEN NOT (${active.sql}) OR NOT EXISTS (SELECT 1 FROM affected)
+          OR EXISTS (SELECT 1 FROM sessions s JOIN affected a ON a.id=s.id WHERE NOT (${eligible})) THEN 'not_visible'
+        ${project ? "WHEN EXISTS (SELECT 1 FROM sessions s JOIN affected a ON a.id=s.id WHERE s.owner_team_id IS NOT ?) THEN 'team_mismatch'" : ""}
+        ELSE 'conflict' END AS reason`
+        )
+        .bind(sessionId, ...active.params, actor.userId, ...(project ? [project.ownerTeamId] : []))
+        .first<{ reason: "not_visible" | "team_mismatch" | "conflict" }>();
+      throw new ProjectAssociationError(failure?.reason ?? "conflict");
+    }
     return result[0].meta.changes;
   }
   async snapshot(sessionId: string) {

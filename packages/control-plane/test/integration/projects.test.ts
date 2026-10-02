@@ -240,6 +240,9 @@ describe("project session invariants", () => {
       })
     ).rejects.toThrow();
     expect((await store.get("root"))?.projectId).toBeNull();
+    expect((await req("/sessions/root/project", "PUT", { projectId: project.id })).status).toBe(
+      403
+    );
   });
   it("project and unassigned lists partition the fixture", async () => {
     const project = await create();
@@ -1232,4 +1235,39 @@ it("loads large project context with bounded queries and skips live data for sna
   expect(live?.sessions).toHaveLength(20);
   expect(live?.sources).toEqual(snapshot?.sources);
   expect((await buildInjectionBlock(live!)).text).toBe((await buildInjectionBlock(snapshot!)).text);
+});
+
+it("moves a large lineage including terminal descendants with constant store queries", async () => {
+  const project = await create();
+  const store = new SessionIndexStore(env.DB);
+  for (let i = 0; i < 80; i++)
+    await store.create({
+      id: `lineage-${i}`,
+      title: "Lineage",
+      parentSessionId: i ? `lineage-${i - 1}` : undefined,
+      repoOwner: null,
+      repoName: null,
+      model: "anthropic/claude-haiku-4-5",
+      reasoningEffort: null,
+      baseBranch: null,
+      status: i % 2 ? "completed" : "created",
+      userId: A,
+      createdAt: 1,
+      updatedAt: 1,
+      ownerTeamId: null,
+      visibility: "workspace",
+    });
+  const db = sqlDatabase(env.DB);
+  const prepare = vi.fn(db.prepare.bind(db));
+  const moved = await new SessionProjectStore({ prepare, batch: db.batch.bind(db) }).associate(
+    "lineage-0",
+    (await new ProjectStore(env.DB).get(project.id))!,
+    true,
+    { userId: A, requestId: "large-tree" }
+  );
+  expect(moved).toBe(80);
+  expect(prepare).toHaveBeenCalledTimes(3);
+  const response = await req("/sessions/lineage-0/project", "PUT", { projectId: null });
+  expect(response.status).toBe(200);
+  expect(await response.json()).toMatchObject({ updated: 80 });
 });

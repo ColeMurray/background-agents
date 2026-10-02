@@ -6,11 +6,9 @@ import { Hono } from "hono";
 import { z } from "zod";
 import { canReadProject, projectCapabilities } from "@open-inspect/shared/types/projects";
 import { ProjectStore, ProjectWriteConflict } from "../db/project-store";
-import { SessionProjectStore } from "../db/session-project-store";
-import { SessionScopeStore } from "../db/session-scope-store";
+import { SessionProjectStore, ProjectAssociationError } from "../db/session-project-store";
 import { SessionIndexStore } from "../db/session-index";
 import { evaluateProjectAdmission } from "../authorization/project-admission";
-import { evaluateSessionAdmission } from "../authorization/session-admission";
 import { projectViewer, loadProjectContext, buildToolResult } from "../session/project-context";
 import { admit, dispatch } from "../routing/admit";
 import type { ControlPlaneHonoEnv } from "../routing/hono-env";
@@ -41,22 +39,6 @@ async function associate(request: Request, env: Env, params: { id: string }, ctx
     if (admission instanceof Response) return admission;
     project = admission.project;
   }
-  const ids = [
-    params.id,
-    ...(input.includeChildren
-      ? await new SessionScopeStore(ctx.db).listDescendantIds(params.id)
-      : []),
-  ];
-  for (const id of ids) {
-    const access = await evaluateSessionAdmission(ctx, env, id, "lifecycle", null, true);
-    if (access.kind !== "allowed") return error("Session is unavailable or cannot be moved", 403);
-    const row = await new SessionIndexStore(ctx.db).get(id);
-    if (project && row?.ownerTeamId !== project.ownerTeamId)
-      return json(
-        { error: "Project and session teams differ", code: "project_team_mismatch" },
-        409
-      );
-  }
   try {
     const updated = await new SessionProjectStore(ctx.db).associate(
       params.id,
@@ -66,6 +48,15 @@ async function associate(request: Request, env: Env, params: { id: string }, ctx
     );
     return json({ projectId: input.projectId, updated });
   } catch (cause) {
+    if (cause instanceof ProjectAssociationError) {
+      if (cause.reason === "not_visible")
+        return error("Session is unavailable or cannot be moved", 403);
+      if (cause.reason === "team_mismatch")
+        return json(
+          { error: "Project and session teams differ", code: "project_team_mismatch" },
+          409
+        );
+    }
     if (cause instanceof ProjectWriteConflict)
       return json({ error: cause.message, code: "project_changed" }, 409);
     throw cause;
