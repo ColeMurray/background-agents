@@ -104,6 +104,7 @@ function fixture() {
     },
     acceptResolvedStartup: vi.fn(async () => true),
     getLogger: vi.fn(() => ({ warn: vi.fn() })),
+    alarmScheduler: { schedule: vi.fn(async () => {}) },
     backgroundTasks: {
       submit: vi.fn((task: () => Promise<unknown>) => {
         work.push(task());
@@ -281,6 +282,20 @@ describe("VM startup reconciliation boundaries", () => {
       expect(f.deps.shutdown.recordResolvedProviderHandle).not.toHaveBeenCalled();
       expect(f.deps.access.broadcastProviderAccessIfConnected).not.toHaveBeenCalled();
       expect(f.deps.storage.completeProviderResume.mock.calls[0][2]).toBe(f.reference);
+    }
+  );
+
+  it.each(["fenced", "stopped", "replaced", "resolved"] as const)(
+    "arms no alarm lookup for a %s generation",
+    async (change) => {
+      const f = fixture();
+      if (change === "fenced") f.row.fenced = 1;
+      if (change === "stopped") f.row.status = "stopped";
+      if (change === "replaced") f.row.created_at += 1;
+      if (change === "resolved") f.row.modal_object_id = "sb-real";
+      await f.reconciliation.resumePendingBridge(f.generation);
+      expect(f.deps.alarmScheduler.schedule).not.toHaveBeenCalled();
+      expect(f.deps.provider.resolveSandbox).not.toHaveBeenCalled();
     }
   );
 
