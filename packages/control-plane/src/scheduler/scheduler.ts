@@ -1281,8 +1281,11 @@ export class Scheduler {
         continue;
       }
 
-      if (event.source === "github" && !grantedGitHubAutomationIds?.has(automation.id)) {
-        await store.recordGitHubGrantDenied(automation.id, event);
+      if (
+        event.source === "github" &&
+        !grantedGitHubAutomationIds?.has(automation.id) &&
+        (await store.recordGitHubGrantDenied(automation.id, event))
+      ) {
         skipped++;
         continue;
       }

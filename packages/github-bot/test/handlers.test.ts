@@ -287,14 +287,11 @@ describe.each(routedHandlers)("GitHub routing: $name", ({ run, senderId }) => {
       respond: () => Response.json({ teamId: "team_pr", via: "workspace" }),
     },
     { name: "invalid via", respond: () => Response.json({ teamId: null, via: "unknown" }) },
-  ])("fails closed on $name before resolving a target", async ({ respond }) => {
+  ])("throws on $name before resolving a target so delivery can retry", async ({ respond }) => {
     const env = createMockEnv();
     mockControlPlaneResponse(env, /\/github\/route\?/, respond);
 
-    expect(await run(env, createMockLogger())).toEqual({
-      outcome: "skipped",
-      skip_reason: "route_lookup_failed",
-    });
+    await expect(run(env, createMockLogger())).rejects.toThrow();
     expect(getControlPlaneFetch(env)).toHaveBeenCalledTimes(1);
   });
 
@@ -360,9 +357,9 @@ describe("GitHub routing", () => {
       /\/github\/route\?/,
       () => new Response("unavailable", { status: 503 })
     );
-    expect(
-      await handlePullRequestOpened(env, createMockLogger(), pullRequestOpenedPayload, "trace-auto")
-    ).toEqual({ outcome: "skipped", skip_reason: "route_lookup_failed" });
+    await expect(
+      handlePullRequestOpened(env, createMockLogger(), pullRequestOpenedPayload, "trace-auto")
+    ).rejects.toThrow("GitHub routing lookup failed: 503");
     expect(getControlPlaneFetch(env)).toHaveBeenCalledTimes(1);
   });
 });
@@ -378,6 +375,7 @@ describe.each([
   it.each([
     { status: 403, code: "not_member", message: /not a member/i },
     { status: 409, code: "target_team_missing_grant", message: /acme\/widgets/ },
+    { status: 409, code: "team_archived", message: /team is archived/i },
   ])(
     "comments on the PR and skips $code without delivering a prompt",
     async ({ status, code, message }) => {
@@ -433,6 +431,7 @@ describe.each([
 describe.each([
   { status: 403, code: "not_member" },
   { status: 409, code: "target_team_missing_grant" },
+  { status: 409, code: "team_archived" },
 ])("refusal notifications: $code", ({ status, code }) => {
   it.each([
     {
@@ -467,27 +466,27 @@ describe.each([
   });
 });
 
-describe("grant refusal repository validation", () => {
+describe("session refusal details", () => {
   it.each([null, 123, ""])(
-    "rejects a malformed repository %s without posting a fallback comment",
+    "does not depend on an unused repository field %s to explain refusal",
     async (repository) => {
       const env = createMockEnv();
       mockControlPlaneResponse(env, /^https:\/\/internal\/sessions$/, () =>
         Response.json({ code: "target_team_missing_grant", repository }, { status: 409 })
       );
-      const githubFetch = vi.fn();
+      const githubFetch = vi.fn().mockResolvedValue(new Response("", { status: 201 }));
       vi.stubGlobal("fetch", githubFetch);
 
-      await expect(
-        handleReviewRequested(
+      expect(
+        await handleReviewRequested(
           env,
           createMockLogger(),
           reviewRequestedPayload,
           "trace-invalid-repository"
         )
-      ).rejects.toThrow("Session creation failed: 409");
-
-      expect(githubFetch).not.toHaveBeenCalled();
+      ).toEqual({ outcome: "skipped", skip_reason: "target_team_missing_grant" });
+      expect(githubFetch).toHaveBeenCalledTimes(1);
+      expect(JSON.parse(githubFetch.mock.calls[0][1].body).body).toContain("`acme/widgets`");
       expect(
         getControlPlaneFetch(env).mock.calls.filter(([url]) => url === "https://internal/sessions")
       ).toHaveLength(1);
@@ -496,6 +495,29 @@ describe("grant refusal repository validation", () => {
       ).toBe(false);
     }
   );
+
+  it("keeps an archived PR owner's team and posts an explanatory refusal", async () => {
+    const env = createMockEnv();
+    mockControlPlaneResponse(env, /\/github\/route\?/, () =>
+      Response.json({ teamId: "team_archived_pr", via: "pull_request_session" })
+    );
+    mockControlPlaneResponse(env, /^https:\/\/internal\/sessions$/, () =>
+      Response.json({ code: "team_archived" }, { status: 409 })
+    );
+    const githubFetch = vi.fn().mockResolvedValue(new Response("", { status: 201 }));
+    vi.stubGlobal("fetch", githubFetch);
+
+    expect(
+      await handleReviewRequested(env, createMockLogger(), reviewRequestedPayload, "trace-archived")
+    ).toEqual({ outcome: "skipped", skip_reason: "team_archived" });
+    const cpFetch = getControlPlaneFetch(env);
+    expect(sessionCreateBody(cpFetch).teamId).toBe("team_archived_pr");
+    expect(cpFetch.mock.calls.filter(([url]) => url === "https://internal/sessions")).toHaveLength(
+      1
+    );
+    expect(cpFetch.mock.calls.some(([url]) => String(url).endsWith("/prompt"))).toBe(false);
+    expect(JSON.parse(githubFetch.mock.calls[0][1].body).body).toMatch(/team is archived/i);
+  });
 });
 
 describe("handlePullRequestOpened", () => {
@@ -1446,12 +1468,9 @@ describe("default environment targets", () => {
     });
   }
 
-  it.each([
-    { repository: "acme/gadgets", expectedRepository: "acme/gadgets" },
-    { repository: undefined, expectedRepository: "acme/widgets" },
-  ])(
-    "names the denied repository $expectedRepository for an environment grant refusal",
-    async ({ repository, expectedRepository }) => {
+  it.each(["acme/gadgets", undefined])(
+    "keeps secondary repository details %s out of public PR refusals",
+    async (repository) => {
       const env = createMockEnv();
       mockSessionTarget(env, {
         metadata: { defaultEnvironmentId: "env_abc" },
@@ -1486,12 +1505,9 @@ describe("default environment targets", () => {
       expect(githubFetch.mock.calls[0][0]).toBe(
         "https://api.github.com/repos/acme/widgets/issues/42/comments"
       );
-      expect(JSON.parse(githubFetch.mock.calls[0][1].body).body).toContain(
-        `\`${expectedRepository}\``
-      );
-      if (repository) {
-        expect(JSON.parse(githubFetch.mock.calls[0][1].body).body).not.toContain("`acme/widgets`");
-      }
+      const comment = JSON.parse(githubFetch.mock.calls[0][1].body).body;
+      expect(comment).toContain("`acme/widgets`");
+      expect(comment).not.toContain("acme/gadgets");
     }
   );
 

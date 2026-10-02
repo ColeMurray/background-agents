@@ -37,8 +37,7 @@ const githubRouteResponseSchema = z.discriminatedUnion("via", [
 ]);
 
 const sessionCreationErrorSchema = z.object({
-  code: z.string(),
-  repository: z.string().min(1).optional(),
+  code: z.enum(["not_member", "target_team_missing_grant", "team_archived"]),
 });
 
 async function resolveGitHubRoute(
@@ -46,7 +45,7 @@ async function resolveGitHubRoute(
   log: Logger,
   traceId: string,
   params: { repositoryId: number; pullNumber?: number; senderId?: number }
-): Promise<z.infer<typeof githubRouteResponseSchema> | null> {
+): Promise<z.infer<typeof githubRouteResponseSchema>> {
   const query = new URLSearchParams({ repositoryId: String(params.repositoryId) });
   if (params.pullNumber !== undefined) query.set("pullNumber", String(params.pullNumber));
   if (params.senderId !== undefined) query.set("sender", `github:${params.senderId}`);
@@ -54,13 +53,11 @@ async function resolveGitHubRoute(
     const url = `https://internal/github/route?${query}`;
     const response = await signedControlPlaneFetch(env, { method: "GET", url, traceId });
     if (!response.ok) {
-      log.warn("route.lookup_failed", { trace_id: traceId, status: response.status });
-      return null;
+      throw new Error(`GitHub routing lookup failed: ${response.status}`);
     }
     const parsed = githubRouteResponseSchema.safeParse(await response.json());
     if (!parsed.success) {
-      log.warn("route.invalid_response", { trace_id: traceId });
-      return null;
+      throw new Error("GitHub routing lookup failed: invalid response");
     }
     return parsed.data;
   } catch (err) {
@@ -68,7 +65,7 @@ async function resolveGitHubRoute(
       trace_id: traceId,
       error: err instanceof Error ? err : new Error(String(err)),
     });
-    return null;
+    throw err;
   }
 }
 
@@ -127,14 +124,20 @@ async function createSession(
     if (
       parsed.success &&
       ((response.status === 403 && parsed.data.code === "not_member") ||
-        (response.status === 409 && parsed.data.code === "target_team_missing_grant"))
+        (response.status === 409 &&
+          (parsed.data.code === "target_team_missing_grant" ||
+            parsed.data.code === "team_archived")))
     ) {
-      const { code, repository } = parsed.data;
-      const repo = repository ?? `${params.owner}/${params.repoName}`;
-      const comment =
-        code === "not_member"
-          ? "I couldn't start a session because you are not a member of the target team. Ask a team lead to add you, then try again."
-          : `I couldn't start a session because the target team does not have a repository grant for \`${repo}\`. Ask a team lead or workspace administrator to grant access, then try again.`;
+      const { code } = parsed.data;
+      // A PR comment must not disclose secondary repositories from the environment.
+      const repo = `${params.owner}/${params.repoName}`;
+      const comment = {
+        not_member:
+          "I couldn't start a session because you are not a member of the target team. Ask a team lead to add you, then try again.",
+        target_team_missing_grant: `I couldn't start a session because the target team is missing a required repository grant to work on \`${repo}\`. Ask a team lead or workspace administrator to review the team's repository and environment grants, then try again.`,
+        team_archived:
+          "I couldn't start a session because the target team is archived. Ask a workspace administrator to restore the team, then try again.",
+      }[code];
       const repositoryPath = encodeRepositoryPathSegments({
         repoOwner: params.owner,
         repoName: params.repoName,
@@ -320,7 +323,6 @@ export async function handleReviewRequested(
         pullNumber: pr.number,
         senderId: sender.id,
       });
-      if (!route) return { outcome: "skipped", skip_reason: "route_lookup_failed" };
       const target = await resolveSessionTarget(env, log, {
         owner,
         repoName,
@@ -433,8 +435,7 @@ export async function handlePullRequestOpened(
     resolveAppName(env),
     meta,
     async () => {
-      const route = await resolveGitHubRoute(env, log, traceId, { repositoryId: repo.id });
-      if (!route) return { outcome: "skipped", skip_reason: "route_lookup_failed" };
+      await resolveGitHubRoute(env, log, traceId, { repositoryId: repo.id });
       // Deprecated auto-review always stays workspace-level, regardless of sender or PR ownership.
       const target = await resolveSessionTarget(env, log, {
         owner,
@@ -565,7 +566,6 @@ export async function handleIssueComment(
         pullNumber: issue.number,
         senderId: sender.id,
       });
-      if (!route) return { outcome: "skipped", skip_reason: "route_lookup_failed" };
       const target = await resolveSessionTarget(env, log, {
         owner,
         repoName,
@@ -687,7 +687,6 @@ export async function handleReviewComment(
         pullNumber: pr.number,
         senderId: sender.id,
       });
-      if (!route) return { outcome: "skipped", skip_reason: "route_lookup_failed" };
       const target = await resolveSessionTarget(env, log, {
         owner,
         repoName,

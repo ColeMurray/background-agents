@@ -380,6 +380,47 @@ describe("GitHub automation routing (real D1 and SessionDO)", () => {
     expect(sessionInitialization.initializeSession).not.toHaveBeenCalled();
   });
 
+  it.each(["after candidate lookup", "before denial persistence"] as const)(
+    "launches when the missing grant is added %s rather than consuming a denied trigger key",
+    async (window) => {
+      const id = "auto-github-added-grant";
+      await saveAutomation(id, TEAM_A, EXECUTOR_A);
+      const addGrant = () =>
+        new TeamRepositoryGrantStore(env.DB).add(TEAM_A, {
+          kind: "repository",
+          repoExternalId: CURRENT_REPOSITORY.repo_id,
+          owner: STORED_REPOSITORY.repo_owner,
+          name: STORED_REPOSITORY.repo_name,
+        });
+      if (window === "after candidate lookup") {
+        const lookup = AutomationStore.prototype.getGitHubAutomationsForEvent;
+        vi.spyOn(AutomationStore.prototype, "getGitHubAutomationsForEvent").mockImplementationOnce(
+          async function (this: AutomationStore, repositoryId, eventType) {
+            const candidates = await lookup.call(this, repositoryId, eventType);
+            expect(candidates[0].repositoryGranted).toBe(false);
+            await addGrant();
+            return candidates;
+          }
+        );
+      } else {
+        const recordDenial = AutomationStore.prototype.recordGitHubGrantDenied;
+        vi.spyOn(AutomationStore.prototype, "recordGitHubGrantDenied").mockImplementationOnce(
+          async function (this: AutomationStore, automationId, event) {
+            await addGrant();
+            return recordDenial.call(this, automationId, event);
+          }
+        );
+      }
+      const event = githubEvent();
+      const scheduler = createScheduler();
+
+      expect(await scheduler.event(event)).toEqual({ triggered: 1, skipped: 0, steered: 0 });
+      expect(await scheduler.event(event)).toEqual({ triggered: 0, skipped: 1, steered: 0 });
+      await expectLaunchedSession(id, TEAM_A, EXECUTOR_A, event);
+      expect(sessionInitialization.initializeSession).toHaveBeenCalledOnce();
+    }
+  );
+
   it("does not launch when SCM resolution returns a different repository ID", async () => {
     const id = "auto-github-replaced-name";
     await saveAutomation(id, TEAM_A, EXECUTOR_A);

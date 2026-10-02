@@ -1563,16 +1563,25 @@ export class AutomationStore {
     }));
   }
 
-  /** Record an event denial atomically and once, without claiming a session or concurrency slot. */
-  async recordGitHubGrantDenied(automationId: string, event: GitHubAutomationEvent): Promise<void> {
+  /** Return false if current grants allow admission and this event has not already been handled. */
+  async recordGitHubGrantDenied(
+    automationId: string,
+    event: GitHubAutomationEvent
+  ): Promise<boolean> {
     const invocationId = generateId();
     const createdAt = Date.now();
-    await this.db.batch([
+    const [inserted] = await this.db.batch([
       this.db
         .prepare(
           `INSERT INTO automation_invocations
            (id, automation_id, source, trigger_key, concurrency_key, created_at, updated_at)
-           VALUES (?, ?, 'event', ?, ?, ?, ?) ON CONFLICT DO NOTHING`
+           SELECT ?, ?, 'event', ?, ?, ?, ?
+           WHERE EXISTS (SELECT 1 FROM automations a WHERE a.id = ? AND a.owner_team_id IS NOT NULL
+                         AND NOT EXISTS (SELECT 1 FROM team_repository_grants g
+                                         WHERE g.team_id = a.owner_team_id
+                                           AND (g.grant_kind = 'installation' OR
+                                                (g.grant_kind = 'repository' AND g.repo_external_id = ?))))
+           ON CONFLICT DO NOTHING`
         )
         .bind(
           invocationId,
@@ -1580,7 +1589,9 @@ export class AutomationStore {
           event.triggerKey,
           event.concurrencyKey,
           createdAt,
-          createdAt
+          createdAt,
+          automationId,
+          event.repositoryId
         ),
       this.db
         .prepare(
@@ -1603,6 +1614,13 @@ export class AutomationStore {
           invocationId
         ),
     ]);
+    if ((inserted.meta.changes ?? 0) > 0) return true;
+    return (
+      (await this.db
+        .prepare("SELECT 1 FROM automation_invocations WHERE automation_id = ? AND trigger_key = ?")
+        .bind(automationId, event.triggerKey)
+        .first()) !== null
+    );
   }
 
   async getAutomationsForEvent(

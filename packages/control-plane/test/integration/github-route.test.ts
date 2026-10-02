@@ -159,6 +159,19 @@ describe("GET /github/route", () => {
     });
   });
 
+  it("keeps an archived PR owner's team instead of rerouting to another granted membership", async () => {
+    const linkedTeam = await team("archived-linked");
+    await session("archived-linked", linkedTeam);
+    await pullRequest("archived-linked");
+    await team("active-sender");
+    await env.DB.prepare("UPDATE teams SET archived_at = 2 WHERE id = ?").bind(linkedTeam).run();
+
+    await expectRoute(`repositoryId=${REPOSITORY_ID}&pullNumber=7&sender=${SENDER}`, {
+      teamId: linkedTeam,
+      via: "pull_request_session",
+    });
+  });
+
   it("does not confuse the same PR number in another numeric repository", async () => {
     const teamId = await team("sender");
     const otherTeam = await team("other", null);

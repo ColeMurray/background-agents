@@ -529,6 +529,7 @@ describe("POST /webhooks/github", () => {
   it.each([
     { status: 403, code: "not_member" },
     { status: 409, code: "target_team_missing_grant" },
+    { status: 409, code: "team_archived" },
   ])(
     "allows redelivery after a failed $code refusal comment clears the marker",
     async ({ status, code }) => {
@@ -602,6 +603,88 @@ describe("POST /webhooks/github", () => {
 
       const duplicateRes = await app.fetch(request(), env, ctx);
       expect(await duplicateRes.json()).toEqual({ ok: true, duplicate: true });
+      expect(ctx.waitUntil).toHaveBeenCalledTimes(2);
+    }
+  );
+
+  it.each([
+    { name: "network failure", respond: () => Promise.reject(new Error("unavailable")) },
+    { name: "HTTP outage", respond: () => new Response("unavailable", { status: 503 }) },
+    { name: "invalid JSON", respond: () => new Response("truncated JSON") },
+    { name: "invalid contract", respond: () => Response.json({ teamId: null }) },
+  ])(
+    "permits redelivery after a routing $name without creating a session first",
+    async ({ respond }) => {
+      const body = JSON.stringify({
+        action: "review_requested",
+        pull_request: {
+          number: 42,
+          title: "Retry routing",
+          body: null,
+          user: { login: "alice" },
+          head: { ref: "feature/test", sha: "abc123" },
+          base: { ref: "main" },
+        },
+        requested_reviewer: { login: "test-bot[bot]" },
+        repository: { id: 99, owner: { login: "test" }, name: "repo", private: false },
+        sender: { login: "alice", id: 1001, avatar_url: "https://example.com/alice.png" },
+      });
+      const signature = await sign(SECRET, body);
+      const ctx = makeCtx();
+      const env = makeEnv();
+      const cpFetch = vi.mocked(env.CONTROL_PLANE.fetch);
+      let routingFailed = false;
+      cpFetch.mockImplementation(async (url) => {
+        const requestUrl = String(url);
+        if (requestUrl.includes("/integration-settings/github/resolved/")) {
+          return Response.json({ config: null });
+        }
+        if (requestUrl.startsWith("https://internal/github/route?")) {
+          if (!routingFailed) {
+            routingFailed = true;
+            return respond();
+          }
+          return Response.json({ teamId: "team_pr", via: "pull_request_session" });
+        }
+        if (requestUrl.endsWith("/metadata")) {
+          return Response.json({ repo: "test/repo", metadata: null });
+        }
+        if (requestUrl === "https://internal/sessions") {
+          return Response.json({ sessionId: "session-123", status: "created" });
+        }
+        if (requestUrl.endsWith("/prompt")) return Response.json({ messageId: "message-123" });
+        return new Response(null, { status: 204 });
+      });
+      const request = () =>
+        new Request("http://localhost/webhooks/github", {
+          method: "POST",
+          body,
+          headers: {
+            "X-Hub-Signature-256": signature,
+            "X-GitHub-Event": "pull_request",
+            "X-GitHub-Delivery": "delivery-routing-retry",
+          },
+        });
+
+      expect(await (await app.fetch(request(), env, ctx)).json()).toEqual({ ok: true });
+      await flushWaitUntil(ctx, 0);
+      expect(await env.GITHUB_KV.get("delivery:delivery-routing-retry")).toBeNull();
+      expect(env.GITHUB_KV.delete).toHaveBeenCalledOnce();
+      expect(cpFetch.mock.calls.some(([url]) => String(url) === "https://internal/sessions")).toBe(
+        false
+      );
+
+      expect(await (await app.fetch(request(), env, ctx)).json()).toEqual({ ok: true });
+      await flushWaitUntil(ctx, 1);
+      expect(await env.GITHUB_KV.get("delivery:delivery-routing-retry")).toBe("processed");
+      expect(
+        cpFetch.mock.calls.filter(([url]) => String(url) === "https://internal/sessions")
+      ).toHaveLength(1);
+      expect(cpFetch.mock.calls.filter(([url]) => String(url).endsWith("/prompt"))).toHaveLength(1);
+      expect(await (await app.fetch(request(), env, ctx)).json()).toEqual({
+        ok: true,
+        duplicate: true,
+      });
       expect(ctx.waitUntil).toHaveBeenCalledTimes(2);
     }
   );
