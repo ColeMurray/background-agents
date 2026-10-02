@@ -282,8 +282,8 @@ async def test_interleaved_turns_keep_identity_deduplication_and_result_fields_i
     (stderr,) = [
         call.kwargs for call in log.info.call_args_list if call.args[0] == "claude.sdk.stderr"
     ]
-    assert "message_id" not in stderr and stderr["active_prompt_count"] == 2
-    assert not trajectory._active_turns and trajectory._turn.get() is None
+    assert "message_id" not in stderr and stderr["agent_session_id"] == "native"
+    assert trajectory._turn.get() is None
 
 
 async def test_connection_lived_stderr_reader_does_not_reuse_its_first_turn_context():
@@ -314,8 +314,9 @@ async def test_connection_lived_stderr_reader_does_not_reuse_its_first_turn_cont
     stderr = [
         call.kwargs for call in log.info.call_args_list if call.args[0] == "claude.sdk.stderr"
     ]
-    assert [record.get("message_id") for record in stderr] == ["A", "B", None]
-    assert [record["active_prompt_count"] for record in stderr] == [1, 1, 0]
+    assert all(
+        "message_id" not in record and record["agent_session_id"] == "native" for record in stderr
+    )
 
 
 @pytest.mark.parametrize(

@@ -66,7 +66,7 @@ def _bounded_text(text: str) -> str:
     return encoded.decode("utf-8")
 
 
-@dataclass(eq=False)
+@dataclass
 class _LogTurn:
     message_id: str
     agent_session_id: str | None
@@ -102,7 +102,6 @@ class ClaudeTrajectoryLogger:
                     and (len(value) >= MIN_MCP_SECRET_LENGTH or _SENSITIVE_KEY.search(name))
                 )
         self._turn: ContextVar[_LogTurn | None] = ContextVar("claude_log_turn", default=None)
-        self._active_turns: set[_LogTurn] = set()
         self._agent_session_id: str | None = None
         # A reused client can deliver a task's terminal update on a later prompt.
         self._task_parents: dict[str, str] = {}
@@ -120,7 +119,6 @@ class ClaudeTrajectoryLogger:
 
     def begin(self, message_id: str, agent_session_id: str | None) -> Token[_LogTurn | None]:
         turn = _LogTurn(message_id, agent_session_id)
-        self._active_turns.add(turn)
         if self._agent_session_id is None:
             self._agent_session_id = agent_session_id
         return self._turn.set(turn)
@@ -224,8 +222,6 @@ class ClaudeTrajectoryLogger:
 
     def _write(self, event: str, *, level: str = "info", **fields: Any) -> None:
         turn = self._turn.get()
-        if turn not in self._active_turns:
-            turn = None
         fields = {
             "message_id": turn.message_id if turn else None,
             "agent_session_id": turn.agent_session_id if turn else self._agent_session_id,
@@ -264,14 +260,12 @@ class ClaudeTrajectoryLogger:
             pass
 
     def stderr(self, line: str) -> None:
-        # The connection-lived SDK reader inherits its first prompt's context.
-        # It supplies no turn ID, so never guess an attribution during overlap.
-        turn = next(iter(self._active_turns)) if len(self._active_turns) == 1 else None
+        # The connection-lived reader inherits its first prompt's context, but
+        # stderr has no turn ID and may arrive after that prompt has completed.
         self.diagnostic(
             "claude.sdk.stderr",
-            message_id=turn.message_id if turn else None,
-            agent_session_id=turn.agent_session_id if turn else self._agent_session_id,
-            active_prompt_count=len(self._active_turns),
+            message_id=None,
+            agent_session_id=self._agent_session_id,
             diagnostic_preview=line,
         )
 
@@ -431,6 +425,4 @@ class ClaudeTrajectoryLogger:
         except Exception:
             pass
         finally:
-            if turn:
-                self._active_turns.discard(turn)
             self._turn.reset(token)

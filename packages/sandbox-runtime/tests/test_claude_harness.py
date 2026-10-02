@@ -1213,7 +1213,7 @@ class TestTrajectoryLogging:
         ] == pytest.approx(0.25)
         assert "uncollected" not in json.dumps(records)
 
-    async def test_stderr_callback_is_supported_and_uses_current_prompt_on_reused_client(
+    async def test_stderr_callback_is_supported_and_stays_session_scoped_on_reused_client(
         self, tmp_path: Path, trajectory_log, caplog
     ) -> None:
         h = Harness(
@@ -1234,9 +1234,10 @@ class TestTrajectoryLogging:
         await h.harness.run_prompt(HarnessPrompt(message_id="m2", text="next"), emit)
         records = _trajectory_records(caplog, "claude.sdk.stderr")
         assert len(h.clients) == 1
-        assert [(record["message_id"], record["diagnostic_preview"]) for record in records] == [
-            ("m1", "startup diagnostic"),
-            ("m2", "second prompt diagnostic"),
+        assert all("message_id" not in record for record in records)
+        assert [record["diagnostic_preview"] for record in records] == [
+            "startup diagnostic",
+            "second prompt diagnostic",
         ]
         assert records[0]["agent_session_id"] == native_id
         assert records[1]["agent_session_id"] == "sess"
