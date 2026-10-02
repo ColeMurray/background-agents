@@ -12,6 +12,7 @@ interface McpServerMetadata {
   url?: string;
   hasEnv: boolean;
   hasHeaders: boolean;
+  credentialKeys: string[];
   repoScopes: string[] | null;
   enabled: boolean;
 }
@@ -57,9 +58,11 @@ describe("MCP Servers API", () => {
       expect(body.type).toBe("remote");
       expect(body.url).toBe("https://mcp.example.com/sse");
       expect(body.hasHeaders).toBe(true);
+      expect(body.credentialKeys).toEqual(["Authorization"]);
       // Credentials should NOT be in the response
       expect("headers" in body).toBe(false);
       expect("env" in body).toBe(false);
+      expect(JSON.stringify(body)).not.toContain("sk-test");
     });
 
     it("returns 400 for missing name", async () => {
@@ -211,8 +214,10 @@ describe("MCP Servers API", () => {
       const body = await response.json<McpServerMetadata[]>();
       const server = body[0];
       expect(server.hasHeaders).toBe(true);
+      expect(server.credentialKeys).toEqual(["Authorization"]);
       expect("headers" in server).toBe(false);
       expect("env" in server).toBe(false);
+      expect(JSON.stringify(server)).not.toContain("secret-token");
     });
   });
 
@@ -261,6 +266,31 @@ describe("MCP Servers API", () => {
       expect(body.name).toBe("updated-name");
       expect(body.url).toBe("https://new.example.com");
       expect(body.revision).toBe(2);
+    });
+
+    it("keeps named headers, replaces edited ones, and drops the rest", async () => {
+      const createRes = await serviceFetch("https://test.local/mcp-servers", {
+        method: "POST",
+        body: JSON.stringify({
+          name: "partial-headers",
+          type: "remote",
+          url: "https://mcp.example.com",
+          headers: { "x-api-key": "old-key", Accept: "text/event-stream", "X-Trace": "1" },
+        }),
+      });
+      const created = await createRes.json<McpServerMetadata>();
+
+      const response = await serviceFetch(`https://test.local/mcp-servers/${created.id}`, {
+        method: "PUT",
+        body: JSON.stringify({
+          headers: { "x-api-key": "new-key" },
+          keepCredentialKeys: ["Accept"],
+        }),
+      });
+      expect(response.status).toBe(200);
+      const body = await response.json<McpServerMetadata>();
+      expect(body.credentialKeys).toEqual(["Accept", "x-api-key"]);
+      expect(JSON.stringify(body)).not.toContain("new-key");
     });
 
     it("rejects a stale revision and accepts a retry from the latest revision", async () => {

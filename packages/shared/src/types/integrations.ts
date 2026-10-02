@@ -664,6 +664,12 @@ export const updateMcpServerInputSchema = z
     url: z.url(),
     env: mcpServerCredentialMapSchema,
     headers: mcpServerCredentialMapSchema,
+    /**
+     * Stored credential names to keep, values unchanged, beside the `env` or
+     * `headers` sent. Stored names not listed are deleted. Without it, sent
+     * credentials replace the stored set.
+     */
+    keepCredentialKeys: z.array(z.string()),
   })
   .partial()
   .strict();
@@ -689,6 +695,8 @@ export interface McpServerMetadata {
   url?: string;
   hasEnv: boolean;
   hasHeaders: boolean;
+  /** Names of the stored env vars (local) or headers (remote). Values never leave the server. */
+  credentialKeys: string[];
   repoScopes?: string[] | null;
   enabled: boolean;
 }
