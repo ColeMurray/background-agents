@@ -7,6 +7,7 @@ import { SessionStorageIntegrityError } from "./types";
 const receiptSchema = z.object({
   kind: z.enum(["snapshot", "retained"]),
   artifactId: z.string().min(1),
+  sourceObjectId: z.string().min(1).optional(),
   provider: z.string(),
   savedAtMs: z.number(),
   runtimeVersion: z.string().nullable(),
@@ -27,6 +28,10 @@ const stateSchema = sandboxShutdownSchema
     lifecyclePolicy: z.enum(["confirmed", "legacy"]).optional(),
     restoreInvoked: z.boolean().optional(),
     checkpointInFlight: z.boolean().optional(),
+    /** Provenance for unattended retries, distinct from authenticated recovery eligibility. */
+    captureFailure: z.boolean().optional(),
+    /** A durably claimed discard; no other recovery may act while it is set. */
+    discarding: z.string().optional(),
     operationId: z.string().optional(),
     messageId: z.string().optional(),
     stopByMs: z.number().optional(),

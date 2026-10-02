@@ -6,6 +6,7 @@ import { sessionRepositoriesInputSchema } from "./repositories";
 import type { EventResponse } from "./sandbox-events";
 import { MAX_WEB_PROMPT_CHARS, promptContentSchema } from "./prompts";
 import { modelProviderSelectionsSchema } from "./provider-accounts";
+import { sessionVisibilitySchema } from "./teams";
 import {
   messageSourceSchema,
   sessionStatusSchema,
@@ -227,6 +228,8 @@ function hasExclusiveSessionTarget(
 }
 
 const createSessionRequestBaseSchema = z.object({
+  teamId: z.string().min(1).nullable().optional(),
+  visibility: sessionVisibilitySchema.optional(),
   repoOwner: z.string().trim().min(1).nullish(),
   repoName: z.string().trim().min(1).nullish(),
   title: z.string().optional(),

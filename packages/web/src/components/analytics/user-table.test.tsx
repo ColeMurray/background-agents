@@ -8,6 +8,14 @@ import { AnalyticsUserTable } from "./user-table";
 
 expect.extend(matchers);
 
+const zeroTokens = {
+  inputTokens: 0,
+  outputTokens: 0,
+  reasoningTokens: 0,
+  cacheReadTokens: 0,
+  cacheWriteTokens: 0,
+};
+
 describe("AnalyticsUserTable", () => {
   it("uses the real completion rate for the progress bar width", () => {
     const { container } = render(
@@ -15,6 +23,7 @@ describe("AnalyticsUserTable", () => {
         entries={[
           {
             key: "zoe",
+            ...zeroTokens,
             sessions: 20,
             completed: 1,
             failed: 8,
@@ -44,6 +53,7 @@ describe("AnalyticsUserTable", () => {
         entries={[
           {
             key: "user-abc-123",
+            ...zeroTokens,
             displayName: "Alice Smith",
             sessions: 5,
             completed: 3,
@@ -73,6 +83,7 @@ describe("AnalyticsUserTable", () => {
         entries={[
           {
             key: "__unknown__",
+            ...zeroTokens,
             displayName: "Unknown user",
             sessions: 3,
             completed: 0,

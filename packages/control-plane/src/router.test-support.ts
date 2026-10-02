@@ -12,6 +12,7 @@ import { createTestBackgroundTasks } from "./background-tasks.test-support";
 import { BUILT_IN_ROLE_REGISTRY, type PermissionId } from "@open-inspect/shared/rbac";
 import type { CacheStore } from "@open-inspect/shared/cache-store";
 import type { SqlDatabase, SqlStatement } from "./db/sql-database";
+import type { SessionRow } from "./db/session-row";
 import type { SessionRuntimeDispatch } from "./session/runtime-client";
 import { cloudflareHost } from "./cloudflare/http-host";
 import { createControlPlaneApp, type RouteModule } from "./routing/hono-app";
@@ -88,6 +89,52 @@ export function emptyStatement(): SqlStatement {
     first: async <T>() => null as T | null,
     all: async <T>() => ({ results: [] as T[], meta: { changes: 0 } }),
     run: async <T>() => ({ results: [] as T[], meta: { changes: 0 } }),
+  };
+  return statement;
+}
+
+/** A persisted workspace session for route tests that are about handler behavior. */
+export const TEST_SESSION_ROW: SessionRow = {
+  id: "session-1",
+  title: null,
+  repo_owner: null,
+  repo_name: null,
+  harness: "opencode",
+  model: "test/model",
+  reasoning_effort: null,
+  base_branch: null,
+  status: "completed",
+  parent_session_id: null,
+  root_session_id: null,
+  spawn_source: "user",
+  spawn_depth: 0,
+  automation_id: null,
+  automation_run_id: null,
+  scm_login: null,
+  user_id: TEST_USER_ID,
+  owner_team_id: null,
+  visibility: "workspace",
+  project_id: null,
+  total_cost: 0,
+  active_duration_ms: 0,
+  message_count: 0,
+  pr_count: 0,
+  input_tokens: 0,
+  output_tokens: 0,
+  reasoning_tokens: 0,
+  cache_read_tokens: 0,
+  cache_write_tokens: 0,
+  environment_id: null,
+  created_at: 1,
+  updated_at: 1,
+};
+
+export function sessionAdmissionStatement(sql: string): SqlStatement | null {
+  if (!sql.includes("SELECT * FROM sessions")) return null;
+  const statement: SqlStatement = {
+    ...emptyStatement(),
+    bind: () => statement,
+    first: async <T>() => TEST_SESSION_ROW as T,
   };
   return statement;
 }

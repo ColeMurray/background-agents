@@ -1,15 +1,28 @@
 import { beforeEach, describe, expect, it } from "vitest";
-import { env } from "cloudflare:test";
+import { createExecutionContext, env } from "cloudflare:test";
 import type {
   AnalyticsBreakdownResponse,
   AnalyticsDashboardResponse,
   AnalyticsSummaryResponse,
+  AnalyticsTokenTotals,
   AnalyticsTimeseriesResponse,
 } from "@open-inspect/shared/types/analytics";
 import type { SpawnSource } from "@open-inspect/shared/types/sessions";
+import type { HarnessId } from "@open-inspect/shared/harnesses";
 import { SessionIndexStore } from "../../src/db/session-index";
+import { TeamMembershipStore } from "../../src/db/team-memberships";
+import { SessionRunStore } from "../../src/db/session-run-store";
+import { AnalyticsStore } from "../../src/db/analytics-store";
 import { cleanD1Tables } from "./cleanup";
-import { serviceFetch } from "./helpers";
+import { routeRequest, serviceFetch, serviceRequestHeaders } from "./helpers";
+
+const zeroTokens: AnalyticsTokenTotals = {
+  inputTokens: 0,
+  outputTokens: 0,
+  reasoningTokens: 0,
+  cacheReadTokens: 0,
+  cacheWriteTokens: 0,
+};
 
 function dateBucket(timestamp: number): string {
   return new Date(timestamp).toISOString().slice(0, 10);
@@ -24,7 +37,13 @@ async function seedSession(
     baseBranch?: string | null;
     scmLogin: string | null;
     userId?: string | null;
+    ownerTeamId?: string | null;
+    visibility?: "workspace" | "team" | "private";
+    parentSessionId?: string;
     spawnSource?: SpawnSource;
+    harness?: HarnessId;
+    automationId?: string;
+    model?: string;
     status: "created" | "active" | "completed" | "failed" | "archived" | "cancelled";
     createdAt: number;
     updatedAt: number;
@@ -32,14 +51,19 @@ async function seedSession(
     activeDurationMs: number;
     messageCount: number;
     prCount: number;
+    tokens?: AnalyticsTokenTotals;
   }
 ): Promise<void> {
   await store.create({
     id: input.id,
+    ownerTeamId: input.ownerTeamId ?? null,
+    visibility: input.visibility ?? "workspace",
     title: input.id,
     repoOwner: input.repoOwner,
     repoName: input.repoName,
-    model: "anthropic/claude-haiku-4-5",
+    model: input.model ?? "anthropic/claude-haiku-4-5",
+    harness: input.harness,
+    automationId: input.automationId,
     reasoningEffort: null,
     baseBranch:
       input.repoOwner !== null && input.repoName !== null ? (input.baseBranch ?? "main") : null,
@@ -47,6 +71,7 @@ async function seedSession(
     spawnSource: input.spawnSource,
     scmLogin: input.scmLogin,
     userId: input.userId,
+    parentSessionId: input.parentSessionId,
     createdAt: input.createdAt,
     updatedAt: input.updatedAt,
   });
@@ -56,6 +81,11 @@ async function seedSession(
     activeDurationMs: input.activeDurationMs,
     messageCount: input.messageCount,
     prCount: input.prCount,
+    inputTokens: input.tokens?.inputTokens ?? 0,
+    outputTokens: input.tokens?.outputTokens ?? 0,
+    reasoningTokens: input.tokens?.reasoningTokens ?? 0,
+    cacheReadTokens: input.tokens?.cacheReadTokens ?? 0,
+    cacheWriteTokens: input.tokens?.cacheWriteTokens ?? 0,
   });
 }
 
@@ -75,6 +105,261 @@ async function seedUser(
 describe("Analytics API", () => {
   beforeEach(cleanD1Tables);
 
+  it("limits private cost to privileged viewers and the requested spawn-source window", async () => {
+    const now = Date.now() - 60_000;
+    const store = new SessionIndexStore(env.DB);
+    for (const [id, source, cost, createdAt] of [
+      ["private-human", "user", 2, now],
+      ["private-agent", "agent", 5, now],
+      ["private-old", "user", 11, now - 45 * 24 * 60 * 60 * 1000],
+      ["public-human", "user", 3, now],
+    ] as const) {
+      await seedSession(store, {
+        id,
+        repoOwner: "acme",
+        repoName: "app",
+        scmLogin: "alice",
+        visibility: id.startsWith("private") ? "private" : "workspace",
+        spawnSource: source,
+        status: "completed",
+        createdAt,
+        updatedAt: createdAt,
+        totalCost: cost,
+        activeDurationMs: 0,
+        messageCount: 0,
+        prCount: 0,
+      });
+    }
+    const owner = { as: { userId: "44444444444444444444444444444444", role: "owner" as const } };
+    const human = await (
+      await serviceFetch("https://test.local/analytics/summary?scope=human", owner)
+    ).json<AnalyticsSummaryResponse>();
+    expect(human).toMatchObject({ totalSessions: 1, totalCost: 3, privateSessionsCostUsd: 2 });
+    const agent = await (
+      await serviceFetch("https://test.local/analytics/summary?scope=agent", owner)
+    ).json<AnalyticsSummaryResponse>();
+    expect(agent).toMatchObject({ totalSessions: 0, totalCost: 0, privateSessionsCostUsd: 5 });
+    const dashboard = await (
+      await serviceFetch("https://test.local/analytics/dashboard?scope=all", owner)
+    ).json<AnalyticsDashboardResponse>();
+    expect(dashboard.summary).toMatchObject({ totalCost: 3, privateSessionsCostUsd: 7 });
+    const member = await (
+      await serviceFetch("https://test.local/analytics/summary?scope=all", {
+        as: { userId: "55555555555555555555555555555555", role: "member" },
+      })
+    ).json<AnalyticsSummaryResponse>();
+    expect(member).toMatchObject({ totalCost: 3, privateSessionsCostUsd: null });
+    expect(
+      await new AnalyticsStore(
+        env.DB,
+        { kind: "internal", reason: "verify raw totals" },
+        "on"
+      ).getSummary({ startAt: now - 1000, endAt: now + 1000, scope: "all" })
+    ).toMatchObject({ totalSessions: 3, totalCost: 10, privateSessionsCostUsd: null });
+  });
+
+  it("limits every dashboard population to visible non-private sessions without exposing private cost to members", async () => {
+    const member = "22222222222222222222222222222222";
+    const now = Date.now() - 60_000;
+    await serviceRequestHeaders("https://test.local/analytics/dashboard", {
+      as: { userId: member, role: "member" },
+    });
+    await env.DB.prepare(
+      "INSERT INTO teams (id, slug, name, created_at, updated_at) VALUES ('analytics-allowed', 'analytics-allowed', 'Allowed', 1, 1), ('analytics-denied', 'analytics-denied', 'Denied', 1, 1)"
+    ).run();
+    await new TeamMembershipStore(env.DB).add("analytics-allowed", member);
+    const store = new SessionIndexStore(env.DB);
+    for (const [id, teamId, visibility, cost, parentSessionId] of [
+      ["visible-root", null, "workspace", 1, undefined],
+      ["visible-child", "analytics-allowed", "team", 2, "visible-root"],
+      ["hidden-child", "analytics-denied", "team", 4, "visible-root"],
+      ["private-child", null, "private", 8, "visible-root"],
+      ["owner-private", null, "private", 16, undefined],
+    ] as const) {
+      await seedSession(store, {
+        id,
+        repoOwner: "acme",
+        repoName: "app",
+        scmLogin: id,
+        userId: member,
+        ownerTeamId: teamId,
+        visibility,
+        parentSessionId,
+        spawnSource: id === "owner-private" ? "agent" : "user",
+        status: "completed",
+        createdAt: now,
+        updatedAt: now + 10,
+        totalCost: cost,
+        activeDurationMs: 10,
+        messageCount: 1,
+        prCount: 1,
+        tokens: {
+          inputTokens: cost,
+          outputTokens: 0,
+          reasoningTokens: 0,
+          cacheReadTokens: 0,
+          cacheWriteTokens: 0,
+        },
+      });
+    }
+    const fetchAnalytics = async (path: string, mode: "on" | "off") => {
+      const url = `https://test.local/analytics/${path}`;
+      return routeRequest(
+        new Request(url, {
+          headers: await serviceRequestHeaders(url, { as: { userId: member, role: "member" } }),
+        }),
+        { ...env, TEAMS_ENFORCEMENT: mode },
+        createExecutionContext()
+      );
+    };
+
+    const dashboardResponse = await fetchAnalytics("dashboard?scope=all", "on");
+    expect(dashboardResponse.status).toBe(200);
+    const dashboard = await dashboardResponse.json<AnalyticsDashboardResponse>();
+    expect(dashboard.summary).toMatchObject({
+      totalSessions: 2,
+      totalCost: 3,
+      inputTokens: 3,
+      privateSessionsCostUsd: null,
+    });
+    expect(
+      dashboard.timeseries.series
+        .flatMap((point) => Object.values(point.groups))
+        .reduce((a, b) => a + b, 0)
+    ).toBe(2);
+    for (const dimension of ["repository", "user", "model", "harness", "provider"] as const) {
+      expect(
+        dashboard.breakdowns[dimension].entries.reduce((sum, entry) => sum + entry.cost, 0)
+      ).toBe(3);
+    }
+    expect(dashboard.runs).toEqual([
+      expect.objectContaining({ rootSessionId: "visible-root", sessionCount: 2, totalCost: 3 }),
+    ]);
+    expect(
+      await new SessionRunStore(env.DB, { kind: "service", teamId: null }, "on").get(
+        "owner-private"
+      )
+    ).toBeNull();
+    expect(
+      (await (await fetchAnalytics("runs", "on")).json<{ runs: { totalCost: number }[] }>()).runs[0]
+        .totalCost
+    ).toBe(3);
+    expect(
+      await (await fetchAnalytics("summary?scope=human", "on")).json<AnalyticsSummaryResponse>()
+    ).toMatchObject({ totalSessions: 2, totalCost: 3, privateSessionsCostUsd: null });
+    expect(
+      await (await fetchAnalytics("summary?scope=all", "off")).json<AnalyticsSummaryResponse>()
+    ).toMatchObject({ totalSessions: 3, totalCost: 7, privateSessionsCostUsd: null });
+  });
+
+  it("sums token totals across sessions and provider merges without excluding zero-token history", async () => {
+    const store = new SessionIndexStore(env.DB);
+    const now = Date.now() - 60_000;
+    for (const [id, model, tokens] of [
+      [
+        "gpt-5",
+        "openai/gpt-5",
+        {
+          inputTokens: 2,
+          outputTokens: 5,
+          reasoningTokens: 1,
+          cacheReadTokens: 6,
+          cacheWriteTokens: 3,
+        },
+      ],
+      [
+        "gpt-5.3",
+        "openai/gpt-5.3-codex",
+        {
+          inputTokens: 1,
+          outputTokens: 4,
+          reasoningTokens: 2,
+          cacheReadTokens: 3,
+          cacheWriteTokens: 2,
+        },
+      ],
+      ["old", "openai/gpt-5", undefined],
+    ] as const) {
+      await seedSession(store, {
+        id,
+        model,
+        tokens,
+        repoOwner: "acme",
+        repoName: "app",
+        scmLogin: "alice",
+        status: "completed",
+        createdAt: now,
+        updatedAt: now + 100,
+        totalCost: 1,
+        activeDurationMs: 100,
+        messageCount: 1,
+        prCount: 0,
+      });
+    }
+    const dashboard = await (
+      await serviceFetch("https://test.local/analytics/dashboard?scope=all")
+    ).json<AnalyticsDashboardResponse>();
+    const totals = {
+      inputTokens: 3,
+      outputTokens: 9,
+      reasoningTokens: 3,
+      cacheReadTokens: 9,
+      cacheWriteTokens: 5,
+    };
+    expect(dashboard.summary).toMatchObject({ totalSessions: 3, ...totals, cacheHitRatio: 0.75 });
+    expect(dashboard.breakdowns.repository.entries[0]).toMatchObject(totals);
+    expect(dashboard.breakdowns.user.entries[0]).toMatchObject(totals);
+    expect(dashboard.breakdowns.model.entries).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ key: "openai/gpt-5", inputTokens: 2, cacheReadTokens: 6 }),
+        expect.objectContaining({
+          key: "openai/gpt-5.3-codex",
+          inputTokens: 1,
+          cacheReadTokens: 3,
+        }),
+      ])
+    );
+    expect(dashboard.breakdowns.provider.entries[0]).toMatchObject({ key: "openai", ...totals });
+    expect(dashboard.summary.cacheHitRatio).toBe(9 / (9 + 3));
+    expect(dashboard.runs).toHaveLength(3);
+  });
+
+  it("lists only scoped top-cost runs in the dashboard, capped at the dashboard limit", async () => {
+    const store = new SessionIndexStore(env.DB);
+    const now = Date.now() - 60_000;
+    for (let i = 0; i < 21; i++) {
+      await seedSession(store, {
+        id: `root-${i}`,
+        repoOwner: "acme",
+        repoName: "app",
+        scmLogin: null,
+        spawnSource: i === 20 ? "automation" : "user",
+        status: "completed",
+        createdAt: now,
+        updatedAt: now + i,
+        totalCost: i + 1,
+        activeDurationMs: 0,
+        messageCount: 0,
+        prCount: 0,
+      });
+    }
+    await env.DB.prepare("UPDATE sessions SET title = NULL WHERE id = 'root-19'").run();
+    const human = await (
+      await serviceFetch("https://test.local/analytics/dashboard?scope=human")
+    ).json<AnalyticsDashboardResponse>();
+    expect(human.runs).toHaveLength(20);
+    expect(human.runs.map((run) => run.totalCost)).toEqual(
+      Array.from({ length: 20 }, (_, i) => 20 - i)
+    );
+    expect(human.runs[0]).toMatchObject({ rootSessionId: "root-19", title: null });
+    const all = await (
+      await serviceFetch("https://test.local/analytics/dashboard?scope=all")
+    ).json<AnalyticsDashboardResponse>();
+    expect(all.runs).toHaveLength(20);
+    expect(all.runs[0].rootSessionId).toBe("root-20");
+    expect(all.runs.at(-1)?.rootSessionId).toBe("root-1");
+  });
+
   it("returns one coherently-windowed dashboard snapshot", async () => {
     const before = Date.now();
     const response = await serviceFetch("https://test.local/analytics/dashboard?days=7");
@@ -88,11 +373,19 @@ describe("Analytics API", () => {
       days: 7,
       startAt: body.generatedAt - 7 * 24 * 60 * 60 * 1000,
       endAt: body.generatedAt,
+      scope: "human",
     });
     expect(body).toMatchObject({
       summary: { totalSessions: 0, totalPrs: 0 },
       timeseries: { series: [] },
-      breakdowns: { repository: { entries: [] }, user: { entries: [] } },
+      breakdowns: {
+        repository: { entries: [] },
+        user: { entries: [] },
+        model: { entries: [] },
+        harness: { entries: [] },
+        provider: { entries: [] },
+        automation: { entries: [] },
+      },
       pullRequests: {
         funnel: { created: 0, open: 0, draft: 0, merged: 0, closed: 0 },
         timeseries: [],
@@ -205,8 +498,11 @@ describe("Analytics API", () => {
 
     expect(body).toEqual({
       totalSessions: 6,
+      ...zeroTokens,
+      cacheHitRatio: null,
       activeUsers: 3,
       totalCost: 3,
+      privateSessionsCostUsd: 0,
       avgCost: 0.5,
       totalPrs: 2,
       statusBreakdown: {
@@ -376,6 +672,7 @@ describe("Analytics API", () => {
       {
         key: "alice",
         displayName: "alice",
+        ...zeroTokens,
         sessions: 2,
         completed: 1,
         failed: 0,
@@ -389,6 +686,7 @@ describe("Analytics API", () => {
       {
         key: "__unknown__",
         displayName: "Unknown user",
+        ...zeroTokens,
         sessions: 1,
         completed: 0,
         failed: 0,
@@ -402,6 +700,7 @@ describe("Analytics API", () => {
       {
         key: "bob",
         displayName: "bob",
+        ...zeroTokens,
         sessions: 1,
         completed: 0,
         failed: 1,
@@ -513,6 +812,7 @@ describe("Analytics API", () => {
     expect(body.entries).toEqual([
       {
         key: "acme/web-app",
+        ...zeroTokens,
         sessions: 3,
         completed: 1,
         failed: 0,
@@ -525,6 +825,7 @@ describe("Analytics API", () => {
       },
       {
         key: "acme/api",
+        ...zeroTokens,
         sessions: 2,
         completed: 0,
         failed: 1,
@@ -537,6 +838,7 @@ describe("Analytics API", () => {
       },
       {
         key: "No repository",
+        ...zeroTokens,
         sessions: 1,
         completed: 1,
         failed: 0,
@@ -735,6 +1037,7 @@ describe("Analytics API", () => {
       {
         key: "user-abc",
         displayName: "Alice Smith",
+        ...zeroTokens,
         sessions: 2,
         completed: 2,
         failed: 0,
@@ -748,6 +1051,7 @@ describe("Analytics API", () => {
       {
         key: "bob",
         displayName: "bob",
+        ...zeroTokens,
         sessions: 1,
         completed: 0,
         failed: 1,
@@ -827,5 +1131,222 @@ describe("Analytics API", () => {
     expect(dayEntry).toBeDefined();
     // Reducer must sum, not overwrite: 1 + 1 = 2
     expect(dayEntry!.groups["Alex"]).toBe(2);
+  });
+
+  it("keeps the default dashboard population and existing resources identical to explicit human scope", async () => {
+    const store = new SessionIndexStore(env.DB);
+    const now = Date.now() - 60_000;
+    await seedSession(store, {
+      id: "human",
+      repoOwner: "acme",
+      repoName: "app",
+      scmLogin: "alice",
+      spawnSource: "user",
+      status: "completed",
+      createdAt: now,
+      updatedAt: now + 100,
+      totalCost: 2,
+      activeDurationMs: 100,
+      messageCount: 3,
+      prCount: 1,
+    });
+    await seedSession(store, {
+      id: "agent",
+      repoOwner: "acme",
+      repoName: "app",
+      scmLogin: "alice",
+      spawnSource: "agent",
+      status: "completed",
+      createdAt: now,
+      updatedAt: now + 100,
+      totalCost: 5,
+      activeDurationMs: 100,
+      messageCount: 3,
+      prCount: 1,
+    });
+    for (const path of ["summary", "timeseries", "breakdown?by=repo", "breakdown?by=user"]) {
+      const separator = path.includes("?") ? "&" : "?";
+      const ordinary = await serviceFetch(`https://test.local/analytics/${path}`);
+      const explicit = await serviceFetch(
+        `https://test.local/analytics/${path}${separator}scope=human`
+      );
+      expect(ordinary.status).toBe(200);
+      expect(await ordinary.json()).toEqual(await explicit.json());
+    }
+    const dashboard = await serviceFetch("https://test.local/analytics/dashboard?scope=agent");
+    const snapshot = await dashboard.json<AnalyticsDashboardResponse>();
+    expect(snapshot.window.scope).toBe("agent");
+    expect(snapshot.summary.totalSessions).toBe(1);
+    expect(snapshot.breakdowns.model.entries[0]).toMatchObject({
+      key: "anthropic/claude-haiku-4-5",
+      sessions: 1,
+    });
+    expect(snapshot.breakdowns.harness.entries[0]).toMatchObject({
+      key: "opencode",
+      displayName: "OpenCode",
+    });
+    expect(snapshot.breakdowns.provider.entries[0]).toMatchObject({
+      key: "anthropic",
+      subscriptionSessions: 0,
+    });
+    expect(snapshot.breakdowns.automation.entries).toEqual([]);
+    const humanDashboard = await (
+      await serviceFetch("https://test.local/analytics/dashboard")
+    ).json<AnalyticsDashboardResponse>();
+    expect(humanDashboard.window.scope).toBe("human");
+    expect(humanDashboard.summary.totalSessions).toBe(1);
+    expect(humanDashboard.breakdowns.repository.entries[0].sessions).toBe(1);
+    expect(humanDashboard.breakdowns.user.entries[0].sessions).toBe(1);
+  });
+
+  it("groups scoped spawn sources and named automations, excluding unlinked sessions", async () => {
+    const store = new SessionIndexStore(env.DB);
+    const now = Date.now() - 60_000;
+    await env.DB.prepare(
+      `INSERT INTO automations
+      (id, name, instructions, trigger_type, schedule_tz, model, enabled, consecutive_failures, created_by, created_at, updated_at)
+      VALUES (?, 'Daily', 'Test', 'schedule', 'UTC', 'openai/gpt-5', 1, 0, 'test-user', ?, ?)`
+    )
+      .bind("daily", now, now)
+      .run();
+    for (const [id, source, automationId] of [
+      ["human", "slack-bot", null],
+      ["child", "agent", null],
+      ["scheduled", "automation", "daily"],
+      ["unlinked", "automation", null],
+    ] as const) {
+      await seedSession(store, {
+        id,
+        repoOwner: null,
+        repoName: null,
+        scmLogin: null,
+        spawnSource: source,
+        automationId: automationId ?? undefined,
+        status: "completed",
+        createdAt: now,
+        updatedAt: now + 100,
+        totalCost: 1,
+        activeDurationMs: 100,
+        messageCount: 1,
+        prCount: 0,
+      });
+    }
+    for (const [scope, total, source] of [
+      ["human", 1, "slack-bot"],
+      ["agent", 1, "agent"],
+      ["automation", 2, "automation"],
+      ["all", 4, "automation"],
+    ] as const) {
+      const summary = await (
+        await serviceFetch(`https://test.local/analytics/summary?scope=${scope}`)
+      ).json<AnalyticsSummaryResponse>();
+      expect(summary.totalSessions).toBe(total);
+      const breakdown = await (
+        await serviceFetch(`https://test.local/analytics/breakdown?by=spawnSource&scope=${scope}`)
+      ).json<AnalyticsBreakdownResponse>();
+      expect(breakdown.entries).toContainEqual(expect.objectContaining({ key: source }));
+    }
+    const humanAutomation = await (
+      await serviceFetch("https://test.local/analytics/breakdown?by=automation")
+    ).json<AnalyticsBreakdownResponse>();
+    expect(humanAutomation.entries).toEqual([]);
+    const automations = await (
+      await serviceFetch("https://test.local/analytics/breakdown?by=automation&scope=automation")
+    ).json<AnalyticsBreakdownResponse>();
+    expect(automations.entries).toEqual([
+      expect.objectContaining({ key: "daily", displayName: "Daily", sessions: 1 }),
+    ]);
+  });
+
+  it("merges canonical models and providers with weighted duration and matching subscription rows", async () => {
+    const store = new SessionIndexStore(env.DB);
+    const now = Date.now() - 60_000;
+    for (const [id, model, duration] of [
+      ["first", "openai/gpt-5", 100],
+      ["second", "openai/gpt-5.3-codex", 300],
+      ["third", "openai/gpt-5.3-codex", 300],
+      ["bare", "anthropic/claude-haiku-4-5", 200],
+      ["prefixed", "anthropic/claude-haiku-4-5", 400],
+    ] as const) {
+      await seedSession(store, {
+        id,
+        model,
+        harness: id === "prefixed" ? "claude" : "opencode",
+        repoOwner: null,
+        repoName: null,
+        scmLogin: null,
+        status: "completed",
+        createdAt: now,
+        updatedAt: now + duration,
+        totalCost: 1,
+        activeDurationMs: duration,
+        messageCount: 1,
+        prCount: 0,
+      });
+    }
+    await env.DB.prepare("UPDATE sessions SET model = 'claude-haiku-4-5' WHERE id = 'bare'").run();
+    for (const [id, provider] of [
+      ["openai-account", "openai"],
+      ["xai-account", "xai"],
+    ] as const) {
+      await env.DB.prepare(
+        `INSERT INTO model_provider_accounts (id, provider, display_name, status, created_at, updated_at)
+        VALUES (?, ?, 'Test account', 'active', ?, ?)`
+      )
+        .bind(id, provider, now, now)
+        .run();
+    }
+    await env.DB.prepare(
+      "UPDATE session_model_provider_auth SET auth_mode = 'provider_account', provider_account_id = ? WHERE session_id = ? AND provider = ?"
+    )
+      .bind("openai-account", "first", "openai")
+      .run();
+    await env.DB.prepare(
+      "UPDATE session_model_provider_auth SET auth_mode = 'provider_account', provider_account_id = ? WHERE session_id = ? AND provider = ?"
+    )
+      .bind("xai-account", "first", "xai")
+      .run();
+    for (const by of ["model", "harness", "spawnSource", "automation", "provider"] as const) {
+      const response = await serviceFetch(`https://test.local/analytics/breakdown?by=${by}`);
+      expect(response.status).toBe(200);
+    }
+    const models = await (
+      await serviceFetch("https://test.local/analytics/breakdown?by=model")
+    ).json<AnalyticsBreakdownResponse>();
+    expect(models.entries).toContainEqual(
+      expect.objectContaining({ key: "anthropic/claude-haiku-4-5", sessions: 2, avgDuration: 300 })
+    );
+    expect(models.entries.every((entry) => !("subscriptionSessions" in entry))).toBe(true);
+    const harnesses = await (
+      await serviceFetch("https://test.local/analytics/breakdown?by=harness")
+    ).json<AnalyticsBreakdownResponse>();
+    expect(harnesses.entries).toEqual([
+      expect.objectContaining({ key: "opencode", displayName: "OpenCode", sessions: 4 }),
+      expect.objectContaining({ key: "claude", displayName: "Claude Agent", sessions: 1 }),
+    ]);
+    const providers = await (
+      await serviceFetch("https://test.local/analytics/breakdown?by=provider")
+    ).json<AnalyticsBreakdownResponse>();
+    expect(providers.entries).toEqual([
+      expect.objectContaining({
+        key: "openai",
+        displayName: "OpenAI",
+        sessions: 3,
+        avgDuration: 700 / 3,
+        subscriptionSessions: 1,
+      }),
+      expect.objectContaining({
+        key: "anthropic",
+        displayName: "Anthropic",
+        sessions: 2,
+        avgDuration: 300,
+        subscriptionSessions: 0,
+      }),
+    ]);
+    const dashboard = await (
+      await serviceFetch("https://test.local/analytics/dashboard")
+    ).json<AnalyticsDashboardResponse>();
+    expect(dashboard.breakdowns.provider).toEqual(providers);
+    expect(dashboard.breakdowns.model).toEqual(models);
   });
 });

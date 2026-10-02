@@ -9,6 +9,7 @@
  */
 
 import type { Environment, EnvironmentRepository } from "@open-inspect/shared/types/environments";
+import { z } from "zod";
 import { parseJsonStringArray } from "./json-columns";
 import type { SqlDatabase, SqlStatement } from "./sql-database";
 
@@ -20,6 +21,16 @@ export interface EnvironmentRow {
   channel_associations: string | null; // JSON string array (mirrors repo_metadata)
   created_at: number;
   updated_at: number;
+  owner_team_id: string | null;
+}
+
+const environmentOwnerRowSchema = z.object({ owner_team_id: z.string().nullable() });
+
+function withValidatedOwnerTeam(row: EnvironmentRow): EnvironmentRow {
+  return {
+    ...row,
+    owner_team_id: environmentOwnerRowSchema.parse(row).owner_team_id,
+  };
 }
 
 export interface EnvironmentRepositoryRow {
@@ -53,6 +64,7 @@ export function toEnvironment(
 ): Environment {
   return {
     id: row.id,
+    ownerTeamId: row.owner_team_id,
     name: row.name,
     description: row.description,
     prebuildEnabled: row.prebuild_enabled === 1,
@@ -82,8 +94,8 @@ export class EnvironmentStore {
     return this.db
       .prepare(
         `INSERT INTO environments
-         (id, name, description, prebuild_enabled, channel_associations, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?)`
+          (id, name, description, prebuild_enabled, channel_associations, created_at, updated_at, owner_team_id)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
       )
       .bind(
         row.id,
@@ -92,7 +104,8 @@ export class EnvironmentStore {
         row.prebuild_enabled,
         row.channel_associations,
         row.created_at,
-        row.updated_at
+        row.updated_at,
+        row.owner_team_id
       );
   }
 
@@ -105,29 +118,36 @@ export class EnvironmentStore {
   }
 
   async getById(id: string): Promise<EnvironmentRow | null> {
-    return this.db
+    const row = await this.db
       .prepare("SELECT * FROM environments WHERE id = ?")
       .bind(id)
       .first<EnvironmentRow>();
+    return row ? withValidatedOwnerTeam(row) : null;
   }
 
   /**
-   * Look up an environment by name, case-insensitively (names are unique under
-   * lower(name)). Used to answer the uniqueness pre-check with a 409 before the
-   * insert would trip the unique index.
+   * Look up a case-insensitive name within its exact team or workspace scope.
+   * Used to answer the uniqueness pre-check before the insert trips the index.
    */
-  async getByName(name: string): Promise<EnvironmentRow | null> {
-    return this.db
-      .prepare("SELECT * FROM environments WHERE lower(name) = lower(?)")
-      .bind(name)
+  async getByName(name: string, ownerTeamId: string | null): Promise<EnvironmentRow | null> {
+    const row = await this.db
+      .prepare("SELECT * FROM environments WHERE lower(name) = lower(?) AND owner_team_id IS ?")
+      .bind(name, ownerTeamId)
       .first<EnvironmentRow>();
+    return row ? withValidatedOwnerTeam(row) : null;
   }
 
-  async list(): Promise<{ environments: EnvironmentRow[]; total: number }> {
+  /** Every environment, or only those with this exact owner (null: workspace-owned). */
+  async list(
+    ownerTeamId?: string | null
+  ): Promise<{ environments: EnvironmentRow[]; total: number }> {
     const result = await this.db
-      .prepare("SELECT * FROM environments ORDER BY created_at DESC")
+      .prepare(
+        `SELECT * FROM environments ${ownerTeamId === undefined ? "" : "WHERE owner_team_id IS ?"} ORDER BY created_at DESC`
+      )
+      .bind(...(ownerTeamId === undefined ? [] : [ownerTeamId]))
       .all<EnvironmentRow>();
-    const environments = result.results || [];
+    const environments = (result.results || []).map(withValidatedOwnerTeam);
     return { environments, total: environments.length };
   }
 

@@ -2,6 +2,7 @@
 
 import { escapeRegExp } from "../regex";
 import { z } from "zod";
+import { teamSettingsSchema } from "./teams";
 
 export type IntegrationId = "github" | "linear" | "code-server" | "vnc" | "sandbox" | "slack";
 
@@ -282,6 +283,7 @@ export type SandboxSettings = z.infer<typeof sandboxSettingsSchema>;
 /** Every supported sandbox backend. Keep provider policy exhaustive over this union. */
 export const SANDBOX_PROVIDER_NAMES = [
   "modal",
+  "modal-vm",
   "daytona",
   "vercel",
   "opencomputer",
@@ -293,6 +295,7 @@ export type SandboxProviderName = (typeof SANDBOX_PROVIDER_NAMES)[number];
 const DEFAULT_SANDBOX_SETTING_CAPABILITIES = { resources: true, timeout: true };
 const SANDBOX_SETTING_CAPABILITIES = {
   modal: DEFAULT_SANDBOX_SETTING_CAPABILITIES,
+  "modal-vm": DEFAULT_SANDBOX_SETTING_CAPABILITIES,
   daytona: { resources: false, timeout: false },
   vercel: DEFAULT_SANDBOX_SETTING_CAPABILITIES,
   opencomputer: { resources: false, timeout: true },
@@ -555,6 +558,13 @@ export const integrationSettingsSchemas = {
   scm: {
     global: scmGlobalConfigSchema,
     repo: scmSettingsSchema,
+  },
+  teams: {
+    global: z.strictObject({
+      enabledRepos: z.never().optional(),
+      defaults: teamSettingsSchema.optional(),
+    }),
+    repo: z.strictObject({}),
   },
 } as const;
 

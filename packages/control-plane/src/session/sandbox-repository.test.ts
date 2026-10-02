@@ -3,7 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { SandboxRepository } from "./sandbox-repository";
 import { initSchema } from "./schema";
 import { createNodeSqlStorage } from "../node/sqlite-storage";
-import { decryptToken, generateEncryptionKey } from "../auth/crypto";
+import { decryptToken, encryptToken, generateEncryptionKey } from "../auth/crypto";
 import type { SqlResult, SqlStorage } from "./sql-storage";
 import type { Logger } from "../logger";
 import { SessionStorageIntegrityError, type SandboxRow } from "./types";
@@ -36,6 +36,7 @@ function sandboxRow(overrides: Partial<SandboxRow> = {}): SandboxRow {
     boot_phase: null,
     boot_seq: null,
     fenced: 0,
+    startup_rejected: 0,
     created_at: 1000,
     ...overrides,
   };
@@ -417,6 +418,13 @@ describe("SandboxRepository", () => {
       expect(mock.calls[0].query).toContain("SET vnc_url = NULL");
       expect(mock.calls[0].query).not.toContain("vnc_password");
     });
+
+    it("reads a decrypted access secret", async () => {
+      const encrypted = await encryptToken("ttyd-token", TEST_ENCRYPTION_KEY);
+      mock.setData(`SELECT ttyd_token AS secret FROM sandbox LIMIT 1`, [{ secret: encrypted }]);
+
+      await expect(repository.getSandboxAccessSecret("ttyd")).resolves.toBe("ttyd-token");
+    });
   });
 
   describe("resetCircuitBreaker", () => {
@@ -462,6 +470,86 @@ describe("SandboxRepository boot state (SQLite)", () => {
     return { db, sql, repository, set };
   }
 
+  it("characterizes the unguarded fresh/restore artifact write across replacement", async () => {
+    const { repository } = createSqliteRepository();
+    const encrypt = crypto.subtle.encrypt.bind(crypto.subtle);
+    let beginEncryption!: () => void;
+    let releaseEncryption!: () => void;
+    const encrypting = new Promise<void>((resolve) => (beginEncryption = resolve));
+    const gate = new Promise<void>((resolve) => (releaseEncryption = resolve));
+    const spy = vi.spyOn(crypto.subtle, "encrypt").mockImplementation(async (...args) => {
+      const encrypted = await encrypt(...args);
+      beginEncryption();
+      await gate;
+      return encrypted;
+    });
+    try {
+      const writing = repository.updateSandboxAccess(
+        "codeServer",
+        "https://old.test",
+        "old-secret"
+      );
+      await encrypting;
+      repository.updateSandboxForSpawn({
+        status: "spawning",
+        createdAt: 3000,
+        modalSandboxId: "replacement",
+      });
+      releaseEncryption();
+      await writing;
+      // This is an existing gap, not an atomicity guarantee granted by the extraction.
+      expect(repository.getSandbox()).toMatchObject({
+        modal_sandbox_id: "replacement",
+        created_at: 3000,
+        code_server_url: "https://old.test",
+      });
+      await expect(repository.getSandboxAccessSecret("codeServer")).resolves.toBe("old-secret");
+    } finally {
+      releaseEncryption();
+      spy.mockRestore();
+    }
+  });
+
+  describe("rejectProviderStartup", () => {
+    const generation = { sandboxId: "sb-1", createdAt: 1000 };
+
+    it.each(["spawning", "connecting", "ready", "failed", "stopped", "stale"])(
+      "fences %s and persists cleanup responsibility",
+      (status) => {
+        const { repository, set } = createSqliteRepository();
+        set(
+          "status = ?, modal_sandbox_id = 'sb-1', fenced = ?, auth_token_hash = 'hash', active_socket_id = 'socket'",
+          status,
+          status === "failed" ? 1 : 0
+        );
+        expect(repository.rejectProviderStartup(generation, "sb-rejected")).toBe(
+          ["spawning", "connecting", "ready"].includes(status) ? "failed" : "retained"
+        );
+        expect(repository.getSandbox()).toMatchObject({
+          status: ["stopped", "stale"].includes(status) ? status : "failed",
+          startup_rejected: 1,
+          fenced: 1,
+          modal_object_id: "sb-rejected",
+          auth_token_hash: "",
+          auth_token: null,
+          active_socket_id: "",
+        });
+        expect(repository.markSandboxReady(generation)).toBe(false);
+      }
+    );
+
+    it("records confirmed cleanup without retaining an obligation and rejects superseded writes", () => {
+      const { repository, set } = createSqliteRepository();
+      set("status = 'connecting', modal_sandbox_id = 'sb-1', modal_object_id = 'old'");
+      expect(repository.rejectProviderStartup(generation, null)).toBe("failed");
+      expect(repository.getSandbox()?.modal_object_id).toBeNull();
+      expect(repository.rejectProviderStartup({ ...generation, createdAt: 999 }, "late")).toBe(
+        "superseded"
+      );
+      expect(repository.getSandbox()?.modal_object_id).toBeNull();
+    });
+  });
+
   describe("commitProviderStartup", () => {
     const generation = { sandboxId: "sb-1", createdAt: 1000 };
 
@@ -505,6 +593,50 @@ describe("SandboxRepository boot state (SQLite)", () => {
         modal_object_id: "provider-1",
       });
     });
+
+    it("coerces malformed returned statuses instead of asserting them", () => {
+      const log = createLog();
+      const repository = new SandboxRepository(
+        {
+          exec: () => ({
+            toArray: () => [{ status: "unexpected" }],
+            one: () => null,
+          }),
+        },
+        log,
+        TEST_ENCRYPTION_KEY
+      );
+
+      expect(repository.commitProviderStartup(generation, "provider-1", true)).toBe("failed");
+      expect(log.warn).toHaveBeenCalledWith(
+        "sandbox.status.unrecognized",
+        expect.objectContaining({ status: "unexpected" })
+      );
+    });
+  });
+
+  it("resolves a VM only while its generation and pending handle still match", async () => {
+    const { repository, set } = createSqliteRepository();
+    const generation = { sandboxId: "sb-1", createdAt: 1000 };
+    const access = {
+      providerObjectId: "sb-real",
+      codeServer: { url: "https://editor.example", password: "secret" },
+      vnc: null,
+      ttyd: null,
+      tunnelUrls: { "8080": "https://port.example" },
+    };
+    set("status = 'connecting', modal_sandbox_id = 'sb-1', modal_object_id = 'pending'");
+    expect(await repository.completeProviderResume(generation, access, "other")).toBe(false);
+    expect(repository.getSandbox()?.modal_object_id).toBe("pending");
+    expect(await repository.completeProviderResume(generation, access, "pending")).toBe(true);
+    expect(repository.getSandbox()).toMatchObject({
+      modal_object_id: "sb-real",
+      code_server_url: "https://editor.example",
+    });
+    expect(await repository.getSandboxAccessSecret("codeServer")).toBe("secret");
+    set("modal_sandbox_id = 'sb-2', created_at = 2000, modal_object_id = 'pending'");
+    expect(await repository.completeProviderResume(generation, access, "pending")).toBe(false);
+    expect(repository.getSandbox()?.modal_object_id).toBe("pending");
   });
 
   describe("markSandboxReady", () => {
@@ -575,6 +707,145 @@ describe("SandboxRepository boot state (SQLite)", () => {
       set("status = 'connecting', modal_sandbox_id = NULL");
 
       expect(repository.markSandboxReady({ sandboxId: null, createdAt: 1000 })).toBe(true);
+    });
+  });
+
+  describe("completeProviderResume", () => {
+    const generation = { sandboxId: "sb-1", createdAt: 2000 };
+    const access = {
+      providerObjectId: "provider-2",
+      codeServer: { url: "https://code.test", password: "code-secret" },
+      vnc: { url: "https://vnc.test", password: "vnc-secret" },
+      ttyd: { url: "https://terminal.test", token: "terminal-token" },
+      tunnelUrls: { "3000": "https://preview.test" },
+    };
+
+    it.each(["connecting", "ready"] as const)(
+      "atomically records access for the current %s generation",
+      async (status) => {
+        const { repository, set } = createSqliteRepository();
+        set("status = ?, modal_sandbox_id = 'sb-1', created_at = 2000", status);
+
+        await expect(repository.completeProviderResume(generation, access)).resolves.toBe(true);
+
+        const row = repository.getSandbox();
+        expect(row).toMatchObject({
+          modal_object_id: "provider-2",
+          code_server_url: "https://code.test",
+          vnc_url: "https://vnc.test",
+          ttyd_url: "https://terminal.test",
+          tunnel_urls: JSON.stringify(access.tunnelUrls),
+        });
+        await expect(repository.getSandboxAccessSecret("codeServer")).resolves.toBe("code-secret");
+        await expect(repository.getSandboxAccessSecret("vnc")).resolves.toBe("vnc-secret");
+        await expect(repository.getSandboxAccessSecret("ttyd")).resolves.toBe("terminal-token");
+      }
+    );
+
+    it.each([
+      [
+        "replaced generation",
+        "status = 'connecting', modal_sandbox_id = 'sb-2', created_at = 2000",
+      ],
+      ["cancelled generation", "status = 'stopped', modal_sandbox_id = 'sb-1', created_at = 2000"],
+      ["timed-out generation", "status = 'failed', modal_sandbox_id = 'sb-1', created_at = 2000"],
+      [
+        "fenced generation",
+        "status = 'connecting', modal_sandbox_id = 'sb-1', created_at = 2000, fenced = 1",
+      ],
+    ])("rejects a %s without writing any access", async (_case, assignments) => {
+      const { repository, set } = createSqliteRepository();
+      set(assignments);
+
+      await expect(repository.completeProviderResume(generation, access)).resolves.toBe(false);
+
+      expect(repository.getSandbox()).toMatchObject({
+        modal_object_id: null,
+        code_server_url: null,
+        vnc_url: null,
+        ttyd_url: null,
+        tunnel_urls: null,
+      });
+    });
+
+    it.each([
+      ["replaced", "modal_sandbox_id = 'sb-2', created_at = 3000"],
+      ["timestamp-only supersession", "created_at = 3000"],
+      ["stopped", "status = 'stopped'"],
+      ["stale", "status = 'stale'"],
+      ["failed", "status = 'failed'"],
+      ["fenced", "fenced = 1"],
+      ["bridge reference changed", "modal_object_id = 'another-pending'"],
+    ])("rejects access encrypted across a %s row", async (_case, change) => {
+      const { repository, set } = createSqliteRepository();
+      set(
+        "status = 'connecting', modal_sandbox_id = 'sb-1', created_at = 2000, modal_object_id = 'pending'"
+      );
+      const encrypt = crypto.subtle.encrypt.bind(crypto.subtle);
+      let beginEncryption!: () => void;
+      let releaseEncryption!: () => void;
+      const encrypting = new Promise<void>((resolve) => (beginEncryption = resolve));
+      const gate = new Promise<void>((resolve) => (releaseEncryption = resolve));
+      const spy = vi.spyOn(crypto.subtle, "encrypt").mockImplementation(async (...args) => {
+        const encrypted = await encrypt(...args);
+        beginEncryption();
+        await gate;
+        return encrypted;
+      });
+      try {
+        const completion = repository.completeProviderResume(generation, access, "pending");
+        await encrypting;
+        set(change);
+        const superseded = repository.getSandbox();
+        releaseEncryption();
+        await expect(completion).resolves.toBe(false);
+        expect(repository.getSandbox()).toEqual(superseded);
+        expect(repository.getSandbox()).toMatchObject({
+          modal_object_id: change.includes("modal_object_id") ? "another-pending" : "pending",
+          code_server_url: null,
+          code_server_password: null,
+          vnc_url: null,
+          vnc_password: null,
+          ttyd_url: null,
+          ttyd_token: null,
+          tunnel_urls: null,
+        });
+      } finally {
+        releaseEncryption();
+        spy.mockRestore();
+      }
+    });
+
+    it("ordinary resume does not require an expected bridge reference after encryption", async () => {
+      const { repository, set } = createSqliteRepository();
+      set(
+        "status = 'connecting', modal_sandbox_id = 'sb-1', created_at = 2000, modal_object_id = 'old'"
+      );
+      const encrypt = crypto.subtle.encrypt.bind(crypto.subtle);
+      let beginEncryption!: () => void;
+      let releaseEncryption!: () => void;
+      const encrypting = new Promise<void>((resolve) => (beginEncryption = resolve));
+      const gate = new Promise<void>((resolve) => (releaseEncryption = resolve));
+      const spy = vi.spyOn(crypto.subtle, "encrypt").mockImplementation(async (...args) => {
+        beginEncryption();
+        await gate;
+        return encrypt(...args);
+      });
+      try {
+        const completion = repository.completeProviderResume(generation, access);
+        await encrypting;
+        set("modal_object_id = 'changed-during-encryption'");
+        releaseEncryption();
+        await expect(completion).resolves.toBe(true);
+        expect(repository.getSandbox()).toMatchObject({
+          modal_object_id: "provider-2",
+          code_server_url: "https://code.test",
+        });
+        await expect(repository.getSandboxAccessSecret("codeServer")).resolves.toBe("code-secret");
+      } finally {
+        releaseEncryption();
+        spy.mockRestore();
+      }
     });
   });
 

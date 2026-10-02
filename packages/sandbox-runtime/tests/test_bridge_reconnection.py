@@ -43,6 +43,12 @@ class TestIsFatalConnectionError:
         error_str = "server rejected WebSocket connection: HTTP 500"
         assert bridge._is_fatal_connection_error(error_str) is False
 
+    def test_http_503_is_not_fatal(self, bridge):
+        # The control plane answers 503 while a save still needs this sandbox;
+        # exiting would shut the sandbox down under the save.
+        error_str = "server rejected WebSocket connection: HTTP 503"
+        assert bridge._is_fatal_connection_error(error_str) is False
+
     def test_network_error_is_not_fatal(self, bridge):
         error_str = "Connection refused"
         assert bridge._is_fatal_connection_error(error_str) is False

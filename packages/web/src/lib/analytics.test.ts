@@ -5,14 +5,44 @@ import {
   formatAnalyticsDuration,
   formatAnalyticsLongDate,
   formatAnalyticsLongDuration,
+  formatAnalyticsRatio,
   formatCompletionRate,
   formatPullRequestAcceptanceRate,
+  getAnalyticsDimensionLabels,
   getCostPerMergedPullRequest,
   getPullRequestAcceptanceRate,
   sortAnalyticsUserEntries,
 } from "./analytics";
 
+const zeroTokens = {
+  inputTokens: 0,
+  outputTokens: 0,
+  reasoningTokens: 0,
+  cacheReadTokens: 0,
+  cacheWriteTokens: 0,
+};
+
 describe("analytics utilities", () => {
+  it("keeps final dimension labels unique when a fallback key matches another display name", () => {
+    const labels = getAnalyticsDimensionLabels([
+      { key: "a", displayName: "Daily" },
+      { key: "b", displayName: "Daily" },
+      { key: "d", displayName: "a (c)" },
+      { key: "c", displayName: "a" },
+    ]);
+
+    expect(labels.get("a")).toBe("a");
+    expect(labels.get("b")).toBe("b");
+    expect(labels.get("d")).toBe("a (c)");
+    expect(labels.get("c")).toContain("c");
+    expect(new Set(labels.values()).size).toBe(4);
+  });
+
+  it("formats a nullable ratio as a rounded percentage", () => {
+    expect(formatAnalyticsRatio(null)).toBe("—");
+    expect(formatAnalyticsRatio(0)).toBe("0%");
+    expect(formatAnalyticsRatio(0.416)).toBe("42%");
+  });
   it("builds chart data with zero-filled group values", () => {
     const result = buildTimeseriesChartData([
       { date: "2026-04-10", groups: { alice: 2, bob: 1 } },
@@ -51,6 +81,7 @@ describe("analytics utilities", () => {
   it("formats completion rate from terminal sessions only", () => {
     expect(
       formatCompletionRate({
+        ...zeroTokens,
         key: "alice",
         sessions: 7,
         completed: 3,
@@ -70,6 +101,7 @@ describe("analytics utilities", () => {
       [
         {
           key: "user-id-1",
+          ...zeroTokens,
           displayName: "Zoe",
           sessions: 1,
           completed: 1,
@@ -83,6 +115,7 @@ describe("analytics utilities", () => {
         },
         {
           key: "user-id-2",
+          ...zeroTokens,
           displayName: "Alice",
           sessions: 1,
           completed: 1,
@@ -107,6 +140,7 @@ describe("analytics utilities", () => {
       [
         {
           key: "user-id-1",
+          ...zeroTokens,
           displayName: "Zoe",
           sessions: 1,
           completed: 1,
@@ -120,6 +154,7 @@ describe("analytics utilities", () => {
         },
         {
           key: "bob-login",
+          ...zeroTokens,
           sessions: 1,
           completed: 1,
           failed: 0,
@@ -144,6 +179,7 @@ describe("analytics utilities", () => {
       [
         {
           key: "alice",
+          ...zeroTokens,
           sessions: 4,
           completed: 3,
           failed: 1,
@@ -156,6 +192,7 @@ describe("analytics utilities", () => {
         },
         {
           key: "bob",
+          ...zeroTokens,
           sessions: 3,
           completed: 1,
           failed: 1,
@@ -194,24 +231,8 @@ describe("analytics utilities", () => {
   });
 
   it("computes cost per merged PR from the PR-session cost basis", () => {
-    const base = {
-      funnel: { created: 4, open: 1, draft: 0, merged: 2, closed: 1 },
-      prSessionCost: 3,
-      mergedInWindow: 2,
-      avgTimeToMergeMs: null,
-      openInventory: { total: 1, avgAgeMs: null },
-      timeseries: [],
-      repos: [],
-      sources: [],
-    };
-
-    expect(getCostPerMergedPullRequest(base)).toBe(1.5);
-    expect(
-      getCostPerMergedPullRequest({
-        ...base,
-        funnel: { ...base.funnel, merged: 0 },
-      })
-    ).toBeNull();
+    expect(getCostPerMergedPullRequest(3, 2)).toBe(1.5);
+    expect(getCostPerMergedPullRequest(3, 0)).toBeNull();
   });
 
   it("formats day-scale durations with days and hours", () => {

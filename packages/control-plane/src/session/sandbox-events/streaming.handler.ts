@@ -5,15 +5,18 @@ import type { CallbackNotificationService } from "../callback-notification-servi
 import type { EventRepository } from "../event-repository";
 import type { SessionMessenger } from "../messenger";
 import type { SessionBudgetService } from "../budget-service";
+import type { UsageRepository } from "../usage-repository";
 import { persistSandboxEvent, type SandboxEventContext } from "./context";
 
 /**
  * Streaming/timeline family: the high-frequency events that narrate an
  * execution (tokens, steps, tool activity, compaction). Every event here is
  * broadcast to clients; the ones with a durable representation also record
- * to the timeline (steps only renew activity and accumulate cost). Nothing
- * here transitions session state. Also owns the timeline-observer path
- * (`recordTimelineEvent`) for events that persist and broadcast unchanged.
+ * to the timeline (steps renew activity, accumulate cost, and persist usage). Nothing
+ * here transitions session state; a step whose turn has already ended
+ * refreshes the metrics projection itself, as no settle for that turn is still
+ * to come. Also owns the timeline-observer path (`recordTimelineEvent`) for
+ * events that persist and broadcast unchanged.
  */
 export class SandboxStreamingEventHandler {
   constructor(
@@ -22,7 +25,9 @@ export class SandboxStreamingEventHandler {
     private readonly callbackService: CallbackNotificationService,
     private readonly messenger: SessionMessenger,
     private readonly updateLastActivity: (timestamp: number) => void,
-    private readonly budgetService: SessionBudgetService
+    private readonly budgetService: SessionBudgetService,
+    private readonly usageRepository: UsageRepository,
+    private readonly refreshMetricsAfterStep: (messageId: string | null) => void
   ) {}
 
   handleToken(event: Extract<SandboxEvent, { type: "token" }>, context: SandboxEventContext): void {
@@ -54,7 +59,28 @@ export class SandboxStreamingEventHandler {
     this.updateLastActivity(context.now);
     this.messenger.broadcast({ type: "sandbox_event", event });
     if (event.type === "step_finish") {
-      await this.budgetService.ingestStepFinish(event, context.messageId, context.now);
+      try {
+        let persistenceFailure: { error: unknown } | null = null;
+        try {
+          this.usageRepository.recordStepUsage(event, context.messageId, context.now);
+        } catch (error) {
+          persistenceFailure = { error };
+        }
+        try {
+          await this.budgetService.ingestStepFinish(event, context.messageId, context.now);
+        } catch (error) {
+          if (persistenceFailure) throw persistenceFailure.error;
+          throw error;
+        }
+        if (persistenceFailure) throw persistenceFailure.error;
+      } finally {
+        // Submitted so a failed refresh is logged at the task boundary rather
+        // than replacing the step's own outcome.
+        this.backgroundTasks.submit(async () => this.refreshMetricsAfterStep(context.messageId), {
+          name: "session_index.refresh_step_metrics",
+          context: { message_id: context.messageId },
+        });
+      }
     }
   }
 
@@ -69,7 +95,7 @@ export class SandboxStreamingEventHandler {
     }
     this.messenger.broadcast({ type: "sandbox_event", event });
 
-    if (messageId) {
+    if (messageId && !event.truncated?.fields.some((field) => field.startsWith("args."))) {
       this.backgroundTasks.submit(() => this.callbackService.notifyToolCall(messageId, event), {
         name: "callback.notify_tool_call",
         context: { message_id: messageId },

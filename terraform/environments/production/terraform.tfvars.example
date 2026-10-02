@@ -56,13 +56,13 @@ cloudflare_worker_subdomain = ""
 # vercel_team_id = ""  # e.g., "team_xxxxxxxxxxxxxxxxxxxx"
 
 # Modal API token
-# Only required when sandbox_provider = "modal"
+# Only required when sandbox_provider = "modal" or "modal-vm"
 # Create at: https://modal.com/settings
 modal_token_id = ""
 modal_token_secret = ""
 
 # Modal workspace, environment, and endpoint web suffix
-# Only required when sandbox_provider = "modal"
+# Only required when sandbox_provider = "modal" or "modal-vm"
 # workspace: your Modal username (e.g., "myworkspace")
 # environment: Modal environment name used by the CLI
 # environment_web_suffix: Modal web suffix used in endpoint URLs:
@@ -247,15 +247,21 @@ linear_webhook_secret = ""   # Webhook Signing Secret from the application confi
 # From: https://console.anthropic.com/
 anthropic_api_key = ""
 
+# Anthropic credential used only by the Slack/Linear bot classifiers; never
+# injected into sandboxes. Falls back to anthropic_api_key when blank. Set this
+# and leave anthropic_api_key blank to keep the classifier key out of sandboxes.
+# classification_anthropic_api_key = ""
+
 # OpenAI credential for the Slack/Linear bot classifiers. Required when
 # classification_model names an OpenAI model AND at least one of the Slack or
 # Linear bots is enabled; an Anthropic classifier model is served by
-# anthropic_api_key above.
+# classification_anthropic_api_key or anthropic_api_key above.
 # From: https://platform.openai.com/api-keys
 classification_openai_api_key = ""
 
 # Model backing the Slack/Linear bot classifiers. A "claude-"/"anthropic/" id is
-# served by anthropic_api_key; a "gpt-"/"openai/" id by
+# served by classification_anthropic_api_key or anthropic_api_key; a
+# "gpt-"/"openai/" id by
 # classification_openai_api_key.
 # classification_model = "claude-haiku-4-5"
 
@@ -276,7 +282,7 @@ repo_secrets_encryption_key = ""
 provider_accounts_encryption_key = ""
 
 # Modal API secret (for control plane -> Modal authentication)
-# Only required when sandbox_provider = "modal"
+# Only required when sandbox_provider = "modal" or "modal-vm"
 # Generate with: openssl rand -hex 32
 modal_api_secret = ""
 
@@ -293,6 +299,7 @@ nextauth_secret = ""
 # - "vercel": Vercel Sandbox API with filesystem snapshot restore
 # - "opencomputer": OpenComputer declarative-template sandboxes with hibernate/resume
 # - "e2b": direct E2B REST API integration with pause/resume
+# Select "modal-vm" for Docker-capable VMs (deployment-wide; see docs/MODAL_DOCKER.md).
 sandbox_provider = "modal"
 
 # Platform for the web app deployment

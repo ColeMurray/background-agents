@@ -74,6 +74,14 @@
       "import": "./dist/types/environments.js",
       "types": "./dist/types/environments.d.ts"
     },
+    "./types/teams": {
+      "import": "./dist/types/teams.js",
+      "types": "./dist/types/teams.d.ts"
+    },
+    "./types/team-access": {
+      "import": "./dist/types/team-access.js",
+      "types": "./dist/types/team-access.d.ts"
+    },
     "./types/github-identity": {
       "import": "./dist/types/github-identity.js",
       "types": "./dist/types/github-identity.d.ts"
@@ -153,6 +161,10 @@
     "./types/sessions": {
       "import": "./dist/types/sessions.js",
       "types": "./dist/types/sessions.d.ts"
+    },
+    "./types/trace-export": {
+      "import": "./dist/types/trace-export.js",
+      "types": "./dist/types/trace-export.d.ts"
     },
     "./types/session-inbox": {
       "import": "./dist/types/session-inbox.js",

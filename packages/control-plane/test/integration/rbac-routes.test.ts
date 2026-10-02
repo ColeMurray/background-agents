@@ -228,6 +228,13 @@ describe("RBAC routes", () => {
       ),
     ]);
 
+    await env.DB.prepare(
+      `INSERT INTO sessions (id, repo_owner, repo_name, status, user_id, created_at, updated_at)
+       VALUES ('parent', 'acme', 'app', 'completed', ?, 1, 1)`
+    )
+      .bind(user!.id)
+      .run();
+
     const response = await serviceFetch("https://cp.test/sessions/parent/children", {
       method: "POST",
       headers: { "Content-Type": "application/json" },

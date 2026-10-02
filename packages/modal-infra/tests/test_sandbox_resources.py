@@ -4,26 +4,28 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from src.sandbox.manager import SandboxConfig, SandboxManager, _resource_kwargs
+from src.sandbox.launch_policy import launch_kwargs, parse_launch
+from src.sandbox.manager import SandboxConfig, SandboxManager
+from src.sandbox.tunnels import SandboxTunnels, TunnelUrls
 
 
 class TestResourceKwargs:
-    """_resource_kwargs maps sandbox settings to Modal create kwargs."""
+    """Provider-local launch policy maps resource settings to Modal kwargs."""
 
     def test_empty_settings(self):
-        assert _resource_kwargs({}) == {}
+        assert launch_kwargs(parse_launch("modal", {})) == {}
 
     def test_maps_cpu_and_memory(self):
-        assert _resource_kwargs({"cpuCores": 2, "memoryMib": 4096}) == {
+        assert launch_kwargs(parse_launch("modal", {"cpuCores": 2, "memoryMib": 4096})) == {
             "cpu": 2.0,
             "memory": 4096,
         }
 
     def test_allows_fractional_cpu(self):
-        assert _resource_kwargs({"cpuCores": 0.5}) == {"cpu": 0.5}
+        assert launch_kwargs(parse_launch("modal", {"cpuCores": 0.5})) == {"cpu": 0.5}
 
     def test_independent_fields(self):
-        assert _resource_kwargs({"memoryMib": 2048}) == {"memory": 2048}
+        assert launch_kwargs(parse_launch("modal", {"memoryMib": 2048})) == {"memory": 2048}
 
 
 def _fake_create(captured: dict):
@@ -46,16 +48,18 @@ class TestCreateSandboxResources:
     @pytest.mark.asyncio
     async def test_create_sandbox_passes_cpu_and_memory(self, monkeypatch):
         captured: dict = {}
-        monkeypatch.setattr("src.sandbox.manager.modal.Sandbox.create", _fake_create(captured))
+        monkeypatch.setattr("src.sandbox.launch.modal.Sandbox.create", _fake_create(captured))
         monkeypatch.setattr(
-            SandboxManager,
-            "_resolve_and_setup_tunnels",
-            AsyncMock(return_value=(None, None, None, None)),
+            SandboxTunnels,
+            "resolve",
+            AsyncMock(return_value=TunnelUrls(None, None, None, None)),
         )
 
         manager = SandboxManager()
         await manager.create_sandbox(
             SandboxConfig(
+                clone_host="github.com",
+                clone_username="x-access-token",
                 repo_owner="acme",
                 repo_name="repo",
                 settings={"cpuCores": 2, "memoryMib": 4096},
@@ -73,17 +77,19 @@ class TestCreateSandboxResources:
             object_id = "img-1"
 
         monkeypatch.setattr(
-            "src.sandbox.manager.modal.Image.from_id", lambda *_a, **_kw: FakeImage()
+            "src.sandbox.launch.modal.Image.from_id", lambda *_a, **_kw: FakeImage()
         )
-        monkeypatch.setattr("src.sandbox.manager.modal.Sandbox.create", _fake_create(captured))
+        monkeypatch.setattr("src.sandbox.launch.modal.Sandbox.create", _fake_create(captured))
         monkeypatch.setattr(
-            SandboxManager,
-            "_resolve_and_setup_tunnels",
-            AsyncMock(return_value=(None, None, None, None)),
+            SandboxTunnels,
+            "resolve",
+            AsyncMock(return_value=TunnelUrls(None, None, None, None)),
         )
 
         manager = SandboxManager()
         await manager.restore_from_snapshot(
+            clone_host="github.com",
+            clone_username="x-access-token",
             snapshot_image_id="img-abc",
             session_config={"repo_owner": "acme", "repo_name": "repo"},
             settings={"cpuCores": 1, "memoryMib": 2048},

@@ -200,7 +200,7 @@ development environment.
 **What's in a sandbox:**
 
 - Debian Linux with common dev tools
-- Node.js 22, Python 3.12, git, curl
+- Node.js 24, Python 3.12, git, curl
 - Package managers: npm, pnpm, pip, uv
 - agent-browser CLI + headless Chrome (for browser automation)
 - OpenCode and the Claude Agent SDK (the coding agent harnesses)
@@ -688,13 +688,12 @@ was built for internal use where all employees have access to company repositori
 | WebSocket Token    | Authenticate client connections            | Single session                   |
 | Managed LLM Token  | Short-lived OpenAI or xAI model access     | Pinned session provider account  |
 
-Fresh and prebuilt-image sandboxes fetch git credentials on demand through the control plane instead
-of relying on a token embedded in the environment or remote URL. Snapshot restores may still receive
-env-token fallbacks so legacy snapshots can boot through the credential-helper migration. The helper
-authorizes HTTPS requests for the configured SCM host, preserving existing setup/start hooks that
-clone other private repositories available to the installation. This primarily protects continuously
-running sessions and Daytona persistent resumes from expired embedded credentials; Modal snapshot
-restores still mint a fresh fallback token on restore.
+Session sandboxes, whether fresh, prebuilt-image, or restored from a snapshot, fetch git credentials
+on demand through the control plane instead of relying on a token embedded in the environment or
+remote URL. The helper authorizes HTTPS requests for the configured SCM host, preserving existing
+setup/start hooks that clone other private repositories available to the installation. This protects
+continuously running sessions and persistent resumes from expired embedded credentials. One-shot
+image builds still receive `VCS_CLONE_TOKEN` because they have no session to broker through.
 
 ### Secrets
 

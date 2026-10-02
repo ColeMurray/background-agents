@@ -3,10 +3,11 @@ import {
   githubLoginSchema,
 } from "@open-inspect/shared/types/github-identity";
 import { z } from "zod";
-import type {
-  GitHubCredentialAuthority,
-  ProviderAccountSelection,
-  ProviderAccountClient,
+import {
+  resolveGitHubAccountProfile,
+  type GitHubCredentialAuthority,
+  type ProviderAccountSelection,
+  type ProviderAccountClient,
 } from "../source-control/github-credential-authority";
 import type { UserStore } from "../db/user-store";
 import type { SourceControlProviderName } from "../source-control";
@@ -77,6 +78,13 @@ const betterAuthGitHubAccountInfoSchema = z.object({
   }),
 });
 
+export class AmbiguousGitHubIdentityError extends Error {
+  constructor() {
+    super("User resolves to multiple GitHub provider accounts");
+    this.name = "AmbiguousGitHubIdentityError";
+  }
+}
+
 export class BetterAuthGitHubTokenUnavailableError extends Error {
   constructor(readonly retrievalError: unknown) {
     super("Better Auth GitHub token is unavailable", { cause: retrievalError });
@@ -104,17 +112,18 @@ export async function resolveCurrentGitHubAccessToken(
   userStore: UserStore,
   getAccountClient: () => ProviderAccountClient,
   canonicalUserId: string,
-  expectedScmUserId: string
+  expectedScmUserId: string | null
 ): Promise<string | null> {
   const enrichment = await resolveGitHubEnrichment(userStore, canonicalUserId);
   if (!enrichment) return null;
-  if (enrichment.scmUserId !== expectedScmUserId) {
+  // Browser joins may lack a cached SCM subject; the canonical identity is authoritative.
+  if (expectedScmUserId !== null && enrichment.scmUserId !== expectedScmUserId) {
     throw new Error("Session GitHub account no longer matches the canonical user");
   }
 
   const selection: ProviderAccountSelection = {
     providerId: "github",
-    accountId: expectedScmUserId,
+    accountId: enrichment.scmUserId,
     userId: canonicalUserId,
   };
   const accountClient = getAccountClient();
@@ -143,7 +152,7 @@ export async function resolveCurrentGitHubAccessToken(
 
   parseBetterAuthGitHubProfile(
     await accountClient.accountInfo({ query: selection }),
-    expectedScmUserId
+    enrichment.scmUserId
   );
   return token.accessToken;
 }
@@ -171,7 +180,7 @@ export async function resolveGitHubEnrichment(
   const identities = await userStore.getIdentitiesForUser(userId);
   const githubIdentities = identities.filter((identity) => identity.provider === "github");
   if (githubIdentities.length > 1) {
-    throw new Error("User resolves to multiple GitHub provider accounts");
+    throw new AmbiguousGitHubIdentityError();
   }
   const githubIdentity = githubIdentities[0];
   if (!githubIdentity) return null;
@@ -220,7 +229,30 @@ export async function resolveGitHubEnrichmentForRequest(
 
   const profileResponse = await authority.githubAccount.resolveProfile();
   if (profileResponse === null) return enrichment;
-  const profile = parseBetterAuthGitHubProfile(profileResponse, authority.githubAccount.subject);
+  return enrichFromVerifiedGitHubProfile(enrichment, profileResponse);
+}
+
+/** Attribute unattended turns to the one linked account of the admitted canonical user. */
+export async function resolveGitHubEnrichmentForCanonicalUser(
+  userStore: UserStore,
+  userId: string,
+  getAccountClient: () => ProviderAccountClient
+): Promise<GitHubEnrichment | null> {
+  const enrichment = await resolveGitHubEnrichment(userStore, userId);
+  if (!enrichment || enrichment.scmLogin) return enrichment;
+  const response = await resolveGitHubAccountProfile(getAccountClient(), {
+    providerId: "github",
+    accountId: enrichment.scmUserId,
+    userId,
+  });
+  return response === null ? enrichment : enrichFromVerifiedGitHubProfile(enrichment, response);
+}
+
+function enrichFromVerifiedGitHubProfile(
+  enrichment: GitHubEnrichment,
+  profileResponse: unknown
+): GitHubEnrichment {
+  const profile = parseBetterAuthGitHubProfile(profileResponse, enrichment.scmUserId);
   const displayName = enrichment.displayName ?? profile.displayName ?? profile.login;
   const authorIdentity = resolveGitAuthorIdentity({
     scmProvider: "github",

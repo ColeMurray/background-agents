@@ -1,7 +1,10 @@
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { env } from "cloudflare:test";
+import { TeamMembershipStore } from "../../src/db/team-memberships";
+import { TeamStore } from "../../src/db/teams";
 import { UserStore } from "../../src/db/user-store";
 import { cleanD1Tables } from "./cleanup";
+import { sqlDatabase } from "./helpers";
 
 const providerIssuers = [
   ["github", "https://github.com"],
@@ -16,6 +19,79 @@ describe("UserStore", () => {
   beforeEach(async () => {
     await cleanD1Tables();
     store = new UserStore(env.DB);
+  });
+
+  describe("listCollaboratorCandidates", () => {
+    it("returns an empty list when there are no active users", async () => {
+      expect(await store.listCollaboratorCandidates({ includeEmail: true })).toEqual([]);
+    });
+
+    it("returns only active picker identities ordered by name with email fallback", async () => {
+      const zed = await store.createUser({ displayName: "zed" });
+      const alice = await store.createUser({
+        displayName: "ALICE",
+        avatarUrl: "https://example.com/alice.png",
+      });
+      const bob = await store.createUser({ email: "bob@example.com" });
+      const suspended = await store.createUser({ displayName: "Suspended" });
+      const unassigned = await store.createUser({ displayName: "Unassigned" });
+      await env.DB.batch([
+        env.DB.prepare("UPDATE users SET suspended_at = 1 WHERE id = ?").bind(suspended.id),
+        env.DB.prepare("DELETE FROM user_role_assignments WHERE user_id = ?").bind(unassigned.id),
+      ]);
+
+      expect(await store.listCollaboratorCandidates({ includeEmail: true })).toEqual([
+        {
+          userId: alice.id,
+          displayName: "ALICE",
+          email: null,
+          avatarUrl: "https://example.com/alice.png",
+        },
+        { userId: bob.id, displayName: null, email: "bob@example.com", avatarUrl: null },
+        { userId: zed.id, displayName: "zed", email: null, avatarUrl: null },
+      ]);
+    });
+
+    it("does not read or sort by email when email is excluded", async () => {
+      const user = await store.createUser({ email: "private@example.com" });
+      const db = sqlDatabase(env.DB);
+      const prepare = vi.fn((sql: string) => db.prepare(sql));
+      const candidates = await new UserStore({
+        prepare,
+        batch: db.batch.bind(db),
+      }).listCollaboratorCandidates({ includeEmail: false });
+      expect(candidates).toEqual([
+        { userId: user.id, displayName: null, email: null, avatarUrl: null },
+      ]);
+      expect(prepare).toHaveBeenCalledWith(expect.stringContaining("NULL AS email"));
+      expect(prepare.mock.calls[0][0]).not.toContain("users.email");
+    });
+  });
+
+  describe("getCollaboratorEligibility", () => {
+    it("requires an active user and, for a team, current membership", async () => {
+      const member = await store.createUser({ displayName: "Member" });
+      const outsider = await store.createUser({ displayName: "Outsider" });
+      const suspended = await store.createUser({ displayName: "Suspended" });
+      const unassigned = await store.createUser({ displayName: "Unassigned" });
+      const team = await new TeamStore(env.DB).create({
+        slug: "eligibility",
+        name: "Eligibility",
+        joinPolicy: "invite_only",
+      });
+      await new TeamMembershipStore(env.DB).add(team.id, member.id);
+      await env.DB.batch([
+        env.DB.prepare("UPDATE users SET suspended_at = 1 WHERE id = ?").bind(suspended.id),
+        env.DB.prepare("DELETE FROM user_role_assignments WHERE user_id = ?").bind(unassigned.id),
+      ]);
+
+      expect(await store.getCollaboratorEligibility("missing", null)).toBe("not_found");
+      expect(await store.getCollaboratorEligibility(suspended.id, null)).toBe("inactive");
+      expect(await store.getCollaboratorEligibility(unassigned.id, null)).toBe("inactive");
+      expect(await store.getCollaboratorEligibility(outsider.id, null)).toBe("eligible");
+      expect(await store.getCollaboratorEligibility(outsider.id, team.id)).toBe("not_team_member");
+      expect(await store.getCollaboratorEligibility(member.id, team.id)).toBe("eligible");
+    });
   });
 
   // ── resolveOrCreateUser ─────────────────────────────────────────
@@ -46,6 +122,11 @@ describe("UserStore", () => {
       expect(user).not.toBeNull();
       expect(user!.displayName).toBe("Alice");
       expect(user!.email).toBeNull();
+      expect(
+        await env.DB.prepare("SELECT team_id, source FROM team_memberships WHERE user_id = ?")
+          .bind(result.id)
+          .first()
+      ).toBeNull();
     });
 
     it("creates a new user with email normalized to lowercase", async () => {
@@ -372,7 +453,6 @@ describe("UserStore", () => {
   describe("createIdentity", () => {
     it.each(providerIssuers)("stores the canonical issuer for %s", async (provider, issuer) => {
       const user = await store.createUser({ displayName: "Alice" });
-
       await store.createIdentity({
         userId: user.id,
         provider,

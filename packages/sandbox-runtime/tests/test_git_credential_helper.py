@@ -39,17 +39,6 @@ def env_set(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("REPO_NAME", "web")
 
 
-@pytest.fixture
-def clean_gh_env(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Strip ambient gh tokens so gh-token mint decisions are deterministic.
-
-    CI (GitHub Actions) sets GITHUB_TOKEN in the environment, which would
-    otherwise make the gh-token action decline to mint.
-    """
-    for key in ("GH_TOKEN", "GITHUB_TOKEN", "GITHUB_APP_TOKEN", "OI_GITHUB_TOKEN_IS_FALLBACK"):
-        monkeypatch.delenv(key, raising=False)
-
-
 # A credential request as git emits it with credential.useHttpPath=true.
 SESSION_REPO_REQUEST = "protocol=https\nhost=github.com\npath=acme/web.git\n\n"
 DEFAULT_CREDENTIAL_TTL_SECONDS = 60 * 60
@@ -564,60 +553,18 @@ def test_control_plane_response_invalid_expiry_is_fatal(cache_dir: Path, env_set
         ({"VCS_HOST": "github.com"}, True),
         # Non-github deployment → never touch gh's own auth.
         ({"VCS_HOST": "gitlab.com"}, False),
-        # A user-set GH_TOKEN always wins (the manager never injects GH_TOKEN).
+        # CLI-supported user tokens always win.
         ({"VCS_HOST": "github.com", "GH_TOKEN": "user"}, False),
-        # A user token without the fallback marker → leave it in place.
         ({"VCS_HOST": "github.com", "GITHUB_TOKEN": "user"}, False),
-        ({"VCS_HOST": "github.com", "GITHUB_APP_TOKEN": "user"}, False),
-        # Marked system fallback → refresh the soon-to-expire installation token.
-        (
-            {
-                "VCS_HOST": "github.com",
-                "GITHUB_TOKEN": "stale",
-                "GITHUB_APP_TOKEN": "stale",
-                "OI_GITHUB_TOKEN_IS_FALLBACK": "1",
-            },
-            True,
-        ),
-        # Marker with only GITHUB_TOKEN present → still refresh.
-        (
-            {
-                "VCS_HOST": "github.com",
-                "GITHUB_TOKEN": "stale",
-                "OI_GITHUB_TOKEN_IS_FALLBACK": "1",
-            },
-            True,
-        ),
-        # Dropped heuristic: the marker alone forces a refresh even when the
-        # two values differ (this case used to be read as a user override).
-        (
-            {
-                "VCS_HOST": "github.com",
-                "GITHUB_TOKEN": "stale",
-                "GITHUB_APP_TOKEN": "user_app",
-                "OI_GITHUB_TOKEN_IS_FALLBACK": "1",
-            },
-            True,
-        ),
-        # A user GH_TOKEN still wins even with the fallback marker present.
-        (
-            {
-                "VCS_HOST": "github.com",
-                "GH_TOKEN": "user",
-                "GITHUB_TOKEN": "stale",
-                "OI_GITHUB_TOKEN_IS_FALLBACK": "1",
-            },
-            False,
-        ),
+        # gh does not read GITHUB_APP_TOKEN; the wrapper must still obtain a usable token.
+        ({"VCS_HOST": "github.com", "GITHUB_APP_TOKEN": "user"}, True),
     ],
 )
 def test_gh_wrapper_should_mint(env: dict[str, str], expected: bool) -> None:
     assert helper._gh_wrapper_should_mint(env) is expected
 
 
-def test_gh_token_action_prints_bare_token(
-    cache_dir: Path, env_set: None, clean_gh_env: None
-) -> None:
+def test_gh_token_action_prints_bare_token(cache_dir: Path, env_set: None) -> None:
     """With no usable token in env, mint one and print it bare (no framing)."""
     transport = _mock_response(
         {
@@ -637,7 +584,7 @@ def test_gh_token_action_prints_bare_token(
 
 
 def test_gh_token_action_prints_nothing_for_user_token(
-    cache_dir: Path, env_set: None, clean_gh_env: None, monkeypatch: pytest.MonkeyPatch
+    cache_dir: Path, env_set: None, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """A user-provided token means gh uses its own env — no mint, no output."""
     monkeypatch.setenv("GITHUB_TOKEN", "user_token")
@@ -652,7 +599,7 @@ def test_gh_token_action_prints_nothing_for_user_token(
 
 
 def test_gh_token_action_prints_nothing_for_non_github_host(
-    cache_dir: Path, env_set: None, clean_gh_env: None, monkeypatch: pytest.MonkeyPatch
+    cache_dir: Path, env_set: None, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setenv("VCS_HOST", "gitlab.com")
     transport = _mock_response({"should": "not be called"}, status=500)
@@ -666,7 +613,7 @@ def test_gh_token_action_prints_nothing_for_non_github_host(
 
 
 def test_gh_token_action_prints_nothing_when_mint_fails(
-    cache_dir: Path, clean_gh_env: None, monkeypatch: pytest.MonkeyPatch
+    cache_dir: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """A failed mint prints nothing and exits 0 so the wrapper falls through to env."""
     # Env wants a mint (nothing usable) but there's no control plane to call.

@@ -1,5 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
+import { DatabaseSync } from "node:sqlite";
 import { createTestBackgroundTasks } from "../../background-tasks.test-support";
+import { createNodeSqlStorage } from "../../node/sqlite-storage";
 import { SessionSandboxEventProcessor } from "./processor";
 import { SandboxArtifactEventHandler } from "./artifact.handler";
 import { SandboxExecutionEventHandler } from "./execution.handler";
@@ -19,6 +21,8 @@ import type { MessageRepository } from "../message-repository";
 import type { SessionStatusService } from "../session-status-service";
 import type { SandboxCommandTarget, SessionWebSocketManager } from "../websocket-manager";
 import type { SessionBudgetService } from "../budget-service";
+import { UsageRepository } from "../usage-repository";
+import { initSchema } from "../schema";
 
 function createPushSpec(repoOwner: string, repoName: string, targetBranch: string): GitPushSpec {
   return {
@@ -32,10 +36,13 @@ function createPushSpec(repoOwner: string, repoName: string, targetBranch: strin
   };
 }
 
-function createProcessor(shutdown?: {
-  generationReady(event: Extract<SandboxEvent, { type: "sandbox_generation_ready" }>): void;
-  prepared(event: Extract<SandboxEvent, { type: "preservation_prepared" }>): void;
-}) {
+function createProcessor(
+  shutdown?: {
+    generationReady(event: Extract<SandboxEvent, { type: "sandbox_generation_ready" }>): void;
+    prepared(event: Extract<SandboxEvent, { type: "preservation_prepared" }>): void;
+  },
+  persistedUsage?: UsageRepository
+) {
   const getProcessingMessage = vi.fn(() => null as { id: string } | null);
   const repository = {
     updateSandboxHeartbeat: vi.fn(),
@@ -112,6 +119,8 @@ function createProcessor(shutdown?: {
     })),
     deliverTransition: vi.fn(async () => {}),
   };
+  const usageRepository = { recordStepUsage: vi.fn() };
+  const refreshMetricsAfterStep = vi.fn((_messageId: string | null) => {});
 
   // The real family composition, mirroring components.ts, so the suite keeps
   // pinning end-to-end processSandboxEvent behavior across the split.
@@ -126,7 +135,9 @@ function createProcessor(shutdown?: {
       callbackService as unknown as CallbackNotificationService,
       messenger,
       updateLastActivity,
-      budgetService as unknown as SessionBudgetService
+      budgetService as unknown as SessionBudgetService,
+      persistedUsage ?? (usageRepository as unknown as UsageRepository),
+      refreshMetricsAfterStep
     ),
     new SandboxArtifactEventHandler(
       artifactRepository,
@@ -193,6 +204,8 @@ function createProcessor(shutdown?: {
     backgroundTasks,
     log,
     budgetService,
+    usageRepository,
+    refreshMetricsAfterStep,
   };
 }
 
@@ -444,6 +457,105 @@ describe("SessionSandboxEventProcessor", () => {
       expect.any(Number)
     );
     expect(h.eventRepository.createEvent).not.toHaveBeenCalled();
+    expect(h.usageRepository.recordStepUsage).toHaveBeenCalledWith(
+      event,
+      "msg-1",
+      expect.any(Number)
+    );
+  });
+
+  it("records step usage before budget delivery rejects", async () => {
+    const db = new DatabaseSync(":memory:");
+    try {
+      const storage = createNodeSqlStorage(db);
+      initSchema(storage.sql);
+      const usage = new UsageRepository(storage.sql, storage.transactionSync);
+      const h = createProcessor(undefined, usage);
+      const event: SandboxEvent = {
+        type: "step_finish",
+        messageId: "msg-1",
+        sandboxId: "sb-1",
+        timestamp: 1000,
+        tokens: { input: 10 },
+      };
+      h.budgetService.ingestStepFinish.mockRejectedValueOnce(new Error("stop failed"));
+
+      await expect(h.processor.processSandboxEvent(event)).rejects.toThrow("stop failed");
+      expect(usage.listStepUsage(null, 10).items).toEqual([
+        expect.objectContaining({ messageId: "msg-1", inputTokens: 10 }),
+      ]);
+      expect(usage.getSessionTotals().rowCount).toBe(1);
+    } finally {
+      db.close();
+    }
+  });
+
+  it.each([false, true])(
+    "ingests cost and preserves the usage error when budget delivery rejects: %s",
+    async (budgetRejects) => {
+      const h = createProcessor();
+      const event: SandboxEvent = {
+        type: "step_finish",
+        messageId: "msg-1",
+        sandboxId: "sb-1",
+        timestamp: 1000,
+        cost: 0.25,
+      };
+      const persistenceError = new Error("usage write failed");
+      h.usageRepository.recordStepUsage.mockImplementationOnce(() => {
+        throw persistenceError;
+      });
+      if (budgetRejects) {
+        h.budgetService.ingestStepFinish.mockRejectedValueOnce(new Error("budget delivery failed"));
+      }
+
+      await expect(h.processor.processSandboxEvent(event)).rejects.toBe(persistenceError);
+      expect(h.budgetService.ingestStepFinish).toHaveBeenCalledWith(
+        event,
+        "msg-1",
+        expect.any(Number)
+      );
+    }
+  );
+
+  it("keeps a recorded step's result when refreshing its metrics fails", async () => {
+    const h = createProcessor();
+    const refreshError = new Error("Malformed persisted session row");
+    h.refreshMetricsAfterStep.mockImplementation(() => {
+      throw refreshError;
+    });
+
+    await expect(
+      h.processor.processSandboxEvent({
+        type: "step_finish",
+        messageId: "msg-1",
+        sandboxId: "sb-1",
+        timestamp: 1000,
+        tokens: { input: 10 },
+      })
+    ).resolves.toBeUndefined();
+    expect(h.backgroundTasks.failures).toEqual([refreshError]);
+  });
+
+  it("reports the usage error rather than a failed metrics refresh", async () => {
+    const h = createProcessor();
+    const persistenceError = new Error("usage write failed");
+    h.usageRepository.recordStepUsage.mockImplementationOnce(() => {
+      throw persistenceError;
+    });
+    h.refreshMetricsAfterStep.mockImplementation(() => {
+      throw new Error("Malformed persisted session row");
+    });
+
+    await expect(
+      h.processor.processSandboxEvent({
+        type: "step_finish",
+        messageId: "msg-1",
+        sandboxId: "sb-1",
+        timestamp: 1000,
+        cost: 0.25,
+      })
+    ).rejects.toBe(persistenceError);
   });
 
   it("records unavailable cost tracking for positive-token steps without cost", async () => {
@@ -752,6 +864,29 @@ describe("SessionSandboxEventProcessor", () => {
           expect.objectContaining({ type: "tool_call", status, callId: `call-${status}` })
         );
       }
+    });
+
+    it("persists a truncated tool call without sending incomplete arguments to callbacks", async () => {
+      const h = createProcessor();
+      await h.processor.processSandboxEvent({
+        type: "tool_call",
+        tool: "bash",
+        args: { command: "partial" },
+        callId: "call-1",
+        messageId: "msg-1",
+        sandboxId: "sb-1",
+        timestamp: 1000,
+        truncated: { fields: ["args.command"], originalBytes: 2_000_000 },
+      });
+
+      expect(h.eventRepository.upsertToolCallEvent).toHaveBeenCalledWith(
+        "msg-1",
+        expect.objectContaining({
+          truncated: { fields: ["args.command"], originalBytes: 2_000_000 },
+        }),
+        expect.any(Number)
+      );
+      expect(h.callbackService.notifyToolCall).not.toHaveBeenCalled();
     });
 
     it("resets activity timer on step_start", async () => {

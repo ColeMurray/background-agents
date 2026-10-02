@@ -57,7 +57,7 @@ export const INTEGRATION_WEBSOCKET_TIMEOUT_MS = 2000;
 const TEST_BROWSER_USER_ID = "11111111111111111111111111111111";
 const TEST_BROWSER_ACCOUNT_ID = "test-browser-account";
 const TEST_BROWSER_PROVIDER_SUBJECT = "583231";
-type InitialUserRole = Exclude<BuiltInRoleKey, "viewer">;
+type InitialUserRole = BuiltInRoleKey;
 const DEFAULT_INITIAL_USER_ROLE = "owner" as const;
 const TEST_BROWSER_SESSION_ID = "test-browser-session";
 const TEST_BROWSER_SESSION_TOKEN = "test-browser-session-token";
@@ -96,15 +96,21 @@ async function signCookieValue(value: string, secret: string): Promise<string> {
  * web request must carry the same compound credential as production. Direct
  * service-auth tests intentionally build their own bare sig1 requests.
  */
-async function testBrowserSessionCookie(initialRole: InitialUserRole): Promise<string> {
+async function testBrowserSessionCookie(
+  initialRole: InitialUserRole,
+  as?: { userId: string; role: BuiltInRoleKey }
+): Promise<string> {
   const secret = env.BROWSER_AUTH_SECRET;
   if (!secret) throw new Error("BROWSER_AUTH_SECRET is not configured for integration tests");
 
   const now = new Date();
   const expiresAt = new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000);
   const applicationTimestamp = now.getTime();
+  const browserUserId = as?.userId ?? TEST_BROWSER_USER_ID;
+  const sessionId = as ? `test-browser-session-${browserUserId}` : TEST_BROWSER_SESSION_ID;
+  const sessionToken = as ? `test-browser-token-${browserUserId}` : TEST_BROWSER_SESSION_TOKEN;
   const existingUser = await env.DB.prepare("SELECT 1 FROM users WHERE id = ?")
-    .bind(TEST_BROWSER_USER_ID)
+    .bind(browserUserId)
     .first();
   await env.DB.batch([
     env.DB.prepare(
@@ -112,11 +118,11 @@ async function testBrowserSessionCookie(initialRole: InitialUserRole): Promise<s
          (id, display_name, email, email_verified, avatar_url, created_at, updated_at)
        VALUES (?, ?, ?, ?, ?, ?, ?)`
     ).bind(
-      TEST_BROWSER_USER_ID,
+      browserUserId,
       "Integration Browser User",
-      "browser@test.local",
+      as ? `${browserUserId}@test.local` : "browser@test.local",
       1,
-      "browser@test.local",
+      as ? `${browserUserId}@test.local` : "browser@test.local",
       applicationTimestamp,
       applicationTimestamp
     ),
@@ -126,12 +132,12 @@ async function testBrowserSessionCookie(initialRole: InitialUserRole): Promise<s
           provider_issuer, created_at, updated_at)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
     ).bind(
-      TEST_BROWSER_ACCOUNT_ID,
-      TEST_BROWSER_USER_ID,
+      as ? `test-browser-account-${browserUserId}` : TEST_BROWSER_ACCOUNT_ID,
+      browserUserId,
       "github",
-      TEST_BROWSER_PROVIDER_SUBJECT,
+      as ? browserUserId : TEST_BROWSER_PROVIDER_SUBJECT,
       null,
-      "browser@test.local",
+      as ? `${browserUserId}@test.local` : "browser@test.local",
       "https://github.com",
       applicationTimestamp,
       applicationTimestamp
@@ -141,23 +147,23 @@ async function testBrowserSessionCookie(initialRole: InitialUserRole): Promise<s
          (id, expiresAt, token, createdAt, updatedAt, ipAddress, userAgent, userId)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
     ).bind(
-      TEST_BROWSER_SESSION_ID,
+      sessionId,
       expiresAt.getTime(),
-      TEST_BROWSER_SESSION_TOKEN,
+      sessionToken,
       applicationTimestamp,
       applicationTimestamp,
       "127.0.0.1",
       "integration-test",
-      TEST_BROWSER_USER_ID
+      browserUserId
     ),
   ]);
-  if (initialRole !== "member" && !existingUser) {
+  if (!existingUser && (as || initialRole !== "member")) {
     await env.DB.prepare(`UPDATE user_role_assignments SET role_id = ? WHERE user_id = ?`)
-      .bind(BUILT_IN_ROLE_REGISTRY[initialRole].id, TEST_BROWSER_USER_ID)
+      .bind(BUILT_IN_ROLE_REGISTRY[as?.role ?? initialRole].id, browserUserId)
       .run();
   }
 
-  const signedToken = await signCookieValue(TEST_BROWSER_SESSION_TOKEN, secret);
+  const signedToken = await signCookieValue(sessionToken, secret);
   return `${TEST_BROWSER_SESSION_COOKIE}=${signedToken}`;
 }
 
@@ -176,6 +182,7 @@ export interface ServiceRequestInit {
   service?: ServiceName;
   actor?: string;
   initialUserRole?: InitialUserRole;
+  as?: { userId: string; role: BuiltInRoleKey };
 }
 
 /**
@@ -198,7 +205,7 @@ export async function serviceRequestHeaders(
   });
   const browserCookie =
     service === "web"
-      ? await testBrowserSessionCookie(init?.initialUserRole ?? DEFAULT_INITIAL_USER_ROLE)
+      ? await testBrowserSessionCookie(init?.initialUserRole ?? DEFAULT_INITIAL_USER_ROLE, init?.as)
       : undefined;
   return {
     ...(init?.body === undefined ? {} : { "Content-Type": "application/json" }),
@@ -235,6 +242,7 @@ export async function initSession(overrides?: {
   reasoningEffort?: string;
   sandboxSettings?: SandboxSettings;
   userId?: string;
+  canonicalUserId?: string;
   scmLogin?: string;
   providerAuth?: SessionModelProviderAuthInput[];
 }) {
@@ -252,16 +260,25 @@ export async function initSession(overrides?: {
   const now = Date.now();
   await new SessionIndexStore(env.DB).create({
     id: defaults.sessionName,
+    ownerTeamId: null,
+    visibility: "workspace",
     title: defaults.title ?? null,
     repoOwner: defaults.repoOwner,
     repoName: defaults.repoName,
     model: defaults.model ?? "anthropic/claude-haiku-4-5",
     reasoningEffort: defaults.reasoningEffort ?? null,
     baseBranch: defaults.defaultBranch ?? "main",
-    repositories: defaults.repositories,
+    repositories: defaults.repositories ?? [
+      {
+        repoOwner: defaults.repoOwner,
+        repoName: defaults.repoName,
+        repoId: defaults.repoId,
+        baseBranch: defaults.defaultBranch ?? "main",
+      },
+    ],
     environmentId: defaults.environmentId ?? null,
     status: "created",
-    userId: defaults.userId,
+    userId: defaults.canonicalUserId ?? defaults.userId,
     providerAuth,
     createdAt: now,
     updatedAt: now,
@@ -374,9 +391,9 @@ export async function seedMessage(
 export async function initNamedSession(
   sessionName: string,
   overrides?: {
-    repoOwner?: string;
-    repoName?: string;
-    repoId?: number;
+    repoOwner?: string | null;
+    repoName?: string | null;
+    repoId?: number | null;
     defaultBranch?: string;
     repositories?: Array<{
       repoOwner: string;
@@ -395,7 +412,8 @@ export async function initNamedSession(
     spawnDepth?: number;
     sandboxSettings?: Record<string, unknown>;
     providerAuth?: SessionModelProviderAuthInput[];
-  }
+  },
+  beforeInit?: (stub: DurableObjectStub) => Promise<void>
 ) {
   const defaults = {
     sessionName,
@@ -406,12 +424,26 @@ export async function initNamedSession(
   const now = Date.now();
   await new SessionIndexStore(env.DB).create({
     id: sessionName,
+    ownerTeamId: null,
+    visibility: "workspace",
     title: defaults.title ?? null,
     repoOwner: defaults.repoOwner ?? null,
     repoName: defaults.repoName ?? null,
     model: defaults.model ?? "anthropic/claude-haiku-4-5",
     reasoningEffort: defaults.reasoningEffort ?? null,
     baseBranch: defaults.defaultBranch ?? "main",
+    repositories:
+      defaults.repositories ??
+      (defaults.repoOwner && defaults.repoName && defaults.repoId !== null
+        ? [
+            {
+              repoOwner: defaults.repoOwner,
+              repoName: defaults.repoName,
+              repoId: defaults.repoId,
+              baseBranch: defaults.defaultBranch ?? "main",
+            },
+          ]
+        : []),
     status: "created",
     parentSessionId: defaults.parentSessionId ?? null,
     spawnSource: defaults.spawnSource ?? "user",
@@ -422,6 +454,7 @@ export async function initNamedSession(
     updatedAt: now,
   });
 
+  await beforeInit?.(env.SESSION.get(env.SESSION.idFromName(sessionName)));
   return initNamedSessionDO(sessionName, doDefaults);
 }
 

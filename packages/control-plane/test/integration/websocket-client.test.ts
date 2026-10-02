@@ -94,6 +94,12 @@ describe("Client WebSocket (via SELF.fetch)", () => {
     const state = subscribed.session as Record<string, unknown>;
     expect(state.id).toBe(name);
     expect(state.repoOwner).toBe("acme");
+    expect(state.capabilities).toMatchObject({
+      canRead: true,
+      canCollaborate: true,
+      canManageLifecycle: true,
+      canSandbox: true,
+    });
 
     ws.close();
   });
@@ -328,7 +334,7 @@ describe("Client WebSocket (via SELF.fetch)", () => {
 
     expect((await denied).find((message) => message.type === "error")).toMatchObject({
       code: "PERMISSION_REQUIRED",
-      message: "Permission required: sessions.collaborate",
+      message: "Access denied: missing_permission",
     });
     ws.close();
   });

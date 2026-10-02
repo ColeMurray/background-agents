@@ -3,6 +3,7 @@ import type { SessionInboxSession } from "@open-inspect/shared/types/session-inb
 import {
   applySessionInboxReadStateUpdate,
   buildSessionInboxKey,
+  buildSessionInboxSnapshotKey,
   isSessionInboxKey,
   isSessionInboxPaginationKey,
   parseSessionInboxPage,
@@ -42,6 +43,25 @@ function page(rootId: string, descendantIds: string[] = []): SessionInboxPage {
 }
 
 describe("session inbox API keys", () => {
+  it("carries team context in both snapshot and cursor keys", () => {
+    expect(buildSessionInboxSnapshotKey(false, { teamIds: ["team_alpha"] })).toBe(
+      "/api/sessions/inbox?teamIds%5B%5D=team_alpha"
+    );
+    expect(
+      buildSessionInboxKey({
+        category: "finished",
+        cursor: "next",
+        mine: true,
+        teamIds: ["team_alpha"],
+      })
+    ).toBe("/api/sessions/inbox?category=finished&cursor=next&mine=true&teamIds%5B%5D=team_alpha");
+    expect(buildSessionInboxSnapshotKey(false, { scope: "workspace" })).toBe(
+      "/api/sessions/inbox?scope=workspace"
+    );
+    expect(buildSessionInboxSnapshotKey(true, { scope: "all" })).toBe(
+      "/api/sessions/inbox?mine=true&scope=all"
+    );
+  });
   it("builds canonical category cursor keys", () => {
     expect(
       buildSessionInboxKey({
@@ -85,6 +105,26 @@ describe("session inbox API keys", () => {
 });
 
 describe("session inbox response parsing", () => {
+  it("preserves server capabilities for roots and descendants", () => {
+    const capabilities = {
+      canRead: true,
+      canCollaborate: false,
+      canManageLifecycle: false,
+      canDelete: false,
+      canSandbox: false,
+      canManageCollaborators: false,
+      canChangeVisibility: false,
+    };
+    const response = page("root", ["child"]);
+    response.items[0].rootSession = { ...response.items[0].rootSession, capabilities };
+    response.items[0].descendantSessions[0] = {
+      ...response.items[0].descendantSessions[0],
+      capabilities,
+    };
+    const parsed = parseSessionInboxPage(response);
+    expect(parsed.items[0].rootSession.capabilities).toEqual(capabilities);
+    expect(parsed.items[0].descendantSessions[0].capabilities).toEqual(capabilities);
+  });
   it("applies read-state compatibility defaults at the web boundary", () => {
     const response = page("root");
     const { version: _version, ...legacyReadState } = response.items[0].rootSession.readState;

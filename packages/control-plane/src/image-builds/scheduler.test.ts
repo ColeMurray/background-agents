@@ -1,7 +1,10 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { EnvironmentStore, type EnvironmentRepositoryRow } from "../db/environments";
 import type { ImageBuildStore } from "../db/image-builds";
 import type { SqlDatabase } from "../db/sql-database";
 import type { Job } from "../jobs";
+import { readCachedInstallationRepositories } from "../repos/cache";
+import type * as ReposCacheModule from "../repos/cache";
 import { createTestEnv } from "../router.test-support";
 import type { SourceControlProvider } from "../source-control";
 import type { Env } from "../types";
@@ -11,6 +14,64 @@ import { ImageBuildScheduler } from "./scheduler";
 import type { ResolvedImageBuildTarget } from "./scope";
 import { COMPATIBLE_RUNTIME_VERSION } from "./test-helpers";
 import type { ImageBuildWorkflow } from "./workflow";
+
+vi.mock("../repos/cache", async (importOriginal) => ({
+  ...(await importOriginal<typeof ReposCacheModule>()),
+  readCachedInstallationRepositories: vi.fn(),
+}));
+
+const ENV_TARGET: ResolvedImageBuildTarget = {
+  kind: "environment",
+  repositories: [
+    { repoOwner: "acme", repoName: "web", baseBranch: "main" },
+    { repoOwner: "acme", repoName: "api", baseBranch: "develop" },
+  ],
+  repositoriesFingerprint: "fp-env",
+};
+const ENV_REPOSITORIES: EnvironmentRepositoryRow[] = ENV_TARGET.repositories.map(
+  (repository, position) => ({
+    environment_id: "env_1",
+    position,
+    repo_owner: repository.repoOwner,
+    repo_name: repository.repoName,
+    repo_id: null,
+    base_branch: repository.baseBranch,
+  })
+);
+
+beforeEach(() => {
+  vi.clearAllMocks();
+  vi.spyOn(EnvironmentStore.prototype, "getById").mockResolvedValue({
+    id: "env_1",
+    name: "Environment",
+    description: null,
+    prebuild_enabled: 1,
+    channel_associations: null,
+    owner_team_id: null,
+    created_at: 1,
+    updated_at: 1,
+  });
+  vi.spyOn(EnvironmentStore.prototype, "getRepositoriesForEnvironment").mockResolvedValue(
+    ENV_REPOSITORIES
+  );
+  vi.mocked(readCachedInstallationRepositories).mockResolvedValue(
+    [
+      { id: 1, name: "web" },
+      { id: 2, name: "api" },
+      { id: 99, name: "sibling" },
+    ].map((repository) => ({
+      ...repository,
+      owner: "acme",
+      fullName: `acme/${repository.name}`,
+      description: null,
+      private: true,
+      defaultBranch: "main",
+      archived: false,
+    }))
+  );
+});
+
+afterEach(() => vi.restoreAllMocks());
 
 function harness(
   options: {
@@ -141,6 +202,31 @@ function harness(
   };
 }
 
+function mockReadyImages({ store, resolveTarget }: ReturnType<typeof harness>): void {
+  store.getReconciliationStatus.mockImplementation(async (scope: ImageBuildScope) => {
+    const target = await resolveTarget({} as Env, {} as SqlDatabase, scope);
+    return [
+      {
+        id: `build-${scope.id}`,
+        scopeKind: scope.kind,
+        scopeId: scope.id,
+        provider: "modal",
+        status: "ready",
+        repositoriesFingerprint: target.repositoriesFingerprint,
+        repositoryShas: target.repositories.map((repository) => ({
+          repoOwner: repository.repoOwner,
+          repoName: repository.repoName,
+          baseSha: "abc123",
+        })),
+        runtimeVersion: COMPATIBLE_RUNTIME_VERSION,
+        buildDurationSeconds: 1,
+        errorMessage: null,
+        createdAt: 1,
+      },
+    ];
+  });
+}
+
 describe("ImageBuildScheduler", () => {
   it("contains cleanup failures and still dispatches rebuilds", async () => {
     const { scheduler, store, adapter, workflow, resolveTarget } = harness();
@@ -218,9 +304,10 @@ describe("ImageBuildScheduler", () => {
 
   it("checks every enabled scope in one full scan", async () => {
     const getBranchHead = vi.fn(async () => "abc123");
-    const { scheduler, store, resolveTarget, listScopes } = harness({
+    const h = harness({
       sourceControl: { getBranchHead } as unknown as SourceControlProvider,
     });
+    const { scheduler, resolveTarget, listScopes } = h;
     listScopes.mockResolvedValue(
       Array.from({ length: 41 }, (_, index) => ({
         kind: "repo" as const,
@@ -243,33 +330,74 @@ describe("ImageBuildScheduler", () => {
         };
       }
     );
-    store.getReconciliationStatus.mockImplementation(async (scope: ImageBuildScope) => {
-      const target = await resolveTarget({} as Env, {} as SqlDatabase, scope);
-      return [
-        {
-          id: `build-${scope.id}`,
-          scopeKind: scope.kind,
-          scopeId: scope.id,
-          provider: "modal",
-          status: "ready",
-          repositoriesFingerprint: target.repositoriesFingerprint,
-          repositoryShas: target.repositories.map((repository) => ({
-            repoOwner: repository.repoOwner,
-            repoName: repository.repoName,
-            baseSha: "abc123",
-          })),
-          runtimeVersion: COMPATIBLE_RUNTIME_VERSION,
-          buildDurationSeconds: 1,
-          errorMessage: null,
-          createdAt: 1,
-        },
-      ];
-    });
+    mockReadyImages(h);
 
     const stats = await scheduler.run({ request_id: "cron-1", trace_id: "cron-1" });
 
     expect(stats.scopesScanned).toBe(41);
     expect(stats.branchLookups).toBe(41);
+  });
+
+  it("scopes every environment branch read to the resolved member ids", async () => {
+    const getBranchHead = vi.fn(async () => "abc123");
+    const env = createTestEnv();
+    const h = harness({
+      env,
+      sourceControl: { getBranchHead } as unknown as SourceControlProvider,
+    });
+    h.listScopes.mockResolvedValue([{ kind: "environment", id: "env_1" }]);
+    h.resolveTarget.mockResolvedValue(ENV_TARGET);
+    mockReadyImages(h);
+
+    const stats = await h.scheduler.run({ request_id: "cron-1", trace_id: "cron-1" });
+
+    const expectedScope = { kind: "repositories", repositoryIds: [1, 2] };
+    expect(readCachedInstallationRepositories).toHaveBeenCalledExactlyOnceWith(env);
+    expect(getBranchHead).toHaveBeenCalledWith(
+      { owner: "acme", name: "web", branch: "main" },
+      expectedScope
+    );
+    expect(getBranchHead).toHaveBeenCalledWith(
+      { owner: "acme", name: "api", branch: "develop" },
+      expectedScope
+    );
+    expect(stats.branchMatched).toBe(2);
+  });
+
+  it("skips branch reads and rebuilds after environment membership changes", async () => {
+    vi.mocked(EnvironmentStore.prototype.getRepositoriesForEnvironment).mockResolvedValue([
+      ENV_REPOSITORIES[0],
+      { ...ENV_REPOSITORIES[1], repo_name: "sibling" },
+    ]);
+    const getBranchHead = vi.fn(async () => "abc123");
+    const h = harness({ sourceControl: { getBranchHead } as unknown as SourceControlProvider });
+    h.listScopes.mockResolvedValue([{ kind: "environment", id: "env_1" }]);
+    h.resolveTarget.mockResolvedValue(ENV_TARGET);
+    mockReadyImages(h);
+
+    const stats = await h.scheduler.run({ request_id: "cron-1", trace_id: "cron-1" });
+
+    expect(stats.scopesScanned).toBe(1);
+    expect(stats.branchLookups).toBe(0);
+    expect(getBranchHead).not.toHaveBeenCalled();
+    expect(h.workflow.triggerBuildWithTarget).not.toHaveBeenCalled();
+  });
+
+  it("does not broaden repository scope when the provider refuses branch auth", async () => {
+    const getBranchHead = vi.fn(async () => {
+      throw new Error("Token scope denied");
+    });
+    const h = harness({ sourceControl: { getBranchHead } as unknown as SourceControlProvider });
+    mockReadyImages(h);
+
+    const stats = await h.scheduler.run({ request_id: "cron-1", trace_id: "cron-1" });
+
+    expect(getBranchHead).toHaveBeenCalledExactlyOnceWith(
+      { owner: "acme", name: "web", branch: "main" },
+      { kind: "repositories", repositoryIds: [1] }
+    );
+    expect(stats.branchUnknown).toBe(1);
+    expect(h.workflow.triggerBuildWithTarget).not.toHaveBeenCalled();
   });
 
   it("starts every required build found by the full scan", async () => {

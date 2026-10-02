@@ -1,6 +1,7 @@
-import { describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { env } from "cloudflare:test";
-import type { SourceControlProvider } from "../../src/source-control";
+import { symmetricEncrypt } from "better-auth/crypto";
+import type { SourceControlAuthContext, SourceControlProvider } from "../../src/source-control";
 import type { SessionDO } from "../../src/cloudflare/durable-object";
 import { componentsOf, runInSessionDO } from "./session-do-access";
 import {
@@ -106,7 +107,7 @@ describe("POST /internal/create-pr", () => {
     const body = await res.json<{ error: string }>();
     expect(body.error).toBe("User not found. Please re-authenticate.");
   });
-  it("falls back to app auth when expired OAuth token cannot be refreshed", async () => {
+  it("ignores copied credentials when the author has no canonical Better Auth identity", async () => {
     const { stub } = await initSession({ userId: "user-1" });
     await modelLegacyManualPushSession(stub);
 
@@ -309,7 +310,7 @@ describe("POST /internal/create-pr", () => {
 
   async function installSingleRepoMockProvider(
     stub: DurableObjectStub,
-    onCreatePullRequest: () => void = () => undefined
+    onCreatePullRequest: (auth: SourceControlAuthContext) => void = () => undefined
   ) {
     await runInSessionDO(stub, (instance: SessionDO) => {
       const mockProvider = {
@@ -323,8 +324,8 @@ describe("POST /internal/create-pr", () => {
           isPrivate: true,
           providerRepoId: 12345,
         }),
-        createPullRequest: async () => {
-          onCreatePullRequest();
+        createPullRequest: async (auth: SourceControlAuthContext) => {
+          onCreatePullRequest(auth);
           return {
             id: 42,
             webUrl: "https://github.com/acme/web-app/pull/42",
@@ -357,6 +358,106 @@ describe("POST /internal/create-pr", () => {
       componentsOf(instance).sourceControlProvider = mockProvider;
     });
   }
+
+  describe("current browser PR credentials", () => {
+    let fetchSpy: { mockRestore(): void };
+    beforeAll(() => {
+      const originalFetch = globalThis.fetch.bind(globalThis);
+      fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
+        const url = input instanceof Request ? input.url : String(input);
+        if (url === "https://api.github.com/user") {
+          return Response.json({ id: 583231, login: "octocat", name: "The Octocat" });
+        }
+        if (url.startsWith("https://api.github.com/user/emails")) {
+          return Response.json([
+            { email: "browser@test.local", primary: true, verified: true, visibility: null },
+          ]);
+        }
+        return originalFetch(input, init);
+      });
+    });
+    afterAll(() => fetchSpy.mockRestore());
+    it.each([
+      { label: "without cached credentials", access: null, refresh: null, expiresAt: null },
+      {
+        label: "with expired copied credentials",
+        access: "invalid-access",
+        refresh: "invalid-refresh",
+        expiresAt: 1,
+      },
+      {
+        label: "with copied refresh only",
+        access: null,
+        refresh: "invalid-refresh",
+        expiresAt: null,
+      },
+      {
+        label: "with unexpired copied credentials",
+        access: "invalid-access",
+        refresh: null,
+        expiresAt: null,
+      },
+    ])("uses current browser OAuth when continuing a Linear session $label", async (legacy) => {
+      const browserUserId = "11111111111111111111111111111111";
+      const sessionName = `linear-browser-pr-${crypto.randomUUID()}`;
+      const { stub } = await initNamedSession(sessionName, {
+        userId: "linear:creator",
+        canonicalUserId: browserUserId,
+      });
+      await modelLegacyManualPushSession(stub);
+      const tokenResponse = await serviceFetch(
+        `https://test.local/sessions/${sessionName}/ws-token`,
+        {
+          method: "POST",
+          body: "{}",
+        }
+      );
+      expect(tokenResponse.status).toBe(200);
+      const { participantId } = await tokenResponse.json<{ participantId: string }>();
+      // Persisted metadata must not choose credentials or block canonical lookup.
+      await runInSessionDO(stub, (_instance: SessionDO, state) => {
+        state.storage.sql.exec(
+          "UPDATE participants SET scm_user_id = NULL, scm_access_token_encrypted = ?, scm_refresh_token_encrypted = ?, scm_token_expires_at = ? WHERE id = ?",
+          legacy.access,
+          legacy.refresh,
+          legacy.expiresAt,
+          participantId
+        );
+      });
+      const accessToken = await symmetricEncrypt({
+        key: env.BROWSER_AUTH_SECRET!,
+        data: "browser-access-token",
+      });
+      await env.DB.prepare(
+        "UPDATE user_identities SET access_token = ?, access_token_expires_at = ? WHERE user_id = ? AND provider = 'github'"
+      )
+        .bind(accessToken, Date.now() + 3_600_000, browserUserId)
+        .run();
+      // Model the browser prompt now being processed, not the Linear creator's prompt.
+      await seedMessage(stub, {
+        id: "browser-create-pr",
+        authorId: participantId,
+        content: "Open the PR",
+        source: "web",
+        status: "processing",
+        createdAt: Date.now(),
+        startedAt: Date.now(),
+      });
+      let prAuth: SourceControlAuthContext | undefined;
+      await installSingleRepoMockProvider(stub, (auth) => {
+        prAuth = auth;
+      });
+
+      const response = await stub.fetch("http://internal/internal/create-pr", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ title: "Browser PR", body: "Continuation of the Linear task" }),
+      });
+
+      expect(response.status).toBe(200);
+      expect(prAuth).toEqual({ authType: "oauth", token: "browser-access-token" });
+    });
+  });
 
   it("reuses an existing open PR recorded for the session branch", async () => {
     const { stub } = await initSession({ userId: "user-1" });

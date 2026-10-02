@@ -3,7 +3,7 @@ import { admit } from "../routing/admit";
 import type { ControlPlaneHonoEnv } from "../routing/hono-env";
 import { SessionInternalPaths } from "../session/contracts";
 import type { Env } from "../types";
-import { GITHUB_USER_OR_SERVICE_ROUTE, requirePermission } from "./shared";
+import { GITHUB_USER_OR_SERVICE_ROUTE, requireSession } from "./shared";
 import { type SessionRouteContext, dispatchSession } from "./session-route";
 
 /**
@@ -31,7 +31,7 @@ sessionPullRequestRoutes.post(
   "/sessions/:id/pull-requests/refresh",
   admit({
     ...GITHUB_USER_OR_SERVICE_ROUTE,
-    authorization: requirePermission("sessions.lifecycle"),
+    authorization: requireSession("lifecycle"),
   }),
   (c) => dispatchSession(c, handleRefreshPullRequests)
 );

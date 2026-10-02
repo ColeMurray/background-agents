@@ -24,6 +24,8 @@ import { createStartCallbackRouter } from "./callbacks/start-callback";
 import { rejectInvalidCallback } from "./callbacks/reject-invalid-callback";
 
 const log = createLogger("callback");
+const EVENT_SIZE_ERROR =
+  "The agent's response exceeded the event size limit and was not delivered in full.";
 
 export function formatCompletionComment(
   appName: string,
@@ -244,10 +246,18 @@ async function handleCompletionCallback(
       message = formatAgentResponse(agentResponse);
     } else {
       activityType = "error";
+      const rawFailureReason = agentResponse.error || payload.error;
+      const failureReason = rawFailureReason
+        ? rawFailureReason === EVENT_SIZE_ERROR
+          ? rawFailureReason
+          : "Error details omitted for safety."
+        : undefined;
       if (agentResponse.textContent) {
-        message = `The agent encountered an error.\n\n${agentResponse.textContent.slice(0, 500)}`;
+        message = `The agent encountered an error${failureReason ? `: ${failureReason}` : "."}\n\n${agentResponse.textContent.slice(0, 500)}`;
       } else {
-        message = `The agent was unable to complete this task.`;
+        message = failureReason
+          ? `The agent encountered an error: ${failureReason}`
+          : "The agent was unable to complete this task.";
       }
     }
 

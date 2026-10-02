@@ -10,10 +10,10 @@ describe("inactivity alarm effects", () => {
 
   it.each([
     {
-      name: "remaining inactivity",
+      name: "heartbeat before remaining inactivity",
       ageMs: 120_000,
       clients: 0,
-      delayMs: DEFAULT_LIFECYCLE_CONFIG.inactivity.timeoutMs - 120_000,
+      delayMs: DEFAULT_LIFECYCLE_CONFIG.heartbeat.timeoutMs + 1,
     },
     {
       name: "minimum interval",
@@ -53,6 +53,49 @@ describe("inactivity alarm effects", () => {
         : []
     );
   });
+
+  it.each(["owned", "held"] as const)(
+    "waits for shutdown ownership and avoids legacy effects when %s",
+    async (ownership) => {
+      const sandbox = createMockSandbox({
+        last_activity: Date.now() - DEFAULT_LIFECYCLE_CONFIG.inactivity.timeoutMs - 1,
+        code_server_url: "https://code.test",
+      });
+      const original = { ...sandbox };
+      const h = createAlarmFixture(
+        sandbox,
+        createMockProvider({
+          capabilities: { supportsExplicitStop: true },
+          stopSandbox: vi.fn(async () => ({ success: true })),
+        })
+      );
+      let releaseOwnership!: (result: "owned" | "held") => void;
+      const decision = new Promise<"owned" | "held">((resolve) => {
+        releaseOwnership = resolve;
+      });
+      vi.spyOn(h.shutdown, "requestShutdown").mockReturnValue(decision);
+      const pending = h.manager.handleAlarm();
+
+      try {
+        expect(h.shutdown.requestShutdown).toHaveBeenCalledExactlyOnceWith("inactivity_timeout");
+        expect(sandbox).toEqual(original);
+        expect(h.broadcaster.messages).toEqual([]);
+      } finally {
+        releaseOwnership(ownership);
+        await pending;
+      }
+
+      await expect(pending).resolves.toBe("no_action");
+      expect(sandbox).toEqual(original);
+      expect(h.storage.updateSandboxStatus).not.toHaveBeenCalled();
+      expect(h.storage.clearSandboxAccess).not.toHaveBeenCalled();
+      expect(h.provider.takeSnapshot).not.toHaveBeenCalled();
+      expect(h.provider.stopSandbox).not.toHaveBeenCalled();
+      expect(h.wsManager.sendToSandbox).not.toHaveBeenCalled();
+      expect(h.wsManager.detachSandboxWebSocket).not.toHaveBeenCalled();
+      expect(h.broadcaster.messages).toEqual([]);
+    }
+  );
 
   describe.each(["rejected", "unsuccessful"] as const)("%s provider stop", (failure) => {
     it.each([false, true])("still retires and warns (resumable=%s)", async (resumable) => {
@@ -140,7 +183,7 @@ describe("inactivity alarm effects", () => {
       sandbox,
       createMockProvider({
         capabilities: {
-          snapshotStopsSandbox: true,
+          snapshotRequiresShutdown: true,
           supportsExplicitStop: true,
           supportsPersistentResume: false,
         },
@@ -161,7 +204,7 @@ describe("inactivity alarm effects", () => {
     expect(sandbox.snapshot_image_id).toBe("legacy-vercel-snapshot");
   });
 
-  it("stops resumable sandboxes without snapshotting, preserving code-server and VNC secrets", async () => {
+  it("stops resumable sandboxes without snapshotting, preserving access secrets", async () => {
     const sandbox = createMockSandbox({
       last_activity: Date.now() - DEFAULT_LIFECYCLE_CONFIG.inactivity.timeoutMs - 1,
       code_server_url: "https://code.test",
@@ -194,13 +237,14 @@ describe("inactivity alarm effects", () => {
     );
     expect(h.storage.clearSandboxAccess).not.toHaveBeenCalledWith("codeServer");
     expect(h.storage.clearSandboxAccess).not.toHaveBeenCalledWith("vnc");
+    expect(h.storage.clearSandboxAccess).not.toHaveBeenCalledWith("ttyd");
     expect(sandbox).toMatchObject({
       code_server_url: null,
       code_server_password: "code-secret",
       vnc_url: null,
       vnc_password: "vnc-secret",
       ttyd_url: null,
-      ttyd_token: null,
+      ttyd_token: "terminal-secret",
       tunnel_urls: null,
     });
   });

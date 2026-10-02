@@ -1,15 +1,17 @@
-# The control plane without Cloudflare: the Node host, MinIO for media and
-# backups, and a Litestream sidecar replicating the global store. This is
-# the stack the AWS instance runs and the local stand-in for it. The web app
-# is not part of it (it stays on Vercel; run `next dev` locally).
+# The control plane without Cloudflare: the Node host, an S3-compatible
+# object store for media and backups, and a Litestream sidecar replicating
+# the global store. This is the stack the AWS instance runs and the local
+# stand-in for it. The web app is not part of it (it stays on Vercel; run
+# `next dev` locally).
 #
 #   cp .env.example .env   # then fill it in
 #   docker compose up --build
 #
 # Only the app reads .env; the sidecars get the few variables they need by
 # name. The app's port is published on APP_BIND_ADDRESS (loopback unless
-# .env says otherwise) and MinIO's ports on loopback only, so nothing here
-# listens on a public interface by default. See docs/CONTROL_PLANE_CONTAINER.md.
+# .env says otherwise) and the object store's on loopback only, so nothing
+# here listens on a public interface by default. See
+# docs/CONTROL_PLANE_CONTAINER.md.
 
 services:
   app:
@@ -33,49 +35,73 @@ services:
     volumes:
       - control-plane-data:/data
     depends_on:
-      minio-init:
-        condition: service_completed_successfully
-    restart: unless-stopped
-
-  # quay.io, not Docker Hub: MinIO withdrew both images from Hub, so a Hub
-  # reference now fails to pull anonymously. Same releases, same digests.
-  minio:
-    image: quay.io/minio/minio:RELEASE.2025-04-22T22-12-26Z
-    command: server /data --console-address ":9001"
-    environment:
-      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minioadmin}
-      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:?MINIO_ROOT_PASSWORD must be set; generate one with openssl rand -hex 16}
-    # Loopback only: the app and the sidecar reach MinIO over the compose
-    # network, and the console is a local convenience.
-    ports:
-      - "127.0.0.1:9000:9000"
-      - "127.0.0.1:9001:9001"
-    volumes:
-      - minio-data:/data
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
-      interval: 5s
-      timeout: 3s
-      retries: 12
-    restart: unless-stopped
-
-  # Creates the media and backup buckets once, then exits. It sees only the
-  # variables named here, never the app's secrets.
-  minio-init:
-    image: quay.io/minio/mc:RELEASE.2025-04-16T18-13-26Z
-    environment:
-      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minioadmin}
-      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:?MINIO_ROOT_PASSWORD must be set; generate one with openssl rand -hex 16}
-      MEDIA_BUCKET: ${OBJECT_STORE_BUCKET:?OBJECT_STORE_BUCKET must name the media bucket}
-      BACKUP_BUCKET: ${LITESTREAM_BUCKET:?LITESTREAM_BUCKET must name the backup bucket}
-    depends_on:
-      minio:
+      object-store:
         condition: service_healthy
+    restart: unless-stopped
+
+  # SeaweedFS as the S3-compatible store for media and backups, pinned by
+  # digest to the multi-arch index so amd64 CI and arm64 laptops run the same
+  # release. Credentials are required on every S3 request.
+  #
+  # `weed server` runs every component in this one container. Only the S3
+  # gateway listens beyond it; the master, volume server and filer bind to
+  # loopback, since nothing outside the container talks to them. Each start
+  # generates the filer signing key the components share. The buckets named
+  # in S3_BUCKET are created once S3 answers.
+  #
+  # The shell stays as PID 1 to create the buckets, and forwards SIGTERM to
+  # the server. The filer can take 10 s to close its streams, so the stop
+  # grace period outlasts it.
+  object-store:
+    image: chrislusf/seaweedfs:4.47@sha256:ce9e796f1fe6f06968f4c04bdaf8f678dad9c8acdfef3d244133d71bfa6bf882
     entrypoint: ["/bin/sh", "-c"]
     command:
       - |
-        mc alias set local http://minio:9000 "$$MINIO_ROOT_USER" "$$MINIO_ROOT_PASSWORD" &&
-        mc mb --ignore-existing "local/$$MEDIA_BUCKET" "local/$$BACKUP_BUCKET"
+        WEED_JWT_FILER_SIGNING_KEY="$$(head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n')"
+        export WEED_JWT_FILER_SIGNING_KEY
+        /entrypoint.sh server -ip=127.0.0.1 -ip.bind=127.0.0.1 -s3.ip.bind=0.0.0.0 \
+          -master.peers=none -master.telemetry=false -volume.preStopSeconds=1 \
+          -filer -s3 -s3.port=9000 -s3.port.iceberg=0 -s3.port.lance=0 &
+        server=$$!
+        trap 'kill -TERM "$$server"' TERM INT
+        until curl -sf -o /dev/null http://localhost:9000/healthz; do
+          kill -0 "$$server" 2>/dev/null || exit 1
+          sleep 1
+        done
+        IFS=,
+        for bucket in $$S3_BUCKET; do
+          echo "s3.bucket.create -name $$bucket" | weed shell -master=127.0.0.1:9333 >/dev/null
+        done
+        wait "$$server" || wait "$$server"
+    stop_grace_period: 20s
+    environment:
+      AWS_ACCESS_KEY_ID: ${OBJECT_STORE_ROOT_USER:-objectstoreadmin}
+      AWS_SECRET_ACCESS_KEY: ${OBJECT_STORE_ROOT_PASSWORD:?OBJECT_STORE_ROOT_PASSWORD must be set; generate one with openssl rand -hex 16}
+      S3_BUCKET: ${OBJECT_STORE_BUCKET:?OBJECT_STORE_BUCKET must name the media bucket},${LITESTREAM_BUCKET:?LITESTREAM_BUCKET must name the backup bucket}
+    # Loopback only: the app and the sidecar reach it over the compose network.
+    ports:
+      - "127.0.0.1:9000:9000"
+    volumes:
+      - object-store-data:/data
+    # Healthy once S3 answers and every bucket exists, so the app and
+    # Litestream never start against a store without its buckets. The filer is
+    # asked, over loopback, because S3 answers an unsigned request 403 whether
+    # or not the bucket exists. Checks run every 2 s until the first passes,
+    # then every 30 s; an engine older than Docker 25 skips the 2 s phase.
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - >-
+          curl -sf -o /dev/null http://localhost:9000/healthz &&
+          IFS=, && for bucket in $$S3_BUCKET; do
+          curl -sf -o /dev/null "http://localhost:8888/buckets/$$bucket/" || exit 1;
+          done
+      interval: 30s
+      timeout: 3s
+      retries: 3
+      start_period: 60s
+      start_interval: 2s
+    restart: unless-stopped
 
   litestream:
     image: litestream/litestream:0.3.13
@@ -94,7 +120,7 @@ services:
     depends_on:
       app:
         condition: service_healthy
-      minio:
+      object-store:
         condition: service_healthy
     restart: unless-stopped
 
@@ -119,6 +145,6 @@ services:
 
 volumes:
   control-plane-data:
-  minio-data:
+  object-store-data:
   caddy-data:
   caddy-config:

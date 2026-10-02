@@ -7,7 +7,23 @@ import type {
 
 export const ENVIRONMENTS_KEY = "/api/environments";
 
-export function useEnvironments(): {
+export interface EnvironmentListScope {
+  /** Session catalog for a team: environments its sessions can use. */
+  teamId?: string | null;
+  /** Exact ownership filter; null selects workspace-owned environments. */
+  ownerTeamId?: string | null;
+}
+
+export function environmentsKey({ teamId, ownerTeamId }: EnvironmentListScope = {}): string {
+  const params = new URLSearchParams();
+  if (teamId) params.set("teamId", teamId);
+  if (ownerTeamId !== undefined) params.set("ownerTeamId", ownerTeamId ?? "null");
+  const query = params.toString();
+  return query ? `${ENVIRONMENTS_KEY}?${query}` : ENVIRONMENTS_KEY;
+}
+
+/** An empty scope lists every environment the viewer can read. */
+export function useEnvironments(scope: EnvironmentListScope = {}): {
   environments: Environment[];
   loading: boolean;
   error: unknown;
@@ -15,7 +31,7 @@ export function useEnvironments(): {
   const { data: session, status } = useAuthSession();
 
   const { data, isLoading, error } = useSWR<ListEnvironmentsResponse>(
-    session ? ENVIRONMENTS_KEY : null
+    session ? environmentsKey(scope) : null
   );
 
   return {

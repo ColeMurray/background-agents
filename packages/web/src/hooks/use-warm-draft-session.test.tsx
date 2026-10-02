@@ -25,6 +25,8 @@ const request = (model = "openai/gpt-5.4"): WarmDraftSessionRequest => ({
     openai: { mode: "provider_account", accountId: "a".repeat(32) },
     xai: { mode: "api_key" },
   },
+  teamId: null,
+  visibility: "workspace",
 });
 
 const routing = (
@@ -37,6 +39,229 @@ const routing = (
 
 describe("useWarmDraftSession", () => {
   beforeEach(() => vi.resetAllMocks());
+
+  it.each([
+    { teamId: "team-2", visibility: "team" as const },
+    { teamId: "team-1", visibility: "private" as const },
+  ])("retires and recreates a draft when team or visibility changes: %j", async (next) => {
+    vi.mocked(browserApiFetch)
+      .mockResolvedValueOnce(Response.json({ sessionId: "old-session", status: "created" }))
+      .mockResolvedValueOnce(Response.json({ sessionId: "new-session", status: "created" }));
+    const initial: WarmDraftSessionRequest = {
+      ...request(),
+      teamId: "team-1",
+      visibility: "team",
+    };
+    const { result, rerender } = renderHook(
+      ({ launchRequest }) => useWarmDraftSession(launchRequest),
+      { initialProps: { launchRequest: initial } }
+    );
+
+    await act(async () => {
+      await result.current.warm();
+    });
+    rerender({ launchRequest: { ...initial, ...next } });
+    expect(retireWarmDraftSession).toHaveBeenCalledWith("old-session");
+    await act(async () => {
+      await result.current.warm();
+    });
+    expect(result.current.sessionId).toBe("new-session");
+    expect(browserApiFetch).toHaveBeenLastCalledWith(
+      "/api/sessions",
+      expect.objectContaining({ body: JSON.stringify({ ...initial, ...next }) })
+    );
+  });
+
+  it.each([400, 403, 404, 409])(
+    "surfaces a terminal %i denial without retrying the same draft",
+    async (status) => {
+      vi.mocked(browserApiFetch).mockResolvedValue(
+        Response.json({ error: "Team unavailable", code: "team_archived" }, { status })
+      );
+      const { result, rerender } = renderHook(
+        ({ launchRequest }) => useWarmDraftSession(launchRequest),
+        { initialProps: { launchRequest: request() } }
+      );
+
+      await act(async () => {
+        await result.current.warm();
+      });
+      expect(result.current.error).toEqual({
+        message: "Team unavailable (team_archived)",
+        code: "team_archived",
+        status,
+        terminal: true,
+      });
+      await act(async () => {
+        await result.current.warm();
+      });
+      expect(browserApiFetch).toHaveBeenCalledTimes(1);
+
+      rerender({ launchRequest: request("openai/gpt-5.5") });
+      expect(result.current.error).toBeNull();
+      await act(async () => {
+        await result.current.warm();
+      });
+      expect(browserApiFetch).toHaveBeenCalledTimes(2);
+    }
+  );
+
+  it.each([429, 500, 503])("preserves retries after a %i failure", async (status) => {
+    vi.mocked(browserApiFetch)
+      .mockResolvedValueOnce(Response.json({ error: "Try again" }, { status }))
+      .mockResolvedValueOnce(Response.json({ sessionId: "retried-session", status: "created" }));
+    const { result } = renderHook(() => useWarmDraftSession(request()));
+
+    await act(async () => {
+      await result.current.warm();
+    });
+    expect(result.current.error?.terminal).toBe(false);
+    await act(async () => {
+      await result.current.warm();
+    });
+    expect(result.current.sessionId).toBe("retried-session");
+    expect(result.current.error).toBeNull();
+  });
+
+  it("retries the unchanged draft explicitly after a missing repository grant is restored", async () => {
+    let resolveRetry: ((response: Response) => void) | undefined;
+    vi.mocked(browserApiFetch)
+      .mockResolvedValueOnce(
+        Response.json(
+          {
+            error: "Target team lacks repository grant",
+            code: "target_team_missing_grant",
+            repository: "group/subgroup/api",
+          },
+          { status: 409 }
+        )
+      )
+      .mockImplementationOnce(() => new Promise<Response>((resolve) => (resolveRetry = resolve)));
+    const initial: WarmDraftSessionRequest = {
+      ...request(),
+      repoOwner: "group/subgroup",
+      repoName: "api",
+      teamId: "team-1",
+      visibility: "team",
+    };
+    const { result, rerender } = renderHook(
+      ({ launchRequest }) => useWarmDraftSession(launchRequest),
+      { initialProps: { launchRequest: initial } }
+    );
+    const identity = result.current.identity;
+    await act(async () => {
+      await expect(result.current.warm()).resolves.toBeNull();
+    });
+    expect(result.current.error).toEqual({
+      message:
+        "This team has no repository grant for group/subgroup/api. (target_team_missing_grant)",
+      code: "target_team_missing_grant",
+      status: 409,
+      terminal: false,
+    });
+    expect(result.current.sessionId).toBeNull();
+    expect(result.current.isWarming).toBe(false);
+
+    rerender({ launchRequest: { ...initial } });
+    expect(result.current.identity).toBe(identity);
+    expect(result.current.error?.code).toBe("target_team_missing_grant");
+    expect(browserApiFetch).toHaveBeenCalledOnce();
+
+    let retries: Promise<string | null>[] = [];
+    act(() => {
+      retries = [result.current.warm(), result.current.warm(), result.current.warm()];
+    });
+    expect(result.current.isWarming).toBe(true);
+    expect(result.current.error).toBeNull();
+    expect(browserApiFetch).toHaveBeenCalledTimes(2);
+    expect(vi.mocked(browserApiFetch).mock.calls.map(([, options]) => options?.body)).toEqual([
+      JSON.stringify(initial),
+      JSON.stringify(initial),
+    ]);
+
+    resolveRetry?.(Response.json({ sessionId: "retried-session", status: "created" }));
+    await act(async () => {
+      await expect(Promise.all(retries)).resolves.toEqual([
+        "retried-session",
+        "retried-session",
+        "retried-session",
+      ]);
+    });
+    expect(result.current.identity).toBe(identity);
+    expect(result.current.sessionId).toBe("retried-session");
+    expect(result.current.isWarming).toBe(false);
+    expect(result.current.error).toBeNull();
+    await act(async () => {
+      await expect(result.current.warm()).resolves.toBe("retried-session");
+    });
+    expect(browserApiFetch).toHaveBeenCalledTimes(2);
+    expect(retireWarmDraftSession).not.toHaveBeenCalled();
+  });
+
+  it("does not retry a still-missing grant on timers or same-identity renders", async () => {
+    vi.useFakeTimers();
+    try {
+      vi.mocked(browserApiFetch).mockImplementation(async () =>
+        Response.json(
+          { error: "Target team lacks repository grant", code: "target_team_missing_grant" },
+          { status: 409 }
+        )
+      );
+      const initial = { ...request(), teamId: "team-1" };
+      const { result, rerender } = renderHook(
+        ({ launchRequest }) => useWarmDraftSession(launchRequest),
+        { initialProps: { launchRequest: initial } }
+      );
+
+      for (const attempts of [1, 2]) {
+        await act(async () => {
+          await expect(result.current.warm()).resolves.toBeNull();
+        });
+        expect(result.current.error).toEqual({
+          message: "Target team lacks repository grant (target_team_missing_grant)",
+          code: "target_team_missing_grant",
+          status: 409,
+          terminal: false,
+        });
+        rerender({ launchRequest: { ...initial } });
+        rerender({ launchRequest: { ...initial } });
+        await act(async () => {
+          await vi.runAllTimersAsync();
+        });
+        expect(browserApiFetch).toHaveBeenCalledTimes(attempts);
+        expect(result.current.sessionId).toBeNull();
+        expect(result.current.isWarming).toBe(false);
+      }
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("ignores a terminal denial from a superseded request", async () => {
+    let resolveCreate: ((response: Response) => void) | undefined;
+    vi.mocked(browserApiFetch).mockImplementation(
+      () =>
+        new Promise<Response>((resolve) => {
+          resolveCreate = resolve;
+        })
+    );
+    const { result, rerender } = renderHook(
+      ({ launchRequest }) => useWarmDraftSession(launchRequest),
+      { initialProps: { launchRequest: request() } }
+    );
+    let warming: Promise<string | null> | undefined;
+    act(() => {
+      warming = result.current.warm();
+    });
+    rerender({ launchRequest: request("openai/gpt-5.5") });
+    resolveCreate?.(
+      Response.json({ error: "Forbidden", code: "not_team_member" }, { status: 403 })
+    );
+    await act(async () => {
+      await warming;
+    });
+    expect(result.current.error).toBeNull();
+  });
 
   it("derives one stable identity from the complete launch request", () => {
     expect(warmDraftSessionIdentity(request(), routing())).toBe(
@@ -51,6 +276,8 @@ describe("useWarmDraftSession", () => {
           harness: "opencode",
           repoName: "background-agents",
           repoOwner: "open-inspect",
+          teamId: null,
+          visibility: "workspace",
         },
         routing()
       )

@@ -87,6 +87,8 @@ function fixture(
     runtime_version: "v72-runtime",
     status: "ready",
   };
+  const alarm = { schedule: vi.fn(async (_atMs: number) => undefined) };
+  const backgroundTasks: Array<() => Promise<unknown>> = [];
   const shutdown = new SandboxShutdownCoordinator({
     store,
     provider,
@@ -111,19 +113,20 @@ function fixture(
     },
     session: {
       getSession: () => ({ id: "session-1", session_name: "shutdown-safety" }),
+      transaction: <T>(operation: () => T) => operation(),
     },
     messages: { getProcessingMessage: () => null },
     failures: { record: vi.fn(), deliver: vi.fn() },
     messenger: { broadcast: vi.fn() },
     sockets: { getSandboxSocket: () => null, send: vi.fn() },
-    alarm: { schedule: vi.fn(async () => undefined) },
-    background: { submit: vi.fn() },
+    alarm,
+    background: { submit: vi.fn((task: () => Promise<unknown>) => backgroundTasks.push(task)) },
     onLifecycleChange: vi.fn(async () => undefined),
     reconcileStatusFromMessages: vi.fn(async () => undefined),
     retireAccess: vi.fn(),
     now: () => options.now ?? 100_000,
   } as never);
-  return { shutdown, provider, sandboxRow, stopSandbox, store };
+  return { shutdown, provider, sandboxRow, stopSandbox, store, alarm, backgroundTasks, options };
 }
 
 describe("sandbox shutdown safety", () => {
@@ -186,7 +189,9 @@ describe("sandbox shutdown safety", () => {
       expect(h.shutdown.admissionDecision()).toBe("held");
       await expect(h.shutdown.handleAlarm()).resolves.toBe("hold_watchdogs");
       expect(h.stopSandbox).not.toHaveBeenCalled();
-      await expect(h.shutdown.recover("retry")).rejects.toThrow("cannot be retried safely");
+      // An ordinary checkpoint is not a shutdown: there is no source capture to repeat.
+      expect(h.shutdown.snapshot()?.availableRecoveryActions).not.toContain("retry");
+      await expect(h.shutdown.recover("retry")).rejects.toThrow("Shutdown recovery is unavailable");
       await expect(h.shutdown.captureCheckpoint(GENERATION, "execution_complete")).resolves.toEqual(
         { outcome: "held" }
       );
@@ -194,6 +199,71 @@ describe("sandbox shutdown safety", () => {
       expect(h.shutdown.admissionDecision()).toBe("held");
     }
   );
+
+  it("keeps checkpoint uncertainty during draining out of automatic capture recovery", async () => {
+    let rejectCheckpoint!: (error: Error) => void;
+    const takeSnapshot = vi
+      .fn<NonNullable<SandboxProvider["takeSnapshot"]>>()
+      .mockImplementationOnce(
+        () =>
+          new Promise((_, reject) => {
+            rejectCheckpoint = reject;
+          })
+      )
+      .mockResolvedValue({ success: true, imageId: "user-retry-image", sourceStopped: false });
+    const h = fixture(runningRecord(), { takeSnapshot });
+    const checkpoint = h.shutdown.captureCheckpoint(GENERATION, "execution_complete");
+    await h.shutdown.requestShutdown("inactivity_timeout");
+    expect(h.store.value).toMatchObject({ phase: "draining", checkpointInFlight: true });
+    h.alarm.schedule.mockClear();
+
+    rejectCheckpoint(new Error("checkpoint response lost"));
+    await expect(checkpoint).resolves.toEqual({ outcome: "unknown" });
+    await Promise.all(h.backgroundTasks.splice(0).map((task) => task()));
+    expect(h.alarm.schedule).not.toHaveBeenCalled();
+    expect(h.store.value).toMatchObject({
+      phase: "unknown",
+      checkpointInFlight: false,
+      captureFailure: false,
+    });
+
+    h.options.now = h.store.value!.captureByMs!;
+    await expect(h.shutdown.handleAlarm()).resolves.toBe("hold_watchdogs");
+    expect(h.shutdown.onRefusedReconnect()).toBe("retry");
+    await Promise.all(h.backgroundTasks.splice(0).map((task) => task()));
+    expect(takeSnapshot).toHaveBeenCalledOnce();
+    expect(h.stopSandbox).not.toHaveBeenCalled();
+    expect(h.sandboxRow.status).toBe("snapshotting");
+
+    // The existing authenticated recovery choice is unchanged.
+    expect(h.shutdown.snapshot()?.availableRecoveryActions).toContain("retry");
+    await h.shutdown.recover("retry");
+    expect(takeSnapshot).toHaveBeenCalledTimes(2);
+    expect(h.stopSandbox).toHaveBeenCalledOnce();
+    expect(h.store.value?.phase).toBe("saved");
+  });
+
+  it("leaves an unclassified held record available only for authenticated recovery", async () => {
+    const takeSnapshot = vi.fn();
+    const h = fixture(
+      runningRecord({
+        phase: "unknown",
+        operationId: "unclassified-operation",
+        stopByMs: 160_000,
+        captureByMs: 460_000,
+        retireByMs: 1_970_000,
+      }),
+      { now: 460_000, takeSnapshot }
+    );
+
+    await expect(h.shutdown.handleAlarm()).resolves.toBe("hold_watchdogs");
+    expect(h.shutdown.onRefusedReconnect()).toBe("retry");
+    await Promise.all(h.backgroundTasks.splice(0).map((task) => task()));
+    expect(takeSnapshot).not.toHaveBeenCalled();
+    expect(h.stopSandbox).not.toHaveBeenCalled();
+    expect(h.alarm.schedule).not.toHaveBeenCalled();
+    expect(h.shutdown.snapshot()?.availableRecoveryActions).toContain("retry");
+  });
 
   it("projects legacy interrupted saved state as paused until explicit resume", async () => {
     const h = fixture(

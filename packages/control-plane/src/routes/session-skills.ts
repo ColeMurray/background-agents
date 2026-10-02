@@ -9,7 +9,7 @@ import {
   error,
   json,
   NO_AUTHORIZATION,
-  requirePermission,
+  requireSession,
   SCM_AGNOSTIC_SANDBOX_ROUTE,
   SCM_AGNOSTIC_HUMAN_USER_ROUTE,
   type SandboxRouteContext,
@@ -92,7 +92,7 @@ export const sessionSkillRoutes = new Hono<ControlPlaneHonoEnv>();
 
 sessionSkillRoutes.get(
   "/sessions/:id/skills",
-  admit({ ...SCM_AGNOSTIC_HUMAN_USER_ROUTE, authorization: requirePermission("sessions.read") }),
+  admit({ ...SCM_AGNOSTIC_HUMAN_USER_ROUTE, authorization: requireSession("read") }),
   (c) => dispatch(c, handleSessionSkillsView)
 );
 

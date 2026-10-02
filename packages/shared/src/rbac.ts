@@ -28,6 +28,17 @@ export const BUILT_IN_ROLE_KEYS = Object.keys(BUILT_IN_ROLE_REGISTRY) as BuiltIn
 /** Stable IDs reserved for system-defined roles. */
 export const BUILT_IN_ROLE_IDS = Object.values(BUILT_IN_ROLE_REGISTRY).map((role) => role.id);
 
+/** Built-in roles that administer the whole workspace, including every team. */
+export const WORKSPACE_ADMIN_ROLE_KEYS = [
+  "owner",
+  "administrator",
+] as const satisfies readonly BuiltInRoleKey[];
+
+/** Whether a role key administers the workspace (the Owner or an Administrator). */
+export function isWorkspaceAdmin(roleKey: string | null | undefined): boolean {
+  return (WORKSPACE_ADMIN_ROLE_KEYS as readonly (string | null | undefined)[]).includes(roleKey);
+}
+
 /** Canonical permission identifiers accepted by the RBAC policy and persistence layers. */
 export const PERMISSION_IDS = [
   "analytics.read",
@@ -63,6 +74,7 @@ export const PERMISSION_IDS = [
   "sessions.collaborate",
   "sessions.create",
   "sessions.delete",
+  "sessions.export",
   "sessions.lifecycle",
   "sessions.read",
   "sessions.sandbox_access",

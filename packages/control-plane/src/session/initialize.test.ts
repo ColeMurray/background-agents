@@ -12,6 +12,8 @@ vi.mock("../db/session-index", () => ({
 describe("initializeSession", () => {
   const baseInput: SessionInitInput = {
     sessionId: "session-123",
+    ownerTeamId: null,
+    visibility: "workspace",
     harness: "opencode",
     repoOwner: "acme",
     repoName: "web-app",
@@ -23,6 +25,7 @@ describe("initializeSession", () => {
     reasoningEffort: null,
     participantUserId: "user-1",
     platformUserId: "platform-user-1",
+    participantCanonicalUserId: "platform-user-1",
     scmLogin: "acmedev",
     scmName: "Acme Dev",
     scmEmail: "dev@acme.test",
@@ -81,6 +84,25 @@ describe("initializeSession", () => {
     });
 
     stubFetchMock = vi.fn(async () => Response.json({ status: "created" }));
+  });
+
+  it("rejects a missing participant credential identity instead of borrowing ownership", async () => {
+    const { participantCanonicalUserId: _unused, ...input } = {
+      ...baseInput,
+      participantCanonicalUserId: null,
+    };
+    await expect(
+      initializeSession(createEnv(), input as SessionInitInput, ctx as never)
+    ).rejects.toThrow("Participant canonical identity must be explicit");
+  });
+
+  it("keeps a null participant identity distinct from the session owner", async () => {
+    await initializeSession(
+      createEnv(),
+      { ...baseInput, participantCanonicalUserId: null },
+      ctx as never
+    );
+    expect(await stubFetchMock.mock.calls[0][0].json()).toMatchObject({ canonicalUserId: null });
   });
 
   it("writes D1 before calling DO init", async () => {

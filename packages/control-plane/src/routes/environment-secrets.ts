@@ -23,13 +23,19 @@ import {
   json,
   error,
   resolveRepoOrError,
-  requirePermission,
+  requireAll,
+  permissionRequirement,
+  environmentRequirement,
 } from "./shared";
 import {
   environmentSecretsImportBodySchema,
   secretsRequestBodySchema,
 } from "./secret-request-schemas";
 import type { Env } from "../types";
+import {
+  authorizeTeamRepositories,
+  authorizeWorkspaceRepositories,
+} from "./workspace-repository-authorization";
 
 const logger = createLogger("router:environment-secrets");
 
@@ -256,11 +262,28 @@ async function handleImportEnvironmentSecrets(
     return error(`${srcOwner}/${srcName} is not a member of this environment`, 403);
   }
 
-  // Resolve the source repo_id (rows written before resolution may lack it).
-  let repoId = sourceRepo.repo_id;
-  if (repoId == null) {
-    repoId = (await resolveRepoOrError(env, srcOwner, srcName, ctx, logger)).repoId;
+  const { repoId } = await resolveRepoOrError(env, srcOwner, srcName, ctx, logger);
+  if (sourceRepo.repo_id !== null && sourceRepo.repo_id !== repoId) {
+    return json(
+      {
+        error: "Repository identity changed",
+        code: "repository_identity_mismatch",
+        repository: `${srcOwner}/${srcName}`,
+      },
+      409
+    );
   }
+  const denied = await authorizeTeamRepositories(ctx, {
+    teamId: environment.owner_team_id,
+    repositories: [{ owner: srcOwner, name: srcName, repoId }],
+  });
+  if (denied) return denied;
+
+  const sourceDenied = await authorizeWorkspaceRepositories(ctx, {
+    repositories: [{ owner: srcOwner, name: srcName, repoId }],
+    requireLead: true,
+  });
+  if (sourceDenied) return sourceDenied;
 
   const secretsStore = new EnvironmentSecretsStore(ctx.db, config.key);
   try {
@@ -299,13 +322,24 @@ async function handleImportEnvironmentSecrets(
 
 const ENVIRONMENT_SECRETS_MANAGE = admit({
   ...GITHUB_USER_OR_SERVICE_ROUTE,
-  authorization: requirePermission("environments.secrets.manage"),
+  authorization: requireAll(
+    permissionRequirement("environments.secrets.manage"),
+    environmentRequirement("manage")
+  ),
 });
 
 export const environmentSecretsRoutes = new Hono<ControlPlaneHonoEnv>();
 
-environmentSecretsRoutes.get("/environments/:id/secrets", ENVIRONMENT_SECRETS_MANAGE, (c) =>
-  dispatch(c, handleListEnvironmentSecrets)
+environmentSecretsRoutes.get(
+  "/environments/:id/secrets",
+  admit({
+    ...GITHUB_USER_OR_SERVICE_ROUTE,
+    authorization: requireAll(
+      permissionRequirement("environments.secrets.manage"),
+      environmentRequirement("read")
+    ),
+  }),
+  (c) => dispatch(c, handleListEnvironmentSecrets)
 );
 environmentSecretsRoutes.put("/environments/:id/secrets", ENVIRONMENT_SECRETS_MANAGE, (c) =>
   dispatch(c, handleSetEnvironmentSecrets)

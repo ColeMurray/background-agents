@@ -2,6 +2,7 @@
 
 import { useEffect, useState, type RefObject } from "react";
 import type { BootPhaseName, SandboxBootPhase } from "@open-inspect/shared/types/sandbox-events";
+import type { SandboxShutdownState } from "@open-inspect/shared/types/sandbox-shutdown";
 import type { SandboxStatus as SandboxStatusValue } from "@open-inspect/shared/types/sessions";
 import { CollapsedSidebarControls, useSidebarContext } from "@/components/sidebar-layout";
 import { MobileSessionActions } from "@/components/mobile-session-actions";
@@ -33,6 +34,26 @@ const BOOTING_STATUSES: ReadonlySet<SandboxStatusValue> = new Set(["spawning", "
  * say. Full detail is always in the actions menu regardless.
  */
 const STEADY_SANDBOX_STATUS: SandboxStatusValue = "ready";
+
+/**
+ * Graceful-stop phases. The control plane keeps the sandbox `ready` until the
+ * stop finishes, but new prompts are already held while it saves, so the
+ * header reports a save rather than a sandbox that is available.
+ */
+const GRACEFUL_STOP_PHASES: ReadonlySet<SandboxShutdownState["phase"]> = new Set([
+  "draining",
+  "prepared",
+  "capturing",
+  "retiring",
+]);
+
+function displayedSandboxStatus(
+  sessionState: SessionSocketState["sessionState"]
+): SandboxStatusValue | undefined {
+  const status = sessionState?.sandboxStatus;
+  const phase = sessionState?.sandboxPreservation?.phase;
+  return status === "ready" && phase && GRACEFUL_STOP_PHASES.has(phase) ? "snapshotting" : status;
+}
 
 type ConnectionState = "connected" | "connecting" | "reconnecting" | "disconnected";
 
@@ -112,12 +133,15 @@ export type SessionHeaderProps = {
   reconnecting: boolean;
   isDetailsOpen: boolean;
   isDesktopDetailsOpen: boolean;
-  showDesktopDetailsToggle: boolean;
   detailsButtonRef: RefObject<HTMLButtonElement | null>;
   actionsButtonRef: RefObject<HTMLButtonElement | null>;
+  /** The desktop sidebar toggle; focus returns here when a closed diff has no other target. */
+  desktopDetailsButtonRef?: RefObject<HTMLButtonElement | null>;
   onToggleDetails: () => void;
   onToggleDesktopDetails: () => void;
   onOpenMobileDetails: () => void;
+  /** Opens the details overlay on the section that lists captured media. */
+  onOpenMobileMedia: () => void;
   actions: SessionActionProps;
   optimisticTitle?: string;
   renameSession: (title: string) => Promise<boolean>;
@@ -134,12 +158,13 @@ export function SessionHeader({
   reconnecting,
   isDetailsOpen,
   isDesktopDetailsOpen,
-  showDesktopDetailsToggle,
   detailsButtonRef,
   actionsButtonRef,
+  desktopDetailsButtonRef,
   onToggleDetails,
   onToggleDesktopDetails,
   onOpenMobileDetails,
+  onOpenMobileMedia,
   actions,
   optimisticTitle,
   renameSession,
@@ -169,7 +194,7 @@ export function SessionHeader({
   };
 
   const handleRenameSubmit = async () => {
-    if (!sessionState) {
+    if (!sessionState || !capabilities.lifecycle) {
       setIsRenaming(false);
       return;
     }
@@ -197,23 +222,24 @@ export function SessionHeader({
   // Anything worth reporting goes in the strip below, as text rather than a
   // decorative dot, and the full detail is always in the actions menu.
   // Desktop keeps the full header.
-  const sandbox = sessionState?.sandboxStatus
+  const sandboxStatus = displayedSandboxStatus(sessionState);
+  const sandbox = sandboxStatus
     ? resolveSandboxStatus({
-        status: sessionState.sandboxStatus,
-        dashboardUrl: capabilities.sandboxAccess ? sessionState.sandboxDashboardUrl : undefined,
+        status: sandboxStatus,
+        dashboardUrl: capabilities.sandboxAccess ? sessionState?.sandboxDashboardUrl : undefined,
         error: sandboxError,
         bootPhase,
-        repositoryCount: sessionState.repositories?.length ?? 0,
+        repositoryCount: sessionState?.repositories?.length ?? 0,
       })
     : null;
 
   return (
     <header className="border-b border-border-muted flex-shrink-0">
-      <div className="flex h-12 items-center justify-between gap-1 px-2 md:h-auto md:gap-0 md:px-4 md:py-3">
-        <div className="flex min-w-0 flex-1 items-center gap-3 md:flex-initial">
+      <div className="flex h-12 items-center justify-between gap-1 px-2 md:h-auto md:gap-4 md:px-4 md:py-3">
+        <div className="flex min-w-0 flex-1 items-center gap-3">
           {!isOpen && <CollapsedSidebarControls />}
-          <div className="min-w-0 flex-1 md:flex-initial">
-            {isRenaming ? (
+          <div className="min-w-0 flex-1">
+            {isRenaming && capabilities.lifecycle ? (
               <input
                 autoFocus
                 aria-label="Session title"
@@ -230,10 +256,10 @@ export function SessionHeader({
                     setIsRenaming(false);
                   }
                 }}
-                className="w-full truncate bg-transparent text-center text-sm font-medium text-foreground outline-none focus:ring-inset focus:ring-ring md:max-w-40 md:text-left"
+                className="w-full truncate bg-transparent text-center text-sm font-medium text-foreground outline-none focus:ring-inset focus:ring-ring md:text-left"
               />
             ) : (
-              <h1 className="flex min-w-0 items-center justify-center text-sm font-medium text-foreground md:max-w-40 md:justify-start">
+              <h1 className="flex min-w-0 items-center justify-center text-sm font-medium text-foreground md:justify-start">
                 <button
                   type="button"
                   className={`min-w-0 truncate ${capabilities.lifecycle ? "cursor-text" : "cursor-default"}`}
@@ -245,7 +271,7 @@ export function SessionHeader({
                 </button>
               </h1>
             )}
-            <p className="hidden text-sm text-muted-foreground md:block">{repoLabel}</p>
+            <p className="hidden truncate text-sm text-muted-foreground md:block">{repoLabel}</p>
           </div>
         </div>
         <div className="flex items-center gap-1 md:gap-4">
@@ -265,7 +291,7 @@ export function SessionHeader({
             sandbox={sandbox}
             triggerRef={actionsButtonRef}
             onOpenDetails={onOpenMobileDetails}
-            onOpenMedia={onOpenMobileDetails}
+            onOpenMedia={onOpenMobileMedia}
           />
           <div className="hidden items-center gap-1 md:flex">
             {capabilities.read && (
@@ -276,7 +302,7 @@ export function SessionHeader({
               />
             )}
             <SandboxStatusIcon
-              status={sessionState?.sandboxStatus}
+              status={sandboxStatus}
               dashboardUrl={
                 capabilities.sandboxAccess ? sessionState?.sandboxDashboardUrl : undefined
               }
@@ -285,29 +311,28 @@ export function SessionHeader({
               repositoryCount={sessionState?.repositories?.length ?? 0}
             />
           </div>
-          {showDesktopDetailsToggle && (
-            <button
-              type="button"
-              onClick={onToggleDesktopDetails}
-              className="hidden rounded p-1.5 text-muted-foreground transition hover:bg-muted hover:text-foreground lg:block"
-              aria-label={isDesktopDetailsOpen ? "Hide session details" : "Show session details"}
-              aria-controls="session-details-sidebar"
-              aria-expanded={isDesktopDetailsOpen}
-            >
-              {isDesktopDetailsOpen ? (
-                <RightSidebarOpenIcon className="h-4 w-4" />
-              ) : (
-                <RightSidebarIcon className="h-4 w-4" />
-              )}
-            </button>
-          )}
+          <button
+            type="button"
+            ref={desktopDetailsButtonRef}
+            onClick={onToggleDesktopDetails}
+            className="hidden rounded p-1.5 text-muted-foreground transition hover:bg-muted hover:text-foreground lg:block"
+            aria-label={isDesktopDetailsOpen ? "Hide session details" : "Show session details"}
+            aria-controls="session-details-sidebar"
+            aria-expanded={isDesktopDetailsOpen}
+          >
+            {isDesktopDetailsOpen ? (
+              <RightSidebarOpenIcon className="h-4 w-4" />
+            ) : (
+              <RightSidebarIcon className="h-4 w-4" />
+            )}
+          </button>
         </div>
       </div>
       <MobileStatusStrip
         connection={
           capabilities.read ? connectionState(connected, connecting, reconnecting) : "connected"
         }
-        status={sessionState?.sandboxStatus}
+        status={sandboxStatus}
         dashboardUrl={capabilities.sandboxAccess ? sessionState?.sandboxDashboardUrl : undefined}
         error={sandboxError}
         bootPhase={bootPhase}

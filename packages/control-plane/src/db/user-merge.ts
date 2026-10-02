@@ -60,6 +60,10 @@ const USER_MERGE_COUNT_KEYS = [
   "identitiesRepointed",
   "readStatesDeduped",
   "readStatesRepointed",
+  "teamMembershipsDeduped",
+  "teamMembershipsRepointed",
+  "sessionCollaboratorsDeduped",
+  "sessionCollaboratorsRepointed",
   "sessionsRepointed",
   "authSessionsDeleted",
   "automationsOwnedRepointed",
@@ -171,6 +175,26 @@ const BEFORE_SKILL_PROFILE_OPERATIONS = [
       SELECT 1 FROM session_read_states AS survivor_state
       WHERE survivor_state.user_id = ?
         AND survivor_state.session_id = session_read_states.session_id
+    )`,
+  }),
+  ...dedupeThenRepoint({
+    dedupeKey: "teamMembershipsDeduped",
+    repointKey: "teamMembershipsRepointed",
+    table: "team_memberships",
+    collision: `EXISTS (
+      SELECT 1 FROM team_memberships AS survivor_membership
+      WHERE survivor_membership.user_id = ?
+        AND survivor_membership.team_id = team_memberships.team_id
+    )`,
+  }),
+  ...dedupeThenRepoint({
+    dedupeKey: "sessionCollaboratorsDeduped",
+    repointKey: "sessionCollaboratorsRepointed",
+    table: "session_collaborators",
+    collision: `EXISTS (
+      SELECT 1 FROM session_collaborators AS survivor_collaborator
+      WHERE survivor_collaborator.user_id = ?
+        AND survivor_collaborator.session_id = session_collaborators.session_id
     )`,
   }),
   regularRepoint("sessionsRepointed", "sessions"),
@@ -431,7 +455,21 @@ export async function mergeUsers(
 
   // Dedup before re-pointing: drop loser rows whose target slot the survivor
   // already occupies (identities under idx_user_identities_provider; read
-  // states routinely, where both split rows read the same session).
+  // states routinely, where both split rows read the same session). Keep the
+  // stronger lead role before deleting a colliding loser membership.
+  statements.push(
+    db
+      .prepare(
+        `UPDATE team_memberships SET role = 'lead'
+         WHERE user_id = ? AND role = 'member'
+           AND EXISTS (
+             SELECT 1 FROM team_memberships AS loser_membership
+             WHERE loser_membership.team_id = team_memberships.team_id
+               AND loser_membership.user_id = ? AND loser_membership.role = 'lead'
+           )`
+      )
+      .bind(survivorId, loserId)
+  );
   addOperations(BEFORE_SKILL_PROFILE_OPERATIONS);
 
   // Profile resolution uses this generation as a consistency fence. Advance

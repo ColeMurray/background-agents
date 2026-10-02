@@ -99,13 +99,13 @@ describe("ParticipantRepository", () => {
       scmLogin: "testuser",
       scmName: "Test User",
       scmEmail: "test@example.com",
-      scmAccessTokenEncrypted: "encrypted-token",
-      scmTokenExpiresAt: 9000,
       role: "owner",
       joinedAt: 1000,
     });
 
     expect(mock.calls[0].query).toContain("INSERT INTO participants");
+    expect(mock.calls[0].query).not.toContain("scm_access_token");
+    expect(mock.calls[0].query).not.toContain("scm_refresh_token");
     expect(mock.calls[0].params).toEqual([
       "p-1",
       "user-1",
@@ -114,9 +114,6 @@ describe("ParticipantRepository", () => {
       "testuser",
       "Test User",
       "test@example.com",
-      "encrypted-token",
-      null,
-      9000,
       "owner",
       1000,
     ]);
@@ -127,9 +124,6 @@ describe("ParticipantRepository", () => {
     expect(mock.calls[0].params).toEqual([
       "p-1",
       "user-1",
-      null,
-      null,
-      null,
       null,
       null,
       null,
@@ -147,26 +141,8 @@ describe("ParticipantRepository", () => {
       scmEmail: "new@example.com",
     });
     expect(mock.calls[0].query).toContain("COALESCE");
-    expect(mock.calls[0].params).toEqual([
-      null,
-      null,
-      "newlogin",
-      null,
-      "new@example.com",
-      null,
-      null,
-      null,
-      "p-1",
-    ]);
-  });
-
-  it("updates participant tokens", () => {
-    repository.updateParticipantTokens("p-1", {
-      scmAccessTokenEncrypted: "access",
-      scmRefreshTokenEncrypted: "refresh",
-      scmTokenExpiresAt: 9000,
-    });
-    expect(mock.calls[0].params).toEqual(["access", "refresh", 9000, "p-1"]);
+    expect(mock.calls[0].query).not.toContain("scm_access_token");
+    expect(mock.calls[0].params).toEqual([null, null, "newlogin", null, "new@example.com", "p-1"]);
   });
 
   it("updates the WebSocket token", () => {

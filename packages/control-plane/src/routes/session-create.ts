@@ -18,6 +18,7 @@ import { resolveEnvironmentTarget, resolveSessionRepositories } from "../repos/r
 import { resolveScmProviderFromEnv } from "../source-control";
 import { EnvironmentStore } from "../db/environments";
 import { UserStore } from "../db/user-store";
+import { TeamMembershipStore } from "../db/team-memberships";
 import { createLogger } from "../logger";
 import { parseCreateSessionInput } from "../session/create-session-input";
 import { initializeSession, type SessionInitInput } from "../session/initialize";
@@ -27,7 +28,8 @@ import { resolveManagedSkills, SkillResolutionError } from "../session/skill-res
 import type { Env } from "../types";
 import { resolveSessionProviderAuth } from "../session/provider-account-resolution";
 import { ProviderAccountSelectionPolicyError } from "../model-provider-accounts/selection-policy";
-import { authorizeSessionTarget } from "./session-target-authorization";
+import { authorizeEnvironmentTarget, authorizeSessionTarget } from "./session-target-authorization";
+import { resolveCreationOwnerTeam, teamRequiredResponse } from "./team-ownership";
 import {
   normalizeOptionalRepositoryPair,
   RepositoryPairValidationError,
@@ -97,11 +99,21 @@ export async function handleCreateSession(
     throw e;
   }
 
-  const targetAuthorizationError = authorizeSessionTarget(ctx, {
+  const targetAuthorizationError = await authorizeSessionTarget(ctx, {
+    teamId: null,
     environmentId: body.environmentId,
-    hasRepository: Boolean(repositoryContext || body.repositories),
+    repositories: (body.repositories ?? (repositoryContext ? [repositoryContext] : [])).map(
+      (repository) => ({ owner: repository.repoOwner, name: repository.repoName })
+    ),
   });
   if (targetAuthorizationError) return targetAuthorizationError;
+  if (body.environmentId) {
+    const environmentError = await authorizeEnvironmentTarget(ctx, {
+      environmentId: body.environmentId,
+      ownerTeamId: body.teamId ?? null,
+    });
+    if (environmentError) return environmentError;
+  }
 
   // Validate branch names if provided (defense in depth)
   if (body.branch && !BRANCH_NAME_PATTERN.test(body.branch)) {
@@ -162,6 +174,33 @@ export async function handleCreateSession(
   const resolution = requireAdmittedCanonicalUserId(ctx, enforced);
   if (resolution instanceof Response) return resolution;
   const resolvedUserId = resolution;
+  const teamId = body.teamId ?? null;
+  const team = await resolveCreationOwnerTeam(ctx, teamId);
+  if (team instanceof Response) return team;
+  if (teamId) {
+    if (
+      !resolvedUserId ||
+      !(await new TeamMembershipStore(ctx.db).listForUser(resolvedUserId)).has(teamId)
+    ) {
+      return json({ error: "Not a team member", code: "not_member" }, 403);
+    }
+  }
+  const resolvedTargetAuthorizationError = await authorizeSessionTarget(ctx, {
+    teamId,
+    environmentId,
+    repositories: (
+      repositories ?? (repoOwner && repoName ? [{ repoOwner, repoName, repoId }] : [])
+    ).map((repository) => ({
+      owner: repository.repoOwner,
+      name: repository.repoName,
+      repoId: repository.repoId,
+    })),
+  });
+  if (resolvedTargetAuthorizationError) return resolvedTargetAuthorizationError;
+  const visibility = body.visibility ?? team?.defaultVisibility ?? "workspace";
+  if (visibility === "team" && !teamId) return teamRequiredResponse();
+  if (visibility === "private" && !resolvedUserId)
+    return json({ error: "Session owner required", code: "owner_required" }, 400);
 
   const githubDeployment = resolveScmProviderFromEnv(env.SCM_PROVIDER) === "github";
   let scmLogin = body.scmLogin;
@@ -245,6 +284,8 @@ export async function handleCreateSession(
   }
 
   const input: SessionInitInput = {
+    ownerTeamId: teamId,
+    visibility,
     sessionId,
     repoOwner,
     repoName,
@@ -259,6 +300,7 @@ export async function handleCreateSession(
     reasoningEffort,
     participantUserId,
     platformUserId: resolvedUserId,
+    participantCanonicalUserId: resolvedUserId,
     scmLogin,
     scmName,
     scmEmail,

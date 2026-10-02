@@ -1,5 +1,38 @@
-import { describe, expect, it } from "vitest";
-import { createVncAccess, signalUntilDeadline } from "./provider";
+import { describe, expect, it, vi } from "vitest";
+import { createVncAccess, providerResumesAfterStop, signalUntilDeadline } from "./provider";
+
+describe("providerResumesAfterStop", () => {
+  it.each([
+    [true, true, true, true],
+    [true, true, false, false],
+    [true, false, true, false],
+    [true, false, false, false],
+    [false, true, true, false],
+    [false, true, false, false],
+    [false, false, true, false],
+    [false, false, false, false],
+    [undefined, true, true, false],
+    [true, true, undefined, false],
+  ])(
+    "requires explicit stop (%s), a stop method (%s), and persistent resume (%s)",
+    (explicitStop, hasStop, persistentResume, expected) => {
+      const stopSandbox = vi.fn(async () => ({ success: true }));
+      expect(
+        providerResumesAfterStop({
+          capabilities: {
+            supportsSandboxTimeout: false,
+            supportsSnapshots: false,
+            supportsRestore: false,
+            supportsExplicitStop: explicitStop,
+            supportsPersistentResume: persistentResume,
+          },
+          stopSandbox: hasStop ? stopSandbox : undefined,
+        })
+      ).toBe(expected);
+      expect(stopSandbox).not.toHaveBeenCalled();
+    }
+  );
+});
 
 describe("createVncAccess", () => {
   it("returns only complete VNC credentials", () => {

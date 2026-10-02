@@ -173,7 +173,7 @@ describe("VercelSandboxProvider", () => {
       supportsRestore: true,
       supportsPersistentResume: false,
       supportsExplicitStop: true,
-      snapshotStopsSandbox: true,
+      snapshotRequiresShutdown: true,
     });
   });
 
@@ -607,6 +607,23 @@ describe("VercelSandboxProvider", () => {
     );
   });
 
+  it("rejects collisions with an enabled service's default port", async () => {
+    const client = createMockClient();
+    const provider = new VercelSandboxProvider(client, providerConfig);
+
+    await expect(
+      provider.createSandbox({
+        ...baseCreateConfig,
+        codeServerEnabled: true,
+        sandboxSettings: { terminalEnabled: true, terminalPort: 8080 },
+      })
+    ).rejects.toMatchObject({
+      message: expect.stringContaining("assigned to more than one enabled service"),
+      errorType: "permanent",
+    });
+    expect(client.createSandbox).not.toHaveBeenCalled();
+  });
+
   it("requires a base snapshot when no repo image snapshot is available", async () => {
     const client = createMockClient();
     const provider = new VercelSandboxProvider(client, {
@@ -794,7 +811,6 @@ describe("VercelSandboxProvider", () => {
     );
     expect(createCall.env).not.toHaveProperty("GITHUB_TOKEN");
     expect(createCall.env).not.toHaveProperty("GITHUB_APP_TOKEN");
-    expect(createCall.env).not.toHaveProperty("OI_GITHUB_TOKEN_IS_FALLBACK");
     expect(createCall.env).not.toHaveProperty("OI_INTERNAL_CALLBACK_SECRET");
     expect(createCall.env).not.toHaveProperty("OI_VERCEL_TOKEN");
     expect(createCall.env).not.toHaveProperty("OI_VERCEL_CALLBACK_URL");

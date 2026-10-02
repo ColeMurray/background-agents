@@ -1,10 +1,46 @@
-import type { SpawnSource } from "./sessions";
+import { spawnSourceSchema, type SpawnSource } from "./sessions";
 
 export const ANALYTICS_DAYS = [7, 14, 30, 90] as const;
 export type AnalyticsDays = (typeof ANALYTICS_DAYS)[number];
 
-export const ANALYTICS_BREAKDOWN_BY = ["user", "repo"] as const;
+export const ANALYTICS_BREAKDOWN_BY = [
+  "user",
+  "repo",
+  "model",
+  "harness",
+  "spawnSource",
+  "automation",
+  "provider",
+] as const;
 export type AnalyticsBreakdownBy = (typeof ANALYTICS_BREAKDOWN_BY)[number];
+
+export const ANALYTICS_SCOPES = ["human", "agent", "automation", "all"] as const;
+export type AnalyticsScope = (typeof ANALYTICS_SCOPES)[number];
+export const DEFAULT_ANALYTICS_SCOPE: AnalyticsScope = "human";
+export const ANALYTICS_SPAWN_SOURCE_SCOPE: Record<SpawnSource, Exclude<AnalyticsScope, "all">> = {
+  user: "human",
+  "slack-bot": "human",
+  "linear-bot": "human",
+  "github-bot": "human",
+  agent: "agent",
+  automation: "automation",
+};
+const spawnSources = Object.keys(ANALYTICS_SPAWN_SOURCE_SCOPE).map((source) =>
+  spawnSourceSchema.parse(source)
+);
+export const ANALYTICS_SCOPE_SPAWN_SOURCES: Record<
+  Exclude<AnalyticsScope, "all">,
+  readonly SpawnSource[]
+> = {
+  human: spawnSources.filter((source) => ANALYTICS_SPAWN_SOURCE_SCOPE[source] === "human"),
+  agent: spawnSources.filter((source) => ANALYTICS_SPAWN_SOURCE_SCOPE[source] === "agent"),
+  automation: spawnSources.filter(
+    (source) => ANALYTICS_SPAWN_SOURCE_SCOPE[source] === "automation"
+  ),
+};
+
+export const ANALYTICS_RUN_ORDER_BY = ["cost", "created"] as const;
+export type AnalyticsRunOrderBy = (typeof ANALYTICS_RUN_ORDER_BY)[number];
 
 export interface AnalyticsStatusBreakdown {
   created: number;
@@ -15,12 +51,30 @@ export interface AnalyticsStatusBreakdown {
   cancelled: number;
 }
 
-export interface AnalyticsSummaryResponse {
+export interface AnalyticsTokenTotals {
+  inputTokens: number;
+  outputTokens: number;
+  reasoningTokens: number;
+  cacheReadTokens: number;
+  cacheWriteTokens: number;
+}
+
+export function getCacheHitRatio(
+  t: Pick<AnalyticsTokenTotals, "cacheReadTokens" | "inputTokens">
+): number | null {
+  const total = t.cacheReadTokens + t.inputTokens;
+  return total === 0 ? null : t.cacheReadTokens / total;
+}
+
+export interface AnalyticsSummaryResponse extends AnalyticsTokenTotals {
   totalSessions: number;
   activeUsers: number;
   totalCost: number;
+  /** Private-session cost in the same window and scope; only owner/administrator viewers receive it. */
+  privateSessionsCostUsd: number | null;
   avgCost: number;
   totalPrs: number;
+  cacheHitRatio: number | null;
   statusBreakdown: AnalyticsStatusBreakdown;
 }
 
@@ -33,9 +87,11 @@ export interface AnalyticsTimeseriesResponse {
   series: AnalyticsTimeseriesPoint[];
 }
 
-export interface AnalyticsBreakdownEntry {
+export interface AnalyticsBreakdownEntry extends AnalyticsTokenTotals {
   key: string;
   displayName?: string;
+  /** Session count billed through a matching provider account; present only for provider breakdowns. */
+  subscriptionSessions?: number;
   sessions: number;
   completed: number;
   failed: number;
@@ -49,6 +105,33 @@ export interface AnalyticsBreakdownEntry {
 
 export interface AnalyticsBreakdownResponse {
   entries: AnalyticsBreakdownEntry[];
+}
+
+/** Sessions in one root_session_id family, attributed to its visible root. */
+export interface SessionRun {
+  rootSessionId: string;
+  title: string | null;
+  sessionCount: number;
+  maxSpawnDepth: number;
+  totalCost: number;
+  totalPrs: number;
+  inputTokens: number;
+  outputTokens: number;
+  reasoningTokens: number;
+  cacheReadTokens: number;
+  cacheWriteTokens: number;
+  createdAt: number;
+  updatedAt: number;
+  userId: string | null;
+  scmLogin: string | null;
+  spawnSource: SpawnSource;
+  automationId: string | null;
+  repoOwner: string | null;
+  repoName: string | null;
+}
+
+export interface AnalyticsRunsResponse {
+  runs: SessionRun[];
 }
 
 // ─── Pull-request analytics ──────────────────────────────────────────────────
@@ -93,6 +176,14 @@ export interface AnalyticsPullRequestSourceEntry {
   merged: number;
 }
 
+export interface AnalyticsPullRequestDimensionEntry {
+  key: string;
+  displayName?: string;
+  created: number;
+  merged: number;
+  sessionCost: number;
+}
+
 export interface AnalyticsPullRequestsResponse {
   funnel: AnalyticsPullRequestFunnel;
   /**
@@ -113,6 +204,8 @@ export interface AnalyticsPullRequestsResponse {
   timeseries: AnalyticsPullRequestTimeseriesPoint[];
   repos: AnalyticsPullRequestRepoEntry[];
   sources: AnalyticsPullRequestSourceEntry[];
+  models: AnalyticsPullRequestDimensionEntry[];
+  harnesses: AnalyticsPullRequestDimensionEntry[];
 }
 
 /** One coherently-windowed analytics dashboard snapshot. */
@@ -122,6 +215,7 @@ export interface AnalyticsDashboardResponse {
   /** Half-open interval [startAt, endAt) shared by every windowed metric. */
   window: {
     days: AnalyticsDays;
+    scope: AnalyticsScope;
     startAt: number;
     endAt: number;
   };
@@ -130,6 +224,11 @@ export interface AnalyticsDashboardResponse {
   breakdowns: {
     repository: AnalyticsBreakdownResponse;
     user: AnalyticsBreakdownResponse;
+    model: AnalyticsBreakdownResponse;
+    harness: AnalyticsBreakdownResponse;
+    provider: AnalyticsBreakdownResponse;
+    automation: AnalyticsBreakdownResponse;
   };
   pullRequests: AnalyticsPullRequestsResponse;
+  runs: SessionRun[];
 }

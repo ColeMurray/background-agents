@@ -14,11 +14,13 @@ import {
   type EnvironmentRepositoryInsert,
 } from "../../src/db/environments";
 import { cleanD1Tables } from "./cleanup";
+import { TeamStore } from "../../src/db/teams";
 
 function makeEnv(overrides?: Partial<EnvironmentRow>): EnvironmentRow {
   const now = Date.now();
   return {
     id: `env_${Math.random().toString(36).slice(2, 10)}`,
+    owner_team_id: null,
     name: "Full Stack",
     description: null,
     prebuild_enabled: 0,
@@ -53,6 +55,7 @@ describe("EnvironmentStore", () => {
     expect(environment.name).toBe("Full Stack");
     expect(environment.description).toBe("web + api");
     expect(environment.prebuildEnabled).toBe(true);
+    expect(environment.ownerTeamId).toBeNull();
     expect(environment.repositories).toEqual([
       { repoOwner: "acme", repoName: "web", repoId: 1, baseBranch: "main" },
       { repoOwner: "acme", repoName: "api", repoId: 2, baseBranch: "develop" },
@@ -62,9 +65,9 @@ describe("EnvironmentStore", () => {
   it("resolves names case-insensitively via getByName", async () => {
     const store = new EnvironmentStore(env.DB);
     await store.create(makeEnv({ name: "Payments" }), repos(["acme", "web", 1, "main"]));
-    expect(await store.getByName("payments")).not.toBeNull();
-    expect(await store.getByName("PAYMENTS")).not.toBeNull();
-    expect(await store.getByName("other")).toBeNull();
+    expect(await store.getByName("payments", null)).not.toBeNull();
+    expect(await store.getByName("PAYMENTS", null)).not.toBeNull();
+    expect(await store.getByName("other", null)).toBeNull();
   });
 
   it("rejects a case-insensitive duplicate name at the unique index", async () => {
@@ -73,6 +76,40 @@ describe("EnvironmentStore", () => {
     await expect(
       store.create(makeEnv({ name: "dup" }), repos(["acme", "api", 2, "main"]))
     ).rejects.toThrow();
+  });
+
+  it("looks up same-named environments only within the exact owner scope", async () => {
+    const store = new EnvironmentStore(env.DB);
+    const teams = new TeamStore(env.DB);
+    const first = await teams.create({ slug: "first", name: "First", joinPolicy: "open" });
+    const second = await teams.create({ slug: "second", name: "Second", joinPolicy: "open" });
+    const workspaceRow = makeEnv({ name: "Scoped" });
+    const firstRow = makeEnv({ name: "SCOPED", owner_team_id: first.id });
+    const secondRow = makeEnv({ name: "scoped", owner_team_id: second.id });
+    for (const row of [workspaceRow, firstRow, secondRow]) {
+      await store.create(row, repos(["acme", "web", 1, "main"]));
+    }
+    expect((await store.getByName("scoped", null))?.id).toBe(workspaceRow.id);
+    expect((await store.getByName("scoped", first.id))?.id).toBe(firstRow.id);
+    expect((await store.getByName("SCOPED", second.id))?.id).toBe(secondRow.id);
+    expect(toEnvironment(firstRow, []).ownerTeamId).toBe(first.id);
+    await expect(
+      store.create(makeEnv({ name: "Scoped", owner_team_id: first.id }), [])
+    ).rejects.toThrow();
+  });
+
+  it("lists all scopes by default and exact team or workspace scopes when supplied", async () => {
+    const store = new EnvironmentStore(env.DB);
+    const team = await new TeamStore(env.DB).create({
+      slug: "filtered",
+      name: "Filtered",
+      joinPolicy: "open",
+    });
+    await store.create(makeEnv({ name: "Workspace" }), []);
+    await store.create(makeEnv({ name: "Team", owner_team_id: team.id }), []);
+    expect((await store.list()).total).toBe(2);
+    expect((await store.list(team.id)).environments.map((row) => row.name)).toEqual(["Team"]);
+    expect((await store.list(null)).environments.map((row) => row.name)).toEqual(["Workspace"]);
   });
 
   it("lists environments newest-first", async () => {

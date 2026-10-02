@@ -26,6 +26,7 @@ async function signSentryPayload(body: string, secret: string): Promise<string> 
 function makeAutomation(overrides: Partial<AutomationRow> = {}): AutomationRow {
   return {
     id: `auto-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+    owner_team_id: null,
     name: "Test Automation",
     instructions: "Test instructions",
     trigger_type: "schedule",

@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { MAX_WEB_PROMPT_CHARS } from "@open-inspect/shared/types/prompts";
 
 import { UserStore } from "./db/user-store";
 import { resolveGitHubEnrichmentForRequest } from "./session/identity";
@@ -8,6 +9,7 @@ import {
   signedServiceRequest,
   TEST_BACKGROUND_TASK_CONTEXT,
   TEST_SERVICE_SECRETS,
+  TEST_SESSION_ROW,
 } from "./router.test-support";
 
 vi.mock("./db/user-store", () => ({
@@ -72,11 +74,27 @@ function createEnv(sessionFetch: (request: Request) => Promise<Response>): Recor
     })),
     run: vi.fn(async () => ({ meta: { changes: 0 } })),
   };
+  const sessionStatement = {
+    ...statement,
+    bind: vi.fn(() => sessionStatement),
+    first: vi.fn(async () => TEST_SESSION_ROW),
+  };
+  const membershipStatement = {
+    ...statement,
+    bind: vi.fn(() => membershipStatement),
+    all: vi.fn(async () => ({ results: [] })),
+  };
   return {
     ...TEST_SERVICE_SECRETS,
     SCM_PROVIDER: "github",
     DB: {
-      prepare: vi.fn(() => statement),
+      prepare: vi.fn((sql: string) =>
+        sql.includes("SELECT * FROM sessions")
+          ? sessionStatement
+          : sql.includes("FROM team_memberships") || sql.includes("FROM session_collaborators")
+            ? membershipStatement
+            : statement
+      ),
       batch: vi.fn(),
       exec: vi.fn(),
       dump: vi.fn(),
@@ -205,6 +223,32 @@ describe("session prompt identity enrichment", () => {
     await expect(response.json()).resolves.toEqual({
       error: "Field 'authorId' is not accepted from verified callers",
     });
+    expect(sessionFetch).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    [
+      "oversized content",
+      { content: "x".repeat(MAX_WEB_PROMPT_CHARS + 1) },
+      {
+        error: `content exceeds ${MAX_WEB_PROMPT_CHARS} characters (got ${MAX_WEB_PROMPT_CHARS + 1})`,
+        code: "prompt_too_long",
+      },
+    ],
+    ["blank content", { content: "  \n" }, { error: "content is required" }],
+    ["invalid source", { content: "hello", source: "unknown" }, null],
+  ])("reports %s without dispatching", async (_case, body, expected) => {
+    const sessionFetch = vi.fn(async () => Response.json({ status: "queued" }));
+    const response = await handleRequest(
+      await userPromptRequest(body),
+      createEnv(sessionFetch) as never,
+      TEST_BACKGROUND_TASK_CONTEXT
+    );
+
+    expect(response.status).toBe(400);
+    const result = (await response.json()) as { error: string };
+    if (expected) expect(result).toEqual(expected);
+    else expect(result.error).toContain("source");
     expect(sessionFetch).not.toHaveBeenCalled();
   });
 });

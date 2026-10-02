@@ -13,9 +13,10 @@ import {
   formatRepositoryFullName,
   parseRepositoryFullName,
 } from "@open-inspect/shared/types/repositories";
-import type {
-  ImageBuildScopeKind,
-  ImageBuildStatus,
+import {
+  IMAGE_BUILD_PROVIDER_IDS,
+  type ImageBuildScopeKind,
+  type ImageBuildStatus,
 } from "@open-inspect/shared/types/image-builds";
 import type { HarnessId } from "@open-inspect/shared/harnesses";
 import { z } from "zod";
@@ -24,21 +25,7 @@ import {
   MIN_COMPATIBLE_RUNTIME_GENERATION,
 } from "../sandbox/runtime-manifest";
 
-/**
- * Providers with image-build support: Modal images, Vercel snapshots,
- * OpenComputer checkpoints, E2B snapshots, Daytona snapshots.
- *
- * Support is the provider's ability to build and boot an artifact. Whether a
- * deployment may start new Daytona builds is a separate, operator-owned
- * question — see `resolveImageBuildAdmission` in provider-policy.ts.
- */
-export const IMAGE_BUILD_PROVIDER_IDS = [
-  "modal",
-  "vercel",
-  "opencomputer",
-  "e2b",
-  "daytona",
-] as const;
+export { IMAGE_BUILD_PROVIDER_IDS } from "@open-inspect/shared/types/image-builds";
 
 export const imageBuildProviderSchema = z.enum(IMAGE_BUILD_PROVIDER_IDS);
 

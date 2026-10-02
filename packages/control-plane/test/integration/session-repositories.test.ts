@@ -9,6 +9,8 @@ import { SessionIndexStore } from "../../src/db/session-index";
 import { cleanD1Tables } from "./cleanup";
 import { initSession, queryDO, serviceFetch } from "./helpers";
 
+const internal = { kind: "internal", reason: "session repositories integration tests" } as const;
+
 type MemberRow = {
   position: number;
   repo_owner: string;
@@ -95,6 +97,8 @@ describe("D1 session index repositories", () => {
     const now = Date.now();
     return {
       id,
+      ownerTeamId: null,
+      visibility: "workspace" as const,
       title: null,
       repoOwner: repositories?.[0]?.repoOwner ?? "acme",
       repoName: repositories?.[0]?.repoName ?? "web-app",
@@ -124,7 +128,7 @@ describe("D1 session index repositories", () => {
       ])
     );
 
-    const { sessions } = await store.list();
+    const { sessions } = await store.list({ readScope: internal, mode: "on" });
     expect(sessions).toHaveLength(1);
     expect(sessions[0].repositories).toEqual([
       { repoOwner: "acme", repoName: "frontend", repoId: 1, baseBranch: "main" },
@@ -136,7 +140,7 @@ describe("D1 session index repositories", () => {
     const store = new SessionIndexStore(env.DB);
     await store.create(makeEntry("scalar-1"));
 
-    const { sessions } = await store.list();
+    const { sessions } = await store.list({ readScope: internal, mode: "on" });
     expect(sessions).toHaveLength(1);
     expect(sessions[0].repositories).toBeUndefined();
   });

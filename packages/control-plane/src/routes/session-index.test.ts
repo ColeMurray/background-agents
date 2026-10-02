@@ -1,10 +1,13 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { handleListSessionInbox, handleListSessions, handlePatchReadState } from "./session-index";
+import { MAX_SESSION_LIST_FILTER_IDS } from "@open-inspect/shared/session-list-query";
 import type { RequestContext, UserRouteContext } from "./shared";
 import type { SqlDatabase } from "../db/sql-database";
+import { D1QueryParameterLimitError } from "../db/query-limits";
 import type { Env } from "../types";
 import type { Principal } from "../auth/principal";
 import { createTestEnv, TEST_BACKGROUND_TASK_CONTEXT } from "../router.test-support";
+import { SessionCollaboratorStore } from "../db/session-collaborators";
 
 const mockSessionIndexStore = {
   list: vi.fn(),
@@ -66,7 +69,7 @@ async function listSessions(query = "", principal?: Principal): Promise<Response
     new Request(`https://test.local/sessions${query}`),
     createEnv(),
     {},
-    createCtx(principal)
+    createCtx(principal ?? { kind: "service", service: "web", actor: null })
   );
 }
 
@@ -74,6 +77,8 @@ const USER_PRINCIPAL: Principal = { kind: "user", userId: "user-1" };
 
 const listSession = {
   id: "session-1",
+  ownerTeamId: null,
+  visibility: "workspace" as const,
   title: "Session 1",
   repoOwner: "open-inspect",
   repoName: "background-agents",
@@ -100,6 +105,9 @@ const listSession = {
 
 const inboxSession = {
   id: listSession.id,
+  ownerTeamId: listSession.ownerTeamId,
+  visibility: listSession.visibility,
+  userId: listSession.userId,
   title: listSession.title,
   repoOwner: listSession.repoOwner,
   repoName: listSession.repoName,
@@ -115,12 +123,16 @@ const inboxSession = {
 
 const emptyInboxResult = { items: [], hasMore: false, nextCursor: null };
 
-async function listInbox(query = ""): Promise<Response> {
+async function listInbox(
+  query = "",
+  ctx = createCtx(USER_PRINCIPAL) as UserRouteContext,
+  env = createEnv()
+): Promise<Response> {
   return handleListSessionInbox(
     new Request(`https://test.local/sessions/inbox${query}`),
-    createEnv(),
+    env,
     {},
-    createCtx(USER_PRINCIPAL) as UserRouteContext
+    ctx
   );
 }
 
@@ -162,28 +174,32 @@ describe("session index routes", () => {
     const response = await listSessions("?limit=abc&offset=nope");
 
     expect(response.status).toBe(200);
-    expect(mockSessionIndexStore.list).toHaveBeenCalledWith({
-      status: undefined,
-      excludeStatus: undefined,
-      excludeAutomationLineage: false,
-      createdByUserIds: [],
-      limit: 50,
-      offset: 0,
-    });
+    expect(mockSessionIndexStore.list).toHaveBeenCalledWith(
+      expect.objectContaining({
+        status: undefined,
+        excludeStatus: undefined,
+        excludeAutomationLineage: false,
+        createdByUserIds: [],
+        limit: 50,
+        offset: 0,
+      })
+    );
   });
 
   it("clamps pagination values before querying the store", async () => {
     const response = await listSessions("?limit=500&offset=-10");
 
     expect(response.status).toBe(200);
-    expect(mockSessionIndexStore.list).toHaveBeenCalledWith({
-      status: undefined,
-      excludeStatus: undefined,
-      excludeAutomationLineage: false,
-      createdByUserIds: [],
-      limit: 100,
-      offset: 0,
-    });
+    expect(mockSessionIndexStore.list).toHaveBeenCalledWith(
+      expect.objectContaining({
+        status: undefined,
+        excludeStatus: undefined,
+        excludeAutomationLineage: false,
+        createdByUserIds: [],
+        limit: 100,
+        offset: 0,
+      })
+    );
   });
 
   it("passes validated status filters through to the store", async () => {
@@ -212,14 +228,16 @@ describe("session index routes", () => {
     );
 
     expect(response.status).toBe(200);
-    expect(mockSessionIndexStore.list).toHaveBeenCalledWith({
-      status: undefined,
-      excludeStatus: undefined,
-      excludeAutomationLineage: false,
-      createdByUserIds: ["0123456789abcdef0123456789abcdef"],
-      limit: 50,
-      offset: 0,
-    });
+    expect(mockSessionIndexStore.list).toHaveBeenCalledWith(
+      expect.objectContaining({
+        status: undefined,
+        excludeStatus: undefined,
+        excludeAutomationLineage: false,
+        createdByUserIds: ["0123456789abcdef0123456789abcdef"],
+        limit: 50,
+        offset: 0,
+      })
+    );
   });
 
   it("resolves createdBy=me from the authenticated user principal", async () => {
@@ -230,15 +248,119 @@ describe("session index routes", () => {
 
     expect(response.status).toBe(200);
     expect(response.headers.get("Cache-Control")).toBe("private, no-store");
-    expect(mockSessionIndexStore.list).toHaveBeenCalledWith({
-      status: undefined,
-      excludeStatus: undefined,
-      excludeAutomationLineage: false,
-      createdByUserIds: ["0123456789abcdef0123456789abcdef"],
-      limit: 50,
-      offset: 0,
-      viewerUserId: "0123456789abcdef0123456789abcdef",
+    expect(mockSessionIndexStore.list).toHaveBeenCalledWith(
+      expect.objectContaining({
+        status: undefined,
+        excludeStatus: undefined,
+        excludeAutomationLineage: false,
+        createdByUserIds: [],
+        limit: 50,
+        offset: 0,
+        viewerUserId: "0123456789abcdef0123456789abcdef",
+        ownerFilter: "started",
+      })
+    );
+  });
+
+  it("passes team and participation filters with the admitted viewer", async () => {
+    const response = await listSessions(
+      "?teamIds%5B%5D=team_alpha&ownerFilter=participating&visibility=team&scope=workspace",
+      USER_PRINCIPAL
+    );
+    expect(response.status).toBe(200);
+    expect(mockSessionIndexStore.list).toHaveBeenCalledWith(
+      expect.objectContaining({
+        teamIds: ["team_alpha"],
+        ownerFilter: "participating",
+        visibility: "team",
+        scope: "workspace",
+        readScope: expect.objectContaining({ userId: "user-1" }),
+        mode: "shadow",
+      })
+    );
+  });
+
+  it("keeps createdBy=me when an explicit ownerFilter is present", async () => {
+    const userId = "0123456789abcdef0123456789abcdef";
+    const response = await listSessions("?createdBy=me&ownerFilter=participating", {
+      kind: "user",
+      userId,
     });
+    expect(response.status).toBe(200);
+    expect(mockSessionIndexStore.list).toHaveBeenCalledWith(
+      expect.objectContaining({ createdByUserIds: [userId], ownerFilter: "participating" })
+    );
+  });
+
+  it("rejects scope=all for a non-administrator", async () => {
+    const response = await listSessions("?scope=all");
+    expect(response.status).toBe(403);
+    expect(mockSessionIndexStore.list).not.toHaveBeenCalled();
+  });
+
+  it("allows scope=all for an administrator", async () => {
+    const response = await listSessions("?scope=all", USER_PRINCIPAL);
+    expect(response.status).toBe(200);
+    expect(mockSessionIndexStore.list).toHaveBeenCalledWith(
+      expect.objectContaining({
+        scope: "all",
+        readScope: expect.objectContaining({ roleKey: "owner" }),
+      })
+    );
+  });
+
+  it("rejects ownerFilter for an actorless service", async () => {
+    const response = await listSessions("?ownerFilter=started", {
+      kind: "service",
+      service: "linear-bot",
+      actor: null,
+    });
+    expect(response.status).toBe(400);
+    expect(mockSessionIndexStore.list).not.toHaveBeenCalled();
+  });
+
+  it("passes inbox team filters before grouping", async () => {
+    const response = await listInbox(
+      "?teamIds%5B%5D=team_alpha&teamIds%5B%5D=team_alpha&teamIds%5B%5D=team_beta"
+    );
+    expect(response.status).toBe(200);
+    expect(mockSessionIndexStore.listInboxSnapshot).toHaveBeenCalledWith(
+      expect.objectContaining({
+        teamIds: ["team_alpha", "team_beta"],
+        readScope: expect.objectContaining({ userId: "user-1" }),
+      })
+    );
+  });
+
+  it("returns 400 for a combined list filter exceeding the D1 parameter budget", async () => {
+    mockSessionIndexStore.list.mockRejectedValueOnce(new D1QueryParameterLimitError());
+    const response = await listSessions("?teamIds[]=team_alpha");
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toEqual({ error: "Too many session filters" });
+  });
+
+  it.each(["", "?category=finished"])(
+    "returns 400 for an inbox filter exceeding the D1 parameter budget (%s)",
+    async (query) => {
+      const method = query
+        ? mockSessionIndexStore.listInbox
+        : mockSessionIndexStore.listInboxSnapshot;
+      method.mockRejectedValueOnce(new D1QueryParameterLimitError());
+      const response = await listInbox(query);
+      expect(response.status).toBe(400);
+      await expect(response.json()).resolves.toEqual({ error: "Too many session filters" });
+    }
+  );
+
+  it("rejects inbox team filters that exceed the query budget before reading D1", async () => {
+    const params = new URLSearchParams();
+    for (let i = 0; i <= MAX_SESSION_LIST_FILTER_IDS; i++) {
+      params.append("teamIds[]", `team_${i}`);
+    }
+    const response = await listInbox(`?${params}`);
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toEqual({ error: "Invalid teamIds[]" });
+    expect(mockSessionIndexStore.listInboxSnapshot).not.toHaveBeenCalled();
   });
 
   it("does not mark service session lists as private viewer data", async () => {
@@ -266,7 +388,13 @@ describe("session index routes", () => {
 
     expect(response.headers.get("Cache-Control")).toBe("private, no-store");
     await expect(response.json()).resolves.toEqual({
-      sessions: [{ ...listSession, readState }],
+      sessions: [
+        {
+          ...listSession,
+          readState,
+          capabilities: expect.objectContaining({ canRead: true, canDelete: true }),
+        },
+      ],
       hasMore: false,
     });
   });
@@ -279,13 +407,25 @@ describe("session index routes", () => {
 
     const response = await listSessions();
     await expect(response.json()).resolves.toEqual({
-      sessions: [listSession],
+      sessions: [
+        {
+          ...listSession,
+          capabilities: expect.objectContaining({ canRead: true, canDelete: false }),
+        },
+      ],
       hasMore: true,
     });
   });
 
   it("projects inbox page and snapshot responses through their shared schemas", async () => {
-    const item = { rootSession: inboxSession, descendantSessions: [] };
+    const { userId: _userId, ...projectedSession } = inboxSession;
+    const item = {
+      rootSession: {
+        ...projectedSession,
+        capabilities: expect.objectContaining({ canRead: true, canDelete: true }),
+      },
+      descendantSessions: [],
+    };
     const storedItem = {
       rootSession: { ...inboxSession, providerAuth: [{ secret: "internal" }] },
       descendantSessions: [],
@@ -449,5 +589,221 @@ describe("session index routes", () => {
       "session-1",
       expectedAction
     );
+  });
+});
+
+describe("scoped inbox routes", () => {
+  beforeEach(() => {
+    vi.restoreAllMocks();
+    vi.clearAllMocks();
+    mockSessionIndexStore.listInbox.mockResolvedValue(emptyInboxResult);
+    mockSessionIndexStore.listInboxSnapshot.mockResolvedValue({
+      needs_attention: emptyInboxResult,
+      in_progress: emptyInboxResult,
+      finished: emptyInboxResult,
+    });
+  });
+
+  it.each(["", "category=finished&cursor=200:session-1&"])(
+    "passes scoped filters to snapshot and paged reads (%s)",
+    async (pagination) => {
+      const response = await listInbox(
+        `?${pagination}ownerFilter=participating&visibility=private&scope=workspace&teamIds[]=team_alpha`
+      );
+      expect(response.status).toBe(200);
+      const read = pagination
+        ? mockSessionIndexStore.listInbox
+        : mockSessionIndexStore.listInboxSnapshot;
+      expect(read).toHaveBeenCalledWith(
+        expect.objectContaining({
+          ownerFilter: "participating",
+          visibility: "private",
+          scope: "workspace",
+          teamIds: ["team_alpha"],
+          readScope: expect.objectContaining({ userId: "user-1" }),
+        })
+      );
+    }
+  );
+
+  it.each([
+    ["member", "member"],
+    ["viewer", "viewer"],
+    ["custom", null],
+  ] as const)("rejects all scope for %s", async (_roleName, roleKey) => {
+    const ctx = createCtx(USER_PRINCIPAL) as UserRouteContext;
+    ctx.authorization!.role.key = roleKey;
+    for (const query of ["?scope=all", "?category=finished&scope=all"]) {
+      const response = await listInbox(query, ctx);
+      expect(response.status).toBe(403);
+      await expect(response.json()).resolves.toEqual({ error: "Invalid scope" });
+    }
+    expect(mockSessionIndexStore.listInboxSnapshot).not.toHaveBeenCalled();
+    expect(mockSessionIndexStore.listInbox).not.toHaveBeenCalled();
+  });
+
+  it.each(["owner", "administrator"] as const)("allows all scope for %s", async (roleKey) => {
+    const ctx = createCtx(USER_PRINCIPAL) as UserRouteContext;
+    ctx.authorization!.role.key = roleKey;
+    expect((await listInbox("?category=finished&scope=all", ctx)).status).toBe(200);
+    expect(mockSessionIndexStore.listInbox).toHaveBeenCalledWith(
+      expect.objectContaining({ scope: "all" })
+    );
+  });
+
+  it.each(["started", "participating", "anyone"])(
+    "preserves creator-only automated exclusions when mine composes with %s",
+    async (ownerFilter) => {
+      expect((await listInbox(`?mine=true&ownerFilter=${ownerFilter}`)).status).toBe(200);
+      expect(mockSessionIndexStore.listInboxSnapshot).toHaveBeenCalledWith(
+        expect.objectContaining({
+          createdByUserIds: ["user-1"],
+          excludeAutomatedSessions: true,
+          ownerFilter,
+        })
+      );
+    }
+  );
+
+  it.each([
+    ["ownerFilter=mine", "Invalid ownerFilter"],
+    ["ownerFilter=", "Invalid ownerFilter"],
+    ["ownerFilter=started&ownerFilter=anyone", "Invalid ownerFilter"],
+    ["visibility=public", "Invalid visibility"],
+    ["visibility=", "Invalid visibility"],
+    ["visibility=team&visibility=workspace", "Invalid visibility"],
+    ["scope=team", "Invalid scope"],
+    ["scope=", "Invalid scope"],
+    ["scope=all&scope=workspace", "Invalid scope"],
+  ])("rejects invalid scoped query %s", async (query, message) => {
+    const response = await listInbox(`?${query}`);
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toEqual({ error: message });
+    expect(mockSessionIndexStore.listInboxSnapshot).not.toHaveBeenCalled();
+    expect(mockSessionIndexStore.listInbox).not.toHaveBeenCalled();
+  });
+
+  it.each(["off", "shadow", "on"] as const)(
+    "decorates snapshot and page roots and descendants with effective capabilities in %s",
+    async (mode) => {
+      const ctx = createCtx(USER_PRINCIPAL) as UserRouteContext;
+      ctx.authorization!.role.key = "member";
+      ctx.authorization!.permissions = [
+        "sessions.read",
+        "sessions.collaborate",
+        "sessions.sandbox_access",
+        "sessions.lifecycle",
+        "sessions.delete",
+      ];
+      const item = {
+        rootSession: { ...inboxSession, userId: "another-user", providerAuth: "secret" },
+        descendantSessions: [
+          {
+            ...inboxSession,
+            id: "private-child",
+            parentSessionId: inboxSession.id,
+            userId: "another-user",
+            visibility: "private",
+          },
+        ],
+      };
+      const page = { items: [item], hasMore: false, nextCursor: null };
+      mockSessionIndexStore.listInbox.mockResolvedValue(page);
+      mockSessionIndexStore.listInboxSnapshot.mockResolvedValue({
+        needs_attention: page,
+        in_progress: emptyInboxResult,
+        finished: emptyInboxResult,
+      });
+      vi.spyOn(SessionCollaboratorStore.prototype, "listForSessions").mockResolvedValue(
+        new Map([["private-child", ["user-1"]]])
+      );
+      const env = { ...createEnv(), TEAMS_ENFORCEMENT: mode };
+      const paged = await (await listInbox("?category=needs_attention", ctx, env)).json();
+      const snapshot = (await (await listInbox("", ctx, env)).json()) as {
+        categories: { needs_attention: unknown };
+      };
+      expect(paged).toEqual(snapshot.categories.needs_attention);
+      expect(paged).toMatchObject({
+        items: [
+          {
+            rootSession: {
+              capabilities: { canRead: true, canDelete: mode !== "on" },
+            },
+            descendantSessions: [
+              {
+                capabilities: {
+                  canRead: true,
+                  canCollaborate: true,
+                  canSandbox: true,
+                  canDelete: false,
+                  canManageCollaborators: false,
+                },
+              },
+            ],
+          },
+        ],
+      });
+      expect(JSON.stringify(paged)).not.toContain("providerAuth");
+      expect(JSON.stringify(paged)).not.toContain("userId");
+    }
+  );
+});
+
+describe("session discovery filters", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockSessionIndexStore.list.mockResolvedValue({ sessions: [], hasMore: false });
+  });
+
+  it("passes search and discovery filters through to the store", async () => {
+    const response = await listSessions(
+      "?q=%20login%20&repoOwner=acme&repoName=web-app&environmentId=env-1&origin=automation&excludeStatus=archived&createdBy=me",
+      { kind: "user", userId: "0123456789abcdef0123456789abcdef" }
+    );
+
+    expect(response.status).toBe(200);
+    expect(mockSessionIndexStore.list).toHaveBeenCalledWith(
+      expect.objectContaining({
+        status: undefined,
+        excludeStatus: "archived",
+        excludeAutomationLineage: false,
+        createdByUserIds: [],
+        ownerFilter: "started",
+        search: "login",
+        repository: { repoOwner: "acme", repoName: "web-app" },
+        environmentId: "env-1",
+        spawnSource: "automation",
+        limit: 50,
+        offset: 0,
+        viewerUserId: "0123456789abcdef0123456789abcdef",
+      })
+    );
+  });
+
+  it("omits discovery filters that were not supplied", async () => {
+    await listSessions("?q=%20%20");
+
+    expect(mockSessionIndexStore.list).toHaveBeenCalledWith(
+      expect.not.objectContaining({
+        search: expect.anything(),
+        repository: expect.anything(),
+        environmentId: expect.anything(),
+        spawnSource: expect.anything(),
+      })
+    );
+  });
+
+  it.each([
+    [`?q=${"x".repeat(201)}`, "Invalid q"],
+    ["?repoOwner=acme", "Invalid repoName"],
+    ["?repoName=web-app", "Invalid repoOwner"],
+    ["?environmentId=%20", "Invalid environmentId"],
+    ["?origin=cron", "Invalid origin"],
+  ])("rejects the discovery query %s before querying the store", async (query, message) => {
+    const response = await listSessions(query);
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toEqual({ error: message });
+    expect(mockSessionIndexStore.list).not.toHaveBeenCalled();
   });
 });

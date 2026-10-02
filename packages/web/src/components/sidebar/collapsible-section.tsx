@@ -18,13 +18,13 @@ export function CollapsibleSection({
   const contentId = useId();
 
   return (
-    <div className="border-b border-border-muted last:border-b-0">
+    <div>
       <button
         type="button"
         onClick={() => setIsOpen(!isOpen)}
         aria-expanded={isOpen}
         aria-controls={contentId}
-        className="flex items-center justify-between w-full px-4 py-4 text-sm font-medium text-foreground hover:bg-muted transition-colors"
+        className="flex min-h-6 w-full items-center justify-between text-xs font-semibold text-foreground transition-colors hover:text-accent"
       >
         <span>{title}</span>
         <ChevronDownIcon
@@ -32,7 +32,7 @@ export function CollapsibleSection({
         />
       </button>
       {isOpen && (
-        <div id={contentId} className="px-4 pb-4">
+        <div id={contentId} className="pt-3">
           {children}
         </div>
       )}

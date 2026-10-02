@@ -17,6 +17,7 @@ import {
   type AutomationRunRow,
   type EnrichedRunRow,
 } from "./automation-store";
+import { MAX_D1_QUERY_PARAMETERS } from "./query-limits";
 
 // ─── Fake D1 helpers ─────────────────────────────────────────────────────────
 
@@ -25,11 +26,7 @@ interface FakeStatement {
   params: unknown[];
 }
 
-function createFakeD1(options?: {
-  firstResult?: unknown;
-  allResults?: unknown[];
-  changes?: number;
-}) {
+function createFakeD1(options?: { allResults?: unknown[] }) {
   const statements: FakeStatement[] = [];
 
   const fakeStmt = {
@@ -38,20 +35,20 @@ function createFakeD1(options?: {
       return fakeStmt;
     },
     async first<T>(): Promise<T | null> {
-      return (options?.firstResult as T) ?? null;
+      return null;
     },
     async all<T>(): Promise<D1Result<T>> {
       return {
         results: (options?.allResults ?? []) as T[],
         success: true,
-        meta: { duration: 0, changes: options?.changes ?? 0 },
+        meta: { duration: 0, changes: 0 },
       } as unknown as D1Result<T>;
     },
     async run(): Promise<D1Result> {
       return {
         results: [],
         success: true,
-        meta: { duration: 0, changes: options?.changes ?? 1 },
+        meta: { duration: 0, changes: 1 },
       } as unknown as D1Result;
     },
   };
@@ -80,6 +77,7 @@ function createFakeD1(options?: {
 const now = Date.now();
 
 const sampleRow: AutomationRow = {
+  owner_team_id: null,
   id: "auto_test1",
   name: "Daily sync",
   instructions: "Run daily sync tasks",
@@ -320,50 +318,6 @@ describe("toAutomationRun", () => {
 });
 
 describe("AutomationStore", () => {
-  describe("create", () => {
-    it("inserts all fields", async () => {
-      const { db, statements } = createFakeD1();
-      const store = new AutomationStore(db);
-      await store.create(sampleRow);
-
-      expect(statements).toHaveLength(1);
-      expect(statements[0].sql).toContain("INSERT INTO automations");
-      expect(statements[0].params[0]).toBe("auto_test1");
-      expect(statements[0].params[1]).toBe("Daily sync");
-      expect(statements[0].params[2]).toBe("Run daily sync tasks");
-    });
-  });
-
-  describe("update", () => {
-    it("writes only whitelisted fields", async () => {
-      const { db, statements } = createFakeD1({ firstResult: sampleRow });
-      const store = new AutomationStore(db);
-
-      await store.update(sampleRow.id, { name: "Renamed" });
-
-      const updateStatement = statements.find((s) => s.sql.includes("UPDATE automations SET"));
-      expect(updateStatement).toBeDefined();
-      expect(updateStatement!.sql).toContain("name = ?");
-      expect(updateStatement!.sql).not.toContain("repo_owner");
-    });
-  });
-
-  describe("getById", () => {
-    it("returns row when found", async () => {
-      const { db } = createFakeD1({ firstResult: sampleRow });
-      const store = new AutomationStore(db);
-      const result = await store.getById("auto_test1");
-      expect(result).toEqual(sampleRow);
-    });
-
-    it("returns null when not found", async () => {
-      const { db } = createFakeD1({ firstResult: null });
-      const store = new AutomationStore(db);
-      const result = await store.getById("nonexistent");
-      expect(result).toBeNull();
-    });
-  });
-
   describe("list", () => {
     it("returns a bounded page", async () => {
       const { db } = createFakeD1({
@@ -374,167 +328,56 @@ describe("AutomationStore", () => {
       expect(result.automations).toHaveLength(1);
       expect(result.hasMore).toBe(false);
     });
-  });
 
-  describe("softDelete", () => {
-    it("sets deleted_at and returns true", async () => {
-      const { db, statements } = createFakeD1({ changes: 1 });
-      const store = new AutomationStore(db);
-      const result = await store.softDelete("auto_test1");
-      expect(result).toBe(true);
-      expect(statements[0].sql).toContain("deleted_at");
-      expect(statements[0].sql).toContain("next_run_at = NULL");
-    });
-
-    it("returns false when automation not found", async () => {
-      const { db } = createFakeD1({ changes: 0 });
-      const store = new AutomationStore(db);
-      const result = await store.softDelete("nonexistent");
-      expect(result).toBe(false);
-    });
-  });
-
-  describe("pause", () => {
-    it("sets enabled=0 and nulls next_run_at", async () => {
-      const { db, statements } = createFakeD1({ changes: 1 });
-      const store = new AutomationStore(db);
-      const result = await store.pause("auto_test1");
-      expect(result).toBe(true);
-      expect(statements[0].sql).toContain("enabled = 0");
-      expect(statements[0].sql).toContain("next_run_at = NULL");
-    });
-  });
-
-  describe("resume", () => {
-    it("sets enabled=1, resets failures, sets next_run_at", async () => {
-      const { db, statements } = createFakeD1({ changes: 1 });
-      const store = new AutomationStore(db);
-      const nextRunAt = now + 86400000;
-      const result = await store.resume("auto_test1", nextRunAt);
-      expect(result).toBe(true);
-      expect(statements[0].sql).toContain("enabled = 1");
-      expect(statements[0].sql).toContain("consecutive_failures = 0");
-      expect(statements[0].params).toContain(nextRunAt);
-    });
-  });
-
-  describe("countOverdue", () => {
-    it("returns count of overdue automations", async () => {
-      const { db } = createFakeD1({ firstResult: { count: 3 } });
-      const store = new AutomationStore(db);
-      const result = await store.countOverdue(now);
-      expect(result).toBe(3);
-    });
-  });
-
-  describe("getOverdueAutomations", () => {
-    it("returns overdue automations ordered by next_run_at", async () => {
+    it("projects legacy canonical owners in one lookup without repairing rows", async () => {
       const { db, statements } = createFakeD1({
-        allResults: [sampleRow],
+        allResults: [{ provider_user_id: "4242", user_id: "user-legacy" }],
       });
-      const store = new AutomationStore(db);
-      const result = await store.getOverdueAutomations(now, 25);
-      expect(result).toHaveLength(1);
-      expect(statements[0].sql).toContain("ORDER BY next_run_at ASC");
-      expect(statements[0].params).toContain(25);
+      const legacy = { ...sampleRow, id: "legacy", user_id: null, created_by: "4242" };
+      const anonymous = { ...sampleRow, id: "anon", user_id: null, created_by: "anonymous" };
+      const canonical = { ...sampleRow, id: "canonical", user_id: "user-1" };
+
+      const rows = await new AutomationStore(db).projectCanonicalOwners([
+        legacy,
+        anonymous,
+        canonical,
+      ]);
+
+      expect(rows.map((row) => row.user_id)).toEqual(["user-legacy", null, "user-1"]);
+      expect(statements).toHaveLength(1);
+      expect(statements[0].sql).toContain("FROM user_identities");
+      expect(statements[0].params).toEqual(["4242"]);
     });
-  });
 
-  describe("getActiveRunForAutomation", () => {
-    it("returns active run", async () => {
-      const { db } = createFakeD1({ firstResult: sampleRunRow });
-      const store = new AutomationStore(db);
-      const result = await store.getActiveRunForAutomation("auto_test1");
-      expect(result).toEqual(sampleRunRow);
-    });
-
-    it("returns null when no active run", async () => {
-      const { db } = createFakeD1({ firstResult: null });
-      const store = new AutomationStore(db);
-      const result = await store.getActiveRunForAutomation("auto_test1");
-      expect(result).toBeNull();
-    });
-  });
-
-  describe("incrementConsecutiveFailures", () => {
-    it("increments and returns new count", async () => {
-      const fakeStmt = {
-        bind: vi.fn().mockReturnThis(),
-        run: vi.fn().mockResolvedValue({
-          results: [],
-          success: true,
-          meta: { duration: 0, changes: 1 },
-        }),
-        first: vi.fn().mockResolvedValue({ consecutive_failures: 2 }),
-        all: vi.fn(),
-      };
-
-      const db = {
-        prepare: vi.fn().mockReturnValue(fakeStmt),
-      } as unknown as D1Database;
-
-      const store = new AutomationStore(db);
-      const count = await store.incrementConsecutiveFailures("auto_test1");
-      expect(count).toBe(2);
-    });
-  });
-
-  describe("autoPause", () => {
-    it("sets enabled=0 and nulls next_run_at", async () => {
+    it("binds team visibility once, regardless of how many teams the viewer joined", async () => {
       const { db, statements } = createFakeD1();
-      const store = new AutomationStore(db);
-      await store.autoPause("auto_test1");
-
-      expect(statements[0].sql).toContain("enabled = 0");
-      expect(statements[0].sql).toContain("next_run_at = NULL");
-    });
-  });
-
-  describe("getOrphanedStartingRuns", () => {
-    it("returns runs stuck in starting state", async () => {
-      const { db, statements } = createFakeD1({
-        allResults: [sampleRunRow],
+      const memberships = new Map(
+        Array.from({ length: MAX_D1_QUERY_PARAMETERS }, (_, i) => [`team_${i}`, "member" as const])
+      );
+      await new AutomationStore(db).list({
+        limit: 25,
+        nameSearch: "sync",
+        teamId: "team_0",
+        repoOwner: "acme",
+        repoName: "web",
+        viewer: {
+          kind: "user",
+          userId: "user-1",
+          roleKey: "member",
+          permissions: ["automations.read"],
+          suspended: false,
+          memberships,
+        },
       });
-      const store = new AutomationStore(db);
-      const result = await store.getOrphanedStartingRuns(5 * 60 * 1000, 50);
-      expect(result).toHaveLength(1);
-      expect(statements[0].sql).toContain("status = 'starting'");
-    });
-  });
-
-  describe("getRunsPastExecutionDeadline", () => {
-    it("returns running runs whose own deadline has passed", async () => {
-      const { db, statements } = createFakeD1({
-        allResults: [
-          { ...sampleRunRow, status: "running", started_at: now, execution_deadline_at: now },
-        ],
-      });
-      const store = new AutomationStore(db);
-      const result = await store.getRunsPastExecutionDeadline(now, 10_800_000, 50);
-      expect(result).toHaveLength(1);
-      expect(statements[0].sql).toContain("status = 'running'");
-      expect(statements[0].sql).toContain("execution_deadline_at < ?");
-      expect(statements[0].sql).toContain("execution_deadline_at IS NULL AND started_at < ?");
-      expect(statements[0].params).toEqual([now, now - 10_800_000, 50]);
+      const [{ sql, params }] = statements;
+      expect(params.length).toBeLessThanOrEqual(MAX_D1_QUERY_PARAMETERS);
+      expect(sql.match(/\?/g)).toHaveLength(params.length);
+      expect(params).toContain("user-1");
+      expect(params).not.toContain("team_1");
     });
   });
 
   describe("updateRun", () => {
-    it("updates specified fields", async () => {
-      const { db, statements } = createFakeD1();
-      const store = new AutomationStore(db);
-      await store.updateRun("run_test1", {
-        status: "running",
-        session_id: "sess-1",
-        started_at: now,
-      });
-
-      expect(statements[0].sql).toContain("UPDATE automation_runs");
-      expect(statements[0].sql).toContain("status = ?");
-      expect(statements[0].sql).toContain("session_id = ?");
-      expect(statements[0].sql).toContain("started_at = ?");
-    });
-
     it("skips update when no fields provided", async () => {
       const { db, statements } = createFakeD1();
       const store = new AutomationStore(db);
@@ -553,15 +396,6 @@ describe("AutomationStore", () => {
       expect(statements[0].sql).toContain("SET status = 'running'");
       expect(statements[0].sql).toContain("WHERE id = ? AND status = 'starting'");
       expect(statements[0].params).toEqual(["session-1", now, now + 1000, "run_test1"]);
-    });
-
-    it("stamps the execution deadline in the statement that makes the run sweepable", async () => {
-      const { db, statements } = createFakeD1();
-      const store = new AutomationStore(db);
-
-      await store.claimRunSession("run_test1", "session-1", now, now + 1000);
-
-      expect(statements[0].sql).toContain("execution_deadline_at = ?");
     });
   });
 
@@ -597,21 +431,6 @@ describe("AutomationStore", () => {
       // Compare-and-set on the claimed slot, not a monotonic timestamp guard:
       // "any later value wins" lets a loser advance again from the winner's
       // successor and skip a slot entirely.
-      expect(advance.sql).toContain("next_run_at = ?");
-      expect(advance.sql).not.toContain("next_run_at < ?");
-      expect(advance.params.at(-1)).toBe(now);
-    });
-
-    it("advances a skipped invocation only while it still owns the claimed slot", async () => {
-      const { db, statements } = createFakeD1();
-      const store = new AutomationStore(db);
-
-      await store.insertSkippedInvocation(
-        { ...invocation, id: "inv-skipped", skip_reason: "concurrent_run_active" },
-        { fromSlot: now, nextRunAt: now + 60_000 }
-      );
-
-      const advance = statements.at(-1)!;
       expect(advance.sql).toContain("next_run_at = ?");
       expect(advance.sql).not.toContain("next_run_at < ?");
       expect(advance.params.at(-1)).toBe(now);

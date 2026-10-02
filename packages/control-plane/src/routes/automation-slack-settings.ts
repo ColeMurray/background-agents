@@ -15,7 +15,7 @@ import {
 } from "./shared";
 import type { Env } from "../types";
 import { createLogger } from "../logger";
-import { AUTOMATIONS_READ } from "./automation-shared";
+import { AUTOMATIONS_READ_PERMISSION } from "./automation-shared";
 
 const logger = createLogger("router:automations");
 
@@ -85,6 +85,8 @@ automationSlackSettingsRoutes.get(
   }),
   (c) => dispatch(c, handleGetWatchedSlackChannels)
 );
-automationSlackSettingsRoutes.get("/integration-settings/slack/channels", AUTOMATIONS_READ, (c) =>
-  dispatch(c, handleGetSlackChannels)
+automationSlackSettingsRoutes.get(
+  "/integration-settings/slack/channels",
+  AUTOMATIONS_READ_PERMISSION,
+  (c) => dispatch(c, handleGetSlackChannels)
 );

@@ -26,19 +26,12 @@ module "modal_app" {
   deploy_path                  = "${var.project_root}/packages/modal-infra"
   deploy_module                = "deploy"
   source_hash                  = data.external.modal_source_hash[0].result.hash
+  build_vm_image               = var.sandbox_provider == "modal-vm"
 
   secrets = [
     {
       name   = "llm-api-keys"
       values = local.modal_llm_secret_values
-    },
-    {
-      name = "github-app"
-      values = {
-        GITHUB_APP_ID              = var.github_app_id
-        GITHUB_APP_PRIVATE_KEY     = var.github_app_private_key
-        GITHUB_APP_INSTALLATION_ID = var.github_app_installation_id
-      }
     },
     {
       name = "internal-api"

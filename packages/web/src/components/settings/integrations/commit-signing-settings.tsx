@@ -112,7 +112,10 @@ export function CommitSigningSettings() {
   };
 
   return (
-    <section className="border-t border-border pt-6 mt-6" aria-labelledby="commit-signing-title">
+    <section
+      className="mt-6 mb-8 border-t border-border pt-6"
+      aria-labelledby="commit-signing-title"
+    >
       <h3 id="commit-signing-title" className="text-base font-medium text-foreground">
         Commit signing
       </h3>

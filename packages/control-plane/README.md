@@ -220,6 +220,37 @@ An invocation's status is **derived from its child runs, never stored**: no chil
 any child starting/running → `starting`/`running`; all terminal → `completed` (none failed),
 `failed` (none completed), `partial_failed` (a mix), or `skipped` (all skipped).
 
+### Audit Events
+
+| Endpoint        | Method | Description                                                    |
+| --------------- | ------ | -------------------------------------------------------------- |
+| `/audit-events` | GET    | Newest-first, cursor-paginated events (`workspace.audit.read`) |
+
+Each event has an `action`, a stored `operationResult` (`applied`, `no_op`, `denied`, or
+`rejected`), and structured `metadata`. What a row proves depends on who wrote it:
+
+- **Authorization decisions** (`authorization.request_allowed`, `authorization.request_denied`) are
+  written by route admission. With `metadata.schema = "authorization_decision.v1"` they also record
+  `httpMethod`, `httpPath`, `httpStatus`, and the evaluated `requirements`. They prove only that the
+  request was allowed or denied and which HTTP status it returned. An allowed request may still fail
+  validation (400), conflict (409), or fail downstream (500), and even a 2xx does not prove that a
+  domain change or asynchronous work (a sandbox, job, or external effect) completed. Their
+  `operationResult` encodes the decision (`applied` for allowed, `denied` for denied) and must not
+  be read as a domain outcome. Rows written before the schema existed carry `{ "legacy": true }`
+  metadata and have no recorded status.
+- **Operation events** (the actions in `AUDIT_OPERATION_ACTIONS`, for example
+  `workspace.member_role_updated`) are written by the operation owner alongside the change, so their
+  `operationResult` is the domain outcome.
+- Any other action is unrecognized; clients should not interpret its `operationResult`.
+
+`interpretAuditEvent` in `@open-inspect/shared` implements these rules. It takes the decision from
+the exact action and reports `httpStatus` only when the metadata parses as
+`authorization_decision.v1`.
+
+A feature that needs "operation completed" evidence must emit its own event from the owning
+transaction or workflow, correlated by request ID. That evidence is never inferred from admission or
+from an HTTP 2xx.
+
 ## WebSocket Protocol
 
 ### Client → Server Messages
@@ -259,7 +290,7 @@ any child starting/running → `starting`/`running`; all terminal → `completed
 
 ### Prerequisites
 
-- Node.js 22+
+- Node.js 24+
 - Terraform (for deployment)
 
 ### Setup
@@ -469,15 +500,14 @@ The system uses two types of GitHub tokens:
 | GitHub App Token | Clone, fetch, push | Brokered to credential helper | All repos where App is installed |
 | User OAuth Token | Create PRs         | Server-only                   | User's accessible repos          |
 
-Fresh and prebuilt-image sandboxes do not receive a long-lived `GITHUB_TOKEN`, `GITHUB_APP_TOKEN`,
+Session sandboxes, including snapshot restores, do not receive `GITHUB_TOKEN`, `GITHUB_APP_TOKEN`,
 or `VCS_CLONE_TOKEN` for normal git operations. Git invokes the sandbox credential helper, which
 calls `/sessions/:id/scm-credentials` with the sandbox auth token and receives short-lived
-credentials on demand. Legacy snapshots and one-shot image builds may still receive env-token
-fallbacks for compatibility. The helper preserves the existing installation-wide model by serving
+credentials on demand. The helper preserves the existing installation-wide model by serving
 credentials for HTTPS git requests to the configured SCM host, including setup/start hooks that
 clone auxiliary private repos. This avoids stale embedded credentials in long-running sessions and
-Daytona persistent resumes; Modal snapshot restores still mint a fresh fallback token during
-restore.
+persistent resumes. One-shot image builds still receive `VCS_CLONE_TOKEN` because they have no
+session to broker through.
 
 If a `create-pr` request is triggered by a participant without a user OAuth token (for example,
 Slack-created or Google-login sessions), the sandbox can still push the branch with brokered GitHub

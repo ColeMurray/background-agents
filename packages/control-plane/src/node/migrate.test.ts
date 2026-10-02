@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { copyFileSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -42,11 +42,94 @@ describe("applyMigrations", () => {
     expect(applied).toEqual(listMigrations(MIGRATIONS_DIR).map((file) => file.name));
     expect(applied).toHaveLength(files.length);
     expect(ledger(db).map((row) => row.name)).toEqual(applied);
+    expect(db.prepare("SELECT COUNT(*) AS n FROM teams").get()).toEqual({ n: 0 });
     expect(
       db.prepare("SELECT count(*) AS n FROM sqlite_master WHERE type = 'table'").get()
     ).toMatchObject({ n: expect.any(Number) });
     // A second run finds everything recorded and applies nothing.
     expect(applyMigrations(db, MIGRATIONS_DIR)).toEqual([]);
+  });
+
+  it("leaves existing resources workspace-owned without creating teams or memberships", () => {
+    for (const name of readdirSync(MIGRATIONS_DIR).filter(
+      (file) => file.endsWith(".sql") && !file.startsWith("0083_")
+    )) {
+      copyFileSync(join(MIGRATIONS_DIR, name), join(dir, name));
+    }
+    applyMigrations(db, dir);
+    for (const [id, role, suspendedAt] of [
+      ["owner", "role_builtin_owner", null],
+      ["admin", "role_builtin_administrator", null],
+      ["member", "role_builtin_member", null],
+      ["viewer", "role_builtin_viewer", null],
+      ["suspended", "role_builtin_member", 1],
+    ] as const) {
+      db.prepare(
+        "INSERT INTO users (id, suspended_at, created_at, updated_at) VALUES (?, ?, 1, 1)"
+      ).run(id, suspendedAt);
+      db.prepare("UPDATE user_role_assignments SET role_id = ? WHERE user_id = ?").run(role, id);
+    }
+    db.prepare(
+      "INSERT INTO sessions (id, user_id, created_at, updated_at) VALUES ('old-session', NULL, 1, 1)"
+    ).run();
+    db.prepare(
+      "INSERT INTO automations (id, name, instructions, model, created_by, created_at, updated_at) VALUES ('old-auto', 'old', 'instructions', 'model', 'owner', 1, 1)"
+    ).run();
+    db.prepare("INSERT INTO environments (id, name) VALUES ('old-env', 'Old')").run();
+
+    expect(applyMigrations(db, MIGRATIONS_DIR)).toEqual(["0083_teams.sql"]);
+    for (const table of ["sessions", "automations", "environments"]) {
+      expect(
+        db.prepare(`SELECT COUNT(*) AS n FROM ${table} WHERE owner_team_id IS NOT NULL`).get()
+      ).toEqual({ n: 0 });
+    }
+    expect(db.prepare("SELECT visibility FROM sessions WHERE id = 'old-session'").get()).toEqual({
+      visibility: "workspace",
+    });
+    expect(db.prepare("SELECT COUNT(*) AS n FROM teams").get()).toEqual({ n: 0 });
+    expect(db.prepare("SELECT COUNT(*) AS n FROM team_memberships").get()).toEqual({ n: 0 });
+    expect(db.prepare("SELECT COUNT(*) AS n FROM team_repository_grants").get()).toEqual({ n: 0 });
+    expect(
+      db
+        .prepare(
+          "SELECT name FROM pragma_table_info('team_repository_grants') WHERE name = 'webhook_home'"
+        )
+        .get()
+    ).toBeUndefined();
+    expect(
+      db
+        .prepare(
+          "SELECT name FROM sqlite_master WHERE type = 'index' AND name IN ('idx_team_grants_webhook_home', 'idx_team_grants_webhook_home_installation')"
+        )
+        .all()
+    ).toEqual([]);
+    expect(() =>
+      db
+        .prepare(
+          "INSERT INTO sessions (id, owner_team_id, created_at, updated_at) VALUES ('invalid', 'unknown', 1, 1)"
+        )
+        .run()
+    ).toThrow();
+    expect(() =>
+      db
+        .prepare(
+          "INSERT INTO sessions (id, visibility, created_at, updated_at) VALUES ('invalid-team-visibility', 'team', 1, 1)"
+        )
+        .run()
+    ).toThrow();
+    expect(() =>
+      db.prepare("INSERT INTO environments (id, name) VALUES ('old-null', 'OLD')").run()
+    ).toThrow();
+    db.prepare("INSERT INTO environments (id, name) VALUES ('null-first', 'New')").run();
+    expect(() =>
+      db.prepare("INSERT INTO environments (id, name) VALUES ('null-second', 'new')").run()
+    ).toThrow();
+    db.prepare(
+      "INSERT INTO teams (id, slug, name, created_at, updated_at) VALUES ('team_a', 'a', 'A', 1, 1), ('team_b', 'b', 'B', 1, 1)"
+    ).run();
+    db.prepare(
+      "INSERT INTO environments (id, name, owner_team_id) VALUES ('env-a', 'New', 'team_a'), ('env-b', 'New', 'team_b')"
+    ).run();
   });
 
   it("applies files in version order and skips the ones already recorded", () => {
@@ -202,7 +285,7 @@ describe("applyMigrations", () => {
       bundle: true,
       platform: "node",
       format: "esm",
-      target: "node22",
+      target: "node24",
       outfile: script,
       logLevel: "silent",
     });

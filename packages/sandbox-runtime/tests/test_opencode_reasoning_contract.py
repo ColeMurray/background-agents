@@ -5,7 +5,15 @@ Only reasoning settings are retained from requests; no real provider keys are us
 
 Fixture: public subset of https://models.opencode.ai/api.json, retrieved 2026-09-09.
 Source SHA-256: a55f5a544d356a15a6491bc3293f2dabb692a381e65cce69fee4741de9636733
-Subset SHA-256: 2c9ff58346fec2db5cc4e1fefc2a6fa752f96570fca06d81bd60a9e93260955f
+GPT-6 Sol and Luna added from the 2026-09-22 retrieval.
+Source SHA-256: c9d3dc07540cf91a7b7362a3b42943132965f4ee6e8374113ee4f0f7b56b3d90
+Claude Opus 5.5 added from the 2026-09-23 retrieval.
+Source SHA-256: e20acec396a73dc3db45d0eca7f0ede5bff28f09f002ba96ce7b1b566de7b6d0
+Claude Sonnet 5.5 added from the 2026-09-28 retrieval.
+Source SHA-256: 06e0071dd4ae9c9da2db1fabf28eb4994914fefdc5dd10270a5b340c88a49aec
+GPT-6.1 Sol added from the 2026-09-29 retrieval.
+Source SHA-256: e4677e698a53d3b8b11c569c0ecc2f5722cd8126677bf5f7dbff23daf942a17b
+Subset SHA-256: 121c3cf245d515b9862685a084ca8fdb1b9200ab672cca1658949b1dd0de6265
 Reconcile this frozen fixture with shared model/effort definitions when changing
 models or the binary. Mocks verify serialization, not live provider acceptance.
 """
@@ -164,19 +172,19 @@ async def wire_server(tmp_path, reasoning_config):
             stderr=subprocess.DEVNULL,
         )
 
-        def call(path, body=None):
+        def call(path, body=None, timeout_seconds=30):
             request = urllib.request.Request(
                 f"http://127.0.0.1:{port}" + path,
                 data=json.dumps(body).encode() if body is not None else None,
                 headers={"Content-Type": "application/json"},
             )
-            with urllib.request.urlopen(request, timeout=30) as response:
+            with urllib.request.urlopen(request, timeout=timeout_seconds) as response:
                 return json.load(response)
 
         deadline = time.monotonic() + 30
         while True:
             try:
-                call("/global/health")
+                call("/global/health", timeout_seconds=1)
                 break
             except OSError:
                 if process.poll() is not None or time.monotonic() >= deadline:

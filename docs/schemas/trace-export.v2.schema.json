@@ -1,0 +1,327 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "anyOf": [
+    {
+      "type": "object",
+      "properties": {
+        "schemaVersion": { "type": "number", "const": 2 },
+        "type": { "type": "string", "const": "session" },
+        "id": { "type": "string" },
+        "title": { "anyOf": [{ "type": "string" }, { "type": "null" }] },
+        "status": {
+          "type": "string",
+          "enum": ["created", "active", "completed", "failed", "archived", "cancelled"]
+        },
+        "source": {
+          "type": "string",
+          "enum": ["user", "agent", "automation", "github-bot", "linear-bot", "slack-bot"]
+        },
+        "spawnSource": {
+          "type": "string",
+          "enum": ["user", "agent", "automation", "github-bot", "linear-bot", "slack-bot"]
+        },
+        "parentSessionId": { "anyOf": [{ "type": "string" }, { "type": "null" }] },
+        "rootSessionId": { "anyOf": [{ "type": "string" }, { "type": "null" }] },
+        "spawnDepth": { "type": "number" },
+        "harness": { "type": "string", "enum": ["opencode", "claude"] },
+        "repoOwner": { "anyOf": [{ "type": "string" }, { "type": "null" }] },
+        "repoName": { "anyOf": [{ "type": "string" }, { "type": "null" }] },
+        "baseBranch": { "anyOf": [{ "type": "string" }, { "type": "null" }] },
+        "model": { "type": "string" },
+        "provider": { "anyOf": [{ "type": "string" }, { "type": "null" }] },
+        "reasoningEffort": { "anyOf": [{ "type": "string" }, { "type": "null" }] },
+        "userId": { "anyOf": [{ "type": "string" }, { "type": "null" }] },
+        "scmLogin": { "anyOf": [{ "type": "string" }, { "type": "null" }] },
+        "automationId": { "anyOf": [{ "type": "string" }, { "type": "null" }] },
+        "automationRunId": { "anyOf": [{ "type": "string" }, { "type": "null" }] },
+        "environmentId": { "anyOf": [{ "type": "string" }, { "type": "null" }] },
+        "messageCount": { "type": "number" },
+        "prCount": { "type": "number" },
+        "totalCost": { "type": "number" },
+        "activeDurationMs": { "type": "number" },
+        "inputTokens": { "type": "number" },
+        "outputTokens": { "type": "number" },
+        "reasoningTokens": { "type": "number" },
+        "cacheReadTokens": { "type": "number" },
+        "cacheWriteTokens": { "type": "number" },
+        "repositories": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "repoOwner": { "type": "string" },
+              "repoName": { "type": "string" },
+              "repoId": { "anyOf": [{ "type": "number" }, { "type": "null" }] },
+              "baseBranch": { "type": "string" }
+            },
+            "required": ["repoOwner", "repoName", "repoId", "baseBranch"]
+          }
+        },
+        "pullRequests": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "repoOwner": { "type": "string" },
+              "repoName": { "type": "string" },
+              "prNumber": { "type": "number" },
+              "url": { "type": "string" },
+              "lifecycleState": { "type": "string", "enum": ["open", "closed", "merged"] },
+              "isDraft": { "type": "boolean" },
+              "headBranch": { "type": "string" },
+              "baseBranch": { "type": "string" },
+              "headSha": { "anyOf": [{ "type": "string" }, { "type": "null" }] },
+              "providerCreatedAt": { "anyOf": [{ "type": "number" }, { "type": "null" }] },
+              "mergedAt": { "anyOf": [{ "type": "number" }, { "type": "null" }] },
+              "closedAt": { "anyOf": [{ "type": "number" }, { "type": "null" }] }
+            },
+            "required": [
+              "repoOwner",
+              "repoName",
+              "prNumber",
+              "url",
+              "lifecycleState",
+              "isDraft",
+              "headBranch",
+              "baseBranch",
+              "headSha",
+              "providerCreatedAt",
+              "mergedAt",
+              "closedAt"
+            ]
+          }
+        },
+        "createdAt": { "type": "number" },
+        "updatedAt": { "type": "number" },
+        "messages": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": { "type": "string" },
+              "authorId": { "type": "string" },
+              "content": { "type": "string" },
+              "source": {
+                "type": "string",
+                "enum": ["web", "slack", "linear", "extension", "github", "automation", "agent"]
+              },
+              "attachments": {
+                "anyOf": [
+                  {
+                    "maxItems": 6,
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "attachmentId": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 128,
+                          "pattern": "^[A-Za-z0-9-]+$"
+                        },
+                        "name": { "type": "string", "minLength": 1, "maxLength": 255 },
+                        "mimeType": {
+                          "type": "string",
+                          "enum": ["image/png", "image/jpeg", "image/webp", "image/gif"]
+                        }
+                      },
+                      "required": ["attachmentId", "name", "mimeType"],
+                      "additionalProperties": false
+                    }
+                  },
+                  { "type": "null" }
+                ]
+              },
+              "status": {
+                "type": "string",
+                "enum": ["pending", "processing", "completed", "failed"]
+              },
+              "createdAt": { "type": "number" },
+              "startedAt": { "anyOf": [{ "type": "number" }, { "type": "null" }] },
+              "completedAt": { "anyOf": [{ "type": "number" }, { "type": "null" }] }
+            },
+            "required": [
+              "id",
+              "authorId",
+              "content",
+              "source",
+              "attachments",
+              "status",
+              "createdAt",
+              "startedAt",
+              "completedAt"
+            ]
+          }
+        },
+        "events": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": { "type": "string" },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "heartbeat",
+                  "ready",
+                  "sandbox_generation_ready",
+                  "preservation_prepared",
+                  "token",
+                  "tool_call",
+                  "step_start",
+                  "step_finish",
+                  "tool_result",
+                  "git_sync",
+                  "error",
+                  "execution_complete",
+                  "context_compacted",
+                  "artifact",
+                  "push_complete",
+                  "push_error",
+                  "warning",
+                  "boot_progress",
+                  "session_title",
+                  "snapshot_ready",
+                  "user_message"
+                ]
+              },
+              "data": {
+                "type": "object",
+                "propertyNames": { "type": "string" },
+                "additionalProperties": {}
+              },
+              "messageId": { "anyOf": [{ "type": "string" }, { "type": "null" }] },
+              "createdAt": { "type": "number" },
+              "timelineSequence": { "type": "integer", "minimum": 0, "maximum": 9007199254740991 }
+            },
+            "required": ["id", "type", "data", "messageId", "createdAt", "timelineSequence"]
+          }
+        },
+        "usage": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": { "type": "string", "minLength": 1 },
+              "messageId": { "anyOf": [{ "type": "string" }, { "type": "null" }] },
+              "model": { "anyOf": [{ "type": "string" }, { "type": "null" }] },
+              "harness": {
+                "anyOf": [{ "type": "string", "enum": ["opencode", "claude"] }, { "type": "null" }]
+              },
+              "inputTokens": { "anyOf": [{ "type": "number" }, { "type": "null" }] },
+              "outputTokens": { "anyOf": [{ "type": "number" }, { "type": "null" }] },
+              "reasoningTokens": { "anyOf": [{ "type": "number" }, { "type": "null" }] },
+              "cacheReadTokens": { "anyOf": [{ "type": "number" }, { "type": "null" }] },
+              "cacheWriteTokens": { "anyOf": [{ "type": "number" }, { "type": "null" }] },
+              "totalTokens": { "anyOf": [{ "type": "number" }, { "type": "null" }] },
+              "stepCostUsd": { "anyOf": [{ "type": "number" }, { "type": "null" }] },
+              "messageCostUsd": { "anyOf": [{ "type": "number" }, { "type": "null" }] },
+              "isSubtask": { "type": "boolean" },
+              "childSessionId": { "anyOf": [{ "type": "string" }, { "type": "null" }] },
+              "taskCallId": { "anyOf": [{ "type": "string" }, { "type": "null" }] },
+              "reason": { "anyOf": [{ "type": "string" }, { "type": "null" }] },
+              "createdAt": { "type": "integer", "minimum": 0, "maximum": 9007199254740991 }
+            },
+            "required": [
+              "id",
+              "messageId",
+              "model",
+              "harness",
+              "inputTokens",
+              "outputTokens",
+              "reasoningTokens",
+              "cacheReadTokens",
+              "cacheWriteTokens",
+              "totalTokens",
+              "stepCostUsd",
+              "messageCostUsd",
+              "isSubtask",
+              "childSessionId",
+              "taskCallId",
+              "reason",
+              "createdAt"
+            ]
+          }
+        }
+      },
+      "required": [
+        "schemaVersion",
+        "type",
+        "id",
+        "title",
+        "status",
+        "source",
+        "spawnSource",
+        "parentSessionId",
+        "rootSessionId",
+        "spawnDepth",
+        "harness",
+        "repoOwner",
+        "repoName",
+        "baseBranch",
+        "model",
+        "provider",
+        "reasoningEffort",
+        "userId",
+        "scmLogin",
+        "automationId",
+        "automationRunId",
+        "environmentId",
+        "messageCount",
+        "prCount",
+        "totalCost",
+        "activeDurationMs",
+        "inputTokens",
+        "outputTokens",
+        "reasoningTokens",
+        "cacheReadTokens",
+        "cacheWriteTokens",
+        "repositories",
+        "pullRequests",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    {
+      "type": "object",
+      "properties": {
+        "schemaVersion": { "type": "number", "const": 2 },
+        "type": { "type": "string", "const": "session_error" },
+        "sessionId": { "type": "string" },
+        "reason": { "type": "string", "const": "http_error" },
+        "status": { "type": "number" }
+      },
+      "required": ["schemaVersion", "type", "sessionId", "reason", "status"]
+    },
+    {
+      "type": "object",
+      "properties": {
+        "schemaVersion": { "type": "number", "const": 2 },
+        "type": { "type": "string", "const": "session_error" },
+        "sessionId": { "type": "string" },
+        "reason": {
+          "type": "string",
+          "enum": ["runtime_failure", "page_cap_reached", "trace_budget_exceeded"]
+        }
+      },
+      "required": ["schemaVersion", "type", "sessionId", "reason"]
+    },
+    {
+      "type": "object",
+      "properties": {
+        "schemaVersion": { "type": "number", "const": 2 },
+        "type": { "type": "string", "const": "cursor" },
+        "nextCursor": { "type": "string" }
+      },
+      "required": ["schemaVersion", "type", "nextCursor"]
+    },
+    {
+      "type": "object",
+      "properties": {
+        "schemaVersion": { "type": "number", "const": 2 },
+        "type": { "type": "string", "const": "error" }
+      },
+      "required": ["schemaVersion", "type"]
+    }
+  ]
+}

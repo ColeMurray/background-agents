@@ -14,14 +14,18 @@ import { ErrorBanner } from "@/components/ui/error-banner";
 import { BackIcon } from "@/components/ui/icons";
 import { browserApiFetch } from "@/lib/browser-api-fetch";
 import Link from "next/link";
-import { useCurrentUserAuthorization } from "@/hooks/use-current-user-authorization";
+import { useSWRConfig } from "swr";
+import { invalidateAutomationCache } from "@/lib/automation-cache";
+import { useAutomationScope } from "@/hooks/use-automation-scope";
+import { useCanCreateAutomation } from "@/hooks/use-can-create-automation";
 
 function NewAutomationContent() {
   const { isOpen } = useSidebarContext();
   const router = useRouter();
   const searchParams = useSearchParams();
-  const { hasPermission, loading: authorizationLoading } = useCurrentUserAuthorization();
-  const canCreate = hasPermission("automations.create");
+  const { teamId, navigation } = useAutomationScope();
+  const swr = useSWRConfig();
+  const { canCreate, loading: authorizationLoading } = useCanCreateAutomation(teamId);
 
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState("");
@@ -33,8 +37,8 @@ function NewAutomationContent() {
   } | null>(null);
 
   useEffect(() => {
-    if (!authorizationLoading && !canCreate) router.replace("/automations");
-  }, [authorizationLoading, canCreate, router]);
+    if (!authorizationLoading && !canCreate) router.replace(navigation.list);
+  }, [authorizationLoading, canCreate, navigation, router]);
 
   if (authorizationLoading || !canCreate) return null;
 
@@ -43,7 +47,10 @@ function NewAutomationContent() {
   // form coerces a template's suggested model against the user's enabled set.
   const templateId = searchParams.get("template");
   const template = automationTemplates.find((candidate) => candidate.id === templateId);
-  const initialValues: Partial<AutomationFormValues> | undefined = template?.prefill;
+  const initialValues: Partial<AutomationFormValues> = {
+    ...template?.prefill,
+    teamId: teamId ?? null,
+  };
 
   const handleSubmit = async (values: AutomationFormValues) => {
     setSubmitting(true);
@@ -58,6 +65,7 @@ function NewAutomationContent() {
 
       if (res.ok) {
         const data = await res.json();
+        await invalidateAutomationCache(swr);
         // For webhook/sentry automations, show post-create info before navigating
         if (data.webhookApiKey || data.sentryWebhookUrl) {
           setWebhookResult({
@@ -68,7 +76,7 @@ function NewAutomationContent() {
           });
           setSubmitting(false);
         } else {
-          router.push(`/automations/${data.automation.id}`);
+          router.push(navigation.detail(data.automation.id));
         }
       } else {
         const data = await res.json();
@@ -123,7 +131,7 @@ function NewAutomationContent() {
             )}
 
             <div className="mt-6">
-              <Link href={`/automations/${webhookResult.automationId}`}>
+              <Link href={navigation.detail(webhookResult.automationId)}>
                 <Button size="sm">Go to Automation</Button>
               </Link>
             </div>
@@ -140,7 +148,7 @@ function NewAutomationContent() {
           <div className="px-4 py-3 flex items-center gap-2">
             <CollapsedSidebarControls />
             <Link
-              href="/automations"
+              href={navigation.list}
               className="p-1.5 text-muted-foreground hover:text-foreground hover:bg-muted transition"
               aria-label="Back to automations"
             >
@@ -170,7 +178,9 @@ function NewAutomationContent() {
             </div>
           )}
 
+          {/* Remount when the query-selected team changes so the form's team follows the URL. */}
           <AutomationForm
+            key={teamId ?? ""}
             mode="create"
             initialValues={initialValues}
             onSubmit={handleSubmit}

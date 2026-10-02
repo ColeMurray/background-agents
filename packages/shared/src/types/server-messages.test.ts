@@ -3,6 +3,7 @@ import {
   redactSessionSnapshotSandboxAccess,
   serverMessageSchema,
   sessionSnapshotSchema,
+  sessionSnapshotStateSchema,
 } from "./server-messages";
 
 describe("artifact_updated server message", () => {
@@ -87,6 +88,27 @@ const snapshotState = {
 };
 
 describe("session view contracts", () => {
+  it.each(["owner-1", null])("preserves snapshot ownerUserId (%s)", (ownerUserId) => {
+    const parsed = sessionSnapshotSchema.parse({
+      session: { ...snapshotState, ownerUserId },
+      artifacts: [],
+      promptQueue: [],
+      timeline: { events: [], hasMore: false, cursor: null },
+    });
+
+    expect(parsed.session).toHaveProperty("ownerUserId", ownerUserId);
+  });
+
+  it("accepts snapshot state without ownerUserId", () => {
+    expect(sessionSnapshotStateSchema.parse(snapshotState)).not.toHaveProperty("ownerUserId");
+  });
+
+  it("rejects non-string snapshot ownerUserId", () => {
+    expect(
+      sessionSnapshotStateSchema.safeParse({ ...snapshotState, ownerUserId: 123 }).success
+    ).toBe(false);
+  });
+
   it("parses a snapshot and removes access credentials", () => {
     const parsed = sessionSnapshotSchema.parse({
       session: {

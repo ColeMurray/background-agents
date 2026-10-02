@@ -17,6 +17,40 @@ const sandboxImplementationImports = [
     message:
       "Only session composition constructs the lifecycle manager. Consumers depend on focused lifecycle ports.",
   },
+  {
+    regex: "(?:^|/)lifecycle/launch-context(?:\\.[cm]?[jt]sx?)?$",
+    message: "Launch inputs are internal to lifecycle composition. Consumers use lifecycle ports.",
+  },
+  {
+    regex: "(?:^|/)lifecycle/sandbox-access(?:\\.[cm]?[jt]sx?)?$",
+    message:
+      "Access mechanics are internal to lifecycle composition. Consumers use lifecycle ports and session access readers.",
+  },
+  {
+    regex: "(?:^|/)lifecycle/vm-startup-reconciliation(?:\\.[cm]?[jt]sx?)?$",
+    message:
+      "VM startup reconciliation is internal to the lifecycle manager. Consumers use lifecycle ports.",
+  },
+  {
+    regex: "(?:^|/)lifecycle/allocation-cleanup(?:\\.[cm]?[jt]sx?)?$",
+    message:
+      "Allocation cleanup is internal to the lifecycle manager. Consumers use lifecycle ports.",
+  },
+  {
+    regex: "(?:^|/)lifecycle/provider-stop(?:\\.[cm]?[jt]sx?)?$",
+    message:
+      "Bounded provider-stop mechanics are internal to lifecycle. Consumers use lifecycle ports.",
+  },
+  {
+    regex: "(?:^|/)lifecycle/startup-errors(?:\\.[cm]?[jt]sx?)?$",
+    message:
+      "Startup abandonment errors are internal to lifecycle. Consumers use lifecycle outcomes.",
+  },
+  {
+    regex: "(?:^|/)lifecycle/watchdog-effects(?:\\.[cm]?[jt]sx?)?$",
+    message:
+      "Watchdog effects are internal to the lifecycle manager. Consumers use lifecycle ports.",
+  },
 ];
 
 export default tseslint.config(
@@ -26,6 +60,7 @@ export default tseslint.config(
       "**/node_modules/**",
       "**/dist/**",
       "**/.next/**",
+      "**/.source/**",
       "**/build/**",
       "**/.wrangler/**",
       "**/coverage/**",
@@ -352,9 +387,9 @@ export default tseslint.config(
     rules: { "no-restricted-imports": ["error", { patterns: sandboxImplementationImports }] },
   },
 
-  // React-specific configuration for web package
+  // React-specific configuration for browser packages
   {
-    files: ["packages/web/**/*.{ts,tsx}"],
+    files: ["packages/{docs,web}/**/*.{ts,tsx}"],
     plugins: {
       react: reactPlugin,
       "react-hooks": reactHooksPlugin,

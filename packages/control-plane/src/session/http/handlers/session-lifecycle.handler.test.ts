@@ -69,6 +69,7 @@ function createSandbox(overrides: Partial<SandboxRow> = {}): SandboxRow {
     boot_phase: null,
     boot_seq: null,
     fenced: 0,
+    startup_rejected: 0,
     created_at: 1,
     ...overrides,
   };
@@ -86,11 +87,13 @@ function createHandler() {
     getSandbox,
   } as unknown as SandboxRepository;
   const transition = vi.fn<(status: SessionRow["status"]) => Promise<boolean>>();
+  const beginTransition = vi.fn<SessionStatusService["beginTransition"]>();
   const confirmIndexStatus = vi.fn<() => Promise<void>>();
   const repairIndexStatus = vi.fn<() => Promise<void>>();
   const settleFromMessageState = vi.fn<() => Promise<SessionRow["status"]>>();
   const statusService = {
     transition,
+    beginTransition,
     repairIndexStatus,
     confirmIndexStatus,
     settleFromMessageState,
@@ -98,6 +101,7 @@ function createHandler() {
   const applySessionTitleUpdate = vi.fn((title: string) => ({ ok: true as const, title }));
   const cancelSession = vi.fn();
   const cancelSandbox = vi.fn();
+  const preserveForArchive = vi.fn(async () => undefined);
 
   const lifecycleHandler = new SessionLifecycleHandler(
     repository as unknown as SessionCoreRepository,
@@ -105,7 +109,7 @@ function createHandler() {
     repository as unknown as MessageRepository,
     statusService,
     { applySessionTitleUpdate } as unknown as SessionTitleService,
-    { cancelSandbox },
+    { cancelSandbox, preserveForArchive },
     "session-do-id",
     cancelSession
   );
@@ -126,12 +130,14 @@ function createHandler() {
     getSession,
     getSandbox,
     transition,
+    beginTransition,
     repairIndexStatus,
     confirmIndexStatus,
     settleFromMessageState,
     applySessionTitleUpdate,
     cancelSession,
     cancelSandbox,
+    preserveForArchive,
   };
 }
 
@@ -277,9 +283,9 @@ describe("SessionLifecycleHandler", () => {
   });
 
   it("archives successfully without participant authorization", async () => {
-    const { handler, getSession, transition } = createHandler();
+    const { handler, getSession, beginTransition, preserveForArchive } = createHandler();
     getSession.mockReturnValue(createSession());
-    transition.mockResolvedValue(true);
+    beginTransition.mockResolvedValue(true);
 
     const response = await handler.archive(
       new Request("http://internal/internal/archive", {
@@ -291,7 +297,26 @@ describe("SessionLifecycleHandler", () => {
 
     expect(response.status).toBe(200);
     expect(await response.json()).toEqual({ status: "archived", outcome: "archived" });
-    expect(transition).toHaveBeenCalledWith("archived");
+    expect(beginTransition).toHaveBeenCalledWith("archived");
+    // An archived session's reconnects are refused, so its sandbox is saved now.
+    expect(preserveForArchive).toHaveBeenCalledOnce();
+    expect(beginTransition.mock.invocationCallOrder[0]).toBeLessThan(
+      preserveForArchive.mock.invocationCallOrder[0]
+    );
+  });
+
+  it("does not preserve when the synchronous local transition fails", async () => {
+    const { handler, getSession, beginTransition, preserveForArchive, confirmIndexStatus } =
+      createHandler();
+    getSession.mockReturnValue(createSession());
+    beginTransition.mockImplementation(() => {
+      throw new Error("local status write failed");
+    });
+
+    await expect(handler.archive()).rejects.toThrow("local status write failed");
+
+    expect(preserveForArchive).not.toHaveBeenCalled();
+    expect(confirmIndexStatus).not.toHaveBeenCalled();
   });
 
   it("archives a draft that was never prompted", async () => {
@@ -397,7 +422,8 @@ describe("SessionLifecycleHandler", () => {
   });
 
   it("returns 409 when archiving a session with queued work", async () => {
-    const { handler, getSession, repository, transition } = createHandler();
+    const { handler, getSession, repository, beginTransition, preserveForArchive } =
+      createHandler();
     getSession.mockReturnValue(createSession());
     repository.getPendingOrProcessingCount.mockReturnValue(1);
 
@@ -409,11 +435,12 @@ describe("SessionLifecycleHandler", () => {
     );
 
     expect(response.status).toBe(409);
-    expect(transition).not.toHaveBeenCalled();
+    expect(beginTransition).not.toHaveBeenCalled();
+    expect(preserveForArchive).not.toHaveBeenCalled();
   });
 
   it("returns 409 when archiving a cancelled session", async () => {
-    const { handler, getSession, transition } = createHandler();
+    const { handler, getSession, beginTransition } = createHandler();
     getSession.mockReturnValue(createSession({ status: "cancelled" }));
 
     const response = await handler.archive(
@@ -424,7 +451,7 @@ describe("SessionLifecycleHandler", () => {
     );
 
     expect(response.status).toBe(409);
-    expect(transition).not.toHaveBeenCalled();
+    expect(beginTransition).not.toHaveBeenCalled();
   });
 
   // Unarchive must not assert a status of its own. Forcing "active" left a
@@ -511,7 +538,7 @@ describe("canonical archive outcomes", () => {
       expect(await response.json()).toMatchObject({
         outcome: status === "cancelled" ? "skipped_cancelled" : "skipped_queued_work",
       });
-      expect(h.transition).not.toHaveBeenCalled();
+      expect(h.beginTransition).not.toHaveBeenCalled();
     }
   );
   it("returns retryable failure when the projection cannot be confirmed", async () => {

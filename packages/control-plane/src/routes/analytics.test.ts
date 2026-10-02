@@ -1,13 +1,16 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type * as AuthenticateModule from "../auth/authenticate";
-import { HUMAN_SPAWN_SOURCES } from "../db/analytics-store";
 import {
+  authorizationDatabase,
   createTestRequestHandler,
+  emptyStatement,
   ownerAuthorizationDatabase,
   TEST_BACKGROUND_TASK_CONTEXT,
   TEST_SERVICE_SECRETS,
 } from "../router.test-support";
 import type { Env } from "../types";
+import type { SqlStatement } from "../db/sql-database";
+import { AnalyticsDashboardStore } from "../db/analytics-dashboard-store";
 import { analyticsRoutes, DEFAULT_ANALYTICS_DAYS } from "./analytics";
 
 const FIXED_NOW = 1_700_000_000_000;
@@ -21,6 +24,8 @@ const mockStore = {
 const mockDashboardStore = {
   get: vi.fn(),
 };
+
+const mockRunStore = { list: vi.fn() };
 
 const mocks = vi.hoisted(() => ({ authenticate: vi.fn() }));
 
@@ -42,6 +47,12 @@ vi.mock("../db/analytics-store", async (importOriginal) => {
 vi.mock("../db/analytics-dashboard-store", () => ({
   AnalyticsDashboardStore: vi.fn().mockImplementation(function () {
     return mockDashboardStore;
+  }),
+}));
+
+vi.mock("../db/session-run-store", () => ({
+  SessionRunStore: vi.fn().mockImplementation(function () {
+    return mockRunStore;
   }),
 }));
 
@@ -81,6 +92,7 @@ describe("analytics route handlers", () => {
       await expect(response.json()).resolves.toEqual({ generatedAt: FIXED_NOW });
       expect(mockDashboardStore.get).toHaveBeenCalledWith({
         days: 14,
+        scope: "human",
         startAt: FIXED_NOW - 14 * 24 * 60 * 60 * 1000,
         endAt: FIXED_NOW,
       });
@@ -91,6 +103,39 @@ describe("analytics route handlers", () => {
 
       expect(response.status).toBe(400);
       expect(mockDashboardStore.get).not.toHaveBeenCalled();
+    });
+
+    it("passes the authorized viewer, team memberships and enforcement mode to the dashboard", async () => {
+      mockDashboardStore.get.mockResolvedValue({});
+      const database = authorizationDatabase({
+        statement: (sql) => {
+          const statement: SqlStatement = {
+            ...emptyStatement(),
+            bind: () => statement,
+            all: async <T>() => ({
+              results: [{ team_id: "team-a", role: "member" }] as T[],
+              meta: { changes: 0 },
+            }),
+          };
+          if (sql.includes("FROM team_memberships")) return statement;
+          throw new Error(`Unexpected query: ${sql}`);
+        },
+      });
+      const response = await handleRequest(
+        new Request("https://test.local/analytics/dashboard"),
+        { ...env, DB: database, TEAMS_ENFORCEMENT: "on" },
+        TEST_BACKGROUND_TASK_CONTEXT
+      );
+      expect(response.status).toBe(200);
+      expect(vi.mocked(AnalyticsDashboardStore)).toHaveBeenCalledWith(
+        expect.objectContaining({ prepare: expect.any(Function) }),
+        expect.objectContaining({
+          kind: "user",
+          userId: "user-1",
+          memberships: new Map([["team-a", "member"]]),
+        }),
+        "on"
+      );
     });
   });
 
@@ -116,7 +161,7 @@ describe("analytics route handlers", () => {
       expect(mockStore.getSummary).toHaveBeenCalledWith({
         startAt: FIXED_NOW - DEFAULT_ANALYTICS_DAYS * 24 * 60 * 60 * 1000,
         endAt: FIXED_NOW,
-        spawnSources: HUMAN_SPAWN_SOURCES,
+        scope: "human",
       });
     });
 
@@ -130,6 +175,65 @@ describe("analytics route handlers", () => {
     });
   });
 
+  describe("runs", () => {
+    it("uses the default window, limit and cost ordering", async () => {
+      mockRunStore.list.mockResolvedValue([{ rootSessionId: "root" }]);
+
+      const response = await callRoute("GET", "/analytics/runs");
+      expect(response.status).toBe(200);
+      await expect(response.json()).resolves.toEqual({ runs: [{ rootSessionId: "root" }] });
+      expect(mockRunStore.list).toHaveBeenCalledWith({
+        startAt: FIXED_NOW - DEFAULT_ANALYTICS_DAYS * 24 * 60 * 60 * 1000,
+        endAt: FIXED_NOW,
+        limit: 50,
+        orderBy: "cost",
+        scope: "all",
+      });
+    });
+
+    it("accepts explicit days, limit, created ordering and human scope", async () => {
+      mockRunStore.list.mockResolvedValue([]);
+      const response = await callRoute(
+        "GET",
+        "/analytics/runs?days=14&limit=10&orderBy=created&scope=human"
+      );
+      expect(response.status).toBe(200);
+      expect(mockRunStore.list).toHaveBeenCalledWith({
+        startAt: FIXED_NOW - 14 * 24 * 60 * 60 * 1000,
+        endAt: FIXED_NOW,
+        limit: 10,
+        orderBy: "created",
+        scope: "human",
+      });
+    });
+
+    it.each([
+      ["days=31", "days must be one of: 7, 14, 30, 90"],
+      ["limit=0", "limit must be an integer between 1 and 100"],
+      ["limit=101", "limit must be an integer between 1 and 100"],
+      ["limit=1.5", "limit must be an integer between 1 and 100"],
+      ["orderBy=other", "orderBy must be one of: cost, created"],
+      ["scope=other", "scope must be one of: human, agent, automation, all"],
+      ["orderBy=cost&orderBy=created", "Invalid orderBy"],
+    ])("rejects invalid runs query %s", async (query, error) => {
+      const response = await callRoute("GET", `/analytics/runs?${query}`);
+      expect(response.status).toBe(400);
+      await expect(response.json()).resolves.toEqual({ error });
+      expect(mockRunStore.list).not.toHaveBeenCalled();
+    });
+
+    it("requires analytics.read before querying runs", async () => {
+      const deniedEnv = { ...env, DB: authorizationDatabase({ permissions: [] }) };
+      const response = await handleRequest(
+        new Request("https://test.local/analytics/runs"),
+        deniedEnv,
+        TEST_BACKGROUND_TASK_CONTEXT
+      );
+      expect(response.status).toBe(403);
+      expect(mockRunStore.list).not.toHaveBeenCalled();
+    });
+  });
+
   describe("timeseries", () => {
     it("passes the requested range to the store", async () => {
       mockStore.getTimeseries.mockResolvedValue([]);
@@ -139,7 +243,7 @@ describe("analytics route handlers", () => {
       expect(mockStore.getTimeseries).toHaveBeenCalledWith({
         startAt: FIXED_NOW - 14 * 24 * 60 * 60 * 1000,
         endAt: FIXED_NOW,
-        spawnSources: HUMAN_SPAWN_SOURCES,
+        scope: "human",
       });
     });
   });
@@ -149,7 +253,7 @@ describe("analytics route handlers", () => {
       const response = await callRoute("GET", "/analytics/breakdown?days=30");
       expect(response.status).toBe(400);
       await expect(response.json()).resolves.toEqual({
-        error: "by must be one of: user, repo",
+        error: "by must be one of: user, repo, model, harness, spawnSource, automation, provider",
       });
     });
 
@@ -157,7 +261,7 @@ describe("analytics route handlers", () => {
       const response = await callRoute("GET", "/analytics/breakdown?days=30&by=status");
       expect(response.status).toBe(400);
       await expect(response.json()).resolves.toEqual({
-        error: "by must be one of: user, repo",
+        error: "by must be one of: user, repo, model, harness, spawnSource, automation, provider",
       });
       expect(mockStore.getBreakdown).not.toHaveBeenCalled();
     });
@@ -171,7 +275,7 @@ describe("analytics route handlers", () => {
         {
           startAt: FIXED_NOW - 7 * 24 * 60 * 60 * 1000,
           endAt: FIXED_NOW,
-          spawnSources: HUMAN_SPAWN_SOURCES,
+          scope: "human",
         },
         "repo"
       );
@@ -213,7 +317,9 @@ describe("analytics route handlers", () => {
     it("rejects an empty or repeated by key", async () => {
       const empty = await callRoute("GET", "/analytics/breakdown?days=30&by=");
       expect(empty.status).toBe(400);
-      await expect(empty.json()).resolves.toEqual({ error: "by must be one of: user, repo" });
+      await expect(empty.json()).resolves.toEqual({
+        error: "by must be one of: user, repo, model, harness, spawnSource, automation, provider",
+      });
 
       const repeated = await callRoute("GET", "/analytics/breakdown?days=30&by=user&by=repo");
       expect(repeated.status).toBe(400);
@@ -227,6 +333,20 @@ describe("analytics route handlers", () => {
         error: "days must be one of: 7, 14, 30, 90",
       });
     });
+  });
+
+  it("validates scope on session analytics without changing runs or PR analytics", async () => {
+    const bad = await callRoute("GET", "/analytics/summary?scope=bogus");
+    expect(bad.status).toBe(400);
+    await expect(bad.json()).resolves.toEqual({
+      error: "scope must be one of: human, agent, automation, all",
+    });
+    mockStore.getBreakdown.mockResolvedValue({ entries: [] });
+    await callRoute("GET", "/analytics/breakdown?by=provider&scope=all");
+    expect(mockStore.getBreakdown).toHaveBeenCalledWith(
+      expect.objectContaining({ scope: "all" }),
+      "provider"
+    );
   });
 
   it("denies a request without analytics permission before touching a store", async () => {

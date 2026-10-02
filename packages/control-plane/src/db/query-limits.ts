@@ -12,3 +12,13 @@
  * the list is short. Unchunked queries fail outright, they do not degrade.
  */
 export const MAX_D1_QUERY_PARAMETERS = 100;
+
+export class D1QueryParameterLimitError extends Error {
+  constructor() {
+    super("Too many session filters");
+  }
+}
+
+export function assertD1QueryParameterLimit(count: number): void {
+  if (count > MAX_D1_QUERY_PARAMETERS) throw new D1QueryParameterLimitError();
+}

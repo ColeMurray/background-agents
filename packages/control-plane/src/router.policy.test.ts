@@ -15,12 +15,111 @@ function routeFor(method: string, path: string) {
 }
 
 describe("route policy table", () => {
+  it("does not expose a member-facing team activity route", () => {
+    expect(routeFor("GET", "/teams/team-1/activity")).toBeUndefined();
+    expect(routeFor("GET", "/audit-events")?.authorization).toMatchObject({
+      allOf: [{ kind: "permission", permission: "workspace.audit.read" }],
+      service: { kind: "deny" },
+    });
+  });
+
   it("publishes the complete canonical route catalog", () => {
-    expect(routes).toHaveLength(180);
+    expect(routes).toHaveLength(207);
 
     const paths = routes.map((route) => route.path);
-    expect(new Set(paths).size).toBe(137);
-    expect(new Set(routes.map((route) => `${route.method}:${route.path}`)).size).toBe(180);
+    expect(new Set(paths).size).toBe(156);
+    expect(new Set(routes.map((route) => `${route.method}:${route.path}`)).size).toBe(207);
+  });
+
+  it("gates run analytics with analytics.read", () => {
+    const route = routeFor("GET", "/analytics/runs");
+    expect(route?.authorization).toMatchObject({
+      kind: "active-user",
+      allOf: [{ permission: "analytics.read" }],
+    });
+  });
+
+  it("gates collaborator candidates on always-enforced human session management", () => {
+    expect(routeFor("GET", "/sessions/session-1/collaborator-candidates")).toMatchObject({
+      authentication: { kind: "user" },
+      authorization: {
+        kind: "active-user",
+        allOf: [
+          {
+            kind: "session",
+            action: "manageCollaborators",
+            sessionIdParam: "id",
+            enforceAlways: true,
+          },
+        ],
+        service: { kind: "deny" },
+        auditAllowed: false,
+      },
+      supportedScmProviders: "all",
+      cacheControl: "private, no-store",
+    });
+  });
+
+  it("requires human team membership and session read permission for team sessions", () => {
+    expect(routeFor("GET", "/teams/team-1/sessions")).toMatchObject({
+      authentication: { kind: "user" },
+      authorization: {
+        kind: "active-user",
+        allOf: [
+          { kind: "team", teamIdParam: "id", need: "member" },
+          { kind: "permission", permission: "sessions.read" },
+        ],
+        service: { kind: "deny" },
+        auditAllowed: false,
+      },
+      cacheControl: "private, no-store",
+    });
+  });
+
+  it("requires target-aware member removal admission", () => {
+    expect(routeFor("DELETE", "/teams/team-1/members/user-1")?.authorization).toMatchObject({
+      allOf: [{ kind: "team", need: "removeMember", targetUserIdParam: "userId" }],
+      service: { kind: "deny" },
+      auditAllowed: true,
+    });
+  });
+
+  it.each(["/teams/team-1", "/teams/team-1/members"])(
+    "does not audit allowed directory reads at %s",
+    (path) => {
+      expect(routeFor("GET", path)?.authorization).toMatchObject({ auditAllowed: false });
+    }
+  );
+
+  it("still audits allowed team capability writes", () => {
+    expect(routeFor("PATCH", "/teams/team-1")?.authorization).toMatchObject({
+      allOf: [{ kind: "team", need: "canEditMetadata" }],
+      auditAllowed: true,
+    });
+  });
+
+  it.each([
+    ["GET", "/teams/team-1/secrets"],
+    ["PUT", "/teams/team-1/secrets"],
+    ["DELETE", "/teams/team-1/secrets/TOKEN"],
+  ])("requires human team secret management for %s %s", (method, path) => {
+    expect(routeFor(method, path)).toMatchObject({
+      authentication: { kind: "user" },
+      authorization: {
+        kind: "active-user",
+        allOf: [{ kind: "team", teamIdParam: "id", need: "canManageSecrets" }],
+        service: { kind: "deny" },
+      },
+      supportedScmProviders: "all",
+      cacheControl: "private, no-store",
+    });
+  });
+
+  it("gates a single-session export with session read and sessions.export", () => {
+    expect(routeFor("GET", "/sessions/session-1/export")?.authorization).toMatchObject({
+      kind: "active-user",
+      allOf: [{ kind: "session", action: "read" }, { permission: "sessions.export" }],
+    });
   });
 
   it("declares every path in the literal-or-parameter grammar", () => {
@@ -102,6 +201,30 @@ describe("route policy table", () => {
     }
   });
 
+  it("requires session admission on every active-user session item route", () => {
+    const exceptions: string[] = [];
+    for (const route of routes) {
+      if (!route.path.startsWith("/sessions/:id") || route.authorization.kind !== "active-user")
+        continue;
+      const identity = `${route.method} ${route.path}`;
+      if (exceptions.includes(identity)) continue;
+      expect(
+        route.authorization.allOf.some((requirement) => requirement.kind === "session"),
+        identity
+      ).toBe(true);
+      if (route.path.includes(":childId")) {
+        expect(
+          route.authorization.allOf.some(
+            (requirement) =>
+              requirement.kind === "session" && requirement.sessionIdParam === "childId"
+          ),
+          identity
+        ).toBe(true);
+      }
+    }
+    expect(exceptions).toEqual([]);
+  });
+
   it.each([
     ["GET", "/repos", [{ service: "slack-bot" }, { service: "linear-bot" }]],
     ["GET", "/repos/acme/widgets/metadata", [{ service: "github-bot" }]],
@@ -118,6 +241,11 @@ describe("route policy table", () => {
     ],
     ["GET", "/integration-settings/slack/watched-channels", [{ service: "slack-bot" }]],
     ["GET", "/model-preferences", [{ service: "slack-bot" }]],
+    ["GET", "/automations", [{ service: "slack-bot" }]],
+    ["GET", "/automations/auto-1", [{ service: "slack-bot" }]],
+    ["GET", "/automations/auto-1/invocations", [{ service: "slack-bot" }]],
+    ["GET", "/automations/auto-1/runs/run-1", [{ service: "slack-bot" }]],
+    ["GET", "/integration-settings/slack/channels", [{ service: "slack-bot" }]],
     ["GET", "/sessions/session-1/events", [{ service: "slack-bot" }, { service: "linear-bot" }]],
     ["GET", "/sessions/session-1/artifacts", [{ service: "slack-bot" }, { service: "linear-bot" }]],
   ])("declares the exact actorless grants for %s %s", (method, path, expected) => {
@@ -141,6 +269,11 @@ describe("route policy table", () => {
       routeFor("GET", "/integration-settings/github/resolved/acme/widgets"),
       routeFor("GET", "/integration-settings/slack/watched-channels"),
       routeFor("GET", "/model-preferences"),
+      routeFor("GET", "/automations"),
+      routeFor("GET", "/automations/auto-1"),
+      routeFor("GET", "/automations/auto-1/invocations"),
+      routeFor("GET", "/automations/auto-1/runs/run-1"),
+      routeFor("GET", "/integration-settings/slack/channels"),
       routeFor("GET", "/sessions/session-1/events"),
       routeFor("GET", "/sessions/session-1/artifacts"),
       routeFor("POST", "/sessions/session-1/stop"),
@@ -218,7 +351,7 @@ describe("route policy table", () => {
     });
     expect(routeFor("POST", "/sessions/session-1/ws-token")?.authorization).toMatchObject({
       kind: "active-user",
-      allOf: [{ kind: "permission", permission: "sessions.read" }],
+      allOf: [{ kind: "session", action: "read" }],
     });
     expect(routeFor("POST", "/sessions/session-1/stop")?.authorization).toMatchObject({
       service: { kind: "actor", actorlessGrants: [{ service: "linear-bot" }] },
@@ -230,14 +363,26 @@ describe("route policy table", () => {
     expect(routeFor("POST", "/sessions/parent/children")?.authorization).toMatchObject({
       kind: "active-user",
       allOf: [
+        { kind: "session", action: "collaborate" },
         { kind: "permission", permission: "sessions.create" },
-        { kind: "permission", permission: "sessions.collaborate" },
       ],
     });
     expect(routeFor("GET", "/sessions/parent/children/child")?.authorization).toMatchObject({
       kind: "active-user",
-      allOf: [{ kind: "permission", permission: "sessions.read" }],
+      allOf: [
+        { kind: "session", action: "read", sessionIdParam: "id" },
+        { kind: "session", action: "read", sessionIdParam: "childId" },
+      ],
     });
+    expect(routeFor("POST", "/sessions/parent/children/child/cancel")?.authorization).toMatchObject(
+      {
+        kind: "active-user",
+        allOf: [
+          { kind: "session", action: "read", sessionIdParam: "id" },
+          { kind: "session", action: "lifecycle", sessionIdParam: "childId" },
+        ],
+      }
+    );
     expect(routeFor("POST", "/internal/github-event")?.authorization).toMatchObject({
       kind: "service",
       services: ["github-bot"],
