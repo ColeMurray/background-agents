@@ -595,7 +595,10 @@ async function handleProviderAccess(
     if (cause instanceof ModelProviderAccountBrokerError) {
       const status =
         cause.code === "account_not_found" ? 404 : cause.code === "upstream_retry_safe" ? 502 : 409;
-      return error(cause.message, status);
+      // The status alone cannot separate a credential that needs reconnection
+      // from transient exchange contention: both answer 409. Sandboxes decide
+      // whether to abandon the subscription on this code, so surface it.
+      return json({ error: cause.message, code: cause.code }, status);
     }
     return error("Provider access unavailable", 503);
   }

@@ -469,4 +469,44 @@ describe("provider account sandbox broker route", () => {
     );
     expect(legacyBypass.status).toBe(409);
   });
+
+  it("names the broker error code a sandbox needs to classify a 409", async () => {
+    const sessionName = `provider-broker-code-${Date.now()}`;
+    const now = Date.now();
+    await env.DB.prepare(
+      `INSERT INTO model_provider_accounts
+        (id, provider, display_name, external_account_id, status, created_at, updated_at)
+        VALUES (?, 'openai', 'Uncredentialed OpenAI', 'acct-nocred', 'active', ?, ?)`
+    )
+      .bind(OPENAI_ACCOUNT_ID, now, now)
+      .run();
+    const { stub } = await initNamedSession(sessionName, {
+      providerAuth: [
+        {
+          provider: "openai",
+          authMode: "provider_account",
+          providerAccountId: OPENAI_ACCOUNT_ID,
+          selectionSource: "explicit",
+        },
+        { provider: "xai", authMode: "api_key", selectionSource: "api_key_fallback" },
+        { provider: "anthropic", authMode: "api_key", selectionSource: "api_key_fallback" },
+      ],
+    });
+    const sandboxToken = "provider-broker-code-token";
+    await seedSandboxAuth(stub, { authToken: sandboxToken, sandboxId: "sandbox-code" });
+
+    const response = await SELF.fetch(
+      `https://test.local/sessions/${sessionName}/provider-auth/openai/access-token`,
+      {
+        method: "POST",
+        headers: { Authorization: `Bearer ${sandboxToken}` },
+      }
+    );
+
+    // Several unrelated broker failures share this status, and a sandbox
+    // deciding whether to abandon the subscription cannot tell them apart from
+    // the status alone.
+    expect(response.status).toBe(409);
+    await expect(response.json()).resolves.toMatchObject({ code: "credential_not_found" });
+  });
 });

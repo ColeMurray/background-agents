@@ -66,12 +66,14 @@ repository, re-import it or update the environment secret directly.
 Use global secrets for keys that every session needs regardless of which repository it runs against.
 The most common example:
 
-| Key                 | Description                                                                               |
-| ------------------- | ----------------------------------------------------------------------------------------- |
-| `ANTHROPIC_API_KEY` | Required for Claude models, unless the deployment configured a fleet-wide key (see below) |
-| `DEEPSEEK_API_KEY`  | Required for DeepSeek models with any sandbox provider                                    |
-| `ZHIPU_API_KEY`     | Required for Z.AI Coding Plan GLM models with any sandbox provider                        |
-| `OPENCODE_API_KEY`  | Required for OpenCode Zen and OpenCode Go models with any sandbox provider                |
+| Key                               | Description                                                                                                                                     |
+| --------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
+| `ANTHROPIC_API_KEY`               | Required for Claude models, unless the deployment configured a fleet-wide key (see below)                                                       |
+| `DEEPSEEK_API_KEY`                | Required for DeepSeek models with any sandbox provider                                                                                          |
+| `ZHIPU_API_KEY`                   | Required for Z.AI Coding Plan GLM models with any sandbox provider                                                                              |
+| `OPENCODE_API_KEY`                | Required for OpenCode Zen and OpenCode Go models with any sandbox provider                                                                      |
+| `OPENAI_API_KEY_FALLBACK`         | Spillover key used once the ChatGPT subscription reaches its ceiling ([guide](OPENAI_MODELS.md#spilling-over-before-the-subscription-runs-out)) |
+| `OPENAI_SUBSCRIPTION_MAX_PERCENT` | Share of a Codex rate-limit window sandboxes may consume before spilling over; default 100                                                      |
 
 > **Claude models**: add `ANTHROPIC_API_KEY` as a global secret after deploying. A deployment can
 > instead set `anthropic_api_key` in Terraform to inject one fleet-wide key into Modal session
@@ -207,20 +209,22 @@ image as no less sensitive than the scope's secrets.
 
 ## Common Examples
 
-| Key                          | Scope  | Purpose                                                                        |
-| ---------------------------- | ------ | ------------------------------------------------------------------------------ |
-| `ANTHROPIC_API_KEY`          | Global | Claude API access                                                              |
-| `OPENAI_API_KEY`             | Global | OpenAI API access when a session selects API-key mode                          |
-| `XAI_API_KEY`                | Global | xAI API access when a session selects API-key mode                             |
-| `DEEPSEEK_API_KEY`           | Global | DeepSeek API access                                                            |
-| `ZHIPU_API_KEY`              | Global | Z.AI Coding Plan GLM access                                                    |
-| `OPENCODE_API_KEY`           | Global | OpenCode Zen and OpenCode Go access                                            |
-| `OPENAI_OAUTH_REFRESH_TOKEN` | Any    | Legacy OpenAI Codex via ChatGPT subscription ([setup guide](OPENAI_MODELS.md)) |
-| `OPENAI_OAUTH_ACCOUNT_ID`    | Any    | Legacy OpenAI Codex via ChatGPT subscription ([setup guide](OPENAI_MODELS.md)) |
-| `XAI_OAUTH_REFRESH_TOKEN`    | Any    | Legacy SuperGrok access ([setup guide](GROK_MODELS.md))                        |
-| `DATABASE_URL`               | Repo   | Database connection string                                                     |
-| `AWS_ACCESS_KEY_ID`          | Repo   | AWS credentials for a specific project                                         |
-| `STRIPE_SECRET_KEY`          | Repo   | Stripe API key for a specific project                                          |
+| Key                               | Scope  | Purpose                                                                                                                                |
+| --------------------------------- | ------ | -------------------------------------------------------------------------------------------------------------------------------------- |
+| `ANTHROPIC_API_KEY`               | Global | Claude API access                                                                                                                      |
+| `OPENAI_API_KEY`                  | Global | OpenAI API access when a session selects API-key mode                                                                                  |
+| `XAI_API_KEY`                     | Global | xAI API access when a session selects API-key mode                                                                                     |
+| `DEEPSEEK_API_KEY`                | Global | DeepSeek API access                                                                                                                    |
+| `ZHIPU_API_KEY`                   | Global | Z.AI Coding Plan GLM access                                                                                                            |
+| `OPENCODE_API_KEY`                | Global | OpenCode Zen and OpenCode Go access                                                                                                    |
+| `OPENAI_API_KEY_FALLBACK`         | Any    | Spillover once the ChatGPT subscription reaches its ceiling ([guide](OPENAI_MODELS.md#spilling-over-before-the-subscription-runs-out)) |
+| `OPENAI_SUBSCRIPTION_MAX_PERCENT` | Any    | Share of a Codex rate-limit window sandboxes may consume (default 100)                                                                 |
+| `OPENAI_OAUTH_REFRESH_TOKEN`      | Any    | Legacy OpenAI Codex via ChatGPT subscription ([setup guide](OPENAI_MODELS.md))                                                         |
+| `OPENAI_OAUTH_ACCOUNT_ID`         | Any    | Legacy OpenAI Codex via ChatGPT subscription ([setup guide](OPENAI_MODELS.md))                                                         |
+| `XAI_OAUTH_REFRESH_TOKEN`         | Any    | Legacy SuperGrok access ([setup guide](GROK_MODELS.md))                                                                                |
+| `DATABASE_URL`                    | Repo   | Database connection string                                                                                                             |
+| `AWS_ACCESS_KEY_ID`               | Repo   | AWS credentials for a specific project                                                                                                 |
+| `STRIPE_SECRET_KEY`               | Repo   | Stripe API key for a specific project                                                                                                  |
 
 ---
 
