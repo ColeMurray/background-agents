@@ -537,7 +537,8 @@ describe("checkEnvironmentAccess", () => {
     [null, "team_other", true],
     ["team_one", "team_one", true],
     ["team_one", "team_other", false],
-    ["team_one", null, true],
+    // Unbound services launch workspace sessions, which cannot use team environments.
+    ["team_one", null, false],
   ] as const)(
     "limits service environment use for row team %s and binding %s",
     (ownerTeamId, teamId, allowed) => {

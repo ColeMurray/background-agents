@@ -308,7 +308,14 @@ export function automationCapabilities(
   };
 }
 
-function environmentFacts(viewer: UserViewer, row: { ownerTeamId: string | null }): OwnedFacts {
+interface EnvironmentFacts extends OwnedFacts {
+  teamOwned: boolean;
+}
+
+function environmentFacts(
+  viewer: UserViewer,
+  row: { ownerTeamId: string | null }
+): EnvironmentFacts {
   const teamRole = row.ownerTeamId === null ? undefined : viewer.memberships.get(row.ownerTeamId);
   const isAdmin = viewer.roleKey === "owner" || viewer.roleKey === "administrator";
   return {
@@ -316,30 +323,34 @@ function environmentFacts(viewer: UserViewer, row: { ownerTeamId: string | null 
     has: (permission) => viewer.permissions.includes(permission),
     suspended: viewer.suspended,
     eligible: row.ownerTeamId === null || teamRole !== undefined || isAdmin,
+    teamOwned: row.ownerTeamId !== null,
     teamRole,
     isAdmin,
   };
 }
 
+// Workspace environments need only the grant; team environments also need a lead or admin.
 const manageEnvironment = {
   permission: "environments.manage",
-  when: (facts: OwnedFacts) => facts.teamRole === "lead" || facts.isAdmin,
+  when: (facts: EnvironmentFacts) => !facts.teamOwned || facts.teamRole === "lead" || facts.isAdmin,
   reason: "not_owner_or_lead",
 } as const;
 const ENVIRONMENT_RULES = {
   read: { permission: "environments.read" },
   use: { permission: "environments.use" },
   manage: manageEnvironment,
-} as const satisfies Record<EnvironmentAction, ActionRule<OwnedFacts>>;
+} as const satisfies Record<EnvironmentAction, ActionRule<EnvironmentFacts>>;
 
+/**
+ * Services launch sessions for their bound team, or for the workspace when unbound, so they
+ * see only environments those sessions could use.
+ */
 function checkServiceEnvironmentAccess(
   viewer: ServiceViewer,
   row: { ownerTeamId: string | null },
   action: EnvironmentAction
 ): AccessDecision {
-  const eligible =
-    row.ownerTeamId === null || viewer.teamId === null || row.ownerTeamId === viewer.teamId;
-  if (!eligible) return deny("not_member");
+  if (row.ownerTeamId !== null && row.ownerTeamId !== viewer.teamId) return deny("not_member");
   return action === "read" || action === "use" ? permit() : deny("missing_permission");
 }
 
@@ -350,11 +361,7 @@ export function checkEnvironmentAccess(
 ): AccessDecision {
   if (viewer.kind === "service") return checkServiceEnvironmentAccess(viewer, row, action);
   const facts = environmentFacts(viewer, row);
-  const rule =
-    row.ownerTeamId === null && action === "manage"
-      ? { permission: "environments.manage" as const }
-      : ENVIRONMENT_RULES[action];
-  return ownedGate(facts) ?? decide(rule, facts);
+  return ownedGate(facts) ?? decide(ENVIRONMENT_RULES[action], facts);
 }
 
 export function environmentCapabilities(

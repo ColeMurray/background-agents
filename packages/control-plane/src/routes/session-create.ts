@@ -18,9 +18,7 @@ import { resolveEnvironmentTarget, resolveSessionRepositories } from "../repos/r
 import { resolveScmProviderFromEnv } from "../source-control";
 import { EnvironmentStore } from "../db/environments";
 import { UserStore } from "../db/user-store";
-import { TeamStore } from "../db/teams";
 import { TeamMembershipStore } from "../db/team-memberships";
-import { TeamSettingsStore } from "../db/team-settings";
 import { createLogger } from "../logger";
 import { parseCreateSessionInput } from "../session/create-session-input";
 import { initializeSession, type SessionInitInput } from "../session/initialize";
@@ -31,6 +29,7 @@ import type { Env } from "../types";
 import { resolveSessionProviderAuth } from "../session/provider-account-resolution";
 import { ProviderAccountSelectionPolicyError } from "../model-provider-accounts/selection-policy";
 import { authorizeEnvironmentTarget, authorizeSessionTarget } from "./session-target-authorization";
+import { resolveCreationOwnerTeam, teamRequiredResponse } from "./team-ownership";
 import {
   normalizeOptionalRepositoryPair,
   RepositoryPairValidationError,
@@ -176,15 +175,9 @@ export async function handleCreateSession(
   if (resolution instanceof Response) return resolution;
   const resolvedUserId = resolution;
   const teamId = body.teamId ?? null;
-  if (!teamId && (await new TeamSettingsStore(ctx.db).get()).requireTeamOnCreate) {
-    return json({ error: "A team is required", code: "team_required" }, 400);
-  }
-  let team = null;
+  const team = await resolveCreationOwnerTeam(ctx, teamId);
+  if (team instanceof Response) return team;
   if (teamId) {
-    team = await new TeamStore(ctx.db).getById(teamId);
-    if (!team) return error("Team not found", 404);
-    if (team.archivedAt !== null)
-      return json({ error: "Team archived", code: "team_archived" }, 409);
     if (
       !resolvedUserId ||
       !(await new TeamMembershipStore(ctx.db).listForUser(resolvedUserId)).has(teamId)
@@ -205,8 +198,7 @@ export async function handleCreateSession(
   });
   if (resolvedTargetAuthorizationError) return resolvedTargetAuthorizationError;
   const visibility = body.visibility ?? team?.defaultVisibility ?? "workspace";
-  if (visibility === "team" && !teamId)
-    return json({ error: "A team is required", code: "team_required" }, 400);
+  if (visibility === "team" && !teamId) return teamRequiredResponse();
   if (visibility === "private" && !resolvedUserId)
     return json({ error: "Session owner required", code: "owner_required" }, 400);
 

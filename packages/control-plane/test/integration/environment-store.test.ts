@@ -65,9 +65,9 @@ describe("EnvironmentStore", () => {
   it("resolves names case-insensitively via getByName", async () => {
     const store = new EnvironmentStore(env.DB);
     await store.create(makeEnv({ name: "Payments" }), repos(["acme", "web", 1, "main"]));
-    expect(await store.getByName("payments")).not.toBeNull();
-    expect(await store.getByName("PAYMENTS")).not.toBeNull();
-    expect(await store.getByName("other")).toBeNull();
+    expect(await store.getByName("payments", null)).not.toBeNull();
+    expect(await store.getByName("PAYMENTS", null)).not.toBeNull();
+    expect(await store.getByName("other", null)).toBeNull();
   });
 
   it("rejects a case-insensitive duplicate name at the unique index", async () => {
@@ -89,7 +89,6 @@ describe("EnvironmentStore", () => {
     for (const row of [workspaceRow, firstRow, secondRow]) {
       await store.create(row, repos(["acme", "web", 1, "main"]));
     }
-    expect((await store.getByName("scoped"))?.id).toBe(workspaceRow.id);
     expect((await store.getByName("scoped", null))?.id).toBe(workspaceRow.id);
     expect((await store.getByName("scoped", first.id))?.id).toBe(firstRow.id);
     expect((await store.getByName("SCOPED", second.id))?.id).toBe(secondRow.id);

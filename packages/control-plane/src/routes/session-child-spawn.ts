@@ -75,17 +75,14 @@ export async function handleSpawnChild(
 
   const parentSession = await sessionStore.get(parentId);
   const parentEnvironmentId = parentSession?.environmentId ?? null;
-  // Reject incompatible inherited targets before settings resolution or child admission.
-  const targetAuthorizationError = await authorizeSessionTarget(ctx, {
-    teamId: null,
-    environmentId: parentEnvironmentId,
-    repositories:
-      parentSession?.repoOwner && parentSession.repoName
-        ? [{ owner: parentSession.repoOwner, name: parentSession.repoName }]
-        : [],
-  });
-  if (targetAuthorizationError) return targetAuthorizationError;
+  // Reject an incompatible inherited environment before settings resolution or child admission.
+  // The permission preflight runs first so a missing grant keeps its permission_required shape.
   if (parentEnvironmentId) {
+    const permissionError = await authorizeSessionTarget(ctx, {
+      teamId: null,
+      environmentId: parentEnvironmentId,
+    });
+    if (permissionError) return permissionError;
     const environmentError = await authorizeEnvironmentTarget(ctx, {
       environmentId: parentEnvironmentId,
       ownerTeamId: parentSession?.ownerTeamId ?? null,
@@ -176,6 +173,13 @@ export async function handleSpawnChild(
 
   const inheritedRepositories =
     parentRepoOwner && parentRepoName ? [{ owner: parentRepoOwner, name: parentRepoName }] : [];
+  const targetAuthorizationError = await authorizeSessionTarget(ctx, {
+    teamId: null,
+    environmentId: parentEnvironmentId,
+    repositories: inheritedRepositories,
+  });
+  if (targetAuthorizationError) return targetAuthorizationError;
+
   const teamId = parentSession?.ownerTeamId ?? null;
   let childRepoId = spawnContext.repoId;
   if (teamId && parentRepoOwner && parentRepoName) {

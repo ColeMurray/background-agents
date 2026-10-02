@@ -552,6 +552,8 @@ async function enforceEnvironmentRequirement(
 ): Promise<AuthorizationFailure | null> {
   try {
     const result = await evaluateOwnedResourceAdmission(requirement, params, ctx);
+    // Denials keep the loaded environment too, so the audit attributes its owner team.
+    if (result.kind !== "error" && result.admission) ctx.environmentAdmission = result.admission;
     if (result.kind === "error") {
       return { response: ownedResourceAdmissionResponse(result) };
     }

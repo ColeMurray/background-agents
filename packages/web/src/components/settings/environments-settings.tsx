@@ -22,19 +22,24 @@ import { supportsRepoImages } from "@/lib/sandbox-provider";
 import { useEnvironments, ENVIRONMENTS_KEY } from "@/hooks/use-environments";
 import { EnvironmentForm, type EnvironmentFormValues } from "./environment-form";
 import { browserApiFetch } from "@/lib/browser-api-fetch";
-import { EnvironmentIntegrationSettings } from "./environment-integration-settings";
-import { EnvironmentSecretsImport } from "./environment-secrets-import";
 import { ImageBuildStatus } from "./image-build-status";
-import { SecretsEditor } from "@/components/secrets-editor";
 import { useCurrentUserAuthorization } from "@/hooks/use-current-user-authorization";
+import {
+  environmentAccess,
+  type EnvironmentFeatureGrants,
+  type EnvironmentTab,
+} from "./environment-access";
+import { EnvironmentDetail } from "./environment-detail";
 
 type View =
   | { mode: "list" }
   | { mode: "create" }
-  | { mode: "edit"; environmentId: string; tab: "configuration" | "secrets" | "overrides" };
+  | { mode: "edit"; environmentId: string; tab: EnvironmentTab };
 
 /**
- * Presents environments with configuration, secrets, settings, and image actions gated independently by permission.
+ * Presents environments with configuration, secrets, settings, and image actions, each gated by
+ * the server's capabilities for that environment and the matching feature grant. Controls the
+ * viewer lacks are hidden; the control plane enforces the same decisions.
  */
 export function EnvironmentsSettings({
   teamId,
@@ -42,12 +47,14 @@ export function EnvironmentsSettings({
 }: { teamId?: string; canCreate?: boolean } = {}) {
   const { hasPermission } = useCurrentUserAuthorization();
   const canCreate = createAllowed ?? hasPermission("environments.manage");
-  const canManageSecrets = hasPermission("environments.secrets.manage");
-  const canManageRepoSecrets = hasPermission("repositories.secrets.manage");
-  const canManageSettings = hasPermission("environments.settings.manage");
-  const canManageImages = hasPermission("environments.images.manage");
-  const canReadImages = hasPermission("image_builds.read");
-  const canReadSettings = hasPermission("integrations.read");
+  const grants: EnvironmentFeatureGrants = {
+    manageSecrets: hasPermission("environments.secrets.manage"),
+    manageRepoSecrets: hasPermission("repositories.secrets.manage"),
+    manageSettings: hasPermission("environments.settings.manage"),
+    manageImages: hasPermission("environments.images.manage"),
+    readImages: hasPermission("image_builds.read"),
+    readSettings: hasPermission("integrations.read"),
+  };
   const { environments, loading, error: listError } = useEnvironments({ ownerTeamId: teamId });
   const { mutate } = useSWRConfig();
   const refreshEnvironments = (environmentId?: string) =>
@@ -59,10 +66,10 @@ export function EnvironmentsSettings({
           (environmentId !== undefined && key === `${ENVIRONMENTS_KEY}/${environmentId}`))
     );
   const { data: imageBuildsFeed, error: imageBuildsError } = useImageBuilds(
-    canReadImages &&
-      environments.some(
-        (environment) => environment.capabilities?.canRead === true && environment.prebuildEnabled
-      )
+    environments.some(
+      (environment) =>
+        environment.prebuildEnabled && environmentAccess(environment, grants).canViewImage
+    )
   );
   const admissionOpen = imageBuildsFeed?.admission?.open ?? DEFAULT_IMAGE_BUILD_ADMISSION_OPEN;
   const [view, setView] = useState<View>({ mode: "list" });
@@ -75,7 +82,6 @@ export function EnvironmentsSettings({
   const prebuildsSupported = supportsRepoImages();
 
   const handleCreate = async (values: EnvironmentFormValues) => {
-    if (!canCreate) return;
     setSubmitting(true);
     setError("");
     try {
@@ -95,7 +101,7 @@ export function EnvironmentsSettings({
       toast.success(`Created ${values.name}`);
       const createdId = data?.environment?.id;
       setView(
-        createdId && canManageSecrets && (!teamId || values.teamId === teamId)
+        createdId && grants.manageSecrets && (!teamId || values.teamId === teamId)
           ? { mode: "edit", environmentId: createdId, tab: "secrets" }
           : { mode: "list" }
       );
@@ -107,8 +113,6 @@ export function EnvironmentsSettings({
   };
 
   const handleUpdate = async (environmentId: string, values: EnvironmentFormValues) => {
-    const environment = environments.find((entry) => entry.id === environmentId);
-    if (environment?.capabilities?.canManage !== true) return;
     setSubmitting(true);
     setError("");
     try {
@@ -132,7 +136,6 @@ export function EnvironmentsSettings({
   };
 
   const handleDelete = async (environment: Environment) => {
-    if (environment.capabilities?.canManage !== true) return;
     setError("");
     try {
       const response = await browserApiFetch(`/api/environments/${environment.id}`, {
@@ -151,7 +154,6 @@ export function EnvironmentsSettings({
   };
 
   const handlePrebuildToggle = async (environment: Environment, enabled: boolean) => {
-    if (environment.capabilities?.canManage !== true) return;
     setTogglingIds((prev) => new Set(prev).add(environment.id));
     setError("");
     try {
@@ -179,7 +181,6 @@ export function EnvironmentsSettings({
   };
 
   const handleRebuild = async (environment: Environment) => {
-    if (environment.capabilities?.canManage !== true || !canManageImages) return;
     setTriggeringIds((prev) => new Set(prev).add(environment.id));
     setError("");
     try {
@@ -241,96 +242,17 @@ export function EnvironmentsSettings({
       );
     }
 
-    const canManage = environment.capabilities?.canManage === true;
-    const canRead = environment.capabilities?.canRead === true;
-    const tabs = (["configuration", "secrets", "overrides"] as const).filter(
-      (tab) =>
-        (tab === "configuration" && canManage) ||
-        (tab === "secrets" && canRead && canManageSecrets) ||
-        (tab === "overrides" && canRead && canReadSettings)
-    );
-    const activeTab = tabs.includes(view.tab) ? view.tab : tabs[0];
-    if (!activeTab) {
-      return (
-        <Button variant="outline" size="xs" onClick={() => setView({ mode: "list" })}>
-          Back to environments
-        </Button>
-      );
-    }
-
     return (
-      <div>
-        <h2 className="text-xl font-semibold text-foreground mb-1">{environment.name}</h2>
-        <p className="text-sm text-muted-foreground mb-4">
-          {environment.description || "Edit this environment."}
-        </p>
-
-        <div className="flex items-center gap-1 border-b border-border-muted mb-4">
-          {tabs.map((tab) => (
-            <button
-              type="button"
-              key={tab}
-              onClick={() => setView({ ...view, tab })}
-              className={`px-3 py-2 text-sm capitalize transition border-b-2 -mb-px ${
-                activeTab === tab
-                  ? "border-accent text-foreground font-medium"
-                  : "border-transparent text-muted-foreground hover:text-foreground"
-              }`}
-            >
-              {tab}
-            </button>
-          ))}
-        </div>
-
-        {error && <ErrorBanner className="mb-4">{error}</ErrorBanner>}
-
-        {activeTab === "configuration" ? (
-          <EnvironmentForm
-            mode="edit"
-            initialValues={environment}
-            onSubmit={(values) => handleUpdate(environment.id, values)}
-            onCancel={() => setView({ mode: "list" })}
-            submitting={submitting}
-          />
-        ) : activeTab === "secrets" ? (
-          <div>
-            <p className="text-xs text-muted-foreground">
-              Sessions launched from this environment get global secrets plus these — repository
-              secrets do not carry over automatically. Changing secrets invalidates prebuilt images
-              and triggers a rebuild.
-            </p>
-            <SecretsEditor
-              scope="environment"
-              environmentId={environment.id}
-              disabled={!canManage || !canManageSecrets}
-            />
-            {canManage && canManageSecrets && canManageRepoSecrets && (
-              <EnvironmentSecretsImport
-                environmentId={environment.id}
-                repositories={environment.repositories}
-              />
-            )}
-            <div className="mt-4">
-              <Button variant="outline" size="xs" onClick={() => setView({ mode: "list" })}>
-                Back to environments
-              </Button>
-            </div>
-          </div>
-        ) : (
-          <div>
-            <EnvironmentIntegrationSettings
-              environmentId={environment.id}
-              repositories={environment.repositories}
-              canManage={canManage && canManageSettings}
-            />
-            <div className="mt-4">
-              <Button variant="outline" size="xs" onClick={() => setView({ mode: "list" })}>
-                Back to environments
-              </Button>
-            </div>
-          </div>
-        )}
-      </div>
+      <EnvironmentDetail
+        environment={environment}
+        access={environmentAccess(environment, grants)}
+        tab={view.tab}
+        error={error}
+        submitting={submitting}
+        onTabChange={(tab) => setView({ ...view, tab })}
+        onSubmit={(values) => handleUpdate(environment.id, values)}
+        onBack={() => setView({ mode: "list" })}
+      />
     );
   }
 
@@ -375,8 +297,7 @@ export function EnvironmentsSettings({
 
         <div className="space-y-2">
           {environments.map((environment) => {
-            const canManage = environment.capabilities?.canManage === true;
-            const canRead = environment.capabilities?.canRead === true;
+            const access = environmentAccess(environment, grants);
             const isToggling = togglingIds.has(environment.id);
             const isTriggering = triggeringIds.has(environment.id);
 
@@ -400,9 +321,9 @@ export function EnvironmentsSettings({
                   </div>
 
                   <div className="flex flex-wrap items-center gap-2 flex-shrink-0">
-                    {prebuildsSupported && (canManage || (canRead && canReadImages)) && (
+                    {prebuildsSupported && (access.canManage || access.canViewImage) && (
                       <>
-                        {canRead && canReadImages && (
+                        {access.canViewImage && (
                           <EnvironmentImageStatus
                             environment={environment}
                             image={imageBuildsFeed?.images.find(
@@ -413,7 +334,7 @@ export function EnvironmentsSettings({
                             feedUnavailable={Boolean(imageBuildsError) && !imageBuildsFeed}
                           />
                         )}
-                        {canManage && (
+                        {access.canManage && (
                           <Tooltip>
                             <TooltipTrigger asChild>
                               <span>
@@ -430,7 +351,7 @@ export function EnvironmentsSettings({
                             <TooltipContent>Prebuild images</TooltipContent>
                           </Tooltip>
                         )}
-                        {canManage && canManageImages && (
+                        {access.canRebuild && (
                           <Button
                             variant="ghost"
                             size="icon"
@@ -447,7 +368,7 @@ export function EnvironmentsSettings({
                         )}
                       </>
                     )}
-                    {(canManage || (canRead && (canManageSecrets || canReadSettings))) && (
+                    {access.tabs.length > 0 && (
                       <Button
                         variant="ghost"
                         size="xs"
@@ -455,18 +376,14 @@ export function EnvironmentsSettings({
                           setView({
                             mode: "edit",
                             environmentId: environment.id,
-                            tab: canManage
-                              ? "configuration"
-                              : canManageSecrets
-                                ? "secrets"
-                                : "overrides",
+                            tab: access.tabs[0],
                           })
                         }
                       >
                         Edit
                       </Button>
                     )}
-                    {canManage &&
+                    {access.canManage &&
                       (confirmDeleteId === environment.id ? (
                         <div className="flex items-center gap-1">
                           <Button

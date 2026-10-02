@@ -7,7 +7,7 @@ import {
   authorizeEnvironmentTarget,
   authorizeSessionTarget,
 } from "../routes/session-target-authorization";
-import { evaluateOwnedResourceAdmission } from "./owned-resource-admission";
+import { admittedEnvironment, evaluateOwnedResourceAdmission } from "./owned-resource-admission";
 
 // Full row validation is covered by D1 tests; admission consumes only ownership fields.
 const environment = { id: "environment", owner_team_id: "team" } as EnvironmentRow;
@@ -42,7 +42,7 @@ describe("owned-resource admission outcomes", () => {
   });
   afterEach(() => vi.restoreAllMocks());
 
-  it("hides invisible environments like missing ones, retaining denial audit context", async () => {
+  it("hides invisible environments like missing ones, returning denial audit context", async () => {
     const ctx = context();
     ctx.sessionMemberships = new Map();
     const hidden = await evaluateOwnedResourceAdmission(
@@ -50,23 +50,25 @@ describe("owned-resource admission outcomes", () => {
       { id: "resource" },
       ctx
     );
-    expect(ctx.environmentAdmission?.environment).toBe(environment);
     vi.mocked(EnvironmentStore.prototype.getById).mockResolvedValue(null);
-    const missingCtx = context();
     const missing = await evaluateOwnedResourceAdmission(
       environmentRequirement,
       { id: "id" },
-      missingCtx
+      context()
     );
-    expect(hidden).toEqual(missing);
-    expect(hidden).toEqual({
+    const { admission, ...response } = hidden as Extract<typeof hidden, { kind: "denied" }>;
+    // Only the audit context differs; the HTTP-visible outcome is identical.
+    expect(admission?.environment).toBe(environment);
+    expect(missing).toEqual(response);
+    expect(response).toEqual({
       kind: "denied",
       status: 404,
       response: { error: "Environment not found" },
       reasonCode: "environment_not_visible",
       reason: "Environment not found",
     });
-    expect(missingCtx.environmentAdmission).toBeUndefined();
+    // Evaluation never writes request state; route admission owns that.
+    expect(ctx.environmentAdmission).toBeUndefined();
   });
 
   it.each([
@@ -80,8 +82,11 @@ describe("owned-resource admission outcomes", () => {
     ctx.authorization!.permissions = [permission];
     await expect(
       evaluateOwnedResourceAdmission(requirement, { id: "resource" }, ctx)
-    ).resolves.toEqual({ kind: "allowed", effectivePermission: permission });
-    expect(ctx.environmentAdmission?.environment).toBe(environment);
+    ).resolves.toEqual({
+      kind: "allowed",
+      effectivePermission: permission,
+      admission: { environment, viewer: expect.objectContaining({ kind: "user" }) },
+    });
   });
 
   it("maps visible read/action denials to 403 and retains loaded audit context", async () => {
@@ -99,8 +104,8 @@ describe("owned-resource admission outcomes", () => {
         reason: "Forbidden",
         response: { error: "Forbidden", code: "environment_action_denied", reason_code: reason },
         failedPermission: `environments.${read ? "read" : "manage"}`,
+        admission: { environment, viewer: expect.objectContaining({ kind: "user" }) },
       });
-      expect(ctx.environmentAdmission?.environment).toBe(environment);
     }
   });
 
@@ -134,7 +139,7 @@ describe("owned-resource admission outcomes", () => {
         { id: "resource" },
         ctx
       )
-    ).resolves.toEqual({ kind: "allowed", effectivePermission: null });
+    ).resolves.toMatchObject({ kind: "allowed", effectivePermission: null });
   });
 
   it("hides team environments from actorless bots like missing ones", async () => {
@@ -146,6 +151,10 @@ describe("owned-resource admission outcomes", () => {
         evaluateOwnedResourceAdmission({ ...environmentRequirement, need }, { id: "resource" }, ctx)
       ).resolves.toMatchObject({ kind: "denied", status: 404 });
     }
+  });
+
+  it("refuses to hand a handler an environment that route admission did not load", () => {
+    expect(() => admittedEnvironment(context())).toThrow("Route did not admit an environment");
   });
 
   it("applies canonical admission to session targets before owner mismatch", async () => {

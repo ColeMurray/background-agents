@@ -20,6 +20,7 @@ import {
 import { z } from "zod";
 import { checkEnvironmentAccess } from "@open-inspect/shared";
 import {
+  admittedEnvironment,
   evaluateEnvironmentAdmission,
   ownedResourceAdmissionResponse,
 } from "../authorization/owned-resource-admission";
@@ -300,7 +301,7 @@ async function handleTriggerEnvironmentBuild(
 
   const environmentId = params.id;
   // Admission already loaded the environment and required manage access to it.
-  const { environment } = ctx.environmentAdmission!;
+  const { environment } = admittedEnvironment(ctx);
   if (environment.owner_team_id !== null) {
     const repositories = await new EnvironmentStore(ctx.db).getRepositoriesForEnvironment(
       environmentId

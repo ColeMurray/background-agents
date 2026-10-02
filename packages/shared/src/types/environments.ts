@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { sessionRepositoriesInputSchema } from "./repositories";
+import { teamIdSchema } from "./team-id";
 
 /** Maximum characters in an environment's display name. */
 export const MAX_ENVIRONMENT_NAME_LENGTH = 200;
@@ -39,11 +40,8 @@ const environmentChannelAssociationsSchema = z
   .max(MAX_ENVIRONMENT_CHANNEL_ASSOCIATIONS);
 
 export const createEnvironmentInputSchema = z.object({
-  teamId: z
-    .string()
-    .regex(/^team_[A-Za-z0-9_-]+$/)
-    .nullable()
-    .optional(),
+  /** Owner team; null or absent means the workspace owns the environment. */
+  teamId: teamIdSchema.nullable().optional(),
   name: z.string().trim().min(1).max(MAX_ENVIRONMENT_NAME_LENGTH),
   description: z.string().trim().max(MAX_ENVIRONMENT_DESCRIPTION_LENGTH).nullish(),
   prebuildEnabled: z.boolean().optional(),

@@ -129,20 +129,23 @@ export class EnvironmentStore {
    * Look up a case-insensitive name within its exact team or workspace scope.
    * Used to answer the uniqueness pre-check before the insert trips the index.
    */
-  async getByName(name: string, teamId: string | null = null): Promise<EnvironmentRow | null> {
+  async getByName(name: string, ownerTeamId: string | null): Promise<EnvironmentRow | null> {
     const row = await this.db
       .prepare("SELECT * FROM environments WHERE lower(name) = lower(?) AND owner_team_id IS ?")
-      .bind(name, teamId)
+      .bind(name, ownerTeamId)
       .first<EnvironmentRow>();
     return row ? withValidatedOwnerTeam(row) : null;
   }
 
-  async list(teamId?: string | null): Promise<{ environments: EnvironmentRow[]; total: number }> {
+  /** Every environment, or only those with this exact owner (null: workspace-owned). */
+  async list(
+    ownerTeamId?: string | null
+  ): Promise<{ environments: EnvironmentRow[]; total: number }> {
     const result = await this.db
       .prepare(
-        `SELECT * FROM environments ${teamId === undefined ? "" : "WHERE owner_team_id IS ?"} ORDER BY created_at DESC`
+        `SELECT * FROM environments ${ownerTeamId === undefined ? "" : "WHERE owner_team_id IS ?"} ORDER BY created_at DESC`
       )
-      .bind(...(teamId === undefined ? [] : [teamId]))
+      .bind(...(ownerTeamId === undefined ? [] : [ownerTeamId]))
       .all<EnvironmentRow>();
     const environments = (result.results || []).map(withValidatedOwnerTeam);
     return { environments, total: environments.length };

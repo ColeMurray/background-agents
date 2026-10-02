@@ -2,6 +2,9 @@ import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
 import { getServerAuthSession } from "@/lib/server-auth-session";
 import { controlPlaneUserFetch } from "@/lib/control-plane";
+import { updateEnvironmentInputSchema } from "@open-inspect/shared/types/environments";
+
+const UPDATE_FIELDS = Object.keys(updateEnvironmentInputSchema.shape);
 
 export async function GET(_request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const session = await getServerAuthSession();
@@ -34,10 +37,12 @@ export async function PUT(request: NextRequest, { params }: { params: Promise<{ 
     if (typeof body !== "object" || body === null || Array.isArray(body)) {
       return NextResponse.json({ error: "Invalid request body" }, { status: 400 });
     }
+    // Forward only configuration fields; ownership is fixed at creation.
     const environmentBody = Object.fromEntries(
-      ["name", "description", "prebuildEnabled", "repositories", "channelAssociations"]
-        .filter((field) => body[field] !== undefined)
-        .map((field) => [field, body[field]])
+      UPDATE_FIELDS.filter((field) => body[field] !== undefined).map((field) => [
+        field,
+        body[field],
+      ])
     );
 
     const response = await controlPlaneUserFetch(`/environments/${encodeURIComponent(id)}`, {

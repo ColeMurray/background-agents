@@ -72,7 +72,7 @@ export async function authorizeEnvironmentTarget(
   } else {
     const admission = await evaluateEnvironmentAdmission(ctx, target.environmentId, "use");
     if (admission.kind !== "allowed") return ownedResourceAdmissionResponse(admission);
-    environment = ctx.environmentAdmission!.environment;
+    environment = admission.admission.environment;
   }
   if (environment.owner_team_id !== null && environment.owner_team_id !== target.ownerTeamId) {
     return json(
