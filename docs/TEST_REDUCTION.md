@@ -123,3 +123,12 @@ TypeScript coverage floors pass.
 
 Sandbox-runtime combined coverage is 87.42%. The eleven focused conflict-resolution cases also pass
 independently. Repository typechecks, ESLint, and formatting checks were rerun for the merge.
+
+## Security Review Follow-Up
+
+Three focused security checks were restored without restoring the removed suites: single-session
+export refuses a readable session without `sessions.export` before loading its trace; the public
+prompt route rejects caller-provided `authorId` before runtime dispatch; and failed
+repository-scoped credential minting remains unavailable without retrying with broader credentials.
+The route checks use real D1/DO sessions and verified browser credentials. The planner check injects
+only the mint failure and retains the real scope resolver and planning path.
