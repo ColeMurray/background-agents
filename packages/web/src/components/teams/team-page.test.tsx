@@ -168,18 +168,29 @@ describe("TeamPage", () => {
     }
   );
 
-  it("uses the ID-keyed detail's canonical slug even when the directory is stale", async () => {
-    directoryRefresh = "stale";
-    stored = { ...stored, slug: "product-design", updatedAt: 2 };
-    const { cache } = renderPage("design");
+  it.each(["rerender", "remount"] as const)(
+    "resolves the canonical route after %s with a stale directory",
+    async (navigation) => {
+      directoryRefresh = "stale";
+      stored = { ...stored, slug: "product-design", updatedAt: 2 };
+      const { cache, rerender } = renderPage("design");
 
-    await waitFor(() => expect(replace).toHaveBeenCalledWith("/teams/product-design"));
+      await waitFor(() => expect(replace).toHaveBeenCalledWith("/teams/product-design"));
 
-    expect(cache.get("/api/teams")?.data?.teams).toContainEqual(
-      expect.objectContaining({ id: "team_design", slug: "design" })
-    );
-    expect(screen.getByRole("heading", { level: 1, name: "Design" })).toBeInTheDocument();
-  });
+      rerender(
+        <TeamPage
+          key={navigation === "remount" ? "canonical-route" : undefined}
+          slug="product-design"
+        />
+      );
+
+      expect(cache.get("/api/teams")?.data?.teams).toContainEqual(
+        expect.objectContaining({ id: "team_design", slug: "product-design" })
+      );
+      expect(screen.getByRole("heading", { level: 1, name: "Design" })).toBeInTheDocument();
+      expect(screen.queryByText("Team not found.")).not.toBeInTheDocument();
+    }
+  );
 
   it.each(["stale", "failed", "forbidden"] as const)(
     "reconciles the PATCH while an older directory refresh is %s",

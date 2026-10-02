@@ -4,8 +4,11 @@ import { isWorkspaceAdmin } from "@open-inspect/shared/rbac";
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
+import { useSWRConfig } from "swr";
 import {
+  TEAMS_KEY,
   isRetryableTeamError,
+  reconcileTeamDirectory,
   useMeTeams,
   useTeam,
   useTeamMembers,
@@ -90,13 +93,25 @@ function TeamContent({
   canReadAutomations: boolean;
 }) {
   const router = useRouter();
+  const { mutate } = useSWRConfig();
   const { team: currentTeam, error } = useTeam(initialTeam.id);
   // The ID-keyed detail cache holds the PATCH response even when directory reads lag.
   const canonicalSlug = !error && currentTeam?.archivedAt === null ? currentTeam.slug : undefined;
   useEffect(() => {
-    if (canonicalSlug && canonicalSlug !== slug)
-      router.replace(`/teams/${encodeURIComponent(canonicalSlug)}`);
-  }, [router, slug, canonicalSlug]);
+    if (!currentTeam || !canonicalSlug || canonicalSlug === slug) return;
+    let cancelled = false;
+    void mutate(
+      TEAMS_KEY,
+      (current: { teams: TeamResponse[] } | undefined) =>
+        reconcileTeamDirectory(current, currentTeam),
+      { revalidate: false }
+    ).then(() => {
+      if (!cancelled) router.replace(`/teams/${encodeURIComponent(canonicalSlug)}`);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [router, mutate, slug, canonicalSlug, currentTeam]);
   const team = currentTeam ?? initialTeam;
   const capabilities = useTeamCapabilities(team);
   const [tab, setTab] = useState<TeamTab>("Overview");
