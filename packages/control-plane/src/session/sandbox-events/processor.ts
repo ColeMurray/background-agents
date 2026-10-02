@@ -75,18 +75,18 @@ export class SessionSandboxEventProcessor {
   async processSandboxEvent(event: SandboxEventWithAck): Promise<void> {
     const now = Date.now();
     const eventMessageId = "messageId" in event ? event.messageId : null;
-    const processingMessage = this.messageRepository.getProcessingMessage();
-    const context: SandboxEventContext = {
-      now,
-      messageId: eventMessageId ?? processingMessage?.id ?? null,
-      processingMessage,
-    };
-
-    const fields = eventLogContext(event, context.messageId);
+    let fields = eventLogContext(event, eventMessageId ?? null);
     const level = event.type === "heartbeat" || event.type === "token" ? "debug" : "info";
     this.log[level]("sandbox.event.received", fields);
     const startedAt = performance.now();
     try {
+      const processingMessage = this.messageRepository.getProcessingMessage();
+      const context: SandboxEventContext = {
+        now,
+        messageId: eventMessageId ?? processingMessage?.id ?? null,
+        processingMessage,
+      };
+      fields = eventLogContext(event, context.messageId);
       await this.dispatch(event, context);
     } catch (error) {
       this.log.error("sandbox.event.processing_failed", {
@@ -184,7 +184,7 @@ export class SessionSandboxEventProcessor {
 
   private sendAck(ackId: string | undefined, fields: Record<string, unknown>): void {
     if (!ackId) {
-      this.log.debug("sandbox.event.ack", { ...fields, outcome: "missing_id" });
+      this.log.info("sandbox.event.ack", { ...fields, outcome: "missing_id" });
       return;
     }
     const sandboxWs = this.wsManager.getSandboxSocket();

@@ -264,9 +264,70 @@ describe("SessionSandboxEventProcessor", () => {
       expect(h.log.info).toHaveBeenCalledWith("sandbox.event.received", {
         event_type: "snapshot_ready",
         sandbox_id: "s".repeat(256),
-        message_id: "fallback-message",
+        message_id: null,
         metadata_truncated: true,
       });
+      expect(h.log.info).toHaveBeenCalledWith("sandbox.event.processed", {
+        event_type: "snapshot_ready",
+        sandbox_id: "s".repeat(256),
+        message_id: "fallback-message",
+        metadata_truncated: true,
+        duration_ms: expect.any(Number),
+      });
+    });
+
+    it.each([
+      {
+        event: {
+          type: "snapshot_ready",
+          sandboxId: "sb-1",
+          timestamp: 1000,
+          ackId: "ack-1",
+        } satisfies SandboxEvent,
+        messageId: null,
+      },
+      {
+        event: {
+          type: "error",
+          sandboxId: "sb-1",
+          timestamp: 1000,
+          ackId: "ack-1",
+          messageId: "msg-1",
+          error: "secret-event-detail",
+        } satisfies SandboxEvent,
+        messageId: "msg-1",
+      },
+    ])("logs receipt and attribution failure for $event.type", async ({ event, messageId }) => {
+      const h = createProcessor();
+      const failure = new TypeError("secret-persisted-row-detail");
+      h.repository.getProcessingMessage.mockImplementationOnce(() => {
+        throw failure;
+      });
+      h.wsManager.getSandboxSocket.mockReturnValue({} as WebSocket);
+
+      await expect(h.processor.processSandboxEvent(event)).rejects.toBe(failure);
+
+      const expected = {
+        event_type: event.type,
+        sandbox_id: "sb-1",
+        message_id: messageId,
+        ack_id: "ack-1",
+      };
+      expect(h.log.info).toHaveBeenCalledWith("sandbox.event.received", expected);
+      expect(h.log.info.mock.invocationCallOrder[0]).toBeLessThan(
+        h.repository.getProcessingMessage.mock.invocationCallOrder[0]
+      );
+      expect(h.log.error).toHaveBeenCalledWith("sandbox.event.processing_failed", {
+        ...expected,
+        error_type: "TypeError",
+        duration_ms: expect.any(Number),
+      });
+      expect(h.log.info).not.toHaveBeenCalledWith("sandbox.event.processed", expect.anything());
+      expect(JSON.stringify([h.log.info.mock.calls, h.log.error.mock.calls])).not.toContain(
+        "secret-"
+      );
+      expect(h.eventRepository.createEvent).not.toHaveBeenCalled();
+      expect(h.wsManager.send).not.toHaveBeenCalled();
     });
 
     it.each(["token", "heartbeat"] as const)("keeps %s diagnostics at DEBUG", async (type) => {
@@ -331,8 +392,7 @@ describe("SessionSandboxEventProcessor", () => {
           timestamp: 1000,
           ...(outcome === "missing_id" ? {} : { ackId: "ack-1" }),
         });
-        const method =
-          outcome === "missing_id" ? h.log.debug : outcome === "sent" ? h.log.info : h.log.warn;
+        const method = outcome === "sent" || outcome === "missing_id" ? h.log.info : h.log.warn;
         expect(method).toHaveBeenCalledWith(
           "sandbox.event.ack",
           expect.objectContaining({ outcome, event_type: "snapshot_ready" })
@@ -344,6 +404,9 @@ describe("SessionSandboxEventProcessor", () => {
           );
         } else {
           expect(h.wsManager.send).not.toHaveBeenCalled();
+        }
+        if (outcome === "missing_id") {
+          expect(h.log.debug).not.toHaveBeenCalledWith("sandbox.event.ack", expect.anything());
         }
       }
     );
