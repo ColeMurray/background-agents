@@ -35,7 +35,9 @@ function automation(id: string, name: string): AutomationListItem {
     repositories: [],
     environmentIds: [],
     providerSelections: {},
+    ownerTeamId: null,
     recentExecutions: [],
+    capabilities: { canRead: true, canManage: true, canTrigger: true },
   };
 }
 
@@ -100,6 +102,35 @@ describe("useAutomations", () => {
 
     await waitFor(() => expect(result.current.automations).toEqual([secondAutomation]));
     expect(result.current.automations).not.toContain(firstAutomation);
+  });
+
+  it("scopes every cursor page and replaces pages when the team changes", async () => {
+    const scoped = {
+      ...firstAutomation,
+      ownerTeamId: "team/one",
+      capabilities: { canRead: true, canManage: false, canTrigger: true },
+    };
+    const fetcher = vi.fn(async (path: string): Promise<ListAutomationsResponse> => {
+      if (path.includes("teamId=team-2")) {
+        return { automations: [secondAutomation], hasMore: false, nextCursor: null };
+      }
+      if (path.includes("cursor=")) {
+        return { automations: [secondAutomation], hasMore: false, nextCursor: null };
+      }
+      return { automations: [scoped], hasMore: true, nextCursor: "next" };
+    });
+    const { result, rerender } = renderHook(({ teamId }) => useAutomations("Daily", teamId), {
+      initialProps: { teamId: "team/one" },
+      wrapper: wrapper(fetcher),
+    });
+    await waitFor(() => expect(result.current.automations).toEqual([scoped]));
+    await act(() => result.current.loadMore());
+    await waitFor(() => expect(result.current.automations).toEqual([scoped, secondAutomation]));
+    expect(fetcher).toHaveBeenCalledWith(
+      "/api/automations?limit=25&search=Daily&teamId=team%2Fone&cursor=next"
+    );
+    rerender({ teamId: "team-2" });
+    await waitFor(() => expect(result.current.automations).toEqual([secondAutomation]));
   });
 
   it("rebuilds later cursor pages when the first page changes", async () => {

@@ -94,7 +94,7 @@ vi.mock("../scheduler/scheduler", () => ({
     }
   },
   AutomationTriggerBlockedError: class AutomationTriggerBlockedError extends Error {
-    constructor() {
+    constructor(readonly reason = "concurrent_run_active") {
       super("An active run already exists");
       this.name = "AutomationTriggerBlockedError";
     }
@@ -159,6 +159,30 @@ describe("automation lifecycle routes", () => {
   });
 
   describe("POST /automations/:id/trigger", () => {
+    it.each([
+      ["own", "user-1", 201],
+      ["own", "another-user", 403],
+      ["any", "user-1", 201],
+      ["any", "another-user", 201],
+    ] as const)(
+      "preserves trigger.%s without read for executor %s",
+      async (scope, executorUserId, status) => {
+        mockStore.getById.mockResolvedValue({ ...sampleRow, user_id: executorUserId });
+        const response = await callRoute("POST", "/automations/auto-1/trigger", {
+          permissions: [`automations.trigger.${scope}`],
+        });
+        expect(response.status).toBe(status);
+        if (status === 201) {
+          expect(mockSchedulerTrigger).toHaveBeenCalledWith("auto-1", "user-1", null);
+        } else {
+          await expect(response.json()).resolves.toMatchObject({
+            reason_code: "not_owner_or_lead",
+          });
+          expect(mockSchedulerTrigger).not.toHaveBeenCalled();
+        }
+      }
+    );
+
     it("triggers automation via the scheduler", async () => {
       mockStore.getById.mockResolvedValue(sampleRow);
       mockStore.getActiveRunForAutomation.mockResolvedValue(null);
@@ -205,6 +229,21 @@ describe("automation lifecycle routes", () => {
       expect(res.status).toBe(409);
       expect(await res.json()).toEqual({
         error: "A run is already active for this automation",
+      });
+    });
+
+    it("returns a distinct 409 when team grants change during admission", async () => {
+      mockStore.getById.mockResolvedValue(sampleRow);
+
+      mockSchedulerTrigger.mockRejectedValue(
+        new AutomationTriggerBlockedError("team_grants_changed")
+      );
+
+      const res = await callRoute("POST", "/automations/auto-1/trigger");
+      expect(res.status).toBe(409);
+      expect(await res.json()).toEqual({
+        error: "Team repository grants changed; retry the trigger",
+        code: "team_grants_changed",
       });
     });
 

@@ -22,6 +22,16 @@ const messageStopConfirmationRowSchema = messageRowSchema
   .pick({ id: true, stop_confirmation_deadline: true })
   .extend({ stop_confirmation_deadline: z.number() });
 const messageCreatedAtRowSchema = messageRowSchema.pick({ id: true, created_at: true });
+const messageCallbackContextRowSchema = messageRowSchema.pick({
+  callback_context: true,
+  source: true,
+});
+const messageCompletionStateRowSchema = z.object({
+  status: z.unknown().optional(),
+  created_at: z.number(),
+  started_at: z.number().nullable(),
+});
+const messageProcessingAuthorRowSchema = messageRowSchema.pick({ author_id: true });
 
 export interface RecordedMessageCompletion {
   messageId: string;
@@ -351,10 +361,7 @@ export class MessageRepository {
       `SELECT callback_context, source FROM messages WHERE id = ?`,
       messageId
     );
-    const rows = result.toArray() as Array<{
-      callback_context: string | null;
-      source: string | null;
-    }>;
+    const rows = parseStorageRows(result.toArray(), messageCallbackContextRowSchema);
     return rows[0] ?? null;
   }
 
@@ -447,13 +454,7 @@ export class MessageRepository {
         `SELECT status, created_at, started_at FROM messages WHERE id = ?`,
         event.messageId
       );
-      const message = (
-        result.toArray() as Array<{
-          status?: unknown;
-          created_at: number;
-          started_at: number | null;
-        }>
-      )[0];
+      const message = parseStorageRows(result.toArray(), messageCompletionStateRowSchema)[0];
       const messageStatus = parseMessageStatus(message?.status);
       if (!message || messageStatus !== expectedStatus) return null;
 
@@ -525,7 +526,7 @@ export class MessageRepository {
     const result = this.sql.exec(
       `SELECT author_id FROM messages WHERE status = 'processing' LIMIT 1`
     );
-    const rows = result.toArray() as Array<{ author_id: string }>;
+    const rows = parseStorageRows(result.toArray(), messageProcessingAuthorRowSchema);
     return rows[0] ?? null;
   }
 }

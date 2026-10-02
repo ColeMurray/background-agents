@@ -43,7 +43,7 @@ export type RouteAuthorizationRequirement =
   | { kind: "permission"; permission: PermissionId }
   | {
       kind: "automation";
-      operation: "manage" | "trigger";
+      operation: "read" | "manage" | "trigger";
       automationIdParam: string;
     }
   | { kind: "team"; teamIdParam: string; need: keyof TeamCapabilities | "read" | "member" }
@@ -149,6 +149,7 @@ function auditsAllowedRequirement(requirement: RouteAuthorizationRequirement): b
   if (requirement.kind === "team") {
     return requirement.need !== "read" && requirement.need !== "member";
   }
+  if (requirement.kind === "automation") return requirement.operation !== "read";
   if (requirement.kind === "environment") return requirement.need !== "read";
   if (requirement.kind === "permission") {
     return AUDITED_ALLOWED_PERMISSIONS.has(requirement.permission);
@@ -177,16 +178,19 @@ export function requirePermission(
   };
 }
 
-/** Require admission to manage or trigger the automation identified by a path parameter. */
+/** Require admission to the automation identified by a path parameter. */
 export function requireAutomation(
-  operation: "manage" | "trigger",
+  operation: "read" | "manage" | "trigger",
   automationIdParam = "id"
 ): RouteAuthorization {
   return {
     kind: "active-user",
     allOf: [{ kind: "automation", operation, automationIdParam }],
-    service: { kind: "deny" },
-    auditAllowed: true,
+    service:
+      operation === "read"
+        ? { kind: "actor", actorlessGrants: [{ service: "slack-bot" }] }
+        : { kind: "deny" },
+    auditAllowed: operation !== "read",
   };
 }
 

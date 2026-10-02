@@ -5,6 +5,7 @@ import type { TeamMember, TeamResponse } from "@/hooks/use-teams";
 import { useTeamMemberCandidates, useTeamMembers } from "@/hooks/use-teams";
 import { useTeamCapabilities } from "@/hooks/use-team-capabilities";
 import { useCurrentUserAuthorization } from "@/hooks/use-current-user-authorization";
+import { useAuthSession } from "@/lib/auth-session";
 import { Button } from "@/components/ui/button";
 import { ErrorBanner } from "@/components/ui/error-banner";
 import {
@@ -19,6 +20,7 @@ import { UserIdentity, UserIdentityPicker, userDisplayName } from "@/components/
 export function TeamMembersTable({ team, members }: { team: TeamResponse; members: TeamMember[] }) {
   const capabilities = useTeamCapabilities(team);
   const { hasPermission } = useCurrentUserAuthorization();
+  const viewerId = useAuthSession().data?.user?.id;
   const { candidates, loading, error } = useTeamMemberCandidates(
     capabilities.canManageMembers && hasPermission("workspace.members.read")
   );
@@ -51,6 +53,10 @@ export function TeamMembersTable({ team, members }: { team: TeamResponse; member
         {members.length === 0 && <p className="p-4 text-sm text-muted-foreground">No members.</p>}
         {members.map((member) => {
           const name = userDisplayName(member);
+          // The control plane lets any member remove themselves unless they are the
+          // sole lead, which canLeave already reflects; others need manage rights.
+          const canRemove =
+            member.userId === viewerId ? capabilities.canLeave : capabilities.canManageMembers;
           return (
             <div
               key={member.userId}
@@ -74,7 +80,7 @@ export function TeamMembersTable({ team, members }: { team: TeamResponse; member
               </Select>
               <Button
                 variant="outline"
-                disabled={!capabilities.canManageMembers || pending}
+                disabled={!canRemove || pending}
                 onClick={() => void run(() => removeMember(member.userId))}
                 aria-label={`Remove ${name}`}
               >

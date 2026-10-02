@@ -2,6 +2,11 @@
 
 ## Results
 
+These figures record the initial reduction measured against `d343cac`, before later changes from
+`main` were merged. Subsequent merge resolutions retain newly introduced regression tests rather
+than restoring the removed redundant suites, so these are historical counts, not current-main
+totals.
+
 Removed **3,414 test cases** and **278 complete test files** across eight packages. The measured
 suites decreased from 14,587 to 11,173 cases, a **23.4% reduction**. Counts include four unchanged
 skipped tests.
@@ -98,3 +103,23 @@ V8 coverage cannot run inside workerd because Workers lack its inspector API. Bo
 measurements used the same Istanbul provider and source scope, excluding `.test-support.ts` files
 that otherwise break uncovered-file instrumentation. Other packages retain their existing V8 source
 scopes. Established test-helper/fixture inclusion was not changed between measurements.
+
+## Merge Validation
+
+After merging `main` at `452b0b9`, six modify/delete conflicts were resolved by retaining focused
+upstream regressions for canonical automation owners, bounded D1 parameters, linked-session privacy,
+synchronous archive failures, executor audit events, and environment selection equality. The old
+redundant cases remain removed, and all upstream integration additions are retained.
+
+The following are current coverage percentages, not a new before/after benchmark. All configured
+TypeScript coverage floors pass.
+
+| Package                   | Passed | Skipped | Statements | Branches | Functions | Lines |
+| ------------------------- | -----: | ------: | ---------: | -------: | --------: | ----: |
+| control-plane, both hosts |  6,002 |       1 |      90.92 |    82.66 |     95.86 | 92.72 |
+| web                       |  1,965 |       0 |      74.35 |    73.05 |     74.15 | 75.54 |
+| shared                    |    909 |       0 |      92.05 |    81.91 |     89.83 | 93.07 |
+| sandbox-runtime           |  1,279 |       3 |      89.50 |    80.49 |       N/A | 89.50 |
+
+Sandbox-runtime combined coverage is 87.42%. The eleven focused conflict-resolution cases also pass
+independently. Repository typechecks, ESLint, and formatting checks were rerun for the merge.

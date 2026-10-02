@@ -199,6 +199,7 @@ describe("AuditLogSettings", () => {
     ["team.grant_removed", "Team repository grant removed"],
     ["team.secret_set", "Team secret set"],
     ["team.secret_deleted", "Team secret deleted"],
+    ["automation.executor_changed", "Automation executor changed"],
   ])("labels %s as an operation in the workspace audit viewer", (action, label) => {
     const article = renderSingle(createEvent("applied", { action }));
     expect(article.getByText(label)).toBeInTheDocument();
