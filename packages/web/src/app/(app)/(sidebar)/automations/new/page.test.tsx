@@ -177,6 +177,7 @@ describe("NewAutomationPage template pre-fill", () => {
       "href",
       "/automations/new-auto?teamId=team-1"
     );
+    expect(JSON.parse(String(vi.mocked(browserApiFetch).mock.calls[0][1]?.body)).teamId).toBe(null);
     expect(push).not.toHaveBeenCalled();
   });
 
