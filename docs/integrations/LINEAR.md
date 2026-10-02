@@ -130,18 +130,21 @@ remain the responsibility of Linear's GitHub integration and the team's PR autom
 
 Open the web app and go to **Settings > Integrations > Linear** to configure the Linear Agent.
 
-| Setting                        | What it controls                                                  |
-| ------------------------------ | ----------------------------------------------------------------- |
-| Default model and effort       | Model and reasoning depth for Linear-started sessions             |
-| Repository Scope               | Whether Linear can run in all accessible repos or selected repos  |
-| Issue Session Instructions     | Extra guidance appended to Linear issue prompts                   |
-| Allow user model preferences   | Whether admin-managed user preferences can override the model     |
-| Allow model labels (`model:*`) | Whether Linear issue labels can choose the model                  |
-| Tool progress activities       | Whether Linear shows intermediate file and command activity       |
-| Repository Overrides           | Per-repository defaults for model, reasoning, and Linear behavior |
+| Setting                        | What it controls                                                              |
+| ------------------------------ | ----------------------------------------------------------------------------- |
+| Default model and effort       | Model and reasoning depth for Linear-started sessions                         |
+| Agent harness                  | Harness that runs Linear-started sessions (OpenCode default, or Claude Agent) |
+| Repository Scope               | Whether Linear can run in all accessible repos or selected repos              |
+| Issue Session Instructions     | Extra guidance appended to Linear issue prompts                               |
+| Allow user model preferences   | Whether admin-managed user preferences can override the model                 |
+| Allow model labels (`model:*`) | Whether Linear issue labels can choose the model                              |
+| Tool progress activities       | Whether Linear shows intermediate file and command activity                   |
+| Repository Overrides           | Per-repository defaults for model, harness, reasoning, and Linear behavior    |
 
 If no Linear settings are configured, all accessible repositories are in scope, user preferences and
-model labels are allowed, and tool progress is enabled.
+model labels are allowed, and tool progress is enabled. A harness/model pair the harness cannot run
+falls back to OpenCode with a warning, so a trigger never fails on a mismatch the saves could not
+see.
 
 Model selection uses this priority, highest to lowest:
 

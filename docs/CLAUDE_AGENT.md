@@ -18,7 +18,9 @@ sign in inside a sandbox.
 
 Every session runs on exactly one harness, chosen when the session is created and fixed for its
 lifetime (like the base branch). Child sessions inherit their parent's harness. Automations carry a
-harness for the sessions they create. Bots and integrations create OpenCode sessions.
+harness for the sessions they create. The GitHub and Linear bots run OpenCode sessions unless their
+settings choose Claude Agent (global default or per-repo override); a harness/model pair a bot
+cannot run falls back to OpenCode and logs a warning.
 
 | Harness          | Models                | Anthropic authentication                   | Notes                                 |
 | ---------------- | --------------------- | ------------------------------------------ | ------------------------------------- |

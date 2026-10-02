@@ -1208,6 +1208,22 @@ describe("IntegrationSettingsStore", () => {
       ).rejects.toThrow(IntegrationSettingsValidationError);
     });
 
+    it("accepts a compatible harness/model pair on setGlobal", async () => {
+      await expect(
+        store.setGlobal("linear", {
+          defaults: { harness: "claude", model: "anthropic/claude-opus-4-6" },
+        })
+      ).resolves.not.toThrow();
+    });
+
+    it("rejects an incompatible harness/model pair on setGlobal", async () => {
+      await expect(
+        store.setGlobal("linear", {
+          defaults: { harness: "claude", model: "openai/gpt-5.4" },
+        })
+      ).rejects.toThrow('Model "openai/gpt-5.4" cannot run on the Claude Agent harness.');
+    });
+
     it("merges linear global and repo settings", async () => {
       await store.setGlobal("linear", {
         enabledRepos: ["acme/platform"],

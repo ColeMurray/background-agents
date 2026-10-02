@@ -27,7 +27,9 @@ import type { LinearApiClient } from "./utils/linear-client";
 import { signedControlPlaneFetch } from "./internal-auth";
 import { createLogger } from "./logger";
 import { makePlan } from "./plan";
+import type { HarnessId } from "@open-inspect/shared/harnesses";
 import { extractModelFromLabels, resolveSessionModelSettings } from "./model-resolution";
+import { resolveLinearSessionHarness } from "./utils/integration-config";
 import {
   resolveSessionTarget,
   resolveStoredSessionTarget,
@@ -144,6 +146,7 @@ async function createSession(
   params: {
     title: string;
     model: string;
+    harness: HarnessId | null;
     reasoningEffort?: string;
     actorUserId?: string;
     actorDisplayName?: string;
@@ -156,6 +159,9 @@ async function createSession(
     ...targetRequestFields(target),
     title: params.title,
     model: params.model,
+    // Absent harness resolves to the built-in default server-side; send it only
+    // when configured so unset behavior stays byte-identical to today.
+    ...(params.harness ? { harness: params.harness } : {}),
     reasoningEffort: params.reasoningEffort,
     actorDisplayName: params.actorDisplayName,
     actorEmail: params.actorEmail,
@@ -664,6 +670,7 @@ async function handleNewSession(
     {
       title: `${issue.identifier}: ${issue.title}`,
       model,
+      harness: resolveLinearSessionHarness(integrationConfig.harness, model, log),
       reasoningEffort,
       actorUserId: launchActorUserId,
       actorDisplayName,
