@@ -50,11 +50,12 @@ stale restore files. The live tool is installed only when a project is associate
 session after removing its project preserves the original snapshot but disables the live tool.
 Associating a running session does not mutate its harness; tool installation changes at next boot.
 
-The live tool resolves current project access for the session owner on every read. Shared sessions
-exclude private sibling summaries. Source fetching is described honestly: repository documents are
-available in the workspace only when that repository is a session target; URLs may be agent-fetched;
-Linear/Slack sources are references only in v1. No credentials or conversation bodies are included.
-Each successful live read records `project_context.read` with bytes and truncation, not contents.
+The live tool resolves current project access for the session owner on every read. Live reads always
+exclude private sibling summaries, including from private sessions with collaborators. Source
+fetching is described honestly: repository documents are available in the workspace only when that
+repository is a session target; URLs may be agent-fetched; Linear/Slack sources are references only
+in v1. No credentials or conversation bodies are included. Each successful live read records
+`project_context.read` with bytes and truncation, not contents.
 
 ## Ownership and authorization
 

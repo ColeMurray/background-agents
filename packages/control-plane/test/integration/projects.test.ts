@@ -868,3 +868,41 @@ it.each([
     }
   }
 );
+
+it.each(["private", "workspace"])(
+  "omits private siblings from live context in a %s session",
+  async (visibility) => {
+    const project = await create();
+    const { stub, sessionName } = await initSession({ userId: A });
+    await req(`/sessions/${sessionName}/project`, "PUT", { projectId: project.id });
+    await env.DB.prepare("UPDATE sessions SET visibility=? WHERE id=?")
+      .bind(visibility, sessionName)
+      .run();
+    const sibling = await initSession({ userId: A });
+    await req(`/sessions/${sibling.sessionName}/project`, "PUT", { projectId: project.id });
+    await env.DB.prepare(
+      "UPDATE sessions SET visibility='private', title='Private sibling secret' WHERE id=?"
+    )
+      .bind(sibling.sessionName)
+      .run();
+    await req(`/projects/${project.id}/sources`, "PUT", {
+      sourceType: "session",
+      externalIdOrUrl: sibling.sessionName,
+      title: "Private source secret",
+      role: "reference",
+    });
+    await seedSandboxAuth(stub, {
+      authToken: "private-context-token",
+      sandboxId: "private-context-sandbox",
+    });
+    const response = await SELF.fetch(
+      `https://test.local/sessions/${sessionName}/project-context`,
+      { headers: { Authorization: "Bearer private-context-token" } }
+    );
+    expect(response.status).toBe(200);
+    const content = await response.text();
+    expect(content).not.toContain(sibling.sessionName);
+    expect(content).not.toContain("Private sibling secret");
+    expect(content).not.toContain("Private source secret");
+  }
+);

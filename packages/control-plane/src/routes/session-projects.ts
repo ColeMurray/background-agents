@@ -101,13 +101,13 @@ async function context(request: Request, env: Env, params: { id: string }, ctx: 
     return json(pinned);
   }
   if (!session.projectId) return error("No project associated", 404);
-  // Private sibling summaries must not be exposed to an entire shared session audience.
+  // Even a private session can have collaborators without access to private siblings.
   const input = await loadProjectContext(
     ctx.db,
     session.projectId,
     viewer,
     (session.repositories ?? []).map((repo) => ({ owner: repo.repoOwner, name: repo.repoName })),
-    session.visibility !== "private"
+    true
   );
   if (!input) return error("Project context unavailable", 404);
   const result = buildToolResult(input);
