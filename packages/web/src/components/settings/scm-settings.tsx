@@ -11,6 +11,7 @@ import {
 import type { EnrichedRepository } from "@open-inspect/shared/types/repository-catalog";
 import { IntegrationSettingsSkeleton } from "./integrations/integration-settings-skeleton";
 import { SettingsCardSection } from "./settings-card-section";
+import { RepositoryOverrideSelector } from "./repository-override-selector";
 import {
   getScmRepoSettingsPath,
   SCM_GLOBAL_SETTINGS_KEY,
@@ -331,17 +332,9 @@ function RepoOverridesSection({
   globalDefault: boolean;
   globalLabel?: string;
 }) {
-  const [addingRepo, setAddingRepo] = useState("");
-
-  const overriddenRepos = new Set(overrides.map((o) => o.repo));
-  const availableForOverride = availableRepos.filter(
-    (r) => !overriddenRepos.has(r.fullName.toLowerCase())
-  );
-
-  const handleAdd = async () => {
-    if (!addingRepo) return;
-    const settingsPath = getScmRepoSettingsPath(addingRepo);
-    if (!settingsPath) return;
+  const handleAdd = async (repositoryKey: string) => {
+    const settingsPath = getScmRepoSettingsPath(repositoryKey);
+    if (!settingsPath) return false;
 
     try {
       const res = await browserApiFetch(settingsPath, {
@@ -352,8 +345,8 @@ function RepoOverridesSection({
 
       if (res.ok) {
         mutate(SCM_REPO_SETTINGS_KEY);
-        setAddingRepo("");
         toast.success("Override added.");
+        return true;
       } else {
         const data = await res.json();
         toast.error(data.error || "Failed to add override");
@@ -361,6 +354,7 @@ function RepoOverridesSection({
     } catch {
       toast.error("Failed to add override");
     }
+    return false;
   };
 
   return (
@@ -382,23 +376,11 @@ function RepoOverridesSection({
         </p>
       )}
 
-      <div className="flex items-center gap-2">
-        <Select value={addingRepo} onValueChange={setAddingRepo}>
-          <SelectTrigger className="flex-1" aria-label="Select a repository">
-            <SelectValue placeholder="Select a repository..." />
-          </SelectTrigger>
-          <SelectContent>
-            {availableForOverride.map((repo) => (
-              <SelectItem key={repo.fullName} value={repo.fullName.toLowerCase()}>
-                {repo.fullName}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
-        <Button onClick={handleAdd} disabled={!addingRepo}>
-          Add Override
-        </Button>
-      </div>
+      <RepositoryOverrideSelector
+        repositories={availableRepos}
+        overriddenRepositories={overrides.map((entry) => entry.repo)}
+        onAdd={handleAdd}
+      />
     </div>
   );
 }
