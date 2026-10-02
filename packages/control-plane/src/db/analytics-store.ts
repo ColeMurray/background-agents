@@ -344,13 +344,14 @@ export class AnalyticsStore {
       harness: "s.harness",
       spawnSource: "s.spawn_source",
       automation: "s.automation_id",
-      project: "COALESCE(p.id, '__no_project__')",
+      project:
+        "CASE WHEN s.project_id IS NULL THEN '__no_project__' ELSE COALESCE(p.id, '__restricted_project__') END",
     }[by];
 
     const displayNameSelect = isUserBreakdown
       ? "COALESCE(MAX(NULLIF(u.display_name, '')), MAX(NULLIF(s.scm_login, '')), 'Unknown user') AS display_name,"
       : by === "project"
-        ? "COALESCE(MAX(p.name), 'No project') AS display_name,"
+        ? "CASE WHEN s.project_id IS NULL THEN 'No project' ELSE COALESCE(MAX(p.name), 'Restricted project') END AS display_name,"
         : by === "automation"
           ? "MAX(a.name) AS display_name,"
           : "NULL AS display_name,";

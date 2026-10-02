@@ -1271,3 +1271,53 @@ it("moves a large lineage including terminal descendants with constant store que
   expect(response.status).toBe(200);
   expect(await response.json()).toMatchObject({ updated: 80 });
 });
+
+it("separates restricted project analytics from genuinely unassigned sessions", async () => {
+  const project = await create({ name: "Secret name" });
+  const store = new SessionIndexStore(env.DB);
+  for (const assigned of [true, false])
+    await store.create({
+      id: assigned ? "assigned-analytics" : "unassigned-analytics",
+      title: "Visible",
+      repoOwner: null,
+      repoName: null,
+      model: "anthropic/claude-haiku-4-5",
+      reasoningEffort: null,
+      baseBranch: null,
+      status: "created",
+      userId: A,
+      createdAt: 1,
+      updatedAt: 1,
+      ownerTeamId: null,
+      visibility: "workspace",
+      projectId: assigned ? project.id : null,
+    });
+  await env.DB.prepare(
+    "INSERT INTO roles (id,name,normalized_name,is_system) VALUES ('analytics-reader','Analytics reader','analytics reader',0)"
+  ).run();
+  await env.DB.prepare(
+    "INSERT INTO role_permissions (role_id,permission_id) VALUES ('analytics-reader','sessions.read')"
+  ).run();
+  await env.DB.prepare(
+    "UPDATE user_role_assignments SET role_id='analytics-reader' WHERE user_id=?"
+  )
+    .bind(A)
+    .run();
+  const result = await new AnalyticsStore(
+    env.DB,
+    await projectViewer(env.DB, A),
+    "on"
+  ).getBreakdown({ startAt: 0, endAt: 10, scope: "all" }, "project");
+  expect(result.entries).toEqual(
+    expect.arrayContaining([
+      expect.objectContaining({ key: "__no_project__", displayName: "No project", sessions: 1 }),
+      expect.objectContaining({
+        key: "__restricted_project__",
+        displayName: "Restricted project",
+        sessions: 1,
+      }),
+    ])
+  );
+  expect(JSON.stringify(result)).not.toContain(project.id);
+  expect(JSON.stringify(result)).not.toContain("Secret name");
+});
