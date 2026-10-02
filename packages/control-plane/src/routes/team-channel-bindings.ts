@@ -17,6 +17,7 @@ import { admit, dispatch } from "../routing/admit";
 import type { ControlPlaneHonoEnv } from "../routing/hono-env";
 import type { Env } from "../types";
 import { parseBody } from "./body";
+import { handleGetSlackChannels } from "./automation-slack-settings";
 import { SCM_AGNOSTIC_USER_OR_SERVICE_ROUTE, error, json, requireTeam } from "./shared";
 
 const slackChannelInfoSchema = z.object({
@@ -146,4 +147,7 @@ teamChannelBindingRoutes.delete(
   "/teams/:id/channel-bindings/:provider/:externalId",
   manageBindings,
   (c) => dispatch(c, deleteBinding)
+);
+teamChannelBindingRoutes.get("/teams/:id/slack-channels", manageBindings, (c) =>
+  dispatch(c, handleGetSlackChannels)
 );

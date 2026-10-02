@@ -3,6 +3,7 @@ import { NextRequest } from "next/server";
 import { controlPlaneUserFetch } from "./control-plane";
 import { SETTINGS_PROXY_MAX_BODY_BYTES, settingsProxy } from "./settings-proxy";
 import { GET as getChannelBindings } from "@/app/api/teams/[id]/channel-bindings/route";
+import { GET as getSlackChannels } from "@/app/api/teams/[id]/slack-channels/route";
 import {
   DELETE as deleteChannelBinding,
   PUT as putChannelBinding,
@@ -164,14 +165,17 @@ describe("settingsProxy", () => {
     await expect(response.json()).resolves.toEqual({ error: "Failed to fetch settings" });
   });
 
-  it.each(["GET", "PUT", "DELETE"] as const)(
+  it.each(["GET", "PUT", "DELETE", "channels"] as const)(
     "exports the channel-binding %s proxy with encoded identifiers",
-    async (method) => {
+    async (operation) => {
+      const method = operation === "channels" ? "GET" : operation;
       const body = JSON.stringify({ kind: "source" });
       const payload =
-        method === "PUT"
-          ? { error: "Channel is not joinable", code: "channel_not_joinable" }
-          : { bindings: [] };
+        operation === "channels"
+          ? { channels: [] }
+          : method === "PUT"
+            ? { error: "Channel is not joinable", code: "channel_not_joinable" }
+            : { bindings: [] };
       const status = method === "DELETE" ? 204 : method === "PUT" ? 409 : 200;
       vi.mocked(controlPlaneUserFetch).mockResolvedValue(
         method === "DELETE" ? new Response(null, { status }) : Response.json(payload, { status })
@@ -180,7 +184,8 @@ describe("settingsProxy", () => {
         GET: getChannelBindings,
         PUT: putChannelBinding,
         DELETE: deleteChannelBinding,
-      }[method];
+        channels: getSlackChannels,
+      }[operation];
       const response = await handler(
         new NextRequest("http://localhost/api/teams/id/channel-bindings", {
           method,
@@ -190,7 +195,7 @@ describe("settingsProxy", () => {
         { params: Promise.resolve({ id: "team/id", channelId: "C/1" }) }
       );
       expect(controlPlaneUserFetch).toHaveBeenCalledWith(
-        `/teams/team%2Fid/channel-bindings${method === "GET" ? "" : "/slack/C%2F1"}`,
+        `/teams/team%2Fid/${operation === "channels" ? "slack-channels" : `channel-bindings${method === "GET" ? "" : "/slack/C%2F1"}`}`,
         method === "GET" ? undefined : method === "PUT" ? { method, body } : { method }
       );
       expect(response.status).toBe(status);

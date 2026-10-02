@@ -24,11 +24,11 @@ describe("route policy table", () => {
   });
 
   it("publishes the complete canonical route catalog", () => {
-    expect(routes).toHaveLength(207);
+    expect(routes).toHaveLength(208);
 
     const paths = routes.map((route) => route.path);
-    expect(new Set(paths).size).toBe(157);
-    expect(new Set(routes.map((route) => `${route.method}:${route.path}`)).size).toBe(207);
+    expect(new Set(paths).size).toBe(158);
+    expect(new Set(routes.map((route) => `${route.method}:${route.path}`)).size).toBe(208);
   });
 
   it("gates run analytics with analytics.read", () => {

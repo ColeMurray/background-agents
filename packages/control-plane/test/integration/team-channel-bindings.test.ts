@@ -1,5 +1,5 @@
 import { createExecutionContext, env } from "cloudflare:test";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { computeHmacHex } from "@open-inspect/shared/auth";
 import { BUILT_IN_ROLE_REGISTRY } from "@open-inspect/shared/rbac";
 import type { TeamChannelBinding } from "@open-inspect/shared/types/team-channel-bindings";
@@ -49,6 +49,7 @@ beforeEach(async () => {
   await cleanD1Tables();
   await serviceFetch(`${BASE}/me/authorization`);
 });
+afterEach(() => vi.unstubAllGlobals());
 
 describe("team channel binding store", () => {
   it("gets provider-keyed bindings and lists only the requested team", async () => {
@@ -286,6 +287,8 @@ describe("team channel binding routes", () => {
       .run();
     await new TeamMembershipStore(env.DB).add(team.id, OWNER);
     const fetch = vi.fn().mockResolvedValue(Response.json(channelInfo));
+    const slackFetch = vi.fn();
+    vi.stubGlobal("fetch", slackFetch);
     for (const mode of ["off", "shadow", "on"]) {
       for (const method of ["GET", "PUT", "DELETE"]) {
         const path = `/teams/${team.id}/channel-bindings${method === "GET" ? "" : "/slack/C123"}`;
@@ -298,8 +301,17 @@ describe("team channel binding routes", () => {
         );
         expect(denied.status).toBe(403);
       }
+      for (const token of ["xoxb-test", undefined]) {
+        const denied = await request(`/teams/${team.id}/slack-channels`, "GET", undefined, {
+          TEAMS_ENFORCEMENT: mode,
+          SLACK_BOT_TOKEN: token,
+        });
+        expect(denied.status).toBe(403);
+        expect(await denied.json()).toMatchObject({ code: "team_capability_required" });
+      }
     }
     expect(fetch).not.toHaveBeenCalled();
+    expect(slackFetch).not.toHaveBeenCalled();
     await new TeamMembershipStore(env.DB).setRole(team.id, OWNER, "lead");
     expect((await request(`/teams/${team.id}/channel-bindings`)).status).toBe(200);
     expect(
@@ -310,6 +322,63 @@ describe("team channel binding routes", () => {
       service: "slack-bot",
     });
     expect(actorless.status).toBe(403);
+    expect(
+      (await serviceFetch(`${BASE}/teams/${team.id}/slack-channels`, { service: "slack-bot" }))
+        .status
+    ).toBe(403);
+  });
+
+  it("lists Slack channel names for a team lead without automation permissions", async () => {
+    const team = await createTeam("engineering");
+    const otherTeam = await createTeam("other");
+    const store = new TeamChannelBindingStore(env.DB);
+    await store.put({ ...slackBinding(team.id, "source"), externalId: "C_OWN" }, actor);
+    await store.put({ ...slackBinding(otherTeam.id, "source"), externalId: "C_OTHER" }, actor);
+    await new TeamMembershipStore(env.DB).add(team.id, OWNER, "lead");
+    await env.DB.batch([
+      env.DB.prepare(
+        `INSERT INTO roles (id, key, name, normalized_name, description, is_system)
+         VALUES ('binding_lead', NULL, 'Binding Lead', 'binding lead', NULL, 0)`
+      ),
+      env.DB.prepare(
+        "UPDATE user_role_assignments SET role_id = 'binding_lead' WHERE user_id = ?"
+      ).bind(OWNER),
+    ]);
+    const slackFetch = vi.fn().mockImplementation(async () =>
+      Response.json({
+        ok: true,
+        channels: [
+          { id: "C123", name: "engineering", is_private: false, is_member: true },
+          { id: "C_OWN", name: "own-private", is_private: true, is_member: true },
+          { id: "C_OTHER", name: "other-private", is_private: true, is_member: true },
+          { id: "C_UNBOUND", name: "unbound-private", is_private: true, is_member: true },
+        ],
+      })
+    );
+    vi.stubGlobal("fetch", slackFetch);
+    expect((await request("/integration-settings/slack/channels")).status).toBe(403);
+    expect(slackFetch).not.toHaveBeenCalled();
+    const response = await request(`/teams/${team.id}/slack-channels`);
+    expect(response.status).toBe(200);
+    expect(response.headers.get("Cache-Control")).toBe("private, no-store");
+    expect(await response.json()).toEqual({
+      channels: [
+        { id: "C123", name: "engineering", isPrivate: false, isMember: true },
+        { id: "C_OWN", name: "own-private", isPrivate: true, isMember: true },
+      ],
+    });
+    expect(slackFetch).toHaveBeenCalledOnce();
+    expect(slackFetch.mock.calls[0]?.[0]).toContain("https://slack.com/api/conversations.list");
+    await env.DB.prepare(
+      "INSERT INTO role_permissions (role_id, permission_id) VALUES ('binding_lead', 'automations.read')"
+    ).run();
+    const globalReader = await request(`/teams/${team.id}/slack-channels`);
+    expect(await globalReader.json()).toMatchObject({
+      channels: expect.arrayContaining([
+        expect.objectContaining({ id: "C_OTHER" }),
+        expect.objectContaining({ id: "C_UNBOUND" }),
+      ]),
+    });
   });
 
   it("returns conflicts without disclosing another team's identity", async () => {
