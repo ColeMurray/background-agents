@@ -23,6 +23,7 @@ from claude_agent_sdk import (
     ResultMessage,
     StreamEvent,
     SystemMessage,
+    TaskUpdatedMessage,
     TextBlock,
     ToolResultBlock,
     ToolUseBlock,
@@ -345,6 +346,7 @@ class TestOptions:
         assert options["include_partial_messages"] is True
         assert options["forward_subagent_text"] is False
         assert options["max_buffer_size"] == MAX_STDOUT_MESSAGE_BYTES
+        assert callable(options["stderr"])
         assert options["system_prompt"] == {
             "type": "preset",
             "preset": "claude_code",
@@ -674,6 +676,12 @@ class TestTranslation:
         # ours, and its result ends that turn, not ours.
         injected_turn = [
             UserMessage(content="task finished", origin={"kind": "task-notification"}),
+            TaskUpdatedMessage(
+                subtype="task_updated",
+                data={},
+                task_id="background-task",
+                patch={"status": "killed", "summary": "private background text"},
+            ),
             _text_delta("injected"),
             AssistantMessage(
                 content=[
@@ -703,6 +711,13 @@ class TestTranslation:
         assert [e["content"] for e in events if e["type"] == "token"] == ["real answer"]
         assert [e for e in events if e["type"] == "tool"] == []
         assert len([e for e in events if e["type"] == "step_finish"]) == 1
+        update = next(
+            call.kwargs
+            for call in h.harness.log.info.call_args_list
+            if call.args[0] == "claude.task_updated"
+        )
+        assert update["task_id"] == "background-task" and update["status"] == "killed"
+        assert "private background text" not in str(h.harness.log.method_calls)
 
 
 class TestCostBaseline:

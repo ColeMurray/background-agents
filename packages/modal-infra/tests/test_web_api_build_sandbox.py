@@ -1,5 +1,8 @@
 """Tests for the Modal provider-session image-build APIs."""
 
+import asyncio
+import json
+import logging
 from types import SimpleNamespace
 from unittest.mock import ANY, AsyncMock, MagicMock
 
@@ -8,6 +11,7 @@ from modal.exception import NotFoundError as ModalNotFoundError
 from modal.exception import SandboxTimeoutError
 from modal.exception import TimeoutError as ModalTimeoutError
 
+from sandbox_runtime.log_config import JSONFormatter
 from sandbox_runtime.types import SandboxStatus
 from src import web_api
 from src.sandbox.build_session import (
@@ -146,6 +150,70 @@ async def test_vm_capture_failure_never_retires(monkeypatch):
     with pytest.raises(web_api.HTTPException):
         await _call_vm_snapshot({"sandbox_id": "sb-vm", "sandbox_backend": "modal-vm"})
     manager.stop_sandbox.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("phase", ["exec", "wait"])
+@pytest.mark.parametrize(
+    "failure_type", [RuntimeError, TimeoutError, ModalTimeoutError, asyncio.CancelledError]
+)
+async def test_vm_preparation_endpoint_omits_exception_details_and_preserves_outcome(
+    monkeypatch, caplog, phase, failure_type
+):
+    # Deliberately neither registered in the environment nor a recognizable
+    # credential pattern: formatter redaction alone cannot protect this value.
+    opaque_value = "ordinary_value_87125"
+    failure = failure_type(opaque_value)
+    waiter = AsyncMock(side_effect=failure if phase == "wait" else None)
+    execute = AsyncMock(
+        return_value=SimpleNamespace(wait=SimpleNamespace(aio=waiter)),
+        side_effect=failure if phase == "exec" else None,
+    )
+    snapshot = AsyncMock()
+    handle = SandboxHandle(
+        sandbox_id="sb-vm",
+        modal_object_id="sb-immutable",
+        sandbox_backend="modal-vm",
+        status=SandboxStatus.READY,
+        created_at=0,
+        modal_sandbox=SimpleNamespace(
+            exec=SimpleNamespace(aio=execute),
+            snapshot_filesystem=SimpleNamespace(aio=snapshot),
+        ),
+    )
+    monkeypatch.setattr(SandboxManager, "get_sandbox_by_id", AsyncMock(return_value=handle))
+    monkeypatch.setattr(web_api, "require_auth", lambda _authorization: None)
+    caplog.set_level(logging.INFO)
+
+    cancelled = isinstance(failure, asyncio.CancelledError)
+    with pytest.raises(asyncio.CancelledError if cancelled else web_api.HTTPException) as raised:
+        await _call_vm_snapshot({"sandbox_id": "sb-vm", "sandbox_backend": "modal-vm"})
+
+    if cancelled:
+        assert raised.value is failure
+        expected_status = 499
+    else:
+        assert raised.value.__cause__ is failure
+        expected_status = 408 if isinstance(failure, (TimeoutError, ModalTimeoutError)) else 500
+        assert raised.value.status_code == expected_status
+        assert raised.value.detail == (
+            "snapshot deadline expired" if expected_status == 408 else "Internal server error"
+        )
+    snapshot.assert_not_awaited()
+    rendered = [JSONFormatter().format(record) for record in caplog.records]
+    assert opaque_value not in "\n".join(rendered)
+    logs = [json.loads(line) for line in rendered]
+    assert any(
+        entry.get("event") == "modal.http_request" and entry["http_status"] == expected_status
+        for entry in logs
+    )
+    if expected_status == 500:
+        error = next(entry for entry in logs if entry.get("event") == "api.error")
+        assert error["error_type"] == "RuntimeError"
+        assert "error_message" not in error
+        assert "error_stack" not in error
+    else:
+        assert not any(entry.get("event") == "api.error" for entry in logs)
 
 
 @pytest.mark.asyncio

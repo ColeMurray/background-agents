@@ -16,6 +16,7 @@ import os
 import uuid
 from collections.abc import AsyncIterator, Callable, Mapping
 from dataclasses import dataclass, field
+from functools import partial
 from typing import TYPE_CHECKING, Any, Final, Protocol
 
 from claude_agent_sdk import (
@@ -43,6 +44,7 @@ from ..credentials.provider_credential_client import (
     RuntimeCredentialDenied,
     RuntimeCredentialUnavailable,
 )
+from ..log_safety import register_log_secret, unregister_log_secret
 from .base import (
     BridgeEvent,
     EventSink,
@@ -61,6 +63,7 @@ from .claude_env import (
     write_clean_env_wrapper,
 )
 from .claude_tools import OI_TOOL_SERVER_NAME, ControlPlaneToolClient, ToolServerConfig
+from .claude_trajectory import observe_events, observe_message, observe_stderr, observe_turn
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -314,6 +317,7 @@ class ClaudeHarness:
 
         self.session_id: str | None = None
         self.credential: ClaudeCredential | None = None
+        self._credential_registered = False
         self.wrapper_path: Path | None = None
         self._client: SdkClient | None = None
         self._client_lifecycle_lock = asyncio.Lock()
@@ -340,6 +344,10 @@ class ClaudeHarness:
         bridge restart budget covers.
         """
         self.credential = await self._resolve_credential()
+        for name, value in self.credential.env.items():
+            if name != "ANTHROPIC_BASE_URL":
+                register_log_secret(value)
+        self._credential_registered = True
         binary = self._binary or bundled_claude_binary()
         self.wrapper_path = write_clean_env_wrapper(
             self.config.config_dir / "bin", mode=self.credential.mode, binary=binary
@@ -377,6 +385,11 @@ class ClaudeHarness:
 
     async def close(self) -> None:
         await self._disconnect()
+        if self._client is None and self.credential is not None and self._credential_registered:
+            for name, value in self.credential.env.items():
+                if name != "ANTHROPIC_BASE_URL":
+                    unregister_log_secret(value)
+            self._credential_registered = False
         if self._tool_client is not None:
             await self._tool_client.aclose()
             self._tool_client = None
@@ -428,6 +441,7 @@ class ClaudeHarness:
             "include_partial_messages": True,
             "forward_subagent_text": False,
             "max_buffer_size": MAX_STDOUT_MESSAGE_BYTES,
+            "stderr": partial(observe_stderr, self.log, client_agent_session_id=self.session_id),
             **reasoning_options(model, reasoning_effort),
         }
         if self._resume_on_connect:
@@ -503,6 +517,14 @@ class ClaudeHarness:
     # --- prompt ------------------------------------------------------------
 
     async def run_prompt(self, prompt: HarnessPrompt, emit: EventSink) -> TurnOutcome:
+        with observe_turn(
+            self.log, agent_session_id=self.session_id, message_id=prompt.message_id
+        ) as finished:
+            outcome = await self._run_prompt(prompt, emit)
+            finished(outcome)
+            return outcome
+
+    async def _run_prompt(self, prompt: HarnessPrompt, emit: EventSink) -> TurnOutcome:
         try:
             model = bare_model_id(prompt.model, self.config.default_model)
         except ValueError as error:
@@ -549,8 +571,28 @@ class ClaudeHarness:
                     except TimeoutError as error:
                         raise _InactivityTimeout from error
                     if self._belongs_to_injected_turn(state, message):
+                        observe_message(
+                            self.log,
+                            message,
+                            agent_session_id=self.session_id,
+                            message_id=state.message_id,
+                            injected_turn=True,
+                        )
                         continue
                     events, outcome = self._translate(state, message)
+                    observe_message(
+                        self.log,
+                        message,
+                        agent_session_id=self.session_id,
+                        message_id=state.message_id,
+                        outcome=outcome,
+                    )
+                    observe_events(
+                        self.log,
+                        events,
+                        agent_session_id=self.session_id,
+                        message_id=state.message_id,
+                    )
                     for event in events:
                         await emit(event)
                     if outcome is not None:

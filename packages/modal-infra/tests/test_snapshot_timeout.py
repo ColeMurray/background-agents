@@ -274,7 +274,9 @@ async def test_stop_sandbox_propagates_explicit_cancellation(monkeypatch):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("exit_code", [0, 1])
-async def test_vm_capture_requires_docker_preparation(exit_code):
+async def test_vm_capture_requires_docker_preparation(exit_code, monkeypatch):
+    logger = MagicMock()
+    monkeypatch.setattr("src.sandbox.manager.log", logger)
     process = SimpleNamespace(wait=_async_method(exit_code))
     execute = _async_method(process)
     snapshot = _async_method(SimpleNamespace(object_id="im-vm"))
@@ -300,6 +302,80 @@ async def test_vm_capture_requires_docker_preparation(exit_code):
     )
     assert type(execute.aio.call_args.kwargs["timeout"]) is int
     assert execute.aio.call_args.kwargs["timeout"] == int(CONTROL_TIMEOUT_SECONDS)
+    process.wait.aio.assert_awaited_once()
+    logger.info.assert_any_call(
+        "sandbox.snapshot_preparation.started",
+        sandbox_id="sb-vm",
+        modal_object_id=None,
+        timeout_seconds=int(CONTROL_TIMEOUT_SECONDS),
+    )
+    if exit_code:
+        logger.error.assert_called_once_with(
+            "sandbox.snapshot_preparation.failed",
+            sandbox_id="sb-vm",
+            modal_object_id=None,
+            timeout_seconds=int(CONTROL_TIMEOUT_SECONDS),
+            phase="wait",
+            error_type="RuntimeError",
+            exit_code=1,
+            acknowledgement="not_confirmed",
+            duration_ms=pytest.approx(0, abs=1000),
+        )
+    else:
+        logger.info.assert_any_call(
+            "sandbox.snapshot_preparation.completed",
+            sandbox_id="sb-vm",
+            modal_object_id=None,
+            timeout_seconds=int(CONTROL_TIMEOUT_SECONDS),
+            exit_code=0,
+            acknowledgement="confirmed",
+            duration_ms=pytest.approx(0, abs=1000),
+        )
+        logger.error.assert_not_called()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("cancelled", [False, True])
+async def test_vm_preparation_failure_preserves_original_error_and_omits_details(
+    monkeypatch, cancelled
+):
+    logger = MagicMock()
+    monkeypatch.setattr("src.sandbox.manager.log", logger)
+    failure = asyncio.CancelledError() if cancelled else RuntimeError("private registry credential")
+    execute = _async_method()
+    execute.aio.side_effect = failure
+    snapshot = _async_method()
+    handle = SandboxHandle(
+        sandbox_id="sb-vm",
+        sandbox_backend="modal-vm",
+        status=SandboxStatus.READY,
+        created_at=0,
+        modal_sandbox=SimpleNamespace(exec=execute, snapshot_filesystem=snapshot),
+    )
+
+    with pytest.raises(type(failure)) as raised:
+        await SandboxManager().take_snapshot(handle)
+
+    assert raised.value is failure
+    snapshot.aio.assert_not_awaited()
+    diagnostic = logger.info if cancelled else logger.error
+    diagnostic.assert_any_call(
+        "sandbox.snapshot_preparation.cancelled"
+        if cancelled
+        else "sandbox.snapshot_preparation.failed",
+        sandbox_id="sb-vm",
+        modal_object_id=None,
+        timeout_seconds=int(CONTROL_TIMEOUT_SECONDS),
+        phase="exec",
+        error_type=type(failure).__name__,
+        exit_code=None,
+        acknowledgement="not_confirmed",
+        duration_ms=pytest.approx(0, abs=1000),
+    )
+    if cancelled:
+        logger.error.assert_not_called()
+        logger.debug.assert_not_called()
+    assert "private registry credential" not in str(logger.mock_calls)
 
 
 @pytest.mark.asyncio

@@ -14,6 +14,7 @@ import httpx
 
 from .constants import OPENCODE_PORT
 from .git_excludes import install_runtime_git_excludes
+from .log_safety import sanitize_log_value
 from .mcp_packages import McpPackageInstaller
 from .process_output import iter_process_lines
 from .sandbox_bin import install_bin_scripts
@@ -496,7 +497,14 @@ class OpenCodeServer:
             self._opencode_process.stdout,
             on_error=lambda error: self.log.warn("opencode.log_forward_error", exc=error),
         ):
-            print(f"[opencode] {line}")
+            # A diagnostic handler failure must not stop draining the pipe.
+            with contextlib.suppress(Exception):
+                self.log.info(
+                    "opencode.output",
+                    harness="opencode",
+                    stream="stdout+stderr",
+                    output=sanitize_log_value(line),
+                )
 
     async def _wait_for_health(self) -> None:
         """Poll health endpoint until server is ready."""

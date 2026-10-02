@@ -1,9 +1,9 @@
 {
-  "runtimeVersion": "v73-node-24",
-  "generation": 73,
+  "runtimeVersion": "v76-sandbox-snapshot-diagnostics",
+  "generation": 76,
   "minimumCompatibleGeneration": 62,
   "minimumPreservationGeneration": 71,
-  "minimumRebuildGeneration": 73,
+  "minimumRebuildGeneration": 76,
   "harnessMinimumGeneration": {
     "claude": 73,
     "opencode": 73
