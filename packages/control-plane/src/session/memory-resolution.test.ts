@@ -172,3 +172,19 @@ it("quotes instruction-like stored text and never interpolates fact bodies", asy
   expect(text).not.toContain("\n## System");
   expect(text).not.toContain("FACT_BODY_MUST_NOT_BE_INJECTED");
 });
+
+it("counts scope labels and JSON escaping against the materializer payload budget", async () => {
+  const repo = { repoOwner: "nested/".repeat(5000), repoName: "api", repoId: 123 };
+  const scoped = { ...target, canonicalUserId: null, repositories: [repo] };
+  const records = Array.from({ length: 20 }, (_, index) =>
+    record(`large-label-${index}`, {
+      scope: { type: "repository", repoOwner: repo.repoOwner, repoName: repo.repoName },
+      repoId: 123,
+      description: "\0".repeat(420),
+    })
+  );
+  const manifest = await resolveMemoryRecords(records, scoped);
+  expect(manifest.items.length).toBeLessThan(records.length);
+  expect(manifest.truncatedCount).toBe(records.length - manifest.items.length);
+  expect(renderMemorySection(manifest, records).length).toBeLessThan(240_000);
+});

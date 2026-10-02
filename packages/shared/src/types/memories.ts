@@ -12,6 +12,7 @@ export const MEMORY_LIMITS = {
   directives: 12_000,
   catalog: 24_000,
   catalogRecords: 200,
+  rendered: 240_000,
   writesPerSession: 20,
   pendingPerSession: 5,
 } as const;
