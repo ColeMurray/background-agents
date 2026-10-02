@@ -210,7 +210,7 @@ export function useSessionTargetPicker({
     !(teamId && draftTarget?.kind === "none" && !hasExplicitSelection) &&
     (hasExplicitSelection || selectionContext.defaultEnvironmentId === defaultEnvironmentId) &&
     !selectionError &&
-    !(hasExplicitSelection && targetCatalogError) &&
+    !targetCatalogError &&
     targetIsAvailable(draftTarget, repos, environments)
       ? draftTarget
       : null;
@@ -251,7 +251,12 @@ export function useSessionTargetPicker({
       }
       return;
     }
-    if (sessionTarget) return;
+    // A failed catalog neither confirms nor replaces this context's automatic target; a draft
+    // left from another team or default still falls back to the new context's catalogs.
+    const draftInContext =
+      selectionContext.teamId === teamId &&
+      selectionContext.defaultEnvironmentId === defaultEnvironmentId;
+    if (sessionTarget || (targetCatalogError && draftInContext)) return;
 
     let nextTarget: SessionTarget | null = null;
     if (
@@ -295,6 +300,7 @@ export function useSessionTargetPicker({
     loadingEnvironments,
     loadingRepos,
     repos,
+    selectionContext.defaultEnvironmentId,
     selectionContext.teamId,
     selectionInvalidated,
     sessionTarget,
