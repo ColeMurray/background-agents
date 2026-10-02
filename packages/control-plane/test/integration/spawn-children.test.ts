@@ -693,6 +693,51 @@ describe("POST /sessions/:parentId/children — spawn child", () => {
     expect(storedChild?.reasoningEffort).toBeNull();
   });
 
+  it.each(["readable", "inaccessible", "ownerless"])(
+    "spawns with a %s parent project without failing child creation",
+    async (access) => {
+      const userId = "project-child-owner";
+      if (access !== "ownerless") {
+        await seedActiveUser(userId);
+        await env.DB.prepare(
+          "INSERT INTO roles (id,name,normalized_name,is_system) VALUES ('child-role','Child role','child role',0)"
+        ).run();
+        await env.DB.prepare(
+          "UPDATE user_role_assignments SET role_id = 'child-role' WHERE user_id = ?"
+        )
+          .bind(userId)
+          .run();
+        if (access === "readable")
+          await env.DB.prepare(
+            "INSERT INTO role_permissions (role_id,permission_id) VALUES ('child-role','projects.read')"
+          ).run();
+      }
+      const { parentName, sandboxToken, store } = await setupParent({
+        repoId: 12345,
+        userId: "user-1",
+        ...(access !== "ownerless" ? { canonicalUserId: userId } : {}),
+      });
+      await env.DB.prepare(
+        "INSERT INTO projects (id,slug,name,owner_user_id,created_at,updated_at) VALUES ('project-child','child','Child',?,1,1)"
+      )
+        .bind(userId)
+        .run();
+      await env.DB.prepare("UPDATE sessions SET project_id = 'project-child' WHERE id = ?")
+        .bind(parentName)
+        .run();
+      const response = await SELF.fetch(`https://test.local/sessions/${parentName}/children`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${sandboxToken}` },
+        body: JSON.stringify({ title: "Child", prompt: "Continue" }),
+      });
+      expect(response.status, await response.clone().text()).toBe(201);
+      const { sessionId } = await response.json<{ sessionId: string }>();
+      expect((await store.get(sessionId))?.projectId).toBe(
+        access === "readable" ? "project-child" : null
+      );
+    }
+  );
+
   it("propagates null userId from parent to child", async () => {
     const { parentName, sandboxToken, store } = await setupParent({
       repoId: 12345,

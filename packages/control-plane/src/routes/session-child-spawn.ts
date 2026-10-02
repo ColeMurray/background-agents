@@ -1,3 +1,6 @@
+import { canReadProject } from "@open-inspect/shared/types/projects";
+import { ProjectStore } from "../db/project-store";
+import { projectViewer } from "../session/project-context";
 import { checkHarnessCompatibility } from "@open-inspect/shared/harnesses";
 import { parseBody } from "./body";
 import { Hono } from "hono";
@@ -300,6 +303,13 @@ export async function handleSpawnChild(
     parentEnvironmentId
   );
 
+  let childProjectId: string | null = null;
+  if (parentSession?.projectId && childOwnerUserId) {
+    const project = await new ProjectStore(ctx.db).get(parentSession.projectId);
+    if (project && canReadProject(await projectViewer(ctx.db, childOwnerUserId), project))
+      childProjectId = project.id;
+  }
+
   const input: SessionInitInput = {
     ownerTeamId: teamId,
     visibility: parentSession?.visibility ?? "workspace",
@@ -330,7 +340,7 @@ export async function handleSpawnChild(
     parentSessionId: parentId,
     spawnSource: "agent",
     spawnDepth: childDepth,
-    projectId: parentSession?.projectId ?? null,
+    projectId: childProjectId,
     automationId: parentSession?.automationId ?? null,
     automationRunId: parentSession?.automationRunId ?? null,
     managedSkillsSourceSessionId: parentId,
