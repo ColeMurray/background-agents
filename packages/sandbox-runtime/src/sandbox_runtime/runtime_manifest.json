@@ -1,9 +1,9 @@
 {
-  "runtimeVersion": "v74-agent-trajectory-logging",
-  "generation": 74,
+  "runtimeVersion": "v75-sandbox-transport-diagnostics",
+  "generation": 75,
   "minimumCompatibleGeneration": 62,
   "minimumPreservationGeneration": 71,
-  "minimumRebuildGeneration": 74,
+  "minimumRebuildGeneration": 75,
   "harnessMinimumGeneration": {
     "claude": 73,
     "opencode": 73

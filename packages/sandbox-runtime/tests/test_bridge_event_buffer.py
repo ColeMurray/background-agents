@@ -245,6 +245,7 @@ class TestAssistantTextDelivery:
         opening = "Reading the repository."
         answer = f"{opening}\n\n{'x' * MAX_EVENT_BYTES}\n\nFinal answer."
         ws = FakeWs()
+        bridge.log = MagicMock()
 
         completion = await self._run(
             bridge,
@@ -257,6 +258,13 @@ class TestAssistantTextDelivery:
         assert [event["content"] for event in sent if event["type"] == "token"] == [opening]
         assert completion["success"] is False
         assert completion["error"] == self.UNDELIVERED
+        summary = next(
+            call.kwargs for call in bridge.log.info.call_args_list if call.args == ("prompt.run",)
+        )
+        assert summary["source_outcome"] == "success"
+        assert summary["outcome"] == "error"
+        assert summary["error_category"] == "text_undelivered"
+        assert summary["emitted_event_count"] == 2
 
     @pytest.mark.asyncio
     async def test_text_the_envelope_pushes_past_the_limit_fails_the_turn(
