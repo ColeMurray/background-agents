@@ -2,6 +2,8 @@
 
 import asyncio
 import json
+import os
+import tempfile
 from pathlib import Path
 from typing import Any
 from urllib.parse import quote
@@ -64,16 +66,27 @@ class MemoryMaterializer:
         # A restored image may contain another session's context. Never retain it
         # on an empty response, old server, failed fetch, or malformed payload.
         self.destination.unlink(missing_ok=True)
+        # Remove legacy and abandoned staging files before any request, including
+        # empty/404 responses. Unlink symlinks themselves, never their targets.
+        self.destination.with_suffix(".tmp").unlink(missing_ok=True)
+        for abandoned in self.destination.parent.glob(".oi-memory-*.tmp"):
+            abandoned.unlink(missing_ok=True)
         for attempt in range(MAX_ATTEMPTS):
             try:
                 rendered = await self._fetch()
                 if rendered:
                     self.destination.parent.mkdir(parents=True, exist_ok=True)
-                    temporary = self.destination.with_suffix(".tmp")
+                    # mkstemp creates a unique O_EXCL file with mode 0600 before
+                    # writing any content; an existing symlink cannot be followed.
+                    descriptor, name = tempfile.mkstemp(
+                        prefix=".oi-memory-", suffix=".tmp", dir=self.destination.parent
+                    )
+                    temporary = Path(name)
                     try:
-                        with temporary.open("w", encoding="utf-8") as stream:
-                            temporary.chmod(0o600)
+                        with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
                             stream.write(rendered)
+                            stream.flush()
+                            os.fsync(stream.fileno())
                         temporary.replace(self.destination)
                     finally:
                         temporary.unlink(missing_ok=True)

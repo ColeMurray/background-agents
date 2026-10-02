@@ -39,8 +39,11 @@ async def test_empty_or_old_server_removes_restored_memory(
     tmp_path: Path, status: int, body: dict
 ) -> None:
     (tmp_path / "oi-memory.md").write_text("another session's memory")
+    (tmp_path / "oi-memory.tmp").write_text("stale private memory")
+    (tmp_path / ".oi-memory-abandoned.tmp").write_text("stale private memory")
     await materializer(tmp_path, lambda _: httpx.Response(status, json=body)).materialize()
     assert not (tmp_path / "oi-memory.md").exists()
+    assert not list(tmp_path.glob("*.tmp"))
     assert append_memory(None, tmp_path) is None
     assert append_memory("guidance", tmp_path) == "guidance"
 
@@ -238,3 +241,33 @@ def test_opencode_tools_use_session_transport_and_strip_caller_identity():
     body = json.loads(requests[1]["body"])
     assert body["scope"] == {"type": "repository", "repoOwner": "group/subgroup", "repoName": "api"}
     assert "ownerUserId" not in body and "sessionId" not in body
+
+
+@pytest.mark.asyncio
+async def test_staging_symlinks_do_not_overwrite_their_targets(tmp_path: Path) -> None:
+    target = tmp_path / "unrelated.txt"
+    target.write_text("do not modify")
+    (tmp_path / "oi-memory.tmp").symlink_to(target)
+    (tmp_path / ".oi-memory-restored.tmp").symlink_to(target)
+    await materializer(
+        tmp_path, lambda _: httpx.Response(200, json={"schemaVersion": 1, "rendered": "private"})
+    ).materialize()
+    assert target.read_text() == "do not modify"
+    assert memory_text(tmp_path) == "private"
+    assert not list(tmp_path.glob("*.tmp"))
+    assert (tmp_path / "oi-memory.md").stat().st_mode & 0o777 == 0o600
+
+
+@pytest.mark.asyncio
+async def test_failed_install_removes_private_staging_file(tmp_path: Path, monkeypatch) -> None:
+    def fail_replace(self, destination):
+        raise OSError("installation failed")
+
+    monkeypatch.setattr(Path, "replace", fail_replace)
+    with pytest.raises(OSError, match="installation failed"):
+        await materializer(
+            tmp_path,
+            lambda _: httpx.Response(200, json={"schemaVersion": 1, "rendered": "private"}),
+        ).materialize()
+    assert not list(tmp_path.glob("*.tmp"))
+    assert memory_text(tmp_path) is None
