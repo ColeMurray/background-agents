@@ -1,8 +1,9 @@
 // @vitest-environment jsdom
 /// <reference types="@testing-library/jest-dom" />
 
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import * as matchers from "@testing-library/jest-dom/matchers";
 import type { ReactNode } from "react";
 import { MAX_AUTOMATION_REPOSITORIES } from "@open-inspect/shared/types/automations";
@@ -132,8 +133,21 @@ const singleRepository = [
 const openRepositoryPicker = () =>
   fireEvent.click(screen.getByRole("button", { name: "Repository Configuration" }));
 
+beforeAll(() => {
+  // Radix Select uses pointer capture, which jsdom lacks.
+  Element.prototype.hasPointerCapture = () => false;
+  Element.prototype.releasePointerCapture = () => {};
+  Element.prototype.scrollIntoView = vi.fn();
+});
+
+async function chooseTeam(user: ReturnType<typeof userEvent.setup>, name: string) {
+  await user.click(screen.getByRole("combobox", { name: "Team" }));
+  await user.click(await screen.findByRole("option", { name }));
+}
+
 describe("automation cron submission", () => {
-  it("scopes creation targets and clears selections when the team changes", () => {
+  it("scopes creation targets and clears selections when the team changes", async () => {
+    const user = userEvent.setup();
     environmentsValue = [
       {
         id: "env-draft",
@@ -162,9 +176,7 @@ describe("automation cron submission", () => {
     openRepositoryPicker();
     fireEvent.click(screen.getByRole("button", { name: "Select Multiple" }));
     fireEvent.click(screen.getByRole("checkbox", { name: /Draft environment/ }));
-    fireEvent.change(screen.getByRole("combobox", { name: "Team" }), {
-      target: { value: "team-2" },
-    });
+    await chooseTeam(user, "Design");
     expect(scopeMocks.repos).toHaveBeenLastCalledWith(true, "team-2");
     expect(scopeMocks.environments).toHaveBeenLastCalledWith({ ownerTeamId: "team-2" });
     fireEvent.submit(container.querySelector("form")!);
@@ -172,7 +184,7 @@ describe("automation cron submission", () => {
       expect.objectContaining({ teamId: "team-2", repositories: [], environmentIds: [] })
     );
     scopeMocks.allowWorkspace = false;
-    fireEvent.change(screen.getByRole("combobox", { name: "Team" }), { target: { value: "" } });
+    await chooseTeam(user, "Workspace (no team)");
     expect(screen.getByRole("button", { name: "Create Automation" })).toBeDisabled();
     fireEvent.submit(container.querySelector("form")!);
     expect(onSubmit).toHaveBeenCalledTimes(1);
@@ -195,10 +207,9 @@ describe("automation cron submission", () => {
       />
     );
     expect(screen.getByRole("combobox", { name: "Team" })).toBeDisabled();
-    expect(screen.getByRole("combobox", { name: "Team" })).toHaveValue(teamId ?? "");
-    if (!teamId) {
-      expect(screen.getByRole("option", { name: "Workspace (no team)" })).toBeInTheDocument();
-    }
+    expect(screen.getByRole("combobox", { name: "Team" })).toHaveTextContent(
+      teamId ? "Engineering" : "Workspace (no team)"
+    );
     fireEvent.submit(container.querySelector("form")!);
     expect(onSubmit).toHaveBeenCalledTimes(1);
     expect(onSubmit.mock.calls[0][0]).not.toHaveProperty("teamId");

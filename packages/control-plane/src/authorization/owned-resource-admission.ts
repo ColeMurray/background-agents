@@ -52,6 +52,21 @@ type EnvironmentNeed = Extract<RouteAuthorizationRequirement, { kind: "environme
  * {@link evaluateEnvironmentAdmission}; infrastructure failures propagate to the router.
  */
 export async function evaluateOwnedResourceAdmission(
+  requirement: Extract<RouteAuthorizationRequirement, { kind: "environment" }>,
+  params: RouteParams,
+  ctx: RequestContext
+): Promise<OwnedResourceAdmissionOutcome>;
+export async function evaluateOwnedResourceAdmission(
+  requirement: Extract<RouteAuthorizationRequirement, { kind: "automation" }>,
+  params: RouteParams,
+  ctx: RequestContext
+): Promise<AutomationAdmissionOutcome>;
+export async function evaluateOwnedResourceAdmission(
+  requirement: Extract<RouteAuthorizationRequirement, { kind: "automation" | "environment" }>,
+  params: RouteParams,
+  ctx: RequestContext
+): Promise<OwnedResourceAdmissionOutcome | AutomationAdmissionOutcome>;
+export async function evaluateOwnedResourceAdmission(
   requirement: Extract<RouteAuthorizationRequirement, { kind: "automation" | "environment" }>,
   params: RouteParams,
   ctx: RequestContext

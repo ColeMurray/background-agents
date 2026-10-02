@@ -1,8 +1,9 @@
 // @vitest-environment jsdom
 /// <reference types="@testing-library/jest-dom" />
 
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import * as matchers from "@testing-library/jest-dom/matchers";
 import type { ReactNode } from "react";
 import { DEFAULT_MODEL } from "@open-inspect/shared/models";
@@ -102,17 +103,30 @@ beforeEach(() => {
   vi.mocked(browserApiFetch).mockResolvedValue(Response.json({ automation: { id: "new-auto" } }));
 });
 
+beforeAll(() => {
+  // Radix Select uses pointer capture, which jsdom lacks.
+  Element.prototype.hasPointerCapture = () => false;
+  Element.prototype.releasePointerCapture = () => {};
+  Element.prototype.scrollIntoView = vi.fn();
+});
+
+async function chooseTeam(user: ReturnType<typeof userEvent.setup>, name: string) {
+  await user.click(screen.getByRole("combobox", { name: "Team" }));
+  await user.click(await screen.findByRole("option", { name }));
+}
+
 describe("NewAutomationPage template pre-fill", () => {
   it.each([undefined, "team-1"])(
     "keeps navigation scope %s when the selected creation owner changes",
     async (teamId) => {
       search = `template=find-bugs${teamId ? `&teamId=${teamId}` : ""}`;
+      const user = userEvent.setup();
       const { container } = render(<NewAutomationPage />);
       expect(screen.getByDisplayValue("Find bugs")).toBeInTheDocument();
-      expect(screen.getByRole("combobox", { name: "Team" })).toHaveValue(teamId ?? "");
-      fireEvent.change(screen.getByRole("combobox", { name: "Team" }), {
-        target: { value: teamId ? "" : "team-1" },
-      });
+      expect(screen.getByRole("combobox", { name: "Team" })).toHaveTextContent(
+        teamId ? "Engineering" : "Workspace (no team)"
+      );
+      await chooseTeam(user, teamId ? "Workspace (no team)" : "Engineering");
       const scopeQuery = teamId ? "?teamId=team-1" : "";
       expect(screen.getByRole("link", { name: "Back to automations" })).toHaveAttribute(
         "href",
@@ -130,10 +144,10 @@ describe("NewAutomationPage template pre-fill", () => {
   it("follows an in-place change of the query-selected team", () => {
     search = "teamId=team-1";
     const view = render(<NewAutomationPage />);
-    expect(screen.getByRole("combobox", { name: "Team" })).toHaveValue("team-1");
+    expect(screen.getByRole("combobox", { name: "Team" })).toHaveTextContent("Engineering");
     search = "teamId=team-2";
     view.rerender(<NewAutomationPage />);
-    expect(screen.getByRole("combobox", { name: "Team" })).toHaveValue("team-2");
+    expect(screen.getByRole("combobox", { name: "Team" })).toHaveTextContent("Design");
     expect(screen.getByRole("link", { name: "Back to automations" })).toHaveAttribute(
       "href",
       "/automations?teamId=team-2"
@@ -143,7 +157,7 @@ describe("NewAutomationPage template pre-fill", () => {
   it("treats the API's workspace filter sentinel as no team scope", () => {
     search = "teamId=null";
     render(<NewAutomationPage />);
-    expect(screen.getByRole("combobox", { name: "Team" })).toHaveValue("");
+    expect(screen.getByRole("combobox", { name: "Team" })).toHaveTextContent("Workspace (no team)");
     expect(screen.getByRole("link", { name: "Back to automations" })).toHaveAttribute(
       "href",
       "/automations"
@@ -155,10 +169,9 @@ describe("NewAutomationPage template pre-fill", () => {
     vi.mocked(browserApiFetch).mockResolvedValue(
       Response.json({ automation: { id: "new-auto" }, webhookApiKey: "secret" })
     );
+    const user = userEvent.setup();
     const { container } = render(<NewAutomationPage />);
-    fireEvent.change(screen.getByRole("combobox", { name: "Team" }), {
-      target: { value: "" },
-    });
+    await chooseTeam(user, "Workspace (no team)");
     fireEvent.submit(container.querySelector("form")!);
     expect(await screen.findByRole("link", { name: "Go to Automation" })).toHaveAttribute(
       "href",
