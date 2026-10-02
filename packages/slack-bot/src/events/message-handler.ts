@@ -331,11 +331,19 @@ async function handleIncomingMessage(params: IncomingMessageParams): Promise<voi
 
   const result = await createClassifier(env).classify(
     promptText,
-    { channelId: channel, teamId, channelName, channelDescription, threadTs, previousMessages },
+    {
+      channelId: channel,
+      teamId,
+      userId: user,
+      channelName,
+      channelDescription,
+      threadTs,
+      previousMessages,
+    },
     traceId
   );
   if (result.needsClarification || !result.target) {
-    const catalog = await loadTargetCatalog(env, traceId, teamId);
+    const catalog = await loadTargetCatalog(env, traceId, teamId, user);
     const clarificationThreadTs = threadTs || ts;
     const requestId = crypto.randomUUID();
     await storePendingRequest(env, {

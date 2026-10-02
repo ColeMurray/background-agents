@@ -17,18 +17,18 @@ export interface TargetCatalog {
 }
 
 /**
- * Fetch both target lists concurrently. Each side is served from its own
- * cache; environments fail open to an empty list, so an environments outage
- * degrades the whole catalog to repository-only.
+ * Fetch both target lists concurrently. Workspace reads use caches; team
+ * reads are authorized afresh for the current user and fail closed to [].
  */
 export async function loadTargetCatalog(
   env: Env,
   traceId?: string,
-  teamId?: string | null
+  teamId?: string | null,
+  userId?: string
 ): Promise<TargetCatalog> {
   const [repos, environments] = await Promise.all([
-    getAvailableRepos(env, traceId, teamId),
-    getAvailableEnvironments(env, traceId, teamId),
+    getAvailableRepos(env, traceId, teamId, userId),
+    getAvailableEnvironments(env, traceId, teamId, userId),
   ]);
   return { repos, environments };
 }

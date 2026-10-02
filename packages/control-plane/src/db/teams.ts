@@ -46,6 +46,15 @@ export class TeamStore {
     return row ? toTeam(row) : null;
   }
 
+  async isActive(id: string): Promise<boolean> {
+    return (
+      (await this.db
+        .prepare("SELECT 1 AS ok FROM teams WHERE id = ? AND archived_at IS NULL")
+        .bind(id)
+        .first()) !== null
+    );
+  }
+
   async getBySlug(slug: string): Promise<Team | null> {
     const row = await this.db.prepare("SELECT * FROM teams WHERE slug = ?").bind(slug).first();
     return row ? toTeam(row) : null;

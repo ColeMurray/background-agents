@@ -46,53 +46,72 @@ describe("getAvailableEnvironments", () => {
     vi.clearAllMocks();
   });
 
-  it("isolates team memory and KV caches from workspace environments", async () => {
+  it("reads teams afresh per user, keeping workspace reads actorless and cached", async () => {
     const env = makeEnv(jsonResponse({ environments: [], total: 0 }));
     const fetch = vi.mocked(env.CONTROL_PLANE.fetch);
-    fetch.mockImplementation(async (input) => {
-      const teamId = new URL(String(input)).searchParams.get("teamId");
+    fetch.mockImplementation(async (_input, init) => {
+      const name = new Headers(init?.headers).get("X-OpenInspect-Actor")?.slice(6) ?? "workspace";
       return jsonResponse({
-        environments: [{ ...TEST_ENVIRONMENT, name: teamId ?? "workspace" }],
+        environments: [{ ...TEST_ENVIRONMENT, name }],
         total: 1,
       });
     });
-    expect((await getAvailableEnvironments(env, "trace", null))[0].name).toBe("workspace");
-    expect((await getAvailableEnvironments(env, "trace", "team-a"))[0].name).toBe("team-a");
-    expect((await getAvailableEnvironments(env, "trace", "team-b"))[0].name).toBe("team-b");
-    await getAvailableEnvironments(env, "trace", "team-a");
-    expect((await getAvailableEnvironments(env, "trace", null))[0].name).toBe("workspace");
-    expect(fetch).toHaveBeenCalledTimes(3);
-    expect(env.SLACK_KV.put).toHaveBeenCalledWith(
-      "slack:environments:team:team-a",
-      expect.any(String),
-      expect.anything()
-    );
-    clearEnvironmentsLocalCache();
-    fetch.mockImplementation(async () => new Response(null, { status: 503 }));
-    const stored = new Map(
-      vi.mocked(env.SLACK_KV.put).mock.calls.map(([key, value]) => [key, JSON.parse(String(value))])
-    );
-    vi.mocked(env.SLACK_KV.get).mockImplementation(async (key) =>
-      typeof key === "string" ? (stored.get(key) ?? null) : null
-    );
-    expect((await getAvailableEnvironments(env, "trace", "team-a"))[0].name).toBe("team-a");
-    expect((await getAvailableEnvironments(env, "trace", "team-b"))[0].name).toBe("team-b");
-    expect(await getAvailableEnvironments(env, "trace", "team-c")).toEqual([]);
-    expect(await getAvailableEnvironments(env, "trace", null)).toEqual(
-      stored.get("slack:environments")
-    );
-    expect(env.SLACK_KV.get).toHaveBeenCalledWith("slack:environments:team:team-a", "json");
-    expect(env.SLACK_KV.get).toHaveBeenCalledWith("slack:environments", "json");
-    clearEnvironmentsLocalCache();
-    vi.mocked(env.SLACK_KV.get).mockRejectedValueOnce(new Error("KV unavailable"));
+    expect((await getAvailableEnvironments(env, "trace", null, "U123"))[0].name).toBe("workspace");
+    expect((await getAvailableEnvironments(env, "trace", "team-a", "U123"))[0].name).toBe("U123");
+    expect((await getAvailableEnvironments(env, "trace", "team-a", "U456"))[0].name).toBe("U456");
+    expect((await getAvailableEnvironments(env, "trace", "team-a", "U123"))[0].name).toBe("U123");
+    expect((await getAvailableEnvironments(env, "trace", null, "U456"))[0].name).toBe("workspace");
+    expect(
+      fetch.mock.calls.map(([, init]) => new Headers(init?.headers).get("X-OpenInspect-Actor"))
+    ).toEqual([null, "slack:U123", "slack:U456", "slack:U123"]);
+    expect(fetch.mock.calls.map(([input]) => String(input))).toEqual([
+      "https://internal/environments",
+      "https://internal/environments?teamId=team-a",
+      "https://internal/environments?teamId=team-a",
+      "https://internal/environments?teamId=team-a",
+    ]);
+    expect(env.SLACK_KV.put).toHaveBeenCalledTimes(1);
+    expect(env.SLACK_KV.get).not.toHaveBeenCalled();
+  });
+
+  it("makes no team catalog request without a current user", async () => {
+    const env = makeEnv(new Error("should not fetch"));
     expect(await getAvailableEnvironments(env, "trace", "team-a")).toEqual([]);
+    expect(await getAvailableEnvironments(env, "trace", "team-a", "")).toEqual([]);
+    expect(env.CONTROL_PLANE.fetch).not.toHaveBeenCalled();
+    expect(env.SLACK_KV.get).not.toHaveBeenCalled();
+    expect(env.SLACK_KV.put).not.toHaveBeenCalled();
+  });
+
+  it.each<[string, Response | Error]>([
+    ["denied", new Response(null, { status: 403 })],
+    ["unavailable", new Response(null, { status: 503 })],
+    ["offline", new Error("CP offline")],
+    ["malformed", jsonResponse({ environments: [{ id: "env_bad" }], total: 1 })],
+    ["invalid JSON", new Response("not JSON")],
+  ])("fails closed on %s with preseeded caches", async (_name, result) => {
+    const env = makeEnv(result);
+    vi.mocked(env.CONTROL_PLANE.fetch).mockResolvedValueOnce(
+      jsonResponse({ environments: [TEST_ENVIRONMENT], total: 1 })
+    );
+    const workspaceEnvironments = await getAvailableEnvironments(env, "trace");
+    expect(workspaceEnvironments).toEqual([TEST_ENVIRONMENT]);
+    env.SLACK_KV.get = vi.fn().mockResolvedValue(workspaceEnvironments);
+    expect(await getAvailableEnvironments(env, "trace", "team-a", "U123")).toEqual([]);
+    expect(env.CONTROL_PLANE.fetch).toHaveBeenCalledTimes(2);
+    expect(env.SLACK_KV.get).not.toHaveBeenCalled();
+    expect(env.SLACK_KV.put).toHaveBeenCalledTimes(1);
+    expect(await getAvailableEnvironments(env, "trace")).toBe(workspaceEnvironments);
+    clearEnvironmentsLocalCache();
+    expect(await getAvailableEnvironments(env, "trace")).toEqual(workspaceEnvironments);
+    expect(env.SLACK_KV.get).toHaveBeenCalledWith("slack:environments", "json");
   });
 
   it("parses environments and retains memory even if the KV write fails", async () => {
     const env = makeEnv(jsonResponse({ environments: [TEST_ENVIRONMENT], total: 1 }));
     vi.mocked(env.SLACK_KV.put).mockRejectedValueOnce(new Error("KV unavailable"));
-    expect(await getAvailableEnvironments(env, "trace", "team-a")).toEqual([TEST_ENVIRONMENT]);
-    expect(await getAvailableEnvironments(env, "trace", "team-a")).toEqual([TEST_ENVIRONMENT]);
+    expect(await getAvailableEnvironments(env, "trace")).toEqual([TEST_ENVIRONMENT]);
+    expect(await getAvailableEnvironments(env, "trace")).toEqual([TEST_ENVIRONMENT]);
     expect(env.CONTROL_PLANE.fetch).toHaveBeenCalledTimes(1);
   });
 
@@ -135,7 +154,15 @@ describe("getEnvironmentById", () => {
 
   it("finds an environment by its stable id", async () => {
     const env = makeEnv(jsonResponse({ environments: [TEST_ENVIRONMENT], total: 1 }));
-    expect(await getEnvironmentById(env, "env_abc123")).toEqual(TEST_ENVIRONMENT);
+    expect(await getEnvironmentById(env, "env_abc123", "trace", "team-a", "U123")).toEqual(
+      TEST_ENVIRONMENT
+    );
+    expect(env.CONTROL_PLANE.fetch).toHaveBeenCalledWith(
+      "https://internal/environments?teamId=team-a",
+      expect.objectContaining({
+        headers: expect.objectContaining({ "X-OpenInspect-Actor": "slack:U123" }),
+      })
+    );
   });
 
   it("returns undefined for an unknown id", async () => {

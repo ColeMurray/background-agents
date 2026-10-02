@@ -39,10 +39,11 @@ import {
   permissionRequirement,
   sessionRequirement,
   requireAll,
+  resolveRepoOrError,
 } from "./shared";
 import { type SessionRouteContext, dispatchSession } from "./session-route";
 import { DEFAULT_BASE_BRANCH } from "../repos/default-branch";
-import { authorizeSessionTarget } from "./session-target-authorization";
+import { authorizeEnvironmentTarget, authorizeSessionTarget } from "./session-target-authorization";
 
 const logger = createLogger("router:session-child-spawn");
 const MAX_SPAWN_DEPTH = 2;
@@ -74,6 +75,21 @@ export async function handleSpawnChild(
 
   const parentSession = await sessionStore.get(parentId);
   const parentEnvironmentId = parentSession?.environmentId ?? null;
+  // Reject an incompatible inherited environment before settings resolution or child admission.
+  // The permission preflight runs first so a missing grant keeps its permission_required shape.
+  if (parentEnvironmentId) {
+    const permissionError = await authorizeSessionTarget(ctx, {
+      teamId: null,
+      environmentId: parentEnvironmentId,
+    });
+    if (permissionError) return permissionError;
+    const environmentError = await authorizeEnvironmentTarget(ctx, {
+      environmentId: parentEnvironmentId,
+      ownerTeamId: parentSession?.ownerTeamId ?? null,
+    });
+    if (environmentError) return environmentError;
+  }
+
   // Children inherit the parent's settings scope: its primary repo plus, for
   // environment-launched parents, that environment's overrides (design §13.5).
   const resolvedChildSandboxSettings = parentSession
@@ -155,11 +171,30 @@ export async function handleSpawnChild(
     }
   }
 
-  const targetAuthorizationError = authorizeSessionTarget(ctx, {
+  const inheritedRepositories =
+    parentRepoOwner && parentRepoName ? [{ owner: parentRepoOwner, name: parentRepoName }] : [];
+  const targetAuthorizationError = await authorizeSessionTarget(ctx, {
+    teamId: null,
     environmentId: parentEnvironmentId,
-    hasRepository: Boolean(parentRepoOwner && parentRepoName),
+    repositories: inheritedRepositories,
   });
   if (targetAuthorizationError) return targetAuthorizationError;
+
+  const teamId = parentSession?.ownerTeamId ?? null;
+  let childRepoId = spawnContext.repoId;
+  if (teamId && parentRepoOwner && parentRepoName) {
+    const resolved = await resolveRepoOrError(env, parentRepoOwner, parentRepoName, ctx, logger);
+    childRepoId = resolved.repoId;
+  }
+  const resolvedTargetAuthorizationError = await authorizeSessionTarget(ctx, {
+    teamId,
+    environmentId: parentEnvironmentId,
+    repositories: inheritedRepositories.map((repository) => ({
+      ...repository,
+      repoId: childRepoId,
+    })),
+  });
+  if (resolvedTargetAuthorizationError) return resolvedTargetAuthorizationError;
 
   let enabledModels: ValidModel[];
   try {
@@ -256,7 +291,7 @@ export async function handleSpawnChild(
     sessionId: childId,
     repoOwner: spawnContext.repoOwner,
     repoName: spawnContext.repoName,
-    repoId: spawnContext.repoId,
+    repoId: childRepoId,
     environmentId: parentEnvironmentId,
     branch:
       spawnContext.repoOwner && spawnContext.repoName

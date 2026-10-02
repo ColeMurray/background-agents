@@ -140,6 +140,8 @@ export type SessionHeaderProps = {
   onToggleDetails: () => void;
   onToggleDesktopDetails: () => void;
   onOpenMobileDetails: () => void;
+  /** Opens the details overlay on the section that lists captured media. */
+  onOpenMobileMedia: () => void;
   actions: SessionActionProps;
   optimisticTitle?: string;
   renameSession: (title: string) => Promise<boolean>;
@@ -162,6 +164,7 @@ export function SessionHeader({
   onToggleDetails,
   onToggleDesktopDetails,
   onOpenMobileDetails,
+  onOpenMobileMedia,
   actions,
   optimisticTitle,
   renameSession,
@@ -288,7 +291,7 @@ export function SessionHeader({
             sandbox={sandbox}
             triggerRef={actionsButtonRef}
             onOpenDetails={onOpenMobileDetails}
-            onOpenMedia={onOpenMobileDetails}
+            onOpenMedia={onOpenMobileMedia}
           />
           <div className="hidden items-center gap-1 md:flex">
             {capabilities.read && (

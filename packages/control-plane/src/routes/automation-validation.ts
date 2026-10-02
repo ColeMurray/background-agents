@@ -8,35 +8,17 @@ import {
   createAutomationRequestSchema,
   validateAutomationTargetCounts,
 } from "@open-inspect/shared/types/automations";
-import type { PermissionId } from "@open-inspect/shared/rbac";
 import { isValidReasoningEffort } from "@open-inspect/shared/models";
 import { type AutomationRepositoryInsert } from "../db/automation-store";
 import { EnvironmentStore } from "../db/environments";
-import { type RequestContext, json, resolveRepoOrError } from "./shared";
+import { type RequestContext, resolveRepoOrError } from "./shared";
+import { authorizeSessionTarget } from "./session-target-authorization";
 import type { Env } from "../types";
 import type { SqlDatabase } from "../db/sql-database";
 import { z } from "zod";
 import { createLogger } from "../logger";
 
 const logger = createLogger("router:automations");
-
-export function requireTargetPermissions(
-  ctx: RequestContext,
-  requiredPermissions: readonly PermissionId[]
-): Response | null {
-  const authorization = ctx.authorization;
-  if (!authorization) return json({ error: "Authorization unavailable" }, 503);
-  const missingPermission = requiredPermissions.find(
-    (permission) => !authorization.permissions.includes(permission)
-  );
-  if (missingPermission) {
-    return json(
-      { error: "Forbidden", code: "permission_required", permission: missingPermission },
-      403
-    );
-  }
-  return null;
-}
 
 export const createAutomationBodySchema = createAutomationRequestSchema.extend({
   // Bot-asserted actor display fields are cosmetic only; identity enforcement
@@ -192,7 +174,8 @@ export function getEnvironmentSelection(body: {
 
 /**
  * Verify every selected environment exists — a selection must not silently
- * point at deleted environments.
+ * point at deleted environments. Automations are workspace-owned, so team-owned
+ * environments are treated as missing rather than revealed.
  *
  * @throws TargetSelectionError naming every missing environment.
  */
@@ -203,7 +186,9 @@ export async function resolveEnvironmentSelection(
   if (environmentIds.length === 0) return;
   const store = new EnvironmentStore(db);
   const found = await Promise.all(environmentIds.map((id) => store.getById(id)));
-  const missing = environmentIds.filter((_, index) => !found[index]);
+  const missing = environmentIds.filter(
+    (_, index) => !found[index] || found[index].owner_team_id !== null
+  );
   if (missing.length > 0) {
     throw new TargetSelectionError(`Environment not found: ${missing.join(", ")}`);
   }
@@ -217,8 +202,18 @@ export async function resolveEnvironmentSelection(
 export async function resolveRepositorySelection(
   env: Env,
   repositories: NormalizedRepositoryInput[],
-  ctx: RequestContext
-): Promise<AutomationRepositoryInsert[]> {
+  ctx: RequestContext,
+  teamId: string | null
+): Promise<AutomationRepositoryInsert[] | Response> {
+  const targetAuthorizationError = await authorizeSessionTarget(ctx, {
+    teamId: null,
+    repositories: repositories.map((repository) => ({
+      owner: repository.repoOwner,
+      name: repository.repoName,
+    })),
+  });
+  if (targetAuthorizationError) return targetAuthorizationError;
+
   const settled = await Promise.allSettled(
     repositories.map((repository) =>
       resolveRepoOrError(env, repository.repoOwner, repository.repoName, ctx, logger)
@@ -229,7 +224,7 @@ export async function resolveRepositorySelection(
     return result.value;
   });
 
-  return repositories.map((repository, index) => {
+  const inserts = repositories.map((repository, index) => {
     const access = resolved[index];
     return {
       repo_owner: repository.repoOwner,
@@ -238,6 +233,15 @@ export async function resolveRepositorySelection(
       base_branch: repository.baseBranch ?? access.defaultBranch,
     };
   });
+  const resolvedTargetAuthorizationError = await authorizeSessionTarget(ctx, {
+    teamId,
+    repositories: inserts.map((repository) => ({
+      owner: repository.repo_owner,
+      name: repository.repo_name,
+      repoId: repository.repo_id,
+    })),
+  });
+  return resolvedTargetAuthorizationError ?? inserts;
 }
 
 /** Extract the watched channel IDs from a slack automation's `slack_channel` condition. */

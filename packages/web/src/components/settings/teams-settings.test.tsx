@@ -83,6 +83,7 @@ const capabilities = {
   canManageRepositories: false,
   canManageBindings: false,
   canManageAutomations: false,
+  canManageEnvironments: false,
   canManageSecrets: false,
   canArchive: true,
 };
@@ -252,6 +253,30 @@ describe("Teams settings", () => {
     expect(screen.getByRole("button", { name: "Save changes" })).toBeDisabled();
     expect(screen.getByRole("button", { name: "Archive team" })).toBeDisabled();
     expect(screen.getByRole("combobox", { name: "Join policy" })).toBeDisabled();
+    expect(screen.getByRole("combobox", { name: "Default visibility" })).toBeDisabled();
+  });
+
+  it("PATCHes join policy and default visibility chosen from the dropdowns", async () => {
+    mocks.update.mockResolvedValue({
+      ...team,
+      joinPolicy: "open",
+      defaultVisibility: "private",
+      capabilities,
+    });
+    render(<TeamDetail team={{ ...team, capabilities }} />);
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("combobox", { name: "Join policy" }));
+    await user.click(await screen.findByRole("option", { name: "Open" }));
+    await user.click(screen.getByRole("combobox", { name: "Default visibility" }));
+    await user.click(await screen.findByRole("option", { name: "Private" }));
+    expect(screen.getByRole("combobox", { name: "Join policy" })).toHaveTextContent("Open");
+    fireEvent.click(screen.getByRole("button", { name: "Save changes" }));
+    await waitFor(() =>
+      expect(mocks.update).toHaveBeenCalledWith({
+        joinPolicy: "open",
+        defaultVisibility: "private",
+      })
+    );
   });
 
   it("enables metadata and lifecycle controls with capabilities", () => {
@@ -334,9 +359,9 @@ describe("Teams settings", () => {
         members={[{ ...member, role: "member" }]}
       />
     );
-    fireEvent.change(screen.getByRole("combobox", { name: "Role for Ada" }), {
-      target: { value: "lead" },
-    });
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("combobox", { name: "Role for Ada" }));
+    await user.click(await screen.findByRole("option", { name: "Lead" }));
     await waitFor(() => expect(mocks.setMember).toHaveBeenCalledWith("user_one", "lead"));
   });
 

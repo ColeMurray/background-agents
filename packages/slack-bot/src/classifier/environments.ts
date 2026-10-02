@@ -6,20 +6,23 @@
  * list**) so an environments-fetch problem never blocks classification —
  * rules and channel associations targeting an environment are simply skipped,
  * like rules targeting an inaccessible repository.
+ * Team catalogs instead require a current user and bypass all caches.
  */
 
 import { environmentSchema, listEnvironmentsResponseSchema } from "@open-inspect/shared";
 import type { Environment } from "@open-inspect/shared/types/environments";
 import type { Env } from "../types";
 import { createCachedResource } from "./cached-resource";
-import { fetchControlPlaneJson } from "./control-plane";
+import { ControlPlaneRequestError, fetchControlPlaneJson } from "./control-plane";
+import { createLogger } from "../logger";
+
+const log = createLogger("environments");
 
 const environments = createCachedResource<Environment[]>({
   name: "environments",
   kvKey: "slack:environments",
-  load: async (env, traceId, teamId) => {
-    const path = teamId ? `/environments?teamId=${encodeURIComponent(teamId)}` : "/environments";
-    const body = await fetchControlPlaneJson(env, path, traceId);
+  load: async (env, traceId) => {
+    const body = await fetchControlPlaneJson(env, "/environments", traceId);
     // Throw on malformed fresh data so the cache can fall back to the KV
     // last-known-good copy instead of overwriting it with an empty list.
     return listEnvironmentsResponseSchema.parse(body).environments;
@@ -42,9 +45,31 @@ const environments = createCachedResource<Environment[]>({
 export async function getAvailableEnvironments(
   env: Env,
   traceId?: string,
-  teamId?: string | null
+  teamId?: string | null,
+  userId?: string
 ): Promise<Environment[]> {
-  return environments.get(env, traceId, teamId);
+  if (teamId) {
+    if (!userId) return [];
+    // Team membership and grants must be checked on every read.
+    try {
+      const body = await fetchControlPlaneJson(
+        env,
+        `/environments?teamId=${encodeURIComponent(teamId)}`,
+        traceId,
+        userId
+      );
+      return listEnvironmentsResponseSchema.parse(body).environments;
+    } catch (e) {
+      log.warn("control_plane.fetch_environments", {
+        trace_id: traceId,
+        outcome: "error",
+        http_status: e instanceof ControlPlaneRequestError ? e.status : undefined,
+        error: e instanceof Error ? e : new Error(String(e)),
+      });
+      return [];
+    }
+  }
+  return environments.get(env, traceId);
 }
 
 /**
@@ -54,9 +79,10 @@ export async function getEnvironmentById(
   env: Env,
   environmentId: string,
   traceId?: string,
-  teamId?: string | null
+  teamId?: string | null,
+  userId?: string
 ): Promise<Environment | undefined> {
-  const all = await getAvailableEnvironments(env, traceId, teamId);
+  const all = await getAvailableEnvironments(env, traceId, teamId, userId);
   return all.find((environment) => environment.id === environmentId);
 }
 

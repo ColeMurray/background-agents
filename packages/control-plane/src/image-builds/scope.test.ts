@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type * as SourceControlModule from "../source-control";
 import type * as IntegrationSettingsResolutionModule from "../session/integration-settings-resolution";
 import type { Env } from "../types";
+import { EnvironmentStore } from "../db/environments";
 import { SecretDecryptionError } from "../db/scoped-secrets";
 import { ImageBuildPlanningError, ImageBuildScopeNotFoundError } from "./errors";
 import { computeRepositoriesFingerprint } from "./fingerprint";
@@ -299,6 +300,15 @@ describe("listEnabledScopes", () => {
       { kind: "repo", id: "acme/web" },
     ]);
   });
+
+  it("omits environments the filter excludes", async () => {
+    const db = fakeDb({
+      environment: { id: "env_1", prebuild_enabled: 1 },
+      enabledRepos: [{ repo_owner: "acme", repo_name: "web" }],
+    });
+
+    expect(await listEnabledScopes(db, () => false)).toEqual([{ kind: "repo", id: "acme/web" }]);
+  });
 });
 
 describe("listEnabledScopeUnits", () => {
@@ -339,6 +349,20 @@ describe("listEnabledScopeUnits", () => {
     const units = await listEnabledScopeUnits(envWith(db), db);
 
     expect(units.map((unit) => unit.scope.kind)).toEqual(["environment"]);
+  });
+
+  it("drops filtered environments before hydrating their repositories", async () => {
+    const db = fakeDb({
+      environment: { id: "env_hidden", prebuild_enabled: 1, name: "Hidden" },
+      repositories: [{ position: 0, repo_owner: "acme", repo_name: "api", base_branch: "dev" }],
+    });
+    const hydrate = vi.spyOn(EnvironmentStore.prototype, "getRepositoriesForEnvironmentIds");
+
+    const units = await listEnabledScopeUnits(envWith(db), db, (row) => row.id !== "env_hidden");
+
+    expect(units).toEqual([]);
+    expect(hydrate).toHaveBeenCalledWith([]);
+    hydrate.mockRestore();
   });
 });
 

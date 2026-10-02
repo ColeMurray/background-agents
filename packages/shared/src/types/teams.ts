@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { isEnvironmentId } from "./environments";
-import { sessionListRepositorySchema } from "./repositories";
+import { repositoryPairInputSchema, sessionListRepositorySchema } from "./repositories";
 
 export const teamRoleSchema = z.enum(["lead", "member"]);
 export type TeamRole = z.infer<typeof teamRoleSchema>;
@@ -79,6 +79,7 @@ export const teamCapabilitiesSchema = z.object({
   canManageRepositories: z.boolean(),
   canManageBindings: z.boolean(),
   canManageAutomations: z.boolean(),
+  canManageEnvironments: z.boolean(),
   canManageSecrets: z.boolean(),
   canArchive: z.boolean(),
 });
@@ -178,3 +179,42 @@ export const teamSessionsResponseSchema = z.union([
   }),
 ]);
 export type TeamSessionsResponse = z.infer<typeof teamSessionsResponseSchema>;
+
+export const MAX_TEAM_REPOSITORY_GRANTS = 500;
+
+export const addTeamRepositoryGrantRequestSchema = z.discriminatedUnion("kind", [
+  z.strictObject({ kind: z.literal("installation") }),
+  z.strictObject({
+    kind: z.literal("repository"),
+    repoExternalId: z.number().int().positive().max(Number.MAX_SAFE_INTEGER),
+    owner: repositoryPairInputSchema.shape.repoOwner,
+    name: repositoryPairInputSchema.shape.repoName,
+  }),
+]);
+export type AddTeamRepositoryGrantRequest = z.infer<typeof addTeamRepositoryGrantRequestSchema>;
+
+const grantFields = {
+  id: z.string(),
+  teamId: z.string(),
+  createdAt: z.number(),
+};
+export const teamRepositoryGrantSchema = z.discriminatedUnion("kind", [
+  z.object({
+    ...grantFields,
+    kind: z.literal("installation"),
+    repoExternalId: z.null(),
+    owner: z.null(),
+    name: z.null(),
+  }),
+  z.object({
+    ...grantFields,
+    kind: z.literal("repository"),
+    repoExternalId: z.number().int().positive(),
+    owner: z.string(),
+    name: z.string(),
+  }),
+]);
+export type TeamRepositoryGrant = z.infer<typeof teamRepositoryGrantSchema>;
+export const teamRepositoryGrantsResponseSchema = z.object({
+  grants: z.array(teamRepositoryGrantSchema),
+});

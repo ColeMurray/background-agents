@@ -608,7 +608,9 @@ describe("POST /events", () => {
     for (const resource of ["repos", "environments"]) {
       expect(env.CONTROL_PLANE.fetch).toHaveBeenCalledWith(
         `https://internal/${resource}?teamId=team-a`,
-        expect.anything()
+        expect.objectContaining({
+          headers: expect.objectContaining({ "X-OpenInspect-Actor": "slack:U123" }),
+        })
       );
     }
     expect(sessionBodies[0]).not.toHaveProperty("title");
@@ -819,10 +821,13 @@ describe("POST /events", () => {
       expect.objectContaining({ teamId: "team-a" }),
     ]);
     for (const resource of ["repos", "environments"]) {
-      expect(env.CONTROL_PLANE.fetch).toHaveBeenCalledWith(
-        `https://internal/${resource}?teamId=team-a`,
-        expect.anything()
+      const catalogReads = env.CONTROL_PLANE.fetch.mock.calls.filter(
+        ([url]) => String(url) === `https://internal/${resource}?teamId=team-a`
       );
+      expect(catalogReads).toHaveLength(resource === "repos" ? 3 : 2);
+      for (const [, init] of catalogReads) {
+        expect(new Headers(init?.headers).get("X-OpenInspect-Actor")).toBe("slack:U123");
+      }
     }
     expect(
       env.CONTROL_PLANE.fetch.mock.calls.filter(([url]) =>
@@ -3163,9 +3168,13 @@ describe("POST /interactions", () => {
       expect.anything()
     );
     for (const resource of ["repos", "environments"]) {
-      expect(env.CONTROL_PLANE.fetch).toHaveBeenCalledWith(
-        `https://internal/${resource}${teamId ? `?teamId=${teamId}` : ""}`,
-        expect.anything()
+      const catalogReads = env.CONTROL_PLANE.fetch.mock.calls.filter(
+        ([url]) =>
+          String(url) === `https://internal/${resource}${teamId ? `?teamId=${teamId}` : ""}`
+      );
+      expect(catalogReads).toHaveLength(1);
+      expect(new Headers(catalogReads[0][1]?.headers).get("X-OpenInspect-Actor")).toBe(
+        teamId ? "slack:U123" : null
       );
     }
     expect(slackFetch).not.toHaveBeenCalled();
@@ -3185,6 +3194,7 @@ describe("POST /interactions", () => {
     { payload: { block_id: undefined } },
     { payload: { block_id: "malformed" } },
     { payload: { user: { id: "other" } } },
+    { payload: { user: undefined } },
     { payload: { channel: { id: "other" } } },
     { payload: { channel: undefined } },
   ])("withholds suggestions and visible instructions for untrusted scope: %j", async (failure) => {

@@ -55,10 +55,12 @@ Containers must use appropriate persistence and restart policies. Live Docker pa
 provided. Raw daemon logs are truncated after clean preparation before reusable image capture.
 
 Retried VM launches adopt only an exactly owned allocation and recover its original interactive
-credentials. A predecessor must be confirmed terminated before launching a replacement. Build
-allocations have deterministic backend/build names, so a retried create adopts the allocation an
-earlier lost response created. Returned build handles are persisted for cleanup before backend
-validation; incompatible builds never start and cannot publish prepared images.
+credentials. A predecessor must be confirmed terminated before launching a replacement. A build
+whose create response is lost is marked failed; its VM runs until the provider's build sandbox
+timeout (40 minutes by default, up to 70 minutes, including the 10-minute finalization grace).
+Re-triggering the build uses a new build ID and allocation name, not the previous allocation.
+Returned build handles are persisted for cleanup before backend validation; incompatible builds
+never start and cannot publish prepared images.
 
 Before create or restore returns, the control plane records a pending VM reference of the form
 `modal-vm-session:["sessionId","sandboxId"]`. The session id selects the named allocation; the
@@ -121,6 +123,24 @@ snapshots may become unusable. Drain/retire active allocations first when feasib
 credentials for pending cleanup, and rebuild images under the selected backend. Do not relabel old
 artifacts. Rollback to `modal` does not transparently resume VM sessions or prove old VMs have
 stopped.
+
+After changing `sandbox_provider`, apply Terraform and ensure the web app is deployed with the new
+provider. The deployment step depends on `web_platform`:
+
+- **Cloudflare**: `terraform apply` rebuilds and deploys the web Worker with the new provider. No
+  separate redeploy step is needed.
+- **Vercel**: after the apply, create a new production deployment through your configured CLI,
+  Git-linked, or GitHub Actions deployment path. If using Actions, manually run **Deploy Web**;
+  Terraform-only changes do not trigger it, and it skips deployment unless `VERCEL_API_TOKEN` and
+  `VERCEL_PROJECT_ID` are configured in GitHub. See
+  [Deploy the Web App](GETTING_STARTED.md#step-7-deploy-the-web-app) for the CLI and Git-linked
+  paths.
+
+Terraform updates `NEXT_PUBLIC_SANDBOX_PROVIDER`, but Vercel environment changes apply only to new
+deployments and `NEXT_PUBLIC_*` values are fixed at build time. Until the new Vercel deployment is
+live, `GET /api/image-builds` still filters by the old provider, so the Pre-Built Images page shows
+the old provider's builds. This applies to any provider switch, not only switches to or from
+`modal-vm`.
 
 PR #2007's earlier per-session Docker/variant design was not deployed. Its schema additions and
 settings are not part of this implementation, so no variant migration is required.

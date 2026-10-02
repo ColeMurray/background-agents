@@ -161,18 +161,18 @@ describe("getAvailableRepos", () => {
     vi.clearAllMocks();
   });
 
-  it("isolates memory and KV fallback by team, never falling back to workspace repos", async () => {
+  it("reads teams afresh per user, keeping workspace reads actorless and cached", async () => {
     const env = makeEnv(jsonResponse({ repos: [], cached: false, cachedAt: "2026-10-01" }));
     const fetch = vi.mocked(env.CONTROL_PLANE.fetch);
-    fetch.mockImplementation(async (input) => {
-      const teamId = new URL(String(input)).searchParams.get("teamId");
+    fetch.mockImplementation(async (_input, init) => {
+      const name = new Headers(init?.headers).get("X-OpenInspect-Actor")?.slice(6) ?? "workspace";
       return jsonResponse({
         repos: [
           {
             id: 1,
             owner: "acme",
-            name: teamId ?? "workspace",
-            fullName: `acme/${teamId ?? "workspace"}`,
+            name,
+            fullName: `acme/${name}`,
             description: null,
             archived: false,
             private: true,
@@ -183,35 +183,70 @@ describe("getAvailableRepos", () => {
         cachedAt: "2026-10-01",
       });
     });
-    expect((await getAvailableRepos(env, "trace", null))[0].name).toBe("workspace");
-    const teamA = await getAvailableRepos(env, "trace", "team-a");
-    expect(teamA[0].name).toBe("team-a");
-    expect((await getAvailableRepos(env, "trace", "team-b"))[0].name).toBe("team-b");
-    expect(await getAvailableRepos(env, "trace", "team-a")).toBe(teamA);
-    expect((await getAvailableRepos(env, "trace", null))[0].name).toBe("workspace");
-    expect(fetch).toHaveBeenCalledTimes(3);
-    expect(env.SLACK_KV.put).toHaveBeenCalledWith(
-      "repos:cache:team:team-a",
-      expect.any(String),
-      expect.anything()
-    );
-    clearLocalCache();
-    fetch.mockImplementation(async () => new Response(null, { status: 503 }));
-    const stored = new Map(
-      vi.mocked(env.SLACK_KV.put).mock.calls.map(([key, value]) => [key, JSON.parse(String(value))])
-    );
-    vi.mocked(env.SLACK_KV.get).mockImplementation(async (key) =>
-      typeof key === "string" ? (stored.get(key) ?? null) : null
-    );
-    expect((await getAvailableRepos(env, "trace", "team-a"))[0].name).toBe("team-a");
-    expect((await getAvailableRepos(env, "trace", "team-b"))[0].name).toBe("team-b");
-    expect(await getAvailableRepos(env, "trace", null)).toEqual(stored.get("repos:cache"));
-    expect(await getAvailableRepos(env, "trace", "team-c")).toEqual([]);
-    expect(env.SLACK_KV.get).toHaveBeenCalledWith("repos:cache:team:team-a", "json");
-    expect(env.SLACK_KV.get).toHaveBeenCalledWith("repos:cache", "json");
-    clearLocalCache();
-    vi.mocked(env.SLACK_KV.get).mockRejectedValueOnce(new Error("KV unavailable"));
+    expect((await getAvailableRepos(env, "trace", null, "U123"))[0].name).toBe("workspace");
+    expect((await getAvailableRepos(env, "trace", "team-a", "U123"))[0].name).toBe("u123");
+    expect((await getAvailableRepos(env, "trace", "team-a", "U456"))[0].name).toBe("u456");
+    expect((await getAvailableRepos(env, "trace", "team-a", "U123"))[0].name).toBe("u123");
+    expect((await getAvailableRepos(env, "trace", null, "U456"))[0].name).toBe("workspace");
+    expect(
+      fetch.mock.calls.map(([, init]) => new Headers(init?.headers).get("X-OpenInspect-Actor"))
+    ).toEqual([null, "slack:U123", "slack:U456", "slack:U123"]);
+    expect(fetch.mock.calls.map(([input]) => String(input))).toEqual([
+      "https://internal/repos",
+      "https://internal/repos?teamId=team-a",
+      "https://internal/repos?teamId=team-a",
+      "https://internal/repos?teamId=team-a",
+    ]);
+    expect(env.SLACK_KV.put).toHaveBeenCalledTimes(1);
+    expect(env.SLACK_KV.get).not.toHaveBeenCalled();
+  });
+
+  it("makes no team catalog request without a current user", async () => {
+    const env = makeEnv(new Error("should not fetch"));
     expect(await getAvailableRepos(env, "trace", "team-a")).toEqual([]);
+    expect(await getAvailableRepos(env, "trace", "team-a", "")).toEqual([]);
+    expect(env.CONTROL_PLANE.fetch).not.toHaveBeenCalled();
+    expect(env.SLACK_KV.get).not.toHaveBeenCalled();
+    expect(env.SLACK_KV.put).not.toHaveBeenCalled();
+  });
+
+  it.each<[string, Response | Error]>([
+    ["denied", new Response(null, { status: 403 })],
+    ["unavailable", new Response(null, { status: 503 })],
+    ["offline", new Error("CP offline")],
+    ["malformed", jsonResponse({ repos: [{ owner: "acme", name: "web" }] })],
+    ["invalid JSON", new Response("not JSON")],
+  ])("fails closed on %s with preseeded caches", async (_name, result) => {
+    const env = makeEnv(result);
+    vi.mocked(env.CONTROL_PLANE.fetch).mockResolvedValueOnce(
+      jsonResponse({
+        repos: [
+          {
+            id: 1,
+            owner: "acme",
+            name: "web",
+            fullName: "acme/web",
+            description: null,
+            archived: false,
+            private: true,
+            defaultBranch: "main",
+          },
+        ],
+        cached: false,
+        cachedAt: "2026-10-01",
+      })
+    );
+    const workspaceRepos = await getAvailableRepos(env, "trace");
+    expect(workspaceRepos).toHaveLength(1);
+    env.SLACK_KV.get = vi.fn().mockResolvedValue(workspaceRepos);
+    expect(await getAvailableRepos(env, "trace", "team-a", "U123")).toEqual([]);
+    expect(env.CONTROL_PLANE.fetch).toHaveBeenCalledTimes(2);
+    expect(env.SLACK_KV.get).not.toHaveBeenCalled();
+    expect(env.SLACK_KV.put).toHaveBeenCalledTimes(1);
+    expect(await getAvailableRepos(env, "trace")).toBe(workspaceRepos);
+    clearLocalCache();
+    expect(await getAvailableRepos(env, "trace")).toEqual(workspaceRepos);
+    expect(env.SLACK_KV.get).toHaveBeenCalledWith("repos:cache", "json");
   });
 
   it("normalizes repositories and retains memory even if the KV write fails", async () => {
@@ -241,7 +276,7 @@ describe("getAvailableRepos", () => {
     );
 
     vi.mocked(env.SLACK_KV.put).mockRejectedValueOnce(new Error("KV unavailable"));
-    const repos = await getAvailableRepos(env, "trace-1", "team-a");
+    const repos = await getAvailableRepos(env, "trace-1");
 
     expect(repos).toEqual([
       {
@@ -258,14 +293,10 @@ describe("getAvailableRepos", () => {
         channelAssociations: ["C123"],
       },
     ]);
-    expect(env.SLACK_KV.put).toHaveBeenCalledWith(
-      "repos:cache:team:team-a",
-      JSON.stringify(repos),
-      {
-        expirationTtl: 300,
-      }
-    );
-    expect(await getAvailableRepos(env, "trace-1", "team-a")).toBe(repos);
+    expect(env.SLACK_KV.put).toHaveBeenCalledWith("repos:cache", JSON.stringify(repos), {
+      expirationTtl: 300,
+    });
+    expect(await getAvailableRepos(env, "trace-1")).toBe(repos);
     expect(env.CONTROL_PLANE.fetch).toHaveBeenCalledTimes(1);
   });
 

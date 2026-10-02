@@ -80,7 +80,8 @@ interactionRoutes.post("/interactions", async (c) => {
     let response: TargetClarificationOptions = { options: [] };
     if (
       pending &&
-      pending.userId === payload.user?.id &&
+      payload.user &&
+      pending.userId === payload.user.id &&
       pending.teamId !== undefined &&
       payload.channel?.id === pending.channel
     ) {
@@ -91,7 +92,8 @@ interactionRoutes.post("/interactions", async (c) => {
             c.env,
             payload.value,
             traceId,
-            pending.teamId
+            pending.teamId,
+            payload.user.id
           );
         }
       } catch (error) {

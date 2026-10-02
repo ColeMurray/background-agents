@@ -8,6 +8,7 @@ export interface TeamCapabilities {
   canManageRepositories: boolean;
   canManageBindings: boolean;
   canManageAutomations: boolean;
+  canManageEnvironments: boolean;
   canManageSecrets: boolean;
   canArchive: boolean;
 }
@@ -27,6 +28,7 @@ export function resolveTeamAccess(
     canManageRepositories: manages,
     canManageBindings: manages,
     canManageAutomations: manages,
+    canManageEnvironments: manages,
     canManageSecrets: manages,
     canArchive: manages,
   };

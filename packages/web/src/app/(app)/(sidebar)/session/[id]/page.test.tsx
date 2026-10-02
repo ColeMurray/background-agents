@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 
 import { Component, type PropsWithChildren, type ReactNode } from "react";
-import { cleanup, render, screen } from "@testing-library/react";
+import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { SessionSnapshot } from "@open-inspect/shared/types/server-messages";
 import { resolveSessionCapabilities } from "@/lib/session-capabilities";
@@ -153,6 +153,7 @@ class NotFoundBoundary extends Component<PropsWithChildren, { error: Error | nul
 
 afterEach(() => {
   cleanup();
+  localStorage.clear();
   vi.restoreAllMocks();
 });
 
@@ -169,6 +170,19 @@ it("renders the existing not-found path before cached session content or action 
   expect(screen.queryByText("Generic unavailable")).toBeNull();
   expect(screen.queryByRole("button", { name: "Reconnect" })).toBeNull();
   expect(mocks.prompt).not.toHaveBeenCalled();
+});
+
+it("opens phone media on Info without replacing the remembered inspector tab", async () => {
+  localStorage.setItem("open-inspect-session-inspector-tab", "changes");
+  mocks.mobile = true;
+  render(<SessionPage />);
+  await waitFor(() => expect(mocks.overlay.mock.lastCall?.[0].activeTab).toBe("changes"));
+  expect(mocks.overlay.mock.lastCall?.[0].open).toBe(false);
+
+  act(() => mocks.header.mock.lastCall?.[0].onOpenMobileMedia());
+
+  expect(mocks.overlay.mock.lastCall?.[0]).toMatchObject({ open: true, activeTab: "info" });
+  expect(localStorage.getItem("open-inspect-session-inspector-tab")).toBe("changes");
 });
 
 it("keeps desktop actions available without collaboration and refreshes sidebar and overlay scope", () => {

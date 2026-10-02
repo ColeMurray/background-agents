@@ -261,7 +261,7 @@ describe("RepoClassifier", () => {
       const classifier = new RepoClassifier(TEST_ENV);
       const result = await classifier.classify(
         "please fix the frontend nav bug",
-        { teamId: "team-a", channelId: "C1" },
+        { teamId: "team-a", channelId: "C1", userId: "U123" },
         "t"
       );
 
@@ -269,8 +269,8 @@ describe("RepoClassifier", () => {
       expect(result.confidence).toBe("high");
       expect(result.needsClarification).toBe(false);
       expect(result.reasoning).toContain("routing rule");
-      expect(mockGetAvailableRepos).toHaveBeenCalledWith(TEST_ENV, "t", "team-a");
-      expect(mockGetAvailableEnvironments).toHaveBeenCalledWith(TEST_ENV, "t", "team-a");
+      expect(mockGetAvailableRepos).toHaveBeenCalledWith(TEST_ENV, "t", "team-a", "U123");
+      expect(mockGetAvailableEnvironments).toHaveBeenCalledWith(TEST_ENV, "t", "team-a", "U123");
       expect(mockGetRoutingRules).toHaveBeenCalledWith(TEST_ENV, "t");
       expect(mockMessagesCreate).not.toHaveBeenCalled();
     });

@@ -30,7 +30,10 @@ export async function GET(request: NextRequest) {
     if (!parsed.success) throw new Error("Invalid control plane repositories response");
 
     // The control plane returns repos in the format we need
-    return NextResponse.json({ repos: parsed.data.repos });
+    return NextResponse.json({
+      repos: parsed.data.repos,
+      teamHasRepositoryGrants: parsed.data.teamHasRepositoryGrants,
+    });
   } catch (error) {
     console.error("Error fetching repos:", error);
     return NextResponse.json({ error: "Internal server error" }, { status: 500 });

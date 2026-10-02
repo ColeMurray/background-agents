@@ -17,6 +17,7 @@ import { createControlPlaneApp } from "../../src/routing/hono-app";
 import { listRouteContracts, type RouteContract } from "../../src/routing/route-contracts";
 import { createCloudflareEnv } from "../../src/cloudflare/platform";
 import { AutomationStore, type AutomationRow } from "../../src/db/automation-store";
+import { EnvironmentStore } from "../../src/db/environments";
 import { TeamStore } from "../../src/db/teams";
 import { TeamMembershipStore } from "../../src/db/team-memberships";
 import { SessionCollaboratorStore } from "../../src/db/session-collaborators";
@@ -53,6 +54,7 @@ interface MatrixFixtures {
   sandboxSessionId: string;
   automationId: string;
   teamId: string;
+  environmentId: string;
 }
 
 function automation(id: string, userId: string): AutomationRow {
@@ -106,6 +108,12 @@ function isTeamRoute(route: RouteContract): boolean {
   return route.path.startsWith("/teams/:id");
 }
 
+function environmentRequirementFor(route: RouteContract) {
+  return route.authorization.kind === "active-user"
+    ? route.authorization.allOf.find((requirement) => requirement.kind === "environment")
+    : undefined;
+}
+
 let automationSequence = 0;
 async function createAutomation(): Promise<string> {
   const id = `matrix-automation-${automationSequence++}`;
@@ -137,6 +145,7 @@ describe("route admission matrix", { timeout: MATRIX_TIMEOUT_MS }, () => {
     sandboxSessionId: "",
     automationId: "",
     teamId: "",
+    environmentId: "",
   };
 
   beforeAll(async () => {
@@ -407,6 +416,7 @@ describe("route admission sentinel", { timeout: MATRIX_TIMEOUT_MS }, () => {
     sandboxSessionId: "",
     automationId: "",
     teamId: "",
+    environmentId: "env_sentinel",
   };
   // Every production contract, admitted by its own policy, in front of a
   // sentinel handler.
@@ -438,6 +448,19 @@ describe("route admission sentinel", { timeout: MATRIX_TIMEOUT_MS }, () => {
         joinPolicy: "open",
       })
     ).id;
+    await new EnvironmentStore(env.DB).create(
+      {
+        id: fixtures.environmentId,
+        owner_team_id: null,
+        name: "Sentinel environment",
+        description: null,
+        prebuild_enabled: 0,
+        channel_associations: null,
+        created_at: 1,
+        updated_at: 1,
+      },
+      []
+    );
     for (const [userId, role] of [
       [OTHER_MEMBER, "member"],
       [TEAM_VIEWER, "viewer"],
@@ -501,11 +524,16 @@ describe("route admission sentinel", { timeout: MATRIX_TIMEOUT_MS }, () => {
           ? fixtures.sandboxSessionId
           : fixtures.readonlySessionId;
       const url = `${BASE}${materialize(route, {
+        ...(environmentRequirementFor(route)?.kind === "environment"
+          ? { [environmentRequirementFor(route)!.idParam]: fixtures.environmentId }
+          : {}),
         id: isTeamRoute(route)
           ? fixtures.teamId
           : isAutomationRoute(route)
             ? fixtures.automationId
-            : sessionId,
+            : environmentRequirementFor(route)?.idParam === "id"
+              ? fixtures.environmentId
+              : sessionId,
         childId: fixtures.sandboxSessionId,
       })}`;
       const method = route.method;

@@ -62,6 +62,7 @@ const team: TeamResponse = {
     canManageRepositories: false,
     canManageBindings: true,
     canManageAutomations: false,
+    canManageEnvironments: false,
     canManageSecrets: false,
     canArchive: false,
   },

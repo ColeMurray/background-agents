@@ -11,6 +11,7 @@ const DENIED: TeamCapabilities = {
   canManageRepositories: false,
   canManageBindings: false,
   canManageAutomations: false,
+  canManageEnvironments: false,
   canManageSecrets: false,
   canArchive: false,
 };

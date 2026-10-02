@@ -104,6 +104,7 @@ export {
   teamMembershipSchema,
 } from "./teams";
 export type { Team, TeamRole, TeamJoinPolicy, SessionVisibility, TeamMembership } from "./teams";
+export { teamIdSchema } from "./team-id";
 
 export {
   teamChannelBindingProviderSchema,

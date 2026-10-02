@@ -144,6 +144,23 @@ describe("automation create route", () => {
       instructions: "Run tests",
     };
 
+    it("denies repository targets before SCM lookup or persistence", async () => {
+      const res = await callRoute("POST", "/automations", {
+        body: validBody,
+        permissions: PERMISSION_IDS.filter((permission) => permission !== "repositories.use"),
+      });
+
+      expect(res.status).toBe(403);
+      await expect(res.json()).resolves.toEqual({
+        error: "Forbidden",
+        code: "permission_required",
+        permission: "repositories.use",
+      });
+      expect(resolveRepoOrError).not.toHaveBeenCalled();
+      expect(mockStore.bindAutomationInsert).not.toHaveBeenCalled();
+      expect(mockBatch).not.toHaveBeenCalled();
+    });
+
     it("rejects a Slack channel condition with the wrong operator", async () => {
       const res = await callRoute("POST", "/automations", {
         body: {
@@ -538,6 +555,28 @@ describe("automation create route", () => {
 
       expect(res.status).toBe(400);
       expect(await res.json()).toEqual({ error: "Environment not found: env_a, env_b" });
+    });
+
+    it("treats team-owned environments as missing for workspace automations", async () => {
+      mockEnvironmentStore.getById.mockResolvedValue({
+        id: "env_team",
+        name: "Team",
+        owner_team_id: "team_a",
+      });
+
+      const res = await callRoute("POST", "/automations", {
+        body: {
+          name: "Workspace sync",
+          scheduleCron: "0 9 * * *",
+          scheduleTz: "UTC",
+          instructions: "Run tests",
+          environmentIds: ["env_team"],
+        },
+      });
+
+      expect(res.status).toBe(400);
+      expect(await res.json()).toEqual({ error: "Environment not found: env_team" });
+      expect(mockBatch).not.toHaveBeenCalled();
     });
 
     it("checks environment-use permission before disclosing whether an environment exists", async () => {

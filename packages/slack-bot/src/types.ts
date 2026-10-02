@@ -56,6 +56,7 @@ export interface Env {
 export interface ThreadContext {
   channelId: string;
   teamId?: string | null;
+  userId?: string;
   channelName?: string;
   channelDescription?: string;
   threadTs?: string;

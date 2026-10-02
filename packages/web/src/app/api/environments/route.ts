@@ -12,7 +12,10 @@ export async function GET(request: NextRequest) {
 
   try {
     const response = await controlPlaneUserFetch(
-      buildControlPlanePath("/environments", request.nextUrl.searchParams, ["teamId"])
+      buildControlPlanePath("/environments", request.nextUrl.searchParams, [
+        "teamId",
+        "ownerTeamId",
+      ])
     );
     const data = await response.json();
     return NextResponse.json(data, { status: response.status });

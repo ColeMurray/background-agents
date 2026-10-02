@@ -2,8 +2,10 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { createModalClient, type ModalClient } from "../client";
 import { SandboxLaunchRejectedError } from "../provider";
 import { ModalSandboxProvider } from "./modal-provider";
+import { scmCloneIdentity } from "../sandbox-env";
 import { resolveSandboxDashboardUrl } from "../../session/sandbox-access";
 
+const scmIdentity = scmCloneIdentity("github");
 const config = {
   sessionId: "session-1",
   sandboxId: "sandbox-1",
@@ -51,7 +53,7 @@ function fixture(confirmation: unknown) {
   };
   return {
     client,
-    provider: new ModalSandboxProvider(client as unknown as ModalClient, "modal-vm"),
+    provider: new ModalSandboxProvider(client as unknown as ModalClient, "modal-vm", "github"),
   };
 }
 
@@ -110,7 +112,7 @@ describe("distinct Modal backend identities", () => {
 
   it("accepts older standard Modal responses without a backend echo", async () => {
     const { client } = fixture(undefined);
-    const provider = new ModalSandboxProvider(client as unknown as ModalClient, "modal");
+    const provider = new ModalSandboxProvider(client as unknown as ModalClient, "modal", "github");
     await expect(provider.createSandbox(config)).resolves.toMatchObject({
       providerObjectId: "sb-1",
     });
@@ -172,7 +174,11 @@ describe("distinct Modal backend identities", () => {
       )
     );
     const client = createModalClient("test-secret", "workspace");
-    const result = await client.createImageBuildSandbox({ ...build, sandboxBackend: "modal-vm" });
+    const result = await client.createImageBuildSandbox({
+      ...build,
+      scmIdentity,
+      sandboxBackend: "modal-vm",
+    });
     expect(result).toMatchObject({ providerSessionId: "sb-1", sandboxBackend: { invalid: true } });
   });
 
@@ -190,14 +196,19 @@ describe("distinct Modal backend identities", () => {
     );
     vi.stubGlobal("fetch", fetchMock);
     const client = createModalClient("test-secret", "workspace");
-    await client.createSandbox({ ...config, sandboxBackend: "modal-vm" });
+    await client.createSandbox({ ...config, scmIdentity, sandboxBackend: "modal-vm" });
     fetchMock.mockResolvedValue(
       Response.json({
         success: true,
         data: { sandbox_id: "sandbox-1", modal_object_id: "sb-1", sandbox_backend: "modal-vm" },
       })
     );
-    await client.restoreSandbox({ ...config, snapshotImageId: "im-1", sandboxBackend: "modal-vm" });
+    await client.restoreSandbox({
+      ...config,
+      scmIdentity,
+      snapshotImageId: "im-1",
+      sandboxBackend: "modal-vm",
+    });
     for (const [, init] of fetchMock.mock.calls) {
       expect(JSON.parse(init.body)).toMatchObject({
         sandbox_backend: "modal-vm",

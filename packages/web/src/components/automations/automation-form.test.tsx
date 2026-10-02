@@ -64,11 +64,12 @@ vi.mock("@/hooks/use-repos", () => ({
   }),
 }));
 
+const environmentScopes = vi.hoisted(() => [] as unknown[]);
 vi.mock("@/hooks/use-environments", () => ({
-  useEnvironments: () => ({
-    environments: environmentsValue,
-    loading: false,
-  }),
+  useEnvironments: (scope: unknown) => {
+    environmentScopes.push(scope);
+    return { environments: environmentsValue, loading: false };
+  },
 }));
 
 vi.mock("@/hooks/use-branches", () => ({
@@ -519,6 +520,18 @@ describe("environment binding", () => {
       { repoOwner: "acme", repoName: "api" },
     ],
   };
+
+  it("offers only workspace-owned environments to workspace automations", () => {
+    render(
+      <AutomationForm
+        mode="create"
+        submitting={false}
+        onSubmit={vi.fn()}
+        initialValues={scheduleBase}
+      />
+    );
+    expect(environmentScopes.at(-1)).toEqual({ ownerTeamId: null });
+  });
 
   it("submits the selected environment in single-select mode", () => {
     environmentsValue = [fullstackEnvironment];

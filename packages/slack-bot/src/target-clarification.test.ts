@@ -198,16 +198,24 @@ describe("resolveTargetValue", () => {
   });
 
   it("resolves a repository value against the live repo list", async () => {
-    expect(await resolveTargetValue(env, "acme/web", "trace", "team-a")).toEqual(target);
-    expect(mockGetAvailableRepos).toHaveBeenCalledWith(env, "trace", "team-a");
+    expect(await resolveTargetValue(env, "acme/web", "trace", "team-a", "U123")).toEqual(target);
+    expect(mockGetAvailableRepos).toHaveBeenCalledWith(env, "trace", "team-a", "U123");
   });
 
   it("resolves an env: value against the live environments", async () => {
     mockGetEnvironmentById.mockResolvedValue(
       envTarget.kind === "environment" ? envTarget.environment : null
     );
-    expect(await resolveTargetValue(env, "env:env_abc123", "trace", "team-a")).toEqual(envTarget);
-    expect(mockGetEnvironmentById).toHaveBeenCalledWith(env, "env_abc123", "trace", "team-a");
+    expect(await resolveTargetValue(env, "env:env_abc123", "trace", "team-a", "U123")).toEqual(
+      envTarget
+    );
+    expect(mockGetEnvironmentById).toHaveBeenCalledWith(
+      env,
+      "env_abc123",
+      "trace",
+      "team-a",
+      "U123"
+    );
   });
 
   it("returns null for a repository or environment that no longer exists", async () => {
@@ -266,9 +274,9 @@ describe("getTargetClarificationOptions", () => {
   });
 
   it("returns flat options while the workspace is repository-only", async () => {
-    const response = await getTargetClarificationOptions(env, undefined, "trace", "team-a");
-    expect(mockGetAvailableRepos).toHaveBeenCalledWith(env, "trace", "team-a");
-    expect(mockGetAvailableEnvironments).toHaveBeenCalledWith(env, "trace", "team-a");
+    const response = await getTargetClarificationOptions(env, undefined, "trace", "team-a", "U123");
+    expect(mockGetAvailableRepos).toHaveBeenCalledWith(env, "trace", "team-a", "U123");
+    expect(mockGetAvailableEnvironments).toHaveBeenCalledWith(env, "trace", "team-a", "U123");
     expect(response).toEqual({
       options: [
         {

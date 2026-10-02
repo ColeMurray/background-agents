@@ -7,6 +7,10 @@ import {
 } from "@open-inspect/shared/rbac";
 import { authenticate, isAuthError } from "../auth/authenticate";
 import type { Principal } from "../auth/principal";
+import {
+  evaluateOwnedResourceAdmission,
+  ownedResourceAdmissionResponse,
+} from "../authorization/owned-resource-admission";
 import type {
   AuthorizationDecisionRequirement,
   RouteAuthorizationDecision,
@@ -352,7 +356,9 @@ function enforceStaticServicePermissionCeiling(
         ? requirement.permission
         : requirement.kind === "session"
           ? legacyPermissionForAction(requirement.action)
-          : null;
+          : requirement.kind === "environment"
+            ? (`environments.${requirement.need}` as const)
+            : null;
     if (permission && !serviceAllowsPermission(principal.service, permission)) {
       return authorizationDenial(
         json({ error: "Forbidden", code: "service_capability_required" }, 403),
@@ -540,6 +546,37 @@ async function enforcePermissionRequirement(
   );
 }
 
+async function enforceEnvironmentRequirement(
+  requirement: Extract<RouteAuthorizationRequirement, { kind: "environment" }>,
+  params: RouteParams,
+  ctx: RequestContext,
+  evidence: AuthorizationEvidence
+): Promise<AuthorizationFailure | null> {
+  try {
+    const result = await evaluateOwnedResourceAdmission(requirement, params, ctx);
+    // Denials keep the loaded environment too, so the audit attributes its owner team.
+    if (result.kind !== "error" && result.admission) ctx.environmentAdmission = result.admission;
+    if (result.kind === "error") {
+      return { response: ownedResourceAdmissionResponse(result) };
+    }
+    if (result.kind === "denied") {
+      return authorizationDenial(
+        ownedResourceAdmissionResponse(result),
+        evidence,
+        requirement,
+        result.reasonCode,
+        result.reason,
+        result.failedPermission
+      );
+    }
+    evidence.requirements.push(requirement);
+    if (result.effectivePermission) evidence.effectivePermissions.push(result.effectivePermission);
+    return null;
+  } catch {
+    return authorizationUnavailable();
+  }
+}
+
 async function enforceAutomationRequirement(
   requirement: Extract<RouteAuthorizationRequirement, { kind: "automation" }>,
   params: RouteParams,
@@ -612,7 +649,14 @@ async function enforceTeamRequirement(
   if (!teamId) return { response: json({ error: "Invalid team route" }, 400) };
   try {
     const team = await new TeamStore(ctx.db).getById(teamId);
-    if (!team) return { response: error("Team not found", 404) };
+    if (!team)
+      return authorizationDenial(
+        error("Team not found", 404),
+        evidence,
+        requirement,
+        "team_not_visible",
+        "Team not found"
+      );
     const memberships = new TeamMembershipStore(ctx.db);
     const viewer = viewerFromContext(
       ctx,
@@ -627,7 +671,13 @@ async function enforceTeamRequirement(
         requirement.need === "removeMember" ||
         (requirement.need === "read" && team.archivedAt !== null))
     )
-      return { response: error("Team not found", 404) };
+      return authorizationDenial(
+        error("Team not found", 404),
+        evidence,
+        requirement,
+        "team_not_visible",
+        "Team not found"
+      );
     const access = resolveTeamAccess(
       {
         userId: viewer.userId,
@@ -833,6 +883,9 @@ async function enforceRouteAuthorization(
           break;
         case "automation":
           failure = await enforceAutomationRequirement(requirement, params, ctx, evidence);
+          break;
+        case "environment":
+          failure = await enforceEnvironmentRequirement(requirement, params, ctx, evidence);
           break;
         case "team":
           failure = await enforceTeamRequirement(requirement, params, ctx, evidence);

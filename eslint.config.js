@@ -18,6 +18,10 @@ const sandboxImplementationImports = [
       "Only session composition constructs the lifecycle manager. Consumers depend on focused lifecycle ports.",
   },
   {
+    regex: "(?:^|/)lifecycle/launch-context(?:\\.[cm]?[jt]sx?)?$",
+    message: "Launch inputs are internal to lifecycle composition. Consumers use lifecycle ports.",
+  },
+  {
     regex: "(?:^|/)lifecycle/sandbox-access(?:\\.[cm]?[jt]sx?)?$",
     message:
       "Access mechanics are internal to lifecycle composition. Consumers use lifecycle ports and session access readers.",
@@ -36,6 +40,16 @@ const sandboxImplementationImports = [
     regex: "(?:^|/)lifecycle/provider-stop(?:\\.[cm]?[jt]sx?)?$",
     message:
       "Bounded provider-stop mechanics are internal to lifecycle. Consumers use lifecycle ports.",
+  },
+  {
+    regex: "(?:^|/)lifecycle/startup-errors(?:\\.[cm]?[jt]sx?)?$",
+    message:
+      "Startup abandonment errors are internal to lifecycle. Consumers use lifecycle outcomes.",
+  },
+  {
+    regex: "(?:^|/)lifecycle/watchdog-effects(?:\\.[cm]?[jt]sx?)?$",
+    message:
+      "Watchdog effects are internal to the lifecycle manager. Consumers use lifecycle ports.",
   },
 ];
 

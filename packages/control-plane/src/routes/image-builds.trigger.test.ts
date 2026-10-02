@@ -274,7 +274,10 @@ describe("POST /image-builds/trigger/repo/:owner/:name", () => {
       "modal-session-1"
     );
     expect(modalClient.startImageBuildSandbox).toHaveBeenCalledTimes(1);
-    expect(scmProvider.generateCredentialHelperAuth).toHaveBeenCalled();
+    expect(scmProvider.generateCredentialHelperAuth).toHaveBeenCalledExactlyOnceWith({
+      kind: "repositories",
+      repositoryIds: [123],
+    });
 
     // ...and is baked into the persisted fingerprint.
     expect(registerBuildSpy).toHaveBeenCalledWith(

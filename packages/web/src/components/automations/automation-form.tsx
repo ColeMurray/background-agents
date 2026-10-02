@@ -40,7 +40,8 @@ interface AutomationFormProps {
 
 export function AutomationForm({ mode, initialValues, onSubmit, submitting }: AutomationFormProps) {
   const { repos, loading: loadingRepos } = useRepos();
-  const { environments, loading: loadingEnvironments } = useEnvironments();
+  // Automations are workspace-owned, so only workspace environments can be targeted.
+  const { environments, loading: loadingEnvironments } = useEnvironments({ ownerTeamId: null });
   const { enabledModels, enabledModelOptions, loading: loadingModels } = useEnabledModels();
   const providerAccounts = useProviderAccounts();
   const initialDraft = useMemo(() => createAutomationFormDraft(initialValues), [initialValues]);

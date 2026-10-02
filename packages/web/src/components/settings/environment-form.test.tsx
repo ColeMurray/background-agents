@@ -1,8 +1,8 @@
 // @vitest-environment jsdom
 /// <reference types="@testing-library/jest-dom" />
 
-import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
-import { cleanup, render, screen, within } from "@testing-library/react";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import * as matchers from "@testing-library/jest-dom/matchers";
 import { MAX_TARGET_REPOSITORIES } from "@open-inspect/shared/types/repositories";
@@ -14,6 +14,8 @@ expect.extend(matchers);
 afterEach(cleanup);
 
 const mocks = vi.hoisted(() => ({
+  useRepos: vi.fn(),
+  allowWorkspace: true,
   reposValue: [] as Array<{
     id: number;
     fullName: string;
@@ -26,7 +28,22 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.mock("@/hooks/use-repos", () => ({
-  useRepos: () => ({ repos: mocks.reposValue, loading: false }),
+  useRepos: (enabled: boolean, teamId: string | null) => {
+    mocks.useRepos(enabled, teamId);
+    return { repos: mocks.reposValue, loading: false };
+  },
+}));
+vi.mock("@/hooks/use-resource-teams", () => ({
+  useResourceTeams: () => ({
+    teams: [
+      { id: "team-1", name: "Engineering" },
+      { id: "team-2", name: "Design" },
+    ],
+    allTeams: [],
+    loading: false,
+    error: null,
+    allowWorkspace: mocks.allowWorkspace,
+  }),
 }));
 
 vi.mock("@/hooks/use-branches", () => ({
@@ -34,6 +51,9 @@ vi.mock("@/hooks/use-branches", () => ({
 }));
 
 beforeAll(() => {
+  // Radix Select uses pointer capture, which jsdom lacks.
+  Element.prototype.hasPointerCapture = () => false;
+  Element.prototype.releasePointerCapture = () => {};
   Element.prototype.scrollIntoView = vi.fn();
   // Radix Switch measures itself via ResizeObserver, which jsdom lacks.
   vi.stubGlobal(
@@ -44,6 +64,10 @@ beforeAll(() => {
       disconnect() {}
     }
   );
+});
+
+beforeEach(() => {
+  mocks.allowWorkspace = true;
 });
 
 function repo(owner: string, name: string, id: number) {
@@ -79,6 +103,85 @@ function environment(
 }
 
 describe("EnvironmentForm", () => {
+  it.each(["team-1", null])("validates owner %s and discards stale selections", async (teamId) => {
+    mocks.allowWorkspace = teamId !== null;
+    mocks.reposValue = [repo("acme", "web", 1)];
+    const onSubmit = vi.fn();
+    const user = userEvent.setup();
+    const { container } = render(
+      <EnvironmentForm
+        mode="create"
+        teamId={teamId}
+        submitting={false}
+        onSubmit={onSubmit}
+        onCancel={vi.fn()}
+        initialValues={environment([{ repoOwner: "acme", repoName: "web" }])}
+      />
+    );
+    expect(mocks.useRepos).toHaveBeenLastCalledWith(true, teamId);
+    expect(screen.getByRole("combobox", { name: "Team" })).toHaveTextContent(
+      teamId ? "Engineering" : "Select a team"
+    );
+    fireEvent.submit(container.querySelector("form")!);
+    if (!teamId) {
+      expect(screen.getByRole("button", { name: "Create environment" })).toBeDisabled();
+      expect(onSubmit).not.toHaveBeenCalled();
+      return;
+    }
+    expect(onSubmit).toHaveBeenCalledWith(expect.objectContaining({ teamId }));
+    // Creating from a team's page keeps the environment on that page.
+    expect(screen.getByRole("combobox", { name: "Team" })).toBeDisabled();
+    await user.click(screen.getByRole("combobox", { name: "Team" }));
+    expect(screen.queryByRole("option", { name: "Design" })).not.toBeInTheDocument();
+  });
+
+  it("discards stale selections when an unscoped creation changes owner", async () => {
+    mocks.allowWorkspace = true;
+    mocks.reposValue = [repo("acme", "web", 1)];
+    const onSubmit = vi.fn();
+    const user = userEvent.setup();
+    const { container } = render(
+      <EnvironmentForm
+        mode="create"
+        submitting={false}
+        onSubmit={onSubmit}
+        onCancel={vi.fn()}
+        initialValues={environment([{ repoOwner: "acme", repoName: "web" }])}
+      />
+    );
+    await user.click(screen.getByRole("combobox", { name: "Team" }));
+    await user.click(screen.getByRole("option", { name: "Design" }));
+    expect(mocks.useRepos).toHaveBeenLastCalledWith(true, "team-2");
+    expect(screen.queryByTitle("acme/web")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Create environment" })).toBeDisabled();
+    fireEvent.submit(container.querySelector("form")!);
+    expect(onSubmit).not.toHaveBeenCalled();
+  });
+
+  it("shows existing team ownership read-only and excludes it from edit submissions", () => {
+    mocks.reposValue = [repo("acme", "web", 1)];
+    const onSubmit = vi.fn();
+    const { container } = render(
+      <EnvironmentForm
+        mode="edit"
+        submitting={false}
+        onSubmit={onSubmit}
+        onCancel={vi.fn()}
+        initialValues={environment([{ repoOwner: "acme", repoName: "web" }], {
+          ownerTeamId: "team-1",
+        })}
+      />
+    );
+    expect(screen.getByRole("combobox", { name: "Team" })).toHaveTextContent("Engineering");
+    expect(screen.getByRole("combobox", { name: "Team" })).toBeDisabled();
+    fireEvent.submit(container.querySelector("form")!);
+    expect(onSubmit).toHaveBeenCalledTimes(1);
+    expect(onSubmit.mock.calls[0][0]).not.toHaveProperty("teamId");
+    expect(onSubmit.mock.calls[0][0].repositories).toEqual([
+      { repoOwner: "acme", repoName: "web", baseBranch: "main" },
+    ]);
+  });
+
   it("preserves a nested owner namespace when saving", async () => {
     mocks.reposValue = [repo("group/subgroup", "web", 1)];
     const onSubmit = vi.fn();

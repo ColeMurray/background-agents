@@ -198,7 +198,7 @@ export async function handleTargetSelection(
     }
     resolvedLaunchPlan = { sessionDefaults: resolvedTurn.turnPlan.effective };
   }
-  const target = await resolveTargetValue(env, selectedValue, traceId, teamId);
+  const target = await resolveTargetValue(env, selectedValue, traceId, teamId, userId);
   if (!target) {
     await postMessage(
       env.SLACK_BOT_TOKEN,

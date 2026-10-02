@@ -109,31 +109,15 @@ async function changeCollaborator(
     if (!access.allowed) return denied(access.reason);
   }
   if (!remove) {
-    const user = z
-      .object({
-        suspended_at: z.number().nullable(),
-        role_id: z.string().nullable(),
-        team_member: z.number(),
-      })
-      .nullable()
-      .parse(
-        await ctx.db
-          .prepare(
-            `SELECT users.suspended_at, assignment.role_id,
-                    EXISTS (SELECT 1 FROM team_memberships m
-                            WHERE m.team_id = ? AND m.user_id = users.id) AS team_member
-             FROM users
-             LEFT JOIN user_role_assignments assignment ON assignment.user_id = users.id
-             WHERE users.id = ?`
-          )
-          .bind(admission.row.ownerTeamId, params.userId)
-          .first()
-      );
-    if (!user) return error("User not found", 404);
-    if (user.suspended_at !== null || user.role_id === null)
+    const eligibility = await new UserStore(ctx.db).getCollaboratorEligibility(
+      params.userId,
+      admission.row.ownerTeamId
+    );
+    if (eligibility === "not_found") return error("User not found", 404);
+    if (eligibility === "inactive")
       return json({ error: "User inactive", code: "user_inactive" }, 409);
     // Team-owned actions require membership, so a non-member grant could never be exercised.
-    if (admission.row.ownerTeamId !== null && !user.team_member)
+    if (eligibility === "not_team_member")
       return json(
         { error: "User is not a member of the owning team", code: "not_team_member" },
         409

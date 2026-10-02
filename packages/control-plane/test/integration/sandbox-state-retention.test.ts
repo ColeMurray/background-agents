@@ -46,7 +46,7 @@ function snapshotProvider(overrides: Partial<SandboxProvider> = {}): SandboxProv
 }
 
 describe("sandbox state retention", () => {
-  it("reconstructs and rearms persisted rejected cleanup without releasing a durable shutdown hold", async () => {
+  it("reconstructs and delivers persisted rejected cleanup without releasing a durable shutdown hold", async () => {
     const stub = await servingSession();
     await runInSessionDO(stub, async (instance, durableState) => {
       const background: Promise<unknown>[] = [];
@@ -82,11 +82,29 @@ describe("sandbox state retention", () => {
         },
       });
       const held = shutdownStore.read();
+      const now = vi.spyOn(Date, "now");
       durableState.storage.sql.exec("DELETE FROM session_alarm_state");
       await durableState.storage.deleteAlarm();
+      let canStop = false;
+      const stopObservations: Array<{
+        pending_deadline: unknown;
+        in_flight_deadline: unknown;
+        hold: unknown;
+      }> = [];
       const stop = vi
         .spyOn(ModalSandboxProvider.prototype, "stopSandbox")
-        .mockRejectedValue(new Error("provider unavailable"));
+        .mockImplementation(async () => {
+          const [delivery] = durableState.storage.sql
+            .exec("SELECT pending_deadline, in_flight_deadline FROM session_alarm_state")
+            .toArray();
+          stopObservations.push({
+            pending_deadline: delivery.pending_deadline,
+            in_flight_deadline: delivery.in_flight_deadline,
+            hold: shutdownStore.read(),
+          });
+          if (!canStop) throw new Error("provider unavailable");
+          return { success: true };
+        });
       try {
         const restarted = createSessionRuntime(platform, runtimeEnv);
         const manager = restarted.internals.lifecycleManager;
@@ -98,10 +116,15 @@ describe("sandbox state retention", () => {
           .toArray();
         expect(deadline.pending_deadline).toBeGreaterThanOrEqual(beforeRearm + 30_000);
         expect(deadline.pending_deadline).toBeLessThanOrEqual(Date.now() + 30_000);
+        expect(await durableState.storage.getAlarm()).toBe(deadline.pending_deadline);
         expect(stop).not.toHaveBeenCalled();
         expect(manager.mayProcessQueuedWork()).toBe(false);
-        expect(await manager.handleShutdownAlarm()).toBe("hold_watchdogs");
-        expect(stop).toHaveBeenCalledOnce();
+        now.mockReturnValue(Number(deadline.pending_deadline));
+        // Simulate the host consuming its alarm before delivering the due callback.
+        await durableState.storage.deleteAlarm();
+        await restarted.server.onScheduledDeadline();
+        // Both shutdown-priority passes retry cleanup, even while ordinary watchdogs are held.
+        expect(stop).toHaveBeenCalledTimes(2);
         expect(restarted.internals.sandboxRepository.getSandbox()).toMatchObject({
           modal_object_id: "rejected-source",
           startup_rejected: 1,
@@ -110,8 +133,20 @@ describe("sandbox state retention", () => {
           active_socket_id: "",
         });
         expect(shutdownStore.read()).toEqual(held);
-        stop.mockResolvedValue({ success: true });
-        expect(await manager.handleShutdownAlarm()).toBe("hold_watchdogs");
+        const [retry] = durableState.storage.sql
+          .exec("SELECT pending_deadline FROM session_alarm_state")
+          .toArray();
+        expect(retry.pending_deadline).toBe(Date.now() + 30_000);
+        expect(await durableState.storage.getAlarm()).toBe(retry.pending_deadline);
+        expect(
+          durableState.storage.sql
+            .exec("SELECT in_flight_deadline FROM session_alarm_state")
+            .toArray()
+        ).toEqual([{ in_flight_deadline: null }]);
+        canStop = true;
+        now.mockReturnValue(Number(retry.pending_deadline));
+        await durableState.storage.deleteAlarm();
+        await restarted.server.onScheduledDeadline();
         expect(restarted.internals.sandboxRepository.getSandbox()).toMatchObject({
           modal_object_id: null,
           startup_rejected: 1,
@@ -119,10 +154,43 @@ describe("sandbox state retention", () => {
           status: "failed",
         });
         expect(shutdownStore.read()).toEqual(held);
-        expect(await manager.handleShutdownAlarm()).toBe("hold_watchdogs");
-        expect(stop).toHaveBeenCalledTimes(2);
+        // Successful stop leaves its pre-I/O retry armed; the final due wake drains it without stopping again.
+        const [lastRetry] = durableState.storage.sql
+          .exec("SELECT pending_deadline FROM session_alarm_state")
+          .toArray();
+        expect(lastRetry.pending_deadline).toBe(Date.now() + 30_000);
+        expect(await durableState.storage.getAlarm()).toBe(lastRetry.pending_deadline);
+        now.mockReturnValue(Number(lastRetry.pending_deadline));
+        await durableState.storage.deleteAlarm();
+        await restarted.server.onScheduledDeadline();
+        expect(stop).toHaveBeenCalledTimes(3);
         expect(shutdownStore.read()).toEqual(held);
+        expect(await durableState.storage.getAlarm()).toBeNull();
+        expect(
+          durableState.storage.sql
+            .exec("SELECT pending_deadline, in_flight_deadline FROM session_alarm_state")
+            .toArray()
+        ).toEqual([{ pending_deadline: null, in_flight_deadline: null }]);
+        for (const [config] of stop.mock.calls) {
+          expect(config).toMatchObject({
+            providerObjectId: "rejected-source",
+            intent: "destroy",
+            reason: "startup_superseded",
+            generationCreatedAtMs: undefined,
+          });
+          expect(config.signal).toBeInstanceOf(AbortSignal);
+        }
+        // Assert outside the provider stub: cleanup intentionally catches provider exceptions.
+        expect(stopObservations).toHaveLength(3);
+        for (const observation of stopObservations) {
+          expect(observation.in_flight_deadline).toEqual(expect.any(Number));
+          expect(observation.pending_deadline).toBe(
+            Number(observation.in_flight_deadline) + 30_000
+          );
+          expect(observation.hold).toEqual(held);
+        }
       } finally {
+        now.mockRestore();
         stop.mockRestore();
       }
     });

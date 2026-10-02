@@ -87,7 +87,11 @@ describe("pending VM reference recovery", () => {
           throw new ModalApiError("snapshot unavailable", 500);
         }),
       };
-      const provider = new ModalSandboxProvider(client as unknown as ModalClient, "modal-vm");
+      const provider = new ModalSandboxProvider(
+        client as unknown as ModalClient,
+        "modal-vm",
+        "github"
+      );
       let state: ShutdownRecord | null =
         action === "restore" && setupDelayMs
           ? {
@@ -212,7 +216,7 @@ describe("pending VM reference recovery", () => {
     const client = { createSandbox: vi.fn(), stopSandbox: vi.fn(async () => {}) };
     const fixture = createAlarmFixture(
       sandbox,
-      new ModalSandboxProvider(client as unknown as ModalClient, "modal-vm")
+      new ModalSandboxProvider(client as unknown as ModalClient, "modal-vm", "github")
     );
     fixture.shutdown.recordPendingProviderHandle = vi.fn(async () => {
       sandbox.modal_sandbox_id = "replacement-generation";
@@ -255,7 +259,7 @@ describe("pending VM reference recovery", () => {
     };
     const fixture = createAlarmFixture(
       sandbox,
-      new ModalSandboxProvider(client as unknown as ModalClient, "modal-vm")
+      new ModalSandboxProvider(client as unknown as ModalClient, "modal-vm", "github")
     );
     await fixture.manager.spawnSandbox();
     vi.setSystemTime(Date.now() + DEFAULT_LIFECYCLE_CONFIG.bootBudget.timeoutMs + 1);
@@ -284,7 +288,11 @@ describe("pending VM reference recovery", () => {
         throw new ModalApiError("not visible", 409, "pending_reference_not_visible");
       }),
     };
-    const provider = new ModalSandboxProvider(client as unknown as ModalClient, "modal-vm");
+    const provider = new ModalSandboxProvider(
+      client as unknown as ModalClient,
+      "modal-vm",
+      "github"
+    );
     const first = createAlarmFixture(sandbox, provider);
     void first.manager.spawnSandbox();
     await vi.waitFor(() => expect(client.createSandbox).toHaveBeenCalledOnce());
@@ -304,7 +312,7 @@ describe("pending VM reference recovery", () => {
     const createSandbox = vi.fn();
     const fixture = createAlarmFixture(
       sandbox,
-      new ModalSandboxProvider({ createSandbox } as unknown as ModalClient, "modal-vm")
+      new ModalSandboxProvider({ createSandbox } as unknown as ModalClient, "modal-vm", "github")
     );
     let finishLookup!: (value: undefined) => void;
     vi.mocked(fixture.storage.getUserEnvVars).mockImplementationOnce(
@@ -330,7 +338,8 @@ describe("pending VM reference recovery", () => {
           throw new ModalApiError("not visible", 409, "pending_reference_not_visible");
         }),
       } as unknown as ModalClient,
-      "modal-vm"
+      "modal-vm",
+      "github"
     );
     const sandbox = createMockSandbox({
       status: "failed",
@@ -364,7 +373,8 @@ describe("pending VM reference recovery", () => {
           throw new ModalApiError("not visible", 409, "pending_reference_not_visible");
         }),
       } as unknown as ModalClient,
-      "modal-vm"
+      "modal-vm",
+      "github"
     );
     const sandbox = createMockSandbox({
       status: "failed",
@@ -393,7 +403,8 @@ describe("pending VM reference recovery", () => {
     }));
     const provider = new ModalSandboxProvider(
       { stopSandbox, restoreSandbox } as unknown as ModalClient,
-      "modal-vm"
+      "modal-vm",
+      "github"
     );
     const sandbox = createMockSandbox({
       status: "stopped",

@@ -103,6 +103,7 @@ function toRepoConfig(repo: ParsedControlPlaneRepo): RepoConfig {
  * 1. Checks local in-memory cache first
  * 2. Calls the control plane GET /repos endpoint
  * 3. Falls back to FALLBACK_REPOS if the API fails
+ * Team catalogs require a current user and bypass all caches and fallbacks.
  *
  * @param env - Cloudflare Worker environment
  * @returns Array of RepoConfig objects
@@ -110,10 +111,13 @@ function toRepoConfig(repo: ParsedControlPlaneRepo): RepoConfig {
 export async function getAvailableRepos(
   env: Env,
   traceId?: string,
-  teamId?: string | null
+  teamId?: string | null,
+  userId?: string
 ): Promise<RepoConfig[]> {
-  const cacheKey = teamId ? `repos:cache:team:${encodeURIComponent(teamId)}` : "repos:cache";
-  const cached = localCache.get(cacheKey);
+  if (teamId && !userId) return [];
+  const cacheKey = "repos:cache";
+  // Team membership and grants must be checked on every read.
+  const cached = teamId ? undefined : localCache.get(cacheKey);
   // Check local cache first
   if (cached && Date.now() - cached.timestamp < LOCAL_CACHE_TTL_MS) {
     return cached.repos;
@@ -122,7 +126,13 @@ export async function getAvailableRepos(
   const startTime = Date.now();
   try {
     const path = teamId ? `/repos?teamId=${encodeURIComponent(teamId)}` : "/repos";
-    const response = await controlPlaneFetch(env, path, traceId, REPOS_FETCH_TIMEOUT_MS);
+    const response = await controlPlaneFetch(
+      env,
+      path,
+      traceId,
+      REPOS_FETCH_TIMEOUT_MS,
+      teamId ? userId : undefined
+    );
 
     if (!response.ok) {
       log.error("control_plane.fetch_repos", {
@@ -131,7 +141,7 @@ export async function getAvailableRepos(
         http_status: response.status,
         duration_ms: Date.now() - startTime,
       });
-      return getFromCacheOrFallback(env, cacheKey);
+      return teamId ? [] : getFromCacheOrFallback(env, cacheKey);
     }
 
     const parsed = controlPlaneReposResponseSchema.safeParse(await response.json());
@@ -141,28 +151,30 @@ export async function getAvailableRepos(
         outcome: "invalid_response",
         duration_ms: Date.now() - startTime,
       });
-      return getFromCacheOrFallback(env, cacheKey);
+      return teamId ? [] : getFromCacheOrFallback(env, cacheKey);
     }
 
     const repos = parsed.data.repos.map(toRepoConfig);
 
-    // Update local cache
-    localCache.set(cacheKey, {
-      repos,
-      timestamp: Date.now(),
-    });
+    if (!teamId) {
+      // Update local cache
+      localCache.set(cacheKey, {
+        repos,
+        timestamp: Date.now(),
+      });
 
-    // Also store in KV for persistence across worker restarts
-    try {
-      await createKvCacheStore(env.SLACK_KV).put(cacheKey, JSON.stringify(repos), {
-        expirationTtl: KV_CACHE_TTL_SECONDS,
-      });
-    } catch (e) {
-      log.warn("kv.put", {
-        trace_id: traceId,
-        key_prefix: "repos_cache",
-        error: e instanceof Error ? e : new Error(String(e)),
-      });
+      // Also store in KV for persistence across worker restarts
+      try {
+        await createKvCacheStore(env.SLACK_KV).put(cacheKey, JSON.stringify(repos), {
+          expirationTtl: KV_CACHE_TTL_SECONDS,
+        });
+      } catch (e) {
+        log.warn("kv.put", {
+          trace_id: traceId,
+          key_prefix: "repos_cache",
+          error: e instanceof Error ? e : new Error(String(e)),
+        });
+      }
     }
 
     log.info("control_plane.fetch_repos", {
@@ -180,7 +192,7 @@ export async function getAvailableRepos(
       error: e instanceof Error ? e : new Error(String(e)),
       duration_ms: Date.now() - startTime,
     });
-    return getFromCacheOrFallback(env, cacheKey);
+    return teamId ? [] : getFromCacheOrFallback(env, cacheKey);
   }
 }
 

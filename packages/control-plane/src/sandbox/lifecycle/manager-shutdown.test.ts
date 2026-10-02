@@ -417,7 +417,13 @@ describe("final graceful shutdown lifecycle integration", () => {
           );
           if (failure === "boot budget") row.last_heartbeat = Date.now();
           expect(await f.manager.handleShutdownAlarm()).toBe("continue");
-          await f.manager.handleAlarm();
+          const result = await f.manager.handleAlarm();
+          if (failure === "boot budget") {
+            expect(result).toEqual({ kind: "boot_budget_exceeded", reason: row.last_spawn_error });
+            expect(f.sockets.sendToSandbox).not.toHaveBeenCalled();
+            expect(f.sockets.detachSandboxWebSocket).not.toHaveBeenCalled();
+            expect(f.manager.isSpawning()).toBe(false);
+          }
         }
 
         // Neither deleted nor fenced: the source is the only copy of the workspace.
@@ -431,6 +437,9 @@ describe("final graceful shutdown lifecycle integration", () => {
           phase: "unknown",
           receipt: { kind: "retained", artifactId: "retained-source" },
         });
+        await expect(f.manager.handleAlarm()).resolves.toBe("no_action");
+        expect(f.storage.incrementCircuitBreakerFailure).toHaveBeenCalledOnce();
+        expect(f.provider.takeSnapshot).not.toHaveBeenCalled();
         await f.manager.spawnSandbox();
         expect(f.provider.createSandbox).not.toHaveBeenCalled();
 

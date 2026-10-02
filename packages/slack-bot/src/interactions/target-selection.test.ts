@@ -235,7 +235,8 @@ describe("handleTargetSelection", () => {
       env,
       DEFAULT_SELECTED_VALUE,
       "trace-1",
-      "team-a"
+      "team-a",
+      "U123"
     );
     expect(startSessionAndSendPrompt).toHaveBeenCalledWith(
       env,
@@ -505,6 +506,13 @@ describe("handleTargetSelection", () => {
     await handleTargetSelection(selectionRequest(), makeEnv(), "trace-1", vi.fn());
 
     expect(getPendingRequest).toHaveBeenCalledWith(expect.anything(), REQUEST_ID);
+    expect(resolveTargetValue).toHaveBeenCalledWith(
+      expect.anything(),
+      DEFAULT_SELECTED_VALUE,
+      "trace-1",
+      null,
+      "U123"
+    );
     expect(startSessionAndSendPrompt).toHaveBeenCalledWith(
       expect.anything(),
       expect.objectContaining({ messageText: "Alice's original request" })

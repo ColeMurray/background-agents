@@ -1,8 +1,10 @@
-import { describe, it, expect, beforeEach } from "vitest";
-import { SELF, env } from "cloudflare:test";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
+import { SELF, env, createExecutionContext } from "cloudflare:test";
 import { runInSessionDO } from "./session-do-access";
 import type { SessionDO } from "../../src/cloudflare/durable-object";
 import { SessionIndexStore } from "../../src/db/session-index";
+import { TeamRepositoryGrantStore } from "../../src/db/team-repository-grants";
+import { GitHubSourceControlProvider } from "../../src/source-control/providers/github-provider";
 import { cleanD1Tables } from "./cleanup";
 import {
   initNamedSessionDO,
@@ -10,10 +12,12 @@ import {
   seedActiveUser,
   seedMessage,
   seedSandboxAuth,
+  routeRequest,
 } from "./helpers";
 
 describe("POST /sessions/:parentId/children — spawn child", () => {
   beforeEach(cleanD1Tables);
+  afterEach(() => vi.restoreAllMocks());
 
   /** Sets up a parent DO + sandbox auth + D1 row, returns everything needed for spawn tests. */
   async function setupParent(opts?: {
@@ -120,6 +124,18 @@ describe("POST /sessions/:parentId/children — spawn child", () => {
     await env.DB.prepare(
       "INSERT INTO teams (id, slug, name, created_at, updated_at) VALUES ('team_child', 'child', 'Child', 1, 1)"
     ).run();
+    await new TeamRepositoryGrantStore(env.DB).add("team_child", {
+      kind: "repository",
+      repoExternalId: 12345,
+      owner: "acme",
+      name: "web-app",
+    });
+    vi.spyOn(GitHubSourceControlProvider.prototype, "checkRepositoryAccess").mockResolvedValue({
+      repoId: 12345,
+      repoOwner: "acme",
+      repoName: "web-app",
+      defaultBranch: "main",
+    });
     const { parentName, sandboxToken, store } = await setupParent({
       ownerTeamId: "team_child",
       visibility: "workspace",
@@ -129,17 +145,21 @@ describe("POST /sessions/:parentId/children — spawn child", () => {
       scmLogin: "acmedev",
     });
 
-    const res = await SELF.fetch(`https://test.local/sessions/${parentName}/children`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${sandboxToken}`,
-      },
-      body: JSON.stringify({
-        title: "Fix the tests",
-        prompt: "Please fix the failing tests in src/utils.ts",
+    const res = await routeRequest(
+      new Request(`https://test.local/sessions/${parentName}/children`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${sandboxToken}`,
+        },
+        body: JSON.stringify({
+          title: "Fix the tests",
+          prompt: "Please fix the failing tests in src/utils.ts",
+        }),
       }),
-    });
+      env,
+      createExecutionContext()
+    );
 
     expect(res.status).toBe(201);
     const body = await res.json<{ sessionId: string; status: string }>();

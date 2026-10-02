@@ -28,11 +28,17 @@ export async function controlPlaneFetch(
   env: Env,
   path: string,
   traceId?: string,
-  timeoutMs?: number
+  timeoutMs?: number,
+  userId?: string
 ): Promise<Response> {
   return signedControlPlaneFetch(
     env,
-    { method: "GET", url: `https://internal${path}`, traceId },
+    {
+      method: "GET",
+      url: `https://internal${path}`,
+      traceId,
+      actor: userId ? `slack:${userId}` : undefined,
+    },
     {
       headers: { Accept: "application/json" },
       ...(timeoutMs === undefined ? {} : { signal: AbortSignal.timeout(timeoutMs) }),
@@ -59,9 +65,10 @@ export class ControlPlaneRequestError extends Error {
 export async function fetchControlPlaneJson(
   env: Env,
   path: string,
-  traceId?: string
+  traceId?: string,
+  userId?: string
 ): Promise<unknown> {
-  const response = await controlPlaneFetch(env, path, traceId);
+  const response = await controlPlaneFetch(env, path, traceId, undefined, userId);
   if (!response.ok) {
     throw new ControlPlaneRequestError(path, response.status);
   }
