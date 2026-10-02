@@ -43,9 +43,9 @@ interface AutomationFormProps {
 }
 
 export function AutomationForm({ mode, initialValues, onSubmit, submitting }: AutomationFormProps) {
-  const { projects } = useProjects();
   const [projectId, setProjectId] = useState(initialValues?.projectId ?? "");
   const [teamId, setTeamId] = useState(initialValues?.teamId ?? null);
+  const { projects, hasMore, loadingMore, loadMore } = useProjects({ teamId: teamId ?? "null" });
   const scope = useResourceTeams("automation");
   const scopeValid =
     mode === "edit" ||
@@ -218,6 +218,17 @@ export function AutomationForm({ mode, initialValues, onSubmit, submitting }: Au
             ))}
         </select>
       </label>
+
+      {hasMore && (
+        <Button
+          type="button"
+          variant="ghost"
+          disabled={loadingMore}
+          onClick={() => void loadMore()}
+        >
+          Load more projects
+        </Button>
+      )}
 
       <AutomationTargetPicker
         targets={targets}

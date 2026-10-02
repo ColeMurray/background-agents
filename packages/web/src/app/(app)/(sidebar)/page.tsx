@@ -116,7 +116,7 @@ export default function Home() {
   const { contextKey, teamId, visibility } = resolveComposerAccess(teamContext, accessDraft);
   const [projectId, setProjectId] = useState("");
   const [appliedProjectId, setAppliedProjectId] = useState("");
-  const { projects, loading: projectsLoading } = useProjects();
+  const { projects, loading: projectsLoading, hasMore, loadingMore, loadMore } = useProjects();
   const selectedProject = projects.find((project) => project.id === projectId);
   useEffect(() => {
     setProjectId(new URLSearchParams(window.location.search).get("projectId") ?? "");
@@ -490,6 +490,11 @@ export default function Home() {
               ))}
             </select>
           </label>
+          {hasMore && (
+            <button type="button" disabled={loadingMore} onClick={() => void loadMore()}>
+              Load more projects
+            </button>
+          )}
           {selectedProject && (
             <span className="rounded border px-2 py-1 text-xs">
               Context: {selectedProject.name} (

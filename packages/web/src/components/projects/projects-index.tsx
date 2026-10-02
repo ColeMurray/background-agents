@@ -13,7 +13,12 @@ export function ProjectsIndex({ teamId }: { teamId?: string }) {
   const [status, setStatus] = useState("active");
   const [search, setSearch] = useState("");
   const [mine, setMine] = useState(false);
-  const { projects, loading, error } = useProjects({ status, search, mine, teamId });
+  const { projects, loading, error, hasMore, loadingMore, loadMore } = useProjects({
+    status,
+    search,
+    mine,
+    teamId,
+  });
   const { teams, requireTeamOnCreate, loading: teamsLoading } = useMeTeams();
   const [creating, setCreating] = useState(false);
   const [failure, setFailure] = useState("");
@@ -139,6 +144,11 @@ export function ProjectsIndex({ teamId }: { teamId?: string }) {
             </Link>
           ))}
         </div>
+      )}
+      {hasMore && (
+        <Button variant="ghost" disabled={loadingMore} onClick={() => void loadMore()}>
+          Load more projects
+        </Button>
       )}
     </section>
   );

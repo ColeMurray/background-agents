@@ -1,5 +1,6 @@
 "use client";
 import useSWR, { useSWRConfig } from "swr";
+import useSWRInfinite from "swr/infinite";
 import { projectViewSchema, type ProjectView } from "@open-inspect/shared/types/projects";
 import { browserApiFetch, type BrowserApiPath } from "@/lib/browser-api-fetch";
 
@@ -20,17 +21,40 @@ export function useProjects(
   const params = new URLSearchParams();
   for (const [key, value] of Object.entries(filters))
     if (value !== undefined && value !== "") params.set(key, String(value));
-  const query = useSWR(`/api/projects?${params}`, async (path) => {
-    const data = await projectRequest<{ projects: unknown[] }>(path);
-    return data.projects.map((project) => projectViewSchema.parse(project));
-  });
+  const { data, error, isLoading, isValidating, size, setSize, mutate } = useSWRInfinite<{
+    projects: ProjectView[];
+    hasMore?: boolean;
+    nextCursor?: string | null;
+  }>(
+    (index, previous) => {
+      if (index > 0 && !previous?.nextCursor) return null;
+      const page = new URLSearchParams(params);
+      if (index > 0) page.set("cursor", previous!.nextCursor!);
+      return `/api/projects?${page}`;
+    },
+    async (path) => {
+      const page = await projectRequest<{
+        projects: unknown[];
+        hasMore?: boolean;
+        nextCursor?: string | null;
+      }>(path);
+      return {
+        ...page,
+        projects: page.projects.map((project) => projectViewSchema.parse(project)),
+      };
+    }
+  );
   return {
-    projects: query.data ?? [],
-    loading: query.isLoading,
-    error: query.error,
-    refresh: query.mutate,
+    projects: data?.flatMap((page) => page.projects) ?? [],
+    loading: isLoading,
+    error,
+    refresh: mutate,
+    hasMore: data?.at(-1)?.hasMore ?? false,
+    loadingMore: isValidating && !!data && data[size - 1] === undefined,
+    loadMore: () => setSize((count) => count + 1),
   };
 }
+
 export function useProject(slug: string) {
   const query = useSWR(
     slug ? `/api/projects/by-slug/${encodeURIComponent(slug)}` : null,

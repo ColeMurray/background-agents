@@ -99,12 +99,12 @@ most one attempt per message; failed Slack delivery does not roll back completed
   `session_project_snapshots`; adds `automations.project_id` and indexes. It reuses the session
   project column already introduced by Teams migration 0083. There is no backfill.
 
-Current bounded projections: project index up to 200 entries, sources/pins up to 200 per project,
-project PR list up to 500, and recent/board up to 50 roots per inbox category. The session view
-links to full history when more exists; category APIs accept inbox cursors. Automation selection
-uses cursor pagination; choose **Load more automations** to reach older entries. These bounds
-prevent unbounded reads; cursor-based project/PR catalogs can be added when workspace scale requires
-them.
+Current bounded projections: project index pages of up to 200 entries, sources/pins up to 200 per
+project, project PR list up to 500, and recent/board up to 50 roots per inbox category. The session
+view links to full history when more exists; category APIs accept inbox cursors. Automation
+selection uses cursor pagination; choose **Load more automations** to reach older entries. These
+bounds prevent unbounded reads; cursor-based project/PR catalogs can be added when workspace scale
+requires them.
 
 ## Deployment
 

@@ -194,7 +194,7 @@ function TeamMembers({ team }: { team: TeamResponse }) {
 }
 
 function TeamProjects({ teamId }: { teamId: string }) {
-  const { projects, loading, error } = useProjects({ teamId });
+  const { projects, loading, error, hasMore, loadingMore, loadMore } = useProjects({ teamId });
   if (loading) return <p role="status">Loading projects…</p>;
   if (error) return <ErrorBanner role="alert">Unable to load projects.</ErrorBanner>;
   return (
@@ -212,6 +212,11 @@ function TeamProjects({ teamId }: { teamId: string }) {
         ))
       ) : (
         <p>No projects yet.</p>
+      )}
+      {hasMore && (
+        <Button variant="ghost" disabled={loadingMore} onClick={() => void loadMore()}>
+          Load more projects
+        </Button>
       )}
     </div>
   );

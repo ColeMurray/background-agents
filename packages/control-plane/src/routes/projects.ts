@@ -74,14 +74,29 @@ async function handleList(request: Request, _env: Env, _params: object, ctx: Req
       search: z.string().max(200).optional(),
       teamId: z.string().optional(),
       mine: z.enum(["true", "false"]).optional(),
+      cursor: z.string().max(512).optional(),
     })
   );
   if (query instanceof Response) return query;
+  let cursor: { updatedAt: number; id: string } | undefined;
+  if (query.cursor) {
+    try {
+      cursor = z
+        .object({ updatedAt: z.number().int().nonnegative(), id: z.string().min(1).max(100) })
+        .parse(JSON.parse(atob(query.cursor)));
+    } catch {
+      return error("Invalid project cursor", 400);
+    }
+  }
   const viewer = await resourceViewer(ctx);
-  const projects = await new ProjectStore(ctx.db).list(actor(ctx).userId, {
+  const rows = await new ProjectStore(ctx.db).list(actor(ctx).userId, {
     ...query,
     mine: query.mine === "true",
+    cursor,
+    limit: 201,
   });
+  const projects = rows.slice(0, 200);
+  const last = projects.at(-1);
   const visible = ctx.authorization?.permissions.includes("sessions.read")
     ? visibleSessionsPredicate("s", viewer, { mode: "on" })
     : { sql: "0 = 1", params: [] };
@@ -95,6 +110,11 @@ async function handleList(request: Request, _env: Env, _params: object, ctx: Req
     .all<{ projectId: string; lastActivityAt: number; openPrCount: number }>();
   const activityByProject = new Map(activity.results.map((row) => [row.projectId, row]));
   return json({
+    hasMore: rows.length > 200,
+    nextCursor:
+      rows.length > 200 && last
+        ? btoa(JSON.stringify({ updatedAt: last.updatedAt, id: last.id }))
+        : null,
     projects: projects.map((project) => ({
       ...project,
       openPrCount: activityByProject.get(project.id)?.openPrCount ?? 0,

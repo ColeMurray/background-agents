@@ -86,7 +86,9 @@ describe("Projects v1 foundation", () => {
       .run();
     const project = await create({ ownerTeamId: "team_a" });
     expect((await req(`/projects/${project.id}`, "GET", undefined, B)).status).toBe(404);
-    expect(await (await req("/projects", "GET", undefined, B)).json()).toEqual({ projects: [] });
+    expect(await (await req("/projects", "GET", undefined, B)).json()).toMatchObject({
+      projects: [],
+    });
     const store = new ProjectStore(env.DB);
     const before = (await store.get(project.id))!;
     await env.DB.prepare("DELETE FROM team_memberships WHERE user_id = ?").bind(A).run();
@@ -1036,4 +1038,29 @@ it("rejects a project-revoked executor before recording an invocation", async ()
     (await env.DB.prepare("SELECT id FROM automation_invocations").all()).results
   ).toHaveLength(0);
   expect((await env.DB.prepare("SELECT id FROM automation_runs").all()).results).toHaveLength(0);
+});
+
+it("paginates project lists past 200 with stable timestamp ties and team scoping", async () => {
+  await req("/me/authorization");
+  await env.DB.batch(
+    Array.from({ length: 205 }, (_, i) =>
+      env.DB.prepare(
+        "INSERT INTO projects (id,slug,name,owner_user_id,created_at,updated_at) VALUES (?,?,?,?,1,1)"
+      ).bind(`page-${String(i).padStart(3, "0")}`, `page-${i}`, `Page ${i}`, A)
+    )
+  );
+  const first = await (
+    await req("/projects?teamId=null")
+  ).json<{ projects: { id: string }[]; hasMore: boolean; nextCursor: string }>();
+  expect(first.projects).toHaveLength(200);
+  expect(first.hasMore).toBe(true);
+  const next = await (
+    await req(`/projects?teamId=null&cursor=${encodeURIComponent(first.nextCursor)}`)
+  ).json<{ projects: { id: string }[]; hasMore: boolean }>();
+  expect(next.projects).toHaveLength(5);
+  expect(next.hasMore).toBe(false);
+  expect(new Set([...first.projects, ...next.projects].map((project) => project.id)).size).toBe(
+    205
+  );
+  expect((await req("/projects?cursor=invalid")).status).toBe(400);
 });

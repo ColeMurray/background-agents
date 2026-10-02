@@ -148,7 +148,14 @@ export class ProjectStore {
   }
   async list(
     userId: string,
-    options: { status?: Project["status"]; search?: string; teamId?: string; mine?: boolean } = {}
+    options: {
+      status?: Project["status"];
+      search?: string;
+      teamId?: string;
+      mine?: boolean;
+      cursor?: { updatedAt: number; id: string };
+      limit?: number;
+    } = {}
   ): Promise<Project[]> {
     const access = projectAccessPredicate(userId, "read");
     const conditions = [access.sql];
@@ -157,7 +164,8 @@ export class ProjectStore {
       conditions.push("p.status = ?");
       params.push(options.status);
     }
-    if (options.teamId) {
+    if (options.teamId === "null") conditions.push("p.owner_team_id IS NULL");
+    else if (options.teamId) {
       conditions.push("p.owner_team_id = ?");
       params.push(options.teamId);
     }
@@ -171,11 +179,15 @@ export class ProjectStore {
       );
       params.push(userId, userId);
     }
+    if (options.cursor) {
+      conditions.push("(p.updated_at < ? OR (p.updated_at = ? AND p.id > ?))");
+      params.push(options.cursor.updatedAt, options.cursor.updatedAt, options.cursor.id);
+    }
     const result = await this.db
       .prepare(
-        `SELECT ${selectProject} FROM projects p WHERE ${conditions.join(" AND ")} ORDER BY p.updated_at DESC, p.id LIMIT 200`
+        `SELECT ${selectProject} FROM projects p WHERE ${conditions.join(" AND ")} ORDER BY p.updated_at DESC, p.id LIMIT ?`
       )
-      .bind(...params)
+      .bind(...params, options.limit ?? 200)
       .all();
     return result.results.map((row) => projectSchema.parse(row));
   }

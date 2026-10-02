@@ -52,15 +52,23 @@ const scopeMocks = vi.hoisted(() => ({
   repos: vi.fn(),
   environments: vi.fn(),
   allowWorkspace: true,
+  projects: vi.fn(),
+  loadMoreProjects: vi.fn(),
+  moreProjects: false,
 }));
 vi.mock("@/hooks/use-projects", () => ({
-  useProjects: () => ({
-    projects: [
-      { id: "project-eng", name: "Engineering project", ownerTeamId: "team-1" },
-      { id: "project-design", name: "Design project", ownerTeamId: "team-2" },
-      { id: "project-workspace", name: "Workspace project", ownerTeamId: null },
-    ],
-  }),
+  useProjects: (filters: unknown) => {
+    scopeMocks.projects(filters);
+    return {
+      hasMore: scopeMocks.moreProjects,
+      loadMore: scopeMocks.loadMoreProjects,
+      projects: [
+        { id: "project-eng", name: "Engineering project", ownerTeamId: "team-1" },
+        { id: "project-design", name: "Design project", ownerTeamId: "team-2" },
+        { id: "project-workspace", name: "Workspace project", ownerTeamId: null },
+      ],
+    };
+  },
 }));
 vi.mock("@/hooks/use-resource-teams", () => ({
   useResourceTeams: () => ({
@@ -76,6 +84,8 @@ vi.mock("@/hooks/use-resource-teams", () => ({
 }));
 beforeEach(() => {
   scopeMocks.allowWorkspace = true;
+  scopeMocks.moreProjects = false;
+  scopeMocks.loadMoreProjects.mockClear();
   enabledModelsValue = ["openai/gpt-5.4"];
   loadingModelsValue = false;
   environmentsValue = [];
@@ -155,6 +165,22 @@ async function chooseTeam(user: ReturnType<typeof userEvent.setup>, name: string
 }
 
 describe("automation cron submission", () => {
+  it("loads additional projects in the selected ownership scope without submitting", () => {
+    scopeMocks.moreProjects = true;
+    const onSubmit = vi.fn();
+    render(
+      <AutomationForm
+        mode="create"
+        submitting={false}
+        onSubmit={onSubmit}
+        initialValues={{ teamId: "team-1" }}
+      />
+    );
+    expect(scopeMocks.projects).toHaveBeenLastCalledWith({ teamId: "team-1" });
+    fireEvent.click(screen.getByRole("button", { name: "Load more projects" }));
+    expect(scopeMocks.loadMoreProjects).toHaveBeenCalledTimes(1);
+    expect(onSubmit).not.toHaveBeenCalled();
+  });
   it("scopes creation targets and clears selections when the team changes", async () => {
     const user = userEvent.setup();
     environmentsValue = [
