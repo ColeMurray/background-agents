@@ -212,6 +212,7 @@ async def _execute_endpoint(
     authorization: str | None,
     trace_id: str | None,
     request_id: str | None,
+    log_exception_details: bool = True,
     **log_fields: object,
 ) -> AsyncIterator[_EndpointExecution]:
     execution = _EndpointExecution(
@@ -251,10 +252,11 @@ async def _execute_endpoint(
         execution.outcome = "error"
         log.error(
             "api.error",
-            exc=e,
+            exc=e if log_exception_details else None,
             endpoint_name=execution.endpoint_name,
             trace_id=execution.trace_id,
             request_id=execution.request_id,
+            **({} if log_exception_details else {"error_type": type(e).__name__}),
             **execution.log_fields,
         )
         raise HTTPException(status_code=500, detail="Internal server error") from e
@@ -684,6 +686,8 @@ async def api_snapshot_vm_sandbox(
     """Capture a prepared VM without retiring it; the control plane owns retirement."""
     async with _execute_endpoint(
         endpoint_name="api_snapshot_vm_sandbox",
+        # SDK/helper exceptions may include repository content or credentials.
+        log_exception_details=False,
         authorization=authorization,
         trace_id=x_trace_id,
         request_id=x_request_id,
