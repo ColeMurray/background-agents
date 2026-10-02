@@ -1,15 +1,14 @@
 "use client";
 import { useState } from "react";
-import useSWR from "swr";
-import { projectRequest, useProjectMutations, type ProjectView } from "@/hooks/use-projects";
+import { useAutomations } from "@/hooks/use-automations";
+import { useProjectMutations, type ProjectView } from "@/hooks/use-projects";
 import { Button } from "@/components/ui/button";
 import Link from "next/link";
-import type { Automation } from "@open-inspect/shared/types/automations";
 const field = "w-full rounded border border-border bg-background p-2";
 export function ProjectAutomations({ project }: { project: ProjectView }) {
-  const { data, error, mutate } = useSWR<{ automations: Automation[] }>(
-    "/api/automations?limit=100",
-    projectRequest
+  const { automations, error, mutate, loading, loadingMore, hasMore, loadMore } = useAutomations(
+    "",
+    project.ownerTeamId ?? undefined
   );
   const [failure, setFailure] = useState("");
   const write = useProjectMutations();
@@ -24,8 +23,9 @@ export function ProjectAutomations({ project }: { project: ProjectView }) {
   return (
     <section className="space-y-3">
       <h2 className="text-xl font-semibold">Subscribed automations</h2>
+      {loading && <p role="status">Loading automations…</p>}
       {(error || failure) && <p role="alert">{failure || String(error)}</p>}
-      {data?.automations
+      {automations
         .filter((automation) => automation.projectId === project.id)
         .map((automation) => (
           <div className="flex gap-3" key={automation.id}>
@@ -47,7 +47,7 @@ export function ProjectAutomations({ project }: { project: ProjectView }) {
           }}
         >
           <option value="">Subscribe an automation…</option>
-          {data?.automations
+          {automations
             .filter((automation) => automation.projectId !== project.id)
             .map((automation) => (
               <option key={automation.id} value={automation.id}>
@@ -55,6 +55,11 @@ export function ProjectAutomations({ project }: { project: ProjectView }) {
               </option>
             ))}
         </select>
+      )}
+      {hasMore && (
+        <Button variant="ghost" disabled={loadingMore} onClick={() => void loadMore()}>
+          {loadingMore ? "Loading…" : "Load more automations"}
+        </Button>
       )}
     </section>
   );

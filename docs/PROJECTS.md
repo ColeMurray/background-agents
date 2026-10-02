@@ -102,8 +102,9 @@ most one attempt per message; failed Slack delivery does not roll back completed
 Current bounded projections: project index up to 200 entries, sources/pins up to 200 per project,
 project PR list up to 500, and recent/board up to 50 roots per inbox category. The session view
 links to full history when more exists; category APIs accept inbox cursors. Automation selection
-displays up to 100 entries. These bounds prevent unbounded reads; cursor-based project/PR catalogs
-can be added when workspace scale requires them.
+uses cursor pagination; choose **Load more automations** to reach older entries. These bounds
+prevent unbounded reads; cursor-based project/PR catalogs can be added when workspace scale requires
+them.
 
 ## Deployment
 
