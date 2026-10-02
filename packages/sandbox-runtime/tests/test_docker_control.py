@@ -89,6 +89,7 @@ async def test_stop_closes_idle_control_connections(socket_path):
             acknowledgement="not_confirmed",
         )
         service.log.warn.assert_not_called()
+        service.log.info.assert_not_called()
     finally:
         writer.close()
         await writer.wait_closed()
@@ -155,3 +156,66 @@ async def test_control_read_timeout_is_logged_without_changing_socket_cleanup():
         duration_ms=pytest.approx(0, abs=1000),
         acknowledgement="not_confirmed",
     )
+
+
+@pytest.mark.asyncio
+async def test_active_preparation_cancellation_is_visible_without_confirming_capture():
+    service = Mock(prepare_for_snapshot=AsyncMock(side_effect=asyncio.CancelledError()))
+    control = DockerControl(service)
+    reader = Mock(readline=AsyncMock(return_value=b"prepare\n"))
+    writer = Mock(drain=AsyncMock(), wait_closed=AsyncMock())
+
+    await control._handle(reader, writer)
+
+    service.log.info.assert_any_call(
+        "docker.prepare_cancelled",
+        error_type="CancelledError",
+        duration_ms=pytest.approx(0, abs=1000),
+        acknowledgement="not_confirmed",
+    )
+    writer.write.assert_called_once_with(b"not_prepared\n")
+    assert not control.prepared
+    service.log.debug.assert_not_called()
+    service.log.warn.assert_not_called()
+    service.log.error.assert_not_called()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("phase", ["wait_lock", "recover", "respond"])
+async def test_active_control_cancellation_is_visible_and_closes_socket(phase):
+    service = Mock(prepare_for_snapshot=AsyncMock())
+    recover = None
+    if phase == "recover":
+        service.prepare_for_snapshot.side_effect = RuntimeError("private preparation detail")
+        recover = AsyncMock(side_effect=asyncio.CancelledError("private recovery detail"))
+    control = DockerControl(service, recover=recover)
+    reader = Mock(readline=AsyncMock(return_value=b"prepare\n"))
+    writer = Mock(drain=AsyncMock(), wait_closed=AsyncMock())
+    if phase == "respond":
+        writer.drain.side_effect = asyncio.CancelledError()
+
+    if phase == "wait_lock":
+        async with control._lock:
+            task = asyncio.create_task(control._handle(reader, writer))
+            while not reader.readline.await_count:
+                await asyncio.sleep(0)
+            task.cancel()
+            await asyncio.wait_for(task, timeout=1)
+    else:
+        await control._handle(reader, writer)
+
+    service.log.info.assert_any_call(
+        "docker.control_cancelled",
+        phase=phase,
+        error_type="CancelledError",
+        duration_ms=pytest.approx(0, abs=1000),
+        acknowledgement="not_confirmed",
+    )
+    if phase == "recover":
+        service.log.info.assert_any_call("docker.recovery_cancelled", error_type="CancelledError")
+    service.log.debug.assert_not_called()
+    service.log.warn.assert_not_called()
+    writer.close.assert_called_once()
+    writer.wait_closed.assert_awaited_once()
+    assert not control._handlers
+    assert "private" not in str(service.log.mock_calls)

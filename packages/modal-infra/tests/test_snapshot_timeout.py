@@ -358,8 +358,8 @@ async def test_vm_preparation_failure_preserves_original_error_and_omits_details
 
     assert raised.value is failure
     snapshot.aio.assert_not_awaited()
-    diagnostic = logger.debug if cancelled else logger.error
-    diagnostic.assert_called_once_with(
+    diagnostic = logger.info if cancelled else logger.error
+    diagnostic.assert_any_call(
         "sandbox.snapshot_preparation.cancelled"
         if cancelled
         else "sandbox.snapshot_preparation.failed",
@@ -374,6 +374,7 @@ async def test_vm_preparation_failure_preserves_original_error_and_omits_details
     )
     if cancelled:
         logger.error.assert_not_called()
+        logger.debug.assert_not_called()
     assert "private registry credential" not in str(logger.mock_calls)
 
 

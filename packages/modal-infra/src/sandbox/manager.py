@@ -222,7 +222,7 @@ class SandboxManager:
                     "duration_ms": int((time.monotonic() - preparation_started) * 1000),
                 }
                 if isinstance(error, asyncio.CancelledError):
-                    log.debug("sandbox.snapshot_preparation.cancelled", **fields)
+                    log.info("sandbox.snapshot_preparation.cancelled", **fields)
                 else:
                     log.error("sandbox.snapshot_preparation.failed", **fields)
                 raise

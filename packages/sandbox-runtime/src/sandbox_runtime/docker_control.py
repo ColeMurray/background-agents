@@ -95,7 +95,7 @@ class DockerControl:
                                 "acknowledgement": "not_confirmed",
                             }
                             if isinstance(error, asyncio.CancelledError):
-                                self.service.log.debug("docker.prepare_cancelled", **fields)
+                                self.service.log.info("docker.prepare_cancelled", **fields)
                             else:
                                 self.service.log.error("docker.prepare_failed", **fields)
                             if self.recover is not None and not self.stopping:
@@ -106,9 +106,7 @@ class DockerControl:
                                 except (Exception, asyncio.CancelledError) as recovery_error:
                                     fields = {"error_type": type(recovery_error).__name__}
                                     if isinstance(recovery_error, asyncio.CancelledError):
-                                        self.service.log.debug(
-                                            "docker.recovery_cancelled", **fields
-                                        )
+                                        self.service.log.info("docker.recovery_cancelled", **fields)
                                     else:
                                         self.service.log.error("docker.recovery_failed", **fields)
                                     raise
@@ -145,7 +143,10 @@ class DockerControl:
                 "acknowledgement": "not_confirmed",
             }
             if isinstance(error, asyncio.CancelledError):
-                self.service.log.debug("docker.control_cancelled", **fields)
+                log_cancelled = (
+                    self.service.log.debug if phase == "read_command" else self.service.log.info
+                )
+                log_cancelled("docker.control_cancelled", **fields)
             else:
                 self.service.log.warn("docker.control_failed", **fields)
         finally:
