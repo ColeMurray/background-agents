@@ -130,9 +130,9 @@ describe("useSessionTargetPicker", () => {
     localStorage.clear();
   });
 
-  it("keeps workspace session creation on the unfiltered environment catalog", () => {
+  it("limits workspace session creation to workspace-owned environments", () => {
     renderHook(() => useSessionTargetPicker({ teamId: null }));
-    expect(mocks.environments).toHaveBeenLastCalledWith({ teamId: null });
+    expect(mocks.environments).toHaveBeenLastCalledWith({ ownerTeamId: null });
   });
 
   it("passes teamId to the catalog hooks and prioritizes the team default over stored targets", () => {

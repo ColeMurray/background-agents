@@ -174,11 +174,12 @@ export function useSessionTargetPicker({
   const noRepositoryGrants =
     !!teamId && !loadingRepos && !reposError && teamHasRepositoryGrants === false;
   const repositoryGrantError = noRepositoryGrants ? "This team has no repository grants." : null;
+  // Workspace sessions can only launch workspace-owned environments.
   const {
     environments,
     loading: loadingEnvironments,
     error: environmentsError,
-  } = useEnvironments({ teamId });
+  } = useEnvironments(teamId ? { teamId } : { ownerTeamId: null });
   const [draftTarget, setSessionTarget] = useState<SessionTarget | null>(null);
   const [selectedBranch, updateSelectedBranch] = useState<string>("");
   const [selectionContext, setSelectionContext] = useState({ teamId, defaultEnvironmentId });
