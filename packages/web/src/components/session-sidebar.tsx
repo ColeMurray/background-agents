@@ -25,6 +25,7 @@ import { UserMenu } from "@/components/sidebar-user-menu";
 import { useCurrentUserAuthorization } from "@/hooks/use-current-user-authorization";
 import { buildSessionsHref } from "@/lib/session-discovery";
 import { useActiveTeam } from "@/hooks/use-active-team";
+import type { SessionInboxFilters } from "@/lib/session-inbox-api";
 import { TeamSwitcher } from "./team-switcher";
 
 export type { SessionItem } from "@/hooks/use-sidebar-sessions";
@@ -73,7 +74,7 @@ export function NewSessionButton({ onClick }: SidebarActionButtonProps) {
 }
 
 interface SessionSidebarProps {
-  filters?: import("@/lib/session-inbox-api").SessionInboxFilters;
+  filters?: SessionInboxFilters;
   projectFilter?: string;
   onProjectFilterChange?: (value: string) => void;
   onNewSession?: () => void;
@@ -98,7 +99,9 @@ export function SessionSidebar({
   const { data: authSession } = useAuthSession();
   const { hasPermission } = useCurrentUserAuthorization();
   const { activeTeamId, scope } = useActiveTeam();
-  const teamQuery = filters ?? { teamIds: activeTeamId ? [activeTeamId] : undefined, scope };
+  const teamQuery = filters
+    ? { ...filters, teamIds: filters.teamIds ? [...filters.teamIds] : undefined }
+    : { teamIds: activeTeamId ? [activeTeamId] : undefined, scope };
   const pathname = usePathname();
   const router = useRouter();
   const isMobile = useIsMobile();
