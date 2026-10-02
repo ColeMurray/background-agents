@@ -68,6 +68,23 @@ describe("useSessionDiffSelection", () => {
     expect(result.current.selectedDiff).toBeNull();
   });
 
+  it("returns to the viewed file's row when a row opened the diff without taking focus", () => {
+    fileRow(FILE_A.path);
+    const rowB = fileRow(FILE_B.path);
+    const filter = document.createElement("input");
+    setRendered(filter, true);
+    document.body.append(filter);
+    const { result } = renderSelection();
+
+    // Safari leaves a clicked row unfocused, so focus is still on the file filter.
+    filter.focus();
+    act(() => result.current.openDiff(FILE_A));
+    act(() => result.current.selectDiff(FILE_B));
+    act(() => result.current.closeDiff());
+
+    expect(rowB).toHaveFocus();
+  });
+
   it("returns to whatever opened the diff when the file's row is not shown", () => {
     const row = fileRow(FILE_A.path);
     setRendered(row, false);
@@ -79,6 +96,20 @@ describe("useSessionDiffSelection", () => {
 
     link.focus();
     act(() => result.current.openDiff(FILE_A));
+    act(() => result.current.closeDiff());
+
+    expect(link).toHaveFocus();
+  });
+
+  it("returns to a timeline file link that opened the diff even when the file's row is shown", () => {
+    fileRow(FILE_A.path);
+    const link = document.createElement("button");
+    setRendered(link, true);
+    document.body.append(link);
+    const { result } = renderSelection();
+
+    // Not focused first: Safari leaves a clicked button unfocused.
+    act(() => result.current.openDiff(FILE_A, link));
     act(() => result.current.closeDiff());
 
     expect(link).toHaveFocus();
