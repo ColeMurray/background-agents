@@ -15,11 +15,12 @@ export function inferProjectSourceReference(
   if (url.hostname === "linear.app") return { ...unchanged, sourceType: "linear_project" };
   if (/^[a-z0-9-]+\.slack\.com$/i.test(url.hostname))
     return { ...unchanged, sourceType: "slack_channel" };
+  // Named refs may contain slashes; only a full commit SHA gives an unambiguous boundary.
   const match =
     url.hostname === "github.com"
-      ? /^\/([^/]+\/[^/]+)\/blob\/[^/]+\/(.+)$/.exec(url.pathname)
+      ? /^\/([^/]+\/[^/]+)\/blob\/[a-fA-F0-9]{40}\/(.+)$/.exec(url.pathname)
       : url.hostname === "gitlab.com"
-        ? /^\/(.+\/[^/]+)\/-\/blob\/[^/]+\/(.+)$/.exec(url.pathname)
+        ? /^\/(.+\/[^/]+)\/-\/blob\/[a-fA-F0-9]{40}\/(.+)$/.exec(url.pathname)
         : null;
   if (!match) return unchanged;
   try {
