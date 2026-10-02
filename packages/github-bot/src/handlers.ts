@@ -24,10 +24,26 @@ export type HandlerResult =
   | { outcome: "processed"; session_id: string; message_id: string; handler_action: string }
   | { outcome: "skipped"; skip_reason: string };
 
-export function isReviewRequestedForBot(payload: unknown, botUsername: string): boolean {
+/**
+ * The logins a review request may name to reach this bot: the webhook App itself and, when a
+ * second App submits the reviews, that App too — it is the one GitHub lists as the reviewer, so
+ * the re-request button on a PR it reviewed names it, never the webhook App.
+ */
+export function reviewRequestLogins(
+  env: Pick<Env, "GITHUB_BOT_USERNAME" | "GITHUB_REVIEWER_USERNAME">
+): string[] {
+  const reviewerLogin = env.GITHUB_REVIEWER_USERNAME?.trim();
+  return reviewerLogin ? [env.GITHUB_BOT_USERNAME, reviewerLogin] : [env.GITHUB_BOT_USERNAME];
+}
+
+export function isReviewRequestedForBot(
+  payload: unknown,
+  acceptedLogins: readonly string[]
+): boolean {
   const parsed = requestedReviewerPayloadSchema.safeParse(payload);
   if (!parsed.success) return false;
-  return parsed.data.requested_reviewer?.login === botUsername;
+  const login = parsed.data.requested_reviewer?.login;
+  return login !== undefined && acceptedLogins.includes(login);
 }
 
 async function createSession(
@@ -178,6 +194,19 @@ async function resolveCallerGating(
   return { allowed: true, ghToken };
 }
 
+/**
+ * The account whose token submits reviews, and whether that is a second App.
+ * `hasReviewerApp` gates the prompt's token fetch; `submittingLogin` decides
+ * whether GitHub would refuse an approval as a self-review.
+ */
+function resolveReviewIdentity(env: Env): { submittingLogin: string; hasReviewerApp: boolean } {
+  const reviewerLogin = env.GITHUB_REVIEWER_USERNAME?.trim();
+  return {
+    submittingLogin: reviewerLogin || env.GITHUB_BOT_USERNAME,
+    hasReviewerApp: Boolean(reviewerLogin),
+  };
+}
+
 export async function handleReviewRequested(
   env: Env,
   log: Logger,
@@ -190,7 +219,7 @@ export async function handleReviewRequested(
   const repositoryPath = encodeRepositoryPathSegments({ repoOwner: owner, repoName });
   const repoFullName = `${owner}/${repoName}`.toLowerCase();
 
-  if (requested_reviewer?.login !== env.GITHUB_BOT_USERNAME) {
+  if (!requested_reviewer || !reviewRequestLogins(env).includes(requested_reviewer.login)) {
     log.debug("handler.review_not_for_bot", {
       trace_id: traceId,
       requested_reviewer: requested_reviewer?.login,
@@ -245,6 +274,7 @@ export async function handleReviewRequested(
       });
       log.info("session.created", { ...meta, session_id: sessionId, action: "review" });
 
+      const reviewIdentity = resolveReviewIdentity(env);
       const prompt = buildCodeReviewPrompt({
         owner,
         repo: repoName,
@@ -256,6 +286,8 @@ export async function handleReviewRequested(
         head: pr.head.ref,
         isPublic: !repo.private,
         codeReviewInstructions: config.codeReviewInstructions,
+        isSelfReview: pr.user.login.toLowerCase() === reviewIdentity.submittingLogin.toLowerCase(),
+        hasReviewerApp: reviewIdentity.hasReviewerApp,
       });
 
       const messageId = await sendPrompt(env, traceId, sessionId, {
@@ -349,6 +381,7 @@ export async function handlePullRequestOpened(
       });
       log.info("session.created", { ...meta, session_id: sessionId, action: "auto_review" });
 
+      const reviewIdentity = resolveReviewIdentity(env);
       const prompt = buildCodeReviewPrompt({
         owner,
         repo: repoName,
@@ -360,7 +393,8 @@ export async function handlePullRequestOpened(
         head: pr.head.ref,
         isPublic: !repo.private,
         codeReviewInstructions: config.codeReviewInstructions,
-        isSelfReview: pr.user.login.toLowerCase() === env.GITHUB_BOT_USERNAME.toLowerCase(),
+        isSelfReview: pr.user.login.toLowerCase() === reviewIdentity.submittingLogin.toLowerCase(),
+        hasReviewerApp: reviewIdentity.hasReviewerApp,
       });
 
       const messageId = await sendPrompt(env, traceId, sessionId, {
