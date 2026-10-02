@@ -6,6 +6,7 @@ import {
   SESSION_ACTIONS,
   automationCapabilities,
   checkAutomationAccess,
+  checkAutomationExecutorReassignment,
   checkEnvironmentAccess,
   checkSessionAccess,
   environmentCapabilities,
@@ -395,6 +396,25 @@ describe("checkAutomationAccess", () => {
     const admin = viewer("non-member", "administrator", false, ["automations.manage.any"]);
     expect(checkAutomationAccess(admin, target, "manage")).toEqual({ allowed: true });
     expect(checkAutomationAccess(admin, target, "read")).toEqual({
+      allowed: false,
+      reason: "missing_permission",
+    });
+  });
+
+  it("lets only team leads and workspace admins reassign an executor", () => {
+    const executor = viewer("owner", "member", false, ["automations.manage.own"]);
+    const member = viewer("team member", "member", false, ["automations.manage.any"]);
+    const lead = viewer("team lead", "member", false, ["automations.manage.own"]);
+    const admin = viewer("non-member", "administrator", false, ["automations.manage.any"]);
+    const denied = { allowed: false, reason: "not_owner_or_lead" };
+    expect(checkAutomationExecutorReassignment(executor, target)).toEqual(denied);
+    expect(checkAutomationExecutorReassignment(member, target)).toEqual(denied);
+    expect(checkAutomationExecutorReassignment(lead, target)).toEqual({ allowed: true });
+    expect(checkAutomationExecutorReassignment(admin, target)).toEqual({ allowed: true });
+    expect(
+      checkAutomationExecutorReassignment(lead, { ownerTeamId: null, executorUserId: "user_owner" })
+    ).toEqual(denied);
+    expect(checkAutomationExecutorReassignment({ kind: "service", teamId: null }, target)).toEqual({
       allowed: false,
       reason: "missing_permission",
     });

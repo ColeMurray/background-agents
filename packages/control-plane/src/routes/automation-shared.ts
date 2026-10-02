@@ -3,7 +3,12 @@
  */
 
 import { admit } from "../routing/admit";
-import { automationCapabilities, type SessionViewer } from "@open-inspect/shared";
+import {
+  automationCapabilities,
+  type AutomationCapabilities,
+  type AutomationView,
+  type SessionViewer,
+} from "@open-inspect/shared";
 import type { AutomationRow } from "../db/automation-store";
 import { hydrateAutomation } from "../automation/hydrate";
 import {
@@ -19,37 +24,38 @@ export function admittedAutomation(ctx: RequestContext): AutomationRouteAdmissio
   return ctx.automationAdmission;
 }
 
-export function automationResponseCapabilities(viewer: SessionViewer, row: AutomationRow) {
-  const capabilities = automationCapabilities(viewer, {
+/** What `viewer` may do with the automation stored in `row`. */
+export function automationResponseCapabilities(
+  viewer: SessionViewer,
+  row: AutomationRow
+): AutomationCapabilities {
+  return automationCapabilities(viewer, {
     ownerTeamId: row.owner_team_id,
     executorUserId: row.user_id,
   });
-  return {
-    canRead: capabilities.canRead,
-    canManage: capabilities.canManage,
-    canTrigger: capabilities.canTrigger,
-  };
 }
 
+/** The automation response for one viewer. */
 export async function hydrateAutomationResponse(
   ctx: RequestContext,
   row: AutomationRow,
   viewer: SessionViewer
-) {
+): Promise<AutomationView> {
   return {
     ...(await hydrateAutomation(ctx.db, row)),
-    ownerTeamId: row.owner_team_id,
     capabilities: automationResponseCapabilities(viewer, row),
   };
 }
 
-export const AUTOMATIONS_READ = admit({
+/** Admission for routes gated only on the `automations.read` permission, not one automation. */
+export const AUTOMATIONS_READ_PERMISSION = admit({
   ...GITHUB_USER_OR_SERVICE_ROUTE,
   authorization: requirePermission("automations.read", {
     actorlessGrants: [{ service: "slack-bot" }],
   }),
 });
 
+/** Admission for routes that read one automation: hidden automations answer 404. */
 export const AUTOMATION_READ = admit({
   ...GITHUB_USER_OR_SERVICE_ROUTE,
   authorization: requireAutomation("read"),

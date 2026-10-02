@@ -1,8 +1,9 @@
 import { Hono } from "hono";
 import { z } from "zod";
-import { isCanonicalUserId } from "@open-inspect/shared";
-import { AutomationStore } from "../db/automation-store";
-import { TeamAuditStore } from "../db/team-audit";
+import { checkAutomationExecutorReassignment, isCanonicalUserId } from "@open-inspect/shared";
+import { AutomationStore, type AutomationRow } from "../db/automation-store";
+import { bindAppliedAuditEvent } from "../db/team-audit";
+import { automationActionDeniedBody } from "../authorization/owned-resource-admission";
 import { isAutomationExecutionAuthorized } from "../automation/authorization-guard";
 import { dispatch } from "../routing/admit";
 import type { ControlPlaneHonoEnv } from "../routing/hono-env";
@@ -20,6 +21,36 @@ const executorBodySchema = z.strictObject({
   userId: z.string().refine(isCanonicalUserId, "Invalid canonical user ID"),
 });
 
+/**
+ * Whether the candidate may execute this automation: an active user, a member of its active
+ * team, and able to launch its stored targets. Null when they may.
+ */
+async function validateExecutorCandidate(
+  ctx: RequestContext,
+  automation: AutomationRow,
+  userId: string
+): Promise<Response | null> {
+  const executorError = await validateAutomationExecutor(ctx.db, userId);
+  if (executorError) return executorError;
+  const teamError = await validateAutomationTeam(ctx, automation.owner_team_id, userId);
+  if (teamError) return teamError;
+  const authorized = await isAutomationExecutionAuthorized(ctx.db, {
+    automationId: automation.id,
+    executionUserId: userId,
+    requiresRepositoryUse: "stored",
+    requiresEnvironmentUse: "stored",
+  });
+  if (authorized) return null;
+  return json(
+    {
+      error: "Executor cannot launch this automation",
+      code: "automation_executor_unauthorized",
+      reason_code: "execution_authorization_denied",
+    },
+    403
+  );
+}
+
 async function changeExecutor(
   request: Request,
   _env: Env,
@@ -27,64 +58,32 @@ async function changeExecutor(
   ctx: RequestContext
 ): Promise<Response> {
   const { automation, viewer } = admittedAutomation(ctx);
-  if (
-    viewer.kind !== "user" ||
-    (viewer.roleKey !== "owner" &&
-      viewer.roleKey !== "administrator" &&
-      (automation.owner_team_id === null ||
-        viewer.memberships.get(automation.owner_team_id) !== "lead"))
-  ) {
-    return json(
-      {
-        error: "Team lead or administrator required",
-        code: "automation_action_denied",
-        reason_code: "not_owner_or_lead",
-      },
-      403
-    );
+  const access = checkAutomationExecutorReassignment(viewer, {
+    ownerTeamId: automation.owner_team_id,
+    executorUserId: automation.user_id,
+  });
+  if (viewer.kind !== "user" || !access.allowed) {
+    const reason = access.allowed ? "missing_permission" : access.reason;
+    return json(automationActionDeniedBody(reason, "Team lead or administrator required"), 403);
   }
   const body = await parseBody(request, executorBodySchema, "Invalid executor");
   if (body instanceof Response) return body;
-  const executorError = await validateAutomationExecutor(ctx.db, body.userId);
-  if (executorError) return executorError;
-  const teamError = await validateAutomationTeam(ctx, automation.owner_team_id, body.userId);
-  if (teamError) return teamError;
-  const store = new AutomationStore(ctx.db);
-  const [repositories, environments] = await Promise.all([
-    store.getRepositoriesForAutomation(params.id),
-    store.getEnvironmentsForAutomation(params.id),
-  ]);
-  const executorUnauthorized = () =>
-    json(
-      {
-        error: "Executor cannot launch this automation",
-        code: "automation_executor_unauthorized",
-        reason_code: "execution_authorization_denied",
-      },
-      403
-    );
-  if (
-    !(await isAutomationExecutionAuthorized(ctx.db, {
-      automationId: params.id,
-      executionUserId: body.userId,
-      requiresRepositoryUse: repositories.length > 0,
-      requiresEnvironmentUse: environments.length > 0,
-    }))
-  ) {
-    return executorUnauthorized();
-  }
+  const candidateError = await validateExecutorCandidate(ctx, automation, body.userId);
+  if (candidateError) return candidateError;
   if (automation.user_id === body.userId) {
     return json({ automation: await hydrateAutomationResponse(ctx, automation, viewer) });
   }
+  const store = new AutomationStore(ctx.db);
   const results = await ctx.db.batch([
     store.bindExecutorChange(automation, body.userId, viewer.userId),
-    new TeamAuditStore(ctx.db).bind(
+    bindAppliedAuditEvent(
+      ctx.db,
       {
         requestId: ctx.request_id,
         actorUserId: viewer.userId,
         action: "automation.executor_changed",
         resourceType: "automation",
-        resourceId: params.id,
+        resourceId: automation.id,
         teamId: automation.owner_team_id,
         targetUserId: body.userId,
         before: { userId: automation.user_id },
@@ -94,22 +93,12 @@ async function changeExecutor(
     ),
   ]);
   if ((results[0]?.meta.changes ?? 0) === 0) {
-    const executorError = await validateAutomationExecutor(ctx.db, body.userId);
-    if (executorError) return executorError;
-    const teamError = await validateAutomationTeam(ctx, automation.owner_team_id, body.userId);
-    if (teamError) return teamError;
-    if (
-      !(await isAutomationExecutionAuthorized(ctx.db, {
-        automationId: params.id,
-        executionUserId: body.userId,
-        requiresRepositoryUse: "stored",
-        requiresEnvironmentUse: "stored",
-      }))
-    ) {
-      return executorUnauthorized();
-    }
-    // Otherwise the row or the caller's reassignment authority changed after admission.
-    return json({ error: "Automation changed concurrently", code: "automation_conflict" }, 409);
+    // The guarded write re-checks everything above; report a candidate that stopped qualifying,
+    // otherwise the row or the caller's reassignment authority changed after admission.
+    return (
+      (await validateExecutorCandidate(ctx, automation, body.userId)) ??
+      json({ error: "Automation changed concurrently", code: "automation_conflict" }, 409)
+    );
   }
   const updated = await store.getById(params.id);
   if (!updated) return error("Automation not found", 404);

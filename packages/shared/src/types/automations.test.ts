@@ -24,6 +24,8 @@ const automation = {
   consecutiveFailures: 0,
   createdBy: "user-1",
   userId: USER_ID,
+  ownerTeamId: null,
+  capabilities: { canRead: true, canManage: true, canTrigger: true },
   createdAt: 1,
   updatedAt: 2,
   deletedAt: null,
@@ -79,6 +81,20 @@ describe("listAutomationsResponseSchema", () => {
         nextCursor: null,
       }).success
     ).toBe(false);
+  });
+
+  it("requires viewer capabilities and explicit team ownership on every item", () => {
+    const { capabilities: _capabilities, ...withoutCapabilities } = automation;
+    const { ownerTeamId: _ownerTeamId, ...withoutOwner } = automation;
+    for (const item of [withoutCapabilities, withoutOwner]) {
+      expect(
+        listAutomationsResponseSchema.safeParse({
+          automations: [item],
+          hasMore: false,
+          nextCursor: null,
+        }).success
+      ).toBe(false);
+    }
   });
 
   it("requires a canonical owner ID when ownership is present", () => {

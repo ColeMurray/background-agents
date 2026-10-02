@@ -342,6 +342,19 @@ export function composeAutomationPrompt(contextBlock: string, instructions: stri
 }
 
 /** Coordinates authorized automation scheduling, dispatch, and completion handling. */
+/** A launch candidate's target as resolved at admission, or why it could not be resolved. */
+type LaunchTargetSnapshot = { target: AutomationSessionTarget } | { error: unknown };
+
+/** Repository IDs that the resolved launch targets will open. */
+function launchTargetRepoIds(snapshots: ReadonlyMap<string, LaunchTargetSnapshot>): number[] {
+  return [...snapshots.values()].flatMap((snapshot) => {
+    if (!("target" in snapshot)) return [];
+    const { target } = snapshot;
+    if (target.repositories) return target.repositories.map((repository) => repository.repoId);
+    return target.repoId === null ? [] : [target.repoId];
+  });
+}
+
 export class Scheduler {
   private readonly log: Logger;
 
@@ -447,6 +460,11 @@ export class Scheduler {
       params.repositories ?? store.getRepositoriesForAutomation(automation.id),
       params.environments ?? store.getEnvironmentsForAutomation(automation.id),
     ]);
+    // One snapshot of the owning team classifies denials and pins the grants version.
+    const team =
+      automation.owner_team_id === null
+        ? null
+        : await new TeamStore(this.db).getById(automation.owner_team_id);
     if (
       !(await isAutomationExecutionAuthorized(this.db, {
         automationId: automation.id,
@@ -455,10 +473,6 @@ export class Scheduler {
         requiresEnvironmentUse: environmentSelection.length > 0,
       }))
     ) {
-      const team =
-        automation.owner_team_id === null
-          ? null
-          : await new TeamStore(this.db).getById(automation.owner_team_id);
       return {
         outcome: "unauthorized",
         reason: team?.archivedAt != null ? "team_archived" : "execution_authorization_denied",
@@ -521,52 +535,19 @@ export class Scheduler {
     }
 
     const launchCandidates = children.filter((child) => child.status === "starting");
-    const launchTargets = new Map<
-      string,
-      { target: AutomationSessionTarget } | { error: unknown }
-    >();
+    let launchTargets: ReadonlyMap<string, LaunchTargetSnapshot> = new Map();
     let teamGrantsVersion: { teamId: string; version: number } | undefined;
     if (automation.owner_team_id !== null) {
+      if (!team) return { outcome: "unauthorized", reason: "execution_authorization_denied" };
       // Snapshot the grants version before checking coverage; the guarded insert
       // refuses admission if grants change in between.
-      const team = await new TeamStore(this.db).getById(automation.owner_team_id);
-      if (!team) return { outcome: "unauthorized", reason: "execution_authorization_denied" };
       teamGrantsVersion = { teamId: team.id, version: team.grantsVersion };
-      // Pin the exact environment members authorized here; never re-read a
-      // different workspace after invocation admission.
-      await Promise.all(
-        launchCandidates.map(async (child) => {
-          try {
-            const target = await resolveAutomationSessionTarget(
-              this.env,
-              child,
-              {
-                trace_id: `automation:${automation.id}`,
-                request_id: child.id,
-                metrics: createRequestMetrics(),
-                db: this.db,
-                executionCtx: this.backgroundJobs,
-              },
-              this.log
-            );
-            launchTargets.set(child.id, { target });
-          } catch (error) {
-            launchTargets.set(child.id, { error });
-          }
-        })
-      );
-      const repoIds = launchCandidates.flatMap((child) => {
-        const snapshot = launchTargets.get(child.id);
-        if (!snapshot || !("target" in snapshot)) return [];
-        const target = snapshot.target;
-        return target.repositories
-          ? target.repositories.map((repository) => repository.repoId)
-          : target.repoId === null
-            ? []
-            : [target.repoId];
-      });
+      launchTargets = await this.resolveLaunchTargets(automation, launchCandidates);
       if (
-        !(await new TeamRepositoryGrantStore(this.db).covers(automation.owner_team_id, repoIds))
+        !(await new TeamRepositoryGrantStore(this.db).covers(
+          team.id,
+          launchTargetRepoIds(launchTargets)
+        ))
       ) {
         return { outcome: "unauthorized", reason: "target_team_missing_grant" };
       }
@@ -636,8 +617,8 @@ export class Scheduler {
     }
 
     if (!inserted && teamGrantsVersion) {
-      const team = await new TeamStore(this.db).getById(teamGrantsVersion.teamId);
-      if (team?.grantsVersion !== teamGrantsVersion.version) {
+      const current = await new TeamStore(this.db).getById(teamGrantsVersion.teamId);
+      if (current?.grantsVersion !== teamGrantsVersion.version) {
         // Grants changed after coverage was checked. Nothing was recorded or
         // advanced, so a schedule slot refires and re-authorizes on the next tick.
         return { outcome: "blocked", reason: "team_grants_changed" };
@@ -1680,6 +1661,39 @@ export class Scheduler {
     return resolveExecutionBudgetMs(sandboxSettings, this.env) + EXECUTION_DEADLINE_GRACE_MS;
   }
 
+  /**
+   * Resolve each launch candidate's session target once, at admission, so grant coverage is
+   * checked against exactly what launch will open. Resolution errors become launch failures.
+   */
+  private async resolveLaunchTargets(
+    automation: AutomationRow,
+    candidates: readonly AutomationRunRow[]
+  ): Promise<ReadonlyMap<string, LaunchTargetSnapshot>> {
+    const snapshots = new Map<string, LaunchTargetSnapshot>();
+    await Promise.all(
+      candidates.map(async (child) => {
+        try {
+          const target = await resolveAutomationSessionTarget(
+            this.env,
+            child,
+            {
+              trace_id: `automation:${automation.id}`,
+              request_id: child.id,
+              metrics: createRequestMetrics(),
+              db: this.db,
+              executionCtx: this.backgroundJobs,
+            },
+            this.log
+          );
+          snapshots.set(child.id, { target });
+        } catch (error) {
+          snapshots.set(child.id, { error });
+        }
+      })
+    );
+    return snapshots;
+  }
+
   private async createSessionForAutomationRun(
     store: AutomationStore,
     automation: AutomationRow,
@@ -1700,7 +1714,7 @@ export class Scheduler {
     };
 
     if (automation.owner_team_id !== null && !authorizedTarget) {
-      throw new AutomationExecutionUnauthorizedError("target_team_missing_grant");
+      throw new Error("Team automation launch is missing its admitted target");
     }
     const target =
       authorizedTarget ?? (await resolveAutomationSessionTarget(this.env, run, ctx, this.log));
@@ -1737,6 +1751,7 @@ export class Scheduler {
     );
 
     const scmEnrichment = executionPrincipal.scmEnrichment;
+    // Re-read at launch: a team archived after invocation admission must not start sessions.
     const team =
       automation.owner_team_id === null
         ? null

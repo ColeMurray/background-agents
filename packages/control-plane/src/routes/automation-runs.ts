@@ -41,18 +41,22 @@ const invocationListQuerySchema = z.object({
     .refine((offset) => offset <= MAX_INVOCATION_LIST_OFFSET, { error: "Invalid offset" }),
 });
 
-async function redactRunSessionMetadata(
+/**
+ * Session IDs among `runs` the admitted viewer may read. The Owner's private-session
+ * break-glass applies only to single-run reads, which audit it; lists never enumerate them.
+ */
+async function readableRunSessionIds(
   ctx: RequestContext,
-  runs: AutomationRun[],
-  readKind: "list" | "item"
-): Promise<void> {
+  runs: readonly AutomationRun[],
+  breakGlass: "exclude" | "audit"
+): Promise<ReadonlySet<string>> {
   const viewer = admittedAutomation(ctx).viewer;
   const sessionIds = [...new Set(runs.flatMap((run) => (run.sessionId ? [run.sessionId] : [])))];
   const [sessions, collaborators] = await Promise.all([
     new SessionIndexStore(ctx.db).getByIds(sessionIds),
     new SessionCollaboratorStore(ctx.db).listForSessions(sessionIds),
   ]);
-  const readableSessionIds = new Set<string>();
+  const readable = new Set<string>();
   for (const [sessionId, session] of sessions) {
     const read = checkSessionAccess(
       viewer,
@@ -67,18 +71,18 @@ async function redactRunSessionMetadata(
     );
     if (!read.allowed) continue;
     if (read.audit === "session.private_break_glass") {
-      // Lists must not enumerate private sessions through the Owner's break-glass privilege.
-      if (readKind === "list") continue;
+      if (breakGlass === "exclude") continue;
       await auditPrivateSessionBreakGlass(ctx, sessionId, session.ownerTeamId);
     }
-    readableSessionIds.add(sessionId);
+    readable.add(sessionId);
   }
-  for (const run of runs) {
-    if (run.sessionId && readableSessionIds.has(run.sessionId)) continue;
-    run.sessionId = null;
-    run.sessionTitle = null;
-    run.artifactSummary = null;
-  }
+  return readable;
+}
+
+/** Hide a run's linked-session details unless its session is readable. */
+function redactRunSession(run: AutomationRun, readable: ReadonlySet<string>): AutomationRun {
+  if (run.sessionId && readable.has(run.sessionId)) return run;
+  return { ...run, sessionId: null, sessionTitle: null, artifactSummary: null };
 }
 
 /** GET /automations/:id/invocations — one row per firing; `total` counts invocations. */
@@ -94,14 +98,17 @@ async function handleListInvocations(
 
   const store = new AutomationStore(ctx.db);
   const result = await store.listInvocations(automationId, query);
-  await redactRunSessionMetadata(
+  const readable = await readableRunSessionIds(
     ctx,
     result.invocations.flatMap((invocation) => invocation.runs),
-    "list"
+    "exclude"
   );
 
   return json({
-    invocations: result.invocations,
+    invocations: result.invocations.map((invocation) => ({
+      ...invocation,
+      runs: invocation.runs.map((run) => redactRunSession(run, readable)),
+    })),
     total: result.total,
   });
 }
@@ -119,8 +126,8 @@ async function handleGetRun(
   if (!run) return error("Run not found", 404);
 
   const result = toAutomationRun(run);
-  await redactRunSessionMetadata(ctx, [result], "item");
-  return json({ run: result });
+  const readable = await readableRunSessionIds(ctx, [result], "audit");
+  return json({ run: redactRunSession(result, readable) });
 }
 
 export const automationRunRoutes = new Hono<ControlPlaneHonoEnv>();

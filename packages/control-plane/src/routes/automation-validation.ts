@@ -16,6 +16,7 @@ import { checkEnvironmentAccess, type SessionViewer } from "@open-inspect/shared
 import { type RequestContext, error, json, resolveRepoOrError } from "./shared";
 import type { RepositoryAuthorizationTarget } from "./workspace-repository-authorization";
 import { resolveActiveTeam } from "./team-ownership";
+import { automationActionDeniedBody } from "../authorization/owned-resource-admission";
 import { authorizeSessionTarget } from "./session-target-authorization";
 import type { Env } from "../types";
 import type { SqlDatabase } from "../db/sql-database";
@@ -165,14 +166,7 @@ export async function validateTeamExecutor(
     return json({ error: "Canonical executor required", code: "executor_required" }, 409);
   }
   if (!(await new TeamMembershipStore(db).listForUser(executorUserId)).has(teamId)) {
-    return json(
-      {
-        error: "Executor must belong to the team",
-        code: "automation_action_denied",
-        reason_code: "not_member",
-      },
-      403
-    );
+    return json(automationActionDeniedBody("not_member", "Executor must belong to the team"), 403);
   }
   return null;
 }

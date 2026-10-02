@@ -129,11 +129,7 @@ async function evaluateAutomationAdmission(
   if (!decision.allowed) {
     return {
       kind: "denied",
-      response: {
-        error: "Forbidden",
-        code: "automation_action_denied",
-        reason_code: decision.reason,
-      },
+      response: automationActionDeniedBody(decision.reason),
       status: 403,
       reasonCode: decision.reason,
       reason: "Forbidden",
@@ -208,6 +204,11 @@ export async function evaluateEnvironmentAdmission(
     effectivePermission: viewer.kind === "user" ? permission : null,
     admission: { environment, viewer },
   };
+}
+
+/** Body for a visible automation the viewer may not act on. */
+export function automationActionDeniedBody(reason: string, error = "Forbidden") {
+  return { error, code: "automation_action_denied", reason_code: reason };
 }
 
 /** Body for a visible environment the viewer may not act on. */

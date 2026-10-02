@@ -5,6 +5,7 @@
  * snake_case rows in the database, camelCase types at the API boundary.
  */
 
+import { isWorkspaceAdmin, WORKSPACE_ADMIN_ROLE_KEYS } from "@open-inspect/shared/rbac";
 import {
   DEFAULT_HARNESS,
   getValidHarnessOrDefault,
@@ -516,7 +517,7 @@ export class AutomationStore {
     if (viewer?.kind === "user") {
       if (viewer.suspended || !viewer.permissions.includes("automations.read")) {
         conditions.push("0 = 1");
-      } else if (viewer.roleKey !== "owner" && viewer.roleKey !== "administrator") {
+      } else if (!isWorkspaceAdmin(viewer.roleKey)) {
         // One bound parameter regardless of how many teams the viewer belongs to.
         conditions.push(
           `(owner_team_id IS NULL OR EXISTS (
@@ -694,7 +695,7 @@ export class AutomationStore {
              JOIN roles r ON r.id = actor_role.role_id
              WHERE actor.id = ? AND actor.suspended_at IS NULL
                AND (${manageOwn.sql} OR ${manageAny.sql})
-               AND (r.key IN ('owner', 'administrator') OR EXISTS (
+               AND (r.key IN (${WORKSPACE_ADMIN_ROLE_KEYS.map(() => "?").join(", ")}) OR EXISTS (
                  SELECT 1 FROM team_memberships lead_membership
                  WHERE lead_membership.team_id = automations.owner_team_id
                    AND lead_membership.user_id = actor.id AND lead_membership.role = 'lead')))
@@ -710,6 +711,7 @@ export class AutomationStore {
         actorUserId,
         ...manageOwn.values,
         ...manageAny.values,
+        ...WORKSPACE_ADMIN_ROLE_KEYS,
         ...execution.values
       );
   }
