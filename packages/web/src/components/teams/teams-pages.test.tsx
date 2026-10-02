@@ -60,6 +60,9 @@ vi.mock("./team-repositories", () => ({
 vi.mock("./team-environments", () => ({
   TeamEnvironments: ({ teamId }: { teamId: string }) => <p>Environments for {teamId}</p>,
 }));
+vi.mock("./team-automations", () => ({
+  TeamAutomations: ({ teamId }: { teamId: string }) => <p>Automations for {teamId}</p>,
+}));
 vi.mock("./team-secrets", () => ({
   TeamSecrets: (props: { teamId: string; capabilities?: TeamResponse["capabilities"] }) => {
     mocks.secrets(props);
@@ -205,6 +208,7 @@ describe("Team page tabs", () => {
     expect(tabs.queryByRole("button", { name: "Repositories" })).not.toBeInTheDocument();
     expect(tabs.queryByRole("button", { name: "Secrets" })).not.toBeInTheDocument();
     expect(tabs.queryByRole("button", { name: "Environments" })).not.toBeInTheDocument();
+    expect(tabs.queryByRole("button", { name: "Automations" })).not.toBeInTheDocument();
     expect(tabs.queryByRole("button", { name: "Settings" })).not.toBeInTheDocument();
     expect(screen.getByText("Team member table")).toBeInTheDocument();
     expect(screen.queryByText("Team session buckets")).not.toBeInTheDocument();
@@ -240,9 +244,12 @@ describe("Team page tabs", () => {
     const tabs = within(screen.getByRole("navigation", { name: "Team tabs" }));
     fireEvent.click(tabs.getByRole("button", { name: "Environments" }));
     expect(screen.getByText("Environments for team_design")).toBeInTheDocument();
+    fireEvent.click(tabs.getByRole("button", { name: "Automations" }));
+    expect(screen.getByText("Automations for team_design")).toBeInTheDocument();
     mocks.mine = [];
     view.rerender(<TeamPage slug="design" />);
-    expect(screen.queryByText("Environments for team_design")).not.toBeInTheDocument();
+    expect(screen.queryByText("Automations for team_design")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Automations" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Environments" })).not.toBeInTheDocument();
   });
 
@@ -352,6 +359,7 @@ describe("Team page tabs", () => {
         "Members",
         "Repositories",
         "Environments",
+        "Automations",
         "Secrets",
       ]);
       expect(screen.queryByText("Team secrets editor for team_design")).not.toBeInTheDocument();

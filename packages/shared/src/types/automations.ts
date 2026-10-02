@@ -127,6 +127,14 @@ const automationSchema = z.object({
   consecutiveFailures: z.number(),
   createdBy: z.string(),
   userId: z.string().refine(isCanonicalUserId, "Invalid canonical user ID").nullable(),
+  ownerTeamId: z.string().nullable().optional(),
+  capabilities: z
+    .object({
+      canRead: z.boolean(),
+      canManage: z.boolean(),
+      canTrigger: z.boolean(),
+    })
+    .optional(),
   createdAt: z.number(),
   updatedAt: z.number(),
   deletedAt: z.number().nullable(),
@@ -179,6 +187,11 @@ export const sentryClientSecretSchema = z.string().refine((secret) => secret.tri
 });
 
 export const createAutomationRequestSchema = z.object({
+  teamId: z
+    .string()
+    .regex(/^team_[A-Za-z0-9_-]+$/)
+    .nullable()
+    .optional(),
   name: z.string(),
   instructions: z.string(),
   triggerType: automationTriggerTypeSchema.optional(),

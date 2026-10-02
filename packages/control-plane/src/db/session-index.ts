@@ -14,7 +14,7 @@ import {
 import type { SessionListRepository } from "@open-inspect/shared/types/repositories";
 import type { SessionVisibility } from "@open-inspect/shared/types/teams";
 import { visibleSessionsPredicate, type SessionReadScope } from "./session-visibility";
-import { assertD1QueryParameterLimit } from "./query-limits";
+import { assertD1QueryParameterLimit, MAX_D1_QUERY_PARAMETERS } from "./query-limits";
 import type { TeamsEnforcementMode } from "../authorization/teams-enforcement";
 import {
   sessionModelProviderAuthSchema,
@@ -450,6 +450,23 @@ export class SessionIndexStore {
 
     const row = parseSessionRow(result);
     return row ? toEntry(row) : null;
+  }
+
+  async getByIds(sessionIds: readonly string[]): Promise<ReadonlyMap<string, SessionEntry>> {
+    const result = new Map<string, SessionEntry>();
+    const uniqueIds = [...new Set(sessionIds)];
+    for (let offset = 0; offset < uniqueIds.length; offset += MAX_D1_QUERY_PARAMETERS) {
+      const ids = uniqueIds.slice(offset, offset + MAX_D1_QUERY_PARAMETERS);
+      const rows = await this.db
+        .prepare(`SELECT * FROM sessions WHERE id IN (${ids.map(() => "?").join(", ")})`)
+        .bind(...ids)
+        .all();
+      for (const value of rows.results) {
+        const row = parseSessionRow(value);
+        if (row) result.set(row.id, toEntry(row));
+      }
+    }
+    return result;
   }
 
   private async getProviderAuth(sessionId: string): Promise<SessionModelProviderAuthInput[]> {

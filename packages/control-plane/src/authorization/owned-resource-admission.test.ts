@@ -1,5 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { PermissionId } from "@open-inspect/shared/rbac";
+import type { TeamRole } from "@open-inspect/shared/types/teams";
 import { createTestBackgroundTasks } from "../background-tasks.test-support";
+import { AutomationStore, type AutomationRow } from "../db/automation-store";
 import { EnvironmentStore, type EnvironmentRow } from "../db/environments";
 import { createRequestMetrics } from "../db/instrumented-sql-database";
 import type { RequestContext } from "../http/request-context";
@@ -199,5 +202,109 @@ describe("owned-resource admission outcomes", () => {
       authorizeSessionTarget(ctx, { teamId: null, environmentId: "environment" })
     ).resolves.toBeNull();
     expect(EnvironmentStore.prototype.getById).not.toHaveBeenCalled();
+  });
+});
+
+describe("automation admission outcomes", () => {
+  // Full row validation is covered by D1 tests; admission consumes only ownership fields.
+  const automation = {
+    id: "automation",
+    owner_team_id: "team",
+    user_id: null,
+    created_by: "legacy-owner",
+  } as AutomationRow;
+  const canonicalAutomation = { ...automation, user_id: "user" };
+  const requirement = { kind: "automation", operation: "manage", automationIdParam: "id" } as const;
+
+  function automationContext(permissions: PermissionId[], role: TeamRole | null = "member") {
+    const ctx = context();
+    ctx.authorization!.permissions = permissions;
+    ctx.sessionMemberships = new Map(role ? [["team", role]] : []);
+    return ctx;
+  }
+
+  beforeEach(() => {
+    vi.spyOn(AutomationStore.prototype, "getById").mockResolvedValue(automation);
+    vi.spyOn(AutomationStore.prototype, "resolveCanonicalOwner").mockResolvedValue(
+      canonicalAutomation
+    );
+  });
+  afterEach(() => vi.restoreAllMocks());
+
+  it("hides invisible automations like missing ones, retaining denial audit context", async () => {
+    const ctx = automationContext(["automations.manage.own"], null);
+    const hidden = await evaluateOwnedResourceAdmission(requirement, { id: "automation" }, ctx);
+    expect(ctx.automationAdmission?.automation).toBe(automation);
+    expect(AutomationStore.prototype.resolveCanonicalOwner).not.toHaveBeenCalled();
+    vi.mocked(AutomationStore.prototype.getById).mockResolvedValue(null);
+    const missingCtx = automationContext(["automations.manage.own"]);
+    expect(await evaluateOwnedResourceAdmission(requirement, { id: "id" }, missingCtx)).toEqual(
+      hidden
+    );
+    expect(hidden).toEqual({
+      kind: "denied",
+      status: 404,
+      response: { error: "Automation not found" },
+      reasonCode: "automation_not_visible",
+      reason: "Automation not found",
+    });
+    expect(missingCtx.automationAdmission).toBeUndefined();
+  });
+
+  it.each([
+    { operation: "manage", permission: "automations.manage.own" },
+    { operation: "manage", permission: "automations.manage.any" },
+    { operation: "trigger", permission: "automations.trigger.own" },
+  ] as const)(
+    "allows $permission without read permission against the canonical owner",
+    async ({ operation, permission }) => {
+      const ctx = automationContext([permission]);
+      await expect(
+        evaluateOwnedResourceAdmission({ ...requirement, operation }, { id: "automation" }, ctx)
+      ).resolves.toEqual({ kind: "allowed", effectivePermission: permission });
+      expect(ctx.automationAdmission?.automation).toBe(canonicalAutomation);
+    }
+  );
+
+  it("maps visible read and action denials to 403", async () => {
+    vi.mocked(AutomationStore.prototype.resolveCanonicalOwner).mockResolvedValue({
+      ...automation,
+      user_id: "other-user",
+    });
+    for (const read of [true, false]) {
+      const ctx = automationContext(["automations.manage.own"]);
+      const reason = read ? "missing_permission" : "not_owner_or_lead";
+      expect(
+        await evaluateOwnedResourceAdmission(
+          read ? { ...requirement, operation: "read" } : requirement,
+          { id: "automation" },
+          ctx
+        )
+      ).toEqual({
+        kind: "denied",
+        status: 403,
+        reasonCode: reason,
+        reason: "Forbidden",
+        response: { error: "Forbidden", code: "automation_action_denied", reason_code: reason },
+      });
+    }
+  });
+
+  it("checks service ceilings before lookup and attributes no actorless permissions", async () => {
+    const ctx = context();
+    ctx.principal = { kind: "service", service: "github-bot", actor: null };
+    await expect(
+      evaluateOwnedResourceAdmission(requirement, { id: "automation" }, ctx)
+    ).resolves.toMatchObject({ kind: "denied", reasonCode: "service_capability_required" });
+    expect(AutomationStore.prototype.getById).not.toHaveBeenCalled();
+    ctx.principal = { kind: "service", service: "slack-bot", actor: null };
+    ctx.authorization = undefined;
+    await expect(
+      evaluateOwnedResourceAdmission(
+        { ...requirement, operation: "read" },
+        { id: "automation" },
+        ctx
+      )
+    ).resolves.toEqual({ kind: "allowed", effectivePermission: null });
   });
 });

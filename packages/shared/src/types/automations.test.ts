@@ -36,6 +36,16 @@ const automation = {
 };
 
 describe("listAutomationsResponseSchema", () => {
+  it("retains team ownership and server capabilities", () => {
+    const capabilities = { canRead: true, canManage: false, canTrigger: true };
+    const result = listAutomationsResponseSchema.parse({
+      automations: [{ ...automation, ownerTeamId: "team_a", capabilities }],
+      hasMore: false,
+      nextCursor: null,
+    });
+    expect(result.automations[0]).toMatchObject({ ownerTeamId: "team_a", capabilities });
+  });
+
   it("accepts a valid cursor page", () => {
     expect(
       listAutomationsResponseSchema.parse({
@@ -114,6 +124,18 @@ describe("listAutomationsResponseSchema", () => {
         nextCursor: null,
       }).success
     ).toBe(false);
+  });
+});
+
+describe("automation team input", () => {
+  it.each(["team_a", null])("accepts teamId=%s on create", (teamId) => {
+    expect(
+      createAutomationRequestSchema.parse({
+        name: "Daily sync",
+        instructions: "Sync",
+        teamId,
+      })
+    ).toHaveProperty("teamId", teamId);
   });
 });
 

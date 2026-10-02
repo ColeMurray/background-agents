@@ -94,8 +94,8 @@ describe("automation router authorization", () => {
     expect(own.status).toBe(200);
     expect(denied.status).toBe(403);
     await expect(denied.json()).resolves.toMatchObject({
-      code: "permission_required",
-      permission: "automations.manage.own",
+      code: "automation_action_denied",
+      reason_code: "not_owner_or_lead",
     });
     expect((await store.getById("other-automation"))?.name).toBe("other-automation");
   });
@@ -135,8 +135,8 @@ describe("automation router authorization", () => {
 
     expect(response.status).toBe(403);
     await expect(response.json()).resolves.toMatchObject({
-      code: "permission_required",
-      permission: "automations.manage.own",
+      code: "automation_action_denied",
+      reason_code: "missing_permission",
     });
   });
 
@@ -189,7 +189,7 @@ describe("automation router authorization", () => {
         {
           id,
           name: id,
-          owner_team_id: null,
+          owner_team_id: team.id,
           description: null,
           prebuild_enabled: 0,
           channel_associations: null,

@@ -2,15 +2,22 @@
  * Automation invocation and run read routes.
  */
 
-import { MAX_AUTOMATION_INVOCATION_LIST_LIMIT } from "@open-inspect/shared/types/automations";
+import { checkSessionAccess } from "@open-inspect/shared";
+import {
+  MAX_AUTOMATION_INVOCATION_LIST_LIMIT,
+  type AutomationRun,
+} from "@open-inspect/shared/types/automations";
+import { auditPrivateSessionBreakGlass } from "../authorization/request-audit";
 import { AutomationStore, toAutomationRun } from "../db/automation-store";
+import { SessionCollaboratorStore } from "../db/session-collaborators";
+import { SessionIndexStore } from "../db/session-index";
 import { Hono } from "hono";
 import { dispatch } from "../routing/admit";
 import type { ControlPlaneHonoEnv } from "../routing/hono-env";
 import { type RequestContext, json, error } from "./shared";
 import type { Env } from "../types";
 import { z } from "zod";
-import { AUTOMATIONS_READ } from "./automation-shared";
+import { admittedAutomation, AUTOMATION_READ } from "./automation-shared";
 import { parseQuery } from "./query";
 
 export const DEFAULT_INVOCATION_LIST_LIMIT = 20;
@@ -34,6 +41,46 @@ const invocationListQuerySchema = z.object({
     .refine((offset) => offset <= MAX_INVOCATION_LIST_OFFSET, { error: "Invalid offset" }),
 });
 
+async function redactRunSessionMetadata(
+  ctx: RequestContext,
+  runs: AutomationRun[],
+  readKind: "list" | "item"
+): Promise<void> {
+  const viewer = admittedAutomation(ctx).viewer;
+  const sessionIds = [...new Set(runs.flatMap((run) => (run.sessionId ? [run.sessionId] : [])))];
+  const [sessions, collaborators] = await Promise.all([
+    new SessionIndexStore(ctx.db).getByIds(sessionIds),
+    new SessionCollaboratorStore(ctx.db).listForSessions(sessionIds),
+  ]);
+  const readableSessionIds = new Set<string>();
+  for (const [sessionId, session] of sessions) {
+    const read = checkSessionAccess(
+      viewer,
+      {
+        id: sessionId,
+        ownerUserId: session.userId ?? null,
+        ownerTeamId: session.ownerTeamId,
+        visibility: session.visibility,
+        collaboratorIds: collaborators.get(sessionId) ?? [],
+      },
+      "read"
+    );
+    if (!read.allowed) continue;
+    if (read.audit === "session.private_break_glass") {
+      // Lists must not enumerate private sessions through the Owner's break-glass privilege.
+      if (readKind === "list") continue;
+      await auditPrivateSessionBreakGlass(ctx, sessionId, session.ownerTeamId);
+    }
+    readableSessionIds.add(sessionId);
+  }
+  for (const run of runs) {
+    if (run.sessionId && readableSessionIds.has(run.sessionId)) continue;
+    run.sessionId = null;
+    run.sessionTitle = null;
+    run.artifactSummary = null;
+  }
+}
+
 /** GET /automations/:id/invocations — one row per firing; `total` counts invocations. */
 async function handleListInvocations(
   request: Request,
@@ -46,10 +93,12 @@ async function handleListInvocations(
   if (query instanceof Response) return query;
 
   const store = new AutomationStore(ctx.db);
-  const automation = await store.getById(automationId);
-  if (!automation) return error("Automation not found", 404);
-
   const result = await store.listInvocations(automationId, query);
+  await redactRunSessionMetadata(
+    ctx,
+    result.invocations.flatMap((invocation) => invocation.runs),
+    "list"
+  );
 
   return json({
     invocations: result.invocations,
@@ -69,14 +118,16 @@ async function handleGetRun(
   const run = await store.getRunById(automationId, runId);
   if (!run) return error("Run not found", 404);
 
-  return json({ run: toAutomationRun(run) });
+  const result = toAutomationRun(run);
+  await redactRunSessionMetadata(ctx, [result], "item");
+  return json({ run: result });
 }
 
 export const automationRunRoutes = new Hono<ControlPlaneHonoEnv>();
 
-automationRunRoutes.get("/automations/:id/invocations", AUTOMATIONS_READ, (c) =>
+automationRunRoutes.get("/automations/:id/invocations", AUTOMATION_READ, (c) =>
   dispatch(c, handleListInvocations)
 );
-automationRunRoutes.get("/automations/:id/runs/:runId", AUTOMATIONS_READ, (c) =>
+automationRunRoutes.get("/automations/:id/runs/:runId", AUTOMATION_READ, (c) =>
   dispatch(c, handleGetRun)
 );
