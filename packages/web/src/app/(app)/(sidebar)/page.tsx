@@ -470,7 +470,10 @@ export default function Home() {
       memoryControls={
         <MemoryPreview
           includePersonalMemories={includePersonalMemories}
-          onChange={setPersonalMemoryOverride}
+          disabled={creating}
+          onChange={(value) => {
+            if (!submitInFlightRef.current) setPersonalMemoryOverride(value);
+          }}
           preview={memoryPreview.data}
           loading={!memoryPreferences.data && !memoryPreferences.error}
           error={memoryPreferences.error || memoryPreview.error}

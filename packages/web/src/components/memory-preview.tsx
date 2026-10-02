@@ -9,6 +9,7 @@ export function MemoryPreview({
   loading,
   error,
   onRetry,
+  disabled = false,
 }: {
   includePersonalMemories: boolean | undefined;
   onChange: (value: boolean) => void;
@@ -16,12 +17,14 @@ export function MemoryPreview({
   loading: boolean;
   error?: unknown;
   onRetry?: () => void;
+  disabled?: boolean;
 }) {
   return (
     <div className="mb-3 space-y-1 px-4 text-xs text-muted-foreground">
       <label className="flex items-center gap-2">
         <input
           type="checkbox"
+          disabled={disabled}
           checked={includePersonalMemories ?? false}
           aria-checked={includePersonalMemories === undefined ? "mixed" : includePersonalMemories}
           ref={(input) => {
