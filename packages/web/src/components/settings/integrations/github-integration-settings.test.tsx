@@ -41,6 +41,10 @@ vi.mock("@/hooks/use-enabled-models", () => ({
         category: "Anthropic",
         models: [{ id: "anthropic/claude-sonnet-4-6", name: "Claude Sonnet 4.6" }],
       },
+      {
+        category: "OpenAI",
+        models: [{ id: "openai/gpt-5.4", name: "GPT 5.4" }],
+      },
     ],
   }),
 }));
@@ -434,4 +438,151 @@ describe("GitHubIntegrationSettings", () => {
       );
     }
   );
+
+  it("saves a global Claude Agent harness choice", async () => {
+    const user = userEvent.setup();
+    setupSWR({
+      global: { defaults: { autoReviewOnOpen: true } },
+    });
+    fetchMock.mockResolvedValue(okJson({}));
+
+    render(<GitHubIntegrationSettings />);
+
+    await user.click(screen.getByRole("combobox", { name: "Agent harness" }));
+    await user.click(await screen.findByRole("option", { name: "Claude Agent" }));
+    await user.click(screen.getByRole("button", { name: /^save$/i }));
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/integration-settings/github",
+      expect.objectContaining({
+        method: "PUT",
+        body: JSON.stringify({
+          settings: { defaults: { autoReviewOnOpen: true, harness: "claude" } },
+        }),
+      })
+    );
+  });
+
+  it("saves a per-repo Claude Agent harness override", async () => {
+    const user = userEvent.setup();
+    setupSWR({
+      global: { defaults: { autoReviewOnOpen: true } },
+      repos: [{ repo: "acme/web", settings: {} }],
+      availableRepos: [repo("acme/web")],
+    });
+    fetchMock.mockResolvedValue(okJson({}));
+
+    render(<GitHubIntegrationSettings />);
+
+    const row = repoOverrideRow("acme/web");
+    await user.click(within(row).getByRole("combobox", { name: "Agent harness scope" }));
+    await user.click(await screen.findByRole("option", { name: "Override harness" }));
+    await user.click(within(row).getByRole("combobox", { name: "Agent harness" }));
+    await user.click(await screen.findByRole("option", { name: "Claude Agent" }));
+    await user.click(within(row).getByRole("button", { name: /^save$/i }));
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/integration-settings/github/repos/acme/web",
+      expect.objectContaining({
+        method: "PUT",
+        body: JSON.stringify({ settings: { harness: "claude" } }),
+      })
+    );
+  });
+
+  it("preserves a harness draft across scope round-trips", async () => {
+    const user = userEvent.setup();
+    setupSWR({
+      global: { defaults: { autoReviewOnOpen: true } },
+      repos: [{ repo: "acme/web", settings: {} }],
+      availableRepos: [repo("acme/web")],
+    });
+    fetchMock.mockResolvedValue(okJson({}));
+
+    render(<GitHubIntegrationSettings />);
+
+    const row = repoOverrideRow("acme/web");
+    const selectScope = async (name: RegExp) => {
+      await user.click(within(row).getByRole("combobox", { name: "Agent harness scope" }));
+      await user.click(await screen.findByRole("option", { name }));
+    };
+    await selectScope(/override harness/i);
+    await user.click(within(row).getByRole("combobox", { name: "Agent harness" }));
+    await user.click(await screen.findByRole("option", { name: "Claude Agent" }));
+    await selectScope(/use global harness/i);
+    await selectScope(/override harness/i);
+
+    // The draft belongs to the user now: still Claude Agent, not reset to OpenCode.
+    expect(within(row).getByRole("combobox", { name: "Agent harness" })).toHaveTextContent(
+      "Claude Agent"
+    );
+    await user.click(within(row).getByRole("button", { name: /^save$/i }));
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/integration-settings/github/repos/acme/web",
+      expect.objectContaining({
+        method: "PUT",
+        body: JSON.stringify({ settings: { harness: "claude" } }),
+      })
+    );
+  }, 20000);
+
+  it("filters the repo model picker by the inherited global harness", async () => {
+    const user = userEvent.setup();
+    setupSWR({
+      global: {
+        defaults: {
+          autoReviewOnOpen: true,
+          harness: "claude",
+          model: "anthropic/claude-sonnet-4-6",
+        },
+      },
+      repos: [{ repo: "acme/web", settings: {} }],
+      availableRepos: [repo("acme/web")],
+    });
+    fetchMock.mockResolvedValue(okJson({}));
+
+    render(<GitHubIntegrationSettings />);
+
+    const row = repoOverrideRow("acme/web");
+    // The row model picker is unlabeled (placeholder only): find its trigger by content.
+    const modelTrigger = within(row)
+      .getAllByRole("combobox")
+      .find((el) => el.textContent?.includes("Default model"));
+    expect(modelTrigger).toBeDefined();
+    await user.click(modelTrigger!);
+    await screen.findByRole("option", { name: "Claude Sonnet 4.6" });
+    // Global harness is Claude Agent: GPT models are not offered for this repo.
+    expect(screen.queryByRole("option", { name: "GPT 5.4" })).toBeNull();
+  }, 20000);
+
+  it("warns on an inherited model the repo harness cannot run, keeping sparse overrides", async () => {
+    const user = userEvent.setup();
+    setupSWR({
+      global: { defaults: { autoReviewOnOpen: true, model: "openai/gpt-5.4" } },
+      repos: [{ repo: "acme/web", settings: { harness: "claude" } }],
+      availableRepos: [repo("acme/web")],
+    });
+    fetchMock.mockResolvedValue(okJson({}));
+
+    render(<GitHubIntegrationSettings />);
+
+    const row = repoOverrideRow("acme/web");
+    expect(within(row).getByText(/cannot run on the Claude Agent harness/)).toBeInTheDocument();
+
+    // Cycle the harness to dirty the form; the save stays a sparse override.
+    await user.click(within(row).getByRole("combobox", { name: "Agent harness" }));
+    await user.click(await screen.findByRole("option", { name: "OpenCode" }));
+    await user.click(within(row).getByRole("combobox", { name: "Agent harness" }));
+    await user.click(await screen.findByRole("option", { name: "Claude Agent" }));
+    await user.click(within(row).getByRole("button", { name: /^save$/i }));
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/integration-settings/github/repos/acme/web",
+      expect.objectContaining({
+        method: "PUT",
+        body: JSON.stringify({ settings: { harness: "claude" } }),
+      })
+    );
+  }, 20000);
 });

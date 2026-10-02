@@ -25,6 +25,7 @@ import {
   type SlackRoutingRule,
 } from "@open-inspect/shared/types/integrations";
 import { isValidModel, isValidReasoningEffort } from "@open-inspect/shared/models";
+import { checkHarnessCompatibility } from "@open-inspect/shared/harnesses";
 import { normalizeSandboxSettings } from "../sandbox/settings";
 import type { SqlDatabase } from "./sql-database";
 
@@ -436,6 +437,17 @@ export class IntegrationSettingsStore {
 
   private validateAndNormalizeGitHubSettings(settings: GitHubBotSettings): GitHubBotSettings {
     this.validateModelAndEffort(settings);
+
+    // Same rule as automation save: a harness/model pair saved together must
+    // be compatible. Cross-level pairs (global harness + repo model) can still
+    // combine into a mismatch; the bot resolves those deterministically at
+    // runtime by falling back to OpenCode.
+    if (settings.harness !== undefined && settings.model !== undefined) {
+      const incompatibility = checkHarnessCompatibility(settings.harness, settings.model);
+      if (incompatibility) {
+        throw new IntegrationSettingsValidationError(incompatibility.message);
+      }
+    }
 
     if (
       settings.codeReviewInstructions !== undefined &&
