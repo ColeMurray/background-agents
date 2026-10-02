@@ -178,6 +178,9 @@ describe("SlackIntegrationSettings", () => {
     render(<SlackIntegrationSettings />);
 
     expect(screen.getByRole("heading", { name: "Slack" })).toBeInTheDocument();
+    expect(
+      screen.getByText(/invite the .*slack.* bot to a channel/i, { selector: "p" })
+    ).toBeInTheDocument();
 
     const masterSwitch = screen.getByRole("switch", { name: /enable agent notifications/i });
     expect(masterSwitch).toHaveAttribute("aria-checked", "false");
@@ -185,6 +188,7 @@ describe("SlackIntegrationSettings", () => {
     const allowRadio = screen.getByRole("radio", { name: /allow/i }) as HTMLInputElement;
     expect(allowRadio.checked).toBe(true);
     expect(screen.getByRole("combobox", { name: "Unbound channels" })).toHaveValue("workspace");
+    expect(screen.getByLabelText(/session instructions/i)).toHaveAttribute("maxlength", "10000");
   });
 
   it("disables the unbound policy without global integration-management permission", () => {
@@ -222,15 +226,6 @@ describe("SlackIntegrationSettings", () => {
     await waitFor(() =>
       expect(screen.getByRole("combobox", { name: "Unbound channels" })).toHaveValue("workspace")
     );
-  });
-
-  it("describes channel access via Slack bot membership in help copy", () => {
-    setupSWR({ global: null });
-    render(<SlackIntegrationSettings />);
-
-    expect(
-      screen.getByText(/invite the .*slack.* bot to a channel/i, { selector: "p" })
-    ).toBeInTheDocument();
   });
 
   it("toggling master switch on and saving sends agentNotificationsEnabled: true", async () => {
@@ -352,14 +347,6 @@ describe("SlackIntegrationSettings", () => {
       sessionInstructions: "Prefer minimal diffs.",
       unboundChannels: "reject",
     });
-  });
-
-  it("bounds the session instructions textarea to the shared maximum length", () => {
-    setupSWR({ global: null });
-
-    render(<SlackIntegrationSettings />);
-
-    expect(screen.getByLabelText(/session instructions/i)).toHaveAttribute("maxlength", "10000");
   });
 
   it("clearing session instructions omits the key on save", async () => {
@@ -648,35 +635,6 @@ describe("SlackIntegrationSettings", () => {
         model: "openai/gpt-5.4",
         sessionInstructions: "Prefer minimal diffs.",
         routingRules: [{ keyword: "Frontend", target: "acme/web" }],
-      });
-    });
-
-    it("preserves existing routing rules when the Defaults section is saved", async () => {
-      const user = userEvent.setup();
-      setupSWR({
-        global: {
-          defaults: {
-            agentNotificationsEnabled: false,
-            mentionsPolicy: "allow",
-            routingRules: [{ keyword: "frontend", target: "acme/web" }],
-          },
-        },
-        availableRepos: [repo("acme/web")],
-      });
-      fetchMock.mockResolvedValue(okJson({}));
-      render(<SlackIntegrationSettings />);
-
-      await user.click(screen.getByRole("switch", { name: /enable agent notifications/i }));
-      await user.click(screen.getByRole("button", { name: /^save$/i }));
-
-      const body = JSON.parse(fetchMock.mock.calls[0][1].body as string) as {
-        settings: SlackGlobalConfig;
-      };
-      expect(body.settings.defaults).toEqual({
-        agentNotificationsEnabled: true,
-        mentionsPolicy: "allow",
-        routingRules: [{ keyword: "frontend", target: "acme/web" }],
-        unboundChannels: "workspace",
       });
     });
 

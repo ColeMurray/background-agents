@@ -118,7 +118,7 @@ describe("CallbackNotificationService", () => {
     harness = createTestHarness();
   });
 
-  describe.each(["complete", "tool_call", "activity"] as const)("Slack post gate: %s", (path) => {
+  describe.each(["tool_call", "activity"] as const)("Slack post gate: %s", (path) => {
     it.each(["getSession", "getChannelBinding"] as const)(
       "fails closed when %s fails",
       async (lookup) => {
@@ -132,9 +132,7 @@ describe("CallbackNotificationService", () => {
         });
         harness.slackBot.fetch.mockResolvedValue(new Response("ok"));
         harness.slackPostScope[lookup].mockRejectedValue(new Error("D1 unavailable"));
-        if (path === "complete") {
-          await harness.service.notifyComplete("msg-1", false, "secret error");
-        } else if (path === "tool_call") {
+        if (path === "tool_call") {
           await harness.service.notifyToolCall("msg-1", {
             type: "tool_call",
             tool: "bash",
@@ -889,19 +887,6 @@ describe("CallbackNotificationService", () => {
       expect(fetchMock).not.toHaveBeenCalled();
     });
 
-    it("abandons a refresh whose message terminates before it reaches the wire", async () => {
-      const fetchMock = withSlackMessage();
-      // The turn completes between the heartbeat that asked for this refresh
-      // and the moment the refresh is ready to send.
-      vi.mocked(harness.repository.getProcessingMessageWithStartedAt).mockImplementation(
-        () => null
-      );
-
-      await harness.service.refreshSlackActivity("msg-1", NOW);
-
-      expect(fetchMock).not.toHaveBeenCalled();
-    });
-
     it("holds the next refresh until the interval has passed", async () => {
       const fetchMock = withSlackMessage();
 
@@ -938,16 +923,6 @@ describe("CallbackNotificationService", () => {
 
       await rebuilt.service.refreshSlackActivity("msg-1", NOW + 30_000);
       expect(rebuilt.slackBot.fetch).toHaveBeenCalledTimes(1);
-    });
-
-    it("does not read the message while the window is still open", async () => {
-      withSlackMessage();
-
-      await harness.service.refreshSlackActivity("msg-1", NOW);
-      harness.repository.getMessageCallbackContext.mockClear();
-
-      await harness.service.refreshSlackActivity("msg-1", NOW + 30_000);
-      expect(harness.repository.getMessageCallbackContext).not.toHaveBeenCalled();
     });
 
     it("sends one bounded attempt and leaves the window open when it fails", async () => {

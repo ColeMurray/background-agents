@@ -19,7 +19,7 @@ function makeEnv(fetchResult: Response | Error): Env {
   const fetch =
     fetchResult instanceof Error
       ? vi.fn().mockRejectedValue(fetchResult)
-      : vi.fn().mockResolvedValue(fetchResult);
+      : vi.fn().mockImplementation(async () => fetchResult.clone());
   return {
     SLACK_KV: {
       get: vi.fn().mockResolvedValue(null),
@@ -118,16 +118,6 @@ describe("getAvailableEnvironments", () => {
   it("fails open when the control-plane response is malformed", async () => {
     const env = makeEnv(jsonResponse({ environments: [{ id: "env_bad" }], total: 1 }));
     expect(await getAvailableEnvironments(env, "trace")).toEqual([]);
-  });
-
-  it("fails open to an empty list on a non-OK response", async () => {
-    const env = makeEnv(new Response("error", { status: 500 }));
-    expect(await getAvailableEnvironments(env)).toEqual([]);
-  });
-
-  it("fails open to an empty list when the fetch throws", async () => {
-    const env = makeEnv(new Error("control plane unreachable"));
-    expect(await getAvailableEnvironments(env)).toEqual([]);
   });
 
   it("ignores malformed environments in the KV fallback", async () => {

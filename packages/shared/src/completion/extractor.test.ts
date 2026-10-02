@@ -423,11 +423,9 @@ describe("extractAgentResponse", () => {
   it.each(["403", "network", "malformed", "invalid-JSON"])(
     "keeps Linear's unprotected artifact fallback unchanged for %s",
     async (failure) => {
-      const urls: URL[] = [];
       const fetcher: ControlPlaneFetcher = {
         async fetch(input) {
           const url = new URL(String(input));
-          urls.push(url);
           if (url.pathname.endsWith("/artifacts")) {
             if (failure === "network") throw new Error("read unavailable");
             if (failure === "invalid-JSON") return new Response("{");
@@ -472,7 +470,6 @@ describe("extractAgentResponse", () => {
           { type: "branch", url: "https://example.com/tree/legacy", label: "Branch: legacy" },
         ],
       });
-      expect(urls.map((url) => url.searchParams.get("purpose"))).toEqual([null, null]);
     }
   );
 

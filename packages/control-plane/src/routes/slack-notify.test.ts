@@ -366,20 +366,6 @@ describe("handleSlackNotify", () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
-  it("happy path posts no events to the DO — the agent's tool_call is the source of truth", async () => {
-    seedActiveSession();
-    integrationStoreMock.getResolvedConfig.mockResolvedValue({
-      enabledRepos: null,
-      settings: { agentNotificationsEnabled: true, mentionsPolicy: "allow" },
-    });
-    mockSlackResponse({ body: { ok: true, channel: "C1", ts: "1.2" } });
-    mockSlackResponse({ body: { ok: true, permalink: "https://x.slack.com/p", channel: "C1" } });
-
-    await callHandler({ channel: "#ops", text: "hello" });
-
-    expect(sessionFetchMock).not.toHaveBeenCalled();
-  });
-
   it("returns 503 feature_unavailable and logs at error level when SLACK_BOT_TOKEN is missing", async () => {
     seedActiveSession();
     const res = await callHandler(
@@ -414,24 +400,6 @@ describe("handleSlackNotify", () => {
     expect(body.error).toBe("feature_disabled");
     expect(fetchMock).not.toHaveBeenCalled();
     expect(sessionFetchMock).not.toHaveBeenCalled();
-  });
-
-  // The handler reads only the resolved master switch (returned by
-  // getResolvedConfig, which already merges global + repo). Whether the
-  // resolved `false` came from a global default or a repo override is not
-  // the handler's concern — that resolution is covered by
-  // IntegrationSettingsStore tests in db/integration-settings.test.ts.
-  it("does not call Slack when feature_disabled regardless of resolution source", async () => {
-    seedActiveSession();
-    integrationStoreMock.getResolvedConfig.mockResolvedValue({
-      enabledRepos: null,
-      settings: { agentNotificationsEnabled: false, mentionsPolicy: "allow" },
-    });
-
-    const res = await callHandler({ channel: "#ops", text: "hello" });
-
-    expect(res.status).toBe(403);
-    expect(fetchMock).not.toHaveBeenCalled();
   });
 
   it("maps Slack channel_not_found to channel_not_found_or_forbidden", async () => {
@@ -795,18 +763,6 @@ describe("handleSlackNotify", () => {
       expect(channelBindingStoreMock.get).toHaveBeenCalledWith("slack", "C1");
     }
   );
-
-  it("does not call Slack when feature is disabled", async () => {
-    seedActiveSession();
-    integrationStoreMock.getResolvedConfig.mockResolvedValue({
-      enabledRepos: null,
-      settings: { agentNotificationsEnabled: false, mentionsPolicy: "allow" },
-    });
-
-    await callHandler({ channel: "#ops", text: "hi" });
-
-    expect(fetchMock).not.toHaveBeenCalled();
-  });
 
   it("maps Slack network/fetch failures to slack_api_error", async () => {
     seedActiveSession();

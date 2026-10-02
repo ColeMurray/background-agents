@@ -172,23 +172,6 @@ describe("POST /automations — slack_event validation (integration)", () => {
     expect(res.status).toBe(400);
     expect(await res.text()).toContain("Unsupported regex flag");
   });
-
-  it("accepts slack_event past the trigger-type allowlist (no unknown-trigger 400)", async () => {
-    // Valid scoping passes validation; the request then fails later at repository
-    // resolution (no GitHub App in the test env). The point is that slack_event is
-    // NOT rejected as an unknown trigger type before reaching that stage.
-    const res = await postAutomation(
-      createBody({
-        triggerConfig: {
-          conditions: [
-            { type: "slack_channel", operator: "any_of", value: ["C1"] },
-            { type: "text_match", operator: "contains", value: { pattern: "deploy" } },
-          ],
-        },
-      })
-    );
-    expect(await res.text()).not.toContain("triggerType must be one of");
-  });
 });
 
 describe("PUT /automations/:id — slack_event validation (integration)", () => {

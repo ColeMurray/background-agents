@@ -868,9 +868,17 @@ describe("POST /events", () => {
     expect(order).not.toContain("prompt");
     expect(slackApiBodies(slackFetch, "chat.postMessage")).toEqual(
       expect.arrayContaining([
-        expect.objectContaining({ text: "Sorry, I couldn't create a session. Please try again." }),
+        expect.objectContaining({
+          channel: "C123",
+          thread_ts: "111.222",
+          text: "Sorry, I couldn't create a session. Please try again.",
+        }),
       ])
     );
+    const threadMappingWrite = (
+      env.SLACK_KV as unknown as { put: ReturnType<typeof vi.fn> }
+    ).put.mock.calls.find(([key]) => key === "thread:C123:111.222");
+    expect(threadMappingWrite).toBeUndefined();
 
     slackFetch.mockRestore();
   });
@@ -901,6 +909,8 @@ describe("POST /events", () => {
     expect(slackApiBodies(slackFetch, "chat.postMessage")).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
+          channel: "C123",
+          thread_ts: "111.222",
           text: "Session created but failed to send prompt. Please try again.",
         }),
       ])
@@ -2170,15 +2180,7 @@ describe("POST /interactions", () => {
         },
       ],
     };
-    const request = new Request("http://localhost/interactions", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/x-www-form-urlencoded",
-        "x-slack-signature": "v0=test",
-        "x-slack-request-timestamp": `${Math.floor(Date.now() / 1000)}`,
-      },
-      body: new URLSearchParams({ payload: JSON.stringify(payload) }),
-    });
+    const request = slackInteractionRequest(payload);
     const ctx = makeCtx();
 
     const response = await app.fetch(request, env, ctx);
@@ -2269,15 +2271,7 @@ describe("POST /interactions", () => {
         },
       ],
     };
-    const request = new Request("http://localhost/interactions", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/x-www-form-urlencoded",
-        "x-slack-signature": "v0=test",
-        "x-slack-request-timestamp": `${Math.floor(Date.now() / 1000)}`,
-      },
-      body: new URLSearchParams({ payload: JSON.stringify(payload) }),
-    });
+    const request = slackInteractionRequest(payload);
     const ctx = makeCtx();
 
     const response = await app.fetch(request, env, ctx);
@@ -2313,15 +2307,7 @@ describe("POST /interactions", () => {
         },
       };
 
-      const request = new Request("http://localhost/interactions", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/x-www-form-urlencoded",
-          "x-slack-signature": "v0=test",
-          "x-slack-request-timestamp": `${Math.floor(Date.now() / 1000)}`,
-        },
-        body: new URLSearchParams({ payload: JSON.stringify(payload) }),
-      });
+      const request = slackInteractionRequest(payload);
 
       const env = makeEnv();
       const ctx = makeCtx();
@@ -2362,15 +2348,7 @@ describe("POST /interactions", () => {
       },
     };
 
-    const request = new Request("http://localhost/interactions", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/x-www-form-urlencoded",
-        "x-slack-signature": "v0=test",
-        "x-slack-request-timestamp": `${Math.floor(Date.now() / 1000)}`,
-      },
-      body: new URLSearchParams({ payload: JSON.stringify(payload) }),
-    });
+    const request = slackInteractionRequest(payload);
 
     const env = makeEnv();
     const ctx = makeCtx();
@@ -2408,15 +2386,7 @@ describe("POST /interactions", () => {
       },
     };
 
-    const request = new Request("http://localhost/interactions", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/x-www-form-urlencoded",
-        "x-slack-signature": "v0=test",
-        "x-slack-request-timestamp": `${Math.floor(Date.now() / 1000)}`,
-      },
-      body: new URLSearchParams({ payload: JSON.stringify(payload) }),
-    });
+    const request = slackInteractionRequest(payload);
 
     const env = makeEnv();
     const ctx = makeCtx();
@@ -2468,15 +2438,7 @@ describe("POST /interactions", () => {
       },
     };
 
-    const request = new Request("http://localhost/interactions", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/x-www-form-urlencoded",
-        "x-slack-signature": "v0=test",
-        "x-slack-request-timestamp": `${Math.floor(Date.now() / 1000)}`,
-      },
-      body: new URLSearchParams({ payload: JSON.stringify(payload) }),
-    });
+    const request = slackInteractionRequest(payload);
 
     const env = makeEnv();
     const ctx = makeCtx();
@@ -2516,15 +2478,7 @@ describe("POST /interactions", () => {
       },
     };
 
-    const request = new Request("http://localhost/interactions", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/x-www-form-urlencoded",
-        "x-slack-signature": "v0=test",
-        "x-slack-request-timestamp": `${Math.floor(Date.now() / 1000)}`,
-      },
-      body: new URLSearchParams({ payload: JSON.stringify(payload) }),
-    });
+    const request = slackInteractionRequest(payload);
 
     const env = makeEnv();
     const ctx = makeCtx();
@@ -2567,15 +2521,7 @@ describe("POST /interactions", () => {
       },
     };
 
-    const request = new Request("http://localhost/interactions", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/x-www-form-urlencoded",
-        "x-slack-signature": "v0=test",
-        "x-slack-request-timestamp": `${Math.floor(Date.now() / 1000)}`,
-      },
-      body: new URLSearchParams({ payload: JSON.stringify(payload) }),
-    });
+    const request = slackInteractionRequest(payload);
 
     const env = makeEnv();
     const ctx = makeCtx();
@@ -2591,128 +2537,7 @@ describe("POST /interactions", () => {
     expect(kvPut).not.toHaveBeenCalledWith("user_repo_branch:U123:acme/unknown", "release/2026-03");
   });
 
-  it("prefers repo branch over global branch when creating a session", async () => {
-    const slackFetch = vi.spyOn(globalThis, "fetch").mockImplementation(async () => {
-      return new Response(JSON.stringify({ ok: true, channel: "C123", ts: "123.456" }), {
-        status: 200,
-        headers: { "Content-Type": "application/json" },
-      });
-    });
-
-    const payload = {
-      type: "block_actions",
-      user: { id: "U123" },
-      channel: { id: "C123" },
-      message: { ts: "111.222" },
-      actions: [
-        {
-          action_id: "select_repo",
-          selected_option: { value: "acme/app" },
-        },
-      ],
-    };
-
-    const request = new Request("http://localhost/interactions", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/x-www-form-urlencoded",
-        "x-slack-signature": "v0=test",
-        "x-slack-request-timestamp": `${Math.floor(Date.now() / 1000)}`,
-      },
-      body: new URLSearchParams({ payload: JSON.stringify(payload) }),
-    });
-
-    const env = makeEnv();
-    await (env.SLACK_KV as unknown as { put: (k: string, v: string) => Promise<void> }).put(
-      "pending:C123:111.222",
-      JSON.stringify({
-        message: "Please handle this",
-        userId: "U123",
-      })
-    );
-    await (env.SLACK_KV as unknown as { put: (k: string, v: string) => Promise<void> }).put(
-      "user_preferences:U123",
-      JSON.stringify({
-        userId: "U123",
-        model: "anthropic/claude-haiku-4-5",
-        reasoningEffort: "medium",
-        branch: "global-branch",
-        updatedAt: Date.now(),
-      })
-    );
-    await (env.SLACK_KV as unknown as { put: (k: string, v: string) => Promise<void> }).put(
-      "user_repo_branch:U123:acme/app",
-      "repo-branch"
-    );
-
-    env.CONTROL_PLANE.fetch.mockImplementation(async (input: RequestInfo | URL) => {
-      const url = typeof input === "string" ? input : input.toString();
-      if (url.includes("/channel-bindings/slack/")) return Response.json({ teamId: null });
-      if (url.includes("/repos")) {
-        return new Response(
-          JSON.stringify(
-            mockReposResponseBody([
-              {
-                id: "acme/app",
-                owner: "acme",
-                name: "app",
-                fullName: "acme/app",
-                defaultBranch: "main",
-                private: true,
-              },
-            ])
-          ),
-          {
-            status: 200,
-            headers: { "Content-Type": "application/json" },
-          }
-        );
-      }
-
-      if (url.endsWith("/sessions")) {
-        return new Response(JSON.stringify({ sessionId: "session-1", status: "created" }), {
-          status: 200,
-          headers: { "Content-Type": "application/json" },
-        });
-      }
-
-      if (url.includes("/prompt")) {
-        return new Response(JSON.stringify({ messageId: "msg-1" }), {
-          status: 200,
-          headers: { "Content-Type": "application/json" },
-        });
-      }
-
-      return new Response(JSON.stringify({ enabledModels: ["anthropic/claude-haiku-4-5"] }), {
-        status: 200,
-        headers: { "Content-Type": "application/json" },
-      });
-    });
-
-    const ctx = makeCtx();
-    const response = await app.fetch(request, env, ctx);
-
-    expect(response.status).toBe(200);
-    expect(await response.json()).toEqual({ ok: true });
-
-    await flushWaitUntil(ctx);
-    await flushWaitUntil(ctx, 1);
-    expect(ctx.waitUntil).toHaveBeenCalledTimes(3);
-
-    const sessionCall = env.CONTROL_PLANE.fetch.mock.calls.find(([input]) => {
-      const url = typeof input === "string" ? input : (input as URL).toString();
-      return url.endsWith("/sessions");
-    });
-
-    expect(sessionCall).toBeTruthy();
-    const init = sessionCall?.[1] as RequestInit;
-    const body = JSON.parse(String(init.body)) as { branch?: string };
-    expect(body.branch).toBe("repo-branch");
-
-    slackFetch.mockRestore();
-  });
-
-  it("forwards display identity fields from getUserInfo to session creation", async () => {
+  it("forwards display identity and prefers repo branch over global branch on session creation", async () => {
     const slackFetch = vi.spyOn(globalThis, "fetch").mockImplementation(async () => {
       return new Response(JSON.stringify({ ok: true, channel: "C123", ts: "123.456" }), {
         status: 200,
@@ -2746,15 +2571,7 @@ describe("POST /interactions", () => {
       ],
     };
 
-    const request = new Request("http://localhost/interactions", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/x-www-form-urlencoded",
-        "x-slack-signature": "v0=test",
-        "x-slack-request-timestamp": `${Math.floor(Date.now() / 1000)}`,
-      },
-      body: new URLSearchParams({ payload: JSON.stringify(payload) }),
-    });
+    const request = slackInteractionRequest(payload);
 
     const env = makeEnv();
     await (env.SLACK_KV as unknown as { put: (k: string, v: string) => Promise<void> }).put(
@@ -2764,6 +2581,17 @@ describe("POST /interactions", () => {
         userId: "U123",
       })
     );
+    await env.SLACK_KV.put(
+      "user_prefs:U123",
+      JSON.stringify({
+        userId: "U123",
+        model: "anthropic/claude-haiku-4-5",
+        reasoningEffort: "medium",
+        branch: "global-branch",
+        updatedAt: Date.now(),
+      })
+    );
+    await env.SLACK_KV.put("user_repo_branch:U123:acme/app", "repo-branch");
 
     env.CONTROL_PLANE.fetch.mockImplementation(async (input: RequestInfo | URL) => {
       const url = typeof input === "string" ? input : input.toString();
@@ -2818,6 +2646,7 @@ describe("POST /interactions", () => {
     const body = JSON.parse(String(init.body)) as Record<string, unknown>;
     expect(body.actorDisplayName).toBe("Jane");
     expect(body.actorEmail).toBe("jane@example.com");
+    expect(body.branch).toBe("repo-branch");
     expect(mockGetUserInfo).toHaveBeenCalledOnce();
     // Identity travels via the signed actor assertion, never the body.
     expect(body.actorUserId).toBeUndefined();
@@ -2849,15 +2678,7 @@ describe("POST /interactions", () => {
       ],
     };
 
-    const request = new Request("http://localhost/interactions", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/x-www-form-urlencoded",
-        "x-slack-signature": "v0=test",
-        "x-slack-request-timestamp": `${Math.floor(Date.now() / 1000)}`,
-      },
-      body: new URLSearchParams({ payload: JSON.stringify(payload) }),
-    });
+    const request = slackInteractionRequest(payload);
 
     const env = makeEnv();
     await (env.SLACK_KV as unknown as { put: (k: string, v: string) => Promise<void> }).put(
@@ -2942,15 +2763,7 @@ describe("POST /interactions", () => {
       ],
     };
 
-    const request = new Request("http://localhost/interactions", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/x-www-form-urlencoded",
-        "x-slack-signature": "v0=test",
-        "x-slack-request-timestamp": `${Math.floor(Date.now() / 1000)}`,
-      },
-      body: new URLSearchParams({ payload: JSON.stringify(payload) }),
-    });
+    const request = slackInteractionRequest(payload);
 
     const env = makeEnv();
     await (env.SLACK_KV as unknown as { put: (k: string, v: string) => Promise<void> }).put(
@@ -2980,15 +2793,7 @@ describe("POST /interactions", () => {
       value: "repo-150",
     };
 
-    const request = new Request("http://localhost/interactions", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/x-www-form-urlencoded",
-        "x-slack-signature": "v0=test",
-        "x-slack-request-timestamp": `${Math.floor(Date.now() / 1000)}`,
-      },
-      body: new URLSearchParams({ payload: JSON.stringify(payload) }),
-    });
+    const request = slackInteractionRequest(payload);
 
     const env = makeEnv();
     const repos = buildNumberedRepos(150);
@@ -3030,15 +2835,7 @@ describe("POST /interactions", () => {
         },
       ],
     };
-    const request = new Request("http://localhost/interactions", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/x-www-form-urlencoded",
-        "x-slack-signature": "v0=test",
-        "x-slack-request-timestamp": `${Math.floor(Date.now() / 1000)}`,
-      },
-      body: new URLSearchParams({ payload: JSON.stringify(payload) }),
-    });
+    const request = slackInteractionRequest(payload);
     const ctx = makeCtx();
 
     const response = await app.fetch(request, env, ctx);

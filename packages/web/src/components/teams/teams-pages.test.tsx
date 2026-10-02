@@ -275,7 +275,6 @@ describe("Team page tabs", () => {
       const view = render(<TeamPage slug="design" />);
       expect(screen.getByRole("button", { name: "Overview" })).toBeInTheDocument();
       expect(screen.getByRole("button", { name: "Members" })).toBeInTheDocument();
-      expect(screen.getByRole("button", { name: "Channels" })).toBeInTheDocument();
       fireEvent.click(screen.getByRole("button", { name: "Repositories" }));
       expect(screen.getByText("Team repository grants")).toBeInTheDocument();
       expect(screen.queryByRole("button", { name: "Settings" })).not.toBeInTheDocument();

@@ -11,19 +11,7 @@ vi.mock("./delivery", async (importOriginal) => {
 });
 
 function makeEnv(): Env {
-  return {
-    SLACK_KV: {} as KVNamespace,
-    SLACK_COMPLETION_QUEUE: {} as Queue,
-    CONTROL_PLANE: {} as Fetcher,
-    DEPLOYMENT_NAME: "test",
-    CONTROL_PLANE_URL: "https://control-plane.test",
-    WEB_APP_URL: "https://app.test",
-    DEFAULT_MODEL: "anthropic/claude-haiku-4-5",
-    CLASSIFICATION_MODEL: "anthropic/claude-haiku-4-5",
-    SLACK_BOT_TOKEN: "xoxb-test",
-    SLACK_SIGNING_SECRET: "signing-secret",
-    ANTHROPIC_API_KEY: "test-key",
-  };
+  return {} as Env;
 }
 
 function job(): SlackCompletionJob {

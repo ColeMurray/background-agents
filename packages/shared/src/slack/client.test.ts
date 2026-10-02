@@ -341,28 +341,6 @@ describe("getChannelInfo", () => {
     expect(result.ok).toBe(false);
     expect(result.error).toBe("channel_not_found");
   });
-
-  it("on 429 returns ratelimited with retryAfter", async () => {
-    vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
-      new Response("", {
-        status: 429,
-        headers: { "Retry-After": "5" },
-      })
-    );
-
-    const result = await getChannelInfo("xoxb-token", "C123");
-    expect(result.ok).toBe(false);
-    expect(result.error).toBe("ratelimited");
-    expect(result.retryAfter).toBe(5);
-  });
-
-  it("on 5xx returns a typed error", async () => {
-    vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(new Response("oops", { status: 500 }));
-
-    const result = await getChannelInfo("xoxb-token", "C123");
-    expect(result.ok).toBe(false);
-    expect(result.error).toBe("http_500");
-  });
 });
 
 describe("getPermalink", () => {

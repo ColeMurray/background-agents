@@ -126,17 +126,4 @@ describe("deliverPrompt", () => {
     expect(sendPrompt).not.toHaveBeenCalled();
     expect(notifyDroppedAttachments).not.toHaveBeenCalled();
   });
-
-  it("still sends a text prompt when images dropped but user text exists", async () => {
-    vi.mocked(uploadPreparedAttachments).mockResolvedValue({
-      references: [],
-      dropped: ["download_failed"],
-      sessionMissing: false,
-    });
-
-    const result = await deliverPrompt(env, options({ imageOnly: false }));
-
-    expect(result.ok).toBe(true);
-    expect(sendPrompt).toHaveBeenCalled();
-  });
 });

@@ -102,23 +102,6 @@ describe("filterReposByQuery", () => {
 });
 
 describe("buildTargetQuickPickButtons", () => {
-  it("maps alternatives to quick-pick buttons carrying the repo id", () => {
-    expect(buildTargetQuickPickButtons([repoTarget("acme/web"), repoTarget("acme/api")])).toEqual([
-      {
-        type: "button",
-        action_id: quickPickActionId(0),
-        text: { type: "plain_text", text: "web" },
-        value: "acme/web",
-      },
-      {
-        type: "button",
-        action_id: quickPickActionId(1),
-        text: { type: "plain_text", text: "api" },
-        value: "acme/api",
-      },
-    ]);
-  });
-
   it("maps an environment alternative to a button carrying the env: value", () => {
     expect(buildTargetQuickPickButtons([environmentTarget("env_abc123", "full-stack")])).toEqual([
       {
@@ -466,8 +449,18 @@ describe("buildTargetClarificationBlocks", () => {
         type: "actions",
         block_id: targetQuickPickBlockId(REQUEST_ID),
         elements: [
-          { type: "button", action_id: quickPickActionId(0), value: "acme/web" },
-          { type: "button", action_id: quickPickActionId(1), value: "acme/api" },
+          {
+            type: "button",
+            action_id: quickPickActionId(0),
+            text: { type: "plain_text", text: "web" },
+            value: "acme/web",
+          },
+          {
+            type: "button",
+            action_id: quickPickActionId(1),
+            text: { type: "plain_text", text: "api" },
+            value: "acme/api",
+          },
         ],
       },
       {

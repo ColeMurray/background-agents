@@ -2402,17 +2402,7 @@ describe("Scheduler", () => {
       mockStore.updateRun.mockResolvedValue(false);
       mockStore.completeTimedOutRun.mockResolvedValue(true);
       mockStore.getInvocationById.mockResolvedValue({
-        id: "inv-slack",
-        automation_id: "auto-slack",
-        source: "event",
-        scheduled_at: null,
-        trigger_key: "slack:msg:C1:1700000000.000200",
-        concurrency_key: "slack:C1:thread-root",
         trigger_metadata: JSON.stringify({ channel: "C1", messageTs: "1700000000.000200" }),
-        skip_reason: null,
-        failure_counted_at: null,
-        created_at: now,
-        updated_at: now,
       });
       mockStore.getById.mockResolvedValue(sampleSlackAutomation);
 
@@ -2446,17 +2436,7 @@ describe("Scheduler", () => {
         })
       );
       mockStore.getInvocationById.mockResolvedValue({
-        id: "inv-slack",
-        automation_id: "auto-slack",
-        source: "event",
-        scheduled_at: null,
-        trigger_key: "slack:msg:C1:1700000000.000200",
-        concurrency_key: "slack:C1:thread-root",
         trigger_metadata: JSON.stringify({ channel: "C1", messageTs: "1700000000.000200" }),
-        skip_reason: null,
-        failure_counted_at: null,
-        created_at: now,
-        updated_at: now,
       });
       mockStore.getById.mockResolvedValue({
         ...sampleSlackAutomation,

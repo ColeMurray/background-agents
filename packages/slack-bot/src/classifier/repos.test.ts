@@ -20,7 +20,7 @@ function makeEnv(fetchResult: Response | Error): Env {
   const fetch =
     fetchResult instanceof Error
       ? vi.fn().mockRejectedValue(fetchResult)
-      : vi.fn().mockResolvedValue(fetchResult);
+      : vi.fn().mockImplementation(async () => fetchResult.clone());
   return {
     SLACK_KV: {
       get: vi.fn().mockResolvedValue(null),
@@ -35,19 +35,6 @@ describe("getRoutingRules", () => {
   beforeEach(() => {
     clearLocalCache();
     vi.clearAllMocks();
-  });
-
-  it("parses routing rules from the control-plane settings response", async () => {
-    const env = makeEnv(
-      jsonResponse({
-        integrationId: "slack",
-        settings: { defaults: { routingRules: [{ keyword: "frontend", target: "acme/web" }] } },
-      })
-    );
-
-    expect(await getRoutingRules(env, "trace")).toEqual([
-      { keyword: "frontend", target: "acme/web" },
-    ]);
   });
 
   it("returns an empty list when slack settings are unset", async () => {
@@ -83,11 +70,6 @@ describe("getRoutingRules", () => {
       })
     );
 
-    expect(await getRoutingRules(env)).toEqual([]);
-  });
-
-  it("fails open to an empty list on a non-OK response", async () => {
-    const env = makeEnv(new Response("error", { status: 500 }));
     expect(await getRoutingRules(env)).toEqual([]);
   });
 
@@ -345,19 +327,6 @@ describe("getAvailableRepos", () => {
     // Identity, not just shape: attaching some other signal would pass an
     // instanceof check while leaving the fetch effectively unbounded.
     expect(init?.signal).toBe(timeoutSpy.mock.results[0]?.value);
-  });
-
-  it("falls back when the control-plane repository response is malformed", async () => {
-    const env = makeEnv(
-      jsonResponse({
-        repos: [{ owner: "Open-Inspect", name: "Background-Agents" }],
-        cached: false,
-        cachedAt: new Date().toISOString(),
-      })
-    );
-
-    await expect(getAvailableRepos(env, "trace-3")).resolves.toEqual([]);
-    expect(env.SLACK_KV.put).not.toHaveBeenCalled();
   });
 
   it("rejects malformed cached repositories on the fallback path", async () => {

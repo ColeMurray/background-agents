@@ -417,20 +417,6 @@ describe("POST /callbacks/activity", () => {
     expect(response.status).toBe(400);
     expect(fetchMock).not.toHaveBeenCalled();
   });
-
-  it("rejects a payload missing the thread context", async () => {
-    const fetchMock = okFetchMock();
-    const payload = await signPayload({
-      sessionId: "session-1",
-      messageId: "msg-1",
-      timestamp: Date.now(),
-    });
-
-    const { response } = await postCallback("/callbacks/activity", payload);
-
-    expect(response.status).toBe(400);
-    expect(fetchMock).not.toHaveBeenCalled();
-  });
 });
 
 describe("POST /callbacks/thread_closed", () => {

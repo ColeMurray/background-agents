@@ -490,53 +490,6 @@ describe("startSessionAndSendPrompt", () => {
     );
   });
 
-  it("notifies Slack and skips prompt delivery when session creation fails", async () => {
-    vi.mocked(createSession).mockResolvedValue(null);
-    const env = makeEnv();
-
-    await expect(
-      startSessionAndSendPrompt(env, {
-        target: repositoryTarget,
-        channel: "C123",
-        threadTs: "111.222",
-        messageText: "Fix it",
-        actor,
-      })
-    ).resolves.toBeNull();
-
-    expect(postMessage).toHaveBeenCalledWith(
-      "xoxb-test",
-      "C123",
-      "Sorry, I couldn't create a session. Please try again.",
-      { thread_ts: "111.222" }
-    );
-    expect(deliverPrompt).not.toHaveBeenCalled();
-    expect(storeThreadSession).not.toHaveBeenCalled();
-  });
-
-  it("notifies Slack and avoids storing thread state when prompt delivery fails", async () => {
-    vi.mocked(deliverPrompt).mockResolvedValue({ ok: false, reason: "transient" });
-    const env = makeEnv();
-
-    await expect(
-      startSessionAndSendPrompt(env, {
-        target: repositoryTarget,
-        channel: "C123",
-        threadTs: "111.222",
-        messageText: "Fix it",
-        actor,
-      })
-    ).resolves.toBeNull();
-
-    expect(postMessage).toHaveBeenCalledWith(
-      "xoxb-test",
-      "C123",
-      "Session created but failed to send prompt. Please try again.",
-      { thread_ts: "111.222" }
-    );
-    expect(storeThreadSession).not.toHaveBeenCalled();
-  });
-
   it("downloads message images before session creation and hands them to delivery", async () => {
     const images: SlackImageAttachment[] = [
       {

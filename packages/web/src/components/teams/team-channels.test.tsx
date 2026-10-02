@@ -114,51 +114,48 @@ describe("Team channels", () => {
     }
   );
 
-  it.each(["primary", "source"])(
-    "searches channel names, binds the selected ID as %s and refreshes",
-    async (kind) => {
-      listedBindings = [bindings[0]];
-      render(<TeamChannels team={team} />, { wrapper });
-      await screen.findByText("#home");
-      expect(screen.getByRole("button", { name: "Bind channel" })).toBeDisabled();
-      fireEvent.click(screen.getByRole("button", { name: /Slack channel Select a channel/ }));
-      expect(screen.queryByRole("option", { name: "#unjoined" })).not.toBeInTheDocument();
-      expect(screen.getByRole("option", { name: /#source.*Private channel/ })).toBeInTheDocument();
-      fireEvent.change(screen.getByPlaceholderText("Search channels..."), {
-        target: { value: "ANNOUNCE" },
-      });
-      expect(within(screen.getByRole("listbox")).getAllByRole("option")).toHaveLength(1);
-      fireEvent.click(screen.getByRole("option", { name: "#design-announcements" }));
-      fireEvent.change(screen.getByRole("combobox", { name: "Binding kind" }), {
-        target: { value: kind },
-      });
-      let finish!: (response: Response) => void;
-      const mutation = new Promise<Response>((resolve) => {
-        finish = resolve;
-      });
-      vi.mocked(browserApiFetch).mockReturnValueOnce(mutation);
-      fireEvent.click(screen.getByRole("button", { name: "Bind channel" }));
-      expect(
-        screen.getByRole("button", { name: /Slack channel #design-announcements/ })
-      ).toBeDisabled();
-      expect(screen.getByRole("combobox", { name: "Binding kind" })).toBeDisabled();
-      expect(screen.getByRole("button", { name: "Unbind Slack channel #home" })).toBeDisabled();
-      await act(async () => {
-        listedBindings = [{ ...bindings[0], externalId: "C_NEW/ID", kind }];
-        finish(Response.json({ ok: true }));
-      });
-      expect(await screen.findByText("#design-announcements")).toBeInTheDocument();
-      expect(browserApiFetch).toHaveBeenCalledWith(channelsKey);
-      expect(browserApiFetch).toHaveBeenCalledWith(`${key}/slack/C_NEW%2FID`, {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ kind }),
-      });
-      await waitFor(() =>
-        expect(screen.getByRole("button", { name: /Slack channel Select a channel/ })).toBeEnabled()
-      );
-    }
-  );
+  it("searches channel names, binds the selected ID as primary and refreshes", async () => {
+    listedBindings = [bindings[0]];
+    render(<TeamChannels team={team} />, { wrapper });
+    await screen.findByText("#home");
+    expect(screen.getByRole("button", { name: "Bind channel" })).toBeDisabled();
+    fireEvent.click(screen.getByRole("button", { name: /Slack channel Select a channel/ }));
+    expect(screen.queryByRole("option", { name: "#unjoined" })).not.toBeInTheDocument();
+    expect(screen.getByRole("option", { name: /#source.*Private channel/ })).toBeInTheDocument();
+    fireEvent.change(screen.getByPlaceholderText("Search channels..."), {
+      target: { value: "ANNOUNCE" },
+    });
+    expect(within(screen.getByRole("listbox")).getAllByRole("option")).toHaveLength(1);
+    fireEvent.click(screen.getByRole("option", { name: "#design-announcements" }));
+    fireEvent.change(screen.getByRole("combobox", { name: "Binding kind" }), {
+      target: { value: "primary" },
+    });
+    let finish!: (response: Response) => void;
+    const mutation = new Promise<Response>((resolve) => {
+      finish = resolve;
+    });
+    vi.mocked(browserApiFetch).mockReturnValueOnce(mutation);
+    fireEvent.click(screen.getByRole("button", { name: "Bind channel" }));
+    expect(
+      screen.getByRole("button", { name: /Slack channel #design-announcements/ })
+    ).toBeDisabled();
+    expect(screen.getByRole("combobox", { name: "Binding kind" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Unbind Slack channel #home" })).toBeDisabled();
+    await act(async () => {
+      listedBindings = [{ ...bindings[0], externalId: "C_NEW/ID", kind: "primary" }];
+      finish(Response.json({ ok: true }));
+    });
+    expect(await screen.findByText("#design-announcements")).toBeInTheDocument();
+    expect(browserApiFetch).toHaveBeenCalledWith(channelsKey);
+    expect(browserApiFetch).toHaveBeenCalledWith(`${key}/slack/C_NEW%2FID`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ kind: "primary" }),
+    });
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: /Slack channel Select a channel/ })).toBeEnabled()
+    );
+  });
 
   it("unbinds Slack channels and reloads the authoritative list", async () => {
     listedBindings = bindings;
@@ -266,45 +263,32 @@ describe("Team channels", () => {
     }
   );
 
-  it("offers refresh when no bot-member channels are available", async () => {
+  it.each([
+    ["Retry channels", { channels: [], error: "not_configured" }],
+    ["Refresh channels", { channels: [channels[4]] }],
+  ] as const)("%s never submits a manual binding draft", async (label, payload) => {
     vi.mocked(browserApiFetch).mockImplementation(async (url) =>
-      Response.json(url === channelsKey ? { channels: [channels[4]] } : { bindings: [] })
+      Response.json(url === channelsKey ? payload : { bindings: [] })
     );
     render(<TeamChannels team={team} />, { wrapper });
-    const refresh = await screen.findByRole("button", { name: "Refresh channels" });
+    const reload = await screen.findByRole("button", { name: label });
     expect(screen.getByRole("button", { name: /Slack channel Select a channel/ })).toBeDisabled();
+    fireEvent.click(screen.getByRole("button", { name: "Enter a channel ID instead" }));
+    fireEvent.change(screen.getByRole("textbox", { name: "Slack channel ID" }), {
+      target: { value: "C_DRAFT" },
+    });
     vi.mocked(browserApiFetch).mockResolvedValueOnce(Response.json({ channels }));
-    fireEvent.click(refresh);
+    fireEvent.click(reload);
+    await waitFor(() =>
+      expect(screen.queryByRole("button", { name: label })).not.toBeInTheDocument()
+    );
+    expect(screen.getByRole("textbox", { name: "Slack channel ID" })).toHaveValue("C_DRAFT");
+    fireEvent.click(screen.getByRole("button", { name: "Choose from channels" }));
     await waitFor(() =>
       expect(screen.getByRole("button", { name: /Slack channel Select a channel/ })).toBeEnabled()
     );
+    expect(vi.mocked(browserApiFetch).mock.calls.every(([, init]) => !init?.method)).toBe(true);
   });
-
-  it.each(["Retry channels", "Refresh channels"])(
-    "%s never submits a manual binding draft",
-    async (label) => {
-      vi.mocked(browserApiFetch).mockImplementation(async (url) =>
-        Response.json(
-          url === channelsKey
-            ? { channels: [], ...(label === "Retry channels" ? { error: "not_configured" } : {}) }
-            : { bindings: [] }
-        )
-      );
-      render(<TeamChannels team={team} />, { wrapper });
-      const reload = await screen.findByRole("button", { name: label });
-      fireEvent.click(screen.getByRole("button", { name: "Enter a channel ID instead" }));
-      fireEvent.change(screen.getByRole("textbox", { name: "Slack channel ID" }), {
-        target: { value: "C_DRAFT" },
-      });
-      vi.mocked(browserApiFetch).mockResolvedValueOnce(Response.json({ channels }));
-      fireEvent.click(reload);
-      await waitFor(() =>
-        expect(screen.queryByRole("button", { name: label })).not.toBeInTheDocument()
-      );
-      expect(screen.getByRole("textbox", { name: "Slack channel ID" })).toHaveValue("C_DRAFT");
-      expect(vi.mocked(browserApiFetch).mock.calls.every(([, init]) => !init?.method)).toBe(true);
-    }
-  );
 
   it.each([401, 403])(
     "withholds cached channel names and all controls after a %s revalidation",

@@ -2,7 +2,6 @@ import { describe, expect, it } from "vitest";
 import {
   channelBindingResponseSchema,
   putTeamChannelBindingRequestSchema,
-  teamChannelBindingSchema,
   teamChannelBindingsResponseSchema,
 } from "../index";
 
@@ -14,13 +13,6 @@ const binding = {
 } as const;
 
 describe("team channel binding contracts", () => {
-  it.each(["slack", "linear"])("supports provider-keyed %s bindings", (provider) => {
-    expect(teamChannelBindingSchema.parse({ ...binding, provider })).toEqual({
-      ...binding,
-      provider,
-    });
-  });
-
   it.each(["primary", "source"])("accepts a %s binding mutation", (kind) => {
     expect(putTeamChannelBindingRequestSchema.parse({ kind })).toEqual({ kind });
   });
@@ -33,9 +25,8 @@ describe("team channel binding contracts", () => {
   );
 
   it("validates lists and minimal service lookup responses", () => {
-    expect(teamChannelBindingsResponseSchema.parse({ bindings: [binding] })).toEqual({
-      bindings: [binding],
-    });
+    const bindings = [binding, { ...binding, provider: "linear" }];
+    expect(teamChannelBindingsResponseSchema.parse({ bindings })).toEqual({ bindings });
     expect(channelBindingResponseSchema.parse({ teamId: null })).toEqual({ teamId: null });
     expect(channelBindingResponseSchema.parse({ teamId: binding.teamId, kind: "source" })).toEqual({
       teamId: binding.teamId,

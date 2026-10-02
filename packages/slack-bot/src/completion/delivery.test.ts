@@ -137,7 +137,7 @@ describe("processSlackCompletion", () => {
     expect(fetch).not.toHaveBeenCalled();
   });
 
-  it("skips media delivery when the response has no media artifacts", async () => {
+  it("lets Slack derive accessible fallback text from completion blocks", async () => {
     vi.mocked(extractAgentResponse).mockResolvedValue({
       ...successfulAgentResponse(),
       mediaArtifacts: [],
@@ -151,20 +151,6 @@ describe("processSlackCompletion", () => {
 
     expect(deliverMediaArtifacts).not.toHaveBeenCalled();
     expect(fetchMock).toHaveBeenCalledTimes(2);
-  });
-
-  it("lets Slack derive accessible fallback text from completion blocks", async () => {
-    vi.mocked(extractAgentResponse).mockResolvedValue({
-      ...successfulAgentResponse(),
-      mediaArtifacts: [],
-    });
-    const fetchMock = vi
-      .spyOn(globalThis, "fetch")
-      .mockResolvedValueOnce(Response.json({ ok: true, channel: "C123", ts: "333.444" }))
-      .mockResolvedValueOnce(Response.json({ ok: true }));
-
-    await processSlackCompletion(job(), makeEnv());
-
     const request = fetchMock.mock.calls[0]?.[1];
     const body = JSON.parse(String(request?.body)) as Record<string, unknown>;
     expect(body).not.toHaveProperty("text");
