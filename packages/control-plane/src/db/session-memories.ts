@@ -32,6 +32,30 @@ interface ItemRow extends MemoryRow {
   estimated_tokens: number;
 }
 
+/** The tool's narrow response contract: live facts or body-free pinned archive notices. */
+export type SessionMemoryRead = {
+  scope: MemoryRecord["scope"];
+  repoId: number | null;
+  result:
+    | { id: string; status: "archived"; archivedAt: number | null; reason: string | null }
+    | (Pick<
+        MemoryRecord,
+        | "id"
+        | "title"
+        | "description"
+        | "content"
+        | "scope"
+        | "revisionNumber"
+        | "authorKind"
+        | "authorUserId"
+        | "authorSessionId"
+      > & {
+        status: "active";
+        memoryType: "fact";
+        revisionId: string;
+      });
+};
+
 /** Persist immutable session selections separately from live memory content and lifecycle state. */
 export class SessionMemoryStore {
   constructor(private readonly db: SqlDatabase) {}
@@ -214,11 +238,11 @@ export class SessionMemoryStore {
     };
   }
   /**
-   * Read the live revision within session scope, rather than the injected pinned revision.
-   * Reject proposals, unpinned archives, personal opt-out, and unpinned personal reads from children.
-   * The route must still check current shared access and redact archived bodies to a notice.
+   * Expand active facts in the current target; directives are never live-expandable.
+   * Pinned archives yield a body-free notice. Proposals, unpinned archives, opt-out,
+   * and unpinned personal reads from children are concealed. Callers recheck shared grants.
    */
-  async read(sessionId: string, memoryId: string): Promise<MemoryRecord | null> {
+  async read(sessionId: string, memoryId: string): Promise<SessionMemoryRead | null> {
     const [target, pinned, record] = await Promise.all([
       this.target(sessionId),
       this.db
@@ -232,8 +256,36 @@ export class SessionMemoryStore {
     if (!target || !record || record.status === "proposed") return null;
     if (record.scope.type === "personal" && !target.includePersonalMemories) return null;
     if (!pinned && record.scope.type === "personal" && target.inherited) return null;
-    if (!pinned && (record.status !== "active" || !matchesMemoryTarget(record, target)))
-      return null;
-    return record;
+    const access = { scope: record.scope, repoId: record.repoId ?? null };
+    if (record.status === "archived")
+      return pinned
+        ? {
+            ...access,
+            result: {
+              id: record.id,
+              status: "archived",
+              archivedAt: record.archivedAt,
+              reason: record.archiveReason,
+            },
+          }
+        : null;
+    if (record.memoryType !== "fact" || !matchesMemoryTarget(record, target)) return null;
+    return {
+      ...access,
+      result: {
+        id: record.id,
+        status: "active",
+        memoryType: "fact",
+        scope: record.scope,
+        title: record.title,
+        description: record.description,
+        content: record.content,
+        revisionId: record.currentRevisionId,
+        revisionNumber: record.revisionNumber,
+        authorKind: record.authorKind,
+        authorUserId: record.authorUserId,
+        authorSessionId: record.authorSessionId,
+      },
+    };
   }
 }

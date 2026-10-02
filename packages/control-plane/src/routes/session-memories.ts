@@ -111,7 +111,7 @@ async function installation(
     rendered: renderMemorySection(loaded.manifest, loaded.records),
   });
 }
-/** Expose live content/provenance to an admitted sandbox, or only a notice for archived records. */
+/** Expose only live facts or pinned archive notices after current shared-scope admission. */
 async function read(
   _request: Request,
   _env: Env,
@@ -121,27 +121,7 @@ async function read(
   const record = await new SessionMemoryStore(ctx.db).read(params.id, params.memoryId);
   if (!record || !(await currentSharedAccess(ctx, params.id, [record])))
     return error("Memory not found", 404);
-  if (record.status === "archived")
-    return json({
-      id: record.id,
-      status: "archived",
-      archivedAt: record.archivedAt,
-      reason: record.archiveReason,
-    });
-  return json({
-    id: record.id,
-    status: record.status,
-    title: record.title,
-    description: record.description,
-    content: record.content,
-    scope: record.scope,
-    memoryType: record.memoryType,
-    revisionId: record.currentRevisionId,
-    revisionNumber: record.revisionNumber,
-    authorKind: record.authorKind,
-    authorUserId: record.authorUserId,
-    authorSessionId: record.authorSessionId,
-  });
+  return json(record.result);
 }
 /**
  * Derive agent identity and scope from the authenticated session, never from the request body.

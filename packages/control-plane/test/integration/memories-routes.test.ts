@@ -185,6 +185,32 @@ describe("memory HTTP lifecycle and session boundaries", () => {
       ).items
     ).toHaveLength(0);
   });
+  it("does not live-expand pinned, revised, or unpinned directives", async () => {
+    const initial = await request("/memories", "POST", { ...content, memoryType: "directive" });
+    const directive = memoryViewSchema.parse(
+      ((await initial.json()) as { memory: unknown }).memory
+    );
+    const sandbox = await session("directive-pinning");
+    const original = (await (await sandbox("")).json()) as { rendered: string };
+    expect((await sandbox(`/${directive.id}`)).status).toBe(404);
+    const { scope: _scope, ...fields } = content;
+    await request(`/memories/${directive.id}`, "PATCH", {
+      ...fields,
+      memoryType: "directive",
+      content: "Changed instructions",
+      expectedRevisionId: directive.currentRevisionId,
+    });
+    expect((await sandbox(`/${directive.id}`)).status).toBe(404);
+    expect(await (await sandbox("")).json()).toMatchObject({ rendered: original.rendered });
+    const later = await request("/memories", "POST", { ...content, memoryType: "directive" });
+    const unpinned = memoryViewSchema.parse(((await later.json()) as { memory: unknown }).memory);
+    expect((await sandbox(`/${unpinned.id}`)).status).toBe(404);
+    const liveFact = await createMemory();
+    expect(await (await sandbox(`/${liveFact.id}`)).json()).toMatchObject({
+      memoryType: "fact",
+      content: content.content,
+    });
+  });
   it("opt-out blocks guessed personal IDs and personal writes, including inherited children", async () => {
     const record = await createMemory();
     const sandbox = await session("excluded", false);
