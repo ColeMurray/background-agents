@@ -34,6 +34,9 @@ import {
   json,
   error,
   requirePermission,
+  requireAll,
+  permissionRequirement,
+  environmentRequirement,
 } from "./shared";
 import { parseJsonBody } from "./body";
 
@@ -505,7 +508,10 @@ const REPO_SETTINGS_MANAGE = admit({
 });
 const ENVIRONMENT_SETTINGS_MANAGE = admit({
   ...GITHUB_USER_OR_SERVICE_ROUTE,
-  authorization: requirePermission("environments.settings.manage"),
+  authorization: requireAll(
+    permissionRequirement("environments.settings.manage"),
+    environmentRequirement("manage", "environmentId")
+  ),
 });
 
 export const integrationSettingsRoutes = new Hono<ControlPlaneHonoEnv>();
@@ -550,7 +556,13 @@ integrationSettingsRoutes.delete(
 // code-server, and VNC only)
 integrationSettingsRoutes.get(
   "/integration-settings/:id/environments/:environmentId",
-  INTEGRATIONS_READ,
+  admit({
+    ...GITHUB_USER_OR_SERVICE_ROUTE,
+    authorization: requireAll(
+      permissionRequirement("integrations.read"),
+      environmentRequirement("read", "environmentId")
+    ),
+  }),
   (c) => dispatch(c, handleGetEnvironmentSettings)
 );
 integrationSettingsRoutes.put(

@@ -102,6 +102,7 @@ export async function handleCreateSession(
 
   const targetAuthorizationError = await authorizeSessionTarget(ctx, {
     teamId: null,
+    ownerTeamId: body.teamId ?? null,
     environmentId: body.environmentId,
     repositories: (body.repositories ?? (repositoryContext ? [repositoryContext] : [])).map(
       (repository) => ({ owner: repository.repoOwner, name: repository.repoName })

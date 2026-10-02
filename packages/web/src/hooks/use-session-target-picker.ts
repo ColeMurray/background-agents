@@ -178,7 +178,7 @@ export function useSessionTargetPicker({
     environments,
     loading: loadingEnvironments,
     error: environmentsError,
-  } = useEnvironments(teamId);
+  } = useEnvironments({ teamId });
   const [draftTarget, setSessionTarget] = useState<SessionTarget | null>(null);
   const [selectedBranch, updateSelectedBranch] = useState<string>("");
   const [selectionContext, setSelectionContext] = useState({ teamId, defaultEnvironmentId });

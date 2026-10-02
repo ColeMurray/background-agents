@@ -7,6 +7,7 @@ import {
 } from "@open-inspect/shared/rbac";
 import { authenticate, isAuthError } from "../auth/authenticate";
 import type { Principal } from "../auth/principal";
+import { evaluateOwnedResourceAdmission } from "../authorization/owned-resource-admission";
 import type {
   AuthorizationDecisionRequirement,
   RouteAuthorizationDecision,
@@ -350,7 +351,9 @@ function enforceStaticServicePermissionCeiling(
         ? requirement.permission
         : requirement.kind === "session"
           ? legacyPermissionForAction(requirement.action)
-          : null;
+          : requirement.kind === "environment"
+            ? (`environments.${requirement.need}` as const)
+            : null;
     if (permission && !serviceAllowsPermission(principal.service, permission)) {
       return authorizationDenial(
         json({ error: "Forbidden", code: "service_capability_required" }, 403),
@@ -536,6 +539,35 @@ async function enforcePermissionRequirement(
     "Forbidden",
     requirement.permission
   );
+}
+
+async function enforceEnvironmentRequirement(
+  requirement: Extract<RouteAuthorizationRequirement, { kind: "environment" }>,
+  params: RouteParams,
+  ctx: RequestContext,
+  evidence: AuthorizationEvidence
+): Promise<AuthorizationFailure | null> {
+  try {
+    const result = await evaluateOwnedResourceAdmission(requirement, params, ctx);
+    if (result.kind === "error") {
+      return { response: json(result.response, result.status) };
+    }
+    if (result.kind === "denied") {
+      return authorizationDenial(
+        json(result.response, result.status),
+        evidence,
+        requirement,
+        result.reasonCode,
+        result.reason,
+        result.failedPermission
+      );
+    }
+    evidence.requirements.push(requirement);
+    if (result.effectivePermission) evidence.effectivePermissions.push(result.effectivePermission);
+    return null;
+  } catch {
+    return authorizationUnavailable();
+  }
 }
 
 async function enforceAutomationRequirement(
@@ -813,6 +845,9 @@ async function enforceRouteAuthorization(
           break;
         case "automation":
           failure = await enforceAutomationRequirement(requirement, params, ctx, evidence);
+          break;
+        case "environment":
+          failure = await enforceEnvironmentRequirement(requirement, params, ctx, evidence);
           break;
         case "team":
           failure = await enforceTeamRequirement(requirement, params, ctx, evidence);

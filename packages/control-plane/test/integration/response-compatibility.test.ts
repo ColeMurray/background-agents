@@ -192,9 +192,14 @@ describe("ordinary HTTP response compatibility", () => {
 
   it("maps a handler HttpError to JSON while retaining common headers", async () => {
     const traceId = "http-error-trace";
+    await env.DB.prepare(
+      `INSERT INTO environments
+        (id, name, prebuild_enabled, created_at, updated_at)
+       VALUES ('env_empty_compat', 'Empty compatibility environment', 0, 1, 1)`
+    ).run();
     const body = JSON.stringify({
-      environmentId: `missing-${crypto.randomUUID()}`,
-      title: "Missing environment compatibility request",
+      environmentId: "env_empty_compat",
+      title: "Empty environment compatibility request",
       model: "anthropic/claude-haiku-4-5",
     });
     const request = await signedRequest({
@@ -208,9 +213,9 @@ describe("ordinary HTTP response compatibility", () => {
 
     const response = await fetchWorker(request);
 
-    expect(response.status).toBe(404);
+    expect(response.status).toBe(500);
     await expect(response.json()).resolves.toEqual({
-      error: expect.stringMatching(/^Environment not found: missing-/),
+      error: "Environment has no repositories: env_empty_compat",
     });
     expectCommonResponseHeaders(response, traceId);
   });

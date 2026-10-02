@@ -27,6 +27,8 @@ const { getAccessToken } = vi.hoisted(() => ({
   })),
 }));
 
+const environmentMocks = vi.hoisted(() => ({ getById: vi.fn() }));
+
 vi.mock("./auth/user/runtime", () => ({
   getUserAuth: vi.fn(() => ({
     api: {
@@ -54,6 +56,12 @@ vi.mock("./db/session-index", () => ({
 
 vi.mock("./db/user-store", () => ({
   UserStore: vi.fn(),
+}));
+
+vi.mock("./db/environments", () => ({
+  EnvironmentStore: vi.fn().mockImplementation(function () {
+    return environmentMocks;
+  }),
 }));
 
 vi.mock("./session/skill-resolution", async (importOriginal) => {
@@ -91,6 +99,7 @@ describe("handleCreateSession D1 ordering", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     vi.spyOn(TeamStore.prototype, "isActive").mockResolvedValue(true);
+    environmentMocks.getById.mockResolvedValue({ id: "env_1", owner_team_id: null });
     vi.mocked(resolveManagedSkills).mockResolvedValue({
       selection: { mode: "all" },
       resolverVersion: 1,
@@ -350,6 +359,31 @@ describe("handleCreateSession D1 ordering", () => {
         userId: "user-1",
       })
     );
+  });
+
+  it("rejects a service actor's team environment for a private workspace destination before resolution/writes", async () => {
+    environmentMocks.getById.mockResolvedValue({ id: "env_1", owner_team_id: "team_a" });
+    vi.spyOn(TeamMembershipStore.prototype, "listForUser").mockResolvedValue(
+      new Map([["team_a", "member"]])
+    );
+    const create = vi.fn();
+    vi.mocked(SessionIndexStore).mockImplementation(function () {
+      return { create } as never;
+    });
+    const initFetch = vi.fn();
+    const response = await createSessionRequestWithBody(createEnv(initFetch), {
+      environmentId: "env_1",
+      teamId: null,
+      visibility: "private",
+    });
+    expect(response.status).toBe(409);
+    await expect(response.json()).resolves.toMatchObject({
+      code: "environment_team_mismatch",
+      reason_code: "environment_team_mismatch",
+    });
+    expect(resolveEnvironmentTarget).not.toHaveBeenCalled();
+    expect(create).not.toHaveBeenCalled();
+    expect(initFetch).not.toHaveBeenCalled();
   });
 
   it.each([

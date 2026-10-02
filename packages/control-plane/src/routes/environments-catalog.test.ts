@@ -59,7 +59,15 @@ const repositoriesById = new Map<string, EnvironmentRepositoryRow[]>(
     })),
   ])
 );
-const fullCatalog = catalog.map((row) => toEnvironment(row, repositoriesById.get(row.id) ?? []));
+const READER = { canRead: true, canManage: false, canUse: false };
+const ADMIN_CAPABILITIES = { canRead: true, canManage: true, canUse: true };
+function listed(rows: EnvironmentRow[], capabilities = READER) {
+  return rows.map((row) => ({
+    ...toEnvironment(row, repositoriesById.get(row.id) ?? []),
+    capabilities,
+  }));
+}
+const fullCatalog = listed(catalog);
 const handleRequest = createTestRequestHandler([environmentRoutes]);
 let environment: Env;
 
@@ -111,18 +119,19 @@ describe("environment catalog team scope", () => {
     vi.restoreAllMocks();
   });
 
-  it.each([null, TEAM_ID, "team_other"])(
-    "returns only fully covered targets, regardless of environment owner %s",
+  it.each([null, TEAM_ID])(
+    "returns only fully covered targets for environment owner %s",
     async (ownerTeamId) => {
+      const owned = catalog.map((row) => ({ ...row, owner_team_id: ownerTeamId }));
       vi.mocked(EnvironmentStore.prototype.list).mockResolvedValue({
-        environments: catalog.map((row) => ({ ...row, owner_team_id: ownerTeamId })),
+        environments: owned,
         total: catalog.length,
       });
 
       const response = await list();
 
       expect(response.status).toBe(200);
-      expect(await response.json()).toEqual({ environments: [fullCatalog[0]], total: 1 });
+      expect(await response.json()).toEqual({ environments: listed(owned.slice(0, 1)), total: 1 });
       expect(TeamMembershipStore.prototype.listForUser).toHaveBeenCalledWith("user-1");
       expect(TeamRepositoryGrantStore.prototype.listForTeam).toHaveBeenCalledExactlyOnceWith(
         TEAM_ID
@@ -133,6 +142,27 @@ describe("environment catalog team scope", () => {
       expect(requestAudit.auditRouteAuthorizationDecision).not.toHaveBeenCalled();
     }
   );
+
+  it("excludes covered targets another team owns, even when the viewer can read them", async () => {
+    // Sessions for one team reject another team's environment, so the catalog must too.
+    vi.mocked(TeamMembershipStore.prototype.listForUser).mockResolvedValue(
+      new Map([
+        [TEAM_ID, "member"],
+        ["team_other", "member"],
+      ])
+    );
+    vi.mocked(EnvironmentStore.prototype.list).mockResolvedValue({
+      environments: catalog.map((row) => ({ ...row, owner_team_id: "team_other" })),
+      total: catalog.length,
+    });
+
+    const response = await list();
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ environments: [], total: 0 });
+    expect(TeamRepositoryGrantStore.prototype.listForTeam).toHaveBeenCalledExactlyOnceWith(TEAM_ID);
+    expect(requestAudit.auditRouteAuthorizationDecision).not.toHaveBeenCalled();
+  });
 
   it("includes a multi-repository target only when every numeric ID is granted", async () => {
     vi.mocked(TeamRepositoryGrantStore.prototype.listForTeam).mockResolvedValue([
@@ -171,7 +201,8 @@ describe("environment catalog team scope", () => {
       total: catalog.length,
     });
     expect(TeamStore.prototype.isActive).not.toHaveBeenCalled();
-    expect(TeamMembershipStore.prototype.listForUser).not.toHaveBeenCalled();
+    // The only membership lookup is the viewer snapshot for read filtering, not a team gate.
+    expect(TeamMembershipStore.prototype.listForUser).toHaveBeenCalledOnce();
     expect(TeamRepositoryGrantStore.prototype.listForTeam).not.toHaveBeenCalled();
   });
 
@@ -216,8 +247,12 @@ describe("environment catalog team scope", () => {
       });
       vi.mocked(TeamMembershipStore.prototype.listForUser).mockResolvedValue(new Map());
 
-      expect(await (await list()).json()).toEqual({ environments: [fullCatalog[0]], total: 1 });
-      expect(TeamMembershipStore.prototype.listForUser).not.toHaveBeenCalled();
+      expect(await (await list()).json()).toEqual({
+        environments: listed(catalog.slice(0, 1), ADMIN_CAPABILITIES),
+        total: 1,
+      });
+      // The bypass skips the team membership gate; the one lookup is the read-filter viewer.
+      expect(TeamMembershipStore.prototype.listForUser).toHaveBeenCalledOnce();
 
       vi.mocked(TeamStore.prototype.isActive).mockResolvedValue(false);
       const archivedResponse = await list();
@@ -265,7 +300,7 @@ describe("environment catalog team scope", () => {
       }));
 
       expect(await (await list("")).json()).toEqual({
-        environments: fullCatalog,
+        environments: listed(catalog, { canRead: true, canManage: false, canUse: true }),
         total: catalog.length,
       });
       vi.mocked(EnvironmentStore.prototype.list).mockClear();
@@ -301,6 +336,9 @@ describe("environment catalog team scope", () => {
     }));
 
     expect(await (await list()).json()).toEqual({ environments: [fullCatalog[0]], total: 1 });
-    expect(TeamMembershipStore.prototype.listForUser).toHaveBeenCalledExactlyOnceWith("user-1");
+    // Both the team gate and the read-filter viewer resolve the canonical actor's memberships.
+    const lookups = vi.mocked(TeamMembershipStore.prototype.listForUser).mock.calls;
+    expect(lookups.length).toBeGreaterThan(0);
+    expect(lookups.every(([userId]) => userId === "user-1")).toBe(true);
   });
 });

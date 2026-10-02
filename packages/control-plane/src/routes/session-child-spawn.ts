@@ -75,6 +75,18 @@ export async function handleSpawnChild(
 
   const parentSession = await sessionStore.get(parentId);
   const parentEnvironmentId = parentSession?.environmentId ?? null;
+  // Reject incompatible inherited targets before settings resolution or child admission.
+  const targetAuthorizationError = await authorizeSessionTarget(ctx, {
+    teamId: null,
+    ownerTeamId: parentSession?.ownerTeamId ?? null,
+    environmentId: parentEnvironmentId,
+    repositories:
+      parentSession?.repoOwner && parentSession.repoName
+        ? [{ owner: parentSession.repoOwner, name: parentSession.repoName }]
+        : [],
+  });
+  if (targetAuthorizationError) return targetAuthorizationError;
+
   // Children inherit the parent's settings scope: its primary repo plus, for
   // environment-launched parents, that environment's overrides (design §13.5).
   const resolvedChildSandboxSettings = parentSession
@@ -158,13 +170,6 @@ export async function handleSpawnChild(
 
   const inheritedRepositories =
     parentRepoOwner && parentRepoName ? [{ owner: parentRepoOwner, name: parentRepoName }] : [];
-  const targetAuthorizationError = await authorizeSessionTarget(ctx, {
-    teamId: null,
-    environmentId: parentEnvironmentId,
-    repositories: inheritedRepositories,
-  });
-  if (targetAuthorizationError) return targetAuthorizationError;
-
   const teamId = parentSession?.ownerTeamId ?? null;
   let childRepoId = spawnContext.repoId;
   if (teamId && parentRepoOwner && parentRepoName) {

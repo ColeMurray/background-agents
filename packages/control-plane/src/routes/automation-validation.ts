@@ -174,7 +174,8 @@ export function getEnvironmentSelection(body: {
 
 /**
  * Verify every selected environment exists — a selection must not silently
- * point at deleted environments.
+ * point at deleted environments. Automations are workspace-owned, so team-owned
+ * environments are treated as missing rather than revealed.
  *
  * @throws TargetSelectionError naming every missing environment.
  */
@@ -185,7 +186,9 @@ export async function resolveEnvironmentSelection(
   if (environmentIds.length === 0) return;
   const store = new EnvironmentStore(db);
   const found = await Promise.all(environmentIds.map((id) => store.getById(id)));
-  const missing = environmentIds.filter((_, index) => !found[index]);
+  const missing = environmentIds.filter(
+    (_, index) => !found[index] || found[index].owner_team_id !== null
+  );
   if (missing.length > 0) {
     throw new TargetSelectionError(`Environment not found: ${missing.join(", ")}`);
   }

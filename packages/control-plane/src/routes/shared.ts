@@ -48,6 +48,7 @@ export type RouteAuthorizationRequirement =
     }
   | { kind: "team"; teamIdParam: string; need: keyof TeamCapabilities | "read" | "member" }
   | { kind: "team"; teamIdParam: string; need: "removeMember"; targetUserIdParam: string }
+  | { kind: "environment"; idParam: string; need: "read" | "manage" | "use" }
   | { kind: "session"; sessionIdParam: string; action: SessionAction; enforceAlways?: boolean };
 
 type BotServiceName = Exclude<ServiceName, "web">;
@@ -148,6 +149,7 @@ function auditsAllowedRequirement(requirement: RouteAuthorizationRequirement): b
   if (requirement.kind === "team") {
     return requirement.need !== "read" && requirement.need !== "member";
   }
+  if (requirement.kind === "environment") return requirement.need !== "read";
   if (requirement.kind === "permission") {
     return AUDITED_ALLOWED_PERMISSIONS.has(requirement.permission);
   }
@@ -185,6 +187,26 @@ export function requireAutomation(
     allOf: [{ kind: "automation", operation, automationIdParam }],
     service: { kind: "deny" },
     auditAllowed: true,
+  };
+}
+
+export function environmentRequirement(
+  need: "read" | "manage" | "use",
+  idParam = "id"
+): Extract<RouteAuthorizationRequirement, { kind: "environment" }> {
+  return { kind: "environment", idParam, need };
+}
+
+export function requireEnvironment(
+  need: "read" | "manage" | "use",
+  idParam = "id",
+  options?: { actorlessGrants?: readonly ActorlessServiceGrant[] }
+): RouteAuthorization {
+  return {
+    kind: "active-user",
+    allOf: [environmentRequirement(need, idParam)],
+    service: need === "manage" ? { kind: "deny" } : { kind: "actor", ...options },
+    auditAllowed: need !== "read",
   };
 }
 

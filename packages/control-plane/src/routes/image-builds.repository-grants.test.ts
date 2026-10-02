@@ -37,8 +37,13 @@ vi.mock("../image-builds/save-hooks", () => ({
   scheduleImageBuildOnSave: mocks.scheduleImageBuildOnSave,
 }));
 
+// Environment triggers also admit through environments.manage (lead-only on team-owned rows).
 const env = () =>
-  createRepositoryGrantEnv(["repositories.images.manage", "environments.images.manage"]);
+  createRepositoryGrantEnv([
+    "repositories.images.manage",
+    "environments.images.manage",
+    "environments.manage",
+  ]);
 const request = createRepositoryGrantRequest(imageBuildRoutes, env);
 const repositoryImageWrites = [
   ["POST", "/image-builds/trigger/repo/acme/repo", undefined],
@@ -95,7 +100,7 @@ describe("image build repository-bearing writes", () => {
   });
   it("denies an environment trigger when its persisted owner lacks grants", async () => {
     vi.mocked(TeamMembershipStore.prototype.listForUser).mockResolvedValue(
-      new Map([["owner-team", "member"]])
+      new Map([["owner-team", "lead"]])
     );
     vi.mocked(TeamRepositoryGrantStore.prototype.listForTeam).mockImplementation(async (teamId) =>
       teamId === "team-1" ? [{ grant_kind: "installation", repo_external_id: null }] : []
@@ -154,7 +159,7 @@ describe("image build repository-bearing writes", () => {
 
   it("checks every current repository against the environment owner regardless of persisted IDs", async () => {
     vi.mocked(TeamMembershipStore.prototype.listForUser).mockResolvedValue(
-      new Map([["owner-team", "member"]])
+      new Map([["owner-team", "lead"]])
     );
     vi.mocked(EnvironmentStore.prototype.getRepositoriesForEnvironment).mockResolvedValue([
       environmentRepository,
@@ -185,7 +190,7 @@ describe("image build repository-bearing writes", () => {
 
   it("rejects a reused environment repository name when only the persisted old ID is granted", async () => {
     vi.mocked(TeamMembershipStore.prototype.listForUser).mockResolvedValue(
-      new Map([["owner-team", "member"]])
+      new Map([["owner-team", "lead"]])
     );
     mocks.checkRepositoryAccess.mockResolvedValue({
       repoId: 456,
@@ -204,7 +209,7 @@ describe("image build repository-bearing writes", () => {
 
   it("allows the current environment repository ID when the persisted ID is stale", async () => {
     vi.mocked(TeamMembershipStore.prototype.listForUser).mockResolvedValue(
-      new Map([["owner-team", "member"]])
+      new Map([["owner-team", "lead"]])
     );
     mocks.checkRepositoryAccess.mockResolvedValue({
       repoId: 456,
@@ -223,7 +228,7 @@ describe("image build repository-bearing writes", () => {
 
   it("rejects a disappeared environment repository despite its persisted ID and grant", async () => {
     vi.mocked(TeamMembershipStore.prototype.listForUser).mockResolvedValue(
-      new Map([["owner-team", "member"]])
+      new Map([["owner-team", "lead"]])
     );
     mocks.checkRepositoryAccess.mockResolvedValue(null);
     vi.mocked(TeamRepositoryGrantStore.prototype.listForTeam).mockResolvedValue([
@@ -234,18 +239,20 @@ describe("image build repository-bearing writes", () => {
     expect(mocks.triggerBuild).not.toHaveBeenCalled();
   });
 
-  it("allows an environment owner-team member with only environments.images.manage", async () => {
+  it("allows an environment owner-team lead with only environment permissions", async () => {
     vi.mocked(TeamMembershipStore.prototype.listForUser).mockResolvedValue(
       new Map([
         ["team-1", "member"],
-        ["owner-team", "member"],
+        ["owner-team", "lead"],
       ])
     );
     vi.mocked(TeamRepositoryGrantStore.prototype.listForTeam).mockImplementation(async (teamId) =>
       teamId === "owner-team" ? [{ grant_kind: "repository", repo_external_id: 123 }] : []
     );
     const environment = env();
-    environment.DB = authorizationDatabase({ permissions: ["environments.images.manage"] });
+    environment.DB = authorizationDatabase({
+      permissions: ["environments.images.manage", "environments.manage"],
+    });
     expect(
       (await request("/image-builds/trigger/environment/env-1", "POST", undefined, environment))
         .status
@@ -253,6 +260,25 @@ describe("image build repository-bearing writes", () => {
     expect(mocks.triggerBuild).toHaveBeenCalledOnce();
     expect(TeamRepositoryGrantStore.prototype.listForTeam).toHaveBeenCalledWith("owner-team");
     expect(TeamRepositoryGrantStore.prototype.listForTeam).not.toHaveBeenCalledWith("team-1");
+  });
+
+  it("denies an owner-team member without the lead role before SCM access", async () => {
+    vi.mocked(TeamMembershipStore.prototype.listForUser).mockResolvedValue(
+      new Map([["owner-team", "member"]])
+    );
+    vi.mocked(TeamRepositoryGrantStore.prototype.listForTeam).mockResolvedValue([
+      { grant_kind: "installation", repo_external_id: null },
+    ]);
+    const response = await request("/image-builds/trigger/environment/env-1", "POST");
+
+    expect(response.status).toBe(403);
+    await expect(response.json()).resolves.toEqual({
+      error: "Forbidden",
+      code: "environment_action_denied",
+      reason_code: "not_owner_or_lead",
+    });
+    expect(mocks.checkRepositoryAccess).not.toHaveBeenCalled();
+    expect(mocks.triggerBuild).not.toHaveBeenCalled();
   });
 
   it.each(["off", "shadow", "on"] as const)(
@@ -270,12 +296,9 @@ describe("image build repository-bearing writes", () => {
         environment
       );
 
-      expect(response.status).toBe(403);
-      await expect(response.json()).resolves.toEqual({
-        error: "Forbidden",
-        code: "not_member",
-        reason_code: "not_member",
-      });
+      // Team-owned environments are invisible to nonmembers.
+      expect(response.status).toBe(404);
+      await expect(response.json()).resolves.toEqual({ error: "Environment not found" });
       expect(EnvironmentStore.prototype.getRepositoriesForEnvironment).not.toHaveBeenCalled();
       expect(mocks.checkRepositoryAccess).not.toHaveBeenCalled();
       expect(TeamRepositoryGrantStore.prototype.listForTeam).not.toHaveBeenCalled();
@@ -289,7 +312,7 @@ describe("image build repository-bearing writes", () => {
       { grant_kind: "repository", repo_external_id: 123 },
     ]);
 
-    expect((await request("/image-builds/trigger/environment/env-1", "POST")).status).toBe(403);
+    expect((await request("/image-builds/trigger/environment/env-1", "POST")).status).toBe(404);
     expect(mocks.checkRepositoryAccess).not.toHaveBeenCalled();
     expect(mocks.triggerBuild).not.toHaveBeenCalled();
   });
@@ -302,7 +325,7 @@ describe("image build repository-bearing writes", () => {
       { grant_kind: "installation", repo_external_id: null },
     ]);
 
-    expect((await request("/image-builds/trigger/environment/env-1", "POST")).status).toBe(403);
+    expect((await request("/image-builds/trigger/environment/env-1", "POST")).status).toBe(404);
     expect(mocks.checkRepositoryAccess).not.toHaveBeenCalled();
     expect(mocks.triggerBuild).not.toHaveBeenCalled();
   });
@@ -342,8 +365,10 @@ describe.each(["off", "shadow", "on"] as const)(
       }
     );
 
-    it("preserves workspace-owned trigger with only its existing custom-role permission", async () => {
-      environment.DB = authorizationDatabase({ permissions: ["environments.images.manage"] });
+    it("preserves workspace-owned trigger with only its custom-role environment permissions", async () => {
+      environment.DB = authorizationDatabase({
+        permissions: ["environments.images.manage", "environments.manage"],
+      });
       vi.mocked(TeamMembershipStore.prototype.listForUser).mockResolvedValue(new Map());
       vi.mocked(TeamRepositoryGrantStore.prototype.listTeamsForRepository).mockResolvedValue([]);
       vi.mocked(EnvironmentStore.prototype.getById).mockResolvedValue({
@@ -355,7 +380,8 @@ describe.each(["off", "shadow", "on"] as const)(
         (await request("/image-builds/trigger/environment/env-1", "POST", undefined, environment))
           .status
       ).toBe(200);
-      expect(TeamMembershipStore.prototype.listForUser).not.toHaveBeenCalled();
+      // Only admission's membership snapshot; the handler's owner-team check is skipped.
+      expect(TeamMembershipStore.prototype.listForUser).toHaveBeenCalledOnce();
       expect(TeamRepositoryGrantStore.prototype.listForTeam).not.toHaveBeenCalled();
       expect(TeamRepositoryGrantStore.prototype.listTeamsForRepository).not.toHaveBeenCalled();
     });

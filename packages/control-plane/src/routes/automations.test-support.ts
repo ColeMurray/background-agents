@@ -210,7 +210,11 @@ export function applyMockDefaults(): void {
     invocationId: "inv-1",
     runs: [{ id: "run-1" }],
   });
-  mockEnvironmentStore.getById.mockResolvedValue({ id: "env_1", name: "Fullstack" });
+  mockEnvironmentStore.getById.mockResolvedValue({
+    id: "env_1",
+    name: "Fullstack",
+    owner_team_id: null,
+  });
   mockEnvironmentStore.getRepositoriesForEnvironment.mockResolvedValue([]);
   mockProviderAccountStore.getById.mockResolvedValue({
     id: "0123456789abcdef0123456789abcdef",

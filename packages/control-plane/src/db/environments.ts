@@ -64,6 +64,7 @@ export function toEnvironment(
 ): Environment {
   return {
     id: row.id,
+    ownerTeamId: row.owner_team_id,
     name: row.name,
     description: row.description,
     prebuildEnabled: row.prebuild_enabled === 1,
@@ -125,21 +126,23 @@ export class EnvironmentStore {
   }
 
   /**
-   * Look up an environment by name, case-insensitively (names are unique under
-   * lower(name)). Used to answer the uniqueness pre-check with a 409 before the
-   * insert would trip the unique index.
+   * Look up a case-insensitive name within its exact team or workspace scope.
+   * Used to answer the uniqueness pre-check before the insert trips the index.
    */
-  async getByName(name: string): Promise<EnvironmentRow | null> {
+  async getByName(name: string, teamId: string | null = null): Promise<EnvironmentRow | null> {
     const row = await this.db
-      .prepare("SELECT * FROM environments WHERE lower(name) = lower(?)")
-      .bind(name)
+      .prepare("SELECT * FROM environments WHERE lower(name) = lower(?) AND owner_team_id IS ?")
+      .bind(name, teamId)
       .first<EnvironmentRow>();
     return row ? withValidatedOwnerTeam(row) : null;
   }
 
-  async list(): Promise<{ environments: EnvironmentRow[]; total: number }> {
+  async list(teamId?: string | null): Promise<{ environments: EnvironmentRow[]; total: number }> {
     const result = await this.db
-      .prepare("SELECT * FROM environments ORDER BY created_at DESC")
+      .prepare(
+        `SELECT * FROM environments ${teamId === undefined ? "" : "WHERE owner_team_id IS ?"} ORDER BY created_at DESC`
+      )
+      .bind(...(teamId === undefined ? [] : [teamId]))
       .all<EnvironmentRow>();
     const environments = (result.results || []).map(withValidatedOwnerTeam);
     return { environments, total: environments.length };

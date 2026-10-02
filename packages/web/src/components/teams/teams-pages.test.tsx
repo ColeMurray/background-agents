@@ -57,6 +57,9 @@ vi.mock("./team-repositories", () => ({
     return <p>Team repository grants</p>;
   },
 }));
+vi.mock("./team-environments", () => ({
+  TeamEnvironments: ({ teamId }: { teamId: string }) => <p>Environments for {teamId}</p>,
+}));
 vi.mock("./team-secrets", () => ({
   TeamSecrets: (props: { teamId: string; capabilities?: TeamResponse["capabilities"] }) => {
     mocks.secrets(props);
@@ -200,6 +203,7 @@ describe("Team page tabs", () => {
     expect(tabs.queryByRole("button", { name: "Activity" })).not.toBeInTheDocument();
     expect(tabs.queryByRole("button", { name: "Repositories" })).not.toBeInTheDocument();
     expect(tabs.queryByRole("button", { name: "Secrets" })).not.toBeInTheDocument();
+    expect(tabs.queryByRole("button", { name: "Environments" })).not.toBeInTheDocument();
     expect(tabs.queryByRole("button", { name: "Settings" })).not.toBeInTheDocument();
     expect(screen.getByText("Team member table")).toBeInTheDocument();
     expect(screen.queryByText("Team session buckets")).not.toBeInTheDocument();
@@ -224,6 +228,21 @@ describe("Team page tabs", () => {
     expect(screen.getByText("Team repository grants")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Members" }));
     expect(screen.getByText("Team member table")).toBeInTheDocument();
+  });
+
+  it("mounts scoped resources and unmounts them when membership disappears", () => {
+    mocks.mine = [team];
+    mocks.teams = [
+      { ...team, capabilities: { ...denied, canEditMetadata: true, canManageSecrets: true } },
+    ];
+    const view = render(<TeamPage slug="design" />);
+    const tabs = within(screen.getByRole("navigation", { name: "Team tabs" }));
+    fireEvent.click(tabs.getByRole("button", { name: "Environments" }));
+    expect(screen.getByText("Environments for team_design")).toBeInTheDocument();
+    mocks.mine = [];
+    view.rerender(<TeamPage slug="design" />);
+    expect(screen.queryByText("Environments for team_design")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Environments" })).not.toBeInTheDocument();
   });
 
   it.each(["owner", "administrator"])(
@@ -331,6 +350,7 @@ describe("Team page tabs", () => {
         "Overview",
         "Members",
         "Repositories",
+        "Environments",
         "Secrets",
       ]);
       expect(screen.queryByText("Team secrets editor for team_design")).not.toBeInTheDocument();

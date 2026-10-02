@@ -350,7 +350,11 @@ export function checkEnvironmentAccess(
 ): AccessDecision {
   if (viewer.kind === "service") return checkServiceEnvironmentAccess(viewer, row, action);
   const facts = environmentFacts(viewer, row);
-  return ownedGate(facts) ?? decide(ENVIRONMENT_RULES[action], facts);
+  const rule =
+    row.ownerTeamId === null && action === "manage"
+      ? { permission: "environments.manage" as const }
+      : ENVIRONMENT_RULES[action];
+  return ownedGate(facts) ?? decide(rule, facts);
 }
 
 export function environmentCapabilities(

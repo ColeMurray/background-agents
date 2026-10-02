@@ -31,10 +31,15 @@ export async function PUT(request: NextRequest, { params }: { params: Promise<{ 
 
   try {
     const body = await request.json();
+    const environmentBody = Object.fromEntries(
+      ["name", "description", "prebuildEnabled", "repositories", "channelAssociations"]
+        .filter((field) => body[field] !== undefined)
+        .map((field) => [field, body[field]])
+    );
 
     const response = await controlPlaneUserFetch(`/environments/${encodeURIComponent(id)}`, {
       method: "PUT",
-      body: JSON.stringify(body),
+      body: JSON.stringify(environmentBody),
     });
 
     const data = await response.json();
