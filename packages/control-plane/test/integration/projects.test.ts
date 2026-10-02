@@ -1,3 +1,4 @@
+import { resolvePromptReferences } from "../../src/session/session-references";
 import { createCloudflareEnv } from "../../src/cloudflare/platform";
 import { Scheduler } from "../../src/scheduler/scheduler";
 import { SessionIndexStore } from "../../src/db/session-index";
@@ -800,3 +801,70 @@ it("stores audit identifiers and changed fields without protected project conten
     JSON.parse(results.find((row) => row.action === "project.created")!.metadata_json).after
   ).toEqual({ id: project.id });
 });
+
+it.each([
+  { source: "private", destination: "workspace", otherTeam: false, allowed: false },
+  { source: "private", destination: "private", otherTeam: false, allowed: false },
+  { source: "team", destination: "workspace", otherTeam: false, allowed: false },
+  { source: "team", destination: "team", otherTeam: true, allowed: false },
+  { source: "team", destination: "team", otherTeam: false, allowed: true },
+  { source: "workspace", destination: "private", otherTeam: false, allowed: true },
+] as const)(
+  "checks reference audience $source to $destination (other team: $otherTeam)",
+  async ({ source, destination, otherTeam, allowed }) => {
+    await req("/me/authorization");
+    for (const team of ["team_refs", "team_other"]) {
+      await env.DB.prepare(
+        "INSERT INTO teams (id,slug,name,created_at,updated_at) VALUES (?,?,?,1,1)"
+      )
+        .bind(team, team, team)
+        .run();
+      await env.DB.prepare(
+        "INSERT INTO team_memberships (team_id,user_id,role,created_at) VALUES (?,?,'member',1)"
+      )
+        .bind(team, A)
+        .run();
+    }
+    const store = new SessionIndexStore(env.DB);
+    const base = {
+      repoOwner: null,
+      repoName: null,
+      model: "anthropic/claude-haiku-4-5",
+      reasoningEffort: null,
+      baseBranch: null,
+      status: "created" as const,
+      userId: A,
+      createdAt: 1,
+      updatedAt: 1,
+    };
+    await store.create({
+      ...base,
+      id: "ref-source",
+      title: "Protected title",
+      visibility: source,
+      ownerTeamId: source === "team" ? "team_refs" : null,
+    });
+    await store.create({
+      ...base,
+      id: "ref-destination",
+      title: "Destination",
+      visibility: destination,
+      ownerTeamId: destination === "team" ? (otherTeam ? "team_other" : "team_refs") : null,
+    });
+    const fetch = vi.fn(async () => Response.json({ finalAssistantExcerpt: "Protected answer" }));
+    const result = resolvePromptReferences(
+      env.DB,
+      { fetch },
+      A,
+      "#[Work](session:ref-source)",
+      "ref-destination"
+    );
+    if (allowed) {
+      expect(await result).toContain("Protected answer");
+      expect(fetch).toHaveBeenCalledOnce();
+    } else {
+      await expect(result).rejects.toThrow("audience is incompatible");
+      expect(fetch).not.toHaveBeenCalled();
+    }
+  }
+);

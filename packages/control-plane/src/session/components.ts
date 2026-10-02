@@ -567,7 +567,8 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
         db,
         createSessionRuntimeClientForTrace(env, durableObjectId),
         userId,
-        content
+        content,
+        getPublicSessionId()
       )
   );
 

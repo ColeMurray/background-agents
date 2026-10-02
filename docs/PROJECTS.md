@@ -28,7 +28,10 @@ Type `#` in a prompt to select a readable session. At most three distinct refere
 when the prompt is accepted. Each includes metadata and the latest completed turn's final assistant
 excerpt (at most 2,000 characters), never user prompts, tool output, or a transcript. Each
 serialized summary is bounded to 4,000 characters. Resolution uses the prompt author's canonical
-identity, including in multiplayer sessions, not the session owner's identity.
+identity, including in multiplayer sessions, not the session owner's identity. Expansion also
+requires a compatible destination audience: workspace-visible references or references between
+team-visible sessions owned by the same team. Private cross-session references and unavailable
+lookups remain unexpanded markers; embedded summaries omit project metadata.
 
 ## Context contract
 
