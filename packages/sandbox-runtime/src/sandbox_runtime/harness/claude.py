@@ -202,12 +202,7 @@ class ClaudeHarness:
         self.credential_client = credential_client
         self.environ = environ if environ is not None else os.environ
         self._translator = ClaudeTranslator()
-        self._trajectory = ClaudeTrajectoryLogger(
-            log,
-            self.environ,
-            config.mcp_servers,
-            config.tools.auth_token if config.tools else None,
-        )
+        self._trajectory = ClaudeTrajectoryLogger(log)
         self._client_factory = client_factory
         self._options_factory = options_factory
         self._tool_server_factory = tool_server_factory
@@ -249,7 +244,6 @@ class ClaudeHarness:
         bridge restart budget covers.
         """
         self.credential = await self._resolve_credential()
-        self._trajectory.add_credentials(self.credential.env.values())
         binary = self._binary or bundled_claude_binary()
         self.wrapper_path = write_clean_env_wrapper(
             self.config.config_dir / "bin", mode=self.credential.mode, binary=binary
@@ -258,7 +252,6 @@ class ClaudeHarness:
             self._tool_client = ControlPlaneToolClient(self.config.tools, self.log)
         self._trajectory.diagnostic(
             "claude.open",
-            content_logging=self._trajectory.content_logging,
             auth_mode=self.credential.mode.value,
             config_dir=str(self.config.config_dir),
             workdir=str(self.config.workdir),

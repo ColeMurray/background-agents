@@ -9,7 +9,6 @@ from unittest.mock import MagicMock
 
 from claude_agent_sdk import ResultMessage, StreamEvent
 
-from sandbox_runtime.constants import USER_SECRET_KEYS_ENV_VAR
 from sandbox_runtime.harness import HarnessPrompt, PromptLimits
 from sandbox_runtime.harness.claude import ClaudeHarness, ClaudeHarnessConfig
 
@@ -130,7 +129,6 @@ class Harness:
         oauth_managed = overrides.pop("oauth_managed", False)
         credential_client = overrides.pop("credential_client", None)
         environ = overrides.pop("environ", {"ANTHROPIC_API_KEY": "sk-ant-key", "PATH": "/bin"})
-        environ = {USER_SECRET_KEYS_ENV_VAR: "[]", **environ}
         transcript_exists = overrides.pop("transcript_exists", lambda _id, _dir, _cfg: False)
         self.config = ClaudeHarnessConfig(
             workdir=tmp_path / "repo",

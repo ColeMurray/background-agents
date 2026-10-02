@@ -27,12 +27,10 @@ from claude_agent_sdk import (
 )
 
 from sandbox_runtime.harness import HarnessPrompt, PromptLimits
-from sandbox_runtime.harness.claude_logging import PREVIEW_MAX_BYTES, REDACTED, TRUNCATED
+from sandbox_runtime.harness.claude_logging import PREVIEW_MAX_BYTES, TRUNCATED
 from sandbox_runtime.log_config import JSONFormatter, get_logger
 from tests.claude_fakes import (
-    FakeCredentialClient,
     Harness,
-    Issued,
     _result,
     _run,
     _stream,
@@ -127,7 +125,7 @@ class TestTrajectoryLogging:
         (completed,) = _trajectory_records(caplog, "claude.tool.completed")
         (failed,) = _trajectory_records(caplog, "claude.tool.failed")
         assert [record["call_id"] for record in starts] == ["tu_ok", "tu_error"]
-        assert json.loads(starts[0]["args_preview"])["nested"]["apiKey"] == REDACTED
+        assert json.loads(starts[0]["args_preview"]) == args
         assert completed["call_id"] == "tu_ok" and completed["output_preview"] == "a.txt\nb.txt"
         assert failed["call_id"] == "tu_error" and failed["status"] == "error"
         for record in [*starts, completed, failed]:
@@ -335,59 +333,28 @@ class TestTrajectoryLogging:
         assert records[0]["agent_session_id"] == native_id
         assert records[1]["agent_session_id"] == "sess"
 
-    async def test_redaction_truncation_and_unicode_leave_session_events_untouched(
+    async def test_raw_bounded_unicode_previews_leave_inputs_and_session_events_untouched(
         self, tmp_path: Path, trajectory_log, caplog
     ) -> None:
-        secrets = [
-            "platform-api-secret",
-            "oauth-memory-secret",
-            "sandbox-bearer-secret",
-            "mcp-custom-header-secret",
-            "mcp-custom-env-secret",
-            "private-key-line-one\nprivate-key-line-two",
-            "unknown-sensitive-value",
-        ]
         text = (
-            "\n".join(secrets[:-1])
-            + "\n"
-            + json.dumps({"api_key": secrets[-1]})
-            + "\n"
+            "sentinel\nAuthorization: Bearer raw-token\napi_key=raw-key\n"
             + "\u00e9\U0001f680" * PREVIEW_MAX_BYTES
         )
         args = {
+            "apiKey": "raw-key",
+            "nested": {"password": "raw-password"},
             "command": text,
-            "nested": [{"password": secrets[-1], "accessToken": secrets[-1]}],
-            "env": {"innocent": "uncollected-environment"},
         }
+        original_args = json.dumps(args, ensure_ascii=False)
+        assistant = AssistantMessage(
+            content=[TextBlock(text), ToolUseBlock(id="tu", name="Bash", input=args)],
+            model="m",
+        )
+        result = UserMessage(content=[ToolResultBlock(tool_use_id="tu", content=text)])
         h = Harness(
             tmp_path,
-            turns=[
-                [
-                    AssistantMessage(
-                        content=[TextBlock(text), ToolUseBlock(id="tu", name="Bash", input=args)],
-                        model="m",
-                    ),
-                    UserMessage(content=[ToolResultBlock(tool_use_id="tu", content=text)]),
-                    _result(0.1),
-                ]
-            ],
+            turns=[[assistant, result, _result(0.1)]],
             log=trajectory_log,
-            oauth_managed=True,
-            credential_client=FakeCredentialClient(Issued(secret=secrets[1])),
-            environ={
-                "ANTHROPIC_API_KEY": secrets[0],
-                "SANDBOX_AUTH_TOKEN": secrets[2],
-                "PRIVATE_KEY": secrets[5],
-            },
-            mcp_servers=(
-                {
-                    "name": "external",
-                    "type": "remote",
-                    "url": "https://mcp",
-                    "headers": {"X-Custom": secrets[3]},
-                    "env": {"CUSTOM": secrets[4]},
-                },
-            ),
             client_kwargs={"stderr_on_connect": text},
         )
         await h.harness.open()
@@ -399,17 +366,22 @@ class TestTrajectoryLogging:
             next(event for event in events if event.get("status") == "completed")["output"] == text
         )
         assert next(event for event in events if event["type"] == "token")["content"] == text
+        assert assistant.content[0].text == text and assistant.content[1].input is args
+        assert result.content[0].content == text
+        assert json.dumps(args, ensure_ascii=False) == original_args
         records = _trajectory_records(caplog)
-        serialized = json.dumps(records)
-        for secret in [*secrets, *secrets[5].splitlines(), "uncollected-environment"]:
-            assert secret not in serialized
         previews = [
             value for record in records for key, value in record.items() if key.endswith("_preview")
         ]
         assert len(previews) == 4
         assert all(len(preview.encode("utf-8")) <= PREVIEW_MAX_BYTES for preview in previews)
         assert all(preview.endswith(TRUNCATED) for preview in previews)
-        assert all(REDACTED in preview for preview in previews)
+        assert all("sentinel" in preview and "raw-key" in preview for preview in previews)
+        assert all("Authorization: Bearer raw-token" in preview for preview in previews)
+        assert all("\u00e9\U0001f680" in preview for preview in previews)
+        (started,) = _trajectory_records(caplog, "claude.tool.started")
+        assert '"apiKey": "raw-key"' in started["args_preview"]
+        assert '"password": "raw-password"' in started["args_preview"]
         for record in caplog.records:
             line = JSONFormatter().format(record)
             assert "\n" not in line
@@ -550,13 +522,16 @@ class TestTrajectoryLogging:
         assert not _trajectory_records(caplog, "claude.task." + kind)
         assert "injected-summary" not in json.dumps(_trajectory_records(caplog))
 
-    @pytest.mark.parametrize("failure", ["logger", "serialization"])
-    async def test_logging_failures_do_not_fail_the_turn(
-        self, tmp_path: Path, monkeypatch, failure
-    ) -> None:
+    @pytest.mark.parametrize("failure", ["logger", "serialization", "cyclic"])
+    async def test_logging_failures_do_not_fail_the_turn(self, tmp_path: Path, failure) -> None:
         log = MagicMock()
         if failure == "logger":
             log.info.side_effect = RuntimeError("logging handler failed")
+        args: dict[str, Any] = {"command": "ls"}
+        if failure == "serialization":
+            args["unserializable"] = object()
+        elif failure == "cyclic":
+            args["nested"] = args
         h = Harness(
             tmp_path,
             turns=[
@@ -565,7 +540,7 @@ class TestTrajectoryLogging:
                     AssistantMessage(
                         content=[
                             TextBlock("hello"),
-                            ToolUseBlock(id="tu", name="Bash", input={"command": "ls"}),
+                            ToolUseBlock(id="tu", name="Bash", input=args),
                         ],
                         model="m",
                     ),
@@ -576,12 +551,6 @@ class TestTrajectoryLogging:
             log=log,
             client_kwargs={"stderr_on_connect": "diagnostic"},
         )
-        if failure == "serialization":
-            monkeypatch.setattr(
-                h.harness._trajectory,
-                "_preview",
-                MagicMock(side_effect=ValueError("serialization failed")),
-            )
         await h.harness.open()
         await h.harness.create_session()
         events, outcome = await _run(h.harness)
@@ -593,6 +562,8 @@ class TestTrajectoryLogging:
             "tool_call",
             "step_finish",
         ]
+        if failure != "logger":
+            assert "claude.turn.completed" in [call.args[0] for call in log.info.call_args_list]
 
     async def test_tool_logs_precede_failed_delivery(
         self, tmp_path: Path, trajectory_log, caplog

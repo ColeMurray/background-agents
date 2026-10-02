@@ -113,8 +113,6 @@ export function toRepositoryConfigPayload(
 
 /** `SESSION_CONFIG` env var carrying the serialized {@link SessionConfigPayload}. */
 const SESSION_CONFIG_ENV_VAR = "SESSION_CONFIG";
-/** Platform-owned, keys-only inventory of user secrets preserved in the runtime env. */
-export const USER_SECRET_KEYS_ENV_VAR = "OI_USER_SECRET_KEYS";
 /** Build-mode marker checked as `=== "true"` by the runtime entrypoint. */
 export const IMAGE_BUILD_MODE_ENV_VAR = "IMAGE_BUILD_MODE";
 export const IMAGE_BUILD_EXECUTION_TIMEOUT_ENV_KEY = "OI_IMAGE_BUILD_EXECUTION_TIMEOUT_SECONDS";
@@ -390,20 +388,6 @@ export function buildSandboxEnvVars(
   // are passed through verbatim, though, so a user-supplied VCS_CLONE_TOKEN
   // survives — OpenComputer deliberately preserves one on prebuilt-image
   // boots (see its provider tests).
-
-  envVars[USER_SECRET_KEYS_ENV_VAR] = JSON.stringify(
-    Object.entries(config.userEnvVars ?? {})
-      .filter(
-        ([key, value]) =>
-          key !== USER_SECRET_KEYS_ENV_VAR &&
-          !(
-            value === "1" &&
-            ["OPENAI_OAUTH_MANAGED", "XAI_OAUTH_MANAGED", "ANTHROPIC_OAUTH_MANAGED"].includes(key)
-          ) &&
-          envVars[key] === value
-      )
-      .map(([key]) => key)
-  );
 
   return envVars;
 }
