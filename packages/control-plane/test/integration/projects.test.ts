@@ -14,7 +14,11 @@ import { SELF, env, createExecutionContext } from "cloudflare:test";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanD1Tables } from "./cleanup";
 import { AnalyticsStore } from "../../src/db/analytics-store";
-import { projectViewer, loadProjectContext } from "../../src/session/project-context";
+import {
+  projectViewer,
+  loadProjectContext,
+  loadProjectSnapshotContext,
+} from "../../src/session/project-context";
 import { projectSubscriptionReceipt } from "../../src/db/project-subscription";
 import {
   serviceFetch,
@@ -1178,4 +1182,54 @@ it("resolves and commits canonical repository defaults against current team gran
   } finally {
     resolve.mockRestore();
   }
+});
+
+it("loads large project context with bounded queries and skips live data for snapshots", async () => {
+  const project = await create();
+  const store = new SessionIndexStore(env.DB);
+  for (let i = 0; i < 20; i++)
+    await store.create({
+      id: `context-${i}`,
+      title: `Context ${i}`,
+      repoOwner: null,
+      repoName: null,
+      model: "anthropic/claude-haiku-4-5",
+      reasoningEffort: null,
+      baseBranch: null,
+      status: "created",
+      userId: A,
+      createdAt: 1,
+      updatedAt: 1,
+      projectId: project.id,
+      ownerTeamId: null,
+      visibility: "workspace",
+    });
+  await env.DB.batch(
+    Array.from({ length: 200 }, (_, i) =>
+      env.DB.prepare(
+        "INSERT INTO project_context_sources (id,project_id,source_type,external_id_or_url,role,refresh_policy,provenance,visibility,position,created_by,created_at,updated_at) VALUES (?,?,'session',?,'reference','manual','user','agent',?,?,1,1)"
+      ).bind(`source-${i}`, project.id, `context-${i}`, i, A)
+    )
+  );
+  const viewer = await projectViewer(env.DB, A);
+  const db = sqlDatabase(env.DB);
+  const queries: string[] = [];
+  const measured = {
+    prepare(sql: string) {
+      queries.push(sql);
+      return db.prepare(sql);
+    },
+    batch: db.batch.bind(db),
+  };
+  const snapshot = await loadProjectSnapshotContext(measured, project.id, viewer);
+  expect(queries).toHaveLength(4);
+  expect(queries.join(" ")).not.toContain("session_pull_requests");
+  expect(snapshot?.sources).toHaveLength(20);
+  expect(snapshot?.sessions).toEqual([]);
+  queries.length = 0;
+  const live = await loadProjectContext(measured, project.id, viewer);
+  expect(queries).toHaveLength(6);
+  expect(live?.sessions).toHaveLength(20);
+  expect(live?.sources).toEqual(snapshot?.sources);
+  expect((await buildInjectionBlock(live!)).text).toBe((await buildInjectionBlock(snapshot!)).text);
 });

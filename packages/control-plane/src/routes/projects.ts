@@ -1,6 +1,6 @@
 import { createLogger } from "../logger";
 import { authorizeEnvironmentTarget, authorizeSessionTarget } from "./session-target-authorization";
-import { loadProjectContext } from "../session/project-context";
+import { loadProjectSnapshotContext } from "../session/project-context";
 import { createSessionRuntimeClient } from "../session/runtime-client";
 import { SessionInternalPaths } from "../session/contracts";
 import { visibleSessionsPredicate } from "../db/session-visibility";
@@ -343,7 +343,7 @@ async function handlePins(
 }
 async function handlePreview(_request: Request, _env: Env, _params: object, ctx: RequestContext) {
   const project = admittedProject(ctx).project;
-  const input = await loadProjectContext(ctx.db, project.id, admittedProject(ctx).viewer);
+  const input = await loadProjectSnapshotContext(ctx.db, project.id, admittedProject(ctx).viewer);
   if (!input) return error("Project not found", 404);
   const snapshot = await buildInjectionBlock(input);
   return json({ ...snapshot, bytes: utf8Bytes(snapshot.text) });
