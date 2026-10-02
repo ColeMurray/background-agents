@@ -129,6 +129,7 @@ function sameScope(
 export class MemoryStore {
   constructor(private readonly db: SqlDatabase) {}
 
+  /** Load one live revision with replacement links; callers authorize its returned scope. */
   async get(id: string): Promise<MemoryRecord | null> {
     const row = await this.db
       .prepare(`${MEMORY_SELECT} WHERE m.id = ?`)
@@ -136,18 +137,21 @@ export class MemoryStore {
       .first<MemoryRow>();
     return row ? (await this.withReplacements([memoryFromRow(row)]))[0] : null;
   }
+  /** Read one bounded management page in stable updated-time/ID order. */
   async list(
     scope: MemoryScope,
     ownerUserId: string | null,
     status: MemoryStatus = "active",
-    repoId: number | null = null
+    repoId: number | null = null,
+    offset = 0,
+    limit = 50
   ): Promise<MemoryRecord[]> {
     const predicate = scopePredicate(scope, ownerUserId, repoId);
     const result = await this.db
       .prepare(
-        `${MEMORY_SELECT} WHERE ${predicate.sql} AND m.status = ? ORDER BY m.updated_at DESC, m.id`
+        `${MEMORY_SELECT} WHERE ${predicate.sql} AND m.status = ? ORDER BY m.updated_at DESC, m.id LIMIT ? OFFSET ?`
       )
-      .bind(...predicate.values, status)
+      .bind(...predicate.values, status, Math.min(limit, 101), offset)
       .all<MemoryRow>();
     return this.withReplacements(result.results.map(memoryFromRow));
   }
@@ -174,8 +178,14 @@ export class MemoryStore {
       replacementMemoryIds: replacements.get(record.id) ?? [],
     }));
   }
-  /** Read active candidates across already-authorized scopes; selection budgets are applied later. */
-  async listApplicable(target: MemoryTarget): Promise<MemoryRecord[]> {
+  /**
+   * Read bounded, ordered candidates and aggregate counts in one consistent snapshot.
+   * Facts project metadata only. Each scope returns at most the global record budget
+   * for each type; skipped rows contribute to diagnostics without entering the manifest.
+   */
+  async listApplicable(
+    target: MemoryTarget
+  ): Promise<{ records: MemoryRecord[]; omittedCount: number }> {
     const predicates = [
       ...(target.canonicalUserId && target.includePersonalMemories
         ? [scopePredicate({ type: "personal" }, target.canonicalUserId)]
@@ -187,20 +197,36 @@ export class MemoryStore {
         ? [scopePredicate({ type: "environment", environmentId: target.environmentId }, null)]
         : []),
     ];
-    if (!predicates.length) return [];
-    // A batch gives every scope one consistent catalog snapshot and avoids D1 parameter limits.
-    const results = await this.db.batch<MemoryRow>(
-      predicates.map((predicate) =>
+    if (!predicates.length) return { records: [], omittedCount: 0 };
+    const statements = predicates.flatMap((predicate) => [
+      this.db
+        .prepare(
+          `SELECT COUNT(*) AS total FROM memories m WHERE m.status = 'active' AND ${predicate.sql}`
+        )
+        .bind(...predicate.values),
+      ...(["directive", "fact"] as const).map((type) =>
         this.db
-          .prepare(`${MEMORY_SELECT} WHERE m.status = 'active' AND ${predicate.sql}`)
-          .bind(...predicate.values)
-      )
-    );
-    return [
-      ...new Map(
-        results.flatMap((result) => result.results).map((row) => [row.id, memoryFromRow(row)])
-      ).values(),
-    ];
+          .prepare(
+            `SELECT m.*, r.title, r.description, ${type === "directive" ? "r.content" : "'' AS content"}, r.revision_number
+         FROM memories m JOIN memory_revisions r ON r.id = m.current_revision_id AND r.memory_id = m.id
+         WHERE m.status = 'active' AND ${predicate.sql} AND m.memory_type = ?
+         ORDER BY ${type === "directive" ? "m.created_at" : "m.updated_at DESC"}, m.id LIMIT ?`
+          )
+          .bind(
+            ...predicate.values,
+            type,
+            type === "directive" ? MEMORY_LIMITS.directiveRecords : MEMORY_LIMITS.catalogRecords
+          )
+      ),
+    ]);
+    const results = await this.db.batch<MemoryRow | { total: number }>(statements);
+    let total = 0;
+    const records = new Map<string, MemoryRecord>();
+    results.forEach((result, index) => {
+      if (index % 3 === 0) total += (result.results[0] as { total: number }).total;
+      else for (const row of result.results as MemoryRow[]) records.set(row.id, memoryFromRow(row));
+    });
+    return { records: [...records.values()], omittedCount: total - records.size };
   }
   /** Missing preferences opt into personal context; existing session manifests are unaffected. */
   async getPreferences(userId: string): Promise<MemoryPreferences> {

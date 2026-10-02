@@ -84,7 +84,8 @@ function MemoryCollection({ scope }: { scope: MemoryScope }) {
   const focused = useMemory(params.get("memoryId"));
   const [selectedStatus, setStatus] = useState<MemoryStatus | null>(null);
   const status = selectedStatus ?? focused.data?.memory.status ?? "active";
-  const { data, isLoading, error, mutate } = useMemories(scope, status);
+  const [offset, setOffset] = useState(0);
+  const { data, isLoading, error, mutate } = useMemories(scope, status, offset);
   const [editor, setEditor] = useState<{ record?: MemoryView; supersedes?: string } | null>(null);
   const [history, setHistory] = useState<string | null>(params.get("memoryId"));
   const [archive, setArchive] = useState<MemoryView | null>(null);
@@ -147,6 +148,7 @@ function MemoryCollection({ scope }: { scope: MemoryScope }) {
               size="sm"
               onClick={() => {
                 setStatus(value);
+                setOffset(0);
                 setEditor(null);
               }}
             >
@@ -160,6 +162,28 @@ function MemoryCollection({ scope }: { scope: MemoryScope }) {
           </Button>
         )}
       </div>
+      <nav className="flex gap-2" aria-label="Memory pages">
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          disabled={offset === 0 || isLoading}
+          onClick={() => setOffset(Math.max(0, offset - 50))}
+        >
+          Previous page
+        </Button>
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          disabled={data?.nextOffset == null || isLoading}
+          onClick={() => {
+            if (data?.nextOffset != null) setOffset(data.nextOffset);
+          }}
+        >
+          Next page
+        </Button>
+      </nav>
       {editor && (
         <MemoryEditor
           key={editor.record?.currentRevisionId ?? editor.supersedes ?? "new"}

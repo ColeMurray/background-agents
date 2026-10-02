@@ -35,6 +35,12 @@ CREATE TABLE memories (
 CREATE INDEX idx_memories_personal ON memories(owner_user_id, status) WHERE scope_type = 'personal';
 CREATE INDEX idx_memories_repository ON memories(lower(repo_owner), lower(repo_name), status) WHERE scope_type = 'repository';
 CREATE INDEX idx_memories_environment ON memories(environment_id, status) WHERE scope_type = 'environment';
+CREATE INDEX idx_memories_personal_directive_selection ON memories(owner_user_id, created_at, id) WHERE scope_type = 'personal' AND status = 'active' AND memory_type = 'directive';
+CREATE INDEX idx_memories_personal_fact_selection ON memories(owner_user_id, updated_at DESC, id) WHERE scope_type = 'personal' AND status = 'active' AND memory_type = 'fact';
+CREATE INDEX idx_memories_repository_directive_selection ON memories(lower(repo_owner), lower(repo_name), repo_id, created_at, id) WHERE scope_type = 'repository' AND status = 'active' AND memory_type = 'directive';
+CREATE INDEX idx_memories_repository_fact_selection ON memories(lower(repo_owner), lower(repo_name), repo_id, updated_at DESC, id) WHERE scope_type = 'repository' AND status = 'active' AND memory_type = 'fact';
+CREATE INDEX idx_memories_environment_directive_selection ON memories(environment_id, created_at, id) WHERE scope_type = 'environment' AND status = 'active' AND memory_type = 'directive';
+CREATE INDEX idx_memories_environment_fact_selection ON memories(environment_id, updated_at DESC, id) WHERE scope_type = 'environment' AND status = 'active' AND memory_type = 'fact';
 CREATE INDEX idx_memories_author_session ON memories(author_session_id, status);
 CREATE INDEX idx_memories_supersedes ON memories(supersedes_memory_id);
 

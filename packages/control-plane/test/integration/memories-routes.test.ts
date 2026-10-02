@@ -68,6 +68,24 @@ async function session(id: string, include = true, parent?: string) {
 
 describe("memory HTTP lifecycle and session boundaries", () => {
   beforeEach(cleanD1Tables);
+  it("paginates management records and rejects unbounded page sizes", async () => {
+    for (let i = 0; i < 3; i++) await createMemory();
+    const first = (await (await request("/memories?limit=2")).json()) as {
+      memories: { id: string }[];
+      nextOffset: number;
+    };
+    expect(first.memories).toHaveLength(2);
+    expect(first.nextOffset).toBe(2);
+    const second = (await (
+      await request(`/memories?limit=2&offset=${first.nextOffset}`)
+    ).json()) as { memories: { id: string }[]; nextOffset: null };
+    expect(second.memories).toHaveLength(1);
+    expect(second.nextOffset).toBeNull();
+    expect(new Set([...first.memories, ...second.memories].map((memory) => memory.id)).size).toBe(
+      3
+    );
+    expect((await request("/memories?limit=10000")).status).toBe(400);
+  });
   it("keeps personal management owner-only, including other administrators", async () => {
     const record = await createMemory();
     expect((await request(`/memories/${record.id}`, "GET", undefined, OTHER)).status).toBe(404);

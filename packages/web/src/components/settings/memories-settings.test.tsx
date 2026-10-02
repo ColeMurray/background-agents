@@ -9,15 +9,20 @@ const mocks = vi.hoisted(() => ({
   mutate: vi.fn(),
   records: [] as MemoryView[],
   canCreate: true,
+  nextOffset: null as number | null,
+  collection: vi.fn(),
 }));
 vi.mock("next/navigation", () => ({ useSearchParams: () => new URLSearchParams() }));
 vi.mock("@/hooks/use-memories", () => ({
   memoryRequest: mocks.request,
   useMemory: () => ({ mutate: mocks.mutate }),
-  useMemories: () => ({
-    data: { memories: mocks.records, canCreate: mocks.canCreate },
-    mutate: mocks.mutate,
-  }),
+  useMemories: (...args: unknown[]) => {
+    mocks.collection(...args);
+    return {
+      data: { memories: mocks.records, canCreate: mocks.canCreate, nextOffset: mocks.nextOffset },
+      mutate: mocks.mutate,
+    };
+  },
   useMemoryPreferences: () => ({ data: { includePersonalMemories: true }, mutate: mocks.mutate }),
   useMemoryRevisions: () => ({ data: { revisions: [] } }),
 }));
@@ -50,7 +55,16 @@ describe("memory management", () => {
     vi.clearAllMocks();
     mocks.records = [];
     mocks.canCreate = true;
+    mocks.nextOffset = null;
     mocks.request.mockResolvedValue({ memory: record });
+  });
+  it("navigates pages and resets pagination when the status changes", () => {
+    mocks.nextOffset = 50;
+    render(<MemoriesSettings />);
+    fireEvent.click(screen.getByText("Next page"));
+    expect(mocks.collection).toHaveBeenLastCalledWith({ type: "personal" }, "active", 50);
+    fireEvent.click(screen.getByRole("tab", { name: "Archived" }));
+    expect(mocks.collection).toHaveBeenLastCalledWith({ type: "personal" }, "archived", 0);
   });
   it("validates a new record and sends only its selected scope and content", async () => {
     render(<MemoriesSettings />);

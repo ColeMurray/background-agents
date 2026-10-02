@@ -3,7 +3,7 @@ import { env } from "cloudflare:test";
 import { MemoryStore, type MemoryActor } from "../../src/db/memories";
 import { cleanD1Tables } from "./cleanup";
 import { SessionIndexStore } from "../../src/db/session-index";
-import { resolveMemoryRecords } from "../../src/session/memory-resolution";
+import { resolveMemoryRecords, resolveSessionMemory } from "../../src/session/memory-resolution";
 import { SessionScopeStore } from "../../src/db/session-scope-store";
 
 const human: MemoryActor = { kind: "user", userId: "user_a", requestId: "test" };
@@ -46,6 +46,38 @@ describe("memory persistence", () => {
         environmentId: null,
       }),
     });
+  });
+  it("bounds candidate queries, omits fact bodies, and counts every omitted record", async () => {
+    const store = new MemoryStore(env.DB);
+    for (let i = 0; i < 230; i++)
+      await store.create({ ...personal, title: `Fact ${i}`, content: "x".repeat(20_000) }, human);
+    for (let i = 0; i < 120; i++)
+      await store.create(
+        { ...personal, memoryType: "directive", title: `Directive ${i}`, content: "x" },
+        human
+      );
+    const target = {
+      canonicalUserId: human.userId,
+      includePersonalMemories: true,
+      repositories: [],
+      environmentId: null,
+    };
+    const candidates = await store.listApplicable(target);
+    expect(candidates.records).toHaveLength(300);
+    expect(candidates.omittedCount).toBe(50);
+    expect(
+      candidates.records
+        .filter((record) => record.memoryType === "fact")
+        .every((record) => record.content === "")
+    ).toBe(true);
+    const manifest = await resolveSessionMemory(env.DB, target, true);
+    expect(manifest.items).toHaveLength(300);
+    expect(manifest.truncatedCount).toBe(50);
+    const pages = [];
+    for (let offset = 0; offset < 350; offset += 50)
+      pages.push(...(await store.list({ type: "personal" }, human.userId, "active", null, offset)));
+    expect(pages).toHaveLength(350);
+    expect(new Set(pages.map((record) => record.id)).size).toBe(350);
   });
   it("revises without replacing provenance and rejects concurrent stale edits", async () => {
     const store = new MemoryStore(env.DB);

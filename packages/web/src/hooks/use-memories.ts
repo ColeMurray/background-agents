@@ -39,11 +39,19 @@ export function memorySettingsLink(scope: MemoryScope, id: string): string {
   query.set("memoryId", id);
   return `/settings?${query}`;
 }
-export function useMemories(scope: MemoryScope | null, status: MemoryStatus) {
+export function useMemories(scope: MemoryScope | null, status: MemoryStatus, offset = 0) {
   const query = scope ? memoryScopeQuery(scope) : null;
   query?.set("status", status);
+  query?.set("offset", String(offset));
   return useSWR(query ? (`/api/memories?${query}` as const) : null, (path) =>
-    memoryRequest(path, z.object({ memories: z.array(memoryViewSchema), canCreate: z.boolean() }))
+    memoryRequest(
+      path,
+      z.object({
+        memories: z.array(memoryViewSchema),
+        canCreate: z.boolean(),
+        nextOffset: z.number().nullable(),
+      })
+    )
   );
 }
 export function useMemory(id: string | null) {

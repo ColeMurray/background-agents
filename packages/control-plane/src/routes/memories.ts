@@ -71,16 +71,27 @@ async function list(request: Request, env: Env, _params: object, ctx: UserRouteC
   );
   const status = memoryStatusSchema.safeParse(query.get("status") ?? "active");
   if (!scopeResult.success || !status.success) return error("Invalid memory scope or status", 400);
+  const pagination = z
+    .object({
+      offset: z.coerce.number().int().min(0).max(1_000_000),
+      limit: z.coerce.number().int().min(1).max(100),
+    })
+    .safeParse({ offset: query.get("offset") ?? 0, limit: query.get("limit") ?? 50 });
+  if (!pagination.success) return error("Invalid memory pagination", 400);
+  const { offset, limit } = pagination.data;
   const access = await authorizeMemoryScope(ctx, env, scopeResult.data, false);
   if (access instanceof Response) return access;
   const records = await new MemoryStore(ctx.db).list(
     scopeResult.data,
     ctx.principal.userId,
     status.data,
-    access.repoId
+    access.repoId,
+    offset,
+    limit + 1
   );
   return json({
-    memories: records.map((record) => view(record, access.canManage)),
+    memories: records.slice(0, limit).map((record) => view(record, access.canManage)),
+    nextOffset: records.length > limit ? offset + limit : null,
     canCreate: access.canManage,
   });
 }

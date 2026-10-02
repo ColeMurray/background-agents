@@ -89,7 +89,8 @@ export function renderMemorySection(
  */
 export async function resolveMemoryRecords(
   records: readonly MemoryRecord[],
-  target: MemoryTarget
+  target: MemoryTarget,
+  omittedCount = 0
 ): Promise<SessionMemoryManifest> {
   const scopes = [
     ...(target.environmentId ? [`environment:${target.environmentId}`] : []),
@@ -117,7 +118,7 @@ export async function resolveMemoryRecords(
     directiveChars: 0,
     catalogChars: 0,
     estimatedTokens: 0,
-    truncatedCount: 0,
+    truncatedCount: omittedCount,
     items: [],
   };
   const scopeChars = new Map<string, number>();
@@ -198,5 +199,6 @@ export async function resolveSessionMemory(
       ? (await store.getPreferences(target.canonicalUserId)).includePersonalMemories
       : false);
   const effective = { ...target, includePersonalMemories };
-  return resolveMemoryRecords(await store.listApplicable(effective), effective);
+  const candidates = await store.listApplicable(effective);
+  return resolveMemoryRecords(candidates.records, effective, candidates.omittedCount);
 }
