@@ -191,18 +191,12 @@ function useCategoryPagination(
   };
 }
 
-export function useSidebarSessions() {
+export function useSidebarSessions(suppliedFilters?: SessionInboxFilters) {
   const { data: authSession } = useAuthSession();
   const { activeTeamId, scope, loading: loadingTeams, error: teamsError } = useActiveTeam();
-  const [projectFilter, setProjectFilter] = useState("");
   const filters = useMemo(
-    () => ({
-      teamIds: activeTeamId ? [activeTeamId] : undefined,
-      scope,
-      projectId: projectFilter && projectFilter !== "none" ? projectFilter : undefined,
-      hasProject: projectFilter === "none" ? false : undefined,
-    }),
-    [activeTeamId, scope, projectFilter]
+    () => suppliedFilters ?? { teamIds: activeTeamId ? [activeTeamId] : undefined, scope },
+    [activeTeamId, scope, suppliedFilters]
   );
   const { fetcher, mutate: mutateCache } = useSWRConfig();
   const [sessionCreatorFilter, setSessionCreatorFilterState] =
@@ -492,8 +486,6 @@ export function useSidebarSessions() {
     },
     sessionCreatorFilter,
     setSessionCreatorFilter,
-    projectFilter,
-    setProjectFilter,
     handleSessionArchived,
     handleMarkLatestMessageRead,
   };

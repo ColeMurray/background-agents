@@ -73,6 +73,9 @@ export function NewSessionButton({ onClick }: SidebarActionButtonProps) {
 }
 
 interface SessionSidebarProps {
+  filters?: import("@/lib/session-inbox-api").SessionInboxFilters;
+  projectFilter?: string;
+  onProjectFilterChange?: (value: string) => void;
   onNewSession?: () => void;
   onSearchSessions?: () => void;
   onToggle?: () => void;
@@ -87,12 +90,15 @@ export function SessionSidebar({
   onSearchSessions,
   onToggle,
   onSessionSelect,
+  filters,
+  projectFilter = "",
+  onProjectFilterChange,
 }: SessionSidebarProps) {
   const { labels } = useKeyboardShortcuts();
   const { data: authSession } = useAuthSession();
   const { hasPermission } = useCurrentUserAuthorization();
   const { activeTeamId, scope } = useActiveTeam();
-  const teamQuery = { teamIds: activeTeamId ? [activeTeamId] : undefined, scope };
+  const teamQuery = filters ?? { teamIds: activeTeamId ? [activeTeamId] : undefined, scope };
   const pathname = usePathname();
   const router = useRouter();
   const isMobile = useIsMobile();
@@ -128,11 +134,9 @@ export function SessionSidebar({
     sectionPagination,
     sessionCreatorFilter,
     setSessionCreatorFilter,
-    projectFilter,
-    setProjectFilter,
     handleSessionArchived,
     handleMarkLatestMessageRead,
-  } = useSidebarSessions();
+  } = useSidebarSessions(filters);
 
   const { projects } = useProjects();
   // Archiving the session on screen leaves nothing to show, so fall back to the home page.
@@ -333,7 +337,7 @@ export function SessionSidebar({
         <select
           aria-label="Session project filter"
           value={projectFilter ?? ""}
-          onChange={(event) => setProjectFilter(event.target.value)}
+          onChange={(event) => onProjectFilterChange?.(event.target.value)}
           className="mb-2 w-full border border-border bg-input p-1 text-xs"
         >
           <option value="">All projects</option>

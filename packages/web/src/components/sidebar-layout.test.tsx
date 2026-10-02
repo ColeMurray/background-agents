@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 /// <reference types="@testing-library/jest-dom" />
 
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import * as matchers from "@testing-library/jest-dom/matchers";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { CollapsedSidebarControls, SidebarLayout } from "./sidebar-layout";
@@ -80,6 +80,27 @@ afterEach(() => {
 });
 
 describe("command-menu recent session scope", () => {
+  it("shares project selection between sidebar and command menu in both directions", () => {
+    vi.mocked(useRouter).mockReturnValue({ push: vi.fn() } as never);
+    render(
+      <SidebarLayout>
+        <CollapsedSidebarControls />
+      </SidebarLayout>
+    );
+    const selector = screen.getByRole("combobox", { name: "Session project filter" });
+    fireEvent.change(selector, { target: { value: "none" } });
+    let props = mocks.commandMenu.mock.calls.at(-1)![0] as {
+      projectFilter: string;
+      teamContext: { hasProject?: boolean };
+      onProjectFilterChange: (value: string) => void;
+    };
+    expect(props.projectFilter).toBe("none");
+    expect(props.teamContext.hasProject).toBe(false);
+    act(() => props.onProjectFilterChange(""));
+    expect(selector).toHaveValue("");
+    props = mocks.commandMenu.mock.calls.at(-1)![0] as typeof props;
+    expect(props.teamContext.hasProject).toBeUndefined();
+  });
   it.each([
     { label: "Workspace", activeTeamId: null, scope: "workspace", suffix: "scope=workspace" },
     {

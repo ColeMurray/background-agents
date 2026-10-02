@@ -108,12 +108,15 @@ export function SidebarLayout({ children }: SidebarLayoutProps) {
   const { activeTeamId, scope, loading: teamLoading, error: teamError } = useActiveTeam();
   const { projects } = useProjects();
   const [projectFilter, setProjectFilter] = useState("");
-  const teamContext = {
-    teamIds: activeTeamId ? [activeTeamId] : undefined,
-    scope,
-    projectId: projectFilter && projectFilter !== "none" ? projectFilter : undefined,
-    hasProject: projectFilter === "none" ? false : undefined,
-  };
+  const teamContext = useMemo(
+    () => ({
+      teamIds: activeTeamId ? [activeTeamId] : undefined,
+      scope,
+      projectId: projectFilter && projectFilter !== "none" ? projectFilter : undefined,
+      hasProject: projectFilter === "none" ? false : undefined,
+    }),
+    [activeTeamId, scope, projectFilter]
+  );
   const teamParams = serializeSessionListQuery(teamContext).toString();
   const recentSessionsKey = `${COMMAND_MENU_SESSIONS_KEY}${teamParams ? `&${teamParams}` : ""}`;
 
@@ -211,6 +214,9 @@ export function SidebarLayout({ children }: SidebarLayoutProps) {
             }
           >
             <SessionSidebar
+              filters={teamContext}
+              projectFilter={projectFilter}
+              onProjectFilterChange={setProjectFilter}
               onNewSession={handleNewSession}
               onSearchSessions={handleSearchSessions}
               onToggle={sidebar.toggle}
