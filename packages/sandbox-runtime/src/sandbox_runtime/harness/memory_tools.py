@@ -26,13 +26,14 @@ def build_memory_tools(client: ControlPlaneToolClient) -> list[Any]:
             response.raise_for_status()
             return {"content": [{"type": "text", "text": json.dumps(response.json())}]}
         except httpx.HTTPError as error:
-            status = (
-                error.response.status_code
-                if isinstance(error, httpx.HTTPStatusError)
-                else "unavailable"
-            )
+            if isinstance(error, httpx.HTTPStatusError):
+                from .claude_tools import _error_text
+
+                detail = f"{error.response.status_code}: {_error_text(error.response)}"
+            else:
+                detail = "unavailable"
             return {
-                "content": [{"type": "text", "text": f"Memory request failed ({status})"}],
+                "content": [{"type": "text", "text": f"Memory request failed ({detail})"}],
                 "isError": True,
             }
 

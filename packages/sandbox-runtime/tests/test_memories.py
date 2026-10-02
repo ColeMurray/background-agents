@@ -166,6 +166,36 @@ async def test_both_harnesses_receive_exact_memory_and_empty_parity(tmp_path, mo
     )
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("unavailable", [False, True])
+async def test_claude_memory_tool_reports_server_errors(tmp_path: Path, unavailable: bool) -> None:
+    from sandbox_runtime.harness.claude_tools import ControlPlaneToolClient, ToolServerConfig
+    from sandbox_runtime.harness.memory_tools import build_memory_tools
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if unavailable:
+            raise httpx.ConnectError("private transport details", request=request)
+        return httpx.Response(403, json={"error": "Personal memory is excluded from this session"})
+
+    client = ControlPlaneToolClient(
+        ToolServerConfig(
+            "https://control.test", "session", "token", tmp_path / "repos.json", False, False
+        ),
+        MagicMock(),
+        httpx.AsyncClient(transport=httpx.MockTransport(handler)),
+    )
+    try:
+        result = await build_memory_tools(client)[0].handler({"memoryId": "mem_denied"})
+        assert result["isError"] is True
+        assert result["content"][0]["text"] == (
+            "Memory request failed (unavailable)"
+            if unavailable
+            else "Memory request failed (403: Personal memory is excluded from this session)"
+        )
+    finally:
+        await client.aclose()
+
+
 def test_opencode_tools_use_session_transport_and_strip_caller_identity():
     import json
     import os
