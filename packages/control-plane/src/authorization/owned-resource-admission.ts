@@ -1,5 +1,14 @@
-import { checkEnvironmentAccess, type SessionViewer } from "@open-inspect/shared";
-import type { PermissionId } from "@open-inspect/shared/rbac";
+import {
+  checkAutomationAccess,
+  checkEnvironmentAccess,
+  type SessionViewer,
+} from "@open-inspect/shared";
+import {
+  SCOPED_PERMISSION_PAIRS,
+  resolveScopedPermission,
+  type PermissionId,
+} from "@open-inspect/shared/rbac";
+import { AutomationStore } from "../db/automation-store";
 import { EnvironmentStore, type EnvironmentRow } from "../db/environments";
 import { json } from "../http/responses";
 import type { RequestContext } from "../http/request-context";
@@ -30,17 +39,113 @@ export type OwnedResourceAdmissionOutcome =
     }
   | { kind: "error"; response: { error: string }; status: 400 };
 
+/** Automation decisions; an admitted automation is recorded on `ctx.automationAdmission`. */
+export type AutomationAdmissionOutcome =
+  | { kind: "allowed"; effectivePermission: PermissionId | null }
+  | Omit<Extract<OwnedResourceAdmissionOutcome, { kind: "denied" }>, "admission">
+  | Extract<OwnedResourceAdmissionOutcome, { kind: "error" }>;
+
 type EnvironmentNeed = Extract<RouteAuthorizationRequirement, { kind: "environment" }>["need"];
 
-/** Route-parameter adapter for {@link evaluateEnvironmentAdmission}. */
+/**
+ * Route-parameter admission for owned automations and environments. Environments delegate to
+ * {@link evaluateEnvironmentAdmission}; infrastructure failures propagate to the router.
+ */
 export async function evaluateOwnedResourceAdmission(
   requirement: Extract<RouteAuthorizationRequirement, { kind: "environment" }>,
   params: RouteParams,
   ctx: RequestContext
-): Promise<OwnedResourceAdmissionOutcome> {
+): Promise<OwnedResourceAdmissionOutcome>;
+export async function evaluateOwnedResourceAdmission(
+  requirement: Extract<RouteAuthorizationRequirement, { kind: "automation" }>,
+  params: RouteParams,
+  ctx: RequestContext
+): Promise<AutomationAdmissionOutcome>;
+export async function evaluateOwnedResourceAdmission(
+  requirement: Extract<RouteAuthorizationRequirement, { kind: "automation" | "environment" }>,
+  params: RouteParams,
+  ctx: RequestContext
+): Promise<OwnedResourceAdmissionOutcome | AutomationAdmissionOutcome>;
+export async function evaluateOwnedResourceAdmission(
+  requirement: Extract<RouteAuthorizationRequirement, { kind: "automation" | "environment" }>,
+  params: RouteParams,
+  ctx: RequestContext
+): Promise<OwnedResourceAdmissionOutcome | AutomationAdmissionOutcome> {
+  if (requirement.kind === "automation") {
+    return evaluateAutomationAdmission(requirement, params, ctx);
+  }
   const id = params[requirement.idParam];
   if (!id) return { kind: "error", response: { error: "Invalid environment route" }, status: 400 };
   return evaluateEnvironmentAdmission(ctx, id, requirement.need);
+}
+
+async function evaluateAutomationAdmission(
+  requirement: Extract<RouteAuthorizationRequirement, { kind: "automation" }>,
+  params: RouteParams,
+  ctx: RequestContext
+): Promise<AutomationAdmissionOutcome> {
+  if (
+    ctx.principal?.kind === "service" &&
+    !serviceAllowsPermission(ctx.principal.service, "automations.read")
+  ) {
+    return {
+      kind: "denied",
+      response: { error: "Forbidden", code: "service_capability_required" },
+      status: 403,
+      reasonCode: "service_capability_required",
+      reason: "Forbidden",
+    };
+  }
+  const automationId = params[requirement.automationIdParam];
+  if (!automationId) {
+    return { kind: "error", response: { error: "Invalid automation route" }, status: 400 };
+  }
+
+  const store = new AutomationStore(ctx.db);
+  const storedAutomation = await store.getById(automationId);
+  const viewer = await resourceViewer(ctx);
+  const row = storedAutomation && {
+    ownerTeamId: storedAutomation.owner_team_id,
+    executorUserId: storedAutomation.user_id,
+  };
+  if (storedAutomation) ctx.automationAdmission = { automation: storedAutomation, viewer };
+  const read = row && checkAutomationAccess(viewer, row, "read");
+  // Missing read permission does not block independently granted management or triggering.
+  if (!storedAutomation || (read && !read.allowed && read.reason !== "missing_permission")) {
+    return {
+      kind: "denied",
+      response: { error: "Automation not found" },
+      status: 404,
+      reasonCode: "automation_not_visible",
+      reason: "Automation not found",
+    };
+  }
+  const automation = await store.resolveCanonicalOwner(storedAutomation);
+  const decision = checkAutomationAccess(
+    viewer,
+    { ownerTeamId: automation.owner_team_id, executorUserId: automation.user_id },
+    requirement.operation
+  );
+  if (!decision.allowed) {
+    return {
+      kind: "denied",
+      response: automationActionDeniedBody(decision.reason),
+      status: 403,
+      reasonCode: decision.reason,
+      reason: "Forbidden",
+    };
+  }
+  let effectivePermission: PermissionId | null = null;
+  if (viewer.kind === "user") {
+    if (requirement.operation === "read") effectivePermission = "automations.read";
+    else {
+      const stem = `automations.${requirement.operation}` as const;
+      const scope = resolveScopedPermission(stem, viewer.permissions);
+      if (scope) effectivePermission = SCOPED_PERMISSION_PAIRS[stem][scope];
+    }
+  }
+  ctx.automationAdmission = { automation, viewer };
+  return { kind: "allowed", effectivePermission };
 }
 
 /**
@@ -101,6 +206,11 @@ export async function evaluateEnvironmentAdmission(
   };
 }
 
+/** Body for a visible automation the viewer may not act on. */
+export function automationActionDeniedBody(reason: string, error = "Forbidden") {
+  return { error, code: "automation_action_denied", reason_code: reason };
+}
+
 /** Body for a visible environment the viewer may not act on. */
 export function environmentActionDeniedBody(reason: string) {
   return { error: "Forbidden", code: "environment_action_denied", reason_code: reason };
@@ -117,7 +227,7 @@ export function admittedEnvironment(ctx: RequestContext): EnvironmentAdmission {
 
 /** HTTP response for an outcome that did not admit the resource. */
 export function ownedResourceAdmissionResponse(
-  outcome: Exclude<OwnedResourceAdmissionOutcome, { kind: "allowed" }>
+  outcome: Exclude<OwnedResourceAdmissionOutcome | AutomationAdmissionOutcome, { kind: "allowed" }>
 ): Response {
   return json(outcome.response, outcome.status);
 }

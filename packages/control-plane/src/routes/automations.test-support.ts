@@ -29,6 +29,7 @@ export const mockStore = {
   list: vi.fn(),
   getById: vi.fn(),
   resolveCanonicalOwner: vi.fn(async (automation: unknown) => automation),
+  projectCanonicalOwners: vi.fn(async (rows: unknown) => rows),
   update: vi.fn(),
   softDelete: vi.fn(),
   pause: vi.fn(),

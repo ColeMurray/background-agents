@@ -75,6 +75,12 @@ vi.mock("../db/environments", () => ({
   }),
 }));
 
+vi.mock("../db/team-settings", () => ({
+  TeamSettingsStore: vi.fn().mockImplementation(function () {
+    return { get: vi.fn(async () => ({ requireTeamOnCreate: false })) };
+  }),
+}));
+
 vi.mock("../auth/model-provider-account-default-adapters", () => ({
   modelProviderAccountAdapterRegistry: {
     get: (...args: unknown[]) => mockProviderAdapterGet(...args),
@@ -554,28 +560,6 @@ describe("automation create route", () => {
 
       expect(res.status).toBe(400);
       expect(await res.json()).toEqual({ error: "Environment not found: env_a, env_b" });
-    });
-
-    it("treats team-owned environments as missing for workspace automations", async () => {
-      mockEnvironmentStore.getById.mockResolvedValue({
-        id: "env_team",
-        name: "Team",
-        owner_team_id: "team_a",
-      });
-
-      const res = await callRoute("POST", "/automations", {
-        body: {
-          name: "Workspace sync",
-          scheduleCron: "0 9 * * *",
-          scheduleTz: "UTC",
-          instructions: "Run tests",
-          environmentIds: ["env_team"],
-        },
-      });
-
-      expect(res.status).toBe(400);
-      expect(await res.json()).toEqual({ error: "Environment not found: env_team" });
-      expect(mockBatch).not.toHaveBeenCalled();
     });
 
     it("checks environment-use permission before disclosing whether an environment exists", async () => {

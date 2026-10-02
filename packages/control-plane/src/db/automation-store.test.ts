@@ -17,6 +17,7 @@ import {
   type AutomationRunRow,
   type EnrichedRunRow,
 } from "./automation-store";
+import { MAX_D1_QUERY_PARAMETERS } from "./query-limits";
 
 // ─── Fake D1 helpers ─────────────────────────────────────────────────────────
 
@@ -326,6 +327,53 @@ describe("AutomationStore", () => {
       const result = await store.list({ limit: 25 });
       expect(result.automations).toHaveLength(1);
       expect(result.hasMore).toBe(false);
+    });
+
+    it("projects legacy canonical owners in one lookup without repairing rows", async () => {
+      const { db, statements } = createFakeD1({
+        allResults: [{ provider_user_id: "4242", user_id: "user-legacy" }],
+      });
+      const legacy = { ...sampleRow, id: "legacy", user_id: null, created_by: "4242" };
+      const anonymous = { ...sampleRow, id: "anon", user_id: null, created_by: "anonymous" };
+      const canonical = { ...sampleRow, id: "canonical", user_id: "user-1" };
+
+      const rows = await new AutomationStore(db).projectCanonicalOwners([
+        legacy,
+        anonymous,
+        canonical,
+      ]);
+
+      expect(rows.map((row) => row.user_id)).toEqual(["user-legacy", null, "user-1"]);
+      expect(statements).toHaveLength(1);
+      expect(statements[0].sql).toContain("FROM user_identities");
+      expect(statements[0].params).toEqual(["4242"]);
+    });
+
+    it("binds team visibility once, regardless of how many teams the viewer joined", async () => {
+      const { db, statements } = createFakeD1();
+      const memberships = new Map(
+        Array.from({ length: MAX_D1_QUERY_PARAMETERS }, (_, i) => [`team_${i}`, "member" as const])
+      );
+      await new AutomationStore(db).list({
+        limit: 25,
+        nameSearch: "sync",
+        teamId: "team_0",
+        repoOwner: "acme",
+        repoName: "web",
+        viewer: {
+          kind: "user",
+          userId: "user-1",
+          roleKey: "member",
+          permissions: ["automations.read"],
+          suspended: false,
+          memberships,
+        },
+      });
+      const [{ sql, params }] = statements;
+      expect(params.length).toBeLessThanOrEqual(MAX_D1_QUERY_PARAMETERS);
+      expect(sql.match(/\?/g)).toHaveLength(params.length);
+      expect(params).toContain("user-1");
+      expect(params).not.toContain("team_1");
     });
   });
 

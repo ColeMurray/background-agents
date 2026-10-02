@@ -23,6 +23,7 @@ import type { ModelProviderSelections } from "@open-inspect/shared/types/provide
 
 export interface AutomationFormValues {
   projectId?: string | null;
+  teamId?: string | null;
   name: string;
   repositories: AutomationRepositoryInput[];
   environmentIds: string[];

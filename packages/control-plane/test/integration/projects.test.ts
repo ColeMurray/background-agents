@@ -547,10 +547,28 @@ it("creates the immutable project snapshot through the authenticated session API
   expect((await new SessionProjectStore(env.DB).snapshot(sessionId))?.text).toBe(snapshot!.text);
 });
 
-it.each(["manual", "schedule"] as const)(
-  "launches a %s automation with a fresh project snapshot",
-  async (source) => {
-    const project = await create({ brief: "Automation context" });
+it.each([
+  { source: "manual", teamId: null },
+  { source: "schedule", teamId: null },
+  { source: "manual", teamId: "team_projects" },
+  { source: "schedule", teamId: "team_projects" },
+])(
+  "launches a $source automation for $teamId with a fresh project snapshot",
+  async ({ source, teamId }) => {
+    if (teamId) {
+      await req("/me/authorization");
+      await env.DB.prepare(
+        "INSERT INTO teams (id,slug,name,default_visibility,created_at,updated_at) VALUES (?,'projects','Projects','private',1,1)"
+      )
+        .bind(teamId)
+        .run();
+      await env.DB.prepare(
+        "INSERT INTO team_memberships (team_id,user_id,role,created_at) VALUES (?,?,'member',1)"
+      )
+        .bind(teamId, A)
+        .run();
+    }
+    const project = await create({ brief: "Automation context", ownerTeamId: teamId });
     const response = await req("/automations", "POST", {
       name: "Project automation",
       instructions: "Check project",
@@ -585,11 +603,16 @@ it.each(["manual", "schedule"] as const)(
       await scheduler.tick();
     }
     const session = await env.DB.prepare(
-      "SELECT id,project_id,user_id FROM sessions WHERE automation_id = ?"
+      "SELECT id,project_id,user_id,owner_team_id,visibility FROM sessions WHERE automation_id = ?"
     )
       .bind(automation.id)
       .first<{ id: string; project_id: string; user_id: string }>();
-    expect(session).toMatchObject({ project_id: project.id, user_id: A });
+    expect(session).toMatchObject({
+      project_id: project.id,
+      user_id: A,
+      owner_team_id: teamId,
+      visibility: teamId ? "private" : "workspace",
+    });
     expect((await new SessionProjectStore(env.DB).snapshot(session!.id))?.text).toContain(
       "Automation context"
     );
@@ -671,4 +694,29 @@ it("keeps the board lane correct when an open PR falls outside the bounded displ
   expect(board.items[0].pullRequests).toHaveLength(500);
   expect(board.items[0].pullRequests.every((pr) => pr.state === "closed")).toBe(true);
   expect(board.items[0].lane).toBe("open");
+});
+
+it("rejects a project subscription that differs from explicit automation ownership", async () => {
+  await req("/me/authorization");
+  await env.DB.prepare(
+    "INSERT INTO teams (id,slug,name,created_at,updated_at) VALUES ('team_projects','projects','Projects',1,1)"
+  ).run();
+  await env.DB.prepare(
+    "INSERT INTO team_memberships (team_id,user_id,role,created_at) VALUES ('team_projects',?,'member',1)"
+  )
+    .bind(A)
+    .run();
+  const project = await create({ ownerTeamId: "team_projects" });
+  const response = await req("/automations", "POST", {
+    name: "Wrong team",
+    instructions: "Do not launch",
+    triggerType: "schedule",
+    scheduleCron: "0 0 * * *",
+    scheduleTz: "UTC",
+    teamId: null,
+    projectId: project.id,
+  });
+  expect(response.status).toBe(409);
+  expect(await response.json()).toMatchObject({ code: "project_team_mismatch" });
+  expect((await env.DB.prepare("SELECT id FROM automations").all()).results).toHaveLength(0);
 });

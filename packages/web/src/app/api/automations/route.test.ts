@@ -63,13 +63,14 @@ describe("automations API route (GET)", () => {
         cursor: "123:auto-1",
         repoOwner: "acme",
         repoName: "web-app",
+        teamId: "team/one",
         offset: "50",
       })
     );
 
     expect(response.status).toBe(200);
     expect(controlPlaneUserFetch).toHaveBeenCalledWith(
-      "/automations?search=daily+sync&limit=25&cursor=123%3Aauto-1&repoOwner=acme&repoName=web-app"
+      "/automations?search=daily+sync&limit=25&cursor=123%3Aauto-1&repoOwner=acme&repoName=web-app&teamId=team%2Fone"
     );
   });
 });
@@ -77,6 +78,13 @@ describe("automations API route (GET)", () => {
 describe("automations API route (POST)", () => {
   beforeEach(() => {
     vi.resetAllMocks();
+  });
+
+  it.each(["team-1", null])("forwards create teamId=%s", async (teamId) => {
+    vi.mocked(getServerAuthSession).mockResolvedValue({ user: { id: "user-1" } });
+    vi.mocked(controlPlaneUserFetch).mockResolvedValue(Response.json({ automation: {} }));
+    await POST(postRequest({ ...validBody, teamId }));
+    expect(controlPlaneBody()).toEqual({ ...validBody, teamId });
   });
 
   it("returns 401 when the user session is missing", async () => {

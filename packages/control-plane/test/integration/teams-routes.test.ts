@@ -238,6 +238,115 @@ describe("team routes", () => {
     );
   });
 
+  describe("when the operation audit cannot be written", () => {
+    const memberRole = async (teamId: string, userId: string) =>
+      (await new TeamMembershipStore(env.DB).listForUser(userId)).get(teamId);
+    const seed = async (joinPolicy: "open" | "invite_only" = "invite_only") => {
+      const team = await new TeamStore(env.DB).create({
+        slug: "audited",
+        name: "Audited",
+        joinPolicy,
+      });
+      await new TeamMembershipStore(env.DB).add(team.id, MEMBER, "lead");
+      return team.id;
+    };
+    const cases: Array<{
+      action: string;
+      arrange: () => Promise<string>;
+      mutate: (teamId: string) => Promise<Response>;
+      state: (teamId: string) => Promise<unknown>;
+    }> = [
+      {
+        action: "team.updated",
+        arrange: () => seed(),
+        mutate: (teamId) => request(`/teams/${teamId}`, "PATCH", { name: "Renamed" }),
+        state: async (teamId) => (await new TeamStore(env.DB).getById(teamId))?.name,
+      },
+      {
+        action: "team.archived",
+        arrange: () => seed(),
+        mutate: (teamId) => request(`/teams/${teamId}/archive`, "POST"),
+        state: async (teamId) => (await new TeamStore(env.DB).getById(teamId))?.archivedAt,
+      },
+      {
+        action: "team.restored",
+        arrange: async () => {
+          const teamId = await seed();
+          await new TeamStore(env.DB).archive(teamId);
+          return teamId;
+        },
+        mutate: (teamId) => request(`/teams/${teamId}/restore`, "POST"),
+        state: async (teamId) => (await new TeamStore(env.DB).getById(teamId))?.archivedAt,
+      },
+      {
+        action: "team.member_added",
+        arrange: () => seed(),
+        mutate: (teamId) => request(`/teams/${teamId}/members/${OTHER}`, "PUT", { role: "member" }),
+        state: (teamId) => memberRole(teamId, OTHER),
+      },
+      {
+        action: "team.member_role_changed",
+        arrange: async () => {
+          const teamId = await seed();
+          await new TeamMembershipStore(env.DB).add(teamId, OTHER, "member");
+          return teamId;
+        },
+        mutate: (teamId) => request(`/teams/${teamId}/members/${OTHER}`, "PUT", { role: "lead" }),
+        state: (teamId) => memberRole(teamId, OTHER),
+      },
+      {
+        action: "team.member_removed",
+        arrange: async () => {
+          const teamId = await seed();
+          await new TeamMembershipStore(env.DB).add(teamId, OTHER, "member");
+          return teamId;
+        },
+        mutate: (teamId) => request(`/teams/${teamId}/members/${OTHER}`, "DELETE"),
+        state: (teamId) => memberRole(teamId, OTHER),
+      },
+      {
+        action: "team.member_joined",
+        arrange: async () => {
+          await setRole(OWNER, "member");
+          return await seed("open");
+        },
+        mutate: (teamId) => request(`/teams/${teamId}/join`, "POST"),
+        state: (teamId) => memberRole(teamId, OWNER),
+      },
+    ];
+
+    it.each(cases)(
+      "rolls back $action with its audit row",
+      async ({ action, arrange, mutate, state }) => {
+        const teamId = await arrange();
+        const before = await state(teamId);
+        await env.DB.prepare(
+          `CREATE TRIGGER fail_team_audit
+         BEFORE INSERT ON authorization_audit_events
+         WHEN NEW.resource_type = 'team'
+         BEGIN
+           SELECT RAISE(ABORT, 'forced audit failure');
+         END`
+        ).run();
+        try {
+          expect((await mutate(teamId)).status).toBe(500);
+        } finally {
+          await env.DB.prepare("DROP TRIGGER fail_team_audit").run();
+        }
+        expect(await state(teamId)).toEqual(before);
+        expect(await auditEvents(teamId)).toEqual([]);
+
+        expect((await mutate(teamId)).ok).toBe(true);
+        expect(await state(teamId)).not.toEqual(before);
+        const rows = await auditEvents(teamId);
+        expect(rows.map((row) => row.action)).toEqual([action]);
+        expect(JSON.parse(String(rows[0].metadata_json)).before).not.toEqual(
+          JSON.parse(String(rows[0].metadata_json)).after
+        );
+      }
+    );
+  });
+
   it("rejects invalid default environments and reports duplicate team slugs", async () => {
     const team = await new TeamStore(env.DB).create({
       slug: "duplicate",

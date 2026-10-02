@@ -5,6 +5,7 @@
  * snake_case rows in the database, camelCase types at the API boundary.
  */
 
+import { isWorkspaceAdmin, WORKSPACE_ADMIN_ROLE_KEYS } from "@open-inspect/shared/rbac";
 import {
   DEFAULT_HARNESS,
   getValidHarnessOrDefault,
@@ -32,9 +33,18 @@ import {
   type AutomationModelProviderAuthRow,
 } from "./automation-model-provider-auth";
 import type { SqlDatabase, SqlStatement } from "./sql-database";
+import { MAX_D1_QUERY_PARAMETERS } from "./query-limits";
 import type { CreatedAtCursor } from "../created-at-cursor";
 import { z } from "zod";
 import { UserStore } from "./user-store";
+import { rolePermissionPredicate } from "../authorization/permission-sql";
+import { automationExecutionPredicate } from "../automation/authorization-guard";
+import type { SessionViewer } from "@open-inspect/shared";
+
+/** Legacy rows predate canonical executors; their GitHub creator may now map to a user. */
+function needsCanonicalOwner(row: AutomationRow): boolean {
+  return !row.user_id && !!row.created_by && row.created_by !== "anonymous";
+}
 
 function escapeLikePattern(value: string): string {
   return value.replace(/[\\%_]/g, "\\$&");
@@ -278,6 +288,7 @@ export function toAutomation(
     consecutiveFailures: row.consecutive_failures,
     createdBy: row.created_by,
     userId: row.user_id,
+    ownerTeamId: row.owner_team_id,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
     deletedAt: row.deleted_at,
@@ -450,9 +461,7 @@ export class AutomationStore {
    * a storage invariant rather than a side effect of starting an invocation.
    */
   async resolveCanonicalOwner(automation: AutomationRow): Promise<AutomationRow> {
-    if (automation.user_id || !automation.created_by || automation.created_by === "anonymous") {
-      return automation;
-    }
+    if (!needsCanonicalOwner(automation)) return automation;
 
     const identity = await new UserStore(this.db).getIdentity("github", automation.created_by);
     if (!identity) return automation;
@@ -467,15 +476,67 @@ export class AutomationStore {
     return (await this.getById(automation.id)) ?? automation;
   }
 
+  /**
+   * Project the canonical owner that {@link resolveCanonicalOwner} would repair, for a page of
+   * rows in one bounded lookup, so collection capabilities agree with item admission.
+   */
+  async projectCanonicalOwners(rows: readonly AutomationRow[]): Promise<AutomationRow[]> {
+    const legacyCreators = [
+      ...new Set(rows.filter(needsCanonicalOwner).map((row) => row.created_by)),
+    ];
+    const owners = new Map<string, string>();
+    for (let offset = 0; offset < legacyCreators.length; offset += MAX_D1_QUERY_PARAMETERS) {
+      const chunk = legacyCreators.slice(offset, offset + MAX_D1_QUERY_PARAMETERS);
+      const result = await this.db
+        .prepare(
+          `SELECT provider_user_id, user_id FROM user_identities
+           WHERE provider = 'github' AND provider_user_id IN (${chunk.map(() => "?").join(", ")})`
+        )
+        .bind(...chunk)
+        .all<{ provider_user_id: string; user_id: string }>();
+      for (const identity of result.results ?? []) {
+        owners.set(identity.provider_user_id, identity.user_id);
+      }
+    }
+    return rows.map((row) => {
+      const owner = needsCanonicalOwner(row) ? owners.get(row.created_by) : undefined;
+      return owner ? { ...row, user_id: owner } : row;
+    });
+  }
+
   async list(options: {
     limit: number;
     cursor?: CreatedAtCursor | null;
     nameSearch?: string;
     repoOwner?: string;
     repoName?: string;
+    viewer?: SessionViewer;
+    teamId?: string | null;
   }): Promise<AutomationListResult> {
     const conditions: string[] = ["deleted_at IS NULL"];
     const params: unknown[] = [];
+
+    const viewer = options.viewer;
+    if (viewer?.kind === "user") {
+      if (viewer.suspended || !viewer.permissions.includes("automations.read")) {
+        conditions.push("0 = 1");
+      } else if (!isWorkspaceAdmin(viewer.roleKey)) {
+        // One bound parameter regardless of how many teams the viewer belongs to.
+        conditions.push(
+          `(owner_team_id IS NULL OR EXISTS (
+             SELECT 1 FROM team_memberships m
+             WHERE m.team_id = automations.owner_team_id AND m.user_id = ?))`
+        );
+        params.push(viewer.userId);
+      }
+    } else if (viewer?.kind === "service" && viewer.teamId !== null) {
+      conditions.push("(owner_team_id IS NULL OR owner_team_id = ?)");
+      params.push(viewer.teamId);
+    }
+    if (options.teamId !== undefined) {
+      conditions.push("owner_team_id IS ?");
+      params.push(options.teamId);
+    }
 
     if (options.nameSearch) {
       conditions.push("name LIKE ? ESCAPE '\\' COLLATE NOCASE");
@@ -612,6 +673,51 @@ export class AutomationStore {
     const statement = this.bindAutomationUpdate(id, fields);
     if (statement) await statement.run();
     return this.getById(id);
+  }
+
+  /**
+   * Reassign the executor only if, at write time, the caller still holds reassignment authority
+   * and the candidate can still launch the automation's current targets.
+   */
+  bindExecutorChange(automation: AutomationRow, userId: string, actorUserId: string): SqlStatement {
+    const manageOwn = rolePermissionPredicate("automations.manage.own");
+    const manageAny = rolePermissionPredicate("automations.manage.any");
+    const execution = automationExecutionPredicate({
+      automationId: automation.id,
+      executionUserId: userId,
+      requiresRepositoryUse: "stored",
+      requiresEnvironmentUse: "stored",
+    });
+    return this.db
+      .prepare(
+        `UPDATE automations SET user_id = ?, updated_at = ?
+         WHERE id = ? AND deleted_at IS NULL AND user_id IS ? AND owner_team_id IS ?
+           AND user_id IS NOT ?
+           AND EXISTS (
+             SELECT 1 FROM users actor
+             JOIN user_role_assignments actor_role ON actor_role.user_id = actor.id
+             JOIN roles r ON r.id = actor_role.role_id
+             WHERE actor.id = ? AND actor.suspended_at IS NULL
+               AND (${manageOwn.sql} OR ${manageAny.sql})
+               AND (r.key IN (${WORKSPACE_ADMIN_ROLE_KEYS.map(() => "?").join(", ")}) OR EXISTS (
+                 SELECT 1 FROM team_memberships lead_membership
+                 WHERE lead_membership.team_id = automations.owner_team_id
+                   AND lead_membership.user_id = actor.id AND lead_membership.role = 'lead')))
+           AND ${execution.sql}`
+      )
+      .bind(
+        userId,
+        Date.now(),
+        automation.id,
+        automation.user_id,
+        automation.owner_team_id,
+        userId,
+        actorUserId,
+        ...manageOwn.values,
+        ...manageAny.values,
+        ...WORKSPACE_ADMIN_ROLE_KEYS,
+        ...execution.values
+      );
   }
 
   /** Build a soft-delete statement for composition in an atomic batch. */
@@ -1064,9 +1170,18 @@ export class AutomationStore {
     children: AutomationRunRow[];
     overlapScope: InvocationOverlapScope;
     advanceSchedule?: ScheduleAdvance;
+    /** Team grants version the targets were authorized against; a change refuses admission. */
+    teamGrantsVersion?: { teamId: string; version: number };
   }): Promise<{ inserted: boolean }> {
     const invocation = params.invocation;
     const overlap = this.overlapPredicate(invocation.automation_id, params.overlapScope);
+    const grants = params.teamGrantsVersion;
+    const grantsGuard = grants
+      ? {
+          sql: "AND EXISTS (SELECT 1 FROM teams WHERE id = ? AND grants_version = ?)",
+          params: [grants.teamId, grants.version],
+        }
+      : { sql: "", params: [] };
     const statements: SqlStatement[] = [];
     statements.push(
       this.db
@@ -1075,7 +1190,7 @@ export class AutomationStore {
            (id, automation_id, source, scheduled_at, trigger_key, concurrency_key,
             trigger_metadata, skip_reason, failure_counted_at, created_at, updated_at)
            SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
-           WHERE NOT EXISTS (${overlap.sql})`
+           WHERE NOT EXISTS (${overlap.sql}) ${grantsGuard.sql}`
         )
         .bind(
           invocation.id,
@@ -1089,7 +1204,8 @@ export class AutomationStore {
           invocation.failure_counted_at,
           invocation.created_at,
           invocation.updated_at,
-          ...overlap.params
+          ...overlap.params,
+          ...grantsGuard.params
         )
     );
 
@@ -1130,14 +1246,16 @@ export class AutomationStore {
       statements.push(
         this.db
           .prepare(
+            // A grants change leaves the slot due, so the next tick re-authorizes it.
             `UPDATE automations SET next_run_at = ?, updated_at = ?
-             WHERE id = ? AND deleted_at IS NULL AND next_run_at = ?`
+             WHERE id = ? AND deleted_at IS NULL AND next_run_at = ? ${grantsGuard.sql}`
           )
           .bind(
             params.advanceSchedule.nextRunAt,
             Date.now(),
             invocation.automation_id,
-            params.advanceSchedule.fromSlot
+            params.advanceSchedule.fromSlot,
+            ...grantsGuard.params
           )
       );
     }

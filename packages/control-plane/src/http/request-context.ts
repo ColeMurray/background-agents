@@ -17,6 +17,7 @@ import type { TeamsEnforcementMode } from "../authorization/teams-enforcement";
 /** Automation resource admitted for the current mutation. */
 export interface AutomationRouteAdmission {
   automation: AutomationRow;
+  viewer: SessionViewer;
 }
 
 /**

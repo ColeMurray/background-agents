@@ -14,6 +14,7 @@ const mocks = vi.hoisted(() => ({
   teams: [] as TeamResponse[],
   mine: [] as TeamResponse[],
   role: "member",
+  permissions: ["automations.read"],
   suspendedAt: null as number | null,
   membershipLoading: false,
   membershipError: null as Error | null,
@@ -21,8 +22,10 @@ const mocks = vi.hoisted(() => ({
   join: vi.fn(),
   repositories: vi.fn(),
   secrets: vi.fn(),
+  replace: vi.fn(),
 }));
 
+vi.mock("next/navigation", () => ({ useRouter: () => ({ replace: mocks.replace }) }));
 vi.mock("@/lib/auth-session", () => ({
   useAuthSession: () => ({ data: { user: { id: "user_one" } }, status: "authenticated" }),
 }));
@@ -41,7 +44,12 @@ vi.mock("@/hooks/use-teams", () => ({
 }));
 vi.mock("@/hooks/use-current-user-authorization", () => ({
   useCurrentUserAuthorization: () => ({
-    authorization: { role: { key: mocks.role }, suspendedAt: mocks.suspendedAt, permissions: [] },
+    authorization: {
+      role: { key: mocks.role },
+      suspendedAt: mocks.suspendedAt,
+      permissions: mocks.permissions,
+    },
+    hasPermission: (permission: string) => mocks.permissions.includes(permission),
   }),
 }));
 vi.mock("@/components/settings/team-members-table", () => ({
@@ -59,6 +67,9 @@ vi.mock("./team-repositories", () => ({
 }));
 vi.mock("./team-environments", () => ({
   TeamEnvironments: ({ teamId }: { teamId: string }) => <p>Environments for {teamId}</p>,
+}));
+vi.mock("./team-automations", () => ({
+  TeamAutomations: ({ teamId }: { teamId: string }) => <p>Automations for {teamId}</p>,
 }));
 vi.mock("./team-secrets", () => ({
   TeamSecrets: (props: { teamId: string; capabilities?: TeamResponse["capabilities"] }) => {
@@ -100,6 +111,7 @@ beforeEach(() => {
   mocks.teams = [team];
   mocks.mine = [];
   mocks.role = "member";
+  mocks.permissions = ["automations.read"];
   mocks.suspendedAt = null;
   mocks.membershipLoading = false;
   mocks.membershipError = null;
@@ -184,6 +196,44 @@ describe("Teams index", () => {
 });
 
 describe("Team page tabs", () => {
+  it("follows navigation to a different active team", () => {
+    mocks.teams = [
+      team,
+      { ...team, id: "team_engineering", slug: "engineering", name: "Engineering" },
+    ];
+    const view = render(<TeamPage slug="design" />);
+    expect(screen.getByRole("heading", { name: "Design" })).toBeInTheDocument();
+
+    view.rerender(<TeamPage slug="engineering" />);
+
+    expect(screen.getByRole("heading", { name: "Engineering" })).toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "Design" })).not.toBeInTheDocument();
+    expect(mocks.replace).not.toHaveBeenCalled();
+  });
+
+  it.each(["missing", "archived"])(
+    "does not retain a team when navigating to the %s slug",
+    (slug) => {
+      mocks.teams = [team, { ...team, id: "team_archived", slug: "archived", archivedAt: 2 }];
+      const view = render(<TeamPage slug="design" />);
+      expect(screen.getByRole("heading", { name: "Design" })).toBeInTheDocument();
+
+      view.rerender(<TeamPage slug={slug} />);
+
+      expect(screen.getByText("Team not found.")).toBeInTheDocument();
+      expect(screen.queryByRole("heading", { name: "Design" })).not.toBeInTheDocument();
+      expect(mocks.replace).not.toHaveBeenCalled();
+
+      mocks.teams = [
+        { ...team, slug: "product-design" },
+        { ...team, id: "team_reused", name: "New Design Team" },
+      ];
+      view.rerender(<TeamPage slug="design" />);
+      expect(screen.getByRole("heading", { name: "New Design Team" })).toBeInTheDocument();
+      expect(mocks.replace).not.toHaveBeenCalled();
+    }
+  );
+
   it("shows the header and Members to a nonmember, even if mutation capabilities are present", () => {
     mocks.teams = [
       {
@@ -205,6 +255,7 @@ describe("Team page tabs", () => {
     expect(tabs.queryByRole("button", { name: "Repositories" })).not.toBeInTheDocument();
     expect(tabs.queryByRole("button", { name: "Secrets" })).not.toBeInTheDocument();
     expect(tabs.queryByRole("button", { name: "Environments" })).not.toBeInTheDocument();
+    expect(tabs.queryByRole("button", { name: "Automations" })).not.toBeInTheDocument();
     expect(tabs.queryByRole("button", { name: "Settings" })).not.toBeInTheDocument();
     expect(screen.getByText("Team member table")).toBeInTheDocument();
     expect(screen.queryByText("Team session buckets")).not.toBeInTheDocument();
@@ -240,10 +291,22 @@ describe("Team page tabs", () => {
     const tabs = within(screen.getByRole("navigation", { name: "Team tabs" }));
     fireEvent.click(tabs.getByRole("button", { name: "Environments" }));
     expect(screen.getByText("Environments for team_design")).toBeInTheDocument();
+    fireEvent.click(tabs.getByRole("button", { name: "Automations" }));
+    expect(screen.getByText("Automations for team_design")).toBeInTheDocument();
     mocks.mine = [];
     view.rerender(<TeamPage slug="design" />);
-    expect(screen.queryByText("Environments for team_design")).not.toBeInTheDocument();
+    expect(screen.queryByText("Automations for team_design")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Automations" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Environments" })).not.toBeInTheDocument();
+  });
+
+  it("hides the Automations tab without automations.read", () => {
+    mocks.mine = [team];
+    mocks.permissions = [];
+    render(<TeamPage slug="design" />);
+    const tabs = within(screen.getByRole("navigation", { name: "Team tabs" }));
+    expect(tabs.getByRole("button", { name: "Environments" })).toBeInTheDocument();
+    expect(tabs.queryByRole("button", { name: "Automations" })).not.toBeInTheDocument();
   });
 
   it.each(["owner", "administrator"])(
@@ -352,6 +415,7 @@ describe("Team page tabs", () => {
         "Members",
         "Repositories",
         "Environments",
+        "Automations",
         "Secrets",
       ]);
       expect(screen.queryByText("Team secrets editor for team_design")).not.toBeInTheDocument();

@@ -10,6 +10,7 @@ const AUTOMATION_LIST_QUERY_PARAMS = [
   "cursor",
   "repoOwner",
   "repoName",
+  "teamId",
 ] as const;
 
 export async function GET(request: NextRequest) {
@@ -61,6 +62,7 @@ export async function POST(request: NextRequest) {
       repositories: body.repositories,
       environmentIds: body.environmentIds,
       providerSelections: body.providerSelections,
+      teamId: body.teamId,
     };
 
     const response = await controlPlaneUserFetch("/automations", {

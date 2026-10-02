@@ -1,5 +1,6 @@
 "use client";
 
+import { isWorkspaceAdmin } from "@open-inspect/shared/rbac";
 import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
@@ -76,8 +77,7 @@ function SessionsContent() {
     hasPermission,
     loading: authorizationLoading,
   } = useCurrentUserAuthorization();
-  const canViewAllTeams =
-    authorization?.role.key === "owner" || authorization?.role.key === "administrator";
+  const canViewAllTeams = isWorkspaceAdmin(authorization?.role.key);
   const canReadSessions = hasPermission("sessions.read");
   const canCreateSession = hasPermission("sessions.create");
   const { data: authSession } = useAuthSession();

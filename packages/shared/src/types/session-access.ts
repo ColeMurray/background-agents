@@ -1,4 +1,5 @@
 import {
+  isWorkspaceAdmin,
   resolveScopedPermission,
   type BuiltInRoleKey,
   type PermissionId,
@@ -130,7 +131,7 @@ function sessionFacts(viewer: UserViewer, row: SessionAccessRow): SessionFacts {
     row.collaboratorIds.includes(viewer.userId) &&
     (row.ownerTeamId === null || teamRole !== undefined);
   const isWsOwner = viewer.roleKey === "owner";
-  const isAdmin = isWsOwner || viewer.roleKey === "administrator";
+  const isAdmin = isWorkspaceAdmin(viewer.roleKey);
   const isPrivate = row.visibility === "private";
   return {
     permissions: viewer.permissions,
@@ -250,7 +251,7 @@ function automationFacts(
   row: { ownerTeamId: string | null; executorUserId: string | null }
 ): AutomationFacts {
   const teamRole = row.ownerTeamId === null ? undefined : viewer.memberships.get(row.ownerTeamId);
-  const isAdmin = viewer.roleKey === "owner" || viewer.roleKey === "administrator";
+  const isAdmin = isWorkspaceAdmin(viewer.roleKey);
   return {
     permissions: viewer.permissions,
     has: (permission) => viewer.permissions.includes(permission),
@@ -297,6 +298,29 @@ export function checkAutomationAccess(
   return ownedGate(facts) ?? decide(AUTOMATION_RULES[action], facts);
 }
 
+/**
+ * Whether the viewer may choose a different executor. Executors cannot hand off their own
+ * automations; reassignment is a team-lead or workspace-admin decision. Route admission
+ * separately requires `manage`.
+ */
+export function checkAutomationExecutorReassignment(
+  viewer: SessionViewer,
+  row: { ownerTeamId: string | null; executorUserId: string | null }
+): AccessDecision {
+  if (viewer.kind === "service") return deny("missing_permission");
+  const facts = automationFacts(viewer, row);
+  return (
+    ownedGate(facts) ??
+    decide(
+      {
+        when: (f: AutomationFacts) => f.isAdmin || f.teamRole === "lead",
+        reason: "not_owner_or_lead",
+      },
+      facts
+    )
+  );
+}
+
 export function automationCapabilities(
   viewer: SessionViewer,
   row: { ownerTeamId: string | null; executorUserId: string | null }
@@ -317,7 +341,7 @@ function environmentFacts(
   row: { ownerTeamId: string | null }
 ): EnvironmentFacts {
   const teamRole = row.ownerTeamId === null ? undefined : viewer.memberships.get(row.ownerTeamId);
-  const isAdmin = viewer.roleKey === "owner" || viewer.roleKey === "administrator";
+  const isAdmin = isWorkspaceAdmin(viewer.roleKey);
   return {
     permissions: viewer.permissions,
     has: (permission) => viewer.permissions.includes(permission),

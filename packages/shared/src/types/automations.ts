@@ -128,6 +128,7 @@ const automationSchema = z.object({
   consecutiveFailures: z.number(),
   createdBy: z.string(),
   userId: z.string().refine(isCanonicalUserId, "Invalid canonical user ID").nullable(),
+  ownerTeamId: z.string().nullable(),
   createdAt: z.number(),
   updatedAt: z.number(),
   deletedAt: z.number().nullable(),
@@ -140,6 +141,22 @@ const automationSchema = z.object({
 
 export type Automation = z.infer<typeof automationSchema>;
 
+const automationCapabilitiesSchema = z.object({
+  canRead: z.boolean(),
+  canManage: z.boolean(),
+  canTrigger: z.boolean(),
+});
+
+/** What one viewer may do with an automation. */
+export type AutomationCapabilities = z.infer<typeof automationCapabilitiesSchema>;
+
+/** An automation as returned to a viewer, with that viewer's capabilities. */
+const automationViewSchema = automationSchema.extend({
+  capabilities: automationCapabilitiesSchema,
+});
+
+export type AutomationView = z.infer<typeof automationViewSchema>;
+
 const automationExecutionSummarySchema = z.object({
   id: z.string(),
   status: automationInvocationStatusSchema,
@@ -148,7 +165,7 @@ const automationExecutionSummarySchema = z.object({
 
 export type AutomationExecutionSummary = z.infer<typeof automationExecutionSummarySchema>;
 
-const automationListItemSchema = automationSchema.extend({
+const automationListItemSchema = automationViewSchema.extend({
   recentExecutions: z.array(automationExecutionSummarySchema),
 });
 
@@ -181,6 +198,11 @@ export const sentryClientSecretSchema = z.string().refine((secret) => secret.tri
 
 export const createAutomationRequestSchema = z.object({
   projectId: z.string().trim().min(1).nullable().optional(),
+  teamId: z
+    .string()
+    .regex(/^team_[A-Za-z0-9_-]+$/)
+    .nullable()
+    .optional(),
   name: z.string(),
   instructions: z.string(),
   triggerType: automationTriggerTypeSchema.optional(),

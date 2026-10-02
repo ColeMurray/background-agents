@@ -1,3 +1,4 @@
+import { isWorkspaceAdmin } from "@open-inspect/shared/rbac";
 import type {
   AnalyticsBreakdownBy,
   AnalyticsBreakdownEntry,
@@ -175,9 +176,7 @@ export class AnalyticsStore {
   prepareSummary(filters: AnalyticsFilters): SqlStatement {
     const { sql, binds } = scopePredicate(filters.scope, "s.spawn_source");
     const visible = this.visible("s");
-    const privileged =
-      this.readScope.kind === "user" &&
-      (this.readScope.roleKey === "owner" || this.readScope.roleKey === "administrator");
+    const privileged = this.readScope.kind === "user" && isWorkspaceAdmin(this.readScope.roleKey);
     const privateScope = scopePredicate(filters.scope, "private.spawn_source");
 
     return this.db
@@ -234,8 +233,7 @@ export class AnalyticsStore {
       activeUsers: row?.active_users ?? 0,
       totalCost,
       privateSessionsCostUsd:
-        this.readScope.kind === "user" &&
-        (this.readScope.roleKey === "owner" || this.readScope.roleKey === "administrator")
+        this.readScope.kind === "user" && isWorkspaceAdmin(this.readScope.roleKey)
           ? (row?.private_sessions_cost ?? 0)
           : null,
       avgCost: totalSessions > 0 ? totalCost / totalSessions : 0,

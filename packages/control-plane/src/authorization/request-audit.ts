@@ -92,6 +92,7 @@ export async function auditRouteAuthorizationDecision(input: {
       : input.ctx.childSessionAdmission
         ? input.ctx.childSessionAdmission.row.ownerTeamId
         : (input.ctx.sessionAdmission?.row.ownerTeamId ??
+          input.ctx.automationAdmission?.automation.owner_team_id ??
           input.ctx.environmentAdmission?.environment.owner_team_id ??
           input.ctx.projectAdmission?.project.ownerTeamId ??
           null);

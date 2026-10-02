@@ -50,6 +50,7 @@ from .constants import (
 )
 from .diff_capture import ControlPlaneDiffClient, SessionDiffRefreshWorker
 from .event_forwarder import BufferedEventForwarder
+from .event_size import MAX_EVENT_BYTES, event_size_bytes
 from .git_signing import GitSigningError, GitSigningRuntime
 from .harness import (
     DEFAULT_HARNESS_ID,
@@ -690,9 +691,10 @@ class AgentBridge:
             )
 
             emitted_output = False
+            text_undelivered = False
 
             async def emit(event: dict[str, Any]) -> None:
-                nonlocal emitted_output, message_cost_usd
+                nonlocal emitted_output, text_undelivered, message_cost_usd
                 if event.get("type") == "execution_complete":
                     raise RuntimeError("harness must not emit execution_complete")
                 if event.get("type") in ("token", "tool_call", "step_finish"):
@@ -702,7 +704,17 @@ class AgentBridge:
                 # When an outcome does arrive it is authoritative (below).
                 if event.get("type") == "step_finish" and "messageCostUsd" in event:
                     message_cost_usd = event["messageCostUsd"]
-                await self._send_event(event)
+                delivered = await self._send_event(event)
+                # Token content is cumulative, so a token the forwarder refuses
+                # as oversized (it sizes the event after stamping it in place)
+                # leaves the control plane's copy of that text incomplete. Any
+                # other undelivered token was buffered for replay.
+                if (
+                    not delivered
+                    and event.get("type") == "token"
+                    and event_size_bytes(event) > MAX_EVENT_BYTES
+                ):
+                    text_undelivered = True
 
             turn: TurnOutcome = await harness.run_prompt(
                 HarnessPrompt(
@@ -720,7 +732,7 @@ class AgentBridge:
             )
             await self._persist_rotated_session_id(harness)
             # The outcome is authoritative for cost and success once it
-            # exists; the bridge adds only the no-output guard below.
+            # exists; the bridge adds only the output guards below.
             if turn.message_cost_usd is not None:
                 message_cost_usd = turn.message_cost_usd
             if not turn.success:
@@ -734,6 +746,19 @@ class AgentBridge:
                 error_message = "The agent completed without emitting assistant output."
                 self.log.error(
                     "prompt.no_output",
+                    message_id=message_id,
+                    model=model,
+                    reasoning_effort=reasoning_effort,
+                )
+
+            if not had_error and text_undelivered:
+                had_error = True
+                error_message = (
+                    "The agent's response exceeded the event size limit and was not "
+                    "delivered in full."
+                )
+                self.log.error(
+                    "prompt.text_undelivered",
                     message_id=message_id,
                     model=model,
                     reasoning_effort=reasoning_effort,
