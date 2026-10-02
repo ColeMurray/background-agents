@@ -15,16 +15,20 @@ where changes are needed.
 ```text
 automation ── repositories (0..10, the live selection)
     │
-    └── invocation                 one per firing (schedule tick, Trigger Now, or event)
+    └── invocation                 one per recorded firing (schedule tick, Trigger Now, or event)
           │                        carries the firing-scoped keys and skip reason
           └── runs (0..10)         one per repository, each linked to one session
                 └── session        ordinary sandbox session; owns branch, artifacts, PR
 ```
 
-Every firing — single-repo, multi-repo, repo-less, or skipped — takes the same path: it records one
-`automation_invocations` row, and unless it was skipped, one `automation_runs` child per repository.
-There is no separate single-repo pipeline and no group-of-N special case; a single-repo firing is
-simply an invocation with one run.
+Recorded firings — single-repo, multi-repo, repo-less, or skipped — take the same path: one
+`automation_invocations` row, and unless skipped, one `automation_runs` child per repository. There
+is no separate single-repo pipeline and no group-of-N special case; a single-repo firing is simply
+an invocation with one run.
+
+Event-driven authorization denials increment the response's `skipped` count without creating an
+invocation, so they do not appear in run history. Scheduled authorization denials instead record a
+skipped invocation and pause the automation; see [Automations](AUTOMATIONS.md#managing-automations).
 
 **API ↔ UI vocabulary.** The API speaks `automation / repository / invocation / run / session`. The
 UI keeps its established "run" copy: the history section is still titled "Run History", the empty
@@ -221,9 +225,9 @@ invocation aggregates links for display only; there is no cross-repository "mega
 
 ## API surface
 
-- `GET /automations/:id/invocations` — the history endpoint: one entry per firing
+- `GET /automations/:id/invocations` — the history endpoint: one entry per recorded invocation
   (`{invocations, total}`), each carrying its child `runs` with repository snapshots. `total` counts
-  invocations.
+  invocations; event-driven authorization denials are not recorded.
 - `POST /automations/:id/trigger` — returns `201 {invocationId, runs}`; `409` when blocked by an
   active invocation.
 - Repository selection is written via `repositories: [{repoOwner, repoName, baseBranch?}]` on

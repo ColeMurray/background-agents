@@ -443,8 +443,9 @@ any sessions it created are preserved.
 
 ## Run History
 
-Each automation's detail page shows a chronological list of runs — one row per firing — with status,
-duration, and links to the underlying sessions.
+Each automation's detail page shows a chronological list of runs — one row per recorded invocation —
+with status, duration, and links to the underlying sessions. Event-driven authorization denials do
+not create invocation records and do not appear in this history.
 
 A single-repository firing renders as a flat row, exactly as before. A multi-repository firing
 renders as one expandable row summarizing its repositories (for example "10 repositories — 8
