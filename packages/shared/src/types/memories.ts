@@ -55,6 +55,24 @@ export const createMemorySchema = memoryContentSchema.safeExtend({
   supersedesMemoryId: z.string().min(1).max(200).optional(),
 });
 export type CreateMemoryInput = z.infer<typeof createMemorySchema>;
+/**
+ * Agent destinations are relative to the authenticated session. Repository names are an
+ * optional pair for disambiguating multi-repository sessions; environment identity is
+ * always server-derived. Persisted scopes and human management requests remain explicit.
+ */
+export const createSandboxMemorySchema = memoryContentSchema.safeExtend({
+  scope: z.discriminatedUnion("type", [
+    z.object({ type: z.literal("personal") }).strict(),
+    z
+      .object({ type: z.literal("repository"), ...repositoryPairInputSchema.partial().shape })
+      .strict()
+      .refine((scope) => (scope.repoOwner === undefined) === (scope.repoName === undefined), {
+        message: "repoOwner and repoName must be provided together",
+      }),
+    z.object({ type: z.literal("environment") }).strict(),
+  ]),
+  supersedesMemoryId: z.string().min(1).max(200).optional(),
+});
 export const reviseMemorySchema = memoryContentSchema.safeExtend({
   expectedRevisionId: z.string().min(1),
 });

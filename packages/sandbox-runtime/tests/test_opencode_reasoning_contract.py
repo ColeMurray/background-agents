@@ -253,6 +253,7 @@ async def test_memory_text_and_tool_contract_reach_real_opencode_provider_reques
     assert {"memory_read", "memory_write"} <= tools.keys()
     assert "memoryId" in tools["memory_read"]["input_schema"]["properties"]
     assert "ownerUserId" not in tools["memory_write"]["input_schema"]["properties"]
+    assert "environmentId" not in tools["memory_write"]["input_schema"]["properties"]
 
 
 async def test_all_fixture_efforts_reach_provider(wire_server):

@@ -7,14 +7,12 @@ export async function readMemory({ memoryId }) {
   return JSON.stringify(await response.json());
 }
 
-/** Send allowlisted content fields only; the server derives identity, approval state, and quotas. */
+/** Send relative scope and optional repo selector; the server resolves targets and write authority. */
 export async function writeMemory(args) {
   const scope =
     args.scope === "repository"
       ? { type: "repository", repoOwner: args.repoOwner, repoName: args.repoName }
-      : args.scope === "environment"
-        ? { type: "environment", environmentId: args.environmentId }
-        : { type: "personal" };
+      : { type: args.scope };
   const body = {
     scope,
     memoryType: args.memoryType,

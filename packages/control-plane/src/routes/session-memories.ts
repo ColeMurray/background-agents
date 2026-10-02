@@ -1,5 +1,9 @@
 import { Hono } from "hono";
-import { createMemorySchema, type MemoryRecord } from "@open-inspect/shared/types/memories";
+import {
+  createSandboxMemorySchema,
+  type MemoryRecord,
+  type MemoryScope,
+} from "@open-inspect/shared/types/memories";
 import { MemoryStore } from "../db/memories";
 import { SessionMemoryStore } from "../db/session-memories";
 import { SessionIndexStore } from "../db/session-index";
@@ -126,6 +130,7 @@ async function read(
 }
 /**
  * Derive agent identity and scope from the authenticated session, never from the request body.
+ * Infer a sole repository or the session environment; require a selector for multiple repos.
  * Shared-session personal writes are proposals because credentials identify a session, not
  * an immutable prompt author; the store rechecks any auto-save eligibility atomically.
  */
@@ -135,30 +140,44 @@ async function write(
   params: { id: string },
   ctx: SandboxRouteContext
 ) {
-  const body = await parseBody(request, createMemorySchema, "Invalid memory");
+  const body = await parseBody(request, createSandboxMemorySchema, "Invalid memory");
   if (body instanceof Response) return body;
   const store = new SessionMemoryStore(ctx.db);
   const target = await store.target(params.id);
   const session = await new SessionIndexStore(ctx.db).get(params.id);
-  const repoId =
-    body.scope.type === "repository"
-      ? (target?.repositories.find(
-          (repo) =>
-            body.scope.type === "repository" &&
-            repo.repoOwner.toLowerCase() === body.scope.repoOwner.toLowerCase() &&
-            repo.repoName.toLowerCase() === body.scope.repoName.toLowerCase()
-        )?.repoId ?? null)
-      : null;
-  if (
-    !target ||
-    !session ||
-    !matchesMemoryTarget({ scope: body.scope, ownerUserId: target.canonicalUserId, repoId }, target)
-  )
+  if (!target || !session) return error("Session not found", 404);
+  let scope: MemoryScope;
+  let repoId: number | null = null;
+  if (body.scope.type === "repository") {
+    const requested = body.scope;
+    if (requested.repoOwner === undefined && target.repositories.length > 1)
+      return error(
+        `This session spans multiple repositories — specify repoOwner and repoName (one of: ${target.repositories.map((repo) => `${repo.repoOwner}/${repo.repoName}`).join(", ")})`,
+        400
+      );
+    const repo =
+      requested.repoOwner === undefined
+        ? target.repositories[0]
+        : target.repositories.find(
+            (repo) =>
+              repo.repoOwner.toLowerCase() === requested.repoOwner &&
+              repo.repoName.toLowerCase() === requested.repoName
+          );
+    if (!repo) return error("Repository is outside this session", 403);
+    scope = { type: "repository", repoOwner: repo.repoOwner, repoName: repo.repoName };
+    repoId = repo.repoId;
+  } else if (body.scope.type === "environment") {
+    if (!target.environmentId) return error("This session has no associated environment", 403);
+    scope = { type: "environment", environmentId: target.environmentId };
+  } else {
+    scope = body.scope;
+  }
+  if (!matchesMemoryTarget({ scope, ownerUserId: target.canonicalUserId, repoId }, target))
     return error("Memory scope is outside this session", 403);
   // A collaborator-owned child can consume inherited context but cannot mutate its original owner's personal store.
-  if (body.scope.type === "personal" && session.userId !== target.canonicalUserId)
+  if (scope.type === "personal" && session.userId !== target.canonicalUserId)
     return error("Personal memory owner differs from this session owner", 403);
-  if (!(await currentSharedAccess(ctx, params.id, [{ scope: body.scope, repoId }])))
+  if (!(await currentSharedAccess(ctx, params.id, [{ scope, repoId }])))
     return error("Memory scope is no longer available", 403);
   const autoSave = await ctx.db
     .prepare(
@@ -168,10 +187,10 @@ async function write(
     .first<{ personal_auto_save_eligible: number }>();
   try {
     const memory = await new MemoryStore(ctx.db).create(
-      body,
+      { ...body, scope },
       {
         kind: "agent",
-        userId: body.scope.type === "personal" ? target.canonicalUserId : (session.userId ?? null),
+        userId: scope.type === "personal" ? target.canonicalUserId : (session.userId ?? null),
         sessionId: params.id,
         requestId: ctx.request_id,
         allowPersonalAutoSave: autoSave?.personal_auto_save_eligible === 1,

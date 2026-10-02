@@ -43,12 +43,10 @@ def build_memory_tools(client: ControlPlaneToolClient) -> list[Any]:
         return await request("GET", f"/sandbox-memory/{quote(str(args['memoryId']), safe='')}")
 
     async def write(args: dict[str, Any]) -> dict[str, Any]:
-        """Allowlist content fields; the control plane derives identity and write authority."""
+        """Send relative scope; the server infers sole targets and checks write authority."""
         scope = {"type": args["scope"]}
         if args["scope"] == "repository":
-            scope.update(repoOwner=args.get("repoOwner"), repoName=args.get("repoName"))
-        elif args["scope"] == "environment":
-            scope["environmentId"] = args.get("environmentId")
+            scope.update({key: args[key] for key in ("repoOwner", "repoName") if key in args})
         body: dict[str, Any] = {
             key: args[key]
             for key in ("memoryType", "title", "description", "content", "supersedesMemoryId")
@@ -65,14 +63,19 @@ def build_memory_tools(client: ControlPlaneToolClient) -> list[Any]:
         )(read),
         tool(
             "memory_write",
-            "Remember non-obvious durable knowledge. Write directives only when the user asks to remember a preference. Never store credentials. Shared memories and directives require approval; result states active or proposed. Respect personal-memory opt-out.",
+            "Remember non-obvious durable knowledge. The server infers the session environment or sole repository. For multi-repository sessions, specify both repoOwner and repoName. Write directives only when the user asks to remember a preference. Never store credentials. Shared memories and directives require approval; result states active or proposed. Respect personal-memory opt-out.",
             {
                 "type": "object",
                 "properties": {
                     "scope": {"type": "string", "enum": ["personal", "repository", "environment"]},
-                    "repoOwner": {"type": "string"},
-                    "repoName": {"type": "string"},
-                    "environmentId": {"type": "string"},
+                    "repoOwner": {
+                        "type": "string",
+                        "description": "Repository owner; supply with repoName for multi-repository sessions",
+                    },
+                    "repoName": {
+                        "type": "string",
+                        "description": "Repository name; supply with repoOwner for multi-repository sessions",
+                    },
                     "memoryType": {"type": "string", "enum": ["fact", "directive"]},
                     "title": {"type": "string"},
                     "description": {"type": "string"},

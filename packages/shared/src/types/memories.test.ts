@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   createMemorySchema,
+  createSandboxMemorySchema,
   reviseMemorySchema,
   MEMORY_LIMITS,
   sessionMemoryManifestSchema,
@@ -15,6 +16,36 @@ const fact = {
   content: "Start the local database",
 };
 describe("memory write contracts", () => {
+  it.each(["personal", "repository", "environment"])(
+    "accepts a session-relative %s scope only for sandbox writes",
+    (type) => {
+      expect(createSandboxMemorySchema.parse({ ...fact, scope: { type } }).scope).toEqual({ type });
+      expect(createMemorySchema.safeParse({ ...fact, scope: { type } }).success).toBe(
+        type === "personal"
+      );
+    }
+  );
+  it("normalizes an explicit sandbox repository selector", () => {
+    expect(
+      createSandboxMemorySchema.parse({
+        ...fact,
+        scope: {
+          type: "repository",
+          repoOwner: " Acme/Subgroup ",
+          repoName: " API ",
+        },
+      }).scope
+    ).toEqual({ type: "repository", repoOwner: "acme/subgroup", repoName: "api" });
+  });
+  it.each([
+    { type: "repository", repoOwner: "acme" },
+    { type: "repository", repoName: "api" },
+    { type: "repository", repoId: 123 },
+    { type: "environment", environmentId: "other" },
+    { type: "personal", ownerUserId: "other" },
+  ])("rejects partial selectors and caller-derived identities: $type", (scope) => {
+    expect(createSandboxMemorySchema.safeParse({ ...fact, scope }).success).toBe(false);
+  });
   it("accepts nested repository owners and canonicalizes their identity", () => {
     expect(
       createMemorySchema.parse({

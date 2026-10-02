@@ -106,6 +106,60 @@ async def test_both_claude_tools_use_session_bound_transport(tmp_path: Path) -> 
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "selector,expected_scope",
+    [
+        ({"scope": "repository"}, {"type": "repository"}),
+        ({"scope": "environment"}, {"type": "environment"}),
+        (
+            {"scope": "repository", "repoOwner": "group/subgroup", "repoName": "api"},
+            {"type": "repository", "repoOwner": "group/subgroup", "repoName": "api"},
+        ),
+    ],
+)
+async def test_claude_writes_preserve_optional_selectors_without_accepting_identity(
+    tmp_path: Path, selector: dict, expected_scope: dict
+) -> None:
+    import json
+
+    from sandbox_runtime.harness.claude_tools import ControlPlaneToolClient, ToolServerConfig
+    from sandbox_runtime.harness.memory_tools import build_memory_tools
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.headers["Authorization"] == "Bearer token"
+        body = json.loads(request.content)
+        assert body["scope"] == expected_scope
+        assert "ownerUserId" not in body and "sessionId" not in body
+        return httpx.Response(201, json={"status": "proposed"})
+
+    client = ControlPlaneToolClient(
+        ToolServerConfig(
+            "https://control.test", "session", "token", tmp_path / "repos.json", False, False
+        ),
+        MagicMock(),
+        httpx.AsyncClient(transport=httpx.MockTransport(handler)),
+    )
+    try:
+        write = build_memory_tools(client)[1]
+        assert "environmentId" not in write.input_schema["properties"]
+        result = await write.handler(
+            {
+                **selector,
+                "memoryType": "fact",
+                "title": "Test setup",
+                "description": "Start the database",
+                "content": "Body",
+                "environmentId": "attacker",
+                "ownerUserId": "attacker",
+                "sessionId": "other",
+            }
+        )
+        assert "isError" not in result
+    finally:
+        await client.aclose()
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("text", ["", "# Memory\n\nA pinned directive\n"])
 async def test_both_harnesses_receive_exact_memory_and_empty_parity(tmp_path, monkeypatch, text):
     import json
@@ -218,6 +272,8 @@ def test_opencode_tools_use_session_transport_and_strip_caller_identity():
       const { readMemory, writeMemory } = await import(process.argv[1]);
       await readMemory({ memoryId: "mem/a" });
       await writeMemory({ scope: "repository", repoOwner: "group/subgroup", repoName: "api", memoryType: "fact", title: "Test setup", description: "Start the database", content: "Body", ownerUserId: "attacker", sessionId: "other" });
+      await writeMemory({ scope: "repository", memoryType: "fact", title: "Test setup", description: "Start the database", content: "Body" });
+      await writeMemory({ scope: "environment", environmentId: "attacker", memoryType: "fact", title: "Test setup", description: "Start the database", content: "Body" });
       console.log(JSON.stringify(requests));
     """
     result = subprocess.run(
@@ -241,6 +297,8 @@ def test_opencode_tools_use_session_transport_and_strip_caller_identity():
     body = json.loads(requests[1]["body"])
     assert body["scope"] == {"type": "repository", "repoOwner": "group/subgroup", "repoName": "api"}
     assert "ownerUserId" not in body and "sessionId" not in body
+    assert json.loads(requests[2]["body"])["scope"] == {"type": "repository"}
+    assert json.loads(requests[3]["body"])["scope"] == {"type": "environment"}
 
 
 @pytest.mark.asyncio

@@ -64,6 +64,132 @@ describe("memory shared-scope authorization", () => {
   });
   afterEach(() => vi.restoreAllMocks());
 
+  /** Exercise inferred targets through real session-token admission and D1 authorization. */
+  async function sandboxSession(
+    id: string,
+    repositories: (Omit<typeof repo, "repoId"> & { repoId: number | null })[] = [repo],
+    environmentId: string | null = null
+  ) {
+    await new SessionIndexStore(env.DB).create({
+      id,
+      title: null,
+      userId: MEMBER,
+      ownerTeamId: "engineering",
+      visibility: "team",
+      repoOwner: repositories[0]?.repoOwner ?? null,
+      repoName: repositories[0]?.repoName ?? null,
+      repositories,
+      environmentId,
+      model: "anthropic/claude-sonnet-4-6",
+      reasoningEffort: null,
+      baseBranch: repositories[0]?.baseBranch ?? null,
+      status: "active",
+      createdAt: 1,
+      updatedAt: 1,
+      memoryManifest: await resolveSessionMemory(env.DB, {
+        canonicalUserId: MEMBER,
+        repositories,
+        environmentId,
+      }),
+    });
+    const { stub } = await initNamedSessionDO(id);
+    await seedSandboxAuthHash(stub, { authToken: `token-${id}`, sandboxId: `sandbox-${id}` });
+    return (scope: unknown) =>
+      routeRequest(
+        new Request(`https://test.local/sessions/${id}/sandbox-memory`, {
+          method: "POST",
+          headers: { Authorization: `Bearer token-${id}`, "Content-Type": "application/json" },
+          body: JSON.stringify({ ...content, scope }),
+        }),
+        env,
+        createExecutionContext()
+      );
+  }
+
+  it.each([null, "dev"])(
+    "infers the sole repository with environment %s",
+    async (environmentId) => {
+      const write = await sandboxSession(`sole-${environmentId}`, [repo], environmentId);
+      const response = await write({ type: "repository" });
+      expect(response.status).toBe(201);
+      const result = await response.json<{ id: string; status: string }>();
+      expect(result.status).toBe("proposed");
+      expect(await new MemoryStore(env.DB).get(result.id)).toMatchObject({
+        repoId: repo.repoId,
+        scope: { type: "repository", repoOwner: repo.repoOwner, repoName: repo.repoName },
+      });
+    }
+  );
+
+  it.each([null, "dev"])(
+    "requires selection in a multi-repository session with environment %s",
+    async (environmentId) => {
+      const second = { ...repo, repoName: "web", repoId: 456 };
+      await seedGrant("engineering", {
+        repo_id: second.repoId,
+        repo_owner: second.repoOwner,
+        repo_name: second.repoName,
+      });
+      const write = await sandboxSession(`multi-${environmentId}`, [repo, second], environmentId);
+      const ambiguous = await write({ type: "repository" });
+      expect(ambiguous.status).toBe(400);
+      const message = await ambiguous.text();
+      expect(message).toContain("repoOwner and repoName");
+      expect(message).toContain("acme/group/api");
+      expect(message).toContain("acme/group/web");
+      expect(await env.DB.prepare("SELECT COUNT(*) AS n FROM memories").first()).toEqual({ n: 0 });
+      expect(await env.DB.prepare("SELECT COUNT(*) AS n FROM memory_revisions").first()).toEqual({
+        n: 0,
+      });
+      const response = await write({
+        type: "repository",
+        repoOwner: " ACME/GROUP ",
+        repoName: " WEB ",
+      });
+      expect(response.status).toBe(201);
+      const { id } = await response.json<{ id: string }>();
+      expect(await new MemoryStore(env.DB).get(id)).toMatchObject({
+        repoId: 456,
+        scope: {
+          type: "repository",
+          repoOwner: second.repoOwner,
+          repoName: second.repoName,
+        },
+      });
+      if (environmentId) {
+        const environment = await write({ type: "environment" });
+        expect(environment.status).toBe(201);
+        const { id } = await environment.json<{ id: string }>();
+        expect(await new MemoryStore(env.DB).get(id)).toMatchObject({
+          status: "proposed",
+          scope: { type: "environment", environmentId: "dev" },
+        });
+      }
+    }
+  );
+
+  it("rejects unavailable targets, partial selectors and spoofed identities without inserting", async () => {
+    // This user can use the other repository, but it is deliberately absent from the session.
+    await seedGrant("engineering", { repo_id: 456, repo_owner: repo.repoOwner, repo_name: "web" });
+    const write = await sandboxSession("invalid-target");
+    for (const [scope, status] of [
+      [{ type: "repository", repoOwner: repo.repoOwner, repoName: "web" }, 403],
+      [{ type: "repository", repoOwner: repo.repoOwner }, 400],
+      [{ type: "repository", repoId: 123 }, 400],
+      [{ type: "environment" }, 403],
+      [{ type: "environment", environmentId: "dev" }, 400],
+    ] as const)
+      expect((await write(scope)).status).toBe(status);
+    const noRepo = await sandboxSession("no-repository", []);
+    expect((await noRepo({ type: "repository" })).status).toBe(403);
+    const legacy = await sandboxSession("legacy-repository", [{ ...repo, repoId: null }]);
+    expect((await legacy({ type: "repository" })).status).toBe(403);
+    expect(await env.DB.prepare("SELECT COUNT(*) AS n FROM memories").first()).toEqual({ n: 0 });
+    expect(await env.DB.prepare("SELECT COUNT(*) AS n FROM memory_revisions").first()).toEqual({
+      n: 0,
+    });
+  });
+
   it.each([123, null])(
     "does not transfer records with repo ID %s to a reused repository name",
     async (repoId) => {
@@ -248,7 +374,9 @@ describe("memory shared-scope authorization", () => {
       }
       expect((await sandbox()).status).toBe(403);
       expect((await sandbox(`/${record.id}`)).status).toBe(404);
-      expect((await sandbox("", "POST", { ...content, scope: record.scope })).status).toBe(403);
+      expect(
+        (await sandbox("", "POST", { ...content, scope: { type: "repository" } })).status
+      ).toBe(403);
     }
   );
 
@@ -341,8 +469,8 @@ describe("memory shared-scope authorization", () => {
             change === "personal failure"
               ? { type: "personal" }
               : change === "environment transfer"
-                ? { type: "environment", environmentId: "dev" }
-                : { type: "repository", repoOwner: repo.repoOwner, repoName: repo.repoName },
+                ? { type: "environment" }
+                : { type: "repository" },
         }),
       }),
       env,

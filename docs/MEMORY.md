@@ -130,6 +130,35 @@ identifiers are retained after target deletion to preserve historical manifests.
 hard-delete endpoint. Restoring an approved memory is allowed only when its entire replacement
 family has no active record.
 
+### Agent write destinations
+
+`memory_write` uses session-relative scopes. The control plane derives the personal owner, the sole
+repository, or the associated environment from the authenticated session:
+
+```javascript
+memory_write({
+  scope: "repository", // Or "personal" / "environment"
+  memoryType: "fact",
+  title: "Integration test setup",
+  description: "Database preparation required before the integration suite.",
+  content: "Start Postgres and apply test migrations before running integration tests.",
+});
+```
+
+For a multi-repository session, add **both** `repoOwner` and `repoName` to select a member
+repository. This applies to ad-hoc sets and environment-backed sessions alike. Omitting the selector
+returns HTTP 400 with the available repository names; the server never silently defaults to the
+primary repository. An explicit non-member, absent environment/repository, or repository without a
+stable ID is denied. Sandbox writes do not accept `environmentId`; environment identity is always
+derived from the session. Human management APIs still require explicit repository/environment
+identities.
+
+Both harnesses send the same relative request to `POST /sessions/:id/sandbox-memory`, with
+`scope: { type: "repository" }`, `{ type: "environment" }`, or `{ type: "personal" }`; an explicit
+repository selector lives inside that scope object. The server resolves a complete scope before
+performing the existing current-access and commit-time checks. Inference does not change approval,
+opt-out, quotas, replacement rules, or pinned context.
+
 ## Local verification
 
 Use Node 24; build shared before dependent TypeScript checks. Run heavyweight checks sequentially.
