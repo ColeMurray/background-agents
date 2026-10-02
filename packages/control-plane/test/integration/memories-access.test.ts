@@ -1,6 +1,8 @@
 import { createExecutionContext, env } from "cloudflare:test";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { MemoryStore } from "../../src/db/memories";
+import { Scheduler } from "../../src/scheduler/scheduler";
+import { createCloudflareEnv } from "../../src/cloudflare/platform";
 import { SessionIndexStore } from "../../src/db/session-index";
 import { SessionCollaboratorStore } from "../../src/db/session-collaborators";
 import { resolveSessionMemory } from "../../src/session/memory-resolution";
@@ -39,6 +41,8 @@ describe("memory shared-scope authorization", () => {
       await seedActiveUser(id);
       await request("/me/authorization", "GET", undefined, id);
       await assignCustomRole(id, [
+        "sessions.create",
+        "repositories.use",
         "repositories.read",
         "repositories.settings.manage",
         "environments.read",
@@ -59,6 +63,54 @@ describe("memory shared-scope authorization", () => {
     });
   });
   afterEach(() => vi.restoreAllMocks());
+
+  it("denies workspace creation before resolving a repository owned by another team", async () => {
+    const denied = await request(
+      "/sessions",
+      "POST",
+      {
+        repoOwner: repo.repoOwner,
+        repoName: repo.repoName,
+      },
+      OUTSIDER
+    );
+    expect(denied.status).toBe(403);
+    expect(await denied.json()).toMatchObject({ code: "repository_grant_required" });
+    expect(
+      await env.DB.prepare("SELECT COUNT(*) AS n FROM session_memory_manifests").first()
+    ).toEqual({ n: 0 });
+  });
+
+  it("does not inject repository memories into an unauthorized workspace automation", async () => {
+    await env.DB.prepare(
+      `INSERT INTO automations
+      (id, name, instructions, schedule_cron, model, next_run_at, created_by, user_id, created_at, updated_at)
+      VALUES ('memory-auto', 'Memory automation', 'Run tests', '0 9 * * *', 'anthropic/claude-sonnet-4-6', 1, ?, ?, 1, 1)`
+    )
+      .bind(OUTSIDER, OUTSIDER)
+      .run();
+    await env.DB.prepare(
+      `INSERT INTO automation_repositories
+      (automation_id, repo_owner, repo_name, repo_id, base_branch, created_at, updated_at)
+      VALUES ('memory-auto', ?, ?, ?, 'main', 1, 1)`
+    )
+      .bind(repo.repoOwner, repo.repoName, repo.repoId)
+      .run();
+    await new Scheduler(env.DB, createCloudflareEnv(env), { submit() {} }).tick();
+    expect(
+      await env.DB.prepare(
+        "SELECT COUNT(*) AS n FROM sessions WHERE automation_id = 'memory-auto'"
+      ).first()
+    ).toEqual({ n: 0 });
+    expect(
+      await env.DB.prepare(
+        "SELECT status, failure_reason FROM automation_runs WHERE automation_id = 'memory-auto'"
+      ).first()
+    ).toMatchObject({
+      status: "failed",
+      failure_reason: "Automation execution principal is not authorized",
+    });
+  });
 
   it.each([
     { type: "repository" as const, repoOwner: repo.repoOwner, repoName: repo.repoName },

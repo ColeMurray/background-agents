@@ -23,6 +23,7 @@ import {
   type TriggerConfig,
 } from "@open-inspect/shared/triggers";
 import { resolveSessionMemory } from "../session/memory-resolution";
+import { authorizeWorkspaceRepositories } from "../routes/workspace-repository-authorization";
 import { nextCronOccurrence } from "@open-inspect/shared/cron";
 import type {
   AutomationInvocationSource,
@@ -1726,8 +1727,22 @@ export class Scheduler {
     const scopeMembers =
       target.repositories ??
       (target.repoOwner && target.repoName
-        ? [{ repoOwner: target.repoOwner, repoName: target.repoName }]
+        ? [{ repoOwner: target.repoOwner, repoName: target.repoName, repoId: target.repoId }]
         : []);
+    ctx.authorization = await new AuthorizationService(this.db).getEffectiveAuthorization(
+      executionPrincipal.platformUserId
+    );
+    if (
+      await authorizeWorkspaceRepositories(ctx, {
+        repositories: scopeMembers.map((repo) => ({
+          owner: repo.repoOwner,
+          name: repo.repoName,
+          repoId: repo.repoId ?? null,
+        })),
+      })
+    ) {
+      throw new AutomationExecutionUnauthorizedError("repository_grant_required");
+    }
     const { codeServerEnabled, vncEnabled, sandboxSettings } = await resolveSessionScopedSettings(
       this.db,
       scopeMembers,

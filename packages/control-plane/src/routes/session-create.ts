@@ -1,4 +1,5 @@
 import { resolveSessionMemory } from "../session/memory-resolution";
+import { authorizeWorkspaceRepositories } from "./workspace-repository-authorization";
 import { Hono } from "hono";
 import { admit, dispatch } from "../routing/admit";
 import type { ControlPlaneHonoEnv } from "../routing/hono-env";
@@ -242,7 +243,16 @@ export async function handleCreateSession(
   // §6.2). In list mode that is repositories[0]; otherwise the scalar pair — the
   // two are the same repo by the row-0-mirrors-scalars invariant. Launching
   // from a saved environment layers its overrides on top (design §13.5).
-  const scopeMembers = repositories ?? (repoOwner && repoName ? [{ repoOwner, repoName }] : []);
+  const scopeMembers =
+    repositories ?? (repoOwner && repoName ? [{ repoOwner, repoName, repoId }] : []);
+  const memoryAccessDenied = await authorizeWorkspaceRepositories(ctx, {
+    repositories: scopeMembers.map((repo) => ({
+      owner: repo.repoOwner,
+      name: repo.repoName,
+      repoId: repo.repoId ?? null,
+    })),
+  });
+  if (memoryAccessDenied) return memoryAccessDenied;
   const { codeServerEnabled, vncEnabled, sandboxSettings } = await resolveSessionScopedSettings(
     ctx.db,
     scopeMembers,
