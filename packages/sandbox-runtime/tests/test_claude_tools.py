@@ -373,3 +373,14 @@ async def test_project_tool_uses_bound_authenticated_route(tmp_path):
     assert "Curated" in _text(result)
     assert str(seen[0].url) == "https://cp.example/sessions/s1/project-context?part=tool"
     assert seen[0].headers["Authorization"] == "Bearer tok"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("error_type", [httpx.ConnectError, httpx.ReadTimeout])
+async def test_project_tool_reports_transport_unavailability(tmp_path, error_type):
+    def unavailable(request):
+        raise error_type("Connection unavailable", request=request)
+
+    tools, _ = _tools(tmp_path, unavailable, project_context_enabled=True)
+    tool = next(tool for tool in build_tools(tools.client) if tool.name == "read_project_context")
+    assert _text(await tool.handler({})) == "Project context unavailable: Connection unavailable"

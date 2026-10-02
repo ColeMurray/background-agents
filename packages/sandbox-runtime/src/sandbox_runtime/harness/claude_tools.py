@@ -847,7 +847,10 @@ def build_tools(client: ControlPlaneToolClient) -> list[Any]:
     if config.project_context_enabled:
 
         async def read_project_context(_args: dict[str, Any]) -> dict[str, Any]:
-            response = await client.request("GET", "/project-context?part=tool")
+            try:
+                response = await client.request("GET", "/project-context?part=tool")
+            except httpx.HTTPError as error:
+                return _text_result(f"Project context unavailable: {error}")
             if not response.is_success:
                 return _text_result(f"Project context unavailable: {_error_text(response)}")
             return _text_result(response.text)
