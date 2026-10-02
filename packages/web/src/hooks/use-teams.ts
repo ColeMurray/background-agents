@@ -158,7 +158,13 @@ export function useTeam(id: string) {
     const team = await write(key, "PATCH", input, teamSchema);
     await Promise.allSettled([
       mutate(key, team, { revalidate: false }),
-      mutate(TEAMS_KEY),
+      mutate(
+        TEAMS_KEY,
+        (current: z.infer<typeof teamsSchema> | undefined) => ({
+          teams: [...(current?.teams ?? []).filter((existing) => existing.id !== team.id), team],
+        }),
+        { revalidate: false }
+      ),
       mutate(isMeTeamsCacheKey),
     ]);
     return team;

@@ -5,6 +5,7 @@ import { useEffect, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import {
+  isRetryableTeamError,
   useMeTeams,
   useTeam,
   useTeamMembers,
@@ -33,7 +34,6 @@ type TeamTab =
   | "Settings";
 
 export function TeamPage({ slug }: { slug: string }) {
-  const router = useRouter();
   const { teams, loading, error } = useTeams();
   const mine = useMeTeams();
   const { authorization, hasPermission } = useCurrentUserAuthorization();
@@ -50,10 +50,6 @@ export function TeamPage({ slug }: { slug: string }) {
   if (shownTeam.routeSlug !== slug || (team && team.id !== shownTeam.id)) {
     setShownTeam({ id: team?.id ?? null, routeSlug: slug });
   }
-  const teamSlug = team?.slug;
-  useEffect(() => {
-    if (teamSlug && teamSlug !== slug) router.replace(`/teams/${encodeURIComponent(teamSlug)}`);
-  }, [router, slug, teamSlug]);
   const role = authorization?.role.key;
   const admin = authorization?.suspendedAt === null && isWorkspaceAdmin(role);
   const member =
@@ -68,12 +64,14 @@ export function TeamPage({ slug }: { slug: string }) {
         Loading team...
       </p>
     );
-  if (error) return <ErrorBanner role="alert">Unable to load team.</ErrorBanner>;
+  if (error && (!team || !isRetryableTeamError(error)))
+    return <ErrorBanner role="alert">Unable to load team.</ErrorBanner>;
   if (!team) return <p className="text-sm text-muted-foreground">Team not found.</p>;
   return (
     <TeamContent
       key={team.id}
       initialTeam={team}
+      slug={slug}
       canViewWork={admin || member}
       canReadAutomations={hasPermission("automations.read")}
     />
@@ -82,14 +80,23 @@ export function TeamPage({ slug }: { slug: string }) {
 
 function TeamContent({
   initialTeam,
+  slug,
   canViewWork,
   canReadAutomations,
 }: {
   initialTeam: TeamResponse;
+  slug: string;
   canViewWork: boolean;
   canReadAutomations: boolean;
 }) {
+  const router = useRouter();
   const { team: currentTeam, error } = useTeam(initialTeam.id);
+  // The ID-keyed detail cache holds the PATCH response even when directory reads lag.
+  const canonicalSlug = !error && currentTeam?.archivedAt === null ? currentTeam.slug : undefined;
+  useEffect(() => {
+    if (canonicalSlug && canonicalSlug !== slug)
+      router.replace(`/teams/${encodeURIComponent(canonicalSlug)}`);
+  }, [router, slug, canonicalSlug]);
   const team = currentTeam ?? initialTeam;
   const capabilities = useTeamCapabilities(team);
   const [tab, setTab] = useState<TeamTab>("Overview");
