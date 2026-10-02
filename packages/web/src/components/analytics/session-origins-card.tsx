@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useId, useState } from "react";
 import type { AnalyticsSessionOriginEntry } from "@open-inspect/shared/types/analytics";
 import type { SpawnSource } from "@open-inspect/shared/types/sessions";
 import { formatAnalyticsCount, formatAnalyticsRatio } from "@/lib/analytics";
@@ -22,6 +22,8 @@ export function AnalyticsSessionOriginsCard({
   entries?: AnalyticsSessionOriginEntry[];
   loading: boolean;
 }) {
+  const headingId = useId();
+  const usersId = useId();
   const [selectedSource, setSelectedSource] = useState<SpawnSource | null>(null);
   const sourceCounts = new Map<SpawnSource, number>();
   for (const entry of entries ?? []) {
@@ -54,12 +56,12 @@ export function AnalyticsSessionOriginsCard({
 
   return (
     <section
-      aria-labelledby="session-origins-heading"
+      aria-labelledby={headingId}
       aria-busy={loading}
       className="rounded-md border border-border-muted bg-card"
     >
       <div className="border-b border-border-muted p-4 sm:px-5">
-        <h2 id="session-origins-heading" className="text-lg font-semibold text-foreground">
+        <h2 id={headingId} className="text-lg font-semibold text-foreground">
           Session origins
         </h2>
         <p className="mt-1 text-sm text-muted-foreground">
@@ -85,7 +87,7 @@ export function AnalyticsSessionOriginsCard({
               <button
                 type="button"
                 aria-pressed={source === null}
-                aria-controls="session-origin-users"
+                aria-controls={usersId}
                 onClick={() => setSelectedSource(null)}
                 className="rounded px-2 py-1 text-xs text-accent hover:bg-accent-muted focus-visible:outline focus-visible:outline-2 focus-visible:outline-ring"
               >
@@ -98,7 +100,7 @@ export function AnalyticsSessionOriginsCard({
                   <button
                     type="button"
                     aria-pressed={source === key}
-                    aria-controls="session-origin-users"
+                    aria-controls={usersId}
                     onClick={() => setSelectedSource(source === key ? null : key)}
                     className={cn(
                       "w-full rounded-md border p-3 text-left transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-ring",
@@ -131,7 +133,7 @@ export function AnalyticsSessionOriginsCard({
             </p>
           </div>
 
-          <div id="session-origin-users" className="min-w-0 p-4 sm:p-5">
+          <div id={usersId} className="min-w-0 p-4 sm:p-5">
             <h3 className="text-xs uppercase tracking-wider text-secondary-foreground">
               Attributed users
             </h3>

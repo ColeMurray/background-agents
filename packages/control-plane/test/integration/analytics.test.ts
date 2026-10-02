@@ -287,6 +287,8 @@ describe("Analytics API", () => {
       ["historical-repeat", "user", null, "old-login", startAt + 1],
       ["historical-other", "user", null, "other-login", startAt + 1],
       ["no-name", "user", "origin-user-3", "fallback-login", startAt + 1],
+      ["no-name-slack", "slack-bot", "origin-user-3", "other-fallback-login", startAt + 1],
+      ["no-name-before", "user", "origin-user-3", "zzz-outside-window", startAt - 1],
       ["unknown-null", "user", null, null, startAt + 1],
       ["unknown-empty", "user", null, "", startAt + 1],
       ["before", "user", "origin-user-1", "new-login", startAt - 1],
@@ -320,7 +322,18 @@ describe("Analytics API", () => {
       { source: "automation", userKey: "origin-user-1", displayName: "Same name", sessions: 1 },
       { source: "user", userKey: "old-login", displayName: "old-login", sessions: 2 },
       { source: "user", userKey: "other-login", displayName: "other-login", sessions: 1 },
-      { source: "user", userKey: "origin-user-3", displayName: "fallback-login", sessions: 1 },
+      {
+        source: "user",
+        userKey: "origin-user-3",
+        displayName: "other-fallback-login",
+        sessions: 1,
+      },
+      {
+        source: "slack-bot",
+        userKey: "origin-user-3",
+        displayName: "other-fallback-login",
+        sessions: 1,
+      },
       { source: "user", userKey: "__unknown__", displayName: "Unknown user", sessions: 2 },
     ];
     const dashboard = new AnalyticsDashboardStore(env.DB, { kind: "service", teamId: null }, "on");
@@ -338,6 +351,11 @@ describe("Analytics API", () => {
         expected.reduce((sum, entry) => sum + entry.sessions, 0)
       );
       for (const user of snapshot.breakdowns.user.entries) {
+        for (const origin of snapshot.sessionOrigins.filter(
+          (entry) => entry.userKey === user.key
+        )) {
+          expect(origin.displayName).toBe(user.displayName);
+        }
         expect(user.sessions).toBe(
           snapshot.sessionOrigins
             .filter((entry) => entry.userKey === user.key)

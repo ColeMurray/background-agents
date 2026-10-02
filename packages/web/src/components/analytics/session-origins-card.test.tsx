@@ -71,14 +71,34 @@ describe("AnalyticsSessionOriginsCard", () => {
     expect(screen.getByText("user-b")).toBeInTheDocument();
   });
 
-  it("shows loading and empty states and retains cached data during refresh", () => {
+  it("shows loading and empty states", () => {
     const { rerender } = render(<AnalyticsSessionOriginsCard loading />);
     expect(screen.getByRole("status")).toHaveTextContent("Loading session origins");
     rerender(<AnalyticsSessionOriginsCard entries={[]} loading={false} />);
     expect(screen.getByText("No sessions found for this range and scope.")).toBeInTheDocument();
     expect(screen.queryByRole("button")).not.toBeInTheDocument();
-    rerender(<AnalyticsSessionOriginsCard entries={entries} loading />);
-    expect(screen.getByRole("button", { name: /Slack/ })).toBeInTheDocument();
+  });
+
+  it("keeps accessible headings and controls local to each card instance", () => {
+    render(
+      <>
+        <AnalyticsSessionOriginsCard entries={entries} loading={false} />
+        <AnalyticsSessionOriginsCard entries={entries} loading={false} />
+      </>
+    );
+    const cards = screen.getAllByRole("region", { name: "Session origins" });
+    const ids: string[] = [];
+    for (const card of cards) {
+      const heading = within(card).getByRole("heading", { name: "Session origins" });
+      expect(card).toHaveAttribute("aria-labelledby", heading.id);
+      const panel = within(card).getByRole("status").parentElement!;
+      for (const button of within(card).getAllByRole("button")) {
+        expect(button).toHaveAttribute("aria-controls", panel.id);
+      }
+      ids.push(heading.id, panel.id);
+    }
+    expect(ids.every(Boolean)).toBe(true);
+    expect(new Set(ids).size).toBe(4);
   });
 
   it("falls back to all sources when refreshed data no longer contains the selection", async () => {

@@ -311,16 +311,25 @@ export class AnalyticsStore {
 
     return this.db
       .prepare(
-        `SELECT s.spawn_source AS source,
-                ${USER_KEY_EXPRESSION} AS user_key,
-                ${USER_DISPLAY_NAME_EXPRESSION} AS display_name,
+        `WITH filtered_sessions AS (
+           SELECT s.spawn_source, s.user_id, s.scm_login, ${USER_KEY_EXPRESSION} AS user_key
+           FROM sessions s
+           WHERE s.created_at >= ? AND s.created_at < ?
+               ${sql} ${visible.sql ? `AND ${visible.sql}` : ""}
+         ), user_labels AS (
+           SELECT s.user_key, ${USER_DISPLAY_NAME_EXPRESSION} AS display_name
+           FROM filtered_sessions s
+           LEFT JOIN users u ON s.user_id = u.id
+           GROUP BY s.user_key
+         )
+         SELECT s.spawn_source AS source,
+                s.user_key,
+                u.display_name,
                 COUNT(*) AS sessions
-         FROM sessions s
-         LEFT JOIN users u ON s.user_id = u.id
-         WHERE s.created_at >= ? AND s.created_at < ?
-             ${sql} ${visible.sql ? `AND ${visible.sql}` : ""}
-         GROUP BY s.spawn_source, ${USER_KEY_EXPRESSION}
-         ORDER BY sessions DESC, source ASC, display_name ASC, user_key ASC`
+         FROM filtered_sessions s
+         JOIN user_labels u ON s.user_key = u.user_key
+         GROUP BY s.spawn_source, s.user_key, u.display_name
+         ORDER BY sessions DESC, source ASC, u.display_name ASC, s.user_key ASC`
       )
       .bind(filters.startAt, filters.endAt, ...binds, ...visible.params);
   }
