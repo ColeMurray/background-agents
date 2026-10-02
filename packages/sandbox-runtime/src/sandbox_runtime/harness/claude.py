@@ -60,6 +60,7 @@ from .claude_env import (
     resolve_api_key_credential,
     write_clean_env_wrapper,
 )
+from .claude_logging import ClaudeTrajectoryLogger
 from .claude_tools import OI_TOOL_SERVER_NAME, ControlPlaneToolClient, ToolServerConfig
 
 if TYPE_CHECKING:
@@ -306,6 +307,12 @@ class ClaudeHarness:
         self.limits = limits
         self.credential_client = credential_client
         self.environ = environ if environ is not None else os.environ
+        self._trajectory = ClaudeTrajectoryLogger(
+            log,
+            self.environ,
+            config.mcp_servers,
+            config.tools.auth_token if config.tools else None,
+        )
         self._client_factory = client_factory
         self._options_factory = options_factory
         self._tool_server_factory = tool_server_factory
@@ -340,13 +347,14 @@ class ClaudeHarness:
         bridge restart budget covers.
         """
         self.credential = await self._resolve_credential()
+        self._trajectory.add_credentials(self.credential.env.values())
         binary = self._binary or bundled_claude_binary()
         self.wrapper_path = write_clean_env_wrapper(
             self.config.config_dir / "bin", mode=self.credential.mode, binary=binary
         )
         if self.config.tools is not None and self._tool_client is None:
             self._tool_client = ControlPlaneToolClient(self.config.tools, self.log)
-        self.log.info(
+        self._trajectory.diagnostic(
             "claude.open",
             auth_mode=self.credential.mode.value,
             config_dir=str(self.config.config_dir),
@@ -383,17 +391,21 @@ class ClaudeHarness:
 
     async def resume_session(self, persisted_id: str) -> bool:
         if not self._transcript_exists(persisted_id, self.config.workdir, self.config.config_dir):
-            self.log.info("claude.session.invalid", agent_session_id=persisted_id)
+            self._trajectory.diagnostic("claude.session.invalid", agent_session_id=persisted_id)
             return False
         self.session_id = persisted_id
         self._resume_on_connect = True
-        self.log.info("claude.session.ensure", agent_session_id=persisted_id, action="loaded")
+        self._trajectory.diagnostic(
+            "claude.session.ensure", agent_session_id=persisted_id, action="loaded"
+        )
         return True
 
     async def create_session(self) -> None:
         self.session_id = str(uuid.uuid4())
         self._resume_on_connect = False
-        self.log.info("claude.session.ensure", agent_session_id=self.session_id, action="created")
+        self._trajectory.diagnostic(
+            "claude.session.ensure", agent_session_id=self.session_id, action="created"
+        )
 
     # --- connection ------------------------------------------------------------
 
@@ -428,6 +440,7 @@ class ClaudeHarness:
             "include_partial_messages": True,
             "forward_subagent_text": False,
             "max_buffer_size": MAX_STDOUT_MESSAGE_BYTES,
+            "stderr": self._trajectory.stderr,
             **reasoning_options(model, reasoning_effort),
         }
         if self._resume_on_connect:
@@ -473,7 +486,7 @@ class ClaudeHarness:
         self._needs_reconnect = False
         # A fresh child starts its running total at zero (§5.3 baseline rule).
         self._cost_baseline = 0.0
-        self.log.info(
+        self._trajectory.diagnostic(
             "claude.connected",
             model=model,
             reasoning_effort=reasoning_effort,
@@ -494,7 +507,7 @@ class ClaudeHarness:
         try:
             await client.disconnect()
         except Exception as error:
-            self.log.warn("claude.disconnect_error", exc=error)
+            self._trajectory.diagnostic("claude.disconnect_error", level="warn", exc=error)
             return False
         if self._client is client:
             self._client = None
@@ -503,6 +516,21 @@ class ClaudeHarness:
     # --- prompt ------------------------------------------------------------
 
     async def run_prompt(self, prompt: HarnessPrompt, emit: EventSink) -> TurnOutcome:
+        self._trajectory.begin(prompt.message_id, self.session_id)
+        outcome = None
+        try:
+            outcome = await self._run_prompt(prompt, emit)
+            return outcome
+        except asyncio.CancelledError:
+            outcome = TurnOutcome(success=False, error="Task was cancelled", cancelled=True)
+            raise
+        except Exception as error:
+            outcome = TurnOutcome.failed(str(error) or type(error).__name__)
+            raise
+        finally:
+            self._trajectory.finish(outcome)
+
+    async def _run_prompt(self, prompt: HarnessPrompt, emit: EventSink) -> TurnOutcome:
         try:
             model = bare_model_id(prompt.model, self.config.default_model)
         except ValueError as error:
@@ -525,12 +553,12 @@ class ClaudeHarness:
         except HarnessStartError:
             raise
         except TimeoutError:
-            self.log.error("claude.connect_timeout", message_id=prompt.message_id)
+            self._trajectory.diagnostic("claude.connect_timeout", level="error")
             self._needs_reconnect = True
             await self._interrupt_within_budget()
             return TurnOutcome.failed(f"Claude agent did not start within {max_duration:.0f}s.")
         except Exception as error:
-            self.log.error("claude.connect_error", exc=error, message_id=prompt.message_id)
+            self._trajectory.diagnostic("claude.connect_error", level="error", exc=error)
             self._needs_reconnect = True
             return TurnOutcome.failed(f"Claude agent failed to start: {error}")
 
@@ -551,6 +579,7 @@ class ClaudeHarness:
                     if self._belongs_to_injected_turn(state, message):
                         continue
                     events, outcome = self._translate(state, message)
+                    self._trajectory.message(message, events)
                     for event in events:
                         await emit(event)
                     if outcome is not None:
@@ -569,9 +598,9 @@ class ClaudeHarness:
             return TurnOutcome.failed(f"Prompt exceeded max duration of {max_duration:.0f}s.")
         except _InactivityTimeout:
             timeout_seconds = self.limits.inactivity_timeout_seconds
-            self.log.error(
+            self._trajectory.diagnostic(
                 "claude.inactivity_timeout",
-                message_id=prompt.message_id,
+                level="error",
                 timeout_s=timeout_seconds,
             )
             await self._interrupt_within_budget()
@@ -580,7 +609,7 @@ class ClaudeHarness:
                 f"Claude agent produced no output for {timeout_seconds:.0f}s."
             )
         except Exception as error:
-            self.log.error("claude.turn_error", exc=error, message_id=prompt.message_id)
+            self._trajectory.diagnostic("claude.turn_error", level="error", exc=error)
             self._needs_reconnect = True
             return TurnOutcome.failed(f"Claude agent transport failed: {error}")
 
@@ -600,12 +629,16 @@ class ClaudeHarness:
         if isinstance(message, UserMessage):
             if (origin := _injected_origin(message.origin)) is not None:
                 state.injected = True
-                self.log.info("claude.injected_turn_started", origin_kind=origin["kind"])
+                self._trajectory.diagnostic(
+                    "claude.injected_turn_started", origin_kind=origin["kind"]
+                )
             return state.injected
         if isinstance(message, ResultMessage):
             if (origin := _injected_origin(message.origin)) is not None:
                 state.injected = False
-                self.log.info("claude.injected_turn_ignored", origin_kind=origin["kind"])
+                self._trajectory.diagnostic(
+                    "claude.injected_turn_ignored", origin_kind=origin["kind"]
+                )
                 return True
             state.injected = False
             return False
@@ -621,12 +654,12 @@ class ClaudeHarness:
             async with asyncio.timeout(budget):
                 return await self._interrupt_quietly()
         except TimeoutError:
-            self.log.warn("claude.interrupt_timeout", timeout_s=budget)
+            self._trajectory.diagnostic("claude.interrupt_timeout", level="warn", timeout_s=budget)
         try:
             async with asyncio.timeout(budget):
                 await self._disconnect()
         except TimeoutError:
-            self.log.warn("claude.disconnect_timeout", timeout_s=budget)
+            self._trajectory.diagnostic("claude.disconnect_timeout", level="warn", timeout_s=budget)
         return False
 
     async def _interrupt_quietly(self) -> bool:
@@ -635,7 +668,7 @@ class ClaudeHarness:
         try:
             await self._client.interrupt()
         except Exception as error:
-            self.log.warn("claude.interrupt_error", exc=error)
+            self._trajectory.diagnostic("claude.interrupt_error", level="warn", exc=error)
             return False
         return True
 
@@ -674,21 +707,26 @@ class ClaudeHarness:
                     async with asyncio.timeout_at(interrupt_deadline):
                         await client.interrupt()
                 except TimeoutError:
-                    self.log.warn(
+                    self._trajectory.diagnostic(
                         "claude.preservation_interrupt_timeout",
+                        level="warn",
                         timeout_s=timeout_seconds / 2,
                     )
                 except Exception as error:
-                    self.log.warn("claude.interrupt_error", exc=error)
+                    self._trajectory.diagnostic("claude.interrupt_error", level="warn", exc=error)
                 await client.disconnect()
                 if self._client is client:
                     self._client = None
                 return True
         except TimeoutError:
-            self.log.warn("claude.preservation_stop_timeout", timeout_s=timeout_seconds)
+            self._trajectory.diagnostic(
+                "claude.preservation_stop_timeout", level="warn", timeout_s=timeout_seconds
+            )
             return False
         except Exception as error:
-            self.log.warn("claude.preservation_disconnect_error", exc=error)
+            self._trajectory.diagnostic(
+                "claude.preservation_disconnect_error", level="warn", exc=error
+            )
             return False
 
     async def _user_messages(self, prompt: HarnessPrompt) -> AsyncIterator[dict[str, Any]]:
@@ -722,7 +760,7 @@ class ClaudeHarness:
         if isinstance(message, SystemMessage):
             if message.subtype == "init":
                 self.init_info = dict(message.data)
-                self.log.info(
+                self._trajectory.diagnostic(
                     "claude.init",
                     model=message.data.get("model"),
                     tool_count=len(message.data.get("tools") or []),
@@ -834,7 +872,7 @@ class ClaudeHarness:
                 and message.session_id
                 and message.session_id != self.session_id
             ):
-                self.log.info(
+                self._trajectory.diagnostic(
                     "claude.session.rotated",
                     agent_session_id=message.session_id,
                     previous_session_id=self.session_id,
