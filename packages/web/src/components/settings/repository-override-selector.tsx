@@ -28,6 +28,7 @@ export function RepositoryOverrideSelector({
   onAdd,
 }: RepositoryOverrideSelectorProps) {
   const [selectedRepository, setSelectedRepository] = useState("");
+  const [isAdding, setIsAdding] = useState(false);
   const overriddenKeys = new Set(
     overriddenRepositories.map((repository) => repository.toLowerCase())
   );
@@ -37,16 +38,27 @@ export function RepositoryOverrideSelector({
     const key = repositorySelectionKey(parsed.repoOwner, parsed.repoName);
     return overriddenKeys.has(key) ? [] : [{ key, label: repository.fullName }];
   });
+  const selectedRepositoryIsAvailable = availableRepositories.some(
+    (repository) => repository.key === selectedRepository
+  );
 
   const handleAdd = async () => {
-    if (selectedRepository && (await onAdd(selectedRepository))) {
-      setSelectedRepository("");
+    if (isAdding || !selectedRepositoryIsAvailable) return;
+
+    const submittedRepository = selectedRepository;
+    setIsAdding(true);
+    try {
+      if (await onAdd(submittedRepository)) {
+        setSelectedRepository((current) => (current === submittedRepository ? "" : current));
+      }
+    } finally {
+      setIsAdding(false);
     }
   };
 
   return (
     <div className="flex items-center gap-2">
-      <Select value={selectedRepository} onValueChange={setSelectedRepository}>
+      <Select value={selectedRepository} onValueChange={setSelectedRepository} disabled={isAdding}>
         <SelectTrigger className="flex-1" aria-label="Select a repository">
           <SelectValue placeholder="Select a repository..." />
         </SelectTrigger>
@@ -58,7 +70,7 @@ export function RepositoryOverrideSelector({
           ))}
         </SelectContent>
       </Select>
-      <Button onClick={handleAdd} disabled={!selectedRepository}>
+      <Button onClick={handleAdd} disabled={isAdding || !selectedRepositoryIsAvailable}>
         Add Override
       </Button>
     </div>
