@@ -182,57 +182,75 @@ describe("memory shared-scope authorization", () => {
     expect((await request("/memories", "POST", { ...content, scope })).status).toBe(201);
   });
 
-  it("revokes sandbox installation, reads and writes when its team repository grant disappears", async () => {
-    const record = await new MemoryStore(env.DB).create(
-      {
-        ...content,
-        scope: { type: "repository", repoOwner: repo.repoOwner, repoName: repo.repoName },
-      },
-      actor,
-      123
-    );
-    const manifest = await resolveSessionMemory(env.DB, {
-      canonicalUserId: MEMBER,
-      repositories: [repo],
-      environmentId: "dev",
-    });
-    await new SessionIndexStore(env.DB).create({
-      id: "scoped",
-      title: null,
-      userId: MEMBER,
-      ownerTeamId: "engineering",
-      visibility: "team",
-      repoOwner: repo.repoOwner,
-      repoName: repo.repoName,
-      repositories: [repo],
-      environmentId: "dev",
-      model: "anthropic/claude-sonnet-4-6",
-      reasoningEffort: null,
-      baseBranch: "main",
-      status: "created",
-      createdAt: 1,
-      updatedAt: 1,
-      memoryManifest: manifest,
-    });
-    const { stub } = await initNamedSessionDO("scoped");
-    await seedSandboxAuthHash(stub, { authToken: "scoped-token", sandboxId: "sandbox-scoped" });
-    const sandbox = (path = "", method = "GET", body?: unknown) =>
-      routeRequest(
-        new Request(`https://test.local/sessions/scoped/sandbox-memory${path}`, {
-          method,
-          headers: { Authorization: "Bearer scoped-token", "Content-Type": "application/json" },
-          ...(body === undefined ? {} : { body: JSON.stringify(body) }),
-        }),
-        env,
-        createExecutionContext()
+  it.each(["team", "workspace"] as const)(
+    "revokes %s sandbox installation, reads and writes when repository access changes",
+    async (ownership) => {
+      const sessionId = `scoped-${ownership}`;
+      if (ownership === "workspace") {
+        await env.DB.prepare("DELETE FROM team_repository_grants").run();
+        await env.DB.prepare("DELETE FROM team_memberships WHERE user_id = ?").bind(MEMBER).run();
+      }
+      const record = await new MemoryStore(env.DB).create(
+        {
+          ...content,
+          scope: { type: "repository", repoOwner: repo.repoOwner, repoName: repo.repoName },
+        },
+        actor,
+        123
       );
-    expect((await sandbox()).status).toBe(200);
-    expect((await sandbox(`/${record.id}`)).status).toBe(200);
-    await env.DB.prepare("DELETE FROM team_repository_grants WHERE team_id = 'engineering'").run();
-    expect((await sandbox()).status).toBe(403);
-    expect((await sandbox(`/${record.id}`)).status).toBe(404);
-    expect((await sandbox("", "POST", { ...content, scope: record.scope })).status).toBe(403);
-  });
+      const manifest = await resolveSessionMemory(env.DB, {
+        canonicalUserId: MEMBER,
+        repositories: [repo],
+        environmentId: ownership === "team" ? "dev" : null,
+      });
+      await new SessionIndexStore(env.DB).create({
+        id: sessionId,
+        title: null,
+        userId: MEMBER,
+        ownerTeamId: ownership === "team" ? "engineering" : null,
+        visibility: ownership,
+        repoOwner: repo.repoOwner,
+        repoName: repo.repoName,
+        repositories: [repo],
+        environmentId: ownership === "team" ? "dev" : null,
+        model: "anthropic/claude-sonnet-4-6",
+        reasoningEffort: null,
+        baseBranch: "main",
+        status: "created",
+        createdAt: 1,
+        updatedAt: 1,
+        memoryManifest: manifest,
+      });
+      const { stub } = await initNamedSessionDO(sessionId);
+      await seedSandboxAuthHash(stub, { authToken: "scoped-token", sandboxId: "sandbox-scoped" });
+      const sandbox = (path = "", method = "GET", body?: unknown) =>
+        routeRequest(
+          new Request(`https://test.local/sessions/${sessionId}/sandbox-memory${path}`, {
+            method,
+            headers: { Authorization: "Bearer scoped-token", "Content-Type": "application/json" },
+            ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+          }),
+          env,
+          createExecutionContext()
+        );
+      expect((await sandbox()).status).toBe(200);
+      expect((await sandbox(`/${record.id}`)).status).toBe(200);
+      if (ownership === "team") {
+        await env.DB.prepare(
+          "DELETE FROM team_repository_grants WHERE team_id = 'engineering'"
+        ).run();
+      } else {
+        await seedGrant("engineering", {
+          repo_id: 123,
+          repo_owner: repo.repoOwner,
+          repo_name: repo.repoName,
+        });
+      }
+      expect((await sandbox()).status).toBe(403);
+      expect((await sandbox(`/${record.id}`)).status).toBe(404);
+      expect((await sandbox("", "POST", { ...content, scope: record.scope })).status).toBe(403);
+    }
+  );
 
   it("permanently revokes personal autosave when a collaborator was added and removed", async () => {
     const manifest = await resolveSessionMemory(env.DB, {

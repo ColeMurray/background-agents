@@ -7,7 +7,7 @@ import { SessionIndexStore } from "../../src/db/session-index";
 import { SessionMemoryStore } from "../../src/db/session-memories";
 import { resolveSessionMemory } from "../../src/session/memory-resolution";
 import { cleanD1Tables } from "./cleanup";
-import { initNamedSessionDO, seedSandboxAuthHash, serviceFetch } from "./helpers";
+import { initNamedSessionDO, seedActiveUser, seedSandboxAuthHash, serviceFetch } from "./helpers";
 
 const BASE = "https://test.local";
 const OWNER = "11111111111111111111111111111111";
@@ -32,6 +32,7 @@ async function createMemory() {
   return memoryViewSchema.parse(((await response.json()) as { memory: unknown }).memory);
 }
 async function session(id: string, include = true, parent?: string) {
+  if (parent) await seedActiveUser(OTHER);
   const manifest = await resolveSessionMemory(
     env.DB,
     { canonicalUserId: OWNER, repositories: [], environmentId: null },

@@ -6,6 +6,8 @@ import { SessionIndexStore } from "../db/session-index";
 import { TeamStore } from "../db/teams";
 import { TeamRepositoryGrantStore } from "../db/team-repository-grants";
 import { EnvironmentStore } from "../db/environments";
+import { AuthorizationError, AuthorizationService } from "../authorization/service";
+import { authorizeWorkspaceRepositories } from "./workspace-repository-authorization";
 import { matchesMemoryTarget, renderMemorySection } from "../session/memory-resolution";
 import { admit, dispatch } from "../routing/admit";
 import type { ControlPlaneHonoEnv } from "../routing/hono-env";
@@ -34,6 +36,18 @@ async function currentSharedAccess(
 ): Promise<boolean> {
   const session = await new SessionIndexStore(ctx.db).get(sessionId);
   if (!session) return false;
+  const repositories = records.flatMap((record) =>
+    record.scope.type === "repository"
+      ? [
+          {
+            owner: record.scope.repoOwner,
+            name: record.scope.repoName,
+            repoId: record.repoId ?? null,
+          },
+        ]
+      : []
+  );
+  if (repositories.some((repo) => repo.repoId === null)) return false;
   if (session.ownerTeamId) {
     if (!(await new TeamStore(ctx.db).isActive(session.ownerTeamId))) return false;
     const ids = records
@@ -41,6 +55,24 @@ async function currentSharedAccess(
       .map((record) => record.repoId ?? null);
     if (!(await new TeamRepositoryGrantStore(ctx.db).covers(session.ownerTeamId, ids)))
       return false;
+  } else {
+    if (!session.userId) return false;
+    try {
+      const authorization = await new AuthorizationService(ctx.db).getEffectiveAuthorization(
+        session.userId
+      );
+      if (
+        authorization.suspendedAt !== null ||
+        (await authorizeWorkspaceRepositories(
+          { ...ctx, authorization, sessionMemberships: undefined },
+          { repositories }
+        ))
+      )
+        return false;
+    } catch (cause) {
+      if (cause instanceof AuthorizationError) return false;
+      throw cause;
+    }
   }
   const environmentIds = new Set(
     records.flatMap((record) =>
@@ -146,20 +178,8 @@ async function write(
   // A collaborator-owned child can consume inherited context but cannot mutate its original owner's personal store.
   if (body.scope.type === "personal" && session.userId !== target.canonicalUserId)
     return error("Personal memory owner differs from this session owner", 403);
-  if (body.scope.type === "repository") {
-    if (
-      session.ownerTeamId &&
-      !(await new TeamRepositoryGrantStore(ctx.db).covers(session.ownerTeamId, [repoId]))
-    )
-      return error("Repository grant required", 403);
-  }
-  if (
-    body.scope.type === "environment" &&
-    !(await currentSharedAccess(ctx, params.id, [{ scope: body.scope }]))
-  )
-    return error("Environment access required", 403);
-  if (session.ownerTeamId && !(await new TeamStore(ctx.db).isActive(session.ownerTeamId)))
-    return error("Team is not active", 403);
+  if (!(await currentSharedAccess(ctx, params.id, [{ scope: body.scope, repoId }])))
+    return error("Memory scope is no longer available", 403);
   const autoSave = await ctx.db
     .prepare(
       "SELECT personal_auto_save_eligible FROM session_memory_manifests WHERE session_id = ?"
