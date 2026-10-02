@@ -3,6 +3,7 @@ import { createExecutionContext, env } from "cloudflare:test";
 import type {
   AnalyticsBreakdownResponse,
   AnalyticsDashboardResponse,
+  AnalyticsSessionOriginEntry,
   AnalyticsSummaryResponse,
   AnalyticsTokenTotals,
   AnalyticsTimeseriesResponse,
@@ -13,6 +14,7 @@ import { SessionIndexStore } from "../../src/db/session-index";
 import { TeamMembershipStore } from "../../src/db/team-memberships";
 import { SessionRunStore } from "../../src/db/session-run-store";
 import { AnalyticsStore } from "../../src/db/analytics-store";
+import { AnalyticsDashboardStore } from "../../src/db/analytics-dashboard-store";
 import { cleanD1Tables } from "./cleanup";
 import { routeRequest, serviceFetch, serviceRequestHeaders } from "./helpers";
 
@@ -143,6 +145,9 @@ describe("Analytics API", () => {
       await serviceFetch("https://test.local/analytics/dashboard?scope=all", owner)
     ).json<AnalyticsDashboardResponse>();
     expect(dashboard.summary).toMatchObject({ totalCost: 3, privateSessionsCostUsd: 7 });
+    expect(dashboard.sessionOrigins).toEqual([
+      { source: "user", userKey: "alice", displayName: "alice", sessions: 1 },
+    ]);
     const member = await (
       await serviceFetch("https://test.local/analytics/summary?scope=all", {
         as: { userId: "55555555555555555555555555555555", role: "member" },
@@ -222,6 +227,9 @@ describe("Analytics API", () => {
       inputTokens: 3,
       privateSessionsCostUsd: null,
     });
+    expect(dashboard.sessionOrigins).toEqual([
+      expect.objectContaining({ source: "user", userKey: member, sessions: 2 }),
+    ]);
     expect(
       dashboard.timeseries.series
         .flatMap((point) => Object.values(point.groups))
@@ -250,6 +258,93 @@ describe("Analytics API", () => {
     expect(
       await (await fetchAnalytics("summary?scope=all", "off")).json<AnalyticsSummaryResponse>()
     ).toMatchObject({ totalSessions: 3, totalCost: 7, privateSessionsCostUsd: null });
+    const unenforced = await (
+      await fetchAnalytics("dashboard?scope=all", "off")
+    ).json<AnalyticsDashboardResponse>();
+    expect(unenforced.sessionOrigins).toEqual([
+      expect.objectContaining({ source: "user", userKey: member, sessions: 3 }),
+    ]);
+  });
+
+  it("groups session origins by source and user identity within the exact scope and date window", async () => {
+    const endAt = Date.now();
+    const startAt = endAt - 7 * 24 * 60 * 60 * 1000;
+    const index = new SessionIndexStore(env.DB);
+    await seedUser(env.DB, { id: "origin-user-1", displayName: "Same name" });
+    await seedUser(env.DB, { id: "origin-user-2", displayName: "Same name" });
+    await seedUser(env.DB, { id: "origin-user-3", displayName: "" });
+
+    for (const [id, source, userId, scmLogin, createdAt] of [
+      ["start", "user", "origin-user-1", "old-login", startAt],
+      ["renamed", "user", "origin-user-1", "new-login", startAt + 1],
+      ["same-name", "user", "origin-user-2", "another-login", startAt + 1],
+      ["slack", "slack-bot", "origin-user-1", "new-login", startAt + 1],
+      ["linear", "linear-bot", "origin-user-1", "new-login", startAt + 1],
+      ["github", "github-bot", "origin-user-1", "new-login", startAt + 1],
+      ["agent", "agent", "origin-user-1", "new-login", startAt + 1],
+      ["automation", "automation", "origin-user-1", "new-login", endAt - 1],
+      ["historical", "user", null, "old-login", startAt + 1],
+      ["historical-repeat", "user", null, "old-login", startAt + 1],
+      ["historical-other", "user", null, "other-login", startAt + 1],
+      ["no-name", "user", "origin-user-3", "fallback-login", startAt + 1],
+      ["unknown-null", "user", null, null, startAt + 1],
+      ["unknown-empty", "user", null, "", startAt + 1],
+      ["before", "user", "origin-user-1", "new-login", startAt - 1],
+      ["end", "user", "origin-user-1", "new-login", endAt],
+      ["future", "user", "origin-user-1", "new-login", endAt + 1],
+    ] as const) {
+      await seedSession(index, {
+        id,
+        spawnSource: source,
+        userId,
+        scmLogin,
+        createdAt,
+        updatedAt: endAt,
+        repoOwner: null,
+        repoName: null,
+        status: "completed",
+        totalCost: 0,
+        activeDurationMs: 0,
+        messageCount: 0,
+        prCount: 0,
+      });
+    }
+
+    const origins: AnalyticsSessionOriginEntry[] = [
+      { source: "user", userKey: "origin-user-1", displayName: "Same name", sessions: 2 },
+      { source: "user", userKey: "origin-user-2", displayName: "Same name", sessions: 1 },
+      { source: "slack-bot", userKey: "origin-user-1", displayName: "Same name", sessions: 1 },
+      { source: "linear-bot", userKey: "origin-user-1", displayName: "Same name", sessions: 1 },
+      { source: "github-bot", userKey: "origin-user-1", displayName: "Same name", sessions: 1 },
+      { source: "agent", userKey: "origin-user-1", displayName: "Same name", sessions: 1 },
+      { source: "automation", userKey: "origin-user-1", displayName: "Same name", sessions: 1 },
+      { source: "user", userKey: "old-login", displayName: "old-login", sessions: 2 },
+      { source: "user", userKey: "other-login", displayName: "other-login", sessions: 1 },
+      { source: "user", userKey: "origin-user-3", displayName: "fallback-login", sessions: 1 },
+      { source: "user", userKey: "__unknown__", displayName: "Unknown user", sessions: 2 },
+    ];
+    const dashboard = new AnalyticsDashboardStore(env.DB, { kind: "service", teamId: null }, "on");
+    for (const [scope, sources] of [
+      ["human", ["user", "slack-bot", "linear-bot", "github-bot"]],
+      ["agent", ["agent"]],
+      ["automation", ["automation"]],
+      ["all", ["user", "slack-bot", "linear-bot", "github-bot", "agent", "automation"]],
+    ] as const) {
+      const snapshot = await dashboard.get({ days: 7, startAt, endAt, scope });
+      const expected = origins.filter((entry) => sources.some((source) => source === entry.source));
+      expect(snapshot.sessionOrigins).toHaveLength(expected.length);
+      expect(snapshot.sessionOrigins).toEqual(expect.arrayContaining(expected));
+      expect(snapshot.summary.totalSessions).toBe(
+        expected.reduce((sum, entry) => sum + entry.sessions, 0)
+      );
+      for (const user of snapshot.breakdowns.user.entries) {
+        expect(user.sessions).toBe(
+          snapshot.sessionOrigins
+            .filter((entry) => entry.userKey === user.key)
+            .reduce((sum, entry) => sum + entry.sessions, 0)
+        );
+      }
+    }
   });
 
   it("sums token totals across sessions and provider merges without excluding zero-token history", async () => {
@@ -378,6 +473,7 @@ describe("Analytics API", () => {
     expect(body).toMatchObject({
       summary: { totalSessions: 0, totalPrs: 0 },
       timeseries: { series: [] },
+      sessionOrigins: [],
       breakdowns: {
         repository: { entries: [] },
         user: { entries: [] },

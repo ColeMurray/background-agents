@@ -3,6 +3,7 @@ import type {
   AnalyticsBreakdownBy,
   AnalyticsBreakdownEntry,
   AnalyticsBreakdownResponse,
+  AnalyticsSessionOriginEntry,
   AnalyticsSummaryResponse,
   AnalyticsTimeseriesResponse,
   AnalyticsScope,
@@ -12,7 +13,7 @@ import {
   ANALYTICS_SCOPE_SPAWN_SOURCES,
   getCacheHitRatio,
 } from "@open-inspect/shared/types/analytics";
-import type { SpawnSource } from "@open-inspect/shared/types/sessions";
+import { spawnSourceSchema, type SpawnSource } from "@open-inspect/shared/types/sessions";
 import {
   getModelDisplayName,
   normalizeModelId,
@@ -83,6 +84,13 @@ const timeseriesRowSchema = z.object({
 
 type TimeseriesRow = z.infer<typeof timeseriesRowSchema>;
 
+const sessionOriginRowSchema = z.object({
+  source: spawnSourceSchema,
+  user_key: z.string(),
+  display_name: z.string(),
+  sessions: z.number(),
+});
+
 const breakdownRowSchema = tokenRowSchema.extend({
   key: z.string().nullable(),
   display_name: z.string().nullable().optional(),
@@ -111,6 +119,9 @@ type BreakdownRow = z.infer<typeof breakdownRowSchema>;
 type SqlBreakdownBy = Exclude<AnalyticsBreakdownBy, "provider">;
 
 const NO_REPOSITORY_ANALYTICS_KEY = "No repository";
+const USER_KEY_EXPRESSION = "COALESCE(s.user_id, NULLIF(s.scm_login, ''), '__unknown__')";
+const USER_DISPLAY_NAME_EXPRESSION =
+  "COALESCE(MAX(NULLIF(u.display_name, '')), MAX(NULLIF(s.scm_login, '')), 'Unknown user')";
 
 export function mergeBreakdownEntries(
   entries: AnalyticsBreakdownEntry[],
@@ -294,6 +305,37 @@ export class AnalyticsStore {
     return { series };
   }
 
+  prepareSessionOrigins(filters: AnalyticsFilters): SqlStatement {
+    const { sql, binds } = scopePredicate(filters.scope, "s.spawn_source");
+    const visible = this.visible("s");
+
+    return this.db
+      .prepare(
+        `SELECT s.spawn_source AS source,
+                ${USER_KEY_EXPRESSION} AS user_key,
+                ${USER_DISPLAY_NAME_EXPRESSION} AS display_name,
+                COUNT(*) AS sessions
+         FROM sessions s
+         LEFT JOIN users u ON s.user_id = u.id
+         WHERE s.created_at >= ? AND s.created_at < ?
+             ${sql} ${visible.sql ? `AND ${visible.sql}` : ""}
+         GROUP BY s.spawn_source, ${USER_KEY_EXPRESSION}
+         ORDER BY sessions DESC, source ASC, display_name ASC, user_key ASC`
+      )
+      .bind(filters.startAt, filters.endAt, ...binds, ...visible.params);
+  }
+
+  decodeSessionOrigins(result: SqlResult): AnalyticsSessionOriginEntry[] {
+    return parseRows(result.results, sessionOriginRowSchema, "analytics session origin row").map(
+      (row) => ({
+        source: row.source,
+        userKey: row.user_key,
+        displayName: row.display_name,
+        sessions: row.sessions,
+      })
+    );
+  }
+
   async getBreakdown(
     filters: AnalyticsFilters,
     by: AnalyticsBreakdownBy
@@ -331,7 +373,7 @@ export class AnalyticsStore {
       "CASE WHEN s.repo_owner IS NULL OR s.repo_name IS NULL THEN NULL ELSE s.repo_owner || '/' || s.repo_name END";
 
     const groupExpression = {
-      user: "COALESCE(s.user_id, NULLIF(s.scm_login, ''), '__unknown__')",
+      user: USER_KEY_EXPRESSION,
       repo: repoGroupExpression,
       model: "s.model",
       harness: "s.harness",
@@ -340,7 +382,7 @@ export class AnalyticsStore {
     }[by];
 
     const displayNameSelect = isUserBreakdown
-      ? "COALESCE(MAX(NULLIF(u.display_name, '')), MAX(NULLIF(s.scm_login, '')), 'Unknown user') AS display_name,"
+      ? `${USER_DISPLAY_NAME_EXPRESSION} AS display_name,`
       : by === "automation"
         ? "MAX(a.name) AS display_name,"
         : "NULL AS display_name,";

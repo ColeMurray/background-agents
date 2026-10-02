@@ -410,6 +410,7 @@ export type {
   AnalyticsTimeseriesResponse,
   AnalyticsBreakdownEntry,
   AnalyticsBreakdownResponse,
+  AnalyticsSessionOriginEntry,
   SessionRun,
   AnalyticsRunsResponse,
   AnalyticsPullRequestFunnel,

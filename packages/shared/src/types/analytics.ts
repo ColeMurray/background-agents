@@ -107,6 +107,14 @@ export interface AnalyticsBreakdownResponse {
   entries: AnalyticsBreakdownEntry[];
 }
 
+export interface AnalyticsSessionOriginEntry {
+  source: SpawnSource;
+  /** Canonical user ID, legacy SCM login, or __unknown__; not necessarily a human creator. */
+  userKey: string;
+  displayName: string;
+  sessions: number;
+}
+
 /** Sessions in one root_session_id family, attributed to its visible root. */
 export interface SessionRun {
   rootSessionId: string;
@@ -221,6 +229,7 @@ export interface AnalyticsDashboardResponse {
   };
   summary: AnalyticsSummaryResponse;
   timeseries: AnalyticsTimeseriesResponse;
+  sessionOrigins: AnalyticsSessionOriginEntry[];
   breakdowns: {
     repository: AnalyticsBreakdownResponse;
     user: AnalyticsBreakdownResponse;

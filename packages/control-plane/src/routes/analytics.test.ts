@@ -84,12 +84,16 @@ describe("analytics route handlers", () => {
 
   describe("dashboard", () => {
     it("anchors one shared dashboard window", async () => {
-      mockDashboardStore.get.mockResolvedValue({ generatedAt: FIXED_NOW });
+      const dashboard = {
+        generatedAt: FIXED_NOW,
+        sessionOrigins: [{ source: "user", userKey: "user-1", displayName: "Ada", sessions: 2 }],
+      };
+      mockDashboardStore.get.mockResolvedValue(dashboard);
 
       const response = await callRoute("GET", "/analytics/dashboard?days=14");
 
       expect(response.status).toBe(200);
-      await expect(response.json()).resolves.toEqual({ generatedAt: FIXED_NOW });
+      await expect(response.json()).resolves.toEqual(dashboard);
       expect(mockDashboardStore.get).toHaveBeenCalledWith({
         days: 14,
         scope: "human",

@@ -42,6 +42,7 @@ const snapshot = {
     },
   },
   timeseries: { series: [] },
+  sessionOrigins: [{ source: "slack-bot", userKey: "alice", displayName: "Alice", sessions: 1 }],
   breakdowns: {
     repository: { entries: [] },
     user: { entries: [] },
@@ -83,6 +84,7 @@ describe("useAnalyticsDashboard", () => {
     });
     expect(result.current).toMatchObject({
       summary: snapshot.summary,
+      sessionOrigins: snapshot.sessionOrigins,
       timeseries: snapshot.timeseries,
       repoBreakdown: snapshot.breakdowns.repository,
       userBreakdown: snapshot.breakdowns.user,
