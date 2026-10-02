@@ -6,7 +6,7 @@
  * test/integration/automation-invocations.test.ts.
  */
 
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { createTestBackgroundTasks } from "../background-tasks.test-support";
 import type { Env } from "../types";
 import type { SqlDatabase } from "../db/sql-database";
@@ -14,6 +14,7 @@ import type { FetchClient } from "../platform-ports";
 import { fakeSessionRuntimeDispatch } from "../router.test-support";
 import type { Logger } from "../logger";
 import type { AutomationRow, InvocationRunAggregate } from "../db/automation-store";
+import { TeamMembershipStore } from "../db/team-memberships";
 import type { SlackAutomationEvent } from "@open-inspect/shared/triggers";
 import type { Team } from "@open-inspect/shared/types/teams";
 import type { EffectiveAuthorization } from "@open-inspect/shared/rbac";
@@ -3416,10 +3417,16 @@ describe("Scheduler", () => {
     ];
     beforeEach(() => {
       mockTeamGetById.mockResolvedValue(activeTeam);
+      vi.spyOn(TeamMembershipStore.prototype, "listForUser").mockResolvedValue(
+        new Map([[teamId, "member"]])
+      );
       mockStore.getById.mockResolvedValue(teamAutomation);
       mockStore.getOverdueAutomations.mockResolvedValue([teamAutomation]);
       mockEnvironmentGetById.mockReset().mockResolvedValue(environment);
       mockEnvironmentRepositories.mockReset().mockResolvedValue(members);
+    });
+    afterEach(() => {
+      vi.restoreAllMocks();
     });
 
     it("checks resolved direct IDs before manual admission", async () => {

@@ -1,5 +1,5 @@
 import { env } from "cloudflare:test";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SessionVisibility } from "@open-inspect/shared/types/teams";
 import { isAutomationExecutionAuthorized } from "../../src/automation/authorization-guard";
 import { createCloudflareEnv } from "../../src/cloudflare/platform";
@@ -107,7 +107,10 @@ describe("automation team execution (integration)", () => {
       [ADMIN, "member"],
     ]);
   });
-  afterEach(cleanD1Tables);
+  afterEach(async () => {
+    vi.restoreAllMocks();
+    await cleanD1Tables();
+  });
 
   it("rejects a departed executor despite other-team membership", async () => {
     const row = await saveAutomation("auto-departed-executor");
@@ -118,6 +121,32 @@ describe("automation team execution (integration)", () => {
     expect(await authorized(row.id)).toBe(false);
     expect(await createScheduler().tick()).toEqual({ processed: 0, skipped: 1, failed: 0 });
     await expectNoLaunch(row.id);
+  });
+
+  it("does not launch for an executor removed after invocation admission", async () => {
+    const row = await saveAutomation("auto-removed-after-admission");
+    const insert = AutomationStore.prototype.insertInvocationGuarded;
+    vi.spyOn(AutomationStore.prototype, "insertInvocationGuarded").mockImplementation(
+      async function (this: AutomationStore, params) {
+        const admitted = await insert.call(this, params);
+        // The executor leaves the team while the admitted run is still being set up.
+        await env.DB.prepare("DELETE FROM team_memberships WHERE team_id = ? AND user_id = ?")
+          .bind(TEAM, EXECUTOR)
+          .run();
+        return admitted;
+      }
+    );
+    expect(await createScheduler().tick()).toEqual({ processed: 0, skipped: 0, failed: 1 });
+    expect(await fetchRuns(row.id)).toEqual([
+      expect.objectContaining({
+        status: "failed",
+        failure_reason: "Automation execution principal is not authorized",
+      }),
+    ]);
+    const sessions = await env.DB.prepare("SELECT id FROM sessions WHERE automation_id = ?")
+      .bind(row.id)
+      .all();
+    expect(sessions.results).toEqual([]);
   });
 
   it("rejects nonmember administrator manual execution", async () => {

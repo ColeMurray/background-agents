@@ -65,6 +65,7 @@ import { getUserAuth } from "../auth/user/runtime";
 import { GitHubAttributionUnavailableError } from "../source-control/github-credential-authority";
 import { UserStore } from "../db/user-store";
 import { TeamStore } from "../db/teams";
+import { TeamMembershipStore } from "../db/team-memberships";
 import { TeamRepositoryGrantStore } from "../db/team-repository-grants";
 import { AuthorizationService } from "../authorization/service";
 import { evaluateSessionAdmission } from "../authorization/session-admission";
@@ -1751,13 +1752,22 @@ export class Scheduler {
     );
 
     const scmEnrichment = executionPrincipal.scmEnrichment;
-    // Re-read at launch: a team archived after invocation admission must not start sessions.
+    // Re-read at launch: a team archived, or a principal removed from it, after invocation
+    // admission must not start sessions.
     const team =
       automation.owner_team_id === null
         ? null
         : await new TeamStore(this.db).getById(automation.owner_team_id);
     if (automation.owner_team_id !== null && (!team || team.archivedAt !== null)) {
       throw new AutomationExecutionUnauthorizedError("team_archived");
+    }
+    if (
+      team &&
+      !(await new TeamMembershipStore(this.db).listForUser(executionPrincipal.platformUserId)).has(
+        team.id
+      )
+    ) {
+      throw new AutomationExecutionUnauthorizedError();
     }
 
     const sessionInput: SessionInitInput = {
