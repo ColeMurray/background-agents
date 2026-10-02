@@ -13,6 +13,7 @@ import {
   harnessIdSchema,
   type HarnessId,
 } from "@open-inspect/shared/harnesses";
+import { getValidModelOrDefault } from "@open-inspect/shared/models";
 
 export interface ResolvedGitHubConfig {
   model: string;
@@ -136,10 +137,13 @@ export async function getGitHubConfig(
 /**
  * Resolve the harness to send for a new GitHub-triggered session, or null to
  * omit it (the server then resolves the built-in default, exactly as today).
+ * Compatibility is evaluated against the canonical model session creation
+ * will actually run (`getValidModelOrDefault`), not the raw configured value:
+ * a stale or out-of-catalog model falls back to the default model server-side,
+ * so judging the raw string would omit a harness the resolved session honors.
  * A resolved pair the harness cannot run — possible when global and repo
- * levels set harness and model separately, or when DEFAULT_MODEL fallback
- * supplies the model — is omitted with a warning, so a trigger never fails
- * silently on a mismatch the saves could not see.
+ * levels set harness and model separately — is omitted with a warning, so a
+ * trigger never fails silently on a mismatch the saves could not see.
  */
 export function resolveGitHubSessionHarness(
   config: Pick<ResolvedGitHubConfig, "harness" | "model">,
@@ -147,7 +151,7 @@ export function resolveGitHubSessionHarness(
 ): HarnessId | null {
   if (config.harness === null) return null;
   const harness = getValidHarnessOrDefault(config.harness);
-  const incompatibility = checkHarnessCompatibility(harness, config.model);
+  const incompatibility = checkHarnessCompatibility(harness, getValidModelOrDefault(config.model));
   if (incompatibility) {
     log?.warn("config.harness_model_mismatch", {
       harness,

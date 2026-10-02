@@ -3,6 +3,7 @@ import type { Env } from "../src/types";
 import type { Logger } from "../src/logger";
 
 import { getGitHubConfig, resolveGitHubSessionHarness } from "../src/utils/integration-config";
+import { checkHarnessCompatibility } from "@open-inspect/shared/harnesses";
 
 function createMockLogger(): Logger {
   return {
@@ -303,11 +304,26 @@ describe("resolveGitHubSessionHarness", () => {
   it("omits with a warning on a cross-level mismatch", () => {
     const log = createMockLogger();
     expect(
-      resolveGitHubSessionHarness({ harness: "claude", model: "openai/gpt-5" }, log)
+      resolveGitHubSessionHarness({ harness: "claude", model: "openai/gpt-5.4" }, log)
     ).toBeNull();
     expect(log.warn).toHaveBeenCalledWith(
       "config.harness_model_mismatch",
-      expect.objectContaining({ harness: "claude", model: "openai/gpt-5", fallback: "opencode" })
+      expect.objectContaining({ harness: "claude", model: "openai/gpt-5.4", fallback: "opencode" })
+    );
+    // Lock the user-facing reason: gpt-5.4 is a catalog model the harness
+    // cannot run, so this test exercises the compatibility check itself.
+    expect(checkHarnessCompatibility("claude", "openai/gpt-5.4")?.message).toContain(
+      'Model "openai/gpt-5.4" cannot run on the Claude Agent harness.'
+    );
+  });
+
+  it("keeps the harness when a stale model canonicalizes to a compatible one", () => {
+    // openai/gpt-5 is absent from the catalog, so session creation resolves it
+    // to the default model (Claude Sonnet). The check must judge that
+    // canonical model — not the raw string — or it would drop a harness the
+    // created session would have honored.
+    expect(resolveGitHubSessionHarness({ harness: "claude", model: "openai/gpt-5" })).toBe(
+      "claude"
     );
   });
 });

@@ -26,7 +26,6 @@ import {
 } from "@open-inspect/shared/types/integrations";
 import { checkHarnessCompatibility, type HarnessId } from "@open-inspect/shared/harnesses";
 import { isValidModel, isValidReasoningEffort } from "@open-inspect/shared/models";
-import { checkHarnessCompatibility } from "@open-inspect/shared/harnesses";
 import { normalizeSandboxSettings } from "../sandbox/settings";
 import type { SqlDatabase } from "./sql-database";
 

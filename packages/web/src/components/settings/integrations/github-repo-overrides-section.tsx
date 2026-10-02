@@ -19,6 +19,7 @@ import {
 } from "@open-inspect/shared/models";
 import {
   HARNESS_IDS,
+  checkHarnessCompatibility,
   getHarnessLabel,
   harnessSupportsModel,
   isValidHarness,
@@ -55,12 +56,17 @@ export function RepoOverridesSection({
   enabledModelOptions,
   defaultAutoReviewOnOpen,
   defaultAutofix,
+  defaultHarness,
+  defaultModel,
 }: {
   overrides: RepoSettingsEntry[];
   availableRepos: EnrichedRepository[];
   enabledModelOptions: ModelCategory[];
   defaultAutoReviewOnOpen: boolean;
   defaultAutofix: ResolvedGitHubAutofixSettings;
+  /** Inherited global harness/model: rows filter and warn on the effective pair. */
+  defaultHarness: HarnessId | null;
+  defaultModel: string;
 }) {
   const [addingRepo, setAddingRepo] = useState("");
 
@@ -108,6 +114,8 @@ export function RepoOverridesSection({
               enabledModelOptions={enabledModelOptions}
               defaultAutoReviewOnOpen={defaultAutoReviewOnOpen}
               defaultAutofix={defaultAutofix}
+              defaultHarness={defaultHarness}
+              defaultModel={defaultModel}
             />
           ))}
         </div>
@@ -143,11 +151,15 @@ function RepoOverrideRow({
   enabledModelOptions,
   defaultAutoReviewOnOpen,
   defaultAutofix,
+  defaultHarness,
+  defaultModel,
 }: {
   entry: RepoSettingsEntry;
   enabledModelOptions: ModelCategory[];
   defaultAutoReviewOnOpen: boolean;
   defaultAutofix: ResolvedGitHubAutofixSettings;
+  defaultHarness: HarnessId | null;
+  defaultModel: string;
 }) {
   const autoReviewNoticeId = useId();
   const [model, setModel] = useState(entry.settings.model ?? "");
@@ -196,11 +208,17 @@ function RepoOverrideRow({
 
   const reasoningConfig = model ? MODEL_REASONING_CONFIG[model as ValidModel] : undefined;
 
-  // The model picker only offers models the override harness can run.
-  const visibleModelOptions =
-    harnessMode === "override"
-      ? filterModelOptionsForHarness(harness, enabledModelOptions)
-      : enabledModelOptions;
+  // The model picker only offers models the *effective* harness can run: the
+  // override when set, else the inherited global harness (OpenCode when unset).
+  // A local/global pair the harness cannot run is still saveable as a sparse
+  // override — the bot falls back to OpenCode at runtime — but the picker can
+  // no longer silently produce it, and the mismatch is spelled out below.
+  const effectiveHarness = harnessMode === "override" ? harness : (defaultHarness ?? "opencode");
+  const effectiveModel = model || defaultModel;
+  const harnessMismatch = effectiveModel
+    ? checkHarnessCompatibility(effectiveHarness, effectiveModel)
+    : null;
+  const visibleModelOptions = filterModelOptionsForHarness(effectiveHarness, enabledModelOptions);
 
   const handleModelChange = (newModel: string) => {
     setModel(newModel);
@@ -212,10 +230,10 @@ function RepoOverrideRow({
   };
 
   const handleHarnessModeChange = (newMode: "global" | "override") => {
+    // The harness draft is initialized once from the persisted settings and
+    // then belongs to the user: switching scope back and forth must never
+    // clobber the current choice with the original stored value.
     setHarnessMode(newMode);
-    if (newMode === "override" && entry.settings.harness === undefined) {
-      setHarness("opencode");
-    }
     setDirty(true);
   };
 
@@ -389,6 +407,13 @@ function RepoOverrideRow({
           Remove
         </Button>
       </div>
+
+      {harnessMismatch && (
+        <p className="text-xs text-warning">
+          {harnessMismatch.message} Sessions for this repo will run on OpenCode until the harness
+          and model are compatible.
+        </p>
+      )}
 
       <div>
         <p className="text-xs font-medium text-muted-foreground mb-1">

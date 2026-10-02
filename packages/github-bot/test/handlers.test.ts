@@ -1364,7 +1364,7 @@ describe("integration config", () => {
   it("falls back to OpenCode on a harness/model mismatch", async () => {
     vi.mocked(getGitHubConfig).mockResolvedValue({
       ...defaultConfig,
-      model: "openai/gpt-5",
+      model: "openai/gpt-5.4",
       harness: "claude",
     });
     const env = createMockEnv();
@@ -1376,7 +1376,7 @@ describe("integration config", () => {
     expect(sessionCreateBody(getControlPlaneFetch(env))).not.toHaveProperty("harness");
     expect(log.warn).toHaveBeenCalledWith(
       "config.harness_model_mismatch",
-      expect.objectContaining({ harness: "claude", model: "openai/gpt-5" })
+      expect.objectContaining({ harness: "claude", model: "openai/gpt-5.4" })
     );
   });
 

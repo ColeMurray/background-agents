@@ -396,9 +396,9 @@ describe("IntegrationSettingsStore", () => {
     it("rejects an incompatible harness/model pair on setGlobal", async () => {
       await expect(
         store.setGlobal("github", {
-          defaults: { harness: "claude", model: "openai/gpt-5" },
+          defaults: { harness: "claude", model: "openai/gpt-5.4" },
         })
-      ).rejects.toThrow(IntegrationSettingsValidationError);
+      ).rejects.toThrow('Model "openai/gpt-5.4" cannot run on the Claude Agent harness.');
     });
 
     it("rejects malformed stored global settings", async () => {

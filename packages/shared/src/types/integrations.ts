@@ -2,7 +2,6 @@
 
 import { harnessIdSchema } from "../harnesses";
 import { escapeRegExp } from "../regex";
-import { harnessIdSchema } from "../harnesses";
 import { z } from "zod";
 import { teamSettingsSchema } from "./teams";
 
