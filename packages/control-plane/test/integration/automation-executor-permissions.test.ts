@@ -1,3 +1,5 @@
+import { ProjectStore } from "../../src/db/project-store";
+import { isAutomationExecutionAuthorized } from "../../src/automation/authorization-guard";
 import { env } from "cloudflare:test";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { PermissionId } from "@open-inspect/shared/rbac";
@@ -98,6 +100,56 @@ describe("automation executor launch permissions (integration)", () => {
     await customRole(LEAD, ["automations.manage.own"]);
   });
   afterEach(cleanD1Tables);
+
+  it.each(["preflight", "commit", "allowed"])(
+    "checks subscribed project access during executor reassignment: %s",
+    async (stage) => {
+      await saveAutomation("repoless");
+      const project = await new ProjectStore(env.DB).create(
+        { name: "Executor project", slug: "executor-project", ownerTeamId: TEAM },
+        { userId: EXECUTOR, requestId: "setup" }
+      );
+      await env.DB.prepare("UPDATE automations SET project_id=? WHERE id='executor-permissions'")
+        .bind(project.id)
+        .run();
+      const store = new AutomationStore(env.DB);
+      const row = (await store.getById("executor-permissions"))!;
+      await customRole(
+        CANDIDATE,
+        stage === "preflight" ? ["sessions.create"] : ["sessions.create", "projects.read"]
+      );
+      if (stage === "preflight") {
+        await expectDenied(
+          await patch(CANDIDATE),
+          row,
+          "automation_executor_unauthorized",
+          "execution_authorization_denied"
+        );
+      } else if (stage === "commit") {
+        expect(
+          await isAutomationExecutionAuthorized(env.DB, {
+            automationId: row.id,
+            executionUserId: CANDIDATE,
+            requiresRepositoryUse: false,
+            requiresEnvironmentUse: false,
+          })
+        ).toBe(true);
+        await env.DB.prepare(
+          "DELETE FROM role_permissions WHERE permission_id='projects.read' AND role_id=(SELECT role_id FROM user_role_assignments WHERE user_id=?)"
+        )
+          .bind(CANDIDATE)
+          .run();
+        const [result] = await sqlDatabase(env.DB).batch([
+          store.bindExecutorChange(row, CANDIDATE, LEAD),
+        ]);
+        expect(result.meta.changes).toBe(0);
+        await expectUnchanged(row);
+      } else {
+        expect((await patch(CANDIDATE)).status).toBe(200);
+        expect((await store.getById(row.id))?.user_id).toBe(CANDIDATE);
+      }
+    }
+  );
 
   it.each([
     { target: "repoless", missingPermission: "sessions.create" },
