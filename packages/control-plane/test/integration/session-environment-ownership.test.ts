@@ -27,7 +27,7 @@ import {
   seedGrant,
   seedTeam,
 } from "./ownership-test-helpers";
-import { getUserEnvVars } from "./session-do-access";
+import { getUserEnvVars, runInSessionDO } from "./session-do-access";
 
 const BASE = "https://test.local";
 const MEMBER = "22222222222222222222222222222222";
@@ -77,6 +77,13 @@ async function sandboxParent(
     "SELECT id FROM participants WHERE role = 'owner'"
   );
   if (!owner) throw new Error("Expected parent owner participant");
+  await runInSessionDO(parent.stub, (_instance, state) => {
+    state.storage.sql.exec(
+      "UPDATE participants SET canonical_user_id = ? WHERE id = ?",
+      MEMBER,
+      owner.id
+    );
+  });
   await seedMessage(parent.stub, {
     id: `processing-${parent.sessionName}`,
     authorId: owner.id,
@@ -240,7 +247,9 @@ describe("session environment ownership compatibility", () => {
     "inherits %s into %s/%s without human use access",
     async (environmentId, ownerTeamId, visibility) => {
       const parent = await sandboxParent(environmentId, ownerTeamId, visibility);
-      await env.DB.prepare("DELETE FROM team_memberships WHERE user_id = ?").bind(MEMBER).run();
+      await env.DB.prepare("DELETE FROM team_memberships WHERE user_id = ? AND team_id != ?")
+        .bind(MEMBER, ownerTeamId ?? "")
+        .run();
       await env.DB.prepare("UPDATE user_role_assignments SET role_id = ? WHERE user_id = ?")
         .bind(BUILT_IN_ROLE_REGISTRY.viewer.id, MEMBER)
         .run();

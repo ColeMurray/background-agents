@@ -3,6 +3,7 @@ import { SELF, env, createExecutionContext } from "cloudflare:test";
 import { runInSessionDO } from "./session-do-access";
 import type { SessionDO } from "../../src/cloudflare/durable-object";
 import { SessionIndexStore } from "../../src/db/session-index";
+import { TeamMembershipStore } from "../../src/db/team-memberships";
 import { TeamRepositoryGrantStore } from "../../src/db/team-repository-grants";
 import { GitHubSourceControlProvider } from "../../src/source-control/providers/github-provider";
 import { cleanD1Tables } from "./cleanup";
@@ -136,6 +137,8 @@ describe("POST /sessions/:parentId/children — spawn child", () => {
       repoName: "web-app",
       defaultBranch: "main",
     });
+    await seedActiveUser("canonical-abc123");
+    await new TeamMembershipStore(env.DB).add("team_child", "canonical-abc123");
     const { parentName, sandboxToken, store } = await setupParent({
       ownerTeamId: "team_child",
       visibility: "workspace",
@@ -188,6 +191,118 @@ describe("POST /sessions/:parentId/children — spawn child", () => {
     // Child spawn immediately enqueues the initial prompt, which transitions session to active.
     expect(state.status).toBe("active");
   });
+
+  it.each(["off", "shadow", "on"] as const)(
+    "refuses a team-owned child for a prompt author removed from the team (%s)",
+    async (mode) => {
+      const ownerId = "11111111111111111111111111111111";
+      const authorId = "33333333333333333333333333333333";
+      await seedActiveUser(ownerId);
+      await seedActiveUser(authorId);
+      await env.DB.prepare(
+        "INSERT INTO teams (id, slug, name, created_at, updated_at) VALUES ('team_spawn', 'spawn', 'Spawn', 1, 1)"
+      ).run();
+      const memberships = new TeamMembershipStore(env.DB);
+      await memberships.add("team_spawn", ownerId);
+      await memberships.add("team_spawn", authorId);
+      await new TeamRepositoryGrantStore(env.DB).add("team_spawn", {
+        kind: "repository",
+        repoExternalId: 12345,
+        owner: "acme",
+        name: "web-app",
+      });
+      const repositoryAccess = vi
+        .spyOn(GitHubSourceControlProvider.prototype, "checkRepositoryAccess")
+        .mockResolvedValue({
+          repoId: 12345,
+          repoOwner: "acme",
+          repoName: "web-app",
+          defaultBranch: "main",
+        });
+      const { parentName, sandboxToken, store } = await setupParent({
+        ownerTeamId: "team_spawn",
+        visibility: "team",
+        repoId: 12345,
+        userId: "user-1",
+        canonicalUserId: authorId,
+      });
+      await env.DB.prepare("UPDATE sessions SET user_id = ? WHERE id = ?")
+        .bind(ownerId, parentName)
+        .run();
+      await memberships.remove("team_spawn", authorId);
+
+      const response = await routeRequest(
+        new Request(`https://test.local/sessions/${parentName}/children`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json", Authorization: `Bearer ${sandboxToken}` },
+          body: JSON.stringify({ title: "Team child", prompt: "Investigate" }),
+        }),
+        { ...env, TEAMS_ENFORCEMENT: mode },
+        createExecutionContext()
+      );
+
+      expect(response.status).toBe(403);
+      await expect(response.json()).resolves.toMatchObject({ code: "not_member" });
+      expect(await store.countTotalChildren(parentName)).toBe(0);
+      expect(
+        await env.DB.prepare("SELECT COUNT(*) AS count FROM child_admission_leases").first()
+      ).toEqual({ count: 0 });
+      expect(repositoryAccess).not.toHaveBeenCalled();
+    }
+  );
+
+  it.each(["off", "shadow", "on"] as const)(
+    "does not borrow the parent owner's team membership for an unresolved prompt author (%s)",
+    async (mode) => {
+      const ownerId = "11111111111111111111111111111111";
+      await seedActiveUser(ownerId);
+      await env.DB.prepare(
+        "INSERT INTO teams (id, slug, name, created_at, updated_at) VALUES ('team_spawn', 'spawn', 'Spawn', 1, 1)"
+      ).run();
+      await new TeamMembershipStore(env.DB).add("team_spawn", ownerId);
+      await new TeamRepositoryGrantStore(env.DB).add("team_spawn", {
+        kind: "repository",
+        repoExternalId: 12345,
+        owner: "acme",
+        name: "web-app",
+      });
+      const repositoryAccess = vi
+        .spyOn(GitHubSourceControlProvider.prototype, "checkRepositoryAccess")
+        .mockResolvedValue({
+          repoId: 12345,
+          repoOwner: "acme",
+          repoName: "web-app",
+          defaultBranch: "main",
+        });
+      const { parentName, sandboxToken, store } = await setupParent({
+        ownerTeamId: "team_spawn",
+        visibility: "team",
+        repoId: 12345,
+        userId: "slack:U0123",
+      });
+      await env.DB.prepare("UPDATE sessions SET user_id = ? WHERE id = ?")
+        .bind(ownerId, parentName)
+        .run();
+
+      const response = await routeRequest(
+        new Request(`https://test.local/sessions/${parentName}/children`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json", Authorization: `Bearer ${sandboxToken}` },
+          body: JSON.stringify({ title: "Team child", prompt: "Investigate" }),
+        }),
+        { ...env, TEAMS_ENFORCEMENT: mode },
+        createExecutionContext()
+      );
+
+      expect(response.status).toBe(403);
+      await expect(response.json()).resolves.toMatchObject({ code: "not_member" });
+      expect(await store.countTotalChildren(parentName)).toBe(0);
+      expect(
+        await env.DB.prepare("SELECT COUNT(*) AS count FROM child_admission_leases").first()
+      ).toEqual({ count: 0 });
+      expect(repositoryAccess).not.toHaveBeenCalled();
+    }
+  );
 
   it("inherits private visibility, owner and collaborators when the prompt author is not canonical", async () => {
     const ownerId = "11111111111111111111111111111111";
