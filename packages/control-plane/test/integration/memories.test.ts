@@ -121,6 +121,29 @@ describe("memory persistence", () => {
       (await env.DB.prepare("SELECT COUNT(*) AS n FROM memory_revisions").first<{ n: number }>())?.n
     ).toBe(20);
   });
+  it("preserves one active record across restored predecessors and multi-generation replacements", async () => {
+    const store = new MemoryStore(env.DB);
+    const a = await store.create(personal, human);
+    const b = await store.create({ ...personal, supersedesMemoryId: a.id }, human);
+    await expect(store.transition(a.id, "restore", a.currentRevisionId, human)).rejects.toThrow(
+      /replacement/
+    );
+    const c = await store.create({ ...personal, supersedesMemoryId: b.id }, human);
+    await expect(store.transition(a.id, "restore", a.currentRevisionId, human)).rejects.toThrow(
+      /replacement/
+    );
+    await expect(store.transition(b.id, "restore", b.currentRevisionId, human)).rejects.toThrow(
+      /replacement/
+    );
+    await store.transition(c.id, "archive", c.currentRevisionId, human);
+    const restored = await Promise.allSettled(
+      [a, b, c].map((record) =>
+        store.transition(record.id, "restore", record.currentRevisionId, human)
+      )
+    );
+    expect(restored.filter((result) => result.status === "fulfilled")).toHaveLength(1);
+    expect(await store.list({ type: "personal" }, human.userId)).toHaveLength(1);
+  });
   it("fences personal autosave after a session was shared, even when made private again", async () => {
     const store = new MemoryStore(env.DB);
     await new SessionScopeStore(env.DB).updateVisibility(["session_a"], "workspace");

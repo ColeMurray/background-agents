@@ -417,6 +417,7 @@ export class MemoryStore {
    * Approval atomically archives the exact predecessor revision of a replacement.
    * Restore retains approval history: rejected proposals become proposed again, while
    * previously approved records become active without superseding their predecessor again.
+   * An approved restore requires the entire replacement family to have no active record.
    * @throws MemoryConflictError on stale state, a changed predecessor, or a full proposal quota.
    */
   async transition(
@@ -450,6 +451,19 @@ export class MemoryStore {
         .prepare(
           `UPDATE memories SET status = ?, approved_at = ?, decided_by = ?, archived_at = ?, archived_by = ?, archive_reason = ?, last_operation_id = ?, updated_at = ?
         WHERE id = ? AND current_revision_id = ? AND status = ?
+        ${
+          action === "restore" && status === "active"
+            ? `AND NOT EXISTS (
+          WITH RECURSIVE family(id, parent_id) AS (
+            SELECT id, supersedes_memory_id FROM memories WHERE id = ?
+            UNION
+            SELECT m.id, m.supersedes_memory_id FROM memories m JOIN family f
+              ON m.id = f.parent_id OR m.supersedes_memory_id = f.id
+          ) SELECT 1 FROM memories active JOIN family f ON f.id = active.id
+            WHERE active.status = 'active'
+        )`
+            : ""
+        }
         ${replacementGuard ? "AND EXISTS (SELECT 1 FROM memories old WHERE old.id = memories.supersedes_memory_id AND old.current_revision_id = memories.supersedes_revision_id AND old.status = 'active')" : ""}
         ${status === "proposed" && current.authorSessionId ? "AND (SELECT COUNT(*) FROM memories WHERE author_session_id = ? AND status = 'proposed') < ?" : ""}`
         )
@@ -465,6 +479,7 @@ export class MemoryStore {
           id,
           expectedRevisionId,
           current.status,
+          ...(action === "restore" && status === "active" ? [id] : []),
           ...(status === "proposed" && current.authorSessionId
             ? [current.authorSessionId, MEMORY_LIMITS.pendingPerSession]
             : [])
@@ -490,7 +505,7 @@ export class MemoryStore {
     ]);
     if (!results[0].meta.changes)
       throw new MemoryConflictError(
-        "Memory or replacement changed, or pending proposal limit reached"
+        "Memory or replacement changed, another replacement is active, or pending proposal limit reached"
       );
     return (await this.get(id))!;
   }
