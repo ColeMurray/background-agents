@@ -309,6 +309,7 @@ export class CallbackNotificationService {
           });
         }
       );
+      if (result.delivered) await this.notifyProjectBestEffort(messageId, success);
     } catch (caught) {
       thrownError = caught;
     } finally {

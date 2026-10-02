@@ -139,6 +139,31 @@ describe("CallbackNotificationService", () => {
       }
     );
 
+    it.each(["slack", "linear"])(
+      "attempts project fallback after successful %s delivery",
+      async (source) => {
+        const notifyProjectComplete = vi
+          .fn()
+          .mockRejectedValue(new Error("Project notification failed"));
+        const h = createTestHarness({ notifyProjectComplete });
+        h.repository.getMessageCallbackContext.mockReturnValue({
+          source,
+          callback_context: JSON.stringify(
+            source === "linear" ? LINEAR_CALLBACK_CONTEXT : { channel: "C1", threadTs: "1.2" }
+          ),
+        });
+        h.slackBot.fetch.mockResolvedValue(Response.json({ ok: true }));
+        h.linearBot.fetch.mockResolvedValue(Response.json({ ok: true }));
+        await h.service.notifyComplete("msg-1", true);
+        expect(notifyProjectComplete).toHaveBeenCalledWith("msg-1", true);
+        expect(h.log.info).toHaveBeenCalledWith(
+          "callback.complete_delivery",
+          expect.objectContaining({ outcome: "success", source })
+        );
+        expect(h.log.error).not.toHaveBeenCalled();
+      }
+    );
+
     it("skips when no callback context", async () => {
       vi.mocked(harness.repository.getMessageCallbackContext).mockReturnValue(null);
 
