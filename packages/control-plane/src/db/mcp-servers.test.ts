@@ -8,7 +8,7 @@
 import { describe, it, expect, vi } from "vitest";
 import type { ValidatedCreateMcpServerInput } from "@open-inspect/shared/types/integrations";
 import { McpServerStore, McpServerValidationError } from "./mcp-servers";
-import { generateEncryptionKey } from "../auth/crypto";
+import { decryptToken, encryptToken, generateEncryptionKey } from "../auth/crypto";
 
 // ─── Fake D1 helpers ────────────────────────────────────────────────────────
 
@@ -201,6 +201,32 @@ describe("McpServerStore", () => {
       expect(result!.hasEnv).toBe(false);
     });
 
+    it("names the stored credentials without their values", async () => {
+      const encryptedRow = {
+        ...remoteRow,
+        env: await encryptToken(
+          JSON.stringify({ "x-api-key": "secret-value", Accept: "text/event-stream" }),
+          TEST_ENCRYPTION_KEY
+        ),
+      };
+      const { db } = createFakeD1({ firstResult: encryptedRow });
+      const store = new McpServerStore(db, TEST_ENCRYPTION_KEY);
+
+      const result = await store.get("def456");
+
+      expect(result!.credentialKeys).toEqual(["x-api-key", "Accept"]);
+      expect(JSON.stringify(result)).not.toContain("secret-value");
+    });
+
+    it("names no credentials when none are stored", async () => {
+      const { db } = createFakeD1({ allResults: [remoteRow] });
+      const store = new McpServerStore(db, TEST_ENCRYPTION_KEY);
+
+      const [result] = await store.list();
+
+      expect(result.credentialKeys).toEqual([]);
+    });
+
     it("drops malformed persisted env values when decrypting config", async () => {
       const malformedEnvRow = { ...sampleRow, env: JSON.stringify({ DEBUG: 1 }) };
       const { db } = createFakeD1({ allResults: [malformedEnvRow] });
@@ -270,6 +296,62 @@ describe("McpServerStore", () => {
       const err = await store.update("def456", { type: "local" }).catch((e) => e);
       expect(err).toBeInstanceOf(McpServerValidationError);
       expect(err.message).toMatch(/require a command/i);
+    });
+
+    async function storedCredentialsAfterUpdate(
+      patch: Parameters<McpServerStore["update"]>[1],
+      server: typeof sampleRow | typeof remoteRow = remoteRow
+    ): Promise<Record<string, string>> {
+      const row = {
+        ...server,
+        env: await encryptToken(
+          JSON.stringify({ "x-api-key": "old-key", Accept: "text/event-stream" }),
+          TEST_ENCRYPTION_KEY
+        ),
+      };
+      const { db, statements } = createFakeD1({ firstResult: row });
+      await new McpServerStore(db, TEST_ENCRYPTION_KEY).update("def456", patch);
+      const written = statements.find((s) => s.sql.includes("UPDATE"))!.params[4] as string;
+      return JSON.parse(await decryptToken(written, TEST_ENCRYPTION_KEY));
+    }
+
+    it("keeps the named stored credentials and applies the new values", async () => {
+      expect(
+        await storedCredentialsAfterUpdate({
+          headers: { "x-api-key": "new-key" },
+          keepCredentialKeys: ["Accept"],
+        })
+      ).toEqual({ Accept: "text/event-stream", "x-api-key": "new-key" });
+    });
+
+    it("drops the stored credentials the update does not keep", async () => {
+      expect(await storedCredentialsAfterUpdate({ keepCredentialKeys: ["Accept"] })).toEqual({
+        Accept: "text/event-stream",
+      });
+    });
+
+    it("replaces all stored credentials when the update keeps none by name", async () => {
+      expect(
+        await storedCredentialsAfterUpdate({ headers: { Authorization: "Bearer t" } })
+      ).toEqual({ Authorization: "Bearer t" });
+    });
+
+    it("replaces a kept header sent under another letter case", async () => {
+      expect(
+        await storedCredentialsAfterUpdate({
+          headers: { "X-Api-Key": "new-key" },
+          keepCredentialKeys: ["x-api-key", "Accept"],
+        })
+      ).toEqual({ Accept: "text/event-stream", "X-Api-Key": "new-key" });
+    });
+
+    it("keeps env var names case-sensitive", async () => {
+      expect(
+        await storedCredentialsAfterUpdate(
+          { env: { "X-API-KEY": "new-key" }, keepCredentialKeys: ["x-api-key"] },
+          sampleRow
+        )
+      ).toEqual({ "x-api-key": "old-key", "X-API-KEY": "new-key" });
     });
   });
 

@@ -6,6 +6,12 @@ New features, integrations, and notable improvements to Open-Inspect — newest 
 
 ### Changed
 
+MCP server settings now list each saved environment variable or HTTP header by name, as the secrets
+editors do. Values stay encrypted on the server and never reach the browser. Leave a saved row blank
+to keep its value, enter a new value to replace it, or remove the row to delete it. The update API
+accepts `keepCredentialKeys` for these per-name edits; without it, sent credentials still replace
+the saved set.
+
 Team-owned session actions now require current owning-team membership in every `TEAMS_ENFORCEMENT`
 mode, including for Owners and Administrators. Visibility still determines read access; collaborator
 self-removal requires only read access. Sessions, automations, and environments cannot move between
