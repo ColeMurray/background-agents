@@ -1,0 +1,184 @@
+import { z } from "zod";
+import { repositoryPairInputSchema } from "./repositories";
+
+export const MEMORY_LIMITS = {
+  title: 200,
+  description: 420,
+  directive: 2_000,
+  fact: 20_000,
+  directiveScope: 6_000,
+  directives: 12_000,
+  catalog: 24_000,
+  catalogRecords: 200,
+  writesPerSession: 20,
+  pendingPerSession: 5,
+} as const;
+
+export const memoryScopeSchema = z.discriminatedUnion("type", [
+  z.object({ type: z.literal("personal") }).strict(),
+  z.object({ type: z.literal("repository"), ...repositoryPairInputSchema.shape }).strict(),
+  z.object({ type: z.literal("environment"), environmentId: z.string().min(1).max(200) }).strict(),
+]);
+export type MemoryScope = z.infer<typeof memoryScopeSchema>;
+export const memoryTypeSchema = z.enum(["fact", "directive"]);
+export const memoryStatusSchema = z.enum(["proposed", "active", "archived"]);
+export type MemoryType = z.infer<typeof memoryTypeSchema>;
+export type MemoryStatus = z.infer<typeof memoryStatusSchema>;
+export const memoryContentSchema = z
+  .object({
+    memoryType: memoryTypeSchema,
+    title: z.string().trim().min(1).max(MEMORY_LIMITS.title),
+    description: z.string().trim().min(10).max(MEMORY_LIMITS.description),
+    content: z.string().min(1).max(MEMORY_LIMITS.fact),
+  })
+  .strict()
+  .superRefine((value, ctx) => {
+    const limit = MEMORY_LIMITS[value.memoryType];
+    if (
+      value.content.length > limit ||
+      new TextEncoder().encode(value.content).length > limit * 4
+    ) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["content"],
+        message: `Content exceeds ${limit} characters`,
+      });
+    }
+  });
+export type MemoryContent = z.infer<typeof memoryContentSchema>;
+export const createMemorySchema = memoryContentSchema.safeExtend({
+  scope: memoryScopeSchema,
+  supersedesMemoryId: z.string().min(1).max(200).optional(),
+});
+export type CreateMemoryInput = z.infer<typeof createMemorySchema>;
+export const reviseMemorySchema = memoryContentSchema.safeExtend({
+  expectedRevisionId: z.string().min(1),
+});
+export const memoryActionSchema = z
+  .object({
+    expectedRevisionId: z.string().min(1),
+    reason: z.string().max(1_000).optional(),
+  })
+  .strict();
+export const memoryPreferencesSchema = z.object({ includePersonalMemories: z.boolean() }).strict();
+export type MemoryPreferences = z.infer<typeof memoryPreferencesSchema>;
+
+export interface MemoryRevision extends MemoryContent {
+  id: string;
+  memoryId: string;
+  revisionNumber: number;
+  authorKind: "user" | "agent";
+  authorUserId: string | null;
+  authorSessionId: string | null;
+  createdAt: number;
+}
+export interface MemoryRecord extends MemoryContent {
+  id: string;
+  scope: MemoryScope;
+  ownerUserId: string | null;
+  repoId?: number | null;
+  status: MemoryStatus;
+  currentRevisionId: string;
+  revisionNumber: number;
+  authorKind: "user" | "agent";
+  authorUserId: string | null;
+  authorSessionId: string | null;
+  supersedesMemoryId: string | null;
+  replacementMemoryIds?: string[];
+  approvedAt: number | null;
+  archivedAt: number | null;
+  archiveReason: string | null;
+  createdAt: number;
+  updatedAt: number;
+}
+export interface MemoryCapabilities {
+  canEdit: boolean;
+  canArchive: boolean;
+  canApprove: boolean;
+}
+export type MemoryView = MemoryRecord & { capabilities: MemoryCapabilities };
+export interface SessionMemoryItem {
+  memoryId: string;
+  revisionId: string;
+  revisionNumber: number;
+  scope: MemoryScope;
+  memoryType: MemoryType;
+  title: string;
+  inclusion: "directive" | "catalog" | "truncated";
+  estimatedTokens: number;
+  changed?: boolean;
+  archived?: boolean;
+}
+export interface SessionMemoryManifest {
+  resolverVersion: number;
+  manifestSha256: string;
+  resolvedAt: number;
+  includePersonalMemories: boolean;
+  personalOwnerUserId: string | null;
+  directiveChars: number;
+  catalogChars: number;
+  estimatedTokens: number;
+  truncatedCount: number;
+  items: SessionMemoryItem[];
+}
+
+const authorFields = {
+  authorKind: z.enum(["user", "agent"]),
+  authorUserId: z.string().nullable(),
+  authorSessionId: z.string().nullable(),
+  createdAt: z.number(),
+};
+export const memoryRevisionSchema: z.ZodType<MemoryRevision> = memoryContentSchema.safeExtend({
+  id: z.string(),
+  memoryId: z.string(),
+  revisionNumber: z.number().int(),
+  ...authorFields,
+});
+export const memoryRecordSchema = memoryContentSchema.safeExtend({
+  id: z.string(),
+  scope: memoryScopeSchema,
+  repoId: z.number().nullable().optional(),
+  ownerUserId: z.string().nullable(),
+  status: memoryStatusSchema,
+  currentRevisionId: z.string(),
+  revisionNumber: z.number().int(),
+  ...authorFields,
+  supersedesMemoryId: z.string().nullable(),
+  replacementMemoryIds: z.array(z.string()).optional(),
+  approvedAt: z.number().nullable(),
+  archivedAt: z.number().nullable(),
+  archiveReason: z.string().nullable(),
+  updatedAt: z.number(),
+});
+export const memoryViewSchema: z.ZodType<MemoryView> = memoryRecordSchema.safeExtend({
+  capabilities: z.object({
+    canEdit: z.boolean(),
+    canArchive: z.boolean(),
+    canApprove: z.boolean(),
+  }),
+});
+export const sessionMemoryManifestSchema: z.ZodType<SessionMemoryManifest> = z.object({
+  resolverVersion: z.number().int(),
+  manifestSha256: z.string(),
+  resolvedAt: z.number(),
+  includePersonalMemories: z.boolean(),
+  personalOwnerUserId: z.string().nullable(),
+  directiveChars: z.number(),
+  catalogChars: z.number(),
+  estimatedTokens: z.number(),
+  truncatedCount: z.number(),
+  items: z.array(
+    z.object({
+      memoryId: z.string(),
+      revisionId: z.string(),
+      revisionNumber: z.number().int(),
+      scope: memoryScopeSchema,
+      memoryType: memoryTypeSchema,
+      title: z.string(),
+      inclusion: z.enum(["directive", "catalog", "truncated"]),
+      estimatedTokens: z.number(),
+      changed: z.boolean().optional(),
+      archived: z.boolean().optional(),
+    })
+  ),
+});

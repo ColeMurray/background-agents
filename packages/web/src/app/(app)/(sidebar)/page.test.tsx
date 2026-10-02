@@ -33,6 +33,21 @@ function activeOpenAiAccount(id: string): (typeof mocks.providerAccountsValue)[n
 }
 
 describe("Home", () => {
+  it("waits for the personal default before warming and forwards an explicit opt-out", async () => {
+    mocks.memoryPreferencesLoading = true;
+    const view = render(<Home />);
+    fireEvent.change(screen.getByPlaceholderText("What do you want to build?"), {
+      target: { value: "Do some work" },
+    });
+    expect(vi.mocked(fetch).mock.calls.filter(([url]) => url === "/api/sessions")).toHaveLength(0);
+    mocks.memoryPreferencesLoading = false;
+    mocks.includePersonalMemories = false;
+    view.rerender(<Home />);
+    await waitFor(() =>
+      expect(sessionCreateBody()).toMatchObject({ includePersonalMemories: false })
+    );
+  });
+
   it("shows the first prompt's server denial reason in a toast without navigating", async () => {
     vi.mocked(fetch).mockImplementation(async (input) =>
       String(input).endsWith("/prompt")

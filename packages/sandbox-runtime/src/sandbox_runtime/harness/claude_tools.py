@@ -682,7 +682,9 @@ def build_tools(client: ControlPlaneToolClient) -> list[Any]:
 
     handlers = OpenInspectTools(client)
     config = client.config
-    tools: list[Any] = []
+    from .memory_tools import build_memory_tools
+
+    tools: list[Any] = build_memory_tools(client)
 
     tools.append(
         tool(

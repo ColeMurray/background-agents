@@ -414,6 +414,10 @@ class OpenCodeServer:
             },
         }
 
+        memory_file = resolve_opencode_global_config_dir() / "oi-memory.md"
+        if memory_file.is_file() and memory_file.stat().st_size:
+            opencode_config["instructions"] = [str(memory_file)]
+
         # Inject MCP servers
         mcp_servers = self._resolve_mcp_servers()
         if mcp_servers:

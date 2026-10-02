@@ -1,3 +1,4 @@
+import { sessionMemoryRoutes } from "./session-memories";
 import { Hono } from "hono";
 import type { ControlPlaneHonoEnv } from "../routing/hono-env";
 import { sessionCreateRoutes } from "./session-create";
@@ -32,6 +33,7 @@ for (const module of [
   sessionAttachmentRoutes,
   sessionDiffRoutes,
   sessionSkillRoutes,
+  sessionMemoryRoutes,
   sessionChildSpawnRoutes,
   sessionChildRoutes,
 ]) {

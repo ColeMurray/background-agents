@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING
 
 from ..claude_stager import ClaudeHarnessHandoff
 from ..credentials.provider_credential_client import RuntimeCredentialClient
+from ..memories import append_memory
 from .base import (
     DEFAULT_HARNESS_ID,
     DETERMINISTIC_FAILURE_EXIT_CODE,
@@ -76,7 +77,9 @@ def build_agent_harness(
                 mcp_servers=_mcp_servers_from(session_config),
                 default_model=str(session_config.get("model") or "claude-sonnet-4-6"),
                 oauth_managed=oauth_managed,
-                system_prompt_append=_repository_guidance(handoff.workdir),
+                system_prompt_append=append_memory(
+                    _repository_guidance(handoff.workdir), handoff.config_dir
+                ),
                 tools=ToolServerConfig(
                     control_plane_url=identity.control_plane_url,
                     session_id=identity.session_id,

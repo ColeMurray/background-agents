@@ -629,3 +629,35 @@ class TestWatcherHandoffFailure:
         supervisor.monitor_processes.assert_not_awaited()
         supervisor._report_fatal_error.assert_awaited_once()
         assert "cannot spawn bridge" in supervisor._report_fatal_error.await_args.args[0]
+
+
+@pytest.mark.parametrize("mode", ["fresh", "snapshot", "repo_image"])
+async def test_memory_materializes_after_repository_and_skills_before_harness(
+    tmp_path, monkeypatch, mode
+):
+    if mode == "snapshot":
+        monkeypatch.setenv("RESTORED_FROM_SNAPSHOT", "true")
+    elif mode == "repo_image":
+        monkeypatch.setenv("FROM_REPO_IMAGE", "true")
+    events = []
+    supervisor = _supervisor(tmp_path, events)
+    supervisor.memory = MagicMock()
+    supervisor.memory.materialize = AsyncMock(side_effect=lambda: events.append("memory"))
+    assert await supervisor.run() is True
+    assert events.index("skills") < events.index("memory") < events.index("harness")
+    assert [(line["phase"], line["status"]) for line in _lines() if line["phase"] == "memory"] == [
+        ("memory", "started"),
+        ("memory", "completed"),
+    ]
+
+
+async def test_memory_failure_is_attributed_and_prevents_harness_start(tmp_path):
+    supervisor = _supervisor(tmp_path, [])
+    supervisor.memory = MagicMock()
+    supervisor.memory.materialize = AsyncMock(side_effect=RuntimeError("Unavailable"))
+    assert await supervisor.run() is False
+    supervisor.harness_process.start.assert_not_awaited()
+    assert [(line["phase"], line["status"]) for line in _lines() if line["phase"] == "memory"] == [
+        ("memory", "started"),
+        ("memory", "failed"),
+    ]

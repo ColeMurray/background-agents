@@ -71,6 +71,13 @@ export const AUTHORIZATION_DECISION_ACTIONS = {
 
 /** Actions written by the operation owner alongside the change; their result is the domain outcome. */
 export const AUDIT_OPERATION_ACTIONS = [
+  "memory.created",
+  "memory.revised",
+  "memory.archived",
+  "memory.restored",
+  "memory.approved",
+  "memory.rejected",
+  "memory.superseded",
   "session.private_break_glass",
   "session.visibility_changed",
   "session.moved",

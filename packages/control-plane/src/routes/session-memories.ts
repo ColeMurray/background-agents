@@ -1,0 +1,198 @@
+import { Hono } from "hono";
+import { createMemorySchema, type MemoryRecord } from "@open-inspect/shared/types/memories";
+import { MemoryStore } from "../db/memories";
+import { SessionMemoryStore } from "../db/session-memories";
+import { SessionIndexStore } from "../db/session-index";
+import { TeamStore } from "../db/teams";
+import { TeamRepositoryGrantStore } from "../db/team-repository-grants";
+import { EnvironmentStore } from "../db/environments";
+import { matchesMemoryTarget, renderMemorySection } from "../session/memory-resolution";
+import { admit, dispatch } from "../routing/admit";
+import type { ControlPlaneHonoEnv } from "../routing/hono-env";
+import type { Env } from "../types";
+import { parseBody } from "./body";
+import {
+  error,
+  json,
+  NO_AUTHORIZATION,
+  requireSession,
+  SCM_AGNOSTIC_HUMAN_USER_ROUTE,
+  SCM_AGNOSTIC_SANDBOX_ROUTE,
+  type SandboxRouteContext,
+  type UserRouteContext,
+} from "./shared";
+import { memoryWriteError } from "./memories";
+
+/** Session-bound credentials are not a permanent grant to a removed team repository. */
+async function currentSharedAccess(
+  ctx: SandboxRouteContext,
+  sessionId: string,
+  records: readonly Pick<MemoryRecord, "scope" | "repoId">[]
+): Promise<boolean> {
+  const session = await new SessionIndexStore(ctx.db).get(sessionId);
+  if (!session) return false;
+  if (session.ownerTeamId) {
+    if (!(await new TeamStore(ctx.db).isActive(session.ownerTeamId))) return false;
+    const ids = records
+      .filter((record) => record.scope.type === "repository")
+      .map((record) => record.repoId ?? null);
+    if (!(await new TeamRepositoryGrantStore(ctx.db).covers(session.ownerTeamId, ids)))
+      return false;
+  }
+  const environmentIds = new Set(
+    records.flatMap((record) =>
+      record.scope.type === "environment" ? [record.scope.environmentId] : []
+    )
+  );
+  for (const id of environmentIds) {
+    const environment = await new EnvironmentStore(ctx.db).getById(id);
+    if (
+      !environment ||
+      (environment.owner_team_id && environment.owner_team_id !== session.ownerTeamId)
+    )
+      return false;
+  }
+  return true;
+}
+async function view(_request: Request, _env: Env, params: { id: string }, ctx: UserRouteContext) {
+  const loaded = await new SessionMemoryStore(ctx.db).load(params.id);
+  return loaded ? json(loaded.manifest) : error("Session not found", 404);
+}
+async function installation(
+  _request: Request,
+  _env: Env,
+  params: { id: string },
+  ctx: SandboxRouteContext
+) {
+  const store = new SessionMemoryStore(ctx.db);
+  const loaded = await store.load(params.id);
+  if (!loaded) return error("Session not found", 404);
+  if (!(await currentSharedAccess(ctx, params.id, loaded.records)))
+    return error("Memory scope is no longer available", 403);
+  return json({
+    schemaVersion: 1,
+    manifestSha256: loaded.manifest.manifestSha256,
+    rendered: renderMemorySection(loaded.manifest, loaded.records),
+    items: loaded.manifest.items,
+  });
+}
+async function read(
+  _request: Request,
+  _env: Env,
+  params: { id: string; memoryId: string },
+  ctx: SandboxRouteContext
+) {
+  const record = await new SessionMemoryStore(ctx.db).read(params.id, params.memoryId);
+  if (!record || !(await currentSharedAccess(ctx, params.id, [record])))
+    return error("Memory not found", 404);
+  if (record.status === "archived")
+    return json({
+      id: record.id,
+      status: "archived",
+      archivedAt: record.archivedAt,
+      reason: record.archiveReason,
+    });
+  return json({
+    id: record.id,
+    status: record.status,
+    title: record.title,
+    description: record.description,
+    content: record.content,
+    scope: record.scope,
+    memoryType: record.memoryType,
+    revisionId: record.currentRevisionId,
+    revisionNumber: record.revisionNumber,
+    authorKind: record.authorKind,
+    authorUserId: record.authorUserId,
+    authorSessionId: record.authorSessionId,
+  });
+}
+async function write(
+  request: Request,
+  _env: Env,
+  params: { id: string },
+  ctx: SandboxRouteContext
+) {
+  const body = await parseBody(request, createMemorySchema, "Invalid memory");
+  if (body instanceof Response) return body;
+  const store = new SessionMemoryStore(ctx.db);
+  const target = await store.target(params.id);
+  const session = await new SessionIndexStore(ctx.db).get(params.id);
+  if (
+    !target ||
+    !session ||
+    !matchesMemoryTarget({ scope: body.scope, ownerUserId: target.canonicalUserId }, target)
+  )
+    return error("Memory scope is outside this session", 403);
+  // A collaborator-owned child can consume inherited context but cannot mutate its original owner's personal store.
+  if (body.scope.type === "personal" && session.userId !== target.canonicalUserId)
+    return error("Personal memory owner differs from this session owner", 403);
+  let repoId: number | null = null;
+  if (body.scope.type === "repository") {
+    const row = await ctx.db
+      .prepare(
+        "SELECT repo_id FROM session_repositories WHERE session_id = ? AND lower(repo_owner) = lower(?) AND lower(repo_name) = lower(?)"
+      )
+      .bind(params.id, body.scope.repoOwner, body.scope.repoName)
+      .first<{ repo_id: number | null }>();
+    repoId = row?.repo_id ?? null;
+    if (
+      session.ownerTeamId &&
+      !(await new TeamRepositoryGrantStore(ctx.db).covers(session.ownerTeamId, [repoId]))
+    )
+      return error("Repository grant required", 403);
+  }
+  if (
+    body.scope.type === "environment" &&
+    !(await currentSharedAccess(ctx, params.id, [{ scope: body.scope }]))
+  )
+    return error("Environment access required", 403);
+  if (session.ownerTeamId && !(await new TeamStore(ctx.db).isActive(session.ownerTeamId)))
+    return error("Team is not active", 403);
+  const autoSave = await ctx.db
+    .prepare(
+      "SELECT personal_auto_save_eligible FROM session_memory_manifests WHERE session_id = ?"
+    )
+    .bind(params.id)
+    .first<{ personal_auto_save_eligible: number }>();
+  try {
+    const memory = await new MemoryStore(ctx.db).create(
+      body,
+      {
+        kind: "agent",
+        userId: body.scope.type === "personal" ? target.canonicalUserId : (session.userId ?? null),
+        sessionId: params.id,
+        requestId: ctx.request_id,
+        allowPersonalAutoSave: autoSave?.personal_auto_save_eligible === 1,
+      },
+      repoId
+    );
+    return json(
+      { id: memory.id, status: memory.status, revisionId: memory.currentRevisionId },
+      201
+    );
+  } catch (cause) {
+    return memoryWriteError(cause);
+  }
+}
+
+export const sessionMemoryRoutes = new Hono<ControlPlaneHonoEnv>();
+const sandbox = admit({
+  ...SCM_AGNOSTIC_SANDBOX_ROUTE,
+  authorization: NO_AUTHORIZATION,
+  cacheControl: "private, no-store",
+});
+sessionMemoryRoutes.get(
+  "/sessions/:id/memories",
+  admit({
+    ...SCM_AGNOSTIC_HUMAN_USER_ROUTE,
+    authorization: requireSession("read"),
+    cacheControl: "private, no-store",
+  }),
+  (c) => dispatch(c, view)
+);
+sessionMemoryRoutes.get("/sessions/:id/sandbox-memory", sandbox, (c) => dispatch(c, installation));
+sessionMemoryRoutes.get("/sessions/:id/sandbox-memory/:memoryId", sandbox, (c) =>
+  dispatch(c, read)
+);
+sessionMemoryRoutes.post("/sessions/:id/sandbox-memory", sandbox, (c) => dispatch(c, write));

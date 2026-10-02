@@ -36,6 +36,8 @@ function describeBootPhase(bootPhaseJson: string | null): string {
       return `running setup.sh${repo}`;
     case "start":
       return `running start.sh${repo}`;
+    case "memory":
+      return "loading session memories";
     case "skills":
       return "installing managed skills";
     case "harness":

@@ -139,6 +139,7 @@ const AUDITED_ALLOWED_PERMISSIONS = new Set<PermissionId>([
   "sessions.lifecycle",
   "sessions.sandbox_access",
   "skill_profiles.manage_own",
+  "memories.manage_own",
   "skills.manage",
   "workspace.members.manage",
   "workspace.transfer_ownership",

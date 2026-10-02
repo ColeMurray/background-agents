@@ -252,6 +252,7 @@ const createSessionRequestBaseSchema = z.object({
   environmentId: z.string().trim().min(1).nullish(),
   /** Managed skills are resolved and pinned when the session is created. */
   skillSelection: sessionSkillSelectionSchema.optional(),
+  includePersonalMemories: z.boolean().optional(),
   /** Explicit account/API-key choices. Omission resolves provider policy. */
   providerSelections: modelProviderSelectionsSchema.optional(),
 });

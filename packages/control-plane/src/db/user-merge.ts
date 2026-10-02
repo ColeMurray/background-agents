@@ -56,6 +56,14 @@ export interface UserMergeOptions {
 }
 
 const USER_MERGE_COUNT_KEYS = [
+  "memoriesOwnedRepointed",
+  "memoryAuthorsRepointed",
+  "memoryRevisionAuthorsRepointed",
+  "memoryDecidersRepointed",
+  "memoryArchiversRepointed",
+  "memoryManifestOwnersRepointed",
+  "memoryPreferencesDeduped",
+  "memoryPreferencesRepointed",
   "identitiesDeduped",
   "identitiesRepointed",
   "readStatesDeduped",
@@ -235,6 +243,23 @@ const SKILL_CATALOG_GENERATION_OPERATION: MergeOperation = {
 };
 
 const FINAL_REPOINT_OPERATIONS = [
+  regularRepoint("memoriesOwnedRepointed", "memories", "owner_user_id"),
+  regularRepoint("memoryAuthorsRepointed", "memories", "author_user_id"),
+  regularRepoint("memoryRevisionAuthorsRepointed", "memory_revisions", "author_user_id"),
+  regularRepoint("memoryDecidersRepointed", "memories", "decided_by"),
+  regularRepoint("memoryArchiversRepointed", "memories", "archived_by"),
+  regularRepoint(
+    "memoryManifestOwnersRepointed",
+    "session_memory_manifests",
+    "personal_owner_user_id"
+  ),
+  ...dedupeThenRepoint({
+    dedupeKey: "memoryPreferencesDeduped",
+    repointKey: "memoryPreferencesRepointed",
+    table: "memory_preferences",
+    collision: `EXISTS (SELECT 1 FROM memory_preferences WHERE user_id = ?)`,
+  }),
+
   regularRepoint("providerAccountAuthorizationsRepointed", "model_provider_account_authorizations"),
   regularRepoint(
     "providerAccountAuthorizationAttemptsRepointed",

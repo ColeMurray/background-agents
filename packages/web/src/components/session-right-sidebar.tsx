@@ -1,5 +1,7 @@
 "use client";
 
+import { MemoriesSection } from "./sidebar/memories-section";
+
 import { useMemo, useState, type ReactNode } from "react";
 import { CollapsibleSection } from "./sidebar/collapsible-section";
 import { ParticipantsSection } from "./sidebar/participants-section";
@@ -344,6 +346,7 @@ export function SessionRightSidebarContent({
               />
             )}
             <ManagedSkillsSection sessionId={sessionState.id} />
+            <MemoriesSection sessionId={sessionState.id} />
             {(!presenceSynced || participants.length > 0) && (
               <DetailsSection title="Participants">
                 <ParticipantsSection participants={participants} presenceSynced={presenceSynced} />

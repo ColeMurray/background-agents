@@ -1,3 +1,4 @@
+import { resolveSessionMemory } from "../session/memory-resolution";
 import { Hono } from "hono";
 import { admit, dispatch } from "../routing/admit";
 import type { ControlPlaneHonoEnv } from "../routing/hono-env";
@@ -283,7 +284,14 @@ export async function handleCreateSession(
     throw e;
   }
 
+  const memoryManifest = await resolveSessionMemory(
+    ctx.db,
+    { canonicalUserId: resolvedUserId, repositories: scopeMembers, environmentId },
+    body.includePersonalMemories
+  );
+
   const input: SessionInitInput = {
+    memoryManifest,
     ownerTeamId: teamId,
     visibility,
     sessionId,

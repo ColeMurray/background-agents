@@ -38,6 +38,18 @@ describe("initializeSession", () => {
     sandboxSettings: {},
     automationId: null,
     automationRunId: null,
+    memoryManifest: {
+      resolverVersion: 1,
+      manifestSha256: "0".repeat(64),
+      resolvedAt: 1,
+      includePersonalMemories: false,
+      personalOwnerUserId: null,
+      directiveChars: 0,
+      catalogChars: 0,
+      estimatedTokens: 0,
+      truncatedCount: 0,
+      items: [],
+    },
     managedSkillsManifest: {
       selection: { mode: "all" },
       resolverVersion: 1,

@@ -1,3 +1,17 @@
+vi.mock("../session/memory-resolution", () => ({
+  resolveSessionMemory: vi.fn(async () => ({
+    resolverVersion: 1,
+    manifestSha256: "0".repeat(64),
+    resolvedAt: 1,
+    includePersonalMemories: false,
+    personalOwnerUserId: null,
+    directiveChars: 0,
+    catalogChars: 0,
+    estimatedTokens: 0,
+    truncatedCount: 0,
+    items: [],
+  })),
+}));
 /**
  * Unit tests for Scheduler.
  *
@@ -6,6 +20,7 @@
  * test/integration/automation-invocations.test.ts.
  */
 
+import { resolveSessionMemory } from "../session/memory-resolution";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { createTestBackgroundTasks } from "../background-tasks.test-support";
 import type { Env } from "../types";
@@ -608,6 +623,10 @@ describe("Scheduler", () => {
       const result = await scheduler.tick();
 
       expect(result).toMatchObject({ processed: 1 });
+      expect(resolveSessionMemory).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({ canonicalUserId: sampleAutomation.user_id })
+      );
 
       expect(mockStore.insertInvocationGuarded).toHaveBeenCalledTimes(1);
       const params = mockStore.insertInvocationGuarded.mock.calls[0][0];

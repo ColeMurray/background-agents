@@ -1,3 +1,5 @@
+import type { SessionMemoryManifest } from "@open-inspect/shared/types/memories";
+import { SessionMemoryStore } from "./session-memories";
 import { DEFAULT_HARNESS, type HarnessId } from "@open-inspect/shared/harnesses";
 import {
   type PullRequestSummary,
@@ -117,6 +119,8 @@ export interface SessionEntry {
 
 /** Declarative fields used only when creating a session index row. */
 export interface CreateSessionCommand extends SessionEntry {
+  memoryManifest?: SessionMemoryManifest;
+  memoryManifestSourceSessionId?: string;
   /** Resolved manifest to persist atomically with a new top-level session. */
   skillManifest?: SessionSkillManifestInput;
   /** Parent manifest to copy atomically for an agent-spawned child. */
@@ -314,6 +318,14 @@ export class SessionIndexStore {
       sessionStmt,
       ...repositoryStmts,
       ...manifestStmts,
+      ...(session.memoryManifest
+        ? new SessionMemoryStore(this.db).bindInsert(session.id, session.memoryManifest)
+        : session.memoryManifestSourceSessionId
+          ? new SessionMemoryStore(this.db).bindCopy(
+              session.id,
+              session.memoryManifestSourceSessionId
+            )
+          : []),
       ...providerAuthStmts,
       ...(session.collaboratorSourceSessionId
         ? [

@@ -22,6 +22,7 @@ import {
   type SlackAutomationEvent,
   type TriggerConfig,
 } from "@open-inspect/shared/triggers";
+import { resolveSessionMemory } from "../session/memory-resolution";
 import { nextCronOccurrence } from "@open-inspect/shared/cron";
 import type {
   AutomationInvocationSource,
@@ -1760,7 +1761,14 @@ export class Scheduler {
       throw new AutomationExecutionUnauthorizedError("team_archived");
     }
 
+    const memoryManifest = await resolveSessionMemory(this.db, {
+      canonicalUserId: executionPrincipal.platformUserId,
+      repositories: scopeMembers,
+      environmentId: target.environmentId,
+    });
+
     const sessionInput: SessionInitInput = {
+      memoryManifest,
       ownerTeamId: automation.owner_team_id,
       visibility: team?.defaultVisibility ?? "workspace",
       sessionId,

@@ -1,3 +1,17 @@
+vi.mock("./session/memory-resolution", () => ({
+  resolveSessionMemory: vi.fn(async () => ({
+    resolverVersion: 1,
+    manifestSha256: "0".repeat(64),
+    resolvedAt: 1,
+    includePersonalMemories: false,
+    personalOwnerUserId: null,
+    directiveChars: 0,
+    catalogChars: 0,
+    estimatedTokens: 0,
+    truncatedCount: 0,
+    items: [],
+  })),
+}));
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { generateEncryptionKey } from "./auth/crypto";
 import { SessionIndexStore } from "./db/session-index";

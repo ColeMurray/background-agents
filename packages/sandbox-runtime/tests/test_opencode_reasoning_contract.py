@@ -1,7 +1,7 @@
 """Opt-in wire tests: OPENCODE_TEST_BINARY=/path/to/opencode pytest ... -v.
 
 Uses real OpenCode 1.18.29, an isolated catalog/config, and fake localhost providers.
-Only reasoning settings are retained from requests; no real provider keys are used.
+Only synthetic requests are captured; no real provider keys or user context are used.
 
 Fixture: public subset of https://models.opencode.ai/api.json, retrieved 2026-09-09.
 Source SHA-256: a55f5a544d356a15a6491bc3293f2dabb692a381e65cce69fee4741de9636733
@@ -20,6 +20,7 @@ models or the binary. Mocks verify serialization, not live provider acceptance.
 
 import json
 import os
+import shutil
 import socket
 import subprocess
 import threading
@@ -105,7 +106,7 @@ def anthropic_events(model):
 
 
 @pytest.fixture
-async def wire_server(tmp_path, reasoning_config):
+async def wire_server(tmp_path, reasoning_config, request):
     assert subprocess.check_output([BINARY, "--version"], text=True).strip() == "1.18.29"
     captured = []
 
@@ -116,7 +117,17 @@ async def wire_server(tmp_path, reasoning_config):
         def do_POST(self):
             body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
             captured.append(
-                {key: body.get(key) for key in ("model", "reasoning", "thinking", "output_config")}
+                {
+                    key: body.get(key)
+                    for key in (
+                        "model",
+                        "reasoning",
+                        "thinking",
+                        "output_config",
+                        "system",
+                        "tools",
+                    )
+                }
             )
             events = (
                 anthropic_events(body["model"])
@@ -139,6 +150,16 @@ async def wire_server(tmp_path, reasoning_config):
     process = None
     try:
         config = reasoning_config
+        if getattr(request, "param", None) == "memory":
+            memory_file = tmp_path / "config/opencode/oi-memory.md"
+            memory_file.parent.mkdir(parents=True, exist_ok=True)
+            memory_file.write_text("# Memory\n\nWIRE_MEMORY_SENTINEL: prefer local verification.\n")
+            config["instructions"] = [str(memory_file)]
+            source = Path(__file__).parents[1] / "src/sandbox_runtime/tools"
+            destination = tmp_path / ".opencode/tool"
+            destination.mkdir(parents=True)
+            for name in ("memory_read.js", "memory_write.js", "_memory.js", "_bridge-client.js"):
+                shutil.copy(source / name, destination / name)
         config["agent"] = {"build": {"options": {"reasoningEffort": "high"}}}
         for provider in ("openai", "anthropic"):
             config["provider"].setdefault(provider, {})["options"] = {
@@ -159,6 +180,8 @@ async def wire_server(tmp_path, reasoning_config):
                 "OPENCODE_CLIENT": "serve",
                 "OPENAI_API_KEY": "test-only",
                 "ANTHROPIC_API_KEY": "test-only",
+                "SANDBOX_AUTH_TOKEN": "test-only",
+                "SESSION_CONFIG": '{"session_id":"wire-test"}',
             }
         )
         with socket.socket() as sock:
@@ -219,6 +242,17 @@ def submit(call, captured, model, effort, session=None):
     sent = [item for item in captured if item["model"] == model_id]
     assert sent, f"no outbound request for {provider}/{model_id}"
     return sent[-1], session
+
+
+@pytest.mark.parametrize("wire_server", ["memory"], indirect=True)
+async def test_memory_text_and_tool_contract_reach_real_opencode_provider_request(wire_server):
+    call, captured = wire_server
+    sent, _ = submit(call, captured, "anthropic/claude-sonnet-4-6", None)
+    assert "WIRE_MEMORY_SENTINEL: prefer local verification." in json.dumps(sent["system"])
+    tools = {tool["name"]: tool for tool in sent["tools"]}
+    assert {"memory_read", "memory_write"} <= tools.keys()
+    assert "memoryId" in tools["memory_read"]["input_schema"]["properties"]
+    assert "ownerUserId" not in tools["memory_write"]["input_schema"]["properties"]
 
 
 async def test_all_fixture_efforts_reach_provider(wire_server):

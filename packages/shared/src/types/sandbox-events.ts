@@ -44,6 +44,7 @@ export const bootPhaseNameSchema = z.enum([
   "setup",
   "start",
   "skills",
+  "memory",
   "harness",
 ]);
 export type BootPhaseName = z.infer<typeof bootPhaseNameSchema>;

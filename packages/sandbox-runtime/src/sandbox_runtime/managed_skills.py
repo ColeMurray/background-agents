@@ -315,14 +315,16 @@ def validate_installation_page(
                 )
             paths.add(path)
             content = _require_string(file["content"], "skill file content", allow_empty=True)
-            content_bytes = content.encode("utf-8")
+            file_content_bytes = content.encode("utf-8")
             size_bytes = _require_int(file["sizeBytes"], "skill file size")
-            if len(content_bytes) > MAX_SKILL_FILE_BYTES or size_bytes != len(content_bytes):
+            if len(file_content_bytes) > MAX_SKILL_FILE_BYTES or size_bytes != len(
+                file_content_bytes
+            ):
                 raise ManagedSkillsError(
                     f"invalid size for skill file {path}", code="installation_invalid"
                 )
             digest = _validate_sha256(file["sha256"], "skill file SHA-256")
-            if not hashlib.sha256(content_bytes).hexdigest() == digest:
+            if not hashlib.sha256(file_content_bytes).hexdigest() == digest:
                 raise ManagedSkillsError(
                     f"SHA-256 mismatch for skill file {path}", code="hash_mismatch"
                 )
@@ -335,7 +337,7 @@ def validate_installation_page(
                 raise ManagedSkillsError(
                     f"executable skill file must be under scripts/: {path}", code="path_invalid"
                 )
-            revision_bytes += len(content_bytes)
+            revision_bytes += len(file_content_bytes)
             files.append(ManagedSkillFile(path, content, digest, size_bytes, executable))
         if "SKILL.md" not in paths:
             raise ManagedSkillsError(

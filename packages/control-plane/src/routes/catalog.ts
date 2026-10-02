@@ -1,3 +1,4 @@
+import { memoryRoutes } from "./memories";
 /**
  * Canonical control-plane HTTP route catalog.
  *
@@ -99,6 +100,7 @@ export const catalog: readonly RouteModule[] = [
 
   // Personal keyboard shortcuts
   keyboardShortcutRoutes,
+  memoryRoutes,
 
   // Workspace roles, members, and current-user authorization
   rbacRoutes,
