@@ -373,7 +373,7 @@ async function handleIncomingMessage(params: IncomingMessageParams): Promise<voi
     traceId
   );
   if (result.needsClarification || !result.target) {
-    const catalog = await loadTargetCatalog(env, traceId, teamId, user);
+    const catalog = await loadTargetCatalog(env, traceId, channel, user);
     const clarificationThreadTs = threadTs || ts;
     const requestId = crypto.randomUUID();
     await storePendingRequest(env, {

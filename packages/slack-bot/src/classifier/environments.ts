@@ -6,7 +6,7 @@
  * list**) so an environments-fetch problem never blocks classification —
  * rules and channel associations targeting an environment are simply skipped,
  * like rules targeting an inaccessible repository.
- * Team catalogs instead require a current user and bypass all caches.
+ * Channel catalogs instead require a current user and bypass all caches.
  */
 
 import { environmentSchema, listEnvironmentsResponseSchema } from "@open-inspect/shared";
@@ -45,16 +45,16 @@ const environments = createCachedResource<Environment[]>({
 export async function getAvailableEnvironments(
   env: Env,
   traceId?: string,
-  teamId?: string | null,
+  channelId?: string | null,
   userId?: string
 ): Promise<Environment[]> {
-  if (teamId) {
+  if (channelId) {
     if (!userId) return [];
     // Team membership and grants must be checked on every read.
     try {
       const body = await fetchControlPlaneJson(
         env,
-        `/environments?teamId=${encodeURIComponent(teamId)}`,
+        `/environments?channel=${encodeURIComponent(`slack:${channelId}`)}`,
         traceId,
         userId
       );
@@ -79,10 +79,10 @@ export async function getEnvironmentById(
   env: Env,
   environmentId: string,
   traceId?: string,
-  teamId?: string | null,
+  channelId?: string | null,
   userId?: string
 ): Promise<Environment | undefined> {
-  const all = await getAvailableEnvironments(env, traceId, teamId, userId);
+  const all = await getAvailableEnvironments(env, traceId, channelId, userId);
   return all.find((environment) => environment.id === environmentId);
 }
 

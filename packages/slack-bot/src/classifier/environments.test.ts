@@ -46,7 +46,7 @@ describe("getAvailableEnvironments", () => {
     vi.clearAllMocks();
   });
 
-  it("reads teams afresh per user, keeping workspace reads actorless and cached", async () => {
+  it("reads channels afresh per user, keeping workspace reads actorless and cached", async () => {
     const env = makeEnv(jsonResponse({ environments: [], total: 0 }));
     const fetch = vi.mocked(env.CONTROL_PLANE.fetch);
     fetch.mockImplementation(async (_input, init) => {
@@ -57,27 +57,27 @@ describe("getAvailableEnvironments", () => {
       });
     });
     expect((await getAvailableEnvironments(env, "trace", null, "U123"))[0].name).toBe("workspace");
-    expect((await getAvailableEnvironments(env, "trace", "team-a", "U123"))[0].name).toBe("U123");
-    expect((await getAvailableEnvironments(env, "trace", "team-a", "U456"))[0].name).toBe("U456");
-    expect((await getAvailableEnvironments(env, "trace", "team-a", "U123"))[0].name).toBe("U123");
+    expect((await getAvailableEnvironments(env, "trace", "C1", "U123"))[0].name).toBe("U123");
+    expect((await getAvailableEnvironments(env, "trace", "C1", "U456"))[0].name).toBe("U456");
+    expect((await getAvailableEnvironments(env, "trace", "C1", "U123"))[0].name).toBe("U123");
     expect((await getAvailableEnvironments(env, "trace", null, "U456"))[0].name).toBe("workspace");
     expect(
       fetch.mock.calls.map(([, init]) => new Headers(init?.headers).get("X-OpenInspect-Actor"))
     ).toEqual([null, "slack:U123", "slack:U456", "slack:U123"]);
     expect(fetch.mock.calls.map(([input]) => String(input))).toEqual([
       "https://internal/environments",
-      "https://internal/environments?teamId=team-a",
-      "https://internal/environments?teamId=team-a",
-      "https://internal/environments?teamId=team-a",
+      "https://internal/environments?channel=slack%3AC1",
+      "https://internal/environments?channel=slack%3AC1",
+      "https://internal/environments?channel=slack%3AC1",
     ]);
     expect(env.SLACK_KV.put).toHaveBeenCalledTimes(1);
     expect(env.SLACK_KV.get).not.toHaveBeenCalled();
   });
 
-  it("makes no team catalog request without a current user", async () => {
+  it("makes no channel catalog request without a current user", async () => {
     const env = makeEnv(new Error("should not fetch"));
-    expect(await getAvailableEnvironments(env, "trace", "team-a")).toEqual([]);
-    expect(await getAvailableEnvironments(env, "trace", "team-a", "")).toEqual([]);
+    expect(await getAvailableEnvironments(env, "trace", "C1")).toEqual([]);
+    expect(await getAvailableEnvironments(env, "trace", "C1", "")).toEqual([]);
     expect(env.CONTROL_PLANE.fetch).not.toHaveBeenCalled();
     expect(env.SLACK_KV.get).not.toHaveBeenCalled();
     expect(env.SLACK_KV.put).not.toHaveBeenCalled();
@@ -97,7 +97,7 @@ describe("getAvailableEnvironments", () => {
     const workspaceEnvironments = await getAvailableEnvironments(env, "trace");
     expect(workspaceEnvironments).toEqual([TEST_ENVIRONMENT]);
     env.SLACK_KV.get = vi.fn().mockResolvedValue(workspaceEnvironments);
-    expect(await getAvailableEnvironments(env, "trace", "team-a", "U123")).toEqual([]);
+    expect(await getAvailableEnvironments(env, "trace", "C1", "U123")).toEqual([]);
     expect(env.CONTROL_PLANE.fetch).toHaveBeenCalledTimes(2);
     expect(env.SLACK_KV.get).not.toHaveBeenCalled();
     expect(env.SLACK_KV.put).toHaveBeenCalledTimes(1);
@@ -144,11 +144,11 @@ describe("getEnvironmentById", () => {
 
   it("finds an environment by its stable id", async () => {
     const env = makeEnv(jsonResponse({ environments: [TEST_ENVIRONMENT], total: 1 }));
-    expect(await getEnvironmentById(env, "env_abc123", "trace", "team-a", "U123")).toEqual(
+    expect(await getEnvironmentById(env, "env_abc123", "trace", "C1", "U123")).toEqual(
       TEST_ENVIRONMENT
     );
     expect(env.CONTROL_PLANE.fetch).toHaveBeenCalledWith(
-      "https://internal/environments?teamId=team-a",
+      "https://internal/environments?channel=slack%3AC1",
       expect.objectContaining({
         headers: expect.objectContaining({ "X-OpenInspect-Actor": "slack:U123" }),
       })

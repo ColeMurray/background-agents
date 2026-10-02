@@ -95,6 +95,7 @@ function makeEnv() {
   controlPlaneFetch.mockImplementation(async (input) => {
     const url = typeof input === "string" ? input : input.toString();
     if (url.includes("/channel-bindings/slack/")) return Response.json({ teamId: null });
+    if (url.includes("/environments")) return Response.json({ environments: [], total: 0 });
     if (url.includes("/repos")) {
       return new Response(
         JSON.stringify(
@@ -606,12 +607,16 @@ describe("POST /events", () => {
     const sessionBodies = sessionFetchBodies(env.CONTROL_PLANE.fetch);
     expect(sessionBodies).toEqual([expect.objectContaining({ teamId: "team-a" })]);
     for (const resource of ["repos", "environments"]) {
-      expect(env.CONTROL_PLANE.fetch).toHaveBeenCalledWith(
-        `https://internal/${resource}?teamId=team-a`,
-        expect.objectContaining({
-          headers: expect.objectContaining({ "X-OpenInspect-Actor": "slack:U123" }),
-        })
+      const catalogReads = env.CONTROL_PLANE.fetch.mock.calls.filter(
+        ([url]) => new URL(String(url)).pathname === `/${resource}`
       );
+      expect(catalogReads).toHaveLength(1);
+      for (const [url, init] of catalogReads) {
+        expect(String(url)).toBe(`https://internal/${resource}?channel=slack%3AC123`);
+        const headers = new Headers(init?.headers);
+        expect(headers.get("X-OpenInspect-Actor")).toBe("slack:U123");
+        expect(headers.get("X-OpenInspect-Service-Signature")).toMatch(/^sig1\./);
+      }
     }
     expect(sessionBodies[0]).not.toHaveProperty("title");
     expect((env.SLACK_KV as unknown as { put: ReturnType<typeof vi.fn> }).put).toHaveBeenCalledWith(
@@ -822,11 +827,14 @@ describe("POST /events", () => {
     ]);
     for (const resource of ["repos", "environments"]) {
       const catalogReads = env.CONTROL_PLANE.fetch.mock.calls.filter(
-        ([url]) => String(url) === `https://internal/${resource}?teamId=team-a`
+        ([url]) => new URL(String(url)).pathname === `/${resource}`
       );
       expect(catalogReads).toHaveLength(resource === "repos" ? 3 : 2);
-      for (const [, init] of catalogReads) {
-        expect(new Headers(init?.headers).get("X-OpenInspect-Actor")).toBe("slack:U123");
+      for (const [url, init] of catalogReads) {
+        expect(String(url)).toBe(`https://internal/${resource}?channel=slack%3AC123`);
+        const headers = new Headers(init?.headers);
+        expect(headers.get("X-OpenInspect-Actor")).toBe("slack:U123");
+        expect(headers.get("X-OpenInspect-Service-Signature")).toMatch(/^sig1\./);
       }
     }
     expect(
@@ -956,11 +964,21 @@ describe("POST /events", () => {
     expect(sessionFetchBodies(env.CONTROL_PLANE.fetch)).toEqual([
       expect.objectContaining({ teamId: null }),
     ]);
-    for (const path of ["channel-bindings/slack/D123", "repos", "environments"]) {
-      expect(env.CONTROL_PLANE.fetch).toHaveBeenCalledWith(
-        `https://internal/${path}`,
-        expect.anything()
+    expect(env.CONTROL_PLANE.fetch).toHaveBeenCalledWith(
+      "https://internal/channel-bindings/slack/D123",
+      expect.anything()
+    );
+    for (const resource of ["repos", "environments"]) {
+      const catalogReads = env.CONTROL_PLANE.fetch.mock.calls.filter(
+        ([url]) => new URL(String(url)).pathname === `/${resource}`
       );
+      expect(catalogReads).toHaveLength(1);
+      for (const [url, init] of catalogReads) {
+        expect(String(url)).toBe(`https://internal/${resource}?channel=slack%3AD123`);
+        const headers = new Headers(init?.headers);
+        expect(headers.get("X-OpenInspect-Actor")).toBe("slack:U123");
+        expect(headers.get("X-OpenInspect-Service-Signature")).toMatch(/^sig1\./);
+      }
     }
 
     slackFetch.mockRestore();
@@ -3100,7 +3118,7 @@ describe("POST /interactions", () => {
     slackFetch.mockRestore();
   });
 
-  it.each([null, "team-a"])("filters scoped clarification suggestions (%s)", async (teamId) => {
+  it.each([null, "team-a"])("filters channel clarification suggestions (%s)", async (teamId) => {
     const slackFetch = mockSlackFetch();
     const payload = {
       type: "block_suggestion",
@@ -3158,13 +3176,15 @@ describe("POST /interactions", () => {
     );
     for (const resource of ["repos", "environments"]) {
       const catalogReads = env.CONTROL_PLANE.fetch.mock.calls.filter(
-        ([url]) =>
-          String(url) === `https://internal/${resource}${teamId ? `?teamId=${teamId}` : ""}`
+        ([url]) => new URL(String(url)).pathname === `/${resource}`
       );
       expect(catalogReads).toHaveLength(1);
-      expect(new Headers(catalogReads[0][1]?.headers).get("X-OpenInspect-Actor")).toBe(
-        teamId ? "slack:U123" : null
-      );
+      for (const [url, init] of catalogReads) {
+        expect(String(url)).toBe(`https://internal/${resource}?channel=slack%3AC123`);
+        const headers = new Headers(init?.headers);
+        expect(headers.get("X-OpenInspect-Actor")).toBe("slack:U123");
+        expect(headers.get("X-OpenInspect-Service-Signature")).toMatch(/^sig1\./);
+      }
     }
     expect(slackFetch).not.toHaveBeenCalled();
     slackFetch.mockRestore();

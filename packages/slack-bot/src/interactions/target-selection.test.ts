@@ -235,7 +235,7 @@ describe("handleTargetSelection", () => {
       env,
       DEFAULT_SELECTED_VALUE,
       "trace-1",
-      "team-a",
+      "C123",
       "U123"
     );
     expect(startSessionAndSendPrompt).toHaveBeenCalledWith(
@@ -510,7 +510,7 @@ describe("handleTargetSelection", () => {
       expect.anything(),
       DEFAULT_SELECTED_VALUE,
       "trace-1",
-      null,
+      "C123",
       "U123"
     );
     expect(startSessionAndSendPrompt).toHaveBeenCalledWith(

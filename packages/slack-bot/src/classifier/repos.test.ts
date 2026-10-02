@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { sha256Hex, verifyServiceSignature } from "@open-inspect/shared/service-auth";
 import type { Env } from "../types";
 import {
   clearLocalCache,
@@ -143,7 +144,7 @@ describe("getAvailableRepos", () => {
     vi.clearAllMocks();
   });
 
-  it("reads teams afresh per user, keeping workspace reads actorless and cached", async () => {
+  it("reads channels afresh per user, keeping workspace reads actorless and cached", async () => {
     const env = makeEnv(jsonResponse({ repos: [], cached: false, cachedAt: "2026-10-01" }));
     const fetch = vi.mocked(env.CONTROL_PLANE.fetch);
     fetch.mockImplementation(async (_input, init) => {
@@ -166,27 +167,45 @@ describe("getAvailableRepos", () => {
       });
     });
     expect((await getAvailableRepos(env, "trace", null, "U123"))[0].name).toBe("workspace");
-    expect((await getAvailableRepos(env, "trace", "team-a", "U123"))[0].name).toBe("u123");
-    expect((await getAvailableRepos(env, "trace", "team-a", "U456"))[0].name).toBe("u456");
-    expect((await getAvailableRepos(env, "trace", "team-a", "U123"))[0].name).toBe("u123");
+    expect((await getAvailableRepos(env, "trace", "C1", "U123"))[0].name).toBe("u123");
+    expect((await getAvailableRepos(env, "trace", "C1", "U456"))[0].name).toBe("u456");
+    expect((await getAvailableRepos(env, "trace", "C1", "U123"))[0].name).toBe("u123");
     expect((await getAvailableRepos(env, "trace", null, "U456"))[0].name).toBe("workspace");
     expect(
       fetch.mock.calls.map(([, init]) => new Headers(init?.headers).get("X-OpenInspect-Actor"))
     ).toEqual([null, "slack:U123", "slack:U456", "slack:U123"]);
     expect(fetch.mock.calls.map(([input]) => String(input))).toEqual([
       "https://internal/repos",
-      "https://internal/repos?teamId=team-a",
-      "https://internal/repos?teamId=team-a",
-      "https://internal/repos?teamId=team-a",
+      "https://internal/repos?channel=slack%3AC1",
+      "https://internal/repos?channel=slack%3AC1",
+      "https://internal/repos?channel=slack%3AC1",
     ]);
+    const [url, init] = fetch.mock.calls[1];
+    const headers = new Headers(init?.headers);
+    const signed = {
+      signatureHeader: headers.get("X-OpenInspect-Service-Signature") ?? "",
+      service: "slack-bot" as const,
+      secret: "test-secret",
+      method: init?.method ?? "GET",
+      url: String(url),
+      bodySha256Hex: await sha256Hex(""),
+      actor: headers.get("X-OpenInspect-Actor") ?? "",
+    };
+    expect(await verifyServiceSignature(signed)).toMatchObject({ ok: true });
+    const changed = new URL(signed.url);
+    changed.searchParams.set("channel", "slack:C_OTHER");
+    expect(await verifyServiceSignature({ ...signed, url: changed.toString() })).toMatchObject({
+      ok: false,
+      reason: "mismatch",
+    });
     expect(env.SLACK_KV.put).toHaveBeenCalledTimes(1);
     expect(env.SLACK_KV.get).not.toHaveBeenCalled();
   });
 
-  it("makes no team catalog request without a current user", async () => {
+  it("makes no channel catalog request without a current user", async () => {
     const env = makeEnv(new Error("should not fetch"));
-    expect(await getAvailableRepos(env, "trace", "team-a")).toEqual([]);
-    expect(await getAvailableRepos(env, "trace", "team-a", "")).toEqual([]);
+    expect(await getAvailableRepos(env, "trace", "C1")).toEqual([]);
+    expect(await getAvailableRepos(env, "trace", "C1", "")).toEqual([]);
     expect(env.CONTROL_PLANE.fetch).not.toHaveBeenCalled();
     expect(env.SLACK_KV.get).not.toHaveBeenCalled();
     expect(env.SLACK_KV.put).not.toHaveBeenCalled();
@@ -221,7 +240,7 @@ describe("getAvailableRepos", () => {
     const workspaceRepos = await getAvailableRepos(env, "trace");
     expect(workspaceRepos).toHaveLength(1);
     env.SLACK_KV.get = vi.fn().mockResolvedValue(workspaceRepos);
-    expect(await getAvailableRepos(env, "trace", "team-a", "U123")).toEqual([]);
+    expect(await getAvailableRepos(env, "trace", "C1", "U123")).toEqual([]);
     expect(env.CONTROL_PLANE.fetch).toHaveBeenCalledTimes(2);
     expect(env.SLACK_KV.get).not.toHaveBeenCalled();
     expect(env.SLACK_KV.put).toHaveBeenCalledTimes(1);

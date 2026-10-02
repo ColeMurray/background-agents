@@ -17,18 +17,18 @@ export interface TargetCatalog {
 }
 
 /**
- * Fetch both target lists concurrently. Workspace reads use caches; team
- * reads are authorized afresh for the current user and fail closed to [].
+ * Fetch both target lists concurrently. Channel reads are authorized afresh
+ * from the live binding and user; unscoped workspace reads use caches.
  */
 export async function loadTargetCatalog(
   env: Env,
   traceId?: string,
-  teamId?: string | null,
+  channelId?: string | null,
   userId?: string
 ): Promise<TargetCatalog> {
   const [repos, environments] = await Promise.all([
-    getAvailableRepos(env, traceId, teamId, userId),
-    getAvailableEnvironments(env, traceId, teamId, userId),
+    getAvailableRepos(env, traceId, channelId, userId),
+    getAvailableEnvironments(env, traceId, channelId, userId),
   ]);
   return { repos, environments };
 }

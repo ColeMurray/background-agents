@@ -103,7 +103,7 @@ function toRepoConfig(repo: ParsedControlPlaneRepo): RepoConfig {
  * 1. Checks local in-memory cache first
  * 2. Calls the control plane GET /repos endpoint
  * 3. Falls back to FALLBACK_REPOS if the API fails
- * Team catalogs require a current user and bypass all caches and fallbacks.
+ * Channel catalogs require a current user and bypass all caches and fallbacks.
  *
  * @param env - Cloudflare Worker environment
  * @returns Array of RepoConfig objects
@@ -111,13 +111,13 @@ function toRepoConfig(repo: ParsedControlPlaneRepo): RepoConfig {
 export async function getAvailableRepos(
   env: Env,
   traceId?: string,
-  teamId?: string | null,
+  channelId?: string | null,
   userId?: string
 ): Promise<RepoConfig[]> {
-  if (teamId && !userId) return [];
+  if (channelId && !userId) return [];
   const cacheKey = "repos:cache";
   // Team membership and grants must be checked on every read.
-  const cached = teamId ? undefined : localCache.get(cacheKey);
+  const cached = channelId ? undefined : localCache.get(cacheKey);
   // Check local cache first
   if (cached && Date.now() - cached.timestamp < LOCAL_CACHE_TTL_MS) {
     return cached.repos;
@@ -125,13 +125,15 @@ export async function getAvailableRepos(
 
   const startTime = Date.now();
   try {
-    const path = teamId ? `/repos?teamId=${encodeURIComponent(teamId)}` : "/repos";
+    const path = channelId
+      ? `/repos?channel=${encodeURIComponent(`slack:${channelId}`)}`
+      : "/repos";
     const response = await controlPlaneFetch(
       env,
       path,
       traceId,
       REPOS_FETCH_TIMEOUT_MS,
-      teamId ? userId : undefined
+      channelId ? userId : undefined
     );
 
     if (!response.ok) {
@@ -141,7 +143,7 @@ export async function getAvailableRepos(
         http_status: response.status,
         duration_ms: Date.now() - startTime,
       });
-      return teamId ? [] : getFromCacheOrFallback(env, cacheKey);
+      return channelId ? [] : getFromCacheOrFallback(env, cacheKey);
     }
 
     const parsed = controlPlaneReposResponseSchema.safeParse(await response.json());
@@ -151,12 +153,12 @@ export async function getAvailableRepos(
         outcome: "invalid_response",
         duration_ms: Date.now() - startTime,
       });
-      return teamId ? [] : getFromCacheOrFallback(env, cacheKey);
+      return channelId ? [] : getFromCacheOrFallback(env, cacheKey);
     }
 
     const repos = parsed.data.repos.map(toRepoConfig);
 
-    if (!teamId) {
+    if (!channelId) {
       // Update local cache
       localCache.set(cacheKey, {
         repos,
@@ -192,7 +194,7 @@ export async function getAvailableRepos(
       error: e instanceof Error ? e : new Error(String(e)),
       duration_ms: Date.now() - startTime,
     });
-    return teamId ? [] : getFromCacheOrFallback(env, cacheKey);
+    return channelId ? [] : getFromCacheOrFallback(env, cacheKey);
   }
 }
 

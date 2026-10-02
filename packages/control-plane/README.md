@@ -451,6 +451,13 @@ valid; this check does not replace the user's collaboration or membership author
 refusals return `slack_channel_scope_denied`, which closes the bot's thread mapping rather than
 treating the refusal as a per-user denial or retrying with cached ownership.
 
+Slack channel catalogs use signed `GET /repos?channel=slack:<channelId>` and
+`GET /environments?channel=slack:<channelId>` requests with the requesting user's actor assertion.
+The control plane derives the team from its current binding, checks user access, and filters current
+repository grants; a bot-supplied `teamId` cannot override that scope. Unbound channel scopes
+include only workspace-owned environments, even for multi-team users and administrators. The bot
+does not cache channel-catalog responses or fall back to workspace/team data on failed scoped reads.
+
 Bulk archiving uses `POST /sessions/batch-archive` with an explicit selection:
 
 ```json

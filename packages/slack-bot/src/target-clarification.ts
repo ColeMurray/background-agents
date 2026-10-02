@@ -165,7 +165,7 @@ export async function resolveTargetValue(
   env: Env,
   value: string,
   traceId?: string,
-  teamId?: string | null,
+  channelId?: string | null,
   userId?: string
 ): Promise<SlackSessionTarget | null> {
   const ref = parseTargetValue(value);
@@ -173,10 +173,16 @@ export async function resolveTargetValue(
     return { kind: "none" };
   }
   if (ref.kind === "environment") {
-    const environment = await getEnvironmentById(env, ref.environmentId, traceId, teamId, userId);
+    const environment = await getEnvironmentById(
+      env,
+      ref.environmentId,
+      traceId,
+      channelId,
+      userId
+    );
     return environment ? { kind: "environment", environment } : null;
   }
-  const repos = await getAvailableRepos(env, traceId, teamId, userId);
+  const repos = await getAvailableRepos(env, traceId, channelId, userId);
   const repo = repos.find((r) => r.id === ref.repoId);
   return repo ? { kind: "repository", repo } : null;
 }
@@ -243,10 +249,10 @@ export async function getTargetClarificationOptions(
   env: Env,
   query: string | undefined,
   traceId?: string,
-  teamId?: string | null,
+  channelId?: string | null,
   userId?: string
 ): Promise<TargetClarificationOptions> {
-  const catalog = await loadTargetCatalog(env, traceId, teamId, userId);
+  const catalog = await loadTargetCatalog(env, traceId, channelId, userId);
   const remainingAfterNoRepository = MAX_REPO_SUGGESTION_OPTIONS - 1;
   const matchedEnvironments = filterEnvironmentsByQuery(catalog.environments, query).slice(
     0,

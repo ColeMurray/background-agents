@@ -269,8 +269,8 @@ describe("RepoClassifier", () => {
       expect(result.confidence).toBe("high");
       expect(result.needsClarification).toBe(false);
       expect(result.reasoning).toContain("routing rule");
-      expect(mockGetAvailableRepos).toHaveBeenCalledWith(TEST_ENV, "t", "team-a", "U123");
-      expect(mockGetAvailableEnvironments).toHaveBeenCalledWith(TEST_ENV, "t", "team-a", "U123");
+      expect(mockGetAvailableRepos).toHaveBeenCalledWith(TEST_ENV, "t", "C1", "U123");
+      expect(mockGetAvailableEnvironments).toHaveBeenCalledWith(TEST_ENV, "t", "C1", "U123");
       expect(mockGetRoutingRules).toHaveBeenCalledWith(TEST_ENV, "t");
       expect(mockMessagesCreate).not.toHaveBeenCalled();
     });
@@ -402,14 +402,20 @@ describe("RepoClassifier", () => {
       expect(result.reasoning).not.toContain("<!channel>");
     });
 
-    it("loads the target catalog exactly once per classification", async () => {
+    it("loads the channel catalog exactly once even without a team binding", async () => {
       mockGetRoutingRules.mockResolvedValue([{ keyword: "frontend", target: "acme/web" }]);
 
       const classifier = new RepoClassifier(TEST_ENV);
-      await classifier.classify("frontend tweak");
+      await classifier.classify(
+        "frontend tweak",
+        { teamId: null, channelId: "C123", userId: "U123" },
+        "t"
+      );
 
       expect(mockGetAvailableRepos).toHaveBeenCalledOnce();
       expect(mockGetAvailableEnvironments).toHaveBeenCalledOnce();
+      expect(mockGetAvailableRepos).toHaveBeenCalledWith(TEST_ENV, "t", "C123", "U123");
+      expect(mockGetAvailableEnvironments).toHaveBeenCalledWith(TEST_ENV, "t", "C123", "U123");
     });
 
     it("routes an environment rule even when only one repository is available", async () => {

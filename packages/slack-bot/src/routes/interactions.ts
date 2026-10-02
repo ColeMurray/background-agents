@@ -92,7 +92,7 @@ interactionRoutes.post("/interactions", async (c) => {
             c.env,
             payload.value,
             traceId,
-            pending.teamId,
+            pending.channel,
             payload.user.id
           );
         }
