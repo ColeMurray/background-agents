@@ -253,6 +253,7 @@ describe("memory shared-scope authorization", () => {
   );
 
   it.each([
+    "personal failure",
     "team archive",
     "grant removal",
     "workspace membership removal",
@@ -268,12 +269,21 @@ describe("memory shared-scope authorization", () => {
       id: sessionId,
       title: null,
       userId: MEMBER,
-      ownerTeamId: change === "workspace membership removal" ? null : "engineering",
-      visibility: change === "workspace membership removal" ? "workspace" : "team",
+      ownerTeamId: ["workspace membership removal", "personal failure"].includes(change)
+        ? null
+        : "engineering",
+      visibility:
+        change === "personal failure"
+          ? "private"
+          : change === "workspace membership removal"
+            ? "workspace"
+            : "team",
       repoOwner: repo.repoOwner,
       repoName: repo.repoName,
       repositories: [repo],
-      environmentId: change === "workspace membership removal" ? null : "dev",
+      environmentId: ["workspace membership removal", "personal failure"].includes(change)
+        ? null
+        : "dev",
       model: "anthropic/claude-sonnet-4-6",
       reasoningEffort: null,
       baseBranch: "main",
@@ -295,7 +305,12 @@ describe("memory shared-scope authorization", () => {
       author,
       repoId
     ) {
-      if (change === "team archive")
+      if (change === "personal failure") {
+        expect(author.allowPersonalAutoSave).toBe(true);
+        await env.DB.prepare("UPDATE sessions SET status = 'failed' WHERE id = ?")
+          .bind(sessionId)
+          .run();
+      } else if (change === "team archive")
         await env.DB.prepare("UPDATE teams SET archived_at = 1 WHERE id = 'engineering'").run();
       else if (change === "workspace membership removal")
         await env.DB.prepare("DELETE FROM team_memberships WHERE user_id = ?").bind(MEMBER).run();
@@ -323,9 +338,11 @@ describe("memory shared-scope authorization", () => {
         body: JSON.stringify({
           ...content,
           scope:
-            change === "environment transfer"
-              ? { type: "environment", environmentId: "dev" }
-              : { type: "repository", repoOwner: repo.repoOwner, repoName: repo.repoName },
+            change === "personal failure"
+              ? { type: "personal" }
+              : change === "environment transfer"
+                ? { type: "environment", environmentId: "dev" }
+                : { type: "repository", repoOwner: repo.repoOwner, repoName: repo.repoName },
         }),
       }),
       env,

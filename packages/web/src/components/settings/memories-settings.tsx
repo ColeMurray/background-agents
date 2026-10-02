@@ -14,6 +14,7 @@ import {
 import {
   memoryRequest,
   memorySettingsLink,
+  memoryScopeQuery,
   useMemory,
   useMemories,
   useMemoryPreferences,
@@ -88,6 +89,16 @@ function MemoryCollection({ scope }: { scope: MemoryScope }) {
   const status = selectedStatus ?? focused.data?.memory.status ?? "active";
   const [offset, setOffset] = useState(0);
   const { data, isLoading, error, mutate } = useMemories(scope, status, offset);
+  // Deep links remain visible even when their record is outside the current page.
+  const focusedRecord = focused.data?.memory;
+  const pageRecords = data?.memories ?? [];
+  const records =
+    focusedRecord &&
+    focusedRecord.status === status &&
+    memoryScopeQuery(focusedRecord.scope).toString() === memoryScopeQuery(scope).toString() &&
+    !pageRecords.some((record) => record.id === focusedRecord.id)
+      ? [focusedRecord, ...pageRecords]
+      : pageRecords;
   const [editor, setEditor] = useState<{ record?: MemoryView; supersedes?: string } | null>(null);
   const [history, setHistory] = useState<string | null>(params.get("memoryId"));
   const [archive, setArchive] = useState<MemoryView | null>(null);
@@ -203,10 +214,10 @@ function MemoryCollection({ scope }: { scope: MemoryScope }) {
         </p>
       )}
       {isLoading && <p className="text-sm text-muted-foreground">Loading memories…</p>}
-      {!isLoading && data?.memories.length === 0 && (
+      {!isLoading && records.length === 0 && !!data && (
         <p className="text-sm text-muted-foreground">No {status} memories for this scope.</p>
       )}
-      {data?.memories.map((record) => (
+      {records.map((record) => (
         <article
           key={record.id}
           id={record.id}

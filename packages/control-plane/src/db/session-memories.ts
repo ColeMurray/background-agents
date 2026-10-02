@@ -130,9 +130,7 @@ export class SessionMemoryStore {
    * Existing sessions without a manifest get empty context; nonexistent sessions return null.
    * Callers must authorize the session and check current shared-scope access before rendering.
    */
-  async load(
-    sessionId: string
-  ): Promise<{
+  async load(sessionId: string): Promise<{
     manifest: SessionMemoryManifest;
     diagnostics: SessionMemoryDiagnostics;
     revisions: PinnedMemoryRevision[];

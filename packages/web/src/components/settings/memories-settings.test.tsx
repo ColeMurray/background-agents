@@ -8,6 +8,7 @@ const mocks = vi.hoisted(() => ({
   request: vi.fn(),
   mutate: vi.fn(),
   records: [] as MemoryView[],
+  focused: null as MemoryView | null,
   canCreate: true,
   nextOffset: null as number | null,
   collection: vi.fn(),
@@ -15,7 +16,11 @@ const mocks = vi.hoisted(() => ({
 vi.mock("next/navigation", () => ({ useSearchParams: () => new URLSearchParams() }));
 vi.mock("@/hooks/use-memories", () => ({
   memoryRequest: mocks.request,
-  useMemory: () => ({ mutate: mocks.mutate }),
+  useMemory: () => ({
+    data: mocks.focused ? { memory: mocks.focused } : undefined,
+    mutate: mocks.mutate,
+  }),
+  memoryScopeQuery: (scope: { type: string }) => new URLSearchParams({ scope: scope.type }),
   useMemories: (...args: unknown[]) => {
     mocks.collection(...args);
     return {
@@ -54,9 +59,16 @@ describe("memory management", () => {
     cleanup();
     vi.clearAllMocks();
     mocks.records = [];
+    mocks.focused = null;
     mocks.canCreate = true;
     mocks.nextOffset = null;
     mocks.request.mockResolvedValue({ memory: record });
+  });
+  it("shows a deep-linked record even when it is not on the current page", () => {
+    mocks.focused = record;
+    render(<MemoriesSettings />);
+    expect(screen.getByText(record.title)).toBeTruthy();
+    expect(screen.queryByText(/No proposed memories/)).toBeNull();
   });
   it("navigates pages and resets pagination when the status changes", () => {
     mocks.nextOffset = 50;
