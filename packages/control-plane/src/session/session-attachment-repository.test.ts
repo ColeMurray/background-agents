@@ -4,6 +4,7 @@ import {
   SessionAttachmentRepository,
 } from "./session-attachment-repository";
 import type { SqlResult, SqlStorage } from "./sql-storage";
+import { SessionStorageIntegrityError } from "./types";
 
 function createMockSql() {
   const calls: Array<{ query: string; params: unknown[] }> = [];
@@ -19,7 +20,7 @@ function createMockSql() {
           consumed = true;
           return rowsByQuery.get(query) ?? [];
         },
-        one: () => null,
+        one: () => rowsByQuery.get(query)?.[0] ?? null,
         get rowsWritten() {
           return consumed ? rowsWritten : 0;
         },
@@ -74,6 +75,14 @@ describe("SessionAttachmentRepository", () => {
 
     expect(repository.getTotals()).toEqual({ count: 2, totalBytes: 3072 });
     expect(mock.calls[0].query).not.toContain("cleanup_claimed_at");
+  });
+
+  it("throws an integrity error for a malformed attachment totals row", () => {
+    const query = `SELECT COUNT(*) as count, COALESCE(SUM(size_bytes), 0) as total_bytes
+       FROM attachments`;
+    mock.setRows(query, [{ count: "2", total_bytes: 3072 }]);
+
+    expect(() => repository.getTotals()).toThrow(SessionStorageIntegrityError);
   });
 
   it("finds only unreferenced, unclaimed attachments", () => {

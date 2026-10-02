@@ -24,6 +24,7 @@
 import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { DatabaseSync } from "node:sqlite";
+import { z } from "zod";
 
 const LEDGER_SQL = `CREATE TABLE IF NOT EXISTS _schema_migrations (
   version TEXT PRIMARY KEY,
@@ -35,6 +36,8 @@ const LEDGER_SQL = `CREATE TABLE IF NOT EXISTS _schema_migrations (
 const MIGRATION_FILE = /^(\d{4})_.+\.sql$/;
 
 const TRANSACTION_CONTROL = /^(BEGIN|COMMIT|END|ROLLBACK|SAVEPOINT|RELEASE)\b/i;
+
+const migrationLedgerRowSchema = z.object({ name: z.string() });
 
 export interface MigrationFile {
   version: string;
@@ -95,9 +98,9 @@ export function applyMigrations(db: DatabaseSync, directory: string): string[] {
     // The ledger is read under the write lock, so a migration another
     // process applied meanwhile is found recorded rather than applied twice.
     db.exec("BEGIN IMMEDIATE");
-    let recorded: { name: string } | undefined;
+    let recorded: z.infer<typeof migrationLedgerRowSchema> | undefined;
     try {
-      recorded = recordedName.get(file.version) as { name: string } | undefined;
+      recorded = parseMigrationLedgerRow(recordedName.get(file.version));
     } catch (error) {
       rollbackQuietly(db);
       throw error;
@@ -123,6 +126,15 @@ export function applyMigrations(db: DatabaseSync, directory: string): string[] {
     applied.push(file.name);
   }
   return applied;
+}
+
+function parseMigrationLedgerRow(
+  row: unknown
+): z.infer<typeof migrationLedgerRowSchema> | undefined {
+  if (row === undefined) return undefined;
+  const parsed = migrationLedgerRowSchema.safeParse(row);
+  if (!parsed.success) throw new Error("Invalid migration ledger row");
+  return parsed.data;
 }
 
 /**

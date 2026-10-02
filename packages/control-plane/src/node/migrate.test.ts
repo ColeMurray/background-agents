@@ -157,6 +157,15 @@ describe("applyMigrations", () => {
     );
   });
 
+  it("rejects malformed ledger rows instead of trusting the stored shape", () => {
+    db.exec("CREATE TABLE _schema_migrations (version TEXT PRIMARY KEY, name INTEGER)");
+    db.prepare("INSERT INTO _schema_migrations (version, name) VALUES ('0001', 123)").run();
+    writeFileSync(join(dir, "0001_first.sql"), "CREATE TABLE first (id INTEGER);");
+
+    expect(() => applyMigrations(db, dir)).toThrow("Invalid migration ledger row");
+    expect(db.prepare("SELECT name FROM sqlite_master WHERE name = 'first'").get()).toBeUndefined();
+  });
+
   it("rejects misnamed files and duplicate versions before applying anything", () => {
     writeFileSync(join(dir, "0001_first.sql"), "CREATE TABLE first (id INTEGER);");
     writeFileSync(join(dir, "notes.sql"), "CREATE TABLE notes (id INTEGER);");

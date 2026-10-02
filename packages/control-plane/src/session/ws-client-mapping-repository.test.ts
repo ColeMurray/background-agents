@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import type { SqlResult, SqlStorage } from "./sql-storage";
+import { SessionStorageIntegrityError } from "./types";
 import { WsClientMappingRepository } from "./ws-client-mapping-repository";
 
 function createMockSql() {
@@ -8,7 +9,7 @@ function createMockSql() {
   const sql: SqlStorage = {
     exec(query: string, ...params: unknown[]): SqlResult {
       calls.push({ query, params });
-      return { toArray: () => rows, one: () => null, rowsWritten: 0 };
+      return { toArray: () => rows, one: () => rows[0] ?? null, rowsWritten: 0 };
     },
   };
   return { sql, calls, setRows: (value: unknown[]) => (rows = value) };
@@ -98,6 +99,24 @@ describe("WsClientMappingRepository", () => {
     expect(repository.hasWsClientMapping("unknown")).toBe(false);
     mock.setRows([{ participant_id: "p-1" }]);
     expect(repository.hasWsClientMapping("ws-1")).toBe(true);
+  });
+
+  it("returns the next persisted authorization expiration", () => {
+    mock.setRows([{ expires_at: 2000 }]);
+
+    expect(repository.getNextAuthorizationExpiry()).toBe(2000);
+  });
+
+  it("accepts a null next authorization expiration", () => {
+    mock.setRows([{ expires_at: null }]);
+
+    expect(repository.getNextAuthorizationExpiry()).toBeNull();
+  });
+
+  it("throws an integrity error for a malformed next authorization expiration row", () => {
+    mock.setRows([{ expires_at: "2000" }]);
+
+    expect(() => repository.getNextAuthorizationExpiry()).toThrow(SessionStorageIntegrityError);
   });
 
   it.each([undefined, null, "2000", Number.NaN, Number.POSITIVE_INFINITY])(
