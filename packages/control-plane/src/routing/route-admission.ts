@@ -7,7 +7,10 @@ import {
 } from "@open-inspect/shared/rbac";
 import { authenticate, isAuthError } from "../auth/authenticate";
 import type { Principal } from "../auth/principal";
-import { evaluateOwnedResourceAdmission } from "../authorization/owned-resource-admission";
+import {
+  evaluateOwnedResourceAdmission,
+  ownedResourceAdmissionResponse,
+} from "../authorization/owned-resource-admission";
 import type {
   AuthorizationDecisionRequirement,
   RouteAuthorizationDecision,
@@ -550,11 +553,11 @@ async function enforceEnvironmentRequirement(
   try {
     const result = await evaluateOwnedResourceAdmission(requirement, params, ctx);
     if (result.kind === "error") {
-      return { response: json(result.response, result.status) };
+      return { response: ownedResourceAdmissionResponse(result) };
     }
     if (result.kind === "denied") {
       return authorizationDenial(
-        json(result.response, result.status),
+        ownedResourceAdmissionResponse(result),
         evidence,
         requirement,
         result.reasonCode,

@@ -1,6 +1,7 @@
 import { checkEnvironmentAccess } from "@open-inspect/shared";
 import type { PermissionId } from "@open-inspect/shared/rbac";
 import { EnvironmentStore } from "../db/environments";
+import { json } from "../http/responses";
 import type { RequestContext } from "../http/request-context";
 import type { RouteAuthorizationRequirement, RouteParams } from "../routes/shared";
 import { resourceViewer } from "./resource-viewer";
@@ -19,7 +20,9 @@ export type OwnedResourceAdmissionOutcome =
     }
   | { kind: "error"; response: { error: string }; status: 400 };
 
-/** Infrastructure failures propagate to the router's authorization-unavailable boundary. */
+type EnvironmentNeed = Extract<RouteAuthorizationRequirement, { kind: "environment" }>["need"];
+
+/** Route-parameter adapter for {@link evaluateEnvironmentAdmission}. */
 export async function evaluateOwnedResourceAdmission(
   requirement: Extract<RouteAuthorizationRequirement, { kind: "environment" }>,
   params: RouteParams,
@@ -27,7 +30,20 @@ export async function evaluateOwnedResourceAdmission(
 ): Promise<OwnedResourceAdmissionOutcome> {
   const id = params[requirement.idParam];
   if (!id) return { kind: "error", response: { error: "Invalid environment route" }, status: 400 };
-  const permission = `environments.${requirement.need}` as const;
+  return evaluateEnvironmentAdmission(ctx, id, requirement.need);
+}
+
+/**
+ * Canonical environment admission for an ID from a path, query, or body: hidden environments
+ * are indistinguishable from missing ones, and visible denials carry their reason. Infrastructure
+ * failures propagate to the caller (the router's authorization-unavailable boundary).
+ */
+export async function evaluateEnvironmentAdmission(
+  ctx: RequestContext,
+  id: string,
+  need: EnvironmentNeed
+): Promise<OwnedResourceAdmissionOutcome> {
+  const permission = `environments.${need}` as const;
   if (
     ctx.principal?.kind === "service" &&
     !serviceAllowsPermission(ctx.principal.service, permission)
@@ -55,11 +71,7 @@ export async function evaluateOwnedResourceAdmission(
       reason: "Environment not found",
     };
   }
-  const decision = checkEnvironmentAccess(
-    viewer,
-    { ownerTeamId: environment.owner_team_id },
-    requirement.need
-  );
+  const decision = checkEnvironmentAccess(viewer, { ownerTeamId: environment.owner_team_id }, need);
   if (!decision.allowed) {
     return {
       kind: "denied",
@@ -75,4 +87,11 @@ export async function evaluateOwnedResourceAdmission(
     };
   }
   return { kind: "allowed", effectivePermission: viewer.kind === "user" ? permission : null };
+}
+
+/** HTTP response for an outcome that did not admit the resource. */
+export function ownedResourceAdmissionResponse(
+  outcome: Exclude<OwnedResourceAdmissionOutcome, { kind: "allowed" }>
+): Response {
+  return json(outcome.response, outcome.status);
 }

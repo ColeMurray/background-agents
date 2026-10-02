@@ -30,7 +30,7 @@ import { resolveManagedSkills, SkillResolutionError } from "../session/skill-res
 import type { Env } from "../types";
 import { resolveSessionProviderAuth } from "../session/provider-account-resolution";
 import { ProviderAccountSelectionPolicyError } from "../model-provider-accounts/selection-policy";
-import { authorizeSessionTarget } from "./session-target-authorization";
+import { authorizeEnvironmentTarget, authorizeSessionTarget } from "./session-target-authorization";
 import {
   normalizeOptionalRepositoryPair,
   RepositoryPairValidationError,
@@ -102,13 +102,19 @@ export async function handleCreateSession(
 
   const targetAuthorizationError = await authorizeSessionTarget(ctx, {
     teamId: null,
-    ownerTeamId: body.teamId ?? null,
     environmentId: body.environmentId,
     repositories: (body.repositories ?? (repositoryContext ? [repositoryContext] : [])).map(
       (repository) => ({ owner: repository.repoOwner, name: repository.repoName })
     ),
   });
   if (targetAuthorizationError) return targetAuthorizationError;
+  if (body.environmentId) {
+    const environmentError = await authorizeEnvironmentTarget(ctx, {
+      environmentId: body.environmentId,
+      ownerTeamId: body.teamId ?? null,
+    });
+    if (environmentError) return environmentError;
+  }
 
   // Validate branch names if provided (defense in depth)
   if (body.branch && !BRANCH_NAME_PATTERN.test(body.branch)) {

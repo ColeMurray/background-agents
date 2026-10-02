@@ -23,8 +23,10 @@ import {
   SkillProfileValidationError,
 } from "../db/skill-profiles";
 import { SkillConflictError, SkillStore, SkillValidationError } from "../db/skills";
-import { checkEnvironmentAccess } from "@open-inspect/shared";
-import { resourceViewer } from "../authorization/resource-viewer";
+import {
+  evaluateEnvironmentAdmission,
+  ownedResourceAdmissionResponse,
+} from "../authorization/owned-resource-admission";
 import { EnvironmentStore } from "../db/environments";
 import { resolveManagedSkills, SkillResolutionError } from "../session/skill-resolution";
 import type { Env } from "../types";
@@ -635,19 +637,9 @@ async function handleResolvePreview(
       ? [{ repoOwner: parsed.repoOwner, repoName: parsed.repoName }]
       : []);
   if (parsed.environmentId) {
+    const admission = await evaluateEnvironmentAdmission(ctx, parsed.environmentId, "read");
+    if (admission.kind !== "allowed") return ownedResourceAdmissionResponse(admission);
     const environments = new EnvironmentStore(ctx.db);
-    const environment = await environments.getById(parsed.environmentId);
-    const access =
-      environment &&
-      checkEnvironmentAccess(
-        await resourceViewer(ctx),
-        { ownerTeamId: environment.owner_team_id },
-        "read"
-      );
-    // Another team's environment is indistinguishable from a missing one.
-    if (!access || (!access.allowed && access.reason === "not_member")) {
-      return error("Environment not found", 404);
-    }
     repositories = (await environments.getRepositoriesForEnvironment(parsed.environmentId)).map(
       (repository) => ({
         repoOwner: repository.repo_owner,

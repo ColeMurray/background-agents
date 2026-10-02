@@ -19,6 +19,10 @@ import {
 } from "@open-inspect/shared/types/image-builds";
 import { z } from "zod";
 import { checkEnvironmentAccess } from "@open-inspect/shared";
+import {
+  evaluateEnvironmentAdmission,
+  ownedResourceAdmissionResponse,
+} from "../authorization/owned-resource-admission";
 import { resourceViewer } from "../authorization/resource-viewer";
 import { EnvironmentStore } from "../db/environments";
 import { ImageBuildStore } from "../db/image-builds";
@@ -39,6 +43,7 @@ import { scheduleImageBuildOnSave } from "../image-builds/save-hooks";
 import {
   listEnabledScopes,
   listEnabledScopeUnits,
+  type EnvironmentRowFilter,
   resolveScopeTarget,
   type ResolvedImageBuildTarget,
 } from "../image-builds/scope";
@@ -49,7 +54,6 @@ import type {
   ImageBuildWorkflowContext,
 } from "../image-builds/types";
 import type { Env } from "../types";
-import type { SqlDatabase } from "../db/sql-database";
 import {
   type RequestContext,
   GITHUB_USER_OR_SERVICE_ROUTE,
@@ -451,30 +455,24 @@ function parseScopeParams(request: Request): ImageBuildScope | null | Response {
 }
 
 async function readStatusRows(
-  db: SqlDatabase,
-  scope: ImageBuildScope | null,
-  readableEnvironmentIds: ReadonlySet<string>
+  ctx: RequestContext,
+  scope: ImageBuildScope | null
 ): Promise<ImageBuildStatusResponse["images"]> {
-  const store = new ImageBuildStore(db);
+  const store = new ImageBuildStore(ctx.db);
   if (scope) return store.getStatus(scope);
   return store.getStatusForEnabledScopes(
-    (await listEnabledScopes(db)).filter(
-      (scope) => scope.kind !== "environment" || readableEnvironmentIds.has(scope.id)
-    )
+    await listEnabledScopes(ctx.db, await readableEnvironmentFilter(ctx))
   );
 }
 
-/** Mixed-scope feeds must omit environment scopes the feature-permitted viewer cannot read. */
-async function readableEnvironmentIds(ctx: RequestContext): Promise<ReadonlySet<string>> {
+/**
+ * Mixed-scope feeds omit environments the feature-permitted viewer cannot read, before any
+ * per-environment work is done.
+ */
+async function readableEnvironmentFilter(ctx: RequestContext): Promise<EnvironmentRowFilter> {
   const viewer = await resourceViewer(ctx);
-  const { environments } = await new EnvironmentStore(ctx.db).list();
-  return new Set(
-    environments
-      .filter(
-        (row) => checkEnvironmentAccess(viewer, { ownerTeamId: row.owner_team_id }, "read").allowed
-      )
-      .map((row) => row.id)
-  );
+  return (row) =>
+    checkEnvironmentAccess(viewer, { ownerTeamId: row.owner_team_id }, "read").allowed;
 }
 
 /**
@@ -498,27 +496,12 @@ async function handleGetStatus(
   const scope = parseScopeParams(request);
   if (scope instanceof Response) return scope;
   if (scope?.kind === "environment") {
-    const environment = await new EnvironmentStore(ctx.db).getById(scope.id);
-    if (!environment) return error("Environment not found", 404);
-    const access = checkEnvironmentAccess(
-      await resourceViewer(ctx),
-      { ownerTeamId: environment.owner_team_id },
-      "read"
-    );
-    if (!access.allowed) {
-      if (access.reason === "not_member") return error("Environment not found", 404);
-      return json(
-        { error: "Forbidden", code: "environment_action_denied", reason_code: access.reason },
-        403
-      );
-    }
+    const admission = await evaluateEnvironmentAdmission(ctx, scope.id, "read");
+    if (admission.kind !== "allowed") return ownedResourceAdmissionResponse(admission);
   }
-  const readableIds = scope === null ? await readableEnvironmentIds(ctx) : new Set<string>();
 
   try {
-    const body = {
-      images: await readStatusRows(ctx.db, scope, readableIds),
-    } satisfies ImageBuildStatusResponse;
+    const body = { images: await readStatusRows(ctx, scope) } satisfies ImageBuildStatusResponse;
     return json(body);
   } catch (e) {
     logger.error("image_build.status_error", {
@@ -545,17 +528,14 @@ async function handleGetEnabledUnits(
   if (providerError) return providerError;
 
   try {
-    const units = await listEnabledScopeUnits(env, ctx.db);
-    const readableIds = await readableEnvironmentIds(ctx);
+    const units = await listEnabledScopeUnits(env, ctx.db, await readableEnvironmentFilter(ctx));
     const admission = resolveImageBuildAdmission(env);
     return json({
-      units: units
-        .filter((unit) => unit.scope.kind !== "environment" || readableIds.has(unit.scope.id))
-        .map((unit) => ({
-          scopeKind: unit.scope.kind,
-          scopeId: unit.scope.id,
-          repositoriesFingerprint: unit.repositoriesFingerprint,
-        })),
+      units: units.map((unit) => ({
+        scopeKind: unit.scope.kind,
+        scopeId: unit.scope.id,
+        repositoriesFingerprint: unit.repositoriesFingerprint,
+      })),
       // Scope toggles say what an operator wants; this says whether the
       // deployment will act on it, so the settings surfaces can stop
       // promising builds that will be refused.

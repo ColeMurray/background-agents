@@ -43,7 +43,7 @@ import {
 } from "./shared";
 import { type SessionRouteContext, dispatchSession } from "./session-route";
 import { DEFAULT_BASE_BRANCH } from "../repos/default-branch";
-import { authorizeSessionTarget } from "./session-target-authorization";
+import { authorizeEnvironmentTarget, authorizeSessionTarget } from "./session-target-authorization";
 
 const logger = createLogger("router:session-child-spawn");
 const MAX_SPAWN_DEPTH = 2;
@@ -78,7 +78,6 @@ export async function handleSpawnChild(
   // Reject incompatible inherited targets before settings resolution or child admission.
   const targetAuthorizationError = await authorizeSessionTarget(ctx, {
     teamId: null,
-    ownerTeamId: parentSession?.ownerTeamId ?? null,
     environmentId: parentEnvironmentId,
     repositories:
       parentSession?.repoOwner && parentSession.repoName
@@ -86,6 +85,13 @@ export async function handleSpawnChild(
         : [],
   });
   if (targetAuthorizationError) return targetAuthorizationError;
+  if (parentEnvironmentId) {
+    const environmentError = await authorizeEnvironmentTarget(ctx, {
+      environmentId: parentEnvironmentId,
+      ownerTeamId: parentSession?.ownerTeamId ?? null,
+    });
+    if (environmentError) return environmentError;
+  }
 
   // Children inherit the parent's settings scope: its primary repo plus, for
   // environment-launched parents, that environment's overrides (design §13.5).

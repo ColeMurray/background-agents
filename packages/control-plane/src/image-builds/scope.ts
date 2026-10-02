@@ -11,7 +11,7 @@
  */
 
 import { EnvironmentSecretsStore } from "../db/environment-secrets";
-import { EnvironmentStore } from "../db/environments";
+import { EnvironmentStore, type EnvironmentRow } from "../db/environments";
 import { GlobalSecretsStore } from "../db/global-secrets";
 import { RepoMetadataStore } from "../db/repo-metadata";
 import { RepoSecretsStore } from "../db/repo-secrets";
@@ -180,10 +180,16 @@ export async function resolveScopeEnabled(
 }
 
 /** Every prebuild-enabled scope, cheap form (ids only) for status aggregation. */
-export async function listEnabledScopes(db: SqlDatabase): Promise<ImageBuildScope[]> {
+/** Narrows environment rows before any per-environment work; omitted means every row. */
+export type EnvironmentRowFilter = (row: EnvironmentRow) => boolean;
+
+export async function listEnabledScopes(
+  db: SqlDatabase,
+  includeEnvironment: EnvironmentRowFilter = () => true
+): Promise<ImageBuildScope[]> {
   const { environments } = await new EnvironmentStore(db).list();
   const environmentScopes = environments
-    .filter((row) => row.prebuild_enabled === 1)
+    .filter((row) => row.prebuild_enabled === 1 && includeEnvironment(row))
     .map((row) => ({ kind: "environment" as const, id: row.id }));
 
   const repos = await new RepoMetadataStore(db).getImageBuildEnabledRepos();
@@ -200,11 +206,14 @@ export async function listEnabledScopes(db: SqlDatabase): Promise<ImageBuildScop
  */
 export async function listEnabledScopeUnits(
   env: Env,
-  db: SqlDatabase
+  db: SqlDatabase,
+  includeEnvironment: EnvironmentRowFilter = () => true
 ): Promise<EnabledScopeUnit[]> {
   const store = new EnvironmentStore(db);
   const { environments } = await store.list();
-  const enabled = environments.filter((row) => row.prebuild_enabled === 1);
+  const enabled = environments.filter(
+    (row) => row.prebuild_enabled === 1 && includeEnvironment(row)
+  );
   const repositoriesById = await store.getRepositoriesForEnvironmentIds(
     enabled.map((row) => row.id)
   );

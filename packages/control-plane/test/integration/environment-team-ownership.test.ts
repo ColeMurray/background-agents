@@ -455,5 +455,13 @@ describe("environment team ownership", () => {
     expect(concealed.status).toBe(404);
     expect(await concealed.json()).toEqual(await missing.json());
     await expectStatus(preview(visible), 200);
+    await removePermission("environments.read");
+    const unreadable = await preview(visible);
+    expect(unreadable.status).toBe(403);
+    expect(await unreadable.json()).toEqual({
+      error: "Forbidden",
+      code: "environment_action_denied",
+      reason_code: "missing_permission",
+    });
   });
 });

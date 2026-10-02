@@ -3,7 +3,10 @@ import { createTestBackgroundTasks } from "../background-tasks.test-support";
 import { EnvironmentStore, type EnvironmentRow } from "../db/environments";
 import { createRequestMetrics } from "../db/instrumented-sql-database";
 import type { RequestContext } from "../http/request-context";
-import { authorizeSessionTarget } from "../routes/session-target-authorization";
+import {
+  authorizeEnvironmentTarget,
+  authorizeSessionTarget,
+} from "../routes/session-target-authorization";
 import { evaluateOwnedResourceAdmission } from "./owned-resource-admission";
 
 // Full row validation is covered by D1 tests; admission consumes only ownership fields.
@@ -130,41 +133,47 @@ describe("owned-resource admission outcomes", () => {
     ).resolves.toEqual({ kind: "allowed", effectivePermission: null });
   });
 
-  it("maps suspended session target use before owner mismatch", async () => {
+  it("applies canonical admission to session targets before owner mismatch", async () => {
     const ctx = context();
     ctx.authorization!.permissions = ["environments.use"];
     ctx.authorization!.suspendedAt = 1;
-    const response = await authorizeSessionTarget(ctx, {
-      teamId: null,
+    const response = await authorizeEnvironmentTarget(ctx, {
       environmentId: "environment",
       ownerTeamId: null,
     });
-    expect(response?.status).toBe(403);
-    await expect(response?.json()).resolves.toEqual({
-      error: "Forbidden",
-      code: "environment_action_denied",
-      reason_code: "suspended",
-    });
+    // Same concealment as route admission, rather than the 409 ownership mismatch.
+    expect(response?.status).toBe(404);
+    await expect(response?.json()).resolves.toEqual({ error: "Environment not found" });
   });
 
-  it.each([null, "env_deleted"])(
-    "allows sandbox clone inheritance with absent environment %s",
-    async (environmentId) => {
-      vi.mocked(EnvironmentStore.prototype.getById).mockResolvedValue(null);
-      const ctx = context();
-      ctx.principal = { kind: "sandbox", sessionId: "parent" };
-      delete ctx.authorization;
-      await expect(
-        authorizeSessionTarget(ctx, {
-          teamId: null,
-          environmentId,
-          repositories: [{ owner: "acme", name: "web" }],
-          ownerTeamId: "team",
-        })
-      ).resolves.toBeNull();
-      expect(EnvironmentStore.prototype.getById).toHaveBeenCalledTimes(
-        environmentId === null ? 0 : 1
-      );
-    }
-  );
+  it("allows sandbox clone inheritance with dangling environment provenance", async () => {
+    vi.mocked(EnvironmentStore.prototype.getById).mockResolvedValue(null);
+    const ctx = context();
+    ctx.principal = { kind: "sandbox", sessionId: "parent" };
+    delete ctx.authorization;
+    await expect(
+      authorizeEnvironmentTarget(ctx, { environmentId: "env_deleted", ownerTeamId: "team" })
+    ).resolves.toBeNull();
+    expect(EnvironmentStore.prototype.getById).toHaveBeenCalledOnce();
+  });
+
+  it("binds a sandbox's inherited team environment to the destination team", async () => {
+    const ctx = context();
+    ctx.principal = { kind: "sandbox", sessionId: "parent" };
+    delete ctx.authorization;
+    const response = await authorizeEnvironmentTarget(ctx, {
+      environmentId: "environment",
+      ownerTeamId: null,
+    });
+    expect(response?.status).toBe(409);
+  });
+
+  it("leaves environment admission out of the permission/grant preflight", async () => {
+    const ctx = context();
+    ctx.authorization!.permissions = ["environments.use"];
+    await expect(
+      authorizeSessionTarget(ctx, { teamId: null, environmentId: "environment" })
+    ).resolves.toBeNull();
+    expect(EnvironmentStore.prototype.getById).not.toHaveBeenCalled();
+  });
 });
