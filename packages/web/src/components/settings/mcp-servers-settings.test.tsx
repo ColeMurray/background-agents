@@ -42,6 +42,7 @@ const servers: McpServerMetadata[] = [
     url: "https://a.example.com",
     hasEnv: false,
     hasHeaders: false,
+    credentialKeys: [],
     repoScopes: null,
     enabled: true,
   },
@@ -53,6 +54,19 @@ const servers: McpServerMetadata[] = [
     url: "https://b.example.com",
     hasEnv: false,
     hasHeaders: false,
+    credentialKeys: [],
+    repoScopes: null,
+    enabled: true,
+  },
+  {
+    id: "server-c",
+    revision: 2,
+    name: "Server C",
+    type: "remote",
+    url: "https://c.example.com",
+    hasEnv: false,
+    hasHeaders: true,
+    credentialKeys: ["x-api-key", "Accept"],
     repoScopes: null,
     enabled: true,
   },
@@ -102,6 +116,98 @@ describe("McpServersSettings", () => {
 
     await waitFor(() => expect(mocks.mutate).toHaveBeenCalled());
     expect(screen.getByDisplayValue("https://b.example.com")).toBeInTheDocument();
+  });
+
+  it("lists saved headers by name with their values hidden", async () => {
+    const user = userEvent.setup();
+    render(<McpServersSettings />);
+
+    await user.click(screen.getByRole("button", { name: /Server C/ }));
+
+    expect(screen.getByDisplayValue("x-api-key")).toBeDisabled();
+    expect(screen.getByDisplayValue("Accept")).toBeDisabled();
+    const hiddenValues = screen.getAllByPlaceholderText("••••••••");
+    expect(hiddenValues).toHaveLength(2);
+    for (const input of hiddenValues) expect(input).toHaveValue("");
+  });
+
+  it("replaces an edited saved header and keeps the untouched one", async () => {
+    mocks.updateMcpServer.mockResolvedValue({ ...servers[2], revision: 3 });
+    const user = userEvent.setup();
+    render(<McpServersSettings />);
+
+    await user.click(screen.getByRole("button", { name: /Server C/ }));
+    await user.type(screen.getAllByPlaceholderText("••••••••")[0], "new-key");
+    await user.click(screen.getByRole("button", { name: "Save Changes" }));
+
+    await waitFor(() =>
+      expect(mocks.updateMcpServer).toHaveBeenCalledWith(
+        "server-c",
+        expect.objectContaining({
+          headers: { "x-api-key": "new-key" },
+          keepCredentialKeys: ["Accept"],
+          revision: 2,
+        })
+      )
+    );
+  });
+
+  it("deletes a removed saved header on save", async () => {
+    mocks.updateMcpServer.mockResolvedValue({ ...servers[2], revision: 3 });
+    const user = userEvent.setup();
+    render(<McpServersSettings />);
+
+    await user.click(screen.getByRole("button", { name: /Server C/ }));
+    await user.click(screen.getAllByRole("button", { name: "Remove" })[1]);
+    await user.click(screen.getByRole("button", { name: "Save Changes" }));
+
+    await waitFor(() =>
+      expect(mocks.updateMcpServer).toHaveBeenCalledWith(
+        "server-c",
+        expect.objectContaining({ headers: {}, keepCredentialKeys: ["x-api-key"] })
+      )
+    );
+  });
+
+  it("sends no credentials when no saved header changes", async () => {
+    mocks.updateMcpServer.mockResolvedValue({ ...servers[2], revision: 3 });
+    const user = userEvent.setup();
+    render(<McpServersSettings />);
+
+    await user.click(screen.getByRole("button", { name: /Server C/ }));
+    await user.click(screen.getByRole("button", { name: "Local" }));
+    await user.click(screen.getByRole("button", { name: "Remote" }));
+    await user.click(screen.getByRole("button", { name: "Save Changes" }));
+
+    await waitFor(() =>
+      expect(mocks.updateMcpServer).toHaveBeenCalledWith("server-c", {
+        name: "Server C",
+        enabled: true,
+        repoScopes: null,
+        type: "remote",
+        url: "https://c.example.com",
+        revision: 2,
+      })
+    );
+  });
+
+  it("keeps the generic notice when the control plane names no saved credentials", async () => {
+    const { credentialKeys: _omitted, ...unnamed } = servers[2];
+    servers.push({ ...unnamed, id: "server-d", name: "Server D" } as McpServerMetadata);
+    try {
+      const user = userEvent.setup();
+      render(<McpServersSettings />);
+
+      await user.click(screen.getByRole("button", { name: /Server D/ }));
+
+      expect(
+        screen.getByText(
+          "Credentials are configured. Enter new values to replace them, or leave empty to keep existing."
+        )
+      ).toBeInTheDocument();
+    } finally {
+      servers.pop();
+    }
   });
 
   it("does not reinterpret entered credentials when the server type changes", async () => {

@@ -2,6 +2,14 @@
 
 New features, integrations, and notable improvements to Open-Inspect — newest first.
 
+## October 29, 2026
+
+MCP server settings now list each saved environment variable or HTTP header by name, as the secrets
+editors do. Values stay encrypted on the server and never reach the browser. Leave a saved row blank
+to keep its value, enter a new value to replace it, or remove the row to delete it. The update API
+accepts `keepCredentialKeys` for these per-name edits; without it, sent credentials still replace
+the saved set.
+
 ## October 28, 2026
 
 **Session connections recover automatically.** Transient disconnects now retry without an attempt
