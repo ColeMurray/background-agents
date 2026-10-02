@@ -18,6 +18,7 @@ import {
   type EnrichedRunRow,
 } from "./automation-store";
 import { MAX_D1_QUERY_PARAMETERS } from "./query-limits";
+import { DEFAULT_AUTOMATION_MAX_CONCURRENT_RUNS } from "@open-inspect/shared/types/automations";
 
 // ─── Fake D1 helpers ─────────────────────────────────────────────────────────
 
@@ -88,6 +89,7 @@ const sampleRow: AutomationRow = {
   harness: "opencode" as const,
   reasoning_effort: null,
   enabled: 1,
+  max_concurrent_runs: DEFAULT_AUTOMATION_MAX_CONCURRENT_RUNS,
   next_run_at: now + 86400000,
   consecutive_failures: 0,
   created_by: "user-1",

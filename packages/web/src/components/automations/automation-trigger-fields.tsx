@@ -10,6 +10,7 @@ import {
   type AutomationTriggerType,
   type TriggerCondition,
 } from "@open-inspect/shared/triggers";
+import { MAX_AUTOMATION_CONCURRENT_RUNS } from "@open-inspect/shared/types/automations";
 import { Combobox, type ComboboxGroup } from "@/components/ui/combobox";
 import { Input } from "@/components/ui/input";
 import {
@@ -43,6 +44,10 @@ const COMMON_TIMEZONES = [
   "Australia/Sydney",
 ];
 const COMMON_SET = new Set(COMMON_TIMEZONES);
+const CONCURRENCY_OPTIONS = Array.from(
+  { length: MAX_AUTOMATION_CONCURRENT_RUNS },
+  (_, index) => index + 1
+);
 const ALL_TIMEZONES = Intl.supportedValuesOf("timeZone");
 const TRIGGER_LABELS: Record<AutomationTriggerType, string> = {
   schedule: "Schedule",
@@ -204,6 +209,36 @@ export function AutomationTriggerConfigurationFields({
             <FieldDescription>
               The schedule is evaluated in this time zone (for example, &quot;9:00&quot; is 9:00
               local time here).
+            </FieldDescription>
+          </div>
+          <div>
+            <label
+              htmlFor="automation-max-concurrent-runs"
+              className="block text-sm font-medium text-foreground mb-1.5"
+            >
+              Concurrent runs
+            </label>
+            <Select
+              value={String(value.maxConcurrentRuns)}
+              onValueChange={(maxConcurrentRuns) =>
+                update({ maxConcurrentRuns: Number(maxConcurrentRuns) })
+              }
+            >
+              <SelectTrigger id="automation-max-concurrent-runs" className="w-full">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {CONCURRENCY_OPTIONS.map((option) => (
+                  <SelectItem key={option} value={String(option)}>
+                    {option === 1 ? "1 — one run at a time" : String(option)}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <FieldDescription>
+              How many runs of this automation may be in flight at once. At 1, a scheduled run is
+              skipped while the previous one is still going — raise it only where two runs cannot
+              tread on each other&apos;s work.
             </FieldDescription>
           </div>
         </>

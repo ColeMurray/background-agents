@@ -1,5 +1,6 @@
 import { env } from "cloudflare:test";
 import { beforeEach, expect, it } from "vitest";
+import { DEFAULT_AUTOMATION_MAX_CONCURRENT_RUNS } from "@open-inspect/shared/types/automations";
 import { AutomationStore, type AutomationRow } from "../../src/db/automation-store";
 import { EnvironmentStore, type EnvironmentRow } from "../../src/db/environments";
 import { SessionIndexStore, type SessionEntry } from "../../src/db/session-index";
@@ -49,6 +50,7 @@ it("persists explicit team and workspace ownership through the stores", async ()
     model: "anthropic/claude-haiku-4-5",
     reasoning_effort: null,
     enabled: 0,
+    max_concurrent_runs: DEFAULT_AUTOMATION_MAX_CONCURRENT_RUNS,
     next_run_at: null,
     consecutive_failures: 0,
     created_by: "operator",
