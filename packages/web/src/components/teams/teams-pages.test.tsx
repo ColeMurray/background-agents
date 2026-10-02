@@ -22,9 +22,10 @@ const mocks = vi.hoisted(() => ({
   join: vi.fn(),
   repositories: vi.fn(),
   secrets: vi.fn(),
+  replace: vi.fn(),
 }));
 
-vi.mock("next/navigation", () => ({ useRouter: () => ({ replace: vi.fn() }) }));
+vi.mock("next/navigation", () => ({ useRouter: () => ({ replace: mocks.replace }) }));
 vi.mock("@/lib/auth-session", () => ({
   useAuthSession: () => ({ data: { user: { id: "user_one" } }, status: "authenticated" }),
 }));
@@ -191,6 +192,44 @@ describe("Teams index", () => {
 });
 
 describe("Team page tabs", () => {
+  it("follows navigation to a different active team", () => {
+    mocks.teams = [
+      team,
+      { ...team, id: "team_engineering", slug: "engineering", name: "Engineering" },
+    ];
+    const view = render(<TeamPage slug="design" />);
+    expect(screen.getByRole("heading", { name: "Design" })).toBeInTheDocument();
+
+    view.rerender(<TeamPage slug="engineering" />);
+
+    expect(screen.getByRole("heading", { name: "Engineering" })).toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "Design" })).not.toBeInTheDocument();
+    expect(mocks.replace).not.toHaveBeenCalled();
+  });
+
+  it.each(["missing", "archived"])(
+    "does not retain a team when navigating to the %s slug",
+    (slug) => {
+      mocks.teams = [team, { ...team, id: "team_archived", slug: "archived", archivedAt: 2 }];
+      const view = render(<TeamPage slug="design" />);
+      expect(screen.getByRole("heading", { name: "Design" })).toBeInTheDocument();
+
+      view.rerender(<TeamPage slug={slug} />);
+
+      expect(screen.getByText("Team not found.")).toBeInTheDocument();
+      expect(screen.queryByRole("heading", { name: "Design" })).not.toBeInTheDocument();
+      expect(mocks.replace).not.toHaveBeenCalled();
+
+      mocks.teams = [
+        { ...team, slug: "product-design" },
+        { ...team, id: "team_reused", name: "New Design Team" },
+      ];
+      view.rerender(<TeamPage slug="design" />);
+      expect(screen.getByRole("heading", { name: "New Design Team" })).toBeInTheDocument();
+      expect(mocks.replace).not.toHaveBeenCalled();
+    }
+  );
+
   it("shows the header and Members to a nonmember, even if mutation capabilities are present", () => {
     mocks.teams = [
       {

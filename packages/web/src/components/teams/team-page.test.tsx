@@ -28,10 +28,12 @@ vi.mock("@/components/settings/team-members-table", () => ({
 }));
 
 let stored: TeamResponse;
+let reusedSlugTeam: TeamResponse | undefined;
 const fetchMock = vi.fn<typeof fetch>();
 
 beforeEach(() => {
   vi.clearAllMocks();
+  reusedSlugTeam = undefined;
   stored = {
     id: "team_design",
     slug: "design",
@@ -60,7 +62,13 @@ beforeEach(() => {
   };
   fetchMock.mockImplementation(async (input, init) => {
     const path = String(input);
-    if (path === "/api/teams") return Response.json({ teams: [stored] });
+    if (path === "/api/teams")
+      return Response.json({
+        teams:
+          reusedSlugTeam && stored.slug !== reusedSlugTeam.slug
+            ? [stored, reusedSlugTeam]
+            : [stored],
+      });
     if (path === "/api/me/teams") return Response.json({ teams: [] });
     if (path === "/api/teams/team_design/members") return Response.json({ members: [] });
     if (path === "/api/teams/team_design" && init?.method === "PATCH") {
@@ -68,6 +76,7 @@ beforeEach(() => {
       return Response.json(stored);
     }
     if (path === "/api/teams/team_design") return Response.json(stored);
+    if (path === "/api/teams/team_reused") return Response.json(reusedSlugTeam);
     return Response.json({ error: "not found" }, { status: 404 });
   });
   vi.stubGlobal("fetch", fetchMock);
@@ -97,19 +106,26 @@ function renderPage(slug: string) {
 }
 
 describe("TeamPage", () => {
-  it("keeps the team and follows its new slug after a rename from Settings", async () => {
-    renderPage("design");
-    fireEvent.click(await screen.findByRole("button", { name: "Settings" }));
-    fireEvent.change(screen.getByRole("textbox", { name: "Slug" }), {
-      target: { value: "product-design" },
-    });
-    fireEvent.click(screen.getByRole("button", { name: "Save changes" }));
-    expect(screen.getByRole("button", { name: "Save changes" })).toBeDisabled();
-    await waitFor(() => expect(screen.getByRole("button", { name: "Save changes" })).toBeEnabled());
+  it.each([false, true])(
+    "keeps the team after a Settings slug rename (old slug reused: %s)",
+    async (reuseOldSlug) => {
+      if (reuseOldSlug) reusedSlugTeam = { ...stored, id: "team_reused", name: "New Design Team" };
+      renderPage("design");
+      fireEvent.click(await screen.findByRole("button", { name: "Settings" }));
+      fireEvent.change(screen.getByRole("textbox", { name: "Slug" }), {
+        target: { value: "product-design" },
+      });
+      fireEvent.click(screen.getByRole("button", { name: "Save changes" }));
+      expect(screen.getByRole("button", { name: "Save changes" })).toBeDisabled();
+      await waitFor(() =>
+        expect(screen.getByRole("button", { name: "Save changes" })).toBeEnabled()
+      );
 
-    expect(fetchMock.mock.calls.filter(([path]) => path === "/api/teams")).toHaveLength(2);
-    expect(screen.queryByText("Team not found.")).not.toBeInTheDocument();
-    expect(screen.getByRole("textbox", { name: "Slug" })).toHaveValue("product-design");
-    expect(replace).toHaveBeenCalledWith("/teams/product-design");
-  });
+      expect(fetchMock.mock.calls.filter(([path]) => path === "/api/teams")).toHaveLength(2);
+      expect(screen.getByRole("heading", { level: 1, name: "Design" })).toBeInTheDocument();
+      expect(screen.queryByText("Team not found.")).not.toBeInTheDocument();
+      expect(screen.getByRole("textbox", { name: "Slug" })).toHaveValue("product-design");
+      expect(replace).toHaveBeenCalledWith("/teams/product-design");
+    }
+  );
 });

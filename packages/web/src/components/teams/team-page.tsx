@@ -37,12 +37,19 @@ export function TeamPage({ slug }: { slug: string }) {
   const { teams, loading, error } = useTeams();
   const mine = useMeTeams();
   const { authorization, hasPermission } = useCurrentUserAuthorization();
-  const [shownTeamId, setShownTeamId] = useState<string | null>(null);
-  // A team renamed while shown stays on screen, and the URL follows its new slug.
+  const [shownTeam, setShownTeam] = useState<{ id: string | null; routeSlug: string }>({
+    id: null,
+    routeSlug: slug,
+  });
+  // Retain identity on the current route, even when another team reuses its slug.
   const team =
-    teams.find((candidate) => candidate.slug === slug && candidate.archivedAt === null) ??
-    teams.find((candidate) => candidate.id === shownTeamId && candidate.archivedAt === null);
-  if (team && team.id !== shownTeamId) setShownTeamId(team.id);
+    (shownTeam.routeSlug === slug
+      ? teams.find((candidate) => candidate.id === shownTeam.id && candidate.archivedAt === null)
+      : undefined) ??
+    teams.find((candidate) => candidate.slug === slug && candidate.archivedAt === null);
+  if (shownTeam.routeSlug !== slug || (team && team.id !== shownTeam.id)) {
+    setShownTeam({ id: team?.id ?? null, routeSlug: slug });
+  }
   const teamSlug = team?.slug;
   useEffect(() => {
     if (teamSlug && teamSlug !== slug) router.replace(`/teams/${encodeURIComponent(teamSlug)}`);
