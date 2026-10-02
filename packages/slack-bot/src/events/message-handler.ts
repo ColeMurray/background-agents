@@ -47,6 +47,7 @@ import {
   advanceLastPromptTs,
   closeThreadSession,
   lookupThreadSession,
+  reopenThreadSession,
   THREAD_CLOSED_MESSAGE,
 } from "../sessions/thread-session-store";
 import { buildTargetClarificationBlocks, getTargetCatalogNotice } from "../target-clarification";
@@ -103,16 +104,28 @@ async function resolveExistingThreadSession(
   if (!threadTs) return null;
   let session = await lookupThreadSession(env, channel, threadTs);
   if (!session) return null;
-  if (!session.closed) {
-    const binding = await getChannelBinding(env, channel, traceId).catch((error) => {
-      log.warn("channel_binding.followup_unavailable", { trace_id: traceId, channel, error });
-      return null;
+  const binding = await getChannelBinding(env, channel, traceId).catch((error) => {
+    log.warn("channel_binding.followup_unavailable", { trace_id: traceId, channel, error });
+    return null;
+  });
+  // Legacy mappings predate team ownership and represent workspace sessions.
+  const bindingMatches = binding !== null && binding.teamId === (session.teamId ?? null);
+  if (!session.closed && !bindingMatches) {
+    await closeThreadSession(env, channel, threadTs, session.sessionId);
+    session = { ...session, closed: true };
+  } else if (
+    session.closed &&
+    bindingMatches &&
+    // Bindings and visibility can change back, so a reply re-checks a closure live.
+    (await checkPublicationAccess(env, session.sessionId, channel, traceId)) === "allowed"
+  ) {
+    session = await reopenThreadSession(env, channel, threadTs, session);
+    log.info("thread_session.reopened", {
+      trace_id: traceId,
+      session_id: session.sessionId,
+      channel,
+      thread_ts: threadTs,
     });
-    // Legacy mappings predate team ownership and represent workspace sessions.
-    if (!binding || binding.teamId !== (session.teamId ?? null)) {
-      await closeThreadSession(env, channel, threadTs, session.sessionId);
-      session = { ...session, closed: true };
-    }
   }
   if (session.closed) {
     await postMessage(env.SLACK_BOT_TOKEN, channel, THREAD_CLOSED_MESSAGE, { thread_ts: threadTs });

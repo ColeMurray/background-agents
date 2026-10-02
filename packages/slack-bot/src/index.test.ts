@@ -1225,6 +1225,88 @@ describe("POST /events", () => {
     slackFetch.mockRestore();
   });
 
+  it("reopens a closed thread once its binding and visibility allow posting again", async () => {
+    const slackFetch = mockSlackFetch();
+    const env = makeSessionEnv([], { teamId: "team-a" });
+    await env.SLACK_KV.put(
+      "thread:C123:111.222",
+      JSON.stringify({
+        sessionId: "team-a-session",
+        teamId: "team-a",
+        repoId: "acme/app",
+        repoFullName: "acme/app",
+        model: "anthropic/claude-haiku-4-5",
+        createdAt: 1,
+        closed: true,
+      })
+    );
+    await env.SLACK_KV.put("thread-closed:C123:111.222:team-a-session", "1");
+    await env.SLACK_KV.put("thread-closed:C123:111.222:team-a-session:notice", "1");
+    const ctx = makeCtx();
+    await app.fetch(
+      slackEventRequest({
+        type: "app_mention",
+        channel: "C123",
+        text: "<@B123> follow up",
+        user: "U123",
+        ts: "333.444",
+        thread_ts: "111.222",
+      }),
+      env,
+      ctx
+    );
+    await flushWaitUntil(ctx);
+    expect(promptFetchBodies(env.CONTROL_PLANE.fetch)).toHaveLength(1);
+    expect(await env.SLACK_KV.get("thread-closed:C123:111.222:team-a-session")).toBeNull();
+    expect(await env.SLACK_KV.get("thread-closed:C123:111.222:team-a-session:notice")).toBeNull();
+    expect(await env.SLACK_KV.get("thread:C123:111.222", "json")).not.toHaveProperty("closed");
+    expect(slackApiBodies(slackFetch, "chat.postMessage")).not.toContainEqual(
+      expect.objectContaining({ text: "this session is no longer available from this channel" })
+    );
+    slackFetch.mockRestore();
+  });
+
+  it.each([
+    ["the channel is bound to another team", { teamId: "team-b" }],
+    ["the session cannot post to the channel", { teamId: "team-a", publicationStatus: 403 }],
+  ] as const)("keeps a closed thread closed while %s", async (_reason, responses) => {
+    const slackFetch = mockSlackFetch();
+    const env = makeSessionEnv([], responses);
+    await env.SLACK_KV.put(
+      "thread:C123:111.222",
+      JSON.stringify({
+        sessionId: "team-a-session",
+        teamId: "team-a",
+        repoId: "acme/app",
+        repoFullName: "acme/app",
+        model: "anthropic/claude-haiku-4-5",
+        createdAt: 1,
+        closed: true,
+      })
+    );
+    await env.SLACK_KV.put("thread-closed:C123:111.222:team-a-session", "1");
+    const ctx = makeCtx();
+    await app.fetch(
+      slackEventRequest({
+        type: "app_mention",
+        channel: "C123",
+        text: "<@B123> follow up",
+        user: "U123",
+        ts: "333.444",
+        thread_ts: "111.222",
+      }),
+      env,
+      ctx
+    );
+    await flushWaitUntil(ctx);
+    expect(promptFetchBodies(env.CONTROL_PLANE.fetch)).toEqual([]);
+    expect(await env.SLACK_KV.get("thread-closed:C123:111.222:team-a-session")).toBe("1");
+    expect(slackApiBodies(slackFetch, "chat.postMessage")).toContainEqual(
+      expect.objectContaining({ text: "this session is no longer available from this channel" })
+    );
+    slackFetch.mockRestore();
+  });
+
   it("adopts combined inline overrides as a new direct-message session's defaults", async () => {
     const slackFetch = mockSlackFetch();
     const env = makeSessionEnv();
@@ -1637,7 +1719,17 @@ describe("POST /events", () => {
         await flushWaitUntil(next);
       }
       if (closed) {
-        expect(env.CONTROL_PLANE.fetch).toHaveBeenCalledTimes(requestCount);
+        // Each reply re-checks the closure live; denied publication keeps it closed.
+        expect(
+          env.CONTROL_PLANE.fetch.mock.calls
+            .slice(requestCount)
+            .map(([url]) => new URL(String(url)).pathname)
+        ).toEqual([
+          "/channel-bindings/slack/C123",
+          "/sessions/stale-session/artifacts",
+          "/channel-bindings/slack/C123",
+          "/sessions/stale-session/artifacts",
+        ]);
         expect(slackApiBodies(slackFetch, "chat.postMessage").map((body) => body.text)).toEqual([
           reply,
           reply,

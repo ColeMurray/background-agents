@@ -61,10 +61,11 @@ workspace-level sessions (the default) or reject requests until bound. Binding c
 workspace audit log.
 
 Slack-created sessions carry the channel's team and enforce the requesting user's membership.
-Unavailable threads close instead of starting replacement sessions. Session notifications and the
-`slack-notify` tool refuse private sessions and destinations bound to another team, including queued
-completion text and media. Slack-triggered automations run only in channels matching their
-ownership.
+Unavailable threads close instead of starting replacement sessions; a later reply reopens the thread
+once the channel's binding and the session's visibility allow posting again. Session notifications
+and the `slack-notify` tool refuse private sessions and destinations bound to another team,
+including queued completion text and media. Slack-triggered automations run only in channels
+matching their ownership.
 
 **Team-owned environments.** The environment form offers team ownership, and team pages include an
 Environments tab. Team environments are visible to their members and administrators, and controls

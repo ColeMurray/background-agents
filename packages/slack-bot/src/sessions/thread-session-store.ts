@@ -28,6 +28,14 @@ function getThreadClosureKey(channel: string, threadTs: string, sessionId: strin
   return `thread-closed:${channel}:${threadTs}:${sessionId}`;
 }
 
+function getThreadClosureNoticeKey(channel: string, threadTs: string, sessionId: string): string {
+  return `${getThreadClosureKey(channel, threadTs, sessionId)}:notice`;
+}
+
+function withoutClosure({ closed: _closed, ...session }: ThreadSession): ThreadSession {
+  return session;
+}
+
 async function hasThreadClosure(
   env: Env,
   channel: string,
@@ -128,6 +136,27 @@ export async function closeThreadSession(
   }
 }
 
+/**
+ * Lifts a closure after the caller re-verified the channel binding and publication access:
+ * both can change back, so a closure must not outlive them. The tombstone goes first so the
+ * mapping rewrite can drop `closed`; a closure written meanwhile wins through its own tombstone.
+ */
+export async function reopenThreadSession(
+  env: Env,
+  channel: string,
+  threadTs: string,
+  session: ThreadSession
+): Promise<ThreadSession> {
+  const store = createKvCacheStore(env.SLACK_KV);
+  await store.delete(getThreadClosureKey(channel, threadTs, session.sessionId));
+  await store.delete(getThreadClosureNoticeKey(channel, threadTs, session.sessionId));
+  const mapping = await lookupThreadSession(env, channel, threadTs);
+  if (mapping?.sessionId === session.sessionId && mapping.closed) {
+    await storeThreadSession(env, channel, threadTs, withoutClosure(mapping));
+  }
+  return withoutClosure(session);
+}
+
 /** Best-effort sent-marker lookup, not an atomic delivery claim. */
 export async function isThreadClosureNoticeSent(
   env: Env,
@@ -135,7 +164,7 @@ export async function isThreadClosureNoticeSent(
   threadTs: string,
   sessionId: string
 ): Promise<boolean> {
-  const key = `${getThreadClosureKey(channel, threadTs, sessionId)}:notice`;
+  const key = getThreadClosureNoticeKey(channel, threadTs, sessionId);
   return (await createKvCacheStore(env.SLACK_KV).get(key)) === "1";
 }
 
@@ -147,7 +176,7 @@ export async function markThreadClosureNoticeSent(
   sessionId: string
 ): Promise<void> {
   await createKvCacheStore(env.SLACK_KV).put(
-    `${getThreadClosureKey(channel, threadTs, sessionId)}:notice`,
+    getThreadClosureNoticeKey(channel, threadTs, sessionId),
     "1",
     { expirationTtl: THREAD_SESSION_TTL_MS / 1000 }
   );
