@@ -301,6 +301,46 @@ describe("automation cache invalidation", () => {
     });
   });
 
+  it("keeps a mounted list's loaded pages through refresh and a failed refetch", async () => {
+    const cache: Cache = new Map();
+    let failing = false;
+    const fetcher = vi.fn(async (path: string) => {
+      if (failing) throw new SwrFetchError(503);
+      return (
+        new URL(path, "https://example.com").searchParams.has("cursor")
+          ? { automations: [original], hasMore: false, nextCursor: null }
+          : {
+              automations: [{ ...original, id: "auto-2", name: "Page 1" }],
+              hasMore: true,
+              nextCursor: "second",
+            }
+      ) satisfies ListAutomationsResponse;
+    });
+    const seenCounts: number[] = [];
+    const { result } = renderHook(
+      () => {
+        const list = useAutomations("", "team-1");
+        seenCounts.push(list.automations.length);
+        return { list, config: useSWRConfig() };
+      },
+      { wrapper: wrapper(cache, fetcher) }
+    );
+    await waitFor(() => expect(result.current.list.automations).toHaveLength(1));
+    await act(() => result.current.list.loadMore());
+    expect(result.current.list.automations).toHaveLength(2);
+
+    seenCounts.length = 0;
+    failing = true;
+    await act(() => invalidateAutomationCache(result.current.config, "auto-1"));
+    await waitFor(() => expect(result.current.list.error).toBeInstanceOf(SwrFetchError));
+    expect(seenCounts).not.toContain(0);
+    expect(result.current.list.loading).toBe(false);
+    expect(result.current.list.automations.map((item) => item.name)).toEqual([
+      "Page 1",
+      "Original",
+    ]);
+  });
+
   it("retains loaded detail and history when GETs reject after a successful trigger", async () => {
     const cache: Cache = new Map();
     const detailKey = "/api/automations/auto-1";

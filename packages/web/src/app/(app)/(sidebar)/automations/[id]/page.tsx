@@ -52,11 +52,16 @@ export default function AutomationDetailPage({ params }: { params: Promise<{ id:
       (getReasoningConfig(automation.model) ? "Model default" : "Not supported"))
     : null;
 
+  // Deletion evicts the cached automation before navigation; keep the spinner up
+  // meanwhile instead of flashing "not found".
+  const [deleting, setDeleting] = useState(false);
   const handleDelete = async () => {
+    setDeleting(true);
     if (await act(id, "delete")) router.push(navigation.list);
+    else setDeleting(false);
   };
 
-  if (loading) {
+  if (loading || (deleting && !automation)) {
     return (
       <div className="h-full flex items-center justify-center">
         <div className="animate-spin rounded-full h-6 w-6 border-2 border-current border-t-transparent text-muted-foreground" />

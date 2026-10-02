@@ -27,8 +27,10 @@ export async function invalidateAutomationCache(
     }
   }
   // Predicate revalidation skips inactive pages and infinite aggregates. Clear
-  // collection pages first, but retain loaded resources if their refresh fails.
-  // A deleted automation's detail and history are evicted rather than refreshed.
+  // collection pages first so inactive lists remount fresh; mounted lists keep
+  // their rows while refetching (see useAutomations), and loaded resources are
+  // retained if their refresh fails. A deleted automation's detail and history
+  // are evicted rather than refreshed.
   const evicted = deleted ? [...collectionKeys, ...resourceKeys] : collectionKeys;
   await Promise.all(evicted.map((key) => mutate(key, undefined, { revalidate: false })));
   await Promise.all(

@@ -1,3 +1,4 @@
+import { useState } from "react";
 import useSWR, { useSWRConfig } from "swr";
 import useSWRInfinite from "swr/infinite";
 import { useAuthSession } from "@/lib/auth-session";
@@ -56,10 +57,27 @@ export function useAutomations(nameSearch: string, teamId?: string | null) {
       { revalidateFirstPage: true }
     );
 
-  const loadedPages = data?.filter((page) => page !== undefined) ?? [];
+  // Invalidation evicts cached pages so inactive lists never remount with stale records. A
+  // mounted list keeps showing its last pages for the same query while they refetch, and
+  // through a transient refetch failure.
+  const listKey = session ? buildAutomationListPath(normalizedNameSearch, teamId) : null;
+  const [retained, setRetained] = useState<{
+    key: string;
+    pages: ListAutomationsResponse[];
+  } | null>(null);
+  if (data && listKey && (retained?.key !== listKey || retained.pages !== data)) {
+    setRetained({ key: listKey, pages: data });
+  }
+  const pages =
+    data ??
+    (retained && retained.key === listKey && !isTerminalAutomationError(error)
+      ? retained.pages
+      : undefined);
+
+  const loadedPages = pages?.filter((page) => page !== undefined) ?? [];
   const automations = loadedPages.flatMap((page) => page.automations);
   const lastPage = loadedPages[loadedPages.length - 1];
-  const loading = authStatus === "loading" || (!!session && !data && !error);
+  const loading = authStatus === "loading" || (!!session && !pages && !error);
   const loadingMore = !!data && isValidating && data[size - 1] === undefined;
   const hasMore = lastPage?.hasMore ?? false;
 

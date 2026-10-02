@@ -21,6 +21,8 @@ let search = "";
 const push = vi.fn();
 /** How many invocations the automation has, and every limit the page asked for. */
 const history = vi.hoisted(() => ({ total: 0, requestedLimits: [] as number[] }));
+/** Set when a mutation has evicted the cached automation. */
+const detail = vi.hoisted(() => ({ evicted: false }));
 
 const automation = {
   id: "auto-1",
@@ -61,7 +63,11 @@ vi.mock("@/components/sidebar-layout", () => ({
   useSidebarContext: () => ({ isOpen: false }),
 }));
 vi.mock("@/hooks/use-automations", () => ({
-  useAutomation: () => ({ automation, loading: false, mutate: vi.fn() }),
+  useAutomation: () => ({
+    automation: detail.evicted ? undefined : automation,
+    loading: false,
+    mutate: vi.fn(),
+  }),
   useAutomationInvocations: (_id: string, limit: number) => {
     history.requestedLimits.push(limit);
     return {
@@ -90,14 +96,19 @@ vi.mock("@/components/automations/run-history", () => ({
     hasMore ? <button onClick={onLoadMore}>Load more</button> : null,
 }));
 
+const params = Promise.resolve({ id: "auto-1" });
+const page = () => (
+  <Suspense fallback={null}>
+    <AutomationDetailPage params={params} />
+  </Suspense>
+);
+
 async function renderPage() {
+  let rendered!: ReturnType<typeof render>;
   await act(async () => {
-    render(
-      <Suspense fallback={null}>
-        <AutomationDetailPage params={Promise.resolve({ id: "auto-1" })} />
-      </Suspense>
-    );
+    rendered = render(page());
   });
+  return rendered;
 }
 
 beforeEach(() => {
@@ -109,6 +120,7 @@ beforeEach(() => {
   automation.capabilities = undefined;
   history.total = 0;
   history.requestedLimits = [];
+  detail.evicted = false;
 });
 afterEach(cleanup);
 
@@ -153,6 +165,21 @@ describe("AutomationDetailPage authorization", () => {
       await waitFor(() => expect(push).toHaveBeenCalledWith(`/automations${query}`));
     }
   );
+
+  it("does not flash not-found while a deleted automation navigates away", async () => {
+    automation.capabilities = { canRead: true, canManage: true, canTrigger: true };
+    vi.mocked(browserApiFetch).mockImplementation(() => {
+      detail.evicted = true;
+      return new Promise<Response>(() => {});
+    });
+    const { rerender } = await renderPage();
+    fireEvent.click(screen.getByRole("button", { name: "Delete" }));
+    fireEvent.click(screen.getByRole("button", { name: "Confirm Delete" }));
+    await waitFor(() => expect(browserApiFetch).toHaveBeenCalled());
+    // The cache eviction re-renders the page before navigation completes.
+    rerender(page());
+    expect(screen.queryByText("Automation not found.")).not.toBeInTheDocument();
+  });
 
   it("reports a failed delete without leaving its scope", async () => {
     automation.capabilities = { canRead: true, canManage: true, canTrigger: false };
