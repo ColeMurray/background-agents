@@ -795,6 +795,13 @@ automationCrudRoutes.post(
   admit({
     ...GITHUB_USER_OR_SERVICE_ROUTE,
     authorization: requirePermission("automations.create"),
+    // Additionally admits a personal access token, so the MCP server can
+    // create automations as its owner. Create only: it adds an automation
+    // under a new id and takes nothing away, while PUT and DELETE rewrite and
+    // remove one that other people may already depend on, and those stay
+    // human-only. `automations.create` is still required, so the exception
+    // widens which credential may act, never which user may.
+    accessTokenWrites: "allow",
   }),
   (c) => dispatch(c, handleCreateAutomation)
 );

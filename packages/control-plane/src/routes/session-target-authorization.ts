@@ -1,4 +1,5 @@
 import type { PermissionId } from "@open-inspect/shared/rbac";
+import { isSelfActingPrincipal } from "../auth/principal";
 import {
   evaluateEnvironmentAdmission,
   ownedResourceAdmissionResponse,
@@ -30,7 +31,9 @@ export async function authorizeSessionTarget(
       ? "repositories.use"
       : null;
 
-  if (permission && (ctx.principal?.kind === "user" || ctx.principal?.kind === "service")) {
+  // An access token is its owner, so it faces the checks that owner would: skipping them would
+  // let the credential aim an automation at repositories and environments the user may not use.
+  if (permission && (isSelfActingPrincipal(ctx.principal) || ctx.principal?.kind === "service")) {
     if (
       ctx.principal.kind === "service" &&
       !serviceAllowsPermission(ctx.principal.service, permission)
