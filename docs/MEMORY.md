@@ -60,12 +60,17 @@ per-component context-snapshot feature is not introduced here.
 
 ### Pinning and live reads
 
+Memory boot requires runtime v74 or later for either harness. The runtime/rebuild floors reject
+pre-memory repository images. Restores remove old context and abandoned staging files before
+fetching; new content is installed through a unique exclusive 0600 file and atomic replacement.
+
 - Directives and catalog entries use **pinned revisions** for the session's lifetime, including
   sandbox restarts and restores. A child copies the same selection and personal owner, not the
   spawning participant's personal catalog.
-- `memory_read` returns the **current** fact body and provenance. An archived record returns only
-  its archive notice. Proposed records cannot be read by sandbox tools.
-- A top-level session may directly read an active record in its authorized scopes even if budget
+- `memory_read` returns the **current** fact body and provenance. A pinned archived record returns
+  only its archive notice. Proposals, unpinned archives, and directives cannot be expanded by
+  sandbox tools.
+- A top-level session may directly read an active fact in its authorized scopes even if budget
   truncation omitted it. An inherited child cannot expand into unpinned personal records.
 - Editing or archiving does not rewrite an existing session's injected text. New sessions resolve
   from current active records.
@@ -80,15 +85,18 @@ per-component context-snapshot feature is not introduced here.
 | Description                         |                                        10–420 characters |
 | Directive body                      |                                         2,000 characters |
 | Fact body                           |                                        20,000 characters |
-| Directives per scope / overall      |                           6,000 / 12,000 body characters |
+| Directives per scope / overall      |   6,000 / 12,000 body characters; at most 100 directives |
 | Fact catalog                        | 24,000 title+description characters, at most 200 entries |
+| Rendered boot context               |             240,000 characters including labels/escaping |
+| Management page                     |                       50 records by default, at most 100 |
 | Accepted agent writes per session   |              20, including subsequently archived records |
 | Pending agent proposals per session |                                                        5 |
 
 Scope priority is environment, repositories in session order, then personal. Directives are oldest
 first; facts are most recently updated first; IDs break timestamp ties. Records beyond a budget are
-omitted whole and retained in diagnostics. Token estimates use rendered text length / 4, including
-labels and framing; they are estimates, not provider-measured token counts.
+omitted whole and counted in aggregate; only selected items are persisted. Candidate queries are
+bounded per scope/type and never fetch fact bodies. Token estimates use rendered text length / 4,
+including labels and framing; they are estimates, not provider-measured token counts.
 
 ## API
 
@@ -97,25 +105,30 @@ request body. Repository management uses existing repository permissions and tea
 environment management uses existing ownership/management authorization. Personal management is
 owner-only, including when the caller is another administrator.
 
-| Method and path                              | Purpose                                                                                                                                                                                                  |
-| -------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `GET /memories?scope=...&status=...`         | List one scope (`personal`, `repository`, or `environment`) and status (`active`, `proposed`, or `archived`). Repository scope also takes `repoOwner` and `repoName`; environment takes `environmentId`. |
-| `POST /memories`                             | Create or propose a replacement via `supersedesMemoryId`.                                                                                                                                                |
-| `GET /memories/:id`                          | Current record and server-calculated management capabilities.                                                                                                                                            |
-| `PATCH /memories/:id`                        | Revise with `expectedRevisionId`.                                                                                                                                                                        |
-| `GET /memories/:id/revisions`                | Immutable revision history.                                                                                                                                                                              |
-| `POST /memories/:id/{action}`                | `archive`, `restore`, `approve`, or `reject` with `expectedRevisionId`; archive accepts an optional reason.                                                                                              |
-| `POST /memories/preview`                     | Resolve a target for the current user without creating a session.                                                                                                                                        |
-| `GET, PUT /memory-preferences`               | Read/save the current user's personal inclusion default.                                                                                                                                                 |
-| `GET /sessions/:id/memories`                 | Session-readable pinned diagnostics.                                                                                                                                                                     |
-| `GET /sessions/:id/sandbox-memory`           | Sandbox-bound rendered installation.                                                                                                                                                                     |
-| `GET /sessions/:id/sandbox-memory/:memoryId` | Sandbox-bound live read.                                                                                                                                                                                 |
-| `POST /sessions/:id/sandbox-memory`          | Sandbox-bound agent write with scope/approval/quota checks.                                                                                                                                              |
+| Method and path                                           | Purpose                                                                                                                                                                                                                                                 |
+| --------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `GET /memories?scope=...&status=...&offset=...&limit=...` | Page through one scope (`personal`, `repository`, or `environment`) and status (`active`, `proposed`, or `archived`). Repository scope also takes `repoOwner` and `repoName`; environment takes `environmentId`. `nextOffset` is null at the last page. |
+| `POST /memories`                                          | Create or propose a replacement via `supersedesMemoryId`.                                                                                                                                                                                               |
+| `GET /memories/:id`                                       | Current record and server-calculated management capabilities.                                                                                                                                                                                           |
+| `PATCH /memories/:id`                                     | Revise with `expectedRevisionId`.                                                                                                                                                                                                                       |
+| `GET /memories/:id/revisions`                             | Immutable revision history.                                                                                                                                                                                                                             |
+| `POST /memories/:id/{action}`                             | `archive`, `restore`, `approve`, or `reject` with `expectedRevisionId`; archive accepts an optional reason.                                                                                                                                             |
+| `POST /memories/preview`                                  | Resolve a target for the current user without creating a session.                                                                                                                                                                                       |
+| `GET, PUT /memory-preferences`                            | Read/save the current user's personal inclusion default.                                                                                                                                                                                                |
+| `GET /sessions/:id/memories`                              | Session-readable pinned diagnostics.                                                                                                                                                                                                                    |
+| `GET /sessions/:id/sandbox-memory`                        | Sandbox-bound rendered installation.                                                                                                                                                                                                                    |
+| `GET /sessions/:id/sandbox-memory/:memoryId`              | Sandbox-bound live read.                                                                                                                                                                                                                                |
+| `POST /sessions/:id/sandbox-memory`                       | Sandbox-bound agent write with scope/approval/quota checks.                                                                                                                                                                                             |
 
-Sandbox routes reject credentials belonging to another session and recheck current team repository
-grants/environment ownership. Audits record record/revision/status/actor/session IDs, never memory
-content or private archive-reason text. Scope identifiers are retained after target deletion to
-preserve historical manifests. There is no hard-delete endpoint.
+Sandbox routes reject credentials belonging to another session and recheck current workspace/team
+repository grants and environment ownership. Agent inserts repeat these checks atomically and
+require an active owner and a live (`created`/`active`) session; settled sessions must be
+reactivated by a fresh prompt before writing. Repository identities require a stable ID; legacy
+null-ID memories fail closed rather than becoming accessible when a name is reused. Audits record
+record/revision/status/actor/session IDs, never memory content or private archive-reason text. Scope
+identifiers are retained after target deletion to preserve historical manifests. There is no
+hard-delete endpoint. Restoring an approved memory is allowed only when its entire replacement
+family has no active record.
 
 ## Local verification
 

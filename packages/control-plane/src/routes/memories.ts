@@ -32,11 +32,13 @@ import {
 } from "./shared";
 import { authorizeMemoryScope } from "./memory-access";
 
+/** Bind human provenance to the admitted canonical principal, not editable request fields. */
 const actor = (ctx: UserRouteContext): MemoryActor => ({
   kind: "user",
   userId: ctx.principal.userId,
   requestId: ctx.request_id,
 });
+/** Project server-derived management capabilities; the UI never infers permission from status alone. */
 function view(record: MemoryRecord, canManage: boolean) {
   return {
     ...record,
@@ -47,6 +49,7 @@ function view(record: MemoryRecord, canManage: boolean) {
     },
   };
 }
+/** Translate expected write conflicts/validation failures while preserving unexpected errors. */
 export function memoryWriteError(cause: unknown): Response {
   if (cause instanceof MemoryConflictError) return error(cause.message, 409);
   if (cause instanceof MemoryValidationError) return error(cause.message, 400);
@@ -60,6 +63,7 @@ const previewSchema = z
   })
   .strict();
 
+/** Authorize one catalog scope before returning a bounded management page. */
 async function list(request: Request, env: Env, _params: object, ctx: UserRouteContext) {
   const query = new URL(request.url).searchParams;
   const scopeResult = memoryScopeSchema.safeParse(
@@ -95,6 +99,7 @@ async function list(request: Request, env: Env, _params: object, ctx: UserRouteC
     canCreate: access.canManage,
   });
 }
+/** Admit human creation/replacement and bind the resolved stable repository identity. */
 async function create(request: Request, env: Env, _params: object, ctx: UserRouteContext) {
   const body = await parseBody(request, createMemorySchema, "Invalid memory");
   if (body instanceof Response) return body;
@@ -109,12 +114,14 @@ async function create(request: Request, env: Env, _params: object, ctx: UserRout
     return memoryWriteError(cause);
   }
 }
+/** Conceal inaccessible records and return the current revision with management capabilities. */
 async function get(_request: Request, env: Env, params: { id: string }, ctx: UserRouteContext) {
   const record = await new MemoryStore(ctx.db).get(params.id);
   if (!record) return error("Memory not found", 404);
   const access = await authorizeMemoryScope(ctx, env, record.scope, false, record);
   return access instanceof Response ? access : json({ memory: view(record, access.canManage) });
 }
+/** Authorize an edit and require the revision the user actually reviewed. */
 async function revise(request: Request, env: Env, params: { id: string }, ctx: UserRouteContext) {
   const store = new MemoryStore(ctx.db);
   const record = await store.get(params.id);
@@ -132,6 +139,7 @@ async function revise(request: Request, env: Env, params: { id: string }, ctx: U
     return memoryWriteError(cause);
   }
 }
+/** Apply record-level read authorization before exposing any historical content. */
 async function revisions(
   _request: Request,
   env: Env,
@@ -146,6 +154,7 @@ async function revisions(
     ? access
     : json({ revisions: await store.revisions(record.id) });
 }
+/** Build a lifecycle endpoint with scope authorization and optimistic revision fencing. */
 function transition(action: "archive" | "restore" | "approve" | "reject") {
   return async (request: Request, env: Env, params: { id: string }, ctx: UserRouteContext) => {
     const store = new MemoryStore(ctx.db);
@@ -173,6 +182,7 @@ function transition(action: "archive" | "restore" | "approve" | "reject") {
     }
   };
 }
+/** Resolve a non-persisted selection after authorizing every environment/repository target. */
 async function preview(request: Request, env: Env, _params: object, ctx: UserRouteContext) {
   const body = await parseBody(request, previewSchema, "Invalid memory target");
   if (body instanceof Response) return body;
@@ -212,6 +222,7 @@ async function preview(request: Request, env: Env, _params: object, ctx: UserRou
     )
   );
 }
+/** Read only the admitted principal's canonical personal-memory default. */
 async function getPreferences(
   _request: Request,
   _env: Env,
@@ -220,6 +231,7 @@ async function getPreferences(
 ) {
   return json(await new MemoryStore(ctx.db).getPreferences(ctx.principal.userId));
 }
+/** Validate and save the owner default without changing existing sessions. */
 async function setPreferences(request: Request, _env: Env, _params: object, ctx: UserRouteContext) {
   const body = await parseBody(request, memoryPreferencesSchema, "Invalid memory preferences");
   return body instanceof Response

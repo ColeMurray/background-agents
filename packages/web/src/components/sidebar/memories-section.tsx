@@ -3,6 +3,7 @@
 import { memorySettingsLink, useSessionMemories } from "@/hooks/use-memories";
 import { CollapsibleSection } from "./collapsible-section";
 
+/** Inspect the bounded pinned selection with live drift/archive notices, never expanded fact bodies. */
 export function MemoriesSection({ sessionId }: { sessionId: string }) {
   const { data, isLoading, error } = useSessionMemories(sessionId);
   if (isLoading) return <p className="text-xs text-muted-foreground">Loading memories…</p>;

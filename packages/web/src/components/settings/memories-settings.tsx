@@ -36,6 +36,7 @@ const responseSchema = z.object({ memory: memoryViewSchema });
 export const PERSONAL_MEMORY_DISCLOSURE =
   "Personal memories included in a session may appear in agent responses and be visible to collaborators.";
 
+/** Persist the account-wide default and disclose the audience of included personal context. */
 function PersonalMemoryDefault() {
   const preferences = useMemoryPreferences();
   const [saving, setSaving] = useState(false);
@@ -79,6 +80,7 @@ function PersonalMemoryDefault() {
   );
 }
 
+/** Manage a paginated scope using server capabilities and revision-fenced mutations. */
 function MemoryCollection({ scope }: { scope: MemoryScope }) {
   const params = useSearchParams();
   const focused = useMemory(params.get("memoryId"));
@@ -92,6 +94,7 @@ function MemoryCollection({ scope }: { scope: MemoryScope }) {
   const [reason, setReason] = useState("");
   const [actionError, setActionError] = useState("");
   const [busy, setBusy] = useState(false);
+  /** Serialize lifecycle actions and refresh both the collection and any deep-linked record. */
   async function perform(action: () => Promise<unknown>) {
     setBusy(true);
     setActionError("");
@@ -104,6 +107,7 @@ function MemoryCollection({ scope }: { scope: MemoryScope }) {
       setBusy(false);
     }
   }
+  /** Send editable content only, carrying the reviewed revision when editing an existing record. */
   async function save(content: MemoryContent, record?: MemoryView, supersedes?: string) {
     await memoryRequest(
       record ? `/api/memories/${encodeURIComponent(record.id)}` : "/api/memories",
@@ -120,6 +124,7 @@ function MemoryCollection({ scope }: { scope: MemoryScope }) {
     setEditor(null);
     await Promise.all([mutate(), focused.mutate()]);
   }
+  /** Apply a lifecycle decision to the exact revision currently displayed. */
   async function action(
     record: MemoryView,
     name: "archive" | "restore" | "approve" | "reject",
@@ -371,6 +376,7 @@ function MemoryCollection({ scope }: { scope: MemoryScope }) {
   );
 }
 
+/** Combine owner-only memory management with the future-session inclusion default. */
 export function MemoriesSettings() {
   return (
     <section className="space-y-6">
@@ -387,6 +393,7 @@ export function MemoriesSettings() {
   );
 }
 
+/** Select an accessible repository/environment; management capabilities come from the API. */
 export function SharedMemoriesSettings() {
   const params = useSearchParams();
   const { repos, loading: reposLoading, error: reposError } = useRepos();

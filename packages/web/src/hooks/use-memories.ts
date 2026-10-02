@@ -25,6 +25,7 @@ export async function memoryRequest<T>(
   }
   return schema.parse(body);
 }
+/** Encode a scope for list requests and deep links without accepting an owner identity. */
 export function memoryScopeQuery(scope: MemoryScope): URLSearchParams {
   const query = new URLSearchParams({ scope: scope.type });
   if (scope.type === "repository") {
@@ -34,12 +35,14 @@ export function memoryScopeQuery(scope: MemoryScope): URLSearchParams {
   if (scope.type === "environment") query.set("environmentId", scope.environmentId);
   return query;
 }
+/** Link to the appropriate personal/shared management view and selected record. */
 export function memorySettingsLink(scope: MemoryScope, id: string): string {
   const query = memoryScopeQuery(scope);
   query.set("tab", scope.type === "personal" ? "memories" : "shared-memories");
   query.set("memoryId", id);
   return `/settings?${query}`;
 }
+/** Cache each management page independently by scope, status, and offset. */
 export function useMemories(scope: MemoryScope | null, status: MemoryStatus, offset = 0) {
   const query = scope ? memoryScopeQuery(scope) : null;
   query?.set("status", status);
@@ -55,11 +58,13 @@ export function useMemories(scope: MemoryScope | null, status: MemoryStatus, off
     )
   );
 }
+/** Load a focused record independently of the current catalog page. */
 export function useMemory(id: string | null) {
   return useSWR(id ? (`/api/memories/${encodeURIComponent(id)}` as const) : null, (path) =>
     memoryRequest(path, z.object({ memory: memoryViewSchema }))
   );
 }
+/** Load the saved default; session creation may proceed using the server default while unavailable. */
 export function useMemoryPreferences(enabled = true) {
   return useSWR(enabled ? ("/api/memory-preferences" as const) : null, (path) =>
     memoryRequest(path, memoryPreferencesSchema)
@@ -73,6 +78,7 @@ export function useSessionMemories(sessionId: string) {
     { refreshInterval: 30_000 }
   );
 }
+/** Fetch authorized immutable history only while a record is selected. */
 export function useMemoryRevisions(id: string | null) {
   return useSWR(
     id ? (`/api/memories/${encodeURIComponent(id)}/revisions` as const) : null,

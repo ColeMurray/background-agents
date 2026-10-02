@@ -89,6 +89,7 @@ async function currentSharedAccess(
   }
   return true;
 }
+/** Return pinned metadata plus required live drift flags under session-read admission. */
 async function view(_request: Request, _env: Env, params: { id: string }, ctx: UserRouteContext) {
   const loaded = await new SessionMemoryStore(ctx.db).load(params.id);
   return loaded ? json(loaded.diagnostics) : error("Session not found", 404);

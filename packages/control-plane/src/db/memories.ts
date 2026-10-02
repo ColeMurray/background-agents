@@ -55,6 +55,7 @@ export interface MemoryRow {
 }
 export const MEMORY_SELECT = `SELECT m.*, r.title, r.description, r.content, r.revision_number
   FROM memories m JOIN memory_revisions r ON r.id = m.current_revision_id AND r.memory_id = m.id`;
+/** Reconstruct a live record from the current-revision join; approval history remains record-level. */
 export function memoryFromRow(row: MemoryRow): MemoryRecord {
   const scope: MemoryScope =
     row.scope_type === "personal"
@@ -85,6 +86,7 @@ export function memoryFromRow(row: MemoryRow): MemoryRecord {
     updatedAt: row.updated_at,
   };
 }
+/** Bind one owner/target identity; repository names alone never authorize legacy or reused IDs. */
 function scopePredicate(
   scope: MemoryScope,
   ownerUserId: string | null,
@@ -102,6 +104,7 @@ function scopePredicate(
     values: [scope.repoOwner, scope.repoName, repoId],
   };
 }
+/** Prevent replacements from crossing personal owners, environments, or stable repository IDs. */
 function sameScope(
   a: MemoryRecord,
   scope: MemoryScope,
@@ -157,6 +160,7 @@ export class MemoryStore {
       .all<MemoryRow>();
     return this.withReplacements(result.results.map(memoryFromRow));
   }
+  /** Attach reverse replacement links using batches within the database parameter limit. */
   private async withReplacements(records: MemoryRecord[]): Promise<MemoryRecord[]> {
     const replacements = new Map<string, string[]>();
     for (let offset = 0; offset < records.length; offset += MAX_D1_QUERY_PARAMETERS) {
@@ -238,6 +242,7 @@ export class MemoryStore {
       .first<{ include_personal_memories: number }>();
     return { includePersonalMemories: row ? row.include_personal_memories === 1 : true };
   }
+  /** Save the canonical owner default for future resolutions, never rewrite existing manifests. */
   async setPreferences(userId: string, input: MemoryPreferences): Promise<MemoryPreferences> {
     await this.db
       .prepare(
@@ -248,6 +253,7 @@ export class MemoryStore {
       .run();
     return input;
   }
+  /** Read immutable content history newest-first after the caller authorizes the record. */
   async revisions(id: string): Promise<MemoryRevision[]> {
     const result = await this.db
       .prepare("SELECT * FROM memory_revisions WHERE memory_id = ? ORDER BY revision_number DESC")
@@ -557,6 +563,7 @@ export class MemoryStore {
     return (await this.get(id))!;
   }
 
+  /** Build a hashed immutable revision that applies only if this operation claimed the record. */
   private async revisionInsert(
     id: string,
     revisionId: string,
@@ -623,6 +630,7 @@ export class MemoryStore {
         operationId
       );
   }
+  /** Archive/audit the exact predecessor only after the replacement wins its activation guard. */
   private supersede(
     oldId: string,
     oldRevisionId: string,

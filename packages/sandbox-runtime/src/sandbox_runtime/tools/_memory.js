@@ -1,6 +1,6 @@
 import { bridgeFetch, extractError } from "./_bridge-client.js";
 
-/** Read live content through the session-bound bridge; archived records return a notice. */
+/** Read live facts through the session-bound bridge; pinned archives return a body-free notice. */
 export async function readMemory({ memoryId }) {
   const response = await bridgeFetch(`/sandbox-memory/${encodeURIComponent(memoryId)}`);
   if (!response.ok) return `Memory read failed: ${await extractError(response)}`;

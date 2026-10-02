@@ -2,6 +2,7 @@
 
 import type { SessionMemoryManifest } from "@open-inspect/shared/types/memories";
 
+/** Present a tri-state default/override choice; submission locks the control to the in-flight request. */
 export function MemoryPreview({
   includePersonalMemories,
   onChange,

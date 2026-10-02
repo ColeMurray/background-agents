@@ -18,6 +18,7 @@ import {
   SelectItem,
 } from "@/components/ui/select";
 
+/** Validate editable content locally; the parent owns scope, provenance, and revision fencing. */
 export function MemoryEditor({
   record,
   onSave,

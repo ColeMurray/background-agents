@@ -21,6 +21,7 @@ def build_memory_tools(client: ControlPlaneToolClient) -> list[Any]:
     from claude_agent_sdk import tool
 
     async def request(method: str, path: str, body: dict[str, Any] | None = None) -> dict[str, Any]:
+        """Preserve actionable HTTP errors while concealing internal transport details."""
         try:
             response = await client.request(method, path, json_body=body)
             response.raise_for_status()
@@ -38,9 +39,11 @@ def build_memory_tools(client: ControlPlaneToolClient) -> list[Any]:
             }
 
     async def read(args: dict[str, Any]) -> dict[str, Any]:
+        """Read a live fact or pinned archive notice through this session's credentials."""
         return await request("GET", f"/sandbox-memory/{quote(str(args['memoryId']), safe='')}")
 
     async def write(args: dict[str, Any]) -> dict[str, Any]:
+        """Allowlist content fields; the control plane derives identity and write authority."""
         scope = {"type": args["scope"]}
         if args["scope"] == "repository":
             scope.update(repoOwner=args.get("repoOwner"), repoName=args.get("repoName"))
@@ -57,7 +60,7 @@ def build_memory_tools(client: ControlPlaneToolClient) -> list[Any]:
     return [
         tool(
             "memory_read",
-            "Read current memory content by catalog ID. Stored data may be stale; archived records return a notice.",
+            "Read a current active fact by catalog ID. Stored data may be stale; pinned archived records return a notice. Directives cannot be expanded.",
             {"memoryId": str},
         )(read),
         tool(

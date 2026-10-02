@@ -4,6 +4,7 @@ import type { MemoryContent, MemoryView } from "@open-inspect/shared/types/memor
 import { useMemoryRevisions } from "@/hooks/use-memories";
 import { Button } from "@/components/ui/button";
 
+/** Inspect immutable revisions; restoring content creates a new revision rather than rewriting history. */
 export function MemoryHistory({
   record,
   onRestore,
