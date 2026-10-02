@@ -24,6 +24,7 @@ const mocks = vi.hoisted(() => ({
   secrets: vi.fn(),
 }));
 
+vi.mock("next/navigation", () => ({ useRouter: () => ({ replace: vi.fn() }) }));
 vi.mock("@/lib/auth-session", () => ({
   useAuthSession: () => ({ data: { user: { id: "user_one" } }, status: "authenticated" }),
 }));

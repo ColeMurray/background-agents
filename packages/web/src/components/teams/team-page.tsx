@@ -1,8 +1,9 @@
 "use client";
 
 import { isWorkspaceAdmin } from "@open-inspect/shared/rbac";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import {
   useMeTeams,
   useTeam,
@@ -32,10 +33,20 @@ type TeamTab =
   | "Settings";
 
 export function TeamPage({ slug }: { slug: string }) {
+  const router = useRouter();
   const { teams, loading, error } = useTeams();
   const mine = useMeTeams();
   const { authorization, hasPermission } = useCurrentUserAuthorization();
-  const team = teams.find((candidate) => candidate.slug === slug && candidate.archivedAt === null);
+  const [shownTeamId, setShownTeamId] = useState<string | null>(null);
+  // A team renamed while shown stays on screen, and the URL follows its new slug.
+  const team =
+    teams.find((candidate) => candidate.slug === slug && candidate.archivedAt === null) ??
+    teams.find((candidate) => candidate.id === shownTeamId && candidate.archivedAt === null);
+  if (team && team.id !== shownTeamId) setShownTeamId(team.id);
+  const teamSlug = team?.slug;
+  useEffect(() => {
+    if (teamSlug && teamSlug !== slug) router.replace(`/teams/${encodeURIComponent(teamSlug)}`);
+  }, [router, slug, teamSlug]);
   const role = authorization?.role.key;
   const admin = authorization?.suspendedAt === null && isWorkspaceAdmin(role);
   const member =
