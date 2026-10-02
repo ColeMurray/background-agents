@@ -271,6 +271,8 @@ interface StartInvocationParams {
   triggerMetadata?: string | null;
   /** Pre-fetched repository selection (the tick passes its batched fetch). */
   repositories?: AutomationRepositoryInsert[];
+  /** GitHub event identity that repository resolution must preserve. */
+  eventRepositoryId?: number;
   /** Pre-fetched environment selection (the tick passes its batched fetch). */
   environments?: AutomationEnvironmentRow[];
   /** Complete prompt to use directly, or as the fallback for a lazy override. */
@@ -479,6 +481,16 @@ export class Scheduler {
       };
     }
     const resolutions = await resolveAutomationRepositories(this.env, selection);
+    for (const resolution of resolutions) {
+      if (
+        params.eventRepositoryId !== undefined &&
+        resolution.repository !== null &&
+        resolution.repository.repoId !== params.eventRepositoryId
+      ) {
+        resolution.repository = null;
+        resolution.error = "Repository identity changed during event resolution";
+      }
+    }
 
     const invocationId = generateId();
     const scheduledAt = params.scheduledAt ?? now;
@@ -1093,6 +1105,7 @@ export class Scheduler {
 
     // 1. Find matching automations
     let candidates: AutomationRow[];
+    let grantedGitHubAutomationIds: ReadonlySet<string> | undefined;
     switch (event.source) {
       case "webhook": {
         const automation = await store.getById(event.automationId);
@@ -1111,12 +1124,22 @@ export class Scheduler {
             : [];
         break;
       }
-      case "github":
+      case "github": {
+        const matches = await store.getGitHubAutomationsForEvent(
+          event.repositoryId,
+          event.eventType
+        );
+        candidates = matches.map((match) => match.automation);
+        grantedGitHubAutomationIds = new Set(
+          matches.filter((match) => match.repositoryGranted).map((match) => match.automation.id)
+        );
+        break;
+      }
       case "linear":
         candidates = await store.getAutomationsForEvent(
           event.repoOwner,
           event.repoName,
-          event.source === "github" ? "github_event" : "linear_event",
+          "linear_event",
           event.eventType
         );
         break;
@@ -1258,6 +1281,26 @@ export class Scheduler {
         continue;
       }
 
+      if (event.source === "github" && !grantedGitHubAutomationIds?.has(automation.id)) {
+        await store.recordGitHubGrantDenied(automation.id, event);
+        skipped++;
+        continue;
+      }
+
+      let githubRepositories: AutomationRepositoryInsert[] | undefined;
+      if (event.source === "github") {
+        const selection = await store.getRepositoriesForAutomation(automation.id);
+        if (selection.length !== 1 || selection[0].repo_id !== event.repositoryId) {
+          skipped++;
+          continue;
+        }
+        githubRepositories = selection.map((repository) => ({
+          ...repository,
+          repo_owner: event.repoOwner,
+          repo_name: event.repoName,
+        }));
+      }
+
       if (event.source === "slack" && !slackSettingsLoaded) {
         slackSessionInstructions = await getSlackSessionInstructions(this.db);
         slackSettingsLoaded = true;
@@ -1281,6 +1324,12 @@ export class Scheduler {
         concurrencyKey: event.concurrencyKey,
         triggerMetadata: event.source === "slack" ? serializeSlackTriggerMetadata(event) : null,
         instructionsOverride,
+        ...(event.source === "github"
+          ? {
+              eventRepositoryId: event.repositoryId,
+              repositories: githubRepositories,
+            }
+          : {}),
         ...(event.source === "slack"
           ? {
               instructionsOverrideFactory: async () =>
@@ -1304,10 +1353,25 @@ export class Scheduler {
           skipped++;
           break;
         case "deduplicated":
+          skipped++;
+          break;
         case "blocked":
+          if (
+            event.source === "github" &&
+            result.reason === "team_grants_changed" &&
+            automation.owner_team_id !== null &&
+            !(await new TeamRepositoryGrantStore(this.db).covers(automation.owner_team_id, [
+              event.repositoryId,
+            ]))
+          ) {
+            await store.recordGitHubGrantDenied(automation.id, event);
+          }
           skipped++;
           break;
         case "unauthorized":
+          if (event.source === "github" && result.reason === "target_team_missing_grant") {
+            await store.recordGitHubGrantDenied(automation.id, event);
+          }
           this.log.warn("Skipped event automation after execution authorization denial", {
             event: "scheduler.authorization_denied",
             automation_id: automation.id,

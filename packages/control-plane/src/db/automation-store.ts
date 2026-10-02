@@ -27,7 +27,9 @@ import {
   triggerConfigSchema,
   type AutomationTriggerType,
   type TriggerConfig,
+  type GitHubAutomationEvent,
 } from "@open-inspect/shared/triggers";
+import { generateId } from "../auth/crypto";
 import {
   toProviderSelections,
   type AutomationModelProviderAuthRow,
@@ -222,6 +224,7 @@ const enrichedAutomationInvocationRowSchema = z.object({
 type EnrichedAutomationInvocationRow = z.infer<typeof enrichedAutomationInvocationRowSchema>;
 
 const countRowSchema = z.object({ count: z.number() });
+const githubGrantRowSchema = z.object({ repo_granted: z.union([z.literal(0), z.literal(1)]) });
 
 /**
  * Overlap scope for a new invocation: schedule/manual firings block on any
@@ -327,7 +330,7 @@ export function toAutomationRun(row: EnrichedRunRow): AutomationRun {
 // order: childless ⇒ skipped (new skips are childless; the app enforces
 // skip_reason on them); any active child ⇒ starting until any child has left
 // 'starting', then running; all-terminal: all skipped ⇒ skipped (legacy
-// backfilled skip rows), no failure ⇒ completed, no success ⇒ failed,
+// backfilled skip rows), any denied child ⇒ unauthorized, no failure ⇒ completed, no success ⇒ failed,
 // otherwise partial_failed.
 
 const DERIVED_INVOCATION_STATUS_SQL = `CASE
@@ -338,6 +341,7 @@ const DERIVED_INVOCATION_STATUS_SQL = `CASE
       ELSE 'running'
     END
   WHEN SUM(CASE WHEN r.status = 'skipped' THEN 1 ELSE 0 END) = COUNT(r.id) THEN 'skipped'
+  WHEN SUM(CASE WHEN r.status = 'unauthorized' THEN 1 ELSE 0 END) > 0 THEN 'unauthorized'
   WHEN SUM(CASE WHEN r.status = 'failed' THEN 1 ELSE 0 END) = 0 THEN 'completed'
   WHEN SUM(CASE WHEN r.status = 'completed' THEN 1 ELSE 0 END) = 0 THEN 'failed'
   ELSE 'partial_failed'
@@ -360,6 +364,7 @@ export function deriveInvocationStatus(counts: {
   failed: number;
   completed: number;
   skipped: number;
+  unauthorized: number;
   // Required: distinguishes "starting" from "running". InvocationRunAggregate
   // folds both into `active` and has no `starting`, so it must not be passed here.
   starting: number;
@@ -369,6 +374,7 @@ export function deriveInvocationStatus(counts: {
     return counts.starting === counts.total ? "starting" : "running";
   }
   if (counts.skipped === counts.total) return "skipped";
+  if (counts.unauthorized > 0) return "unauthorized";
   if (counts.failed === 0) return "completed";
   if (counts.completed === 0) return "failed";
   return "partial_failed";
@@ -1531,6 +1537,73 @@ export class AutomationStore {
   }
 
   // --- Event matching queries ---
+
+  async getGitHubAutomationsForEvent(
+    repositoryId: number,
+    eventType: string
+  ): Promise<Array<{ automation: AutomationRow; repositoryGranted: boolean }>> {
+    // Keep unmatched grants in the result so a revoked grant has a denied-run history entry.
+    const result = await this.db
+      .prepare(
+        `SELECT DISTINCT a.*,
+                CASE WHEN a.owner_team_id IS NULL OR g.id IS NOT NULL THEN 1 ELSE 0 END AS repo_granted
+         FROM automations a
+         JOIN automation_repositories ar ON ar.automation_id = a.id
+         LEFT JOIN team_repository_grants g ON g.team_id = a.owner_team_id
+           AND (g.grant_kind = 'installation' OR
+                (g.grant_kind = 'repository' AND g.repo_external_id = ar.repo_id))
+         WHERE ar.repo_id = ? AND a.trigger_type = 'github_event' AND a.event_type = ?
+           AND a.enabled = 1 AND a.deleted_at IS NULL`
+      )
+      .bind(repositoryId, eventType)
+      .all<AutomationRow & { repo_granted: number }>();
+    return (result.results ?? []).map((row) => ({
+      automation: withValidatedOwnerTeam(row),
+      repositoryGranted: githubGrantRowSchema.parse(row).repo_granted === 1,
+    }));
+  }
+
+  /** Record an event denial atomically and once, without claiming a session or concurrency slot. */
+  async recordGitHubGrantDenied(automationId: string, event: GitHubAutomationEvent): Promise<void> {
+    const invocationId = generateId();
+    const createdAt = Date.now();
+    await this.db.batch([
+      this.db
+        .prepare(
+          `INSERT INTO automation_invocations
+           (id, automation_id, source, trigger_key, concurrency_key, created_at, updated_at)
+           VALUES (?, ?, 'event', ?, ?, ?, ?) ON CONFLICT DO NOTHING`
+        )
+        .bind(
+          invocationId,
+          automationId,
+          event.triggerKey,
+          event.concurrencyKey,
+          createdAt,
+          createdAt
+        ),
+      this.db
+        .prepare(
+          `INSERT INTO automation_runs
+           (id, automation_id, invocation_id, status, failure_reason, scheduled_at,
+            completed_at, created_at, repo_owner, repo_name, repo_id)
+           SELECT ?, ?, ?, 'unauthorized', 'repo_not_granted', ?, ?, ?, ?, ?, ?
+           WHERE EXISTS (SELECT 1 FROM automation_invocations WHERE id = ?)`
+        )
+        .bind(
+          generateId(),
+          automationId,
+          invocationId,
+          createdAt,
+          createdAt,
+          createdAt,
+          event.repoOwner,
+          event.repoName,
+          event.repositoryId,
+          invocationId
+        ),
+    ]);
+  }
 
   async getAutomationsForEvent(
     repoOwner: string,

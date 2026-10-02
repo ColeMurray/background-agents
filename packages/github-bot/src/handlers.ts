@@ -4,6 +4,7 @@ import {
   sendPromptResponseSchema,
 } from "@open-inspect/shared/types/session-api";
 import { resolveAppName } from "@open-inspect/shared/app-name";
+import { z } from "zod";
 import { signedControlPlaneFetch } from "./internal-auth";
 import type {
   Env,
@@ -13,7 +14,12 @@ import type {
   ReviewCommentPayload,
 } from "./types";
 import type { Logger } from "./logger";
-import { generateInstallationToken, postReaction, checkSenderPermission } from "./github-auth";
+import {
+  generateInstallationToken,
+  postReaction,
+  postIssueComment,
+  checkSenderPermission,
+} from "./github-auth";
 import { buildCodeReviewPrompt, buildCommentActionPrompt } from "./prompts";
 import { resolveSessionTarget, type SessionTargetFields } from "./session-target";
 import { getGitHubConfig, type ResolvedGitHubConfig } from "./utils/integration-config";
@@ -24,6 +30,48 @@ export type HandlerResult =
   | { outcome: "processed"; session_id: string; message_id: string; handler_action: string }
   | { outcome: "skipped"; skip_reason: string };
 
+const githubRouteResponseSchema = z.discriminatedUnion("via", [
+  z.object({ via: z.literal("workspace"), teamId: z.null() }),
+  z.object({ via: z.literal("sender_membership"), teamId: z.string().min(1) }),
+  z.object({ via: z.literal("pull_request_session"), teamId: z.string().min(1).nullable() }),
+]);
+
+const sessionCreationErrorSchema = z.object({
+  code: z.string(),
+  repository: z.string().min(1).optional(),
+});
+
+async function resolveGitHubRoute(
+  env: Env,
+  log: Logger,
+  traceId: string,
+  params: { repositoryId: number; pullNumber?: number; senderId?: number }
+): Promise<z.infer<typeof githubRouteResponseSchema> | null> {
+  const query = new URLSearchParams({ repositoryId: String(params.repositoryId) });
+  if (params.pullNumber !== undefined) query.set("pullNumber", String(params.pullNumber));
+  if (params.senderId !== undefined) query.set("sender", `github:${params.senderId}`);
+  try {
+    const url = `https://internal/github/route?${query}`;
+    const response = await signedControlPlaneFetch(env, { method: "GET", url, traceId });
+    if (!response.ok) {
+      log.warn("route.lookup_failed", { trace_id: traceId, status: response.status });
+      return null;
+    }
+    const parsed = githubRouteResponseSchema.safeParse(await response.json());
+    if (!parsed.success) {
+      log.warn("route.invalid_response", { trace_id: traceId });
+      return null;
+    }
+    return parsed.data;
+  } catch (err) {
+    log.warn("route.lookup_failed", {
+      trace_id: traceId,
+      error: err instanceof Error ? err : new Error(String(err)),
+    });
+    return null;
+  }
+}
+
 export function isReviewRequestedForBot(payload: unknown, botUsername: string): boolean {
   const parsed = requestedReviewerPayloadSchema.safeParse(payload);
   if (!parsed.success) return false;
@@ -32,9 +80,15 @@ export function isReviewRequestedForBot(payload: unknown, botUsername: string): 
 
 async function createSession(
   env: Env,
+  log: Logger,
   traceId: string,
   params: {
     target: SessionTargetFields;
+    teamId: string | null;
+    owner: string;
+    repoName: string;
+    pullNumber: number;
+    ghToken: string;
     title: string;
     model: string;
     reasoningEffort?: string | null;
@@ -42,9 +96,10 @@ async function createSession(
     scmUserId: string;
     scmAvatarUrl: string;
   }
-): Promise<string> {
+): Promise<string | Extract<HandlerResult, { outcome: "skipped" }>> {
   const body: Record<string, unknown> = {
     ...params.target,
+    teamId: params.teamId,
     title: params.title,
     model: params.model,
     scmLogin: params.scmLogin,
@@ -63,6 +118,39 @@ async function createSession(
     traceId,
   });
   if (!response.ok) {
+    const parsed = sessionCreationErrorSchema.safeParse(
+      await response
+        .clone()
+        .json()
+        .catch(() => null)
+    );
+    if (
+      parsed.success &&
+      ((response.status === 403 && parsed.data.code === "not_member") ||
+        (response.status === 409 && parsed.data.code === "target_team_missing_grant"))
+    ) {
+      const { code, repository } = parsed.data;
+      const repo = repository ?? `${params.owner}/${params.repoName}`;
+      const comment =
+        code === "not_member"
+          ? "I couldn't start a session because you are not a member of the target team. Ask a team lead to add you, then try again."
+          : `I couldn't start a session because the target team does not have a repository grant for \`${repo}\`. Ask a team lead or workspace administrator to grant access, then try again.`;
+      const repositoryPath = encodeRepositoryPathSegments({
+        repoOwner: params.owner,
+        repoName: params.repoName,
+      });
+      const posted = await postIssueComment(
+        params.ghToken,
+        `https://api.github.com/repos/${repositoryPath}/issues/${params.pullNumber}/comments`,
+        comment,
+        resolveAppName(env)
+      );
+      if (!posted) {
+        log.warn("session.refusal_comment_failed", { trace_id: traceId, repo, code });
+        throw new Error(`Session refusal comment failed: ${code}`);
+      }
+      return { outcome: "skipped", skip_reason: code };
+    }
     const body = await response.text();
     throw new Error(`Session creation failed: ${response.status} ${body}`);
   }
@@ -138,6 +226,7 @@ async function resolveCallerGating(
   traceId: string,
   repoFullName: string
 ): Promise<CallerGatingResult> {
+  // The allowlist gates first; routed-team membership is rechecked on session creation.
   if (config.allowedTriggerUsers !== null) {
     if (!config.allowedTriggerUsers.some((u) => u.toLowerCase() === senderLogin.toLowerCase())) {
       log.info("handler.sender_not_allowed", { trace_id: traceId, sender: senderLogin });
@@ -226,16 +315,29 @@ export async function handleReviewRequested(
     resolveAppName(env),
     meta,
     async () => {
+      const route = await resolveGitHubRoute(env, log, traceId, {
+        repositoryId: repo.id,
+        pullNumber: pr.number,
+        senderId: sender.id,
+      });
+      if (!route) return { outcome: "skipped", skip_reason: "route_lookup_failed" };
       const target = await resolveSessionTarget(env, log, {
         owner,
         repoName,
+        teamId: route.teamId,
+        senderId: sender.id,
         senderLogin: sender.login,
         config,
         ghToken,
         traceId,
       });
-      const sessionId = await createSession(env, traceId, {
+      const sessionId = await createSession(env, log, traceId, {
         target,
+        teamId: route.teamId,
+        owner,
+        repoName,
+        pullNumber: pr.number,
+        ghToken,
         title: `GitHub: Review PR #${pr.number}`,
         model: config.model,
         reasoningEffort: config.reasoningEffort,
@@ -243,6 +345,7 @@ export async function handleReviewRequested(
         scmUserId: String(sender.id),
         scmAvatarUrl: sender.avatar_url,
       });
+      if (typeof sessionId !== "string") return sessionId;
       log.info("session.created", { ...meta, session_id: sessionId, action: "review" });
 
       const prompt = buildCodeReviewPrompt({
@@ -330,16 +433,26 @@ export async function handlePullRequestOpened(
     resolveAppName(env),
     meta,
     async () => {
+      const route = await resolveGitHubRoute(env, log, traceId, { repositoryId: repo.id });
+      if (!route) return { outcome: "skipped", skip_reason: "route_lookup_failed" };
+      // Deprecated auto-review always stays workspace-level, regardless of sender or PR ownership.
       const target = await resolveSessionTarget(env, log, {
         owner,
         repoName,
+        teamId: null,
+        senderId: sender.id,
         senderLogin: sender.login,
         config,
         ghToken,
         traceId,
       });
-      const sessionId = await createSession(env, traceId, {
+      const sessionId = await createSession(env, log, traceId, {
         target,
+        teamId: null,
+        owner,
+        repoName,
+        pullNumber: pr.number,
+        ghToken,
         title: `GitHub: Review PR #${pr.number}`,
         model: config.model,
         reasoningEffort: config.reasoningEffort,
@@ -347,6 +460,7 @@ export async function handlePullRequestOpened(
         scmUserId: String(sender.id),
         scmAvatarUrl: sender.avatar_url,
       });
+      if (typeof sessionId !== "string") return sessionId;
       log.info("session.created", { ...meta, session_id: sessionId, action: "auto_review" });
 
       const prompt = buildCodeReviewPrompt({
@@ -446,16 +560,29 @@ export async function handleIssueComment(
     resolveAppName(env),
     meta,
     async () => {
+      const route = await resolveGitHubRoute(env, log, traceId, {
+        repositoryId: repo.id,
+        pullNumber: issue.number,
+        senderId: sender.id,
+      });
+      if (!route) return { outcome: "skipped", skip_reason: "route_lookup_failed" };
       const target = await resolveSessionTarget(env, log, {
         owner,
         repoName,
+        teamId: route.teamId,
+        senderId: sender.id,
         senderLogin: sender.login,
         config,
         ghToken,
         traceId,
       });
-      const sessionId = await createSession(env, traceId, {
+      const sessionId = await createSession(env, log, traceId, {
         target,
+        teamId: route.teamId,
+        owner,
+        repoName,
+        pullNumber: issue.number,
+        ghToken,
         title: `GitHub: PR #${issue.number} comment`,
         model: config.model,
         reasoningEffort: config.reasoningEffort,
@@ -463,6 +590,7 @@ export async function handleIssueComment(
         scmUserId: String(sender.id),
         scmAvatarUrl: sender.avatar_url,
       });
+      if (typeof sessionId !== "string") return sessionId;
       log.info("session.created", { ...meta, session_id: sessionId, action: "comment" });
 
       const prompt = buildCommentActionPrompt({
@@ -554,16 +682,29 @@ export async function handleReviewComment(
     resolveAppName(env),
     meta,
     async () => {
+      const route = await resolveGitHubRoute(env, log, traceId, {
+        repositoryId: repo.id,
+        pullNumber: pr.number,
+        senderId: sender.id,
+      });
+      if (!route) return { outcome: "skipped", skip_reason: "route_lookup_failed" };
       const target = await resolveSessionTarget(env, log, {
         owner,
         repoName,
+        teamId: route.teamId,
+        senderId: sender.id,
         senderLogin: sender.login,
         config,
         ghToken,
         traceId,
       });
-      const sessionId = await createSession(env, traceId, {
+      const sessionId = await createSession(env, log, traceId, {
         target,
+        teamId: route.teamId,
+        owner,
+        repoName,
+        pullNumber: pr.number,
+        ghToken,
         title: `GitHub: PR #${pr.number} review comment`,
         model: config.model,
         reasoningEffort: config.reasoningEffort,
@@ -571,6 +712,7 @@ export async function handleReviewComment(
         scmUserId: String(sender.id),
         scmAvatarUrl: sender.avatar_url,
       });
+      if (typeof sessionId !== "string") return sessionId;
       log.info("session.created", { ...meta, session_id: sessionId, action: "review_comment" });
 
       const prompt = buildCommentActionPrompt({

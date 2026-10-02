@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { automationEventSchema, githubAutomationEventSchema, triggerConfigSchema } from "./types";
+import { buildMockEvent } from "./testing";
 
 describe("automationEventSchema", () => {
   it("parses a valid Slack automation event", () => {
@@ -46,6 +47,7 @@ describe("automationEventSchema", () => {
       contextBlock: "A pull request was opened.",
       meta: {},
       repoOwner: "acme",
+      repositoryId: 9001,
     });
 
     expect(result.success).toBe(false);
@@ -61,6 +63,7 @@ describe("automationEventSchema", () => {
       meta: {},
       repoOwner: "acme",
       repoName: "web-app",
+      repositoryId: 9001,
     });
 
     expect(result.success).toBe(true);
@@ -76,6 +79,7 @@ describe("automationEventSchema", () => {
       meta: {},
       repoOwner: "acme",
       repoName: "web-app",
+      repositoryId: 9001,
     };
 
     expect(
@@ -100,6 +104,58 @@ describe("automationEventSchema", () => {
     });
 
     expect(result.success).toBe(false);
+  });
+});
+
+describe("GitHub automation repository identity", () => {
+  it.each([1, 9001, Number.MAX_SAFE_INTEGER])(
+    "preserves a positive safe integer repositoryId=%s",
+    (repositoryId) => {
+      const event = { ...buildMockEvent("github"), repositoryId };
+      expect(githubAutomationEventSchema.parse(event)).toEqual(event);
+      expect(automationEventSchema.parse(event)).toEqual(event);
+    }
+  );
+
+  it.each([undefined, null, "9001", 0, -1, 1.5, Number.MAX_SAFE_INTEGER + 1, NaN, Infinity])(
+    "rejects repositoryId=%s even when owner/name and PR lifecycle identity are present",
+    (repositoryId) => {
+      const event = {
+        ...buildMockEvent("github"),
+        repositoryId,
+        pullRequest: { number: 42, repositoryExternalId: "9001" },
+      };
+      expect(githubAutomationEventSchema.safeParse(event).success).toBe(false);
+      expect(automationEventSchema.safeParse(event).success).toBe(false);
+    }
+  );
+
+  it("builds valid shared GitHub fixtures with a required repository id", () => {
+    expect(githubAutomationEventSchema.parse(buildMockEvent("github"))).toHaveProperty(
+      "repositoryId",
+      9001
+    );
+  });
+
+  it("keeps PR lifecycle repositoryExternalId string-compatible", () => {
+    const event = {
+      ...buildMockEvent("github"),
+      pullRequest: { number: 42, repositoryExternalId: "9001" },
+    };
+
+    expect(githubAutomationEventSchema.parse(event)).toEqual(event);
+    expect(
+      githubAutomationEventSchema.safeParse({
+        ...event,
+        pullRequest: { ...event.pullRequest, repositoryExternalId: 9001 },
+      }).success
+    ).toBe(false);
+  });
+
+  it("does not require a GitHub repository id on Linear events", () => {
+    const event = buildMockEvent("linear");
+    expect(automationEventSchema.parse(event)).toEqual(event);
+    expect(event).not.toHaveProperty("repositoryId");
   });
 });
 

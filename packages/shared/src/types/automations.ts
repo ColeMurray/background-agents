@@ -15,7 +15,14 @@ import { modelProviderSelectionsSchema } from "./provider-accounts";
 import { isEnvironmentId } from "./environments";
 import { isCanonicalUserId } from "../user-id";
 
-export type AutomationRunStatus = "starting" | "running" | "completed" | "failed" | "skipped";
+/** `unauthorized` is a terminal, sessionless GitHub repository grant denial. */
+export type AutomationRunStatus =
+  | "starting"
+  | "running"
+  | "completed"
+  | "failed"
+  | "skipped"
+  | "unauthorized";
 
 export type AutomationInvocationSource = "schedule" | "manual" | "event";
 
@@ -31,6 +38,7 @@ export const automationInvocationStatusSchema = z.enum([
   "failed",
   "partial_failed",
   "skipped",
+  "unauthorized",
 ]);
 
 export type AutomationInvocationStatus = z.infer<typeof automationInvocationStatusSchema>;

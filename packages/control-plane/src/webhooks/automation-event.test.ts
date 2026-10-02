@@ -73,6 +73,7 @@ describe("validateAutomationEventEnvelope", () => {
         concurrencyKey: "github:pr:1",
         contextBlock: "A pull request was opened.",
         meta: {},
+        repositoryId: 1,
         repoOwner: { login: "acme" },
         repoName: "api",
       },

@@ -226,6 +226,30 @@ describe("AutomationsList actions", () => {
 });
 
 describe("AutomationsList execution activity", () => {
+  it("renders an unauthorized execution as a terminal denial with an accessible label", () => {
+    render(
+      <AutomationsList
+        canCreate
+        automations={[
+          makeAutomation({
+            recentExecutions: [{ id: "inv-denied", status: "unauthorized", createdAt: 100 }],
+          }),
+        ]}
+        emptyState={{ kind: "no-automations" }}
+        onPause={noop}
+        onResume={noop}
+        onTrigger={noop}
+        onDelete={noop}
+      />
+    );
+
+    const execution = screen.getByRole("listitem", { name: /^Unauthorized,/ });
+    expect(execution).toHaveAttribute("title", expect.stringContaining("Unauthorized"));
+    expect(execution).toHaveAttribute("data-status-shape", "unauthorized");
+    expect(execution.firstElementChild).toHaveAttribute("class", "h-px w-2 bg-current");
+    expect(execution).toHaveAttribute("tabindex", "0");
+  });
+
   it("shows recent execution statuses from oldest to newest", () => {
     render(
       <AutomationsList

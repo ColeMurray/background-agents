@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import type {
   Env,
   PullRequestOpenedPayload,
@@ -8,8 +8,10 @@ import type {
 } from "../src/types";
 import type { Logger } from "../src/logger";
 import type { ResolvedGitHubConfig } from "../src/utils/integration-config";
+import type * as GitHubAuth from "../src/github-auth";
 
-vi.mock("../src/github-auth", () => ({
+vi.mock("../src/github-auth", async (importOriginal) => ({
+  ...(await importOriginal<typeof GitHubAuth>()),
   generateInstallationToken: vi.fn().mockResolvedValue("test-installation-token"),
   postReaction: vi.fn().mockResolvedValue(true),
   checkSenderPermission: vi.fn().mockResolvedValue({ hasPermission: true }),
@@ -58,6 +60,9 @@ function createMockLogger(): Logger {
 
 function createMockEnv(): Env {
   const controlPlaneFetch = vi.fn().mockImplementation((url: string) => {
+    if (url.startsWith("https://internal/github/route?")) {
+      return Promise.resolve(Response.json({ teamId: null, via: "workspace" }));
+    }
     if (/\/repos\/[^/]+\/[^/]+\/metadata$/.test(url)) {
       return Promise.resolve(
         new Response(JSON.stringify({ repo: "acme/widgets", metadata: null }), { status: 200 })
@@ -97,6 +102,18 @@ function getControlPlaneFetch(env: Env) {
   return (env.CONTROL_PLANE as unknown as { fetch: ReturnType<typeof vi.fn> }).fetch;
 }
 
+function mockControlPlaneResponse(
+  env: Env,
+  urlPattern: RegExp,
+  respond: () => Response | Promise<Response>
+) {
+  const cpFetch = getControlPlaneFetch(env);
+  const original = cpFetch.getMockImplementation()!;
+  cpFetch.mockImplementation((url: string, init: RequestInit) =>
+    urlPattern.test(url) ? respond() : original(url, init)
+  );
+}
+
 /**
  * Locate control-plane calls by URL rather than index — handlers make a
  * session-target metadata lookup before creating the session.
@@ -126,7 +143,7 @@ const pullRequestOpenedPayload: PullRequestOpenedPayload = {
     base: { ref: "main" },
     draft: false,
   },
-  repository: { owner: { login: "acme" }, name: "widgets", private: false },
+  repository: { id: 99, owner: { login: "acme" }, name: "widgets", private: false },
   sender: { login: "alice", id: 1001, avatar_url: "https://avatars.githubusercontent.com/u/1001" },
 };
 
@@ -141,7 +158,7 @@ const reviewRequestedPayload: ReviewRequestedPayload = {
     base: { ref: "main" },
   },
   requested_reviewer: { login: "test-bot[bot]" },
-  repository: { owner: { login: "acme" }, name: "widgets", private: false },
+  repository: { id: 99, owner: { login: "acme" }, name: "widgets", private: false },
   sender: { login: "alice", id: 1001, avatar_url: "https://avatars.githubusercontent.com/u/1001" },
 };
 
@@ -157,7 +174,7 @@ const issueCommentPayload: IssueCommentPayload = {
     body: "@test-bot[bot] please fix the error handling",
     user: { login: "bob" },
   },
-  repository: { owner: { login: "acme" }, name: "widgets", private: false },
+  repository: { id: 99, owner: { login: "acme" }, name: "widgets", private: false },
   sender: { login: "bob", id: 1002, avatar_url: "https://avatars.githubusercontent.com/u/1002" },
 };
 
@@ -177,7 +194,7 @@ const reviewCommentPayload: ReviewCommentPayload = {
     position: 5,
     user: { login: "carol" },
   },
-  repository: { owner: { login: "acme" }, name: "widgets", private: false },
+  repository: { id: 99, owner: { login: "acme" }, name: "widgets", private: false },
   sender: { login: "carol", id: 1003, avatar_url: "https://avatars.githubusercontent.com/u/1003" },
 };
 
@@ -187,6 +204,298 @@ beforeEach(() => {
   vi.mocked(postReaction).mockResolvedValue(true);
   vi.mocked(checkSenderPermission).mockResolvedValue({ hasPermission: true });
   vi.mocked(getGitHubConfig).mockResolvedValue({ ...defaultConfig });
+});
+
+afterEach(() => {
+  vi.unstubAllGlobals();
+});
+
+const routedHandlers = [
+  {
+    name: "review requested",
+    senderId: 1001,
+    run: (env: Env, log: Logger) =>
+      handleReviewRequested(env, log, reviewRequestedPayload, "trace-route"),
+  },
+  {
+    name: "issue comment mention",
+    senderId: 1002,
+    run: (env: Env, log: Logger) =>
+      handleIssueComment(env, log, issueCommentPayload, "trace-route"),
+  },
+  {
+    name: "review comment mention",
+    senderId: 1003,
+    run: (env: Env, log: Logger) =>
+      handleReviewComment(env, log, reviewCommentPayload, "trace-route"),
+  },
+];
+
+describe.each(routedHandlers)("GitHub routing: $name", ({ run, senderId }) => {
+  it.each([
+    { teamId: "team_pr", via: "pull_request_session" },
+    { teamId: null, via: "pull_request_session" },
+    { teamId: "team_sender", via: "sender_membership" },
+    { teamId: null, via: "workspace" },
+  ])("creates in the resolved scope $via", async (route) => {
+    const env = createMockEnv();
+    mockControlPlaneResponse(env, /\/github\/route\?/, () => Response.json(route));
+
+    expect(await run(env, createMockLogger())).toMatchObject({ outcome: "processed" });
+
+    const cpFetch = getControlPlaneFetch(env);
+    const [url, init] = cpFetch.mock.calls[0];
+    const routeUrl = new URL(url);
+    expect(routeUrl.origin + routeUrl.pathname).toBe("https://internal/github/route");
+    expect(Object.fromEntries(routeUrl.searchParams)).toEqual({
+      repositoryId: "99",
+      pullNumber: "42",
+      sender: `github:${senderId}`,
+    });
+    expect(init.method).toBe("GET");
+    expect(new Headers(init.headers).get("X-OpenInspect-Service")).toBe("github-bot");
+    expect(new Headers(init.headers).has("X-OpenInspect-Service-Signature")).toBe(true);
+    expect(new Headers(init.headers).has("X-OpenInspect-Actor")).toBe(false);
+    expect(sessionCreateBody(cpFetch).teamId).toBe(route.teamId);
+    const create = cpFetch.mock.calls.find(([url]) => url === "https://internal/sessions")!;
+    expect(new Headers(create[1].headers).get("X-OpenInspect-Actor")).toBe(`github:${senderId}`);
+  });
+
+  it.each([
+    { name: "network failure", respond: () => Promise.reject(new Error("unavailable")) },
+    { name: "HTTP failure", respond: () => new Response("unavailable", { status: 503 }) },
+    { name: "invalid JSON", respond: () => new Response("not JSON") },
+    { name: "missing team", respond: () => Response.json({ via: "workspace" }) },
+    {
+      name: "invalid team",
+      respond: () => Response.json({ teamId: 123, via: "sender_membership" }),
+    },
+    {
+      name: "empty team",
+      respond: () => Response.json({ teamId: "", via: "pull_request_session" }),
+    },
+    {
+      name: "null sender membership team",
+      respond: () => Response.json({ teamId: null, via: "sender_membership" }),
+    },
+    {
+      name: "empty sender membership team",
+      respond: () => Response.json({ teamId: "", via: "sender_membership" }),
+    },
+    {
+      name: "non-null workspace team",
+      respond: () => Response.json({ teamId: "team_pr", via: "workspace" }),
+    },
+    { name: "invalid via", respond: () => Response.json({ teamId: null, via: "unknown" }) },
+  ])("fails closed on $name before resolving a target", async ({ respond }) => {
+    const env = createMockEnv();
+    mockControlPlaneResponse(env, /\/github\/route\?/, respond);
+
+    expect(await run(env, createMockLogger())).toEqual({
+      outcome: "skipped",
+      skip_reason: "route_lookup_failed",
+    });
+    expect(getControlPlaneFetch(env)).toHaveBeenCalledTimes(1);
+  });
+
+  it("runs the allowlist before routing, target resolution, and reactions", async () => {
+    vi.mocked(getGitHubConfig).mockResolvedValue({ ...defaultConfig, allowedTriggerUsers: [] });
+    const env = createMockEnv();
+
+    expect(await run(env, createMockLogger())).toEqual({
+      outcome: "skipped",
+      skip_reason: "sender_not_allowed",
+    });
+    expect(getControlPlaneFetch(env)).not.toHaveBeenCalled();
+    expect(postReaction).not.toHaveBeenCalled();
+  });
+});
+
+describe("GitHub routing", () => {
+  it("routes a renamed repository by its stable numeric id", async () => {
+    const env = createMockEnv();
+    mockControlPlaneResponse(env, /\/github\/route\?/, () =>
+      Response.json({ teamId: "team_pr", via: "pull_request_session" })
+    );
+    const payload = {
+      ...reviewRequestedPayload,
+      repository: { ...reviewRequestedPayload.repository, name: "renamed-widgets" },
+    };
+
+    await handleReviewRequested(env, createMockLogger(), payload, "trace-renamed");
+
+    const cpFetch = getControlPlaneFetch(env);
+    expect(new URL(cpFetch.mock.calls[0][0]).searchParams.get("repositoryId")).toBe("99");
+    expect(sessionCreateBody(cpFetch)).toMatchObject({
+      repoName: "renamed-widgets",
+      teamId: "team_pr",
+    });
+    expect(getGitHubConfig).toHaveBeenCalledWith(env, "acme/renamed-widgets", expect.any(Object));
+  });
+
+  it("keeps auto-review workspace-level and omits sender and PR routing context", async () => {
+    const env = createMockEnv();
+    await handlePullRequestOpened(env, createMockLogger(), pullRequestOpenedPayload, "trace-auto");
+
+    const cpFetch = getControlPlaneFetch(env);
+    expect(Object.fromEntries(new URL(cpFetch.mock.calls[0][0]).searchParams)).toEqual({
+      repositoryId: "99",
+    });
+    expect(sessionCreateBody(cpFetch).teamId).toBeNull();
+  });
+
+  it("does not let a route response put auto-review in a team", async () => {
+    const env = createMockEnv();
+    mockControlPlaneResponse(env, /\/github\/route\?/, () =>
+      Response.json({ teamId: "team_sender", via: "sender_membership" })
+    );
+    await handlePullRequestOpened(env, createMockLogger(), pullRequestOpenedPayload, "trace-auto");
+    expect(sessionCreateBody(getControlPlaneFetch(env)).teamId).toBeNull();
+  });
+
+  it("fails closed when the auto-review route cannot be fetched", async () => {
+    const env = createMockEnv();
+    mockControlPlaneResponse(
+      env,
+      /\/github\/route\?/,
+      () => new Response("unavailable", { status: 503 })
+    );
+    expect(
+      await handlePullRequestOpened(env, createMockLogger(), pullRequestOpenedPayload, "trace-auto")
+    ).toEqual({ outcome: "skipped", skip_reason: "route_lookup_failed" });
+    expect(getControlPlaneFetch(env)).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe.each([
+  ...routedHandlers,
+  {
+    name: "auto-review",
+    run: (env: Env, log: Logger) =>
+      handlePullRequestOpened(env, log, pullRequestOpenedPayload, "trace-denial"),
+  },
+])("session creation refusals: $name", ({ run }) => {
+  it.each([
+    { status: 403, code: "not_member", message: /not a member/i },
+    { status: 409, code: "target_team_missing_grant", message: /acme\/widgets/ },
+  ])(
+    "comments on the PR and skips $code without delivering a prompt",
+    async ({ status, code, message }) => {
+      const env = createMockEnv();
+      mockControlPlaneResponse(env, /^https:\/\/internal\/sessions$/, () =>
+        Response.json({ code }, { status })
+      );
+      const githubFetch = vi.fn().mockResolvedValue(new Response("", { status: 201 }));
+      vi.stubGlobal("fetch", githubFetch);
+
+      expect(await run(env, createMockLogger())).toEqual({ outcome: "skipped", skip_reason: code });
+
+      const cpFetch = getControlPlaneFetch(env);
+      expect(
+        cpFetch.mock.calls.filter(([url]) => url === "https://internal/sessions")
+      ).toHaveLength(1);
+      expect(cpFetch.mock.calls.some(([url]) => String(url).endsWith("/prompt"))).toBe(false);
+      expect(postReaction).toHaveBeenCalledTimes(1);
+      expect(githubFetch).toHaveBeenCalledWith(
+        "https://api.github.com/repos/acme/widgets/issues/42/comments",
+        expect.objectContaining({
+          method: "POST",
+          headers: expect.objectContaining({ Authorization: "Bearer test-installation-token" }),
+          signal: expect.any(AbortSignal),
+        })
+      );
+      expect(JSON.parse(githubFetch.mock.calls[0][1].body).body).toMatch(message);
+    }
+  );
+
+  it.each([
+    { status: 403, code: "missing_permission" },
+    { status: 403, code: "target_team_missing_grant" },
+    { status: 409, code: "not_member" },
+    { status: 500, code: "internal_error" },
+  ])("still throws for unhandled create errors $status $code", async ({ status, code }) => {
+    const env = createMockEnv();
+    mockControlPlaneResponse(env, /^https:\/\/internal\/sessions$/, () =>
+      Response.json({ code }, { status })
+    );
+    const githubFetch = vi.fn();
+    vi.stubGlobal("fetch", githubFetch);
+    await expect(run(env, createMockLogger())).rejects.toThrow(
+      `Session creation failed: ${status}`
+    );
+    expect(githubFetch).not.toHaveBeenCalled();
+    expect(
+      getControlPlaneFetch(env).mock.calls.some(([url]) => String(url).endsWith("/prompt"))
+    ).toBe(false);
+  });
+});
+
+describe.each([
+  { status: 403, code: "not_member" },
+  { status: 409, code: "target_team_missing_grant" },
+])("refusal notifications: $code", ({ status, code }) => {
+  it.each([
+    {
+      name: "GitHub denial",
+      respond: () => Promise.resolve(new Response("Forbidden", { status: 403 })),
+    },
+    { name: "network error", respond: () => Promise.reject(new Error("unavailable")) },
+  ])("throws without another create or prompt after a comment $name", async ({ respond }) => {
+    const env = createMockEnv();
+    mockControlPlaneResponse(env, /^https:\/\/internal\/sessions$/, () =>
+      Response.json({ code }, { status })
+    );
+    const githubFetch = vi.fn().mockImplementation(respond);
+    vi.stubGlobal("fetch", githubFetch);
+    const log = createMockLogger();
+
+    await expect(
+      handleReviewRequested(env, log, reviewRequestedPayload, "trace-comment-failure")
+    ).rejects.toThrow(`Session refusal comment failed: ${code}`);
+
+    expect(log.warn).toHaveBeenCalledWith(
+      "session.refusal_comment_failed",
+      expect.objectContaining({ code })
+    );
+    expect(
+      getControlPlaneFetch(env).mock.calls.filter(([url]) => url === "https://internal/sessions")
+    ).toHaveLength(1);
+    expect(
+      getControlPlaneFetch(env).mock.calls.some(([url]) => String(url).endsWith("/prompt"))
+    ).toBe(false);
+    expect(githubFetch).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("grant refusal repository validation", () => {
+  it.each([null, 123, ""])(
+    "rejects a malformed repository %s without posting a fallback comment",
+    async (repository) => {
+      const env = createMockEnv();
+      mockControlPlaneResponse(env, /^https:\/\/internal\/sessions$/, () =>
+        Response.json({ code: "target_team_missing_grant", repository }, { status: 409 })
+      );
+      const githubFetch = vi.fn();
+      vi.stubGlobal("fetch", githubFetch);
+
+      await expect(
+        handleReviewRequested(
+          env,
+          createMockLogger(),
+          reviewRequestedPayload,
+          "trace-invalid-repository"
+        )
+      ).rejects.toThrow("Session creation failed: 409");
+
+      expect(githubFetch).not.toHaveBeenCalled();
+      expect(
+        getControlPlaneFetch(env).mock.calls.filter(([url]) => url === "https://internal/sessions")
+      ).toHaveLength(1);
+      expect(
+        getControlPlaneFetch(env).mock.calls.some(([url]) => String(url).endsWith("/prompt"))
+      ).toBe(false);
+    }
+  );
 });
 
 describe("handlePullRequestOpened", () => {
@@ -211,7 +520,7 @@ describe("handlePullRequestOpened", () => {
     );
 
     const cpFetch = getControlPlaneFetch(env);
-    expect(cpFetch).toHaveBeenCalledTimes(3);
+    expect(cpFetch).toHaveBeenCalledTimes(4);
 
     const sessionBody = sessionCreateBody(cpFetch);
     expect(sessionBody.repoOwner).toBe("acme");
@@ -238,6 +547,9 @@ describe("handlePullRequestOpened", () => {
     const env = createMockEnv();
     const cpFetch = getControlPlaneFetch(env);
     cpFetch.mockImplementation((url: string) => {
+      if (url.startsWith("https://internal/github/route?")) {
+        return Promise.resolve(Response.json({ teamId: null, via: "workspace" }));
+      }
       if (url === "https://internal/sessions") {
         return Promise.resolve(new Response(JSON.stringify({}), { status: 200 }));
       }
@@ -254,7 +566,7 @@ describe("handlePullRequestOpened", () => {
       handlePullRequestOpened(env, log, pullRequestOpenedPayload, "trace-0")
     ).rejects.toThrow("Session creation failed: invalid response");
 
-    expect(cpFetch).toHaveBeenCalledTimes(2);
+    expect(cpFetch).toHaveBeenCalledTimes(3);
   });
 
   it("returns early for draft PRs", async () => {
@@ -445,7 +757,7 @@ describe("handleReviewRequested", () => {
     );
 
     const cpFetch = getControlPlaneFetch(env);
-    expect(cpFetch).toHaveBeenCalledTimes(3);
+    expect(cpFetch).toHaveBeenCalledTimes(4);
 
     // Verify session creation
     const sessionBody = sessionCreateBody(cpFetch);
@@ -566,7 +878,7 @@ describe("handleIssueComment", () => {
     );
 
     const cpFetch = getControlPlaneFetch(env);
-    expect(cpFetch).toHaveBeenCalledTimes(3);
+    expect(cpFetch).toHaveBeenCalledTimes(4);
 
     const sessionBody = sessionCreateBody(cpFetch);
     expect(sessionBody.scmLogin).toBe("bob");
@@ -756,8 +1068,10 @@ describe("error handling", () => {
         finishReaction = resolve;
       })
     );
-    getControlPlaneFetch(env).mockResolvedValue(
-      new Response("Internal Server Error", { status: 500 })
+    mockControlPlaneResponse(
+      env,
+      /^https:\/\/internal\/sessions$/,
+      () => new Response("Internal Server Error", { status: 500 })
     );
 
     const handlerPromise = handleReviewRequested(env, log, reviewRequestedPayload, "trace-err");
@@ -782,7 +1096,7 @@ describe("error handling", () => {
     await handleReviewRequested(env, log, reviewRequestedPayload, "trace-reaction");
 
     // Session should still be created despite reaction failure
-    expect(getControlPlaneFetch(env)).toHaveBeenCalledTimes(3);
+    expect(getControlPlaneFetch(env)).toHaveBeenCalledTimes(4);
     expect(log.warn).toHaveBeenCalledWith("acknowledgment.failed", expect.any(Object));
   });
 });
@@ -855,7 +1169,7 @@ describe("integration config", () => {
 
     // Should proceed normally — null means all repos allowed
     const cpFetch = getControlPlaneFetch(env);
-    expect(cpFetch).toHaveBeenCalledTimes(3);
+    expect(cpFetch).toHaveBeenCalledTimes(4);
   });
 
   it("rejects sender not in allowedTriggerUsers (handleIssueComment)", async () => {
@@ -889,7 +1203,7 @@ describe("integration config", () => {
     await handleIssueComment(env, log, issueCommentPayload, "trace-allowed");
 
     // bob matches → proceeds to session creation
-    expect(getControlPlaneFetch(env)).toHaveBeenCalledTimes(3);
+    expect(getControlPlaneFetch(env)).toHaveBeenCalledTimes(4);
   });
 
   it("empty allowedTriggerUsers rejects all senders (handleReviewRequested)", async () => {
@@ -1068,6 +1382,7 @@ describe("default environment targets", () => {
   const fullstackEnvironment = {
     id: "env_abc",
     name: "Fullstack",
+    ownerTeamId: null,
     repositories: [
       { repoOwner: "acme", repoName: "widgets" },
       { repoOwner: "acme", repoName: "gadgets" },
@@ -1083,10 +1398,21 @@ describe("default environment targets", () => {
     opts: {
       metadata?: { defaultEnvironmentId?: string } | null;
       metadataStatus?: number;
-      environment?: typeof fullstackEnvironment | null;
+      environment?:
+        | (Omit<typeof fullstackEnvironment, "ownerTeamId"> & { ownerTeamId?: string | null })
+        | null;
+      teamId?: string | null;
     }
   ) {
     getControlPlaneFetch(env).mockImplementation((url: string) => {
+      if (url.startsWith("https://internal/github/route?")) {
+        return Promise.resolve(
+          Response.json({
+            teamId: opts.teamId ?? null,
+            via: opts.teamId ? "pull_request_session" : "workspace",
+          })
+        );
+      }
       if (/\/repos\/[^/]+\/[^/]+\/metadata$/.test(url)) {
         if (opts.metadataStatus) {
           return Promise.resolve(new Response("Error", { status: opts.metadataStatus }));
@@ -1119,6 +1445,163 @@ describe("default environment targets", () => {
       return Promise.resolve(new Response("Not found", { status: 404 }));
     });
   }
+
+  it.each([
+    { repository: "acme/gadgets", expectedRepository: "acme/gadgets" },
+    { repository: undefined, expectedRepository: "acme/widgets" },
+  ])(
+    "names the denied repository $expectedRepository for an environment grant refusal",
+    async ({ repository, expectedRepository }) => {
+      const env = createMockEnv();
+      mockSessionTarget(env, {
+        metadata: { defaultEnvironmentId: "env_abc" },
+        environment: fullstackEnvironment,
+        teamId: "team_pr",
+      });
+      mockControlPlaneResponse(env, /^https:\/\/internal\/sessions$/, () =>
+        Response.json({ code: "target_team_missing_grant", repository }, { status: 409 })
+      );
+      const githubFetch = vi.fn().mockResolvedValue(new Response("", { status: 201 }));
+      vi.stubGlobal("fetch", githubFetch);
+
+      expect(
+        await handleReviewRequested(
+          env,
+          createMockLogger(),
+          reviewRequestedPayload,
+          "trace-secondary-grant"
+        )
+      ).toEqual({ outcome: "skipped", skip_reason: "target_team_missing_grant" });
+
+      const cpFetch = getControlPlaneFetch(env);
+      expect(sessionCreateBody(cpFetch)).toMatchObject({
+        environmentId: "env_abc",
+        teamId: "team_pr",
+      });
+      expect(
+        cpFetch.mock.calls.filter(([url]) => url === "https://internal/sessions")
+      ).toHaveLength(1);
+      expect(cpFetch.mock.calls.some(([url]) => String(url).endsWith("/prompt"))).toBe(false);
+      expect(githubFetch).toHaveBeenCalledTimes(1);
+      expect(githubFetch.mock.calls[0][0]).toBe(
+        "https://api.github.com/repos/acme/widgets/issues/42/comments"
+      );
+      expect(JSON.parse(githubFetch.mock.calls[0][1].body).body).toContain(
+        `\`${expectedRepository}\``
+      );
+      if (repository) {
+        expect(JSON.parse(githubFetch.mock.calls[0][1].body).body).not.toContain("`acme/widgets`");
+      }
+    }
+  );
+
+  it.each(["team_pr", null])(
+    "uses actor-signed environment reads for routed teams with environment owner %s",
+    async (ownerTeamId) => {
+      const env = createMockEnv();
+      mockSessionTarget(env, {
+        metadata: { defaultEnvironmentId: "env_abc" },
+        environment: { ...fullstackEnvironment, ownerTeamId },
+        teamId: "team_pr",
+      });
+
+      await handleReviewRequested(
+        env,
+        createMockLogger(),
+        reviewRequestedPayload,
+        "trace-team-env"
+      );
+
+      const cpFetch = getControlPlaneFetch(env);
+      const environmentCall = cpFetch.mock.calls.find(
+        ([url]) => url === "https://internal/environments/env_abc"
+      )!;
+      expect(new Headers(environmentCall[1].headers).get("X-OpenInspect-Actor")).toBe(
+        "github:1001"
+      );
+      expect(sessionCreateBody(cpFetch)).toMatchObject({
+        teamId: "team_pr",
+        environmentId: "env_abc",
+      });
+    }
+  );
+
+  it.each(["team_pr", null])(
+    "rejects another team's environment even for an allowlisted sender in scope %s",
+    async (teamId) => {
+      vi.mocked(getGitHubConfig).mockResolvedValue({
+        ...defaultConfig,
+        allowedTriggerUsers: ["alice"],
+      });
+      const env = createMockEnv();
+      mockSessionTarget(env, {
+        metadata: { defaultEnvironmentId: "env_abc" },
+        environment: { ...fullstackEnvironment, ownerTeamId: "team_other" },
+        teamId,
+      });
+
+      await handleReviewRequested(
+        env,
+        createMockLogger(),
+        reviewRequestedPayload,
+        "trace-mismatch"
+      );
+
+      const body = sessionCreateBody(getControlPlaneFetch(env));
+      expect(body).toMatchObject({ repoOwner: "acme", repoName: "widgets", teamId });
+      expect(body).not.toHaveProperty("environmentId");
+      expect(checkSenderPermission).not.toHaveBeenCalled();
+    }
+  );
+
+  it("falls back to the scalar repo when environment ownership is missing", async () => {
+    const env = createMockEnv();
+    const { ownerTeamId: _ownerTeamId, ...environment } = fullstackEnvironment;
+    mockSessionTarget(env, {
+      metadata: { defaultEnvironmentId: "env_abc" },
+      environment,
+      teamId: "team_pr",
+    });
+
+    await handleReviewRequested(
+      env,
+      createMockLogger(),
+      reviewRequestedPayload,
+      "trace-missing-owner"
+    );
+
+    const body = sessionCreateBody(getControlPlaneFetch(env));
+    expect(body).toMatchObject({ repoOwner: "acme", repoName: "widgets", teamId: "team_pr" });
+    expect(body).not.toHaveProperty("environmentId");
+  });
+
+  it.each([403, 404, 500])(
+    "falls back to the routed scalar repo on environment HTTP %s",
+    async (status) => {
+      const env = createMockEnv();
+      mockSessionTarget(env, {
+        metadata: { defaultEnvironmentId: "env_abc" },
+        environment: fullstackEnvironment,
+        teamId: "team_pr",
+      });
+      mockControlPlaneResponse(
+        env,
+        /\/environments\//,
+        () => new Response("unavailable", { status })
+      );
+
+      await handleReviewRequested(
+        env,
+        createMockLogger(),
+        reviewRequestedPayload,
+        "trace-denied-env"
+      );
+
+      const body = sessionCreateBody(getControlPlaneFetch(env));
+      expect(body).toMatchObject({ repoOwner: "acme", repoName: "widgets", teamId: "team_pr" });
+      expect(body).not.toHaveProperty("environmentId");
+    }
+  );
 
   it("launches the default environment when it contains the trigger repo", async () => {
     const env = createMockEnv();

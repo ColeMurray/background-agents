@@ -5,11 +5,12 @@ import type { Env } from "../src/types";
 vi.mock("../src/github-auth", () => ({
   generateInstallationToken: vi.fn().mockResolvedValue("installation-token"),
   postReaction: vi.fn().mockResolvedValue(true),
+  postIssueComment: vi.fn().mockResolvedValue(true),
   checkSenderPermission: vi.fn().mockResolvedValue({ hasPermission: true }),
 }));
 
 import app from "../src/index";
-import { postReaction } from "../src/github-auth";
+import { postReaction, postIssueComment } from "../src/github-auth";
 
 /** Generate a valid GitHub webhook signature for a given secret and body. */
 async function sign(secret: string, body: string): Promise<string> {
@@ -379,7 +380,7 @@ describe("POST /webhooks/github", () => {
   it("returns 200 and calls waitUntil for valid webhook", async () => {
     const body = JSON.stringify({
       action: "review_requested",
-      repository: { owner: { login: "test" }, name: "repo" },
+      repository: { id: 99, owner: { login: "test" }, name: "repo" },
     });
     const signature = await sign(SECRET, body);
     const ctx = makeCtx();
@@ -422,7 +423,7 @@ describe("POST /webhooks/github", () => {
         base: { ref: "main" },
       },
       requested_reviewer: { login: "test-bot[bot]" },
-      repository: { owner: { login: "test" }, name: "repo", private: false },
+      repository: { id: 99, owner: { login: "test" }, name: "repo", private: false },
       sender: {
         login: "alice",
         id: 1001,
@@ -437,6 +438,9 @@ describe("POST /webhooks/github", () => {
       const requestUrl = String(url);
       if (requestUrl.includes("/integration-settings/github/resolved/")) {
         return new Response(JSON.stringify({ config: null }));
+      }
+      if (requestUrl.startsWith("https://internal/github/route?")) {
+        return Response.json({ teamId: null, via: "workspace" });
       }
       if (requestUrl.endsWith("/metadata")) {
         return new Response(JSON.stringify({ repo: "test/repo", metadata: null }));
@@ -487,7 +491,7 @@ describe("POST /webhooks/github", () => {
   it("deduplicates repeated deliveries by X-GitHub-Delivery", async () => {
     const body = JSON.stringify({
       action: "review_requested",
-      repository: { owner: { login: "test" }, name: "repo" },
+      repository: { id: 99, owner: { login: "test" }, name: "repo" },
     });
     const signature = await sign(SECRET, body);
     const ctx = makeCtx();
@@ -522,6 +526,86 @@ describe("POST /webhooks/github", () => {
     expect(githubKv.put).toHaveBeenCalledTimes(2);
   });
 
+  it.each([
+    { status: 403, code: "not_member" },
+    { status: 409, code: "target_team_missing_grant" },
+  ])(
+    "allows redelivery after a failed $code refusal comment clears the marker",
+    async ({ status, code }) => {
+      vi.mocked(postIssueComment).mockResolvedValueOnce(false);
+      const body = JSON.stringify({
+        action: "review_requested",
+        pull_request: {
+          number: 42,
+          title: "Refused session",
+          body: null,
+          user: { login: "alice" },
+          head: { ref: "feature/test", sha: "abc123" },
+          base: { ref: "main" },
+        },
+        requested_reviewer: { login: "test-bot[bot]" },
+        repository: { id: 99, owner: { login: "test" }, name: "repo", private: false },
+        sender: { login: "alice", id: 1001, avatar_url: "https://example.com/alice.png" },
+      });
+      const signature = await sign(SECRET, body);
+      const ctx = makeCtx();
+      const env = makeEnv();
+      const cpFetch = vi.mocked(env.CONTROL_PLANE.fetch);
+      cpFetch.mockImplementation(async (url) => {
+        const requestUrl = String(url);
+        if (requestUrl.includes("/integration-settings/github/resolved/")) {
+          return Response.json({ config: null });
+        }
+        if (requestUrl.startsWith("https://internal/github/route?")) {
+          return Response.json({ teamId: "team_pr", via: "pull_request_session" });
+        }
+        if (requestUrl.endsWith("/metadata")) {
+          return Response.json({ repo: "test/repo", metadata: null });
+        }
+        if (requestUrl === "https://internal/sessions") {
+          return Response.json({ code, repository: "test/secondary" }, { status });
+        }
+        return new Response(null, { status: 204 });
+      });
+      const request = () =>
+        new Request("http://localhost/webhooks/github", {
+          method: "POST",
+          body,
+          headers: {
+            "X-Hub-Signature-256": signature,
+            "X-GitHub-Event": "pull_request",
+            "X-GitHub-Delivery": "delivery-refusal-comment",
+          },
+        });
+
+      const firstRes = await app.fetch(request(), env, ctx);
+      expect(await firstRes.json()).toEqual({ ok: true });
+      await flushWaitUntil(ctx, 0);
+
+      expect(await env.GITHUB_KV.get("delivery:delivery-refusal-comment")).toBeNull();
+      expect(env.GITHUB_KV.delete).toHaveBeenCalledTimes(1);
+      expect(
+        cpFetch.mock.calls.filter(([url]) => String(url) === "https://internal/sessions")
+      ).toHaveLength(1);
+      expect(cpFetch.mock.calls.some(([url]) => String(url).endsWith("/prompt"))).toBe(false);
+
+      const secondRes = await app.fetch(request(), env, ctx);
+      expect(await secondRes.json()).toEqual({ ok: true });
+      await flushWaitUntil(ctx, 1);
+
+      expect(ctx.waitUntil).toHaveBeenCalledTimes(2);
+      expect(
+        cpFetch.mock.calls.filter(([url]) => String(url) === "https://internal/sessions")
+      ).toHaveLength(2);
+      expect(cpFetch.mock.calls.some(([url]) => String(url).endsWith("/prompt"))).toBe(false);
+      expect(await env.GITHUB_KV.get("delivery:delivery-refusal-comment")).toBe("processed");
+
+      const duplicateRes = await app.fetch(request(), env, ctx);
+      expect(await duplicateRes.json()).toEqual({ ok: true, duplicate: true });
+      expect(ctx.waitUntil).toHaveBeenCalledTimes(2);
+    }
+  );
+
   it("allows redelivery after async processing failure clears the marker", async () => {
     const body = JSON.stringify({
       action: "opened",
@@ -534,7 +618,7 @@ describe("POST /webhooks/github", () => {
         base: { ref: "main" },
         draft: false,
       },
-      repository: { owner: { login: "test" }, name: "repo" },
+      repository: { id: 99, owner: { login: "test" }, name: "repo" },
       sender: { login: "alice" },
     });
     const signature = await sign(SECRET, body);
@@ -609,7 +693,7 @@ describe("POST /webhooks/github", () => {
   it("forwards closed pull request lifecycle fields to the control plane", async () => {
     const body = JSON.stringify({
       action: "closed",
-      repository: { owner: { login: "test" }, name: "repo" },
+      repository: { id: 99, owner: { login: "test" }, name: "repo" },
       sender: { login: "alice" },
       pull_request: {
         number: 42,
@@ -683,7 +767,7 @@ describe("POST /webhooks/github", () => {
   it("forwards a completed workflow run", async () => {
     const body = JSON.stringify({
       action: "completed",
-      repository: { owner: { login: "acme-org" }, name: "my-app" },
+      repository: { id: 99, owner: { login: "acme-org" }, name: "my-app" },
       sender: { login: "github-actions[bot]" },
       workflow_run: {
         id: 123456789,

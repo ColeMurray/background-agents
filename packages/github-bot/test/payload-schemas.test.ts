@@ -11,7 +11,12 @@ import {
 } from "../src/payload-schemas";
 
 const sender = { login: "octocat", id: 123, avatar_url: "https://example.com/avatar.png" };
-const repository = { owner: { login: "open-inspect" }, name: "background-agents", private: false };
+const repository = {
+  id: 99,
+  owner: { login: "open-inspect" },
+  name: "background-agents",
+  private: false,
+};
 const pullRequest = {
   number: 42,
   title: "Add validation",
@@ -22,6 +27,56 @@ const pullRequest = {
 };
 
 describe("GitHub bot payload schemas", () => {
+  const routedPayloads = [
+    {
+      schema: pullRequestOpenedPayloadSchema,
+      payload: { action: "opened", pull_request: { ...pullRequest, draft: false } },
+    },
+    {
+      schema: reviewRequestedPayloadSchema,
+      payload: { action: "review_requested", pull_request: pullRequest },
+    },
+    {
+      schema: issueCommentPayloadSchema,
+      payload: {
+        action: "created",
+        issue: { number: 42, title: "Mention" },
+        comment: { id: 1, body: "@bot help", user: { login: "octocat" } },
+      },
+    },
+    {
+      schema: reviewCommentPayloadSchema,
+      payload: {
+        action: "created",
+        pull_request: pullRequest,
+        comment: {
+          id: 1,
+          body: "@bot help",
+          path: "src/index.ts",
+          diff_hunk: "@@ -1 +1 @@",
+          user: { login: "octocat" },
+        },
+      },
+    },
+  ];
+
+  it.each([undefined, "99", 0, -1, 1.5, Number.MAX_SAFE_INTEGER + 1, NaN, Infinity])(
+    "rejects repository id %s in session-triggering payloads",
+    (id) => {
+      for (const { schema, payload } of routedPayloads) {
+        expect(
+          schema.safeParse({ ...payload, repository: { ...repository, id }, sender }).success
+        ).toBe(false);
+      }
+    }
+  );
+
+  it("preserves numeric repository ids in every session-triggering payload", () => {
+    for (const { schema, payload } of routedPayloads) {
+      expect(schema.parse({ ...payload, repository, sender }).repository.id).toBe(99);
+    }
+  });
+
   it("parses a valid pull request opened payload", () => {
     const result = pullRequestOpenedPayloadSchema.safeParse({
       action: "opened",

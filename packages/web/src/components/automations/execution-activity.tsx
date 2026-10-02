@@ -21,6 +21,7 @@ const SHAPE_CLASSES: Record<Exclude<AutomationInvocationStatus, "failed">, strin
   completed: "h-3 w-1 rounded-[1px] bg-current",
   partial_failed: "h-3 w-1 border border-dashed border-current",
   skipped: "h-px w-2 bg-current",
+  unauthorized: "h-px w-2 bg-current",
 };
 
 function StatusShape({ status }: { status: AutomationInvocationStatus }) {

@@ -29,6 +29,7 @@ exports[`route admission matrix > admits only the named bot on every exact-servi
 [
   "POST /internal/github-event github-bot=400 slack-bot=403 web=403",
   "POST /internal/slack-event slack-bot=400 github-bot=403 web=403",
+  "GET /github/route github-bot=400 slack-bot=403 web=403",
 ]
 `;
 
@@ -436,6 +437,7 @@ exports[`route admission matrix > rejects every credentialed route anonymously b
   "POST /webhooks/automation/:id anonymous=415",
   "POST /internal/github-event anonymous=401",
   "POST /internal/slack-event anonymous=401",
+  "GET /github/route anonymous=401",
 ]
 `;
 

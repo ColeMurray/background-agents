@@ -230,6 +230,7 @@ describe("automation invocations (D1 integration)", () => {
           expected: "partial_failed",
         },
         // Legacy backfill shapes: skipped children exist only in old data.
+        { children: [{ status: "unauthorized", completed_at: 8 }], expected: "unauthorized" },
         { children: [{ status: "skipped" }], expected: "skipped" },
         {
           children: [{ status: "failed", completed_at: 3 }, { status: "skipped" }],
@@ -257,6 +258,8 @@ describe("automation invocations (D1 integration)", () => {
             failed: aggregate.failed,
             completed: aggregate.completed,
             skipped: aggregate.skipped,
+            unauthorized: testCase.children.filter((child) => child.status === "unauthorized")
+              .length,
             starting,
           })
         ).toBe(testCase.expected);

@@ -6,6 +6,27 @@ New features, integrations, and notable improvements to Open-Inspect — newest 
 
 ### Changed
 
+**Team-aware GitHub routing.** GitHub routing uses numeric repository IDs so renames do not change
+the team destination. Each matching event automation fires once for its owning team when that team
+has a repository or installation grant, using its own executor and creating a team-owned session. An
+automation whose team has lost the repository grant records an `unauthorized` run with reason
+`repo_not_granted`, without creating a sandbox or session. Mentions use the pull request's existing
+session team first, then the sender's granted team; when several teams qualify, the sender's most
+recent session in that repository breaks the tie. Otherwise routing falls back to workspace
+ownership. Trigger-user allowlists, membership checks, and creation-time repository grant checks
+still apply. Autofix continues in the pull request's existing session. `requireTeamOnCreate` remains
+enforced: workspace fallback does not bypass the require-team creation policy.
+
+GitHub automation selections with unresolved repository IDs no longer match events by name. Reselect
+and save their repositories to resolve IDs. Upgrade the GitHub bot and control plane together: event
+envelopes without a numeric repository ID are rejected rather than routed by display names.
+
+**GitHub auto-review is deprecated.** Global and repository-override **Auto-review new PRs**
+settings now point to the existing **Review new PRs** automation template. Create a team-owned
+automation from that template to replace the setting. During the deprecation window, legacy
+auto-review remains workspace-owned and subject to `requireTeamOnCreate`; it does not select a team
+automatically.
+
 Team-owned session actions now require current owning-team membership in every `TEAMS_ENFORCEMENT`
 mode, including for Owners and Administrators. Visibility still determines read access; collaborator
 self-removal requires only read access. Sessions, automations, and environments cannot move between
