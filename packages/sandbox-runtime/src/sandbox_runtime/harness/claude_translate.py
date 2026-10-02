@@ -185,13 +185,20 @@ class ClaudeTranslator:
                 self._observed_native_id = native_id
             translation.agent_session_id = native_id
 
+        if isinstance(message, ConversationResetMessage):
+            # Resets affect the conversation even inside a filtered injected turn.
+            # The next human result supplies the new resumable session id.
+            self.cost_baseline = 0.0
+            state.cost_baseline = 0.0
+            self._session_rotated = True
+            self.reset_tracking()
+            self._observed_native_id = message.session_id
+            return translation
+
         if self._belongs_to_injected_turn(state, message, translation.records):
             if isinstance(message, (TaskNotificationMessage, TaskUpdatedMessage)):
                 if message.status in TERMINAL_TASK_STATUSES:
                     self._task_parents.pop(message.task_id, None)
-            elif isinstance(message, ConversationResetMessage):
-                self.reset_tracking()
-                self._observed_native_id = message.session_id
             return translation
 
         events = translation.events
@@ -385,15 +392,6 @@ class ClaudeTranslator:
                         records, {"type": "warning", "scope": "provider", "message": detail}
                     )
                 )
-            return translation
-
-        if isinstance(message, ConversationResetMessage):
-            # The running total restarts; the next result supplies the resumable id.
-            self.cost_baseline = 0.0
-            state.cost_baseline = 0.0
-            self._session_rotated = True
-            self.reset_tracking()
-            self._observed_native_id = message.session_id
             return translation
 
         if isinstance(message, ResultMessage):

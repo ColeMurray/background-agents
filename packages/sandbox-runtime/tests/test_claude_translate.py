@@ -26,6 +26,7 @@ from sandbox_runtime.harness.claude_translate import (
     SdkTurnResult,
     TrajectoryRecord,
 )
+from tests.claude_fakes import _result
 
 
 def _task_started(task_id="task", parent_id="parent"):
@@ -139,6 +140,60 @@ def test_session_resets_clear_stale_parent_mappings(reset):
     assert state.cost_baseline == (0.0 if reset == "conversation" else 0.5)
     late = translator.translate(state, _task_terminal("updated"), interrupted=False)
     assert late.records[0].fields["parent_tool_use_id"] is None
+
+
+@pytest.mark.parametrize("baseline", [0.5, None], ids=["known-cost", "unknown-cost"])
+def test_conversation_reset_during_injected_turn_updates_cost_and_resumable_session(baseline):
+    translator = ClaudeTranslator()
+    translator.session_id = "native"
+    translator.cost_baseline = baseline
+    state = ClaudeTurnState(message_id="prompt", cost_baseline=baseline)
+    translator.translate(state, _task_started(), interrupted=False)
+    translator.translate(
+        state,
+        UserMessage(content="injected content", origin={"kind": "task-notification"}),
+        interrupted=False,
+    )
+    assert state.injected and translator._task_parents
+
+    reset = translator.translate(
+        state,
+        ConversationResetMessage(
+            new_conversation_id="new-conversation", uuid="r", session_id="native"
+        ),
+        interrupted=False,
+    )
+    assert reset.events == [] and reset.outcome is None
+    assert state.injected and not translator._task_parents
+    assert translator.cost_baseline == state.cost_baseline == 0.0
+    assert translator._session_rotated and translator._observed_native_id == "native"
+
+    injected = translator.translate(
+        state,
+        _result(0.05, session_id="new-native", origin={"kind": "task-notification"}),
+        interrupted=False,
+    )
+    assert injected.events == [] and injected.outcome is None and injected.result is None
+    assert not state.injected and translator.session_id == "native"
+    assert translator.cost_baseline == state.cost_baseline == 0.0
+
+    human = translator.translate(
+        state,
+        _result(0.2, session_id="new-native", origin={"kind": "human"}),
+        interrupted=False,
+    )
+    assert human.outcome is not None and human.outcome.success
+    assert human.outcome.message_cost_usd == pytest.approx(0.2)
+    assert human.events[0]["messageCostUsd"] == pytest.approx(0.2)
+    assert len(human.events) == 1
+    assert translator.session_id == human.agent_session_id == "new-native"
+    assert not translator._session_rotated and translator.cost_baseline == pytest.approx(0.2)
+    assert next(
+        record for record in human.records if record.event == "claude.session.rotated"
+    ).fields == {
+        "agent_session_id": "new-native",
+        "previous_session_id": "native",
+    }
 
 
 def test_task_parent_survives_a_new_turn_state_until_terminal_update():
