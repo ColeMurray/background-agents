@@ -394,6 +394,7 @@ class ClaudeHarness:
             self._trajectory.diagnostic("claude.session.invalid", agent_session_id=persisted_id)
             return False
         self.session_id = persisted_id
+        self._trajectory.reset_session(persisted_id)
         self._resume_on_connect = True
         self._trajectory.diagnostic(
             "claude.session.ensure", agent_session_id=persisted_id, action="loaded"
@@ -402,6 +403,7 @@ class ClaudeHarness:
 
     async def create_session(self) -> None:
         self.session_id = str(uuid.uuid4())
+        self._trajectory.reset_session(self.session_id)
         self._resume_on_connect = False
         self._trajectory.diagnostic(
             "claude.session.ensure", agent_session_id=self.session_id, action="created"
@@ -511,12 +513,13 @@ class ClaudeHarness:
             return False
         if self._client is client:
             self._client = None
+        self._trajectory.reset_session(self.session_id)
         return True
 
     # --- prompt ------------------------------------------------------------
 
     async def run_prompt(self, prompt: HarnessPrompt, emit: EventSink) -> TurnOutcome:
-        self._trajectory.begin(prompt.message_id, self.session_id)
+        log_token = self._trajectory.begin(prompt.message_id, self.session_id)
         outcome = None
         try:
             outcome = await self._run_prompt(prompt, emit)
@@ -528,7 +531,7 @@ class ClaudeHarness:
             outcome = TurnOutcome.failed(str(error) or type(error).__name__)
             raise
         finally:
-            self._trajectory.finish(outcome)
+            self._trajectory.finish(outcome, log_token)
 
     async def _run_prompt(self, prompt: HarnessPrompt, emit: EventSink) -> TurnOutcome:
         try:
@@ -577,6 +580,7 @@ class ClaudeHarness:
                     except TimeoutError as error:
                         raise _InactivityTimeout from error
                     if self._belongs_to_injected_turn(state, message):
+                        self._trajectory.discard_injected(message)
                         continue
                     events, outcome = self._translate(state, message)
                     self._trajectory.message(message, events)
@@ -717,6 +721,7 @@ class ClaudeHarness:
                 await client.disconnect()
                 if self._client is client:
                     self._client = None
+                self._trajectory.reset_session(self.session_id)
                 return True
         except TimeoutError:
             self._trajectory.diagnostic(

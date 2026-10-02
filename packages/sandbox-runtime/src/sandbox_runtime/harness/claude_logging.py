@@ -7,10 +7,14 @@ import json
 import re
 import time
 from collections.abc import Iterable, Mapping
+from contextvars import ContextVar
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Final
 
 from claude_agent_sdk import (
+    TERMINAL_TASK_STATUSES,
     AssistantMessage,
+    ConversationResetMessage,
     ResultMessage,
     SystemMessage,
     TaskNotificationMessage,
@@ -21,6 +25,8 @@ from claude_agent_sdk import (
 )
 
 if TYPE_CHECKING:
+    from contextvars import Token
+
     from ..log_config import StructuredLogger
     from .base import BridgeEvent, TurnOutcome
 
@@ -36,6 +42,11 @@ _SENSITIVE_KEY: Final = re.compile(
     re.IGNORECASE,
 )
 _ASSIGNMENT: Final = re.compile(r"(?<![\w-])([\"']?[\w-]+[\"']?)\s*[:=]\s*")
+_CLI_FLAG: Final = re.compile(r"(?<![\w-])[\"']?--?([\w-]+)[\"']?(?:\s*=\s*|(?:\s|\\\r?\n)+)")
+_CLI_VALUE: Final = re.compile(
+    r"(?:\"(?:\\[\s\S]|[^\"\\])*(?:\"|$)|'(?:\\[\s\S]|[^'\\])*(?:'|$)|"
+    r"\\[\s\S]|[^\s;&|\"'\\])+"
+)
 _ASSIGNED_VALUE: Final = re.compile(
     r"\"(?:\\.|[^\"\\])*(?:\"|$)|'(?:\\.|[^'\\])*(?:'|$)|"
     r"[\[{][\s\S]*|(?:(?:Bearer|Basic)\s+)?[^\s,;]+",
@@ -53,6 +64,15 @@ def _bounded_text(text: str) -> str:
             + TRUNCATED
         )
     return encoded.decode("utf-8")
+
+
+@dataclass(eq=False)
+class _LogTurn:
+    message_id: str
+    agent_session_id: str | None
+    started_at: float = field(default_factory=time.monotonic)
+    assistant_messages: set[tuple[str | None, int]] = field(default_factory=set)
+    result_fields: dict[str, Any] = field(default_factory=dict)
 
 
 class ClaudeTrajectoryLogger:
@@ -81,13 +101,11 @@ class ClaudeTrajectoryLogger:
                     if isinstance(value, str)
                     and (len(value) >= MIN_MCP_SECRET_LENGTH or _SENSITIVE_KEY.search(name))
                 )
-        self.message_id: str | None = None
-        self.agent_session_id: str | None = None
-        self._started_at = 0.0
-        self._assistant_messages: set[tuple[str | None, int]] = set()
+        self._turn: ContextVar[_LogTurn | None] = ContextVar("claude_log_turn", default=None)
+        self._active_turns: set[_LogTurn] = set()
+        self._agent_session_id: str | None = None
         # A reused client can deliver a task's terminal update on a later prompt.
         self._task_parents: dict[str, str] = {}
-        self._result_fields: dict[str, Any] = {}
 
     def add_credentials(self, values: Iterable[str]) -> None:
         for value in values:
@@ -100,12 +118,24 @@ class ClaudeTrajectoryLogger:
                         (part, json.dumps(part)[1:-1], json.dumps(part, ensure_ascii=False)[1:-1])
                     )
 
-    def begin(self, message_id: str, agent_session_id: str | None) -> None:
-        self.message_id = message_id
-        self.agent_session_id = agent_session_id
-        self._started_at = time.monotonic()
-        self._assistant_messages.clear()
-        self._result_fields.clear()
+    def begin(self, message_id: str, agent_session_id: str | None) -> Token[_LogTurn | None]:
+        turn = _LogTurn(message_id, agent_session_id)
+        self._active_turns.add(turn)
+        if self._agent_session_id is None:
+            self._agent_session_id = agent_session_id
+        return self._turn.set(turn)
+
+    def reset_session(self, agent_session_id: str | None) -> None:
+        self._agent_session_id = agent_session_id
+        self._task_parents.clear()
+
+    def discard_injected(self, message: Any) -> None:
+        """Keep lifecycle cleanup even when injected content remains unlogged."""
+        if isinstance(message, (TaskNotificationMessage, TaskUpdatedMessage)):
+            if message.status in TERMINAL_TASK_STATUSES:
+                self._task_parents.pop(message.task_id, None)
+        elif isinstance(message, ConversationResetMessage):
+            self.reset_session(message.session_id)
 
     def _redact_text(self, text: str) -> str:
         # Look ahead beyond the retained prefix so credentials crossing its edge
@@ -122,6 +152,11 @@ class ClaudeTrajectoryLogger:
         for assignment in _ASSIGNMENT.finditer(window[:PREVIEW_MAX_BYTES]):
             if _SENSITIVE_KEY.search(assignment[1].strip("\"'")):
                 value = _ASSIGNED_VALUE.match(window, assignment.end())
+                if value:
+                    spans.append((value.start(), min(value.end(), PREVIEW_MAX_BYTES)))
+        for flag in _CLI_FLAG.finditer(window[:PREVIEW_MAX_BYTES]):
+            if _SENSITIVE_KEY.search(flag[1]):
+                value = _CLI_VALUE.match(window, flag.end())
                 if value:
                     spans.append((value.start(), min(value.end(), PREVIEW_MAX_BYTES)))
         for auth in _AUTH_VALUE.finditer(window):
@@ -188,9 +223,12 @@ class ClaudeTrajectoryLogger:
         return _bounded_text(text)
 
     def _write(self, event: str, *, level: str = "info", **fields: Any) -> None:
+        turn = self._turn.get()
+        if turn not in self._active_turns:
+            turn = None
         fields = {
-            "message_id": self.message_id,
-            "agent_session_id": self.agent_session_id,
+            "message_id": turn.message_id if turn else None,
+            "agent_session_id": turn.agent_session_id if turn else self._agent_session_id,
             **fields,
         }
         safe: dict[str, Any] = {}
@@ -226,15 +264,30 @@ class ClaudeTrajectoryLogger:
             pass
 
     def stderr(self, line: str) -> None:
-        self.diagnostic("claude.sdk.stderr", diagnostic_preview=line)
+        # The connection-lived SDK reader inherits its first prompt's context.
+        # It supplies no turn ID, so never guess an attribution during overlap.
+        turn = next(iter(self._active_turns)) if len(self._active_turns) == 1 else None
+        self.diagnostic(
+            "claude.sdk.stderr",
+            message_id=turn.message_id if turn else None,
+            agent_session_id=turn.agent_session_id if turn else self._agent_session_id,
+            active_prompt_count=len(self._active_turns),
+            diagnostic_preview=line,
+        )
 
     def message(self, message: Any, events: list[BridgeEvent]) -> None:
         try:
+            turn = self._turn.get()
             native_id = getattr(message, "session_id", None)
             if isinstance(message, SystemMessage):
                 native_id = native_id or message.data.get("session_id")
             if native_id:
-                self.agent_session_id = native_id
+                if native_id != self._agent_session_id:
+                    self.reset_session(native_id)
+                if turn:
+                    turn.agent_session_id = native_id
+            if isinstance(message, ConversationResetMessage):
+                self.reset_session(native_id)
             # Log every translated event before the first await of the event sink.
             for event in events:
                 match event["type"]:
@@ -270,7 +323,7 @@ class ClaudeTrajectoryLogger:
                             trigger=metadata.get("trigger"),
                             pre_tokens=metadata.get("pre_tokens"),
                         )
-            if isinstance(message, AssistantMessage) and not message.parent_tool_use_id:
+            if isinstance(message, AssistantMessage) and not message.parent_tool_use_id and turn:
                 parts: list[str] = []
                 remaining = PREVIEW_MAX_BYTES * 2 + 1
                 for block in message.content:
@@ -281,8 +334,8 @@ class ClaudeTrajectoryLogger:
                             break
                 text = "".join(parts)
                 key = (message.message_id, hash(text))
-                if text and key not in self._assistant_messages:
-                    self._assistant_messages.add(key)
+                if text and key not in turn.assistant_messages:
+                    turn.assistant_messages.add(key)
                     self._write(
                         "claude.assistant.message",
                         assistant_message_id=message.message_id,
@@ -297,6 +350,8 @@ class ClaudeTrajectoryLogger:
                     "task_id": message.task_id,
                     "parent_tool_use_id": self._task_parents.get(message.task_id),
                 }
+                if isinstance(message, TaskNotificationMessage):
+                    fields["parent_tool_use_id"] = self._task_parents.pop(message.task_id, None)
                 if isinstance(message, TaskStartedMessage):
                     fields.update(
                         description_preview=message.description, task_type=message.task_type
@@ -317,18 +372,23 @@ class ClaudeTrajectoryLogger:
                 # Deliberately omit task summaries, result text and raw lifecycle data.
                 self._write("claude." + message.subtype.replace("_", "."), **fields)
             elif isinstance(message, TaskUpdatedMessage):
+                parent_id = (
+                    self._task_parents.pop(message.task_id, None)
+                    if message.status in TERMINAL_TASK_STATUSES
+                    else self._task_parents.get(message.task_id)
+                )
                 if message.status or message.patch.get("error"):
                     self._write(
                         "claude.task.updated",
                         task_id=message.task_id,
-                        parent_tool_use_id=self._task_parents.get(message.task_id),
+                        parent_tool_use_id=parent_id,
                         status=message.status,
                         error_preview=message.patch.get("error"),
                     )
-            elif isinstance(message, ResultMessage):
+            elif isinstance(message, ResultMessage) and turn:
                 finish = next(event for event in events if event["type"] == "step_finish")
                 tokens = finish.get("tokens") or {}
-                self._result_fields = {
+                turn.result_fields = {
                     "sdk_status": message.subtype,
                     "sdk_is_error": message.is_error,
                     "sdk_duration_ms": message.duration_ms,
@@ -343,29 +403,34 @@ class ClaudeTrajectoryLogger:
                 }
                 cache = tokens.get("cache") or {}
                 if cache:
-                    self._result_fields["tokens"]["cache"] = {
+                    turn.result_fields["tokens"]["cache"] = {
                         key: value for key, value in cache.items() if isinstance(value, int)
                     }
-                if not self._result_fields["tokens"]:
-                    self._result_fields["tokens"] = None
+                if not turn.result_fields["tokens"]:
+                    turn.result_fields["tokens"] = None
         except Exception:
             # Redaction, serialization or a logging handler failure is never a turn failure.
             pass
 
-    def finish(self, outcome: TurnOutcome | None) -> None:
+    def finish(self, outcome: TurnOutcome | None, token: Token[_LogTurn | None]) -> None:
+        turn = self._turn.get()
         try:
+            if turn is None:
+                return
             status = "completed" if outcome and outcome.success else "failed"
             if outcome and outcome.cancelled:
                 status = "cancelled"
             self._write(
                 f"claude.turn.{status}",
                 status=status,
-                duration_s=round(time.monotonic() - self._started_at, 3),
+                duration_s=round(time.monotonic() - turn.started_at, 3),
                 message_cost_usd=outcome.message_cost_usd if outcome else None,
                 error_preview=outcome.error if outcome else None,
-                **self._result_fields,
+                **turn.result_fields,
             )
         except Exception:
             pass
         finally:
-            self.message_id = None
+            if turn:
+                self._active_turns.discard(turn)
+            self._turn.reset(token)

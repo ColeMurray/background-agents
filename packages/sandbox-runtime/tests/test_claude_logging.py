@@ -2,11 +2,23 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 from unittest.mock import MagicMock
 
 import pytest
+from claude_agent_sdk import (
+    AssistantMessage,
+    ConversationResetMessage,
+    ResultMessage,
+    SystemMessage,
+    TaskNotificationMessage,
+    TaskStartedMessage,
+    TaskUpdatedMessage,
+    TextBlock,
+)
 
+from sandbox_runtime.harness.base import TurnOutcome
 from sandbox_runtime.harness.claude_logging import (
     PREVIEW_MAX_BYTES,
     PREVIEW_MAX_DEPTH,
@@ -36,6 +48,46 @@ def test_sensitive_keys_and_free_text_assignments_are_redacted(value):
     preview = log.info.call_args.kwargs["payload_preview"]
     assert "sensitive" not in preview
     assert REDACTED in preview
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "cli --password sample-sensitive --api-key sample-api-value --verbose",
+        "cli --password=sample-sensitive --api-key=sample-api-value --verbose",
+        "cli --password \"sample-sensitive with spaces\" --api-key='sample-api-value' --verbose",
+        "cli --password sample-sensitive\\ with\\ spaces --api-key sample-api-value,extra --verbose",
+        'cli --password "prefix"sample-sensitive --api-key sample-api-value --verbose',
+        "cli --password\nsample-sensitive --api-key\tsample-api-value --verbose",
+        "cli \"--password\" sample-sensitive '--api-key' sample-api-value --verbose",
+        "cli --password \\\n  sample-sensitive --api-key \\\n  sample-api-value --verbose",
+        'cli --password "sample-\\\nsensitive" --api-key sample-api-value --verbose',
+    ],
+)
+def test_sensitive_cli_flags_are_redacted_without_changing_arguments(command):
+    log = MagicMock()
+    trajectory = ClaudeTrajectoryLogger(log, {}, (), None)
+    args = {"command": command}
+    trajectory.diagnostic("test", args_preview=args)
+    preview = log.info.call_args.kwargs["args_preview"]
+    assert "sample-sensitive" not in preview and "sample-api-value" not in preview
+    assert "with" not in preview and "extra" not in preview
+    assert "sensitive" not in preview
+    assert "--verbose" in preview and REDACTED in preview
+    assert args == {"command": command}
+
+
+def test_cli_credential_crossing_the_retained_prefix_is_redacted():
+    log = MagicMock()
+    trajectory = ClaudeTrajectoryLogger(log, {}, (), None)
+    trajectory.stderr(
+        "a" * (PREVIEW_MAX_BYTES - 100)
+        + ' --password "sample-sensitive '
+        + "value " * PREVIEW_MAX_BYTES
+    )
+    preview = log.info.call_args.kwargs["diagnostic_preview"]
+    assert "sample-sensitive" not in preview and "value" not in preview
+    assert REDACTED in preview and preview.endswith(TRUNCATED)
 
 
 def test_known_credential_crossing_the_retained_prefix_is_redacted():
@@ -135,3 +187,209 @@ def test_width_at_the_depth_boundary_still_spends_the_node_budget():
     for _ in range(PREVIEW_MAX_DEPTH):
         safe = safe[0]
     assert len(safe) <= PREVIEW_MAX_NODES and TRUNCATED in safe
+
+
+async def test_interleaved_turns_keep_identity_deduplication_and_result_fields_isolated():
+    log = MagicMock()
+    trajectory = ClaudeTrajectoryLogger(log, {}, (), None)
+    a_started = asyncio.Event()
+    b_ready = asyncio.Event()
+    a_finished = asyncio.Event()
+
+    def log_messages(name, cost, duration_ms):
+        trajectory.message(
+            AssistantMessage(
+                content=[TextBlock("same assistant text")],
+                model="m",
+                message_id="same-id",
+                session_id="native",
+            ),
+            [
+                {
+                    "type": "tool_call",
+                    "tool": "Read",
+                    "callId": name,
+                    "status": "running",
+                    "args": {"file_path": name},
+                }
+            ],
+        )
+        trajectory.message(
+            ResultMessage(
+                subtype="success",
+                duration_ms=duration_ms,
+                duration_api_ms=duration_ms,
+                is_error=False,
+                num_turns=1,
+                session_id="native",
+                total_cost_usd=cost,
+            ),
+            [{"type": "step_finish", "tokens": {"input": duration_ms}}],
+        )
+
+    async def first():
+        token = trajectory.begin("A", "native")
+        a_started.set()
+        await b_ready.wait()
+        log_messages("A", 0.1, 100)
+        trajectory.finish(TurnOutcome.ok(message_cost_usd=0.1), token)
+        assert trajectory._turn.get() is None
+        a_finished.set()
+
+    async def second():
+        await a_started.wait()
+        token = trajectory.begin("B", "native")
+        log_messages("B", 0.2, 200)
+        trajectory.stderr("overlapping prompts")
+        b_ready.set()
+        await a_finished.wait()
+        trajectory.diagnostic("test.after_other_turn_finished")
+        trajectory.finish(TurnOutcome.ok(message_cost_usd=0.2), token)
+        assert trajectory._turn.get() is None
+
+    await asyncio.gather(first(), second())
+    tool_logs = [
+        call.kwargs for call in log.info.call_args_list if call.args[0] == "claude.tool.started"
+    ]
+    assert [(record["call_id"], record["message_id"]) for record in tool_logs] == [
+        ("B", "B"),
+        ("A", "A"),
+    ]
+    assistant_logs = [
+        call.kwargs
+        for call in log.info.call_args_list
+        if call.args[0] == "claude.assistant.message"
+    ]
+    assert [record["message_id"] for record in assistant_logs] == ["B", "A"]
+    turns = [
+        call.kwargs for call in log.info.call_args_list if call.args[0] == "claude.turn.completed"
+    ]
+    assert [
+        (
+            record["message_id"],
+            record["total_cost_usd"],
+            record["sdk_duration_ms"],
+            record["tokens"],
+        )
+        for record in turns
+    ] == [("A", 0.1, 100, {"input": 100}), ("B", 0.2, 200, {"input": 200})]
+    (after,) = [
+        call.kwargs
+        for call in log.info.call_args_list
+        if call.args[0] == "test.after_other_turn_finished"
+    ]
+    assert after["message_id"] == "B"
+    (stderr,) = [
+        call.kwargs for call in log.info.call_args_list if call.args[0] == "claude.sdk.stderr"
+    ]
+    assert "message_id" not in stderr and stderr["active_prompt_count"] == 2
+    assert not trajectory._active_turns and trajectory._turn.get() is None
+
+
+async def test_connection_lived_stderr_reader_does_not_reuse_its_first_turn_context():
+    log = MagicMock()
+    trajectory = ClaudeTrajectoryLogger(log, {}, (), None)
+    lines = asyncio.Queue()
+    acknowledged = asyncio.Queue()
+
+    async def reader():
+        while (line := await lines.get()) is not None:
+            trajectory.stderr(line)
+            await acknowledged.put(None)
+
+    async def send(line):
+        await lines.put(line)
+        await acknowledged.get()
+
+    first_token = trajectory.begin("A", "native")
+    task = asyncio.create_task(reader())
+    await send("first prompt")
+    trajectory.finish(TurnOutcome.ok(), first_token)
+    second_token = trajectory.begin("B", "native")
+    await send("second prompt")
+    trajectory.finish(TurnOutcome.ok(), second_token)
+    await send("idle connection")
+    await lines.put(None)
+    await task
+    stderr = [
+        call.kwargs for call in log.info.call_args_list if call.args[0] == "claude.sdk.stderr"
+    ]
+    assert [record.get("message_id") for record in stderr] == ["A", "B", None]
+    assert [record["active_prompt_count"] for record in stderr] == [1, 1, 0]
+
+
+@pytest.mark.parametrize(
+    "kind,status",
+    [
+        ("notification", "completed"),
+        ("notification", "failed"),
+        ("notification", "stopped"),
+        ("updated", "completed"),
+        ("updated", "failed"),
+        ("updated", "killed"),
+    ],
+)
+def test_terminal_tasks_are_logged_with_the_parent_then_evicted(kind, status):
+    log = MagicMock()
+    trajectory = ClaudeTrajectoryLogger(log, {}, (), None)
+    trajectory.begin("prompt", "native")
+    trajectory.message(
+        TaskStartedMessage(
+            subtype="task_started",
+            data={},
+            task_id="task",
+            description="inspect",
+            uuid="u",
+            session_id="native",
+            tool_use_id="parent",
+        ),
+        [],
+    )
+    if kind == "notification":
+        terminal = TaskNotificationMessage(
+            subtype="task_notification",
+            data={},
+            task_id="task",
+            status=status,
+            output_file="file",
+            summary="summary",
+            uuid="n",
+            session_id="native",
+        )
+    else:
+        terminal = TaskUpdatedMessage(
+            subtype="task_updated", data={}, task_id="task", patch={"status": status}, status=status
+        )
+    trajectory.message(terminal, [])
+    assert log.info.call_args.kwargs["parent_tool_use_id"] == "parent"
+    assert not trajectory._task_parents
+
+
+@pytest.mark.parametrize("reset", ["explicit", "conversation", "native_change"])
+def test_session_resets_clear_stale_parent_mappings(reset):
+    trajectory = ClaudeTrajectoryLogger(MagicMock(), {}, (), None)
+    trajectory.begin("prompt", "native")
+    trajectory.message(
+        TaskStartedMessage(
+            subtype="task_started",
+            data={},
+            task_id="task",
+            description="inspect",
+            uuid="u",
+            session_id="native",
+            tool_use_id="parent",
+        ),
+        [],
+    )
+    if reset == "explicit":
+        trajectory.reset_session("new-native")
+    elif reset == "conversation":
+        trajectory.message(
+            ConversationResetMessage(
+                new_conversation_id="new-conversation", uuid="r", session_id="native"
+            ),
+            [],
+        )
+    else:
+        trajectory.message(SystemMessage(subtype="init", data={"session_id": "new-native"}), [])
+    assert not trajectory._task_parents

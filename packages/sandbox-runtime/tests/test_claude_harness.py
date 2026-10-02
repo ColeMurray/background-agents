@@ -1101,6 +1101,7 @@ class TestTrajectoryLogging:
                 summary="uncollected-summary",
                 uuid="n",
                 session_id="native",
+                tool_use_id="parent",
                 usage=usage,
             ),
             _result(0.1, session_id="native"),
@@ -1397,6 +1398,63 @@ class TestTrajectoryLogging:
         await _run(h.harness, HarnessPrompt(message_id="m2", text="next"))
         (record,) = _trajectory_records(caplog, "claude.task.updated")
         assert record["parent_tool_use_id"] == "parent-late" and record["message_id"] == "m2"
+
+    @pytest.mark.parametrize("kind", ["notification", "updated"])
+    async def test_injected_terminal_task_messages_still_evict_parent_mappings(
+        self, tmp_path: Path, trajectory_log, caplog, kind
+    ) -> None:
+        if kind == "notification":
+            terminal = TaskNotificationMessage(
+                subtype="task_notification",
+                data={},
+                task_id="task",
+                status="completed",
+                output_file="file",
+                summary="injected-summary",
+                uuid="n",
+                session_id="sess",
+            )
+        else:
+            terminal = TaskUpdatedMessage(
+                subtype="task_updated",
+                data={},
+                task_id="task",
+                patch={"status": "completed"},
+                status="completed",
+            )
+        h = Harness(
+            tmp_path,
+            log=trajectory_log,
+            turns=[
+                [
+                    TaskStartedMessage(
+                        subtype="task_started",
+                        data={},
+                        task_id="task",
+                        description="inspect",
+                        uuid="u",
+                        session_id="sess",
+                        tool_use_id="parent",
+                    ),
+                    _result(0.1),
+                ],
+                [
+                    UserMessage(content="injected content", origin={"kind": "task-notification"}),
+                    terminal,
+                    _result(0.15, origin={"kind": "task-notification"}),
+                    _result(0.2),
+                ],
+            ],
+        )
+        await h.harness.open()
+        await h.harness.create_session()
+        await _run(h.harness)
+        assert h.harness._trajectory._task_parents == {"task": "parent"}
+        events, outcome = await _run(h.harness, HarnessPrompt(message_id="m2", text="next"))
+        assert outcome.success and not h.harness._trajectory._task_parents
+        assert [event["type"] for event in events] == ["step_finish"]
+        assert not _trajectory_records(caplog, "claude.task." + kind)
+        assert "injected-summary" not in json.dumps(_trajectory_records(caplog))
 
     @pytest.mark.parametrize("failure", ["logger", "serialization"])
     async def test_logging_failures_do_not_fail_the_turn(
