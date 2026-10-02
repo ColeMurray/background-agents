@@ -24,32 +24,22 @@ Open-Inspect provides a hosted background coding agent that can:
 ## Security Model (Single-Tenant Only)
 
 > **Important**: This system is designed for **single-tenant deployment only**, where all users are
-> trusted members of the same organization with access to the same repositories.
+> trusted members of the same organization. Teams add internal access controls, not tenant
+> isolation.
 
 ### How It Works
 
-The system uses a shared GitHub App installation for git operations (clone, fetch, push). The
-control plane mints short-lived installation tokens server-side and brokers them to sandboxes
-through the git credential helper on demand. This means:
+The shared GitHub App installation bounds workspace repository reach. Sandbox git credentials are
+limited to the session's persisted repositories and, for team-owned sessions, current owning-team
+grants. Workspace permissions and resource access still apply; Open-Inspect does not compare a
+user's personal GitHub repository permissions before creating a session. GitLab credentials remain a
+deployment-wide PAT rather than a per-session token.
 
-- **Authorized users share the same GitHub App credentials** - The GitHub App must be installed on
-  your organization's repositories, and active users whose role permits repository use can access
-  any repo the App has access to
-- **No per-user repository access validation** - The system does not verify that a user has
-  permission to access a specific repository before creating a session
-- **GitHub users' OAuth tokens are used for PR creation** - For GitHub logins, PRs are created using
-  the user's GitHub OAuth token, ensuring proper attribution and that they can only create PRs on
-  repos they have write access to. Users who sign in another way (e.g. Google) carry no SCM token,
-  so their PRs fall back to the shared GitHub App bot
-
-### Token Architecture
-
-| Token Type         | Purpose                                | Scope                            |
-| ------------------ | -------------------------------------- | -------------------------------- |
-| GitHub App Token   | Brokered git clone/fetch/push auth     | All repos where App is installed |
-| User OAuth Token   | Create PRs, user info                  | Repos user has access to         |
-| Sandbox Auth Token | Sandbox-to-control-plane session calls | Single session                   |
-| WebSocket Token    | Real-time session auth                 | Single session                   |
+Credentials are brokered on demand but cached on disk, so snapshots can retain them. Grant removal
+does not immediately revoke issued tokens. See the canonical
+[Authentication and Authorization guide](docs/AUTH.md) for access rules and
+[credential boundaries](docs/AUTH.md#repository-and-credential-boundaries), including user versus
+App identity and snapshot limitations.
 
 ### Why Single-Tenant Only
 

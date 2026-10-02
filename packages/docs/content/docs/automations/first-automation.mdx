@@ -21,6 +21,7 @@ relatedCode:
   - packages/control-plane/src/routes/automation-runs.ts
   - packages/control-plane/src/automation/authorization-guard.ts
   - packages/control-plane/src/scheduler/scheduler.ts
+  - packages/control-plane/src/db/automation-store.ts
 ---
 
 This tutorial walks you through a scheduled automation that opens a dependency-update pull request every Monday morning, then shows you how to test it and read the results.
@@ -153,14 +154,14 @@ Executor reassignment is currently **API-only**, not a control in the automation
 
 ## Troubleshooting
 
-| Symptom                                                        | Cause                                                                                                                                    | Fix                                                                                                                                 |
-| -------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------- |
-| The **Create Automation** button stays disabled                | A required field is empty, the schedule is invalid, or no enabled model is compatible with the selected harness                          | Fill in the name and instructions, check the cron picker's validation message, or enable a compatible model under Settings › Models |
-| The repository you want is not in the picker                   | The GitHub App cannot access it, or the selected team lacks a grant                                                                      | Check installation access and the team's Repositories tab; see [Teams](/administration/teams)                                       |
-| A scheduled run never starts                                   | The executor was suspended, lost permissions or team membership, the team was archived, or repository grants no longer cover the targets | Restore the required access or ask an authorized lead/admin to [reassign the executor](#change-the-executor) through the API        |
-| **Trigger Now** is denied although you can edit the automation | Management access does not guarantee execution access                                                                                    | Check your current team membership, session/target permissions, and the team's grants                                               |
-| A run has no session title or **View session** link            | No session was created, or you cannot read the linked session                                                                            | Check the failure reason and session access; automation read access does not bypass session visibility                              |
-| The badge says Degraded or the automation paused itself        | Three consecutive failures                                                                                                               | Open a failed run's **View session**, fix the cause, use **Trigger Now** to verify, then **Resume**                                 |
+| Symptom                                                             | Cause                                                                                                                                | Fix                                                                                                                                                 |
+| ------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------- |
+| The **Create Automation** button stays disabled                     | A required field is empty, the schedule is invalid, or no enabled model is compatible with the selected harness                      | Fill in the name and instructions, check the cron picker's validation message, or enable a compatible model under Settings › Models                 |
+| The repository you want is not in the picker                        | The GitHub App cannot access it, or the selected team lacks a grant                                                                  | Check installation access and the team's Repositories tab; see [Teams](/administration/teams)                                                       |
+| A scheduled firing is Skipped and the automation pauses immediately | Execution authorization was denied: the executor lost access or team membership, the team was archived, or target grants are missing | Restore the required access or ask an authorized lead/admin to [reassign the executor](#change-the-executor) through the API, then click **Resume** |
+| **Trigger Now** is denied although you can edit the automation      | Management access does not guarantee execution access                                                                                | Check your current team membership, session/target permissions, and the team's grants                                                               |
+| A run has no session title or **View session** link                 | No session was created, or you cannot read the linked session                                                                        | Check the failure reason and session access; automation read access does not bypass session visibility                                              |
+| The badge says Degraded or the automation paused after failed runs  | Recent consecutive failures; three failures pause it                                                                                 | Open a failed run's **View session**, fix the cause, use **Trigger Now** to verify, then **Resume**                                                 |
 
 ## Next steps
 

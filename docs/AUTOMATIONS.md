@@ -210,8 +210,10 @@ Successful requests return JSON in this shape:
 
 `triggered` is the number of automation runs started.
 
-`skipped` is the number of matching runs that were ignored because of duplicate delivery or
-concurrency protection.
+`skipped` includes runs not started because of duplicate delivery, concurrency protection, or
+runtime authorization denial. Authorization denial does not pause an event-driven automation or
+record a run-history invocation; restore the required executor/team/target access before sending
+another delivery.
 
 ### Error Responses
 
@@ -384,6 +386,12 @@ remain workspace-owned and workspace-visible. Environment targets must have the 
 the automation; unlike the team session picker, a team automation cannot select a workspace-owned
 environment.
 
+If a scheduled run is denied execution authorization, it is recorded as **Skipped** and the
+automation is paused immediately, clearing its next run time without adding a failure strike.
+Restore the required access or reassign the executor, then click **Resume**. Restoring access or
+reassigning alone does not resume the schedule. Event-driven authorization denials skip the event
+without pausing the automation.
+
 ### Executor Reassignment
 
 A team lead or workspace Owner/Administrator with automation management access can use
@@ -445,14 +453,14 @@ reason, and session link.
 
 ### Run Statuses
 
-| Status              | Meaning                                                                                                |
-| ------------------- | ------------------------------------------------------------------------------------------------------ |
-| **Starting**        | A session is being created for this run.                                                               |
-| **Running**         | At least one session is actively executing.                                                            |
-| **Completed**       | Every session finished successfully.                                                                   |
-| **Failed**          | Every session encountered an error. The failure reason is shown on the run.                            |
-| **Partial failure** | A multi-repository run where some repositories completed and some failed.                              |
-| **Skipped**         | The run was skipped because a previous run was still active (see [Concurrent Runs](#concurrent-runs)). |
+| Status              | Meaning                                                                                    |
+| ------------------- | ------------------------------------------------------------------------------------------ |
+| **Starting**        | A session is being created for this run.                                                   |
+| **Running**         | At least one session is actively executing.                                                |
+| **Completed**       | Every session finished successfully.                                                       |
+| **Failed**          | Every session encountered an error. The failure reason is shown on the run.                |
+| **Partial failure** | A multi-repository run where some repositories completed and some failed.                  |
+| **Skipped**         | A previous run was still active, or a scheduled firing was denied execution authorization. |
 
 When authorized, click **View session** to open the session with its output and artifacts.
 Automation read access is not session read access: history redacts session IDs, titles, and artifact
@@ -465,11 +473,11 @@ an Owner's break-glass privilege; a qualifying single-run read audits that acces
 
 Automations display one of three statuses:
 
-| Status       | Meaning                                                                               |
-| ------------ | ------------------------------------------------------------------------------------- |
-| **Enabled**  | Running normally and ready to respond to its trigger.                                 |
-| **Degraded** | Enabled but has recent consecutive failures. The failure count is shown on the badge. |
-| **Paused**   | Not firing. Either manually paused or auto-paused after repeated failures.            |
+| Status       | Meaning                                                                                                                                 |
+| ------------ | --------------------------------------------------------------------------------------------------------------------------------------- |
+| **Enabled**  | Running normally and ready to respond to its trigger.                                                                                   |
+| **Degraded** | Enabled but has recent consecutive failures. The failure count is shown on the badge.                                                   |
+| **Paused**   | Not firing. Manually paused, auto-paused after repeated failures, or immediately paused after scheduled execution authorization denial. |
 
 ---
 

@@ -142,11 +142,11 @@ Build-time secrets differ: shared repository images get global + repository secr
 
 ### Git credentials for other repositories
 
-Git operations inside a script authenticate through an on-demand credential helper for the configured SCM host. For GitHub, the token is limited to the session's **persisted repository set**, intersected with current repository grants for its owning team. Installing the App on another repository, or giving the team an installation-wide grant, does not add that repository to the session's token.
+Git operations inside a script authenticate through an on-demand credential helper for the configured SCM host. For GitHub, the token is limited to the session's **persisted repository set**. Team-owned sessions additionally intersect that set with current owning-team grants; workspace-owned sessions have no team-grant intersection. Installing the App on another repository, or giving the team an installation-wide grant, does not add that repository to the session's token.
 
-Private submodules, Git-backed package dependencies, and sibling-clone scripts therefore need their repositories included in the session target, such as an environment or ad-hoc multi-repository set, and covered by the team's grants. Editing the environment later does not expand an existing session; create a new session with the updated set. Grant removal affects subsequent credential resolution, not immediate revocation of already-issued tokens.
+Private submodules, Git-backed package dependencies, and sibling-clone scripts therefore need their repositories included in the session target, such as an environment or ad-hoc multi-repository set. For team-owned sessions, those repositories also need the owning team's grants. Editing the environment later does not expand an existing session; create a new session with the updated set. Grant removal affects subsequent credential resolution, not immediate revocation of already-issued tokens.
 
-GitLab is an exception: its deployment-wide personal access token (PAT) is not narrowed per session. Do not interpret GitHub's token scoping as an equivalent GitLab credential boundary. See [Git credentials](/reference/sandbox-environment#git-credentials) and [Teams](/administration/teams).
+GitLab is an exception: its deployment-wide personal access token (PAT) is not narrowed per session. Do not interpret GitHub's token scoping as an equivalent GitLab credential boundary. See the canonical [credential boundaries](https://github.com/ColeMurray/background-agents/blob/main/docs/AUTH.md#repository-and-credential-boundaries) and the runtime [Git credentials](/reference/sandbox-environment#git-credentials) reference.
 
 ### Tunnel URLs
 

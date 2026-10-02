@@ -678,7 +678,7 @@ same organization.
 
 ### Why Single-Tenant?
 
-The system uses a shared GitHub App installation for all git operations. This means:
+GitHub git operations use a shared GitHub App installation. This means:
 
 - The installation defines the workspace's maximum repository reach; workspace permissions and team
   repository grants further constrain access
@@ -691,23 +691,17 @@ was built for internal use where all employees have access to company repositori
 
 ### Token Architecture
 
-| Token              | Purpose                                    | Scope                                                     |
-| ------------------ | ------------------------------------------ | --------------------------------------------------------- |
-| GitHub App Token   | Mint brokered git credentials              | Session repositories, intersected with owning-team grants |
-| User OAuth Token   | Create PRs, identify users                 | Repos the user has access to                              |
-| Sandbox Auth Token | Authenticate sandbox → control plane calls | Single session                                            |
-| WebSocket Token    | Authenticate client connections            | Single session                                            |
-| Managed LLM Token  | Short-lived OpenAI or xAI model access     | Pinned session provider account                           |
+Session sandboxes fetch git credentials through the control plane and cache them on disk. GitHub
+credentials cover the persisted session repositories, intersected with current owning-team grants
+only for team-owned sessions. GitLab returns the deployment PAT without per-session narrowing. Modal
+filesystem snapshots can retain the helper cache; brokerage is not a token-free snapshot guarantee,
+and grant removal does not immediately revoke issued credentials.
 
-Session sandboxes, whether fresh, prebuilt-image, or restored from a snapshot, fetch git credentials
-on demand through the control plane instead of relying on a token embedded in the environment or
-remote URL. GitHub credentials cover only the session's persisted repositories, further restricted
-by current owning-team grants. Private submodules, dependencies, and sibling clones must be included
-in that set before session creation; editing an environment does not expand existing sessions. Grant
-removal changes subsequent credential scopes but does not immediately revoke issued tokens.
-Installation metadata/catalog operations remain installation-wide; GitLab retains its
-deployment-wide PAT limitation. One-shot image builds receive `VCS_CLONE_TOKEN` scoped to their
-build repositories because they have no session to broker through.
+Image builds receive `VCS_CLONE_TOKEN` because they have no session broker. For GitHub it is scoped
+to the build repositories, with current owning-team grants applied for team-owned environment
+builds. For GitLab it is the deployment PAT, not a repository-scoped or single-use credential. See
+the canonical [access and credential boundaries](AUTH.md#repository-and-credential-boundaries) for
+dependency access, cache behavior, and provider limitations.
 
 ### Secrets
 

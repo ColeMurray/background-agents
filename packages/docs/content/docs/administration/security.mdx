@@ -6,6 +6,9 @@ owner: security
 status: published
 lastReviewed: "2026-10-02"
 relatedCode:
+  - packages/sandbox-runtime/src/sandbox_runtime/credentials/git_credential_helper.py
+  - packages/sandbox-images/src/sandbox_images/configuration.py
+  - packages/modal-infra/src/sandbox/manager.py
   - README.md
   - docs/AUTH.md
   - docs/HOW_IT_WORKS.md
@@ -26,7 +29,7 @@ relatedCode:
   - packages/sandbox-runtime/src/sandbox_runtime/gh-wrapper.sh
 ---
 
-This page states what OpenInspect trusts, what it does not, and what you should decide before letting a whole organization use it.
+This page summarizes the trust boundaries and operator decisions for an OpenInspect deployment. [Authentication and Authorization](https://github.com/ColeMurray/background-agents/blob/main/docs/AUTH.md) is the canonical guide to security, resource access, and credential boundaries.
 
 ## One trusted organization
 
@@ -46,9 +49,7 @@ Sign-in is GitHub, Google, or both. After the provider verifies identity and ema
 
 The four roles (Owner, Administrator, Member, Viewer) decide which OpenInspect features a person can use. Team membership, repository grants, resource ownership, and session visibility add checks; role permissions alone do not grant access to every session, environment, or automation.
 
-Private sessions require ownership or explicit collaboration, with audited break-glass reads for workspace Owners, not Administrators. Break-glass does not grant collaboration or sandbox access. Team-owned session non-read actions require current team membership even for Administrators and Owners; a team collaborator grant stops granting access after membership is lost. Non-private team-session read isolation depends on [Teams enforcement](/administration/deployment#teams-enforcement), which defaults to `shadow`. Private access and team-owned actions are enforced in every mode.
-
-Environment secret mutations, settings changes, and image actions also require environment management access in addition to their feature permission, even on workspace environments. Custom roles granting only those feature permissions are insufficient. See [Workspace access](/administration/workspace-access#how-environment-access-works).
+Being able to read a session does not grant sandbox or collaboration access. Prompting and sandbox access on team-owned sessions require current owning-team membership even for Owners and Administrators. Non-private team-session read isolation depends on [Teams enforcement](/administration/deployment#teams-enforcement), which defaults to `shadow`. For private-session exceptions and resource-specific rules, use the canonical [access rules](https://github.com/ColeMurray/background-agents/blob/main/docs/AUTH.md#teams-and-session-visibility); [Workspace access](/administration/workspace-access) explains the user-facing controls.
 
 ## Token architecture
 
@@ -92,13 +93,9 @@ flowchart TB
     cp -->|User OAuth or App token opens pull requests| repos
 ```
 
-Git credentials are brokered on demand. For GitHub, the token is limited to the session's persisted repository set and, for a team-owned session, its intersection with current team grants. An installation-wide team grant does not expand that set. Private submodules, repository-backed dependencies, and sibling-clone scripts therefore need those repositories included in the session's targets. Editing an environment later does not expand an existing session's copied repository set.
+Git credentials are brokered on demand, but the helper caches the response password on disk. Modal snapshots capture the full filesystem and can retain that cache, including files outside `/workspace`. Neither brokerage nor short-lived GitHub tokens guarantees credential-free snapshots. Treat snapshots as sensitive artifacts.
 
-Removing a grant affects subsequent credential resolution; it does not instantly revoke an already-issued GitHub token. GitLab is an exception to token narrowing: its deployment-wide PAT is not scoped down per session. Neither the credential helper nor Teams guarantees immediate revocation of credentials already delivered to a sandbox.
-
-Session sandboxes never receive a system git token in the environment or remote URL, whether they start fresh, from a prebuilt image, or from a snapshot. Each one fetches a credential from the control plane through a git credential helper; GitHub credentials are short-lived, while GitLab returns the deployment PAT. Image builds, which have no session, receive a one-shot clone credential instead. The GitHub App private key is held only by the control plane and the GitHub bot, never by Modal or a sandbox.
-
-Pull requests use the prompting user's GitHub OAuth token when it is available. A missing token, failed refresh or decryption, or an ordinary retrieval failure falls back to the App identity even for a GitHub-signed-in user. Unexpected token-resolution errors fail PR creation instead. Google-signed-in users without a GitHub token also use the App. Branch pushes use App credentials regardless of who opens the pull request.
+Grant removal changes subsequent credential resolution, not immediate revocation of issued tokens. GitLab's helper refresh time does not shorten the deployment PAT's lifetime. For dependency access, build-token scope, and user versus App identity, see the canonical [Repository and Credential Boundaries](https://github.com/ColeMurray/background-agents/blob/main/docs/AUTH.md#repository-and-credential-boundaries). Cache paths and runtime mechanics are in the [sandbox environment reference](/reference/sandbox-environment#git-credentials).
 
 ## Secrets and provider accounts
 
@@ -112,12 +109,12 @@ Pull requests use the prompting user's GitHub OAuth token when it is available. 
 
 ## Sandbox boundaries
 
-| Boundary             | What is inside                                                                                                                                                                                                                                                                                                                                                    | What to do                                                                                                                                                                                                                                                                              |
-| -------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Session sandbox      | Each session runs in its own isolated sandbox with a full development environment. It holds the session's auth token, the session's secrets, and whatever the agent writes.                                                                                                                                                                                       | Scope secrets so each session receives only what it needs.                                                                                                                                                                                                                              |
-| Snapshots            | Workspace state. Anything on disk when a snapshot is taken comes back on restore, including files a setup script or the agent wrote.                                                                                                                                                                                                                              | Do not leave credentials on disk in the workspace.                                                                                                                                                                                                                                      |
-| Prebuilt images      | Whatever `setup.sh` writes during a build, using the build-specific secret layers above. A credential written to disk is served to every session that boots from the image.                                                                                                                                                                                       | Read secrets from the environment at runtime, and treat a scope's image as no less sensitive than its secrets. See [Secrets and images](/configure/prebuilt-images#secrets-and-images).                                                                                                 |
-| Claude Agent harness | The Claude credential is held in process memory and never written to disk, so a snapshot carries no credential and a restore re-fetches it. Code the agent runs, and hooks a repository's `.claude/` settings register, run as children of the agent process and can read it, the same way code can read the sandbox token and user secrets under either harness. | Accept this same-sandbox exposure as by design: the wrapper prevents accidental spread (OpenCode, code-server, the terminal, and user shells never see the Claude token), not deliberate exfiltration by code the agent chooses to run. See [Agent harnesses](/models/agent-harnesses). |
+| Boundary             | What is inside                                                                                                                                                              | What to do                                                                                                                                                                              |
+| -------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Session sandbox      | Each session runs in its own isolated sandbox with a full development environment. It holds the session's auth token, the session's secrets, and whatever the agent writes. | Scope secrets so each session receives only what it needs.                                                                                                                              |
+| Snapshots            | Modal captures the full filesystem, including the helper's on-disk SCM credential cache and files written by setup scripts or agent-run code.                               | Treat snapshots as sensitive; paths outside the workspace are not a snapshot-exclusion boundary.                                                                                        |
+| Prebuilt images      | Whatever `setup.sh` writes during a build, using the build-specific secret layers above. A credential written to disk is served to every session that boots from the image. | Read secrets from the environment at runtime, and treat a scope's image as no less sensitive than its secrets. See [Secrets and images](/configure/prebuilt-images#secrets-and-images). |
+| Claude Agent harness | The harness supplies the Claude credential to the agent process at runtime. Agent-run code and repository hooks can read it and could write it to disk.                     | Process-level delivery is not a credential-free snapshot guarantee. See [Agent harnesses](/models/agent-harnesses).                                                                     |
 
 ## Untrusted input in integrations
 

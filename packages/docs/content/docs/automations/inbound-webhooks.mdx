@@ -38,7 +38,9 @@ flowchart TB
     filters -->|No| none["ok: true, triggered: 0"]
     filters -->|Yes| dedupe{"idempotencyKey already seen?"}
     dedupe -->|Yes| skipped["ok: true, skipped: 1"]
-    dedupe -->|No| session["Session: instructions, then the payload context block"]
+    dedupe -->|No| execution{"Execution authorized?"}
+    execution -->|No| skipped
+    execution -->|Yes| session["Session: instructions, then the payload context block"]
     session --> triggered["ok: true, triggered: 1"]
 ```
 
@@ -142,13 +144,15 @@ A successful request returns:
 { "ok": true, "triggered": 1, "skipped": 0, "steered": 0 }
 ```
 
-| Field       | Meaning                                                                                            |
-| ----------- | -------------------------------------------------------------------------------------------------- |
-| `triggered` | Runs started by this delivery                                                                      |
-| `skipped`   | Matching runs not started because of duplicate delivery or concurrency protection                  |
-| `steered`   | Replies routed into an existing session; used by Slack thread replies and 0 for webhook deliveries |
+| Field       | Meaning                                                                                                 |
+| ----------- | ------------------------------------------------------------------------------------------------------- |
+| `triggered` | Runs started by this delivery                                                                           |
+| `skipped`   | Runs not started because of duplicate delivery, concurrency protection, or runtime authorization denial |
+| `steered`   | Replies routed into an existing session; used by Slack thread replies and 0 for webhook deliveries      |
 
 A request whose conditions do not match returns `ok: true` with `triggered: 0`.
+
+Runtime authorization denial returns `ok: true` with `triggered: 0` and `skipped: 1`, not `401`. It does not pause the automation or record a run-history invocation. Restore the required executor/team/target access before sending another delivery; **Resume** is not needed unless the automation was separately paused.
 
 ### Error responses
 
@@ -170,13 +174,13 @@ A paused automation accepts the request but starts nothing.
 
 ## Troubleshooting
 
-| Symptom                       | Cause                                                                | Fix                                                                          |
-| ----------------------------- | -------------------------------------------------------------------- | ---------------------------------------------------------------------------- |
-| `401`                         | Missing `Authorization: Bearer` header, or the key was regenerated   | Copy the current key from the detail page; regenerate if it is lost          |
-| `415`                         | The `Content-Type` header is missing or not `application/json`       | Set the header explicitly; some HTTP clients default to form encoding        |
-| `404`                         | Wrong automation id, or the automation uses a different trigger type | Copy the URL from the detail page                                            |
-| `ok: true` but `triggered: 0` | A JSONPath filter did not match, or the automation is paused         | Compare the filter path with the actual payload; check the automation status |
-| Retries create no run         | The retry reused an `idempotencyKey` that already fired              | Expected; use a new key for a genuinely new event                            |
+| Symptom                       | Cause                                                                                                                  | Fix                                                                                                                                                                    |
+| ----------------------------- | ---------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `401`                         | Missing `Authorization: Bearer` header, or the key was regenerated                                                     | Copy the current key from the detail page; regenerate if it is lost                                                                                                    |
+| `415`                         | The `Content-Type` header is missing or not `application/json`                                                         | Set the header explicitly; some HTTP clients default to form encoding                                                                                                  |
+| `404`                         | Wrong automation id, or the automation uses a different trigger type                                                   | Copy the URL from the detail page                                                                                                                                      |
+| `ok: true` but `triggered: 0` | A filter did not match, the automation is paused, or the delivery was skipped (including runtime authorization denial) | Check filters and status; if `skipped: 1`, check duplicates/concurrency and the executor's active status, permissions, team membership, active team, and target grants |
+| Retries create no run         | The retry reused an `idempotencyKey` that already fired                                                                | Expected; use a new key for a genuinely new event                                                                                                                      |
 
 ## Next steps
 

@@ -13,6 +13,7 @@ relatedCode:
   - packages/web/src/components/automations/automation-trigger-fields.tsx
   - packages/control-plane/src/routes/automation-lifecycle.ts
   - packages/control-plane/src/scheduler/scheduler.ts
+  - packages/control-plane/src/db/automation-store.ts
   - packages/control-plane/src/automation/authorization-guard.ts
 ---
 
@@ -65,6 +66,7 @@ The **Timezone** field defaults to your browser's timezone when you create an au
 - Saving a change to the schedule or timezone recalculates the next run automatically.
 - **Resume** on a paused schedule automation computes the next run from the current moment rather than catching up on missed slots.
 - A schedule slot that comes due while a previous run is still active is skipped (see below) and the schedule advances to the following slot.
+- Execution authorization denial records a **Skipped** invocation and immediately pauses the automation, clearing the next run time without adding a failure strike. Restore the required executor/team/target access or [reassign the executor](/automations#reassigning-an-executor), then click **Resume**; restoring access or reassigning alone does not restart the schedule.
 
 ## Trigger Now
 
@@ -90,12 +92,13 @@ Schedule triggers are the only trigger type that accepts more than one target. S
 
 ## Troubleshooting
 
-| Symptom                                         | Cause                                                                                          | Fix                                                                                                             |
-| ----------------------------------------------- | ---------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------- |
-| "Schedule interval must be at least 15 minutes" | The expression fires more often than every 15 minutes, or its shortest gap is under 15 minutes | Use `*/15` or a slower cadence                                                                                  |
-| The expression is rejected as invalid           | It has six fields (seconds) or a syntax error                                                  | Use five fields; the placeholder `0 9 * * 1-5` shows the format                                                 |
-| The next run is not when you expected           | The timezone is set to a different zone than you assumed                                       | Check the **Timezone** field; the **Next run** preview shows the resolved time                                  |
-| A firing shows as Skipped                       | The previous run was still active when the slot came due                                       | Shorten the work per run, lengthen the interval, or check whether the earlier run is stuck via **View session** |
+| Symptom                                                         | Cause                                                                                          | Fix                                                                                                             |
+| --------------------------------------------------------------- | ---------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------- |
+| "Schedule interval must be at least 15 minutes"                 | The expression fires more often than every 15 minutes, or its shortest gap is under 15 minutes | Use `*/15` or a slower cadence                                                                                  |
+| The expression is rejected as invalid                           | It has six fields (seconds) or a syntax error                                                  | Use five fields; the placeholder `0 9 * * 1-5` shows the format                                                 |
+| The next run is not when you expected                           | The timezone is set to a different zone than you assumed                                       | Check the **Timezone** field; the **Next run** preview shows the resolved time                                  |
+| A firing shows as Skipped but the schedule remains enabled      | The previous run was still active when the slot came due                                       | Shorten the work per run, lengthen the interval, or check whether the earlier run is stuck via **View session** |
+| A firing shows as Skipped and the automation pauses immediately | Execution authorization was denied                                                             | Restore the required access or reassign the executor, then click **Resume**                                     |
 
 ## Next steps
 

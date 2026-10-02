@@ -1,13 +1,14 @@
 # Authentication and Authorization
 
 Open-Inspect uses authentication to establish who you are and workspace authorization to decide what
-you can do. This guide explains the behavior users and workspace administrators will see.
+you can do. This is the canonical guide to security, resource access, and credential boundaries;
+other guides summarize these rules for their audiences.
 
 > **Important:** Open-Inspect is designed for a single trusted organization. A deployment is one
-> workspace, and the source-control App installation defines the repositories available to that
-> workspace. Roles control which Open-Inspect features a person can use; teams and session
-> visibility further limit access to resources. Neither is a replacement for source-control
-> repository permissions.
+> workspace. The GitHub App installation bounds GitHub repository reach; GitLab uses a deployment
+> PAT. Roles control which Open-Inspect features a person can use; teams and session visibility
+> further limit access to resources. Neither is a replacement for source-control repository
+> permissions.
 
 ---
 
@@ -390,18 +391,54 @@ membership for team-owned session actions.
 
 ## Repository and Credential Boundaries
 
-Open-Inspect uses a shared source-control App installation for clone, fetch, and push operations.
-The App should be installed only on repositories intended for the workspace. GitHub sandbox tokens
-are restricted to the persisted session repository set, intersected with current grants for
-team-owned sessions. Installation-wide team grants do not expand that set. Editing an environment
-does not expand an existing session's copied repositories; private submodules, dependencies, and
-sibling clones need their repositories included before session creation.
+Open-Inspect uses a shared GitHub App installation for GitHub clone, fetch, and push operations. The
+App should be installed only on repositories intended for the workspace. GitHub sandbox tokens are
+restricted to the persisted session repository set, intersected with current grants for team-owned
+sessions. Workspace-owned sessions have no team-grant intersection. Installation-wide team grants do
+not expand the session repository set. Editing an environment does not expand an existing session's
+copied repositories; private submodules, dependencies, and sibling clones need their repositories
+included before session creation and, for team-owned sessions, covered by the owning team's grants.
+Unresolvable or invalid repository IDs and empty scopes fail closed rather than falling back to
+installation-wide GitHub credentials.
 
 Grant removal affects subsequent credential resolution, not immediate revocation of issued tokens;
-those remain valid until expiry. Installation-wide metadata/catalog operations remain separate.
-GitLab still uses a deployment-wide PAT that cannot be narrowed this way. Teams do not establish
+those can remain valid until expiry. Installation-wide metadata/catalog operations remain separate.
+GitLab uses a deployment-wide PAT and ignores per-call credential scope; the helper's reported
+refresh time is a cache lifetime, not the PAT's expiry or revocation. Teams do not establish
 multi-tenant isolation. See
 [Sandbox Repository Access](GETTING_STARTED.md#sandbox-repository-access).
+
+### Credential Delivery and Snapshots
+
+Session git operations use `oi-git-credentials`, which authenticates to
+`POST /sessions/:id/scm-credentials` with the session's sandbox auth token. Git requests must use
+HTTPS and the configured `VCS_HOST`; GitHub repository restrictions are enforced by the issued
+token, not by a repository-path check in the helper. The normal session launch path brokers
+credentials instead of injecting a system clone token into the environment or remote URL. This is
+not a guarantee that credentials are absent from sandbox processes, files, or snapshots.
+
+The helper caches the successful response, including its `password` token, in `scm-creds.json` on
+disk with mode `0600`. The directory is selected by `OI_SCM_CRED_CACHE_DIR`: packaged images set it
+to `$HOME/.cache/openinspect/scm`, while the helper's fallback is `/run/oi`. It reuses the cache
+until five minutes before the reported expiry, serializes refreshes with a lock, and does not fall
+back to stale credentials when a refresh fails. A still-valid cached credential can be used without
+a new control-plane authorization check.
+
+Modal's snapshot path captures the full sandbox filesystem, not only `/workspace`, and does not
+clear the helper cache before capture. A snapshot can therefore contain and restore cached SCM
+tokens, as well as credentials written by setup scripts or agent-run code. Moving a file outside a
+repository does not exclude it from that snapshot. Short-lived GitHub tokens limit their usable
+lifetime, not their persistence; GitLab's cached PAT can outlive the helper's cache lifetime. Treat
+snapshots as sensitive artifacts, not credential-free backups.
+
+Image builds have no session credential broker and receive `VCS_CLONE_TOKEN` instead. For GitHub,
+repository builds are scoped to that repository; environment builds use the planned repositories,
+intersected with current owning-team grants when the environment is team-owned. For GitLab, the
+build credential is still the deployment PAT. This build-time delivery is not a single-use or
+snapshot-exclusion guarantee. Files written during a build can persist in prebuilt images; see
+[Secrets and Prebuilt Images](SECRETS.md#secrets-and-prebuilt-images).
+
+### User Credentials and Secrets
 
 A user's role determines whether they may read or use workspace repositories, but Open-Inspect does
 not compare that role with the user's personal GitHub access for each repository. Linked GitHub

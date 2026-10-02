@@ -6,6 +6,7 @@ owner: web
 status: published
 lastReviewed: "2026-10-02"
 relatedCode:
+  - packages/web/src/lib/composer-access.ts
   - packages/control-plane/src/authorization/teams-enforcement.ts
   - packages/web/src/components/session-access-selector.tsx
   - packages/control-plane/src/routes/team-ownership.ts
@@ -52,7 +53,7 @@ New users receive the Member role. For GitHub pull requests, signing in with Git
 
 The home page is the new-session composer, headed "Welcome to" followed by the deployment's app name. The text area's placeholder reads "What do you want to build?". You can also open it from anywhere with Cmd/Ctrl+Shift+O.
 
-Before choosing a target, open the composer's session access selector. Review both the **team context** (the owning team, or **No team** when allowed) and the audience: **Workspace**, the selected team's audience, or **Private**. A selected team supplies its default visibility for a new draft; verify the displayed choice before sending. Team visibility requires a team. If the workspace requires team ownership and you have no eligible membership, the composer says **Join a team to create a session.** See [Teams](/administration/teams).
+Before choosing a target, open the composer's session access selector. Review both the **team context** (the owning team, or **No team** when allowed) and the audience: **Workspace**, the selected team's audience, or **Private**. A draft initialized from the active sidebar team uses that team's default visibility; the required-team fallback also uses its team's default. Changing the team inside the composer preserves the current audience rather than applying the new team's default. For example, choosing a team while the audience is Workspace leaves it Workspace-visible. Review and explicitly change the audience before sending if needed. Team visibility requires a team. If the workspace requires team ownership and you have no eligible membership, the composer says **Join a team to create a session.** See [Teams](/administration/teams).
 
 Ownership is fixed when the session is created. Workspace visibility does not remove team ownership, and changing the sidebar's discovery scope is not a way to transfer a session. Private access is enforced in every deployment mode, but non-private Team read isolation requires `TEAMS_ENFORCEMENT=on`; the default is `shadow`. See [Multiplayer and sharing](/sessions/multiplayer-and-sharing) and [Deployment](/administration/deployment).
 
