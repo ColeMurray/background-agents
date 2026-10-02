@@ -41,6 +41,7 @@ def _tools(tmp_path: Path, handler, **config_overrides):
         repo_manifest_path=manifest,
         has_repository=config_overrides.get("has_repository", True),
         slack_notify_enabled=config_overrides.get("slack_notify_enabled", False),
+        project_context_enabled=config_overrides.get("project_context_enabled", False),
     )
     client = ControlPlaneToolClient(
         config, MagicMock(), httpx.AsyncClient(transport=httpx.MockTransport(transport_handler))
@@ -350,9 +351,25 @@ def test_build_tool_server_registers_the_gated_tools(tmp_path: Path) -> None:
         assert server["type"] == "sdk" and server["name"] == "oi"
         return {tool.name for tool in build_tools(tools.client)}
 
-    everything = names(has_repository=True, slack_notify_enabled=True)
+    everything = names(has_repository=True, slack_notify_enabled=True, project_context_enabled=True)
+    assert "read_project_context" in everything
     assert {"spawn-child", "send-child-prompt", "cancel-child", "get-child-status"} <= everything
     assert {"create-pull-request", "slack-notify", "upload-media"} <= everything
     minimal = names(has_repository=False, slack_notify_enabled=False)
     assert "create-pull-request" not in minimal
     assert "slack-notify" not in minimal
+    assert "read_project_context" not in minimal
+
+
+@pytest.mark.asyncio
+async def test_project_tool_uses_bound_authenticated_route(tmp_path):
+    tools, seen = _tools(
+        tmp_path,
+        lambda _: httpx.Response(200, json={"brief": "Curated", "sessions": []}),
+        project_context_enabled=True,
+    )
+    tool = next(tool for tool in build_tools(tools.client) if tool.name == "read_project_context")
+    result = await tool.handler({})
+    assert "Curated" in _text(result)
+    assert str(seen[0].url) == "https://cp.example/sessions/s1/project-context?part=tool"
+    assert seen[0].headers["Authorization"] == "Bearer tok"

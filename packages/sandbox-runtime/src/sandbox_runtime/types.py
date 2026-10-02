@@ -1,7 +1,7 @@
 """Type definitions for sandbox operations."""
 
 from enum import StrEnum
-from typing import TypedDict
+from typing import Any, TypedDict
 
 from pydantic import BaseModel
 
@@ -62,6 +62,7 @@ class SessionConfig(BaseModel):
     added here or they never reach the sandbox.
     """
 
+    project: dict[str, Any] | None = None
     session_id: str
     repo_owner: str | None = None
     repo_name: str | None = None

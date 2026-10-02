@@ -1,3 +1,4 @@
+import { referenceMarker } from "@open-inspect/shared/session-references";
 import { Hono } from "hono";
 import { admit } from "../routing/admit";
 import type { ControlPlaneHonoEnv } from "../routing/hono-env";
@@ -125,7 +126,11 @@ export async function handleSessionPrompt(
   }
 
   const promptRequest = {
-    content: body.content,
+    content:
+      body.content +
+      (body.references?.length
+        ? "\n" + body.references.map((id) => referenceMarker(id, id)).join(" ")
+        : ""),
     authorId,
     canonicalUserId,
     source: body.source || "web",

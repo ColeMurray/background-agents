@@ -132,6 +132,7 @@ export type SessionReadState = z.infer<typeof sessionReadStateSchema>;
 
 /** Fields shared only by the list, inbox, and direct-child response projections. */
 export const sessionSummaryBaseSchema = z.object({
+  projectId: z.string().nullable().optional(),
   ownerTeamId: z.string().nullable().optional(),
   visibility: z.enum(["team", "workspace", "private"]).optional(),
   id: z.string(),
@@ -229,6 +230,7 @@ export type SessionReadResult = z.infer<typeof sessionReadResultSchema>;
 
 export interface Session {
   id: string;
+  projectId?: string | null;
   ownerTeamId?: string | null;
   visibility?: "team" | "workspace" | "private";
   collaborators?: string[];

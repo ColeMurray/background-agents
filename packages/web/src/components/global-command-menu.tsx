@@ -33,7 +33,10 @@ interface GlobalCommandMenuProps {
   onNavigate: (href: string) => void;
   onNewSession: () => void;
   sessions: SessionListItem[];
-  teamContext?: Pick<SessionDiscoveryQuery, "teamIds" | "scope">;
+  teamContext?: Pick<SessionDiscoveryQuery, "teamIds" | "scope" | "projectId" | "hasProject">;
+  projects?: readonly { id: string; name: string }[];
+  projectFilter?: string;
+  onProjectFilterChange?: (value: string) => void;
 }
 
 function buildSessionUrl(session: SessionListItem): string {
@@ -130,6 +133,9 @@ export function GlobalCommandMenu({
   onNewSession,
   sessions,
   teamContext,
+  projects,
+  projectFilter,
+  onProjectFilterChange,
 }: GlobalCommandMenuProps) {
   const { labels } = useKeyboardShortcuts();
   const { hasPermission } = useCurrentUserAuthorization();
@@ -182,6 +188,25 @@ export function GlobalCommandMenu({
       <DialogDescription className="sr-only">
         Search and jump to sessions, settings, automations, and other destinations.
       </DialogDescription>
+      {onProjectFilterChange && (
+        <label className="px-4 py-2 text-sm">
+          Project
+          <select
+            aria-label="Command menu project filter"
+            className="ml-2 border border-border bg-input p-1"
+            value={projectFilter ?? ""}
+            onChange={(event) => onProjectFilterChange(event.target.value)}
+          >
+            <option value="">All projects</option>
+            <option value="none">No project</option>
+            {projects?.map((project) => (
+              <option key={project.id} value={project.id}>
+                {project.name}
+              </option>
+            ))}
+          </select>
+        </label>
+      )}
       <Command filter={filterCommandItem} label="Search commands, settings, and sessions">
         <CommandInput
           placeholder="Quick search · recent sessions, settings, and commands"

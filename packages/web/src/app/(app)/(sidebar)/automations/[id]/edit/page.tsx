@@ -112,6 +112,7 @@ export default function EditAutomationPage({ params }: { params: Promise<{ id: s
           <AutomationForm
             mode="edit"
             initialValues={{
+              projectId: automation.projectId,
               name: automation.name,
               repositories: automation.repositories,
               environmentIds: automation.environmentIds,

@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING
 
 from ..claude_stager import ClaudeHarnessHandoff
 from ..credentials.provider_credential_client import RuntimeCredentialClient
+from ..project_context import project_context_text
 from .base import (
     DEFAULT_HARNESS_ID,
     DETERMINISTIC_FAILURE_EXIT_CODE,
@@ -76,13 +77,17 @@ def build_agent_harness(
                 mcp_servers=_mcp_servers_from(session_config),
                 default_model=str(session_config.get("model") or "claude-sonnet-4-6"),
                 oauth_managed=oauth_managed,
-                system_prompt_append=_repository_guidance(handoff.workdir),
+                system_prompt_append="\n\n".join(
+                    filter(None, [_repository_guidance(handoff.workdir), project_context_text()])
+                ),
                 tools=ToolServerConfig(
                     control_plane_url=identity.control_plane_url,
                     session_id=identity.session_id,
                     auth_token=identity.auth_token,
                     repo_manifest_path=identity.repo_manifest_path,
                     has_repository=handoff.has_repository,
+                    project_context_enabled=os.environ.get("AGENT_PROJECT_CONTEXT_ENABLED")
+                    == "true",
                     slack_notify_enabled=os.environ.get("AGENT_SLACK_NOTIFY_ENABLED", "").lower()
                     == "true",
                 ),

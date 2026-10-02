@@ -24,6 +24,7 @@ import { MS_PER_DAY, utcDateFromDayIndex } from "./utc-day";
 import { visibleSessionsPredicate, type SessionReadScope } from "./session-visibility";
 import type { TeamsEnforcementMode } from "../authorization/teams-enforcement";
 import { z } from "zod";
+import { projectAccessPredicate } from "./project-access-sql";
 
 export interface AnalyticsFilters {
   startAt: number;
@@ -329,6 +330,12 @@ export class AnalyticsStore {
 
   prepareBreakdown(filters: AnalyticsFilters, by: SqlBreakdownBy): SqlStatement {
     const isUserBreakdown = by === "user";
+    const projectAccess =
+      this.readScope.kind === "internal"
+        ? { sql: "1 = 1", params: [] }
+        : this.readScope.kind === "user"
+          ? projectAccessPredicate(this.readScope.userId, "read", "p")
+          : { sql: "0 = 1", params: [] };
     const repoGroupExpression =
       "CASE WHEN s.repo_owner IS NULL OR s.repo_name IS NULL THEN NULL ELSE s.repo_owner || '/' || s.repo_name END";
 
@@ -339,19 +346,24 @@ export class AnalyticsStore {
       harness: "s.harness",
       spawnSource: "s.spawn_source",
       automation: "s.automation_id",
+      project: "COALESCE(p.id, '__no_project__')",
     }[by];
 
     const displayNameSelect = isUserBreakdown
       ? "COALESCE(MAX(NULLIF(u.display_name, '')), MAX(NULLIF(s.scm_login, '')), 'Unknown user') AS display_name,"
-      : by === "automation"
-        ? "MAX(a.name) AS display_name,"
-        : "NULL AS display_name,";
+      : by === "project"
+        ? "COALESCE(MAX(p.name), 'No project') AS display_name,"
+        : by === "automation"
+          ? "MAX(a.name) AS display_name,"
+          : "NULL AS display_name,";
 
     const joinClause = isUserBreakdown
       ? "LEFT JOIN users u ON s.user_id = u.id"
-      : by === "automation"
-        ? "LEFT JOIN automations a ON a.id = s.automation_id"
-        : "";
+      : by === "project"
+        ? `LEFT JOIN projects p ON p.id = s.project_id AND ${projectAccess.sql}`
+        : by === "automation"
+          ? "LEFT JOIN automations a ON a.id = s.automation_id"
+          : "";
 
     const orderTail = isUserBreakdown || by === "automation" ? "display_name ASC" : "key ASC";
 
@@ -364,9 +376,9 @@ export class AnalyticsStore {
            ${groupExpression} AS key,
            ${displayNameSelect}
            COUNT(*) AS sessions,
-           COALESCE(SUM(CASE WHEN status = 'completed' THEN 1 ELSE 0 END), 0) AS completed,
-           COALESCE(SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END), 0) AS failed,
-           COALESCE(SUM(CASE WHEN status = 'cancelled' THEN 1 ELSE 0 END), 0) AS cancelled,
+           COALESCE(SUM(CASE WHEN s.status = 'completed' THEN 1 ELSE 0 END), 0) AS completed,
+           COALESCE(SUM(CASE WHEN s.status = 'failed' THEN 1 ELSE 0 END), 0) AS failed,
+           COALESCE(SUM(CASE WHEN s.status = 'cancelled' THEN 1 ELSE 0 END), 0) AS cancelled,
            COALESCE(SUM(total_cost), 0) AS cost,
            COALESCE(SUM(pr_count), 0) AS prs,
            COALESCE(SUM(s.input_tokens), 0) AS input_tokens,
@@ -376,7 +388,7 @@ export class AnalyticsStore {
            COALESCE(SUM(s.cache_write_tokens), 0) AS cache_write_tokens,
            COALESCE(SUM(message_count), 0) AS message_count,
            COALESCE(
-             AVG(CASE WHEN status IN ('completed', 'failed', 'cancelled') THEN active_duration_ms END),
+             AVG(CASE WHEN s.status IN ('completed', 'failed', 'cancelled') THEN active_duration_ms END),
              0
            ) AS avg_duration,
            MAX(s.updated_at) AS last_active
@@ -388,7 +400,13 @@ export class AnalyticsStore {
          GROUP BY key
          ORDER BY sessions DESC, ${orderTail}`
       )
-      .bind(filters.startAt, filters.endAt, ...binds, ...visible.params);
+      .bind(
+        ...(by === "project" ? projectAccess.params : []),
+        filters.startAt,
+        filters.endAt,
+        ...binds,
+        ...visible.params
+      );
   }
 
   decodeBreakdown(result: SqlResult, by: SqlBreakdownBy): AnalyticsBreakdownResponse {

@@ -1,3 +1,4 @@
+import { projectSlackChannel } from "../session/project-notifications";
 import { Hono } from "hono";
 import { admit, dispatch } from "../routing/admit";
 import type { ControlPlaneHonoEnv } from "../routing/hono-env";
@@ -64,6 +65,15 @@ export async function handleSlackNotify(
   const session = await new SessionIndexStore(ctx.db).get(sessionId);
   if (!session) {
     return failureResponse("invalid_input", "Session not found.");
+  }
+
+  if (!parsed.channel) {
+    parsed.channel = (await projectSlackChannel(ctx.db, session)) ?? "";
+    if (!parsed.channel)
+      return failureResponse(
+        "invalid_input",
+        "Specify a channel or configure a primary project Slack channel."
+      );
   }
 
   const repoScope =
@@ -190,7 +200,10 @@ async function parseBody(request: Request): Promise<ParsedBody | Response> {
   const body = raw as Record<string, unknown>;
 
   const channelValue = typeof body.channel === "string" ? body.channel.trim() : "";
-  if (channelValue.length === 0 || channelValue.length > CHANNEL_INPUT_MAX_LENGTH) {
+  if (
+    (body.channel !== undefined && typeof body.channel !== "string") ||
+    channelValue.length > CHANNEL_INPUT_MAX_LENGTH
+  ) {
     return failureResponse(
       "invalid_input",
       `channel must be 1..${CHANNEL_INPUT_MAX_LENGTH} characters.`

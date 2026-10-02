@@ -20,6 +20,8 @@ export interface SessionListFilters {
   /** Sessions whose member set (or scalar primary) includes this repository; identifiers are normalized here. */
   repository?: { repoOwner: string; repoName: string };
   environmentId?: string;
+  projectId?: string;
+  hasProject?: boolean;
   /** Exact persisted `spawn_source`; see `SessionListQuery.origin`. */
   spawnSource?: SpawnSource;
   teamIds?: readonly string[];
@@ -73,6 +75,13 @@ export function buildSessionListPredicates(filters: SessionListFilters): Session
   } = filters;
   const conditions: string[] = [];
   const params: unknown[] = [];
+
+  if (filters.projectId) {
+    conditions.push("project_id = ?");
+    params.push(filters.projectId);
+  }
+  if (filters.hasProject !== undefined)
+    conditions.push(filters.hasProject ? "project_id IS NOT NULL" : "project_id IS NULL");
 
   if (status) {
     conditions.push("status = ?");

@@ -124,6 +124,8 @@ export class SessionSandboxEventProcessor {
         this.streaming.recordTimelineEvent(event, context);
         this.pushService.settlePush(event);
         return;
+      case "project.notification_attempt":
+      case "project_context.read":
       case "tool_result":
       case "error":
       case "warning":

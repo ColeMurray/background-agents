@@ -299,6 +299,29 @@ function SessionContent({
     setIsDetailsOpen(false);
   }, [isBelowLg]);
 
+  const openedArtifactLink = useRef<string | null>(null);
+  useEffect(() => {
+    const artifactId = new URLSearchParams(window.location.search).get("artifact");
+    if (!artifactId || openedArtifactLink.current === `${sessionId}:${artifactId}`) return;
+    const artifact = artifacts.find((item) => item.id === artifactId);
+    if (!artifact) return;
+    openedArtifactLink.current = `${sessionId}:${artifactId}`;
+    if (artifact.type === "screenshot" || artifact.type === "video") {
+      setSelectedMediaArtifactId(artifactId);
+    } else {
+      showInspectorTab("info");
+      if (isBelowLg) setIsDetailsOpen(true);
+      else if (!isDesktopDetailsOpen) toggleDesktopDetails();
+    }
+  }, [
+    artifacts,
+    sessionId,
+    showInspectorTab,
+    isBelowLg,
+    isDesktopDetailsOpen,
+    toggleDesktopDetails,
+  ]);
+
   const mediaArtifacts = useMemo(
     () =>
       artifacts.filter((artifact) => artifact.type === "screenshot" || artifact.type === "video"),

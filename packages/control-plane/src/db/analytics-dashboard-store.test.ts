@@ -14,7 +14,7 @@ describe("AnalyticsDashboardStore", () => {
     const batch = vi.fn(async (batched: SqlStatement[]) => {
       batchedStatements = batched;
       return batched.map((_, index) => {
-        if (index === 7)
+        if (index === 8)
           return {
             ...emptyResult(),
             results: [{ model: "openai/gpt-5", provider: "openai", sessions: 1 }],
@@ -43,7 +43,7 @@ describe("AnalyticsDashboardStore", () => {
               },
             ],
           };
-        if (index === 18)
+        if (index === 19)
           return {
             ...emptyResult(),
             results: [
@@ -101,11 +101,11 @@ describe("AnalyticsDashboardStore", () => {
     });
 
     expect(batch).toHaveBeenCalledTimes(1);
-    expect(statements).toHaveLength(19);
-    expect(batchedStatements).toHaveLength(19);
+    expect(statements).toHaveLength(20);
+    expect(batchedStatements).toHaveLength(20);
     expect(batchedStatements.every((statement) => statements.includes(statement))).toBe(true);
-    expect(queries[18]).toContain("root.spawn_source IN (?)");
-    expect(statements[18].bind).toHaveBeenCalledWith(
+    expect(queries[19]).toContain("root.spawn_source IN (?)");
+    expect(statements[19].bind).toHaveBeenCalledWith(
       1_699_395_200_000,
       1_700_000_000_000,
       "agent",

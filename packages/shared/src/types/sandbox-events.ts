@@ -96,6 +96,16 @@ export const sandboxGenerationSchema = z.object({
 
 // Sandbox events from Modal or synthesized by the control plane.
 export const sandboxEventSchema = z.discriminatedUnion("type", [
+  messageSandboxEventBaseSchema.extend({
+    type: z.literal("project.notification_attempt"),
+    success: z.boolean(),
+  }),
+  sandboxEventBaseSchema.extend({
+    type: z.literal("project_context.read"),
+    projectId: z.string(),
+    bytes: z.number().int().min(0).max(65_536),
+    truncated: z.array(z.string()),
+  }),
   sandboxEventBaseSchema.extend({
     type: z.literal("heartbeat"),
   }),

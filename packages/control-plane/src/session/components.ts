@@ -1,3 +1,4 @@
+import { resolvePromptReferences } from "./session-references";
 /**
  * Composition root for one session runtime.
  *
@@ -99,6 +100,7 @@ import { XaiTokenRefreshService } from "./xai-token-refresh-service";
 import { ScmCredentialsService } from "./scm-credentials-service";
 import { ParticipantService } from "./participant-service";
 import { resolveCurrentGitHubAccessToken } from "./identity";
+import { notifyProjectCompletion } from "./project-notifications";
 import { CallbackNotificationService } from "./callback-notification-service";
 import { UserEnvResolver } from "./user-env-resolver";
 import { resolveSessionRepoId } from "./repo-id-resolution";
@@ -399,6 +401,28 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
     messageRepository,
     env,
     completeAutomationRun: (completion) => scheduler.runComplete(completion),
+    notifyProjectComplete: (messageId, success) =>
+      notifyProjectCompletion(
+        db,
+        env,
+        resolvePublicSessionId(sessionCoreRepository.getSession(), durableObjectId),
+        messageId,
+        success,
+        () =>
+          eventRepository.createEventIfAbsent({
+            id: `project-notification:${messageId}`,
+            type: "project.notification_attempt",
+            messageId,
+            data: JSON.stringify({
+              type: "project.notification_attempt",
+              sandboxId: "",
+              timestamp: Date.now() / 1000,
+              messageId,
+              success,
+            }),
+            createdAt: Date.now(),
+          })
+      ),
     log,
     getSessionId: () => resolvePublicSessionId(sessionCoreRepository.getSession(), durableObjectId),
   });
@@ -537,7 +561,14 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
     executionStop,
     getExecutionTimeoutMs,
     () => lifecycleManager.mayProcessQueuedWork(),
-    () => sandboxPromptBlockReason(lifecycleManager.shutdownSnapshot())
+    () => sandboxPromptBlockReason(lifecycleManager.shutdownSnapshot()),
+    (userId, content) =>
+      resolvePromptReferences(
+        db,
+        createSessionRuntimeClientForTrace(env, durableObjectId),
+        userId,
+        content
+      )
   );
 
   // Tier 7 — services over the queue and lifecycle.
@@ -1160,6 +1191,15 @@ function createLifecycleManager(deps: LifecycleManagerDeps): SandboxLifecycleMan
     bootBudget: { timeoutMs: bootBudget.timeoutMs },
     mcpServerLookup,
     slackAgentNotifyLookup,
+    projectLookup: async (sessionId: string) => {
+      const row = await db
+        .prepare(
+          `SELECT p.id, p.slug, COALESCE(snapshot.injected_bytes, 0) AS injectionBytes, s.project_id IS NOT NULL AS toolEnabled FROM sessions s LEFT JOIN session_project_snapshots snapshot ON snapshot.session_id = s.id JOIN projects p ON p.id = COALESCE(s.project_id, snapshot.project_id) WHERE s.id = ?`
+        )
+        .bind(sessionId)
+        .first<{ id: string; slug: string; injectionBytes: number; toolEnabled: number }>();
+      return row ? { ...row, toolEnabled: !!row.toolEnabled } : undefined;
+    },
     recordWarning: deps.recordWarning,
   };
 

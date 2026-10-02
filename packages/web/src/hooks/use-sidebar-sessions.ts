@@ -194,9 +194,15 @@ function useCategoryPagination(
 export function useSidebarSessions() {
   const { data: authSession } = useAuthSession();
   const { activeTeamId, scope, loading: loadingTeams, error: teamsError } = useActiveTeam();
+  const [projectFilter, setProjectFilter] = useState("");
   const filters = useMemo(
-    () => ({ teamIds: activeTeamId ? [activeTeamId] : undefined, scope }),
-    [activeTeamId, scope]
+    () => ({
+      teamIds: activeTeamId ? [activeTeamId] : undefined,
+      scope,
+      projectId: projectFilter && projectFilter !== "none" ? projectFilter : undefined,
+      hasProject: projectFilter === "none" ? false : undefined,
+    }),
+    [activeTeamId, scope, projectFilter]
   );
   const { fetcher, mutate: mutateCache } = useSWRConfig();
   const [sessionCreatorFilter, setSessionCreatorFilterState] =
@@ -486,6 +492,8 @@ export function useSidebarSessions() {
     },
     sessionCreatorFilter,
     setSessionCreatorFilter,
+    projectFilter,
+    setProjectFilter,
     handleSessionArchived,
     handleMarkLatestMessageRead,
   };

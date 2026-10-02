@@ -1,3 +1,4 @@
+import type { ProjectSnapshot } from "@open-inspect/shared/project-context";
 import type { HarnessId } from "@open-inspect/shared/harnesses";
 import type { Env } from "../types";
 import type { RequestContext } from "../routes/shared";
@@ -30,6 +31,8 @@ function hasBranchContext(value: string | null | undefined): boolean {
  */
 export interface SessionInitInput {
   sessionId: string;
+  projectId?: string | null;
+  projectSnapshot?: ProjectSnapshot;
 
   // Repository
   repoOwner: string | null;
@@ -178,6 +181,8 @@ export async function initializeSession(
   }
   await sessionStore.create({
     id: input.sessionId,
+    projectId: input.projectId,
+    projectSnapshot: input.projectSnapshot,
     title: input.title || null,
     repoOwner: input.repoOwner,
     repoName: input.repoName,

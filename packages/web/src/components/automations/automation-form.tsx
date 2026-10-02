@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useState, useMemo } from "react";
+import { useProjects } from "@/hooks/use-projects";
 import { useRepos } from "@/hooks/use-repos";
 import { useEnvironments } from "@/hooks/use-environments";
 import { useEnabledModels } from "@/hooks/use-enabled-models";
@@ -40,8 +41,12 @@ interface AutomationFormProps {
 
 export function AutomationForm({ mode, initialValues, onSubmit, submitting }: AutomationFormProps) {
   const { repos, loading: loadingRepos } = useRepos();
-  // Automations are workspace-owned, so only workspace environments can be targeted.
-  const { environments, loading: loadingEnvironments } = useEnvironments({ ownerTeamId: null });
+  const { projects } = useProjects();
+  const [projectId, setProjectId] = useState(initialValues?.projectId ?? "");
+  const project = projects.find((item) => item.id === projectId);
+  const { environments, loading: loadingEnvironments } = useEnvironments({
+    ownerTeamId: project?.ownerTeamId ?? null,
+  });
   const { enabledModels, enabledModelOptions, loading: loadingModels } = useEnabledModels();
   const providerAccounts = useProviderAccounts();
   const initialDraft = useMemo(() => createAutomationFormDraft(initialValues), [initialValues]);
@@ -136,7 +141,10 @@ export function AutomationForm({ mode, initialValues, onSubmit, submitting }: Au
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (!formEvaluation.valid) return;
-    onSubmit(formEvaluation.values);
+    onSubmit({
+      ...formEvaluation.values,
+      ...(projectId || initialValues?.projectId ? { projectId: projectId || null } : {}),
+    });
   };
 
   return (
@@ -161,6 +169,23 @@ export function AutomationForm({ mode, initialValues, onSubmit, submitting }: Au
           required
         />
       </div>
+
+      <label className="block text-sm">
+        Project
+        <select
+          aria-label="Project"
+          className="block w-full border border-border bg-input p-2 mt-1"
+          value={projectId}
+          onChange={(event) => setProjectId(event.target.value)}
+        >
+          <option value="">No project</option>
+          {projects.map((item) => (
+            <option key={item.id} value={item.id}>
+              {item.name}
+            </option>
+          ))}
+        </select>
+      </label>
 
       <AutomationTargetPicker
         targets={targets}

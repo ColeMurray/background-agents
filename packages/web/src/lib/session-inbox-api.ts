@@ -35,7 +35,7 @@ const SESSION_INBOX_API_PATH = "/api/sessions/inbox";
 
 export type SessionInboxFilters = Pick<
   SessionListQuery,
-  "teamIds" | "scope" | "ownerFilter" | "visibility"
+  "projectId" | "hasProject" | "teamIds" | "scope" | "ownerFilter" | "visibility"
 >;
 
 interface SessionInboxQuery extends SessionInboxFilters {
@@ -64,6 +64,8 @@ export function buildSessionInboxSnapshotKey(
 }
 
 function appendInboxFilters(params: URLSearchParams, filters: SessionInboxFilters) {
+  if (filters.projectId) params.set("projectId", filters.projectId);
+  if (filters.hasProject !== undefined) params.set("hasProject", String(filters.hasProject));
   for (const teamId of filters.teamIds ?? []) params.append("teamIds[]", teamId);
   if (filters.scope) params.set("scope", filters.scope);
   if (filters.ownerFilter) params.set("ownerFilter", filters.ownerFilter);

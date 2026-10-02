@@ -18,6 +18,7 @@ import { SidebarIcon } from "@/components/ui/icons";
 import { useKeyboardShortcuts } from "@/hooks/use-keyboard-shortcuts";
 import { useMobileSidebarPull } from "@/hooks/use-mobile-sidebar-pull";
 import { useCurrentUserAuthorization } from "@/hooks/use-current-user-authorization";
+import { useProjects } from "@/hooks/use-projects";
 import { useActiveTeam } from "@/hooks/use-active-team";
 import { serializeSessionListQuery } from "@open-inspect/shared/session-list-query";
 
@@ -105,7 +106,14 @@ export function SidebarLayout({ children }: SidebarLayoutProps) {
   });
 
   const { activeTeamId, scope, loading: teamLoading, error: teamError } = useActiveTeam();
-  const teamContext = { teamIds: activeTeamId ? [activeTeamId] : undefined, scope };
+  const { projects } = useProjects();
+  const [projectFilter, setProjectFilter] = useState("");
+  const teamContext = {
+    teamIds: activeTeamId ? [activeTeamId] : undefined,
+    scope,
+    projectId: projectFilter && projectFilter !== "none" ? projectFilter : undefined,
+    hasProject: projectFilter === "none" ? false : undefined,
+  };
   const teamParams = serializeSessionListQuery(teamContext).toString();
   const recentSessionsKey = `${COMMAND_MENU_SESSIONS_KEY}${teamParams ? `&${teamParams}` : ""}`;
 
@@ -218,6 +226,9 @@ export function SidebarLayout({ children }: SidebarLayoutProps) {
           onNewSession={handleNewSession}
           sessions={sessionsResponse?.sessions ?? []}
           teamContext={teamContext}
+          projects={projects}
+          projectFilter={projectFilter}
+          onProjectFilterChange={setProjectFilter}
         />
       </AppShellActionsContext.Provider>
     </SidebarContext.Provider>

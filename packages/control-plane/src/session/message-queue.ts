@@ -172,7 +172,8 @@ export class SessionMessageQueue {
     /** Resolved per use so it honors settings persisted after construction. */
     private readonly getExecutionTimeoutMs: () => number,
     private readonly mayDispatch: () => boolean,
-    private readonly getSandboxPromptBlockReason: () => string | null
+    private readonly getSandboxPromptBlockReason: () => string | null,
+    private readonly resolveReferences?: (userId: string, content: string) => Promise<string>
   ) {}
 
   async enqueueAutofix(
@@ -755,9 +756,16 @@ export class SessionMessageQueue {
       requestFingerprint = await fingerprintWebPrompt(data.participant.id, data);
     }
 
+    const resolvedContent = this.resolveReferences
+      ? await this.resolveReferences(
+          data.participant.canonical_user_id ?? data.userId,
+          data.content
+        )
+      : data.content;
+
     // Keep the promptability check, idempotency lookup, budget and capacity
     // checks, and insert in one synchronous turn so concurrent requests cannot
-    // race between them. The fingerprint hash above is a non-storage await: a
+    // race between them. The fingerprint and reference resolution above can await: a
     // cancel or archive can land while this request is suspended, so the
     // session is read after it, not before.
     this.assertPromptableSession();
@@ -828,7 +836,7 @@ export class SessionMessageQueue {
         {
           id: messageId,
           authorId: data.participant.id,
-          content: data.content,
+          content: resolvedContent,
           source: data.source,
           model: messageModel,
           reasoningEffort: messageReasoningEffort,

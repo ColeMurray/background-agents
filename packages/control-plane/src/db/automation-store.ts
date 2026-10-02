@@ -66,6 +66,7 @@ function appendRepositoryFilter(
 // ─── Internal row types ──────────────────────────────────────────────────────
 
 export interface AutomationRow {
+  project_id?: string | null;
   id: string;
   name: string;
   instructions: string;
@@ -263,6 +264,7 @@ export function toAutomation(
 
   return {
     id: row.id,
+    projectId: row.project_id ?? null,
     name: row.name,
     instructions: row.instructions,
     triggerType,
@@ -401,8 +403,8 @@ export class AutomationStore {
          (id, name, instructions,
           trigger_type, schedule_cron, schedule_tz, harness, model, reasoning_effort, enabled, next_run_at,
           consecutive_failures, created_by, user_id, created_at, updated_at, deleted_at,
-           event_type, trigger_config, trigger_auth_data, owner_team_id)
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+           event_type, trigger_config, trigger_auth_data, owner_team_id, project_id)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
       )
       .bind(
         row.id,
@@ -425,7 +427,8 @@ export class AutomationStore {
         row.event_type,
         row.trigger_config,
         row.trigger_auth_data,
-        row.owner_team_id
+        row.owner_team_id,
+        row.project_id ?? null
       );
   }
 
@@ -569,6 +572,7 @@ export class AutomationStore {
     // Repository fields are deliberately absent: the selection lives in
     // automation_repositories, written only by bindReplaceRepositories.
     const allowedFields: (keyof AutomationRow)[] = [
+      "project_id",
       "name",
       "instructions",
       "schedule_cron",

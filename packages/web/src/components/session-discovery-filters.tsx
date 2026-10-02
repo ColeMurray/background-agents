@@ -1,5 +1,6 @@
 "use client";
 
+import { useProjects } from "@/hooks/use-projects";
 import { useId, type ReactNode } from "react";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { Button } from "@/components/ui/button";
@@ -99,6 +100,7 @@ export function SessionDiscoveryFilters({
   onChange,
   onClear,
 }: SessionDiscoveryFiltersProps) {
+  const { projects } = useProjects();
   // A shared link may name a repository or environment the picker sources do
   // not list (a repository the app lost access to, a deleted environment).
   // Keep the active selection visible so the filter is never silently blank.
@@ -138,6 +140,33 @@ export function SessionDiscoveryFilters({
 
   return (
     <div className="flex flex-wrap items-end gap-3">
+      <LabeledSelect
+        label="Project"
+        value={
+          query.projectId
+            ? `project:${query.projectId}`
+            : query.hasProject === false
+              ? "none"
+              : ANY_OPTION
+        }
+        onValueChange={(value) =>
+          onChange({
+            projectId: value.startsWith("project:") ? value.slice(8) : undefined,
+            hasProject: value === "none" ? false : undefined,
+          })
+        }
+      >
+        <SelectItem value={ANY_OPTION}>Any project</SelectItem>
+        <SelectItem value="none">No project</SelectItem>
+        {query.projectId && !projects.some((project) => project.id === query.projectId) && (
+          <SelectItem value={`project:${query.projectId}`}>Selected project</SelectItem>
+        )}
+        {projects.map((project) => (
+          <SelectItem key={project.id} value={`project:${project.id}`}>
+            {project.name}
+          </SelectItem>
+        ))}
+      </LabeledSelect>
       <LabeledSelect
         label="Team"
         value={teamValue}

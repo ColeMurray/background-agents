@@ -39,6 +39,24 @@ export class ChildSummaryHandler {
       return Response.json({ error: "Session not found" }, { status: 404 });
     }
 
+    if (url?.searchParams.get("reference") === "true") {
+      const message = this.messageRepository.getLatestCompletedMessage();
+      const events = message
+        ? this.eventRepository.listEventPage({ messageId: message.id, type: "token", limit: 1 })
+            .events
+        : [];
+      let finalAssistantExcerpt = "";
+      for (const event of events) {
+        if (event.type !== "token") continue;
+        try {
+          const data = JSON.parse(event.data);
+          if (typeof data.content === "string") finalAssistantExcerpt = data.content.slice(0, 2000);
+        } catch {
+          /* Malformed legacy event carries no reference content. */
+        }
+      }
+      return Response.json({ finalAssistantExcerpt });
+    }
     const parsedOptions = parseChildSummaryOptions(url);
     if (!parsedOptions.ok) {
       return Response.json({ error: parsedOptions.error }, { status: 400 });

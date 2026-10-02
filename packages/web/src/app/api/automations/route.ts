@@ -47,6 +47,7 @@ export async function POST(request: NextRequest) {
     // and SCM provenance derive from authenticated control-plane state.
     const automationBody = {
       name: body.name,
+      projectId: body.projectId,
       instructions: body.instructions,
       triggerType: body.triggerType,
       scheduleCron: body.scheduleCron,

@@ -51,6 +51,7 @@ export default function AnalyticsPage() {
     harnessBreakdown,
     providerBreakdown,
     automationBreakdown,
+    projectBreakdown,
     runs,
     pullRequests,
     loading,
@@ -230,6 +231,15 @@ export default function AnalyticsPage() {
 
               <AnalyticsHarnessCards entries={harnessBreakdown?.entries} loading={loading} />
 
+              <AnalyticsDimensionTable
+                title="Projects"
+                description="Sessions and cost by project."
+                keyLabel="Project"
+                columns={["cost", "completionRate", "prs"]}
+                entries={projectBreakdown?.entries}
+                loading={loading}
+                emptyMessage="No project data in this range."
+              />
               {(scope === "automation" || scope === "all") && (
                 <AnalyticsDimensionTable
                   title="Automations"

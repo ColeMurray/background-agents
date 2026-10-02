@@ -134,6 +134,7 @@ class CreateSandboxRequest(_RepositoryContextModel):
     model: str | None = None
     branch: str | None = None
     base_sha: str | None = None
+    project: dict[str, Any] | None = None
     mcp_servers: list[dict[str, Any]] | None = None
     repositories: list[InteractiveRepositoryRequest] | None = None
     working_branch_name: str | None = None
@@ -163,6 +164,7 @@ class RestoreSessionConfigRequest(_RepositoryContextModel):
     harness: str | None = None
     provider: str | None = None
     model: str | None = None
+    project: dict[str, Any] | None = None
     mcp_servers: list[dict[str, Any]] | None = None
     repositories: list[RestoreRepositoryRequest] | None = None
     working_branch_name: str | None = None

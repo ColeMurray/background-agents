@@ -1,3 +1,6 @@
+import { projectWorkRoutes } from "./project-work";
+import { sessionProjectRoutes } from "./session-projects";
+import { projectRoutes } from "./projects";
 /**
  * Canonical control-plane HTTP route catalog.
  *
@@ -57,6 +60,9 @@ export const catalog: readonly RouteModule[] = [
 
   // Environments (Phase-2 session target; internal-HMAC only, web BFF proxied)
   environmentRoutes,
+  projectRoutes,
+  projectWorkRoutes,
+  sessionProjectRoutes,
   environmentSecretsRoutes,
 
   // Image builds (scope-generic)

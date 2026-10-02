@@ -158,6 +158,7 @@ describe("automation cron submission", () => {
     fireEvent.submit(container.querySelector("form")!);
 
     expect(onSubmit.mock.calls[0][0].providerSelections).toEqual(providerSelections);
+    expect(onSubmit.mock.calls[0][0]).not.toHaveProperty("projectId");
   });
 
   it("groups conditions under an accessible name", () => {

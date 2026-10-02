@@ -1,3 +1,5 @@
+import { utf8Bytes, type ProjectSnapshot } from "@open-inspect/shared/project-context";
+import { projectAccessPredicate } from "./project-access-sql";
 import { DEFAULT_HARNESS, type HarnessId } from "@open-inspect/shared/harnesses";
 import {
   type PullRequestSummary,
@@ -77,6 +79,7 @@ export interface SessionEntry {
   reasoningEffort: string | null;
   baseBranch: string | null;
   status: SessionStatus;
+  projectId?: string | null;
   ownerTeamId: string | null;
   visibility: SessionVisibility;
   parentSessionId?: string | null;
@@ -117,6 +120,7 @@ export interface SessionEntry {
 
 /** Declarative fields used only when creating a session index row. */
 export interface CreateSessionCommand extends SessionEntry {
+  projectSnapshot?: ProjectSnapshot;
   /** Resolved manifest to persist atomically with a new top-level session. */
   skillManifest?: SessionSkillManifestInput;
   /** Parent manifest to copy atomically for an agent-spawned child. */
@@ -233,10 +237,14 @@ export class SessionIndexStore {
       throw new Error("Session provider auth snapshot must include every subscription provider");
     }
 
+    const projectGuard =
+      session.projectId && session.userId ? projectAccessPredicate(session.userId, "read") : null;
+    if (session.projectId && !projectGuard) throw new Error("Project requires a canonical owner");
     const sessionStmt = this.db
       .prepare(
-        `INSERT INTO sessions (id, title, repo_owner, repo_name, harness, model, reasoning_effort, base_branch, status, parent_session_id, root_session_id, spawn_source, spawn_depth, automation_id, automation_run_id, scm_login, user_id, environment_id, created_at, updated_at, owner_team_id, visibility)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CASE WHEN ? IS NULL THEN ? ELSE (SELECT root_session_id FROM sessions WHERE id = ?) END, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+        `INSERT INTO sessions (id, title, repo_owner, repo_name, harness, model, reasoning_effort, base_branch, status, parent_session_id, root_session_id, spawn_source, spawn_depth, automation_id, automation_run_id, scm_login, user_id, environment_id, created_at, updated_at, owner_team_id, visibility, project_id)
+         SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CASE WHEN ? IS NULL THEN ? ELSE (SELECT root_session_id FROM sessions WHERE id = ?) END, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+         ${projectGuard ? `WHERE EXISTS (SELECT 1 FROM projects p WHERE p.id = ? AND p.owner_team_id IS ? AND ${projectGuard.sql})` : ""}`
       )
       .bind(
         session.id,
@@ -262,7 +270,9 @@ export class SessionIndexStore {
         session.createdAt,
         session.updatedAt,
         session.ownerTeamId,
-        session.visibility
+        session.visibility,
+        session.projectId ?? null,
+        ...(projectGuard ? [session.projectId, session.ownerTeamId, ...projectGuard.params] : [])
       );
 
     const repositoryStmts = (session.repositories ?? []).map((repo, position) =>
@@ -312,6 +322,22 @@ export class SessionIndexStore {
     );
     const results = await this.db.batch([
       sessionStmt,
+      ...(session.projectSnapshot
+        ? [
+            this.db
+              .prepare(
+                `INSERT INTO session_project_snapshots (session_id, project_id, injected_text, injected_bytes, manifest_json, created_at) VALUES (?, ?, ?, ?, ?, ?)`
+              )
+              .bind(
+                session.id,
+                session.projectId,
+                session.projectSnapshot.text,
+                utf8Bytes(session.projectSnapshot.text),
+                JSON.stringify(session.projectSnapshot.manifest),
+                session.createdAt
+              ),
+          ]
+        : []),
       ...repositoryStmts,
       ...manifestStmts,
       ...providerAuthStmts,

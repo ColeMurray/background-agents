@@ -42,6 +42,15 @@ const UNRECOGNIZED: BadgeTreatment = {
 };
 
 const OPERATION_LABELS: Record<AuditOperationAction, string> = {
+  "project.created": "Project created",
+  "project.updated": "Project updated",
+  "project.source_saved": "Project source saved",
+  "project.source_removed": "Project source removed",
+  "project.pin_saved": "Project pin saved",
+  "project.pin_removed": "Project pin removed",
+  "project.session_associated": "Project session associated",
+  "project.automation_subscribed": "Project automation subscribed",
+
   "session.private_break_glass": "Private session break-glass read",
   "session.visibility_changed": "Session visibility changed",
   "session.moved": "Session moved",

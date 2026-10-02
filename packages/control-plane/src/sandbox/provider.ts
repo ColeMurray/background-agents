@@ -146,6 +146,7 @@ export interface CreateSandboxConfig {
    * control-plane endpoint.
    */
   agentSlackNotifyEnabled?: boolean;
+  project?: { id: string; slug: string; injectionBytes: number; toolEnabled?: boolean };
   /** MCP servers to inject into the agent session */
   mcpServers?: McpServerConfig[];
   /** Sandbox settings (tunnel ports, etc.) resolved from integration settings */
@@ -251,6 +252,7 @@ export interface RestoreConfig {
   vncEnabled?: boolean;
   /** Resolved fresh on each restore — see CreateSandboxConfig. */
   agentSlackNotifyEnabled?: boolean;
+  project?: { id: string; slug: string; injectionBytes: number; toolEnabled?: boolean };
   /** Sandbox settings (tunnel ports, etc.) resolved from integration settings */
   sandboxSettings?: SandboxSettings;
   /** Previous logical allocation identity, used by providers supporting ambiguous-create recovery. */

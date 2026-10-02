@@ -138,7 +138,8 @@ it("creates a canonical SHA-256 web prompt fingerprint", async () => {
 
 function buildQueue(
   mayDispatch: () => boolean = () => true,
-  getSandboxPromptBlockReason: () => string | null = () => null
+  getSandboxPromptBlockReason: () => string | null = () => null,
+  resolveReferences?: (userId: string, content: string) => Promise<string>
 ) {
   // Mutable so tests can pin that the deadline honors the value current at
   // dispatch time — the thunk exists because settings can be persisted after
@@ -304,7 +305,8 @@ function buildQueue(
     executionStop,
     () => executionTimeoutMs,
     mayDispatch,
-    getSandboxPromptBlockReason
+    getSandboxPromptBlockReason,
+    resolveReferences
   );
 
   return {
@@ -333,6 +335,28 @@ function buildQueue(
 }
 
 describe("SessionMessageQueue", () => {
+  it("resolves references for the immutable prompt participant, not the session owner", async () => {
+    const resolve = vi.fn(
+      async (userId: string, content: string) => `${content}\nSummary for ${userId}`
+    );
+    const h = buildQueue(
+      () => false,
+      () => null,
+      resolve
+    );
+    h.repository.getParticipantById.mockReturnValue(
+      createParticipant({ canonical_user_id: "prompt-author" })
+    );
+    await h.queue.handlePromptMessage({} as WebSocket, createClientInfo(), {
+      content: "#[Work](session:other)",
+      clientRequestId: "reference-request",
+    });
+    expect(resolve).toHaveBeenCalledWith("prompt-author", "#[Work](session:other)");
+    expect(h.repository.createMessageWithAttachments).toHaveBeenCalledWith(
+      expect.objectContaining({ content: "#[Work](session:other)\nSummary for prompt-author" }),
+      expect.anything()
+    );
+  });
   it("rejects new websocket and API prompts during a failed safety hold", async () => {
     const h = buildQueue(
       () => false,

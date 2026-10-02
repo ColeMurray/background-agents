@@ -1,3 +1,4 @@
+import { evaluateProjectAdmission } from "../authorization/project-admission";
 /** Framework-neutral authentication and authorization for a matched route. */
 
 import {
@@ -851,6 +852,31 @@ async function enforceRouteAuthorization(
         case "automation":
           failure = await enforceAutomationRequirement(requirement, params, ctx, evidence);
           break;
+        case "project": {
+          try {
+            const result = await evaluateProjectAdmission(
+              ctx,
+              params[requirement.idParam],
+              requirement.need
+            );
+            if (result instanceof Response) {
+              failure = authorizationDenial(
+                result,
+                evidence,
+                requirement,
+                "project_action_denied",
+                "Project access denied"
+              );
+            } else {
+              ctx.projectAdmission = result;
+              evidence.requirements.push(requirement);
+              failure = null;
+            }
+          } catch {
+            failure = authorizationUnavailable();
+          }
+          break;
+        }
         case "environment":
           failure = await enforceEnvironmentRequirement(requirement, params, ctx, evidence);
           break;

@@ -18,6 +18,7 @@ from .constants import (
 )
 from .docker_control import DockerControl
 from .harness.base import DETERMINISTIC_FAILURE_EXIT_CODE
+from .project_context import prepare_project_context
 from .repo_image_callback import RepoImageBuildCallback
 from .runtime_config import BootMode, RuntimeConfig
 
@@ -635,6 +636,8 @@ class SandboxSupervisor:
         except Exception as error:
             self.log.warn("web_terminal.start_failed", exc=error)
             await self.web_terminal.stop()
+
+        await prepare_project_context(self.config)
 
         # The `harness completed` line is what tells an early-connected
         # bridge to attach its harness and report `ready`.

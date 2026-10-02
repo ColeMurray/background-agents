@@ -315,6 +315,7 @@ export async function handleSpawnChild(
     parentSessionId: parentId,
     spawnSource: "agent",
     spawnDepth: childDepth,
+    projectId: parentSession?.projectId ?? null,
     automationId: parentSession?.automationId ?? null,
     automationRunId: parentSession?.automationRunId ?? null,
     managedSkillsSourceSessionId: parentId,

@@ -510,6 +510,18 @@ export class MessageRepository {
     return parseMessageRows(result.toArray());
   }
 
+  getLatestCompletedMessage(): MessageRow | null {
+    return (
+      parseMessageRows(
+        this.sql
+          .exec(
+            "SELECT * FROM messages WHERE status = 'completed' ORDER BY completed_at DESC, created_at DESC, id DESC LIMIT 1"
+          )
+          .toArray()
+      )[0] ?? null
+    );
+  }
+
   getLatestTerminalMessage(): MessageRow | null {
     const result = this.sql.exec(
       `SELECT * FROM messages

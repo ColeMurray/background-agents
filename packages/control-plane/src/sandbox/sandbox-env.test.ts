@@ -36,6 +36,11 @@ const baseInput = {
 };
 
 describe("buildSessionConfig", () => {
+  it("passes project launch identity through without affecting unassigned sessions", () => {
+    const project = { id: "p", slug: "billing", injectionBytes: 12000, toolEnabled: false };
+    expect(buildSessionConfig({ ...baseInput, project }).project).toEqual(project);
+    expect(buildSessionConfig(baseInput)).not.toHaveProperty("project");
+  });
   it("maps provider inputs to the snake_case runtime contract", () => {
     const mcpServers = [{ id: "mcp-1", name: "Tool", type: "local" as const, enabled: true }];
 

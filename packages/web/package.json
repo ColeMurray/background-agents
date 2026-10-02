@@ -13,7 +13,8 @@
     "typecheck": "next typegen && tsc --noEmit",
     "test": "vitest run",
     "test:coverage": "vitest run --coverage",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "test:projects:browser": "playwright test --config playwright.projects.config.ts"
   },
   "dependencies": {
     "@open-inspect/shared": "file:../shared",
@@ -54,6 +55,7 @@
   },
   "devDependencies": {
     "@opennextjs/cloudflare": "1.19.11",
+    "@playwright/test": "^1.63.0",
     "@testing-library/jest-dom": "^6.9.1",
     "@testing-library/react": "^16.3.2",
     "@testing-library/user-event": "^14.6.1",

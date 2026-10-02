@@ -4,6 +4,8 @@ import { controlPlaneUserFetch } from "@/lib/control-plane";
 import { buildControlPlanePath } from "@/lib/control-plane-query";
 
 const SESSION_INBOX_QUERY_PARAMS = [
+  "projectId",
+  "hasProject",
   "category",
   "cursor",
   "mine",

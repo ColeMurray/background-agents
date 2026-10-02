@@ -14,6 +14,10 @@ import { controlPlaneUserFetch } from "@/lib/control-plane";
 const promptRequestSchema = z
   .strictObject({
     content: promptContentSchema,
+    references: z
+      .array(z.string().regex(/^[a-zA-Z0-9_-]{1,100}$/))
+      .max(3)
+      .optional(),
     model: z.string().optional(),
     reasoningEffort: z.string().optional(),
     attachments: sessionAttachmentReferencesSchema.optional(),
@@ -39,7 +43,7 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
         status: 400,
       });
     }
-    const { content, model, reasoningEffort, attachments } = parsed.data;
+    const { content, model, reasoningEffort, attachments, references } = parsed.data;
 
     // authorId is derived by the control plane from the Bearer principal and
     // is rejected in the body under strict enforcement.
@@ -51,6 +55,7 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
         model,
         reasoningEffort,
         attachments,
+        references,
       }),
     });
 

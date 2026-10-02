@@ -56,6 +56,7 @@ export interface CallbackServiceDeps {
   getSessionId: () => string;
   completeAutomationRun?: AutomationRunCompletionHandler;
   sleep?: (ms: number) => Promise<void>;
+  notifyProjectComplete?: (messageId: string, success: boolean) => Promise<boolean>;
 }
 
 /**
@@ -111,6 +112,7 @@ export class CallbackNotificationService {
   private readonly getSessionId: () => string;
   private readonly sleep: (ms: number) => Promise<void>;
   private readonly completeAutomationRun: AutomationRunCompletionHandler | undefined;
+  private readonly notifyProjectComplete: CallbackServiceDeps["notifyProjectComplete"];
   private _lastToolCallCallbackTs = 0;
   /**
    * When Slack's activity indicator was last (re)asserted for this session, by
@@ -128,6 +130,7 @@ export class CallbackNotificationService {
     this.log = deps.log;
     this.getSessionId = deps.getSessionId;
     this.completeAutomationRun = deps.completeAutomationRun;
+    this.notifyProjectComplete = deps.notifyProjectComplete;
     this.sleep = deps.sleep ?? ((ms) => new Promise((resolve) => setTimeout(resolve, ms)));
   }
 
@@ -225,7 +228,9 @@ export class CallbackNotificationService {
       sessionId = this.getSessionId();
       const message = this.messageRepository.getMessageCallbackContext(messageId);
       if (!message?.callback_context) {
-        result.rejectReason = "no_callback_context";
+        if (message && this.notifyProjectComplete)
+          result.delivered = await this.notifyProjectComplete(messageId, success);
+        result.rejectReason = result.delivered ? undefined : "no_callback_context";
         return;
       }
 
@@ -248,6 +253,7 @@ export class CallbackNotificationService {
           error,
           messageId
         );
+        if (result.delivered) await this.notifyProjectComplete?.(messageId, success);
         return;
       }
 

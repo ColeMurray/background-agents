@@ -1,3 +1,6 @@
+import { ProjectStore } from "../db/project-store";
+import { resolveProjectCreation, projectViewer } from "../session/project-context";
+import { authorizeTeamRepositories } from "../routes/workspace-repository-authorization";
 /**
  * Request-driven automation scheduler backed entirely by D1.
  *
@@ -1617,9 +1620,34 @@ export class Scheduler {
 
     const scmEnrichment = executionPrincipal.scmEnrichment;
 
+    const project = automation.project_id
+      ? await new ProjectStore(this.db).get(automation.project_id)
+      : null;
+    if (automation.project_id && !project) throw new Error("Automation project unavailable");
+    const projectContext = await resolveProjectCreation(this.db, {
+      projectId: automation.project_id,
+      userId: executionPrincipal.platformUserId,
+      ownerTeamId: project?.ownerTeamId ?? automation.owner_team_id,
+      repositories: scopeMembers.map((repo) => ({ owner: repo.repoOwner, name: repo.repoName })),
+    });
+    if (project?.ownerTeamId) {
+      const viewer = await projectViewer(this.db, executionPrincipal.platformUserId!);
+      if (viewer.kind !== "user" || !viewer.memberships.has(project.ownerTeamId))
+        throw new Error("Automation executor is no longer a project team member");
+      const denied = await authorizeTeamRepositories(ctx, {
+        teamId: project.ownerTeamId,
+        repositories: scopeMembers.map((repo) => ({
+          owner: repo.repoOwner,
+          name: repo.repoName,
+          repoId: "repoId" in repo ? repo.repoId : null,
+        })),
+      });
+      if (denied) throw new Error("Project team cannot use the automation target");
+    }
     const sessionInput: SessionInitInput = {
-      ownerTeamId: null,
-      visibility: "workspace",
+      ...projectContext,
+      ownerTeamId: project?.ownerTeamId ?? automation.owner_team_id,
+      visibility: (project?.ownerTeamId ?? automation.owner_team_id) ? "team" : "workspace",
       sessionId,
       ...target,
       title: `[Auto] ${automation.name}`,

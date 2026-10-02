@@ -145,6 +145,10 @@ export type CallbackContext = z.infer<typeof callbackContextSchema>;
 
 export const sendPromptRequestSchema = z
   .object({
+    references: z
+      .array(z.string().regex(/^[a-zA-Z0-9_-]{1,100}$/))
+      .max(3)
+      .optional(),
     content: promptContentSchema,
     source: messageSourceSchema.optional(),
     model: z.string().optional(),
@@ -250,6 +254,7 @@ const createSessionRequestBaseSchema = z.object({
    * fields.
    */
   environmentId: z.string().trim().min(1).nullish(),
+  projectId: z.string().trim().min(1).max(100).nullish(),
   /** Managed skills are resolved and pinned when the session is created. */
   skillSelection: sessionSkillSelectionSchema.optional(),
   /** Explicit account/API-key choices. Omission resolves provider policy. */

@@ -114,6 +114,7 @@ export const meTeamsResponseSchema = z.object({
 
 // Session modules depend on team settings; keep this wire schema cycle-free.
 const teamInboxSessionSchema = z.object({
+  projectId: z.string().nullable().optional(),
   ownerTeamId: z.string().nullable(),
   visibility: sessionVisibilitySchema,
   id: z.string(),

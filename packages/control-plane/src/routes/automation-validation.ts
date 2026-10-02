@@ -181,13 +181,16 @@ export function getEnvironmentSelection(body: {
  */
 export async function resolveEnvironmentSelection(
   db: SqlDatabase,
-  environmentIds: string[]
+  environmentIds: string[],
+  ownerTeamId: string | null = null
 ): Promise<void> {
   if (environmentIds.length === 0) return;
   const store = new EnvironmentStore(db);
   const found = await Promise.all(environmentIds.map((id) => store.getById(id)));
   const missing = environmentIds.filter(
-    (_, index) => !found[index] || found[index].owner_team_id !== null
+    (_, index) =>
+      !found[index] ||
+      (found[index].owner_team_id !== null && found[index].owner_team_id !== ownerTeamId)
   );
   if (missing.length > 0) {
     throw new TargetSelectionError(`Environment not found: ${missing.join(", ")}`);
