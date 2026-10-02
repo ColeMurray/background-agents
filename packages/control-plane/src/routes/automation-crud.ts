@@ -242,7 +242,7 @@ async function handleCreateAutomation(
     if (
       !(await new SlackChannelStore(ctx.db).hasCompatibleBindings(
         extractSlackChannels(body.triggerConfig),
-        null
+        ownerTeamId
       ))
     ) {
       return json(
