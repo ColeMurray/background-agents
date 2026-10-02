@@ -47,7 +47,7 @@ async function changeExecutor(
   if (body instanceof Response) return body;
   const executorError = await validateAutomationExecutor(ctx.db, body.userId);
   if (executorError) return executorError;
-  const teamError = await validateAutomationTeam(ctx.db, automation.owner_team_id, body.userId);
+  const teamError = await validateAutomationTeam(ctx, automation.owner_team_id, body.userId);
   if (teamError) return teamError;
   const store = new AutomationStore(ctx.db);
   const [repositories, environments] = await Promise.all([
@@ -96,7 +96,7 @@ async function changeExecutor(
   if ((results[0]?.meta.changes ?? 0) === 0) {
     const executorError = await validateAutomationExecutor(ctx.db, body.userId);
     if (executorError) return executorError;
-    const teamError = await validateAutomationTeam(ctx.db, automation.owner_team_id, body.userId);
+    const teamError = await validateAutomationTeam(ctx, automation.owner_team_id, body.userId);
     if (teamError) return teamError;
     if (
       !(await isAutomationExecutionAuthorized(ctx.db, {

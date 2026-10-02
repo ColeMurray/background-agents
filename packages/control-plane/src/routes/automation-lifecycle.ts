@@ -137,7 +137,15 @@ async function handleTriggerAutomation(
       trace_id: ctx.trace_id,
     });
     if (triggerError instanceof AutomationTriggerBlockedError) {
-      return error("A run is already active for this automation", 409);
+      return triggerError.reason === "team_grants_changed"
+        ? json(
+            {
+              error: "Team repository grants changed; retry the trigger",
+              code: "team_grants_changed",
+            },
+            409
+          )
+        : error("A run is already active for this automation", 409);
     }
     if (triggerError instanceof AutomationExecutionUnauthorizedError) {
       return json(

@@ -33,7 +33,7 @@ import {
   type AutomationRepositoryInsert,
 } from "../db/automation-store";
 import { SlackChannelStore } from "../db/slack-channel-store";
-import { TeamSettingsStore } from "../db/team-settings";
+import { resolveCreationOwnerTeam } from "./team-ownership";
 import { resourceViewer } from "../authorization/resource-viewer";
 import {
   AutomationModelProviderAuthStore,
@@ -85,7 +85,7 @@ import {
   resolveRepositorySelection,
   validateSlackTriggerConfig,
   validateTargetCounts,
-  validateAutomationTeam,
+  validateTeamExecutor,
 } from "./automation-validation";
 import { isAutomationExecutionAuthorized } from "../automation/authorization-guard";
 import { authorizeSessionTarget } from "./session-target-authorization";
@@ -140,12 +140,13 @@ async function handleCreateAutomation(
   const resolution = requireAdmittedCanonicalUserId(ctx, enforced);
   if (resolution instanceof Response) return resolution;
   const resolvedUserId = resolution;
-  const ownerTeamId = body.teamId ?? null;
-  if (ownerTeamId === null && (await new TeamSettingsStore(ctx.db).get()).requireTeamOnCreate) {
-    return json({ error: "A team is required", code: "team_required" }, 400);
+  const ownerTeam = await resolveCreationOwnerTeam(ctx, body.teamId ?? null);
+  if (ownerTeam instanceof Response) return ownerTeam;
+  const ownerTeamId = ownerTeam?.id ?? null;
+  if (ownerTeamId !== null) {
+    const executorError = await validateTeamExecutor(ctx.db, ownerTeamId, resolvedUserId);
+    if (executorError) return executorError;
   }
-  const teamError = await validateAutomationTeam(ctx.db, ownerTeamId, resolvedUserId);
-  if (teamError) return teamError;
   const viewer = await resourceViewer(ctx);
 
   const selection = getRepositorySelection(body);

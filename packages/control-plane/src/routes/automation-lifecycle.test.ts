@@ -94,7 +94,7 @@ vi.mock("../scheduler/scheduler", () => ({
     }
   },
   AutomationTriggerBlockedError: class AutomationTriggerBlockedError extends Error {
-    constructor() {
+    constructor(readonly reason = "concurrent_run_active") {
       super("An active run already exists");
       this.name = "AutomationTriggerBlockedError";
     }
@@ -229,6 +229,21 @@ describe("automation lifecycle routes", () => {
       expect(res.status).toBe(409);
       expect(await res.json()).toEqual({
         error: "A run is already active for this automation",
+      });
+    });
+
+    it("returns a distinct 409 when team grants change during admission", async () => {
+      mockStore.getById.mockResolvedValue(sampleRow);
+
+      mockSchedulerTrigger.mockRejectedValue(
+        new AutomationTriggerBlockedError("team_grants_changed")
+      );
+
+      const res = await callRoute("POST", "/automations/auto-1/trigger");
+      expect(res.status).toBe(409);
+      expect(await res.json()).toEqual({
+        error: "Team repository grants changed; retry the trigger",
+        code: "team_grants_changed",
       });
     });
 

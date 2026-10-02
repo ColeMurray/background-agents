@@ -11,11 +11,11 @@ import {
 import { isValidReasoningEffort } from "@open-inspect/shared/models";
 import { type AutomationRepositoryInsert } from "../db/automation-store";
 import { EnvironmentStore } from "../db/environments";
-import { TeamStore } from "../db/teams";
 import { TeamMembershipStore } from "../db/team-memberships";
 import { checkEnvironmentAccess, type SessionViewer } from "@open-inspect/shared";
 import { type RequestContext, error, json, resolveRepoOrError } from "./shared";
 import type { RepositoryAuthorizationTarget } from "./workspace-repository-authorization";
+import { resolveActiveTeam } from "./team-ownership";
 import { authorizeSessionTarget } from "./session-target-authorization";
 import type { Env } from "../types";
 import type { SqlDatabase } from "../db/sql-database";
@@ -143,20 +143,24 @@ export class TargetSelectionError extends Error {
   }
 }
 
+/** An automation's team, when it has one, must be active and include its executor. */
 export async function validateAutomationTeam(
-  db: SqlDatabase,
+  ctx: RequestContext,
   teamId: string | null,
   executorUserId: string | null
 ): Promise<Response | null> {
   if (teamId === null) return null;
-  const team = await new TeamStore(db).getById(teamId);
-  if (!team) return error("Team not found", 404);
-  if (team.archivedAt !== null) {
-    return json(
-      { error: "Team archived", code: "team_archived", reason_code: "team_archived" },
-      409
-    );
-  }
+  const team = await resolveActiveTeam(ctx, teamId);
+  if (team instanceof Response) return team;
+  return validateTeamExecutor(ctx.db, teamId, executorUserId);
+}
+
+/** A team-owned automation's executor must be a canonical member of that team. */
+export async function validateTeamExecutor(
+  db: SqlDatabase,
+  teamId: string,
+  executorUserId: string | null
+): Promise<Response | null> {
   if (!executorUserId) {
     return json({ error: "Canonical executor required", code: "executor_required" }, 409);
   }

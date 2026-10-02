@@ -233,9 +233,16 @@ export interface SchedulerTriggerResult {
   runs: AutomationRun[];
 }
 
+/** Why a firing was refused without recording an invocation. */
+export type AutomationTriggerBlockedReason = "concurrent_run_active" | "team_grants_changed";
+
 export class AutomationTriggerBlockedError extends Error {
-  constructor() {
-    super("An active run already exists");
+  constructor(readonly reason: AutomationTriggerBlockedReason = "concurrent_run_active") {
+    super(
+      reason === "team_grants_changed"
+        ? "Team repository grants changed during admission"
+        : "An active run already exists"
+    );
     this.name = "AutomationTriggerBlockedError";
   }
 }
@@ -293,7 +300,7 @@ type StartInvocationResult =
    * Overlap on a manual firing, or team grants changed during admission — nothing
    * recorded; manual callers answer 409.
    */
-  | { outcome: "blocked" }
+  | { outcome: "blocked"; reason: AutomationTriggerBlockedReason }
   /** Idempotency/dedup collision — another firing owns this slot or event. */
   | { outcome: "deduplicated" }
   /** The execution principal cannot launch the immutable target snapshot. */
@@ -633,7 +640,7 @@ export class Scheduler {
       if (team?.grantsVersion !== teamGrantsVersion.version) {
         // Grants changed after coverage was checked. Nothing was recorded or
         // advanced, so a schedule slot refires and re-authorizes on the next tick.
-        return { outcome: "blocked" };
+        return { outcome: "blocked", reason: "team_grants_changed" };
       }
     }
     if (!inserted) {
@@ -787,7 +794,7 @@ export class Scheduler {
     params: StartInvocationParams,
     options: { advanceSchedule: boolean }
   ): Promise<StartInvocationResult> {
-    if (params.source === "manual") return { outcome: "blocked" };
+    if (params.source === "manual") return { outcome: "blocked", reason: "concurrent_run_active" };
 
     const now = Date.now();
     await store.insertSkippedInvocation(
@@ -1376,6 +1383,7 @@ export class Scheduler {
     if (result.outcome === "unauthorized") {
       throw new AutomationExecutionUnauthorizedError(result.reason);
     }
+    if (result.outcome === "blocked") throw new AutomationTriggerBlockedError(result.reason);
     if (result.outcome !== "started") {
       // Manual overlap (pre-check or lost race) records nothing.
       throw new AutomationTriggerBlockedError();

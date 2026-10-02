@@ -198,7 +198,10 @@ describe("automation current team repository grants (integration)", () => {
         submit() {},
       });
       if (source === "manual") {
-        await expect(scheduler.trigger(row.id, REQUESTER)).rejects.toThrow();
+        await expect(scheduler.trigger(row.id, REQUESTER)).rejects.toMatchObject({
+          name: "AutomationTriggerBlockedError",
+          reason: "team_grants_changed",
+        });
       } else {
         expect(await scheduler.tick()).toEqual({ processed: 0, skipped: 1, failed: 0 });
       }

@@ -32,7 +32,15 @@ export async function resolveCreationOwnerTeam(
       ? teamRequiredResponse()
       : null;
   }
-  const team = await new TeamStore(ctx.db).getById(ownerTeamId);
+  return resolveActiveTeam(ctx, ownerTeamId);
+}
+
+/** Resolve a team that will own or keep owning a resource; archived teams accept no changes. */
+export async function resolveActiveTeam(
+  ctx: RequestContext,
+  teamId: string
+): Promise<Team | Response> {
+  const team = await new TeamStore(ctx.db).getById(teamId);
   if (!team) return error("Team not found", 404);
   if (team.archivedAt !== null) {
     return json(
