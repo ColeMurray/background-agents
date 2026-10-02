@@ -84,7 +84,7 @@ export function renderMemorySection(
 /**
  * Select active records deterministically: environment, ordered repositories, then personal;
  * oldest directives first and most recently updated facts first, with ID tie-breaks.
- * Budgets omit whole records and retain those omissions in diagnostics. The selection hash
+ * Budgets omit whole records and retain only an aggregate omission count. The selection hash
  * excludes timestamps and mutable user aliases; token counts estimate rendered text, not usage.
  */
 export async function resolveMemoryRecords(
@@ -125,6 +125,7 @@ export async function resolveMemoryRecords(
   let directivesFull = false;
   let catalogFull = false;
   let factCount = 0;
+  let directiveCount = 0;
   for (const record of ordered) {
     const scope = memoryScopeKey(record.scope);
     const directive = record.memoryType === "directive";
@@ -136,8 +137,12 @@ export async function resolveMemoryRecords(
       if ((scopeChars.get(scope) ?? 0) + chars > MEMORY_LIMITS.directiveScope)
         exhaustedScopes.add(scope);
       if (manifest.directiveChars + chars > MEMORY_LIMITS.directives) directivesFull = true;
-      included = !directivesFull && !exhaustedScopes.has(scope);
+      included =
+        !directivesFull &&
+        !exhaustedScopes.has(scope) &&
+        directiveCount < MEMORY_LIMITS.directiveRecords;
       if (included) {
+        directiveCount++;
         manifest.directiveChars += chars;
         scopeChars.set(scope, (scopeChars.get(scope) ?? 0) + chars);
       }
@@ -153,7 +158,10 @@ export async function resolveMemoryRecords(
         factCount++;
       }
     }
-    if (!included) manifest.truncatedCount++;
+    if (!included) {
+      manifest.truncatedCount++;
+      continue;
+    }
     manifest.items.push({
       memoryId: record.id,
       revisionId: record.currentRevisionId,
@@ -161,8 +169,8 @@ export async function resolveMemoryRecords(
       scope: record.scope,
       memoryType: record.memoryType,
       title: record.title,
-      inclusion: included ? (directive ? "directive" : "catalog") : "truncated",
-      estimatedTokens: included ? Math.ceil(chars / 4) : 0,
+      inclusion: directive ? "directive" : "catalog",
+      estimatedTokens: Math.ceil(chars / 4),
     });
   }
   manifest.estimatedTokens = Math.ceil(renderMemorySection(manifest, ordered).length / 4);

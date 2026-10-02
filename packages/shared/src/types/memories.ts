@@ -8,6 +8,7 @@ export const MEMORY_LIMITS = {
   directive: 2_000,
   fact: 20_000,
   directiveScope: 6_000,
+  directiveRecords: 100,
   directives: 12_000,
   catalog: 24_000,
   catalogRecords: 200,

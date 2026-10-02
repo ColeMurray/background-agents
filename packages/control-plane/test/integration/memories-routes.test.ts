@@ -126,6 +126,7 @@ describe("memory HTTP lifecycle and session boundaries", () => {
     const record = await createMemory();
     const sandbox = await session("pinned");
     const original = await (await sandbox("")).json();
+    expect(original).not.toHaveProperty("items");
     const { scope: _scope, ...fields } = content;
     const revision = await request(`/memories/${record.id}`, "PATCH", {
       ...fields,

@@ -71,23 +71,27 @@ describe("memory resolution", () => {
       record(String(n), { memoryType: "directive", content: "x".repeat(2_000), createdAt: n })
     );
     const manifest = await resolveMemoryRecords(records, target);
-    expect(manifest.items.map((i) => i.inclusion)).toEqual([
-      "directive",
-      "directive",
-      "directive",
-      "truncated",
-      "truncated",
-    ]);
+    expect(manifest.items.map((i) => i.inclusion)).toEqual(["directive", "directive", "directive"]);
     expect(manifest.directiveChars).toBe(6_000);
+    expect(manifest.truncatedCount).toBe(2);
     expect(renderMemorySection(manifest, records)).toContain("2 records omitted for budget");
   });
   it("bounds fact catalogs at 200 and computes estimated tokens from the rendered text", async () => {
     const records = Array.from({ length: 205 }, (_, n) => record(String(n).padStart(3, "0")));
     const manifest = await resolveMemoryRecords(records, target);
     expect(manifest.truncatedCount).toBe(5);
+    expect(manifest.items).toHaveLength(200);
     expect(manifest.estimatedTokens).toBe(
       Math.ceil(renderMemorySection(manifest, records).length / 4)
     );
+  });
+  it("bounds persisted directive metadata even for thousands of tiny directives", async () => {
+    const records = Array.from({ length: 10_000 }, (_, i) =>
+      record(String(i), { memoryType: "directive", content: "x" })
+    );
+    const manifest = await resolveMemoryRecords(records, target);
+    expect(manifest.items).toHaveLength(100);
+    expect(manifest.truncatedCount).toBe(9_900);
   });
   it("renders an empty manifest as no text and pins revision identity", async () => {
     const empty = await resolveMemoryRecords([], target);

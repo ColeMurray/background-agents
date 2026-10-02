@@ -109,7 +109,6 @@ async function installation(
     schemaVersion: 1,
     manifestSha256: loaded.manifest.manifestSha256,
     rendered: renderMemorySection(loaded.manifest, loaded.records),
-    items: loaded.manifest.items,
   });
 }
 /** Expose live content/provenance to an admitted sandbox, or only a notice for archived records. */
