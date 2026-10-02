@@ -1,23 +1,53 @@
 import { rolePermissionPredicate } from "../authorization/permission-sql";
 import type { SqlDatabase } from "../db/sql-database";
 
-interface SqlPredicate {
+export interface SqlPredicate {
   sql: string;
   values: readonly unknown[];
 }
 
-/** Immutable execution requirements derived from the targets selected for one firing. */
+/** `stored` derives the requirement from the automation's target rows when evaluated. */
+type TargetUseRequirement = boolean | "stored";
+
+/** Execution requirements, normally derived from the targets selected for one firing. */
 export interface AutomationExecutionAuthorizationRequest {
   automationId: string;
   executionUserId?: string;
-  requiresRepositoryUse: boolean;
-  requiresEnvironmentUse: boolean;
+  requiresRepositoryUse: TargetUseRequirement;
+  requiresEnvironmentUse: TargetUseRequirement;
 }
 
-function executionPredicate(request: AutomationExecutionAuthorizationRequest): SqlPredicate {
+function targetUseGuard(
+  requirement: TargetUseRequirement,
+  table: "automation_repositories" | "automation_environments",
+  permission: "repositories.use" | "environments.use"
+): SqlPredicate {
+  if (requirement === false) return { sql: "", values: [] };
+  const guard = rolePermissionPredicate(permission);
+  return {
+    sql:
+      requirement === "stored"
+        ? `AND (NOT EXISTS (SELECT 1 FROM ${table} stored_target WHERE stored_target.automation_id = a.id)
+             OR ${guard.sql})`
+        : `AND ${guard.sql}`,
+    values: guard.values,
+  };
+}
+
+export function automationExecutionPredicate(
+  request: AutomationExecutionAuthorizationRequest
+): SqlPredicate {
   const createGuard = rolePermissionPredicate("sessions.create");
-  const repositoryGuard = rolePermissionPredicate("repositories.use");
-  const environmentGuard = rolePermissionPredicate("environments.use");
+  const repositoryGuard = targetUseGuard(
+    request.requiresRepositoryUse,
+    "automation_repositories",
+    "repositories.use"
+  );
+  const environmentGuard = targetUseGuard(
+    request.requiresEnvironmentUse,
+    "automation_environments",
+    "environments.use"
+  );
   return {
     sql: `EXISTS (
       SELECT 1 FROM automations a
@@ -29,15 +59,15 @@ function executionPredicate(request: AutomationExecutionAuthorizationRequest): S
       WHERE a.id = ? AND a.deleted_at IS NULL AND u.suspended_at IS NULL
         AND (a.owner_team_id IS NULL OR (tm.user_id IS NOT NULL AND t.id IS NOT NULL AND t.archived_at IS NULL))
         AND ${createGuard.sql}
-        ${request.requiresRepositoryUse ? `AND ${repositoryGuard.sql}` : ""}
-        ${request.requiresEnvironmentUse ? `AND ${environmentGuard.sql}` : ""}
+        ${repositoryGuard.sql}
+        ${environmentGuard.sql}
     )`,
     values: [
       ...(request.executionUserId ? [request.executionUserId] : []),
       request.automationId,
       ...createGuard.values,
-      ...(request.requiresRepositoryUse ? repositoryGuard.values : []),
-      ...(request.requiresEnvironmentUse ? environmentGuard.values : []),
+      ...repositoryGuard.values,
+      ...environmentGuard.values,
     ],
   };
 }
@@ -56,7 +86,7 @@ export async function isAutomationExecutionAuthorized(
   db: SqlDatabase,
   request: AutomationExecutionAuthorizationRequest
 ): Promise<boolean> {
-  const predicate = executionPredicate(request);
+  const predicate = automationExecutionPredicate(request);
   const row = await db
     .prepare(`SELECT CASE WHEN (${predicate.sql}) THEN 1 ELSE 0 END AS authorized`)
     .bind(...predicate.values)

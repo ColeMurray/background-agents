@@ -33,7 +33,7 @@ type TeamTab =
 export function TeamPage({ slug }: { slug: string }) {
   const { teams, loading, error } = useTeams();
   const mine = useMeTeams();
-  const { authorization } = useCurrentUserAuthorization();
+  const { authorization, hasPermission } = useCurrentUserAuthorization();
   const team = teams.find((candidate) => candidate.slug === slug && candidate.archivedAt === null);
   const role = authorization?.role.key;
   const admin =
@@ -52,23 +52,33 @@ export function TeamPage({ slug }: { slug: string }) {
     );
   if (error) return <ErrorBanner role="alert">Unable to load team.</ErrorBanner>;
   if (!team) return <p className="text-sm text-muted-foreground">Team not found.</p>;
-  return <TeamContent key={team.id} initialTeam={team} canViewWork={admin || member} />;
+  return (
+    <TeamContent
+      key={team.id}
+      initialTeam={team}
+      canViewWork={admin || member}
+      canReadAutomations={hasPermission("automations.read")}
+    />
+  );
 }
 
 function TeamContent({
   initialTeam,
   canViewWork,
+  canReadAutomations,
 }: {
   initialTeam: TeamResponse;
   canViewWork: boolean;
+  canReadAutomations: boolean;
 }) {
   const { team: currentTeam, error } = useTeam(initialTeam.id);
   const team = currentTeam ?? initialTeam;
   const capabilities = useTeamCapabilities(team);
   const [tab, setTab] = useState<TeamTab>("Overview");
   const tabs: TeamTab[] = canViewWork
-    ? ["Overview", "Members", "Repositories", "Environments", "Automations"]
+    ? ["Overview", "Members", "Repositories", "Environments"]
     : ["Members"];
+  if (canViewWork && canReadAutomations) tabs.push("Automations");
   if (canViewWork && capabilities.canManageSecrets) tabs.push("Secrets");
   if (canViewWork && (capabilities.canEditMetadata || capabilities.canArchive))
     tabs.push("Settings");

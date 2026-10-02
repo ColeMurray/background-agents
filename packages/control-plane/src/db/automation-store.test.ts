@@ -17,6 +17,7 @@ import {
   type AutomationRunRow,
   type EnrichedRunRow,
 } from "./automation-store";
+import { MAX_D1_QUERY_PARAMETERS } from "./query-limits";
 
 // ─── Fake D1 helpers ─────────────────────────────────────────────────────────
 
@@ -326,6 +327,33 @@ describe("AutomationStore", () => {
       const result = await store.list({ limit: 25 });
       expect(result.automations).toHaveLength(1);
       expect(result.hasMore).toBe(false);
+    });
+
+    it("binds team visibility once, regardless of how many teams the viewer joined", async () => {
+      const { db, statements } = createFakeD1();
+      const memberships = new Map(
+        Array.from({ length: MAX_D1_QUERY_PARAMETERS }, (_, i) => [`team_${i}`, "member" as const])
+      );
+      await new AutomationStore(db).list({
+        limit: 25,
+        nameSearch: "sync",
+        teamId: "team_0",
+        repoOwner: "acme",
+        repoName: "web",
+        viewer: {
+          kind: "user",
+          userId: "user-1",
+          roleKey: "member",
+          permissions: ["automations.read"],
+          suspended: false,
+          memberships,
+        },
+      });
+      const [{ sql, params }] = statements;
+      expect(params.length).toBeLessThanOrEqual(MAX_D1_QUERY_PARAMETERS);
+      expect(sql.match(/\?/g)).toHaveLength(params.length);
+      expect(params).toContain("user-1");
+      expect(params).not.toContain("team_1");
     });
   });
 

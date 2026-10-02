@@ -7,7 +7,7 @@ import { CollapsedSidebarControls, useSidebarContext } from "@/components/sideba
 import { TemplateGallery } from "@/components/automations/template-gallery";
 import { BackIcon } from "@/components/ui/icons";
 import { useCurrentUserAuthorization } from "@/hooks/use-current-user-authorization";
-import { automationNavigation } from "@/lib/automation-navigation";
+import { automationNavigation, automationScopeTeamId } from "@/lib/automation-navigation";
 
 export default function AutomationTemplatesPage() {
   return (
@@ -20,7 +20,7 @@ export default function AutomationTemplatesPage() {
 function AutomationTemplatesContent() {
   const { isOpen } = useSidebarContext();
   const router = useRouter();
-  const teamId = useSearchParams().get("teamId") || undefined;
+  const teamId = automationScopeTeamId(useSearchParams().get("teamId"));
   const navigation = automationNavigation(teamId);
   const { hasPermission, loading } = useCurrentUserAuthorization();
   const canCreate = hasPermission("automations.create");

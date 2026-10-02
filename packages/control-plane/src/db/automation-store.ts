@@ -35,6 +35,8 @@ import type { SqlDatabase, SqlStatement } from "./sql-database";
 import type { CreatedAtCursor } from "../created-at-cursor";
 import { z } from "zod";
 import { UserStore } from "./user-store";
+import { rolePermissionPredicate } from "../authorization/permission-sql";
+import { automationExecutionPredicate } from "../automation/authorization-guard";
 import type { SessionViewer } from "@open-inspect/shared";
 
 function escapeLikePattern(value: string): string {
@@ -483,13 +485,13 @@ export class AutomationStore {
       if (viewer.suspended || !viewer.permissions.includes("automations.read")) {
         conditions.push("0 = 1");
       } else if (viewer.roleKey !== "owner" && viewer.roleKey !== "administrator") {
-        const teamIds = [...viewer.memberships.keys()];
+        // One bound parameter regardless of how many teams the viewer belongs to.
         conditions.push(
-          teamIds.length > 0
-            ? `(owner_team_id IS NULL OR owner_team_id IN (${teamIds.map(() => "?").join(", ")}))`
-            : "owner_team_id IS NULL"
+          `(owner_team_id IS NULL OR EXISTS (
+             SELECT 1 FROM team_memberships m
+             WHERE m.team_id = automations.owner_team_id AND m.user_id = ?))`
         );
-        params.push(...teamIds);
+        params.push(viewer.userId);
       }
     } else if (viewer?.kind === "service" && viewer.teamId !== null) {
       conditions.push("(owner_team_id IS NULL OR owner_team_id = ?)");
@@ -636,17 +638,35 @@ export class AutomationStore {
     return this.getById(id);
   }
 
-  bindExecutorChange(automation: AutomationRow, userId: string): SqlStatement {
+  /**
+   * Reassign the executor only if, at write time, the caller still holds reassignment authority
+   * and the candidate can still launch the automation's current targets.
+   */
+  bindExecutorChange(automation: AutomationRow, userId: string, actorUserId: string): SqlStatement {
+    const manageOwn = rolePermissionPredicate("automations.manage.own");
+    const manageAny = rolePermissionPredicate("automations.manage.any");
+    const execution = automationExecutionPredicate({
+      automationId: automation.id,
+      executionUserId: userId,
+      requiresRepositoryUse: "stored",
+      requiresEnvironmentUse: "stored",
+    });
     return this.db
       .prepare(
         `UPDATE automations SET user_id = ?, updated_at = ?
          WHERE id = ? AND deleted_at IS NULL AND user_id IS ? AND owner_team_id IS ?
            AND user_id IS NOT ?
-           AND EXISTS (SELECT 1 FROM users u JOIN user_role_assignments a ON a.user_id = u.id
-                       WHERE u.id = ? AND u.suspended_at IS NULL AND a.role_id IS NOT NULL)
-           AND (owner_team_id IS NULL OR (
-             EXISTS (SELECT 1 FROM teams t WHERE t.id = owner_team_id AND t.archived_at IS NULL)
-             AND EXISTS (SELECT 1 FROM team_memberships m WHERE m.team_id = owner_team_id AND m.user_id = ?)))`
+           AND EXISTS (
+             SELECT 1 FROM users actor
+             JOIN user_role_assignments actor_role ON actor_role.user_id = actor.id
+             JOIN roles r ON r.id = actor_role.role_id
+             WHERE actor.id = ? AND actor.suspended_at IS NULL
+               AND (${manageOwn.sql} OR ${manageAny.sql})
+               AND (r.key IN ('owner', 'administrator') OR EXISTS (
+                 SELECT 1 FROM team_memberships lead_membership
+                 WHERE lead_membership.team_id = automations.owner_team_id
+                   AND lead_membership.user_id = actor.id AND lead_membership.role = 'lead')))
+           AND ${execution.sql}`
       )
       .bind(
         userId,
@@ -655,8 +675,10 @@ export class AutomationStore {
         automation.user_id,
         automation.owner_team_id,
         userId,
-        userId,
-        userId
+        actorUserId,
+        ...manageOwn.values,
+        ...manageAny.values,
+        ...execution.values
       );
   }
 

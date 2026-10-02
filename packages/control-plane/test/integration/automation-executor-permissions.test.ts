@@ -213,6 +213,61 @@ describe("automation executor launch permissions (integration)", () => {
     );
   });
 
+  describe("guarded write after preflight", () => {
+    function revoke(userId: string, permission: PermissionId) {
+      return env.DB.prepare(
+        `DELETE FROM role_permissions WHERE permission_id = ?
+           AND role_id = (SELECT role_id FROM user_role_assignments WHERE user_id = ?)`
+      )
+        .bind(permission, userId)
+        .run();
+    }
+
+    async function write(row: AutomationRow, actorUserId = LEAD) {
+      const [result] = await sqlDatabase(env.DB).batch([
+        new AutomationStore(env.DB).bindExecutorChange(row, CANDIDATE, actorUserId),
+      ]);
+      return result.meta.changes;
+    }
+
+    it("commits when caller authority and candidate launch permissions still hold", async () => {
+      const row = await saveAutomation("mixed");
+      await customRole(CANDIDATE, LAUNCH_PERMISSIONS);
+      expect(await write(row)).toBe(1);
+      expect((await new AutomationStore(env.DB).getById(row.id))?.user_id).toBe(CANDIDATE);
+    });
+
+    it.each([
+      [
+        "the caller is demoted from lead",
+        () =>
+          env.DB.prepare("UPDATE team_memberships SET role = 'member' WHERE user_id = ?")
+            .bind(LEAD)
+            .run(),
+      ],
+      ["the caller loses management permission", () => revoke(LEAD, "automations.manage.own")],
+      ["the candidate loses a target permission", () => revoke(CANDIDATE, "environments.use")],
+    ])("refuses the write when %s", async (_change, change) => {
+      const row = await saveAutomation("mixed");
+      await customRole(CANDIDATE, LAUNCH_PERMISSIONS);
+      await change();
+      expect(await write(row)).toBe(0);
+      expect(await new AutomationStore(env.DB).getById(row.id)).toEqual(row);
+    });
+
+    it("derives target requirements from the targets stored at write time", async () => {
+      const row = await saveAutomation("direct");
+      await customRole(CANDIDATE, ["sessions.create", "repositories.use"]);
+      // A concurrent edit adds an environment the candidate cannot use.
+      await seedEnvironment(ENVIRONMENT, TEAM, [{ ...REPOSITORY, position: 0 }]);
+      await sqlDatabase(env.DB).batch(
+        new AutomationStore(env.DB).bindEnvironmentInserts(row.id, [ENVIRONMENT], 2)
+      );
+      expect(await write(row)).toBe(0);
+      expect((await new AutomationStore(env.DB).getById(row.id))?.user_id).toBe(EXECUTOR);
+    });
+  });
+
   it("requires caller management permission before candidate checks", async () => {
     const row = await saveAutomation("mixed");
     await customRole(CANDIDATE, []);

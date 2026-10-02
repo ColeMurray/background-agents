@@ -17,13 +17,13 @@ import Link from "next/link";
 import { useCurrentUserAuthorization } from "@/hooks/use-current-user-authorization";
 import { useSWRConfig } from "swr";
 import { invalidateAutomationCache } from "@/lib/automation-cache";
-import { automationNavigation } from "@/lib/automation-navigation";
+import { automationNavigation, automationScopeTeamId } from "@/lib/automation-navigation";
 
 function NewAutomationContent() {
   const { isOpen } = useSidebarContext();
   const router = useRouter();
   const searchParams = useSearchParams();
-  const teamId = searchParams.get("teamId");
+  const teamId = automationScopeTeamId(searchParams.get("teamId"));
   const navigation = automationNavigation(teamId);
   const swr = useSWRConfig();
   const { hasPermission, loading: authorizationLoading } = useCurrentUserAuthorization();
@@ -51,7 +51,7 @@ function NewAutomationContent() {
   const template = automationTemplates.find((candidate) => candidate.id === templateId);
   const initialValues: Partial<AutomationFormValues> = {
     ...template?.prefill,
-    teamId: teamId || null,
+    teamId: teamId ?? null,
   };
 
   const handleSubmit = async (values: AutomationFormValues) => {
@@ -180,7 +180,9 @@ function NewAutomationContent() {
             </div>
           )}
 
+          {/* Remount when the query-selected team changes so the form's team follows the URL. */}
           <AutomationForm
+            key={teamId ?? ""}
             mode="create"
             initialValues={initialValues}
             onSubmit={handleSubmit}

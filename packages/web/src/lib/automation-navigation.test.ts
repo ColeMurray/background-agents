@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { automationNavigation } from "./automation-navigation";
+import { automationNavigation, automationScopeTeamId } from "./automation-navigation";
 
 describe("automation navigation", () => {
   it.each([undefined, null, ""])("retains shipped unscoped links for %s", (teamId) => {
@@ -52,4 +52,15 @@ describe("automation navigation", () => {
       }
     }
   );
+});
+
+describe("automationScopeTeamId", () => {
+  it.each([
+    [null, undefined],
+    ["", undefined],
+    ["null", undefined],
+    ["team_a", "team_a"],
+  ])("maps %j to %j", (value, scope) => {
+    expect(automationScopeTeamId(value)).toBe(scope);
+  });
 });

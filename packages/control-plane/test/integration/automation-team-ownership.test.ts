@@ -275,7 +275,7 @@ describe("automation team ownership", () => {
     const row = (await store.getById("executor-change"))!;
     await expect(
       sqlDatabase(env.DB).batch([
-        store.bindExecutorChange(row, MEMBER),
+        store.bindExecutorChange(row, MEMBER, LEAD),
         env.DB.prepare("INSERT INTO authorization_audit_events (id) VALUES ('invalid-audit')"),
       ])
     ).rejects.toThrow();

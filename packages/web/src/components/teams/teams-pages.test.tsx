@@ -14,6 +14,7 @@ const mocks = vi.hoisted(() => ({
   teams: [] as TeamResponse[],
   mine: [] as TeamResponse[],
   role: "member",
+  permissions: ["automations.read"],
   suspendedAt: null as number | null,
   membershipLoading: false,
   membershipError: null as Error | null,
@@ -42,6 +43,7 @@ vi.mock("@/hooks/use-teams", () => ({
 vi.mock("@/hooks/use-current-user-authorization", () => ({
   useCurrentUserAuthorization: () => ({
     authorization: { role: { key: mocks.role }, suspendedAt: mocks.suspendedAt },
+    hasPermission: (permission: string) => mocks.permissions.includes(permission),
   }),
 }));
 vi.mock("@/components/settings/team-members-table", () => ({
@@ -103,6 +105,7 @@ beforeEach(() => {
   mocks.teams = [team];
   mocks.mine = [];
   mocks.role = "member";
+  mocks.permissions = ["automations.read"];
   mocks.suspendedAt = null;
   mocks.membershipLoading = false;
   mocks.membershipError = null;
@@ -251,6 +254,15 @@ describe("Team page tabs", () => {
     expect(screen.queryByText("Automations for team_design")).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Automations" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Environments" })).not.toBeInTheDocument();
+  });
+
+  it("hides the Automations tab without automations.read", () => {
+    mocks.mine = [team];
+    mocks.permissions = [];
+    render(<TeamPage slug="design" />);
+    const tabs = within(screen.getByRole("navigation", { name: "Team tabs" }));
+    expect(tabs.getByRole("button", { name: "Environments" })).toBeInTheDocument();
+    expect(tabs.queryByRole("button", { name: "Automations" })).not.toBeInTheDocument();
   });
 
   it.each(["owner", "administrator"])(

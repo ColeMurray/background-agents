@@ -54,6 +54,15 @@ async function changeExecutor(
     store.getRepositoriesForAutomation(params.id),
     store.getEnvironmentsForAutomation(params.id),
   ]);
+  const executorUnauthorized = () =>
+    json(
+      {
+        error: "Executor cannot launch this automation",
+        code: "automation_executor_unauthorized",
+        reason_code: "execution_authorization_denied",
+      },
+      403
+    );
   if (
     !(await isAutomationExecutionAuthorized(ctx.db, {
       automationId: params.id,
@@ -62,20 +71,13 @@ async function changeExecutor(
       requiresEnvironmentUse: environments.length > 0,
     }))
   ) {
-    return json(
-      {
-        error: "Executor cannot launch this automation",
-        code: "automation_executor_unauthorized",
-        reason_code: "execution_authorization_denied",
-      },
-      403
-    );
+    return executorUnauthorized();
   }
   if (automation.user_id === body.userId) {
     return json({ automation: await hydrateAutomationResponse(ctx, automation, viewer) });
   }
   const results = await ctx.db.batch([
-    store.bindExecutorChange(automation, body.userId),
+    store.bindExecutorChange(automation, body.userId, viewer.userId),
     new TeamAuditStore(ctx.db).bind(
       {
         requestId: ctx.request_id,
@@ -96,6 +98,17 @@ async function changeExecutor(
     if (executorError) return executorError;
     const teamError = await validateAutomationTeam(ctx.db, automation.owner_team_id, body.userId);
     if (teamError) return teamError;
+    if (
+      !(await isAutomationExecutionAuthorized(ctx.db, {
+        automationId: params.id,
+        executionUserId: body.userId,
+        requiresRepositoryUse: "stored",
+        requiresEnvironmentUse: "stored",
+      }))
+    ) {
+      return executorUnauthorized();
+    }
+    // Otherwise the row or the caller's reassignment authority changed after admission.
     return json({ error: "Automation changed concurrently", code: "automation_conflict" }, 409);
   }
   const updated = await store.getById(params.id);

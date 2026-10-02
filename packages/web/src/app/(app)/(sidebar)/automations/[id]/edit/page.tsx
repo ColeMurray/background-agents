@@ -14,14 +14,14 @@ import { BackIcon } from "@/components/ui/icons";
 import { browserApiFetch } from "@/lib/browser-api-fetch";
 import { useSWRConfig } from "swr";
 import { invalidateAutomationCache } from "@/lib/automation-cache";
-import { automationNavigation } from "@/lib/automation-navigation";
+import { automationNavigation, automationScopeTeamId } from "@/lib/automation-navigation";
 import { sameEnvironmentIds } from "@/components/automations/automation-target-selection";
 
 export default function EditAutomationPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = use(params);
   const { isOpen } = useSidebarContext();
   const router = useRouter();
-  const teamId = useSearchParams().get("teamId");
+  const teamId = automationScopeTeamId(useSearchParams().get("teamId"));
   const navigation = automationNavigation(teamId);
   const { automation, loading } = useAutomation(id);
   const swr = useSWRConfig();

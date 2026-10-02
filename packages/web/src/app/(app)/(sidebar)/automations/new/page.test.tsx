@@ -51,8 +51,14 @@ vi.mock("@/hooks/use-environments", () => ({
 }));
 vi.mock("@/hooks/use-resource-teams", () => ({
   useResourceTeams: () => ({
-    teams: [{ id: "team-1", name: "Engineering" }],
-    allTeams: [{ id: "team-1", name: "Engineering" }],
+    teams: [
+      { id: "team-1", name: "Engineering" },
+      { id: "team-2", name: "Design" },
+    ],
+    allTeams: [
+      { id: "team-1", name: "Engineering" },
+      { id: "team-2", name: "Design" },
+    ],
     loading: false,
     error: null,
     allowWorkspace: true,
@@ -120,6 +126,29 @@ describe("NewAutomationPage template pre-fill", () => {
       expect(invalidateAutomationCache).toHaveBeenCalledWith(expect.anything());
     }
   );
+
+  it("follows an in-place change of the query-selected team", () => {
+    search = "teamId=team-1";
+    const view = render(<NewAutomationPage />);
+    expect(screen.getByRole("combobox", { name: "Team" })).toHaveValue("team-1");
+    search = "teamId=team-2";
+    view.rerender(<NewAutomationPage />);
+    expect(screen.getByRole("combobox", { name: "Team" })).toHaveValue("team-2");
+    expect(screen.getByRole("link", { name: "Back to automations" })).toHaveAttribute(
+      "href",
+      "/automations?teamId=team-2"
+    );
+  });
+
+  it("treats the API's workspace filter sentinel as no team scope", () => {
+    search = "teamId=null";
+    render(<NewAutomationPage />);
+    expect(screen.getByRole("combobox", { name: "Team" })).toHaveValue("");
+    expect(screen.getByRole("link", { name: "Back to automations" })).toHaveAttribute(
+      "href",
+      "/automations"
+    );
+  });
 
   it("preserves scope after webhook creation while allowing a different owner", async () => {
     search = "template=find-bugs&teamId=team-1";

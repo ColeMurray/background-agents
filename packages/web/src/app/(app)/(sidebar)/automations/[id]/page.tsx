@@ -19,7 +19,7 @@ import { formatModelNameLower } from "@/lib/format";
 import { getHarnessLabel } from "@open-inspect/shared/harnesses";
 import { formatAutomationTargetsLabel } from "@/lib/repo-label";
 import { useAutomationActions } from "@/hooks/use-automation-actions";
-import { automationNavigation } from "@/lib/automation-navigation";
+import { automationNavigation, automationScopeTeamId } from "@/lib/automation-navigation";
 
 const HISTORY_PAGE_SIZE = 20;
 
@@ -27,7 +27,7 @@ export default function AutomationDetailPage({ params }: { params: Promise<{ id:
   const { id } = use(params);
   const { isOpen } = useSidebarContext();
   const router = useRouter();
-  const navigation = automationNavigation(useSearchParams().get("teamId"));
+  const navigation = automationNavigation(automationScopeTeamId(useSearchParams().get("teamId")));
   const { automation, loading } = useAutomation(id);
   const { environments } = useEnvironments({ ownerTeamId: automation?.ownerTeamId });
   // "Load more" grows the fetch limit rather than paging by offset: the
