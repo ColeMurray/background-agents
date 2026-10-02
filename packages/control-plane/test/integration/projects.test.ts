@@ -1,3 +1,7 @@
+import {
+  projectSourceInputSchema,
+  projectPinInputSchema,
+} from "@open-inspect/shared/types/projects";
 import { SessionInboxStore } from "../../src/db/session-inbox-store";
 import { resolvePromptReferences } from "../../src/session/session-references";
 import { createCloudflareEnv } from "../../src/cloudflare/platform";
@@ -959,4 +963,44 @@ it("partitions multi-project inbox pages, snapshots, and project boards", async 
     await req(`/projects/${first.id}/sessions?bucket=board`)
   ).json<{ items: { rootSession: { id: string } }[] }>();
   expect(board.items.map((item) => item.rootSession.id)).toEqual(["first-project"]);
+});
+
+it("advances the project version for same-millisecond item saves and deletes", async () => {
+  const { id } = await create();
+  const store = new ProjectStore(env.DB);
+  const before = (await store.get(id))!;
+  const actor = { userId: A, requestId: "monotonic" };
+  const clock = vi.spyOn(Date, "now").mockReturnValue(before.updatedAt);
+  try {
+    const sourceId = await store.putSource(
+      before,
+      projectSourceInputSchema.parse({
+        sourceType: "url",
+        externalIdOrUrl: "https://example.org",
+        role: "reference",
+      }),
+      actor
+    );
+    const pinId = await store.putPin(
+      before,
+      projectPinInputSchema.parse({
+        kind: "decision",
+        title: "Decision",
+        body: "Body",
+        decidedAt: 1,
+      }),
+      actor
+    );
+    expect((await store.get(id))?.updatedAt).toBe(before.updatedAt + 2);
+    await expect(store.update(before, { name: "Stale edit" }, actor)).rejects.toThrow("changed");
+    const beforeDelete = (await store.get(id))!;
+    await store.deleteItem(beforeDelete, "source", sourceId, actor);
+    await store.deleteItem(beforeDelete, "pin", pinId, actor);
+    expect((await store.get(id))?.updatedAt).toBe(before.updatedAt + 4);
+    await expect(store.update(beforeDelete, { name: "Stale delete edit" }, actor)).rejects.toThrow(
+      "changed"
+    );
+  } finally {
+    clock.mockRestore();
+  }
 });

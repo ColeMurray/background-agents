@@ -345,8 +345,10 @@ export class ProjectStore {
         ...input,
       }),
       this.db
-        .prepare("UPDATE projects SET updated_at = ? WHERE id = ? AND changes() > 0")
-        .bind(now, project.id),
+        .prepare(
+          "UPDATE projects SET updated_at = CASE WHEN updated_at >= ? THEN updated_at + 1 ELSE ? END WHERE id = ? AND changes() > 0"
+        )
+        .bind(now, now, project.id),
     ]);
     if (!results[0].meta.changes) throw new ProjectWriteConflict();
     return itemId;
@@ -358,6 +360,7 @@ export class ProjectStore {
     actor: ProjectActor
   ): Promise<void> {
     const table = kind === "source" ? "project_context_sources" : "project_pins";
+    const now = Date.now();
     const access = projectAccessPredicate(actor.userId, "manage");
     const results = await this.db.batch([
       this.db
@@ -367,8 +370,10 @@ export class ProjectStore {
         .bind(id, project.id, project.id, ...access.params),
       projectAudit(this.db, actor, project, `project.${kind}_removed`, { id }, null),
       this.db
-        .prepare("UPDATE projects SET updated_at = ? WHERE id = ? AND changes() > 0")
-        .bind(Date.now(), project.id),
+        .prepare(
+          "UPDATE projects SET updated_at = CASE WHEN updated_at >= ? THEN updated_at + 1 ELSE ? END WHERE id = ? AND changes() > 0"
+        )
+        .bind(now, now, project.id),
     ]);
     if (!results[0].meta.changes) throw new ProjectWriteConflict();
   }
