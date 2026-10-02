@@ -9,7 +9,12 @@ import { authorizeWorkspaceRepositories } from "./workspace-repository-authoriza
 
 const logger = createLogger("memories");
 
-/** Management remains owner-only even when the owner has included content in a shared session. */
+/**
+ * Authorize human catalog access and calculate management capabilities for the UI.
+ * Personal records stay owner-only, even for administrators and shared-session collaborators.
+ * Shared scopes use current repository grants or environment ownership; write requests require
+ * management authority, while reads can return canManage=false without denying the catalog.
+ */
 export async function authorizeMemoryScope(
   ctx: UserRouteContext,
   env: Parameters<typeof resolveRepoOrError>[0],

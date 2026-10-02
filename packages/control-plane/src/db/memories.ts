@@ -17,6 +17,7 @@ import { MAX_D1_QUERY_PARAMETERS } from "./query-limits";
 
 export class MemoryConflictError extends Error {}
 export class MemoryValidationError extends Error {}
+/** Server-derived provenance; never populate identity or auto-save eligibility from tool arguments. */
 export interface MemoryActor {
   kind: "user" | "agent";
   userId: string | null;
@@ -111,7 +112,12 @@ function sameScope(a: MemoryRecord, scope: MemoryScope, owner: string | null): b
   );
 }
 
-/** Revisioned records; mutation-dependent statements share a unique operation fence. */
+/**
+ * Persist revisioned memories after the caller has authorized the target scope.
+ * Mutations claim a unique operation ID in an atomic batch; dependent revision,
+ * supersession, and audit statements check that ID so a lost race leaves no side effects.
+ * This store enforces lifecycle/quota invariants, not general user or team authorization.
+ */
 export class MemoryStore {
   constructor(private readonly db: SqlDatabase) {}
 
@@ -159,6 +165,7 @@ export class MemoryStore {
       replacementMemoryIds: replacements.get(record.id) ?? [],
     }));
   }
+  /** Read active candidates across already-authorized scopes; selection budgets are applied later. */
   async listApplicable(target: MemoryTarget): Promise<MemoryRecord[]> {
     const predicates = [
       ...(target.canonicalUserId && target.includePersonalMemories
@@ -184,6 +191,7 @@ export class MemoryStore {
       ).values(),
     ];
   }
+  /** Missing preferences opt into personal context; existing session manifests are unaffected. */
   async getPreferences(userId: string): Promise<MemoryPreferences> {
     const row = await this.db
       .prepare("SELECT include_personal_memories FROM memory_preferences WHERE user_id = ?")
@@ -233,6 +241,13 @@ export class MemoryStore {
     }));
   }
 
+  /**
+   * Atomically create a record, its first revision, and audit event.
+   * Human writes are active; agent writes require approval except eligible personal facts.
+   * Auto-save eligibility and agent quotas are rechecked in SQL at commit time.
+   * Proposed replacements leave their predecessor active until approval.
+   * @throws MemoryConflictError if a quota, eligibility, or predecessor guard loses a race.
+   */
   async create(
     raw: CreateMemoryInput,
     actor: MemoryActor,
@@ -328,6 +343,11 @@ export class MemoryStore {
     return (await this.get(id))!;
   }
 
+  /**
+   * Compare-and-swap an unarchived revision, preserving the record's original provenance.
+   * Identical content is a no-op; changed content records the editor on a new revision.
+   * @throws MemoryConflictError if the expected revision or status is no longer current.
+   */
   async revise(
     id: string,
     content: MemoryContent,
@@ -379,6 +399,13 @@ export class MemoryStore {
     return (await this.get(id))!;
   }
 
+  /**
+   * Apply a lifecycle decision against the expected revision and current status.
+   * Approval atomically archives the exact predecessor revision of a replacement.
+   * Restore retains approval history: rejected proposals become proposed again, while
+   * previously approved records become active without superseding their predecessor again.
+   * @throws MemoryConflictError on stale state, a changed predecessor, or a full proposal quota.
+   */
   async transition(
     id: string,
     action: "archive" | "restore" | "approve" | "reject",
@@ -489,6 +516,7 @@ export class MemoryStore {
         operationId
       );
   }
+  /** Build an operation-fenced audit event containing identifiers/status only, never memory text. */
   private audit(
     verb: string,
     id: string,

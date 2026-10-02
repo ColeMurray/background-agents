@@ -32,8 +32,13 @@ interface ItemRow extends MemoryRow {
   estimated_tokens: number;
 }
 
+/** Persist immutable session selections separately from live memory content and lifecycle state. */
 export class SessionMemoryStore {
   constructor(private readonly db: SqlDatabase) {}
+  /**
+   * Build statements to run after the session insert in the same atomic batch.
+   * Only private, collaborator-free root sessions start eligible for personal fact auto-save.
+   */
   bindInsert(sessionId: string, manifest: SessionMemoryManifest): SqlStatement[] {
     return [
       this.db
@@ -72,6 +77,11 @@ export class SessionMemoryStore {
       ),
     ];
   }
+  /**
+   * Copy the parent's pinned owner/selection without resolving the child's participant catalog.
+   * Run with the child session insert; auto-save eligibility is deliberately not inherited.
+   * A legacy parent without a manifest leaves the child with the same empty-context fallback.
+   */
   bindCopy(childId: string, parentId: string): SqlStatement[] {
     return [
       this.db
@@ -89,6 +99,11 @@ export class SessionMemoryStore {
         .bind(childId, parentId),
     ];
   }
+  /**
+   * Load pinned titles/directives plus live changed/archived diagnostics, never fact bodies.
+   * Existing sessions without a manifest get empty context; nonexistent sessions return null.
+   * Callers must authorize the session and check current shared-scope access before rendering.
+   */
   async load(
     sessionId: string
   ): Promise<{ manifest: SessionMemoryManifest; records: MemoryRecord[] } | null> {
@@ -156,6 +171,7 @@ export class SessionMemoryStore {
       ),
     };
   }
+  /** Recover tool scope from session metadata and the pinned personal owner, not current preferences. */
   async target(sessionId: string): Promise<(MemoryTarget & { inherited: boolean }) | null> {
     const session = await this.db
       .prepare(
@@ -193,6 +209,11 @@ export class SessionMemoryStore {
           : [],
     };
   }
+  /**
+   * Read the live revision within session scope, rather than the injected pinned revision.
+   * Reject proposals, personal opt-out, and unpinned personal reads from inherited children.
+   * The route must still check current shared access and redact archived bodies to a notice.
+   */
   async read(sessionId: string, memoryId: string): Promise<MemoryRecord | null> {
     const [target, pinned, record] = await Promise.all([
       this.target(sessionId),

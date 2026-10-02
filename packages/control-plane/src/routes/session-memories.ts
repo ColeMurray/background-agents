@@ -23,7 +23,10 @@ import {
 } from "./shared";
 import { memoryWriteError } from "./memories";
 
-/** Session-bound credentials are not a permanent grant to a removed team repository. */
+/**
+ * Recheck team activity, repository grants, and environment ownership for sandbox reads.
+ * A pinned manifest or previously issued session token does not freeze shared-scope access.
+ */
 async function currentSharedAccess(
   ctx: SandboxRouteContext,
   sessionId: string,
@@ -58,6 +61,7 @@ async function view(_request: Request, _env: Env, params: { id: string }, ctx: U
   const loaded = await new SessionMemoryStore(ctx.db).load(params.id);
   return loaded ? json(loaded.manifest) : error("Session not found", 404);
 }
+/** Return pinned boot context only after validating all referenced shared scopes. */
 async function installation(
   _request: Request,
   _env: Env,
@@ -76,6 +80,7 @@ async function installation(
     items: loaded.manifest.items,
   });
 }
+/** Expose live content/provenance to an admitted sandbox, or only a notice for archived records. */
 async function read(
   _request: Request,
   _env: Env,
@@ -107,6 +112,11 @@ async function read(
     authorSessionId: record.authorSessionId,
   });
 }
+/**
+ * Derive agent identity and scope from the authenticated session, never from the request body.
+ * Shared-session personal writes are proposals because credentials identify a session, not
+ * an immutable prompt author; the store rechecks any auto-save eligibility atomically.
+ */
 async function write(
   request: Request,
   _env: Env,

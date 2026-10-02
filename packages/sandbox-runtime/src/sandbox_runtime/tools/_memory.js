@@ -1,11 +1,13 @@
 import { bridgeFetch, extractError } from "./_bridge-client.js";
 
+/** Read live content through the session-bound bridge; archived records return a notice. */
 export async function readMemory({ memoryId }) {
   const response = await bridgeFetch(`/sandbox-memory/${encodeURIComponent(memoryId)}`);
   if (!response.ok) return `Memory read failed: ${await extractError(response)}`;
   return JSON.stringify(await response.json());
 }
 
+/** Send allowlisted content fields only; the server derives identity, approval state, and quotas. */
 export async function writeMemory(args) {
   const scope =
     args.scope === "repository"

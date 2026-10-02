@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { repositoryPairInputSchema } from "./repositories";
 
+/** Content/catalog lengths use JavaScript string length; write quotas count records, not revisions. */
 export const MEMORY_LIMITS = {
   title: 200,
   description: 420,
@@ -46,6 +47,7 @@ export const memoryContentSchema = z
     }
   });
 export type MemoryContent = z.infer<typeof memoryContentSchema>;
+/** Caller-editable fields only; identity, approval state, and provenance are server-derived. */
 export const createMemorySchema = memoryContentSchema.safeExtend({
   scope: memoryScopeSchema,
   supersedesMemoryId: z.string().min(1).max(200).optional(),
@@ -63,6 +65,7 @@ export const memoryActionSchema = z
 export const memoryPreferencesSchema = z.object({ includePersonalMemories: z.boolean() }).strict();
 export type MemoryPreferences = z.infer<typeof memoryPreferencesSchema>;
 
+/** Immutable content snapshot; its author is the creator/editor of this revision. */
 export interface MemoryRevision extends MemoryContent {
   id: string;
   memoryId: string;
@@ -72,6 +75,7 @@ export interface MemoryRevision extends MemoryContent {
   authorSessionId: string | null;
   createdAt: number;
 }
+/** Live record/current content; author fields retain the original creator across later edits. */
 export interface MemoryRecord extends MemoryContent {
   id: string;
   scope: MemoryScope;
@@ -97,6 +101,7 @@ export interface MemoryCapabilities {
   canApprove: boolean;
 }
 export type MemoryView = MemoryRecord & { capabilities: MemoryCapabilities };
+/** A pinned revision, including budget omissions; optional drift flags describe current store state. */
 export interface SessionMemoryItem {
   memoryId: string;
   revisionId: string;
@@ -109,6 +114,11 @@ export interface SessionMemoryItem {
   changed?: boolean;
   archived?: boolean;
 }
+/**
+ * Session-lifetime selection inherited by children and reused on sandbox restore.
+ * Pinning preserves injected context, but does not authorize management or bypass current grants.
+ * Token estimates include rendering overhead and are not provider-measured consumption.
+ */
 export interface SessionMemoryManifest {
   resolverVersion: number;
   manifestSha256: string;

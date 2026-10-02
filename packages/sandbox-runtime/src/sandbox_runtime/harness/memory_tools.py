@@ -13,6 +13,11 @@ if TYPE_CHECKING:
 
 
 def build_memory_tools(client: ControlPlaneToolClient) -> list[Any]:
+    """Build Claude tools with session-bound transport and allowlisted content fields.
+
+    The control plane derives ownership, approval state, and write eligibility;
+    tool arguments cannot supply identity or override personal-memory opt-out.
+    """
     from claude_agent_sdk import tool
 
     async def request(method: str, path: str, body: dict[str, Any] | None = None) -> dict[str, Any]:

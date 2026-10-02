@@ -84,7 +84,9 @@ export interface SessionInitInput {
   spawnDepth?: number;
   automationId?: string | null;
   automationRunId?: string | null;
+  /** Resolved root-session selection; exactly one of this or memorySourceSessionId is required. */
   memoryManifest?: SessionMemoryManifest;
+  /** Child inheritance source; copies pinned context atomically with the new session. */
   memorySourceSessionId?: string;
   managedSkillsManifest?: SessionSkillManifestInput;
   managedSkillsSourceSessionId?: string;

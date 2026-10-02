@@ -16,11 +16,13 @@ MAX_ATTEMPTS = 3
 
 
 def memory_text(config_dir: Path) -> str | None:
+    """Read materialized context, or return None when boot installed no memory file."""
     path = config_dir / MEMORY_FILENAME
     return path.read_text(encoding="utf-8") if path.is_file() else None
 
 
 def append_memory(guidance: str | None, config_dir: Path) -> str | None:
+    """Append pinned context for Claude, preserving existing guidance when memory is empty."""
     text = memory_text(config_dir)
     if not text:
         return guidance
@@ -28,6 +30,12 @@ def append_memory(guidance: str | None, config_dir: Path) -> str | None:
 
 
 class MemoryMaterializer:
+    """Install control-plane-rendered context using credentials bound to one session.
+
+    Boot must finish materialization before starting either harness. Restored files
+    are not trusted: each call clears old context before fetching the pinned selection.
+    """
+
     def __init__(
         self,
         control_plane_url: str,
@@ -47,6 +55,12 @@ class MemoryMaterializer:
         self.transport = transport
 
     async def materialize(self) -> None:
+        """Replace context atomically with an owner-readable file, or leave no file.
+
+        A legacy 404 means empty context. Transport errors, throttling, and server
+        failures retry within a bounded budget; authorization, validation, and
+        exhausted retries propagate to fail the memory boot phase.
+        """
         # A restored image may contain another session's context. Never retain it
         # on an empty response, old server, failed fetch, or malformed payload.
         self.destination.unlink(missing_ok=True)
@@ -75,6 +89,7 @@ class MemoryMaterializer:
                 await asyncio.sleep(attempt + 1)
 
     async def _fetch(self) -> str:
+        """Stream a bounded versioned response without logging credentials or memory text."""
         async with (
             httpx.AsyncClient(transport=self.transport, timeout=REQUEST_TIMEOUT_SECONDS) as client,
             client.stream(

@@ -10,6 +10,7 @@ import {
 } from "@open-inspect/shared/types/memories";
 import { browserApiFetch, type BrowserApiPath } from "@/lib/browser-api-fetch";
 
+/** Fetch through the cookie-authenticated browser proxy and validate the response contract. */
 export async function memoryRequest<T>(
   path: BrowserApiPath,
   schema: z.ZodType<T>,
@@ -55,6 +56,7 @@ export function useMemoryPreferences(enabled = true) {
     memoryRequest(path, memoryPreferencesSchema)
   );
 }
+/** Refresh drift/archive diagnostics without changing the session's pinned selection. */
 export function useSessionMemories(sessionId: string) {
   return useSWR(
     `/api/sessions/${encodeURIComponent(sessionId)}/memories` as const,
@@ -68,6 +70,7 @@ export function useMemoryRevisions(id: string | null) {
     (path) => memoryRequest(path, z.object({ revisions: z.array(memoryRevisionSchema) }))
   );
 }
+/** Preview without persisting a session; target and opt-out both participate in the SWR cache key. */
 export function useMemoryPreview(
   target: {
     repoOwner?: string;
