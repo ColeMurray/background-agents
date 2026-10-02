@@ -271,6 +271,36 @@ describe("GitHub automation routing (real D1 and SessionDO)", () => {
     await cleanD1Tables();
   });
 
+  it.each(["repository", "installation", "mixed", "none", "workspace"] as const)(
+    "returns one candidate for duplicate repository IDs with %s grants",
+    async (grantKind) => {
+      const id = "auto-github-duplicate-repository";
+      const workspace = grantKind === "workspace";
+      await saveAutomation(
+        id,
+        workspace ? null : TEAM_A,
+        workspace ? WORKSPACE_EXECUTOR : EXECUTOR_A
+      );
+      const store = new AutomationStore(env.DB);
+      await store.replaceRepositories(id, [STORED_REPOSITORY, CURRENT_REPOSITORY]);
+      await seedGrant(TEAM_A, { ...STORED_REPOSITORY, repo_id: 909 });
+      if (grantKind === "repository" || grantKind === "mixed") {
+        await seedGrant(TEAM_A, STORED_REPOSITORY);
+      }
+      if (grantKind === "installation" || grantKind === "mixed") {
+        // Raw seeding also exercises mixed rows that the grant write path refuses.
+        await seedGrant(TEAM_A, "installation");
+      }
+
+      expect(await store.getGitHubAutomationsForEvent(101, "pull_request.opened")).toEqual([
+        {
+          automation: expect.objectContaining({ id }),
+          repositoryGranted: grantKind !== "none",
+        },
+      ]);
+    }
+  );
+
   it("fans out by numeric ID across granted teams and workspace, recording revoked grants once", async () => {
     await seedGrant(TEAM_A, STORED_REPOSITORY);
     await seedGrant(TEAM_B, "installation");

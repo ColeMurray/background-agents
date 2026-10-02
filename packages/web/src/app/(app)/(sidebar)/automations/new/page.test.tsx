@@ -51,7 +51,10 @@ vi.mock("@/components/sidebar-layout", () => ({
 }));
 
 vi.mock("@/hooks/use-repos", () => ({
-  useRepos: () => ({ repos: [], loading: false }),
+  useRepos: () => ({
+    repos: [{ id: 1, owner: "acme", name: "api", fullName: "acme/api", defaultBranch: "main" }],
+    loading: false,
+  }),
 }));
 
 vi.mock("@/hooks/use-environments", () => ({
@@ -123,6 +126,54 @@ async function chooseTeam(user: ReturnType<typeof userEvent.setup>, name: string
 }
 
 describe("NewAutomationPage template pre-fill", () => {
+  it("requires an explicit team for the auto-review replacement even when workspace creation is allowed", async () => {
+    search = "template=review-new-prs&requireTeam=true";
+    const user = userEvent.setup();
+    const { container } = render(<NewAutomationPage />);
+    fireEvent.click(screen.getByRole("button", { name: "Repository Configuration" }));
+    fireEvent.click(screen.getByRole("button", { name: "acme/api" }));
+
+    expect(screen.getByRole("combobox", { name: "Team" })).toHaveTextContent("Select a team");
+    expect(screen.getByRole("button", { name: "Create Automation" })).toBeDisabled();
+    fireEvent.submit(container.querySelector("form")!);
+    expect(browserApiFetch).not.toHaveBeenCalled();
+
+    await chooseTeam(user, "Engineering");
+    fireEvent.click(screen.getByRole("button", { name: "Repository Configuration" }));
+    fireEvent.click(screen.getByRole("button", { name: "acme/api" }));
+    expect(screen.getByRole("button", { name: "Create Automation" })).toBeEnabled();
+    fireEvent.submit(container.querySelector("form")!);
+    await waitFor(() => expect(push).toHaveBeenCalledWith("/automations/new-auto"));
+    expect(JSON.parse(String(vi.mocked(browserApiFetch).mock.calls[0][1]?.body))).toMatchObject({
+      teamId: "team-1",
+      repositories: [{ repoOwner: "acme", repoName: "api", baseBranch: "main" }],
+    });
+  });
+
+  it("prefills the replacement's scoped team without offering workspace ownership", async () => {
+    search = "template=review-new-prs&teamId=team-1&requireTeam=true";
+    const user = userEvent.setup();
+    render(<NewAutomationPage />);
+
+    expect(screen.getByRole("combobox", { name: "Team" })).toHaveTextContent("Engineering");
+    await user.click(screen.getByRole("combobox", { name: "Team" }));
+    expect(screen.queryByRole("option", { name: "Workspace (no team)" })).not.toBeInTheDocument();
+    expect(screen.getByRole("option", { name: "Design" })).toBeInTheDocument();
+  });
+
+  it("keeps ordinary review-template creation workspace-owned when the replacement flag is absent", async () => {
+    search = "template=review-new-prs";
+    const { container } = render(<NewAutomationPage />);
+    fireEvent.click(screen.getByRole("button", { name: "Repository Configuration" }));
+    fireEvent.click(screen.getByRole("button", { name: "acme/api" }));
+
+    expect(screen.getByRole("combobox", { name: "Team" })).toHaveTextContent("Workspace (no team)");
+    expect(screen.getByRole("button", { name: "Create Automation" })).toBeEnabled();
+    fireEvent.submit(container.querySelector("form")!);
+    await waitFor(() => expect(push).toHaveBeenCalledWith("/automations/new-auto"));
+    expect(JSON.parse(String(vi.mocked(browserApiFetch).mock.calls[0][1]?.body)).teamId).toBeNull();
+  });
+
   it.each([undefined, "team-1"])(
     "keeps navigation scope %s when the selected creation owner changes",
     async (teamId) => {

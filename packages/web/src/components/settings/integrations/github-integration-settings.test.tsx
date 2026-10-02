@@ -13,6 +13,11 @@ import {
 } from "@open-inspect/shared/types/integrations";
 import { GitHubIntegrationSettings } from "./github-integration-settings";
 
+let search = "";
+vi.mock("next/navigation", () => ({
+  useSearchParams: () => new URLSearchParams(search),
+}));
+
 vi.mock("@/hooks/use-current-user-authorization", () => ({
   useCurrentUserAuthorization: () => ({ hasPermission: () => true }),
 }));
@@ -130,6 +135,7 @@ beforeAll(() => {
 });
 
 beforeEach(() => {
+  search = "";
   fetchMock.mockReset();
   toastSuccess.mockReset();
   toastError.mockReset();
@@ -159,8 +165,28 @@ describe("GitHubIntegrationSettings", () => {
     expect(toggle).toHaveAttribute("aria-checked", "true");
     expect(screen.getByRole("link", { name: "Review new PRs" })).toHaveAttribute(
       "href",
-      "/automations/new?template=review-new-prs"
+      "/automations/new?template=review-new-prs&requireTeam=true"
     );
+  });
+
+  it("preserves the current team scope in both replacement links", () => {
+    search = "teamId=team_engineering";
+    setupSWR({
+      global: null,
+      repos: [{ repo: "acme/web", settings: {} }],
+      availableRepos: [repo("acme/web")],
+    });
+
+    render(<GitHubIntegrationSettings />);
+
+    const links = screen.getAllByRole("link", { name: "Review new PRs" });
+    expect(links).toHaveLength(2);
+    for (const link of links) {
+      expect(link).toHaveAttribute(
+        "href",
+        "/automations/new?template=review-new-prs&teamId=team_engineering&requireTeam=true"
+      );
+    }
   });
 
   it.each([undefined, false, true])(
@@ -178,7 +204,7 @@ describe("GitHubIntegrationSettings", () => {
       expect(within(controls).getByText("Deprecated")).toBeInTheDocument();
       expect(within(controls).getByRole("link", { name: "Review new PRs" })).toHaveAttribute(
         "href",
-        "/automations/new?template=review-new-prs"
+        "/automations/new?template=review-new-prs&requireTeam=true"
       );
       expect(within(controls).getByRole("combobox")).toHaveAccessibleDescription(
         /team-owned automation/
