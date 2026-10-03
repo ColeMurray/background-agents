@@ -3,6 +3,13 @@
 import { useState } from "react";
 import { ErrorBanner } from "@/components/ui/error-banner";
 import { Button } from "@/components/ui/button";
+import {
+  Select,
+  SelectTrigger,
+  SelectValue,
+  SelectContent,
+  SelectItem,
+} from "@/components/ui/select";
 import { useCurrentUserAuthorization } from "@/hooks/use-current-user-authorization";
 import { useWorkspaceAdministration } from "@/hooks/use-workspace-administration";
 
@@ -79,27 +86,31 @@ export function WorkspaceSettings() {
                 (member.role.key !== "owner" ||
                   (canTransfer &&
                     !(member.suspendedAt === null && unsuspendedOwnerCount === 1))) ? (
-                  <select
-                    aria-label={`Role for ${member.displayName ?? member.userId}`}
+                  <Select
                     value={member.role.id}
                     disabled={pendingMemberIds.has(member.userId)}
-                    onChange={(event) =>
+                    onValueChange={(roleId) =>
                       void mutate(member.userId, () =>
-                        updateMember(member, { kind: "role", roleId: event.target.value })
+                        updateMember(member, { kind: "role", roleId })
                       )
                     }
-                    className="rounded border border-border bg-background px-2 py-1.5 text-sm"
                   >
-                    {roles
-                      .filter(
-                        (role) => role.key !== "owner" || canTransfer || role.id === member.role.id
-                      )
-                      .map((role) => (
-                        <option key={role.id} value={role.id}>
-                          {role.name}
-                        </option>
-                      ))}
-                  </select>
+                    <SelectTrigger aria-label={`Role for ${member.displayName ?? member.userId}`}>
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {roles
+                        .filter(
+                          (role) =>
+                            role.key !== "owner" || canTransfer || role.id === member.role.id
+                        )
+                        .map((role) => (
+                          <SelectItem key={role.id} value={role.id}>
+                            {role.name}
+                          </SelectItem>
+                        ))}
+                    </SelectContent>
+                  </Select>
                 ) : (
                   <span className="text-sm text-foreground">{member.role.name}</span>
                 )}
