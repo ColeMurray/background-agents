@@ -2,14 +2,10 @@
 
 import Link from "next/link";
 import { useActiveTeam } from "@/hooks/use-active-team";
-import { useMeTeams } from "@/hooks/use-teams";
-import { useWorkspaceTeamCapabilities } from "@/hooks/use-workspace-team-capabilities";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "./ui/select";
 
 export function TeamSwitcher({ onNavigate }: { onNavigate?: () => void }) {
-  const { activeTeamId, setActiveTeam, teams, scope } = useActiveTeam();
-  const memberships = useMeTeams();
-  const { canListAllTeams } = useWorkspaceTeamCapabilities(memberships);
+  const { activeTeamId, setActiveTeam, teams, scope, canListAllTeams } = useActiveTeam();
   const activeTeam = teams.find((team) => team.id === activeTeamId);
   if (teams.length === 0) return null;
 

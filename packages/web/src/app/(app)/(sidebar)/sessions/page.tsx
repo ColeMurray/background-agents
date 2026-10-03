@@ -14,8 +14,6 @@ import { PlusIcon, SearchIcon, XIcon } from "@/components/ui/icons";
 import { useAuthSession } from "@/lib/auth-session";
 import { useCurrentUserAuthorization } from "@/hooks/use-current-user-authorization";
 import { useActiveTeam } from "@/hooks/use-active-team";
-import { useMeTeams } from "@/hooks/use-teams";
-import { useWorkspaceTeamCapabilities } from "@/hooks/use-workspace-team-capabilities";
 import { useEnvironments } from "@/hooks/use-environments";
 import { useRepos } from "@/hooks/use-repos";
 import { useSessionDiscovery } from "@/hooks/use-session-discovery";
@@ -47,6 +45,7 @@ function SessionsContent() {
     scope: activeTeamScope,
     setActiveTeam,
     teams,
+    canListAllTeams,
     loading: teamLoading,
     error: teamError,
   } = useActiveTeam();
@@ -74,8 +73,6 @@ function SessionsContent() {
   const invalidParams = parsed.success ? [] : parsed.invalidParams;
   const hasFilters = hasSessionDiscoveryFilters(query, teamContext);
   const { hasPermission, loading: authorizationLoading } = useCurrentUserAuthorization();
-  const memberships = useMeTeams();
-  const { canListAllTeams } = useWorkspaceTeamCapabilities(memberships);
   const canReadSessions = hasPermission("sessions.read");
   const canCreateSession = hasPermission("sessions.create");
   const { data: authSession } = useAuthSession();

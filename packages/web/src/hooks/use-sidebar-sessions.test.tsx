@@ -23,6 +23,7 @@ vi.mock("@/lib/auth-session", () => ({
 const teamContext = vi.hoisted(() => ({
   activeTeamId: null as string | null,
   scope: undefined as "workspace" | "all" | undefined,
+  canListAllTeams: false,
 }));
 vi.mock("./use-active-team", () => ({ useActiveTeam: () => ({ ...teamContext, loading: false }) }));
 

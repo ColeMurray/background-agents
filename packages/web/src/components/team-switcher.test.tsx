@@ -9,7 +9,7 @@ const state = vi.hoisted(() => ({
   activeTeamId: null as string | null,
   scope: "workspace" as string | undefined,
   roleKey: "member",
-  capabilities: { canListAllTeams: false } as { canListAllTeams?: boolean } | undefined,
+  canListAllTeams: false,
   setActiveTeam: vi.fn(),
 }));
 vi.mock("@/hooks/use-active-team", () => ({
@@ -17,14 +17,12 @@ vi.mock("@/hooks/use-active-team", () => ({
     teams: state.teams,
     activeTeamId: state.activeTeamId,
     scope: state.scope,
+    canListAllTeams: state.canListAllTeams,
     setActiveTeam: state.setActiveTeam,
   }),
 }));
 vi.mock("@/hooks/use-current-user-authorization", () => ({
   useCurrentUserAuthorization: () => ({ authorization: { role: { key: state.roleKey } } }),
-}));
-vi.mock("@/hooks/use-teams", () => ({
-  useMeTeams: () => ({ capabilities: state.capabilities }),
 }));
 vi.mock("@/components/ui/select", () => ({
   Select: ({
@@ -57,7 +55,7 @@ beforeEach(() => {
   state.activeTeamId = null;
   state.scope = "workspace";
   state.roleKey = "member";
-  state.capabilities = { canListAllTeams: false };
+  state.canListAllTeams = false;
   state.setActiveTeam.mockClear();
 });
 afterEach(cleanup);
@@ -101,29 +99,26 @@ describe("team switcher", () => {
         { id: "team_beta", slug: "beta", name: "Beta" },
       ];
       state.roleKey = roleKey;
-      state.capabilities = { canListAllTeams: true };
+      state.canListAllTeams = true;
       render(<TeamSwitcher />);
       expect(screen.getByRole("option", { name: "All teams" })).toBeTruthy();
     }
   );
 
-  it.each([undefined, {}, { canListAllTeams: false }])(
-    "withholds All teams from an owner when capabilities are %j",
-    (capabilities) => {
-      state.teams = [{ id: "team_alpha", slug: "alpha", name: "Alpha" }];
-      state.roleKey = "owner";
-      state.capabilities = capabilities;
-      render(<TeamSwitcher />);
-      expect(screen.queryByRole("option", { name: "All teams" })).toBeNull();
-    }
-  );
+  it("withholds All teams from an owner when the context denies the grant", () => {
+    state.teams = [{ id: "team_alpha", slug: "alpha", name: "Alpha" }];
+    state.roleKey = "owner";
+    state.canListAllTeams = false;
+    render(<TeamSwitcher />);
+    expect(screen.queryByRole("option", { name: "All teams" })).toBeNull();
+  });
 
   it("removes All teams when a fresh server response revokes the grant", () => {
     state.teams = [{ id: "team_alpha", slug: "alpha", name: "Alpha" }];
-    state.capabilities = { canListAllTeams: true };
+    state.canListAllTeams = true;
     const { rerender } = render(<TeamSwitcher />);
     expect(screen.getByRole("option", { name: "All teams" })).toBeTruthy();
-    state.capabilities = { canListAllTeams: false };
+    state.canListAllTeams = false;
     rerender(<TeamSwitcher />);
     expect(screen.queryByRole("option", { name: "All teams" })).toBeNull();
   });

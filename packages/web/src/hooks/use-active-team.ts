@@ -11,14 +11,13 @@ import {
 } from "react";
 import { useAuthSession } from "@/lib/auth-session";
 import { isRetryableTeamError, useMeTeams } from "./use-teams";
-import { useWorkspaceTeamCapabilities } from "./use-workspace-team-capabilities";
 
 const ACTIVE_TEAM_STORAGE_KEY = "open-inspect-active-team";
 
 function useActiveTeamState() {
   const { data: session } = useAuthSession();
   const memberships = useMeTeams();
-  const { canListAllTeams } = useWorkspaceTeamCapabilities(memberships);
+  const { canListAllTeams } = memberships;
   const [selection, setSelection] = useState<string | null>(null);
   const [hydratedUserId, setHydratedUserId] = useState<string | null>(null);
   const userId = session?.user.id ?? null;
@@ -78,6 +77,7 @@ function useActiveTeamState() {
     setActiveTeam,
     teams,
     scope,
+    canListAllTeams,
     requireTeamOnCreate: error ? false : memberships.requireTeamOnCreate,
     loading,
     error,

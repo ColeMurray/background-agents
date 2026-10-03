@@ -7,12 +7,13 @@ import { useSWRConfig } from "swr";
 import {
   TEAMS_KEY,
   teamCacheKey,
-  isRetryableTeamError,
   reconcileTeamDirectory,
+  isRetryableTeamError,
   useTeam,
   useTeamMembers,
   useTeams,
   type TeamResponse,
+  type TeamSnapshot,
 } from "@/hooks/use-teams";
 import { useTeamCapabilities } from "@/hooks/use-team-capabilities";
 import { useAuthSession } from "@/lib/auth-session";
@@ -69,7 +70,7 @@ export function TeamPage({ slug }: { slug: string }) {
         Loading team...
       </p>
     );
-  if (error && (!team || !isRetryableTeamError(error) || !team.capabilities))
+  if (error && (!team || !isRetryableTeamError(error)))
     return <ErrorBanner role="alert">Unable to load team.</ErrorBanner>;
   if (!team) return <p className="text-sm text-muted-foreground">Team not found.</p>;
   return <TeamContent key={`${userId}:${team.id}`} initialTeam={team} slug={slug} />;
@@ -82,13 +83,16 @@ function TeamContent({ initialTeam, slug }: { initialTeam: TeamResponse; slug: s
   const { mutate } = useSWRConfig();
   const { team: currentTeam, error } = useTeam(initialTeam.id);
   // The ID-keyed detail cache holds the PATCH response even when directory reads lag.
-  const canonicalSlug = !error && currentTeam?.archivedAt === null ? currentTeam.slug : undefined;
+  const canonicalSlug =
+    (!error || isRetryableTeamError(error)) && currentTeam?.archivedAt === null
+      ? currentTeam.slug
+      : undefined;
   useEffect(() => {
     if (!userId || !currentTeam || !canonicalSlug || canonicalSlug === slug) return;
     let cancelled = false;
     void mutate(
       teamCacheKey(TEAMS_KEY, userId),
-      (current: { teams: TeamResponse[] } | undefined) =>
+      (current: TeamSnapshot<{ teams: TeamResponse[] }> | undefined) =>
         reconcileTeamDirectory(current, currentTeam),
       { revalidate: false }
     ).then(() => {
@@ -100,19 +104,20 @@ function TeamContent({ initialTeam, slug }: { initialTeam: TeamResponse; slug: s
   }, [router, mutate, slug, canonicalSlug, currentTeam, userId]);
   const team = currentTeam ?? initialTeam;
   const capabilities = useTeamCapabilities(team);
-  const { canViewWork, canReadAutomations } = capabilities;
   const [tab, setTab] = useState<TeamTab>("Overview");
-  const tabs: TeamTab[] = canViewWork
-    ? ["Overview", "Members", "Repositories", "Environments"]
-    : ["Members"];
-  if (canViewWork && canReadAutomations) tabs.push("Automations");
-  if (canViewWork && capabilities.canManageSecrets) tabs.push("Secrets");
-  if (canViewWork) tabs.push("Channels");
-  if (canViewWork && (capabilities.canEditMetadata || capabilities.canArchive))
-    tabs.push("Settings");
+  const tabs: TeamTab[] = [];
+  if (capabilities.canReadTeamSessions) tabs.push("Overview");
+  tabs.push("Members");
+  if (capabilities.canReadTeamRepositories) tabs.push("Repositories");
+  if (capabilities.canReadTeamEnvironments) tabs.push("Environments");
+  if (capabilities.canReadAutomations) tabs.push("Automations");
+  if (capabilities.canManageSecrets) tabs.push("Secrets");
+  if (capabilities.canManageBindings) tabs.push("Channels");
+  if (capabilities.canEditMetadata || capabilities.canArchive) tabs.push("Settings");
   const activeTab = tabs.includes(tab) ? tab : "Members";
 
-  if (error) return <ErrorBanner role="alert">Unable to load team.</ErrorBanner>;
+  if (error && (!currentTeam || !isRetryableTeamError(error)))
+    return <ErrorBanner role="alert">Unable to load team.</ErrorBanner>;
   if (team.archivedAt !== null)
     return <p className="text-sm text-muted-foreground">Team not found.</p>;
   return (
@@ -155,9 +160,7 @@ function TeamContent({ initialTeam, slug }: { initialTeam: TeamResponse; slug: s
       {activeTab === "Repositories" && <TeamRepositories team={team} />}
       {activeTab === "Environments" && <TeamEnvironments teamId={team.id} />}
       {activeTab === "Automations" && <TeamAutomations teamId={team.id} />}
-      {activeTab === "Secrets" && canViewWork && capabilities.canManageSecrets && (
-        <TeamSecrets teamId={team.id} capabilities={team.capabilities} />
-      )}
+      {activeTab === "Secrets" && <TeamSecrets teamId={team.id} capabilities={team.capabilities} />}
       {activeTab === "Channels" && <TeamChannels team={team} />}
       {activeTab === "Settings" && <TeamDetail team={team} />}
     </section>

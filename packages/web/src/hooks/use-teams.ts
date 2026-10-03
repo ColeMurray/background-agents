@@ -1,6 +1,6 @@
 "use client";
 
-import useSWR, { unstable_serialize, useSWRConfig, type Cache } from "swr";
+import useSWR, { useSWRConfig } from "swr";
 import { z } from "zod";
 import type {
   createTeamRequestSchema,
@@ -11,13 +11,15 @@ import {
   teamResponseSchema,
   teamRoleSchema,
   meTeamsResponseSchema,
-  workspaceTeamCapabilitiesSchema,
   type TeamRole,
 } from "@open-inspect/shared/types/teams";
 import { workspaceMemberListResponseSchema } from "@open-inspect/shared/rbac";
 import { browserApiFetch, type BrowserApiPath } from "@/lib/browser-api-fetch";
 import { useAuthSession } from "@/lib/auth-session";
 import { ME_TEAMS_API_PATH, meTeamsKey } from "@/lib/me-teams-cache";
+import { fetchTeamSnapshot, teamSnapshot, type TeamSnapshot } from "@/lib/team-snapshot";
+
+export { isRetryableTeamError, teamSnapshot, type TeamSnapshot } from "@/lib/team-snapshot";
 
 export const TEAMS_KEY = "/api/teams";
 export function teamCacheKey(path: BrowserApiPath, userId: string | undefined) {
@@ -32,82 +34,39 @@ export type TeamMember = z.infer<typeof teamMemberSchema>;
 const teamsSchema = z.object({ teams: z.array(teamSchema) });
 const meTeamsSchema = meTeamsResponseSchema.extend({
   teams: z.array(teamSchema.extend({ role: teamRoleSchema })),
-  capabilities: workspaceTeamCapabilitiesSchema.partial().optional(),
 });
 const membersSchema = z.object({ members: z.array(teamMemberSchema) });
 
 export function reconcileTeamDirectory(
-  current: z.infer<typeof teamsSchema> | undefined,
+  current: TeamSnapshot<z.infer<typeof teamsSchema>> | undefined,
   team: TeamResponse
 ) {
-  return current
-    ? { teams: [...current.teams.filter((existing) => existing.id !== team.id), team] }
+  return current?.kind === "ready"
+    ? teamSnapshot({
+        teams: [...current.value.teams.filter((existing) => existing.id !== team.id), team],
+      })
     : current;
 }
 
-class TeamRequestError extends Error {
-  constructor(
-    message: string,
-    readonly retryable: boolean
-  ) {
-    super(message);
-    this.name = "TeamRequestError";
-  }
-}
-
-export function isRetryableTeamError(error: unknown): boolean {
-  return error instanceof TeamRequestError && error.retryable;
-}
-
 async function get<T>(path: BrowserApiPath, schema: z.ZodType<T>): Promise<T> {
-  let response: Response;
-  try {
-    response = await browserApiFetch(path);
-  } catch (cause) {
-    throw new TeamRequestError(`Failed to load teams (${String(cause)})`, true);
-  }
-  if (!response.ok)
-    throw new TeamRequestError(`Failed to load teams (${response.status})`, response.status >= 500);
-  return schema.parse(await response.json());
+  const snapshot = await fetchTeamSnapshot(path, schema);
+  if (snapshot.kind === "denied") throw snapshot.error;
+  return snapshot.value;
 }
-
-// Track requests per provider/key so a late failure cannot revoke a newer response.
-const teamReads = new WeakMap<Cache, Map<string, object>>();
 
 function useTeamSnapshot<T>(
   key: ReturnType<typeof teamCacheKey>,
   path: BrowserApiPath,
-  schema: z.ZodType<T>,
-  revoke: (current: T) => T
+  schema: z.ZodType<T>
 ) {
-  const { cache, mutate } = useSWRConfig();
-  const reads = teamReads.get(cache) ?? new Map<string, object>();
-  teamReads.set(cache, reads);
-  return useSWR<T>(
-    key,
-    async () => {
-      const cacheKey = unstable_serialize(key);
-      const current = cache.get(cacheKey)?.data as T | undefined;
-      const request = {};
-      reads.set(cacheKey, request);
-      try {
-        return await get(path, schema);
-      } catch (error) {
-        // Let SWR discard superseded failures just like superseded successful responses.
-        if (reads.get(cacheKey) !== request) return cache.get(cacheKey)?.data as T;
-        if (
-          !isRetryableTeamError(error) &&
-          current !== undefined &&
-          cache.get(cacheKey)?.data === current
-        ) {
-          // Mutate before SWR records the error, retaining it even if the viewer has switched.
-          void mutate(cacheKey, revoke(current), { revalidate: false });
-        }
-        throw error;
-      }
-    },
-    { keepPreviousData: false }
-  );
+  const result = useSWR<TeamSnapshot<T>>(key, () => fetchTeamSnapshot(path, schema), {
+    keepPreviousData: false,
+  });
+  return {
+    data: result.data?.kind === "ready" ? result.data.value : undefined,
+    error: result.data?.kind === "denied" ? result.data.error : result.error,
+    isLoading: result.isLoading,
+  };
 }
 
 function write(path: BrowserApiPath, method: string, body?: object): Promise<void>;
@@ -147,16 +106,11 @@ export function useMeTeams(enabled = true) {
   const result = useTeamSnapshot(
     userId && enabled ? meTeamsKey(userId) : null,
     ME_TEAMS_API_PATH,
-    meTeamsSchema,
-    (current) => ({ ...current, capabilities: undefined })
+    meTeamsSchema
   );
   return {
     teams: result.data?.teams ?? [],
-    // Terminal failures revoke cached grants; transient failures leave the last answer in force.
-    capabilities:
-      result.error === undefined || isRetryableTeamError(result.error)
-        ? result.data?.capabilities
-        : undefined,
+    canListAllTeams: result.data?.capabilities.canListAllTeams ?? false,
     requireTeamOnCreate: result.data?.requireTeamOnCreate ?? false,
     loading: enabled && Boolean(userId) && !result.data && !result.error,
     error: result.error,
@@ -169,19 +123,22 @@ export function useTeams(enabled = true) {
   const userId = session?.user.id;
   const { mutate } = useSWRConfig();
   const key = teamCacheKey(TEAMS_KEY, userId);
-  const result = useTeamSnapshot(enabled ? key : null, TEAMS_KEY, teamsSchema, (current) => ({
-    ...current,
-    teams: current.teams.map((team) => ({ ...team, capabilities: undefined })),
-  }));
+  const result = useTeamSnapshot(enabled ? key : null, TEAMS_KEY, teamsSchema);
 
   async function createTeam(input: z.input<typeof createTeamRequestSchema>) {
     const team = await write(TEAMS_KEY, "POST", input, teamSchema);
     await Promise.allSettled([
       mutate(
         key,
-        (current: z.infer<typeof teamsSchema> | undefined) => ({
-          teams: [...(current?.teams ?? []).filter((existing) => existing.id !== team.id), team],
-        }),
+        (current: TeamSnapshot<z.infer<typeof teamsSchema>> | undefined) =>
+          teamSnapshot({
+            teams: [
+              ...(current?.kind === "ready" ? current.value.teams : []).filter(
+                (existing) => existing.id !== team.id
+              ),
+              team,
+            ],
+          }),
         { revalidate: false }
       ),
       mutate(userId ? meTeamsKey(userId) : null),
@@ -193,7 +150,7 @@ export function useTeams(enabled = true) {
     const path = `/api/teams/${encodeURIComponent(id)}` as const;
     const team = await write(`${path}/join`, "POST", undefined, teamSchema);
     await Promise.allSettled([
-      mutate(teamCacheKey(path, userId), team, { revalidate: false }),
+      mutate(teamCacheKey(path, userId), teamSnapshot(team), { revalidate: false }),
       mutate(key),
       mutate(userId ? meTeamsKey(userId) : null),
       mutate(teamCacheKey(`${path}/members`, userId)),
@@ -216,18 +173,16 @@ export function useTeam(id: string) {
   const { mutate } = useSWRConfig();
   const path = `/api/teams/${encodeURIComponent(id)}` as const;
   const key = teamCacheKey(path, userId);
-  const result = useTeamSnapshot(key, path, teamSchema, (current) => ({
-    ...current,
-    capabilities: undefined,
-  }));
+  const result = useTeamSnapshot(key, path, teamSchema);
 
   async function updateTeam(input: z.input<typeof updateTeamRequestSchema>) {
     const team = await write(path, "PATCH", input, teamSchema);
     await Promise.allSettled([
-      mutate(key, team, { revalidate: false }),
+      mutate(key, teamSnapshot(team), { revalidate: false }),
       mutate(
         teamCacheKey(TEAMS_KEY, userId),
-        (current: z.infer<typeof teamsSchema> | undefined) => reconcileTeamDirectory(current, team),
+        (current: TeamSnapshot<z.infer<typeof teamsSchema>> | undefined) =>
+          reconcileTeamDirectory(current, team),
         { revalidate: (data) => data === undefined }
       ),
       mutate(userId ? meTeamsKey(userId) : null),
@@ -242,7 +197,7 @@ export function useTeam(id: string) {
       teamSchema
     );
     await Promise.allSettled([
-      mutate(key, team, { revalidate: false }),
+      mutate(key, teamSnapshot(team), { revalidate: false }),
       mutate(teamCacheKey(TEAMS_KEY, userId)),
       mutate(userId ? meTeamsKey(userId) : null),
     ]);

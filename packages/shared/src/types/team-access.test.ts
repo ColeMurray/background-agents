@@ -39,7 +39,9 @@ describe("resolveTeamAccess", () => {
               { ...baseTeam, joinPolicy, archivedAt, leadCount: 2 }
             );
             expect(access).toEqual({
-              canViewWork: isAdmin || membership !== null,
+              canReadTeamSessions: false,
+              canReadTeamRepositories: isAdmin || membership !== null,
+              canReadTeamEnvironments: false,
               canReadAutomations: false,
               canJoin: membership === null && joinPolicy === "open" && archivedAt === null,
               canLeave: membership !== null,
@@ -58,31 +60,40 @@ describe("resolveTeamAccess", () => {
     }
   );
 
-  it.each(["owner", "administrator", "member", "viewer", null] as const)(
-    "resolves work and workspace capabilities for role %s across membership and suspension",
+  it.each(["owner", "administrator", "member", "viewer", "custom", null] as const)(
+    "resolves read and workspace capabilities for role %s independently of other read permissions",
     (roleKey) => {
+      const permissionSets: PermissionId[][] = [
+        [],
+        ["sessions.read"],
+        ["environments.read"],
+        ["automations.read"],
+        ["sessions.read", "environments.read"],
+        ["sessions.read", "automations.read"],
+        ["environments.read", "automations.read"],
+        ["sessions.read", "environments.read", "automations.read"],
+      ];
       for (const membership of [null, "member", "lead"] as const) {
         for (const suspended of [false, true]) {
-          for (const canReadAutomations of [false, true]) {
+          for (const readPermissions of permissionSets) {
             const viewer = {
               userId: "user_one",
               roleKey,
               suspended,
-              permissions: [
-                "automations.manage.any",
-                ...(canReadAutomations ? ["automations.read" as const] : []),
-              ] satisfies PermissionId[],
+              permissions: ["automations.manage.any", ...readPermissions] satisfies PermissionId[],
               memberships: new Map<string, TeamRole>(membership ? [[baseTeam.id, membership]] : []),
             };
             const admin = roleKey === "owner" || roleKey === "administrator";
-            const canViewWork = !suspended && (admin || membership !== null);
-            // Archived teams remain readable; only the viewer's suspension denies work.
+            const eligible = !suspended && (admin || membership !== null);
+            // Archiving does not change read eligibility or the viewer's permissions.
             for (const archivedAt of [null, 123]) {
               expect(
                 resolveTeamAccess(viewer, { ...baseTeam, archivedAt, leadCount: 2 })
               ).toMatchObject({
-                canViewWork,
-                canReadAutomations: canViewWork && canReadAutomations,
+                canReadTeamSessions: eligible && readPermissions.includes("sessions.read"),
+                canReadTeamRepositories: eligible,
+                canReadTeamEnvironments: eligible && readPermissions.includes("environments.read"),
+                canReadAutomations: eligible && readPermissions.includes("automations.read"),
               });
             }
             expect(resolveWorkspaceTeamAccess(viewer)).toEqual({
@@ -111,24 +122,24 @@ describe("resolveTeamAccess", () => {
 });
 
 describe("team capability rollout compatibility", () => {
-  it("preserves legacy action grants while denying missing work capabilities", () => {
-    expect(
-      teamCapabilitiesSchema.parse({
-        canJoin: true,
-        canLeave: false,
-        canEditMetadata: true,
-        canManageMembers: true,
-        canManageRepositories: true,
-        canManageBindings: true,
-        canManageAutomations: true,
-        canManageEnvironments: true,
-        canManageSecrets: true,
-        canArchive: true,
-      })
-    ).toMatchObject({
+  it("preserves action grants while defaulting missing read capabilities to false", () => {
+    const actions = {
       canJoin: true,
+      canLeave: false,
       canEditMetadata: true,
-      canViewWork: false,
+      canManageMembers: true,
+      canManageRepositories: true,
+      canManageBindings: true,
+      canManageAutomations: true,
+      canManageEnvironments: true,
+      canManageSecrets: true,
+      canArchive: true,
+    };
+    expect(teamCapabilitiesSchema.parse(actions)).toEqual({
+      ...actions,
+      canReadTeamSessions: false,
+      canReadTeamRepositories: false,
+      canReadTeamEnvironments: false,
       canReadAutomations: false,
     });
   });

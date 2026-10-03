@@ -2,7 +2,9 @@ import { isWorkspaceAdmin, type PermissionId } from "../rbac";
 import type { Team, TeamRole } from "./teams";
 
 export interface TeamCapabilities {
-  canViewWork: boolean;
+  canReadTeamSessions: boolean;
+  canReadTeamRepositories: boolean;
+  canReadTeamEnvironments: boolean;
   canReadAutomations: boolean;
   canJoin: boolean;
   canLeave: boolean;
@@ -28,10 +30,12 @@ export function resolveTeamAccess(
 ): TeamCapabilities {
   const role = viewer.memberships.get(team.id);
   const manages = isWorkspaceAdmin(viewer.roleKey) || role === "lead";
-  const canViewWork = !viewer.suspended && (isWorkspaceAdmin(viewer.roleKey) || role !== undefined);
+  const eligible = !viewer.suspended && (isWorkspaceAdmin(viewer.roleKey) || role !== undefined);
   return {
-    canViewWork,
-    canReadAutomations: canViewWork && viewer.permissions.includes("automations.read"),
+    canReadTeamSessions: eligible && viewer.permissions.includes("sessions.read"),
+    canReadTeamRepositories: eligible,
+    canReadTeamEnvironments: eligible && viewer.permissions.includes("environments.read"),
+    canReadAutomations: eligible && viewer.permissions.includes("automations.read"),
     canJoin: role === undefined && team.joinPolicy === "open" && team.archivedAt === null,
     canLeave: role !== undefined && (role !== "lead" || team.leadCount > 1),
     canEditMetadata: manages,

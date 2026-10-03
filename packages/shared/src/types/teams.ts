@@ -73,7 +73,9 @@ export const updateTeamRequestSchema = z.object({
 
 export const teamCapabilitiesSchema = z.object({
   // Independently deployed web clients must fail closed against older server responses.
-  canViewWork: z.boolean().default(false),
+  canReadTeamSessions: z.boolean().default(false),
+  canReadTeamRepositories: z.boolean().default(false),
+  canReadTeamEnvironments: z.boolean().default(false),
   canReadAutomations: z.boolean().default(false),
   canJoin: z.boolean(),
   canLeave: z.boolean(),

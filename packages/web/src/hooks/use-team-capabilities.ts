@@ -4,7 +4,9 @@ import { teamCapabilitiesSchema } from "@open-inspect/shared/types/teams";
 type TeamCapabilities = z.infer<typeof teamCapabilitiesSchema>;
 
 const DENIED: TeamCapabilities = {
-  canViewWork: false,
+  canReadTeamSessions: false,
+  canReadTeamRepositories: false,
+  canReadTeamEnvironments: false,
   canReadAutomations: false,
   canJoin: false,
   canLeave: false,

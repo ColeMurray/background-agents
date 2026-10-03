@@ -1,6 +1,10 @@
 import { createExecutionContext, env } from "cloudflare:test";
 import { beforeEach, describe, expect, it } from "vitest";
-import { BUILT_IN_ROLE_REGISTRY } from "@open-inspect/shared/rbac";
+import {
+  BUILT_IN_ROLE_REGISTRY,
+  permissionsForBuiltInRole,
+  type PermissionId,
+} from "@open-inspect/shared/rbac";
 import {
   meTeamsResponseSchema,
   teamSessionsResponseSchema,
@@ -188,23 +192,33 @@ describe("team routes", () => {
   });
 
   it.each([
-    { roleKey: "owner", hasAutomationRead: true },
-    { roleKey: "administrator", hasAutomationRead: true },
-    { roleKey: "member", hasAutomationRead: true },
-    { roleKey: "viewer", hasAutomationRead: true },
-    { roleKey: null, hasAutomationRead: false },
-    { roleKey: null, hasAutomationRead: true },
-  ] as const)(
-    "returns $roleKey team capabilities across memberships (automations.read: $hasAutomationRead)",
-    async ({ roleKey, hasAutomationRead }) => {
+    ...(["owner", "administrator", "member", "viewer"] as const).map((roleKey) => ({
+      roleKey,
+      permissions: permissionsForBuiltInRole(roleKey),
+    })),
+    ...(
+      [
+        [],
+        ["sessions.read"],
+        ["environments.read"],
+        ["automations.read"],
+        ["sessions.read", "environments.read"],
+        ["sessions.read", "automations.read"],
+        ["environments.read", "automations.read"],
+        ["sessions.read", "environments.read", "automations.read"],
+      ] satisfies PermissionId[][]
+    ).map((permissions: PermissionId[]) => ({ roleKey: null, permissions })),
+  ])(
+    "returns $roleKey team capabilities across memberships (permissions: $permissions)",
+    async ({ roleKey, permissions }) => {
       if (roleKey === null) {
-        await assignCustomRole(
-          OWNER,
-          hasAutomationRead ? ["sessions.read", "automations.read"] : ["sessions.read"]
-        );
+        await assignCustomRole(OWNER, permissions);
       } else {
         await setRole(OWNER, roleKey);
       }
+      const hasSessionsRead = permissions.includes("sessions.read");
+      const hasEnvironmentsRead = permissions.includes("environments.read");
+      const hasAutomationRead = permissions.includes("automations.read");
       const isAdmin = roleKey === "owner" || roleKey === "administrator";
       const team = await new TeamStore(env.DB).create({
         slug: "capabilities",
@@ -217,11 +231,13 @@ describe("team routes", () => {
       for (const teamRole of [undefined, "member", "lead"] as const) {
         if (teamRole === "member") await memberships.add(team.id, OWNER);
         if (teamRole === "lead") await memberships.setRole(team.id, OWNER, "lead");
-        const canViewWork = isAdmin || teamRole !== undefined;
+        const eligible = isAdmin || teamRole !== undefined;
         const manages = isAdmin || teamRole === "lead";
         const capabilities = {
-          canViewWork,
-          canReadAutomations: canViewWork && hasAutomationRead,
+          canReadTeamSessions: eligible && hasSessionsRead,
+          canReadTeamRepositories: eligible,
+          canReadTeamEnvironments: eligible && hasEnvironmentsRead,
+          canReadAutomations: eligible && hasAutomationRead,
           canJoin: false,
           canLeave: teamRole !== undefined,
           canEditMetadata: manages,
@@ -249,10 +265,37 @@ describe("team routes", () => {
           teams: teamRole === undefined ? [] : [{ id: team.id, role: teamRole, capabilities }],
         });
 
-        for (const suffix of ["sessions", "repository-grants"]) {
-          const work = await request(`/teams/${team.id}/${suffix}`);
-          expect(work.status, `${teamRole ?? "nonmember"}/${suffix}`).toBe(canViewWork ? 200 : 404);
-          if (!canViewWork) expect(await work.json()).toEqual({ error: "Team not found" });
+        const sessions = await request(`/teams/${team.id}/sessions`);
+        expect(sessions.status, `${teamRole ?? "nonmember"}/sessions`).toBe(
+          !eligible ? 404 : hasSessionsRead ? 200 : 403
+        );
+        if (!eligible) expect(await sessions.json()).toEqual({ error: "Team not found" });
+        else if (!hasSessionsRead) {
+          expect(await sessions.json()).toEqual({
+            error: "Forbidden",
+            code: "permission_required",
+            permission: "sessions.read",
+          });
+        }
+
+        const repositories = await request(`/teams/${team.id}/repository-grants`);
+        expect(repositories.status, `${teamRole ?? "nonmember"}/repository-grants`).toBe(
+          eligible ? 200 : 404
+        );
+        if (!eligible) expect(await repositories.json()).toEqual({ error: "Team not found" });
+
+        const environments = await request(`/environments?ownerTeamId=${team.id}`);
+        expect(environments.status, `${teamRole ?? "nonmember"}/environments`).toBe(
+          hasEnvironmentsRead ? 200 : 403
+        );
+        if (!hasEnvironmentsRead) {
+          expect(await environments.json()).toEqual({
+            error: "Forbidden",
+            code: "permission_required",
+            permission: "environments.read",
+          });
+        } else if (!eligible) {
+          expect(await environments.json()).toEqual({ environments: [], total: 0 });
         }
         expect((await request(`/teams/${team.id}`, "PATCH", { name: "Renamed" })).status).toBe(
           manages ? 200 : 403
@@ -634,8 +677,17 @@ describe("team routes", () => {
         expect(detail.status).toBe(200);
         expect(await detail.json()).toMatchObject({
           id: archived.id,
-          capabilities: { canArchive: canRestore },
+          capabilities: {
+            canArchive: canRestore,
+            canReadTeamSessions: true,
+            canReadTeamRepositories: true,
+            canReadTeamEnvironments: true,
+            canReadAutomations: true,
+          },
         });
+        for (const suffix of ["sessions", "repository-grants"]) {
+          expect((await request(`/teams/${archived.id}/${suffix}`)).status).toBe(200);
+        }
         const members = await request(`/teams/${archived.id}/members`);
         expect(members.status).toBe(200);
         expect(await members.json()).toMatchObject({
