@@ -24,6 +24,10 @@ new Sentry issues, and recurring report generation.
 
 Navigate to **Automations** in the sidebar, then click **Create Automation**.
 
+Creation requires both `automations.create` and `sessions.create`, plus permission to use the
+selected targets. The creator becomes the initial executor. The web creation and template entry
+points also require both permissions; automation creation permission alone is insufficient.
+
 Start by choosing a **Trigger Type**. The rest of the form adjusts based on that choice.
 
 Choose workspace ownership or an owning team; team pages also expose an **Automations** tab. The
@@ -444,8 +448,16 @@ any sessions it created are preserved.
 ## Run History
 
 Each automation's detail page shows a chronological list of runs — one row per recorded invocation —
-with status, duration, and links to the underlying sessions. Event-driven authorization denials do
-not create invocation records and do not appear in this history.
+with status, duration, and links to the underlying sessions. Generic event execution-authorization
+denials do not create invocation records and do not appear in this history.
+
+GitHub repository-grant denials are an exception. Matching events without an owning-team grant for
+the repository can record a sessionless **Unauthorized** invocation with reason `repo_not_granted`
+before executor authorization, including when the executor cannot be resolved. A missing executor
+alone does not create that record. These denials increment the event response's `skipped` count, do
+not pause the automation, and neither add a failure strike nor reset existing failures. See
+`packages/control-plane/src/automation/github-event-admission.ts` and
+`packages/control-plane/src/db/github-automation-store.ts` for this pre-admission path.
 
 A single-repository firing renders as a flat row, exactly as before. A multi-repository firing
 renders as one expandable row summarizing its repositories (for example "10 repositories — 8
@@ -454,14 +466,15 @@ reason, and session link.
 
 ### Run Statuses
 
-| Status              | Meaning                                                                                    |
-| ------------------- | ------------------------------------------------------------------------------------------ |
-| **Starting**        | A session is being created for this run.                                                   |
-| **Running**         | At least one session is actively executing.                                                |
-| **Completed**       | Every session finished successfully.                                                       |
-| **Failed**          | Every session encountered an error. The failure reason is shown on the run.                |
-| **Partial failure** | A multi-repository run where some repositories completed and some failed.                  |
-| **Skipped**         | A previous run was still active, or a scheduled firing was denied execution authorization. |
+| Status              | Meaning                                                                                                             |
+| ------------------- | ------------------------------------------------------------------------------------------------------------------- |
+| **Starting**        | A session is being created for this run.                                                                            |
+| **Running**         | At least one session is actively executing.                                                                         |
+| **Completed**       | Every session finished successfully.                                                                                |
+| **Failed**          | Every session encountered an error. The failure reason is shown on the run.                                         |
+| **Partial failure** | A multi-repository run where some repositories completed and some failed.                                           |
+| **Skipped**         | A previous run was still active, or a scheduled firing was denied execution authorization.                          |
+| **Unauthorized**    | GitHub event admission found no owning-team grant for the repository (`repo_not_granted`); no session was launched. |
 
 When authorized, click **View session** to open the session with its output and artifacts.
 Automation read access is not session read access: history redacts session IDs, titles, and artifact

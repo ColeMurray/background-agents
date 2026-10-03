@@ -4,8 +4,11 @@ description: Sign in to an existing OpenInspect deployment, start a session agai
 audience: user
 owner: web
 status: published
-lastReviewed: "2026-10-02"
+lastReviewed: "2026-10-03"
 relatedCode:
+  - packages/web/src/hooks/use-prompt-draft.ts
+  - packages/web/src/lib/prompt-drafts.ts
+  - packages/web/src/lib/auth-session.tsx
   - packages/web/src/lib/composer-access.ts
   - packages/control-plane/src/authorization/teams-enforcement.ts
   - packages/web/src/components/session-access-selector.tsx
@@ -56,6 +59,8 @@ The home page is the new-session composer, headed "Welcome to" followed by the d
 Before choosing a target, open the composer's session access selector. Review both the **team context** (the owning team, or **No team** when allowed) and the audience: **Workspace**, the selected team's audience, or **Private**. A draft initialized from the active sidebar team uses that team's default visibility; the required-team fallback also uses its team's default. Changing the team inside the composer preserves the current audience rather than applying the new team's default. For example, choosing a team while the audience is Workspace leaves it Workspace-visible. Review and explicitly change the audience before sending if needed. Team visibility requires a team. If the workspace requires team ownership and you have no eligible membership, the composer says **Join a team to create a session.** See [Teams](/administration/teams).
 
 Ownership is fixed when the session is created. Workspace visibility does not remove team ownership, and changing the sidebar's discovery scope is not a way to transfer a session. Private access is enforced in every deployment mode, but non-private Team read isolation requires `TEAMS_ENFORCEMENT=on`; the default is `shadow`. See [Multiplayer and sharing](/sessions/multiplayer-and-sharing) and [Deployment](/administration/deployment).
+
+Explicit team and audience choices are remembered in user-scoped `localStorage` in this browser and restored when you return, but only while the sidebar context matches. Changing sidebar scope discards that saved choice and uses the new context's defaults. Composer choices do not change sidebar scope. Invalid stored choices are ignored, and team selection is rechecked against current memberships and the required-team policy.
 
 Above the text area, the target picker decides what the sandbox works on. Its search field reads "Search environments and repositories...". Choices reflect the selected team context and your access. Choose one of:
 
@@ -129,7 +134,9 @@ A good first prompt names one outcome, the place in the code it concerns, and ho
 In packages/web, the "Copy link" button on the session header does not show any confirmation after copying. Add a brief "Copied" state on the button for two seconds after a successful copy, matching how the branch-name copy button in the sidebar behaves. Add or update the component test, run the web test suite for the files you touched, and report the command you ran and its result. Do not open a pull request yet.
 ```
 
-Send with the send button or Cmd/Ctrl+Enter (the default keyboard shortcut; it can be customized). Typing in the composer already starts warming a sandbox ("Warming sandbox..." appears beside the send button), so the session is often ready by the time you send. You are taken to the session page at `/session/<id>`.
+Unsent prompt text is saved separately from team/audience preferences, in this tab's `sessionStorage` for your account. It returns after a reload or navigation back in the same tab. A successful send clears the submitted draft; a failed send keeps it. Emptying the prompt or successfully signing out clears it, and storage ends with the tab. Attachments are not part of this text draft. If browser storage is unavailable, the text stays only in memory.
+
+Send with the send button or Cmd/Ctrl+Enter (the default keyboard shortcut; it can be customized). Typing in the composer already starts warming a sandbox ("Warming sandbox..." appears beside the send button), so the session is often ready by the time you send. Restoring a saved draft alone does not start warming; the next input change can, or sending creates the session directly. You are taken to the session page at `/session/<id>`.
 
 </Step>
 

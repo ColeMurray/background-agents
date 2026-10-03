@@ -4,8 +4,11 @@ description: A tour of the session page, from the header and timeline to the com
 audience: user
 owner: web
 status: published
-lastReviewed: "2026-10-02"
+lastReviewed: "2026-10-03"
 relatedCode:
+  - packages/web/src/hooks/use-prompt-draft.ts
+  - packages/web/src/lib/prompt-drafts.ts
+  - packages/web/src/lib/auth-session.tsx
   - packages/shared/src/types/session-access.ts
   - packages/web/src/components/session-visibility-control.tsx
   - packages/web/src/components/sidebar/collaborators-section.tsx
@@ -58,7 +61,7 @@ Older events load as you scroll up. The view stays pinned to the bottom while ne
 
 ## The composer
 
-The composer sits below the timeline.
+The composer sits below the timeline. Unsent prompt text is saved in this tab's `sessionStorage`, separately for your account and each session, and restored after reloads or returning to the session in the same tab. A failed send keeps the draft; a successful send clears the submitted text without erasing a newer draft. Emptying the composer or successfully signing out clears the stored text. This is text-draft storage, not attachment persistence, and it ends with the tab; if browser storage is unavailable, the draft stays only in memory.
 
 - The placeholder reads "Ask or build anything". While a prompt is running it changes to "Add a follow-up...".
 - **Attach images** (the paperclip) opens a file picker. You can also paste or drag images into the box. Previews appear above the text and "Uploading…" shows while they upload. See [attaching images](/sessions/attaching-images) for formats and limits.
@@ -82,7 +85,7 @@ Archive asks for confirmation: "Archive this session? You can restore archived s
 
 The sidebar shows session details in sections. Some sections appear only when they have content or when you have the permission to use them.
 
-Session details include the owning team and visibility. If authorized, use **Visibility** to choose Workspace, Team, or Private and click **Save**. **Include child sessions** is checked by default: changing to Workspace or Team can widen access to private children, so review the confirmation carefully. Private sessions also show **Collaborators** to people allowed to manage sharing. These controls change access, not the session's fixed ownership. See [Change visibility](/sessions/multiplayer-and-sharing#change-visibility).
+Session details include the owning team and visibility. If authorized, use **Visibility** to choose Workspace, Team, or Private; changes save automatically after any required confirmation. **Include child sessions** is checked by default, so clear it before changing visibility to affect only this session. Unchecking saves nothing; checking it again applies the current visibility to descendants. Applying Workspace or Team to children can widen access to private children and requires confirmation. Team also requires confirmation for parent-only changes. Private sessions show **Collaborators** to people allowed to manage sharing. These controls change access, not the session's fixed ownership. See [Change visibility](/sessions/multiplayer-and-sharing#change-visibility).
 
 | Section              | What it shows                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                | When it appears                                                                                                           |
 | -------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------- |

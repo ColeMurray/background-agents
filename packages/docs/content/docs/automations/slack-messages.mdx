@@ -4,7 +4,7 @@ description: Start a session when a matching message is posted in a watched Slac
 audience: team-owner
 owner: control-plane
 status: published
-lastReviewed: "2026-09-23"
+lastReviewed: "2026-10-03"
 relatedCode:
   - docs/AUTOMATIONS.md
   - docs/integrations/SLACK.md
@@ -13,6 +13,9 @@ relatedCode:
   - packages/web/src/components/automations/condition-builder.tsx
   - packages/control-plane/src/routes/automation-validation.ts
   - packages/control-plane/src/scheduler/scheduler.ts
+  - packages/control-plane/src/authorization/slack-post-gate.ts
+  - packages/control-plane/src/authorization/teams-enforcement.ts
+  - packages/slack-bot/src/channel-trigger.ts
 ---
 
 A Slack Message automation watches one or more channels and starts a session when a message matches its conditions, without anyone mentioning the bot.
@@ -45,6 +48,16 @@ The Slack app needs more than the standard @mention setup. An operator must:
 - Invite the bot to every channel to watch. The bot only sees messages in channels it is a member of.
 
 Slack automations take zero or one repository. Multi-repository fan-out is not available.
+
+## Team scope and publication
+
+An automation run uses the automation's saved owning team, not the posting user's choice of team. [Slack channel bindings](/integrations/slack#team-channel-bindings) route new interactive requests; do not assume binding a watched channel transfers an existing automation or session to that team.
+
+For team-owned automations, the executor and repository grants must satisfy automation execution authorization. A **Slack User** condition filters trigger messages; it is not an OpenInspect membership or repository grant, and it does not authorize all later thread replies.
+
+Slack output has a separate live publication gate. Private-session output is refused, as is output to a channel bound to a different owning team, including workspace-visible sessions. Managed completion and media delivery do not bypass that gate. An unbound channel is not automatically a cross-team refusal, so channel bindings are not an outbound allowlist.
+
+`TEAMS_ENFORCEMENT` still defaults to `shadow`, not `on`. These execution and publication checks do not imply full team-read isolation in that mode.
 
 ## Conditions
 
@@ -91,7 +104,9 @@ A run that opened a pull request or produced other artifacts always posts.
 
 ## Thread replies continue the session
 
-Every reply in a thread continues the same session, during the run and after it finishes, for up to 7 days after the thread's first trigger. The reply is queued as a follow-up prompt on that session (re-spawned from a snapshot if it had gone idle), gets its own eyes reaction, and the agent posts its response in the thread. A follow-up does not need to match the trigger conditions: conditions gate new runs, not replies that continue a thread.
+Authorized replies in a thread continue the same session, during the run and after it finishes, for up to 7 days after the thread's first trigger. An admitted reply is queued as a follow-up prompt on that session (re-spawned from a snapshot if it had gone idle), gets its own eyes reaction, and the agent posts its response while publication is allowed. A follow-up does not need to match the trigger conditions: conditions gate new runs, not replies that continue a thread. The scheduler checks the reply author's session collaboration access separately.
+
+An unauthorized reply does not fall through to start a new run for that automation. This scheduler path is distinct from [interactive mapped-thread handling](/integrations/slack#threaded-conversations): if there is no steerable session, or enqueueing fails, the scheduler can re-evaluate the reply as a new trigger. Publication can still be refused after a run is admitted.
 
 Two edge cases:
 
@@ -104,7 +119,7 @@ Attachments on thread replies are not forwarded either.
 
 Channel triggers widen who can start a coding session. Before enabling one:
 
-- Any member of a watched channel can start a run by posting a matching message. Treat each watched channel as a list of people authorized to run the automation against its repository.
+- Any member of a watched channel can supply a matching trigger unless conditions restrict them. Treat each watched channel as a source of untrusted requests to the automation's executor; membership and grant checks do not make that message trustworthy.
 - Prefer an allowlist: add a **Slack User** condition with **include** so only specific people can trigger it, and keep watched channels small.
 - Message text reaches the agent as part of the prompt. Scope the instructions defensively and rely on the deployment's repository access boundary.
 - Regex conditions run without a per-match timeout. Patterns are length-capped and validated on save, but a pathological pattern is the author's responsibility.

@@ -40,10 +40,17 @@ be resolved from it.
 ## Teams Enforcement
 
 Production Terraform's `teams_enforcement` sets the control-plane `TEAMS_ENFORCEMENT` value.
-Accepted values are `off`, `shadow`, and `on`, with **`shadow` as the default**. Set
-`teams_enforcement = "on"` in `terraform.tfvars` to enforce non-private Team-visibility reads. The
+Accepted values are `off`, `shadow`, and `on`, with **`shadow` as the default**. For a fresh
+deployment, explicitly set `teams_enforcement = "on"` in `terraform.tfvars` (as in Step 5) so the
+control plane runs with `TEAMS_ENFORCEMENT=on` and enforces non-private Team-visibility reads. The
 AWS configuration also explicitly sets `shadow`. Do not assume a deployed instance has full team
 read isolation simply because it includes Teams.
+
+For an existing deployment, review its production `shadow_denied:*` authorization audit entries
+before opting into `on`. Resolve unexpected would-deny decisions and verify membership, repository
+grants, and bot bindings before changing the deployed value. A default flip remains gated on that
+production audit review; this guide does not establish that the gate has passed. Runtime and
+Terraform defaults remain `shadow`, independently of the fresh-deployment opt-in shown here.
 
 Private-session access and current owning-team membership for non-read session actions remain
 enforced in every mode. Environment/automation ownership, repository grants, and team-secret checks
@@ -73,9 +80,9 @@ Open-Inspect uses Terraform to automate deployment across multiple cloud provide
 **Your job**: Create accounts, gather credentials, and configure one file (`terraform.tfvars`).
 **Terraform's job**: Create all infrastructure and configure services.
 
-**How this guide is organized**: Steps 1–9 are the minimal deploy path: one web platform, the
+**How this guide is organized**: Steps 1–10 are the minimal deploy path: one web platform, the
 default Modal sandbox provider, a GitHub App for repository access and sign-in, and the Slack,
-Linear, and GitHub bots turned off. The [Optional Sections](#optional-sections) after Step 9 cover
+Linear, and GitHub bots turned off. The [Optional Sections](#optional-sections) after Step 10 cover
 alternative sandbox providers, Google login, Slack, Linear, the GitHub bot, a custom domain, CI/CD,
 branding, updating, and troubleshooting.
 
@@ -326,6 +333,12 @@ For GitHub sign-in, you should also have:
 - **Client ID** (e.g., `Iv1.abc123...`)
 - **Client Secret** (e.g., `abc123...`)
 
+The App private key belongs in the control plane, not in a Modal `github-app` secret or a session
+secret. Fresh and restored sandboxes obtain scoped Git credentials from the control plane on demand.
+The optional GitHub bot Worker still needs its own App credential bindings; Terraform supplies them
+when enabled. Modal's `llm-api-keys` and `internal-api` secrets remain required and are provisioned
+by Terraform.
+
 ---
 
 ## Step 4: Generate Security Secrets
@@ -505,6 +518,11 @@ allowed_github_orgs   = ""                      # Comma-separated orgs whose act
 # Explicitly opt into open access only if you want any authenticated user to be
 # able to sign in when all allowlists are empty.
 unsafe_allow_all_users = false
+
+# Fresh deployment opt-in: sets control-plane TEAMS_ENFORCEMENT=on.
+# The Terraform/runtime default remains shadow. Existing deployments must review
+# production shadow_denied audit entries before opting in.
+teams_enforcement = "on"
 ```
 
 > **Core path bot settings**: The snippet above deploys with `enable_slack_bot = false`,
@@ -666,7 +684,8 @@ curl -I "$(terraform -chdir=terraform/environments/production output -raw web_ap
 ```
 
 Visit your web app URL and sign in with each configured provider. New users get the Member role,
-which cannot manage secrets, so the end-to-end session test comes after Step 9.
+which cannot manage secrets, so the end-to-end session test comes after Owner and team setup in
+Steps 9 and 10.
 
 ---
 
@@ -724,14 +743,32 @@ The preflight row should report `"status":"no-op"` with the detail
 command exits non-zero and the `detail` field gives the reason. The control-plane `/health` endpoint
 reports service liveness, not Owner status.
 
-### Test the Full Flow
+## Step 10: Create the First Team and Test a Session
 
-1. As the Owner, add a model credential: go to **Settings > Secrets**, select the repository used
-   for this test, and add the key for your model (e.g. `ANTHROPIC_API_KEY` for Claude). Skip this if
-   you set `anthropic_api_key` in `terraform.tfvars` and will use a Claude model. See
-   [Secrets Management](SECRETS.md).
-2. Create a new session with a repository, selecting a model whose credential you added
-3. Send a prompt and verify the sandbox starts
+1. As the bootstrapped Owner, open **Settings > Teams > Create team**, enter a name and slug, and
+   create your first team. The creator becomes its first **Lead** automatically; Owner bootstrap
+   alone does not create a team or membership.
+2. Open the team's settings. Choose **Join policy**: **Invite only** (the creation default) or
+   **Open** for workspace users to join themselves. Choose **Default visibility** for new sessions:
+   **Team**, **Workspace**, or **Private**. Use Team for team-readable work, and confirm the
+   deployed control plane has `TEAMS_ENFORCEMENT=on` before relying on that read boundary.
+3. In **Teams > your team > Repositories**, grant the repositories the team needs. New teams have no
+   grants. Prefer named repositories; use **All installation repositories** only when that broad
+   access is intended. Include every repository required by a multi-repository environment.
+4. Have the other operators sign in once, then add them in the team's member list. For an open team,
+   they can instead use **Join team** from Teams. Assign Lead to operators who need team-management
+   duties. Workspace Owner/Administrator status is not a substitute for joining the team to perform
+   non-read actions on its sessions.
+5. Add a model credential in the team's **Secrets** tab, or use **Settings > Secrets** for a global
+   or repository key (e.g. `ANTHROPIC_API_KEY` for Claude). Skip this if a suitable deployment-wide
+   credential is already configured. See [Secrets Management](SECRETS.md).
+6. Create a session with this team selected, a granted repository, the intended visibility, and a
+   model whose credential is configured. Send a prompt and verify sandbox startup, repository
+   checkout, and streamed results. Have another team member verify the intended collaboration.
+7. If new sessions, environments, and automation definitions must be team-owned, enable **Require a
+   team for new sessions** in **Settings > Teams** after membership and grants are ready. This
+   separate `requireTeamOnCreate` policy also covers new environments and automation definitions; it
+   does not migrate existing workspace resources.
 
 ---
 
@@ -1043,6 +1080,16 @@ In Slack, for each channel where you want the bot to respond:
 
 The bot only responds to @mentions in channels it has been invited to.
 
+#### Choose Team Routing
+
+In Open-Inspect, bind each Slack channel in **Teams > your team > Channels**. Then open **Settings >
+Integrations > Slack** and save **Unbound channels**: `workspace` (the default, **Create
+workspace-level sessions**) or `reject` (**Reject requests until the channel is bound**). This is
+the integration's workspace-wide `unboundChannels` setting, not an environment variable or Terraform
+input. Slack DMs are personal conversations and bypass the unbound-channel rejection policy; session
+creation still checks other policies, including `requireTeamOnCreate`. A workspace fallback does not
+override a requirement to choose a team. See [Slack Integration](integrations/SLACK.md).
+
 ---
 
 ## Linear Agent (Optional)
@@ -1079,8 +1126,15 @@ https://open-inspect-linear-bot-{deployment_name}.YOUR-SUBDOMAIN.workers.dev/oau
 ```
 
 A Linear workspace admin must approve the installation. After installation, the agent appears in
-mention and assignment menus. Test it by mentioning the agent on an issue, then use **View Session**
-to follow the corresponding Open-Inspect session.
+mention and assignment menus. Before testing, bind the external Linear team in Open-Inspect's
+**Teams > your team > Channels**. In **Settings > Integrations > Linear**, save **Unbound Linear
+teams**: `workspace` (the default, **Create workspace-level sessions**) or `reject` (**Reject
+requests until bound**). This workspace-wide integration setting is named `unboundChannels`; it is
+not an environment variable or Terraform input. Workspace fallback still must satisfy other creation
+policies, including `requireTeamOnCreate`.
+
+Test by mentioning the agent on an issue in the bound Linear team, then use **View Session** to
+verify the corresponding Open-Inspect session has the intended owning team and repository.
 
 For upgrades, enable **Client credentials tokens** before deploying. No reinstall is expected for an
 eligible existing installation, but allow already-running sessions to finish before upgrading

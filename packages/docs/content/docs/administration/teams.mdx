@@ -4,7 +4,7 @@ description: Create teams, manage membership and repository grants, and understa
 audience: team-owner
 owner: control-plane
 status: published
-lastReviewed: "2026-10-02"
+lastReviewed: "2026-10-03"
 relatedCode:
   - docs/AUTH.md
   - packages/shared/src/types/team-access.ts
@@ -18,6 +18,8 @@ relatedCode:
   - packages/web/src/components/teams/teams-index.tsx
   - packages/web/src/components/teams/team-page.tsx
   - packages/web/src/components/teams/team-repositories.tsx
+  - packages/web/src/components/teams/team-channels.tsx
+  - packages/control-plane/src/routes/team-channel-bindings.ts
 ---
 
 Teams organize members and own sessions, environments, and automations inside one workspace. They also hold repository grants and secrets. Team membership does not replace your [workspace role](/administration/workspace-access): both resource access and the relevant feature permissions apply.
@@ -62,7 +64,7 @@ Open **Teams** to browse **My teams** or **All teams**, search by name, slug, or
 
 Use the team's **Members** tab or its Settings detail to add a member, change **Member** to **Lead**, or remove someone. With workspace member-directory permission, the add control offers a picker; otherwise, a lead enters a known workspace user ID. Directory browsing does not expose everyone else's email address to ordinary members.
 
-The last lead cannot leave, be removed, or be demoted. Promote another lead first. To leave when no self-service control is available, ask a lead or workspace administrator to remove your membership. Losing membership also removes eligibility for team-owned session actions and for private collaborator access on that team's sessions.
+To leave, select **Remove** on your own membership row in the team's **Members** tab or Settings detail. The last lead cannot leave, be removed, or be demoted; promote another lead first. Losing membership also removes eligibility for team-owned session actions and for private collaborator access on that team's sessions.
 
 Workspace Owners and Administrators can administer teams without joining, but must actually belong to a team to create or act on its sessions or execute its automations. Administrative read access is not permission to prompt or use a sandbox.
 
@@ -85,21 +87,26 @@ Repository secrets, skills, and images remain workspace resources. Once a reposi
 
 The team page exposes tabs according to your access:
 
-| Tab          | Purpose                                                               |
-| ------------ | --------------------------------------------------------------------- |
-| Overview     | Discover the team's sessions.                                         |
-| Members      | Inspect membership; leads and workspace administrators can manage it. |
-| Repositories | Inspect or manage repository grants.                                  |
-| Environments | Find and manage team-owned environments.                              |
-| Automations  | Find team-owned automations when your role permits automation reads.  |
-| Secrets      | Manage team secrets; shown to leads and workspace administrators.     |
-| Settings     | Edit team details and defaults, or archive the team.                  |
+| Tab          | Purpose                                                                  |
+| ------------ | ------------------------------------------------------------------------ |
+| Overview     | Discover the team's sessions.                                            |
+| Members      | Inspect membership; leads and workspace administrators can manage it.    |
+| Repositories | Inspect or manage repository grants.                                     |
+| Environments | Find and manage team-owned environments.                                 |
+| Automations  | Find team-owned automations when your role permits automation reads.     |
+| Secrets      | Manage team secrets; shown to leads and workspace administrators.        |
+| Channels     | Leads and workspace administrators bind Slack channels and Linear teams. |
+| Settings     | Edit team details and defaults, or archive the team.                     |
 
 The sidebar scope switcher changes which work you browse. **Workspace** means workspace-owned work, not all work with Workspace visibility. Selecting a team does not change the ownership of an existing resource. See [Inbox and search](/sessions/inbox-and-search) for the aggregate scopes and session filters.
 
 ## Create team-owned work
 
 Choose a team when creating a session, environment, or automation. Ownership cannot later move between teams or between a team and the workspace.
+
+Automation creation requires both `automations.create` and `sessions.create`. Team child-session
+creation requires the active prompt author's current membership; the agent cannot fall back to the
+parent owner's membership if that author is unresolved or has left.
 
 | Resource    | Team behavior                                                                                                                                                                                                                                        |
 | ----------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -132,6 +139,16 @@ The policy does not move or hide existing workspace resources, and existing work
 Leads and workspace Owners/Administrators manage the **Secrets** tab. Saved values are not returned; only key names are listed. Team-owned sessions receive global secrets, then owning-team secrets, then target environment or repository secrets, with later layers winning collisions.
 
 Team-owned environment image builds include the team's secrets. Repository-shared image builds never include team secrets. Team-secret changes invalidate affected environment images and schedule best-effort rebuilds when prebuilds are enabled. See [Secrets](/configure/secrets) and [Prebuilt images](/configure/prebuilt-images#secrets-and-images).
+
+## Route integrations to the team
+
+Leads and workspace Owners/Administrators use the **Channels** tab to bind a Slack channel or an external Linear team ID. Choose **Primary** for the team's main binding for that provider or **Source** for another inbound source. Both kinds route new sessions to this team; neither selects a default notification destination. One external channel/team can belong to only one OpenInspect team, and a team can have only one primary binding per provider.
+
+For Slack, invite the bot first: the binding refuses channels it has not joined and externally shared channels. For Linear, enter the external team ID, not an issue-key prefix. Existing Linear repository/environment mappings choose a target but do not establish team ownership; create the binding explicitly. Neither binding type grants membership or moves existing sessions.
+
+In **Settings > Integrations**, Slack has an **Unbound channels** policy and Linear has **Unbound Linear teams**. Each stores its own `unboundChannels` setting: `workspace` (default) creates workspace-owned sessions for unbound sources; `reject` refuses creation until a binding exists. Workspace fallback still fails when **Require a team for new sessions** is enabled. Configure each provider separately and ensure the acting users have team membership and repository grants.
+
+GitHub has no channel binding. Mentions route from the linked PR session, then the sender's eligible team, with workspace fallback when unresolved; event automations use their own team and executor. Deprecated auto-review-on-open remains workspace-owned. See [Slack](/integrations/slack), [Linear](/integrations/linear), and [GitHub](/integrations/github) for routing, output restrictions, and troubleshooting.
 
 ## Archive and restore
 

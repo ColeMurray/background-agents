@@ -55,8 +55,11 @@ Provided by `packages/sandbox-runtime/src/sandbox_runtime/auth/`:
 
 - **internal.py**: HMAC authentication for control plane requests
 
-Modal holds no source-control credentials. Session sandboxes fetch git credentials on demand from the
-control plane; image builds receive a one-shot clone token in the build request.
+Modal does not need the GitHub App private key. Fresh and snapshot-restored session sandboxes fetch
+scoped Git credentials on demand from the control plane; image builds receive a one-shot clone token
+in the build request. The legacy Modal `github-app` secret is optional and not required by these
+paths. Keep the App private key in the control plane; the optional GitHub bot Worker still needs its
+own App credential bindings. Do not inject the private key through session secrets.
 
 ### API (`src/`)
 
@@ -75,7 +78,9 @@ snapshot, terminate, and delete provider operations.
 
 1. Install Modal CLI: `pip install modal`
 2. Authenticate: `modal setup`
-3. Create secrets via Modal CLI:
+3. Create the required `llm-api-keys` and `internal-api` secrets via Modal CLI (Terraform provisions
+   them when using the full deployment guide). Do not create a `github-app` secret for sandbox Git
+   authentication:
 
 ```bash
 # Fleet-wide LLM API keys. No key is required — pass an empty value to have
@@ -90,6 +95,12 @@ modal secret create internal-api \
 ```
 
 See `.env.example` for a full list of environment variables.
+
+Use the same `MODAL_API_SECRET` in the control plane and Modal, and set
+`ALLOWED_CONTROL_PLANE_HOSTS` to the deployed control-plane hostname. Removing the old `github-app`
+dependency does not make either of the required secret objects above optional. For upgrades, verify
+the deployed Modal app and runtime images use the current credential path before removing legacy
+credentials needed by older deployments.
 
 ### Install local packages
 

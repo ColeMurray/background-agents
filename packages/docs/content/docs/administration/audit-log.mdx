@@ -4,7 +4,7 @@ description: What the workspace audit log records, how to read an event, and how
 audience: admin
 owner: control-plane
 status: published
-lastReviewed: "2026-10-02"
+lastReviewed: "2026-10-03"
 relatedCode:
   - packages/shared/src/types/audit-events.ts
   - packages/control-plane/src/routes/audit-events.ts
@@ -12,6 +12,7 @@ relatedCode:
   - packages/control-plane/src/db/authorization-store.ts
   - packages/control-plane/src/db/session-audit.ts
   - packages/control-plane/src/db/team-secrets.ts
+  - packages/control-plane/src/db/team-channel-bindings.ts
   - packages/control-plane/src/routes/session-scope.ts
   - packages/control-plane/src/routes/automation-executor.ts
   - packages/web/src/components/settings/audit-log-settings.tsx
@@ -69,6 +70,10 @@ The control plane writes these event families today:
 | `workspace.owner_bootstrapped`                                                               | Owner bootstrapped                            | An operator ran the Owner bootstrap command. The principal is `service`, the actor is `operator-cli`, and the target user is the new Owner.                                                                                                                                                                                 |
 
 Actions without a friendly label are shown by their raw name.
+
+Channel binding changes are recorded as `team.binding_added` (**Team channel binding added**) and
+`team.binding_removed` (**Team channel binding removed**) for Slack channels and Linear teams. These record
+routing changes, not membership grants or transfers of existing session ownership.
 
 In `shadow` [Teams enforcement](/administration/deployment#teams-enforcement), an **Authorization allowed** event can carry a `shadow_denied:<reason>` reason, or `shadow_denied:batch` with per-session details. That means the Teams resolver would have denied access but legacy admission allowed it; it is not a denied request. Private-session and team-owned non-read checks remain enforced in every mode.
 

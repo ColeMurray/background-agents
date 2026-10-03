@@ -4,7 +4,7 @@ description: Choose session visibility, share private sessions with collaborator
 audience: user
 owner: control-plane
 status: published
-lastReviewed: "2026-10-02"
+lastReviewed: "2026-10-03"
 relatedCode:
   - packages/shared/src/types/session-access.ts
   - packages/control-plane/src/authorization/teams-enforcement.ts
@@ -53,10 +53,14 @@ Collaborators still need the appropriate workspace permissions to prompt or use 
 ## Change visibility
 
 1. Open the session's right sidebar, or **Details** on a small screen.
-2. If you are authorized to change visibility, choose **Workspace**, **Team**, or **Private** under **Visibility**. Team requires an owning team; Private requires an owning user.
-3. Review **Include child sessions**, which is checked by default, then click **Save**.
+2. Review **Include child sessions**, which is checked by default. Clear it before changing visibility if you want to change only this session.
+3. If you are authorized, choose **Workspace**, **Team**, or **Private** under **Visibility**. The selection saves automatically after any required confirmation; there is no separate Save button. Team requires an owning team; Private requires an owning user.
 
-Including children when changing to Workspace or Team shows a confirmation: **private child sessions will also change to that visibility**. Clear the checkbox to change only this session. You must be authorized for every included descendant; when offered after a failure, **Retry without child sessions** applies the change only to the parent.
+Including children when applying Workspace or Team shows a confirmation: **private child sessions will also change to that visibility**. Team visibility also requires confirmation when changing only the parent, because the owning user may lose read access if they no longer belong to the team. Cancelling leaves visibility unchanged.
+
+Unchecking **Include child sessions** saves nothing; it only scopes later changes to this session. Checking it again immediately applies the current visibility to descendants, after any required confirmation, even if the parent's visibility has not changed.
+
+Controls are disabled while **Updating...** is shown. You must be authorized for every included descendant. A failed save normally restores the previous selection; when **Retry without child sessions** is offered, the failed selection is retained so the retry can apply it only to the parent.
 
 For non-private sessions, the owning user, owning team's leads, and workspace administrators can change visibility if they meet the access checks. For private sessions, that authority is limited to the owning user or workspace Owner. Team-owned changes always require current owning-team membership. Visibility changes never change ownership.
 

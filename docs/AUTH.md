@@ -105,8 +105,9 @@ team access.
 Open teams allow active workspace users to join; invite-only teams require a lead or workspace
 Owner/Administrator to add members. Leads and workspace Owners/Administrators can manage membership,
 lead/member roles, team metadata, and archive/restore. The last lead cannot leave, be removed, or be
-demoted: appoint another lead first. Members can leave through `DELETE /teams/:id/members/:userId`
-using their own user ID, subject to the same last-lead restriction.
+demoted: appoint another lead first. Members can leave using **Remove** on their own membership row
+in the team's Members tab or Settings detail, or through `DELETE /teams/:id/members/:userId` using
+their own user ID, subject to the same last-lead restriction.
 
 ### Team Directory and Pages
 
@@ -123,10 +124,10 @@ address or full ID. This privacy rule applies in every team enforcement mode.
 
 A team's session overview is available to its members and workspace Owners and Administrators, with
 session visibility checks applied on the server. Team pages also expose Repositories, Environments,
-Automations, Secrets, and Settings according to the viewer's capabilities and feature permissions.
-Team pages do not expose an audit activity feed. Team operations are still recorded in the workspace
-audit log behind `workspace.audit.read`; its team filter includes teams the reader does not belong
-to.
+Automations, Secrets, Channels, and Settings according to the viewer's capabilities and feature
+permissions. Team pages do not expose an audit activity feed. Team operations are still recorded in
+the workspace audit log behind `workspace.audit.read`; its team filter includes teams the reader
+does not belong to.
 
 The sidebar context defaults to **All my teams**, which leaves session lists unfiltered by team
 while preserving server visibility checks. Users with at least one active team can choose Workspace
@@ -134,9 +135,12 @@ while preserving server visibility checks. Users with at least one active team c
 without active teams have no selector and keep unfiltered lists. A stored Workspace or active-team
 choice is retained; unknown or archived selections fall back to All my teams.
 
-The new-session composer's team and visibility are draft-local choices initialized from the sidebar
-context. Changing them does not change the sidebar or command-menu recents. If a team is required
-and the context does not name one, the composer selects the user's first active team locally.
+The new-session composer's team and visibility are independent of the sidebar and command-menu
+recents. Explicit choices are saved in user-scoped localStorage and restored while the sidebar
+context matches; changing sidebar context clears that saved choice. Without a matching saved draft,
+the composer initializes from the sidebar context. If a team is required and the context does not
+name one, it selects the user's first active team locally. Changing teams within the composer
+preserves the selected audience when valid; it does not apply the new team's default automatically.
 
 ### Session Visibility
 
@@ -205,6 +209,11 @@ repository used by the session; archived teams cannot be selected. Without an ex
 team sessions use the team's default and teamless sessions default to `workspace`. `team` visibility
 requires a team; `private` requires a workspace user owner. A teamless session may still be private.
 
+For an agent-spawned child of a team-owned session, the active prompt author's canonical identity
+must resolve and still belong to the owning team. The child cannot borrow its parent owner's
+membership when that author is missing or no longer a member; creation fails with `not_member` in
+every enforcement mode. Child actions also check the active author's current access.
+
 Owners and Administrators can configure **Settings > Teams > Require a team for new sessions**
 (`requireTeamOnCreate`). It is off by default. Despite the setting's session-oriented label, it
 requires a team for new sessions, environment definitions, and automation definitions; creation
@@ -258,10 +267,12 @@ or the team membership required for non-read actions.
 Visibility changes can include descendants. A cascading visibility change refuses the entire request
 if any included descendant is inaccessible or denies the requested action, including the
 current-membership check for each team-owned descendant; it does not silently skip that descendant.
-The web visibility control requires a changed selection and asks for confirmation when applying
-non-private visibility to child sessions, since private descendants will receive that visibility
-too. Grant changes constrain subsequent credential resolution, not the token already available to a
-running sandbox.
+The web visibility control autosaves selection changes. **Include child sessions** starts checked;
+unchecking it only scopes future changes to the parent, while checking it applies the current
+visibility to children even if the parent selection has not changed. Team changes and non-private
+child cascades ask for confirmation, since they can restrict collaborators or widen private-child
+access. Grant changes constrain subsequent credential resolution, not the token already available to
+a running sandbox.
 
 Session discovery and inbox filters compose on the server: `ownerFilter=started` matches the
 creator, `participating` also includes explicit collaborators and users with persisted read state,
@@ -323,6 +334,9 @@ initially the creator. Workspace definitions and run history are readable with a
 permission; team definitions additionally require team membership or a workspace Owner/Administrator
 role. These checks apply in every session enforcement mode.
 
+Creating either workspace-owned or team-owned automations requires both `automations.create` and
+`sessions.create`, as well as target access and any applicable team membership.
+
 - Executors and owning-team leads can manage/trigger eligible automations with the corresponding
   `own` permissions; `any` permissions allow those actions across eligible automations.
 - Built-in Administrators and Owners can manage and manually trigger any automation. A manual run of
@@ -370,6 +384,53 @@ specific integration route explicitly permits that operation.
 Some integrations also apply their own ingress rules. For example, the GitHub integration may
 require an allowed trigger user or sufficient repository collaborator access before it sends a
 request to Open-Inspect.
+
+### Slack and Linear Bindings
+
+Team leads and workspace Owners/Administrators manage Slack channel and Linear team bindings in
+**Teams > Channels**. Each external coordinate belongs to at most one Open-Inspect team; each team
+has at most one primary binding per provider, with additional source bindings. Both kinds route
+creation to that team. Bindings do not add members or repository grants, and changing a binding does
+not reassign existing sessions. Slack binding validation requires the bot to have joined the channel
+and rejects externally shared channels.
+
+Slack and Linear each have a separate `unboundChannels` integration setting in their respective
+**Settings > Integrations** page. `workspace` (default) permits unbound creation into workspace
+ownership; `reject` requires a binding. `requireTeamOnCreate` can still refuse workspace fallback.
+Binding lookup failures stop launch rather than silently falling back. Scoped classification and
+target mappings do not bypass membership, repository grants, or environment ownership.
+
+Slack interactive follow-ups never replace an unavailable session with a new one on `404`. Confirmed
+publication denial closes the thread; a later reply may reopen it only when posting is allowed
+again. An actor-specific forbidden follow-up is refused without closing the thread for other
+authorized users. Session publication, including queued media and `slack-notify`, refuses private
+sessions and destinations bound to a different team independently of session enforcement mode.
+Unbound destinations are not an outbound allowlist. Slack automation steering has its own scheduler
+path; see [Slack follow-ups](integrations/SLACK.md).
+
+Linear uses the external Linear team coordinate for ownership and scoped catalog/completion reads.
+Legacy KV repository/environment mappings select targets, not team ownership, and are not migrated
+into bindings automatically. The bot verifies the issue's current team before posting completion; if
+it changed from the launch team or a protected read fails, it withholds results. Unlike Slack's
+publication gate, Linear's actorless session reads retain the `off`/`shadow`/`on` session-read
+semantics: full Team read isolation still requires `on`. See [Linear](integrations/LINEAR.md).
+
+### GitHub Routing
+
+GitHub uses numeric repository IDs rather than channel bindings. Event automations match the
+repository and their owning team's grants, and run as their configured executor. A matching team
+automation denied its trigger-repository grant can record an `unauthorized` history entry with
+`repo_not_granted`, without a session or failure strike; other runtime authorization denials keep
+their existing skip behavior. This is distinct from the general event-denial path described in
+[Automations](AUTOMATIONS.md#managing-automations).
+
+Mentions use the linked PR session's owning team first, then an eligible sender team with a grant.
+Multiple eligible teams use the sender's most recent session in the repository to break the tie;
+unresolved identity or ambiguity falls back to workspace ownership. Routing is not permission to
+read the linked session and does not bypass session-creation checks or the require-team policy.
+Autofix continues in the PR's existing session. Deprecated auto-review-on-open remains
+workspace-owned; use a team-owned GitHub Event automation for team-owned reviews. See
+[GitHub](integrations/GITHUB.md).
 
 ## Suspension
 

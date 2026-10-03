@@ -4,8 +4,9 @@ description: Build a weekly scheduled automation that opens a dependency-update 
 audience: team-owner
 owner: control-plane
 status: published
-lastReviewed: "2026-10-02"
+lastReviewed: "2026-10-03"
 relatedCode:
+  - packages/web/src/hooks/use-can-create-automation.ts
   - docs/AUTOMATIONS.md
   - docs/AVAILABLE_MODELS.md
   - packages/web/src/components/automations/automation-form.tsx
@@ -28,7 +29,7 @@ This tutorial walks you through a scheduled automation that opens a dependency-u
 
 ## Prerequisites
 
-- A workspace role of Member, Administrator, or Owner. Viewers cannot create automations.
+- Both `automations.create` and `sessions.create`, granted by the built-in Member, Administrator, and Owner roles. Viewers cannot create automations. Custom roles need both permissions because the creator becomes the initial executor.
 - A repository the GitHub App can access. For a team automation, the owning team also needs a current repository grant; newly created teams have no grants until configured.
 - Current membership in the active team if you are creating a team-owned automation, including when you are a workspace Administrator or Owner.
 - At least one enabled model under Settings › Models that your chosen harness can run.

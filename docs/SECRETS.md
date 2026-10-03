@@ -155,6 +155,21 @@ If you try to save a reserved key, the UI will show a validation error.
 
 ## Security
 
+### GitHub App credentials are not session secrets
+
+Fresh and restored sandboxes obtain scoped Git credentials on demand from the control plane. Keep
+the GitHub App private key in the control plane; do not add it as a global, team, repository, or
+environment secret. The optional GitHub bot Worker still needs its own App credential bindings.
+
+The legacy Modal `github-app` secret is optional and is no longer required for sandbox Git
+credentials. This does not remove the required Modal `internal-api` secret (`MODAL_API_SECRET` and
+`ALLOWED_CONTROL_PLANE_HOSTS`) or the `llm-api-keys` secret object. The latter may contain an empty
+model key when sessions receive their model credentials from the control-plane secret store.
+Terraform provisions these required Modal secrets. See
+[Modal setup](../packages/modal-infra/README.md#prerequisites).
+
+### Stored secret protection
+
 - Secrets are encrypted with **AES-256-GCM** before being stored in the database
 - Values are **never returned by the API** after saving — only key names are visible
 - Secrets are decrypted at sandbox creation time and injected as environment variables

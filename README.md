@@ -29,6 +29,24 @@ Open-Inspect provides a hosted background coding agent that can:
 
 ### How It Works
 
+Teams own sessions, environments, and automations. A session's Workspace, Team, or Private
+visibility is separate from its fixed ownership; resources cannot move between teams or to/from the
+workspace. Team-owned session actions require current owning-team membership, even for workspace
+Owners and Administrators. With enforcement on, deletion additionally requires `sessions.delete` and
+being the session owner, an owning-team lead, or a workspace administrator; team-owned and private
+sessions apply their action checks in every mode.
+
+Private sessions are readable by their owner and explicit collaborators. Workspace Owners have an
+audited break-glass read path, not automatic collaboration or sandbox access. Team visibility's read
+boundary requires `TEAMS_ENFORCEMENT=on`; the deployment default remains `shadow`.
+
+For a single-team deployment, create one team, add the users who need to act on its sessions, and
+grant its repositories. Existing workspace-owned rows are not moved or hidden. Even with every user
+in one team, being a Member does not let someone delete another member's session under enforcement
+unless they satisfy the ownership/lead rule. Follow the
+[first-team setup](docs/GETTING_STARTED.md#step-10-create-the-first-team-and-test-a-session) before
+inviting users.
+
 The shared GitHub App installation bounds workspace repository reach. Sandbox git credentials are
 limited to the session's persisted repositories and, for team-owned sessions, current owning-team
 grants. Workspace permissions and resource access still apply; Open-Inspect does not compare a

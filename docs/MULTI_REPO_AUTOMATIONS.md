@@ -26,9 +26,11 @@ Recorded firings — single-repo, multi-repo, repo-less, or skipped — take the
 is no separate single-repo pipeline and no group-of-N special case; a single-repo firing is simply
 an invocation with one run.
 
-Event-driven authorization denials increment the response's `skipped` count without creating an
-invocation, so they do not appear in run history. Scheduled authorization denials instead record a
-skipped invocation and pause the automation; see [Automations](AUTOMATIONS.md#managing-automations).
+Generic event execution-authorization denials increment the response's `skipped` count without
+creating an invocation. GitHub's earlier trigger-repository grant check is an exception: it can
+record a sessionless `unauthorized` run with reason `repo_not_granted`, including before an executor
+is resolved. Scheduled authorization denials instead record a skipped invocation and pause the
+automation; see [Automations](AUTOMATIONS.md#managing-automations).
 
 **API ↔ UI vocabulary.** The API speaks `automation / repository / invocation / run / session`. The
 UI keeps its established "run" copy: the history section is still titled "Run History", the empty
@@ -227,7 +229,8 @@ invocation aggregates links for display only; there is no cross-repository "mega
 
 - `GET /automations/:id/invocations` — the history endpoint: one entry per recorded invocation
   (`{invocations, total}`), each carrying its child `runs` with repository snapshots. `total` counts
-  invocations; event-driven authorization denials are not recorded.
+  invocations. Generic event execution-authorization denials are not recorded; GitHub pre-admission
+  grant denials can appear as `unauthorized` instead.
 - `POST /automations/:id/trigger` — returns `201 {invocationId, runs}`; `409` when blocked by an
   active invocation.
 - Repository selection is written via `repositories: [{repoOwner, repoName, baseBranch?}]` on
