@@ -2110,7 +2110,7 @@ describe("Scheduler", () => {
       mockSessionStoreGet
         .mockReset()
         .mockResolvedValue({ ownerTeamId: "team-a", visibility: "workspace" });
-      mockTeamChannelBindingGet.mockReset().mockResolvedValue(null);
+      mockTeamChannelBindingGet.mockReset().mockResolvedValue({ teamId: "team-a" });
     });
 
     describe("Slack publication preparation retries", () => {
@@ -2198,6 +2198,7 @@ describe("Scheduler", () => {
 
       it.each([
         { visibility: "private", binding: null, reason: "private_session" },
+        { visibility: "workspace", binding: null, reason: "channel_team_mismatch" },
         {
           visibility: "workspace",
           binding: { teamId: "team-b" },
@@ -2231,39 +2232,42 @@ describe("Scheduler", () => {
         expect(await verifyCallbackSignature(body, "test-secret")).toBe(true);
       });
 
-      it("rechecks preparation and scope after transport failure without a nested loop", async () => {
-        const { scheduler, slackFetch, warn } = createSlackCompletionHarness();
-        mockTeamChannelBindingGet
-          .mockResolvedValueOnce(null)
-          .mockResolvedValue({ teamId: "team-b" });
-        slackFetch.mockResolvedValue(new Response("unavailable", { status: 503 }));
-        const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
-        try {
-          await scheduler.runComplete(runCompletion({ success: false, error: "secret error" }));
+      it.each([null, { teamId: "team-b" }])(
+        "rechecks preparation and scope after transport failure without a nested loop: %j",
+        async (binding) => {
+          const { scheduler, slackFetch, warn } = createSlackCompletionHarness();
+          mockTeamChannelBindingGet
+            .mockResolvedValueOnce({ teamId: "team-a" })
+            .mockResolvedValue(binding);
+          slackFetch.mockResolvedValue(new Response("unavailable", { status: 503 }));
+          const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
+          try {
+            await scheduler.runComplete(runCompletion({ success: false, error: "secret error" }));
 
-          expect(mockStore.updateRun).toHaveBeenCalledOnce();
-          expect(mockStore.getInvocationById).toHaveBeenCalledTimes(2);
-          expect(mockStore.getById).toHaveBeenCalledTimes(2);
-          expect(mockSessionStoreGet).toHaveBeenCalledTimes(2);
-          expect(mockTeamChannelBindingGet).toHaveBeenCalledTimes(2);
-          expect(slackFetch.mock.calls.map(([url]) => url)).toEqual([
-            "https://internal/callbacks/automation-complete",
-            "https://internal/callbacks/thread_closed",
-          ]);
-          const closure = JSON.parse(String(slackFetch.mock.calls[1][1]?.body));
-          expect(closure.context).toEqual({ channel: "C1", threadTs: "1700000000.000200" });
-          expect(closure).not.toHaveProperty("error");
-          expect(closure).not.toHaveProperty("messageId");
-          expect(setTimeoutSpy.mock.calls.map(([, ms]) => ms)).toEqual([10_000, 1000, 10_000]);
-          expect(
-            warn.mock.calls
-              .filter(([, fields]) => fields?.event === "scheduler.slack_complete_failed")
-              .map(([, fields]) => fields?.attempt)
-          ).toEqual([1, 2]);
-        } finally {
-          setTimeoutSpy.mockRestore();
+            expect(mockStore.updateRun).toHaveBeenCalledOnce();
+            expect(mockStore.getInvocationById).toHaveBeenCalledTimes(2);
+            expect(mockStore.getById).toHaveBeenCalledTimes(2);
+            expect(mockSessionStoreGet).toHaveBeenCalledTimes(2);
+            expect(mockTeamChannelBindingGet).toHaveBeenCalledTimes(2);
+            expect(slackFetch.mock.calls.map(([url]) => url)).toEqual([
+              "https://internal/callbacks/automation-complete",
+              "https://internal/callbacks/thread_closed",
+            ]);
+            const closure = JSON.parse(String(slackFetch.mock.calls[1][1]?.body));
+            expect(closure.context).toEqual({ channel: "C1", threadTs: "1700000000.000200" });
+            expect(closure).not.toHaveProperty("error");
+            expect(closure).not.toHaveProperty("messageId");
+            expect(setTimeoutSpy.mock.calls.map(([, ms]) => ms)).toEqual([10_000, 1000, 10_000]);
+            expect(
+              warn.mock.calls
+                .filter(([, fields]) => fields?.event === "scheduler.slack_complete_failed")
+                .map(([, fields]) => fields?.attempt)
+            ).toEqual([1, 2]);
+          } finally {
+            setTimeoutSpy.mockRestore();
+          }
         }
-      });
+      );
 
       it.each(["invocation", "automation", "session", "channel"] as const)(
         "contains exhausted %s reads without transport or terminal duplicate publication",

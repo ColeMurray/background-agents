@@ -234,35 +234,79 @@ describe("HTTP session access by enforcement mode", () => {
     }
   );
 
-  it("revokes an unbound Linear coordinate's reads of team-owned sessions", async () => {
-    const { sessionName, team } = await session("team");
-    const bindings = new TeamChannelBindingStore(env.DB);
-    const bindingActor = { actorUserId: OWNER, requestId: "linear-unbind" };
-    await bindings.put(
-      { provider: "linear", externalId: "L1", teamId: team.id, kind: "source" },
-      bindingActor
+  describe.each(["slack", "linear"] as const)("unbound %s reads", (provider) => {
+    it.each(["off", "shadow", "on"])(
+      "revokes team-owned reads in %s mode without hiding workspace sessions",
+      async (mode) => {
+        const { sessionName, team } = await session("team");
+        const bindings = new TeamChannelBindingStore(env.DB);
+        const bindingActor = { actorUserId: OWNER, requestId: `${provider}-unbind` };
+        const externalId = provider === "slack" ? "C1" : "L1";
+        await bindings.put({ provider, externalId, teamId: team.id, kind: "source" }, bindingActor);
+        const purposes = provider === "slack" ? ["", "&purpose=slack-post"] : [""];
+        const resources = ["events", "artifacts"] as const;
+        const read = (resource: (typeof resources)[number], purpose: string) =>
+          fetchMode(
+            `/sessions/${sessionName}/${resource}?channel=${provider}:${externalId}${purpose}`,
+            mode,
+            { service: `${provider}-bot` }
+          );
+        for (const purpose of purposes) {
+          for (const resource of resources) {
+            expect((await read(resource, purpose)).status).toBe(200);
+          }
+        }
+
+        await bindings.remove(team.id, provider, externalId, bindingActor);
+        const runtime = vi.spyOn(env.SESSION, "get");
+        for (const visibility of ["team", "workspace", "private"]) {
+          await env.DB.prepare("UPDATE sessions SET visibility = ? WHERE id = ?")
+            .bind(visibility, sessionName)
+            .run();
+          for (const purpose of purposes) {
+            for (const resource of resources) {
+              const response = await read(resource, purpose);
+              expect(response.status).toBe(404);
+              expect(await response.json()).toEqual({ error: "Session not found" });
+            }
+          }
+        }
+        expect(runtime).not.toHaveBeenCalled();
+        runtime.mockRestore();
+        const denials = await auditRows("authorization.request_denied");
+        expect(denials).toHaveLength(resources.length * purposes.length * 3);
+        expect(
+          denials.every(
+            (row) => row.team_id === team.id && row.reason_code === "session_not_visible"
+          )
+        ).toBe(true);
+
+        await env.DB.prepare("UPDATE sessions SET visibility = 'workspace' WHERE id = ?")
+          .bind(sessionName)
+          .run();
+        expect(
+          (await fetchMode(`/sessions/${sessionName}/events`, mode, { service: `${provider}-bot` }))
+            .status
+        ).toBe(200);
+
+        await env.DB.prepare("UPDATE sessions SET owner_team_id = NULL WHERE id = ?")
+          .bind(sessionName)
+          .run();
+        for (const purpose of purposes) {
+          for (const resource of resources) {
+            expect((await read(resource, purpose)).status).toBe(200);
+          }
+        }
+        await env.DB.prepare("UPDATE sessions SET visibility = 'private' WHERE id = ?")
+          .bind(sessionName)
+          .run();
+        for (const purpose of purposes) {
+          for (const resource of resources) {
+            expect((await read(resource, purpose)).status).toBe(404);
+          }
+        }
+      }
     );
-    const read = async (resource: "events" | "artifacts") =>
-      (
-        await fetchMode(`/sessions/${sessionName}/${resource}?channel=linear:L1`, "on", {
-          service: "linear-bot",
-        })
-      ).status;
-    expect(await read("events")).toBe(200);
-
-    await bindings.remove(team.id, "linear", "L1", bindingActor);
-    const runtime = vi.spyOn(env.SESSION, "get");
-    expect(await read("events")).toBe(404);
-    expect(await read("artifacts")).toBe(404);
-    expect(runtime).not.toHaveBeenCalled();
-    runtime.mockRestore();
-
-    await env.DB.prepare(
-      "UPDATE sessions SET owner_team_id = NULL, visibility = 'workspace' WHERE id = ?"
-    )
-      .bind(sessionName)
-      .run();
-    expect(await read("events")).toBe(200);
   });
 
   it.each(["linear:", "unknown:L1", "slack:L1", "linear:L1&channel=linear:L2"])(

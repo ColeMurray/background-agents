@@ -260,6 +260,14 @@ access resolver, including in `off` and `shadow` modes. Those modes do not relax
 checks or the checks on descendants included in a cascading operation. Collaborator self-removal
 remains read-only-authorized in every mode.
 
+Actorless Slack and Linear reads scoped to an unbound integration coordinate can read only
+workspace-owned, non-private sessions in every mode. Unbinding immediately revokes scoped reads of
+team-owned sessions, even when their visibility is `workspace`; channel-less service reads keep
+their existing semantics. Slack publication, including `purpose=slack-post` reads, also requires a
+current matching channel binding for team-owned sessions in every mode. Private sessions cannot
+publish to Slack. Unbound DMs and never-bound channels have no team-session exception. Refused
+callbacks send only a coordinate-only thread closure, not session content.
+
 The session boundary covers four paths, not just the session page:
 
 - **HTTP item routes** authorize by the persisted session row before serving snapshots, actions,

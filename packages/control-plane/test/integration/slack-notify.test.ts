@@ -1,10 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { SELF, env } from "cloudflare:test";
+import { SELF, createExecutionContext, env } from "cloudflare:test";
 import { IntegrationSettingsStore } from "../../src/db/integration-settings";
 import { SessionIndexStore } from "../../src/db/session-index";
+import { TeamChannelBindingStore } from "../../src/db/team-channel-bindings";
 import type { SessionVisibility } from "@open-inspect/shared/types/teams";
 import { cleanD1Tables } from "./cleanup";
-import { initNamedSessionDO, queryDO, seedSandboxAuth } from "./helpers";
+import { initNamedSessionDO, queryDO, routeRequest, seedSandboxAuth } from "./helpers";
 
 async function setupSession(opts?: {
   agentNotificationsEnabled?: boolean;
@@ -105,6 +106,7 @@ describe("POST /sessions/:id/slack-notify", () => {
   beforeEach(cleanD1Tables);
   afterEach(() => {
     vi.unstubAllGlobals();
+    vi.restoreAllMocks();
   });
 
   it("does not post when the authoritative session is missing", async () => {
@@ -184,6 +186,58 @@ describe("POST /sessions/:id/slack-notify", () => {
       }
     }
   );
+
+  describe.each(["off", "shadow", "on"])("channel unbinding in %s mode", (mode) => {
+    it.each(["team", "workspace"] as const)(
+      "revokes %s-visible team posts and logs the refusal",
+      async (visibility) => {
+        await env.DB.prepare(
+          "INSERT INTO teams (id, slug, name, created_at, updated_at) VALUES ('team-a', 'team-a', 'Team A', 1, 1)"
+        ).run();
+        const bindings = new TeamChannelBindingStore(env.DB);
+        const actor = { actorUserId: "user-1", requestId: "slack-notify-unbind" };
+        await bindings.put(
+          { provider: "slack", externalId: "C1", teamId: "team-a", kind: "source" },
+          actor
+        );
+        const { sessionName, sandboxToken } = await setupSession({
+          ownerTeamId: "team-a",
+          visibility,
+          agentNotificationsEnabled: true,
+        });
+        const slackFetch = buildSlackFetchMock({});
+        vi.stubGlobal("fetch", slackFetch);
+        const notify = () =>
+          routeRequest(
+            new Request(`https://test.local/sessions/${sessionName}/slack-notify`, {
+              method: "POST",
+              headers: { Authorization: `Bearer ${sandboxToken}` },
+              body: JSON.stringify({ channel: "C1", text: "secret text" }),
+            }),
+            { ...env, TEAMS_ENFORCEMENT: mode },
+            createExecutionContext()
+          );
+        expect((await notify()).status).toBe(200);
+
+        await bindings.remove("team-a", "slack", "C1", actor);
+        slackFetch.mockClear();
+        const warnings = vi.spyOn(console, "warn").mockImplementation(() => {});
+        const refused = await notify();
+
+        expect(refused.status).toBe(403);
+        expect(await refused.json()).toMatchObject({ error: "session_scope_denied" });
+        expect(slackFetch).not.toHaveBeenCalled();
+        expect(warnings.mock.calls.map(([line]) => JSON.parse(String(line)))).toContainEqual(
+          expect.objectContaining({
+            event: "slack_notify.denial",
+            session_id: sessionName,
+            channel_input: "C1",
+            reason: "session_scope_denied",
+          })
+        );
+      }
+    );
+  });
 
   it("returns 401 without sandbox auth", async () => {
     const { sessionName } = await setupSession({ agentNotificationsEnabled: true });
