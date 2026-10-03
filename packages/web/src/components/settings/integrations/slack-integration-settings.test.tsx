@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 /// <reference types="@testing-library/jest-dom" />
 
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import * as matchers from "@testing-library/jest-dom/matchers";
@@ -131,19 +131,6 @@ function repo(fullName: string): EnrichedRepository {
   } as unknown as EnrichedRepository;
 }
 
-// Radix Select uses pointer-capture APIs that jsdom doesn't implement.
-beforeAll(() => {
-  if (!Element.prototype.hasPointerCapture) {
-    Element.prototype.hasPointerCapture = () => false;
-  }
-  if (!Element.prototype.releasePointerCapture) {
-    Element.prototype.releasePointerCapture = () => {};
-  }
-  if (!Element.prototype.scrollIntoView) {
-    Element.prototype.scrollIntoView = () => {};
-  }
-});
-
 beforeEach(() => {
   authorization.canManageGlobal = true;
   fetchMock.mockReset();
@@ -197,26 +184,29 @@ describe("SlackIntegrationSettings", () => {
     expect(screen.getByLabelText(/session instructions/i)).toHaveAttribute("maxlength", "10000");
   });
 
-  it("disables already-open policy items when permission is revoked", async () => {
+  it("closes the open policy menu when permission is revoked without changing the value", async () => {
     const user = userEvent.setup();
     setupSWR({ global: null });
     const { rerender } = render(<SlackIntegrationSettings />);
-    await user.click(screen.getByLabelText("Unbound channels"));
+    const policy = screen.getByRole("combobox", { name: "Unbound channels" });
+    await user.click(policy);
+    expect(screen.getByRole("listbox")).toBeInTheDocument();
+    expect(
+      screen.getByRole("option", { name: "Reject requests until the channel is bound" })
+    ).toBeInTheDocument();
 
     authorization.canManageGlobal = false;
     rerender(<SlackIntegrationSettings />);
-    const reject = screen.getByRole("option", {
-      name: "Reject requests until the channel is bound",
-    });
-    expect(reject).toHaveAttribute("aria-disabled", "true");
-    await user.click(reject);
-    await user.keyboard("{Escape}");
-    expect(screen.getByLabelText("Unbound channels")).toHaveTextContent(
-      "Create workspace-level sessions"
-    );
+    await waitFor(() => expect(screen.queryByRole("listbox")).not.toBeInTheDocument());
+    expect(screen.queryAllByRole("option")).toHaveLength(0);
+    expect(policy).toBeDisabled();
+    expect(policy).toHaveAttribute("disabled");
+    expect(policy).toHaveTextContent("Create workspace-level sessions");
 
     authorization.canManageGlobal = true;
     rerender(<SlackIntegrationSettings />);
+    expect(policy).toBeEnabled();
+    expect(policy).toHaveTextContent("Create workspace-level sessions");
     expect(screen.getByRole("button", { name: /^save$/i })).toBeDisabled();
     expect(fetchMock).not.toHaveBeenCalled();
   });

@@ -4,7 +4,7 @@
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import * as matchers from "@testing-library/jest-dom/matchers";
-import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { useCurrentUserAuthorization } from "@/hooks/use-current-user-authorization";
 import { useWorkspaceAdministration } from "@/hooks/use-workspace-administration";
 import { WorkspaceSettings } from "./workspace-settings";
@@ -17,12 +17,6 @@ vi.mock("@/hooks/use-current-user-authorization", () => ({
 vi.mock("@/hooks/use-workspace-administration", () => ({
   useWorkspaceAdministration: vi.fn(),
 }));
-
-beforeAll(() => {
-  Element.prototype.hasPointerCapture = () => false;
-  Element.prototype.releasePointerCapture = () => {};
-  Element.prototype.scrollIntoView = vi.fn();
-});
 
 afterEach(() => {
   cleanup();

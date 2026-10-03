@@ -254,11 +254,9 @@ export function AuditLogSettings() {
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
-            <SelectItem value={ALL_TEAMS_VALUE} disabled={teamsLoading || !!teamsError}>
-              All teams
-            </SelectItem>
+            <SelectItem value={ALL_TEAMS_VALUE}>All teams</SelectItem>
             {teams.map((team) => (
-              <SelectItem key={team.id} value={team.id} disabled={teamsLoading || !!teamsError}>
+              <SelectItem key={team.id} value={team.id}>
                 {team.name}
               </SelectItem>
             ))}

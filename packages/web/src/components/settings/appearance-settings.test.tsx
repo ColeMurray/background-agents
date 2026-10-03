@@ -4,7 +4,7 @@
 import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import * as matchers from "@testing-library/jest-dom/matchers";
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { AppearanceSettings } from "./appearance-settings";
 
 expect.extend(matchers);
@@ -13,11 +13,6 @@ vi.mock("next-themes", () => ({
   useTheme: () => ({ theme: "system", setTheme: vi.fn() }),
 }));
 
-beforeAll(() => {
-  Element.prototype.hasPointerCapture = () => false;
-  Element.prototype.releasePointerCapture = () => {};
-  Element.prototype.scrollIntoView = vi.fn();
-});
 beforeEach(() => localStorage.clear());
 afterEach(cleanup);
 

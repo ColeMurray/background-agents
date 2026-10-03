@@ -4,7 +4,7 @@
 import { cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import * as matchers from "@testing-library/jest-dom/matchers";
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { AuditLogSettings } from "./audit-log-settings";
 
 expect.extend(matchers);
@@ -66,11 +66,6 @@ const scrollIntoView = vi.fn();
 Object.defineProperty(HTMLElement.prototype, "scrollIntoView", {
   configurable: true,
   value: scrollIntoView,
-});
-
-beforeAll(() => {
-  Element.prototype.hasPointerCapture = () => false;
-  Element.prototype.releasePointerCapture = () => {};
 });
 
 type OperationResult = "applied" | "no_op" | "denied" | "rejected";

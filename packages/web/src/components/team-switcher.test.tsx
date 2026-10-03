@@ -2,7 +2,7 @@
 
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { TeamSwitcher } from "./team-switcher";
 
 const state = vi.hoisted(() => ({
@@ -23,12 +23,6 @@ vi.mock("@/hooks/use-active-team", () => ({
 vi.mock("@/hooks/use-current-user-authorization", () => ({
   useCurrentUserAuthorization: () => ({ authorization: { role: { key: state.roleKey } } }),
 }));
-
-beforeAll(() => {
-  Element.prototype.hasPointerCapture = () => false;
-  Element.prototype.releasePointerCapture = () => {};
-  Element.prototype.scrollIntoView = vi.fn();
-});
 
 beforeEach(() => {
   state.teams = [];

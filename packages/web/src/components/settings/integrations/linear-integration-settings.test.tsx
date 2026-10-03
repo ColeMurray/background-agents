@@ -4,7 +4,7 @@
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import * as matchers from "@testing-library/jest-dom/matchers";
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type {
   LinearBotSettings,
   LinearGlobalConfig,
@@ -56,19 +56,6 @@ function setupSWR(opts: {
   });
 }
 
-// Radix Select uses pointer-capture APIs that jsdom doesn't implement.
-beforeAll(() => {
-  if (!Element.prototype.hasPointerCapture) {
-    Element.prototype.hasPointerCapture = () => false;
-  }
-  if (!Element.prototype.releasePointerCapture) {
-    Element.prototype.releasePointerCapture = () => {};
-  }
-  if (!Element.prototype.scrollIntoView) {
-    Element.prototype.scrollIntoView = () => {};
-  }
-});
-
 beforeEach(() => {
   vi.resetAllMocks();
   authorization.canManageGlobal = true;
@@ -76,24 +63,27 @@ beforeEach(() => {
 afterEach(cleanup);
 
 describe("LinearIntegrationSettings unbound policy", () => {
-  it("disables already-open policy items when permission is revoked", async () => {
+  it("closes the open policy menu when permission is revoked without changing the value", async () => {
     const user = userEvent.setup();
     setupSWR({ settings: null });
     const view = render(<LinearIntegrationSettings />);
-    await user.click(screen.getByLabelText("Unbound Linear teams"));
+    const policy = screen.getByRole("combobox", { name: "Unbound Linear teams" });
+    await user.click(policy);
+    expect(screen.getByRole("listbox")).toBeInTheDocument();
+    expect(screen.getByRole("option", { name: "Reject requests until bound" })).toBeInTheDocument();
 
     authorization.canManageGlobal = false;
     view.rerender(<LinearIntegrationSettings />);
-    const reject = screen.getByRole("option", { name: "Reject requests until bound" });
-    expect(reject).toHaveAttribute("aria-disabled", "true");
-    await user.click(reject);
-    await user.keyboard("{Escape}");
-    expect(screen.getByLabelText("Unbound Linear teams")).toHaveTextContent(
-      "Create workspace-level sessions"
-    );
+    await waitFor(() => expect(screen.queryByRole("listbox")).not.toBeInTheDocument());
+    expect(screen.queryAllByRole("option")).toHaveLength(0);
+    expect(policy).toBeDisabled();
+    expect(policy).toHaveAttribute("disabled");
+    expect(policy).toHaveTextContent("Create workspace-level sessions");
 
     authorization.canManageGlobal = true;
     view.rerender(<LinearIntegrationSettings />);
+    expect(policy).toBeEnabled();
+    expect(policy).toHaveTextContent("Create workspace-level sessions");
     expect(screen.getByRole("button", { name: "Save" })).toBeDisabled();
     expect(browserApiFetch).not.toHaveBeenCalled();
   });

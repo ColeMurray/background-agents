@@ -4,7 +4,7 @@
 import { act, cleanup, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import * as matchers from "@testing-library/jest-dom/matchers";
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Skill, SkillImportPreviewResponse } from "@open-inspect/shared/types/skills";
 import { SkillImport } from "./skill-import";
 import { SkillReimport } from "./skill-reimport";
@@ -105,12 +105,6 @@ const importedSkill: Skill = {
   createdAt: 1,
   updatedAt: 1,
 };
-
-beforeAll(() => {
-  Element.prototype.hasPointerCapture = () => false;
-  Element.prototype.releasePointerCapture = () => {};
-  Element.prototype.scrollIntoView = vi.fn();
-});
 
 beforeEach(() => {
   previewSkillImportMock.mockReset();

@@ -143,11 +143,9 @@ export function SkillImport({
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
-              <SelectItem value={NO_REPOSITORY} disabled={reposLoading}>
-                Select a repository
-              </SelectItem>
+              <SelectItem value={NO_REPOSITORY}>Select a repository</SelectItem>
               {repos.map((repo) => (
-                <SelectItem key={repo.fullName} value={repo.fullName} disabled={reposLoading}>
+                <SelectItem key={repo.fullName} value={repo.fullName}>
                   {repo.fullName}
                 </SelectItem>
               ))}

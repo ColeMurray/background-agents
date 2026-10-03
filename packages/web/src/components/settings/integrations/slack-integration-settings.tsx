@@ -356,12 +356,8 @@ function GlobalSettingsSection({
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
-            <SelectItem value="workspace" disabled={!canManageGlobal}>
-              Create workspace-level sessions
-            </SelectItem>
-            <SelectItem value="reject" disabled={!canManageGlobal}>
-              Reject requests until the channel is bound
-            </SelectItem>
+            <SelectItem value="workspace">Create workspace-level sessions</SelectItem>
+            <SelectItem value="reject">Reject requests until the channel is bound</SelectItem>
           </SelectContent>
         </Select>
       </div>
