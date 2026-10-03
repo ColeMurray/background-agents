@@ -68,11 +68,9 @@ export function useAutomations(nameSearch: string, teamId?: string | null) {
   if (data && listKey && (retained?.key !== listKey || retained.pages !== data)) {
     setRetained({ key: listKey, pages: data });
   }
-  const pages =
-    data ??
-    (retained && retained.key === listKey && !isTerminalAutomationError(error)
-      ? retained.pages
-      : undefined);
+  const pages = isTerminalAutomationError(error)
+    ? undefined
+    : (data ?? (retained && retained.key === listKey ? retained.pages : undefined));
 
   const loadedPages = pages?.filter((page) => page !== undefined) ?? [];
   const automations = loadedPages.flatMap((page) => page.automations);

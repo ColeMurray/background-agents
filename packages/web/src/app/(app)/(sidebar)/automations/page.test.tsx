@@ -72,6 +72,7 @@ describe("AutomationsPage", () => {
     mockSearchParamsState.value = new URLSearchParams();
     mockPermissions.clear();
     mockPermissions.add("automations.create");
+    mockPermissions.add("sessions.create");
     mockUseAutomations.mockReturnValue(defaultHookResult);
   });
 
@@ -142,13 +143,16 @@ describe("AutomationsPage", () => {
     expect(mockUseAutomations).toHaveBeenLastCalledWith("weekly", undefined);
   });
 
-  it("hides create and template entry points without automations.create", () => {
-    mockPermissions.clear();
-    render(<AutomationsPage />);
+  it.each(["automations.create", "sessions.create"])(
+    "hides create and template entry points without %s",
+    (permission) => {
+      mockPermissions.delete(permission);
+      render(<AutomationsPage />);
 
-    expect(screen.queryByRole("link", { name: "Browse templates" })).not.toBeInTheDocument();
-    expect(screen.queryByRole("link", { name: "Create Automation" })).not.toBeInTheDocument();
-  });
+      expect(screen.queryByRole("link", { name: "Browse templates" })).not.toBeInTheDocument();
+      expect(screen.queryByRole("link", { name: "Create Automation" })).not.toBeInTheDocument();
+    }
+  );
 
   it("forwards a team filter and preserves creation context", () => {
     mockSearchParamsState.value = new URLSearchParams({ teamId: "team/one" });

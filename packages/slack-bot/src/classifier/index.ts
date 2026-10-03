@@ -198,11 +198,22 @@ function extractStructuredResponse(response: Anthropic.Messages.Message): LLMRes
  * `additionalProperties: false`, which is what OpenAI's `strict` mode requires,
  * so both providers are driven from that one declaration.
  */
-async function callOpenAI(apiKey: string, model: string, prompt: string): Promise<LLMResponse> {
-  const parsed = await callOpenAIStructured(apiKey, model, prompt, {
-    name: CLASSIFY_TARGET_TOOL_NAME,
-    schema: CLASSIFY_TARGET_TOOL.input_schema,
-  });
+async function callOpenAI(
+  apiKey: string,
+  model: string,
+  prompt: string,
+  reasoningEffort?: string
+): Promise<LLMResponse> {
+  const parsed = await callOpenAIStructured(
+    apiKey,
+    model,
+    prompt,
+    {
+      name: CLASSIFY_TARGET_TOOL_NAME,
+      schema: CLASSIFY_TARGET_TOOL.input_schema,
+    },
+    reasoningEffort
+  );
 
   return normalizeModelResponse(parsed);
 }
@@ -358,7 +369,7 @@ export class RepoClassifier {
     // The target catalog every stage below works over. Environments fail open
     // to []: an environments-fetch problem degrades the catalog — and with it
     // classification — to repository-only.
-    const catalog = await loadTargetCatalog(this.env, traceId);
+    const catalog = await loadTargetCatalog(this.env, traceId, context?.channelId, context?.userId);
 
     // Deterministic routing rules (explicit keyword → repo or environment) take
     // precedence over everything below, but never override an active thread
@@ -396,7 +407,8 @@ export class RepoClassifier {
           : await callOpenAI(
               requireClassificationProviderKey(this.env.OPENAI_API_KEY, "OPENAI_API_KEY", modelId),
               model,
-              prompt
+              prompt,
+              this.env.CLASSIFICATION_REASONING_EFFORT
             );
 
       const matchedTarget = llmResult.targetId ? matchTargetId(llmResult.targetId, catalog) : null;

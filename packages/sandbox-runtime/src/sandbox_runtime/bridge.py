@@ -252,6 +252,12 @@ class AgentBridge:
         self._connected_at_monotonic: float | None = None
         self._connection_count = 0
         self._reconnect_attempt_count = 0
+        # Latest heartbeat timing, retained across reconnects for bridge.health.
+        self._last_heartbeat: dict[str, Any] = {
+            "scheduling_delay_seconds": None,
+            "send_duration_seconds": None,
+            "heartbeat_delivered": None,
+        }
         self._total_connected_duration_seconds = 0.0
 
     @property
@@ -313,6 +319,9 @@ class AgentBridge:
         )
         reconnect_attempts = 0
         run_outcome = "harness_start_failed"
+        # Run-scoped rather than connection-scoped, so delivery pressure stays
+        # visible during sustained outages and rapid reconnects.
+        health_task = asyncio.create_task(self._health_loop())
 
         # One lifecycle: whatever the harness acquires in open() is released
         # in the finally below, whether startup, session loading or the run
@@ -377,6 +386,7 @@ class AgentBridge:
                 raise self.boot_attach.failure
 
         finally:
+            health_task.cancel()
             await self.boot_attach.stop()
             await self.activity.shutdown()
             # Cleanup failures are logged, never raised: an exception here
@@ -567,7 +577,6 @@ class AgentBridge:
 
     async def _heartbeat_loop(self) -> None:
         """Send periodic heartbeat events."""
-        last_health_log = time.monotonic()
         while not self.shutdown_event.is_set():
             expected_wake = time.monotonic() + self.HEARTBEAT_INTERVAL
             await asyncio.sleep(self.HEARTBEAT_INTERVAL)
@@ -593,19 +602,31 @@ class AgentBridge:
                         delivered=delivered,
                         **self.event_forwarder.health_snapshot(),
                     )
-            now = time.monotonic()
-            if now - last_health_log >= HEALTH_LOG_INTERVAL_SECONDS:
-                self.log.info(
-                    "bridge.health",
-                    connected=bool(self.ws and self.ws.state == State.OPEN),
-                    booting=self.boot_attach.booting,
-                    harness_id=self._harness_id.value,
-                    scheduling_delay_seconds=scheduling_delay_seconds,
-                    send_duration_seconds=send_duration_seconds,
-                    heartbeat_delivered=delivered,
-                    **self.event_forwarder.health_snapshot(),
+            self._last_heartbeat = {
+                "scheduling_delay_seconds": scheduling_delay_seconds,
+                "send_duration_seconds": send_duration_seconds,
+                "heartbeat_delivered": delivered,
+            }
+
+    async def _health_loop(self) -> None:
+        """Log delivery health periodically, whether or not a socket is bound."""
+        while not self.shutdown_event.is_set():
+            with contextlib.suppress(TimeoutError):
+                await asyncio.wait_for(
+                    self.shutdown_event.wait(), timeout=HEALTH_LOG_INTERVAL_SECONDS
                 )
-                last_health_log = now
+            if self.shutdown_event.is_set():
+                return
+            self.log.info(
+                "bridge.health",
+                connected=bool(self.ws and self.ws.state == State.OPEN),
+                booting=self.boot_attach.booting,
+                harness_id=self._harness_id.value,
+                connection_count=self._connection_count,
+                reconnect_attempt_count=self._reconnect_attempt_count,
+                **self._last_heartbeat,
+                **self.event_forwarder.health_snapshot(),
+            )
 
     async def _end_run(self) -> None:
         """End the run loop from outside it.
@@ -701,7 +722,6 @@ class AgentBridge:
         reasoning_effort = cmd.get("reasoningEffort")
         raw_attachments = cmd.get("attachments")
         author_data = cmd.get("author", {})
-        start_time = time.monotonic()
         outcome = "success"
         source_outcome: str | None = None
         error_category: str | None = None
@@ -783,6 +803,7 @@ class AgentBridge:
             )
             phase = "session_persistence"
             await self._persist_rotated_session_id(harness)
+            phase = "output_checks"
             # The outcome is authoritative for cost and success once it
             # exists; the bridge adds only the output guards below.
             if turn.message_cost_usd is not None:
@@ -838,23 +859,21 @@ class AgentBridge:
             error_message = str(e)
             self.log.error("prompt.error", exc=e, message_id=message_id)
         finally:
-            duration_ms = int((time.monotonic() - start_time) * 1000)
-            self.log.info(
-                "prompt.run",
-                message_id=message_id,
-                model=model,
-                reasoning_effort=reasoning_effort,
-                outcome=outcome,
-                duration_ms=duration_ms,
-                harness_id=self._harness_id.value,
-                source_outcome=source_outcome,
-                phase=phase,
-                error_category=error_category,
-                error_type=error_type,
-                error_detail=error_message,
-                emitted_event_count=emitted_event_count,
-                tool_call_event_count=tool_call_event_count,
-                **({"message_cost_usd": message_cost_usd} if message_cost_usd is not None else {}),
+            # ActivitySupervisor owns the terminal event, so it emits the
+            # prompt.run summary once it has selected what the client receives.
+            self.activity.record_prompt_diagnostics(
+                {
+                    "model": model,
+                    "reasoning_effort": reasoning_effort,
+                    "outcome": outcome,
+                    "harness_id": self._harness_id.value,
+                    "source_outcome": source_outcome,
+                    "phase": phase,
+                    "error_category": error_category,
+                    "error_type": error_type,
+                    "emitted_event_count": emitted_event_count,
+                    "tool_call_event_count": tool_call_event_count,
+                }
             )
 
         return {

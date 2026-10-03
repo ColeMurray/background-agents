@@ -72,12 +72,25 @@ describe("callOpenAIStructured", () => {
     const body = JSON.parse(init!.body as string);
     // gpt-5-family models reject an explicit temperature with HTTP 400.
     expect(body).not.toHaveProperty("temperature");
+    // Without a configured effort OpenAI applies the model's default.
+    expect(body).not.toHaveProperty("reasoning_effort");
     expect(body.model).toBe("gpt-5.4-mini");
     expect(body.max_completion_tokens).toBe(OPENAI_CLASSIFICATION_MAX_COMPLETION_TOKENS);
     expect(body.response_format).toEqual({
       type: "json_schema",
       json_schema: { name: SCHEMA.name, strict: true, schema: SCHEMA.schema },
     });
+  });
+
+  it("sends a configured reasoning effort as reasoning_effort", async () => {
+    const fetchMock = stubFetch(async () =>
+      Response.json({ choices: [{ message: { content: "{}" } }] })
+    );
+
+    await callOpenAIStructured("sk-test", "gpt-6.1-sol", "prompt", SCHEMA, "low");
+
+    const body = JSON.parse(fetchMock.mock.calls[0][1]!.body as string);
+    expect(body.reasoning_effort).toBe("low");
   });
 
   it("bounds the request with the shared timeout signal", async () => {

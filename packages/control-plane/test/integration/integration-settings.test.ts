@@ -470,6 +470,7 @@ describe("Integration settings API", () => {
               allowUserPreferenceOverride: true,
               allowLabelModelOverride: true,
               emitToolProgressActivities: true,
+              unboundChannels: "reject",
             },
           },
         }),
@@ -495,6 +496,7 @@ describe("Integration settings API", () => {
           allowUserPreferenceOverride: boolean;
           allowLabelModelOverride: boolean;
           emitToolProgressActivities: boolean;
+          unboundChannels: string;
           enabledRepos: string[] | null;
         };
       }>();
@@ -504,6 +506,7 @@ describe("Integration settings API", () => {
       expect(body.config.allowUserPreferenceOverride).toBe(false);
       expect(body.config.allowLabelModelOverride).toBe(true);
       expect(body.config.emitToolProgressActivities).toBe(true);
+      expect(body.config.unboundChannels).toBe("reject");
       expect(body.config.enabledRepos).toEqual(["acme/widgets"]);
     });
 
@@ -519,6 +522,7 @@ describe("Integration settings API", () => {
           allowUserPreferenceOverride: boolean;
           allowLabelModelOverride: boolean;
           emitToolProgressActivities: boolean;
+          unboundChannels: string;
           enabledRepos: string[] | null;
         };
       }>();
@@ -528,6 +532,7 @@ describe("Integration settings API", () => {
       expect(body.config.allowUserPreferenceOverride).toBe(true);
       expect(body.config.allowLabelModelOverride).toBe(true);
       expect(body.config.emitToolProgressActivities).toBe(true);
+      expect(body.config.unboundChannels).toBe("workspace");
       expect(body.config.enabledRepos).toBeNull();
     });
 

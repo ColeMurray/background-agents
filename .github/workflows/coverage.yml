@@ -1,0 +1,187 @@
+name: Coverage
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  control-plane-coverage:
+    name: Coverage (control-plane)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v6
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      - name: Install and build shared
+        run: |
+          npm ci
+          npm run build -w @open-inspect/shared
+      - name: Enforce control-plane coverage
+        run: |
+          npm run test:coverage -w @open-inspect/control-plane
+          node scripts/check-coverage.mjs control-plane packages/control-plane/coverage/coverage-summary.json
+      - name: Upload control-plane coverage
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-data-control-plane
+          path: packages/control-plane/coverage/
+          if-no-files-found: error
+
+  web-coverage:
+    name: Coverage (web)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v6
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      - name: Install and build shared
+        run: |
+          npm ci
+          npm run build -w @open-inspect/shared
+      - name: Enforce web coverage
+        run: |
+          npm run test:coverage -w @open-inspect/web
+          node scripts/check-coverage.mjs web packages/web/coverage/coverage-summary.json
+      - name: Upload web coverage
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-data-web
+          path: packages/web/coverage/
+          if-no-files-found: error
+
+  other-ts-coverage:
+    name: Coverage (shared and bots)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v6
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      - name: Install and build shared
+        run: |
+          npm ci
+          npm run build -w @open-inspect/shared
+      - name: Test the coverage gate
+        run: node --test scripts/check-coverage.test.mjs
+      - name: Enforce TypeScript coverage
+        run: |
+          for package in shared slack-bot linear-bot github-bot; do
+            npm run test:coverage -w "@open-inspect/$package"
+            node scripts/check-coverage.mjs "$package" "packages/$package/coverage/coverage-summary.json"
+          done
+      - name: Upload other TypeScript coverage
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-data-ts
+          path: |
+            packages/shared/coverage/
+            packages/slack-bot/coverage/
+            packages/linear-bot/coverage/
+            packages/github-bot/coverage/
+          if-no-files-found: error
+
+  python-coverage:
+    name: Coverage (Python)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v6
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - uses: astral-sh/setup-uv@v6
+        with:
+          version: "0.9.7"
+      - name: Enforce Python statement and branch coverage
+        run: |
+          for package in modal-infra sandbox-runtime; do
+            uv run --frozen --project "packages/$package" --extra dev pytest "packages/$package/tests" --cov="packages/$package/src" --cov-branch --cov-report="json:packages/$package/coverage/coverage.json"
+            node scripts/check-coverage.mjs "$package" "packages/$package/coverage/coverage.json"
+          done
+      - name: Upload Python coverage
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-data-python
+          path: |
+            packages/modal-infra/coverage/
+            packages/sandbox-runtime/coverage/
+          if-no-files-found: error
+
+  coverage:
+    name: Coverage
+    if: ${{ always() }}
+    needs: [control-plane-coverage, web-coverage, other-ts-coverage, python-coverage]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Require successful coverage jobs
+        env:
+          CP_RESULT: ${{ needs.control-plane-coverage.result }}
+          WEB_RESULT: ${{ needs.web-coverage.result }}
+          TS_RESULT: ${{ needs.other-ts-coverage.result }}
+          PYTHON_RESULT: ${{ needs.python-coverage.result }}
+        run: |
+          status=0
+          for pair in "control-plane=$CP_RESULT" "web=$WEB_RESULT" "other-ts=$TS_RESULT" "python=$PYTHON_RESULT"; do
+            if [ "${pair#*=}" != success ]; then
+              echo "::error::${pair%%=*} coverage job result: ${pair#*=}"
+              status=1
+            fi
+          done
+          exit "$status"
+      - uses: actions/download-artifact@v4
+        with:
+          name: coverage-data-control-plane
+          path: packages/control-plane/coverage/
+      - uses: actions/download-artifact@v4
+        with:
+          name: coverage-data-web
+          path: packages/web/coverage/
+      - uses: actions/download-artifact@v4
+        with:
+          name: coverage-data-ts
+          path: packages/
+      - uses: actions/download-artifact@v4
+        with:
+          name: coverage-data-python
+          path: packages/
+      - name: Upload coverage reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: production-coverage
+          path: packages/*/coverage/
+          if-no-files-found: error

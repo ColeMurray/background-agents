@@ -448,6 +448,7 @@ anthropic_api_key = ""
 # served by classification_anthropic_api_key, falling back to anthropic_api_key.
 # classification_model = "claude-haiku-4-5"   # e.g. "gpt-5.4-mini" to classify on OpenAI
 classification_openai_api_key = ""   # Required when classification_model is an OpenAI id
+# classification_reasoning_effort = "low"     # OpenAI ids only; blank keeps the model default
 
 # Security Secrets (from Step 4)
 token_encryption_key          = "your-generated-value"
@@ -1341,6 +1342,8 @@ also requires the `CLASSIFICATION_OPENAI_API_KEY` secret; an Anthropic value is 
 `CLASSIFICATION_ANTHROPIC_API_KEY`, falling back to `ANTHROPIC_API_KEY`. To keep the classifier key
 out of Modal and OpenComputer sandboxes, set `CLASSIFICATION_ANTHROPIC_API_KEY` and leave
 `ANTHROPIC_API_KEY` unset; sandboxes then take model credentials from Open-Inspect's secret store.
+The optional `CLASSIFICATION_REASONING_EFFORT` variable sets the reasoning effort an OpenAI
+classifier requests (for example `low`); leave it unset to use the model's default.
 
 When enabling or upgrading the Linear bot, also enable **Client credentials tokens** on the OAuth
 application in **Linear Settings → API → Applications**. This provider-side setting is not managed

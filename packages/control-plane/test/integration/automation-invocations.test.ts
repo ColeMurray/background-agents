@@ -230,6 +230,7 @@ describe("automation invocations (D1 integration)", () => {
           expected: "partial_failed",
         },
         // Legacy backfill shapes: skipped children exist only in old data.
+        { children: [{ status: "unauthorized", completed_at: 8 }], expected: "unauthorized" },
         { children: [{ status: "skipped" }], expected: "skipped" },
         {
           children: [{ status: "failed", completed_at: 3 }, { status: "skipped" }],
@@ -257,6 +258,8 @@ describe("automation invocations (D1 integration)", () => {
             failed: aggregate.failed,
             completed: aggregate.completed,
             skipped: aggregate.skipped,
+            unauthorized: testCase.children.filter((child) => child.status === "unauthorized")
+              .length,
             starting,
           })
         ).toBe(testCase.expected);
@@ -791,6 +794,53 @@ describe("automation invocations (D1 integration)", () => {
       const candidates = await store.getStaleFailureResetCandidates(0, 10);
       expect(candidates).toEqual([{ automation_id: "auto-reset", invocation_id: "inv-latest" }]);
     });
+
+    it.each([
+      { statuses: ["unauthorized"] },
+      { statuses: ["skipped"] },
+      { statuses: ["unauthorized", "skipped"] },
+    ] as const)(
+      "getStaleFailureResetCandidates ignores newer neutral-only children $statuses",
+      async ({ statuses }) => {
+        const store = new AutomationStore(env.DB);
+        const now = Date.now();
+        await store.create(makeAutomation({ id: "auto-neutral-reset", consecutive_failures: 2 }));
+        await store.insertInvocationGuarded({
+          invocation: makeInvocation("auto-neutral-reset", {
+            id: "inv-neutral-success",
+            created_at: now - 60_000,
+            updated_at: now - 60_000,
+          }),
+          children: [
+            makeChild("auto-neutral-reset", {
+              status: "completed",
+              completed_at: now - 59_000,
+            }),
+          ],
+          overlapScope: { kind: "automation" },
+        });
+        await store.insertInvocationGuarded({
+          invocation: makeInvocation("auto-neutral-reset", {
+            id: "inv-neutral-latest",
+            created_at: now - 30_000,
+            updated_at: now - 30_000,
+          }),
+          children: statuses.map((status, index) =>
+            makeChild("auto-neutral-reset", {
+              status,
+              completed_at: now - 29_000,
+              repo_owner: "acme",
+              repo_name: `repo-${index}`,
+            })
+          ),
+          overlapScope: { kind: "automation" },
+        });
+
+        expect(await store.getStaleFailureResetCandidates(now - 120_000, 10)).toEqual([
+          { automation_id: "auto-neutral-reset", invocation_id: "inv-neutral-success" },
+        ]);
+      }
+    );
   });
 
   // ─── Scalar mirror ────────────────────────────────────────────────────────

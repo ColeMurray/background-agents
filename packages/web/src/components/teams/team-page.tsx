@@ -26,6 +26,7 @@ import { TeamRepositories } from "./team-repositories";
 import { TeamEnvironments } from "./team-environments";
 import { TeamAutomations } from "./team-automations";
 import { TeamSecrets } from "./team-secrets";
+import { TeamChannels } from "./team-channels";
 
 type TeamTab =
   | "Overview"
@@ -34,6 +35,7 @@ type TeamTab =
   | "Environments"
   | "Automations"
   | "Secrets"
+  | "Channels"
   | "Settings";
 
 export function TeamPage({ slug }: { slug: string }) {
@@ -120,6 +122,7 @@ function TeamContent({
     : ["Members"];
   if (canViewWork && canReadAutomations) tabs.push("Automations");
   if (canViewWork && capabilities.canManageSecrets) tabs.push("Secrets");
+  if (canViewWork) tabs.push("Channels");
   if (canViewWork && (capabilities.canEditMetadata || capabilities.canArchive))
     tabs.push("Settings");
   const activeTab = tabs.includes(tab) ? tab : "Members";
@@ -170,6 +173,7 @@ function TeamContent({
       {activeTab === "Secrets" && canViewWork && capabilities.canManageSecrets && (
         <TeamSecrets teamId={team.id} capabilities={team.capabilities} />
       )}
+      {activeTab === "Channels" && <TeamChannels team={team} />}
       {activeTab === "Settings" && <TeamDetail team={team} />}
     </section>
   );

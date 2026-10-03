@@ -108,7 +108,9 @@ class BufferedEventForwarder:
         self._evicted_events = 0
         self._evicted_critical_events = 0
         self._suppressed_eviction_warnings = 0
-        self._last_eviction_warning_monotonic: float | None = None
+        # Critical evictions always warn; only noncritical warnings share this
+        # rate limit, so critical bursts cannot suppress noncritical identities.
+        self._last_noncritical_eviction_warning_monotonic: float | None = None
 
     def health_snapshot(self) -> dict[str, int]:
         """Read-only delivery pressure counters, without event payloads."""
@@ -216,6 +218,14 @@ class BufferedEventForwarder:
                 self._log.debug("bridge.event_dropped_cancelled", event_type=event_type)
             raise
         except Exception as e:
+            # Settle the failed attempt before snapshotting so the warning
+            # reports the state the forwarder is actually left in.
+            self._clear_in_flight(ack_id, event)
+            replayable = ack_id is None or self._pending_acks.get(ack_id) is event
+            if ack_id is not None and replayable:
+                self._pending_acks.pop(ack_id, None)
+            if buffered and replayable:
+                self._buffer_event(event)
             self._log.warn(
                 "bridge.send_error",
                 event_type=event_type,
@@ -224,19 +234,18 @@ class BufferedEventForwarder:
                 exc=e,
                 **self.health_snapshot(),
             )
-            replayable = ack_id is None or self._pending_acks.get(ack_id) is event
-            if ack_id is not None and replayable:
-                self._pending_acks.pop(ack_id, None)
             if buffered and replayable:
-                self._buffer_event(event)
                 await self._drain_if_rebound(failed_ws=ws)
             else:
                 self._log.debug("bridge.event_dropped_send_failed", event_type=event_type)
             return False
         finally:
-            if ack_id is not None and self._in_flight_acks.get(ack_id) is event:
-                self._in_flight_acks.pop(ack_id, None)
+            self._clear_in_flight(ack_id, event)
         return True
+
+    def _clear_in_flight(self, ack_id: str | None, event: dict[str, Any]) -> None:
+        if ack_id is not None and self._in_flight_acks.get(ack_id) is event:
+            self._in_flight_acks.pop(ack_id, None)
 
     async def _write(self, ws: ClientConnection, event: dict[str, Any]) -> None:
         """Write one event, retiring the connection if the write stalls.
@@ -373,6 +382,7 @@ class BufferedEventForwarder:
                     self._pending_acks.pop(ack_id, None)
                 if acknowledged and self._event_buffer and self._event_buffer[0] is event:
                     self._event_buffer.pop(0)
+                self._clear_in_flight(ack_id, event)
                 self._log.warn(
                     "bridge.flush_send_error",
                     event_type=event.get("type", "unknown"),
@@ -383,8 +393,7 @@ class BufferedEventForwarder:
                 )
                 break
             finally:
-                if ack_id is not None and self._in_flight_acks.get(ack_id) is event:
-                    self._in_flight_acks.pop(ack_id, None)
+                self._clear_in_flight(ack_id, event)
 
             # The send succeeded, but a concurrent overflow eviction may have
             # removed our claimed head while the send was in flight — pop by
@@ -469,8 +478,9 @@ class BufferedEventForwarder:
         now = time.monotonic()
         if (
             not critical
-            and self._last_eviction_warning_monotonic is not None
-            and now - self._last_eviction_warning_monotonic < EVICTION_WARNING_INTERVAL_SECONDS
+            and self._last_noncritical_eviction_warning_monotonic is not None
+            and now - self._last_noncritical_eviction_warning_monotonic
+            < EVICTION_WARNING_INTERVAL_SECONDS
         ):
             self._suppressed_eviction_warnings += 1
             return
@@ -483,8 +493,9 @@ class BufferedEventForwarder:
             max_buffer_size=self._max_buffer_size,
             **self.health_snapshot(),
         )
-        self._last_eviction_warning_monotonic = now
-        self._suppressed_eviction_warnings = 0
+        if not critical:
+            self._last_noncritical_eviction_warning_monotonic = now
+            self._suppressed_eviction_warnings = 0
 
     @staticmethod
     def _make_ack_id(event: dict[str, Any]) -> str:

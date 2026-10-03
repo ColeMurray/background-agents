@@ -58,7 +58,7 @@ function uploadCreatedResponse(attachmentId = "att-1"): Response {
 /** Download + upload in one step, as the delivery pipeline runs them. */
 async function prepareAndUpload(env: Env, sessionId: string, files: SlackMessageFile[]) {
   const prepared = await prepareImageAttachments(env, toImageAttachments(files));
-  return uploadPreparedAttachments(env, sessionId, prepared, "slack:U1");
+  return uploadPreparedAttachments(env, sessionId, prepared, "slack:U1", "C123");
 }
 
 afterEach(() => {
@@ -315,7 +315,7 @@ describe("uploadPreparedAttachments", () => {
     expect(result.sessionMissing).toBe(false);
 
     const [uploadUrl, uploadInit] = controlPlaneFetch.mock.calls[0]!;
-    expect(uploadUrl).toBe("https://internal/sessions/sess-1/attachments");
+    expect(uploadUrl).toBe("https://internal/sessions/sess-1/attachments?channel=slack%3AC123");
     expect(uploadInit.method).toBe("POST");
     // The multipart form is serialized before signing, so the body is the
     // exact bytes and the Content-Type header carries the boundary they were
@@ -353,6 +353,19 @@ describe("uploadPreparedAttachments", () => {
       actor: "slack:U1",
     });
     expect(verified).toMatchObject({ ok: true });
+    const changed = new URL(uploadUrl);
+    changed.searchParams.set("channel", "slack:C_OTHER");
+    expect(
+      await verifyServiceSignature({
+        signatureHeader: headers.get("X-OpenInspect-Service-Signature")!,
+        service: "slack-bot",
+        secret: "slack-sig1-secret",
+        method: "POST",
+        url: changed.toString(),
+        bodySha256Hex: await sha256Hex(uploadInit.body as Uint8Array),
+        actor: "slack:U1",
+      })
+    ).toMatchObject({ ok: false });
   });
 
   it("counts rejected uploads as dropped and carries prepare-stage drops forward", async () => {
@@ -374,8 +387,8 @@ describe("uploadPreparedAttachments", () => {
     expect(result.sessionMissing).toBe(false);
   });
 
-  it("keeps context upload failures out of user drop notices but detects a stale session", async () => {
-    const controlPlaneFetch = vi.fn().mockResolvedValueOnce(new Response(null, { status: 404 }));
+  it.each([403, 404])("preserves context upload refusal %s", async (status) => {
+    const controlPlaneFetch = vi.fn().mockResolvedValueOnce(new Response(null, { status }));
     const env = makeEnv(controlPlaneFetch);
 
     const result = await uploadPreparedAttachments(
@@ -391,12 +404,14 @@ describe("uploadPreparedAttachments", () => {
         ],
         dropped: [],
       },
-      "slack:U1"
+      "slack:U1",
+      "C123"
     );
 
     expect(result.references).toEqual([]);
     expect(result.dropped).toEqual([]);
-    expect(result.sessionMissing).toBe(true);
+    expect(result.sessionMissing).toBe(status === 404);
+    expect(result.sessionForbidden).toBe(status === 403 ? true : undefined);
   });
 
   it("counts malformed upload responses as dropped", async () => {
@@ -460,6 +475,32 @@ describe("uploadPreparedAttachments", () => {
     ]);
 
     expect(result.sessionMissing).toBe(false);
+  });
+});
+
+describe("attachment channel scope", () => {
+  it.each([403, 503])("propagates authoritative upload scope refusal %s", async (status) => {
+    const env = makeEnv(
+      vi
+        .fn(async () => Response.json({ code: "slack_channel_scope_denied" }, { status }))
+        .mockResolvedValueOnce(uploadCreatedResponse())
+    );
+    const result = await uploadPreparedAttachments(
+      env,
+      "session-1",
+      {
+        files: [pngAttachment, { ...pngAttachment, id: "F2" }].map((attachment) => ({
+          attachment,
+          bytes: new Uint8Array(16),
+          reportDrop: false as const,
+        })),
+        dropped: [],
+      },
+      "slack:U1",
+      "C123"
+    );
+    expect(result.channelScopeDenied).toBe(true);
+    expect(result.references).toEqual([{ attachmentId: "att-1", name: "screenshot.png" }]);
   });
 });
 

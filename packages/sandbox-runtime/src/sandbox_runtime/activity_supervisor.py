@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 import asyncio
+import time
 from collections.abc import Awaitable, Callable, Coroutine
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
@@ -18,8 +19,11 @@ EventSender = Callable[[Event], Awaitable[object]]
 class _PromptActivity:
     message_id: str
     task: asyncio.Task[Event]
+    started_monotonic: float = field(default_factory=time.monotonic)
     interruption_error: str | None = None
     terminal_selected: bool = False
+    # Set by the operation itself; absent when it was cancelled before starting.
+    diagnostics: dict[str, Any] | None = None
 
 
 @dataclass
@@ -71,6 +75,13 @@ class ActivitySupervisor:
         self._current_prompt = activity
         self._prompts[task] = activity
         task.add_done_callback(lambda completed: self._finish_prompt(activity, completed))
+
+    def record_prompt_diagnostics(self, diagnostics: dict[str, Any]) -> None:
+        """Attach the running prompt operation's metadata to its ``prompt.run`` summary."""
+        task = asyncio.current_task()
+        activity = self._prompts.get(task) if task is not None else None
+        if activity is not None:
+            activity.diagnostics = diagnostics
 
     def interrupt_prompt(self, error: str) -> None:
         self.set_prompt_interruption(error)
@@ -124,7 +135,35 @@ class ActivitySupervisor:
                 "error": activity.interruption_error,
             }
         activity.terminal_selected = True
+        self._log_prompt_run(activity, completed, event)
         self._schedule_delivery(event, refresh_message_id=activity.message_id)
+
+    def _log_prompt_run(
+        self, activity: _PromptActivity, completed: asyncio.Task[Event], event: Event
+    ) -> None:
+        """Summarize the turn once, from the terminal event the client receives."""
+        fields = dict(activity.diagnostics or {"phase": "not_started"})
+        outcome = fields.pop("outcome", None)
+        if event.get("success"):
+            outcome = "success"
+        elif completed.cancelled():
+            outcome = "cancelled"
+            fields.setdefault("error_category", "cancelled")
+        elif outcome not in ("cancelled", "error"):
+            outcome = "error"
+            fields.setdefault("error_category", "exception")
+        if activity.interruption_error is not None:
+            fields["error_category"] = "interrupted"
+        if "messageCostUsd" in event:
+            fields["message_cost_usd"] = event["messageCostUsd"]
+        self._log.info(
+            "prompt.run",
+            message_id=activity.message_id,
+            outcome=outcome,
+            duration_ms=int((time.monotonic() - activity.started_monotonic) * 1000),
+            error_detail=event.get("error"),
+            **fields,
+        )
 
     def start_push(
         self,

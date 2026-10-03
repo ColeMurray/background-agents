@@ -53,13 +53,15 @@ import {
   toProviderSelections,
 } from "../db/automation-model-provider-auth";
 import { SlackChannelStore } from "../db/slack-channel-store";
+import { SessionIndexStore } from "../db/session-index";
+import { TeamChannelBindingStore } from "../db/team-channel-bindings";
+import { slackPostGate } from "../authorization/slack-post-gate";
 import { IntegrationSettingsStore } from "../db/integration-settings";
 import {
   buildSlackCompletionNotification,
   buildSlackSkipNotification,
   parseSlackTriggerMetadata,
   type SlackRunMetadata,
-  type SlackCompletionContext,
 } from "./slack-completion";
 import { getUserAuth } from "../auth/user/runtime";
 import { GitHubAttributionUnavailableError } from "../source-control/github-credential-authority";
@@ -92,8 +94,9 @@ import {
   type AutomationSessionTarget,
 } from "../automation/session-target";
 import { isAutomationExecutionAuthorized } from "../automation/authorization-guard";
+import { admitGitHubEvent } from "../automation/github-event-admission";
 import type { RequestContext } from "../routes/shared";
-import { deliverWithRetry } from "../session/callback-delivery";
+import { retryDelivery } from "../session/callback-delivery";
 import {
   AmbiguousGitHubIdentityError,
   resolveGitHubEnrichmentForCanonicalUser,
@@ -271,6 +274,8 @@ interface StartInvocationParams {
   triggerMetadata?: string | null;
   /** Pre-fetched repository selection (the tick passes its batched fetch). */
   repositories?: AutomationRepositoryInsert[];
+  /** GitHub event identity that repository resolution must preserve. */
+  eventRepositoryId?: number;
   /** Pre-fetched environment selection (the tick passes its batched fetch). */
   environments?: AutomationEnvironmentRow[];
   /** Complete prompt to use directly, or as the fallback for a lazy override. */
@@ -291,7 +296,7 @@ interface ExecutionPrincipal {
   scmEnrichment: GitHubEnrichment | null;
 }
 
-type StartInvocationResult =
+export type StartInvocationResult =
   /** Invocation inserted; children launched (some may have pre-failed). */
   | { outcome: "started"; invocationId: string; runs: AutomationRunRow[]; launched: number }
   /** Overlap — a childless skipped invocation was recorded (schedule/event). */
@@ -479,6 +484,16 @@ export class Scheduler {
       };
     }
     const resolutions = await resolveAutomationRepositories(this.env, selection);
+    for (const resolution of resolutions) {
+      if (
+        params.eventRepositoryId !== undefined &&
+        resolution.repository !== null &&
+        resolution.repository.repoId !== params.eventRepositoryId
+      ) {
+        resolution.repository = null;
+        resolution.error = "Repository identity changed during event resolution";
+      }
+    }
 
     const invocationId = generateId();
     const scheduledAt = params.scheduledAt ?? now;
@@ -1090,6 +1105,26 @@ export class Scheduler {
   /** Match an inbound event to authorized automations and start or steer their invocations. */
   async event(event: AutomationEvent): Promise<SchedulerEventResult> {
     const store = new AutomationStore(this.db);
+    if (event.source === "github") {
+      return admitGitHubEvent(
+        this.db,
+        event,
+        (automation, repositories) =>
+          this.startInvocation(store, {
+            automation,
+            repositories,
+            source: "event",
+            triggerKey: event.triggerKey,
+            concurrencyKey: event.concurrencyKey,
+            eventRepositoryId: event.repositoryId,
+            instructionsOverride: composeAutomationPrompt(
+              event.contextBlock,
+              automation.instructions
+            ),
+          }),
+        this.log
+      );
+    }
 
     // 1. Find matching automations
     let candidates: AutomationRow[];
@@ -1111,12 +1146,11 @@ export class Scheduler {
             : [];
         break;
       }
-      case "github":
       case "linear":
         candidates = await store.getAutomationsForEvent(
           event.repoOwner,
           event.repoName,
-          event.source === "github" ? "github_event" : "linear_event",
+          "linear_event",
           event.eventType
         );
         break;
@@ -1304,6 +1338,8 @@ export class Scheduler {
           skipped++;
           break;
         case "deduplicated":
+          skipped++;
+          break;
         case "blocked":
           skipped++;
           break;
@@ -1485,21 +1521,9 @@ export class Scheduler {
     // Slack-triggered runs post the agent's result into the triggering message's
     // thread and clear the `eyes` reaction when they finish. The scheduler owns
     // this fan-out (not the session callback path) because the message
-    // coordinates live on the invocation. Best-effort.
-    const invocation = await store.getInvocationById(run.invocation_id);
-    const slackMeta = parseSlackTriggerMetadata(invocation?.trigger_metadata ?? null);
-    if (slackMeta) {
-      const automation = await store.getById(body.automationId);
-      await this.notifySlackCompletion(run, slackMeta, {
-        sessionId: body.sessionId,
-        messageId: body.messageId,
-        success: body.success,
-        error: body.error,
-        repoFullName: formatRunRepositoryLabel(run),
-        model: automation?.model ?? "",
-        reasoningEffort: automation?.reasoning_effort ?? undefined,
-      });
-    }
+    // coordinates live on the invocation. Only the terminal CAS winner owns
+    // publication retries; retrying runComplete itself would be ignored.
+    await this.notifySlackCompletion(store, run, body);
   }
 
   /**
@@ -1511,28 +1535,69 @@ export class Scheduler {
    * `SLACK_BOT` is unbound, or when the secret is unset — all best-effort.
    */
   private async notifySlackCompletion(
+    store: AutomationStore,
     run: AutomationRunRow,
-    meta: SlackRunMetadata,
-    ctx: SlackCompletionContext
+    completion: AutomationRunCompletion
   ): Promise<void> {
     const binding = this.env.SLACK_BOT;
     const secret = callbackSigningSecret(this.env, "slack-bot");
     if (!binding || !secret) return;
 
-    const body = buildSlackCompletionNotification(meta, ctx);
-    if (!body) return;
+    await retryDelivery<void, Response>(
+      async (signal) => {
+        const invocation = await store.getInvocationById(run.invocation_id);
+        const meta = parseSlackTriggerMetadata(invocation?.trigger_metadata ?? null);
+        if (!meta?.messageTs) return { outcome: "delivered", value: undefined };
+        const automation = await store.getById(completion.automationId);
+        const [session, channelBinding] = await Promise.all([
+          new SessionIndexStore(this.db).get(completion.sessionId),
+          new TeamChannelBindingStore(this.db).get("slack", meta.channel),
+        ]);
+        // D1 reads cannot be canceled; an expired attempt must not reach the wire.
+        signal.throwIfAborted();
+        const denial = slackPostGate(session, channelBinding);
+        const body = denial
+          ? {
+              kind: "slack.thread_closed",
+              sessionId: completion.sessionId,
+              timestamp: Date.now(),
+              context: { channel: meta.channel, threadTs: meta.messageTs },
+            }
+          : buildSlackCompletionNotification(meta, {
+              sessionId: completion.sessionId,
+              messageId: completion.messageId,
+              success: completion.success,
+              error: completion.error,
+              repoFullName: formatRunRepositoryLabel(run),
+              model: automation?.model ?? "",
+              reasoningEffort: automation?.reasoning_effort ?? undefined,
+            });
+        if (!body) return { outcome: "delivered", value: undefined };
 
-    const signature = await computeHmacHex(JSON.stringify(body), secret);
-    await deliverWithRetry(
-      (signal) =>
-        binding.fetch("https://internal/callbacks/automation-complete", {
+        if (denial) {
+          this.log.info("Slack completion denied by session scope", {
+            event: "scheduler.slack_complete_denied",
+            run_id: run.id,
+            session_id: completion.sessionId,
+            reason: denial,
+          });
+        }
+
+        const signature = await computeHmacHex(JSON.stringify(body), secret);
+        signal.throwIfAborted();
+        const endpoint = denial ? "thread_closed" : "automation-complete";
+        const response = await binding.fetch(`https://internal/callbacks/${endpoint}`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ ...body, signature }),
           signal,
-        }),
+        });
+        return response.ok
+          ? { outcome: "delivered", value: undefined }
+          : { outcome: "retryable_failure", failure: response };
+      },
       (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
-      ({ attempt, response, error }) => {
+      ({ attempt, failure: response, error }) => {
         this.log.warn("Slack completion callback failed", {
           event: "scheduler.slack_complete_failed",
           automation_id: run.automation_id,

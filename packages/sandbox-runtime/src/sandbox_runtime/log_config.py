@@ -14,13 +14,10 @@ Usage:
     log.error("bridge.error", exc=e, attempt=3)
 """
 
-import contextlib
 import json
 import logging
 import sys
-from typing import Any, TextIO
-
-from .log_safety import MAX_LOG_JSON_BYTES, TRUNCATED, sanitize_log_value
+from typing import Any
 
 # Standard LogRecord attributes to exclude from extra fields.
 # Built from a blank LogRecord's __dict__ plus our custom underscore-prefixed attrs.
@@ -51,39 +48,17 @@ _STANDARD_ATTRS = {
     "_component",
     "_service",
 }
-_CORRELATION_FIELDS = (
-    "sandbox_id",
-    "session_id",
-    "message_id",
-    "agent_session_id",
-    "call_id",
-    "ack_id",
-)
-_ENVELOPE_FIELDS = ("level", "service", "component", "event", "ts")
 
 
 class JSONFormatter(logging.Formatter):
     """Formats log records as single-line JSON with envelope fields."""
 
     def format(self, record: logging.LogRecord) -> str:
-        try:
-            return self._format(record)
-        except Exception:
-            # Never let logging.handleError print raw message/args when a
-            # hostile payload or formatter fails. This fallback contains no
-            # data from the failing record.
-            return '{"level":"error","service":"sandbox-runtime","component":"logging","event":"log.format_failed"}'
-
-    def _format(self, record: logging.LogRecord) -> str:
-        try:
-            event = record.getMessage()
-        except Exception:
-            event = "log.unformattable_message"
         output: dict[str, Any] = {
             "level": record.levelname.lower(),
             "service": getattr(record, "_service", "modal-infra"),
             "component": getattr(record, "_component", record.name),
-            "event": event,
+            "event": record.getMessage(),
             "ts": int(record.created * 1000),
         }
         # Merge extra fields from record.__dict__ (skip standard attrs)
@@ -94,32 +69,9 @@ class JSONFormatter(logging.Formatter):
         if record.exc_info and record.exc_info[1]:
             exc = record.exc_info[1]
             output["error_type"] = type(exc).__qualname__
-            try:
-                output["error_message"] = str(exc)
-                output["error_stack"] = self.formatException(record.exc_info)
-            except Exception:
-                output["error_message"] = "<unformattable exception>"
-        # Keep the envelope first, then IDs, then potentially enormous payloads.
-        priority = _ENVELOPE_FIELDS + _CORRELATION_FIELDS
-        output = {**{key: output[key] for key in priority if key in output}, **output}
-        safe = sanitize_log_value(output)
-        rendered = json.dumps(safe, ensure_ascii=False)
-        # Enforce a final byte ceiling too (JSON escaping and large numeric
-        # payloads need not match the text budget). Preserve correlation fields.
-        if len(rendered.encode("utf-8")) > MAX_LOG_JSON_BYTES:
-            kept = {key: value for key, value in safe.items() if key in priority}
-            kept["log_payload"] = TRUNCATED
-            rendered = json.dumps(sanitize_log_value(kept), ensure_ascii=False)
-        return rendered
-
-
-class SafeStreamHandler(logging.StreamHandler[TextIO]):
-    """Drop failed writes without stdlib's raw-record stderr fallback."""
-
-    def handleError(self, record: logging.LogRecord) -> None:
-        # StreamHandler.emit handles write/flush failures internally. Its
-        # default handleError prints unsanitized record.msg/args to stderr.
-        pass
+            output["error_message"] = str(exc)
+            output["error_stack"] = self.formatException(record.exc_info)[-2000:]
+        return json.dumps(output, default=str)
 
 
 def configure_logging() -> None:
@@ -128,7 +80,7 @@ def configure_logging() -> None:
     Call once at process startup (entrypoint, bridge, web_api module load).
     Replaces any existing handlers on the root logger.
     """
-    handler = SafeStreamHandler(sys.stdout)
+    handler = logging.StreamHandler(sys.stdout)
     handler.setFormatter(JSONFormatter())
     logging.root.handlers = [handler]
     logging.root.setLevel(logging.INFO)
@@ -192,15 +144,12 @@ class StructuredLogger:
             "_component": self._component,
             "_service": self._service,
         }
-        # Custom handlers may raise directly; keep them nonfatal too. The
-        # configured SafeStreamHandler separately owns stdlib's fallback path.
-        with contextlib.suppress(Exception):
-            self._logger.log(
-                level,
-                event,
-                extra=extra,
-                exc_info=(type(exc), exc, exc.__traceback__) if exc else None,
-            )
+        self._logger.log(
+            level,
+            event,
+            extra=extra,
+            exc_info=(type(exc), exc, exc.__traceback__) if exc else None,
+        )
 
 
 def get_logger(component: str, **context: Any) -> StructuredLogger:

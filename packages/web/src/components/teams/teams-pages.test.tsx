@@ -73,6 +73,7 @@ vi.mock("./team-secrets", () => ({
     return <p>Team secrets editor for {props.teamId}</p>;
   },
 }));
+vi.mock("./team-channels", () => ({ TeamChannels: () => <p>Team channel bindings</p> }));
 
 const team: TeamResponse = {
   id: "team_design",
@@ -247,6 +248,7 @@ describe("Team page tabs", () => {
     const tabs = within(screen.getByRole("navigation", { name: "Team tabs" }));
     expect(tabs.getByRole("button", { name: "Members" })).toBeInTheDocument();
     expect(tabs.queryByRole("button", { name: "Overview" })).not.toBeInTheDocument();
+    expect(tabs.queryByRole("button", { name: "Channels" })).not.toBeInTheDocument();
     expect(tabs.queryByRole("button", { name: "Activity" })).not.toBeInTheDocument();
     expect(tabs.queryByRole("button", { name: "Repositories" })).not.toBeInTheDocument();
     expect(tabs.queryByRole("button", { name: "Secrets" })).not.toBeInTheDocument();
@@ -264,6 +266,7 @@ describe("Team page tabs", () => {
     const tabs = within(screen.getByRole("navigation", { name: "Team tabs" }));
     expect(tabs.getByRole("button", { name: "Overview" })).toBeInTheDocument();
     expect(tabs.getByRole("button", { name: "Members" })).toBeInTheDocument();
+    expect(tabs.getByRole("button", { name: "Channels" })).toBeInTheDocument();
     expect(tabs.queryByRole("button", { name: "Activity" })).not.toBeInTheDocument();
   });
 
@@ -342,6 +345,7 @@ describe("Team page tabs", () => {
     view.rerender(<TeamPage slug="design" />);
     expect(screen.queryByText("Team session buckets")).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Overview" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Channels" })).not.toBeInTheDocument();
     expect(screen.getByText("Team member table")).toBeInTheDocument();
   });
 
@@ -364,6 +368,7 @@ describe("Team page tabs", () => {
     render(<TeamPage slug="design" />);
     expect(screen.getByText("Team member table")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Overview" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Channels" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Repositories" })).not.toBeInTheDocument();
   });
 
@@ -385,6 +390,7 @@ describe("Team page tabs", () => {
     render(<TeamPage slug="design" />);
     expect(screen.queryByText("Team session buckets")).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Overview" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Channels" })).not.toBeInTheDocument();
   });
 
   it("unmounts private content when fresh team metadata reports an archive", () => {
@@ -402,7 +408,12 @@ describe("Team page tabs", () => {
     (role) => {
       mocks.role = role === "lead" ? "member" : role;
       mocks.mine = role === "lead" ? [team] : [];
-      mocks.teams = [{ ...team, capabilities: { ...denied, canManageSecrets: true } }];
+      mocks.teams = [
+        {
+          ...team,
+          capabilities: { ...denied, canManageSecrets: true, canArchive: role === "lead" },
+        },
+      ];
       render(<TeamPage slug="design" />);
 
       const tabs = within(screen.getByRole("navigation", { name: "Team tabs" }));
@@ -413,7 +424,13 @@ describe("Team page tabs", () => {
         "Environments",
         "Automations",
         "Secrets",
+        "Channels",
+        ...(role === "lead" ? ["Settings"] : []),
       ]);
+      if (role === "lead") {
+        fireEvent.click(tabs.getByRole("button", { name: "Channels" }));
+        expect(screen.getByText("Team channel bindings")).toBeInTheDocument();
+      }
       expect(screen.queryByText("Team secrets editor for team_design")).not.toBeInTheDocument();
       fireEvent.click(tabs.getByRole("button", { name: "Secrets" }));
       expect(screen.getByText("Team secrets editor for team_design")).toBeInTheDocument();

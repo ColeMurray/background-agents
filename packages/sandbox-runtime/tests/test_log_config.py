@@ -8,17 +8,9 @@ import pytest
 
 from sandbox_runtime.log_config import (
     JSONFormatter,
-    SafeStreamHandler,
     StructuredLogger,
     configure_logging,
     get_logger,
-)
-from sandbox_runtime.log_safety import (
-    MAX_LOG_JSON_BYTES,
-    MAX_LOG_TEXT_CHARS,
-    REDACTED,
-    TRUNCATED,
-    register_log_secret,
 )
 
 
@@ -49,107 +41,6 @@ def _capture_log(logger: StructuredLogger, level: str = "info", **kwargs) -> dic
 
 
 class TestJSONFormatter:
-    def test_nonfinite_numeric_payloads_produce_standard_json(self):
-        record = logging.LogRecord("runtime", logging.INFO, __file__, 1, "agent.usage", (), None)
-        record.usage = {"cost": float("nan"), "duration": float("inf")}
-        rendered = JSONFormatter().format(record)
-        safe = json.loads(rendered, parse_constant=lambda value: pytest.fail(f"Non-JSON {value}"))
-        assert safe["usage"] == {"cost": "<non-finite float>", "duration": "<non-finite float>"}
-
-    @pytest.mark.parametrize("event", ["agent.tool", "claude.stderr", "opencode.process_output"])
-    def test_json_string_credentials_are_redacted_in_output_records(self, event):
-        record = logging.LogRecord("runtime", logging.INFO, __file__, 1, event, (), None)
-        record.output = '{"api_key":"opaque-json-value","access_token":"opaque-token-value"}'
-        rendered = JSONFormatter().format(record)
-        assert "opaque-json-value" not in rendered
-        assert "opaque-token-value" not in rendered
-        assert REDACTED in rendered
-
-    def test_aggregate_json_byte_bound_and_cycles(self):
-        record = logging.LogRecord("bounded", logging.INFO, __file__, 1, "test.bound", (), None)
-        record.payload = {f"field-{i}": "\x00😀" * 10_000 for i in range(100)}
-        record.payload["cycle"] = record.payload
-        record.message_id = "m1"
-        rendered = JSONFormatter().format(record)
-        assert len(rendered.encode("utf-8")) <= MAX_LOG_JSON_BYTES
-        assert json.loads(rendered)["event"] == "test.bound"
-        assert json.loads(rendered)["message_id"] == "m1"
-        assert TRUNCATED in rendered
-
-    def test_oversized_correlation_ids_do_not_displace_envelope(self):
-        record = _capture_log(
-            get_logger("id-budget"),
-            sandbox_id="x" * 10_000,
-            session_id="x" * 10_000,
-            message_id="x" * 10_000,
-            agent_session_id="x" * 10_000,
-            call_id="x" * 10_000,
-            ack_id="x" * 10_000,
-        )
-        assert record["level"] == "info"
-        assert record["event"] == "test.event"
-        assert record["component"] == "id-budget"
-        assert isinstance(record["ts"], int)
-
-    def test_formatter_failure_never_exposes_raw_record_data(self):
-        class BrokenMapping(dict):
-            def items(self):
-                raise RuntimeError("private failure detail")
-
-        record = logging.LogRecord(
-            "bad", logging.INFO, __file__, 1, "raw private payload", (), None
-        )
-        record.payload = BrokenMapping(secret="raw secret")
-        rendered = JSONFormatter().format(record)
-        assert json.loads(rendered)["event"] == "log.format_failed"
-        assert "private" not in rendered and "raw" not in rendered and "secret" not in rendered
-
-    def test_bad_message_str_does_not_break_formatter(self):
-        class BadMessage:
-            def __str__(self):
-                raise RuntimeError("bad str")
-
-        record = logging.LogRecord("bad", logging.INFO, __file__, 1, BadMessage(), (), None)
-        assert json.loads(JSONFormatter().format(record))["event"] == "log.unformattable_message"
-
-    def test_formatter_redacts_all_fields_including_exceptions(self, monkeypatch):
-        monkeypatch.setenv("SANDBOX_AUTH_TOKEN", "formatter-env-secret")
-        register_log_secret("formatter-brokered-secret")
-        record = _capture_log(
-            get_logger("safe-formatter"),
-            level="error",
-            exc=ValueError("formatter-env-secret formatter-brokered-secret"),
-            args_preview={"api_key": "unknown-key", "command": "formatter-env-secret"},
-            output="x" * (MAX_LOG_TEXT_CHARS + 100),
-        )
-        serialized = json.dumps(record)
-        for secret in ("formatter-env-secret", "formatter-brokered-secret", "unknown-key"):
-            assert secret not in serialized
-        assert record["args_preview"]["api_key"] == REDACTED
-        assert record["output"].endswith(TRUNCATED)
-        assert record["error_type"] == "ValueError"
-
-    def test_third_party_python_logs_use_the_same_redaction(self, monkeypatch):
-        monkeypatch.setenv("PROVIDER_SECRET", "third-party-secret")
-        record = logging.LogRecord(
-            "third-party",
-            logging.WARNING,
-            __file__,
-            1,
-            "failure: %s",
-            ("third-party-secret",),
-            None,
-        )
-        rendered = json.loads(JSONFormatter().format(record))
-        assert rendered["event"] == f"failure: {REDACTED}"
-
-    def test_exception_secret_is_redacted_before_stack_truncation(self, monkeypatch):
-        secret = "unique-exception-credential-material" * 150
-        monkeypatch.setenv("LONG_SECRET", secret)
-        record = _capture_log(get_logger("stack-safety"), level="error", exc=ValueError(secret))
-        assert "unique-exception-credential-material" not in json.dumps(record)
-        assert record["error_message"] == REDACTED
-
     def test_basic_fields(self):
         log = get_logger("test-component")
         record = _capture_log(log)
@@ -223,16 +114,6 @@ class TestJSONFormatter:
 
 
 class TestStructuredLogger:
-    def test_custom_handler_failure_remains_nonfatal(self):
-        class RaisingHandler(logging.Handler):
-            def emit(self, record):
-                raise OSError("custom handler failed")
-
-        log = get_logger("custom-handler-failure")
-        log._logger = logging.Logger("isolated-custom-handler", logging.INFO)
-        log._logger.addHandler(RaisingHandler())
-        log.info("agent.tool", output="opaque diagnostic")
-
     def test_get_logger_factory(self):
         log = get_logger("my-component", sandbox_id="sb-1")
         assert isinstance(log, StructuredLogger)
@@ -287,30 +168,6 @@ class TestStructuredLogger:
 
 
 class TestConfigureLogging:
-    @pytest.mark.parametrize("failure", ["write", "flush"])
-    def test_failed_stream_never_prints_third_party_raw_record(self, failure, monkeypatch, capsys):
-        class FailingStream:
-            def write(self, value):
-                if failure == "write":
-                    raise OSError("stream write failed")
-                return len(value)
-
-            def flush(self):
-                if failure == "flush":
-                    raise OSError("stream flush failed")
-
-        monkeypatch.setattr(logging, "raiseExceptions", True)
-        configure_logging()
-        handler = logging.root.handlers[0]
-        assert isinstance(handler, SafeStreamHandler)
-        original_stream = handler.stream
-        try:
-            handler.stream = FailingStream()
-            logging.getLogger("third-party-broken-stream").error("token=%s", "raw-super-secret")
-            assert capsys.readouterr().err == ""
-        finally:
-            handler.stream = original_stream
-
     def test_configures_root_logger(self):
         configure_logging()
         assert len(logging.root.handlers) == 1

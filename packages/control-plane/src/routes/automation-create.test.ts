@@ -102,6 +102,7 @@ vi.mock("../auth/crypto", () => ({
 }));
 
 const mockSlackChannelStore = {
+  hasCompatibleBindings: vi.fn(async () => true),
   bindChannelStatements: vi.fn(),
   getWatchedSlackChannels: vi.fn(),
 };

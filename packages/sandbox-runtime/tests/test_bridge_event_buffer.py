@@ -245,7 +245,7 @@ class TestAssistantTextDelivery:
         opening = "Reading the repository."
         answer = f"{opening}\n\n{'x' * MAX_EVENT_BYTES}\n\nFinal answer."
         ws = FakeWs()
-        bridge.log = MagicMock()
+        bridge.activity.record_prompt_diagnostics = MagicMock()
 
         completion = await self._run(
             bridge,
@@ -258,9 +258,7 @@ class TestAssistantTextDelivery:
         assert [event["content"] for event in sent if event["type"] == "token"] == [opening]
         assert completion["success"] is False
         assert completion["error"] == self.UNDELIVERED
-        summary = next(
-            call.kwargs for call in bridge.log.info.call_args_list if call.args == ("prompt.run",)
-        )
+        (summary,) = bridge.activity.record_prompt_diagnostics.call_args.args
         assert summary["source_outcome"] == "success"
         assert summary["outcome"] == "error"
         assert summary["error_category"] == "text_undelivered"

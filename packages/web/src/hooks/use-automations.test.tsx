@@ -5,6 +5,7 @@ import { act, renderHook, waitFor } from "@testing-library/react";
 import { SWRConfig } from "swr";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { AutomationListItem, ListAutomationsResponse } from "@open-inspect/shared";
+import { SwrFetchError } from "@/lib/swr-fetch-error";
 import { useAutomations } from "./use-automations";
 
 vi.mock("@/lib/auth-session", () => ({
@@ -235,5 +236,29 @@ describe("useAutomations", () => {
     expect(
       fetcher.mock.calls.filter(([path]) => String(path).includes("cursor=")).map(([path]) => path)
     ).toEqual(["/api/automations?limit=25&cursor=next"]);
+  });
+
+  it.each([
+    [403, []],
+    [404, []],
+    [500, [firstAutomation]],
+  ])("after a %i refetch shows %j for a loaded list", async (status, expected) => {
+    let failure: SwrFetchError | null = null;
+    const fetcher = vi.fn(async (): Promise<ListAutomationsResponse> => {
+      if (failure) throw failure;
+      return { automations: [firstAutomation], hasMore: false, nextCursor: null };
+    });
+    const { result } = renderHook(() => useAutomations("", "team-1"), {
+      wrapper: wrapper(fetcher),
+    });
+    await waitFor(() => expect(result.current.automations).toEqual([firstAutomation]));
+
+    failure = new SwrFetchError(status);
+    await act(async () => {
+      await result.current.mutate();
+    });
+
+    await waitFor(() => expect(result.current.error).toBe(failure));
+    expect(result.current.automations).toEqual(expected);
   });
 });
