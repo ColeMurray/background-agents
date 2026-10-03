@@ -17,7 +17,8 @@ export default defineConfig({
       reportsDirectory: "./coverage",
       include: ["src/**/*.ts", "src/**/*.tsx"],
       exclude: coverageExclusions("web"),
-      thresholds: coverageThresholds("web"),
+      // Shards cannot meet a full-suite threshold; enforce it after merging their reports.
+      thresholds: process.env.COVERAGE_SHARD === "true" ? undefined : coverageThresholds("web"),
     },
   },
 });

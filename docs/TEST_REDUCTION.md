@@ -84,9 +84,9 @@ Vitest configs and report checker share this policy. Python statement and branch
 independently; a high combined score cannot hide a branch regression.
 
 `.github/workflows/coverage.yml` runs the entire policy on every PR targeting `main` and every push
-to `main`, without path filters or `continue-on-error`. Control-plane coverage runs in parallel
-shards; the final `Coverage` check merges their reports before enforcing the full-suite floor and
-fails if any shard or other package job fails. It also fails on missing/invalid reports or any
+to `main`, without path filters or `continue-on-error`. Control-plane and web coverage run in
+parallel shards; the final `Coverage` check merges their reports before enforcing full-suite floors
+and fails if any shard or other package job fails. It also fails on missing/invalid reports or any
 metric below its floor, and uploads the combined coverage artifact. The workflow tests its gate,
 including CLI failure on low Python branch coverage.
 
