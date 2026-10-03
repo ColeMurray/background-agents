@@ -193,11 +193,13 @@ describe("automation team execution (integration)", () => {
         .run();
     }
 
-    async function expectDeniedLaunch(automationId: string) {
+    async function expectDeniedLaunch(automationId: string, reason: string) {
       expect(await fetchRuns(automationId)).toEqual([
         expect.objectContaining({
-          status: "failed",
-          failure_reason: "Automation execution principal is not authorized",
+          status: "skipped",
+          skip_reason: reason,
+          failure_reason: null,
+          session_id: null,
         }),
       ]);
       const sessions = await env.DB.prepare("SELECT id FROM sessions WHERE automation_id = ?")
@@ -207,13 +209,15 @@ describe("automation team execution (integration)", () => {
     }
 
     it.each([
-      ["is removed from the team", () => removeMember(EXECUTOR)],
+      ["is removed from the team", "execution_authorization_denied", () => removeMember(EXECUTOR)],
       [
         "is suspended",
+        "execution_authorization_denied",
         () => env.DB.prepare("UPDATE users SET suspended_at = 1 WHERE id = ?").bind(EXECUTOR).run(),
       ],
       [
         "loses sessions.create",
+        "execution_authorization_denied",
         () =>
           env.DB.prepare(
             "UPDATE user_role_assignments SET role_id = 'role_builtin_viewer' WHERE user_id = ?"
@@ -223,20 +227,29 @@ describe("automation team execution (integration)", () => {
       ],
       [
         "belongs to a team that is archived",
+        "team_archived",
         () => env.DB.prepare("UPDATE teams SET archived_at = 2 WHERE id = ?").bind(TEAM).run(),
       ],
-    ])("does not launch or count a failure when the scheduled executor %s", async (_, change) => {
-      const row = await saveAutomation("auto-denied-at-launch");
-      afterAdmission(change);
-      expect(await createScheduler().tick()).toEqual({ processed: 0, skipped: 1, failed: 0 });
-      expect(await authorized(row.id)).toBe(false);
-      await expectDeniedLaunch(row.id);
-      // Two failures are already on record; a strike here would auto-pause at three.
-      expect(await new AutomationStore(env.DB).getById(row.id)).toMatchObject({
-        enabled: 1,
-        consecutive_failures: 2,
-      });
-    });
+    ])(
+      "does not launch or count a failure when the scheduled executor %s",
+      async (_, reason, change) => {
+        const row = await saveAutomation("auto-denied-at-launch");
+        afterAdmission(change);
+        expect(await createScheduler().tick()).toEqual({ processed: 0, skipped: 1, failed: 0 });
+        expect(await authorized(row.id)).toBe(false);
+        await expectDeniedLaunch(row.id, reason);
+        const { invocations } = await new AutomationStore(env.DB).listInvocations(row.id, {
+          limit: 10,
+          offset: 0,
+        });
+        expect(invocations).toEqual([expect.objectContaining({ status: "skipped" })]);
+        // Two failures are already on record; a strike here would auto-pause at three.
+        expect(await new AutomationStore(env.DB).getById(row.id)).toMatchObject({
+          enabled: 1,
+          consecutive_failures: 2,
+        });
+      }
+    );
 
     it("answers 403 when a manual requester is removed mid-launch", async () => {
       const row = await saveAutomation("auto-manual-denied-at-launch");
@@ -249,7 +262,7 @@ describe("automation team execution (integration)", () => {
       expect(await response.json()).toMatchObject({
         reason_code: "execution_authorization_denied",
       });
-      await expectDeniedLaunch(row.id);
+      await expectDeniedLaunch(row.id, "execution_authorization_denied");
       expect(await new AutomationStore(env.DB).getById(row.id)).toMatchObject({
         consecutive_failures: 2,
       });

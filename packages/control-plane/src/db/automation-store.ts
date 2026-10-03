@@ -324,11 +324,11 @@ export function toAutomationRun(row: EnrichedRunRow): AutomationRun {
 // ─── Derived invocation status ───────────────────────────────────────────────
 // Single SQL definition (aggregated over an invocation's child runs, aliased
 // `r`) with a TS twin below — integration tests assert the two agree. Arms, in
-// order: childless ⇒ skipped (new skips are childless; the app enforces
-// skip_reason on them); any active child ⇒ starting until any child has left
-// 'starting', then running; all-terminal: all skipped ⇒ skipped (legacy
-// backfilled skip rows), no failure ⇒ completed, no success ⇒ failed,
-// otherwise partial_failed.
+// order: childless ⇒ skipped (the app enforces skip_reason on them); any
+// active child ⇒ starting until any child has left 'starting', then running;
+// all-terminal: all skipped ⇒ skipped (children denied authorization at
+// launch, or legacy backfilled skip rows), no failure ⇒ completed, no success
+// ⇒ failed, otherwise partial_failed.
 
 const DERIVED_INVOCATION_STATUS_SQL = `CASE
   WHEN COUNT(r.id) = 0 THEN 'skipped'
@@ -977,6 +977,7 @@ export class AutomationStore {
       "session_id",
       "status",
       "failure_reason",
+      "skip_reason",
       "started_at",
       "completed_at",
     ];

@@ -3442,18 +3442,14 @@ describe("Scheduler", () => {
       /** Admit the firing, then deny every launch. */
       function denyAfterAdmission() {
         mockIsAutomationExecutionAuthorized.mockResolvedValueOnce(true).mockResolvedValue(false);
-        // The failure-accounting CAS admits a single winner.
-        mockStore.tryMarkInvocationFailureCounted
-          .mockResolvedValueOnce(true)
-          .mockResolvedValue(false);
-        mockStore.getInvocationRunAggregate.mockResolvedValue(
-          aggregate({ total: 1, active: 0, failed: 1 })
-        );
       }
 
-      it("re-checks admission's requirements before any launch work", async () => {
+      it("re-checks admission's requirements as the last step before session creation", async () => {
         launchableRepositories(["web-app"]);
         denyAfterAdmission();
+        mockStore.getInvocationRunAggregate.mockResolvedValue(
+          aggregate({ total: 1, active: 0, skipped: 1 })
+        );
 
         await expect(createScheduler().trigger("auto-1", "manual-user")).rejects.toMatchObject({
           name: "AutomationExecutionUnauthorizedError",
@@ -3469,20 +3465,21 @@ describe("Scheduler", () => {
           [expect.anything(), admissionRequest],
           [expect.anything(), admissionRequest],
         ]);
-        expect(mockStore.setRunExecutionDeadline).not.toHaveBeenCalled();
-        expect(resolveManagedSkills).not.toHaveBeenCalled();
+        const launchCheck = mockIsAutomationExecutionAuthorized.mock.invocationCallOrder[1];
+        expect(launchCheck).toBeGreaterThan(
+          mockStore.setRunExecutionDeadline.mock.invocationCallOrder[0]
+        );
+        expect(launchCheck).toBeGreaterThan(
+          vi.mocked(resolveManagedSkills).mock.invocationCallOrder[0]
+        );
         expect(mockSessionStoreCreate).not.toHaveBeenCalled();
-        expect(mockStore.updateRun).toHaveBeenCalledWith(
-          expect.any(String),
-          expect.objectContaining({
-            status: "failed",
-            failure_reason: "Automation execution principal is not authorized",
-          })
-        );
-        // The accounting claim precedes the failed run, so no path can count a strike.
-        expect(mockStore.tryMarkInvocationFailureCounted.mock.invocationCallOrder[0]).toBeLessThan(
-          mockStore.updateRun.mock.invocationCallOrder[0]
-        );
+        expect(mockStore.updateRun).toHaveBeenCalledWith(expect.any(String), {
+          status: "skipped",
+          skip_reason: "execution_authorization_denied",
+          session_id: null,
+          completed_at: expect.any(Number),
+        });
+        expect(mockStore.tryMarkInvocationFailureCounted).not.toHaveBeenCalled();
         expect(mockStore.incrementConsecutiveFailures).not.toHaveBeenCalled();
       });
 
@@ -3505,6 +3502,44 @@ describe("Scheduler", () => {
         expect(await createScheduler().tick()).toEqual({ processed: 0, skipped: 1, failed: 0 });
         expect(mockStore.incrementConsecutiveFailures).not.toHaveBeenCalled();
         expect(mockStore.recordAuthorizationDenied).not.toHaveBeenCalled();
+      });
+
+      it("still counts a genuine sibling failure in a mixed fan-out", async () => {
+        launchableRepositories(["web-app", "api"]);
+        // "api" fails resolution before launch; "web-app" is denied at launch.
+        mockCheckRepositoryAccess.mockImplementation(async ({ owner, name }) =>
+          name === "api"
+            ? null
+            : { repoId: 1000, repoOwner: owner, repoName: name, defaultBranch: "main" }
+        );
+        denyAfterAdmission();
+        mockStore.getInvocationRunAggregate.mockResolvedValue(
+          aggregate({ total: 2, active: 0, failed: 1, skipped: 1 })
+        );
+
+        await expect(createScheduler().trigger("auto-1", "manual-user")).rejects.toMatchObject({
+          reason: "execution_authorization_denied",
+        });
+        expect(mockStore.updateRun).toHaveBeenCalledWith(
+          expect.any(String),
+          expect.objectContaining({ status: "skipped" })
+        );
+        expect(mockStore.tryMarkInvocationFailureCounted).toHaveBeenCalledTimes(1);
+        expect(mockStore.incrementConsecutiveFailures).toHaveBeenCalledTimes(1);
+      });
+
+      it("counts an event launch denial as skipped", async () => {
+        mockGetSlackAutomationsForChannel.mockResolvedValue([sampleSlackAutomation]);
+        mockStore.getLatestSteerableRunForThread.mockResolvedValue(null);
+        mockStore.getActiveRunForKey.mockResolvedValue(null);
+        denyAfterAdmission();
+
+        expect(await createScheduler().event(makeSlackEvent())).toEqual({
+          triggered: 0,
+          skipped: 1,
+          steered: 0,
+        });
+        expect(mockStore.incrementConsecutiveFailures).not.toHaveBeenCalled();
       });
 
       it("re-authorizes each fanned-out child with one guard query", async () => {

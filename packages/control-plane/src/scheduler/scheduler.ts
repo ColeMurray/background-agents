@@ -738,19 +738,16 @@ export class Scheduler {
           run_id: child.id,
           error: message,
         });
+        // Losing authorization is not an automation failure: the run is skipped, so only
+        // genuine sibling failures count a strike. The next admission re-evaluates the
+        // principal and pauses if still denied.
+        const outcome: Partial<AutomationRunRow> =
+          e instanceof AutomationExecutionUnauthorizedError
+            ? { status: "skipped", skip_reason: e.reason, session_id: null }
+            : { status: "failed", failure_reason: message };
+        if (e instanceof AutomationExecutionUnauthorizedError) authorizationDenial ??= e.reason;
         try {
-          if (e instanceof AutomationExecutionUnauthorizedError) {
-            authorizationDenial ??= e.reason;
-            // Losing authorization is not an automation failure. Claim the invocation's
-            // failure accounting before the run turns failed so no path counts a strike;
-            // the next admission re-evaluates the principal and pauses if still denied.
-            await store.tryMarkInvocationFailureCounted(invocationId);
-          }
-          await store.updateRun(child.id, {
-            status: "failed",
-            failure_reason: message,
-            completed_at: Date.now(),
-          });
+          await store.updateRun(child.id, { ...outcome, completed_at: Date.now() });
         } catch (updateError) {
           this.log.error("Failed to record launch failure", {
             event: "scheduler.fail_track_error",
@@ -760,8 +757,7 @@ export class Scheduler {
             error: updateError instanceof Error ? updateError.message : String(updateError),
           });
         }
-        child.status = "failed";
-        child.failure_reason = message;
+        Object.assign(child, outcome);
       }
     };
 
@@ -1332,6 +1328,8 @@ export class Scheduler {
           // launch failed counted as neither triggered nor skipped.
           if (result.launched > 0) {
             triggered++;
+          } else if (result.authorizationDenial !== undefined) {
+            skipped++;
           }
           break;
         case "skipped":
@@ -1746,16 +1744,6 @@ export class Scheduler {
     startedAt: number,
     admission: LaunchAdmission
   ): Promise<void> {
-    // Re-authorize with admission's requirements before doing any launch work: the principal
-    // may have left the team, been suspended, or lost a permission since admission.
-    if (!(await isAutomationExecutionAuthorized(this.db, admission.authorization))) {
-      const team =
-        automation.owner_team_id === null
-          ? null
-          : await new TeamStore(this.db).getById(automation.owner_team_id);
-      throw new AutomationExecutionUnauthorizedError(executionDenialReason(team));
-    }
-
     const ctx: RequestContext = {
       trace_id: `automation:${automation.id}`,
       request_id: run.id,
@@ -1830,6 +1818,15 @@ export class Scheduler {
       providerAuth,
     };
 
+    // Re-authorize with admission's requirements as the last step before creation: the
+    // principal may have left the team, been suspended, or lost a permission since admission.
+    if (!(await isAutomationExecutionAuthorized(this.db, admission.authorization))) {
+      const team =
+        automation.owner_team_id === null
+          ? null
+          : await new TeamStore(this.db).getById(automation.owner_team_id);
+      throw new AutomationExecutionUnauthorizedError(executionDenialReason(team));
+    }
     await initializeSession(this.env, sessionInput, ctx);
   }
 
