@@ -1,4 +1,8 @@
-import { describe, it, expect } from "vitest";
+import { createExecutionContext, env } from "cloudflare:test";
+import { afterEach, beforeEach, describe, it, expect, vi } from "vitest";
+import { handleControlPlaneHttp } from "../../src/cloudflare/http-host";
+import { createCloudflareEnv } from "../../src/cloudflare/platform";
+import { cleanD1Tables } from "./cleanup";
 import {
   collectMessages,
   initNamedSession,
@@ -6,11 +10,43 @@ import {
   openSandboxWs,
   queryDO,
   seedSandboxAuth,
+  serviceRequestHeaders,
 } from "./helpers";
 import { hostContract } from "../conformance/session-core-conformance";
 
 const SANDBOX_TOKEN = "prompt-order-sandbox-token";
 const SANDBOX_ID = "prompt-order-sandbox";
+
+describe("POST /sessions/:id/prompt", () => {
+  beforeEach(cleanD1Tables);
+  afterEach(async () => {
+    vi.restoreAllMocks();
+    await cleanD1Tables();
+  });
+
+  it("rejects a caller-provided authorId without dispatching to the runtime", async () => {
+    const caller = { userId: "a".repeat(32), role: "member" } as const;
+    const sessionName = `public-prompt-author-${crypto.randomUUID()}`;
+    const url = `https://cp.test/sessions/${sessionName}/prompt`;
+    const body = JSON.stringify({ content: "Fix the bug", authorId: "someone-else" });
+    const headers = await serviceRequestHeaders(url, { method: "POST", body, as: caller });
+    await initSession({ sessionName, userId: caller.userId });
+    const platform = createCloudflareEnv(env);
+    const dispatch = vi.spyOn(platform, "SESSION");
+
+    const response = await handleControlPlaneHttp(
+      new Request(url, { method: "POST", headers, body }),
+      platform,
+      createExecutionContext()
+    );
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toEqual({
+      error: "Field 'authorId' is not accepted from verified callers",
+    });
+    expect(dispatch).not.toHaveBeenCalled();
+  });
+});
 
 describe("POST /internal/prompt", () => {
   it("enqueues prompt and returns messageId", async () => {

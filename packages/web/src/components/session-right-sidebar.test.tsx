@@ -190,7 +190,7 @@ describe("SessionRightSidebar", () => {
     selectTab("Info");
     expect(screen.getByRole("link", { name: "Design" })).toHaveAttribute("href", "/teams/design");
     expect(screen.getByText("private")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Save" })).toBeInTheDocument();
+    expect(screen.getByRole("combobox", { name: "Visibility" })).toBeInTheDocument();
     expect(screen.getByText("Unnamed user \u00b7 orator")).toBeInTheDocument();
     expect(screen.queryByText("user_collaborator")).not.toBeInTheDocument();
     rerender(<Overlay {...props} open isPhone onOpenChange={vi.fn()} />);
@@ -199,7 +199,7 @@ describe("SessionRightSidebar", () => {
     rerender(
       <Overlay {...props} capabilities={FULL_CAPABILITIES} open isPhone onOpenChange={vi.fn()} />
     );
-    expect(screen.queryByRole("button", { name: "Save" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("combobox", { name: "Visibility" })).not.toBeInTheDocument();
     expect(screen.queryByText("Unnamed user \u00b7 orator")).not.toBeInTheDocument();
   });
 

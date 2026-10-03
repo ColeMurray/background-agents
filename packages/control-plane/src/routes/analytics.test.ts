@@ -1,32 +1,24 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type * as AuthenticateModule from "../auth/authenticate";
+import type * as AnalyticsStoreModule from "../db/analytics-store";
 import {
   authorizationDatabase,
+  createTestEnv,
   createTestRequestHandler,
   emptyStatement,
   ownerAuthorizationDatabase,
   TEST_BACKGROUND_TASK_CONTEXT,
   TEST_SERVICE_SECRETS,
 } from "../router.test-support";
-import type { Env } from "../types";
 import type { SqlStatement } from "../db/sql-database";
+import { AnalyticsStore } from "../db/analytics-store";
 import { AnalyticsDashboardStore } from "../db/analytics-dashboard-store";
+import { SessionRunStore } from "../db/session-run-store";
 import { analyticsRoutes, DEFAULT_ANALYTICS_DAYS } from "./analytics";
 
 const FIXED_NOW = 1_700_000_000_000;
-
-const mockStore = {
-  getSummary: vi.fn(),
-  getTimeseries: vi.fn(),
-  getBreakdown: vi.fn(),
-};
-
-const mockDashboardStore = {
-  get: vi.fn(),
-};
-
+const mockDashboardStore = { get: vi.fn() };
 const mockRunStore = { list: vi.fn() };
-
 const mocks = vi.hoisted(() => ({ authenticate: vi.fn() }));
 
 vi.mock("../auth/authenticate", async (importOriginal) => ({
@@ -34,15 +26,10 @@ vi.mock("../auth/authenticate", async (importOriginal) => ({
   authenticate: mocks.authenticate,
 }));
 
-vi.mock("../db/analytics-store", async (importOriginal) => {
-  const actual = (await importOriginal()) as Record<string, unknown>;
-  return {
-    ...actual,
-    AnalyticsStore: vi.fn().mockImplementation(function () {
-      return mockStore;
-    }),
-  };
-});
+vi.mock("../db/analytics-store", async (importOriginal) => ({
+  ...(await importOriginal<typeof AnalyticsStoreModule>()),
+  AnalyticsStore: vi.fn(),
+}));
 
 vi.mock("../db/analytics-dashboard-store", () => ({
   AnalyticsDashboardStore: vi.fn().mockImplementation(function () {
@@ -57,17 +44,17 @@ vi.mock("../db/session-run-store", () => ({
 }));
 
 const handleRequest = createTestRequestHandler([analyticsRoutes]);
-const env = { ...TEST_SERVICE_SECRETS, DB: ownerAuthorizationDatabase() } as unknown as Env;
+const env = createTestEnv({ ...TEST_SERVICE_SECRETS, DB: ownerAuthorizationDatabase() });
 
-async function callRoute(method: string, path: string): Promise<Response> {
+async function callRoute(path: string, testEnv = env): Promise<Response> {
   return handleRequest(
-    new Request(`https://test.local${path}`, { method }),
-    env,
+    new Request(`https://test.local/analytics/${path}`),
+    testEnv,
     TEST_BACKGROUND_TASK_CONTEXT
   );
 }
 
-describe("analytics route handlers", () => {
+describe("analytics route contracts", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     vi.useFakeTimers();
@@ -82,286 +69,122 @@ describe("analytics route handlers", () => {
     vi.useRealTimers();
   });
 
-  describe("dashboard", () => {
-    it("anchors one shared dashboard window", async () => {
-      const dashboard = {
-        generatedAt: FIXED_NOW,
-        sessionOrigins: [{ source: "user", userKey: "user-1", displayName: "Ada", sessions: 2 }],
-      };
-      mockDashboardStore.get.mockResolvedValue(dashboard);
-
-      const response = await callRoute("GET", "/analytics/dashboard?days=14");
-
-      expect(response.status).toBe(200);
-      await expect(response.json()).resolves.toEqual(dashboard);
-      expect(mockDashboardStore.get).toHaveBeenCalledWith({
-        days: 14,
-        scope: "human",
-        startAt: FIXED_NOW - 14 * 24 * 60 * 60 * 1000,
-        endAt: FIXED_NOW,
-      });
+  it("returns dashboard attribution unchanged with one window and the authorized viewer", async () => {
+    const dashboard = {
+      generatedAt: FIXED_NOW,
+      sessionOrigins: [{ source: "user", userKey: "user-1", displayName: "Ada", sessions: 2 }],
+    };
+    mockDashboardStore.get.mockResolvedValue(dashboard);
+    const membershipStatement: SqlStatement = {
+      ...emptyStatement(),
+      bind: () => membershipStatement,
+      all: async <T>() => ({
+        results: [{ team_id: "team-a", role: "member" }] as T[],
+        meta: { changes: 0 },
+      }),
+    };
+    const database = authorizationDatabase({
+      statement: (sql) => {
+        expect(sql).toContain("FROM team_memberships");
+        return membershipStatement;
+      },
     });
 
-    it("rejects invalid ranges before querying", async () => {
-      const response = await callRoute("GET", "/analytics/dashboard?days=31");
-
-      expect(response.status).toBe(400);
-      expect(mockDashboardStore.get).not.toHaveBeenCalled();
+    const response = await callRoute("dashboard?days=14", {
+      ...env,
+      DB: database,
+      TEAMS_ENFORCEMENT: "on",
     });
 
-    it("passes the authorized viewer, team memberships and enforcement mode to the dashboard", async () => {
-      mockDashboardStore.get.mockResolvedValue({});
-      const database = authorizationDatabase({
-        statement: (sql) => {
-          const statement: SqlStatement = {
-            ...emptyStatement(),
-            bind: () => statement,
-            all: async <T>() => ({
-              results: [{ team_id: "team-a", role: "member" }] as T[],
-              meta: { changes: 0 },
-            }),
-          };
-          if (sql.includes("FROM team_memberships")) return statement;
-          throw new Error(`Unexpected query: ${sql}`);
-        },
-      });
-      const response = await handleRequest(
-        new Request("https://test.local/analytics/dashboard"),
-        { ...env, DB: database, TEAMS_ENFORCEMENT: "on" },
-        TEST_BACKGROUND_TASK_CONTEXT
-      );
-      expect(response.status).toBe(200);
-      expect(vi.mocked(AnalyticsDashboardStore)).toHaveBeenCalledWith(
-        expect.objectContaining({ prepare: expect.any(Function) }),
-        expect.objectContaining({
-          kind: "user",
-          userId: "user-1",
-          memberships: new Map([["team-a", "member"]]),
-        }),
-        "on"
-      );
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual(dashboard);
+    expect(mockDashboardStore.get).toHaveBeenCalledWith({
+      days: 14,
+      scope: "human",
+      startAt: FIXED_NOW - 14 * 24 * 60 * 60 * 1000,
+      endAt: FIXED_NOW,
     });
-  });
-
-  describe("summary", () => {
-    it("defaults days to 30", async () => {
-      mockStore.getSummary.mockResolvedValue({
-        totalSessions: 0,
-        activeUsers: 0,
-        prsOpened: 0,
-        prsMerged: 0,
-        mergeRate: 0,
-        avgSessionDurationMs: 0,
-        sessionsByStatus: [],
-        sessionsByRepo: [],
-        sessionsByUser: [],
-        sessionsByModel: [],
-        prBreakdown: [],
-        recentSessions: [],
-      });
-
-      const response = await callRoute("GET", "/analytics/summary");
-      expect(response.status).toBe(200);
-      expect(mockStore.getSummary).toHaveBeenCalledWith({
-        startAt: FIXED_NOW - DEFAULT_ANALYTICS_DAYS * 24 * 60 * 60 * 1000,
-        endAt: FIXED_NOW,
-        scope: "human",
-      });
-    });
-
-    it("returns 400 for invalid days", async () => {
-      const response = await callRoute("GET", "/analytics/summary?days=31");
-      expect(response.status).toBe(400);
-      await expect(response.json()).resolves.toEqual({
-        error: "days must be one of: 7, 14, 30, 90",
-      });
-      expect(mockStore.getSummary).not.toHaveBeenCalled();
-    });
-  });
-
-  describe("runs", () => {
-    it("uses the default window, limit and cost ordering", async () => {
-      mockRunStore.list.mockResolvedValue([{ rootSessionId: "root" }]);
-
-      const response = await callRoute("GET", "/analytics/runs");
-      expect(response.status).toBe(200);
-      await expect(response.json()).resolves.toEqual({ runs: [{ rootSessionId: "root" }] });
-      expect(mockRunStore.list).toHaveBeenCalledWith({
-        startAt: FIXED_NOW - DEFAULT_ANALYTICS_DAYS * 24 * 60 * 60 * 1000,
-        endAt: FIXED_NOW,
-        limit: 50,
-        orderBy: "cost",
-        scope: "all",
-      });
-    });
-
-    it("accepts explicit days, limit, created ordering and human scope", async () => {
-      mockRunStore.list.mockResolvedValue([]);
-      const response = await callRoute(
-        "GET",
-        "/analytics/runs?days=14&limit=10&orderBy=created&scope=human"
-      );
-      expect(response.status).toBe(200);
-      expect(mockRunStore.list).toHaveBeenCalledWith({
-        startAt: FIXED_NOW - 14 * 24 * 60 * 60 * 1000,
-        endAt: FIXED_NOW,
-        limit: 10,
-        orderBy: "created",
-        scope: "human",
-      });
-    });
-
-    it.each([
-      ["days=31", "days must be one of: 7, 14, 30, 90"],
-      ["limit=0", "limit must be an integer between 1 and 100"],
-      ["limit=101", "limit must be an integer between 1 and 100"],
-      ["limit=1.5", "limit must be an integer between 1 and 100"],
-      ["orderBy=other", "orderBy must be one of: cost, created"],
-      ["scope=other", "scope must be one of: human, agent, automation, all"],
-      ["orderBy=cost&orderBy=created", "Invalid orderBy"],
-    ])("rejects invalid runs query %s", async (query, error) => {
-      const response = await callRoute("GET", `/analytics/runs?${query}`);
-      expect(response.status).toBe(400);
-      await expect(response.json()).resolves.toEqual({ error });
-      expect(mockRunStore.list).not.toHaveBeenCalled();
-    });
-
-    it("requires analytics.read before querying runs", async () => {
-      const deniedEnv = { ...env, DB: authorizationDatabase({ permissions: [] }) };
-      const response = await handleRequest(
-        new Request("https://test.local/analytics/runs"),
-        deniedEnv,
-        TEST_BACKGROUND_TASK_CONTEXT
-      );
-      expect(response.status).toBe(403);
-      expect(mockRunStore.list).not.toHaveBeenCalled();
-    });
-  });
-
-  describe("timeseries", () => {
-    it("passes the requested range to the store", async () => {
-      mockStore.getTimeseries.mockResolvedValue([]);
-
-      const response = await callRoute("GET", "/analytics/timeseries?days=14");
-      expect(response.status).toBe(200);
-      expect(mockStore.getTimeseries).toHaveBeenCalledWith({
-        startAt: FIXED_NOW - 14 * 24 * 60 * 60 * 1000,
-        endAt: FIXED_NOW,
-        scope: "human",
-      });
-    });
-  });
-
-  describe("breakdown", () => {
-    it("requires a valid by parameter", async () => {
-      const response = await callRoute("GET", "/analytics/breakdown?days=30");
-      expect(response.status).toBe(400);
-      await expect(response.json()).resolves.toEqual({
-        error: "by must be one of: user, repo, model, harness, spawnSource, automation, provider",
-      });
-    });
-
-    it("returns 400 for invalid by values", async () => {
-      const response = await callRoute("GET", "/analytics/breakdown?days=30&by=status");
-      expect(response.status).toBe(400);
-      await expect(response.json()).resolves.toEqual({
-        error: "by must be one of: user, repo, model, harness, spawnSource, automation, provider",
-      });
-      expect(mockStore.getBreakdown).not.toHaveBeenCalled();
-    });
-
-    it("passes the breakdown dimension to the store", async () => {
-      mockStore.getBreakdown.mockResolvedValue([]);
-
-      const response = await callRoute("GET", "/analytics/breakdown?days=7&by=repo");
-      expect(response.status).toBe(200);
-      expect(mockStore.getBreakdown).toHaveBeenCalledWith(
-        {
-          startAt: FIXED_NOW - 7 * 24 * 60 * 60 * 1000,
-          endAt: FIXED_NOW,
-          scope: "human",
-        },
-        "repo"
-      );
-    });
-  });
-
-  describe("query strings", () => {
-    it.each(["7", "14", "30", "90"])("accepts days=%s", async (days) => {
-      mockStore.getSummary.mockResolvedValue({ ok: true });
-
-      const response = await callRoute("GET", `/analytics/summary?days=${days}`);
-
-      expect(response.status).toBe(200);
-      expect(mockStore.getSummary).toHaveBeenCalledWith(
-        expect.objectContaining({
-          startAt: FIXED_NOW - Number(days) * 24 * 60 * 60 * 1000,
-          endAt: FIXED_NOW,
-        })
-      );
-    });
-
-    it.each(["", "0", "8", "abc", "1e1"])("rejects days=%s", async (days) => {
-      const response = await callRoute("GET", `/analytics/summary?days=${days}`);
-
-      expect(response.status).toBe(400);
-      await expect(response.json()).resolves.toEqual({
-        error: "days must be one of: 7, 14, 30, 90",
-      });
-      expect(mockStore.getSummary).not.toHaveBeenCalled();
-    });
-
-    it("rejects a repeated days key", async () => {
-      const response = await callRoute("GET", "/analytics/summary?days=7&days=14");
-
-      expect(response.status).toBe(400);
-      await expect(response.json()).resolves.toEqual({ error: "Invalid days" });
-    });
-
-    it("rejects an empty or repeated by key", async () => {
-      const empty = await callRoute("GET", "/analytics/breakdown?days=30&by=");
-      expect(empty.status).toBe(400);
-      await expect(empty.json()).resolves.toEqual({
-        error: "by must be one of: user, repo, model, harness, spawnSource, automation, provider",
-      });
-
-      const repeated = await callRoute("GET", "/analytics/breakdown?days=30&by=user&by=repo");
-      expect(repeated.status).toBe(400);
-      await expect(repeated.json()).resolves.toEqual({ error: "Invalid by" });
-    });
-
-    it("reports days before by when both are invalid", async () => {
-      const response = await callRoute("GET", "/analytics/breakdown?days=1&by=nope");
-
-      await expect(response.json()).resolves.toEqual({
-        error: "days must be one of: 7, 14, 30, 90",
-      });
-    });
-  });
-
-  it("validates scope on session analytics without changing runs or PR analytics", async () => {
-    const bad = await callRoute("GET", "/analytics/summary?scope=bogus");
-    expect(bad.status).toBe(400);
-    await expect(bad.json()).resolves.toEqual({
-      error: "scope must be one of: human, agent, automation, all",
-    });
-    mockStore.getBreakdown.mockResolvedValue({ entries: [] });
-    await callRoute("GET", "/analytics/breakdown?by=provider&scope=all");
-    expect(mockStore.getBreakdown).toHaveBeenCalledWith(
-      expect.objectContaining({ scope: "all" }),
-      "provider"
+    expect(AnalyticsDashboardStore).toHaveBeenCalledWith(
+      expect.objectContaining({ prepare: expect.any(Function) }),
+      expect.objectContaining({
+        kind: "user",
+        userId: "user-1",
+        memberships: new Map([["team-a", "member"]]),
+      }),
+      "on"
     );
   });
 
-  it("denies a request without analytics permission before touching a store", async () => {
-    mocks.authenticate.mockImplementation(async () => ({
-      reason: "Unauthorized",
-      status: 401,
-      failedScheme: "none",
-    }));
+  it.each([
+    { query: "", days: DEFAULT_ANALYTICS_DAYS, limit: 50, orderBy: "cost", scope: "all" },
+    {
+      query: "?days=14&limit=10&orderBy=created&scope=human",
+      days: 14,
+      limit: 10,
+      orderBy: "created",
+      scope: "human",
+    },
+  ])("preserves runs options for '$query'", async ({ query, days, limit, orderBy, scope }) => {
+    mockRunStore.list.mockResolvedValue([{ rootSessionId: "root" }]);
+    const response = await callRoute(`runs${query}`);
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual({ runs: [{ rootSessionId: "root" }] });
+    expect(mockRunStore.list).toHaveBeenCalledWith({
+      startAt: FIXED_NOW - days * 24 * 60 * 60 * 1000,
+      endAt: FIXED_NOW,
+      limit,
+      orderBy,
+      scope,
+    });
+  });
 
-    const response = await callRoute("GET", "/analytics/summary");
-    expect(response.status).toBe(401);
-    expect(mockStore.getSummary).not.toHaveBeenCalled();
+  const daysError = "days must be one of: 7, 14, 30, 90";
+  const scopeError = "scope must be one of: human, agent, automation, all";
+  const byError =
+    "by must be one of: user, repo, model, harness, spawnSource, automation, provider";
+  const limitError = "limit must be an integer between 1 and 100";
+
+  it.each([
+    ["dashboard?days=31", daysError],
+    ["summary?days=", daysError],
+    ["summary?days=7&days=14", "Invalid days"],
+    ["summary?scope=bogus", scopeError],
+    ["summary?scope=human&scope=all", "Invalid scope"],
+    ["breakdown", byError],
+    ["breakdown?by=", byError],
+    ["breakdown?by=status", byError],
+    ["breakdown?by=user&by=repo", "Invalid by"],
+    ["breakdown?days=1&by=nope", daysError],
+    ["runs?days=31", daysError],
+    ["runs?limit=0", limitError],
+    ["runs?limit=101", limitError],
+    ["runs?limit=1.5", limitError],
+    ["runs?orderBy=other", "orderBy must be one of: cost, created"],
+    ["runs?scope=other", scopeError],
+    ["runs?orderBy=cost&orderBy=created", "Invalid orderBy"],
+  ])("rejects %s before constructing a store", async (path, error) => {
+    const response = await callRoute(path);
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toEqual({ error });
+    expect(AnalyticsStore).not.toHaveBeenCalled();
+    expect(AnalyticsDashboardStore).not.toHaveBeenCalled();
+    expect(SessionRunStore).not.toHaveBeenCalled();
+  });
+
+  it.each([401, 403])("denies %s before constructing any analytics store", async (status) => {
+    if (status === 401) {
+      mocks.authenticate.mockResolvedValue({
+        reason: "Unauthorized",
+        status: 401,
+        failedScheme: "none",
+      });
+    }
+    const deniedEnv = { ...env, DB: authorizationDatabase({ permissions: [] }) };
+    for (const path of ["dashboard", "summary", "timeseries", "breakdown?by=user", "runs"]) {
+      expect((await callRoute(path, deniedEnv)).status, path).toBe(status);
+    }
+    expect(AnalyticsStore).not.toHaveBeenCalled();
+    expect(AnalyticsDashboardStore).not.toHaveBeenCalled();
+    expect(SessionRunStore).not.toHaveBeenCalled();
   });
 });

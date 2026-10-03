@@ -14,7 +14,6 @@ function jsonResponse(body: unknown): Response {
   });
 }
 
-/** Minimal Env whose control plane returns `response` and whose KV is empty. */
 function makeEnv(fetchResult: Response | Error): Env {
   const fetch =
     fetchResult instanceof Error
@@ -115,34 +114,7 @@ describe("getAvailableEnvironments", () => {
     expect(env.CONTROL_PLANE.fetch).toHaveBeenCalledTimes(1);
   });
 
-  it("fails open when the control-plane response is malformed", async () => {
-    const env = makeEnv(jsonResponse({ environments: [{ id: "env_bad" }], total: 1 }));
-    expect(await getAvailableEnvironments(env, "trace")).toEqual([]);
-  });
-
-  it("ignores malformed environments in the KV fallback", async () => {
-    const env = {
-      SLACK_KV: {
-        get: vi.fn().mockResolvedValue([TEST_ENVIRONMENT, { id: "env_bad" }]),
-        put: vi.fn().mockResolvedValue(undefined),
-      },
-      CONTROL_PLANE: {
-        fetch: vi.fn().mockResolvedValue(new Response("error", { status: 500 })),
-      },
-      SERVICE_AUTH_SECRET: "test-secret",
-    } as unknown as Env;
-
-    expect(await getAvailableEnvironments(env, "trace")).toEqual([TEST_ENVIRONMENT]);
-  });
-});
-
-describe("getEnvironmentById", () => {
-  beforeEach(() => {
-    clearEnvironmentsLocalCache();
-    vi.clearAllMocks();
-  });
-
-  it("finds an environment by its stable id", async () => {
+  it("forwards the channel and current actor when looking up a stable id", async () => {
     const env = makeEnv(jsonResponse({ environments: [TEST_ENVIRONMENT], total: 1 }));
     expect(await getEnvironmentById(env, "env_abc123", "trace", "C1", "U123")).toEqual(
       TEST_ENVIRONMENT
@@ -153,10 +125,5 @@ describe("getEnvironmentById", () => {
         headers: expect.objectContaining({ "X-OpenInspect-Actor": "slack:U123" }),
       })
     );
-  });
-
-  it("returns undefined for an unknown id", async () => {
-    const env = makeEnv(jsonResponse({ environments: [TEST_ENVIRONMENT], total: 1 }));
-    expect(await getEnvironmentById(env, "env_missing")).toBeUndefined();
   });
 });

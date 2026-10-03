@@ -526,6 +526,51 @@ describe("POST /webhooks/github", () => {
     expect(githubKv.put).toHaveBeenCalledTimes(2);
   });
 
+  it.each([undefined, "99", 0, -1, 1.5, Number.MAX_SAFE_INTEGER + 1])(
+    "rejects a session-triggering webhook with repository id %s before dispatch",
+    async (repositoryId) => {
+      const body = JSON.stringify({
+        action: "review_requested",
+        pull_request: {
+          number: 42,
+          title: "Requires stable repository identity",
+          body: null,
+          user: { login: "alice" },
+          head: { ref: "feature/test", sha: "abc123" },
+          base: { ref: "main" },
+        },
+        requested_reviewer: { login: "test-bot[bot]" },
+        repository: { id: repositoryId, owner: { login: "test" }, name: "repo", private: false },
+        sender: { login: "alice", id: 1001 },
+      });
+      const signature = await sign(SECRET, body);
+      const ctx = makeCtx();
+      const env = makeEnv();
+      const request = () =>
+        new Request("http://localhost/webhooks/github", {
+          method: "POST",
+          body,
+          headers: {
+            "X-Hub-Signature-256": signature,
+            "X-GitHub-Event": "pull_request",
+            "X-GitHub-Delivery": "delivery-invalid-repository-id",
+          },
+        });
+
+      expect((await app.fetch(request(), env, ctx)).status).toBe(200);
+      await flushWaitUntil(ctx);
+      const cpFetch = vi.mocked(env.CONTROL_PLANE.fetch);
+      expect(
+        cpFetch.mock.calls.some(([url]) => String(url).startsWith("https://internal/github/route?"))
+      ).toBe(false);
+      expect(cpFetch.mock.calls.some(([url]) => String(url) === "https://internal/sessions")).toBe(
+        false
+      );
+      expect(await env.GITHUB_KV.get("delivery:delivery-invalid-repository-id")).toBeNull();
+      expect(env.GITHUB_KV.delete).toHaveBeenCalledOnce();
+    }
+  );
+
   it.each([
     { status: 403, code: "not_member" },
     { status: 409, code: "target_team_missing_grant" },

@@ -7,7 +7,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from websockets import State
 
-from sandbox_runtime.bridge import AgentBridge, SessionTerminatedError
+from sandbox_runtime.bridge import AgentBridge
 from sandbox_runtime.git_signing import GitSigningError
 
 
@@ -311,18 +311,3 @@ class TestStalledWriteReconnect:
         assert ws.state is State.CLOSED
         assert bridge.ws is None
         assert bridge.event_forwarder._ws is None
-
-
-class TestSessionTerminatedError:
-    """Tests for SessionTerminatedError exception."""
-
-    def test_can_be_raised_and_caught(self):
-        with pytest.raises(SessionTerminatedError) as exc_info:
-            raise SessionTerminatedError("Test message")
-        assert "Test message" in str(exc_info.value)
-
-    def test_exception_chaining(self):
-        original = ValueError("original error")
-        with pytest.raises(SessionTerminatedError) as exc_info:
-            raise SessionTerminatedError("Wrapped") from original
-        assert exc_info.value.__cause__ is original

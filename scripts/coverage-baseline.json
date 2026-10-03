@@ -1,0 +1,82 @@
+{
+  "sourceCommit": "d343cac",
+  "maximumDropPercentagePoints": 3,
+  "exclude": [
+    "src/**/*.{test,spec}.{ts,tsx}",
+    "src/**/test-helpers.{ts,tsx}",
+    "src/**/*.test-{helpers,support,fixture}.{ts,tsx}",
+    "src/**/*.d.ts",
+    "src/index.ts"
+  ],
+  "packages": {
+    "control-plane": {
+      "provider": "istanbul",
+      "metrics": {
+        "statements": { "covered": 22052, "total": 23852 },
+        "branches": { "covered": 13767, "total": 16229 },
+        "functions": { "covered": 4419, "total": 4558 },
+        "lines": { "covered": 20496, "total": 21778 }
+      }
+    },
+    "web": {
+      "provider": "v8",
+      "metrics": {
+        "statements": { "covered": 9653, "total": 12736 },
+        "branches": { "covered": 8089, "total": 10850 },
+        "functions": { "covered": 2473, "total": 3285 },
+        "lines": { "covered": 8925, "total": 11614 }
+      }
+    },
+    "shared": {
+      "provider": "v8",
+      "exclude": ["src/triggers/testing.ts"],
+      "metrics": {
+        "statements": { "covered": 2398, "total": 2561 },
+        "branches": { "covered": 1452, "total": 1728 },
+        "functions": { "covered": 443, "total": 482 },
+        "lines": { "covered": 2183, "total": 2307 }
+      }
+    },
+    "slack-bot": {
+      "provider": "v8",
+      "metrics": {
+        "statements": { "covered": 1840, "total": 2039 },
+        "branches": { "covered": 1283, "total": 1582 },
+        "functions": { "covered": 316, "total": 331 },
+        "lines": { "covered": 1736, "total": 1920 }
+      }
+    },
+    "linear-bot": {
+      "provider": "v8",
+      "metrics": {
+        "statements": { "covered": 906, "total": 1046 },
+        "branches": { "covered": 514, "total": 694 },
+        "functions": { "covered": 133, "total": 147 },
+        "lines": { "covered": 851, "total": 969 }
+      }
+    },
+    "github-bot": {
+      "provider": "v8",
+      "metrics": {
+        "statements": { "covered": 354, "total": 378 },
+        "branches": { "covered": 155, "total": 175 },
+        "functions": { "covered": 45, "total": 48 },
+        "lines": { "covered": 339, "total": 358 }
+      }
+    },
+    "modal-infra": {
+      "provider": "coverage.py",
+      "metrics": {
+        "statements": { "covered": 1140, "total": 1185 },
+        "branches": { "covered": 214, "total": 238 }
+      }
+    },
+    "sandbox-runtime": {
+      "provider": "coverage.py",
+      "metrics": {
+        "statements": { "covered": 7357, "total": 8190 },
+        "branches": { "covered": 2003, "total": 2462 }
+      }
+    }
+  }
+}

@@ -2,15 +2,14 @@ import { describe, expect, it, vi } from "vitest";
 import { extractAgentResponse } from "./extractor";
 import type { Env } from "../types";
 
-function jsonResponse(payload: unknown, status = 200): Response {
+function jsonResponse(payload: unknown): Response {
   return new Response(JSON.stringify(payload), {
-    status,
     headers: { "Content-Type": "application/json" },
   });
 }
 
 describe("extractAgentResponse", () => {
-  it("uses artifacts API when available", async () => {
+  it("scopes event and artifact reads to the Slack destination and purpose", async () => {
     const fetchMock = vi.fn(async (input: string | URL | Request) => {
       const url = String(input);
       if (url.includes("/events")) {
@@ -45,13 +44,6 @@ describe("extractAgentResponse", () => {
               metadata: { number: 42 },
               createdAt: 10,
             },
-            {
-              id: "a2",
-              type: "branch",
-              url: "https://github.com/octocat/repo/pull/new/main...open-inspect%2Fsession-123",
-              metadata: { head: "open-inspect/session-123", mode: "manual_pr" },
-              createdAt: 11,
-            },
           ],
         });
       }
@@ -68,6 +60,10 @@ describe("extractAgentResponse", () => {
 
     expect(response.textContent).toBe("Final response");
     expect(response.success).toBe(true);
+    expect(fetchMock.mock.calls.map(([input]) => new URL(String(input)).pathname)).toEqual([
+      "/sessions/session-1/events",
+      "/sessions/session-1/artifacts",
+    ]);
     for (const [input] of fetchMock.mock.calls) {
       expect(new URL(String(input)).searchParams.get("channel")).toBe("slack:C123");
       expect(new URL(String(input)).searchParams.get("purpose")).toBe("slack-post");
@@ -78,12 +74,6 @@ describe("extractAgentResponse", () => {
         url: "https://github.com/octocat/repo/pull/42",
         label: "PR #42",
         metadata: { number: 42 },
-      },
-      {
-        type: "branch",
-        url: "https://github.com/octocat/repo/pull/new/main...open-inspect%2Fsession-123",
-        label: "Branch: open-inspect/session-123",
-        metadata: { head: "open-inspect/session-123", mode: "manual_pr" },
       },
     ]);
   });
