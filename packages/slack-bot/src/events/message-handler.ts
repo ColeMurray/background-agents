@@ -14,7 +14,11 @@ import {
   type SlackImageAttachment,
 } from "../attachments";
 import { createClassifier } from "../classifier";
-import { getChannelBinding, resolveChannelBinding } from "../channel-bindings";
+import {
+  CHANNEL_BINDING_UNAVAILABLE_MESSAGE,
+  lookupChannelBinding,
+  resolveChannelBinding,
+} from "../channel-bindings";
 import { loadTargetCatalog } from "../classifier/catalog";
 import { stripMentions } from "../dm-utils";
 import {
@@ -95,21 +99,31 @@ interface IncomingMessageParams {
   scheduleBackground: BackgroundTaskScheduler;
 }
 
+/** Null permits a new launch; undefined stops an unavailable follow-up without changing state. */
 async function resolveExistingThreadSession(
   env: Env,
   channel: string,
   threadTs: string | undefined,
   traceId?: string
-): Promise<ThreadSession | null> {
+): Promise<ThreadSession | null | undefined> {
   if (!threadTs) return null;
   let session = await lookupThreadSession(env, channel, threadTs);
   if (!session) return null;
-  const binding = await getChannelBinding(env, channel, traceId).catch((error) => {
-    log.warn("channel_binding.followup_unavailable", { trace_id: traceId, channel, error });
-    return null;
-  });
+  const result = await lookupChannelBinding(env, channel, traceId);
+  if (result.kind === "unavailable") {
+    log.warn("channel_binding.followup_unavailable", {
+      trace_id: traceId,
+      channel,
+      error: result.error,
+    });
+    await postMessage(env.SLACK_BOT_TOKEN, channel, CHANNEL_BINDING_UNAVAILABLE_MESSAGE, {
+      thread_ts: threadTs,
+    });
+    return undefined;
+  }
   // Legacy mappings predate team ownership and represent workspace sessions.
-  const bindingMatches = binding !== null && binding.teamId === (session.teamId ?? null);
+  const bindingMatches =
+    result.kind === "resolved" && result.binding.teamId === (session.teamId ?? null);
   if (!session.closed && !bindingMatches) {
     await closeThreadSession(env, channel, threadTs, session.sessionId);
     session = { ...session, closed: true };
@@ -510,7 +524,7 @@ export async function handleAppMention(
     event.thread_ts,
     traceId
   );
-  if (existingSession?.closed) return;
+  if (existingSession === undefined || existingSession?.closed) return;
   const parsedFlags = parseInlinePromptFlags(stripMentions(event.text));
   const messageText = parsedFlags.ok ? parsedFlags.text : "";
   const threadKey = event.thread_ts || event.ts;
@@ -621,7 +635,7 @@ export async function handleDirectMessage(
     event.thread_ts,
     traceId
   );
-  if (existingSession?.closed) return;
+  if (existingSession === undefined || existingSession?.closed) return;
   const parsedFlags = parseInlinePromptFlags(stripMentions(event.text));
   const messageText = parsedFlags.ok ? parsedFlags.text : "";
   const forwarded = collectForwardedMessages(event.attachments);

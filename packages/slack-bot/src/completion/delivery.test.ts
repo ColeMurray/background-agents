@@ -196,6 +196,7 @@ describe("processSlackCompletion", () => {
 
   it.each([
     ["events", 403, true],
+    ["events", 503, true],
     ["artifacts", 404, false],
     ["artifacts", 503, false],
   ] as const)(
@@ -236,6 +237,31 @@ describe("processSlackCompletion", () => {
       expect(deliverMediaArtifacts).not.toHaveBeenCalled();
     }
   );
+
+  describe.each(["events", "artifacts"] as const)("protected %s reads", (endpoint) => {
+    it.each(["network", "timeout", "invalid-json", "malformed"] as const)(
+      "retries %s failures without publishing or clearing the reaction",
+      async (failure) => {
+        const actual = await vi.importActual<typeof ExtractorModule>("./extractor");
+        vi.mocked(extractAgentResponse).mockImplementation(actual.extractAgentResponse);
+        const fetch = vi.spyOn(globalThis, "fetch");
+        const env = makeEnv();
+        vi.mocked(env.CONTROL_PLANE.fetch).mockImplementation(async (input) => {
+          if (new URL(String(input)).pathname.endsWith(`/${endpoint}`)) {
+            if (failure === "network") throw new Error("offline");
+            if (failure === "timeout") throw new DOMException("timed out", "TimeoutError");
+            if (failure === "invalid-json") return new Response("{");
+            return Response.json({ invalid: true });
+          }
+          return Response.json({ events: [], hasMore: false });
+        });
+
+        await expect(processSlackCompletion(job(), env)).resolves.toEqual({ kind: "retry" });
+        expect(fetch).not.toHaveBeenCalled();
+        expect(deliverMediaArtifacts).not.toHaveBeenCalled();
+      }
+    );
+  });
 
   it.each(["allowed", "denied", "unavailable"] as const)(
     "gates cached completion text after missing media on a fresh %s publication proof",
