@@ -57,6 +57,15 @@ teams or to/from the workspace; a team-owned session never becomes workspace-own
 collaborator controls remain available to authorized users. Historical `session.moved` audit events
 remain readable.
 
+### Fixed
+
+The session page reconnects on its own after a transient disconnect. It used to stop after ten
+attempts (about three minutes) and wait for a click on **Reconnect**, so a laptop that slept or lost
+its network came back to a dead page. Retries now continue at the capped backoff. A hidden tab or an
+offline browser makes no attempts and reconnects as soon as it is visible and online again, with a
+fresh backoff. A session-expired close (4002) also reconnects with a new credential instead of
+showing a banner.
+
 ## October 1, 2026
 
 ### Changed
