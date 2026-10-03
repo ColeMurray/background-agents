@@ -333,6 +333,7 @@ export async function handleSpawnChild(
     automationId: parentSession?.automationId ?? null,
     automationRunId: parentSession?.automationRunId ?? null,
     managedSkillsSourceSessionId: parentId,
+    memorySourceSessionId: parentId,
     providerAuth: providerAuth.map((auth) => ({
       ...auth,
       inheritedFromSessionId: parentId,

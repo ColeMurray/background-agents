@@ -31,6 +31,17 @@ async function readyImage(
 }
 
 describe("evaluateImageBuildForSpawn", () => {
+  it.each(["claude", "opencode"] as const)(
+    "rejects pre-memory v73 images for %s",
+    async (harness) => {
+      const image = await readyImage({ runtime_version: "v73-node-24" });
+      expect(await evaluateImageBuildForSpawn(image, SESSION_REPOSITORIES, harness)).toEqual({
+        outcome: "miss",
+        reason: "runtime_below_floor",
+        imageBuildId: "imgb-1",
+      });
+    }
+  );
   it("selects a ready image matching the session's own snapshot", async () => {
     const result = await evaluateImageBuildForSpawn(await readyImage(), SESSION_REPOSITORIES);
 

@@ -65,9 +65,16 @@ export class SessionCollaboratorStore {
          VALUES (?, ?, ?, ?) ON CONFLICT (session_id, user_id) DO NOTHING`
       )
       .bind(sessionId, userId, addedBy, Date.now());
-    const result = audit
-      ? (await this.db.batch([statement, new SessionAuditStore(this.db).bind(audit, true)]))[0]
-      : await statement.run();
+    const [result] = await this.db.batch([
+      statement,
+      ...(audit ? [new SessionAuditStore(this.db).bind(audit, true)] : []),
+      this.db
+        .prepare(
+          `UPDATE session_memory_manifests SET personal_auto_save_eligible = 0
+        WHERE session_id = ? AND EXISTS (SELECT 1 FROM sessions WHERE id = ? AND user_id <> ?)`
+        )
+        .bind(sessionId, sessionId, userId),
+    ]);
     return result.meta.changes > 0;
   }
 

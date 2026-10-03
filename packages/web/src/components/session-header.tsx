@@ -97,6 +97,7 @@ const BOOT_PHASE_DETAILS: Record<BootPhaseName, { started: string; completed: st
   sync: { started: "Cloning the repository", completed: "Cloned the repository" },
   setup: { started: "Running setup.sh", completed: "Finished setup.sh" },
   start: { started: "Running start.sh", completed: "Finished start.sh" },
+  memory: { started: "Loading memories", completed: "Memories loaded" },
   skills: { started: "Installing skills", completed: "Installed skills" },
   harness: { started: "Starting the agent", completed: "Started the agent" },
 };

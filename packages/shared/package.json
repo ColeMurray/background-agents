@@ -213,6 +213,10 @@
     "./types/audit-events": {
       "import": "./dist/types/audit-events.js",
       "types": "./dist/types/audit-events.d.ts"
+    },
+    "./types/memories": {
+      "import": "./dist/types/memories.js",
+      "types": "./dist/types/memories.d.ts"
     }
   },
   "scripts": {

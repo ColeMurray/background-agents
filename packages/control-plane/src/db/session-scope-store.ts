@@ -41,7 +41,19 @@ export class SessionScopeStore {
           .prepare("UPDATE sessions SET visibility = ? WHERE id = ?")
           .bind(visibility, id);
         const audit = auditBySessionId.get(id);
-        return audit ? [update, audit] : [update];
+        const statements = audit ? [update, audit] : [update];
+        if (visibility !== "private") {
+          // Once shared, a delayed agent tool call cannot auto-save personal facts,
+          // even if the audience is subsequently made private again.
+          statements.push(
+            this.db
+              .prepare(
+                "UPDATE session_memory_manifests SET personal_auto_save_eligible = 0 WHERE session_id = ?"
+              )
+              .bind(id)
+          );
+        }
+        return statements;
       })
     );
   }

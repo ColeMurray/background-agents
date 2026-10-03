@@ -1,3 +1,17 @@
+vi.mock("../session/memory-resolution", () => ({
+  resolveSessionMemory: vi.fn(async () => ({
+    resolverVersion: 1,
+    manifestSha256: "0".repeat(64),
+    resolvedAt: 1,
+    includePersonalMemories: false,
+    personalOwnerUserId: null,
+    directiveChars: 0,
+    catalogChars: 0,
+    estimatedTokens: 0,
+    truncatedCount: 0,
+    items: [],
+  })),
+}));
 /**
  * Unit tests for Scheduler.
  *
@@ -6,6 +20,7 @@
  * test/integration/automation-invocations.test.ts.
  */
 
+import { resolveSessionMemory } from "../session/memory-resolution";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { createTestBackgroundTasks } from "../background-tasks.test-support";
 import type { Env } from "../types";
@@ -32,6 +47,7 @@ const mockEvaluateSessionAdmission = vi.hoisted(() => vi.fn());
 const mockTeamGetById = vi.hoisted(() =>
   vi.fn<(id: string) => Promise<Team | null>>().mockResolvedValue(null)
 );
+const mockListTeamsForRepository = vi.hoisted(() => vi.fn().mockResolvedValue([]));
 const mockTeamGrantCovers = vi.hoisted(() =>
   vi
     .fn<(teamId: string, repoIds: readonly (number | null)[]) => Promise<boolean>>()
@@ -46,7 +62,7 @@ vi.mock("../db/teams", () => ({
 
 vi.mock("../db/team-repository-grants", () => ({
   TeamRepositoryGrantStore: vi.fn().mockImplementation(function () {
-    return { covers: mockTeamGrantCovers };
+    return { covers: mockTeamGrantCovers, listTeamsForRepository: mockListTeamsForRepository };
   }),
 }));
 
@@ -564,6 +580,7 @@ describe("Scheduler", () => {
     ]);
     mockProviderAuthList.mockResolvedValue([]);
     mockIsAutomationExecutionAuthorized.mockResolvedValue(true);
+    mockListTeamsForRepository.mockReset().mockResolvedValue([]);
     mockGetEffectiveAuthorization.mockReset().mockResolvedValue(steeringAuthorization());
     mockEvaluateSessionAdmission
       .mockReset()
@@ -608,6 +625,10 @@ describe("Scheduler", () => {
       const result = await scheduler.tick();
 
       expect(result).toMatchObject({ processed: 1 });
+      expect(resolveSessionMemory).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({ canonicalUserId: sampleAutomation.user_id })
+      );
 
       expect(mockStore.insertInvocationGuarded).toHaveBeenCalledTimes(1);
       const params = mockStore.insertInvocationGuarded.mock.calls[0][0];

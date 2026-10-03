@@ -1,5 +1,8 @@
 "use client";
 
+import { useMemoryPreferences, useMemoryPreview } from "@/hooks/use-memories";
+import { MemoryPreview } from "@/components/memory-preview";
+
 import { useAuthSession } from "@/lib/auth-session";
 import { browserApiFetch } from "@/lib/browser-api-fetch";
 import { toast } from "sonner";
@@ -132,6 +135,10 @@ export default function Home() {
   const [modelPreferenceDraft, setModelPreferenceDraft] = useState<ModelPreference | null>(null);
   const [harness, setHarness] = useState<HarnessId>(DEFAULT_HARNESS);
   const [prompt, setPrompt] = useState("");
+  const memoryPreferences = useMemoryPreferences(!!session);
+  const [personalMemoryOverride, setPersonalMemoryOverride] = useState<boolean | null>(null);
+  const includePersonalMemories =
+    personalMemoryOverride ?? memoryPreferences.data?.includePersonalMemories;
   const [warmRequested, setWarmRequested] = useState(false);
   const [skillSelection, setSkillSelection] = useState<SessionSkillSelection>({ mode: "all" });
   const [providerSelections, setProviderSelections] = useState<ModelProviderSelections>({});
@@ -145,6 +152,10 @@ export default function Home() {
   const { enabledModels, enabledModelOptions, loading: loadingEnabledModels } = useEnabledModels();
   const targetRequestFields = buildRequestFields();
   const currentSkillPreviewTarget = session ? skillPreviewTarget(targetRequestFields) : null;
+  const memoryPreview = useMemoryPreview(
+    currentSkillPreviewTarget,
+    personalMemoryOverride ?? undefined
+  );
   const {
     preview: skillPreview,
     loading: skillPreviewLoading,
@@ -257,6 +268,7 @@ export default function Home() {
           model: selectedModel,
           reasoningEffort,
           skillSelection,
+          includePersonalMemories: personalMemoryOverride ?? undefined,
           providerSelections: availableProviderSelections,
           teamId,
           visibility,
@@ -455,6 +467,22 @@ export default function Home() {
       modelOptions={modelSelection.options}
       skillSelection={skillSelection}
       setSkillSelection={setSkillSelection}
+      memoryControls={
+        <MemoryPreview
+          includePersonalMemories={includePersonalMemories}
+          disabled={creating}
+          onChange={(value) => {
+            if (!submitInFlightRef.current) setPersonalMemoryOverride(value);
+          }}
+          preview={memoryPreview.data}
+          loading={!memoryPreferences.data && !memoryPreferences.error}
+          error={memoryPreferences.error || memoryPreview.error}
+          onRetry={() => {
+            void memoryPreferences.mutate();
+            void memoryPreview.mutate();
+          }}
+        />
+      }
       skillPreviewTarget={currentSkillPreviewTarget}
       skillPreview={skillPreview}
       skillPreviewLoading={skillPreviewLoading}
@@ -493,6 +521,7 @@ function HomeContent({
   modelOptions,
   skillSelection,
   setSkillSelection,
+  memoryControls,
   skillPreviewTarget,
   skillPreview,
   skillPreviewLoading,
@@ -533,6 +562,7 @@ function HomeContent({
   modelOptions: ModelCategory[];
   skillSelection: SessionSkillSelection;
   setSkillSelection: (value: SessionSkillSelection) => void;
+  memoryControls: React.ReactNode;
   skillPreviewTarget: Omit<SkillResolutionPreviewInput, "selection"> | null;
   skillPreview: SkillResolutionPreviewResponse | null;
   skillPreviewLoading: boolean;
@@ -617,6 +647,8 @@ function HomeContent({
               <div className="mb-3 flex flex-wrap items-center gap-2 px-4 sm:gap-4">
                 <SessionTargetPicker {...picker.pickerProps} disabled={creating} />
               </div>
+
+              {memoryControls}
 
               <div
                 className={`border border-border bg-input ${isDraggingOver ? "ring-2 ring-accent" : ""}`}

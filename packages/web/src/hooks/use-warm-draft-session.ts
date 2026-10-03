@@ -16,6 +16,7 @@ export type WarmDraftSessionRequest = SessionTargetRequestFields & {
   model: string;
   reasoningEffort?: string;
   skillSelection: SessionSkillSelection;
+  includePersonalMemories?: boolean;
   providerSelections: ModelProviderSelections;
   teamId: string | null;
   visibility: SessionVisibility;

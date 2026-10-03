@@ -26,6 +26,7 @@ from .image_build_context_start import (
 from .image_environment import apply_image_environment
 from .log_config import configure_logging, get_logger
 from .managed_skills import ManagedSkillsClient, ManagedSkillsMaterializer
+from .memories import MemoryMaterializer
 from .modal_image_build_start import MODAL_IMAGE_BUILD_START_ARGUMENT, run_modal_image_build
 from .opencode_server import OpenCodeServer, resolve_opencode_global_config_dir
 from .repository_boot import RepositoryBoot
@@ -146,6 +147,15 @@ def build_supervisor(shutdown_event: asyncio.Event) -> SandboxSupervisor:
         managed_skills,
         shutdown_event,
         log,
+        memory=MemoryMaterializer(
+            config.control_plane_url,
+            config.session_id,
+            config.sandbox_token,
+            managed_skills_destination(config.harness, claude_config_dir).parent,
+            log,
+        )
+        if config.control_plane_url and config.session_id
+        else None,
         boot_events=warnings,
         docker_service=DockerService(log) if config.docker_enabled else None,
     )

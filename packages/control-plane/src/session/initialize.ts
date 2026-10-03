@@ -1,3 +1,4 @@
+import type { SessionMemoryManifest } from "@open-inspect/shared/types/memories";
 import type { HarnessId } from "@open-inspect/shared/harnesses";
 import type { Env } from "../types";
 import type { RequestContext } from "../routes/shared";
@@ -83,6 +84,10 @@ export interface SessionInitInput {
   spawnDepth?: number;
   automationId?: string | null;
   automationRunId?: string | null;
+  /** Resolved root-session selection; exactly one of this or memorySourceSessionId is required. */
+  memoryManifest?: SessionMemoryManifest;
+  /** Child inheritance source; copies pinned context atomically with the new session. */
+  memorySourceSessionId?: string;
   managedSkillsManifest?: SessionSkillManifestInput;
   managedSkillsSourceSessionId?: string;
   /** Complete, immutable provider routing snapshot resolved by the caller. */
@@ -110,6 +115,9 @@ export async function initializeSession(
     (input.managedSkillsSourceSessionId === undefined)
   ) {
     throw new Error("Session must resolve or inherit exactly one managed skills manifest");
+  }
+  if ((input.memoryManifest === undefined) === (input.memorySourceSessionId === undefined)) {
+    throw new Error("Session must resolve or inherit exactly one memory manifest");
   }
   const hasRepoOwner = input.repoOwner !== null;
   const hasRepoName = input.repoName !== null;
@@ -207,6 +215,8 @@ export async function initializeSession(
         : undefined,
     createdAt: now,
     updatedAt: now,
+    memoryManifest: input.memoryManifest,
+    memoryManifestSourceSessionId: input.memorySourceSessionId,
     skillManifest: input.managedSkillsManifest,
     skillManifestSourceSessionId: input.managedSkillsSourceSessionId,
     providerAuth: input.providerAuth,
