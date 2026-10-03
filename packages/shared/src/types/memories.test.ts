@@ -1,8 +1,12 @@
 import { describe, expect, it } from "vitest";
 import {
   createMemorySchema,
-  createSandboxMemorySchema,
+  allowedMemoryActions,
+  memoryScopeFromSearchParams,
+  memoryScopeToSearchParams,
   memorySearchSchema,
+  MEMORY_TRANSITIONS,
+  sandboxMemoryWriteSchema,
   reviseMemorySchema,
   MEMORY_LIMITS,
   sessionMemoryManifestSchema,
@@ -20,32 +24,34 @@ describe("memory write contracts", () => {
   it.each(["personal", "repository", "environment"])(
     "accepts a session-relative %s scope only for sandbox writes",
     (type) => {
-      expect(createSandboxMemorySchema.parse({ ...fact, scope: { type } }).scope).toEqual({ type });
+      const { scope: _scope, ...fields } = fact;
+      expect(sandboxMemoryWriteSchema.parse({ ...fields, scope: type }).scope).toBe(type);
       expect(createMemorySchema.safeParse({ ...fact, scope: { type } }).success).toBe(
         type === "personal"
       );
     }
   );
   it("normalizes an explicit sandbox repository selector", () => {
+    const { scope: _scope, ...fields } = fact;
     expect(
-      createSandboxMemorySchema.parse({
-        ...fact,
-        scope: {
-          type: "repository",
-          repoOwner: " Acme/Subgroup ",
-          repoName: " API ",
-        },
-      }).scope
-    ).toEqual({ type: "repository", repoOwner: "acme/subgroup", repoName: "api" });
+      sandboxMemoryWriteSchema.parse({
+        ...fields,
+        scope: "repository",
+        repoOwner: " Acme/Subgroup ",
+        repoName: " API ",
+      })
+    ).toMatchObject({ scope: "repository", repoOwner: "acme/subgroup", repoName: "api" });
   });
   it.each([
-    { type: "repository", repoOwner: "acme" },
-    { type: "repository", repoName: "api" },
-    { type: "repository", repoId: 123 },
-    { type: "environment", environmentId: "other" },
-    { type: "personal", ownerUserId: "other" },
-  ])("rejects partial selectors and caller-derived identities: $type", (scope) => {
-    expect(createSandboxMemorySchema.safeParse({ ...fact, scope }).success).toBe(false);
+    { scope: "repository", repoOwner: "acme" },
+    { scope: "repository", repoName: "api" },
+    { scope: "personal", repoOwner: "acme", repoName: "api" },
+    { scope: "repository", repoId: 123 },
+    { scope: "environment", environmentId: "other" },
+    { scope: "personal", ownerUserId: "other" },
+  ])("rejects partial selectors and caller-derived identities: $scope", (selector) => {
+    const { scope: _scope, ...fields } = fact;
+    expect(sandboxMemoryWriteSchema.safeParse({ ...fields, ...selector }).success).toBe(false);
   });
   it("accepts nested repository owners and canonicalizes their identity", () => {
     expect(
@@ -69,9 +75,7 @@ describe("memory write contracts", () => {
       content: "a".repeat(MEMORY_LIMITS.directive + 1),
     };
     expect(createMemorySchema.safeParse({ ...directive, scope: fact.scope }).success).toBe(false);
-    expect(reviseMemorySchema.safeParse({ ...directive, expectedRevisionId: "old" }).success).toBe(
-      false
-    );
+    expect(reviseMemorySchema.safeParse(directive).success).toBe(false);
     expect(
       createMemorySchema.safeParse({ ...fact, content: "a".repeat(MEMORY_LIMITS.fact) }).success
     ).toBe(true);
@@ -118,11 +122,11 @@ describe("pinned memory and diagnostic contracts", () => {
       scope: { type: "personal" },
       memoryType: "fact",
       title: "Fact",
-      inclusion: "catalog",
+      inclusion: "summary",
       estimatedTokens: 1,
     };
     const manifest = {
-      resolverVersion: 1,
+      selectionVersion: 1,
       manifestSha256: "hash",
       resolvedAt: 1,
       includePersonalMemories: true,
@@ -147,5 +151,47 @@ describe("pinned memory and diagnostic contracts", () => {
         items: Array.from({ length: 301 }, () => item),
       }).success
     ).toBe(false);
+  });
+});
+
+describe("memory scope query encoding", () => {
+  it.each([
+    { type: "personal" },
+    { type: "repository", repoOwner: "group/subgroup", repoName: "api" },
+    { type: "environment", environmentId: "env_1" },
+  ] as const)("round-trips $type scopes", (scope) => {
+    expect(memoryScopeFromSearchParams(memoryScopeToSearchParams(scope))).toEqual(scope);
+  });
+  it("rejects incomplete or unknown scopes", () => {
+    expect(memoryScopeFromSearchParams(new URLSearchParams("scope=repository&repoOwner=a"))).toBe(
+      null
+    );
+    expect(memoryScopeFromSearchParams(new URLSearchParams("scope=team"))).toBe(null);
+  });
+});
+
+describe("memory lifecycle table", () => {
+  it("derives the available actions from the current status", () => {
+    expect(allowedMemoryActions({ status: "proposed", approvedAt: null })).toEqual([
+      "approve",
+      "reject",
+      "archive",
+    ]);
+    expect(allowedMemoryActions({ status: "active", approvedAt: 1 })).toEqual(["archive"]);
+    expect(allowedMemoryActions({ status: "archived", approvedAt: null })).toEqual(["restore"]);
+  });
+  it("restores records to their last decided state", () => {
+    expect(MEMORY_TRANSITIONS.restore.to({ status: "archived", approvedAt: null })).toEqual({
+      status: "proposed",
+      archiveKind: null,
+    });
+    expect(MEMORY_TRANSITIONS.restore.to({ status: "archived", approvedAt: 1 })).toEqual({
+      status: "active",
+      archiveKind: null,
+    });
+    expect(MEMORY_TRANSITIONS.reject.to({ status: "proposed", approvedAt: null })).toEqual({
+      status: "archived",
+      archiveKind: "rejected",
+    });
   });
 });
