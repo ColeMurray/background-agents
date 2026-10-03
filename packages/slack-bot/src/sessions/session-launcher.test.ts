@@ -7,6 +7,7 @@ import type { SlackActorIdentity } from "../user-identity";
 import { getUserRepoBranchPreference } from "../branch-preferences";
 import type * as BranchPreferencesModule from "../branch-preferences";
 import { createSession } from "./control-plane-client";
+import type * as ControlPlaneClientModule from "./control-plane-client";
 import { deliverPrompt } from "./prompt-delivery";
 import { buildThreadSession, storeThreadSession } from "./thread-session-store";
 import type * as ThreadSessionStoreModule from "./thread-session-store";
@@ -109,6 +110,25 @@ describe("startSessionAndSendPrompt team boundaries", () => {
     expect(deliverPrompt).not.toHaveBeenCalled();
     expect(buildThreadSession).not.toHaveBeenCalled();
     expect(storeThreadSession).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["team-a", "team"],
+    [null, "workspace"],
+  ] as const)("launches with non-private visibility for scope %s", async (teamId, visibility) => {
+    const client = await vi.importActual<typeof ControlPlaneClientModule>("./control-plane-client");
+    vi.mocked(createSession).mockImplementationOnce(client.createSession);
+    const fetch = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) =>
+      Response.json({ sessionId: "session-1", status: "created" })
+    );
+    const env = { ...makeEnv(), CONTROL_PLANE: { fetch }, SERVICE_AUTH_SECRET: "test-secret" };
+
+    expect(await startSessionAndSendPrompt(env, { ...options, teamId })).toMatchObject({
+      sessionId: "session-1",
+    });
+    expect(fetch).toHaveBeenCalledOnce();
+    expect(fetch.mock.calls[0][0]).toBe("https://internal/sessions");
+    expect(JSON.parse(String(fetch.mock.calls[0][1]?.body))).toMatchObject({ teamId, visibility });
   });
 
   it.each([

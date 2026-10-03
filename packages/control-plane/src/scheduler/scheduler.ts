@@ -700,6 +700,7 @@ export class Scheduler {
         await this.createSessionForAutomationRun(
           store,
           automation,
+          invocation,
           child,
           providerAuthSnapshot.providerAuth,
           sessionId,
@@ -1762,6 +1763,7 @@ export class Scheduler {
   private async createSessionForAutomationRun(
     store: AutomationStore,
     automation: AutomationRow,
+    invocation: AutomationInvocationRow,
     run: AutomationRunRow,
     providerAuth: SessionModelProviderAuthInput[],
     sessionId: string,
@@ -1825,9 +1827,15 @@ export class Scheduler {
       throw new AutomationExecutionUnauthorizedError("team_archived");
     }
 
+    let visibility = team?.defaultVisibility ?? "workspace";
+    // Slack output cannot be published from a private session.
+    if (parseSlackTriggerMetadata(invocation.trigger_metadata)?.messageTs) {
+      visibility = team ? "team" : "workspace";
+    }
+
     const sessionInput: SessionInitInput = {
       ownerTeamId: automation.owner_team_id,
-      visibility: team?.defaultVisibility ?? "workspace",
+      visibility,
       sessionId,
       ...target,
       title: `[Auto] ${automation.name}`,

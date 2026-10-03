@@ -575,6 +575,7 @@ describe("handleAgentSessionEvent environment targets", () => {
 
       expect(createSessionBody(fetchMock)).toMatchObject({
         teamId,
+        visibility: teamId ? "team" : "workspace",
         repoOwner: "acme",
         repoName: "backend",
       });

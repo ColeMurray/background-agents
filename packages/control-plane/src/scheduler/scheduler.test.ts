@@ -3595,6 +3595,37 @@ describe("Scheduler", () => {
       mockEnvironmentRepositories.mockReset().mockResolvedValue(members);
     });
 
+    it.each([
+      ["private", true, teamId, "team"],
+      ["workspace", true, teamId, "team"],
+      ["team", true, teamId, "team"],
+      ["private", false, teamId, "private"],
+      ["workspace", false, teamId, "workspace"],
+      ["team", false, teamId, "team"],
+      ["private", true, null, "workspace"],
+      ["private", false, null, "workspace"],
+    ] as const)(
+      "selects visibility for default %s, Slack destination %s, owner %s",
+      async (defaultVisibility, slackDestination, ownerTeamId, visibility) => {
+        mockTeamGetById.mockResolvedValue({ ...activeTeam, defaultVisibility });
+        const automation = { ...sampleSlackAutomation, owner_team_id: ownerTeamId };
+        mockStore.getById.mockResolvedValue(automation);
+        mockGetSlackAutomationsForChannel.mockResolvedValue([automation]);
+        const scheduler = createScheduler();
+
+        if (slackDestination) {
+          expect(await scheduler.event(makeSlackEvent())).toMatchObject({ triggered: 1 });
+        } else {
+          await scheduler.trigger(automation.id, "user-1");
+        }
+
+        expect(mockSessionStoreCreate).toHaveBeenCalledOnce();
+        expect(mockSessionStoreCreate).toHaveBeenCalledWith(
+          expect.objectContaining({ ownerTeamId, visibility })
+        );
+      }
+    );
+
     it("checks resolved direct IDs before manual admission", async () => {
       selectRepositories("auto-1", [repositoryRow("auto-1")]);
       mockCheckRepositoryAccess.mockResolvedValue({

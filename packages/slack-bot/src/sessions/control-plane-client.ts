@@ -88,6 +88,7 @@ export async function createSession(
     const body = JSON.stringify({
       ...buildSessionTargetRequestFields(target, branch),
       teamId,
+      visibility: teamId ? "team" : "workspace",
       model,
       reasoningEffort,
       actorDisplayName,
