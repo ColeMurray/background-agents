@@ -16,10 +16,20 @@ import {
 } from "@open-inspect/shared/types/integrations";
 import {
   MODEL_REASONING_CONFIG,
+  getValidModelOrDefault,
   isValidReasoningEffort,
   type ModelCategory,
   type ValidModel,
 } from "@open-inspect/shared/models";
+import {
+  HARNESS_IDS,
+  checkHarnessCompatibility,
+  getHarnessLabel,
+  harnessSupportsModel,
+  isValidHarness,
+  type HarnessId,
+} from "@open-inspect/shared/harnesses";
+import { filterModelOptionsForHarness } from "@/lib/session-harness";
 import { useEnabledModels } from "@/hooks/use-enabled-models";
 import { browserApiFetch } from "@/lib/browser-api-fetch";
 import { IntegrationSettingsSkeleton } from "./integration-settings-skeleton";
@@ -135,6 +145,8 @@ export function LinearIntegrationSettings() {
             overrides={repoOverrides}
             availableRepos={availableRepos}
             enabledModelOptions={enabledModelOptions}
+            defaultHarness={settings?.defaults?.harness ?? null}
+            defaultModel={settings?.defaults?.model ?? ""}
           />
         </fieldset>
       </SettingsCardSection>
@@ -155,6 +167,7 @@ function GlobalSettingsSection({
 }) {
   const [model, setModel] = useState(settings?.defaults?.model ?? "");
   const [effort, setEffort] = useState(settings?.defaults?.reasoningEffort ?? "");
+  const [harness, setHarness] = useState(settings?.defaults?.harness ?? "");
   const [enabledRepos, setEnabledRepos] = useState<string[]>(settings?.enabledRepos ?? []);
   const [repoScopeMode, setRepoScopeMode] = useState<"all" | "selected">(
     settings?.enabledRepos == null ? "all" : "selected"
@@ -183,6 +196,7 @@ function GlobalSettingsSection({
     if (settings === undefined || dirty || saving) return;
     setModel(settings?.defaults?.model ?? "");
     setEffort(settings?.defaults?.reasoningEffort ?? "");
+    setHarness(settings?.defaults?.harness ?? "");
     setEnabledRepos(settings?.enabledRepos ?? []);
     setRepoScopeMode(settings?.enabledRepos == null ? "all" : "selected");
     setAllowUserPreferenceOverride(settings?.defaults?.allowUserPreferenceOverride ?? true);
@@ -195,6 +209,24 @@ function GlobalSettingsSection({
   const isConfigured = settings !== null && settings !== undefined;
   const resetNotice =
     "Reset all Linear settings to defaults? This enables both label/user model overrides and restores the default policy for unbound Linear teams.";
+
+  // The model picker only offers models the selected harness can run. A model
+  // the new harness cannot run is cleared, mirroring the composer behavior.
+  const visibleModelOptions =
+    harness && isValidHarness(harness)
+      ? filterModelOptionsForHarness(harness, enabledModelOptions)
+      : enabledModelOptions;
+
+  const handleHarnessChange = (next: string) => {
+    const value = next === "__system_default__" ? "" : next;
+    setHarness(value);
+    if (value && isValidHarness(value) && model && !harnessSupportsModel(value, model)) {
+      setModel("");
+      setEffort("");
+    }
+    setDirty(true);
+    setError("");
+  };
 
   const handleReset = () => {
     setShowResetDialog(true);
@@ -212,6 +244,7 @@ function GlobalSettingsSection({
         mutate(GLOBAL_SETTINGS_KEY, { settings: null });
         setModel("");
         setEffort("");
+        setHarness("");
         setEnabledRepos([]);
         setRepoScopeMode("all");
         setAllowUserPreferenceOverride(true);
@@ -245,6 +278,7 @@ function GlobalSettingsSection({
     };
 
     if (model) defaults.model = model;
+    if (harness && isValidHarness(harness)) defaults.harness = harness;
     if (effort) defaults.reasoningEffort = effort;
     if (issueSessionInstructions) defaults.issueSessionInstructions = issueSessionInstructions;
 
@@ -323,7 +357,7 @@ function GlobalSettingsSection({
         <ModelReasoningDefaultsFields
           model={model}
           reasoningEffort={effort}
-          modelOptions={enabledModelOptions}
+          modelOptions={visibleModelOptions}
           onChange={(nextModel, nextEffort) => {
             setModel(nextModel);
             setEffort(nextEffort);
@@ -331,6 +365,32 @@ function GlobalSettingsSection({
             setError("");
           }}
         />
+
+        <div className="mb-4">
+          <label
+            htmlFor="linear-harness"
+            className="block text-sm font-medium text-foreground mb-1"
+          >
+            Agent harness
+          </label>
+          <Select value={harness || "__system_default__"} onValueChange={handleHarnessChange}>
+            <SelectTrigger id="linear-harness" className="w-full" aria-label="Agent harness">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="__system_default__">Use system default (OpenCode)</SelectItem>
+              {HARNESS_IDS.map((id) => (
+                <SelectItem key={id} value={id}>
+                  {getHarnessLabel(id)}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+          <p className="text-xs text-muted-foreground mt-1">
+            Harness that runs Linear-triggered sessions. It decides which models are available
+            above.
+          </p>
+        </div>
 
         <div className="grid sm:grid-cols-2 gap-2 mb-4">
           <label className="flex items-center justify-between px-3 py-2 border border-border rounded-sm cursor-pointer hover:bg-muted/50 transition text-sm">
@@ -495,10 +555,15 @@ function RepoOverridesSection({
   overrides,
   availableRepos,
   enabledModelOptions,
+  defaultHarness,
+  defaultModel,
 }: {
   overrides: RepoSettingsEntry[];
   availableRepos: EnrichedRepository[];
   enabledModelOptions: ModelCategory[];
+  /** Inherited global harness/model: rows filter and warn on the effective pair. */
+  defaultHarness: HarnessId | null;
+  defaultModel: string;
 }) {
   const [addingRepo, setAddingRepo] = useState("");
 
@@ -544,6 +609,8 @@ function RepoOverridesSection({
               key={entry.repo}
               entry={entry}
               enabledModelOptions={enabledModelOptions}
+              defaultHarness={defaultHarness}
+              defaultModel={defaultModel}
             />
           ))}
         </div>
@@ -577,12 +644,19 @@ function RepoOverridesSection({
 function RepoOverrideRow({
   entry,
   enabledModelOptions,
+  defaultHarness,
+  defaultModel,
 }: {
   entry: RepoSettingsEntry;
   enabledModelOptions: ModelCategory[];
+  defaultHarness: HarnessId | null;
+  defaultModel: string;
 }) {
   const [model, setModel] = useState(entry.settings.model ?? "");
   const [effort, setEffort] = useState(entry.settings.reasoningEffort ?? "");
+  // One selector holds "use global" plus the concrete harnesses, so there is
+  // no scope toggle whose transitions could reset the draft.
+  const [harness, setHarness] = useState<string>(entry.settings.harness ?? "__global__");
   const [allowUserPreferenceOverride, setAllowUserPreferenceOverride] = useState(
     entry.settings.allowUserPreferenceOverride ?? true
   );
@@ -597,6 +671,21 @@ function RepoOverrideRow({
 
   const reasoningConfig = model ? MODEL_REASONING_CONFIG[model as ValidModel] : undefined;
 
+  // The model picker only offers models the *effective* harness can run: the
+  // override when set, else the inherited global harness (OpenCode when unset).
+  // A local/global pair the harness cannot run is still saveable as a sparse
+  // override — the bot falls back to OpenCode at runtime — but the picker can
+  // no longer silently produce it, and the mismatch is spelled out below.
+  // The mismatch judges the canonical model session creation runs, so a stale
+  // stored model does not produce a false fallback warning.
+  const effectiveHarness =
+    harness !== "__global__" && isValidHarness(harness) ? harness : (defaultHarness ?? "opencode");
+  const effectiveModel = model || defaultModel;
+  const harnessMismatch = effectiveModel
+    ? checkHarnessCompatibility(effectiveHarness, getValidModelOrDefault(effectiveModel))
+    : null;
+  const visibleModelOptions = filterModelOptionsForHarness(effectiveHarness, enabledModelOptions);
+
   const handleModelChange = (newModel: string) => {
     setModel(newModel);
     setDirty(true);
@@ -604,6 +693,20 @@ function RepoOverrideRow({
     if (effort && newModel && !isValidReasoningEffort(newModel, effort)) {
       setEffort("");
     }
+  };
+
+  const handleHarnessChange = (next: string) => {
+    setHarness(next);
+    if (
+      next !== "__global__" &&
+      isValidHarness(next) &&
+      model &&
+      !harnessSupportsModel(next, model)
+    ) {
+      setModel("");
+      setEffort("");
+    }
+    setDirty(true);
   };
 
   const handleSave = async () => {
@@ -617,6 +720,7 @@ function RepoOverrideRow({
     };
     if (model) settings.model = model;
     if (effort) settings.reasoningEffort = effort;
+    if (harness !== "__global__" && isValidHarness(harness)) settings.harness = harness;
 
     try {
       const res = await browserApiFetch(
@@ -677,7 +781,7 @@ function RepoOverrideRow({
             <SelectValue placeholder="Default model" />
           </SelectTrigger>
           <SelectContent>
-            {enabledModelOptions.map((group) => (
+            {visibleModelOptions.map((group) => (
               <SelectGroup key={group.category}>
                 <SelectLabel>{group.category}</SelectLabel>
                 {group.models.map((m) => (
@@ -686,6 +790,20 @@ function RepoOverrideRow({
                   </SelectItem>
                 ))}
               </SelectGroup>
+            ))}
+          </SelectContent>
+        </Select>
+
+        <Select value={harness} onValueChange={handleHarnessChange}>
+          <SelectTrigger density="compact" aria-label="Agent harness">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="__global__">Use global harness</SelectItem>
+            {HARNESS_IDS.map((id) => (
+              <SelectItem key={id} value={id}>
+                {getHarnessLabel(id)}
+              </SelectItem>
             ))}
           </SelectContent>
         </Select>
@@ -754,6 +872,13 @@ function RepoOverrideRow({
           Remove
         </Button>
       </div>
+
+      {harnessMismatch && (
+        <p className="text-xs text-warning">
+          {harnessMismatch.message} Sessions for this repo will run on OpenCode until the harness
+          and model are compatible.
+        </p>
+      )}
     </div>
   );
 }

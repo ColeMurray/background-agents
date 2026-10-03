@@ -1,6 +1,7 @@
 // Integration settings types
 
 import { escapeRegExp } from "../regex";
+import { harnessIdSchema } from "../harnesses";
 import { z } from "zod";
 import { teamSettingsSchema } from "./teams";
 
@@ -108,6 +109,7 @@ export type ScmRepoSettings = ScmSettings;
 /** Overridable behavior settings for the Linear bot, shared by global defaults and repo overrides. */
 export const linearBotSettingsSchema = z.strictObject({
   model: z.string().optional(),
+  harness: harnessIdSchema.optional(),
   reasoningEffort: z.string().optional(),
   allowUserPreferenceOverride: z.boolean().optional(),
   allowLabelModelOverride: z.boolean().optional(),

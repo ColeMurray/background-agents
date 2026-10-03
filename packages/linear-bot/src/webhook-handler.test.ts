@@ -243,6 +243,7 @@ describe("handleAgentSessionEvent environment targets", () => {
     env: Env,
     options: {
       instructions?: string;
+      resolvedConfig?: unknown;
       promptResponse?: Response;
       bindingResponse?: Response;
       createResponse?: Response;
@@ -267,19 +268,23 @@ describe("handleAgentSessionEvent environment targets", () => {
         return {
           ok: true,
           json: () =>
-            Promise.resolve({
-              config: options.instructions
-                ? {
-                    model: null,
-                    reasoningEffort: null,
-                    allowUserPreferenceOverride: true,
-                    allowLabelModelOverride: true,
-                    emitToolProgressActivities: true,
-                    issueSessionInstructions: options.instructions,
-                    enabledRepos: null,
+            Promise.resolve(
+              options.resolvedConfig !== undefined
+                ? { config: options.resolvedConfig }
+                : {
+                    config: options.instructions
+                      ? {
+                          model: null,
+                          reasoningEffort: null,
+                          allowUserPreferenceOverride: true,
+                          allowLabelModelOverride: true,
+                          emitToolProgressActivities: true,
+                          issueSessionInstructions: options.instructions,
+                          enabledRepos: null,
+                        }
+                      : null,
                   }
-                : null,
-            }),
+            ),
         };
       }
       if (path === "https://internal/sessions") {
@@ -557,6 +562,62 @@ describe("handleAgentSessionEvent environment targets", () => {
     > | null;
     expect(issueSession).toMatchObject({ repoOwner: "acme", repoName: "backend" });
     expect(issueSession).not.toHaveProperty("environmentId");
+  });
+
+  async function sessionBodyForResolvedConfig(resolvedConfig: unknown, traceId: string) {
+    const { kv } = createFakeKV({
+      "oauth:client-credentials:org-1": validToken(),
+      "config:project-repos": JSON.stringify({
+        "project-1": { owner: "acme", name: "backend" },
+      }),
+    });
+    const env = makeLinearBotEnv(kv);
+    const fetchMock = stubControlPlane(env, { resolvedConfig });
+
+    await handleAgentSessionEvent(makeWebhook(), env, traceId);
+
+    return createSessionBody(fetchMock);
+  }
+
+  function linearConfig(overrides: Record<string, unknown>) {
+    return {
+      model: null,
+      harness: null,
+      reasoningEffort: null,
+      allowUserPreferenceOverride: true,
+      allowLabelModelOverride: true,
+      emitToolProgressActivities: true,
+      issueSessionInstructions: null,
+      enabledRepos: null,
+      ...overrides,
+    };
+  }
+
+  it("omits harness from session creation when unconfigured", async () => {
+    const body = await sessionBodyForResolvedConfig(null, "trace-no-harness");
+
+    expect(body).not.toBeNull();
+    expect(body).not.toHaveProperty("harness");
+  });
+
+  it("sends the configured harness for Linear-triggered sessions", async () => {
+    const body = await sessionBodyForResolvedConfig(
+      linearConfig({ model: "anthropic/claude-opus-4-6", harness: "claude" }),
+      "trace-harness-1"
+    );
+
+    expect(body).toMatchObject({ harness: "claude", model: "anthropic/claude-opus-4-6" });
+  });
+
+  it("falls back to OpenCode on a harness/model mismatch", async () => {
+    const body = await sessionBodyForResolvedConfig(
+      linearConfig({ model: "openai/gpt-5.4", harness: "claude" }),
+      "trace-harness-mismatch"
+    );
+
+    // Omitted, so the server resolves its built-in default (OpenCode).
+    expect(body).not.toBeNull();
+    expect(body).not.toHaveProperty("harness");
   });
 
   it.each([null, "team_internal"])(

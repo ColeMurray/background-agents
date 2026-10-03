@@ -5,6 +5,7 @@
  */
 
 import { createSessionResponseSchema } from "@open-inspect/shared/types/session-api";
+import type { HarnessId } from "@open-inspect/shared/harnesses";
 import { channelBindingResponseSchema } from "@open-inspect/shared/types/team-channel-bindings";
 import { z } from "zod";
 import type { Env } from "./types";
@@ -63,6 +64,7 @@ export async function createSession(
   params: {
     title: string;
     model: string;
+    harness: HarnessId | null;
     reasoningEffort?: string;
     actorUserId?: string;
     actorDisplayName?: string;
@@ -76,6 +78,9 @@ export async function createSession(
     ...targetRequestFields(target),
     title: params.title,
     model: params.model,
+    // Absent harness resolves to the built-in default server-side; send it only
+    // when configured so unset behavior stays byte-identical to today.
+    ...(params.harness ? { harness: params.harness } : {}),
     reasoningEffort: params.reasoningEffort,
     actorDisplayName: params.actorDisplayName,
     actorEmail: params.actorEmail,

@@ -20,6 +20,7 @@ import { signedControlPlaneFetch } from "./internal-auth";
 import { createLogger } from "./logger";
 import { makePlan } from "./plan";
 import { extractModelFromLabels, resolveSessionModelSettings } from "./model-resolution";
+import { resolveLinearSessionHarness } from "./utils/integration-config";
 import {
   resolveSessionTarget,
   resolveStoredSessionTarget,
@@ -576,6 +577,7 @@ async function handleNewSession(
     {
       title: `${issue.identifier}: ${issue.title}`,
       model,
+      harness: resolveLinearSessionHarness(integrationConfig.harness, model, log),
       reasoningEffort,
       actorUserId: launchActorUserId,
       actorDisplayName,
