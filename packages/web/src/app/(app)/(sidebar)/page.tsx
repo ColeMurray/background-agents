@@ -125,32 +125,51 @@ export default function Home() {
   });
   const { sessionTarget, buildRequestFields, isLaunchable } = picker;
 
-  // Restore the last composer team/audience; it only applies while its sidebar context matches.
+  const accessStorageKey = session ? `${LAST_SESSION_ACCESS_STORAGE_KEY}:${session.user.id}` : null;
+  const accessContextReady = !teamContext.loading && !teamContext.error;
+
+  // Restore the user's last composer team/audience; it only applies while its sidebar context matches.
   useEffect(() => {
+    let stored: ComposerAccessDraft | null = null;
     try {
-      const stored = parseStoredComposerAccess(
-        localStorage.getItem(LAST_SESSION_ACCESS_STORAGE_KEY)
-      );
-      if (stored) setAccessDraft((draft) => draft ?? stored);
+      stored = accessStorageKey
+        ? parseStoredComposerAccess(localStorage.getItem(accessStorageKey))
+        : null;
     } catch {
       // Storage is optional; the composer falls back to the sidebar team defaults.
     }
-  }, []);
+    setAccessDraft(stored);
+  }, [accessStorageKey]);
 
-  const saveAccessDraft = useCallback((draft: ComposerAccessDraft) => {
-    setAccessDraft(draft);
-    try {
-      localStorage.setItem(LAST_SESSION_ACCESS_STORAGE_KEY, JSON.stringify(draft));
-    } catch {
-      // Continue with the in-memory selection when storage is unavailable.
-    }
-  }, []);
+  const saveAccessDraft = useCallback(
+    (draft: ComposerAccessDraft) => {
+      setAccessDraft(draft);
+      if (!accessStorageKey) return;
+      try {
+        localStorage.setItem(accessStorageKey, JSON.stringify(draft));
+      } catch {
+        // Continue with the in-memory selection when storage is unavailable.
+      }
+    },
+    [accessStorageKey]
+  );
 
   // Composer context changes preserve the audience; sidebar changes use team defaults.
   useEffect(() => {
     if (teamContext.loading || teamContext.error) return;
     setAccessDraft((draft) => (draft ? resolveComposerAccess(teamContext, draft) : null));
   }, [teamContext]);
+
+  // Sidebar changes discard the draft, so drop the saved one too rather than reviving it on reload.
+  useEffect(() => {
+    if (!accessContextReady || !accessStorageKey) return;
+    try {
+      const stored = parseStoredComposerAccess(localStorage.getItem(accessStorageKey));
+      if (stored && stored.contextKey !== contextKey) localStorage.removeItem(accessStorageKey);
+    } catch {
+      // Storage is optional.
+    }
+  }, [accessContextReady, accessStorageKey, contextKey]);
   const [storedPreference, setStoredPreference] = useState<ModelPreference>({
     model: DEFAULT_MODEL,
     reasoningEffort: getDefaultReasoningEffort(DEFAULT_MODEL),
