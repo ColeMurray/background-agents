@@ -70,7 +70,11 @@ import { useWarmDraftSession, type WarmDraftSessionRequest } from "@/hooks/use-w
 import { useCurrentUserAuthorization } from "@/hooks/use-current-user-authorization";
 import { useActiveTeam } from "@/hooks/use-active-team";
 import type { SessionVisibility } from "@open-inspect/shared/types/teams";
-import { resolveComposerAccess, type ComposerAccessDraft } from "@/lib/composer-access";
+import {
+  parseStoredComposerAccess,
+  resolveComposerAccess,
+  type ComposerAccessDraft,
+} from "@/lib/composer-access";
 import {
   buildInteractiveProviderRoutingIdentity,
   parseStoredProviderSelections,
@@ -83,6 +87,7 @@ const LAST_SELECTED_HARNESS_STORAGE_KEY = "open-inspect-last-selected-harness";
 const LAST_SELECTED_REASONING_EFFORT_STORAGE_KEY = "open-inspect-last-selected-reasoning-effort";
 const LEGACY_PROVIDER_SELECTIONS_STORAGE_KEY = "open-inspect-last-provider-selections";
 const LAST_PROVIDER_SELECTIONS_STORAGE_KEY = "open-inspect-last-provider-selections:v1";
+const LAST_SESSION_ACCESS_STORAGE_KEY = "open-inspect-last-session-access";
 
 function skillPreviewTarget(
   fields: SessionTargetRequestFields | null
@@ -119,6 +124,27 @@ export default function Home() {
     defaultEnvironmentId: selectedTeam?.defaultEnvironmentId,
   });
   const { sessionTarget, buildRequestFields, isLaunchable } = picker;
+
+  // Restore the last composer team/audience; it only applies while its sidebar context matches.
+  useEffect(() => {
+    try {
+      const stored = parseStoredComposerAccess(
+        localStorage.getItem(LAST_SESSION_ACCESS_STORAGE_KEY)
+      );
+      if (stored) setAccessDraft((draft) => draft ?? stored);
+    } catch {
+      // Storage is optional; the composer falls back to the sidebar team defaults.
+    }
+  }, []);
+
+  const saveAccessDraft = useCallback((draft: ComposerAccessDraft) => {
+    setAccessDraft(draft);
+    try {
+      localStorage.setItem(LAST_SESSION_ACCESS_STORAGE_KEY, JSON.stringify(draft));
+    } catch {
+      // Continue with the in-memory selection when storage is unavailable.
+    }
+  }, []);
 
   // Composer context changes preserve the audience; sidebar changes use team defaults.
   useEffect(() => {
@@ -419,11 +445,11 @@ export default function Home() {
       teamCreationReady={teamCreationReady}
       visibility={visibility}
       onTeamChange={(teamId) => {
-        setAccessDraft({ contextKey, teamId, visibility });
+        saveAccessDraft({ contextKey, teamId, visibility });
       }}
       onVisibilityChange={(value) => {
         if (teamId !== null || value !== "team")
-          setAccessDraft({
+          saveAccessDraft({
             contextKey,
             teamId,
             visibility: value,

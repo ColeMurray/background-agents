@@ -382,6 +382,51 @@ describe("Home team context", () => {
     );
   });
 
+  it("restores the last composer team and audience after remounting", async () => {
+    const user = userEvent.setup();
+    mocks.teams = [team(), team({ id: "team-2", slug: "design", name: "Design" })];
+    const view = render(<Home />);
+    await user.click(screen.getByRole("button", { name: /^Session access:/ }));
+    await selectTeam(user, "Design");
+    await user.keyboard("{Escape}");
+    await selectAudience(user, "Private");
+    view.unmount();
+
+    render(<Home />);
+    expect(
+      await screen.findByRole("button", {
+        name: "Session access: Private; team context: Design",
+      })
+    ).toBeInTheDocument();
+    await user.type(screen.getByPlaceholderText("What do you want to build?"), "Ship it");
+    await waitFor(() =>
+      expect(sessionCreateBody()).toMatchObject({ teamId: "team-2", visibility: "private" })
+    );
+    expect(mocks.setActiveTeam).not.toHaveBeenCalled();
+  });
+
+  it("ignores a stored composer selection from a different sidebar context", async () => {
+    mocks.teams = [team(), team({ id: "team-2", slug: "design", name: "Design" })];
+    mocks.activeTeamId = "team-1";
+    localStorage.setItem(
+      "open-inspect-last-session-access",
+      JSON.stringify({ contextKey: "all-my-teams", teamId: "team-2", visibility: "private" })
+    );
+    render(<Home />);
+    expect(screen.getByRole("button", { name: /^Session access:/ })).toHaveAccessibleName(
+      "Session access: Engineering team; team context: Engineering"
+    );
+  });
+
+  it("ignores a malformed stored composer selection", () => {
+    mocks.teams = [team()];
+    localStorage.setItem("open-inspect-last-session-access", "{invalid");
+    render(<Home />);
+    expect(screen.getByRole("button", { name: /^Session access:/ })).toHaveAccessibleName(
+      "Session access: Workspace; team context: No team"
+    );
+  });
+
   it("preserves Private access when the composer team context changes and warms the final pair", async () => {
     const user = userEvent.setup();
     mocks.teams = [team(), team({ id: "team-2", name: "Design", defaultVisibility: "workspace" })];
