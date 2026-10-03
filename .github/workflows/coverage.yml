@@ -14,10 +14,16 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  control-plane-coverage:
-    name: Coverage (control-plane)
+  # Control-plane coverage is CPU-bound on per-file Workers pool startup, so it is split across
+  # runners. Shards skip the full-suite floor; the merge job below enforces it on the merged report.
+  control-plane-coverage-shard:
+    name: Coverage (control-plane ${{ matrix.shard }})
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: ["1/8", "2/8", "3/8", "4/8", "5/8", "6/8", "7/8", "8/8"]
     steps:
       - uses: actions/checkout@v6
         with:
@@ -30,10 +36,49 @@ jobs:
         run: |
           npm ci
           npm run build -w @open-inspect/shared
-      - name: Enforce control-plane coverage
+      - name: Run control-plane coverage shard
+        env:
+          COVERAGE_SHARD: "true"
+          SHARD: ${{ matrix.shard }}
+        run: >-
+          npm run test:coverage -w @open-inspect/control-plane --
+          --shard="$SHARD"
+          --reporter=default --reporter=github-actions --reporter=blob
+          --coverage.reporter=json-summary
+      - name: Upload shard report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: control-plane-coverage-shard-${{ strategy.job-index }}
+          path: packages/control-plane/.vitest-reports/
+          include-hidden-files: true
+          if-no-files-found: error
+
+  control-plane-coverage:
+    name: Coverage (control-plane)
+    needs: control-plane-coverage-shard
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v6
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      - name: Install dependencies
+        run: npm ci
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: control-plane-coverage-shard-*
+          path: packages/control-plane/.vitest-reports/
+          merge-multiple: true
+      - name: Merge and enforce control-plane coverage
+        working-directory: packages/control-plane
         run: |
-          npm run test:coverage -w @open-inspect/control-plane
-          node scripts/check-coverage.mjs control-plane packages/control-plane/coverage/coverage-summary.json
+          npx vitest run --merge-reports=.vitest-reports --config vitest.coverage.config.ts --coverage
+          node ../../scripts/check-coverage.mjs control-plane coverage/coverage-summary.json
       - name: Upload control-plane coverage
         if: always()
         uses: actions/upload-artifact@v4
@@ -143,19 +188,27 @@ jobs:
   coverage:
     name: Coverage
     if: ${{ always() }}
-    needs: [control-plane-coverage, web-coverage, other-ts-coverage, python-coverage]
+    needs:
+      [
+        control-plane-coverage-shard,
+        control-plane-coverage,
+        web-coverage,
+        other-ts-coverage,
+        python-coverage,
+      ]
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
       - name: Require successful coverage jobs
         env:
+          CP_SHARD_RESULT: ${{ needs.control-plane-coverage-shard.result }}
           CP_RESULT: ${{ needs.control-plane-coverage.result }}
           WEB_RESULT: ${{ needs.web-coverage.result }}
           TS_RESULT: ${{ needs.other-ts-coverage.result }}
           PYTHON_RESULT: ${{ needs.python-coverage.result }}
         run: |
           status=0
-          for pair in "control-plane=$CP_RESULT" "web=$WEB_RESULT" "other-ts=$TS_RESULT" "python=$PYTHON_RESULT"; do
+          for pair in "control-plane-shards=$CP_SHARD_RESULT" "control-plane=$CP_RESULT" "web=$WEB_RESULT" "other-ts=$TS_RESULT" "python=$PYTHON_RESULT"; do
             if [ "${pair#*=}" != success ]; then
               echo "::error::${pair%%=*} coverage job result: ${pair#*=}"
               status=1

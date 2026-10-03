@@ -17,7 +17,9 @@ export default defineConfig({
       reportsDirectory: "./coverage",
       include: ["src/**/*.ts"],
       exclude: coverageExclusions("control-plane"),
-      thresholds: coverageThresholds("control-plane"),
+      // A shard cannot meet the full-suite floor; CI enforces it after merging shard reports.
+      thresholds:
+        process.env.COVERAGE_SHARD === "true" ? undefined : coverageThresholds("control-plane"),
     },
   },
 });
