@@ -300,6 +300,7 @@ jobs:
           TF_VAR_docs_custom_domain: ${{ vars.DOCS_CUSTOM_DOMAIN || secrets.DOCS_CUSTOM_DOMAIN }}
 
       - name: Prepare Plan Comment
+        id: prepare_comment
         if: always() && (steps.plan.outcome == 'success' || steps.plan.outcome == 'failure')
         env:
           PLAN_OUTCOME: ${{ steps.plan.outcome }}
@@ -307,7 +308,7 @@ jobs:
         working-directory: ${{ env.TF_WORKING_DIR }}
 
       - name: Upload Plan Comment
-        if: always() && (steps.plan.outcome == 'success' || steps.plan.outcome == 'failure')
+        if: steps.prepare_comment.conclusion == 'success'
         uses: actions/upload-artifact@v4
         with:
           name: terraform-plan-comment
@@ -333,6 +334,8 @@ jobs:
         uses: actions/github-script@v8
         env:
           HAS_SECRETS: ${{ needs.check-secrets.outputs.has-secrets }}
+          CHECK_SECRETS_RESULT: ${{ needs.check-secrets.result }}
+          VALIDATION_RESULT: ${{ needs.validate.result }}
           FORMAT_OUTCOME: ${{ needs.validate.outputs.fmt }}
           INIT_OUTCOME: ${{ needs.validate.outputs.init }}
           VALIDATE_OUTCOME: ${{ needs.validate.outputs.validate }}
@@ -340,6 +343,8 @@ jobs:
           MODAL_TEST_OUTCOME: ${{ needs.validate.outputs.modal-test }}
         with:
           script: |
+            const validationResult = process.env.VALIDATION_RESULT;
+            const checkSecretsResult = process.env.CHECK_SECRETS_RESULT;
             const statuses = {
               Format: process.env.FORMAT_OUTCOME,
               Init: process.env.INIT_OUTCOME,
@@ -348,12 +353,20 @@ jobs:
               'Modal module tests': process.env.MODAL_TEST_OUTCOME
             };
             const rows = Object.entries(statuses).map(([step, outcome]) =>
-              `| ${step} | ${outcome === 'success' ? 'Success' : outcome || 'skipped'} |`
+              `| ${step} | ${outcome === 'success' ? 'Success' : outcome || (validationResult === 'skipped' ? 'skipped' : 'Not reported')} |`
             ).join('\n');
-            const planNote = process.env.HAS_SECRETS === 'true'
-              ? ''
-              : '\n\n> **Note:** Terraform plan was skipped because secrets are not configured. This is expected for external contributors. See [docs/GETTING_STARTED.md](docs/GETTING_STARTED.md) for setup instructions.';
+            let planNote = '';
+            if (checkSecretsResult !== 'success') {
+              planNote = '\n\n> **Warning:** Secret availability is unknown because the Check Secrets job did not succeed.';
+            } else if (process.env.HAS_SECRETS === 'false') {
+              planNote = '\n\n> **Note:** Terraform plan was skipped because secrets are not configured. This is expected for external contributors. See [docs/GETTING_STARTED.md](docs/GETTING_STARTED.md) for setup instructions.';
+            } else if (process.env.HAS_SECRETS !== 'true') {
+              planNote = '\n\n> **Warning:** Check Secrets completed without a valid secret-availability result.';
+            }
             const output = `### Terraform Validation Results
+
+            **Validation job:** ${validationResult || 'unknown'}
+            **Check Secrets job:** ${checkSecretsResult || 'unknown'}
 
             | Step | Status |
             |------|--------|

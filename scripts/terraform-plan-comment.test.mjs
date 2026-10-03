@@ -38,6 +38,11 @@ function block(name, key, indentation) {
   return match[1].replace(new RegExp(`^ {${indentation}}`, "gm"), "");
 }
 
+function canUpload(conclusion) {
+  const condition = stepBody("Upload Plan Comment").match(/if: (.*)/)[1];
+  return new Function("steps", `return ${condition};`)({ prepare_comment: { conclusion } });
+}
+
 function tempDirectory(t) {
   const directory = mkdtempSync(join(tmpdir(), "terraform comment "));
   t.after(() => rmSync(directory, { recursive: true, force: true }));
@@ -58,22 +63,43 @@ function formatComment(t, plan, outcome = "success") {
   return { path: outputPath, body: readFileSync(outputPath, "utf8") };
 }
 
-async function postComment(path, createComment, notices = []) {
-  // Execute the workflow's static script with the artifact available only as file data.
-  const script = block("Post Plan Results", "script", 12);
+function runPreparation(directory, outcome) {
+  return spawnSync("bash", ["-e", "-c", stepBody("Prepare Plan Comment").match(/run: (.*)/)[1]], {
+    cwd: directory,
+    encoding: "utf8",
+    env: {
+      ...process.env,
+      GITHUB_WORKSPACE: fileURLToPath(new URL("../", import.meta.url)),
+      GITHUB_ACTOR: "contributor",
+      PLAN_OUTCOME: outcome,
+    },
+    timeout: 10000,
+  });
+}
+
+async function postComment(name, env, createComment, notices = []) {
+  // Execute the workflow's static script with inputs available only as data.
+  const script = block(name, "script", 12);
   await new AsyncFunction("github", "context", "core", "require", "process", script)(
     { rest: { issues: { createComment } } },
-    { issue: { number: 260 }, repo: { owner: "owner", repo: "repo" } },
+    {
+      issue: { number: 260 },
+      repo: { owner: "owner", repo: "repo" },
+      actor: "contributor",
+      eventName: "pull_request",
+    },
     { notice: (message) => notices.push(message) },
     require,
-    { env: { PLAN_COMMENT_PATH: path } }
+    { env }
   );
 }
 
 test("malicious plan text is sanitized and posted as inert data", async (t) => {
   const comment = formatComment(t, maliciousPlan);
   const comments = [];
-  await postComment(comment.path, async (parameters) => comments.push(parameters));
+  await postComment("Post Plan Results", { PLAN_COMMENT_PATH: comment.path }, async (parameters) =>
+    comments.push(parameters)
+  );
   assert.equal(globalThis.__terraformPlanExecuted, undefined);
   assert.deepEqual(comments, [
     { issue_number: 260, owner: "owner", repo: "repo", body: comment.body },
@@ -152,22 +178,9 @@ for (const exitCode of [0, 1, 42]) {
       result.stdout.endsWith(`\n::${token}::\n`),
       "resume commands on their own line, including on failure"
     );
-    const prepare = spawnSync(
-      "bash",
-      ["-e", "-c", stepBody("Prepare Plan Comment").match(/run: (.*)/)[1]],
-      {
-        cwd: directory,
-        encoding: "utf8",
-        env: {
-          ...process.env,
-          GITHUB_WORKSPACE: fileURLToPath(new URL("../", import.meta.url)),
-          GITHUB_ACTOR: "contributor",
-          PLAN_OUTCOME: exitCode === 0 ? "success" : "failure",
-        },
-        timeout: 10000,
-      }
-    );
+    const prepare = runPreparation(directory, exitCode === 0 ? "success" : "failure");
     assert.equal(prepare.status, 0, prepare.stderr);
+    assert.equal(canUpload("success"), true);
     const comment = readFileSync(join(directory, "plan_comment.txt"), "utf8");
     assert.ok(comment.includes(`**Status:** ${exitCode === 0 ? "Success" : "Failed"}`));
     assert.ok(Buffer.byteLength(comment) < 65536);
@@ -179,11 +192,31 @@ for (const exitCode of [0, 1, 42]) {
   });
 }
 
+for (const outcome of ["success", "failure"]) {
+  test(`formatter failure cannot publish stale or partial comments after a ${outcome} plan`, (t) => {
+    const directory = tempDirectory(t);
+    const previousComment = outcome === "success" ? "stale unformatted comment" : "<pre>partial";
+    writeFileSync(join(directory, "plan_comment.txt"), previousComment);
+    const prepare = runPreparation(directory, outcome);
+    assert.equal(prepare.status, 1, prepare.stderr);
+    assert.match(prepare.stderr, /ENOENT/);
+    assert.equal(readFileSync(join(directory, "plan_comment.txt"), "utf8"), previousComment);
+    assert.equal(canUpload("failure"), false);
+    assert.equal(canUpload("skipped"), false);
+    assert.match(stepBody("Plan Status"), /if: always\(\) && steps\.plan\.outcome == 'failure'/);
+    if (outcome === "failure") {
+      const gate = stepBody("Plan Status").match(/run: (.*)/)[1];
+      assert.equal(spawnSync("bash", ["-e", "-c", gate]).status, 1);
+    }
+  });
+}
+
 test("read-only fork comment failures are tolerated but other API failures are propagated", async (t) => {
   const comment = formatComment(t, "No changes.");
   const notices = [];
   await postComment(
-    comment.path,
+    "Post Plan Results",
+    { PLAN_COMMENT_PATH: comment.path },
     async () => {
       throw Object.assign(new Error("Forbidden"), { status: 403 });
     },
@@ -191,12 +224,121 @@ test("read-only fork comment failures are tolerated but other API failures are p
   );
   assert.equal(notices.length, 1);
   await assert.rejects(
-    postComment(comment.path, async () => {
+    postComment("Post Plan Results", { PLAN_COMMENT_PATH: comment.path }, async () => {
       throw Object.assign(new Error("Server error"), { status: 500 });
     }),
     /Server error/
   );
 });
+
+const successfulSteps = {
+  FORMAT_OUTCOME: "success",
+  INIT_OUTCOME: "success",
+  VALIDATE_OUTCOME: "success",
+  TEST_OUTCOME: "success",
+  MODAL_TEST_OUTCOME: "success",
+};
+
+for (const { name, env, expected, absent } of [
+  {
+    name: "successful upstream jobs with configured secrets",
+    env: {
+      ...successfulSteps,
+      VALIDATION_RESULT: "success",
+      CHECK_SECRETS_RESULT: "success",
+      HAS_SECRETS: "true",
+    },
+    expected: [
+      "**Validation job:** success",
+      "**Check Secrets job:** success",
+      "| Format | Success |",
+    ],
+    absent: ["**Warning:**", "secrets are not configured", "Not reported", "skipped"],
+  },
+  {
+    name: "successful secret check explicitly reports unconfigured secrets",
+    env: {
+      ...successfulSteps,
+      VALIDATION_RESULT: "success",
+      CHECK_SECRETS_RESULT: "success",
+      HAS_SECRETS: "false",
+    },
+    expected: ["**Validation job:** success", "secrets are not configured"],
+    absent: ["**Warning:**", "Not reported"],
+  },
+  {
+    name: "checkout or Terraform setup failure leaves validation outcomes unreported",
+    env: { VALIDATION_RESULT: "failure", CHECK_SECRETS_RESULT: "success", HAS_SECRETS: "true" },
+    expected: [
+      "**Validation job:** failure",
+      "| Format | Not reported |",
+      "| Modal module tests | Not reported |",
+    ],
+    absent: ["skipped", "secrets are not configured"],
+  },
+  {
+    name: "reported validation failures and skipped steps retain their actual outcomes",
+    env: {
+      ...successfulSteps,
+      VALIDATION_RESULT: "failure",
+      CHECK_SECRETS_RESULT: "success",
+      HAS_SECRETS: "true",
+      INIT_OUTCOME: "failure",
+      TEST_OUTCOME: "skipped",
+    },
+    expected: [
+      "**Validation job:** failure",
+      "| Format | Success |",
+      "| Init | failure |",
+      "| Tests | skipped |",
+    ],
+    absent: ["Not reported", "secrets are not configured"],
+  },
+  {
+    name: "failed secret check leaves availability unknown and validation genuinely skipped",
+    env: { VALIDATION_RESULT: "skipped", CHECK_SECRETS_RESULT: "failure", HAS_SECRETS: "" },
+    expected: [
+      "**Validation job:** skipped",
+      "**Check Secrets job:** failure",
+      "| Format | skipped |",
+      "Secret availability is unknown",
+    ],
+    absent: ["secrets are not configured", "Not reported"],
+  },
+  {
+    name: "cancelled secret check cannot report unconfigured secrets even with false output",
+    env: { VALIDATION_RESULT: "skipped", CHECK_SECRETS_RESULT: "cancelled", HAS_SECRETS: "false" },
+    expected: ["**Check Secrets job:** cancelled", "Secret availability is unknown"],
+    absent: ["secrets are not configured"],
+  },
+  {
+    name: "successful secret check without an output is not treated as false",
+    env: { VALIDATION_RESULT: "success", CHECK_SECRETS_RESULT: "success", HAS_SECRETS: "" },
+    expected: ["| Format | Not reported |", "without a valid secret-availability result"],
+    absent: ["secrets are not configured", "skipped"],
+  },
+  {
+    name: "missing upstream job results are explicitly unknown",
+    env: {},
+    expected: [
+      "**Validation job:** unknown",
+      "**Check Secrets job:** unknown",
+      "| Format | Not reported |",
+      "Secret availability is unknown",
+    ],
+    absent: ["secrets are not configured", "skipped"],
+  },
+]) {
+  test(`validation comment distinguishes ${name}`, async () => {
+    const comments = [];
+    await postComment("Post Validation Results", env, async (parameters) =>
+      comments.push(parameters)
+    );
+    assert.equal(comments.length, 1);
+    for (const text of expected) assert.ok(comments[0].body.includes(text), `expected ${text}`);
+    for (const text of absent) assert.ok(!comments[0].body.includes(text), `unexpected ${text}`);
+  });
+}
 
 test("commenting has minimal permissions and never checks out or executes PR code", () => {
   assert.equal(workflow.match(/^permissions:\n((?: {2}.*\n)+)/m)[1], "  contents: read\n");
@@ -214,17 +356,28 @@ test("commenting has minimal permissions and never checks out or executes PR cod
   for (const name of ["Post Validation Results", "Post Plan Results"]) {
     assert.doesNotMatch(block(name, "script", 12), /\$\{\{/);
   }
+  assert.match(
+    stepBody("Post Validation Results"),
+    /CHECK_SECRETS_RESULT: \$\{\{ needs\.check-secrets\.result \}\}/
+  );
+  assert.match(
+    stepBody("Post Validation Results"),
+    /VALIDATION_RESULT: \$\{\{ needs\.validate\.result \}\}/
+  );
   const planJob = workflow.split("\n  plan:\n")[1].split("\n  comment:\n")[0];
   assert.match(planJob, /terraform_wrapper: false/);
   assert.doesNotMatch(planJob, /github-script|GITHUB_OUTPUT|steps\.plan\.outputs\.plan/);
   assert.match(stepBody("Terraform Plan"), /shell: bash/);
   assert.match(stepBody("Terraform Plan"), /continue-on-error: true/);
-  for (const name of ["Prepare Plan Comment", "Upload Plan Comment"]) {
-    assert.match(
-      stepBody(name),
-      /if: always\(\) && \(steps\.plan\.outcome == 'success' \|\| steps\.plan\.outcome == 'failure'\)/
-    );
-  }
+  assert.match(stepBody("Prepare Plan Comment"), /id: prepare_comment/);
+  assert.match(
+    stepBody("Prepare Plan Comment"),
+    /if: always\(\) && \(steps\.plan\.outcome == 'success' \|\| steps\.plan\.outcome == 'failure'\)/
+  );
+  assert.match(
+    stepBody("Upload Plan Comment"),
+    /if: steps\.prepare_comment\.conclusion == 'success'/
+  );
   assert.match(
     stepBody("Upload Plan Comment"),
     /path: \$\{\{ env\.TF_WORKING_DIR \}\}\/plan_comment\.txt\n/
