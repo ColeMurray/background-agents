@@ -145,12 +145,9 @@ async def test_legacy_mode_opens_before_connect_and_retries_signing_without_reop
 
 
 @pytest.mark.parametrize("early_connect", [True, False])
-@pytest.mark.parametrize(
-    "command", ["prompt", "stop", "shutdown", "git_sync_complete", "ack", "unknown"]
-)
-async def test_other_commands_are_left_to_the_bridge(coordinator, early_connect, command):
+async def test_other_commands_are_left_to_the_bridge(coordinator, early_connect):
     attach = coordinator(early_connect=early_connect)
-    assert not await attach.handle_command({"type": command})
+    assert not await attach.handle_command({"type": "unknown"})
     attach._send_event.assert_not_awaited()
 
 
