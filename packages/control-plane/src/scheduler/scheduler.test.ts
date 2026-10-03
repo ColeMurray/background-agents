@@ -3675,28 +3675,37 @@ describe("Scheduler", () => {
         expect(mockStore.recordAuthorizationDenied).not.toHaveBeenCalled();
       });
 
-      it("still counts a genuine sibling failure in a mixed fan-out", async () => {
-        launchableRepositories(["web-app", "api"]);
-        // "api" fails resolution before launch; "web-app" is denied at launch.
-        mockCheckRepositoryAccess.mockImplementation(async ({ owner, name }) =>
-          name === "api"
-            ? null
-            : { repoId: 1000, repoOwner: owner, repoName: name, defaultBranch: "main" }
-        );
-        denyAfterAdmission();
-        mockStore.getInvocationRunAggregate.mockResolvedValue(
-          aggregate({ total: 2, active: 0, failed: 1 })
-        );
-
-        await expect(createScheduler().trigger("auto-1", "manual-user")).rejects.toMatchObject({
-          reason: "execution_authorization_denied",
+      describe("mixed fan-out with a denied and a genuinely failed child", () => {
+        beforeEach(() => {
+          launchableRepositories(["web-app", "api"]);
+          // "api" fails resolution before launch; "web-app" is denied at launch.
+          mockCheckRepositoryAccess.mockImplementation(async ({ owner, name }) =>
+            name === "api"
+              ? null
+              : { repoId: 1000, repoOwner: owner, repoName: name, defaultBranch: "main" }
+          );
+          denyAfterAdmission();
+          mockStore.getInvocationRunAggregate.mockResolvedValue(
+            aggregate({ total: 2, active: 0, failed: 1 })
+          );
         });
-        expect(mockStore.updateRun).toHaveBeenCalledWith(
-          expect.any(String),
-          expect.objectContaining({ status: "unauthorized" })
-        );
-        expect(mockStore.tryMarkInvocationFailureCounted).toHaveBeenCalledTimes(1);
-        expect(mockStore.incrementConsecutiveFailures).toHaveBeenCalledTimes(1);
+
+        it("fails a manual trigger and counts the genuine failure", async () => {
+          const trigger = createScheduler().trigger("auto-1", "manual-user");
+          await expect(trigger).rejects.toThrow("Failed to trigger automation");
+          await expect(trigger).rejects.not.toBeInstanceOf(AutomationExecutionUnauthorizedError);
+          expect(mockStore.updateRun).toHaveBeenCalledWith(
+            expect.any(String),
+            expect.objectContaining({ status: "unauthorized" })
+          );
+          expect(mockStore.tryMarkInvocationFailureCounted).toHaveBeenCalledTimes(1);
+          expect(mockStore.incrementConsecutiveFailures).toHaveBeenCalledTimes(1);
+        });
+
+        it("reports a scheduled firing as failed, not skipped", async () => {
+          expect(await createScheduler().tick()).toEqual({ processed: 0, skipped: 0, failed: 1 });
+          expect(mockStore.incrementConsecutiveFailures).toHaveBeenCalledTimes(1);
+        });
       });
 
       it("counts an event launch denial as skipped", async () => {
@@ -3713,7 +3722,7 @@ describe("Scheduler", () => {
         expect(mockStore.incrementConsecutiveFailures).not.toHaveBeenCalled();
       });
 
-      it("re-authorizes each fanned-out child with one guard query", async () => {
+      it("re-authorizes each fanned-out child against current team state", async () => {
         launchableRepositories(["web-app", "api", "worker"]);
         mockStore.getInvocationRunAggregate.mockResolvedValue(aggregate({ total: 3, active: 3 }));
 
@@ -3721,8 +3730,22 @@ describe("Scheduler", () => {
 
         expect(result.runs.filter((run) => run.status === "running")).toHaveLength(3);
         expect(mockIsAutomationExecutionAuthorized).toHaveBeenCalledTimes(1 + 3);
-        // Launch uses the admission snapshot of the team.
-        expect(mockTeamGetById).toHaveBeenCalledTimes(1);
+        // One admission read plus one launch read per child.
+        expect(mockTeamGetById).toHaveBeenCalledTimes(1 + 3);
+      });
+
+      it("uses the team's default visibility as of launch", async () => {
+        launchableRepositories(["web-app"]);
+        mockTeamGetById
+          .mockResolvedValueOnce({ ...activeTeam, defaultVisibility: "workspace" })
+          .mockResolvedValue({ ...activeTeam, defaultVisibility: "private" });
+        mockStore.getInvocationRunAggregate.mockResolvedValue(aggregate({ total: 1, active: 1 }));
+
+        await createScheduler().trigger("auto-1", "manual-user");
+
+        expect(mockSessionStoreCreate).toHaveBeenCalledWith(
+          expect.objectContaining({ ownerTeamId: teamId, visibility: "private" })
+        );
       });
     });
 

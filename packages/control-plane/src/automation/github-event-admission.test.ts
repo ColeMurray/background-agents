@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { GitHubAutomationEvent } from "@open-inspect/shared/triggers";
-import type { AutomationRow } from "../db/automation-store";
+import type { AutomationRow, AutomationRunRow } from "../db/automation-store";
 import type * as AutomationStoreModule from "../db/automation-store";
 import type { SqlDatabase } from "../db/sql-database";
 import type { Logger } from "../logger";
@@ -214,8 +214,8 @@ describe("GitHub event admission", () => {
   it("counts a launch-time authority denial as skipped", async () => {
     const fire = vi.fn<() => Promise<StartInvocationResult>>().mockResolvedValue({
       ...started,
+      runs: [{ status: "unauthorized" } as AutomationRunRow],
       launched: 0,
-      authorizationDenial: "execution_authorization_denied",
     });
     expect(await admitGitHubEvent(db, event, fire, log)).toEqual({
       triggered: 0,

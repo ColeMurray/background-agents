@@ -38,6 +38,7 @@ import { z } from "zod";
 import { callbackSigningSecret } from "../auth/service/callback-signing";
 import {
   AutomationStore,
+  allRunsUnauthorized,
   EXECUTION_TIMEOUT_FAILURE_REASON,
   parseAutomationTriggerFields,
   toAutomationRun,
@@ -301,17 +302,8 @@ interface ExecutionPrincipal {
 }
 
 export type StartInvocationResult =
-  /**
-   * Invocation inserted; children launched (some may have pre-failed). A launch-time
-   * authorization denial carries its reason code.
-   */
-  | {
-      outcome: "started";
-      invocationId: string;
-      runs: AutomationRunRow[];
-      launched: number;
-      authorizationDenial?: string;
-    }
+  /** Invocation inserted; children launched (some may have pre-failed or been denied). */
+  | { outcome: "started"; invocationId: string; runs: AutomationRunRow[]; launched: number }
   /** Overlap — a childless skipped invocation was recorded (schedule/event). */
   | { outcome: "skipped" }
   /**
@@ -367,7 +359,6 @@ function executionDenialReason(team: Team | null): string {
 /** What admission decided for a firing, re-checked as each child launches. */
 interface LaunchAdmission {
   authorization: AutomationExecutionAuthorizationRequest;
-  team: Team | null;
   /** Session target resolved at admission; required for team automations. */
   target?: AutomationSessionTarget;
 }
@@ -696,7 +687,6 @@ export class Scheduler {
       }
     }
 
-    let authorizationDenial: string | undefined;
     const launchChild = async (child: AutomationRunRow): Promise<void> => {
       try {
         if (attributionError !== undefined) throw attributionError;
@@ -730,7 +720,6 @@ export class Scheduler {
           claimedAt,
           {
             authorization,
-            team,
             target:
               targetSnapshot && "target" in targetSnapshot ? targetSnapshot.target : undefined,
           }
@@ -760,7 +749,6 @@ export class Scheduler {
           e instanceof AutomationExecutionUnauthorizedError
             ? { status: "unauthorized", failure_reason: e.reason, session_id: null }
             : { status: "failed", failure_reason: message };
-        if (e instanceof AutomationExecutionUnauthorizedError) authorizationDenial ??= e.reason;
         try {
           await store.updateRun(child.id, { ...outcome, completed_at: Date.now() });
         } catch (updateError) {
@@ -805,7 +793,7 @@ export class Scheduler {
       }
     }
 
-    return { outcome: "started", invocationId, runs: children, launched, authorizationDenial };
+    return { outcome: "started", invocationId, runs: children, launched };
   }
 
   /**
@@ -909,7 +897,7 @@ export class Scheduler {
             // reports as failed, not processed.
             if (result.launched > 0) {
               processed++;
-            } else if (result.authorizationDenial !== undefined) {
+            } else if (allRunsUnauthorized(result.runs)) {
               skipped++;
             } else {
               failed++;
@@ -1362,7 +1350,7 @@ export class Scheduler {
           // launch failed counted as neither triggered nor skipped.
           if (result.launched > 0) {
             triggered++;
-          } else if (result.authorizationDenial !== undefined) {
+          } else if (allRunsUnauthorized(result.runs)) {
             skipped++;
           }
           break;
@@ -1441,21 +1429,19 @@ export class Scheduler {
       throw new AutomationTriggerBlockedError();
     }
 
-    if (result.launched === 0 && result.authorizationDenial !== undefined) {
-      throw new AutomationExecutionUnauthorizedError(result.authorizationDenial);
+    if (allRunsUnauthorized(result.runs)) {
+      throw new AutomationExecutionUnauthorizedError(result.runs[0].failure_reason ?? undefined);
     }
 
     const runs = result.runs.map((run) =>
       toAutomationRun({ ...run, session_title: null, artifact_summary: null })
     );
-    const allFailed = runs.every((run) => run.status === "failed");
-
-    if (allFailed) {
+    if (result.launched === 0) {
       this.log.error("Manual trigger failed", {
         event: "scheduler.manual_trigger_failed",
         automation_id: automationId,
         invocation_id: result.invocationId,
-        error: result.runs[0]?.failure_reason ?? "unknown",
+        error: result.runs.find((run) => run.status === "failed")?.failure_reason ?? "unknown",
       });
 
       throw new Error("Failed to trigger automation");
@@ -1856,9 +1842,20 @@ export class Scheduler {
 
     const scmEnrichment = executionPrincipal.scmEnrichment;
 
+    // Re-authorize with admission's requirements, and re-read the team's current policy, as the
+    // last step before creation: the principal may have left the team, been suspended, or lost a
+    // permission, and the team's default visibility may have changed since admission.
+    const [team, authorized] = await Promise.all([
+      automation.owner_team_id === null
+        ? null
+        : new TeamStore(this.db).getById(automation.owner_team_id),
+      isAutomationExecutionAuthorized(this.db, admission.authorization),
+    ]);
+    if (!authorized) throw new AutomationExecutionUnauthorizedError(executionDenialReason(team));
+
     const sessionInput: SessionInitInput = {
       ownerTeamId: automation.owner_team_id,
-      visibility: admission.team?.defaultVisibility ?? "workspace",
+      visibility: team?.defaultVisibility ?? "workspace",
       sessionId,
       ...target,
       title: `[Auto] ${automation.name}`,
@@ -1883,15 +1880,6 @@ export class Scheduler {
       providerAuth,
     };
 
-    // Re-authorize with admission's requirements as the last step before creation: the
-    // principal may have left the team, been suspended, or lost a permission since admission.
-    if (!(await isAutomationExecutionAuthorized(this.db, admission.authorization))) {
-      const team =
-        automation.owner_team_id === null
-          ? null
-          : await new TeamStore(this.db).getById(automation.owner_team_id);
-      throw new AutomationExecutionUnauthorizedError(executionDenialReason(team));
-    }
     await initializeSession(this.env, sessionInput, ctx);
   }
 
