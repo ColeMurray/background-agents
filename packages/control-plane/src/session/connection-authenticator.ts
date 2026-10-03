@@ -2,6 +2,7 @@ import { isSessionPromptable } from "@open-inspect/shared/types/session-activity
 import type { EffectiveAuthorization } from "@open-inspect/shared/rbac";
 import {
   checkSessionAccess,
+  type AccessDenialReason,
   type AccessDecision,
   type SessionAction,
   type SessionAccessRow,
@@ -73,6 +74,12 @@ export interface SessionConnectionAuthenticatorDeps {
     options?: { includeMemberships?: boolean }
   ) => Promise<SessionViewerResolution>;
   auditPrivateBreakGlass: (userId: string, row: SessionAccessRow) => Promise<void>;
+  auditShadowDenied: (
+    userId: string,
+    row: SessionAccessRow,
+    reason: AccessDenialReason,
+    connectionId: string
+  ) => Promise<void>;
   /** The session-scoped logger; upgrade/subscribe paths also receive request-scoped children. */
   log: Logger;
 }
@@ -122,6 +129,8 @@ export interface SessionUpgradeAdmission {
  * snapshot handoff), and post-hibernation client identity recovery.
  */
 export class SessionConnectionAuthenticator implements SessionUpgradeAdmission {
+  private readonly shadowDenials = new WeakMap<SessionWebSocket, Set<string>>();
+
   constructor(private readonly deps: SessionConnectionAuthenticatorDeps) {}
 
   /**
@@ -440,6 +449,7 @@ export class SessionConnectionAuthenticator implements SessionUpgradeAdmission {
           return;
         }
       }
+      await this.observeShadowReadDenial(ws, resolution);
 
       const enrichment = await this.deps.snapshotReader.resolveSessionSnapshotEnrichment();
       const clientInfo: ClientInfo = {
@@ -549,8 +559,45 @@ export class SessionConnectionAuthenticator implements SessionUpgradeAdmission {
       );
       return { kind: "revoked" };
     }
+    await this.observeShadowReadDenial(ws, resolution);
     const decision = this.decide(resolution, action);
     return decision.allowed ? { kind: "allowed" } : { kind: "denied", reason: decision.reason };
+  }
+
+  /** Observe only allowed reads; a hypothetical denial must never revoke the lease. */
+  private async observeShadowReadDenial(
+    ws: SessionWebSocket,
+    resolution: Extract<SessionViewerResolution, { kind: "valid" }>
+  ): Promise<void> {
+    if (resolution.mode !== "shadow") return;
+    try {
+      const decision = checkSessionAccess(resolution.viewer, resolution.row, "read");
+      if (decision.allowed) return;
+      const key = JSON.stringify([resolution.row.id, decision.reason]);
+      let observed = this.shadowDenials.get(ws);
+      if (observed?.has(key)) return;
+      const connection = this.deps.wsManager.classify(ws);
+      if (connection.kind !== "client" || !connection.wsId) {
+        throw new Error("Missing WebSocket ID for shadow audit");
+      }
+      if (!observed) {
+        observed = new Set();
+        this.shadowDenials.set(ws, observed);
+      }
+      // Reserve before awaiting, including failed writes, to avoid command/retry storms.
+      observed.add(key);
+      await this.deps.auditShadowDenied(
+        resolution.authorization.userId,
+        resolution.row,
+        decision.reason,
+        connection.wsId
+      );
+    } catch (error) {
+      this.deps.log.error("WebSocket shadow denial audit failed", {
+        user_id: resolution.authorization.userId,
+        error: error instanceof Error ? error : String(error),
+      });
+    }
   }
 
   private decide(

@@ -164,7 +164,10 @@ import { SessionTitleService } from "./title-service";
 import { parseArtifactMetadata } from "./artifact-metadata";
 import { AuthorizationError, AuthorizationService } from "../authorization/service";
 import { parseTeamsEnforcementMode, resolverDecides } from "../authorization/teams-enforcement";
-import { auditSocketPrivateBreakGlass } from "../authorization/session-socket-audit";
+import {
+  auditSocketPrivateBreakGlass,
+  auditSocketShadowDenied,
+} from "../authorization/session-socket-audit";
 import type { TeamRole } from "@open-inspect/shared/types/teams";
 import type { SessionWebSocket } from "../platform-ports";
 
@@ -907,6 +910,8 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
       }
     },
     auditPrivateBreakGlass: (userId, row) => auditSocketPrivateBreakGlass(db, userId, row),
+    auditShadowDenied: (userId, row, reason, connectionId) =>
+      auditSocketShadowDenied(db, userId, row, reason, connectionId),
     log,
   });
 

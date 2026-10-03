@@ -46,6 +46,7 @@ import {
 import { SessionCollaboratorStore } from "../db/session-collaborators";
 import type { TeamsEnforcementMode } from "../authorization/teams-enforcement";
 import type { ListSessionInboxResult } from "../db/session-inbox-store";
+import { recordShadowListDenials } from "../authorization/session-shadow-audit";
 
 const sessionInboxQuerySchema = z.object({
   category: z
@@ -190,6 +191,7 @@ export async function handleListSessions(
     })
   );
   if (result instanceof Response) return result;
+  recordShadowListDenials(ctx, viewer, result.sessions, teamsEnforcementMode(ctx, env));
   const collaborators = await new SessionCollaboratorStore(ctx.db).listForSessions(
     result.sessions.map((row) => row.id),
     { privateOnly: true }
@@ -324,6 +326,7 @@ async function encodeInboxPage(
   mode: TeamsEnforcementMode
 ) {
   const sessions = result.items.flatMap((item) => [item.rootSession, ...item.descendantSessions]);
+  recordShadowListDenials(ctx, viewer, sessions, mode);
   const collaborators = await new SessionCollaboratorStore(ctx.db).listForSessions(
     sessions.map((row) => row.id),
     { privateOnly: true }

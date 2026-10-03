@@ -281,6 +281,70 @@ New HTTP requests reflect role, membership, collaborator, and visibility changes
 Live browser connections are rechecked at least every five minutes, so an existing connection may
 remain open for up to five minutes after access changes. Recreating the session is not required.
 
+### Reviewing Shadow Denials
+
+Before switching `TEAMS_ENFORCEMENT` from `shadow` to `on`, review would-be denied requests per UTC
+day across all reader seams. These records are observation only: requests and subscriptions still
+use the current mode's authorization rules. `off` and `on` do not emit shadow records.
+
+- HTTP item routes use `authorization.request_allowed` with `shadow_denied:<reason>`.
+- Session lists, inbox snapshots/pages (including descendants), team session pages, child lists, and
+  bulk exports use one `shadow_denied:batch` row per request that returns would-be-hidden rows.
+  `metadata_json.shadowDenials` samples the first 50 session IDs and reasons; `shadowDenialCount`
+  counts all would-be-hidden rows in the returned page, not the lookahead row. Run exports include
+  rows hidden by either their own or their root's enforced visibility.
+- WebSocket subscribe and subsequent read checks use `session.shadow_denied` with `channel: "ws"`
+  and `shadow_denied:<reason>`, at most once per connection/session/reason during the authorization
+  lease, including after hibernation. Repeated presence, history, or typing checks do not add rows
+  for an already-observed reason. A new connection can add a new record.
+- Analytics totals, breakdowns, grouped run analytics, and other aggregate counts are deliberately
+  not observed: attributing their difference would require additional SQL. There is no second
+  aggregate query or per-session lookup for shadow auditing.
+
+The workspace audit viewer labels WebSocket records as **Session read shadow denied** and exposes
+the reason and metadata. For daily counts split by seam and reason, run this query against the
+existing D1 `authorization_audit_events` table, replacing the start date with the start of the
+shadow release:
+
+```sql
+WITH shadow AS (
+  SELECT id, date(occurred_at / 1000, 'unixepoch') AS day,
+         CASE WHEN action = 'session.shadow_denied' THEN 'websocket'
+              WHEN reason_code = 'shadow_denied:batch'
+                   AND json_extract(metadata_json, '$.httpMethod') = 'GET'
+                THEN 'http_list'
+              ELSE 'http_item' END AS seam,
+         reason_code, metadata_json
+  FROM authorization_audit_events
+  WHERE occurred_at >= unixepoch('2026-10-01') * 1000
+    AND reason_code LIKE 'shadow_denied:%'
+    AND action IN ('authorization.request_allowed', 'session.shadow_denied')
+), reasons AS (
+  SELECT id, day, seam, substr(reason_code, 15) AS reason
+  FROM shadow WHERE reason_code != 'shadow_denied:batch'
+  UNION
+  SELECT s.id, s.day, s.seam, json_extract(d.value, '$.reason') AS reason
+  FROM shadow s, json_each(s.metadata_json, '$.shadowDenials') d
+  WHERE s.reason_code = 'shadow_denied:batch'
+  UNION
+  SELECT id, day, 'http_item', json_extract(metadata_json, '$.shadowReason')
+  FROM shadow
+  WHERE reason_code = 'shadow_denied:batch'
+    AND json_extract(metadata_json, '$.shadowReason') IS NOT NULL
+)
+SELECT day, seam, reason, COUNT(*) AS would_be_denied_requests
+FROM reasons
+GROUP BY day, seam, reason
+ORDER BY day, seam, reason;
+```
+
+For cross-team denial volume, select the `not_member` results. Counts are affected HTTP requests or
+WebSocket leases, not denied session IDs, unique users, or messages. `UNION` deduplicates a batch's
+sampled reasons; list batches have only `not_member`, so sampling IDs does not undercount affected
+list requests. A children request can appear in both item and list seams if its parent and returned
+children would both be hidden. Audit persistence is best effort; write failures are logged without
+changing access. Account for these failures and the aggregate gap when interpreting the release.
+
 ## How Automation Access Works
 
 Automation definitions and run history are visible workspace-wide to roles with automation read

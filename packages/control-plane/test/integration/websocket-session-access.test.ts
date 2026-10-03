@@ -3,8 +3,11 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { TeamStore } from "../../src/db/teams";
 import { TeamMembershipStore } from "../../src/db/team-memberships";
 import { SessionCollaboratorStore } from "../../src/db/session-collaborators";
+import { createCloudflareEnv } from "../../src/cloudflare/platform";
+import { createDurableObjectSessionPlatform } from "../../src/cloudflare/session-platform";
+import { createSessionRuntime } from "../../src/session/components";
 import { cleanD1Tables } from "./cleanup";
-import { setSessionTeamsEnforcementMode } from "./session-do-access";
+import { componentsOf, runInSessionDO, setSessionTeamsEnforcementMode } from "./session-do-access";
 import {
   collectMessages,
   initNamedSession,
@@ -38,6 +41,247 @@ describe("session WebSocket D1 access", () => {
       .run();
     return { name, stub, team };
   }
+
+  async function shadowAuditRows(sessionId: string) {
+    const { results } = await env.DB.prepare(
+      `SELECT id, request_id, principal_kind, actor_user_id_snapshot, actor_service_snapshot,
+              resource_type, resource_id, team_id, reason_code, operation_result, metadata_json
+       FROM authorization_audit_events WHERE action = 'session.shadow_denied' AND resource_id = ?`
+    )
+      .bind(sessionId)
+      .all();
+    return results;
+  }
+
+  async function repeatReadOnlyCommands(ws: WebSocket, stub: DurableObjectStub) {
+    for (let i = 0; i < 2; i++) {
+      const typing = collectMessages(ws, { until: (message) => message.type === "error" });
+      ws.send(JSON.stringify({ type: "typing" }));
+      expect((await typing).find((message) => message.type === "error")).toMatchObject({
+        code: "PERMISSION_REQUIRED",
+        message: "Access denied: not_member",
+      });
+      const presence = collectMessages(ws, {
+        until: (message) => message.type === "presence_update",
+      });
+      ws.send(JSON.stringify({ type: "presence", status: "idle" }));
+      expect((await presence).some((message) => message.type === "presence_update")).toBe(true);
+
+      // Bypass only the history rate limit so every repeat reaches the fresh access check.
+      await runInSessionDO(stub, (instance) => {
+        for (const client of componentsOf(instance).wsManager.getAuthenticatedClients()) {
+          delete client.lastFetchHistoryAtMs;
+        }
+      });
+      const history = collectMessages(ws, { until: (message) => message.type === "history_page" });
+      ws.send(JSON.stringify({ type: "fetch_history", cursor: { timestamp: 0, id: "event" } }));
+      expect((await history).some((message) => message.type === "history_page")).toBe(true);
+    }
+  }
+
+  it.each(["off", "shadow", "on"] as const)(
+    "records only the shadow-allowed nonmember subscribe in %s mode without auditing repeated commands",
+    async (mode) => {
+      const { name, stub, team } = await scopedSession("team", mode);
+      const canonicalUserId = crypto.randomUUID().replaceAll("-", "");
+      const { token } = await issueClientWsToken(name, {
+        userId: `scm-${canonicalUserId}`,
+        canonicalUserId,
+      });
+      const { ws } = await openClientWs(name);
+      const closed = vi.fn();
+      ws.addEventListener("close", closed);
+      try {
+        if (mode === "on") {
+          const revoked = new Promise<number>((resolve) =>
+            ws.addEventListener("close", (event) => resolve(event.code))
+          );
+          ws.send(JSON.stringify({ type: "subscribe", token, clientId: "nonmember" }));
+          await expect(revoked).resolves.toBe(4010);
+          expect(await shadowAuditRows(name)).toEqual([]);
+          return;
+        }
+        const subscribed = collectMessages(ws, {
+          until: (message) => message.type === "subscribed",
+        });
+        ws.send(JSON.stringify({ type: "subscribe", token, clientId: "nonmember" }));
+        expect((await subscribed).some((message) => message.type === "subscribed")).toBe(true);
+        const audit = await shadowAuditRows(name);
+        expect(audit).toHaveLength(mode === "shadow" ? 1 : 0);
+        if (mode === "shadow") {
+          expect(audit[0]).toMatchObject({
+            id: expect.stringMatching(/^ws-shadow-/),
+            request_id: expect.stringMatching(/^ws-/),
+            principal_kind: "user",
+            actor_user_id_snapshot: canonicalUserId,
+            actor_service_snapshot: null,
+            resource_type: "session",
+            resource_id: name,
+            team_id: team.id,
+            reason_code: "shadow_denied:not_member",
+            operation_result: "denied",
+          });
+          expect(JSON.parse(String(audit[0].metadata_json))).toEqual({
+            before: {},
+            requested: {},
+            after: {},
+            channel: "ws",
+          });
+        }
+        await repeatReadOnlyCommands(ws, stub);
+        expect(await shadowAuditRows(name)).toEqual(audit);
+        expect(closed).not.toHaveBeenCalled();
+
+        if (mode === "shadow") {
+          const { ws: reconnected } = await openClientWs(name);
+          try {
+            const subscribedAgain = collectMessages(reconnected, {
+              until: (message) => message.type === "subscribed",
+            });
+            reconnected.send(JSON.stringify({ type: "subscribe", token, clientId: "nonmember" }));
+            expect((await subscribedAgain).some((message) => message.type === "subscribed")).toBe(
+              true
+            );
+            expect(await shadowAuditRows(name)).toHaveLength(2);
+          } finally {
+            reconnected.close();
+          }
+        }
+      } finally {
+        ws.close();
+      }
+    }
+  );
+
+  it.each(["membership", "scope"] as const)(
+    "observes a %s change midlease in shadow while continuing read access",
+    async (change) => {
+      const { name, stub, team } = await scopedSession("team", "shadow");
+      const userId = `shadow-member-${crypto.randomUUID()}`;
+      const { token } = await issueClientWsToken(name, { userId, canonicalUserId: userId });
+      await new TeamMembershipStore(env.DB).add(team.id, userId);
+      const { ws } = await openClientWs(name);
+      const closed = vi.fn();
+      ws.addEventListener("close", closed);
+      try {
+        const subscribed = collectMessages(ws, {
+          until: (message) => message.type === "subscribed",
+        });
+        ws.send(JSON.stringify({ type: "subscribe", token, clientId: "shadow-member" }));
+        expect((await subscribed).some((message) => message.type === "subscribed")).toBe(true);
+        expect(await shadowAuditRows(name)).toEqual([]);
+        let ownerTeamId = team.id;
+        if (change === "membership") {
+          await new TeamMembershipStore(env.DB).remove(team.id, userId);
+        } else {
+          const destination = await new TeamStore(env.DB).create({
+            slug: `shadow-destination-${crypto.randomUUID()}`,
+            name: "Shadow destination",
+            joinPolicy: "invite_only",
+          });
+          ownerTeamId = destination.id;
+          await env.DB.prepare("UPDATE sessions SET owner_team_id = ? WHERE id = ?")
+            .bind(ownerTeamId, name)
+            .run();
+        }
+        await repeatReadOnlyCommands(ws, stub);
+        expect(await shadowAuditRows(name)).toMatchObject([
+          {
+            actor_user_id_snapshot: userId,
+            team_id: ownerTeamId,
+            reason_code: "shadow_denied:not_member",
+          },
+        ]);
+        expect(closed).not.toHaveBeenCalled();
+      } finally {
+        ws.close();
+      }
+    }
+  );
+
+  it("deduplicates concurrent shadow checks after runtime reconstruction using persisted socket identity", async () => {
+    const { name, stub } = await scopedSession("team", "shadow");
+    const userId = `shadow-restored-${crypto.randomUUID()}`;
+    const { ws, messages } = await openClientWs(name, {
+      subscribe: true,
+      userId,
+      canonicalUserId: userId,
+    });
+    try {
+      expect(messages.some((message) => message.type === "subscribed")).toBe(true);
+      const audit = await shadowAuditRows(name);
+      expect(audit).toHaveLength(1);
+      const presence = collectMessages(ws, {
+        until: (message) => message.type === "presence_update",
+      });
+      await runInSessionDO(stub, async (_instance, state) => {
+        const [socket] = state.getWebSockets();
+        expect(state.getTags(socket)).toContain(`wsid:${audit[0].request_id}`);
+        // Independent graphs have neither recovered client state nor the in-memory denial cache.
+        const runtimes = [0, 1].map(() =>
+          createSessionRuntime(createDurableObjectSessionPlatform(state, env.DB), {
+            ...createCloudflareEnv(env),
+            TEAMS_ENFORCEMENT: "shadow",
+          })
+        );
+        for (const runtime of runtimes) {
+          expect(Array.from(runtime.internals.wsManager.getAuthenticatedClients())).toEqual([]);
+        }
+        await Promise.all(
+          runtimes.map((runtime) =>
+            runtime.server.onMessage(socket, JSON.stringify({ type: "presence", status: "idle" }))
+          )
+        );
+        for (const runtime of runtimes) {
+          expect(Array.from(runtime.internals.wsManager.getAuthenticatedClients())).toMatchObject([
+            { userId },
+          ]);
+        }
+      });
+      expect((await presence).some((message) => message.type === "presence_update")).toBe(true);
+      expect(await shadowAuditRows(name)).toEqual(audit);
+    } finally {
+      ws.close();
+    }
+  });
+
+  it.each(["subscribe", "command"] as const)(
+    "does not change access when the real shadow audit INSERT fails at %s",
+    async (phase) => {
+      const { name, stub } = await scopedSession(
+        phase === "subscribe" ? "team" : "workspace",
+        "shadow"
+      );
+      const userId = `shadow-write-failure-${crypto.randomUUID()}`;
+      const { token } = await issueClientWsToken(name, { userId, canonicalUserId: userId });
+      const { ws } = await openClientWs(name);
+      const closed = vi.fn();
+      ws.addEventListener("close", closed);
+      try {
+        await env.DB.prepare(
+          `CREATE TRIGGER fail_ws_shadow_audit
+          BEFORE INSERT ON authorization_audit_events WHEN NEW.action = 'session.shadow_denied'
+          BEGIN SELECT RAISE(ABORT, 'test shadow audit write failure'); END`
+        ).run();
+        const subscribed = collectMessages(ws, {
+          until: (message) => message.type === "subscribed",
+        });
+        ws.send(JSON.stringify({ type: "subscribe", token, clientId: "audit-failure" }));
+        expect((await subscribed).some((message) => message.type === "subscribed")).toBe(true);
+        if (phase === "command") {
+          await env.DB.prepare("UPDATE sessions SET visibility = 'team' WHERE id = ?")
+            .bind(name)
+            .run();
+        }
+        await repeatReadOnlyCommands(ws, stub);
+        expect(await shadowAuditRows(name)).toEqual([]);
+        expect(closed).not.toHaveBeenCalled();
+      } finally {
+        ws.close();
+        await env.DB.prepare("DROP TRIGGER IF EXISTS fail_ws_shadow_audit").run();
+      }
+    }
+  );
 
   it("rejects a still-valid token after private access is removed and refuses re-mint", async () => {
     const { name, team } = await scopedSession("private");

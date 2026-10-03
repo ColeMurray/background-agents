@@ -594,6 +594,11 @@ describe("client session access", () => {
     const close = vi.fn();
     const removeClient = vi.fn();
     const auditPrivateBreakGlass = vi.fn(async () => undefined);
+    const auditShadowDenied = vi.fn<SessionConnectionAuthenticatorDeps["auditShadowDenied"]>(
+      async () => undefined
+    );
+    const connectionIds = new WeakMap<WebSocket, string>();
+    let nextConnectionId = 0;
     const send = vi.fn((_ws: WebSocket, _message: { type: string; session?: unknown }) => true);
     const snapshot = {
       session: {
@@ -613,6 +618,14 @@ describe("client session access", () => {
         close,
         removeClient,
         send,
+        classify: vi.fn((ws: WebSocket) => {
+          let wsId = connectionIds.get(ws);
+          if (!wsId) {
+            wsId = `ws-${++nextConnectionId}`;
+            connectionIds.set(ws, wsId);
+          }
+          return { kind: "client", wsId };
+        }),
         isClientAuthenticated: vi.fn(() => false),
         isClientSynchronizing: vi.fn(() => false),
         setClientSynchronizing: vi.fn(),
@@ -637,6 +650,7 @@ describe("client session access", () => {
       presenceService: { sendPresence: vi.fn(), broadcastPresence: vi.fn() },
       schedulePullRequestRefresh: vi.fn(),
       auditPrivateBreakGlass,
+      auditShadowDenied,
       log: createLogger(),
     } as unknown as SessionConnectionAuthenticatorDeps;
     return {
@@ -645,6 +659,7 @@ describe("client session access", () => {
       removeClient,
       send,
       auditPrivateBreakGlass,
+      auditShadowDenied,
       resolveSessionViewer: deps.resolveSessionViewer,
     };
   }
@@ -652,19 +667,171 @@ describe("client session access", () => {
   it.each(["off", "shadow", "on"] as const)(
     "uses the %s mode for the team rule at subscribe and on commands",
     async (mode) => {
-      const { authenticator, close, resolveSessionViewer } = accessHarness(mode, member, teamRow);
-      await authenticator.handleSubscribe({} as WebSocket, { token: "token", clientId: "client" });
+      const { authenticator, close, resolveSessionViewer, auditShadowDenied } = accessHarness(
+        mode,
+        member,
+        teamRow
+      );
+      const socket = {} as WebSocket;
+      await authenticator.handleSubscribe(socket, { token: "token", clientId: "client" });
       expect(close).toHaveBeenCalledTimes(mode === "on" ? 1 : 0);
       if (mode === "on") expect(close).toHaveBeenCalledWith({}, 4010, expect.any(String));
       expect(
-        await authenticator.authorizeClientCommand({} as WebSocket, member.userId, "collaborate")
+        await authenticator.authorizeClientCommand(socket, member.userId, "collaborate")
       ).toEqual(mode === "on" ? { kind: "revoked" } : { kind: "denied", reason: "not_member" });
       expect(resolveSessionViewer).toHaveBeenNthCalledWith(1, member.userId, {
         includeMemberships: true,
       });
       expect(resolveSessionViewer).toHaveBeenNthCalledWith(2, member.userId);
+      expect(auditShadowDenied).toHaveBeenCalledTimes(mode === "shadow" ? 1 : 0);
+      if (mode === "shadow") {
+        expect(auditShadowDenied).toHaveBeenCalledWith(
+          member.userId,
+          teamRow,
+          "not_member",
+          "ws-1"
+        );
+      }
     }
   );
+
+  it("deduplicates subscribe and repeated read/collaboration checks using the canonical actor", async () => {
+    const viewer = { ...member, userId: "canonical-user" };
+    const { authenticator, auditShadowDenied, close, send } = accessHarness(
+      "shadow",
+      viewer,
+      teamRow
+    );
+    const socket = {} as WebSocket;
+
+    await authenticator.handleSubscribe(socket, { token: "token", clientId: "client" });
+    expect(send).toHaveBeenCalledWith(socket, expect.objectContaining({ type: "subscribed" }));
+    for (let i = 0; i < 3; i++) {
+      expect(await authenticator.authorizeClientCommand(socket, viewer.userId, "read")).toEqual({
+        kind: "allowed",
+      });
+      expect(
+        await authenticator.authorizeClientCommand(socket, viewer.userId, "collaborate")
+      ).toEqual({
+        kind: "denied",
+        reason: "not_member",
+      });
+    }
+    expect(auditShadowDenied).toHaveBeenCalledExactlyOnceWith(
+      viewer.userId,
+      teamRow,
+      "not_member",
+      "ws-1"
+    );
+    expect(close).not.toHaveBeenCalled();
+  });
+
+  it.each(["membership", "scope"])(
+    "observes a fresh %s change midlease only once",
+    async (change) => {
+      const memberships = new Map([["team-b", "member"]] as const);
+      const viewer = { ...member, memberships };
+      const row = { ...teamRow };
+      const { authenticator, auditShadowDenied, close } = accessHarness("shadow", viewer, row);
+      const socket = {} as WebSocket;
+
+      await authenticator.handleSubscribe(socket, { token: "token", clientId: "client" });
+      expect(auditShadowDenied).not.toHaveBeenCalled();
+      if (change === "membership") memberships.delete("team-b");
+      else row.ownerTeamId = "other-team";
+      for (let i = 0; i < 3; i++) {
+        expect(await authenticator.authorizeClientCommand(socket, viewer.userId, "read")).toEqual({
+          kind: "allowed",
+        });
+      }
+      expect(auditShadowDenied).toHaveBeenCalledExactlyOnceWith(
+        viewer.userId,
+        row,
+        "not_member",
+        "ws-1"
+      );
+      expect(close).not.toHaveBeenCalled();
+    }
+  );
+
+  it("does not observe an actual denied read or a collaboration-only denial", async () => {
+    for (const row of [
+      { ...teamRow, visibility: "private" as const },
+      { ...teamRow, visibility: "workspace" as const },
+    ]) {
+      const { authenticator, auditShadowDenied } = accessHarness("shadow", member, row);
+      const socket = {} as WebSocket;
+      await authenticator.handleSubscribe(socket, { token: "token", clientId: "client" });
+      await authenticator.authorizeClientCommand(socket, member.userId, "collaborate");
+      expect(auditShadowDenied).not.toHaveBeenCalled();
+    }
+  });
+
+  it.each(["reject", "throw"])(
+    "preserves subscribe and command decisions when the audit writer %s fails",
+    async (failure) => {
+      const { authenticator, auditShadowDenied, close, send } = accessHarness(
+        "shadow",
+        member,
+        teamRow
+      );
+      if (failure === "reject") auditShadowDenied.mockRejectedValue(new Error("D1 unavailable"));
+      else
+        auditShadowDenied.mockImplementation(() => {
+          throw new Error("D1 unavailable");
+        });
+      const socket = {} as WebSocket;
+
+      await authenticator.handleSubscribe(socket, { token: "token", clientId: "client" });
+      expect(send).toHaveBeenCalledWith(socket, expect.objectContaining({ type: "subscribed" }));
+      expect(await authenticator.authorizeClientCommand(socket, member.userId, "read")).toEqual({
+        kind: "allowed",
+      });
+      expect(
+        await authenticator.authorizeClientCommand(socket, member.userId, "collaborate")
+      ).toEqual({
+        kind: "denied",
+        reason: "not_member",
+      });
+      expect(auditShadowDenied).toHaveBeenCalledOnce();
+      expect(close).not.toHaveBeenCalled();
+    }
+  );
+
+  it("reserves a denial before awaiting the writer to deduplicate concurrent commands", async () => {
+    const { authenticator, auditShadowDenied, close } = accessHarness("shadow", member, teamRow);
+    let finishAudit!: () => void;
+    auditShadowDenied.mockImplementation(
+      () =>
+        new Promise<void>((resolve) => {
+          finishAudit = resolve;
+        })
+    );
+    const socket = {} as WebSocket;
+    const first = authenticator.authorizeClientCommand(socket, member.userId, "read");
+    const repeated = authenticator.authorizeClientCommand(socket, member.userId, "read");
+
+    await expect(repeated).resolves.toEqual({ kind: "allowed" });
+    expect(auditShadowDenied).toHaveBeenCalledOnce();
+    finishAudit();
+    await expect(first).resolves.toEqual({ kind: "allowed" });
+    expect(close).not.toHaveBeenCalled();
+  });
+
+  it("keeps denial observations distinct per connection and session", async () => {
+    const row = { ...teamRow };
+    const { authenticator, auditShadowDenied } = accessHarness("shadow", member, row);
+    const first = {} as WebSocket;
+    const second = {} as WebSocket;
+    await authenticator.handleSubscribe(first, { token: "token", clientId: "reused-client-id" });
+    await authenticator.handleSubscribe(second, { token: "token", clientId: "reused-client-id" });
+    expect(auditShadowDenied).toHaveBeenCalledTimes(2);
+    expect(auditShadowDenied.mock.calls.map((args) => args[3])).toEqual(["ws-1", "ws-2"]);
+
+    row.id = "other-session";
+    await authenticator.authorizeClientCommand(first, member.userId, "read");
+    expect(auditShadowDenied).toHaveBeenCalledTimes(3);
+  });
 
   it("retains a read-only socket when only collaboration is denied", async () => {
     const viewer: UserViewer = {

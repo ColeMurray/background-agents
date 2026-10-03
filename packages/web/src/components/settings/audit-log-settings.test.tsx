@@ -214,6 +214,21 @@ describe("AuditLogSettings", () => {
     expect(article.getByText("Applied")).toBeInTheDocument();
   });
 
+  it("labels a session shadow denial without fabricating an HTTP response", () => {
+    const article = renderSingle(
+      createEvent("denied", {
+        action: "session.shadow_denied",
+        resourceType: "session",
+        reasonCode: "shadow_denied:not_member",
+        metadata: { before: {}, requested: {}, after: {}, channel: "ws" },
+      })
+    );
+    expect(article.getByText("Session read shadow denied")).toBeInTheDocument();
+    expect(article.getByText("Denied")).toBeInTheDocument();
+    expect(article.getByText("shadow_denied:not_member")).toBeInTheDocument();
+    expect(article.queryByText("HTTP response")).not.toBeInTheDocument();
+  });
+
   it("renders outcomes, stable summaries, timestamps, and expandable structured details", async () => {
     hook.events = [
       createEvent("applied"),

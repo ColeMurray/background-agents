@@ -43,6 +43,7 @@ const UNRECOGNIZED: BadgeTreatment = {
 
 const OPERATION_LABELS: Record<AuditOperationAction, string> = {
   "session.private_break_glass": "Private session break-glass read",
+  "session.shadow_denied": "Session read shadow denied",
   "session.visibility_changed": "Session visibility changed",
   "session.moved": "Session moved",
   "session.collaborator_added": "Session collaborator added",

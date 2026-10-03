@@ -72,6 +72,8 @@ export const AUTHORIZATION_DECISION_ACTIONS = {
 /** Actions written by the operation owner alongside the change; their result is the domain outcome. */
 export const AUDIT_OPERATION_ACTIONS = [
   "session.private_break_glass",
+  // Observational: "denied" is the hypothetical read result, not an enforced denial.
+  "session.shadow_denied",
   "session.visibility_changed",
   "session.moved",
   "session.collaborator_added",

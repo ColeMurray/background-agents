@@ -25,6 +25,7 @@ import {
   viewerFromContext,
 } from "../authorization/session-admission";
 import { createLogger } from "../logger";
+import { recordShadowListDenials } from "../authorization/session-shadow-audit";
 import { SessionInternalPaths } from "../session/contracts";
 import { resolveSandboxSettings } from "../session/integration-settings-resolution";
 import { activePromptAuthorSchema, type ActivePromptAuthor } from "../session/active-prompt-author";
@@ -144,6 +145,7 @@ export async function handleListChildren(
     return json(childSessionListResponseSchema.parse({ children: visible }));
   }
 
+  recordShadowListDenials(ctx, readScope, children, teamsEnforcementMode(ctx, env));
   return json(childSessionListResponseSchema.parse({ children }));
 }
 

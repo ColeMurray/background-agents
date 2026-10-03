@@ -30,6 +30,7 @@ export type RouteAuthorizationDecision =
       auditAllowed: boolean;
       shadowReason?: string;
       shadowDenials?: readonly { sessionId: string; reason: string }[];
+      shadowDenialCount?: number;
     })
   | (AuthorizationDecisionEvidence & {
       kind: "denied";
@@ -111,7 +112,13 @@ export async function auditRouteAuthorizationDecision(input: {
     traceId: input.ctx.trace_id,
     ...(decision.kind === "allowed" ? { admission: decision.admission } : {}),
     ...(decision.kind === "allowed" && decision.shadowDenials?.length
-      ? { shadowDenials: decision.shadowDenials }
+      ? {
+          shadowDenials: decision.shadowDenials,
+          shadowDenialCount: decision.shadowDenialCount ?? decision.shadowDenials.length,
+        }
+      : {}),
+    ...(decision.kind === "allowed" && decision.shadowReason
+      ? { shadowReason: decision.shadowReason }
       : {}),
     ...(principal.kind === "service" && principal.actor
       ? {

@@ -57,6 +57,7 @@ import {
   type RouteAuthorization,
 } from "./shared";
 import { createLogger } from "../logger";
+import { recordShadowListDenials } from "../authorization/session-shadow-audit";
 
 const PRIVATE = { cacheControl: "private, no-store" } as const;
 const logger = createLogger("router:teams");
@@ -236,6 +237,7 @@ async function teamSessions(
   const sessions = Object.values(pages).flatMap(({ items }) =>
     items.flatMap(({ rootSession, descendantSessions }) => [rootSession, ...descendantSessions])
   );
+  recordShadowListDenials(ctx, sessionViewer, sessions, mode);
   const collaborators = await new SessionCollaboratorStore(ctx.db).listForSessions(
     sessions.map((row) => row.id),
     { privateOnly: true }
