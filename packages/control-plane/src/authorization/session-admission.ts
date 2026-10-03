@@ -68,72 +68,66 @@ export async function evaluateSessionAdmission(
 ): Promise<SessionAdmissionOutcome> {
   const mode = enforceAlways ? "on" : teamsEnforcementMode(ctx, env);
   const row = await new SessionIndexStore(ctx.db).get(sessionId);
-  return evaluateLoadedSessionAdmission(
-    ctx,
-    row,
-    action,
-    mode,
-    slot,
-    (includeMemberships) => resourceViewer(ctx, includeMemberships),
-    () => new SessionCollaboratorStore(ctx.db).listUserIds(sessionId)
+  if (!row) return { kind: "not_found" };
+  return evaluateLoadedSessionAdmission(ctx, row, action, mode, slot, () =>
+    new SessionCollaboratorStore(ctx.db).listUserIds(sessionId)
   );
 }
 
-export interface SessionAdmissionResult {
-  sessionId: string;
-  row: SessionEntry | null;
-  outcome: SessionAdmissionOutcome;
-}
+export type SessionAdmissionsOutcome =
+  | { kind: "allowed"; rows: SessionEntry[] }
+  | {
+      kind: "denied";
+      sessionId: string;
+      outcome: Exclude<SessionAdmissionOutcome, { kind: "allowed" }>;
+    };
 
-/** Bulk reads, ordered decisions. Stopping iteration also stops admission audit side effects. */
-export async function* evaluateSessionAdmissions(
+/** Ordered preflight: stop at the first refusal without reading or auditing later chunks. */
+export async function evaluateSessionAdmissions(
   ctx: RequestContext,
   env: Env,
   ids: readonly string[],
   action: SessionAction,
   enforceAlways = false
-): AsyncGenerator<SessionAdmissionResult> {
-  if (!ids.length) return;
+): Promise<SessionAdmissionsOutcome> {
+  const admittedRows: SessionEntry[] = [];
+  if (!ids.length) return { kind: "allowed", rows: admittedRows };
   const mode = enforceAlways ? "on" : teamsEnforcementMode(ctx, env);
-  let viewer: Promise<SessionViewer> | undefined;
-  let rollbackViewer: Promise<SessionViewer> | undefined;
-  const getViewer = (includeMemberships: boolean) =>
-    includeMemberships
-      ? (viewer ??= resourceViewer(ctx))
-      : (rollbackViewer ??= resourceViewer(ctx, false));
   for (let offset = 0; offset < ids.length; offset += MAX_D1_QUERY_PARAMETERS) {
     const chunk = ids.slice(offset, offset + MAX_D1_QUERY_PARAMETERS);
     const rows = await new SessionIndexStore(ctx.db).getByIds(chunk);
-    let collaborators: Promise<ReadonlyMap<string, string[]>> | undefined;
+    const privateIds = chunk.filter((id) => rows.get(id)?.visibility === "private");
+    let collaborators: ReadonlyMap<string, string[]> | undefined;
     for (const sessionId of chunk) {
-      const row = rows.get(sessionId) ?? null;
+      const row = rows.get(sessionId);
+      if (!row) return { kind: "denied", sessionId, outcome: { kind: "not_found" } };
       const outcome = await evaluateLoadedSessionAdmission(
         ctx,
         row,
         action,
         mode,
         null,
-        getViewer,
-        async () =>
-          (
-            await (collaborators ??= new SessionCollaboratorStore(ctx.db).listForSessions(chunk))
-          ).get(sessionId) ?? []
+        async () => {
+          if (row.visibility !== "private") return [];
+          collaborators ??= await new SessionCollaboratorStore(ctx.db).listForSessions(privateIds);
+          return collaborators.get(sessionId) ?? [];
+        }
       );
-      yield { sessionId, row, outcome };
+      if (outcome.kind !== "allowed") return { kind: "denied", sessionId, outcome };
+      admittedRows.push(row);
     }
   }
+  return { kind: "allowed", rows: admittedRows };
 }
 
 async function evaluateLoadedSessionAdmission(
   ctx: RequestContext,
-  row: SessionEntry | null,
+  row: SessionEntry,
   action: SessionAction,
   mode: TeamsEnforcementMode,
   slot: "session" | "child" | null,
-  getViewer: (includeMemberships: boolean) => Promise<SessionViewer>,
   getCollaboratorIds: () => Promise<string[]>
 ): Promise<SessionAdmissionOutcome> {
-  if (!row) return { kind: "not_found" };
   const sessionId = row.id;
 
   // Publication is narrower than workspace readability, including during rollback.
@@ -143,7 +137,7 @@ async function evaluateLoadedSessionAdmission(
   ) {
     const admission = {
       row: { ...row, ownerUserId: row.userId ?? null, collaboratorIds: [] },
-      viewer: await getViewer(false),
+      viewer: await resourceViewer(ctx, false),
     };
     if (slot === "session") ctx.sessionAdmission = admission;
     if (slot === "child") ctx.childSessionAdmission = admission;
@@ -154,7 +148,7 @@ async function evaluateLoadedSessionAdmission(
     return { kind: "allowed", legacyPermission: legacyPermissionForAction(action) };
   }
 
-  const viewer = await getViewer(!(mode === "off" && row.ownerTeamId === null));
+  const viewer = await resourceViewer(ctx, !(mode === "off" && row.ownerTeamId === null));
   const accessRow = {
     ...row,
     ownerUserId: row.userId ?? null,

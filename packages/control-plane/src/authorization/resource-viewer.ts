@@ -6,7 +6,7 @@ import { TeamMembershipStore } from "../db/team-memberships";
 import type { RequestContext } from "../http/request-context";
 import { AuthorizationError, AuthorizationService } from "./service";
 
-function userViewer(
+export function userViewer(
   authorization: EffectiveAuthorization,
   memberships: ReadonlyMap<string, TeamRole>
 ): Extract<SessionViewer, { kind: "user" }> {

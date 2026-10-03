@@ -190,15 +190,14 @@ describe("session descendant authorization batching (real D1)", () => {
         sessionBatches: 2,
         memberships: 1,
         collaboratorGets: 1,
-        collaboratorBatches: 1,
+        collaboratorBatches: 0,
         authorizationReads: 1,
         descendantLists: 1,
       });
       expect(result.sessionGets).toEqual([root]);
       expect(result.sessionBatches).toHaveLength(2);
       for (const batch of result.sessionBatches) expect(batch.sort()).toEqual(ids.slice(1).sort());
-      expect(result.collaboratorBatches).toHaveLength(1);
-      expect(result.collaboratorBatches[0].sort()).toEqual(ids.slice(1).sort());
+      expect(result.collaboratorBatches).toEqual([]);
       counts.push(result.reads);
 
       // These writes are intentionally O(N), independently of the SELECT budget.
@@ -317,7 +316,7 @@ describe("session descendant authorization batching (real D1)", () => {
     for (const size of [1, 20]) {
       const parent = `sandbox-list-${size}-${crypto.randomUUID()}`;
       const token = await sandboxParent(parent, { ownerTeamId: team.id, visibility: "team" });
-      const selectedIds: string[] = [];
+      const privateIds: string[] = [];
       const visibleIds: string[] = [];
       for (let index = 0; index < size; index++) {
         const id = `${parent}-private-${index}`;
@@ -327,7 +326,7 @@ describe("session descendant authorization batching (real D1)", () => {
           visibility: "private",
           userId: index % 3 === 1 ? AUTHOR : OTHER_OWNER,
         });
-        selectedIds.push(id);
+        privateIds.push(id);
         if (index % 3 === 0) {
           await new SessionCollaboratorStore(env.DB).add(id, AUTHOR, OTHER_OWNER);
         }
@@ -336,12 +335,10 @@ describe("session descendant authorization batching (real D1)", () => {
       for (const visibility of ["workspace", "team"] as const) {
         const id = `${parent}-${visibility}`;
         await session(id, { parentSessionId: parent, ownerTeamId: team.id, visibility });
-        selectedIds.push(id);
         visibleIds.push(id);
       }
       const movedId = `${parent}-moved`;
       await session(movedId, { parentSessionId: parent, ownerTeamId: otherTeam.id });
-      selectedIds.push(movedId);
       const result = await measuredRequest(`/sessions/${parent}/children`, { sandboxToken: token });
       expect(result.response.status).toBe(200);
       const body = await result.response.json<{ children: Array<{ id: string }> }>();
@@ -357,7 +354,7 @@ describe("session descendant authorization batching (real D1)", () => {
       });
       expect(result.sessionGets).toEqual([parent]);
       expect(result.collaboratorBatches).toHaveLength(1);
-      expect(result.collaboratorBatches[0].sort()).toEqual(selectedIds.sort());
+      expect(result.collaboratorBatches[0].sort()).toEqual(privateIds.sort());
       expect(result.authorResolutions).toBe(1);
       counts.push(result.reads);
     }

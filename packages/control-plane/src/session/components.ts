@@ -56,6 +56,7 @@ import { McpServerStore } from "../db/mcp-servers";
 import { UserStore } from "../db/user-store";
 import { IntegrationSettingsStore, resolveSlackSettings } from "../db/integration-settings";
 import { SessionIndexStore } from "../db/session-index";
+import { TeamMembershipStore } from "../db/team-memberships";
 import { TeamChannelBindingStore } from "../db/team-channel-bindings";
 import { SessionCollaboratorStore } from "../db/session-collaborators";
 import { parsePersistedSandboxSettings } from "../sandbox/settings";
@@ -161,9 +162,11 @@ import { SessionStatusService } from "./session-status-service";
 import { createSessionRuntimeClientForTrace } from "./runtime-client";
 import { SessionTitleService } from "./title-service";
 import { parseArtifactMetadata } from "./artifact-metadata";
-import { viewerForUser } from "../authorization/resource-viewer";
+import { userViewer } from "../authorization/resource-viewer";
+import { AuthorizationError, AuthorizationService } from "../authorization/service";
 import { parseTeamsEnforcementMode, resolverDecides } from "../authorization/teams-enforcement";
 import { auditSocketPrivateBreakGlass } from "../authorization/session-socket-audit";
+import type { TeamRole } from "@open-inspect/shared/types/teams";
 import type { SessionWebSocket } from "../platform-ports";
 
 /**
@@ -330,6 +333,7 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
   const teamChannelBindingStore = new TeamChannelBindingStore(db);
   const resolveCredentialScope = (sessionId: string) =>
     resolveSessionCredentialScope(db, sessionId, () => readCachedInstallationRepositories(env));
+  const teamMembershipStore = new TeamMembershipStore(db);
   const sessionCollaboratorStore = new SessionCollaboratorStore(db);
   const sessionPullRequestStore = new SessionPullRequestStore(db);
   const resolveRepoId = (sessionRow: SessionRow) =>
@@ -861,22 +865,23 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
     resolveSessionViewer: async (userId, options) => {
       try {
         const mode = parseTeamsEnforcementMode(env.TEAMS_ENFORCEMENT);
-        const session = await sessionIndexStore.get(getPublicSessionId());
-        const subject = await viewerForUser(
-          db,
-          userId,
-          session !== null &&
-            (resolverDecides(mode, session, "collaborate") || options?.includeMemberships === true)
-        );
-        if (!subject || subject.viewer.suspended || !session) return { kind: "rejected" };
+        const [authorization, session] = await Promise.all([
+          new AuthorizationService(db).getEffectiveAuthorization(userId),
+          sessionIndexStore.get(getPublicSessionId()),
+        ]);
+        if (authorization.suspendedAt !== null || !session) return { kind: "rejected" };
         const enforceScope = resolverDecides(mode, session, "read");
-        const collaboratorIds = enforceScope
-          ? await sessionCollaboratorStore.listUserIds(session.id)
-          : [];
+        const [memberships, collaboratorIds] = await Promise.all([
+          resolverDecides(mode, session, "collaborate") || options?.includeMemberships === true
+            ? teamMembershipStore.listForUser(userId)
+            : new Map<string, TeamRole>(),
+          enforceScope ? sessionCollaboratorStore.listUserIds(session.id) : [],
+        ]);
         return {
           kind: "valid",
           mode,
-          ...subject,
+          authorization,
+          viewer: userViewer(authorization, memberships),
           row: {
             id: session.id,
             ownerUserId: session.userId ?? null,
@@ -886,6 +891,7 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
           },
         };
       } catch (error) {
+        if (error instanceof AuthorizationError) return { kind: "rejected" };
         log.error("WebSocket authorization verification failed", {
           user_id: userId,
           error: error instanceof Error ? error : String(error),

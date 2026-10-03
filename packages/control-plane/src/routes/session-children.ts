@@ -82,11 +82,14 @@ function sandboxChildAccess(
     const viewer = await viewerPromise;
     if (!viewer || viewer.kind !== "user") return false;
     const collaboratorStore = new SessionCollaboratorStore(ctx.db);
-    const collaboratorIds = batchIds
-      ? ((await (collaboratorsPromise ??= collaboratorStore.listForSessions(batchIds))).get(
-          child.id
-        ) ?? [])
-      : await collaboratorStore.listUserIds(child.id);
+    const collaboratorIds =
+      child.visibility !== "private"
+        ? []
+        : batchIds
+          ? ((await (collaboratorsPromise ??= collaboratorStore.listForSessions(batchIds))).get(
+              child.id
+            ) ?? [])
+          : await collaboratorStore.listUserIds(child.id);
     if (
       child.visibility === "private" &&
       child.userId !== viewer.userId &&
@@ -127,10 +130,12 @@ export async function handleListChildren(
     const parent = await sessionStore.get(parentId);
     if (!parent) return error("Session not found", 404);
     const canAccess = sandboxChildAccess(ctx, parent);
-    const childIds = children.map((child) => child.id);
+    const privateIds = children
+      .filter((child) => child.visibility === "private")
+      .map((child) => child.id);
     const visible: SessionEntry[] = [];
     for (const child of children) {
-      if (await canAccess(child, "read", childIds)) visible.push(child);
+      if (await canAccess(child, "read", privateIds)) visible.push(child);
     }
     return json(childSessionListResponseSchema.parse({ children: visible }));
   }
@@ -337,26 +342,21 @@ export async function handleCancelChild(
   const descendantIds = cancelNested ? await sessionStore.listActiveDescendantIds(childId) : [];
   if (canAccess && descendantIds.length) {
     const descendants = await sessionStore.getByIds(descendantIds);
+    const privateIds = descendantIds.filter((id) => descendants.get(id)?.visibility === "private");
     for (const descendantId of descendantIds) {
       const descendant = descendants.get(descendantId);
-      if (!descendant || !(await canAccess(descendant, "lifecycle", descendantIds))) {
+      if (!descendant || !(await canAccess(descendant, "lifecycle", privateIds))) {
         return error("Child session not found", 404);
       }
     }
   } else if (!canAccess) {
-    for await (const { outcome } of evaluateSessionAdmissions(
-      ctx,
-      env,
-      descendantIds,
-      "lifecycle"
-    )) {
-      if (outcome.kind === "not_found") return error("Child session not found", 404);
-      if (outcome.kind === "action_denied") {
-        return json(
-          { error: "Forbidden", code: "session_action_denied", reason_code: outcome.reason },
-          403
-        );
-      }
+    const result = await evaluateSessionAdmissions(ctx, env, descendantIds, "lifecycle");
+    if (result.kind === "denied") {
+      if (result.outcome.kind === "not_found") return error("Child session not found", 404);
+      return json(
+        { error: "Forbidden", code: "session_action_denied", reason_code: result.outcome.reason },
+        403
+      );
     }
   }
 

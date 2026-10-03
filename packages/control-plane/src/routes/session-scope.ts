@@ -34,17 +34,11 @@ async function admitDescendants(
   env: Env,
   ids: readonly string[]
 ): Promise<Response | null> {
-  for await (const { outcome } of evaluateSessionAdmissions(
-    ctx,
-    env,
-    ids,
-    "changeVisibility",
-    true
-  )) {
-    if (outcome.kind === "not_found") return error("Session not found", 404);
-    if (outcome.kind === "action_denied") return denied(outcome.reason);
-  }
-  return null;
+  const result = await evaluateSessionAdmissions(ctx, env, ids, "changeVisibility", true);
+  if (result.kind === "allowed") return null;
+  return result.outcome.kind === "not_found"
+    ? error("Session not found", 404)
+    : denied(result.outcome.reason);
 }
 
 async function changeVisibility(

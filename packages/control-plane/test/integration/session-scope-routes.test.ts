@@ -179,10 +179,10 @@ describe("session scope routes", () => {
       )
         .bind(initial, team.id)
         .run();
-      const original = SessionCollaboratorStore.prototype.listForSessions;
+      const original = SessionIndexStore.prototype.getByIds;
       const read = vi
-        .spyOn(SessionCollaboratorStore.prototype, "listForSessions")
-        .mockImplementation(async function (this: SessionCollaboratorStore, ...args) {
+        .spyOn(SessionIndexStore.prototype, "getByIds")
+        .mockImplementationOnce(async function (this: SessionIndexStore, ...args) {
           const result = await original.apply(this, args);
           await env.DB.prepare("UPDATE sessions SET visibility = ? WHERE id = 'child'")
             .bind(current)
