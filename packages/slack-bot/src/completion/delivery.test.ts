@@ -263,6 +263,45 @@ describe("processSlackCompletion", () => {
     );
   });
 
+  it("publishes a retried completion once publication authority recovers", async () => {
+    const actual = await vi.importActual<typeof ExtractorModule>("./extractor");
+    vi.mocked(extractAgentResponse).mockImplementation(actual.extractAgentResponse);
+    const fetch = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValue(Response.json({ ok: true, channel: "C123", ts: "333.444" }));
+    const env = makeEnv();
+    const cpFetch = vi.mocked(env.CONTROL_PLANE.fetch);
+    cpFetch.mockResolvedValueOnce(new Response(null, { status: 503 }));
+    cpFetch.mockImplementation(async (input) => {
+      const url = new URL(String(input));
+      expect(url.searchParams.get("channel")).toBe("slack:C123");
+      expect(url.searchParams.get("purpose")).toBe("slack-post");
+      return url.pathname.endsWith("/events")
+        ? Response.json({
+            events: [
+              {
+                id: "token-1",
+                type: "token",
+                data: { content: "Previous prompt completed." },
+                messageId: "message-1",
+                createdAt: 1,
+              },
+            ],
+            hasMore: false,
+          })
+        : Response.json({ artifacts: [] });
+    });
+    const completion = job();
+
+    await expect(processSlackCompletion(completion, env)).resolves.toEqual({ kind: "retry" });
+    expect(fetch).not.toHaveBeenCalled();
+    await expect(processSlackCompletion(completion, env)).resolves.toEqual({ kind: "ack" });
+    expect(fetch).toHaveBeenCalledTimes(2);
+    expect(String(fetch.mock.calls[0][0])).toContain("chat.postMessage");
+    expect(String(fetch.mock.calls[0][1]?.body)).toContain("Previous prompt completed.");
+    expect(String(fetch.mock.calls[1][0])).toContain("reactions.remove");
+  });
+
   it.each(["allowed", "denied", "unavailable"] as const)(
     "gates cached completion text after missing media on a fresh %s publication proof",
     async (access) => {

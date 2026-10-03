@@ -40,7 +40,6 @@ import { clearBotUserIdCache } from "./bot-identity";
 import { clearLocalCache } from "./classifier/repos";
 import { clearEnvironmentsLocalCache } from "./classifier/environments";
 import { RepoClassifier } from "./classifier";
-import { processSlackCompletion } from "./completion/delivery";
 
 function createMockKV() {
   const store = new Map<string, string>();
@@ -1131,7 +1130,7 @@ describe("POST /events", () => {
       "404-router",
       "404-invalid-json",
     ] as const)(
-      "preserves the thread and its completion when binding lookup is %s, then forwards after recovery",
+      "preserves the thread when binding lookup is %s, then forwards after recovery",
       async (failure) => {
         const channel = type === "message" ? "D123" : "C123";
         const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
@@ -1150,7 +1149,6 @@ describe("POST /events", () => {
         await env.SLACK_KV.put(`thread:${channel}:111.222`, JSON.stringify(session));
         const dispatch = env.CONTROL_PLANE.fetch.getMockImplementation()!;
         let bindingUnavailable = true;
-        let publicationUnavailable = true;
         env.CONTROL_PLANE.fetch.mockImplementation(async (input, init) => {
           const url = new URL(String(input));
           if (url.pathname.includes("/channel-bindings/") && bindingUnavailable) {
@@ -1163,25 +1161,6 @@ describe("POST /events", () => {
               return Response.json({ code: "not_found" }, { status: 404 });
             if (failure === "404-invalid-json") return new Response("{", { status: 404 });
             return new Response(null, { status: 503 });
-          }
-          if (url.pathname.endsWith("/events") || url.pathname.endsWith("/artifacts")) {
-            expect(url.searchParams.get("channel")).toBe(`slack:${channel}`);
-            expect(url.searchParams.get("purpose")).toBe("slack-post");
-            if (publicationUnavailable) return new Response(null, { status: 503 });
-            if (url.pathname.endsWith("/events")) {
-              return Response.json({
-                events: [
-                  {
-                    id: "token-1",
-                    type: "token",
-                    data: { content: "Previous prompt completed." },
-                    messageId: "message-1",
-                    createdAt: 1,
-                  },
-                ],
-                hasMore: false,
-              });
-            }
           }
           return dispatch(input, init);
         });
@@ -1223,26 +1202,6 @@ describe("POST /events", () => {
         const kv = env.SLACK_KV as unknown as ReturnType<typeof createMockKV>;
         expect(kv.put.mock.calls.filter(([key]) => key.startsWith("thread"))).toHaveLength(1);
         expect(kv.delete).not.toHaveBeenCalled();
-
-        // A completion already in flight retries while publication authority is unavailable.
-        const completion = {
-          version: 1 as const,
-          deliveryId: crypto.randomUUID(),
-          source: "session" as const,
-          sessionId: session.sessionId,
-          messageId: "message-1",
-          success: true,
-          channel,
-          threadTs: "111.222",
-          context: { repoFullName: session.repoFullName, model: session.model },
-        };
-        await expect(processSlackCompletion(completion, env)).resolves.toEqual({ kind: "retry" });
-        expect(slackFetch).toHaveBeenCalledOnce();
-        publicationUnavailable = false;
-        await expect(processSlackCompletion(completion, env)).resolves.toEqual({ kind: "ack" });
-        const completionPosts = slackApiBodies(slackFetch, "chat.postMessage");
-        expect(completionPosts).toHaveLength(2);
-        expect(JSON.stringify(completionPosts[1])).toContain("Previous prompt completed.");
 
         bindingUnavailable = false;
         env.CONTROL_PLANE.fetch.mockClear();
