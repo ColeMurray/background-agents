@@ -9,6 +9,9 @@ const GITHUB_API_VERSION = "2022-11-28";
 const GITHUB_EMAILS_PER_PAGE = 100;
 const GITHUB_EMAILS_MAX_PAGES = 10;
 const GITHUB_NETWORK_REQUEST_ATTEMPTS = 2;
+const HTTP_FORBIDDEN = 403;
+const GITHUB_EMAIL_PERMISSION_HINT =
+  "Check that the GitHub App has the Account permission 'Email addresses: Read-only', then sign in again.";
 
 const githubUserSchema = z.object({
   id: z.number().int().positive(),
@@ -25,6 +28,17 @@ const githubEmailSchema = z.object({
 });
 
 const githubEmailPageSchema = z.array(githubEmailSchema);
+
+const githubErrorSchema = z.object({ message: z.string() });
+
+// Secondary and abuse rate limits can arrive as a 403 without rate-limit headers.
+const GITHUB_RATE_LIMIT_MESSAGE = /rate limit|abuse/i;
+const ERROR_BODY_TIMED_OUT = Symbol("error body timed out");
+
+interface TimedResponse {
+  readonly response: Response;
+  readonly abort: () => void;
+}
 
 export interface GitHubProviderIdentityResolverConfig {
   readonly issuer: string;
@@ -79,7 +93,7 @@ export class GitHubProviderIdentityResolver {
   }
 
   private async fetchGitHubUser(accessToken: string): Promise<z.infer<typeof githubUserSchema>> {
-    const response = await this.fetchWithTimeout(`${GITHUB_API_URL}/user`, {
+    const { response } = await this.fetchWithTimeout(`${GITHUB_API_URL}/user`, {
       headers: this.apiHeaders(accessToken),
     });
     if (!response.ok) {
@@ -102,14 +116,11 @@ export class GitHubProviderIdentityResolver {
       pageUrl.searchParams.set("per_page", String(GITHUB_EMAILS_PER_PAGE));
       pageUrl.searchParams.set("page", String(page));
 
-      const response = await this.fetchWithTimeout(pageUrl, {
+      const { response, abort } = await this.fetchWithTimeout(pageUrl, {
         headers: this.apiHeaders(accessToken),
       });
       if (!response.ok) {
-        throw new OAuthProviderError(
-          "provider_unavailable",
-          "GitHub email lookup was not successful"
-        );
+        throw await this.emailLookupFailure(response, abort);
       }
       const parsed = githubEmailPageSchema.safeParse(
         await this.parseJson(response, "GitHub emails")
@@ -130,6 +141,33 @@ export class GitHubProviderIdentityResolver {
     );
   }
 
+  /**
+   * A GitHub App user token can read `/user/emails` only with the Account
+   * permission "Email addresses: Read-only". GitHub answers a missing
+   * permission with 403. A 403 caused by a rate limit is transient instead.
+   */
+  private async emailLookupFailure(
+    response: Response,
+    abort: () => void
+  ): Promise<OAuthProviderError> {
+    if (
+      response.status === HTTP_FORBIDDEN &&
+      !(await isTransientForbidden(response, abort, this.requestTimeoutMs))
+    ) {
+      this.logger.error("GitHub email lookup was rejected", {
+        event: "auth.github_email_lookup_failed",
+        http_status: response.status,
+        hint: GITHUB_EMAIL_PERMISSION_HINT,
+      });
+      return new OAuthProviderError("provider_rejected", "GitHub email lookup was rejected");
+    }
+    this.logger.error("GitHub email lookup was not successful", {
+      event: "auth.github_email_lookup_failed",
+      http_status: response.status,
+    });
+    return new OAuthProviderError("provider_unavailable", "GitHub email lookup was not successful");
+  }
+
   private apiHeaders(accessToken: string): HeadersInit {
     return {
       Authorization: `Bearer ${accessToken}`,
@@ -147,13 +185,21 @@ export class GitHubProviderIdentityResolver {
     }
   }
 
-  private async fetchWithTimeout(input: RequestInfo | URL, init: RequestInit): Promise<Response> {
+  /**
+   * The timeout covers the request until headers arrive. The returned `abort`
+   * lets a caller stop a body read that outlives it.
+   */
+  private async fetchWithTimeout(
+    input: RequestInfo | URL,
+    init: RequestInit
+  ): Promise<TimedResponse> {
     let lastCause: unknown;
     for (let attempt = 1; attempt <= GITHUB_NETWORK_REQUEST_ATTEMPTS; attempt += 1) {
       const controller = new AbortController();
       const timeout = setTimeout(() => controller.abort(), this.requestTimeoutMs);
       try {
-        return await this.fetchImpl(input, { ...init, signal: controller.signal });
+        const response = await this.fetchImpl(input, { ...init, signal: controller.signal });
+        return { response, abort: () => controller.abort() };
       } catch (cause) {
         lastCause = cause;
       } finally {
@@ -168,5 +214,35 @@ export class GitHubProviderIdentityResolver {
     throw new OAuthProviderError("provider_unavailable", "GitHub request failed", {
       cause: lastCause,
     });
+  }
+}
+
+/**
+ * Whether a GitHub 403 is transient: a rate limit, or an error body that does
+ * not arrive within the request timeout. A stalled body read is aborted.
+ */
+async function isTransientForbidden(
+  response: Response,
+  abort: () => void,
+  timeoutMs: number
+): Promise<boolean> {
+  if (response.headers.get("X-RateLimit-Remaining") === "0") return true;
+  if (response.headers.has("Retry-After")) return true;
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  const timedOut = new Promise<typeof ERROR_BODY_TIMED_OUT>((resolve) => {
+    timeout = setTimeout(() => resolve(ERROR_BODY_TIMED_OUT), timeoutMs);
+  });
+  try {
+    const body = await Promise.race([response.json(), timedOut]);
+    if (body === ERROR_BODY_TIMED_OUT) {
+      abort();
+      return true;
+    }
+    const parsed = githubErrorSchema.safeParse(body);
+    return parsed.success && GITHUB_RATE_LIMIT_MESSAGE.test(parsed.data.message);
+  } catch {
+    return false;
+  } finally {
+    if (timeout !== undefined) clearTimeout(timeout);
   }
 }

@@ -143,6 +143,12 @@ by team. No audit history is deleted.
 
 ### Fixed
 
+**Rejected sign-ins no longer fail with HTTP 500.** When sign-in is refused (an admission denial, an
+admission check that cannot run, or a provider error), the OAuth callback now redirects to the
+access-denied page with a reason. Previously it returned HTTP 500. If a GitHub App lacks the **Email
+addresses: Read-only** account permission, the page names that permission, and the control plane
+logs `auth.github_email_lookup_failed` with the GitHub status.
+
 The team directory and collaborator picker now show email addresses only to viewers with
 `workspace.members.read` (Owners and Administrators in the built-in roles). Other viewers receive
 names and avatars with no email address, and unnamed users have a neutral label with a short ID
