@@ -761,10 +761,6 @@ async function enforceSessionRequirement(
         ctx.serviceTeamId =
           (await new TeamChannelBindingStore(ctx.db).get(scope.provider, scope.externalId))
             ?.teamId ?? null;
-        // Unbinding revokes a Linear team's reads of team-owned sessions.
-        if (scope.provider === "linear" && ctx.serviceTeamId === null) {
-          ctx.serviceWorkspaceSessionsOnly = true;
-        }
         if (postRead) ctx.serviceReadPurpose = "slack-post";
       }
     }

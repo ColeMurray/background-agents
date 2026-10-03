@@ -1543,6 +1543,7 @@ export class Scheduler {
     const secret = callbackSigningSecret(this.env, "slack-bot");
     if (!binding || !secret) return;
 
+    let closureReason: string | null = null;
     await retryDelivery<void, Response>(
       async (signal) => {
         const invocation = await store.getInvocationById(run.invocation_id);
@@ -1555,7 +1556,7 @@ export class Scheduler {
         ]);
         // D1 reads cannot be canceled; an expired attempt must not reach the wire.
         signal.throwIfAborted();
-        const denial = slackPostGate(session, channelBinding);
+        const denial = closureReason ?? slackPostGate(session, channelBinding);
         const body = denial
           ? {
               kind: "slack.thread_closed",
@@ -1585,6 +1586,8 @@ export class Scheduler {
 
         const signature = await computeHmacHex(JSON.stringify(body), secret);
         signal.throwIfAborted();
+        // The bot can tombstone the thread even when closure delivery fails.
+        closureReason = denial;
         const endpoint = denial ? "thread_closed" : "automation-complete";
         const response = await binding.fetch(`https://internal/callbacks/${endpoint}`, {
           method: "POST",

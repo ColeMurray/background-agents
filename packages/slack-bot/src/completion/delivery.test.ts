@@ -24,7 +24,9 @@ function makeEnv(overrides: Partial<Env> = {}): Env {
   return {
     SLACK_KV: { get: vi.fn(async () => null) } as unknown as KVNamespace,
     SLACK_COMPLETION_QUEUE: {} as Queue,
-    CONTROL_PLANE: { fetch: vi.fn() } as unknown as Fetcher,
+    CONTROL_PLANE: {
+      fetch: vi.fn(async () => Response.json({ artifacts: [] })),
+    } as unknown as Fetcher,
     DEPLOYMENT_NAME: "test",
     CONTROL_PLANE_URL: "https://control-plane.test",
     WEB_APP_URL: "https://app.test",
@@ -262,7 +264,7 @@ describe("processSlackCompletion", () => {
       await expect(
         processSlackCompletion(job({ error: "SECRET JOB ERROR" }), env)
       ).resolves.toEqual({ kind: access === "unavailable" ? "retry" : "ack" });
-      expect(env.CONTROL_PLANE.fetch).toHaveBeenCalledTimes(2);
+      expect(env.CONTROL_PLANE.fetch).toHaveBeenCalledTimes(access === "allowed" ? 4 : 2);
       const [proofUrl] = vi.mocked(env.CONTROL_PLANE.fetch).mock.calls[1]!;
       expect(new URL(String(proofUrl)).pathname).toBe("/sessions/session-1/artifacts");
       expect(new URL(String(proofUrl)).searchParams.get("channel")).toBe("slack:C123");
@@ -281,6 +283,95 @@ describe("processSlackCompletion", () => {
       }
     }
   );
+
+  describe.each([true, false])("final publication access for success=%s", (success) => {
+    it.each([403, 404, 503])(
+      "suppresses cached content after unbinding between extraction and posting: %s",
+      async (status) => {
+        const actual = await vi.importActual<typeof ExtractorModule>("./extractor");
+        vi.mocked(extractAgentResponse).mockImplementation(actual.extractAgentResponse);
+        const env = makeEnv();
+        let bound = true;
+        const cpFetch = vi.mocked(env.CONTROL_PLANE.fetch).mockImplementation(async (input) => {
+          if (new URL(String(input)).pathname.endsWith("/events")) {
+            return Response.json({
+              events: success
+                ? [
+                    {
+                      id: "secret",
+                      type: "token",
+                      data: { content: "SECRET CONTENT" },
+                      messageId: "message-1",
+                      createdAt: 1,
+                    },
+                  ]
+                : [],
+              hasMore: false,
+            });
+          }
+          if (!bound) return new Response(null, { status });
+          // The protected artifacts read succeeds, then the channel is unbound.
+          bound = false;
+          return Response.json({ artifacts: [] });
+        });
+        const fetch = vi.spyOn(globalThis, "fetch");
+
+        await expect(
+          processSlackCompletion(job({ success, error: "SECRET JOB ERROR" }), env)
+        ).resolves.toEqual({ kind: status === 503 ? "retry" : "ack" });
+
+        expect(cpFetch).toHaveBeenCalledTimes(3);
+        const [proofUrl, proofInit] = cpFetch.mock.calls[2]!;
+        expect(new URL(String(proofUrl)).searchParams.get("channel")).toBe("slack:C123");
+        expect(new URL(String(proofUrl)).searchParams.get("purpose")).toBe("slack-post");
+        expect(new Headers(proofInit?.headers).get("X-OpenInspect-Service-Signature")).toMatch(
+          /^sig1\./
+        );
+        expect(fetch).not.toHaveBeenCalled();
+        expect(deliverMediaArtifacts).not.toHaveBeenCalled();
+      }
+    );
+  });
+
+  it.each([404, 503])(
+    "does not replay shared media when the final text proof fails: %s",
+    async (status) => {
+      const env = makeEnv();
+      vi.mocked(extractAgentResponse).mockResolvedValue(successfulAgentResponse());
+      vi.mocked(deliverMediaArtifacts).mockImplementation(async (input) => {
+        input.onShareAttempt();
+        vi.mocked(env.CONTROL_PLANE.fetch).mockResolvedValue(new Response(null, { status }));
+        return { uploaded: 1, failed: 0, omitted: 0 };
+      });
+      const fetch = vi.spyOn(globalThis, "fetch").mockResolvedValue(Response.json({ ok: true }));
+
+      await expect(processSlackCompletion(job(), env)).resolves.toEqual({ kind: "ack" });
+
+      expect(deliverMediaArtifacts).toHaveBeenCalledOnce();
+      expect(fetch).toHaveBeenCalledOnce();
+      expect(String(fetch.mock.calls[0]?.[0])).toContain("reactions.remove");
+    }
+  );
+
+  it("rechecks authority for the unavailable-media notice after posting text", async () => {
+    const env = makeEnv();
+    vi.mocked(extractAgentResponse).mockResolvedValue(successfulAgentResponse());
+    vi.mocked(deliverMediaArtifacts).mockResolvedValue({ uploaded: 0, failed: 1, omitted: 0 });
+    const fetch = vi
+      .spyOn(globalThis, "fetch")
+      .mockImplementationOnce(async () => {
+        vi.mocked(env.CONTROL_PLANE.fetch).mockResolvedValue(new Response(null, { status: 404 }));
+        return Response.json({ ok: true, channel: "C123", ts: "333.444" });
+      })
+      .mockResolvedValueOnce(Response.json({ ok: true }));
+
+    await expect(processSlackCompletion(job(), env)).resolves.toEqual({ kind: "ack" });
+
+    expect(env.CONTROL_PLANE.fetch).toHaveBeenCalledTimes(2);
+    expect(fetch).toHaveBeenCalledTimes(2);
+    expect(String(fetch.mock.calls[0]?.[0])).toContain("chat.postMessage");
+    expect(String(fetch.mock.calls[1]?.[0])).toContain("reactions.remove");
+  });
 
   it("does not replay accepted media if the following closure check throws", async () => {
     vi.mocked(extractAgentResponse).mockResolvedValue(successfulAgentResponse());
