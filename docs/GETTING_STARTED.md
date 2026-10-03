@@ -39,12 +39,14 @@ be resolved from it.
 
 ## Teams Enforcement
 
-Production Terraform's `teams_enforcement` sets the control-plane `TEAMS_ENFORCEMENT` value.
-Accepted values are `off`, `shadow`, and `on`, with **`shadow` as the default**. For a fresh
+Cloudflare production Terraform's `teams_enforcement` sets the control-plane `TEAMS_ENFORCEMENT`
+value. Accepted values are `off`, `shadow`, and `on`, with **`shadow` as the default**. For a fresh
 deployment, explicitly set `teams_enforcement = "on"` in `terraform.tfvars` (as in Step 5) so the
-control plane runs with `TEAMS_ENFORCEMENT=on` and enforces non-private Team-visibility reads. The
-AWS configuration also explicitly sets `shadow`. Do not assume a deployed instance has full team
-read isolation simply because it includes Teams.
+control plane runs with `TEAMS_ENFORCEMENT=on` and enforces non-private Team-visibility reads. AWS
+production is separate and defaults to `shadow`: add `TEAMS_ENFORCEMENT = "on"` to its `config` map
+in `terraform/environments/aws-production/terraform.tfvars` to opt in, then apply Terraform and
+restart the service as described in [AWS Bring-Up](AWS_BRING_UP.md). Do not assume a deployed
+instance has full team read isolation simply because it includes Teams.
 
 For an existing deployment, review its production `shadow_denied:*` authorization audit entries
 before opting into `on`. Resolve unexpected would-deny decisions and verify membership, repository

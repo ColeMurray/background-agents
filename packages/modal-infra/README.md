@@ -89,14 +89,19 @@ snapshot, terminate, and delete provider operations.
 modal secret create llm-api-keys ANTHROPIC_API_KEY="sk-ant-..."
 
 # Internal API secret (for control plane authentication)
+MODAL_API_SECRET="$(openssl rand -hex 32)"
 modal secret create internal-api \
-  MODAL_API_SECRET="$(openssl rand -hex 32)" \
+  MODAL_API_SECRET="$MODAL_API_SECRET" \
   ALLOWED_CONTROL_PLANE_HOSTS="your-control-plane.workers.dev"
+
+# Reuse the same value when configuring the control plane with Terraform.
+export TF_VAR_modal_api_secret="$MODAL_API_SECRET"
 ```
 
 See `.env.example` for a full list of environment variables.
 
-Use the same `MODAL_API_SECRET` in the control plane and Modal, and set
+Use the retained `MODAL_API_SECRET` value for the control plane's `modal_api_secret` Terraform input
+(or its `MODAL_API_SECRET` secret binding); do not generate a second value. Set
 `ALLOWED_CONTROL_PLANE_HOSTS` to the deployed control-plane hostname. Removing the old `github-app`
 dependency does not make either of the required secret objects above optional. For upgrades, verify
 the deployed Modal app and runtime images use the current credential path before removing legacy
