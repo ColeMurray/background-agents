@@ -1,8 +1,8 @@
 """Open Inspect tools for the Claude harness, as one in-process SDK MCP server.
 
-These are the same seven tools OpenCode gets as ``.opencode/tool/*.js``
-plugins, ported over the same control-plane side channels
-(``/sessions/:id/children``, ``/pr``, ``/slack-notify``, ``/media``). They run
+These are the same tools OpenCode gets as ``.opencode/tool/*.js`` plugins,
+ported over the same control-plane side channels (``/sessions/:id/children``,
+``/pr``, ``/slack-notify``, ``/media``, ``/sandbox-memory``). They run
 inside the bridge process, so they see the bridge's environment rather than
 the child's clean one, and no credential has to reach the ``claude`` process
 for them to work.
@@ -23,6 +23,8 @@ from urllib.parse import quote, urlencode
 import httpx
 
 from ..repo_config import load_repo_manifest
+from .memory_tools import MemoryTools
+from .tool_results import error_text, text_result
 
 if TYPE_CHECKING:
     from ..log_config import StructuredLogger
@@ -132,17 +134,6 @@ class ControlPlaneToolClient:
         )
 
 
-def _error_text(response: httpx.Response) -> str:
-    text = response.text
-    try:
-        body = json.loads(text)
-    except ValueError:
-        return text
-    if isinstance(body, dict):
-        return str(body.get("error") or body.get("message") or text)
-    return text
-
-
 def _format_status(status: str) -> str:
     return _STATUS_LABELS.get(status, status.upper())
 
@@ -156,10 +147,6 @@ def _format_timestamp(value: Any) -> str:
         )
     except (TypeError, ValueError, OSError):
         return str(value)
-
-
-def _text_result(text: str) -> dict[str, Any]:
-    return {"content": [{"type": "text", "text": text}]}
 
 
 def _pull_request_failure(message: str) -> str:
@@ -258,20 +245,20 @@ class OpenInspectTools:
         try:
             response = await self.client.request("POST", "/children", json_body=body)
         except httpx.HTTPError as error:
-            return _text_result(f"Failed to spawn child: {error}")
+            return text_result(f"Failed to spawn child: {error}")
         if response.status_code >= 400:
-            message = _error_text(response)
+            message = error_text(response)
             if response.status_code == 403:
-                return _text_result(
+                return text_result(
                     f"Cannot spawn child: {message}. This may be a depth limit or repository restriction."
                 )
             if response.status_code == 429:
-                return _text_result(
+                return text_result(
                     f"Rate limited: {message}. Wait a moment before spawning another child."
                 )
-            return _text_result(f"Failed to spawn child: {message} (HTTP {response.status_code})")
+            return text_result(f"Failed to spawn child: {message} (HTTP {response.status_code})")
         result = response.json()
-        return _text_result(
+        return text_result(
             "\n".join(
                 [
                     "Child spawned successfully.",
@@ -292,22 +279,20 @@ class OpenInspectTools:
                 "POST", f"/children/{encoded}/prompt", json_body={"content": args.get("prompt")}
             )
         except httpx.HTTPError as error:
-            return _text_result(f"Failed to prompt child: {error}")
+            return text_result(f"Failed to prompt child: {error}")
         if response.status_code >= 400:
-            message = _error_text(response)
+            message = error_text(response)
             if response.status_code == 404:
-                return _text_result(
+                return text_result(
                     f'Child "{child_id}" not found. Use get-child-status to list direct children.'
                 )
             if response.status_code == 409:
-                return _text_result(f'Cannot prompt child "{child_id}": {message}')
+                return text_result(f'Cannot prompt child "{child_id}": {message}')
             if response.status_code == 429:
-                return _text_result(
-                    f'Cannot queue another prompt for child "{child_id}": {message}'
-                )
-            return _text_result(f"Failed to prompt child: {message} (HTTP {response.status_code})")
+                return text_result(f'Cannot queue another prompt for child "{child_id}": {message}')
+            return text_result(f"Failed to prompt child: {message} (HTTP {response.status_code})")
         result = response.json()
-        return _text_result(
+        return text_result(
             "\n".join(
                 [
                     f'Follow-up durably queued for child "{child_id}".',
@@ -328,16 +313,16 @@ class OpenInspectTools:
                 json_body={"cancelNested": bool(cancel_nested)},
             )
         except httpx.HTTPError as error:
-            return _text_result(f"Failed to cancel child: {error}")
+            return text_result(f"Failed to cancel child: {error}")
         if response.status_code >= 400:
             if response.status_code == 404:
-                return _text_result(
+                return text_result(
                     f'Child "{child_id}" not found. Use get-child-status to list available children.'
                 )
-            message = _error_text(response)
+            message = error_text(response)
             if response.status_code == 409:
-                return _text_result(f"Cannot cancel: {message}")
-            return _text_result(f"Failed to cancel child: {message} (HTTP {response.status_code})")
+                return text_result(f"Cannot cancel: {message}")
+            return text_result(f"Failed to cancel child: {message} (HTTP {response.status_code})")
         result = response.json()
         nested = result.get("cancelledDescendantIds")
         nested_count = len(nested) if isinstance(nested, list) else 0
@@ -345,22 +330,22 @@ class OpenInspectTools:
             f" Also cancelled {nested_count} nested child session(s)." if nested_count else ""
         )
         status = str(result.get("status") or "cancelled").upper()
-        return _text_result(
+        return text_result(
             f'Child "{child_id}" cancelled successfully.{nested_note} Status: {status}'
         )
 
     async def get_child_status(self, args: Mapping[str, Any]) -> dict[str, Any]:
         try:
             if args.get("childId"):
-                return _text_result(await self._child_detail(str(args["childId"]), args))
-            return _text_result(await self._list_children())
+                return text_result(await self._child_detail(str(args["childId"]), args))
+            return text_result(await self._list_children())
         except httpx.HTTPError as error:
-            return _text_result(f"Failed to get child status: {error}")
+            return text_result(f"Failed to get child status: {error}")
 
     async def _list_children(self) -> str:
         response = await self.client.request("GET", "/children")
         if response.status_code >= 400:
-            return f"Failed to list children: {_error_text(response)} (HTTP {response.status_code})"
+            return f"Failed to list children: {error_text(response)} (HTTP {response.status_code})"
         children = response.json().get("children") or []
         if not children:
             return "No child sessions found."
@@ -408,7 +393,7 @@ class OpenInspectTools:
                 "to list all child sessions."
             )
         if response.status_code >= 400:
-            return f"Failed to get child: {_error_text(response)} (HTTP {response.status_code})"
+            return f"Failed to get child: {error_text(response)} (HTTP {response.status_code})"
         detail = response.json()
         return self._format_child_detail(detail, child_id, args)
 
@@ -510,7 +495,7 @@ class OpenInspectTools:
                 (r for r in repositories if f"{r.owner}/{r.name}".lower() == lowered), None
             )
             if target is None and repositories:
-                return _text_result(
+                return text_result(
                     _pull_request_failure(
                         f"Failed to create pull request: {requested} is not part of this session. "
                         f"Valid values: {valid_values}."
@@ -519,7 +504,7 @@ class OpenInspectTools:
             if target is None:
                 separator = requested.rfind("/")
                 if separator <= 0 or separator == len(requested) - 1:
-                    return _text_result(
+                    return text_result(
                         _pull_request_failure(
                             'Failed to create pull request: repo must be "owner/name".'
                         )
@@ -528,7 +513,7 @@ class OpenInspectTools:
             else:
                 repo_owner, repo_name, repo_path = target.owner, target.name, target.path
         elif len(repositories) > 1:
-            return _text_result(
+            return text_result(
                 _pull_request_failure(
                     "Failed to create pull request: this session spans multiple repositories "
                     f"— pass repo with one of: {valid_values}."
@@ -560,9 +545,9 @@ class OpenInspectTools:
                 "POST", "/pr", json_body=payload, timeout_seconds=PULL_REQUEST_TIMEOUT_SECONDS
             )
         except httpx.HTTPError as error:
-            return _text_result(_pull_request_failure(f"Failed to create pull request: {error}"))
+            return text_result(_pull_request_failure(f"Failed to create pull request: {error}"))
         if response.status_code >= 400:
-            message = _error_text(response)
+            message = error_text(response)
             user_message = f"Failed to create pull request: {message}"
             if response.status_code == 401:
                 user_message = (
@@ -576,11 +561,11 @@ class OpenInspectTools:
                     f"Conflict: {message} To open an additional pull request, create a new branch "
                     "('git checkout -b'), commit, and call this tool again."
                 )
-            return _text_result(_pull_request_failure(user_message))
+            return text_result(_pull_request_failure(user_message))
         result = response.json()
         if result.get("status") == "manual" and result.get("createPrUrl"):
-            return _text_result(_manual_pull_request(str(result["createPrUrl"])))
-        return _text_result(_pull_request_success(result))
+            return text_result(_manual_pull_request(str(result["createPrUrl"])))
+        return text_result(_pull_request_success(result))
 
     # --- slack ------------------------------------------------------------
 
@@ -597,12 +582,12 @@ class OpenInspectTools:
                 },
             )
         except httpx.HTTPError as error:
-            return _text_result(_slack_failure("bridge_error", str(error)))
+            return text_result(_slack_failure("bridge_error", str(error)))
         if response.status_code < 400:
             try:
-                return _text_result(json.dumps(response.json()))
+                return text_result(json.dumps(response.json()))
             except ValueError as error:
-                return _text_result(
+                return text_result(
                     _slack_failure(
                         "slack_api_error",
                         f"Control plane returned a non-JSON 2xx response: {error}",
@@ -619,7 +604,7 @@ class OpenInspectTools:
             message = response.text or None
         fallback = _SLACK_STATUS_FALLBACK.get(response.status_code, "slack_api_error")
         final_reason = reason if reason in _SLACK_REASON_GUIDANCE else fallback
-        return _text_result(_slack_failure(final_reason, message, retry_after))
+        return text_result(_slack_failure(final_reason, message, retry_after))
 
     # --- media --------------------------------------------------------------
 
@@ -627,15 +612,15 @@ class OpenInspectTools:
         raw_path = str(args.get("filePath") or "")
         path = Path(raw_path).expanduser()
         if not path.is_file():
-            return _text_result(f"upload-media requires a path to a file (got {raw_path!r}).")
+            return text_result(f"upload-media requires a path to a file (got {raw_path!r}).")
         mime = _MEDIA_MIME_TYPES.get(path.suffix.lower()) or mimetypes.guess_type(path.name)[0]
         if mime not in _MEDIA_MIME_TYPES.values():
-            return _text_result(
+            return text_result(
                 "upload-media only supports .png, .jpg, .jpeg, .webp, and .mp4 files."
             )
         artifact_type = str(args.get("artifactType") or "screenshot")
         if mime == "video/mp4" and artifact_type != "video":
-            return _text_result("MP4 files must be uploaded with artifactType 'video'.")
+            return text_result("MP4 files must be uploaded with artifactType 'video'.")
         data: dict[str, Any] = {"artifactType": artifact_type}
         for key in ("caption", "sourceUrl", "endUrl"):
             if args.get(key):
@@ -649,9 +634,9 @@ class OpenInspectTools:
         if artifact_type == "video":
             for key in ("caption", "durationMs", "recordingStartedAt", "recordingEndedAt"):
                 if not args.get(key):
-                    return _text_result(f"Video uploads require {key}.")
+                    return text_result(f"Video uploads require {key}.")
             if args.get("dimensions") is None:
-                return _text_result("Video uploads require dimensions.")
+                return text_result("Video uploads require dimensions.")
             for key in ("durationMs", "recordingStartedAt", "recordingEndedAt"):
                 data[key] = str(args[key])
             data["dimensions"] = _dimensions_field(args["dimensions"])
@@ -659,7 +644,7 @@ class OpenInspectTools:
             # The endpoint rejects audio tracks; refuse here so the agent gets a
             # clear message instead of a 400 after uploading the whole file.
             if args.get("hasAudio") is True:
-                return _text_result("Video uploads do not support audio (hasAudio must be false).")
+                return text_result("Video uploads do not support audio (hasAudio must be false).")
             data["hasAudio"] = "false"
         try:
             response = await self.client.request(
@@ -670,10 +655,10 @@ class OpenInspectTools:
                 timeout_seconds=MEDIA_UPLOAD_TIMEOUT_SECONDS,
             )
         except (httpx.HTTPError, OSError) as error:
-            return _text_result(f"Failed to upload media: {error}")
+            return text_result(f"Failed to upload media: {error}")
         if response.status_code >= 400:
-            return _text_result(f"Failed to upload media: {_error_text(response)}")
-        return _text_result(json.dumps(response.json(), indent=2))
+            return text_result(f"Failed to upload media: {error_text(response)}")
+        return text_result(json.dumps(response.json(), indent=2))
 
 
 def build_tools(client: ControlPlaneToolClient) -> list[Any]:
@@ -682,9 +667,7 @@ def build_tools(client: ControlPlaneToolClient) -> list[Any]:
 
     handlers = OpenInspectTools(client)
     config = client.config
-    from .memory_tools import build_memory_tools
-
-    tools: list[Any] = build_memory_tools(client)
+    tools: list[Any] = []
 
     tools.append(
         tool(
@@ -949,6 +932,7 @@ def build_tools(client: ControlPlaneToolClient) -> list[Any]:
             },
         )(handlers.upload_media)
     )
+    tools.extend(MemoryTools(client).build())
     return tools
 
 

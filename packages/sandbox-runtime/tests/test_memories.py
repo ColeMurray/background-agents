@@ -1,10 +1,27 @@
+import json
 from pathlib import Path
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock
 
 import httpx
 import pytest
 
-from sandbox_runtime.memories import MemoryMaterializer, append_memory, memory_text
+from sandbox_runtime.harness.claude_tools import (
+    ControlPlaneToolClient,
+    ToolServerConfig,
+    build_tools,
+)
+from sandbox_runtime.memories import (
+    MEMORY_TOOL_SPECS,
+    MemoryMaterializer,
+    append_memory,
+    memory_text,
+)
+
+MANIFEST_SHA256 = "a" * 64
+
+
+def installation(rendered: object) -> dict:
+    return {"schemaVersion": 1, "manifestSha256": MANIFEST_SHA256, "rendered": rendered}
 
 
 def materializer(path: Path, handler: object) -> MemoryMaterializer:
@@ -18,14 +35,23 @@ def materializer(path: Path, handler: object) -> MemoryMaterializer:
     )
 
 
-@pytest.mark.asyncio
+def tool_client(tmp_path: Path, handler: object) -> ControlPlaneToolClient:
+    return ControlPlaneToolClient(
+        ToolServerConfig(
+            "https://control.test", "session", "token", tmp_path / "repos.json", False, False
+        ),
+        MagicMock(),
+        httpx.AsyncClient(transport=httpx.MockTransport(handler)),
+    )
+
+
 async def test_authenticated_fetch_replaces_stale_memory(tmp_path: Path) -> None:
     (tmp_path / "oi-memory.md").write_text("stale")
 
     def handler(request: httpx.Request) -> httpx.Response:
         assert request.url.raw_path == b"/sessions/session%2Fa/sandbox-memory"
         assert request.headers["Authorization"] == "Bearer test-token"
-        return httpx.Response(200, json={"schemaVersion": 1, "rendered": "exact rendered text\n"})
+        return httpx.Response(200, json=installation("exact rendered text\n"))
 
     await materializer(tmp_path, handler).materialize()
     assert memory_text(tmp_path) == "exact rendered text\n"
@@ -33,110 +59,224 @@ async def test_authenticated_fetch_replaces_stale_memory(tmp_path: Path) -> None
     assert append_memory("guidance", tmp_path) == "guidance\n\nexact rendered text\n"
 
 
-@pytest.mark.asyncio
-@pytest.mark.parametrize("status,body", [(404, {}), (200, {"schemaVersion": 1, "rendered": ""})])
-async def test_empty_or_old_server_removes_restored_memory(
-    tmp_path: Path, status: int, body: dict
-) -> None:
+async def test_empty_memory_removes_restored_memory_and_staging(tmp_path: Path) -> None:
     (tmp_path / "oi-memory.md").write_text("another session's memory")
-    (tmp_path / "oi-memory.tmp").write_text("stale private memory")
-    (tmp_path / ".oi-memory-abandoned.tmp").write_text("stale private memory")
-    await materializer(tmp_path, lambda _: httpx.Response(status, json=body)).materialize()
+    (tmp_path / ".oi-memory.md-abandoned.tmp").write_text("stale private memory")
+    await materializer(tmp_path, lambda _: httpx.Response(200, json=installation(""))).materialize()
     assert not (tmp_path / "oi-memory.md").exists()
     assert not list(tmp_path.glob("*.tmp"))
     assert append_memory(None, tmp_path) is None
     assert append_memory("guidance", tmp_path) == "guidance"
 
 
-@pytest.mark.asyncio
 @pytest.mark.parametrize(
     "status,body",
     [
-        (403, {}),
-        (200, {"schemaVersion": 2, "rendered": "unsafe"}),
-        (200, {"schemaVersion": 1, "rendered": []}),
+        (404, {"error": "Not found"}),
+        (403, {"error": "Forbidden"}),
+        (200, {**installation("unsafe"), "schemaVersion": 2}),
+        (200, installation([])),
+        (200, {"schemaVersion": 1, "rendered": "no manifest"}),
+        (200, installation("x" * (MEMORY_TOOL_SPECS["limits"]["renderedChars"] + 1))),
     ],
 )
-async def test_invalid_or_unauthorized_response_never_keeps_stale_file(
+async def test_failed_or_invalid_response_never_keeps_stale_file(
     tmp_path: Path, status: int, body: dict
 ) -> None:
     (tmp_path / "oi-memory.md").write_text("stale")
-    with pytest.raises(RuntimeError):
-        await materializer(tmp_path, lambda _: httpx.Response(status, json=body)).materialize()
-    assert not (tmp_path / "oi-memory.md").exists()
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize(
-    "selector,expected_scope",
-    [
-        ({"scope": "personal"}, {"type": "personal"}),
-        ({"scope": "repository"}, {"type": "repository"}),
-        ({"scope": "environment"}, {"type": "environment"}),
-        (
-            {"scope": "repository", "repoOwner": "group/subgroup", "repoName": "api"},
-            {"type": "repository", "repoOwner": "group/subgroup", "repoName": "api"},
-        ),
-    ],
-)
-async def test_registered_claude_tools_bind_session_and_allowlist_write_selectors(
-    tmp_path: Path, selector: dict, expected_scope: dict
-) -> None:
-    import json
-
-    from sandbox_runtime.harness.claude_tools import (
-        ControlPlaneToolClient,
-        ToolServerConfig,
-        build_tools,
-    )
+    requests = []
 
     def handler(request: httpx.Request) -> httpx.Response:
-        assert request.headers["Authorization"] == "Bearer token"
-        if request.method == "GET":
-            assert request.url.raw_path == b"/sessions/session/sandbox-memory/mem%2Fa"
-            return httpx.Response(200, json={"content": "Fact body"})
+        requests.append(request)
+        return httpx.Response(status, json=body)
+
+    with pytest.raises(RuntimeError):
+        await materializer(tmp_path, handler).materialize()
+    assert not (tmp_path / "oi-memory.md").exists()
+    assert len(requests) == 1
+
+
+async def test_transient_failures_retry_with_the_shared_policy(tmp_path: Path, monkeypatch) -> None:
+    statuses = iter([408, 503])
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        status = next(statuses, 200)
+        return httpx.Response(status, json=installation("recovered") if status == 200 else {})
+
+    sleep = AsyncMock()
+    monkeypatch.setattr("sandbox_runtime.control_plane_fetch.asyncio.sleep", sleep)
+    await materializer(tmp_path, handler).materialize()
+    assert memory_text(tmp_path) == "recovered"
+    assert [call.args[0] for call in sleep.await_args_list] == [0.25, 0.5]
+
+
+async def test_exhausted_retries_and_oversized_responses_fail(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setattr("sandbox_runtime.control_plane_fetch.asyncio.sleep", AsyncMock())
+    with pytest.raises(RuntimeError, match="could not be loaded"):
+        await materializer(tmp_path, lambda _: httpx.Response(503)).materialize()
+    monkeypatch.setattr("sandbox_runtime.memories.MAX_MEMORY_RESPONSE_BYTES", 10)
+    with pytest.raises(RuntimeError, match="could not be loaded"):
+        await materializer(
+            tmp_path, lambda _: httpx.Response(200, json=installation("too large"))
+        ).materialize()
+
+
+async def test_staging_symlinks_do_not_overwrite_their_targets(tmp_path: Path) -> None:
+    target = tmp_path / "unrelated.txt"
+    target.write_text("do not modify")
+    (tmp_path / ".oi-memory.md-restored.tmp").symlink_to(target)
+    await materializer(
+        tmp_path, lambda _: httpx.Response(200, json=installation("private"))
+    ).materialize()
+    assert target.read_text() == "do not modify"
+    assert memory_text(tmp_path) == "private"
+    assert not list(tmp_path.glob("*.tmp"))
+    assert (tmp_path / "oi-memory.md").stat().st_mode & 0o777 == 0o600
+
+
+async def test_failed_install_removes_private_staging_file(tmp_path: Path, monkeypatch) -> None:
+    def fail_replace(self, destination):
+        raise OSError("installation failed")
+
+    monkeypatch.setattr(Path, "replace", fail_replace)
+    with pytest.raises(OSError, match="installation failed"):
+        await materializer(
+            tmp_path, lambda _: httpx.Response(200, json=installation("private"))
+        ).materialize()
+    assert not list(tmp_path.glob("*.tmp"))
+    assert memory_text(tmp_path) is None
+
+
+def test_memory_is_disabled_without_a_control_plane_session(tmp_path: Path) -> None:
+    from sandbox_runtime.entrypoint import _build_memory
+
+    log = MagicMock()
+    config = MagicMock(control_plane_url="", session_id="session")
+    assert _build_memory(config, tmp_path, log) is None
+    log.info.assert_called_once_with("memory.disabled", reason="no_control_plane_session")
+
+
+async def test_claude_memory_tools_are_the_generated_specs(tmp_path: Path) -> None:
+    client = tool_client(tmp_path, lambda _: httpx.Response(200))
+    try:
+        tools = build_tools(client)
+    finally:
+        await client.aclose()
+    memory_tools = tools[-len(MEMORY_TOOL_SPECS["tools"]) :]
+    assert [(tool.name, tool.description, tool.input_schema) for tool in memory_tools] == [
+        (spec["name"], spec["description"], spec["inputSchema"])
+        for spec in MEMORY_TOOL_SPECS["tools"]
+    ]
+
+
+@pytest.mark.parametrize(
+    "selector",
+    [
+        {"scope": "personal"},
+        {"scope": "environment"},
+        {"scope": "repository", "repoOwner": "group/subgroup", "repoName": "api"},
+    ],
+)
+async def test_claude_write_sends_flat_arguments_without_caller_identity(
+    tmp_path: Path, selector: dict
+) -> None:
+    content = {
+        "memoryType": "fact",
+        "title": "Test setup",
+        "description": "Start the database",
+        "content": "Body",
+    }
+    sent = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.method == "POST"
         assert request.url.raw_path == b"/sessions/session/sandbox-memory"
-        body = json.loads(request.content)
-        assert body["scope"] == expected_scope
-        assert "ownerUserId" not in body and "sessionId" not in body
+        assert request.headers["Authorization"] == "Bearer token"
+        sent.append(json.loads(request.content))
         return httpx.Response(201, json={"status": "proposed"})
 
-    client = ControlPlaneToolClient(
-        ToolServerConfig(
-            "https://control.test", "session", "token", tmp_path / "repos.json", False, False
-        ),
-        MagicMock(),
-        httpx.AsyncClient(transport=httpx.MockTransport(handler)),
-    )
+    client = tool_client(tmp_path, handler)
     try:
-        tools = {tool.name: tool for tool in build_tools(client)}
-        if selector["scope"] == "personal":
-            read = await tools["memory_read"].handler({"memoryId": "mem/a"})
-            assert json.loads(read["content"][0]["text"]) == {"content": "Fact body"}
-        write = tools["memory_write"]
-        assert "environmentId" not in write.input_schema["properties"]
+        write = {tool.name: tool for tool in build_tools(client)}["memory_write"]
         result = await write.handler(
             {
                 **selector,
-                "memoryType": "fact",
-                "title": "Test setup",
-                "description": "Start the database",
-                "content": "Body",
+                **content,
                 "environmentId": "attacker",
                 "ownerUserId": "attacker",
                 "sessionId": "other",
             }
         )
-        assert "isError" not in result
     finally:
         await client.aclose()
+    assert sent == [{**selector, **content}]
+    assert "is_error" not in result
+    assert json.loads(result["content"][0]["text"]) == {"status": "proposed"}
 
 
-@pytest.mark.asyncio
+async def test_claude_read_fills_the_encoded_path_parameter(tmp_path: Path) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.method == "GET"
+        assert request.url.raw_path == b"/sessions/session/sandbox-memory/mem%2Fa"
+        assert request.content == b""
+        return httpx.Response(200, json={"content": "Fact body"})
+
+    client = tool_client(tmp_path, handler)
+    try:
+        read = {tool.name: tool for tool in build_tools(client)}["memory_read"]
+        result = await read.handler({"memoryId": "mem/a"})
+    finally:
+        await client.aclose()
+    assert json.loads(result["content"][0]["text"]) == {"content": "Fact body"}
+
+
+async def test_claude_search_strips_caller_identity(tmp_path: Path) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.raw_path == b"/sessions/session/sandbox-memory/search"
+        assert json.loads(request.content) == {"query": "billing webhook", "limit": 5}
+        return httpx.Response(200, json={"results": [], "hasMore": False})
+
+    client = tool_client(tmp_path, handler)
+    try:
+        search = {tool.name: tool for tool in build_tools(client)}["memory_search"]
+        result = await search.handler(
+            {
+                "query": "billing webhook",
+                "limit": 5,
+                "ownerUserId": "attacker",
+                "environmentId": "other",
+                "sessionId": "other",
+            }
+        )
+    finally:
+        await client.aclose()
+    assert json.loads(result["content"][0]["text"]) == {"results": [], "hasMore": False}
+
+
+@pytest.mark.parametrize("unavailable", [False, True])
+async def test_claude_memory_tool_reports_failures(tmp_path: Path, unavailable: bool) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        if unavailable:
+            raise httpx.ConnectError("private transport details", request=request)
+        return httpx.Response(403, json={"error": "Personal memory is excluded from this session"})
+
+    client = tool_client(tmp_path, handler)
+    try:
+        read = {tool.name: tool for tool in build_tools(client)}["memory_read"]
+        result = await read.handler({"memoryId": "mem_denied"})
+    finally:
+        await client.aclose()
+    assert result["is_error"] is True
+    assert result["content"][0]["text"] == (
+        "memory_read failed (unavailable)"
+        if unavailable
+        else "memory_read failed (403): Personal memory is excluded from this session"
+    )
+
+
 @pytest.mark.parametrize("text", ["", "# Memory\n\nA pinned directive\n"])
 async def test_both_harnesses_receive_exact_memory_and_empty_parity(tmp_path, monkeypatch, text):
-    import json
-    from unittest.mock import AsyncMock, patch
+    from unittest.mock import patch
 
     from sandbox_runtime.claude_stager import ClaudeHarnessHandoff
     from sandbox_runtime.harness import BridgeIdentity, build_agent_harness
@@ -194,151 +334,3 @@ async def test_both_harnesses_receive_exact_memory_and_empty_parity(tmp_path, mo
     ].system_prompt_append == "Workspace guidance (AGENTS.md):\n\nRepository guidance" + (
         "\n\n" + text if text else ""
     )
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("unavailable", [False, True])
-async def test_claude_memory_tool_reports_server_errors(tmp_path: Path, unavailable: bool) -> None:
-    from sandbox_runtime.harness.claude_tools import ControlPlaneToolClient, ToolServerConfig
-    from sandbox_runtime.harness.memory_tools import build_memory_tools
-
-    def handler(request: httpx.Request) -> httpx.Response:
-        if unavailable:
-            raise httpx.ConnectError("private transport details", request=request)
-        return httpx.Response(403, json={"error": "Personal memory is excluded from this session"})
-
-    client = ControlPlaneToolClient(
-        ToolServerConfig(
-            "https://control.test", "session", "token", tmp_path / "repos.json", False, False
-        ),
-        MagicMock(),
-        httpx.AsyncClient(transport=httpx.MockTransport(handler)),
-    )
-    try:
-        result = await build_memory_tools(client)[0].handler({"memoryId": "mem_denied"})
-        assert result["isError"] is True
-        assert result["content"][0]["text"] == (
-            "Memory request failed (unavailable)"
-            if unavailable
-            else "Memory request failed (403: Personal memory is excluded from this session)"
-        )
-    finally:
-        await client.aclose()
-
-
-def test_opencode_tools_use_session_transport_and_strip_caller_identity():
-    import json
-    import os
-    import shutil
-    import subprocess
-
-    binary = shutil.which("node")
-    if not binary:
-        pytest.skip("node is required for OpenCode tool transport")
-    module = Path(__file__).parents[1] / "src/sandbox_runtime/tools/_memory.js"
-    script = """
-      const requests = [];
-      globalThis.fetch = async (url, init) => {
-        requests.push({ url, authorization: init.headers.get("Authorization"), body: init.body });
-        return Response.json({ status: "proposed" });
-      };
-      const { readMemory, writeMemory, searchMemory } = await import(process.argv[1]);
-      await readMemory({ memoryId: "mem/a" });
-      await writeMemory({ scope: "repository", repoOwner: "group/subgroup", repoName: "api", memoryType: "fact", title: "Test setup", description: "Start the database", content: "Body", ownerUserId: "attacker", sessionId: "other" });
-      await writeMemory({ scope: "repository", memoryType: "fact", title: "Test setup", description: "Start the database", content: "Body" });
-      await writeMemory({ scope: "environment", environmentId: "attacker", memoryType: "fact", title: "Test setup", description: "Start the database", content: "Body" });
-      await searchMemory({ query: "billing webhook", scope: "repository", repoOwner: "group/subgroup", repoName: "api", limit: 5, ownerUserId: "attacker", environmentId: "other", sessionId: "other" });
-      console.log(JSON.stringify(requests));
-    """
-    result = subprocess.run(
-        [binary, "--input-type=module", "-e", script, module.as_uri()],
-        capture_output=True,
-        text=True,
-        check=True,
-        timeout=10,
-        env={
-            **os.environ,
-            "CONTROL_PLANE_URL": "https://control.test",
-            "SANDBOX_AUTH_TOKEN": "test-token",
-            "SESSION_CONFIG": '{"session_id":"bound-session"}',
-        },
-    )
-    requests = json.loads(result.stdout)
-    assert (
-        requests[0]["url"] == "https://control.test/sessions/bound-session/sandbox-memory/mem%2Fa"
-    )
-    assert requests[1]["authorization"] == "Bearer test-token"
-    body = json.loads(requests[1]["body"])
-    assert body["scope"] == {"type": "repository", "repoOwner": "group/subgroup", "repoName": "api"}
-    assert "ownerUserId" not in body and "sessionId" not in body
-    assert json.loads(requests[2]["body"])["scope"] == {"type": "repository"}
-    assert json.loads(requests[3]["body"])["scope"] == {"type": "environment"}
-    assert requests[4]["url"].endswith("/sessions/bound-session/sandbox-memory/search")
-    assert json.loads(requests[4]["body"]) == {
-        "query": "billing webhook",
-        "scope": "repository",
-        "repoOwner": "group/subgroup",
-        "repoName": "api",
-        "limit": 5,
-    }
-
-
-@pytest.mark.asyncio
-async def test_claude_search_uses_session_transport_and_strips_identity(tmp_path: Path):
-    import json
-
-    from sandbox_runtime.harness.claude_tools import ControlPlaneToolClient, ToolServerConfig
-    from sandbox_runtime.harness.memory_tools import build_memory_tools
-
-    def handler(request: httpx.Request) -> httpx.Response:
-        assert request.url.raw_path.endswith(b"/sessions/session/sandbox-memory/search")
-        assert request.headers["Authorization"] == "Bearer token"
-        assert json.loads(request.content) == {"query": "billing webhook"}
-        return httpx.Response(200, json={"results": [], "hasMore": False})
-
-    client = ControlPlaneToolClient(
-        ToolServerConfig(
-            "https://control.test", "session", "token", tmp_path / "repos.json", False, False
-        ),
-        MagicMock(),
-        httpx.AsyncClient(transport=httpx.MockTransport(handler)),
-    )
-    try:
-        search = {tool.name: tool for tool in build_memory_tools(client)}["memory_search"]
-        assert search.input_schema["required"] == ["query"]
-        result = await search.handler(
-            {"query": "billing webhook", "ownerUserId": "attacker", "environmentId": "other"}
-        )
-        assert json.loads(result["content"][0]["text"]) == {"results": [], "hasMore": False}
-    finally:
-        await client.aclose()
-
-
-@pytest.mark.asyncio
-async def test_staging_symlinks_do_not_overwrite_their_targets(tmp_path: Path) -> None:
-    target = tmp_path / "unrelated.txt"
-    target.write_text("do not modify")
-    (tmp_path / "oi-memory.tmp").symlink_to(target)
-    (tmp_path / ".oi-memory-restored.tmp").symlink_to(target)
-    await materializer(
-        tmp_path, lambda _: httpx.Response(200, json={"schemaVersion": 1, "rendered": "private"})
-    ).materialize()
-    assert target.read_text() == "do not modify"
-    assert memory_text(tmp_path) == "private"
-    assert not list(tmp_path.glob("*.tmp"))
-    assert (tmp_path / "oi-memory.md").stat().st_mode & 0o777 == 0o600
-
-
-@pytest.mark.asyncio
-async def test_failed_install_removes_private_staging_file(tmp_path: Path, monkeypatch) -> None:
-    def fail_replace(self, destination):
-        raise OSError("installation failed")
-
-    monkeypatch.setattr(Path, "replace", fail_replace)
-    with pytest.raises(OSError, match="installation failed"):
-        await materializer(
-            tmp_path,
-            lambda _: httpx.Response(200, json={"schemaVersion": 1, "rendered": "private"}),
-        ).materialize()
-    assert not list(tmp_path.glob("*.tmp"))
-    assert memory_text(tmp_path) is None

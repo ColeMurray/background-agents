@@ -72,8 +72,8 @@ def claude_config_dir_for(
 ) -> Path | None:
     """Where Claude keeps its state, decided once before anything is written there.
 
-    Managed skills are materialized before the stager runs, so both take the
-    directory from here rather than deciding separately.
+    Managed skills and memory are materialized before the stager runs, so all
+    take the directory from here rather than deciding separately.
     """
     if config.harness is not HarnessId.CLAUDE:
         return None
@@ -82,16 +82,37 @@ def claude_config_dir_for(
     )
 
 
-def managed_skills_destination(harness: HarnessId, claude_config_dir: Path | None) -> Path:
-    """Where managed skills land: each harness discovers skills from its own tree."""
+def harness_config_dir(harness: HarnessId, claude_config_dir: Path | None) -> Path:
+    """The harness's own config tree, where boot installs skills and memory."""
     match harness:
         case HarnessId.OPENCODE:
-            return resolve_opencode_global_config_dir() / "skills"
+            return resolve_opencode_global_config_dir()
         case HarnessId.CLAUDE:
             if claude_config_dir is None:
                 raise ValueError("Claude sessions need a config dir decided")
-            return claude_config_dir / "skills"
+            return claude_config_dir
     raise ValueError(f"Unsupported harness: {harness}")
+
+
+def managed_skills_destination(harness: HarnessId, claude_config_dir: Path | None) -> Path:
+    """Where managed skills land: each harness discovers skills from its own tree."""
+    return harness_config_dir(harness, claude_config_dir) / "skills"
+
+
+def _build_memory(
+    config: RuntimeConfig, claude_config_dir: Path | None, log: Any
+) -> MemoryMaterializer | None:
+    """Session memory needs the control plane; without one the harness starts with none."""
+    if not (config.control_plane_url and config.session_id):
+        log.info("memory.disabled", reason="no_control_plane_session")
+        return None
+    return MemoryMaterializer(
+        config.control_plane_url,
+        config.session_id,
+        config.sandbox_token,
+        harness_config_dir(config.harness, claude_config_dir),
+        log,
+    )
 
 
 def build_supervisor(shutdown_event: asyncio.Event) -> SandboxSupervisor:
@@ -147,15 +168,7 @@ def build_supervisor(shutdown_event: asyncio.Event) -> SandboxSupervisor:
         managed_skills,
         shutdown_event,
         log,
-        memory=MemoryMaterializer(
-            config.control_plane_url,
-            config.session_id,
-            config.sandbox_token,
-            managed_skills_destination(config.harness, claude_config_dir).parent,
-            log,
-        )
-        if config.control_plane_url and config.session_id
-        else None,
+        memory=_build_memory(config, claude_config_dir, log),
         boot_events=warnings,
         docker_service=DockerService(log) if config.docker_enabled else None,
     )

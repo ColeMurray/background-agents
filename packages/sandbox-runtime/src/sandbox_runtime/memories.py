@@ -1,25 +1,53 @@
 """Materialize pinned session memory before either agent harness starts."""
 
-import asyncio
 import json
-import os
-import tempfile
 from pathlib import Path
-from typing import Any
+from typing import Any, Final, TypedDict, cast
 from urllib.parse import quote
 
 import httpx
 
-MEMORY_FILENAME = "oi-memory.md"
-MAX_RESPONSE_BYTES = 2 * 1024 * 1024
-MAX_RENDERED_CHARS = 256_000
-REQUEST_TIMEOUT_SECONDS = 30
-MAX_ATTEMPTS = 3
+from .control_plane_fetch import ResponseTooLargeError, fetch_bounded
+from .durable_files import atomic_write_private, remove_abandoned_staging
+
+
+class MemoryToolSpec(TypedDict):
+    name: str
+    description: str
+    method: str
+    # Below ``/sessions/:id``; ``{name}`` segments are filled from (and consume) input fields.
+    path: str
+    inputSchema: dict[str, Any]
+
+
+class MemoryLimits(TypedDict):
+    renderedChars: int
+
+
+class MemoryToolSpecs(TypedDict):
+    tools: list[MemoryToolSpec]
+    limits: MemoryLimits
+
+
+# Generated from packages/shared/src/memory-tools.ts; the OpenCode tools read the JS twin.
+_SPECS_PATH = Path(__file__).with_name("memory_tool_specs.json")
+MEMORY_TOOL_SPECS = cast("MemoryToolSpecs", json.loads(_SPECS_PATH.read_text()))
+
+# Mirrors SANDBOX_MEMORY_SCHEMA_VERSION in packages/shared/src/types/memories.ts.
+SANDBOX_MEMORY_SCHEMA_VERSION: Final = 1
+MEMORY_FILENAME: Final = "oi-memory.md"
+MAX_MEMORY_RESPONSE_BYTES: Final = 2 * 1024 * 1024
+MEMORY_FETCH_TIMEOUT_SECONDS: Final = 30.0
+
+
+def memory_path(config_dir: Path) -> Path:
+    """Where boot materializes rendered memory inside a harness's config directory."""
+    return config_dir / MEMORY_FILENAME
 
 
 def memory_text(config_dir: Path) -> str | None:
     """Read materialized context, or return None when boot installed no memory file."""
-    path = config_dir / MEMORY_FILENAME
+    path = memory_path(config_dir)
     return path.read_text(encoding="utf-8") if path.is_file() else None
 
 
@@ -29,6 +57,27 @@ def append_memory(guidance: str | None, config_dir: Path) -> str | None:
     if not text:
         return guidance
     return f"{guidance}\n\n{text}" if guidance else text
+
+
+def _validate_response(body: bytes) -> tuple[str, str]:
+    """Return ``(manifestSha256, rendered)`` from an untrusted versioned response."""
+    try:
+        payload = json.loads(body)
+    except (ValueError, UnicodeError) as error:
+        raise RuntimeError("Invalid session memory response") from error
+    if (
+        not isinstance(payload, dict)
+        or payload.get("schemaVersion") != SANDBOX_MEMORY_SCHEMA_VERSION
+    ):
+        raise RuntimeError("Unsupported session memory response")
+    manifest_sha256, rendered = payload.get("manifestSha256"), payload.get("rendered")
+    if (
+        not isinstance(manifest_sha256, str)
+        or not isinstance(rendered, str)
+        or len(rendered) > MEMORY_TOOL_SPECS["limits"]["renderedChars"]
+    ):
+        raise RuntimeError("Invalid rendered session memory")
+    return manifest_sha256, rendered
 
 
 class MemoryMaterializer:
@@ -51,80 +100,35 @@ class MemoryMaterializer:
         self.url = (
             f"{control_plane_url.rstrip('/')}/sessions/{quote(session_id, safe='')}/sandbox-memory"
         )
-        self.token = sandbox_token
-        self.destination = config_dir / MEMORY_FILENAME
+        self.headers = {"Authorization": f"Bearer {sandbox_token}"}
+        self.destination = memory_path(config_dir)
         self.log = log
         self.transport = transport
 
     async def materialize(self) -> None:
         """Replace context atomically with an owner-readable file, or leave no file.
 
-        A legacy 404 means empty context. Transport errors, throttling, and server
-        failures retry within a bounded budget; authorization, validation, and
-        exhausted retries propagate to fail the memory boot phase.
+        Transient failures retry under the shared control-plane fetch policy; any
+        other failure propagates to fail the memory boot phase.
         """
         # A restored image may contain another session's context. Never retain it
-        # on an empty response, old server, failed fetch, or malformed payload.
+        # on an empty response, failed fetch, or malformed payload.
         self.destination.unlink(missing_ok=True)
-        # Remove legacy and abandoned staging files before any request, including
-        # empty/404 responses. Unlink symlinks themselves, never their targets.
-        self.destination.with_suffix(".tmp").unlink(missing_ok=True)
-        for abandoned in self.destination.parent.glob(".oi-memory-*.tmp"):
-            abandoned.unlink(missing_ok=True)
-        for attempt in range(MAX_ATTEMPTS):
-            try:
-                rendered = await self._fetch()
-                if rendered:
-                    self.destination.parent.mkdir(parents=True, exist_ok=True)
-                    # mkstemp creates a unique O_EXCL file with mode 0600 before
-                    # writing any content; an existing symlink cannot be followed.
-                    descriptor, name = tempfile.mkstemp(
-                        prefix=".oi-memory-", suffix=".tmp", dir=self.destination.parent
-                    )
-                    temporary = Path(name)
-                    try:
-                        with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
-                            stream.write(rendered)
-                            stream.flush()
-                            os.fsync(stream.fileno())
-                        temporary.replace(self.destination)
-                    finally:
-                        temporary.unlink(missing_ok=True)
-                return
-            except (httpx.TransportError, httpx.HTTPStatusError) as error:
-                retryable = (
-                    not isinstance(error, httpx.HTTPStatusError)
-                    or error.response.status_code >= 500
-                    or error.response.status_code == 429
-                )
-                if not retryable or attempt == MAX_ATTEMPTS - 1:
-                    raise RuntimeError("Session memory could not be loaded") from error
-                await asyncio.sleep(attempt + 1)
-
-    async def _fetch(self) -> str:
-        """Stream a bounded versioned response without logging credentials or memory text."""
-        async with (
-            httpx.AsyncClient(transport=self.transport, timeout=REQUEST_TIMEOUT_SECONDS) as client,
-            client.stream(
-                "GET", self.url, headers={"Authorization": f"Bearer {self.token}"}
-            ) as response,
-        ):
-            if response.status_code == 404:
-                self.log.info("memory.unavailable_legacy_control_plane")
-                return ""
-            response.raise_for_status()
-            body = bytearray()
-            async for chunk in response.aiter_bytes():
-                body.extend(chunk)
-                if len(body) > MAX_RESPONSE_BYTES:
-                    raise RuntimeError("Session memory response exceeds the size limit")
+        remove_abandoned_staging(self.destination)
         try:
-            payload = json.loads(body)
-        except (ValueError, UnicodeError) as error:
-            raise RuntimeError("Invalid session memory response") from error
-        if not isinstance(payload, dict) or payload.get("schemaVersion") != 1:
-            raise RuntimeError("Unsupported session memory response")
-        rendered = payload.get("rendered")
-        if not isinstance(rendered, str) or len(rendered) > MAX_RENDERED_CHARS:
-            raise RuntimeError("Invalid rendered session memory")
-        return rendered
+            body = await fetch_bounded(
+                self.url,
+                headers=self.headers,
+                max_bytes=MAX_MEMORY_RESPONSE_BYTES,
+                timeout_seconds=MEMORY_FETCH_TIMEOUT_SECONDS,
+                transport=self.transport,
+            )
+        except (ResponseTooLargeError, httpx.HTTPError, OSError) as error:
+            raise RuntimeError("Session memory could not be loaded") from error
+        manifest_sha256, rendered = _validate_response(body)
+        if rendered:
+            atomic_write_private(self.destination, rendered)
+        # Never log memory text; the manifest digest identifies the pinned selection.
+        self.log.info(
+            "memory.materialized", manifest_sha256=manifest_sha256, rendered_chars=len(rendered)
+        )

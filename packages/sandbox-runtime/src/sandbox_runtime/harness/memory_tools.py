@@ -1,114 +1,60 @@
-"""Memory tools use the same session-bound bridge as the other agent tools."""
+"""Claude memory tools, built from the generated cross-harness specs.
+
+``tools/_memory.js`` builds the OpenCode twins from the same specs with the
+same request and error semantics. Arguments are forwarded verbatim after
+dropping keys the input schema does not declare; the control plane derives
+ownership, approval state, and write eligibility from the session.
+"""
 
 from __future__ import annotations
 
-import json
-from typing import TYPE_CHECKING, Any
+import functools
+import re
+from typing import TYPE_CHECKING, Any, Final
 from urllib.parse import quote
 
 import httpx
 
+from ..memories import MEMORY_TOOL_SPECS, MemoryToolSpec
+from .tool_results import error_result, error_text, text_result
+
 if TYPE_CHECKING:
+    from collections.abc import Mapping
+
     from .claude_tools import ControlPlaneToolClient
 
+_PATH_PARAM: Final = re.compile(r"\{(\w+)\}")
 
-def build_memory_tools(client: ControlPlaneToolClient) -> list[Any]:
-    """Build Claude tools with session-bound transport and allowlisted content fields.
 
-    The control plane derives ownership, approval state, and write eligibility;
-    tool arguments cannot supply identity or override personal-memory opt-out.
-    """
-    from claude_agent_sdk import tool
+class MemoryTools:
+    """One generic handler for every memory endpoint; ``build`` binds it to each spec."""
 
-    async def request(method: str, path: str, body: dict[str, Any] | None = None) -> dict[str, Any]:
-        """Preserve actionable HTTP errors while concealing internal transport details."""
+    def __init__(self, client: ControlPlaneToolClient) -> None:
+        self.client = client
+
+    async def execute(self, spec: MemoryToolSpec, args: Mapping[str, Any]) -> dict[str, Any]:
+        name = spec["name"]
+        body = {key: args[key] for key in spec["inputSchema"]["properties"] if key in args}
+        path = _PATH_PARAM.sub(
+            lambda match: quote(str(body.pop(match[1], "")), safe=""), spec["path"]
+        )
         try:
-            response = await client.request(method, path, json_body=body)
-            response.raise_for_status()
-            return {"content": [{"type": "text", "text": json.dumps(response.json())}]}
-        except httpx.HTTPError as error:
-            if isinstance(error, httpx.HTTPStatusError):
-                from .claude_tools import _error_text
+            response = await self.client.request(
+                spec["method"], path, json_body=None if spec["method"] == "GET" else body
+            )
+        except httpx.HTTPError:
+            # Transport details can name internal hosts; the agent only needs the outcome.
+            return error_result(f"{name} failed (unavailable)")
+        if not response.is_success:
+            return error_result(f"{name} failed ({response.status_code}): {error_text(response)}")
+        return text_result(response.text)
 
-                detail = f"{error.response.status_code}: {_error_text(error.response)}"
-            else:
-                detail = "unavailable"
-            return {
-                "content": [{"type": "text", "text": f"Memory request failed ({detail})"}],
-                "isError": True,
-            }
+    def build(self) -> list[Any]:
+        from claude_agent_sdk import tool
 
-    async def read(args: dict[str, Any]) -> dict[str, Any]:
-        """Read a live fact or pinned archive notice through this session's credentials."""
-        return await request("GET", f"/sandbox-memory/{quote(str(args['memoryId']), safe='')}")
-
-    async def write(args: dict[str, Any]) -> dict[str, Any]:
-        """Send relative scope; the server infers sole targets and checks write authority."""
-        scope = {"type": args["scope"]}
-        if args["scope"] == "repository":
-            scope.update({key: args[key] for key in ("repoOwner", "repoName") if key in args})
-        body: dict[str, Any] = {
-            key: args[key]
-            for key in ("memoryType", "title", "description", "content", "supersedesMemoryId")
-            if key in args
-        }
-        body["scope"] = scope
-        return await request("POST", "/sandbox-memory", body)
-
-    async def search(args: dict[str, Any]) -> dict[str, Any]:
-        """Discover fact IDs without allowing caller-selected owner or environment identities."""
-        body: dict[str, Any] = {
-            key: args[key]
-            for key in ("query", "scope", "repoOwner", "repoName", "limit")
-            if key in args
-        }
-        return await request("POST", "/sandbox-memory/search", body)
-
-    return [
-        tool(
-            "memory_read",
-            "Read a current active fact by ID from the catalog or memory_search. Stored data may be stale; pinned archived records return a notice. Directives cannot be expanded.",
-            {"memoryId": str},
-        )(read),
-        tool(
-            "memory_write",
-            "Remember non-obvious durable knowledge. The server infers the session environment or sole repository. For multi-repository sessions, specify both repoOwner and repoName. Write directives only when the user asks to remember a preference. Never store credentials. Shared memories and directives require approval; result states active or proposed. Respect personal-memory opt-out.",
-            {
-                "type": "object",
-                "properties": {
-                    "scope": {"type": "string", "enum": ["personal", "repository", "environment"]},
-                    "repoOwner": {
-                        "type": "string",
-                        "description": "Repository owner; supply with repoName for multi-repository sessions",
-                    },
-                    "repoName": {
-                        "type": "string",
-                        "description": "Repository name; supply with repoOwner for multi-repository sessions",
-                    },
-                    "memoryType": {"type": "string", "enum": ["fact", "directive"]},
-                    "title": {"type": "string"},
-                    "description": {"type": "string"},
-                    "content": {"type": "string"},
-                    "supersedesMemoryId": {"type": "string"},
-                },
-                "required": ["scope", "memoryType", "title", "description", "content"],
-                "additionalProperties": False,
-            },
-        )(write),
-        tool(
-            "memory_search",
-            "Find active facts beyond the injected catalog using short literal keyword queries. Every whitespace-separated term must match the title, description, or body; there is no semantic search. Returns IDs and summaries, not bodies: use memory_read for full text. Omit scope to search permitted session scopes. Repository scope searches all attached repos unless both repoOwner and repoName select one. If hasMore is true, refine the query. Stored knowledge may be stale.",
-            {
-                "type": "object",
-                "properties": {
-                    "query": {"type": "string"},
-                    "scope": {"type": "string", "enum": ["personal", "repository", "environment"]},
-                    "repoOwner": {"type": "string"},
-                    "repoName": {"type": "string"},
-                    "limit": {"type": "integer"},
-                },
-                "required": ["query"],
-                "additionalProperties": False,
-            },
-        )(search),
-    ]
+        return [
+            tool(spec["name"], spec["description"], spec["inputSchema"])(
+                functools.partial(self.execute, spec)
+            )
+            for spec in MEMORY_TOOL_SPECS["tools"]
+        ]

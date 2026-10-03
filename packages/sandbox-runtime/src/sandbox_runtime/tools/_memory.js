@@ -1,45 +1,90 @@
+/**
+ * Memory tools for OpenCode, built from the generated cross-harness specs.
+ *
+ * Not a tool (no default tool() export). `harness/memory_tools.py` builds the
+ * Claude twins from the same specs with the same request and error semantics.
+ * Arguments are forwarded verbatim after dropping keys the input schema does
+ * not declare; the control plane derives identity and write authority.
+ */
 import { bridgeFetch, extractError } from "./_bridge-client.js";
+import { MEMORY_TOOL_SPECS } from "./_memory-tool-specs.js";
 
-/** Discover facts beyond the catalog; all target identities and access are session-derived. */
-export async function searchMemory(args) {
+function memoryToolSpec(name) {
+  const spec = MEMORY_TOOL_SPECS.tools.find((candidate) => candidate.name === name);
+  if (!spec) throw new Error(`Unknown memory tool: ${name}`);
+  return spec;
+}
+
+/** Convert one JSON Schema property (the subset the specs use) to a zod schema. */
+function toArg(z, key, property, required) {
+  let arg;
+  switch (property.type) {
+    case "string":
+      arg = property.enum ? z.enum(property.enum) : z.string();
+      if (property.minLength !== undefined) arg = arg.min(property.minLength);
+      if (property.maxLength !== undefined) arg = arg.max(property.maxLength);
+      break;
+    case "integer":
+      arg = z.number().int();
+      if (property.minimum !== undefined) arg = arg.min(property.minimum);
+      if (property.maximum !== undefined) arg = arg.max(property.maximum);
+      break;
+    default:
+      throw new Error(`Unsupported memory tool argument type for ${key}: ${property.type}`);
+  }
+  if (property.default !== undefined) arg = arg.default(property.default);
+  // optional() after default() keeps a defaulted field out of the provider-facing `required`.
+  if (!required) arg = arg.optional();
+  if (property.description !== undefined) arg = arg.describe(property.description);
+  return arg;
+}
+
+/** OpenCode `args` for a tool's input schema; `z` is the plugin's `tool.schema`. */
+export function memoryToolArgs(z, inputSchema) {
+  const required = new Set(inputSchema.required ?? []);
+  return Object.fromEntries(
+    Object.entries(inputSchema.properties).map(([key, property]) => [
+      key,
+      toArg(z, key, property, required.has(key)),
+    ])
+  );
+}
+
+/** Call a memory endpoint through the session-scoped bridge, reporting failures as text. */
+export async function executeMemoryTool(name, args) {
+  const spec = memoryToolSpec(name);
   const body = Object.fromEntries(
-    ["query", "scope", "repoOwner", "repoName", "limit"]
+    Object.keys(spec.inputSchema.properties)
       .filter((key) => args[key] !== undefined)
       .map((key) => [key, args[key]])
   );
-  const response = await bridgeFetch("/sandbox-memory/search", {
-    method: "POST",
-    body: JSON.stringify(body),
+  const path = spec.path.replace(/\{(\w+)\}/g, (_match, key) => {
+    const value = body[key] ?? "";
+    delete body[key];
+    return encodeURIComponent(String(value));
   });
-  if (!response.ok) return `Memory search failed: ${await extractError(response)}`;
-  return JSON.stringify(await response.json());
+  let response;
+  try {
+    response = await bridgeFetch(
+      path,
+      spec.method === "GET"
+        ? { method: "GET" }
+        : { method: spec.method, body: JSON.stringify(body) }
+    );
+  } catch {
+    // Transport details can name internal hosts; the agent only needs the outcome.
+    return `${name} failed (unavailable)`;
+  }
+  if (!response.ok) return `${name} failed (${response.status}): ${await extractError(response)}`;
+  return response.text();
 }
 
-/** Read live facts through the session-bound bridge; pinned archives return a body-free notice. */
-export async function readMemory({ memoryId }) {
-  const response = await bridgeFetch(`/sandbox-memory/${encodeURIComponent(memoryId)}`);
-  if (!response.ok) return `Memory read failed: ${await extractError(response)}`;
-  return JSON.stringify(await response.json());
-}
-
-/** Send relative scope and optional repo selector; the server resolves targets and write authority. */
-export async function writeMemory(args) {
-  const scope =
-    args.scope === "repository"
-      ? { type: "repository", repoOwner: args.repoOwner, repoName: args.repoName }
-      : { type: args.scope };
-  const body = {
-    scope,
-    memoryType: args.memoryType,
-    title: args.title,
-    description: args.description,
-    content: args.content,
-    ...(args.supersedesMemoryId ? { supersedesMemoryId: args.supersedesMemoryId } : {}),
+/** The `tool()` input for one memory tool: spec description and args, generic executor. */
+export function memoryToolDefinition(z, name) {
+  const spec = memoryToolSpec(name);
+  return {
+    description: spec.description,
+    args: memoryToolArgs(z, spec.inputSchema),
+    execute: (args) => executeMemoryTool(name, args),
   };
-  const response = await bridgeFetch("/sandbox-memory", {
-    method: "POST",
-    body: JSON.stringify(body),
-  });
-  if (!response.ok) return `Memory write failed: ${await extractError(response)}`;
-  return JSON.stringify(await response.json());
 }
