@@ -1,5 +1,5 @@
 import { isWorkspaceAdmin } from "@open-inspect/shared/rbac";
-import { TeamMembershipStore } from "../db/team-memberships";
+import { resourceViewer } from "../authorization/resource-viewer";
 import { TeamRepositoryGrantStore } from "../db/team-repository-grants";
 import { TeamStore } from "../db/teams";
 import { json, type RequestContext } from "./shared";
@@ -76,9 +76,9 @@ export async function authorizeWorkspaceRepositories(
       return deniedRepository(repository);
     const owners = await store.listTeamsForRepository(repoId);
     if (owners.length === 0) continue;
-    const memberships = (ctx.sessionMemberships ??= await new TeamMembershipStore(
-      ctx.db
-    ).listForUser(authorization.userId));
+    const viewer = await resourceViewer(ctx);
+    if (viewer.kind !== "user") throw new Error("Missing request authorization");
+    const memberships = viewer.memberships;
     let allowed = false;
     for (const teamId of owners) {
       if (target.requireLead ? memberships.get(teamId) !== "lead" : !memberships.has(teamId))

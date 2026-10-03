@@ -36,13 +36,12 @@ import type { Env } from "../types";
 import { createLogger } from "../logger";
 import { encodeSessionInboxCursor, parseSessionInboxCursor } from "../db/session-inbox-cursor";
 import { parseQuery } from "./query";
-import { TeamMembershipStore } from "../db/team-memberships";
 import { D1QueryParameterLimitError } from "../db/query-limits";
 import {
   effectiveSessionCapabilities,
   teamsEnforcementMode,
-  viewerFromContext,
 } from "../authorization/session-admission";
+import { resourceViewer } from "../authorization/resource-viewer";
 import { SessionCollaboratorStore } from "../db/session-collaborators";
 import type { TeamsEnforcementMode } from "../authorization/teams-enforcement";
 import type { ListSessionInboxResult } from "../db/session-inbox-store";
@@ -151,14 +150,7 @@ export async function handleListSessions(
     return createdByUserIds;
   }
 
-  const viewer = viewerFromContext(
-    ctx,
-    ctx.authorization
-      ? (ctx.sessionMemberships ??= await new TeamMembershipStore(ctx.db).listForUser(
-          ctx.authorization.userId
-        ))
-      : new Map()
-  );
+  const viewer = await resourceViewer(ctx);
   if (scope === "all" && (viewer.kind !== "user" || !isWorkspaceAdmin(viewer.roleKey))) {
     return error("Invalid scope", 403);
   }
@@ -248,12 +240,7 @@ export async function handleListSessionInbox(
   if (teamIds === null) {
     return error("Invalid teamIds[]", 400);
   }
-  const viewer = viewerFromContext(
-    ctx,
-    (ctx.sessionMemberships ??= await new TeamMembershipStore(ctx.db).listForUser(
-      ctx.principal.userId
-    ))
-  );
+  const viewer = await resourceViewer(ctx);
   if (scope === "all" && (viewer.kind !== "user" || !isWorkspaceAdmin(viewer.roleKey))) {
     return error("Invalid scope", 403);
   }

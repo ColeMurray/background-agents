@@ -9,13 +9,12 @@ import {
   type SessionViewer,
 } from "@open-inspect/shared";
 import type { PermissionId } from "@open-inspect/shared/rbac";
-import type { TeamRole } from "@open-inspect/shared/types/teams";
 import { SessionCollaboratorStore } from "../db/session-collaborators";
-import { SessionIndexStore } from "../db/session-index";
-import { TeamMembershipStore } from "../db/team-memberships";
+import { SessionIndexStore, type SessionEntry } from "../db/session-index";
 import type { RequestContext } from "../http/request-context";
 import type { Env } from "../types";
 import { auditPrivateSessionBreakGlass } from "./request-audit";
+import { resourceViewer } from "./resource-viewer";
 import { slackPostGate } from "./slack-post-gate";
 import {
   legacyPermissionForAction,
@@ -26,26 +25,6 @@ import {
 
 export function teamsEnforcementMode(ctx: RequestContext, env: Env): TeamsEnforcementMode {
   return (ctx.teamsEnforcementMode ??= parseTeamsEnforcementMode(env.TEAMS_ENFORCEMENT));
-}
-
-export function viewerFromContext(
-  ctx: RequestContext,
-  memberships: ReadonlyMap<string, TeamRole>
-): SessionViewer {
-  const authorization = ctx.authorization;
-  if (!authorization) {
-    if (ctx.principal?.kind === "service" && !ctx.principal.actor)
-      return { kind: "service", teamId: ctx.serviceTeamId ?? null };
-    throw new Error("Missing request authorization");
-  }
-  return {
-    kind: "user",
-    userId: authorization.userId,
-    roleKey: authorization.role.key,
-    permissions: authorization.permissions,
-    suspended: authorization.suspendedAt !== null,
-    memberships,
-  };
 }
 
 /** Preserve legacy read visibility without relaxing team-owned actions. */
@@ -88,7 +67,70 @@ export async function evaluateSessionAdmission(
 ): Promise<SessionAdmissionOutcome> {
   const mode = enforceAlways ? "on" : teamsEnforcementMode(ctx, env);
   const row = await new SessionIndexStore(ctx.db).get(sessionId);
+  return evaluateLoadedSessionAdmission(
+    ctx,
+    row,
+    action,
+    mode,
+    slot,
+    (includeMemberships) => resourceViewer(ctx, includeMemberships),
+    () => new SessionCollaboratorStore(ctx.db).listUserIds(sessionId)
+  );
+}
+
+export interface SessionAdmissionResult {
+  sessionId: string;
+  row: SessionEntry | null;
+  outcome: SessionAdmissionOutcome;
+}
+
+/** Bulk reads, ordered decisions. Stopping iteration also stops admission audit side effects. */
+export async function* evaluateSessionAdmissions(
+  ctx: RequestContext,
+  env: Env,
+  ids: readonly string[],
+  action: SessionAction,
+  enforceAlways = false
+): AsyncGenerator<SessionAdmissionResult> {
+  if (!ids.length) return;
+  const mode = enforceAlways ? "on" : teamsEnforcementMode(ctx, env);
+  const rows = await new SessionIndexStore(ctx.db).getByIds(ids);
+  let collaborators: Promise<ReadonlyMap<string, string[]>> | undefined;
+  let viewer: Promise<SessionViewer> | undefined;
+  let rollbackViewer: Promise<SessionViewer> | undefined;
+  const getViewer = (includeMemberships: boolean) =>
+    includeMemberships
+      ? (viewer ??= resourceViewer(ctx))
+      : (rollbackViewer ??= resourceViewer(ctx, false));
+  for (const sessionId of ids) {
+    const row = rows.get(sessionId) ?? null;
+    const outcome = await evaluateLoadedSessionAdmission(
+      ctx,
+      row,
+      action,
+      mode,
+      null,
+      getViewer,
+      async () =>
+        (await (collaborators ??= new SessionCollaboratorStore(ctx.db).listForSessions(ids))).get(
+          sessionId
+        ) ?? []
+    );
+    yield { sessionId, row, outcome };
+  }
+}
+
+async function evaluateLoadedSessionAdmission(
+  ctx: RequestContext,
+  row: SessionEntry | null,
+  action: SessionAction,
+  mode: TeamsEnforcementMode,
+  slot: "session" | "child" | null,
+  getViewer: (includeMemberships: boolean) => Promise<SessionViewer>,
+  getCollaboratorIds: () => Promise<string[]>
+): Promise<SessionAdmissionOutcome> {
   if (!row) return { kind: "not_found" };
+  const sessionId = row.id;
 
   // Publication is narrower than workspace readability, including during rollback.
   if (
@@ -97,7 +139,7 @@ export async function evaluateSessionAdmission(
   ) {
     const admission = {
       row: { ...row, ownerUserId: row.userId ?? null, collaboratorIds: [] },
-      viewer: viewerFromContext(ctx, new Map()),
+      viewer: await getViewer(false),
     };
     if (slot === "session") ctx.sessionAdmission = admission;
     if (slot === "child") ctx.childSessionAdmission = admission;
@@ -108,17 +150,11 @@ export async function evaluateSessionAdmission(
     return { kind: "allowed", legacyPermission: legacyPermissionForAction(action) };
   }
 
-  const memberships =
-    (mode === "off" && row.ownerTeamId === null) || !ctx.authorization
-      ? new Map<string, TeamRole>()
-      : (ctx.sessionMemberships ??= await new TeamMembershipStore(ctx.db).listForUser(
-          ctx.authorization.userId
-        ));
-  const viewer = viewerFromContext(ctx, memberships);
+  const viewer = await getViewer(!(mode === "off" && row.ownerTeamId === null));
   const accessRow = {
     ...row,
     ownerUserId: row.userId ?? null,
-    collaboratorIds: await new SessionCollaboratorStore(ctx.db).listUserIds(sessionId),
+    collaboratorIds: await getCollaboratorIds(),
   };
   if (slot === "session") ctx.sessionAdmission = { row: accessRow, viewer };
   if (slot === "child") ctx.childSessionAdmission = { row: accessRow, viewer };

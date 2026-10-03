@@ -1,12 +1,12 @@
 import { Hono } from "hono";
 import { z } from "zod";
-import { checkSessionAccess, type SessionAction } from "@open-inspect/shared";
+import { checkSessionAccess } from "@open-inspect/shared";
 import { sessionVisibilitySchema } from "@open-inspect/shared/types/teams";
 import { SessionAuditStore } from "../db/session-audit";
 import { SessionCollaboratorStore } from "../db/session-collaborators";
-import { SessionIndexStore } from "../db/session-index";
+import type { SessionEntry } from "../db/session-index";
 import { SessionScopeStore } from "../db/session-scope-store";
-import { evaluateSessionAdmission } from "../authorization/session-admission";
+import { evaluateSessionAdmissions } from "../authorization/session-admission";
 import { UserStore } from "../db/user-store";
 import { admit, dispatch } from "../routing/admit";
 import type { ControlPlaneHonoEnv } from "../routing/hono-env";
@@ -32,15 +32,21 @@ function denied(reason: string): Response {
 async function admitDescendants(
   ctx: RequestContext,
   env: Env,
-  ids: readonly string[],
-  action: SessionAction
-): Promise<Response | null> {
-  for (const id of ids.slice(1)) {
-    const result = await evaluateSessionAdmission(ctx, env, id, action, null, true);
-    if (result.kind === "not_found") return error("Session not found", 404);
-    if (result.kind === "action_denied") return denied(result.reason);
+  ids: readonly string[]
+): Promise<Response | SessionEntry[]> {
+  const rows: SessionEntry[] = [];
+  for await (const { row, outcome } of evaluateSessionAdmissions(
+    ctx,
+    env,
+    ids,
+    "changeVisibility",
+    true
+  )) {
+    if (outcome.kind === "not_found") return error("Session not found", 404);
+    if (outcome.kind === "action_denied") return denied(outcome.reason);
+    rows.push(row!);
   }
-  return null;
+  return rows;
 }
 
 async function changeVisibility(
@@ -56,22 +62,21 @@ async function changeVisibility(
   const actorUserId = admission.viewer.userId;
   if (body.visibility === "team" && !admission.row.ownerTeamId)
     return json({ error: "A team is required", code: "team_required" }, 400);
-  const store = new SessionIndexStore(ctx.db);
   const scope = new SessionScopeStore(ctx.db);
   const ids = [
     params.id,
     ...(body.includeChildren ? await scope.listDescendantIds(params.id) : []),
   ];
-  const descendantDenial = await admitDescendants(ctx, env, ids, "changeVisibility");
-  if (descendantDenial) return descendantDenial;
-  const rows = [admission.row, ...(await Promise.all(ids.slice(1).map((id) => store.get(id))))];
-  if (body.visibility === "private" && rows.some((row) => !row?.userId))
+  const descendants = await admitDescendants(ctx, env, ids.slice(1));
+  if (descendants instanceof Response) return descendants;
+  const rows = [admission.row, ...descendants];
+  if (body.visibility === "private" && rows.some((row) => !row.userId))
     return json({ error: "Session owner required", code: "owner_required" }, 400);
-  if (body.visibility === "team" && rows.some((row) => !row?.ownerTeamId))
+  if (body.visibility === "team" && rows.some((row) => !row.ownerTeamId))
     return json({ error: "A team is required", code: "team_required" }, 400);
   const auditStore = new SessionAuditStore(ctx.db);
   const audits = rows.flatMap((row) =>
-    row && row.visibility !== body.visibility
+    row.visibility !== body.visibility
       ? [
           {
             sessionId: row.id,
