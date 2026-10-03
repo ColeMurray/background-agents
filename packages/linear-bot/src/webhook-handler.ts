@@ -8,6 +8,7 @@ import {
   type LinearCallbackContext,
 } from "@open-inspect/shared/types/session-api";
 import { MAX_WEB_PROMPT_CHARS } from "@open-inspect/shared/types/prompts";
+import { channelBindingResponseSchema } from "@open-inspect/shared/types/team-channel-bindings";
 import { z } from "zod";
 import type {
   Env,
@@ -36,10 +37,16 @@ import {
   targetLabel,
   targetRequestFields,
   type SessionTarget,
+  type TargetIntegration,
 } from "./target-resolution";
 import { getUserPreferences, lookupIssueSession, storeIssueSession } from "./kv-store";
 
 const log = createLogger("handler");
+
+const sessionCreateRefusalSchema = z.object({
+  code: z.string(),
+  repository: z.string().optional(),
+});
 
 const sessionEventsSummaryResponseSchema = z.object({
   events: z.array(
@@ -148,6 +155,7 @@ async function createSession(
     actorUserId?: string;
     actorDisplayName?: string;
     actorEmail?: string;
+    teamId: string | null;
   },
   traceId?: string
 ): Promise<{ ok: true; sessionId: string } | { ok: false; status: number; body: string }> {
@@ -159,6 +167,7 @@ async function createSession(
     reasoningEffort: params.reasoningEffort,
     actorDisplayName: params.actorDisplayName,
     actorEmail: params.actorEmail,
+    teamId: params.teamId,
   });
   const response = await signedControlPlaneFetch(env, {
     method: "POST",
@@ -224,7 +233,7 @@ async function handleStop(webhook: AgentSessionWebhook, env: Env, traceId: strin
   if (issueId) {
     const existingSession = await lookupIssueSession(env, issueId);
     if (existingSession) {
-      const stopUrl = `https://internal/sessions/${existingSession.sessionId}/stop`;
+      const stopUrl = new URL(`https://internal/sessions/${existingSession.sessionId}/stop`);
       const actorUserId =
         webhook.agentActivity?.userId ?? webhook.agentSession.comment?.userId ?? undefined;
       if (!actorUserId) {
@@ -236,10 +245,13 @@ async function handleStop(webhook: AgentSessionWebhook, env: Env, traceId: strin
         });
         return;
       }
+      const linearTeamId = webhook.agentSession.issue?.team.id ?? existingSession.linearTeamId;
+      if (!linearTeamId) return;
+      stopUrl.searchParams.set("channel", `linear:${linearTeamId}`);
       try {
         const stopRes = await signedControlPlaneFetch(env, {
           method: "POST",
-          url: stopUrl,
+          url: stopUrl.toString(),
           actor: `linear:${actorUserId}`,
           traceId,
         });
@@ -368,6 +380,7 @@ function buildLinearCallbackContext(params: {
     issueId: issue.id,
     issueIdentifier: issue.identifier,
     issueUrl: issue.url,
+    linearTeamId: issue.team.id,
     repoFullName,
     model,
     agentSessionId: webhook.agentSession.id,
@@ -428,10 +441,20 @@ async function handleFollowUp(
 
   const existingSession = await lookupIssueSession(env, issue.id);
   if (!existingSession) return;
-  const existingTarget = await resolveStoredSessionTarget(env, existingSession, traceId);
-  const currentIntegration = existingTarget
-    ? await resolveTargetIntegration(env, existingTarget)
-    : null;
+  const scope = { linearTeamId: issue.team.id };
+  let currentIntegration: TargetIntegration | null;
+  try {
+    const existingTarget = await resolveStoredSessionTarget(env, existingSession, traceId, scope);
+    currentIntegration = existingTarget
+      ? await resolveTargetIntegration(env, existingTarget, scope)
+      : null;
+  } catch {
+    await emitAgentActivity(client, agentSessionId, {
+      type: "error",
+      body: "Cannot resolve the existing session's target or Linear settings. Verify the acting user's team membership and retry.",
+    });
+    return;
+  }
   const callbackContext = buildLinearCallbackContext({
     webhook,
     issue,
@@ -452,10 +475,13 @@ async function handleFollowUp(
 
   let sessionContextSummary = "";
   try {
-    const eventsUrl = `https://internal/sessions/${existingSession.sessionId}/events?type=token&limit=20`;
+    const eventsUrl = new URL(
+      `https://internal/sessions/${existingSession.sessionId}/events?type=token&limit=20`
+    );
+    eventsUrl.searchParams.set("channel", `linear:${issue.team.id}`);
     const eventsRes = await signedControlPlaneFetch(env, {
       method: "GET",
-      url: eventsUrl,
+      url: eventsUrl.toString(),
       actor: `linear:${followUp.actorUserId}`,
       traceId,
     });
@@ -542,6 +568,42 @@ async function handleNewSession(
   });
   if (!client) return;
 
+  if (!launchActorUserId) {
+    await emitAgentActivity(client, agentSessionId, {
+      type: "error",
+      body: "Cannot start a coding session because Linear did not identify its author.",
+    });
+    return;
+  }
+  const scope = { linearTeamId: issue.team.id };
+  let teamId: string | null;
+  try {
+    const bindingUrl = new URL(
+      `https://internal/channel-bindings/linear/${encodeURIComponent(issue.team.id)}`
+    );
+    bindingUrl.searchParams.set("channel", `linear:${issue.team.id}`);
+    const response = await signedControlPlaneFetch(env, {
+      method: "GET",
+      url: bindingUrl.toString(),
+      traceId,
+    });
+    if (response.status === 404) {
+      await emitAgentActivity(client, agentSessionId, {
+        type: "error",
+        body: `This Linear team is not bound. Ask a team lead or workspace administrator to bind Linear team \`${issue.team.id}\` in the team's Channels tab, then delegate again.`,
+      });
+      return;
+    }
+    if (!response.ok) throw new Error("Binding lookup failed");
+    teamId = channelBindingResponseSchema.parse(await response.json()).teamId;
+  } catch {
+    await emitAgentActivity(client, agentSessionId, {
+      type: "error",
+      body: "Cannot resolve this Linear team's binding right now. No coding session was created; please retry.",
+    });
+    return;
+  }
+
   await updateAgentSession(client, agentSessionId, { plan: makePlan("start") });
   await emitAgentActivity(
     client,
@@ -570,13 +632,28 @@ async function handleNewSession(
     projectInfo,
     comment: resolutionComment,
     traceId,
+    scope,
+    teamId,
+  }).catch(async () => {
+    await emitAgentActivity(client, agentSessionId, {
+      type: "error",
+      body: "Cannot resolve a target for this Linear team. Verify the acting user's team membership and the team's repository grants, then retry.",
+    });
+    return null;
   });
   if (!resolved) return;
 
   const { target, reasoning: classificationReasoning } = resolved;
   const label = targetLabel(target);
 
-  const integration = await resolveTargetIntegration(env, target);
+  const integration = await resolveTargetIntegration(env, target, scope).catch(async () => {
+    await emitAgentActivity(client, agentSessionId, {
+      type: "error",
+      body: "Cannot read the Linear integration settings for this target. No coding session was created; please retry.",
+    });
+    return null;
+  });
+  if (!integration) return;
   const integrationConfig = integration.config;
   if (!integration.enabled) {
     await emitAgentActivity(client, agentSessionId, {
@@ -668,14 +745,33 @@ async function handleNewSession(
       actorUserId: launchActorUserId,
       actorDisplayName,
       actorEmail,
+      teamId,
     },
     traceId
   );
 
   if (!sessionResult.ok) {
+    let rawRefusal: unknown;
+    try {
+      rawRefusal = JSON.parse(sessionResult.body);
+    } catch {
+      rawRefusal = null;
+    }
+    const refusal = sessionCreateRefusalSchema.safeParse(rawRefusal);
+    let errorBody = `Failed to create a coding session.\n\n\`HTTP ${sessionResult.status}: ${sessionResult.body.slice(0, 200)}\``;
+    if (sessionResult.status === 403 && refusal.success && refusal.data.code === "not_member") {
+      errorBody =
+        "The acting Linear user is not a member of the bound team. Add that user to the team before delegating again; automation-created requests use the installed app user. No coding session was created.";
+    } else if (
+      sessionResult.status === 409 &&
+      refusal.success &&
+      refusal.data.code === "target_team_missing_grant"
+    ) {
+      errorBody = `The bound team lacks the required repository grant for \`${refusal.data.repository ?? label}\`. Ask a team lead or workspace administrator to grant it, then delegate again. No coding session was created.`;
+    }
     await emitAgentActivity(client, agentSessionId, {
       type: "error",
-      body: `Failed to create a coding session.\n\n\`HTTP ${sessionResult.status}: ${sessionResult.body.slice(0, 200)}\``,
+      body: errorBody,
     });
     log.error("control_plane.create_session", {
       trace_id: traceId,
@@ -702,6 +798,7 @@ async function handleNewSession(
     sessionId: session.sessionId,
     issueId: issue.id,
     issueIdentifier: issue.identifier,
+    linearTeamId: issue.team.id,
     ...targetRequestFields(target),
     model,
     agentSessionId,
@@ -728,7 +825,7 @@ async function handleNewSession(
     method: "POST",
     url: promptUrl,
     body: promptBody,
-    actor: launchActorUserId ? `linear:${launchActorUserId}` : undefined,
+    actor: `linear:${launchActorUserId}`,
     traceId,
   });
 

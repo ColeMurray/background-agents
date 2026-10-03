@@ -1,8 +1,7 @@
 /**
- * Dynamic repository fetching from the control plane. A cached resource
- * (in-memory → control plane → KV, fail open to an empty list); an empty
- * repo list surfaces to the user as a clarification asking for the
- * repository name.
+ * Dynamic repository fetching from the control plane. Scoped reads are live
+ * and fail closed; legacy unscoped reads use an in-memory/control-plane/KV
+ * cache and fail open to an empty list for repository clarification.
  */
 
 import { z } from "zod";
@@ -12,7 +11,7 @@ import {
   type ControlPlaneRepo,
   type RepoConfig,
 } from "@open-inspect/shared/types/repository-catalog";
-import type { Env } from "../types";
+import type { Env, LinearChannelScope } from "../types";
 import { createCachedResource } from "../cached-resource";
 import { fetchControlPlaneJson } from "../control-plane";
 
@@ -54,7 +53,15 @@ const reposResource = createCachedResource<RepoConfig[]>({
   fallback: [],
 });
 
-export async function getAvailableRepos(env: Env, traceId?: string): Promise<RepoConfig[]> {
+export async function getAvailableRepos(
+  env: Env,
+  traceId?: string,
+  scope?: LinearChannelScope
+): Promise<RepoConfig[]> {
+  if (scope) {
+    const body = await fetchControlPlaneJson(env, "/repos", traceId, scope);
+    return controlPlaneReposResponseSchema.parse(body).repos.map(toRepoConfig);
+  }
   return reposResource.get(env, traceId);
 }
 
@@ -65,8 +72,12 @@ export function clearReposLocalCache(): void {
   reposResource.invalidate();
 }
 
-export async function buildRepoDescriptions(env: Env, traceId?: string): Promise<string> {
-  const repos = await getAvailableRepos(env, traceId);
+export async function buildRepoDescriptions(
+  env: Env,
+  traceId?: string,
+  scope?: LinearChannelScope
+): Promise<string> {
+  const repos = await getAvailableRepos(env, traceId, scope);
   if (repos.length === 0) return "No repositories are currently available.";
 
   return repos

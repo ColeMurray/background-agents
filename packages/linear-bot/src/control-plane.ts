@@ -4,7 +4,7 @@
  * cached read uses. Mirrors slack-bot's classifier/control-plane.ts.
  */
 
-import type { Env } from "./types";
+import type { Env, LinearChannelScope } from "./types";
 import { signedControlPlaneFetch } from "./internal-auth";
 
 /** Local cache TTL in milliseconds (1 minute). */
@@ -35,11 +35,19 @@ export class ControlPlaneRequestError extends Error {
 export async function fetchControlPlaneJson(
   env: Env,
   path: string,
-  traceId?: string
+  traceId?: string,
+  scope?: LinearChannelScope
 ): Promise<unknown> {
+  const url = new URL(`https://internal${path}`);
+  if (scope) url.searchParams.set("channel", `linear:${scope.linearTeamId}`);
   const response = await signedControlPlaneFetch(
     env,
-    { method: "GET", url: `https://internal${path}`, traceId },
+    {
+      method: "GET",
+      url: url.toString(),
+      traceId,
+      actor: scope?.actorUserId ? `linear:${scope.actorUserId}` : undefined,
+    },
     { headers: { Accept: "application/json" } }
   );
   if (!response.ok) {

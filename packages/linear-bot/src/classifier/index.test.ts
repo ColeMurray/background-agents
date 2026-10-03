@@ -1,12 +1,12 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { anthropicMessagesResponseSchema, classifyRepo, classifyToolInputSchema } from "./index";
 import {
   CLASSIFICATION_REQUEST_TIMEOUT_MS,
   OPENAI_CLASSIFICATION_MAX_COMPLETION_TOKENS,
 } from "@open-inspect/shared/classification";
-import { clearReposLocalCache } from "./repos";
+import { clearReposLocalCache, getAvailableRepos } from "./repos";
 import { createFakeKV, makeLinearBotEnv } from "../test-helpers";
-import type { Env } from "../types";
+import type { Env, LinearChannelScope } from "../types";
 
 describe("anthropicMessagesResponseSchema", () => {
   it("parses a response with the consumed tool block fields", () => {
@@ -111,7 +111,7 @@ describe("classifyRepo provider dispatch", () => {
     } as unknown as Fetcher;
   }
 
-  function classify(env: Env) {
+  function classify(env: Env, scope?: LinearChannelScope) {
     return classifyRepo(
       env,
       "Fix the login bug",
@@ -121,7 +121,8 @@ describe("classifyRepo provider dispatch", () => {
       "Platform",
       "PLAT",
       undefined,
-      traceId
+      traceId,
+      scope
     );
   }
 
@@ -142,7 +143,92 @@ describe("classifyRepo provider dispatch", () => {
   beforeEach(() => {
     clearReposLocalCache();
     vi.unstubAllGlobals();
+    vi.spyOn(Date, "now").mockReturnValue(1_700_000_000_000);
   });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+  });
+
+  it("scopes both prompt descriptions and candidate matching despite a warm workspace cache", async () => {
+    const { kv } = createFakeKV();
+    const catalog = twoRepoControlPlane();
+    const fetch = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+      const response = await catalog.fetch(input, init);
+      const body = (await response.json()) as {
+        repos: Array<{ name: string; fullName: string }>;
+      };
+      const url = new URL(String(input));
+      if (url.searchParams.has("channel")) {
+        expect(url.searchParams.get("channel")).toBe("linear:external-team-1");
+        expect(new Headers(init?.headers).get("X-OpenInspect-Actor")).toBe("linear:user-1");
+        body.repos = body.repos.map((repo) => ({
+          ...repo,
+          name: `allowed-${repo.name}`,
+          fullName: `acme/allowed-${repo.name}`,
+        }));
+      }
+      return Response.json(body);
+    });
+    const env = makeLinearBotEnv(kv, { CONTROL_PLANE: { fetch } });
+    await getAvailableRepos(env);
+    const fetchMock = vi.fn<typeof globalThis.fetch>(async () =>
+      Response.json({
+        content: [
+          {
+            type: "tool_use",
+            name: "classify_repository",
+            input: {
+              repoId: "acme/alpha",
+              confidence: "high",
+              reasoning: "Matches",
+              alternatives: ["acme/allowed-beta", "acme/beta"],
+            },
+          },
+        ],
+      })
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await classify(env, { linearTeamId: "external-team-1", actorUserId: "user-1" });
+
+    expect(result.repo).toBeNull();
+    expect(result.alternatives?.map((repo) => repo.id)).toEqual(["acme/allowed-beta"]);
+    expect(result.needsClarification).toBe(true);
+    const body = JSON.parse(fetchMock.mock.calls[0][1]!.body as string);
+    expect(body.messages[0].content).toContain("**acme/allowed-alpha**");
+    expect(body.messages[0].content).toContain("**acme/allowed-beta**");
+    expect(body.messages[0].content).not.toContain("**acme/alpha**");
+    expect(body.messages[0].content).not.toContain("**acme/beta**");
+    expect(fetch).toHaveBeenCalledTimes(3);
+  });
+
+  it.each([1, 2])(
+    "propagates a scoped catalog denial on read %s instead of clarifying",
+    async (deniedRead) => {
+      const { kv } = createFakeKV();
+      const catalog = twoRepoControlPlane();
+      let reads = 0;
+      const fetch = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+        reads += 1;
+        expect(new URL(String(input)).searchParams.get("channel")).toBe("linear:external-team-1");
+        return reads === deniedRead
+          ? new Response(null, { status: 403 })
+          : catalog.fetch(input, init);
+      });
+      const fetchMock = vi.fn();
+      vi.stubGlobal("fetch", fetchMock);
+
+      await expect(
+        classify(makeLinearBotEnv(kv, { CONTROL_PLANE: { fetch } }), {
+          linearTeamId: "external-team-1",
+        })
+      ).rejects.toThrow();
+      expect(fetchMock).not.toHaveBeenCalled();
+      expect(kv.get).not.toHaveBeenCalled();
+    }
+  );
 
   it("sends a spec-compliant OpenAI request when CLASSIFICATION_MODEL selects an OpenAI model", async () => {
     const { kv } = createFakeKV();

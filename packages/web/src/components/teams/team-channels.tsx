@@ -5,6 +5,7 @@ import useSWR from "swr";
 import {
   teamChannelBindingsResponseSchema,
   type TeamChannelBindingKind,
+  type TeamChannelBindingProvider,
 } from "@open-inspect/shared/types/team-channel-bindings";
 import { useTeamCapabilities } from "@/hooks/use-team-capabilities";
 import { useSlackChannels } from "@/hooks/use-slack-channels";
@@ -30,20 +31,28 @@ export function TeamChannels({ team }: { team: TeamResponse }) {
       return teamChannelBindingsResponseSchema.parse(await response.json());
     }
   );
+  const [provider, setProvider] = useState<TeamChannelBindingProvider>("slack");
   const [channelId, setChannelId] = useState("");
   const [manualEntry, setManualEntry] = useState(false);
   const [kind, setKind] = useState<TeamChannelBindingKind>("source");
   const [pending, setPending] = useState(false);
   const [failure, setFailure] = useState<string | null>(null);
+  // Keep Slack discovery admission active while Slack bindings are displayed.
   const {
     channels,
     error: channelsError,
     accessDenied: channelsAccessDenied,
     loading: channelsLoading,
     mutate: reloadChannels,
-  } = useSlackChannels(canManageBindings, team.id);
-  const disabled =
-    !canManageBindings || !session?.user || pending || isLoading || !!error || channelsAccessDenied;
+  } = useSlackChannels(
+    canManageBindings &&
+      (provider === "slack" ||
+        data?.bindings.some((binding) => binding.provider === "slack") === true),
+    team.id
+  );
+  const disabled = !canManageBindings || !session?.user || pending || isLoading || !!error;
+  const providerDisabled = disabled || (provider === "slack" && channelsAccessDenied);
+  const isManualEntry = provider === "linear" || manualEntry;
   const channelNames = new Map(channels.map((channel) => [channel.id, `#${channel.name}`]));
   const channelOptions = channels
     .filter((channel) => channel.isMember)
@@ -54,21 +63,29 @@ export function TeamChannels({ team }: { team: TeamResponse }) {
       description: channel.isPrivate ? "Private channel" : undefined,
     }));
   const selectedChannel = channelOptions.find((channel) => channel.value === channelId);
-  const pickerDisabled = disabled || channelsLoading || !!channelsError || !channelOptions.length;
+  const pickerDisabled =
+    providerDisabled || channelsLoading || !!channelsError || !channelOptions.length;
   const bindDisabled =
-    disabled || (manualEntry ? !channelId.trim() : pickerDisabled || !selectedChannel);
+    providerDisabled || (isManualEntry ? !channelId.trim() : pickerDisabled || !selectedChannel);
 
-  async function changeBinding(externalId: string, method: "PUT" | "DELETE") {
-    if (disabled || !externalId) return;
+  async function changeBinding(
+    bindingProvider: TeamChannelBindingProvider,
+    externalId: string,
+    method: "PUT" | "DELETE"
+  ) {
+    if (disabled || (bindingProvider === "slack" && channelsAccessDenied) || !externalId) return;
     setPending(true);
     setFailure(null);
     try {
-      const response = await browserApiFetch(`${key}/slack/${encodeURIComponent(externalId)}`, {
-        method,
-        ...(method === "PUT"
-          ? { headers: { "Content-Type": "application/json" }, body: JSON.stringify({ kind }) }
-          : {}),
-      });
+      const response = await browserApiFetch(
+        `${key}/${bindingProvider}/${encodeURIComponent(externalId)}`,
+        {
+          method,
+          ...(method === "PUT"
+            ? { headers: { "Content-Type": "application/json" }, body: JSON.stringify({ kind }) }
+            : {}),
+        }
+      );
       if (!response.ok) {
         const body = await response.json().catch(() => null);
         const message =
@@ -90,35 +107,59 @@ export function TeamChannels({ team }: { team: TeamResponse }) {
         Channels
       </h2>
       <p className="mt-1 text-sm text-muted-foreground">
-        Bind Slack channels to this team. Primary is the team&apos;s home channel; source channels
-        also route new sessions to the team.
+        Bind Slack channels or Linear teams to this team. Primary marks the team&apos;s main binding
+        for each provider; source bindings also route new sessions to the team.
       </p>
       <form
         className="my-4 space-y-3 rounded-md border border-border-muted p-4"
         onSubmit={(event) => {
           event.preventDefault();
-          if (!bindDisabled) void changeBinding(channelId.trim(), "PUT");
+          if (!bindDisabled) void changeBinding(provider, channelId.trim(), "PUT");
         }}
       >
         <fieldset
           disabled={disabled}
           className="flex min-w-0 flex-col gap-3 sm:flex-row sm:items-end"
         >
+          <div className="space-y-1">
+            <label htmlFor={`${id}-provider`} className="block text-sm font-medium">
+              Provider
+            </label>
+            <select
+              id={`${id}-provider`}
+              value={provider}
+              onChange={(event) => {
+                setProvider(event.target.value as TeamChannelBindingProvider);
+                setChannelId("");
+                setManualEntry(false);
+                setFailure(null);
+              }}
+              className="w-full rounded border border-border bg-background px-2 py-2 text-sm disabled:opacity-50"
+            >
+              <option value="slack">Slack</option>
+              <option value="linear">Linear</option>
+            </select>
+          </div>
           <div className="min-w-0 flex-1 space-y-1">
             <label
               id={`${id}-channel-label`}
               htmlFor={`${id}-channel`}
               className="block text-sm font-medium"
             >
-              {manualEntry ? "Slack channel ID" : "Slack channel"}
+              {provider === "linear"
+                ? "Linear team ID"
+                : manualEntry
+                  ? "Slack channel ID"
+                  : "Slack channel"}
             </label>
-            {manualEntry ? (
+            {isManualEntry ? (
               <input
                 id={`${id}-channel`}
                 value={channelId}
                 onChange={(event) => setChannelId(event.target.value)}
-                placeholder="C0123456789"
+                placeholder={provider === "linear" ? "Linear team ID" : "C0123456789"}
                 autoComplete="off"
+                disabled={providerDisabled}
                 className="w-full rounded border border-border bg-background px-3 py-2 text-sm disabled:opacity-50"
               />
             ) : (
@@ -150,6 +191,7 @@ export function TeamChannels({ team }: { team: TeamResponse }) {
             <select
               id={`${id}-kind`}
               value={kind}
+              disabled={providerDisabled}
               onChange={(event) => setKind(event.target.value as TeamChannelBindingKind)}
               className="w-full rounded border border-border bg-background px-2 py-2 text-sm disabled:opacity-50"
             >
@@ -158,26 +200,39 @@ export function TeamChannels({ team }: { team: TeamResponse }) {
             </select>
           </div>
           <Button type="submit" disabled={bindDisabled}>
-            {pending ? "Updating..." : "Bind channel"}
+            {pending ? "Updating..." : provider === "linear" ? "Bind team" : "Bind channel"}
           </Button>
         </fieldset>
         <p className="text-xs text-muted-foreground">
-          Only channels the Slack bot has joined are listed. Invite it to a channel to add it here;
-          externally shared channels cannot be bound. Select a bound channel to change its kind.
+          {provider === "linear" ? (
+            <>
+              Enter the Linear team ID, not its name or issue prefix. Enter a bound team&apos;s ID
+              to change its kind.
+            </>
+          ) : (
+            <>
+              Only channels the Slack bot has joined are listed. Invite it to a channel to add it
+              here; externally shared channels cannot be bound. Select a bound channel to change its
+              kind.
+            </>
+          )}
         </p>
-        <Button
-          type="button"
-          size="xs"
-          variant="ghost"
-          disabled={disabled}
-          onClick={() => {
-            setManualEntry(!manualEntry);
-            setChannelId("");
-          }}
-        >
-          {manualEntry ? "Choose from channels" : "Enter a channel ID instead"}
-        </Button>
+        {provider === "slack" && (
+          <Button
+            type="button"
+            size="xs"
+            variant="ghost"
+            disabled={providerDisabled}
+            onClick={() => {
+              setManualEntry(!manualEntry);
+              setChannelId("");
+            }}
+          >
+            {manualEntry ? "Choose from channels" : "Enter a channel ID instead"}
+          </Button>
+        )}
         {canManageBindings &&
+          provider === "slack" &&
           (channelsError ? (
             <ErrorBanner role="alert">
               Unable to load Slack channels.{" "}
@@ -257,19 +312,21 @@ export function TeamChannels({ team }: { team: TeamResponse }) {
                       <Badge>{binding.kind === "primary" ? "Primary" : "Source"}</Badge>
                     </div>
                   </div>
-                  {binding.provider === "slack" ? (
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      disabled={disabled}
-                      aria-label={`Unbind Slack channel ${channelNames.get(binding.externalId) ?? binding.externalId}`}
-                      onClick={() => void changeBinding(binding.externalId, "DELETE")}
-                    >
-                      Unbind
-                    </Button>
-                  ) : (
-                    <span className="text-xs text-muted-foreground">Read-only</span>
-                  )}
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    disabled={disabled || (binding.provider === "slack" && channelsAccessDenied)}
+                    aria-label={
+                      binding.provider === "slack"
+                        ? `Unbind Slack channel ${channelNames.get(binding.externalId) ?? binding.externalId}`
+                        : `Unbind Linear team ${binding.externalId}`
+                    }
+                    onClick={() =>
+                      void changeBinding(binding.provider, binding.externalId, "DELETE")
+                    }
+                  >
+                    Unbind
+                  </Button>
                 </li>
               ))}
             </ul>

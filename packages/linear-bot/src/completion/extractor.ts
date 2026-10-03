@@ -23,6 +23,7 @@ export async function extractAgentResponse(
   env: Env,
   sessionId: string,
   messageId: string,
+  linearTeamId: string,
   traceId?: string
 ): Promise<AgentResponse> {
   return sharedExtract(
@@ -33,7 +34,8 @@ export async function extractAgentResponse(
     },
     sessionId,
     messageId,
-    traceId
+    traceId,
+    `linear:${linearTeamId}`
   );
 }
 

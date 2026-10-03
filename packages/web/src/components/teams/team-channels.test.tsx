@@ -107,6 +107,7 @@ describe("Team channels", () => {
     (capabilities) => {
       render(<TeamChannels team={{ ...team, capabilities }} />, { wrapper });
       expect(browserApiFetch).not.toHaveBeenCalled();
+      expect(screen.getByRole("combobox", { name: "Provider" })).toBeDisabled();
       expect(screen.getByRole("button", { name: /Slack channel Select a channel/ })).toBeDisabled();
       expect(screen.getByRole("combobox", { name: "Binding kind" })).toBeDisabled();
       expect(screen.getByRole("button", { name: "Bind channel" })).toBeDisabled();
@@ -166,7 +167,7 @@ describe("Team channels", () => {
     expect(rows.getByText("Primary")).toBeInTheDocument();
     expect(rows.getAllByText("Source")).toHaveLength(2);
     expect(rows.getByText("linear_team")).toBeInTheDocument();
-    expect(rows.queryByRole("button", { name: /Unbind.*linear_team/ })).not.toBeInTheDocument();
+    expect(rows.getByRole("button", { name: "Unbind Linear team linear_team" })).toBeEnabled();
     expect(browserApiFetch).toHaveBeenCalledWith(key);
     listedBindings = [];
     vi.mocked(browserApiFetch).mockResolvedValueOnce(new Response(null, { status: 204 }));
@@ -174,6 +175,133 @@ describe("Team channels", () => {
     await screen.findByText("No channel bindings yet.");
     expect(browserApiFetch).toHaveBeenCalledWith(`${key}/slack/C_HOME`, { method: "DELETE" });
     expect(screen.queryByText("#home")).not.toBeInTheDocument();
+  });
+
+  it.each([200, 401, 403, 503])(
+    "binds a manual Linear team without Slack discovery after a %s channel-list failure",
+    async (status) => {
+      vi.mocked(browserApiFetch).mockImplementation(async (url) =>
+        url === channelsKey
+          ? Response.json({ channels: [], error: "not_configured" }, { status })
+          : Response.json({ bindings: listedBindings })
+      );
+      render(<TeamChannels team={team} />, { wrapper });
+      await screen.findByRole("alert");
+      await screen.findByText("No channel bindings yet.");
+      expect(screen.getByRole("combobox", { name: "Provider" })).toBeEnabled();
+      vi.mocked(browserApiFetch).mockClear();
+      fireEvent.change(screen.getByRole("combobox", { name: "Provider" }), {
+        target: { value: "linear" },
+      });
+      expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+      expect(screen.queryByPlaceholderText("Search channels...")).not.toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: "Enter a channel ID instead" })).toBeNull();
+      expect(screen.getByRole("button", { name: "Bind team" })).toBeDisabled();
+      fireEvent.change(screen.getByRole("textbox", { name: "Linear team ID" }), {
+        target: { value: " linear/team " },
+      });
+      fireEvent.change(screen.getByRole("combobox", { name: "Binding kind" }), {
+        target: { value: "primary" },
+      });
+      listedBindings = [{ ...bindings[2], externalId: "linear/team", kind: "primary" }];
+      vi.mocked(browserApiFetch).mockResolvedValueOnce(Response.json({ ok: true }));
+      fireEvent.click(screen.getByRole("button", { name: "Bind team" }));
+      await screen.findByRole("button", { name: "Unbind Linear team linear/team" });
+      expect(screen.getByRole("textbox", { name: "Linear team ID" })).toHaveValue("");
+      expect(browserApiFetch).toHaveBeenCalledWith(`${key}/linear/linear%2Fteam`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ kind: "primary" }),
+      });
+      expect(browserApiFetch).toHaveBeenCalledWith(key);
+      expect(browserApiFetch).toHaveBeenCalledTimes(2);
+      await waitFor(() => expect(screen.getByRole("combobox", { name: "Provider" })).toBeEnabled());
+      fireEvent.change(screen.getByRole("combobox", { name: "Provider" }), {
+        target: { value: "slack" },
+      });
+      expect(screen.getByRole("button", { name: /^Slack channel/ })).toBeDisabled();
+    }
+  );
+
+  it("unbinds Linear teams while Slack discovery is denied", async () => {
+    listedBindings = bindings;
+    vi.mocked(browserApiFetch).mockImplementation(async (url) =>
+      url === channelsKey
+        ? Response.json({ error: "Forbidden" }, { status: 403 })
+        : Response.json({ bindings: listedBindings })
+    );
+    render(<TeamChannels team={team} />, { wrapper });
+    await screen.findByRole("alert");
+    const unbind = await screen.findByRole("button", { name: "Unbind Linear team linear_team" });
+    expect(unbind).toBeEnabled();
+    fireEvent.change(screen.getByRole("combobox", { name: "Provider" }), {
+      target: { value: "linear" },
+    });
+    expect(screen.getByRole("button", { name: "Unbind Slack channel C_HOME" })).toBeDisabled();
+    vi.mocked(browserApiFetch).mockClear();
+    listedBindings = [];
+    vi.mocked(browserApiFetch).mockResolvedValueOnce(new Response(null, { status: 204 }));
+    fireEvent.click(unbind);
+    await screen.findByText("No channel bindings yet.");
+    expect(browserApiFetch).toHaveBeenCalledWith(`${key}/linear/linear_team`, { method: "DELETE" });
+    expect(browserApiFetch).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not wait for Slack discovery to create or unbind a Linear team", async () => {
+    let finishDiscovery!: (response: Response) => void;
+    const discovery = new Promise<Response>((resolve) => {
+      finishDiscovery = resolve;
+    });
+    vi.mocked(browserApiFetch).mockImplementation(async (url) =>
+      url === channelsKey ? discovery : Response.json({ bindings: listedBindings })
+    );
+    render(<TeamChannels team={team} />, { wrapper });
+    await screen.findByText("No channel bindings yet.");
+    fireEvent.change(screen.getByRole("combobox", { name: "Provider" }), {
+      target: { value: "linear" },
+    });
+    fireEvent.change(screen.getByRole("textbox", { name: "Linear team ID" }), {
+      target: { value: "linear_team" },
+    });
+    listedBindings = [bindings[2]];
+    vi.mocked(browserApiFetch).mockResolvedValueOnce(Response.json({ ok: true }));
+    fireEvent.click(screen.getByRole("button", { name: "Bind team" }));
+    const unbind = await screen.findByRole("button", { name: "Unbind Linear team linear_team" });
+    await waitFor(() => expect(unbind).toBeEnabled());
+    listedBindings = [];
+    vi.mocked(browserApiFetch).mockResolvedValueOnce(new Response(null, { status: 204 }));
+    fireEvent.click(unbind);
+    await screen.findByText("No channel bindings yet.");
+    expect(browserApiFetch).toHaveBeenCalledWith(`${key}/linear/linear_team`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ kind: "source" }),
+    });
+    expect(browserApiFetch).toHaveBeenCalledWith(`${key}/linear/linear_team`, { method: "DELETE" });
+    await act(async () => finishDiscovery(Response.json({ channels })));
+  });
+
+  it("preserves a refused Linear draft and withholds controls when capabilities are revoked", async () => {
+    const view = render(<TeamChannels team={team} />, { wrapper });
+    await screen.findByText("No channel bindings yet.");
+    fireEvent.change(screen.getByRole("combobox", { name: "Provider" }), {
+      target: { value: "linear" },
+    });
+    fireEvent.change(screen.getByRole("textbox", { name: "Linear team ID" }), {
+      target: { value: "linear_team" },
+    });
+    vi.mocked(browserApiFetch).mockResolvedValueOnce(
+      Response.json({ error: "Already bound", code: "channel_already_bound" }, { status: 409 })
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Bind team" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("channel_already_bound");
+    expect(screen.getByRole("textbox", { name: "Linear team ID" })).toHaveValue("linear_team");
+    vi.mocked(browserApiFetch).mockClear();
+    view.rerender(<TeamChannels team={{ ...team, capabilities: undefined }} />);
+    expect(screen.getByRole("combobox", { name: "Provider" })).toBeDisabled();
+    expect(screen.getByRole("textbox", { name: "Linear team ID" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Bind team" })).toBeDisabled();
+    expect(browserApiFetch).not.toHaveBeenCalled();
   });
 
   it("shows server refusal codes without clearing the draft or claiming success", async () => {

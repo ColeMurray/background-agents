@@ -7,7 +7,7 @@ import type {
   ClassificationResult,
   RepoConfig,
 } from "@open-inspect/shared/types/repository-catalog";
-import type { Env } from "../types";
+import type { Env, LinearChannelScope } from "../types";
 import { z } from "zod";
 import {
   CLASSIFICATION_REQUEST_TIMEOUT_MS,
@@ -93,9 +93,10 @@ async function buildClassificationPrompt(
   teamName: string | null | undefined,
   teamKey: string | null | undefined,
   triggerComment: string | null | undefined,
-  traceId?: string
+  traceId?: string,
+  scope?: LinearChannelScope
 ): Promise<string> {
-  const repoDescriptions = await buildRepoDescriptions(env, traceId);
+  const repoDescriptions = await buildRepoDescriptions(env, traceId, scope);
 
   const escapeUntrusted = (s: string) =>
     s
@@ -219,9 +220,10 @@ export async function classifyRepo(
   teamName: string | null | undefined,
   teamKey: string | null | undefined,
   triggerComment: string | null | undefined,
-  traceId?: string
+  traceId?: string,
+  scope?: LinearChannelScope
 ): Promise<ClassificationResult> {
-  const repos = await getAvailableRepos(env, traceId);
+  const repos = await getAvailableRepos(env, traceId, scope);
 
   if (repos.length === 0) {
     return {
@@ -241,19 +243,21 @@ export async function classifyRepo(
     };
   }
 
-  try {
-    const prompt = await buildClassificationPrompt(
-      env,
-      issueTitle,
-      issueDescription,
-      labels,
-      projectName,
-      teamName,
-      teamKey,
-      triggerComment,
-      traceId
-    );
+  // Catalog failures must propagate rather than turn into stale candidate suggestions.
+  const prompt = await buildClassificationPrompt(
+    env,
+    issueTitle,
+    issueDescription,
+    labels,
+    projectName,
+    teamName,
+    teamKey,
+    triggerComment,
+    traceId,
+    scope
+  );
 
+  try {
     const modelId = env.CLASSIFICATION_MODEL || DEFAULT_CLASSIFICATION_MODEL;
     const { provider, model } = resolveClassificationProvider(modelId);
 

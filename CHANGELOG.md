@@ -4,6 +4,14 @@ New features, integrations, and notable improvements to Open-Inspect — newest 
 
 ## Unreleased
 
+### Added
+
+Team leads and workspace administrators can bind Linear teams from a team's Channels tab. Linear
+requests create sessions in the bound team with current actor membership and repository-grant
+checks, including for the installed app user used by unattended requests. Settings > Integrations >
+Linear controls whether unbound teams create workspace-level sessions (the default) or reject
+requests until bound. Catalog and completion reads carry the signed Linear team coordinate.
+
 ### Changed
 
 Team-owned session actions now require current owning-team membership in every `TEAMS_ENFORCEMENT`

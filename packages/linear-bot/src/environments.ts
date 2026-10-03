@@ -1,9 +1,8 @@
 /**
  * Environment fetching from the control plane, for team/project mappings that
- * target a saved environment. A cached resource (in-memory → control plane →
- * KV, **fail open to an empty list**) so an environments-fetch problem never
- * blocks issue handling — mappings targeting an environment are simply
- * skipped and resolution falls through to the next stage.
+ * target a saved environment. Scoped reads are live and fail closed. Legacy
+ * unscoped reads use an in-memory/control-plane/KV cache and fail open to an
+ * empty list so resolution can fall through to the next stage.
  */
 
 import { z } from "zod";
@@ -12,7 +11,7 @@ import {
   listEnvironmentsResponseSchema,
   type Environment,
 } from "@open-inspect/shared/types/environments";
-import type { Env } from "./types";
+import type { Env, LinearChannelScope } from "./types";
 import { createCachedResource } from "./cached-resource";
 import { fetchControlPlaneJson } from "./control-plane";
 
@@ -38,7 +37,15 @@ const environments = createCachedResource<Environment[]>({
 /**
  * Fetch the workspace's environments from the control plane.
  */
-export async function getAvailableEnvironments(env: Env, traceId?: string): Promise<Environment[]> {
+export async function getAvailableEnvironments(
+  env: Env,
+  traceId?: string,
+  scope?: LinearChannelScope
+): Promise<Environment[]> {
+  if (scope) {
+    const body = await fetchControlPlaneJson(env, "/environments", traceId, scope);
+    return listEnvironmentsResponseSchema.parse(body).environments;
+  }
   return environments.get(env, traceId);
 }
 
@@ -48,9 +55,10 @@ export async function getAvailableEnvironments(env: Env, traceId?: string): Prom
 export async function getEnvironmentById(
   env: Env,
   environmentId: string,
-  traceId?: string
+  traceId?: string,
+  scope?: LinearChannelScope
 ): Promise<Environment | undefined> {
-  const all = await getAvailableEnvironments(env, traceId);
+  const all = await getAvailableEnvironments(env, traceId, scope);
   return all.find((environment) => environment.id === environmentId);
 }
 

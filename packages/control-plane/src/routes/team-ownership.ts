@@ -27,19 +27,32 @@ export async function resolveCatalogScope(
   const query = new URL(request.url).searchParams;
   const channels = query.getAll("channel");
   if (channels.length > 0) {
-    const refusal = { error: "Slack channel scope denied", code: "slack_channel_scope_denied" };
     const scope = channels.length === 1 ? parseChannelScope(channels[0]) : null;
-    if (!scope || scope.provider !== "slack" || query.has("teamId")) return json(refusal, 400);
+    const refusal =
+      scope?.provider === "linear"
+        ? { error: "Linear channel scope denied", code: "linear_channel_scope_denied" }
+        : { error: "Slack channel scope denied", code: "slack_channel_scope_denied" };
+    if (!scope || query.has("teamId")) return json(refusal, 400);
     if (
       ctx.principal?.kind !== "service" ||
-      ctx.principal.service !== "slack-bot" ||
-      !ctx.authorization
+      ctx.principal.service !== `${scope.provider}-bot` ||
+      (!ctx.authorization && (scope.provider !== "linear" || ctx.principal.actor))
     ) {
       return json(refusal, 403);
     }
     try {
       const teamId =
-        (await new TeamChannelBindingStore(ctx.db).get("slack", scope.externalId))?.teamId ?? null;
+        (await new TeamChannelBindingStore(ctx.db).get(scope.provider, scope.externalId))?.teamId ??
+        null;
+      if (scope.provider === "linear" && !ctx.principal.actor) {
+        ctx.serviceTeamId = teamId;
+        if (teamId !== null && !(await new TeamStore(ctx.db).isActive(teamId))) {
+          return error("Team not found", 404);
+        }
+        const grants =
+          teamId === null ? null : await new TeamRepositoryGrantStore(ctx.db).listForTeam(teamId);
+        return { teamId, grants };
+      }
       const grants = teamId === null ? null : await admitTeamCatalog(request, ctx, teamId, path);
       return grants instanceof Response ? grants : { teamId, grants };
     } catch {
@@ -50,7 +63,7 @@ export async function resolveCatalogScope(
   if (
     query.has("teamId") &&
     ctx.principal?.kind === "service" &&
-    ctx.principal.service === "slack-bot"
+    (ctx.principal.service === "slack-bot" || ctx.principal.service === "linear-bot")
   ) {
     return denyTeamCatalog(request, ctx, catalogTeamId, path);
   }

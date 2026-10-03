@@ -230,7 +230,22 @@ describe("route policy table", () => {
     ["GET", "/repos/acme/widgets/metadata", [{ service: "github-bot" }]],
     ["GET", "/environments", [{ service: "slack-bot" }, { service: "linear-bot" }]],
     ["GET", "/environments/env-1", [{ service: "github-bot" }]],
-    ["GET", "/integration-settings/slack", [{ service: "slack-bot", pathParams: { id: "slack" } }]],
+    [
+      "GET",
+      "/integration-settings/slack",
+      [
+        { service: "slack-bot", pathParams: { id: "slack" } },
+        { service: "linear-bot", pathParams: { id: "linear" } },
+      ],
+    ],
+    [
+      "GET",
+      "/integration-settings/linear",
+      [
+        { service: "slack-bot", pathParams: { id: "slack" } },
+        { service: "linear-bot", pathParams: { id: "linear" } },
+      ],
+    ],
     [
       "GET",
       "/integration-settings/github/resolved/acme/widgets",

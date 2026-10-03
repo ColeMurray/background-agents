@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { computeHmacHex } from "@open-inspect/shared/auth";
 import { callbacksRouter } from "./callbacks";
 import { createFakeKV, makeExecutionContext, makeLinearBotEnv } from "./test-helpers";
@@ -6,6 +6,10 @@ import { createFakeKV, makeExecutionContext, makeLinearBotEnv } from "./test-hel
 const SECRET = "callback-secret";
 const SIZE_LIMIT_ERROR =
   "The agent's response exceeded the event size limit and was not delivered in full.";
+
+beforeEach(() => {
+  vi.spyOn(Date, "now").mockReturnValue(1_700_000_000_000);
+});
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -66,6 +70,7 @@ async function postFailedCompletion(options: {
       issueId: "issue-1",
       issueIdentifier: "ENG-1",
       issueUrl: "https://linear.app/acme/issue/ENG-1",
+      linearTeamId: "external-team-1",
       model: "anthropic/claude-haiku-4-5",
     },
   };

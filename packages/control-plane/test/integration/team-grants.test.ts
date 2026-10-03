@@ -46,17 +46,18 @@ async function request(path: string, method = "GET", body?: object, userId?: str
   );
 }
 
-async function slackCatalog(
+async function channelCatalog(
   path: string,
-  query = "channel=slack:C-CATALOG",
+  provider: "slack" | "linear",
+  query = `channel=${provider}:C-CATALOG`,
   init: ServiceRequestInit = {}
 ) {
   const url = `https://test.local${path}${query ? `?${query}` : ""}`;
   return routeRequest(
     new Request(url, {
       headers: await serviceRequestHeaders(url, {
-        service: "slack-bot",
-        actor: "slack:U-CATALOG",
+        service: provider === "slack" ? "slack-bot" : "linear-bot",
+        actor: `${provider}:U-CATALOG`,
         ...init,
       }),
     }),
@@ -71,11 +72,13 @@ describe("team repository grants", () => {
     await cleanD1Tables();
     await seedActiveUser(MEMBER);
     await seedActiveUser(OTHER);
-    await new UserStore(env.DB).createIdentity({
-      userId: MEMBER,
-      provider: "slack",
-      providerUserId: "U-CATALOG",
-    });
+    for (const provider of ["slack", "linear"] as const) {
+      await new UserStore(env.DB).createIdentity({
+        userId: MEMBER,
+        provider,
+        providerUserId: "U-CATALOG",
+      });
+    }
     await request("/me/authorization");
     teamId = (
       await new TeamStore(env.DB).create({
@@ -129,9 +132,172 @@ describe("team repository grants", () => {
     });
   });
 
-  it("admits signed Slack channel catalogs and rechecks grants and membership", async () => {
+  it.each(["slack", "linear"] as const)(
+    "admits signed %s channel catalogs and rechecks grants and membership",
+    async (provider) => {
+      await new TeamChannelBindingStore(env.DB).put(
+        { provider, externalId: "C-CATALOG", teamId, kind: "source" },
+        { requestId: "catalog-binding", actorUserId: MEMBER }
+      );
+      const grants = new TeamRepositoryGrantStore(env.DB);
+      const grant = await grants.add(teamId, {
+        kind: "repository",
+        repoExternalId: 1,
+        owner: "acme",
+        name: "repo-1",
+      });
+      await new EnvironmentStore(env.DB).create(
+        {
+          id: "env_slack_catalog",
+          owner_team_id: teamId,
+          name: "Slack catalog",
+          description: null,
+          prebuild_enabled: 0,
+          channel_associations: null,
+          created_at: 1,
+          updated_at: 1,
+        },
+        [{ position: 0, repo_owner: "acme", repo_name: "repo-1", repo_id: 1, base_branch: "main" }]
+      );
+      const repoList = await channelCatalog("/repos", provider);
+      expect(repoList.status).toBe(200);
+      expect(await repoList.json()).toMatchObject({ repos: [repos[0]] });
+      const environmentList = await channelCatalog("/environments", provider);
+      expect(environmentList.status).toBe(200);
+      expect(await environmentList.json()).toMatchObject({
+        environments: [expect.objectContaining({ id: "env_slack_catalog" })],
+      });
+      await grants.remove(teamId, grant.id);
+      expect(await (await channelCatalog("/repos", provider)).json()).toMatchObject({
+        repos: [],
+        teamHasRepositoryGrants: false,
+      });
+      expect(await (await channelCatalog("/environments", provider)).json()).toMatchObject({
+        environments: [],
+      });
+      await new TeamMembershipStore(env.DB).remove(teamId, MEMBER);
+      const cache = vi.spyOn(env.REPOS_CACHE, "get");
+      const scm = vi.spyOn(GitHubSourceControlProvider.prototype, "listRepositories");
+      const environments = vi.spyOn(EnvironmentStore.prototype, "list");
+      for (const path of ["/repos", "/environments"]) {
+        expect((await channelCatalog(path, provider)).status).toBe(404);
+      }
+      expect(cache).not.toHaveBeenCalled();
+      expect(scm).not.toHaveBeenCalled();
+      expect(environments).not.toHaveBeenCalled();
+    }
+  );
+
+  it.each(["slack", "linear"] as const)(
+    "uses live %s repo bindings despite old or dual membership and retains unbound workspace reads",
+    async (provider) => {
+      const otherTeam = await new TeamStore(env.DB).create({
+        slug: "other",
+        name: "Other",
+        joinPolicy: "invite_only",
+      });
+      const bindings = new TeamChannelBindingStore(env.DB);
+      const bindingActor = { requestId: "catalog-binding", actorUserId: MEMBER };
+      await bindings.put(
+        { provider, externalId: "C-CATALOG", teamId, kind: "source" },
+        bindingActor
+      );
+      const grants = new TeamRepositoryGrantStore(env.DB);
+      for (const [id, repoId] of [
+        [teamId, 1],
+        [otherTeam.id, 2],
+      ] as const) {
+        await grants.add(id, {
+          kind: "repository",
+          repoExternalId: repoId,
+          owner: "acme",
+          name: `repo-${repoId}`,
+        });
+      }
+      expect(await (await channelCatalog("/repos", provider)).json()).toMatchObject({
+        repos: [repos[0]],
+      });
+      await bindings.remove(teamId, provider, "C-CATALOG", bindingActor);
+      await bindings.put(
+        { provider, externalId: "C-CATALOG", teamId: otherTeam.id, kind: "source" },
+        bindingActor
+      );
+      const cache = vi.spyOn(env.REPOS_CACHE, "get");
+      expect((await channelCatalog("/repos", provider)).status).toBe(404);
+      expect(cache).not.toHaveBeenCalled();
+      await new TeamMembershipStore(env.DB).add(otherTeam.id, MEMBER);
+      expect(await (await channelCatalog("/repos", provider)).json()).toMatchObject({
+        repos: [repos[1]],
+      });
+      await bindings.remove(otherTeam.id, provider, "C-CATALOG", bindingActor);
+      expect(await (await channelCatalog("/repos", provider)).json()).toMatchObject({ repos });
+      expect(
+        await (await channelCatalog("/repos", provider, "", { actor: undefined })).json()
+      ).toMatchObject({
+        repos,
+      });
+    }
+  );
+
+  it.each(["slack", "linear"] as const)(
+    "refuses invalid and mismatched %s channel claims before reading catalogs",
+    async (provider) => {
+      const binding = vi.spyOn(TeamChannelBindingStore.prototype, "get");
+      const cache = vi.spyOn(env.REPOS_CACHE, "get");
+      const scm = vi.spyOn(GitHubSourceControlProvider.prototype, "listRepositories");
+      const environments = vi.spyOn(EnvironmentStore.prototype, "list");
+      for (const path of ["/repos", "/environments"]) {
+        for (const query of [
+          "channel",
+          `channel=${provider}:`,
+          `channel=${provider}:C-CATALOG:extra`,
+          `channel=${provider}:C%20CATALOG`,
+          "channel=unknown:C-CATALOG",
+          `channel=${provider}:C-CATALOG&channel=${provider}:C-CATALOG`,
+          `channel=${provider}:C-CATALOG&channel=${provider}:C-OTHER`,
+          `channel=${provider}:C-CATALOG&teamId=${teamId}`,
+          `channel=${provider}:C-CATALOG&teamId=&teamId=${teamId}`,
+          `teamId=${teamId}&teamId=${teamId}`,
+        ]) {
+          expect((await channelCatalog(path, provider, query)).status, `${path}?${query}`).toBe(
+            400
+          );
+        }
+        if (provider === "slack") {
+          expect(
+            (await channelCatalog(path, provider, undefined, { actor: undefined })).status
+          ).toBe(403);
+        }
+        expect((await channelCatalog(path, provider, `teamId=${teamId}`)).status).toBe(404);
+        expect(
+          (await channelCatalog(path, provider, `teamId=${teamId}`, { actor: undefined })).status
+        ).toBe(404);
+        const otherProvider = provider === "slack" ? "linear" : "slack";
+        expect(
+          (await channelCatalog(path, provider, `channel=${otherProvider}:C-CATALOG`)).status
+        ).toBe(403);
+        for (const actor of [undefined, `${otherProvider}:U-CATALOG`]) {
+          expect(
+            (
+              await channelCatalog(path, provider, undefined, {
+                service: otherProvider === "slack" ? "slack-bot" : "linear-bot",
+                actor,
+              })
+            ).status
+          ).toBe(403);
+        }
+        expect((await request(`${path}?channel=${provider}:C-CATALOG`)).status).toBe(403);
+      }
+      expect(binding).not.toHaveBeenCalled();
+      expect(cache).not.toHaveBeenCalled();
+      expect(scm).not.toHaveBeenCalled();
+      expect(environments).not.toHaveBeenCalled();
+    }
+  );
+
+  it("derives actorless Linear repository reads from the binding's live grants", async () => {
     await new TeamChannelBindingStore(env.DB).put(
-      { provider: "slack", externalId: "C-CATALOG", teamId, kind: "source" },
+      { provider: "linear", externalId: "C-CATALOG", teamId, kind: "source" },
       { requestId: "catalog-binding", actorUserId: MEMBER }
     );
     const grants = new TeamRepositoryGrantStore(env.DB);
@@ -141,204 +307,105 @@ describe("team repository grants", () => {
       owner: "acme",
       name: "repo-1",
     });
-    await new EnvironmentStore(env.DB).create(
-      {
-        id: "env_slack_catalog",
-        owner_team_id: teamId,
-        name: "Slack catalog",
-        description: null,
-        prebuild_enabled: 0,
-        channel_associations: null,
-        created_at: 1,
-        updated_at: 1,
-      },
-      [{ position: 0, repo_owner: "acme", repo_name: "repo-1", repo_id: 1, base_branch: "main" }]
-    );
-    const repoList = await slackCatalog("/repos");
-    expect(repoList.status).toBe(200);
-    expect(await repoList.json()).toMatchObject({ repos: [repos[0]] });
-    const environmentList = await slackCatalog("/environments");
-    expect(environmentList.status).toBe(200);
-    expect(await environmentList.json()).toMatchObject({
-      environments: [expect.objectContaining({ id: "env_slack_catalog" })],
+    const init = { actor: undefined };
+    expect(await (await channelCatalog("/repos", "linear", undefined, init)).json()).toMatchObject({
+      repos: [repos[0]],
     });
     await grants.remove(teamId, grant.id);
-    expect(await (await slackCatalog("/repos")).json()).toMatchObject({
+    expect(await (await channelCatalog("/repos", "linear", undefined, init)).json()).toMatchObject({
       repos: [],
-      teamHasRepositoryGrants: false,
     });
-    expect(await (await slackCatalog("/environments")).json()).toMatchObject({ environments: [] });
-    await new TeamMembershipStore(env.DB).remove(teamId, MEMBER);
     const cache = vi.spyOn(env.REPOS_CACHE, "get");
-    const scm = vi.spyOn(GitHubSourceControlProvider.prototype, "listRepositories");
-    const environments = vi.spyOn(EnvironmentStore.prototype, "list");
-    for (const path of ["/repos", "/environments"]) {
-      expect((await slackCatalog(path)).status).toBe(404);
-    }
+    cache.mockClear();
+    vi.spyOn(TeamStore.prototype, "isActive").mockResolvedValue(false);
+    expect((await channelCatalog("/repos", "linear", undefined, init)).status).toBe(404);
     expect(cache).not.toHaveBeenCalled();
-    expect(scm).not.toHaveBeenCalled();
-    expect(environments).not.toHaveBeenCalled();
   });
 
-  it("uses live repo bindings despite old or dual membership and retains unbound workspace reads", async () => {
-    const otherTeam = await new TeamStore(env.DB).create({
-      slug: "other",
-      name: "Other",
-      joinPolicy: "invite_only",
-    });
-    const bindings = new TeamChannelBindingStore(env.DB);
-    const bindingActor = { requestId: "catalog-binding", actorUserId: MEMBER };
-    await bindings.put(
-      { provider: "slack", externalId: "C-CATALOG", teamId, kind: "source" },
-      bindingActor
-    );
-    const grants = new TeamRepositoryGrantStore(env.DB);
-    for (const [id, repoId] of [
-      [teamId, 1],
-      [otherTeam.id, 2],
-    ] as const) {
-      await grants.add(id, {
-        kind: "repository",
-        repoExternalId: repoId,
-        owner: "acme",
-        name: `repo-${repoId}`,
-      });
-    }
-    expect(await (await slackCatalog("/repos")).json()).toMatchObject({ repos: [repos[0]] });
-    await bindings.remove(teamId, "slack", "C-CATALOG", bindingActor);
-    await bindings.put(
-      { provider: "slack", externalId: "C-CATALOG", teamId: otherTeam.id, kind: "source" },
-      bindingActor
-    );
-    const cache = vi.spyOn(env.REPOS_CACHE, "get");
-    expect((await slackCatalog("/repos")).status).toBe(404);
-    expect(cache).not.toHaveBeenCalled();
-    await new TeamMembershipStore(env.DB).add(otherTeam.id, MEMBER);
-    expect(await (await slackCatalog("/repos")).json()).toMatchObject({ repos: [repos[1]] });
-    await bindings.remove(otherTeam.id, "slack", "C-CATALOG", bindingActor);
-    expect(await (await slackCatalog("/repos")).json()).toMatchObject({ repos });
-    expect(await (await slackCatalog("/repos", "", { actor: undefined })).json()).toMatchObject({
-      repos,
-    });
-  });
-
-  it("refuses invalid, actorless, and other-service channel claims before reading catalogs", async () => {
-    await new UserStore(env.DB).createIdentity({
-      userId: MEMBER,
-      provider: "linear",
-      providerUserId: "L-CATALOG",
-    });
-    const binding = vi.spyOn(TeamChannelBindingStore.prototype, "get");
-    const cache = vi.spyOn(env.REPOS_CACHE, "get");
-    const scm = vi.spyOn(GitHubSourceControlProvider.prototype, "listRepositories");
-    const environments = vi.spyOn(EnvironmentStore.prototype, "list");
-    for (const path of ["/repos", "/environments"]) {
-      for (const query of [
-        "channel",
-        "channel=slack:",
-        "channel=slack:C-CATALOG:extra",
-        "channel=slack:C%20CATALOG",
-        "channel=unknown:C-CATALOG",
-        "channel=linear:C-CATALOG",
-        "channel=slack:C-CATALOG&channel=slack:C-CATALOG",
-        "channel=slack:C-CATALOG&channel=slack:C-OTHER",
-        `channel=slack:C-CATALOG&teamId=${teamId}`,
-        `channel=slack:C-CATALOG&teamId=&teamId=${teamId}`,
-        `teamId=${teamId}&teamId=${teamId}`,
-      ]) {
-        expect((await slackCatalog(path, query)).status, `${path}?${query}`).toBe(400);
-      }
-      expect((await slackCatalog(path, undefined, { actor: undefined })).status).toBe(403);
-      expect((await slackCatalog(path, `teamId=${teamId}`)).status).toBe(404);
-      expect((await slackCatalog(path, `teamId=${teamId}`, { actor: undefined })).status).toBe(404);
-      expect(
-        (await slackCatalog(path, undefined, { service: "linear-bot", actor: undefined })).status
-      ).toBe(403);
-      expect(
-        (await slackCatalog(path, undefined, { service: "linear-bot", actor: "linear:L-CATALOG" }))
-          .status
-      ).toBe(403);
-      expect((await request(`${path}?channel=slack:C-CATALOG`)).status).toBe(403);
-    }
-    expect(binding).not.toHaveBeenCalled();
-    expect(cache).not.toHaveBeenCalled();
-    expect(scm).not.toHaveBeenCalled();
-    expect(environments).not.toHaveBeenCalled();
-  });
-
-  it("cryptographically rejects removed, replaced, or extended channel queries", async () => {
-    const binding = vi.spyOn(TeamChannelBindingStore.prototype, "get");
-    const cache = vi.spyOn(env.REPOS_CACHE, "get");
-    const scm = vi.spyOn(GitHubSourceControlProvider.prototype, "listRepositories");
-    const environments = vi.spyOn(EnvironmentStore.prototype, "list");
-    for (const path of ["/repos", "/environments"]) {
-      const url = `https://test.local${path}`;
-      const headers = await serviceRequestHeaders(`${url}?channel=slack:C-CATALOG`, {
-        service: "slack-bot",
-        actor: "slack:U-CATALOG",
-      });
-      for (const query of [
-        "",
-        "?channel=slack:C-OTHER",
-        "?channel=slack:C-CATALOG&channel=slack:C-OTHER",
-        `?channel=slack:C-CATALOG&teamId=${teamId}`,
-      ]) {
-        const response = await routeRequest(
-          new Request(`${url}${query}`, { headers }),
-          env,
-          createExecutionContext()
-        );
-        expect(response.status).toBe(401);
-      }
-    }
-    expect(binding).not.toHaveBeenCalled();
-    expect(cache).not.toHaveBeenCalled();
-    expect(scm).not.toHaveBeenCalled();
-    expect(environments).not.toHaveBeenCalled();
-  });
-
-  it("fails closed on catalog authority errors or malformed bindings before catalog reads", async () => {
-    await new TeamChannelBindingStore(env.DB).put(
-      { provider: "slack", externalId: "C-CATALOG", teamId, kind: "source" },
-      { requestId: "catalog-binding", actorUserId: MEMBER }
-    );
-    const cache = vi.spyOn(env.REPOS_CACHE, "get");
-    const scm = vi.spyOn(GitHubSourceControlProvider.prototype, "listRepositories");
-    const environments = vi.spyOn(EnvironmentStore.prototype, "list");
-    const repositories = vi.spyOn(EnvironmentStore.prototype, "getRepositoriesForEnvironmentIds");
-    for (const read of [
-      vi.spyOn(TeamChannelBindingStore.prototype, "get"),
-      vi.spyOn(TeamStore.prototype, "isActive"),
-      vi.spyOn(TeamMembershipStore.prototype, "listForUser"),
-      vi.spyOn(TeamRepositoryGrantStore.prototype, "listForTeam"),
-      vi.spyOn(AuthorizationStore.prototype, "getEffectiveAuthorization"),
-    ]) {
-      read.mockRejectedValue(new Error("Authority unavailable"));
+  it.each(["slack", "linear"] as const)(
+    "cryptographically rejects removed, replaced, or extended %s channel queries",
+    async (provider) => {
+      const binding = vi.spyOn(TeamChannelBindingStore.prototype, "get");
+      const cache = vi.spyOn(env.REPOS_CACHE, "get");
+      const scm = vi.spyOn(GitHubSourceControlProvider.prototype, "listRepositories");
+      const environments = vi.spyOn(EnvironmentStore.prototype, "list");
       for (const path of ["/repos", "/environments"]) {
-        expect((await slackCatalog(path)).status, path).toBe(503);
+        const url = `https://test.local${path}`;
+        const headers = await serviceRequestHeaders(`${url}?channel=${provider}:C-CATALOG`, {
+          service: provider === "slack" ? "slack-bot" : "linear-bot",
+          actor: `${provider}:U-CATALOG`,
+        });
+        for (const query of [
+          "",
+          `?channel=${provider}:C-OTHER`,
+          `?channel=${provider}:C-CATALOG&channel=${provider}:C-OTHER`,
+          `?channel=${provider}:C-CATALOG&teamId=${teamId}`,
+        ]) {
+          const response = await routeRequest(
+            new Request(`${url}${query}`, { headers }),
+            env,
+            createExecutionContext()
+          );
+          expect(response.status).toBe(401);
+        }
       }
-      read.mockRestore();
+      expect(binding).not.toHaveBeenCalled();
+      expect(cache).not.toHaveBeenCalled();
+      expect(scm).not.toHaveBeenCalled();
+      expect(environments).not.toHaveBeenCalled();
     }
-    vi.spyOn(TeamChannelBindingStore.prototype, "get").mockImplementation(async () =>
-      teamChannelBindingSchema.parse({
-        provider: "slack",
-        externalId: "C-CATALOG",
-        teamId,
-        kind: "invalid",
-      })
-    );
-    for (const path of ["/repos", "/environments"]) {
-      expect((await slackCatalog(path)).status, `malformed ${path}`).toBe(503);
-    }
-    expect(cache).not.toHaveBeenCalled();
-    expect(scm).not.toHaveBeenCalled();
-    expect(environments).not.toHaveBeenCalled();
-    expect(repositories).not.toHaveBeenCalled();
-  });
+  );
 
-  it.each(["suspended", "unassigned"])(
-    "rejects a %s canonical Slack actor even in an unbound channel before catalog reads",
-    async (state) => {
+  it.each(["slack", "linear"] as const)(
+    "fails closed on %s catalog authority errors or malformed bindings before catalog reads",
+    async (provider) => {
+      await new TeamChannelBindingStore(env.DB).put(
+        { provider, externalId: "C-CATALOG", teamId, kind: "source" },
+        { requestId: "catalog-binding", actorUserId: MEMBER }
+      );
+      const cache = vi.spyOn(env.REPOS_CACHE, "get");
+      const scm = vi.spyOn(GitHubSourceControlProvider.prototype, "listRepositories");
+      const environments = vi.spyOn(EnvironmentStore.prototype, "list");
+      const repositories = vi.spyOn(EnvironmentStore.prototype, "getRepositoriesForEnvironmentIds");
+      for (const read of [
+        vi.spyOn(TeamChannelBindingStore.prototype, "get"),
+        vi.spyOn(TeamStore.prototype, "isActive"),
+        vi.spyOn(TeamMembershipStore.prototype, "listForUser"),
+        vi.spyOn(TeamRepositoryGrantStore.prototype, "listForTeam"),
+        vi.spyOn(AuthorizationStore.prototype, "getEffectiveAuthorization"),
+      ]) {
+        read.mockRejectedValue(new Error("Authority unavailable"));
+        for (const path of ["/repos", "/environments"]) {
+          expect((await channelCatalog(path, provider)).status, path).toBe(503);
+        }
+        read.mockRestore();
+      }
+      vi.spyOn(TeamChannelBindingStore.prototype, "get").mockImplementation(async () =>
+        teamChannelBindingSchema.parse({
+          provider,
+          externalId: "C-CATALOG",
+          teamId,
+          kind: "invalid",
+        })
+      );
+      for (const path of ["/repos", "/environments"]) {
+        expect((await channelCatalog(path, provider)).status, `malformed ${path}`).toBe(503);
+      }
+      expect(cache).not.toHaveBeenCalled();
+      expect(scm).not.toHaveBeenCalled();
+      expect(environments).not.toHaveBeenCalled();
+      expect(repositories).not.toHaveBeenCalled();
+    }
+  );
+
+  it.each([
+    { provider: "slack", state: "suspended" },
+    { provider: "slack", state: "unassigned" },
+    { provider: "linear", state: "suspended" },
+    { provider: "linear", state: "unassigned" },
+  ] as const)(
+    "rejects a $state canonical $provider actor even in an unbound channel before catalog reads",
+    async ({ provider, state }) => {
       if (state === "suspended") {
         await env.DB.prepare("UPDATE users SET suspended_at = 1 WHERE id = ?").bind(MEMBER).run();
       } else {
@@ -351,7 +418,7 @@ describe("team repository grants", () => {
       const scm = vi.spyOn(GitHubSourceControlProvider.prototype, "listRepositories");
       const environments = vi.spyOn(EnvironmentStore.prototype, "list");
       for (const path of ["/repos", "/environments"]) {
-        expect((await slackCatalog(path)).status).toBe(403);
+        expect((await channelCatalog(path, provider)).status).toBe(403);
       }
       expect(binding).not.toHaveBeenCalled();
       expect(cache).not.toHaveBeenCalled();

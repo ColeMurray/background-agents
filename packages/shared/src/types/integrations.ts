@@ -105,7 +105,7 @@ export const scmGlobalConfigSchema: z.ZodType<ScmGlobalConfig> = z.strictObject(
 /** Repository SCM settings are field-level overrides; omitted fields inherit globally. */
 export type ScmRepoSettings = ScmSettings;
 
-/** Overridable behavior settings for the Linear bot. Used at both global (defaults) and per-repo (overrides) levels. */
+/** Overridable behavior settings for the Linear bot, shared by global defaults and repo overrides. */
 export const linearBotSettingsSchema = z.strictObject({
   model: z.string().optional(),
   reasoningEffort: z.string().optional(),
@@ -116,6 +116,17 @@ export const linearBotSettingsSchema = z.strictObject({
 });
 
 export type LinearBotSettings = z.infer<typeof linearBotSettingsSchema>;
+
+export const linearUnboundChannelsSchema = z.enum(["workspace", "reject"]);
+export type LinearUnboundChannels = z.infer<typeof linearUnboundChannelsSchema>;
+export const DEFAULT_LINEAR_UNBOUND_CHANNELS: LinearUnboundChannels = "workspace";
+
+/** Global Linear defaults include workspace-wide policy that repo overrides cannot change. */
+export const linearBotGlobalSettingsSchema = linearBotSettingsSchema.extend({
+  unboundChannels: linearUnboundChannelsSchema.optional(),
+});
+
+export type LinearBotGlobalSettings = z.infer<typeof linearBotGlobalSettingsSchema>;
 
 /**
  * Maximum length of a custom session-instructions value (Linear
@@ -542,7 +553,7 @@ export const integrationSettingsSchemas = {
     repo: githubBotSettingsSchema,
   },
   linear: {
-    global: integrationGlobalSettingsSchema(linearBotSettingsSchema),
+    global: integrationGlobalSettingsSchema(linearBotGlobalSettingsSchema),
     repo: linearBotSettingsSchema,
   },
   "code-server": {

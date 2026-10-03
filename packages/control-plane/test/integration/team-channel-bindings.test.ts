@@ -49,7 +49,10 @@ beforeEach(async () => {
   await cleanD1Tables();
   await serviceFetch(`${BASE}/me/authorization`);
 });
-afterEach(() => vi.unstubAllGlobals());
+afterEach(() => {
+  vi.unstubAllGlobals();
+  vi.restoreAllMocks();
+});
 
 describe("team channel binding store", () => {
   it("gets provider-keyed bindings and lists only the requested team", async () => {
@@ -228,6 +231,24 @@ describe("team channel binding routes", () => {
     expect(await (await request(path)).json()).toEqual({ bindings: [] });
   });
 
+  it("round-trips Linear bindings without Slack credentials or channel verification", async () => {
+    const team = await createTeam("engineering");
+    const path = `/teams/${team.id}/channel-bindings`;
+    const fetch = vi.fn();
+    const overrides = { SLACK_BOT: undefined, SERVICE_AUTH_SECRET_SLACK_BOT: undefined };
+    for (const kind of ["primary", "source"] as const) {
+      const response = await request(`${path}/linear/L123`, "PUT", { kind }, overrides, fetch);
+      expect(response.status).toBe(200);
+      const binding = { provider: "linear", externalId: "L123", teamId: team.id, kind };
+      expect(await response.json()).toEqual({ binding });
+      expect(await (await request(path)).json()).toEqual({ bindings: [binding] });
+    }
+    expect(fetch).not.toHaveBeenCalled();
+    expect(await bindingAudits(team.id)).toHaveLength(2);
+    expect((await request(`${path}/linear/L123`, "DELETE")).status).toBe(204);
+    expect(await (await request(path)).json()).toEqual({ bindings: [] });
+  });
+
   it.each([
     { ...channelInfo, isMember: false },
     { ...channelInfo, isExtShared: true },
@@ -291,15 +312,17 @@ describe("team channel binding routes", () => {
     vi.stubGlobal("fetch", slackFetch);
     for (const mode of ["off", "shadow", "on"]) {
       for (const method of ["GET", "PUT", "DELETE"]) {
-        const path = `/teams/${team.id}/channel-bindings${method === "GET" ? "" : "/slack/C123"}`;
-        const denied = await request(
-          path,
-          method,
-          method === "PUT" ? { kind: "source" } : undefined,
-          { TEAMS_ENFORCEMENT: mode },
-          fetch
-        );
-        expect(denied.status).toBe(403);
+        for (const provider of ["slack", "linear"]) {
+          const path = `/teams/${team.id}/channel-bindings${method === "GET" ? "" : `/${provider}/C123`}`;
+          const denied = await request(
+            path,
+            method,
+            method === "PUT" ? { kind: "source" } : undefined,
+            { TEAMS_ENFORCEMENT: mode },
+            fetch
+          );
+          expect(denied.status).toBe(403);
+        }
       }
       for (const token of ["xoxb-test", undefined]) {
         const denied = await request(`/teams/${team.id}/slack-channels`, "GET", undefined, {
@@ -381,29 +404,29 @@ describe("team channel binding routes", () => {
     });
   });
 
-  it("returns conflicts without disclosing another team's identity", async () => {
-    const team = await createTeam("engineering");
-    const other = await createTeam("other");
-    const store = new TeamChannelBindingStore(env.DB);
-    await store.put(
-      { provider: "slack", externalId: "C123", teamId: other.id, kind: "source" },
-      actor
-    );
-    const response = await request(`/teams/${team.id}/channel-bindings/slack/C123`, "PUT", {
-      kind: "source",
-    });
-    expect(response.status).toBe(409);
-    expect(await response.json()).toEqual({
-      error: "Channel binding conflicts with an existing binding",
-      code: "channel_binding_conflict",
-    });
-    expect(await bindingAudits(team.id)).toEqual([]);
-  });
+  it.each(["slack", "linear"] as const)(
+    "returns %s conflicts without disclosing another team's identity",
+    async (provider) => {
+      const team = await createTeam("engineering");
+      const other = await createTeam("other");
+      const store = new TeamChannelBindingStore(env.DB);
+      await store.put({ provider, externalId: "C123", teamId: other.id, kind: "source" }, actor);
+      const response = await request(`/teams/${team.id}/channel-bindings/${provider}/C123`, "PUT", {
+        kind: "source",
+      });
+      expect(response.status).toBe(409);
+      expect(await response.json()).toEqual({
+        error: "Channel binding conflicts with an existing binding",
+        code: "channel_binding_conflict",
+      });
+      expect(await bindingAudits(team.id)).toEqual([]);
+    }
+  );
 
   it("rejects unsupported providers and invalid kinds before checking Slack", async () => {
     const team = await createTeam("engineering");
     const fetch = vi.fn();
-    for (const provider of ["github", "linear"]) {
+    for (const provider of ["github", "unknown"]) {
       expect(
         (
           await request(
@@ -416,22 +439,91 @@ describe("team channel binding routes", () => {
         ).status
       ).toBe(400);
     }
-    expect(
-      (
-        await request(
-          `/teams/${team.id}/channel-bindings/slack/C123`,
-          "PUT",
-          { kind: "other" },
-          {},
-          fetch
-        )
-      ).status
-    ).toBe(400);
+    for (const provider of ["slack", "linear"]) {
+      expect(
+        (
+          await request(
+            `/teams/${team.id}/channel-bindings/${provider}/C123`,
+            "PUT",
+            { kind: "other" },
+            {},
+            fetch
+          )
+        ).status
+      ).toBe(400);
+    }
     expect(fetch).not.toHaveBeenCalled();
   });
 });
 
 describe("service channel binding lookup", () => {
+  it("uses Linear global policy without a Slack DM exemption or Slack policy inheritance", async () => {
+    await new IntegrationSettingsStore(env.DB).setGlobal("slack", {
+      defaults: { unboundChannels: "reject" },
+    });
+    const endpoint = `${BASE}/channel-bindings/linear/D123`;
+    const unconfigured = await serviceFetch(endpoint, { service: "linear-bot" });
+    expect(unconfigured.status).toBe(200);
+    expect(await unconfigured.json()).toEqual({ teamId: null });
+    for (const unboundChannels of ["reject", "workspace"] as const) {
+      await new IntegrationSettingsStore(env.DB).setGlobal("linear", {
+        defaults: { unboundChannels },
+      });
+      const response = await serviceFetch(endpoint, { service: "linear-bot" });
+      expect(response.status).toBe(unboundChannels === "reject" ? 404 : 200);
+      expect(await response.json()).toEqual(
+        unboundChannels === "reject"
+          ? { error: "Channel is not bound", code: "channel_unbound" }
+          : { teamId: null }
+      );
+    }
+  });
+
+  it.each(["primary", "source"] as const)(
+    "returns the bound Linear team and %s kind under reject policy",
+    async (kind) => {
+      const team = await createTeam("engineering");
+      await new TeamChannelBindingStore(env.DB).put(
+        { provider: "linear", externalId: "L123", teamId: team.id, kind },
+        actor
+      );
+      await new IntegrationSettingsStore(env.DB).setGlobal("linear", {
+        defaults: { unboundChannels: "reject" },
+      });
+      const response = await serviceFetch(`${BASE}/channel-bindings/linear/L123`, {
+        service: "linear-bot",
+      });
+      expect(response.status).toBe(200);
+      expect(await response.json()).toEqual({ teamId: team.id, kind });
+      expect(response.headers.get("Cache-Control")).toBe("private, no-store");
+    }
+  );
+
+  it("fails closed when Linear binding or policy authority is unavailable or malformed", async () => {
+    const endpoint = `${BASE}/channel-bindings/linear/L123`;
+    for (const read of [
+      vi.spyOn(TeamChannelBindingStore.prototype, "get"),
+      vi.spyOn(IntegrationSettingsStore.prototype, "getGlobal"),
+    ]) {
+      read.mockRejectedValue(new Error("Authority unavailable"));
+      const response = await routeRequest(
+        new Request(endpoint, {
+          headers: await serviceRequestHeaders(endpoint, { service: "linear-bot" }),
+        }),
+        env,
+        createExecutionContext()
+      );
+      expect(response.status).toBe(503);
+      read.mockRestore();
+    }
+    await env.DB.prepare(
+      "INSERT INTO integration_settings (integration_id, settings, created_at, updated_at) VALUES ('linear', ?, 1, 1)"
+    )
+      .bind(JSON.stringify({ defaults: { unboundChannels: "invalid" } }))
+      .run();
+    expect((await serviceFetch(endpoint, { service: "linear-bot" })).status).toBe(503);
+  });
+
   it("allows unbound DMs under reject policy without exempting regular channels", async () => {
     const unbound = await serviceFetch(`${BASE}/channel-bindings/slack/C123`, {
       service: "slack-bot",
@@ -470,111 +562,151 @@ describe("service channel binding lookup", () => {
     expect(await dm.json()).toEqual({ teamId: team.id, kind: "source" });
   });
 
-  it("round-trips unboundChannels through the settings API and rejects invalid or repo-scoped policies", async () => {
-    const endpoint = `${BASE}/integration-settings/slack`;
-    for (const unboundChannels of ["workspace", "reject"]) {
-      const updated = await serviceFetch(endpoint, {
-        method: "PUT",
-        body: JSON.stringify({ settings: { defaults: { unboundChannels } } }),
-      });
-      expect(updated.status).toBe(200);
-      const settings = await serviceFetch(endpoint, { service: "slack-bot" });
-      expect(await settings.json()).toEqual({
-        integrationId: "slack",
-        settings: { defaults: { unboundChannels } },
-      });
-    }
-    expect(
-      (
-        await serviceFetch(endpoint, {
+  it.each(["slack", "linear"] as const)(
+    "round-trips %s unboundChannels and rejects invalid or repo-scoped policies",
+    async (provider) => {
+      const service = provider === "slack" ? "slack-bot" : "linear-bot";
+      const endpoint = `${BASE}/integration-settings/${provider}`;
+      for (const unboundChannels of ["workspace", "reject"]) {
+        const updated = await serviceFetch(endpoint, {
           method: "PUT",
-          body: JSON.stringify({ settings: { defaults: { unboundChannels: "team" } } }),
-        })
-      ).status
-    ).toBe(400);
-    expect(
-      (
-        await serviceFetch(`${endpoint}/repos/acme/widgets`, {
-          method: "PUT",
-          body: JSON.stringify({ settings: { unboundChannels: "workspace" } }),
-        })
-      ).status
-    ).toBe(400);
-    expect(
-      (await new IntegrationSettingsStore(env.DB).getGlobal("slack"))?.defaults?.unboundChannels
-    ).toBe("reject");
-  });
-
-  it("grants actorless lookup only to slack-bot and rejects unsupported providers", async () => {
-    const team = await createTeam("engineering");
-    await new TeamChannelBindingStore(env.DB).put(slackBinding(team.id, "primary"), actor);
-    await new IntegrationSettingsStore(env.DB).setGlobal("slack", {
-      defaults: { unboundChannels: "reject" },
-    });
-    const response = await serviceFetch(`${BASE}/channel-bindings/slack/C123`, {
-      service: "slack-bot",
-    });
-    expect(response.status).toBe(200);
-    expect(await response.json()).toEqual({ teamId: team.id, kind: "primary" });
-    expect(response.headers.get("Cache-Control")).toBe("private, no-store");
-    for (const service of ["github-bot", "linear-bot"] as const) {
-      expect((await serviceFetch(`${BASE}/channel-bindings/slack/C123`, { service })).status).toBe(
-        403
-      );
+          body: JSON.stringify({ settings: { defaults: { unboundChannels } } }),
+        });
+        expect(updated.status).toBe(200);
+        const settings = await serviceFetch(endpoint, { service });
+        expect(settings.status).toBe(200);
+        expect(await settings.json()).toEqual({
+          integrationId: provider,
+          settings: { defaults: { unboundChannels } },
+        });
+      }
+      expect(
+        (
+          await serviceFetch(endpoint, {
+            method: "PUT",
+            body: JSON.stringify({ settings: { defaults: { unboundChannels: "team" } } }),
+          })
+        ).status
+      ).toBe(400);
+      expect(
+        (
+          await serviceFetch(`${endpoint}/repos/acme/widgets`, {
+            method: "PUT",
+            body: JSON.stringify({ settings: { unboundChannels: "workspace" } }),
+          })
+        ).status
+      ).toBe(400);
+      expect(
+        (await new IntegrationSettingsStore(env.DB).getGlobal(provider))?.defaults?.unboundChannels
+      ).toBe("reject");
     }
-    for (const provider of ["linear", "github"]) {
-      const unsupported = await serviceFetch(`${BASE}/channel-bindings/${provider}/C123`, {
-        service: "slack-bot",
-      });
-      expect(unsupported.status).toBe(400);
-      expect(await unsupported.json()).toEqual({ error: "Unsupported channel binding provider" });
-    }
-  });
+  );
 
-  it("denies human owners and custom-role integration readers", async () => {
-    const team = await createTeam("engineering");
-    await new TeamChannelBindingStore(env.DB).put(
-      { provider: "slack", externalId: "C123", teamId: team.id, kind: "source" },
-      actor
-    );
-    const endpoint = `${BASE}/channel-bindings/slack/C123`;
-    const owner = await serviceFetch(endpoint);
-    expect(owner.status).toBe(403);
-    expect(await owner.json()).toMatchObject({ code: "service_capability_required" });
-
-    const roleId = "role_channel_binding_integration_reader";
-    await env.DB.batch([
-      env.DB.prepare(
-        `INSERT INTO roles (id, key, name, normalized_name, description, is_system)
-         VALUES (?, NULL, 'Integration Reader', 'integration reader', NULL, 0)`
-      ).bind(roleId),
-      env.DB.prepare(
-        "INSERT INTO role_permissions (role_id, permission_id) VALUES (?, 'integrations.read')"
-      ).bind(roleId),
-      env.DB.prepare("UPDATE user_role_assignments SET role_id = ? WHERE user_id = ?").bind(
-        roleId,
-        OWNER
-      ),
-    ]);
-    expect((await serviceFetch(`${BASE}/integration-settings/slack`)).status).toBe(200);
-    const reader = await serviceFetch(endpoint);
-    expect(reader.status).toBe(403);
-    expect(await reader.json()).toMatchObject({ code: "service_capability_required" });
-  });
-
-  it.each([
-    { service: "github-bot", provider: "github", providerUserId: "208" },
-    { service: "linear-bot", provider: "linear", providerUserId: "binding-reader" },
-  ] as const)(
-    "denies $service even with an owner actor",
-    async ({ service, provider, providerUserId }) => {
+  it.each(["slack", "linear"] as const)(
+    "grants %s lookup only to the matching bot and rejects unsupported providers",
+    async (provider) => {
       const team = await createTeam("engineering");
       await new TeamChannelBindingStore(env.DB).put(
-        { provider: "slack", externalId: "C123", teamId: team.id, kind: "source" },
+        { ...slackBinding(team.id, "primary"), provider },
+        actor
+      );
+      await new IntegrationSettingsStore(env.DB).setGlobal(provider, {
+        defaults: { unboundChannels: "reject" },
+      });
+      const matchingService = provider === "slack" ? "slack-bot" : "linear-bot";
+      const response = await serviceFetch(`${BASE}/channel-bindings/${provider}/C123`, {
+        service: matchingService,
+      });
+      expect(response.status).toBe(200);
+      expect(await response.json()).toEqual({ teamId: team.id, kind: "primary" });
+      expect(response.headers.get("Cache-Control")).toBe("private, no-store");
+      const binding = vi.spyOn(TeamChannelBindingStore.prototype, "get");
+      const settings = vi.spyOn(IntegrationSettingsStore.prototype, "getGlobal");
+      for (const service of ["slack-bot", "github-bot", "linear-bot"] as const) {
+        if (service === matchingService) continue;
+        const endpoint = `${BASE}/channel-bindings/${provider}/C123`;
+        const denied = await routeRequest(
+          new Request(endpoint, { headers: await serviceRequestHeaders(endpoint, { service }) }),
+          env,
+          createExecutionContext()
+        );
+        expect(denied.status).toBe(403);
+        expect(await denied.json()).toMatchObject({ code: "service_capability_required" });
+      }
+      for (const unsupportedProvider of ["github", "unknown"]) {
+        const unsupported = await serviceFetch(
+          `${BASE}/channel-bindings/${unsupportedProvider}/C123`,
+          {
+            service: matchingService,
+          }
+        );
+        expect(unsupported.status).toBe(400);
+        expect(await unsupported.json()).toEqual({ error: "Unsupported channel binding provider" });
+      }
+      expect(binding).not.toHaveBeenCalled();
+      expect(settings).not.toHaveBeenCalled();
+    }
+  );
+
+  it.each(["slack", "linear"] as const)(
+    "denies human owners and custom-role readers of %s bindings",
+    async (provider) => {
+      const team = await createTeam("engineering");
+      await new TeamChannelBindingStore(env.DB).put(
+        { provider, externalId: "C123", teamId: team.id, kind: "source" },
+        actor
+      );
+      const endpoint = `${BASE}/channel-bindings/${provider}/C123`;
+      const owner = await serviceFetch(endpoint);
+      expect(owner.status).toBe(403);
+      expect(await owner.json()).toMatchObject({ code: "service_capability_required" });
+
+      const roleId = "role_channel_binding_integration_reader";
+      await env.DB.batch([
+        env.DB.prepare(
+          `INSERT INTO roles (id, key, name, normalized_name, description, is_system)
+         VALUES (?, NULL, 'Integration Reader', 'integration reader', NULL, 0)`
+        ).bind(roleId),
+        env.DB.prepare(
+          "INSERT INTO role_permissions (role_id, permission_id) VALUES (?, 'integrations.read')"
+        ).bind(roleId),
+        env.DB.prepare("UPDATE user_role_assignments SET role_id = ? WHERE user_id = ?").bind(
+          roleId,
+          OWNER
+        ),
+      ]);
+      expect((await serviceFetch(`${BASE}/integration-settings/slack`)).status).toBe(200);
+      const reader = await serviceFetch(endpoint);
+      expect(reader.status).toBe(403);
+      expect(await reader.json()).toMatchObject({ code: "service_capability_required" });
+    }
+  );
+
+  it.each([
+    { service: "github-bot", provider: "github", bindingProvider: "slack", providerUserId: "208" },
+    {
+      service: "linear-bot",
+      provider: "linear",
+      bindingProvider: "slack",
+      providerUserId: "binding-reader",
+    },
+    {
+      service: "slack-bot",
+      provider: "slack",
+      bindingProvider: "linear",
+      providerUserId: "binding-reader",
+    },
+    { service: "github-bot", provider: "github", bindingProvider: "linear", providerUserId: "208" },
+  ] as const)(
+    "denies $service reading $bindingProvider bindings even with an owner actor",
+    async ({ service, provider, bindingProvider, providerUserId }) => {
+      const team = await createTeam("engineering");
+      await new TeamChannelBindingStore(env.DB).put(
+        { provider: bindingProvider, externalId: "C123", teamId: team.id, kind: "source" },
         actor
       );
       await new UserStore(env.DB).createIdentity({ userId: OWNER, provider, providerUserId });
-      const denied = await serviceFetch(`${BASE}/channel-bindings/slack/C123`, {
+      const denied = await serviceFetch(`${BASE}/channel-bindings/${bindingProvider}/C123`, {
         service,
         actor: `${provider}:${providerUserId}`,
       });

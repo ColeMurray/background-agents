@@ -51,43 +51,46 @@ async function putBinding(
   params: { id: string; provider: string; externalId: string },
   ctx: RequestContext
 ) {
-  if (params.provider !== "slack") return error("Unsupported channel binding provider", 400);
+  const provider = teamChannelBindingProviderSchema.safeParse(params.provider);
+  if (!provider.success) return error("Unsupported channel binding provider", 400);
   const body = await parseBody(request, putTeamChannelBindingRequestSchema);
   if (body instanceof Response) return body;
-  const secret = callbackSigningSecret(env, "slack-bot");
-  if (!env.SLACK_BOT || !secret) {
-    return json(
-      { error: "Channel information unavailable", code: "channel_info_unavailable" },
-      503
-    );
-  }
+  if (provider.data === "slack") {
+    const secret = callbackSigningSecret(env, "slack-bot");
+    if (!env.SLACK_BOT || !secret) {
+      return json(
+        { error: "Channel information unavailable", code: "channel_info_unavailable" },
+        503
+      );
+    }
 
-  const payload = { channelId: params.externalId, timestamp: Date.now() };
-  const signature = await computeHmacHex(JSON.stringify(payload), secret);
-  let response: Response;
-  try {
-    response = await env.SLACK_BOT.fetch("https://internal/internal/channel-info", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ ...payload, signature }),
-      signal: request.signal,
-    });
-  } catch {
-    return json(
-      { error: "Channel information unavailable", code: "channel_info_unavailable" },
-      503
+    const payload = { channelId: params.externalId, timestamp: Date.now() };
+    const signature = await computeHmacHex(JSON.stringify(payload), secret);
+    let response: Response;
+    try {
+      response = await env.SLACK_BOT.fetch("https://internal/internal/channel-info", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ...payload, signature }),
+        signal: request.signal,
+      });
+    } catch {
+      return json(
+        { error: "Channel information unavailable", code: "channel_info_unavailable" },
+        503
+      );
+    }
+    const info = slackChannelInfoSchema.safeParse(
+      response.ok ? await response.json().catch(() => null) : null
     );
-  }
-  const info = slackChannelInfoSchema.safeParse(
-    response.ok ? await response.json().catch(() => null) : null
-  );
-  if (
-    !info.success ||
-    info.data.id !== params.externalId ||
-    !info.data.isMember ||
-    info.data.isExtShared
-  ) {
-    return json({ error: "Channel cannot be bound", code: "channel_not_joinable" }, 409);
+    if (
+      !info.success ||
+      info.data.id !== params.externalId ||
+      !info.data.isMember ||
+      info.data.isExtShared
+    ) {
+      return json({ error: "Channel cannot be bound", code: "channel_not_joinable" }, 409);
+    }
   }
 
   if (ctx.principal?.kind !== "user") throw new Error("Team route not admitted");
@@ -95,7 +98,7 @@ async function putBinding(
     const binding = await new TeamChannelBindingStore(ctx.db).put(
       {
         teamId: admittedTeamId(ctx),
-        provider: "slack",
+        provider: provider.data,
         externalId: params.externalId,
         kind: body.kind,
       },

@@ -321,34 +321,37 @@ describe("environment catalog team scope", () => {
     }
   );
 
-  it("scopes an acting service using its canonical actor's actual membership", async () => {
-    vi.spyOn(TeamChannelBindingStore.prototype, "get").mockResolvedValue({
-      provider: "slack",
-      externalId: "C-CATALOG",
-      teamId: TEAM_ID,
-      kind: "source",
-    });
-    mocks.authenticate.mockImplementation(async (request: Request) => ({
-      principal: {
-        kind: "service",
-        service: "slack-bot",
-        actor: {
-          provider: "slack",
-          providerUserId: "U_ACTOR",
-          participantUserId: "slack:U_ACTOR",
-          canonicalUserId: "user-1",
+  it.each(["slack", "linear"] as const)(
+    "scopes an acting %s service using its canonical actor's actual membership",
+    async (provider) => {
+      vi.spyOn(TeamChannelBindingStore.prototype, "get").mockResolvedValue({
+        provider,
+        externalId: "C-CATALOG",
+        teamId: TEAM_ID,
+        kind: "source",
+      });
+      mocks.authenticate.mockImplementation(async (request: Request) => ({
+        principal: {
+          kind: "service",
+          service: provider === "slack" ? "slack-bot" : "linear-bot",
+          actor: {
+            provider,
+            providerUserId: "U_ACTOR",
+            participantUserId: `${provider}:U_ACTOR`,
+            canonicalUserId: "user-1",
+          },
         },
-      },
-      request,
-    }));
+        request,
+      }));
 
-    expect(await (await list("?channel=slack:C-CATALOG")).json()).toEqual({
-      environments: [fullCatalog[0]],
-      total: 1,
-    });
-    // Both the team gate and the read-filter viewer resolve the canonical actor's memberships.
-    const lookups = vi.mocked(TeamMembershipStore.prototype.listForUser).mock.calls;
-    expect(lookups.length).toBeGreaterThan(0);
-    expect(lookups.every(([userId]) => userId === "user-1")).toBe(true);
-  });
+      expect(await (await list(`?channel=${provider}:C-CATALOG`)).json()).toEqual({
+        environments: [fullCatalog[0]],
+        total: 1,
+      });
+      // Both the team gate and the read-filter viewer resolve the canonical actor's memberships.
+      const lookups = vi.mocked(TeamMembershipStore.prototype.listForUser).mock.calls;
+      expect(lookups.length).toBeGreaterThan(0);
+      expect(lookups.every(([userId]) => userId === "user-1")).toBe(true);
+    }
+  );
 });

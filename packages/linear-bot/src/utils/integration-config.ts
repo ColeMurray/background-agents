@@ -3,8 +3,8 @@ import {
   parseRepositoryFullName,
 } from "@open-inspect/shared/types/repositories";
 import { z } from "zod";
-import type { Env } from "../types";
-import { signedControlPlaneFetch } from "../internal-auth";
+import type { Env, LinearChannelScope } from "../types";
+import { fetchControlPlaneJson } from "../control-plane";
 
 const resolvedLinearConfigSchema = z.object({
   model: z.string().nullable(),
@@ -32,35 +32,28 @@ const DEFAULT_CONFIG: ResolvedLinearConfig = {
   enabledRepos: null,
 };
 
-export async function getLinearConfig(env: Env, repo: string): Promise<ResolvedLinearConfig> {
-  if (!env.SERVICE_AUTH_SECRET) {
+export async function getLinearConfig(
+  env: Env,
+  repo: string,
+  scope?: LinearChannelScope
+): Promise<ResolvedLinearConfig> {
+  if (!env.SERVICE_AUTH_SECRET && !scope) {
     return DEFAULT_CONFIG;
   }
 
   const repository = parseRepositoryFullName(repo);
   if (!repository) {
+    if (scope) throw new Error("Invalid repository for scoped Linear config read");
     return DEFAULT_CONFIG;
   }
 
-  const url = `https://internal/integration-settings/linear/resolved/${encodeRepositoryPathSegments(repository)}`;
+  const path = `/integration-settings/linear/resolved/${encodeRepositoryPathSegments(repository)}`;
 
-  let response: Response;
   try {
-    response = await signedControlPlaneFetch(env, { method: "GET", url });
-  } catch {
+    const body = await fetchControlPlaneJson(env, path, undefined, scope);
+    return resolvedLinearConfigResponseSchema.parse(body).config ?? DEFAULT_CONFIG;
+  } catch (error) {
+    if (scope) throw error;
     return DEFAULT_CONFIG;
   }
-
-  if (!response.ok) {
-    return DEFAULT_CONFIG;
-  }
-
-  const parsed = resolvedLinearConfigResponseSchema.safeParse(
-    await response.json().catch(() => null)
-  );
-  if (!parsed.success || !parsed.data.config) {
-    return DEFAULT_CONFIG;
-  }
-
-  return parsed.data.config;
 }

@@ -15,6 +15,8 @@ import {
   emitAgentActivity,
   postIssueComment,
   updateAgentSession,
+  fetchIssueDetails,
+  type LinearApiClient,
 } from "./utils/linear-client";
 import { extractAgentResponse, formatAgentResponse } from "./completion/extractor";
 import { resolveAppName } from "@open-inspect/shared/app-name";
@@ -22,6 +24,7 @@ import { makePlan } from "./plan";
 import { createLogger } from "./logger";
 import { createStartCallbackRouter } from "./callbacks/start-callback";
 import { rejectInvalidCallback } from "./callbacks/reject-invalid-callback";
+import { lookupIssueSession } from "./kv-store";
 
 const log = createLogger("callback");
 const EVENT_SIZE_ERROR =
@@ -235,8 +238,41 @@ async function handleCompletionCallback(
   const { sessionId, context } = payload;
 
   try {
+    let linearTeamId = context.linearTeamId;
+    let client: LinearApiClient | null = null;
+    if (!linearTeamId) {
+      const mapping = await lookupIssueSession(env, context.issueId);
+      if (mapping?.sessionId === sessionId && mapping.issueId === context.issueId) {
+        linearTeamId = mapping.linearTeamId?.trim();
+      }
+    }
+    if (!linearTeamId && context.organizationId && context.appUserId) {
+      client = await getLinearClient(env, context.organizationId, context.appUserId);
+      if (client) {
+        const issue = await fetchIssueDetails(client, context.issueId);
+        if (issue?.id === context.issueId) linearTeamId = issue.team.id.trim();
+      }
+    }
+    if (!linearTeamId) {
+      log.warn("callback.complete", {
+        trace_id: traceId,
+        session_id: sessionId,
+        issue_id: context.issueId,
+        outcome: "skipped",
+        skip_reason: "missing_linear_team_id",
+        duration_ms: Date.now() - startTime,
+      });
+      return;
+    }
+
     // Extract rich agent response from events
-    const agentResponse = await extractAgentResponse(env, sessionId, payload.messageId, traceId);
+    const agentResponse = await extractAgentResponse(
+      env,
+      sessionId,
+      payload.messageId,
+      linearTeamId,
+      traceId
+    );
 
     let message: string;
     let activityType: "response" | "error";
@@ -263,7 +299,7 @@ async function handleCompletionCallback(
 
     // Emit via Agent API if we have session context
     if (context.agentSessionId && context.organizationId && context.appUserId) {
-      const client = await getLinearClient(env, context.organizationId, context.appUserId);
+      client ??= await getLinearClient(env, context.organizationId, context.appUserId);
       if (client) {
         const activityDelivered = await emitAgentActivity(client, context.agentSessionId, {
           type: activityType,
