@@ -37,7 +37,7 @@ jobs:
       - name: Run control-plane coverage shard
         env:
           COVERAGE_SHARD: "true"
-        run: npm run test:coverage -w @open-inspect/control-plane -- --shard=${{ matrix.shard }} --maxWorkers=2 --reporter=blob --coverage.reporter=json-summary
+        run: npm run test:coverage -w @open-inspect/control-plane -- --shard=${{ matrix.shard }} --maxWorkers=2 --reporter=default --reporter=github-actions --reporter=blob --coverage.reporter=json-summary
       - name: Upload shard report
         if: always()
         uses: actions/upload-artifact@v4
@@ -70,7 +70,7 @@ jobs:
       - name: Run web coverage shard
         env:
           COVERAGE_SHARD: "true"
-        run: npm run test:coverage -w @open-inspect/web -- --shard=${{ matrix.shard }} --maxWorkers=2 --reporter=blob --coverage.reporter=json-summary
+        run: npm run test:coverage -w @open-inspect/web -- --shard=${{ matrix.shard }} --maxWorkers=2 --reporter=default --reporter=github-actions --reporter=blob --coverage.reporter=json-summary
       - name: Upload shard report
         if: always()
         uses: actions/upload-artifact@v4
