@@ -264,21 +264,24 @@ describe("route admission matrix", { timeout: MATRIX_TIMEOUT_MS }, () => {
       const admitted = await serviceFetch(url, {
         method: route.method,
         service: allowedService,
-        body: "{}",
+        ...(isMutation(route) ? { body: "{}" } : {}),
       });
       expect(PROTECTED_STATUSES.has(admitted.status), `${identity} allowed bot`).toBe(false);
 
       const wrongBot = await serviceFetch(url, {
         method: route.method,
         service: deniedService,
-        body: "{}",
+        ...(isMutation(route) ? { body: "{}" } : {}),
       });
       expect(wrongBot.status, `${identity} wrong bot`).toBe(403);
       await expect(wrongBot.json(), identity).resolves.toMatchObject({
         code: "service_capability_required",
       });
 
-      const browser = await serviceFetch(url, { method: route.method, body: "{}" });
+      const browser = await serviceFetch(url, {
+        method: route.method,
+        ...(isMutation(route) ? { body: "{}" } : {}),
+      });
       expect(browser.status, `${identity} browser owner`).toBe(403);
       await expect(browser.json(), identity).resolves.toMatchObject({
         code: "service_capability_required",

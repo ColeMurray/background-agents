@@ -29,7 +29,7 @@ export interface CachedResourceOptions<T> {
   /** KV key for the last-known-good copy (stores the value as JSON). */
   kvKey: string;
   /** Fetch and parse the fresh value. A throw falls back to the KV copy. */
-  load: (env: Env, traceId?: string) => Promise<T>;
+  load: (env: Env, traceId?: string, teamId?: string | null) => Promise<T>;
   /** Revive a KV hit; return null to treat it as a miss. */
   deserialize: (cached: unknown) => T | null;
   /** Served when the loader and the KV copy both fail — the fail-open value. */
@@ -37,7 +37,7 @@ export interface CachedResourceOptions<T> {
 }
 
 export interface CachedResource<T> {
-  get(env: Env, traceId?: string): Promise<T>;
+  get(env: Env, traceId?: string, teamId?: string | null): Promise<T>;
   /**
    * Drop the in-memory copy so the next get() reloads. The KV copy is
    * deliberately kept — it is fallback data, not authority.
@@ -49,11 +49,11 @@ export function createCachedResource<T>(options: CachedResourceOptions<T>): Cach
   const log = createLogger(options.name);
   const loadFailureEvent = `control_plane.fetch_${options.name}`;
   const kvLogKeyPrefix = `${options.name}_cache`;
-  let memory: { value: T; timestamp: number } | null = null;
+  const memory = new Map<string, { value: T; timestamp: number }>();
 
-  async function readKvFallback(env: Env): Promise<T> {
+  async function readKvFallback(env: Env, kvKey: string): Promise<T> {
     try {
-      const cached = await createKvCacheStore(env.SLACK_KV).get(options.kvKey, "json");
+      const cached = await createKvCacheStore(env.SLACK_KV).get(kvKey, "json");
       const value = cached === null ? null : options.deserialize(cached);
       if (value !== null) return value;
     } catch (e) {
@@ -65,18 +65,20 @@ export function createCachedResource<T>(options: CachedResourceOptions<T>): Cach
     return options.fallback;
   }
 
-  async function get(env: Env, traceId?: string): Promise<T> {
-    if (memory && Date.now() - memory.timestamp < LOCAL_CACHE_TTL_MS) {
-      return memory.value;
+  async function get(env: Env, traceId?: string, teamId?: string | null): Promise<T> {
+    const kvKey = teamId ? `${options.kvKey}:team:${encodeURIComponent(teamId)}` : options.kvKey;
+    const cached = memory.get(kvKey);
+    if (cached && Date.now() - cached.timestamp < LOCAL_CACHE_TTL_MS) {
+      return cached.value;
     }
 
     const startTime = Date.now();
     try {
-      const value = await options.load(env, traceId);
-      memory = { value, timestamp: Date.now() };
+      const value = await options.load(env, traceId, teamId);
+      memory.set(kvKey, { value, timestamp: Date.now() });
 
       try {
-        await createKvCacheStore(env.SLACK_KV).put(options.kvKey, JSON.stringify(value), {
+        await createKvCacheStore(env.SLACK_KV).put(kvKey, JSON.stringify(value), {
           expirationTtl: KV_CACHE_TTL_SECONDS,
         });
       } catch (e) {
@@ -96,14 +98,14 @@ export function createCachedResource<T>(options: CachedResourceOptions<T>): Cach
         error: e instanceof Error ? e : new Error(String(e)),
         duration_ms: Date.now() - startTime,
       });
-      return readKvFallback(env);
+      return readKvFallback(env, kvKey);
     }
   }
 
   return {
     get,
     invalidate() {
-      memory = null;
+      memory.clear();
     },
   };
 }

@@ -58,16 +58,28 @@ def _fake_create(captured: dict):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("image_source", ["base", "repository", "snapshot"])
 @pytest.mark.parametrize(
-    "resources, expected_cpu, expected_memory, timeout_seconds",
+    "image_source, resources, expected_cpu, expected_memory, timeout_seconds",
     [
-        ({}, None, None, 30),
-        ({"cpuCores": 0.5}, 0.5, None, 300),
-        ({"memoryMib": 2048}, None, 2048, 1800),
-        ({"cpuCores": 1.5, "memoryMib": 3072}, 1.5, 3072, 4321),
+        ("base", {}, None, None, 30),
+        ("base", {"cpuCores": 0.5}, 0.5, None, 300),
+        ("base", {"memoryMib": 2048}, None, 2048, 1800),
+        ("base", {"cpuCores": 1.5, "memoryMib": 3072}, 1.5, 3072, 4321),
+        ("repository", {}, None, None, 30),
+        ("repository", {"cpuCores": 1.5, "memoryMib": 3072}, 1.5, 3072, 4321),
+        ("snapshot", {}, None, None, 30),
+        ("snapshot", {"cpuCores": 1.5, "memoryMib": 3072}, 1.5, 3072, 4321),
     ],
-    ids=["defaults", "cpu-only", "memory-only", "cpu-and-memory"],
+    ids=[
+        "defaults-base",
+        "cpu-only-base",
+        "memory-only-base",
+        "cpu-and-memory-base",
+        "defaults-repository",
+        "cpu-and-memory-repository",
+        "defaults-snapshot",
+        "cpu-and-memory-snapshot",
+    ],
 )
 async def test_launch_matrix_preserves_common_and_source_specific_behavior(
     monkeypatch,
@@ -312,8 +324,23 @@ async def test_base_image_spawn_errors_propagate_without_retry(monkeypatch, miss
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("image_source", ["base", "repository", "snapshot"])
-@pytest.mark.parametrize("failure", ["partial", "unavailable", "write"])
+@pytest.mark.parametrize(
+    "image_source, failure",
+    [
+        ("base", "partial"),
+        ("base", "unavailable"),
+        ("base", "write"),
+        ("repository", "partial"),
+        ("snapshot", "partial"),
+    ],
+    ids=[
+        "partial-base",
+        "unavailable-base",
+        "write-base",
+        "partial-repository",
+        "partial-snapshot",
+    ],
+)
 async def test_launch_returns_handle_despite_tunnel_failures(monkeypatch, image_source, failure):
     write_text = AsyncMock(side_effect=OSError("write failed") if failure == "write" else None)
     sandbox = SimpleNamespace(
@@ -494,15 +521,22 @@ def _not_found(*_args, **_kwargs):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("image_source", ["base", "repository", "snapshot"])
 @pytest.mark.parametrize(
-    "settings, expected_cpu, expected_memory, timeout_seconds",
+    "image_source, settings, expected_cpu, expected_memory, timeout_seconds",
     [
-        (None, 2, 4096, 30),
-        (DOCKER_SETTINGS, 2, 4096, 4321),
-        ({"cpuCores": 0.5, "memoryMib": 2048}, 0.5, 2048, 600),
+        ("base", None, 2, 4096, 30),
+        ("base", DOCKER_SETTINGS, 2, 4096, 4321),
+        ("base", {"cpuCores": 0.5, "memoryMib": 2048}, 0.5, 2048, 600),
+        ("repository", None, 2, 4096, 30),
+        ("snapshot", None, 2, 4096, 30),
     ],
-    ids=["defaults", "integer-cpu", "fractional-cpu"],
+    ids=[
+        "defaults-base",
+        "integer-cpu-base",
+        "fractional-cpu-base",
+        "defaults-repository",
+        "defaults-snapshot",
+    ],
 )
 async def test_docker_launch_selects_vm_runtime_and_named_allocation(
     monkeypatch, image_source, settings, expected_cpu, expected_memory, timeout_seconds

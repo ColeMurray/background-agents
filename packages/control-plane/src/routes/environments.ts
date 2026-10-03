@@ -51,7 +51,7 @@ import {
 import type { Env } from "../types";
 import { authorizeSessionTarget } from "./session-target-authorization";
 import {
-  admitTeamCatalog,
+  resolveCatalogScope,
   resolveCreationOwnerTeam,
   type TeamRepositoryGrants,
 } from "./team-ownership";
@@ -198,11 +198,9 @@ async function handleListEnvironments(
 ): Promise<Response> {
   const query = parseQuery(request, listQuerySchema);
   if (query instanceof Response) return query;
-  const catalogTeamId = query.teamId || null;
-  const catalogGrants = catalogTeamId
-    ? await admitTeamCatalog(request, ctx, catalogTeamId, "/environments")
-    : null;
-  if (catalogGrants instanceof Response) return catalogGrants;
+  const scope = await resolveCatalogScope(request, ctx, query.teamId || null, "/environments");
+  if (scope instanceof Response) return scope;
+  const catalogGrants = scope?.grants;
 
   const store = new EnvironmentStore(ctx.db);
   const viewer = await resourceViewer(ctx);
@@ -211,9 +209,9 @@ async function handleListEnvironments(
   );
   const readable = (row: EnvironmentRow) =>
     checkEnvironmentAccess(viewer, { ownerTeamId: row.owner_team_id }, "read").allowed;
-  // A team's sessions cannot launch with environments other teams own.
+  // Explicit workspace scopes exclude all teams; team scopes may also use workspace environments.
   const launchableByCatalogTeam = (row: EnvironmentRow) =>
-    !catalogTeamId || row.owner_team_id === null || row.owner_team_id === catalogTeamId;
+    scope === null || row.owner_team_id === null || row.owner_team_id === scope.teamId;
   let environments = rows.filter((row) => readable(row) && launchableByCatalogTeam(row));
   const repositoriesById = await store.getRepositoriesForEnvironmentIds(
     environments.map((row) => row.id)

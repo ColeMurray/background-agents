@@ -587,6 +587,7 @@ export class IntegrationSettingsStore {
             "agentNotificationsEnabled",
             "model",
             "mentionsPolicy",
+            "unboundChannels",
             "routingRules",
             "sessionInstructions",
           ])

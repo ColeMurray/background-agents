@@ -16,6 +16,7 @@ import type { TeamsEnforcementMode } from "../authorization/teams-enforcement";
 /** Automation resource admitted for the current mutation. */
 export interface AutomationRouteAdmission {
   automation: AutomationRow;
+  viewer: SessionViewer;
 }
 
 /**
@@ -37,6 +38,8 @@ export type RequestContext = AuthenticationRequestServices & {
   sessionAdmission?: { row: SessionEntry & SessionAccessRow; viewer: SessionViewer };
   childSessionAdmission?: { row: SessionEntry & SessionAccessRow; viewer: SessionViewer };
   sessionMemberships?: ReadonlyMap<string, TeamRole>;
+  serviceTeamId?: string | null;
+  serviceReadPurpose?: "slack-post";
   teamsEnforcementMode?: TeamsEnforcementMode;
   shadowSessionDenial?: string;
   shadowBatchDenials?: { sessionId: string; reason: string }[];

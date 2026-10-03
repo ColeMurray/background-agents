@@ -22,6 +22,7 @@ import type { HarnessModelAvailability } from "@/lib/session-harness";
 import type { ModelProviderSelections } from "@open-inspect/shared/types/provider-accounts";
 
 export interface AutomationFormValues {
+  teamId?: string | null;
   name: string;
   repositories: AutomationRepositoryInput[];
   environmentIds: string[];

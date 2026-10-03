@@ -1,9 +1,9 @@
+import { isWorkspaceAdmin } from "@open-inspect/shared/rbac";
 import { Hono } from "hono";
 import { z } from "zod";
 import { resolveTeamAccess } from "@open-inspect/shared/types/team-access";
 import {
   createTeamRequestSchema,
-  teamMembershipSchema,
   teamRoleSchema,
   teamSessionsResponseSchema,
   updateTeamRequestSchema,
@@ -25,7 +25,7 @@ import { SessionIndexStore } from "../db/session-index";
 import { SessionCollaboratorStore } from "../db/session-collaborators";
 import { encodeSessionInboxCursor, parseSessionInboxCursor } from "../db/session-inbox-cursor";
 import type { ScopedInboxSession, ListSessionInboxResult } from "../db/session-inbox-store";
-import { TeamAuditStore, type TeamAuditInput } from "../db/team-audit";
+import type { TeamAuditActor } from "../db/team-audit";
 import {
   LastLeadError,
   TeamMembershipNotFoundError,
@@ -106,19 +106,8 @@ function admittedTeam(ctx: RequestContext): Team {
   return ctx.teamAdmission.team;
 }
 
-async function auditTeamEvent(
-  input: Omit<TeamAuditInput, "requestId" | "actorUserId" | "teamId"> & {
-    ctx: RequestContext;
-    team: Team;
-  }
-): Promise<void> {
-  const { ctx, team, ...event } = input;
-  await new TeamAuditStore(ctx.db).write({
-    ...event,
-    requestId: ctx.request_id,
-    actorUserId: viewer(ctx).userId,
-    teamId: team.id,
-  });
+function auditActor(ctx: RequestContext): TeamAuditActor {
+  return { requestId: ctx.request_id, actorUserId: viewer(ctx).userId };
 }
 
 function mutationError(cause: unknown): Response {
@@ -140,7 +129,7 @@ async function listTeams(request: Request, _env: Env, _params: object, ctx: Requ
   const query = parseQuery(request, querySchema);
   if (query instanceof Response) return query;
   const subject = viewer(ctx);
-  const isAdmin = subject.roleKey === "owner" || subject.roleKey === "administrator";
+  const isAdmin = isWorkspaceAdmin(subject.roleKey);
   const membershipStore = new TeamMembershipStore(ctx.db);
   const memberships = await membershipStore.listForUser(subject.userId);
   const teams = await new TeamStore(ctx.db).list({
@@ -301,11 +290,11 @@ async function updateTeam(
   if (body instanceof Response) return body;
   const before = admittedTeam(ctx);
   try {
-    const team = await new TeamStore(ctx.db).update(before.id, body);
+    const team = await new TeamStore(ctx.db).update(before.id, body, {
+      ...auditActor(ctx),
+      before,
+    });
     if (!team) return error("Team not found", 404);
-    if (Object.keys(body).length > 0) {
-      await auditTeamEvent({ ctx, team, action: "team.updated", before, after: team });
-    }
     return json(await responseTeam(ctx, team));
   } catch (cause) {
     return mutationError(cause);
@@ -321,16 +310,9 @@ async function setArchived(
 ) {
   const before = admittedTeam(ctx);
   const store = new TeamStore(ctx.db);
-  const changed = archive ? await store.archive(before.id) : await store.restore(before.id);
+  const audit = { ...auditActor(ctx), before };
+  await (archive ? store.archive(before.id, audit) : store.restore(before.id, audit));
   const team = (await store.getById(before.id))!;
-  if (changed)
-    await auditTeamEvent({
-      ctx,
-      team,
-      action: archive ? "team.archived" : "team.restored",
-      before,
-      after: team,
-    });
   return json(await responseTeam(ctx, team));
 }
 
@@ -368,22 +350,15 @@ async function putMember(
     return json({ member });
   }
   try {
-    if (before) await store.setRole(team.id, params.userId, body.role);
-    else if (!(await store.add(team.id, params.userId, body.role))) {
+    if (before)
+      await store.setRole(team.id, params.userId, body.role, { ...auditActor(ctx), before });
+    else if (!(await store.add(team.id, params.userId, body.role, "manual", auditActor(ctx)))) {
       return json({ error: "Membership changed concurrently", code: "membership_conflict" }, 409);
     }
-    const after = (await store.listMembersWithUsers(team.id, { includeEmail })).find(
-      (member) => member.userId === params.userId
-    )!;
-    await auditTeamEvent({
-      ctx,
-      team,
-      targetUserId: params.userId,
-      action: before ? "team.member_role_changed" : "team.member_added",
-      before: before ?? {},
-      after: teamMembershipSchema.parse(after),
-    });
-    return json({ member: after });
+    const member = (await store.listMembersWithUsers(team.id, { includeEmail })).find(
+      (row) => row.userId === params.userId
+    );
+    return json({ member });
   } catch (cause) {
     return mutationError(cause);
   }
@@ -402,15 +377,7 @@ async function deleteMember(
   );
   if (!before) return error("Team membership not found", 404);
   try {
-    await store.remove(team.id, params.userId);
-    await auditTeamEvent({
-      ctx,
-      team,
-      targetUserId: params.userId,
-      action: "team.member_removed",
-      before,
-      after: {},
-    });
+    await store.remove(team.id, params.userId, { ...auditActor(ctx), before });
     return new Response(null, { status: 204 });
   } catch (cause) {
     return mutationError(cause);
@@ -425,17 +392,9 @@ async function joinTeam(
 ) {
   const team = admittedTeam(ctx);
   const userId = viewer(ctx).userId;
-  if (!(await new TeamMembershipStore(ctx.db).addIfJoinable(team.id, userId))) {
+  if (!(await new TeamMembershipStore(ctx.db).addIfJoinable(team.id, userId, auditActor(ctx)))) {
     return json({ error: "Team join is no longer available", code: "join_unavailable" }, 409);
   }
-  await auditTeamEvent({
-    ctx,
-    team,
-    targetUserId: userId,
-    action: "team.member_joined",
-    before: {},
-    after: { userId, role: "member" },
-  });
   return json(await responseTeam(ctx, team));
 }
 

@@ -18,11 +18,30 @@ import {
   supportsConfigurableSandboxTimeout,
   scmGlobalConfigSchema,
   scmSettingsSchema,
+  DEFAULT_SLACK_UNBOUND_CHANNELS,
+  slackGlobalSettingsSchema,
+  slackRepoSettingsSchema,
   integrationSettingsSchemas,
   slackIntegrationSettingsRoutingResponseSchema,
   validateSandboxChildSessionLimits,
   type SlackRoutingRule,
 } from "./integrations";
+
+describe("Slack unbound channel policy", () => {
+  it("defaults to workspace ownership without changing stored optional settings", () => {
+    expect(DEFAULT_SLACK_UNBOUND_CHANNELS).toBe("workspace");
+    expect(slackGlobalSettingsSchema.parse({})).toEqual({});
+  });
+
+  it.each(["workspace", "reject"])("accepts %s only at the global level", (unboundChannels) => {
+    expect(slackGlobalSettingsSchema.parse({ unboundChannels })).toEqual({ unboundChannels });
+    expect(slackRepoSettingsSchema.safeParse({ unboundChannels }).success).toBe(false);
+  });
+
+  it.each([null, "team"])("rejects invalid policy %j", (unboundChannels) => {
+    expect(slackGlobalSettingsSchema.safeParse({ unboundChannels }).success).toBe(false);
+  });
+});
 
 describe("sandbox provider settings capabilities", () => {
   it.each(["modal", "vercel"])("allows resource overrides for %s", (provider) => {

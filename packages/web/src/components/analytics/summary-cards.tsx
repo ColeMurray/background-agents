@@ -67,7 +67,7 @@ export function AnalyticsSummaryCards({ days, summary, loading }: SummaryCardsPr
         <SummaryCard
           label="Active Users"
           value={formatAnalyticsCount(summary.activeUsers)}
-          hint="Distinct SCM logins"
+          hint="Attributed users, including legacy logins"
         />
         <SummaryCard
           label="Total Cost"

@@ -21,6 +21,7 @@ import {
 import { generateId } from "../auth/crypto";
 import { getEffectiveEnabledModels } from "../db/model-preferences";
 import { SessionIndexStore } from "../db/session-index";
+import { TeamMembershipStore } from "../db/team-memberships";
 import { createLogger } from "../logger";
 import { SessionInternalPaths } from "../session/contracts";
 import type { EnqueuePromptRequest } from "../session/enqueue-prompt-contract";
@@ -86,6 +87,7 @@ export async function handleSpawnChild(
     const environmentError = await authorizeEnvironmentTarget(ctx, {
       environmentId: parentEnvironmentId,
       ownerTeamId: parentSession?.ownerTeamId ?? null,
+      inherited: true,
     });
     if (environmentError) return environmentError;
   }
@@ -181,6 +183,19 @@ export async function handleSpawnChild(
   if (targetAuthorizationError) return targetAuthorizationError;
 
   const teamId = parentSession?.ownerTeamId ?? null;
+  // Sandbox callers skip route authorization. Require the active author's own
+  // team membership rather than borrowing the parent's ownership fallback.
+  const childOwnerUserId =
+    spawnContext.promptAuthor.canonicalUserId ??
+    (teamId === null ? (parentSession?.userId ?? null) : null);
+  if (
+    teamId &&
+    (!childOwnerUserId ||
+      !(await new TeamMembershipStore(ctx.db).listForUser(childOwnerUserId)).has(teamId))
+  ) {
+    return json({ error: "Not a team member", code: "not_member" }, 403);
+  }
+
   let childRepoId = spawnContext.repoId;
   if (teamId && parentRepoOwner && parentRepoName) {
     const resolved = await resolveRepoOrError(env, parentRepoOwner, parentRepoName, ctx, logger);
@@ -286,7 +301,7 @@ export async function handleSpawnChild(
   );
 
   const input: SessionInitInput = {
-    ownerTeamId: parentSession?.ownerTeamId ?? null,
+    ownerTeamId: teamId,
     visibility: parentSession?.visibility ?? "workspace",
     sessionId: childId,
     repoOwner: spawnContext.repoOwner,
@@ -302,7 +317,7 @@ export async function handleSpawnChild(
     model,
     reasoningEffort,
     participantUserId: spawnContext.promptAuthor.userId,
-    platformUserId: spawnContext.promptAuthor.canonicalUserId ?? parentSession?.userId ?? null,
+    platformUserId: childOwnerUserId,
     participantCanonicalUserId: spawnContext.promptAuthor.canonicalUserId ?? null,
     collaboratorSourceSessionId: parentId,
     scmLogin: spawnContext.promptAuthor.scmLogin,

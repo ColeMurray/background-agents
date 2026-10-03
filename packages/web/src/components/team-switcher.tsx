@@ -1,5 +1,6 @@
 "use client";
 
+import { isWorkspaceAdmin } from "@open-inspect/shared/rbac";
 import Link from "next/link";
 import { useActiveTeam } from "@/hooks/use-active-team";
 import { useCurrentUserAuthorization } from "@/hooks/use-current-user-authorization";
@@ -8,8 +9,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from ".
 export function TeamSwitcher({ onNavigate }: { onNavigate?: () => void }) {
   const { activeTeamId, setActiveTeam, teams, scope } = useActiveTeam();
   const { authorization } = useCurrentUserAuthorization();
-  const canListAllTeams =
-    authorization?.role.key === "owner" || authorization?.role.key === "administrator";
+  const canListAllTeams = isWorkspaceAdmin(authorization?.role.key);
   const activeTeam = teams.find((team) => team.id === activeTeamId);
   if (teams.length === 0) return null;
 

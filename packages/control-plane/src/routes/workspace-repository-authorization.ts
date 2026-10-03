@@ -1,3 +1,4 @@
+import { isWorkspaceAdmin } from "@open-inspect/shared/rbac";
 import { TeamMembershipStore } from "../db/team-memberships";
 import { TeamRepositoryGrantStore } from "../db/team-repository-grants";
 import { TeamStore } from "../db/teams";
@@ -65,7 +66,7 @@ export async function authorizeWorkspaceRepositories(
     return json({ error: "Authorization unavailable", code: "authorization_unavailable" }, 503);
   }
   const roleKey = authorization.role.key;
-  if (roleKey === "owner" || roleKey === "administrator") return null;
+  if (isWorkspaceAdmin(roleKey)) return null;
 
   const store = new TeamRepositoryGrantStore(ctx.db);
   const teams = new TeamStore(ctx.db);

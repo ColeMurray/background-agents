@@ -71,6 +71,11 @@ function sameStringList(a: string[], b: string[]): boolean {
   return a.length === b.length && a.every((value, index) => value === b[index]);
 }
 
+/** Environment link order is not persisted. */
+export function sameEnvironmentIds(a: readonly string[], b: readonly string[]): boolean {
+  return sameStringList([...a].sort(), [...b].sort());
+}
+
 function sameTarget(a: AutomationSessionTarget, b: AutomationSessionTarget): boolean {
   return a.kind === "repo"
     ? b.kind === "repo" && b.repoFullName === a.repoFullName

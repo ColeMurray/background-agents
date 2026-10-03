@@ -55,6 +55,18 @@ session ownership. Team-only legacy OAuth refresh tokens do not enable managed a
 keys remain usable. Team-secret read and decryption errors abort environment builds rather than
 falling back to other secret scopes.
 
+Team leads and administrators can manage primary and source Slack channel bindings in a team's
+Channels tab. Settings > Integrations > Slack now controls whether unbound channels create
+workspace-level sessions (the default) or reject requests until bound. Binding changes appear in the
+workspace audit log.
+
+Slack-created sessions carry the channel's team and enforce the requesting user's membership.
+Unavailable threads close instead of starting replacement sessions; a later reply reopens the thread
+once the channel's binding and the session's visibility allow posting again. Session notifications
+and the `slack-notify` tool refuse private sessions and destinations bound to another team,
+including queued completion text and media. Slack-triggered automations run only in channels
+matching their ownership.
+
 **Team-owned environments.** The environment form offers team ownership, and team pages include an
 Environments tab. Team environments are visible to their members and administrators, and controls
 use server capabilities. Environment names are unique within each team. Sessions, including
@@ -66,6 +78,18 @@ environment secrets, settings, or images now also requires `environments.manage`
 holding only `environments.secrets.manage`, `environments.settings.manage`, or
 `environments.images.manage` lose those actions. Actorless bots see only workspace environments,
 both in lists and by ID.
+
+**Team-owned automations.** The automation form offers team ownership, and team pages include an
+Automations tab. Team automations are visible to their members and administrators, and controls use
+server capabilities. Automation leads can manage team work and reassign departed executors; executor
+reassignment verifies the candidate's launch permissions before writing and is audited as
+`automation.executor_changed`. Selected environments must belong to the automation's team.
+Executions require active membership, an unarchived team, and current repository grants, and their
+sessions inherit the team's default visibility. Slack follow-ups use the persisted session's
+collaboration decision, and automation history redacts inaccessible session metadata. Existing
+automations retain their ownership and visibility. The require-team creation setting also applies to
+new automations. These owned-resource checks apply in every session enforcement mode; source-control
+token narrowing remains a separate change.
 
 ### Removed
 

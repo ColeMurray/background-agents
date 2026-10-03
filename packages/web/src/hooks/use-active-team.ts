@@ -1,5 +1,6 @@
 "use client";
 
+import { isWorkspaceAdmin } from "@open-inspect/shared/rbac";
 import {
   createContext,
   createElement,
@@ -34,8 +35,7 @@ function useActiveTeamState() {
     : memberships.teams.filter((team) => team.archivedAt === null);
   const loading = memberships.loading || authorizationLoading || hydratedUserId !== userId;
   const error = membershipsError ?? (authorization ? undefined : authorizationError);
-  const canListAllTeams =
-    authorization?.role.key === "owner" || authorization?.role.key === "administrator";
+  const canListAllTeams = isWorkspaceAdmin(authorization?.role.key);
 
   useEffect(() => {
     let stored = "all-my-teams";

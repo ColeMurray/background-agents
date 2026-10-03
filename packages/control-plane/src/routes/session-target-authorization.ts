@@ -58,31 +58,36 @@ export async function authorizeSessionTarget(
 /**
  * Admit the environment a session launches with and bind its ownership to the session: the
  * caller must be able to use it, and a team environment must belong to the session's team.
- * Sandboxes inherit their parent's environment, so they skip use admission and tolerate
- * dangling provenance.
+ * Inherited targets (a child's parent environment) are provenance rather than a new choice, so
+ * they tolerate an environment that has since been deleted; `EnvironmentStore.delete` leaves
+ * sessions' environment IDs dangling. Sandboxes also skip use admission.
  */
 export async function authorizeEnvironmentTarget(
   ctx: RequestContext,
-  target: { environmentId: string; ownerTeamId: string | null }
+  target: { environmentId: string; ownerTeamId: string | null; inherited?: boolean }
 ): Promise<Response | null> {
-  let environment: EnvironmentRow | null;
-  if (ctx.principal?.kind === "sandbox") {
-    environment = await new EnvironmentStore(ctx.db).getById(target.environmentId);
+  const sandbox = ctx.principal?.kind === "sandbox";
+  if (sandbox || target.inherited) {
+    const environment = await new EnvironmentStore(ctx.db).getById(target.environmentId);
     if (!environment) return null;
-  } else {
-    const admission = await evaluateEnvironmentAdmission(ctx, target.environmentId, "use");
-    if (admission.kind !== "allowed") return ownedResourceAdmissionResponse(admission);
-    environment = admission.admission.environment;
+    if (sandbox) return environmentTeamMismatch(environment, target.ownerTeamId);
   }
-  if (environment.owner_team_id !== null && environment.owner_team_id !== target.ownerTeamId) {
-    return json(
-      {
-        error: "Environment must belong to the session's owner team",
-        code: "environment_team_mismatch",
-        reason_code: "environment_team_mismatch",
-      },
-      409
-    );
-  }
-  return null;
+  const admission = await evaluateEnvironmentAdmission(ctx, target.environmentId, "use");
+  if (admission.kind !== "allowed") return ownedResourceAdmissionResponse(admission);
+  return environmentTeamMismatch(admission.admission.environment, target.ownerTeamId);
+}
+
+function environmentTeamMismatch(
+  environment: EnvironmentRow,
+  ownerTeamId: string | null
+): Response | null {
+  if (environment.owner_team_id === null || environment.owner_team_id === ownerTeamId) return null;
+  return json(
+    {
+      error: "Environment must belong to the session's owner team",
+      code: "environment_team_mismatch",
+      reason_code: "environment_team_mismatch",
+    },
+    409
+  );
 }
