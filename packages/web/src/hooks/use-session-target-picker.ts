@@ -16,6 +16,7 @@ import {
 } from "@/lib/image-builds";
 import { NO_REPOSITORY_LABEL } from "@/lib/repo-label";
 import { useImageBuilds } from "@/hooks/use-image-builds";
+import { isTerminalFetchError } from "@/lib/swr-fetch-error";
 import {
   type SessionTarget,
   type SessionTargetRequestFields,
@@ -167,19 +168,24 @@ export function useSessionTargetPicker({
     error: reposError,
     teamHasRepositoryGrants,
   } = useRepos(true, teamId);
+  // A denied catalog lists nothing launchable; a transient failure keeps the last loaded entries.
   const repos = useMemo(
-    () => (teamId && reposError ? [] : catalogRepos),
-    [teamId, reposError, catalogRepos]
+    () => (isTerminalFetchError(reposError) ? [] : catalogRepos),
+    [reposError, catalogRepos]
   );
   const noRepositoryGrants =
     !!teamId && !loadingRepos && !reposError && teamHasRepositoryGrants === false;
   const repositoryGrantError = noRepositoryGrants ? "This team has no repository grants." : null;
   // Workspace sessions can only launch workspace-owned environments.
   const {
-    environments,
+    environments: catalogEnvironments,
     loading: loadingEnvironments,
     error: environmentsError,
   } = useEnvironments(teamId ? { teamId } : { ownerTeamId: null });
+  const environments = useMemo(
+    () => (isTerminalFetchError(environmentsError) ? [] : catalogEnvironments),
+    [environmentsError, catalogEnvironments]
+  );
   const [draftTarget, setSessionTarget] = useState<SessionTarget | null>(null);
   const [selectedBranch, updateSelectedBranch] = useState<string>("");
   const [selectionContext, setSelectionContext] = useState({ teamId, defaultEnvironmentId });
@@ -191,6 +197,12 @@ export function useSessionTargetPicker({
       : draftTarget?.kind === "repo" || draftTarget?.kind === "repos"
         ? reposError
         : null;
+  const inSelectionContext =
+    selectionContext.teamId === teamId &&
+    selectionContext.defaultEnvironmentId === defaultEnvironmentId;
+  // A failed catalog neither confirms nor replaces this context's target; a draft left from
+  // another team or default still falls back to the new context's catalogs.
+  const catalogErrorHoldsTarget = !!targetCatalogError && inSelectionContext;
   const explicitTargetUnavailable =
     hasExplicitSelection &&
     !!draftTarget &&
@@ -208,13 +220,13 @@ export function useSessionTargetPicker({
     !loadingEnvironments &&
     selectionContext.teamId === teamId &&
     !(teamId && draftTarget?.kind === "none" && !hasExplicitSelection) &&
-    (hasExplicitSelection || selectionContext.defaultEnvironmentId === defaultEnvironmentId) &&
+    (hasExplicitSelection || inSelectionContext) &&
     !selectionError &&
-    !targetCatalogError &&
     targetIsAvailable(draftTarget, repos, environments)
       ? draftTarget
       : null;
-  const pickerTarget = hasExplicitSelection ? draftTarget : sessionTarget;
+  const pickerTarget =
+    hasExplicitSelection || catalogErrorHoldsTarget ? draftTarget : sessionTarget;
 
   const selectedRepository =
     sessionTarget?.kind === "repo" ? parseRepositoryFullName(sessionTarget.repoFullName) : null;
@@ -251,12 +263,7 @@ export function useSessionTargetPicker({
       }
       return;
     }
-    // A failed catalog neither confirms nor replaces this context's automatic target; a draft
-    // left from another team or default still falls back to the new context's catalogs.
-    const draftInContext =
-      selectionContext.teamId === teamId &&
-      selectionContext.defaultEnvironmentId === defaultEnvironmentId;
-    if (sessionTarget || (targetCatalogError && draftInContext)) return;
+    if (sessionTarget || catalogErrorHoldsTarget) return;
 
     let nextTarget: SessionTarget | null = null;
     if (
@@ -292,6 +299,7 @@ export function useSessionTargetPicker({
     setSessionTarget(nextTarget);
     setSelectionContext({ teamId, defaultEnvironmentId });
   }, [
+    catalogErrorHoldsTarget,
     defaultEnvironmentId,
     draftTarget,
     environments,
@@ -300,7 +308,6 @@ export function useSessionTargetPicker({
     loadingEnvironments,
     loadingRepos,
     repos,
-    selectionContext.defaultEnvironmentId,
     selectionContext.teamId,
     selectionInvalidated,
     sessionTarget,

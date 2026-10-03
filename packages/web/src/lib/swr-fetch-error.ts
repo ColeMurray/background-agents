@@ -5,3 +5,11 @@ export class SwrFetchError extends Error {
     this.name = "SwrFetchError";
   }
 }
+
+/**
+ * Deleted or inaccessible resources must not render from cache; only transient failures
+ * (network, 5xx) keep the last loaded data.
+ */
+export function isTerminalFetchError(error: unknown): boolean {
+  return error instanceof SwrFetchError && [401, 403, 404].includes(error.status);
+}

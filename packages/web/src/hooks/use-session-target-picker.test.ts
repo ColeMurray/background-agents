@@ -8,6 +8,7 @@ import type {
   ImageBuildStatus,
 } from "@open-inspect/shared/types/image-builds";
 import { foldImageBuildStatusByScope, imageBuildScopeKey } from "@/lib/image-builds";
+import { SwrFetchError } from "@/lib/swr-fetch-error";
 import type { Repo } from "@/hooks/use-repos";
 import {
   MULTIPLE_REPOSITORIES_OPTION_VALUE,
@@ -263,7 +264,7 @@ describe("useSessionTargetPicker", () => {
   });
 
   it.each(["acme/web", MULTIPLE_REPOSITORIES_OPTION_VALUE])(
-    "blocks a selected scoped repository target backed by stale catalog data after an error (%s)",
+    "blocks a selected scoped repository target backed by stale catalog data after a denial (%s)",
     (value) => {
       mocks.environments.mockReturnValue({ environments: [], loading: false });
       const { result, rerender } = renderHook(() => useSessionTargetPicker({ teamId: "team-1" }));
@@ -273,7 +274,7 @@ describe("useSessionTargetPicker", () => {
       mocks.repos.mockReturnValue({
         repos: [repo()],
         loading: false,
-        error: new Error("Forbidden"),
+        error: new SwrFetchError(403),
       });
       rerender();
       expect(result.current.isLaunchable).toBe(false);
@@ -565,14 +566,14 @@ describe("useSessionTargetPicker", () => {
   );
 
   it.each([false, true])(
-    "preserves an explicit environment through catalog errors without launching stale data (cached: %s)",
+    "preserves an explicit environment through a denied catalog without launching stale data (cached: %s)",
     (cached) => {
       const { result, rerender } = renderHook(() => useSessionTargetPicker({ teamId: "team-1" }));
       act(() => result.current.pickerProps.onTargetSelectValueChange("env:env-1"));
       mocks.environments.mockReturnValue({
         environments: cached ? [environment()] : [],
         loading: false,
-        error: new Error("Unavailable"),
+        error: new SwrFetchError(403),
       });
       rerender();
       expect(result.current.isLaunchable).toBe(false);
@@ -591,14 +592,14 @@ describe("useSessionTargetPicker", () => {
   );
 
   it.each([false, true])(
-    "does not replace an explicit workspace repository during catalog errors (cached: %s)",
+    "does not replace an explicit workspace repository during a denied catalog (cached: %s)",
     (cached) => {
       const { result, rerender } = renderHook(() => useSessionTargetPicker());
       act(() => result.current.pickerProps.onTargetSelectValueChange("acme/web"));
       mocks.repos.mockReturnValue({
         repos: cached ? [repo()] : [],
         loading: false,
-        error: new Error("Unavailable"),
+        error: new SwrFetchError(403),
       });
       rerender();
       expect(result.current.buildRequestFields()).toBeNull();
@@ -682,7 +683,7 @@ describe("useSessionTargetPicker", () => {
     expect(result.current.pickerProps.selectionError).toBeNull();
   });
 
-  it("does not launch an automatic environment target from stale catalog data after an error", () => {
+  it("holds an automatic environment target without launching stale data after a denial", () => {
     const { result, rerender } = renderHook(() =>
       useSessionTargetPicker({ teamId: "team-1", defaultEnvironmentId: "env-1" })
     );
@@ -690,11 +691,16 @@ describe("useSessionTargetPicker", () => {
     mocks.environments.mockReturnValue({
       environments: [environment()],
       loading: false,
-      error: new Error("Forbidden"),
+      error: new SwrFetchError(403),
     });
     rerender();
     expect(result.current.isLaunchable).toBe(false);
     expect(result.current.buildRequestFields()).toBeNull();
+    expect(result.current.pickerProps.sessionTarget).toEqual({
+      kind: "environment",
+      environmentId: "env-1",
+    });
+    expect(result.current.pickerProps.displayTargetName).toBe("Environment (env-1)");
     mocks.environments.mockReturnValue({ environments: [environment()], loading: false });
     rerender();
     expect(result.current.buildRequestFields()).toEqual({ environmentId: "env-1" });
@@ -751,6 +757,54 @@ describe("useSessionTargetPicker", () => {
     expect(result.current.buildRequestFields()).toEqual({
       repositories: [{ repoOwner: "acme", repoName: "web" }],
     });
+  });
+  it.each([new Error("Failed to fetch"), new SwrFetchError(503)])(
+    "keeps launching an automatic environment target from cached data through %s",
+    (error) => {
+      const { result, rerender } = renderHook(() =>
+        useSessionTargetPicker({ teamId: "team-1", defaultEnvironmentId: "env-1" })
+      );
+      mocks.environments.mockReturnValue({ environments: [environment()], loading: false, error });
+      rerender();
+      expect(result.current.isLaunchable).toBe(true);
+      expect(result.current.buildRequestFields()).toEqual({ environmentId: "env-1" });
+      expect(result.current.configKey).not.toBe("");
+    }
+  );
+
+  it.each([undefined, "team-1"])(
+    "keeps launching an automatic repository from cached data through a transient error (team: %s)",
+    (teamId) => {
+      mocks.environments.mockReturnValue({ environments: [], loading: false });
+      const { result, rerender } = renderHook(() => useSessionTargetPicker({ teamId }));
+      expect(result.current.sessionTarget).toEqual({ kind: "repo", repoFullName: "acme/web" });
+      mocks.repos.mockReturnValue({
+        repos: [repo()],
+        loading: false,
+        error: new SwrFetchError(500),
+      });
+      rerender();
+      expect(result.current.isLaunchable).toBe(true);
+      expect(result.current.repos).toEqual([repo()]);
+      expect(result.current.buildRequestFields()).toEqual({
+        repoOwner: "acme",
+        repoName: "web",
+        branch: "main",
+      });
+    }
+  );
+
+  it("launches an explicit target from cached data through a transient error", () => {
+    const { result, rerender } = renderHook(() => useSessionTargetPicker({ teamId: "team-1" }));
+    act(() => result.current.pickerProps.onTargetSelectValueChange("env:env-1"));
+    mocks.environments.mockReturnValue({
+      environments: [environment()],
+      loading: false,
+      error: new SwrFetchError(503),
+    });
+    rerender();
+    expect(result.current.buildRequestFields()).toEqual({ environmentId: "env-1" });
+    expect(result.current.pickerProps.selectionError).toBeNull();
   });
 });
 
