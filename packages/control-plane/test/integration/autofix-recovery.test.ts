@@ -1,6 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { env } from "cloudflare:test";
-import type { GitHubAutofixSessionCommand } from "@open-inspect/shared";
+import {
+  githubAutofixSessionResponseSchema,
+  type GitHubAutofixSessionCommand,
+} from "@open-inspect/shared";
 import type { SessionDO } from "../../src/cloudflare/durable-object";
 import { createDurableObjectSessionPlatform } from "../../src/cloudflare/session-platform";
 import { GlobalSecretsStore } from "../../src/db/global-secrets";
@@ -11,6 +14,7 @@ import { SANDBOX_RUNTIME_VERSION } from "../../src/sandbox/runtime-manifest";
 import { createSessionRuntime } from "../../src/session/components";
 import { SessionInternalPaths } from "../../src/session/contracts";
 import { SandboxPromptBlockedError } from "../../src/session/message-queue";
+import { MessageRepository } from "../../src/session/message-repository";
 import {
   SandboxShutdownRepository,
   type ShutdownRecord,
@@ -162,8 +166,19 @@ function recoveryHarness(
   const settle = async () => {
     while (background.length) await Promise.all(background.splice(0));
   };
+  const autofix = async (command: GitHubAutofixSessionCommand, target = runtime) => {
+    const response = await target.server.onRequest(
+      new Request(`http://internal${SessionInternalPaths.autofix}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(command),
+      })
+    );
+    expect(response.status).toBe(200);
+    return githubAutofixSessionResponseSchema.parse(await response.json());
+  };
   const enqueue = async (command: ReturnType<typeof feedback>) => {
-    const result = await messageQueue.enqueueAutofix(command);
+    const result = await autofix(command);
     expect(result).toEqual({ kind: "enqueued", messageId: expect.any(String) });
     if (result.kind !== "enqueued") throw new Error("Expected admitted feedback");
     await settle();
@@ -221,9 +236,11 @@ function recoveryHarness(
     prompts,
     rows,
     settle,
+    autofix,
     enqueue,
     ready,
     complete,
+    restart: build,
   };
 }
 
@@ -242,7 +259,7 @@ describe("Autofix feedback across sandbox recovery", () => {
         const first = await h.enqueue(feedback(1));
         const second = await h.enqueue(feedback(2));
         expect(first).not.toBe(second);
-        await expect(h.messageQueue.enqueueAutofix(feedback(1))).resolves.toEqual({
+        await expect(h.autofix(feedback(1))).resolves.toEqual({
           kind: "duplicate",
           messageId: first,
         });
@@ -299,7 +316,7 @@ describe("Autofix feedback across sandbox recovery", () => {
       expect(
         await env.DB.prepare("SELECT status FROM sessions WHERE id = ?").bind(sessionName).first()
       ).toMatchObject({ status: "failed" });
-      await expect(h.messageQueue.enqueueAutofix(feedback(1))).resolves.toEqual({
+      await expect(h.autofix(feedback(1))).resolves.toEqual({
         kind: "duplicate",
         messageId,
       });
@@ -323,6 +340,67 @@ describe("Autofix feedback across sandbox recovery", () => {
       await h.complete(messageId);
       expect(h.rows()).toEqual([{ id: messageId, status: "completed" }]);
       expect(h.restore).not.toHaveBeenCalled();
+    });
+  });
+
+  it("repairs local and index status through HTTP lookup after admission is interrupted", async () => {
+    const stub = await recoverySession();
+    await runInSessionDO(stub, async (instance, state) => {
+      const h = recoveryHarness(instance, state);
+      const sql = state.storage.sql;
+      sql.exec("UPDATE session SET status = 'failed'");
+      const [{ session_name: sessionName }] = sql
+        .exec("SELECT session_name FROM session")
+        .toArray();
+      await env.DB.prepare("UPDATE sessions SET status = 'failed' WHERE id = ?")
+        .bind(sessionName)
+        .run();
+      const admit = MessageRepository.prototype.admitAutofixMessage;
+      vi.spyOn(MessageRepository.prototype, "admitAutofixMessage").mockImplementationOnce(function (
+        this: MessageRepository,
+        data
+      ) {
+        admit.call(this, data);
+        throw new Error("Interrupted after admission committed");
+      });
+      const command = feedback(1);
+      await expect(h.autofix(command)).rejects.toThrow("Interrupted after admission committed");
+      expect(h.rows()).toEqual([{ id: expect.any(String), status: "pending" }]);
+      const [{ id: messageId }] = h.rows();
+      expect(sql.exec("SELECT status FROM session").one()).toMatchObject({ status: "failed" });
+      expect(
+        await env.DB.prepare("SELECT status FROM sessions WHERE id = ?").bind(sessionName).first()
+      ).toMatchObject({ status: "failed" });
+
+      await expect(
+        h.autofix({ type: "lookup_feedback", feedbackKey: command.feedbackKey }, h.restart())
+      ).resolves.toEqual({ kind: "found", messageId });
+      await h.settle();
+      expect(sql.exec("SELECT status FROM session").one()).toMatchObject({ status: "active" });
+      expect(
+        await env.DB.prepare("SELECT status FROM sessions WHERE id = ?").bind(sessionName).first()
+      ).toMatchObject({ status: "active" });
+      expect(h.rows()).toEqual([{ id: messageId, status: "pending" }]);
+      expect(h.prompts()).toEqual([]);
+      expect(h.create).not.toHaveBeenCalled();
+      expect(h.restore).not.toHaveBeenCalled();
+    });
+  });
+
+  it("rejects an invalid Autofix HTTP command before persisting feedback", async () => {
+    const stub = await recoverySession();
+    await runInSessionDO(stub, async (instance, state) => {
+      const h = recoveryHarness(instance, state);
+      const response = await h.runtime.server.onRequest(
+        new Request(`http://internal${SessionInternalPaths.autofix}`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ ...feedback(1), prompt: "" }),
+        })
+      );
+      expect(response.status).toBe(400);
+      await expect(response.json()).resolves.toEqual({ error: "Invalid Autofix command" });
+      expect(h.rows()).toEqual([]);
     });
   });
 
@@ -452,11 +530,11 @@ describe("Autofix feedback across sandbox recovery", () => {
       const h = recoveryHarness(instance, state);
       const first = await h.enqueue(feedback(1, 2));
       const second = await h.enqueue(feedback(2, 2));
-      await expect(h.messageQueue.enqueueAutofix(feedback(3, 2))).resolves.toEqual({
+      await expect(h.autofix(feedback(3, 2))).resolves.toEqual({
         kind: "rejected",
         reason: "attempt_limit",
       });
-      await expect(h.messageQueue.enqueueAutofix(feedback(1, 2))).resolves.toEqual({
+      await expect(h.autofix(feedback(1, 2))).resolves.toEqual({
         kind: "duplicate",
         messageId: first,
       });
