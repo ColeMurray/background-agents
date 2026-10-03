@@ -169,7 +169,7 @@ Compact tests now preserve the contracts aggregate coverage cannot establish:
 - Gated same-repository PR conflicts, claim release after failure, and independent-repository
   concurrency through the real service and claims object.
 
-Fresh production-only runs pass all floors. These current-source results are separate from the
+Production-only runs at `6f4c32f` pass all floors. These validation results are separate from the
 historical fixed-denominator comparison above.
 
 | Package                   | Passed | Skipped | Statements | Branches | Functions | Lines |
@@ -182,3 +182,11 @@ historical fixed-denominator comparison above.
 | github-bot                |    134 |       0 |      93.65 |    88.00 |     93.75 | 94.69 |
 | modal-infra               |    511 |       0 |      96.20 |    89.92 |       N/A | 96.20 |
 | sandbox-runtime           |  1,285 |       3 |      89.56 |    80.70 |       N/A | 89.56 |
+
+## Additional Main Merge
+
+After merging `main` at `5abc1fb`, eight test conflicts were resolved by retaining the new analytics
+source/user attribution, Slack channel/team boundary, and channel-binding audit assertions. The
+older redundant cases remain removed. All 57 focused resolution cases, all eight full coverage
+suites, and the unchanged coverage floors pass. No baseline or coverage budget was reset for the
+upstream features. The required-check administration setting remains a separate external step.

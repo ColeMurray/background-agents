@@ -1,15 +1,19 @@
 import { env } from "cloudflare:test";
 import { beforeEach, describe, expect, it } from "vitest";
 import { EnvironmentStore } from "../../src/db/environments";
+import { TeamChannelBindingStore } from "../../src/db/team-channel-bindings";
 import { TeamMembershipStore } from "../../src/db/team-memberships";
 import { TeamRepositoryGrantStore } from "../../src/db/team-repository-grants";
 import { TeamStore } from "../../src/db/teams";
+import { UserStore } from "../../src/db/user-store";
 import { cleanD1Tables } from "./cleanup";
 import { seedActiveUser, serviceFetch } from "./helpers";
 
 const BASE = "https://test.local/environments";
 const MEMBER = "22222222222222222222222222222222";
 const OTHER = "33333333333333333333333333333333";
+const SLACK_ACTOR = { service: "slack-bot", actor: "slack:U-CATALOG" } as const;
+const CHANNEL_URL = `${BASE}?channel=slack:C-CATALOG`;
 
 describe("team-scoped environment catalog", () => {
   let teamId: string;
@@ -18,6 +22,11 @@ describe("team-scoped environment catalog", () => {
     await cleanD1Tables();
     await seedActiveUser(MEMBER);
     await seedActiveUser(OTHER);
+    await new UserStore(env.DB).createIdentity({
+      userId: MEMBER,
+      provider: "slack",
+      providerUserId: "U-CATALOG",
+    });
     teamId = (
       await new TeamStore(env.DB).create({
         slug: "engineering",
@@ -55,6 +64,117 @@ describe("team-scoped environment catalog", () => {
       );
     }
   });
+
+  it("derives live Slack team catalogs despite old/dual membership and only permits narrower selectors", async () => {
+    const bindings = new TeamChannelBindingStore(env.DB);
+    const bindingActor = { requestId: "catalog-binding", actorUserId: MEMBER };
+    await bindings.put(
+      { provider: "slack", externalId: "C-CATALOG", teamId, kind: "source" },
+      bindingActor
+    );
+    const grants = new TeamRepositoryGrantStore(env.DB);
+    await grants.add(teamId, {
+      kind: "repository",
+      repoExternalId: 1,
+      owner: "acme",
+      name: "repo-1",
+    });
+    expect(await (await serviceFetch(CHANNEL_URL, SLACK_ACTOR)).json()).toMatchObject({
+      environments: [expect.objectContaining({ id: "env_covered" })],
+      total: 1,
+    });
+    const otherTeam = await new TeamStore(env.DB).create({
+      slug: "other",
+      name: "Other",
+      joinPolicy: "invite_only",
+    });
+    const store = new EnvironmentStore(env.DB);
+    const original = (await store.getById("env_denied"))!;
+    await store.create(
+      { ...original, id: "env_other", name: "Other", owner_team_id: otherTeam.id },
+      await store.getRepositoriesForEnvironment("env_denied")
+    );
+    const grant = await grants.add(otherTeam.id, {
+      kind: "repository",
+      repoExternalId: 2,
+      owner: "acme",
+      name: "repo-2",
+    });
+    await bindings.remove(teamId, "slack", "C-CATALOG", bindingActor);
+    await bindings.put(
+      { provider: "slack", externalId: "C-CATALOG", teamId: otherTeam.id, kind: "source" },
+      bindingActor
+    );
+    // The actor is still a member of the old team; the binding must not select its catalog.
+    const denied = await serviceFetch(CHANNEL_URL, SLACK_ACTOR);
+    expect(denied.status).toBe(404);
+    await new TeamMembershipStore(env.DB).add(otherTeam.id, MEMBER);
+    for (const query of ["", `&ownerTeamId=${otherTeam.id}`]) {
+      expect(
+        await (await serviceFetch(`${CHANNEL_URL}${query}`, SLACK_ACTOR)).json()
+      ).toMatchObject({
+        environments: [expect.objectContaining({ id: "env_other" })],
+        total: 1,
+      });
+    }
+    for (const query of [`&ownerTeamId=${teamId}`, "&ownerTeamId=null"]) {
+      expect(await (await serviceFetch(`${CHANNEL_URL}${query}`, SLACK_ACTOR)).json()).toEqual({
+        environments: [],
+        total: 0,
+      });
+    }
+    await grants.remove(otherTeam.id, grant.id);
+    expect(await (await serviceFetch(CHANNEL_URL, SLACK_ACTOR)).json()).toEqual({
+      environments: [],
+      total: 0,
+    });
+  });
+
+  it.each(["member", "administrator"] as const)(
+    "limits unbound Slack channels to workspace environments for a multi-team %s without changing browser catalogs",
+    async (role) => {
+      const otherTeam = await new TeamStore(env.DB).create({
+        slug: "other",
+        name: "Other",
+        joinPolicy: "invite_only",
+      });
+      await new TeamMembershipStore(env.DB).add(otherTeam.id, MEMBER);
+      const store = new EnvironmentStore(env.DB);
+      const original = (await store.getById("env_denied"))!;
+      await store.create(
+        { ...original, id: "env_other", name: "Other", owner_team_id: otherTeam.id },
+        await store.getRepositoriesForEnvironment("env_denied")
+      );
+      await env.DB.prepare("UPDATE user_role_assignments SET role_id = ? WHERE user_id = ?")
+        .bind(`role_builtin_${role}`, MEMBER)
+        .run();
+      const scoped = await serviceFetch(CHANNEL_URL, SLACK_ACTOR);
+      expect(scoped.status).toBe(200);
+      const catalog = await scoped.json<{
+        environments: { id: string; ownerTeamId: string | null }[];
+      }>();
+      expect(catalog.environments.map((row) => row.id).sort()).toEqual([
+        "env_covered",
+        "env_empty",
+        "env_multi",
+        "env_nullable",
+      ]);
+      expect(catalog.environments.every((row) => row.ownerTeamId === null)).toBe(true);
+      for (const id of [teamId, otherTeam.id]) {
+        expect(
+          await (await serviceFetch(`${CHANNEL_URL}&ownerTeamId=${id}`, SLACK_ACTOR)).json()
+        ).toEqual({ environments: [], total: 0 });
+      }
+      expect(
+        await (await serviceFetch(BASE, { as: { userId: MEMBER, role } })).json()
+      ).toMatchObject({
+        total: 6,
+      });
+      expect(await (await serviceFetch(BASE, { service: "slack-bot" })).json()).toMatchObject({
+        total: 4,
+      });
+    }
+  );
 
   it("filters persisted refs without SCM configuration, and retains the workspace catalog", async () => {
     const scopedUrl = `${BASE}?teamId=${teamId}`;

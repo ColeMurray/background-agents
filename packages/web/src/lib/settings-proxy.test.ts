@@ -2,6 +2,12 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { NextRequest } from "next/server";
 import { controlPlaneUserFetch } from "./control-plane";
 import { SETTINGS_PROXY_MAX_BODY_BYTES, settingsProxy } from "./settings-proxy";
+import { GET as getChannelBindings } from "@/app/api/teams/[id]/channel-bindings/route";
+import { GET as getSlackChannels } from "@/app/api/teams/[id]/slack-channels/route";
+import {
+  DELETE as deleteChannelBinding,
+  PUT as putChannelBinding,
+} from "@/app/api/teams/[id]/channel-bindings/slack/[channelId]/route";
 
 vi.mock("./control-plane", () => ({ controlPlaneUserFetch: vi.fn() }));
 
@@ -158,4 +164,31 @@ describe("settingsProxy", () => {
     expect(response.status).toBe(500);
     await expect(response.json()).resolves.toEqual({ error: "Failed to fetch settings" });
   });
+
+  it.each(["GET", "PUT", "DELETE", "channels"] as const)(
+    "exports the channel-binding %s proxy with encoded identifiers",
+    async (operation) => {
+      const method = operation === "channels" ? "GET" : operation;
+      const body = JSON.stringify({ kind: "source" });
+      vi.mocked(controlPlaneUserFetch).mockResolvedValue(Response.json({ ok: true }));
+      const handler = {
+        GET: getChannelBindings,
+        PUT: putChannelBinding,
+        DELETE: deleteChannelBinding,
+        channels: getSlackChannels,
+      }[operation];
+      await handler(
+        new NextRequest("http://localhost/api/teams/id/channel-bindings", {
+          method,
+          headers: { Cookie: "__Secure-openinspect.session_token=session.signature" },
+          ...(method === "PUT" ? { body } : {}),
+        }),
+        { params: Promise.resolve({ id: "team/id", channelId: "C/1" }) }
+      );
+      expect(controlPlaneUserFetch).toHaveBeenCalledWith(
+        `/teams/team%2Fid/${operation === "channels" ? "slack-channels" : `channel-bindings${method === "GET" ? "" : "/slack/C%2F1"}`}`,
+        method === "GET" ? undefined : method === "PUT" ? { method, body } : { method }
+      );
+    }
+  );
 });

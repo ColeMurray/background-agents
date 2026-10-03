@@ -360,7 +360,7 @@ describe("sig1 service-credential authentication", () => {
     const collaborator = await signedFetch({
       service: "slack-bot",
       method: "POST",
-      url: `https://test.local/sessions/${createdBody.sessionId}/prompt`,
+      url: `https://test.local/sessions/${createdBody.sessionId}/prompt?channel=slack:C1`,
       actor: "slack:U0002",
       body: JSON.stringify({ content: "Cross-session prompt" }),
     });

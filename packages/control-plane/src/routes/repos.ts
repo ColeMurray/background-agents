@@ -8,7 +8,7 @@ import type { ControlPlaneHonoEnv } from "../routing/hono-env";
 import { repositoryParams } from "./repository-params";
 import { RepoMetadataStore } from "../db/repo-metadata";
 import type { Env } from "../types";
-import { admitTeamCatalog, type TeamRepositoryGrants } from "./team-ownership";
+import { resolveCatalogScope } from "./team-ownership";
 import type { SqlDatabase } from "../db/sql-database";
 import {
   repoMetadataSchema,
@@ -143,12 +143,9 @@ async function handleListRepos(
   ctx: RequestContext
 ): Promise<Response> {
   const teamId = new URL(request.url).searchParams.get("teamId");
-  let grants: TeamRepositoryGrants | undefined;
-  if (teamId !== null) {
-    const admitted = await admitTeamCatalog(request, ctx, teamId, "/repos");
-    if (admitted instanceof Response) return admitted;
-    grants = admitted;
-  }
+  const scope = await resolveCatalogScope(request, ctx, teamId, "/repos");
+  if (scope instanceof Response) return scope;
+  const grants = scope?.grants;
   const filterRepos = (repos: EnrichedRepository[]) => {
     if (!grants || grants.some((grant) => grant.grant_kind === "installation")) return repos;
     const ids = new Set(grants.map((grant) => grant.repo_external_id));

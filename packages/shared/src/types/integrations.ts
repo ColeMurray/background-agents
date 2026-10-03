@@ -386,6 +386,10 @@ export function resolveBuildTimeoutSeconds(settings: SandboxSettings | undefined
 
 export type SlackMentionsPolicy = "allow" | "escape" | "strip";
 
+export const slackUnboundChannelsSchema = z.enum(["workspace", "reject"]);
+export type SlackUnboundChannels = z.infer<typeof slackUnboundChannelsSchema>;
+export const DEFAULT_SLACK_UNBOUND_CHANNELS: SlackUnboundChannels = "workspace";
+
 /** What a Slack routing rule points at: a repository or a saved environment. */
 export type SlackRoutingTargetType = "repository" | "environment";
 
@@ -446,6 +450,8 @@ export type SlackRepoSettings = z.infer<typeof slackRepoSettingsSchema>;
 export const slackGlobalSettingsSchema = slackRepoSettingsSchema.extend({
   model: z.string().optional(),
   mentionsPolicy: z.enum(["allow", "escape", "strip"]).optional(),
+  /** Ownership policy for Slack channels without a Team binding (global-only). */
+  unboundChannels: slackUnboundChannelsSchema.optional(),
   /** Workspace-wide keyword→repository routing rules (global-only, like mentionsPolicy). */
   routingRules: z.array(slackRoutingRuleSchema.strict()).optional(),
   /** Custom instructions appended to the first prompt of every Slack-initiated session. */

@@ -15,6 +15,7 @@ import { TeamMembershipStore } from "../db/team-memberships";
 import type { RequestContext } from "../http/request-context";
 import type { Env } from "../types";
 import { auditPrivateSessionBreakGlass } from "./request-audit";
+import { slackPostGate } from "./slack-post-gate";
 import {
   legacyPermissionForAction,
   parseTeamsEnforcementMode,
@@ -33,7 +34,7 @@ export function viewerFromContext(
   const authorization = ctx.authorization;
   if (!authorization) {
     if (ctx.principal?.kind === "service" && !ctx.principal.actor)
-      return { kind: "service", teamId: null };
+      return { kind: "service", teamId: ctx.serviceTeamId ?? null };
     throw new Error("Missing request authorization");
   }
   return {
@@ -87,6 +88,20 @@ export async function evaluateSessionAdmission(
   const mode = enforceAlways ? "on" : teamsEnforcementMode(ctx, env);
   const row = await new SessionIndexStore(ctx.db).get(sessionId);
   if (!row) return { kind: "not_found" };
+
+  // Publication is narrower than workspace readability, including during rollback.
+  if (
+    ctx.serviceReadPurpose === "slack-post" &&
+    slackPostGate(row, ctx.serviceTeamId ? { teamId: ctx.serviceTeamId } : null)
+  ) {
+    const admission = {
+      row: { ...row, ownerUserId: row.userId ?? null, collaboratorIds: [] },
+      viewer: viewerFromContext(ctx, new Map()),
+    };
+    if (slot === "session") ctx.sessionAdmission = admission;
+    if (slot === "child") ctx.childSessionAdmission = admission;
+    return { kind: "not_found" };
+  }
 
   if (mode === "off" && !resolverDecides(mode, row, action)) {
     return { kind: "allowed", legacyPermission: legacyPermissionForAction(action) };

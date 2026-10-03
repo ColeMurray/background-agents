@@ -223,6 +223,33 @@ function getUserRows() {
 }
 
 describe("AnalyticsPage", () => {
+  it("renders session origins and resets the local source selection on range and scope changes", async () => {
+    const user = userEvent.setup();
+    renderPage();
+    mockUseAnalyticsDashboard.mockReturnValue({
+      summary,
+      sessionOrigins: [{ source: "slack-bot", userKey: "zoe", displayName: "Zoe", sessions: 8 }],
+      loading: false,
+    });
+    await user.click(screen.getByRole("radio", { name: "7d" }));
+    let origins = within(screen.getByRole("region", { name: "Session origins" }));
+    await user.click(origins.getByRole("button", { name: /Slack/ }));
+    expect(origins.getByRole("button", { name: /Slack/ })).toHaveAttribute("aria-pressed", "true");
+    await user.click(screen.getByRole("radio", { name: "14d" }));
+    origins = within(screen.getByRole("region", { name: "Session origins" }));
+    expect(origins.getByRole("button", { name: "All sources" })).toHaveAttribute(
+      "aria-pressed",
+      "true"
+    );
+    await user.click(origins.getByRole("button", { name: /Slack/ }));
+    await user.click(screen.getByRole("radio", { name: "All" }));
+    origins = within(screen.getByRole("region", { name: "Session origins" }));
+    expect(origins.getByRole("button", { name: "All sources" })).toHaveAttribute(
+      "aria-pressed",
+      "true"
+    );
+  });
+
   it("shows automation only for automation and all scopes and orders the new views", async () => {
     const user = userEvent.setup();
     renderPage();

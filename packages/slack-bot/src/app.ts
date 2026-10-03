@@ -4,6 +4,7 @@ import { threadContextRoutes } from "./routes/thread-context";
 import { eventRoutes } from "./routes/events";
 import { healthRoutes } from "./routes/health";
 import { interactionRoutes } from "./routes/interactions";
+import { channelInfoRoutes } from "./routes/channel-info";
 import type { Env } from "./types";
 
 const app = new Hono<{ Bindings: Env }>();
@@ -13,5 +14,6 @@ app.route("/", eventRoutes);
 app.route("/", interactionRoutes);
 app.route("/callbacks", callbacksRouter);
 app.route("/", threadContextRoutes);
+app.route("/", channelInfoRoutes);
 
 export default app;

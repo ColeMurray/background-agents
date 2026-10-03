@@ -19,6 +19,7 @@ import type { SlackMentionsPolicy } from "../types/integrations";
 export const SLACK_DENIAL_REASONS = [
   "feature_unavailable",
   "feature_disabled",
+  "session_scope_denied",
   "empty_message_after_sanitization",
   "channel_not_found_or_forbidden",
   "rate_limited",
@@ -37,6 +38,7 @@ export type SlackWireDenialReason = Exclude<SlackDenialReason, "bridge_error">;
 export const SLACK_DENIAL_STATUS: Record<SlackWireDenialReason, number> = {
   feature_unavailable: 503,
   feature_disabled: 403,
+  session_scope_denied: 403,
   empty_message_after_sanitization: 422,
   channel_not_found_or_forbidden: 404,
   rate_limited: 429,

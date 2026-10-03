@@ -78,6 +78,10 @@
       "import": "./dist/types/teams.js",
       "types": "./dist/types/teams.d.ts"
     },
+    "./types/team-channel-bindings": {
+      "import": "./dist/types/team-channel-bindings.js",
+      "types": "./dist/types/team-channel-bindings.d.ts"
+    },
     "./types/team-access": {
       "import": "./dist/types/team-access.js",
       "types": "./dist/types/team-access.d.ts"
