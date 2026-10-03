@@ -1,11 +1,13 @@
 import { Hono } from "hono";
 import {
   createSandboxMemorySchema,
+  memorySearchSchema,
   type MemoryRecord,
   type MemoryScope,
 } from "@open-inspect/shared/types/memories";
 import { MemoryStore } from "../db/memories";
-import { SessionMemoryStore } from "../db/session-memories";
+import { SessionMemoryStore, MemorySearchScopeError } from "../db/session-memories";
+import { searchMemories } from "../db/memory-search";
 import { SessionIndexStore } from "../db/session-index";
 import { TeamStore } from "../db/teams";
 import { TeamRepositoryGrantStore } from "../db/team-repository-grants";
@@ -207,6 +209,29 @@ async function write(
 }
 
 export const sessionMemoryRoutes = new Hono<ControlPlaneHonoEnv>();
+/** Search current facts under session admission, checking selected scopes before and after SQL. */
+async function search(
+  request: Request,
+  _env: Env,
+  params: { id: string },
+  ctx: SandboxRouteContext
+) {
+  const input = await parseBody(request, memorySearchSchema, "Invalid memory search");
+  if (input instanceof Response) return input;
+  try {
+    const scopes = await new SessionMemoryStore(ctx.db).searchScopes(params.id, input);
+    if (!scopes) return error("Session not found", 404);
+    if (!(await currentSharedAccess(ctx, params.id, scopes)))
+      return error("Memory scope is no longer available", 403);
+    const result = await searchMemories(ctx.db, input, scopes);
+    if (!(await currentSharedAccess(ctx, params.id, scopes)))
+      return error("Memory scope is no longer available", 403);
+    return json(result);
+  } catch (cause) {
+    if (cause instanceof MemorySearchScopeError) return error(cause.message, 403);
+    throw cause;
+  }
+}
 const sandbox = admit({
   ...SCM_AGNOSTIC_SANDBOX_ROUTE,
   authorization: NO_AUTHORIZATION,
@@ -226,3 +251,6 @@ sessionMemoryRoutes.get("/sessions/:id/sandbox-memory/:memoryId", sandbox, (c) =
   dispatch(c, read)
 );
 sessionMemoryRoutes.post("/sessions/:id/sandbox-memory", sandbox, (c) => dispatch(c, write));
+sessionMemoryRoutes.post("/sessions/:id/sandbox-memory/search", sandbox, (c) =>
+  dispatch(c, search)
+);

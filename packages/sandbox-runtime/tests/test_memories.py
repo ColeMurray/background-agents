@@ -269,11 +269,12 @@ def test_opencode_tools_use_session_transport_and_strip_caller_identity():
         requests.push({ url, authorization: init.headers.get("Authorization"), body: init.body });
         return Response.json({ status: "proposed" });
       };
-      const { readMemory, writeMemory } = await import(process.argv[1]);
+      const { readMemory, writeMemory, searchMemory } = await import(process.argv[1]);
       await readMemory({ memoryId: "mem/a" });
       await writeMemory({ scope: "repository", repoOwner: "group/subgroup", repoName: "api", memoryType: "fact", title: "Test setup", description: "Start the database", content: "Body", ownerUserId: "attacker", sessionId: "other" });
       await writeMemory({ scope: "repository", memoryType: "fact", title: "Test setup", description: "Start the database", content: "Body" });
       await writeMemory({ scope: "environment", environmentId: "attacker", memoryType: "fact", title: "Test setup", description: "Start the database", content: "Body" });
+      await searchMemory({ query: "billing webhook", scope: "repository", repoOwner: "group/subgroup", repoName: "api", limit: 5, ownerUserId: "attacker", environmentId: "other", sessionId: "other" });
       console.log(JSON.stringify(requests));
     """
     result = subprocess.run(
@@ -299,6 +300,55 @@ def test_opencode_tools_use_session_transport_and_strip_caller_identity():
     assert "ownerUserId" not in body and "sessionId" not in body
     assert json.loads(requests[2]["body"])["scope"] == {"type": "repository"}
     assert json.loads(requests[3]["body"])["scope"] == {"type": "environment"}
+    assert requests[4]["url"].endswith("/sessions/bound-session/sandbox-memory/search")
+    assert json.loads(requests[4]["body"]) == {
+        "query": "billing webhook",
+        "scope": "repository",
+        "repoOwner": "group/subgroup",
+        "repoName": "api",
+        "limit": 5,
+    }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("error", [False, True])
+async def test_claude_search_uses_session_transport_and_preserves_errors(
+    tmp_path: Path, error: bool
+):
+    import json
+
+    from sandbox_runtime.harness.claude_tools import ControlPlaneToolClient, ToolServerConfig
+    from sandbox_runtime.harness.memory_tools import build_memory_tools
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.raw_path.endswith(b"/sessions/session/sandbox-memory/search")
+        assert request.headers["Authorization"] == "Bearer token"
+        assert json.loads(request.content) == {"query": "billing webhook"}
+        return httpx.Response(
+            403 if error else 200,
+            json={"error": "Scope revoked"} if error else {"results": [], "hasMore": False},
+        )
+
+    client = ControlPlaneToolClient(
+        ToolServerConfig(
+            "https://control.test", "session", "token", tmp_path / "repos.json", False, False
+        ),
+        MagicMock(),
+        httpx.AsyncClient(transport=httpx.MockTransport(handler)),
+    )
+    try:
+        search = {tool.name: tool for tool in build_memory_tools(client)}["memory_search"]
+        assert search.input_schema["required"] == ["query"]
+        result = await search.handler(
+            {"query": "billing webhook", "ownerUserId": "attacker", "environmentId": "other"}
+        )
+        if error:
+            assert result["isError"] is True
+            assert "403: Scope revoked" in result["content"][0]["text"]
+        else:
+            assert json.loads(result["content"][0]["text"]) == {"results": [], "hasMore": False}
+    finally:
+        await client.aclose()
 
 
 @pytest.mark.asyncio

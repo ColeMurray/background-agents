@@ -87,7 +87,7 @@ export function memoryFromRow(row: MemoryRow): MemoryRecord {
   };
 }
 /** Bind one owner/target identity; repository names alone never authorize legacy or reused IDs. */
-function scopePredicate(
+export function scopePredicate(
   scope: MemoryScope,
   ownerUserId: string | null,
   repoId: number | null = null

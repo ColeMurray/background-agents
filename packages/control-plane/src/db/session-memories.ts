@@ -4,6 +4,7 @@ import {
   type SessionMemoryManifest,
   type SessionMemoryDiagnostics,
   type PinnedMemoryRevision,
+  type MemorySearchInput,
 } from "@open-inspect/shared/types/memories";
 import {
   matchesMemoryTarget,
@@ -13,6 +14,9 @@ import {
 import { bulkInsertStatements } from "./bulk-insert";
 import { MemoryStore, type MemoryRow } from "./memories";
 import type { SqlDatabase, SqlStatement } from "./sql-database";
+import type { MemorySearchScope } from "./memory-search";
+
+export class MemorySearchScopeError extends Error {}
 
 interface ManifestRow {
   session_id: string;
@@ -252,6 +256,58 @@ export class SessionMemoryStore {
           ? [{ repoOwner: session.repo_owner, repoName: session.repo_name, repoId: null }]
           : [],
     };
+  }
+  /** Resolve only session-relative identities; explicit unavailable scopes fail closed. */
+  async searchScopes(
+    sessionId: string,
+    input: MemorySearchInput
+  ): Promise<MemorySearchScope[] | null> {
+    const target = await this.target(sessionId);
+    if (!target) return null;
+    const scopes: MemorySearchScope[] = [];
+    if (!input.scope || input.scope === "personal") {
+      if (target.includePersonalMemories && target.canonicalUserId)
+        scopes.push({
+          scope: { type: "personal" },
+          ownerUserId: target.canonicalUserId,
+          repoId: null,
+          ...(target.inherited ? { personalSessionId: sessionId } : {}),
+        });
+      else if (input.scope)
+        throw new MemorySearchScopeError("Personal memory is excluded from this session");
+    }
+    if (!input.scope || input.scope === "repository") {
+      const repositories =
+        input.repoOwner === undefined
+          ? target.repositories
+          : target.repositories.filter(
+              (repo) =>
+                repo.repoOwner.toLowerCase() === input.repoOwner &&
+                repo.repoName.toLowerCase() === input.repoName
+            );
+      if (input.scope && !repositories.length)
+        throw new MemorySearchScopeError("Repository is outside this session");
+      for (const repo of repositories) {
+        if (repo.repoId === null || repo.repoId <= 0)
+          throw new MemorySearchScopeError("Repository identity is unavailable");
+        scopes.push({
+          scope: { type: "repository", repoOwner: repo.repoOwner, repoName: repo.repoName },
+          ownerUserId: null,
+          repoId: repo.repoId,
+        });
+      }
+    }
+    if (!input.scope || input.scope === "environment") {
+      if (target.environmentId)
+        scopes.push({
+          scope: { type: "environment", environmentId: target.environmentId },
+          ownerUserId: null,
+          repoId: null,
+        });
+      else if (input.scope)
+        throw new MemorySearchScopeError("This session has no associated environment");
+    }
+    return scopes;
   }
   /**
    * Expand active facts in the current target; directives are never live-expandable.

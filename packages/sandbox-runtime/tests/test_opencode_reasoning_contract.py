@@ -158,7 +158,13 @@ async def wire_server(tmp_path, reasoning_config, request):
             source = Path(__file__).parents[1] / "src/sandbox_runtime/tools"
             destination = tmp_path / ".opencode/tool"
             destination.mkdir(parents=True)
-            for name in ("memory_read.js", "memory_write.js", "_memory.js", "_bridge-client.js"):
+            for name in (
+                "memory_read.js",
+                "memory_write.js",
+                "memory_search.js",
+                "_memory.js",
+                "_bridge-client.js",
+            ):
                 shutil.copy(source / name, destination / name)
         config["agent"] = {"build": {"options": {"reasoningEffort": "high"}}}
         for provider in ("openai", "anthropic"):
@@ -250,7 +256,9 @@ async def test_memory_text_and_tool_contract_reach_real_opencode_provider_reques
     sent, _ = submit(call, captured, "anthropic/claude-sonnet-4-6", None)
     assert "WIRE_MEMORY_SENTINEL: prefer local verification." in json.dumps(sent["system"])
     tools = {tool["name"]: tool for tool in sent["tools"]}
-    assert {"memory_read", "memory_write"} <= tools.keys()
+    assert {"memory_read", "memory_write", "memory_search"} <= tools.keys()
+    assert tools["memory_search"]["input_schema"]["required"] == ["query"]
+    assert "environmentId" not in tools["memory_search"]["input_schema"]["properties"]
     assert "memoryId" in tools["memory_read"]["input_schema"]["properties"]
     assert "ownerUserId" not in tools["memory_write"]["input_schema"]["properties"]
     assert "environmentId" not in tools["memory_write"]["input_schema"]["properties"]

@@ -1,5 +1,20 @@
 import { bridgeFetch, extractError } from "./_bridge-client.js";
 
+/** Discover facts beyond the catalog; all target identities and access are session-derived. */
+export async function searchMemory(args) {
+  const body = Object.fromEntries(
+    ["query", "scope", "repoOwner", "repoName", "limit"]
+      .filter((key) => args[key] !== undefined)
+      .map((key) => [key, args[key]])
+  );
+  const response = await bridgeFetch("/sandbox-memory/search", {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
+  if (!response.ok) return `Memory search failed: ${await extractError(response)}`;
+  return JSON.stringify(await response.json());
+}
+
 /** Read live facts through the session-bound bridge; pinned archives return a body-free notice. */
 export async function readMemory({ memoryId }) {
   const response = await bridgeFetch(`/sandbox-memory/${encodeURIComponent(memoryId)}`);

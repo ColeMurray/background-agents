@@ -85,6 +85,68 @@ export const memoryActionSchema = z
 export const memoryPreferencesSchema = z.object({ includePersonalMemories: z.boolean() }).strict();
 export type MemoryPreferences = z.infer<typeof memoryPreferencesSchema>;
 
+/** Lexical search bounds, independent of the injected catalog's selection budget. */
+export const MEMORY_SEARCH_LIMITS = {
+  query: 256,
+  terms: 8,
+  results: 20,
+  defaultResults: 10,
+  response: 24_000,
+} as const;
+/** Literal whitespace-separated terms; there is no wildcard or query-language interpretation. */
+export function memorySearchTerms(query: string): string[] {
+  return [...new Set(query.toLowerCase().split(/\s+/).filter(Boolean))];
+}
+/** Repository filters select session members; environment and personal identity are server-derived. */
+export const memorySearchSchema = z
+  .object({
+    query: z
+      .string()
+      .trim()
+      .min(2)
+      .max(MEMORY_SEARCH_LIMITS.query)
+      .refine(
+        (query) => memorySearchTerms(query).length <= MEMORY_SEARCH_LIMITS.terms,
+        "Too many search terms"
+      ),
+    scope: z.enum(["personal", "repository", "environment"]).optional(),
+    ...repositoryPairInputSchema.partial().shape,
+    limit: z
+      .number()
+      .int()
+      .min(1)
+      .max(MEMORY_SEARCH_LIMITS.results)
+      .default(MEMORY_SEARCH_LIMITS.defaultResults),
+  })
+  .strict()
+  .superRefine((input, ctx) => {
+    if ((input.repoOwner === undefined) !== (input.repoName === undefined))
+      ctx.addIssue({ code: "custom", message: "repoOwner and repoName must be provided together" });
+    if (
+      (input.repoOwner !== undefined || input.repoName !== undefined) &&
+      input.scope !== "repository"
+    )
+      ctx.addIssue({ code: "custom", message: "Repository selectors require repository scope" });
+  });
+export type MemorySearchInput = z.infer<typeof memorySearchSchema>;
+export const memorySearchResultSchema = z
+  .object({
+    id: z.string(),
+    revisionId: z.string(),
+    scope: memoryScopeSchema,
+    title: z.string().max(MEMORY_LIMITS.title),
+    description: z.string().max(MEMORY_LIMITS.description),
+  })
+  .strict();
+export type MemorySearchResult = z.infer<typeof memorySearchResultSchema>;
+export const memorySearchResponseSchema = z
+  .object({
+    results: z.array(memorySearchResultSchema).max(MEMORY_SEARCH_LIMITS.results),
+    hasMore: z.boolean(),
+  })
+  .strict();
+export type MemorySearchResponse = z.infer<typeof memorySearchResponseSchema>;
+
 /** Immutable content snapshot; its author is the creator/editor of this revision. */
 export interface MemoryRevision extends MemoryContent {
   id: string;

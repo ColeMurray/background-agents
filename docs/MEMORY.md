@@ -1,8 +1,8 @@
 # Persistent session memory
 
 Memory carries useful knowledge between sessions without changing repository files. It has no
-embedding store or semantic search: the agent sees a compact fact catalog and reads relevant bodies
-with `memory_read`.
+embedding store or semantic search: the agent sees a compact fact catalog, discovers additional
+facts with lexical `memory_search`, and reads relevant bodies with `memory_read`.
 
 ## User experience
 
@@ -50,8 +50,8 @@ a different participant cannot write to the inherited owner's personal scope.
 | Resolver         | Canonical personal identity, ordered repositories, optional environment, deterministic selection and whole-record truncation.                                                                    |
 | Session creation | Save the resolved manifest in the same database transaction as the session index, before sandbox warming. Schedulers use the execution owner's default. Children copy the parent's selection.    |
 | Runtime boot     | Fetch the installation using the sandbox's session-bound bearer token, clear stale restored content, then atomically write owner-readable `oi-memory.md` in the harness configuration directory. |
-| OpenCode         | Add the memory file to `instructions`; expose `memory_read` and `memory_write` custom tools.                                                                                                     |
-| Claude           | Append the same file text to repository guidance; expose both tools through the existing SDK MCP server.                                                                                         |
+| OpenCode         | Add the memory file to `instructions`; expose `memory_read`, `memory_search` and `memory_write` custom tools.                                                                                    |
+| Claude           | Append the same file text to repository guidance; expose the three memory tools through the existing SDK MCP server.                                                                             |
 | Web              | Cookie-authenticated proxy routes, owner/shared management pages, composer toggle/preview and session diagnostics.                                                                               |
 
 No project scope, embeddings, automatic memory search, repository writes or new infrastructure
@@ -119,6 +119,7 @@ owner-only, including when the caller is another administrator.
 | `GET /sessions/:id/sandbox-memory`                        | Sandbox-bound rendered installation.                                                                                                                                                                                                                    |
 | `GET /sessions/:id/sandbox-memory/:memoryId`              | Sandbox-bound live read.                                                                                                                                                                                                                                |
 | `POST /sessions/:id/sandbox-memory`                       | Sandbox-bound agent write with scope/approval/quota checks.                                                                                                                                                                                             |
+| `POST /sessions/:id/sandbox-memory/search`                | Session-authorized lexical discovery of active current facts, including records outside the boot catalog.                                                                                                                                               |
 
 Sandbox routes reject credentials belonging to another session and recheck current workspace/team
 repository grants and environment ownership. Agent inserts repeat these checks atomically and
@@ -160,6 +161,51 @@ performing the existing current-access and commit-time checks. Inference does no
 opt-out, quotas, replacement rules, or pinned context.
 
 ## Local verification
+
+### Searching beyond the catalog
+
+Both harnesses expose `memory_search`. It discovers **current active facts**, not directives,
+proposals, archives, or historical revision text. Search results contain IDs, revision IDs, scope
+labels, titles and descriptions; call `memory_read` for the body.
+
+```javascript
+memory_search({ query: "billing webhook deduplication", scope: "repository", limit: 10 });
+```
+
+Omit `scope` to search permitted session scopes. Repository scope searches all attached
+repositories; optionally supply both `repoOwner` and `repoName` to select one. Personal owner and
+environment identity are derived from the session. Personal opt-out excludes personal results, and
+inherited children can discover only their pinned personal memory IDs. Selected shared scopes are
+authorized before the query and checked again before returning results.
+
+Queries are literal whitespace-separated keywords: every term must occur in the current title,
+description or body. Matching uses SQLite's ASCII case folding; it provides no stemming, synonyms,
+semantic similarity or wildcard/query-language syntax. SQL wildcard characters are escaped. Per-term
+title matches score 5, description matches 3, and body matches 1; the strongest field match for each
+term is summed. Updated time and memory ID break ties. SQL matches and ranks before limiting, across
+the full applicable fact store rather than the latest 200 records.
+
+Queries are 2–256 characters with at most eight distinct terms. Results default to 10, max out at
+20, and fit a 24,000-character serialized response budget. `hasMore` signals that the agent should
+refine its query. There is no pagination or unrestricted browsing endpoint. Empty memory context
+does not remove the search tool, and searching does not alter the session's pinned context.
+
+The implementation uses existing scope indexes and escaped `LIKE`, with no migration or new service.
+Body matching still scans text; bounded results do not guarantee constant query cost. The opt-in
+Node SQLite benchmark records query plans and rare/broad-query timings at 1,000 and 10,000 facts
+with representative and maximum-size bodies:
+
+```bash
+MEMORY_SEARCH_BENCHMARK=1 MEMORY_SEARCH_BENCHMARK_OUTPUT=/tmp/memory-search-benchmark.json \
+  npm test -w @open-inspect/control-plane -- \
+  src/db/memory-search.test.ts --maxWorkers=1
+```
+
+These local measurements are not deployed D1 latency or provider-canary proof. Indexed lexical
+search and semantic retrieval remain separate follow-ups if corpus size or measured cost demands
+them.
+
+### Test commands
 
 Use Node 24; build shared before dependent TypeScript checks. Run heavyweight checks sequentially.
 No Cloudflare, Modal or model-provider credentials are needed for these tests.

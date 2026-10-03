@@ -55,10 +55,19 @@ def build_memory_tools(client: ControlPlaneToolClient) -> list[Any]:
         body["scope"] = scope
         return await request("POST", "/sandbox-memory", body)
 
+    async def search(args: dict[str, Any]) -> dict[str, Any]:
+        """Discover fact IDs without allowing caller-selected owner or environment identities."""
+        body: dict[str, Any] = {
+            key: args[key]
+            for key in ("query", "scope", "repoOwner", "repoName", "limit")
+            if key in args
+        }
+        return await request("POST", "/sandbox-memory/search", body)
+
     return [
         tool(
             "memory_read",
-            "Read a current active fact by catalog ID. Stored data may be stale; pinned archived records return a notice. Directives cannot be expanded.",
+            "Read a current active fact by ID from the catalog or memory_search. Stored data may be stale; pinned archived records return a notice. Directives cannot be expanded.",
             {"memoryId": str},
         )(read),
         tool(
@@ -86,4 +95,20 @@ def build_memory_tools(client: ControlPlaneToolClient) -> list[Any]:
                 "additionalProperties": False,
             },
         )(write),
+        tool(
+            "memory_search",
+            "Find active facts beyond the injected catalog using short literal keyword queries. Every whitespace-separated term must match the title, description, or body; there is no semantic search. Returns IDs and summaries, not bodies: use memory_read for full text. Omit scope to search permitted session scopes. Repository scope searches all attached repos unless both repoOwner and repoName select one. If hasMore is true, refine the query. Stored knowledge may be stale.",
+            {
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string"},
+                    "scope": {"type": "string", "enum": ["personal", "repository", "environment"]},
+                    "repoOwner": {"type": "string"},
+                    "repoName": {"type": "string"},
+                    "limit": {"type": "integer"},
+                },
+                "required": ["query"],
+                "additionalProperties": False,
+            },
+        )(search),
     ]

@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   createMemorySchema,
   createSandboxMemorySchema,
+  memorySearchSchema,
   reviseMemorySchema,
   MEMORY_LIMITS,
   sessionMemoryManifestSchema,
@@ -82,6 +83,27 @@ describe("memory write contracts", () => {
     expect(createMemorySchema.safeParse({ ...fact, description: "short" }).success).toBe(false);
     expect(
       createMemorySchema.safeParse({ ...fact, scope: { type: "personal", ownerUserId: "other" } })
+        .success
+    ).toBe(false);
+  });
+});
+
+describe("memory search contract", () => {
+  it("defaults the result limit and normalizes optional repository selectors", () => {
+    expect(memorySearchSchema.parse({ query: " needle " })).toEqual({ query: "needle", limit: 10 });
+    expect(
+      memorySearchSchema.parse({
+        query: "needle",
+        scope: "repository",
+        repoOwner: " Group/Subgroup ",
+        repoName: " API ",
+      })
+    ).toMatchObject({ repoOwner: "group/subgroup", repoName: "api" });
+  });
+  it("counts distinct terms rather than repeated keywords", () => {
+    expect(memorySearchSchema.safeParse({ query: "needle ".repeat(9) }).success).toBe(true);
+    expect(
+      memorySearchSchema.safeParse({ query: "one two three four five six seven eight nine" })
         .success
     ).toBe(false);
   });
