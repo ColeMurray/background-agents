@@ -16,7 +16,6 @@ import {
 } from "@/lib/image-builds";
 import { NO_REPOSITORY_LABEL } from "@/lib/repo-label";
 import { useImageBuilds } from "@/hooks/use-image-builds";
-import { isTerminalFetchError } from "@/lib/swr-fetch-error";
 import {
   type SessionTarget,
   type SessionTargetRequestFields,
@@ -163,29 +162,20 @@ export function useSessionTargetPicker({
   defaultEnvironmentId?: string | null;
 } = {}): SessionTargetSelection {
   const {
-    repos: catalogRepos,
+    repos,
     loading: loadingRepos,
     error: reposError,
     teamHasRepositoryGrants,
   } = useRepos(true, teamId);
-  // A denied catalog lists nothing launchable; a transient failure keeps the last loaded entries.
-  const repos = useMemo(
-    () => (isTerminalFetchError(reposError) ? [] : catalogRepos),
-    [reposError, catalogRepos]
-  );
   const noRepositoryGrants =
     !!teamId && !loadingRepos && !reposError && teamHasRepositoryGrants === false;
   const repositoryGrantError = noRepositoryGrants ? "This team has no repository grants." : null;
   // Workspace sessions can only launch workspace-owned environments.
   const {
-    environments: catalogEnvironments,
+    environments,
     loading: loadingEnvironments,
     error: environmentsError,
   } = useEnvironments(teamId ? { teamId } : { ownerTeamId: null });
-  const environments = useMemo(
-    () => (isTerminalFetchError(environmentsError) ? [] : catalogEnvironments),
-    [environmentsError, catalogEnvironments]
-  );
   const [draftTarget, setSessionTarget] = useState<SessionTarget | null>(null);
   const [selectedBranch, updateSelectedBranch] = useState<string>("");
   const [selectionContext, setSelectionContext] = useState({ teamId, defaultEnvironmentId });

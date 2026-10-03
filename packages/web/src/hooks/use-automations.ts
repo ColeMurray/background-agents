@@ -2,7 +2,7 @@ import { useState } from "react";
 import useSWR, { useSWRConfig } from "swr";
 import useSWRInfinite from "swr/infinite";
 import { useAuthSession } from "@/lib/auth-session";
-import { isTerminalFetchError } from "@/lib/swr-fetch-error";
+import { usableFetchData } from "@/lib/swr-fetch-error";
 import {
   DEFAULT_AUTOMATION_LIST_PAGE_SIZE,
   listAutomationsResponseSchema,
@@ -60,9 +60,10 @@ export function useAutomations(nameSearch: string, teamId?: string | null) {
   if (data && listKey && (retained?.key !== listKey || retained.pages !== data)) {
     setRetained({ key: listKey, pages: data });
   }
-  const pages = isTerminalFetchError(error)
-    ? undefined
-    : (data ?? (retained && retained.key === listKey ? retained.pages : undefined));
+  const pages = usableFetchData(
+    data ?? (retained && retained.key === listKey ? retained.pages : undefined),
+    error
+  );
 
   const loadedPages = pages?.filter((page) => page !== undefined) ?? [];
   const automations = loadedPages.flatMap((page) => page.automations);
@@ -93,7 +94,7 @@ export function useAutomation(id: string | undefined) {
   );
 
   return {
-    automation: isTerminalFetchError(error) ? null : (data?.automation ?? null),
+    automation: usableFetchData(data, error)?.automation ?? null,
     loading: isLoading,
     mutate,
   };
@@ -105,7 +106,7 @@ export function useAutomationInvocations(id: string | undefined, limit = 20, off
   const { data, error, isLoading, mutate } = useSWR<ListAutomationInvocationsResponse>(
     session && id ? `/api/automations/${id}/invocations?limit=${limit}&offset=${offset}` : null
   );
-  const visible = isTerminalFetchError(error) ? undefined : data;
+  const visible = usableFetchData(data, error);
 
   return {
     invocations: visible?.invocations ?? [],
