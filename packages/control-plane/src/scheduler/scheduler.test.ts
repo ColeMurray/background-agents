@@ -19,6 +19,7 @@ import { verifyCallbackSignature } from "@open-inspect/shared/auth";
 import type { Team } from "@open-inspect/shared/types/teams";
 import type { EffectiveAuthorization } from "@open-inspect/shared/rbac";
 import type * as SessionAdmissionModule from "../authorization/session-admission";
+import * as SlackCompletionModule from "./slack-completion";
 
 const mockCheckRepositoryAccess = vi.hoisted(() => vi.fn());
 const mockResolveSessionProviderAuth = vi.hoisted(() =>
@@ -3630,6 +3631,37 @@ describe("Scheduler", () => {
         );
       }
     );
+
+    it("keeps Slack launch visibility independent of completion metadata parsing", async () => {
+      mockTeamGetById.mockResolvedValue({ ...activeTeam, defaultVisibility: "private" });
+      const automation = { ...sampleSlackAutomation, owner_team_id: teamId };
+      mockGetSlackAutomationsForChannel.mockResolvedValue([automation]);
+      const scheduler = createScheduler(
+        createEnv({
+          SLACK_BOT: { fetch: vi.fn() },
+          SERVICE_AUTH_SECRET_SLACK_BOT: "test-secret",
+        })
+      );
+      const parseMetadata = vi
+        .spyOn(SlackCompletionModule, "parseSlackTriggerMetadata")
+        .mockReturnValue(null);
+      try {
+        expect(await scheduler.event(makeSlackEvent())).toMatchObject({ triggered: 1 });
+        expect(mockSessionStoreCreate).toHaveBeenCalledWith(
+          expect.objectContaining({ ownerTeamId: teamId, visibility: "team" })
+        );
+        expect(parseMetadata).not.toHaveBeenCalled();
+        expect(mockStore.insertInvocationGuarded).toHaveBeenCalledWith(
+          expect.objectContaining({
+            invocation: expect.objectContaining({
+              trigger_metadata: JSON.stringify({ channel: "C1", messageTs: "1700000000.000200" }),
+            }),
+          })
+        );
+      } finally {
+        parseMetadata.mockRestore();
+      }
+    });
 
     it.each([
       [false, "test-secret"],

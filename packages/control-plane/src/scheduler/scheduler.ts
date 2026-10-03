@@ -270,8 +270,8 @@ interface StartInvocationParams {
   advanceToNextRunAt?: number;
   triggerKey?: string | null;
   concurrencyKey?: string | null;
-  /** Source-specific JSON stored on the invocation (slack message coordinates). */
-  triggerMetadata?: string | null;
+  /** Typed Slack output coordinates, serialized only when persisting the invocation. */
+  slackDestination?: SlackRunMetadata;
   /** Pre-fetched repository selection (the tick passes its batched fetch). */
   repositories?: AutomationRepositoryInsert[];
   /** GitHub event identity that repository resolution must preserve. */
@@ -595,7 +595,7 @@ export class Scheduler {
       scheduled_at: params.scheduledAt ?? null,
       trigger_key: params.triggerKey ?? null,
       concurrency_key: concurrencyKey,
-      trigger_metadata: params.triggerMetadata ?? null,
+      trigger_metadata: serializeSlackTriggerMetadata(params.slackDestination),
       skip_reason: null,
       failure_counted_at: null,
       created_at: now,
@@ -700,7 +700,7 @@ export class Scheduler {
         await this.createSessionForAutomationRun(
           store,
           automation,
-          invocation,
+          params.slackDestination,
           child,
           providerAuthSnapshot.providerAuth,
           sessionId,
@@ -802,7 +802,7 @@ export class Scheduler {
         scheduled_at: params.scheduledAt ?? null,
         trigger_key: null,
         concurrency_key: params.concurrencyKey ?? null,
-        trigger_metadata: params.triggerMetadata ?? null,
+        trigger_metadata: serializeSlackTriggerMetadata(params.slackDestination),
         skip_reason: "concurrent_run_active",
         failure_counted_at: null,
         created_at: now,
@@ -1314,7 +1314,8 @@ export class Scheduler {
         source: "event",
         triggerKey: event.triggerKey,
         concurrencyKey: event.concurrencyKey,
-        triggerMetadata: event.source === "slack" ? serializeSlackTriggerMetadata(event) : null,
+        slackDestination:
+          event.source === "slack" ? { channel: event.channelId, messageTs: event.ts } : undefined,
         instructionsOverride,
         ...(event.source === "slack"
           ? {
@@ -1763,7 +1764,7 @@ export class Scheduler {
   private async createSessionForAutomationRun(
     store: AutomationStore,
     automation: AutomationRow,
-    invocation: AutomationInvocationRow,
+    slackDestination: SlackRunMetadata | undefined,
     run: AutomationRunRow,
     providerAuth: SessionModelProviderAuthInput[],
     sessionId: string,
@@ -1832,7 +1833,7 @@ export class Scheduler {
     if (
       this.env.SLACK_BOT &&
       callbackSigningSecret(this.env, "slack-bot") &&
-      parseSlackTriggerMetadata(invocation.trigger_metadata)?.messageTs
+      slackDestination?.messageTs
     ) {
       visibility = team ? "team" : "workspace";
     }
@@ -2017,13 +2018,9 @@ export class Scheduler {
 }
 
 /**
- * Serialize a slack event's message coordinates for the invocation's
+ * Serialize Slack output coordinates for the invocation's
  * trigger_metadata — carried by both real firings and concurrency skips.
  */
-function serializeSlackTriggerMetadata(event: SlackAutomationEvent): string {
-  const metadata: SlackRunMetadata = {
-    channel: event.channelId,
-    messageTs: event.ts,
-  };
-  return JSON.stringify(metadata);
+function serializeSlackTriggerMetadata(destination?: SlackRunMetadata): string | null {
+  return destination ? JSON.stringify(destination) : null;
 }
