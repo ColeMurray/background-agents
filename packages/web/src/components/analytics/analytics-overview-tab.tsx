@@ -6,14 +6,12 @@ import {
   ANALYTICS_TAB_LABELS,
   formatAnalyticsCost,
   formatAnalyticsCount,
-  formatAnalyticsRatio,
+  formatCompletionRate,
   formatRepositoryName,
   getAnalyticsDimensionLabels,
   getCommonRepositoryOwner,
-  getCompletionRate,
   getDailyPullRequestCounts,
   getDailySessionCounts,
-  getFinishedSessionCount,
   type AnalyticsTab,
 } from "@/lib/analytics";
 import { getHeadlineKpiGroups } from "./analytics-kpi-items";
@@ -140,9 +138,7 @@ export function AnalyticsOverviewTab({
               label: entry.displayName ?? entry.key,
               value: entry.sessions,
               display: formatAnalyticsCount(entry.sessions),
-              secondary: formatAnalyticsRatio(
-                getFinishedSessionCount(entry) > 0 ? getCompletionRate(entry) : null
-              ),
+              secondary: formatCompletionRate(entry),
             }))}
             emptyMessage="No user analytics found for this range."
           />

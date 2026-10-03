@@ -9,6 +9,7 @@ import {
   formatAnalyticsLongDuration,
   formatAnalyticsRatio,
   formatCompletionRate,
+  getCompletionRate,
   formatPullRequestAcceptanceRate,
   getAnalyticsDimensionLabels,
   getCostPerMergedPullRequest,
@@ -18,11 +19,10 @@ import {
   getCommonRepositoryOwner,
   getDailyPullRequestCounts,
   getDailySessionCounts,
-  getDailySessionCountsByGroup,
+  getDailySessionCountsByUser,
   getPullRequestAcceptanceRate,
   getSessionsBySource,
   getSubscriptionShare,
-  getUserTimeseriesGroup,
   parseAnalyticsView,
 } from "./analytics";
 import { analyticsDashboard, breakdownEntry } from "./analytics.test-fixture";
@@ -48,6 +48,13 @@ describe("analytics utilities", () => {
     expect(formatAnalyticsRatio(0)).toBe("0%");
     expect(formatAnalyticsRatio(0.416)).toBe("42%");
   });
+  it("has no completion rate until a session finishes", () => {
+    const nothingFinished = { completed: 0, failed: 0, cancelled: 0 };
+    expect(getCompletionRate(nothingFinished)).toBeNull();
+    expect(formatCompletionRate(nothingFinished)).toBe("—");
+    expect(getCompletionRate({ completed: 0, failed: 2, cancelled: 0 })).toBe(0);
+  });
+
   it("formats completion rate from terminal sessions only", () => {
     expect(formatCompletionRate({ completed: 3, failed: 1, cancelled: 2 })).toBe("50%");
   });
@@ -135,15 +142,11 @@ describe("analytics utilities", () => {
     expect(daily.find((day) => day.date === "2026-09-22")?.sessions).toBe(4);
   });
 
-  it("aligns each timeseries group to the window and maps users onto their group", () => {
-    const byGroup = getDailySessionCountsByGroup(analyticsDashboard());
-    expect(byGroup.get("Zoe")).toEqual([0, 2, 0, 0, 0, 3, 0, 0]);
-    expect(byGroup.get("__unknown__")).toEqual([0, 0, 0, 0, 0, 1, 0, 0]);
-    expect(getUserTimeseriesGroup({ key: "user-zoe", displayName: "Zoe" })).toBe("Zoe");
-    expect(getUserTimeseriesGroup({ key: "legacy-login" })).toBe("legacy-login");
-    expect(getUserTimeseriesGroup({ key: "__unknown__", displayName: "Unknown user" })).toBe(
-      "__unknown__"
-    );
+  it("aligns each user's daily sessions to the window, keyed like the user breakdown", () => {
+    const byUser = getDailySessionCountsByUser(analyticsDashboard());
+    expect(byUser.get("user-zoe")).toEqual([0, 2, 0, 0, 0, 3, 0, 0]);
+    expect(byUser.get("__unknown__")).toEqual([0, 0, 0, 0, 0, 1, 0, 0]);
+    expect(byUser.get("Zoe")).toBeUndefined();
   });
 
   it("zero-fills pull requests per day across the window", () => {

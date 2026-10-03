@@ -4,6 +4,7 @@ import {
 } from "@open-inspect/shared/types/analytics";
 import {
   ANALYTICS_SCOPE_CAPTIONS,
+  ANALYTICS_UNKNOWN_USER_KEY,
   formatAnalyticsCompactCount,
   formatAnalyticsCost,
   formatAnalyticsCount,
@@ -13,7 +14,6 @@ import {
   getCostPerMergedPullRequest,
   getDailyPullRequestCounts,
   getDailySessionCounts,
-  getFinishedSessionCount,
   getPullRequestAcceptanceRate,
   getSubscriptionShare,
 } from "@/lib/analytics";
@@ -23,9 +23,13 @@ import type { AnalyticsKpiGroup, AnalyticsKpiItem } from "./analytics-kpis";
 export function getHeadlineKpiGroups(dashboard: AnalyticsDashboardResponse): AnalyticsKpiGroup[] {
   const { summary, pullRequests, window } = dashboard;
   const status = summary.statusBreakdown;
-  const finished = getFinishedSessionCount(status);
-  const completion = finished > 0 ? getCompletionRate(status) : null;
-  const acceptance = getPullRequestAcceptanceRate(pullRequests.funnel);
+  const completion = getCompletionRate(status);
+  // Divide attributed sessions by the people they belong to; unattributed sessions
+  // have no person, so counting them would inflate everyone's share.
+  const people = dashboard.breakdowns.user.entries.filter(
+    (entry) => entry.key !== ANALYTICS_UNKNOWN_USER_KEY
+  );
+  const attributedSessions = people.reduce((sum, entry) => sum + entry.sessions, 0);
 
   return [
     {
@@ -41,8 +45,8 @@ export function getHeadlineKpiGroups(dashboard: AnalyticsDashboardResponse): Ana
           label: "Active users",
           value: formatAnalyticsCount(summary.activeUsers),
           detail:
-            summary.activeUsers > 0
-              ? `${formatAnalyticsCount(Math.round(summary.totalSessions / summary.activeUsers))} sessions per person`
+            people.length > 0
+              ? `${formatAnalyticsCount(Math.round(attributedSessions / people.length))} sessions per person`
               : "No attributed users",
         },
         {
@@ -62,12 +66,14 @@ export function getHeadlineKpiGroups(dashboard: AnalyticsDashboardResponse): Ana
       caption: "Pull requests · every source",
       items: [
         {
+          // Merges during the window: the same population as the daily-merges
+          // sparkline and the average time to merge.
           label: "PRs merged",
-          value: formatAnalyticsCount(pullRequests.funnel.merged),
+          value: formatAnalyticsCount(pullRequests.mergedInWindow),
           detail:
-            acceptance === null
-              ? "None resolved yet"
-              : `${formatAnalyticsRatio(acceptance)} acceptance`,
+            pullRequests.avgTimeToMergeMs === null
+              ? "None merged in range"
+              : `Avg ${formatAnalyticsLongDuration(pullRequests.avgTimeToMergeMs)} to merge`,
           trend: getDailyPullRequestCounts(dashboard).map((point) => point.merged),
         },
         {
@@ -75,7 +81,7 @@ export function getHeadlineKpiGroups(dashboard: AnalyticsDashboardResponse): Ana
           value: formatAnalyticsCost(
             getCostPerMergedPullRequest(pullRequests.prSessionCost, pullRequests.funnel.merged)
           ),
-          detail: "Sessions behind the PRs",
+          detail: "PRs opened in range",
         },
       ],
     },

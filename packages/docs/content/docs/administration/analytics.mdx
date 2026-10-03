@@ -24,7 +24,7 @@ Every role can open Analytics; it requires only `analytics.read`, which Viewers 
 
 ## Time range
 
-The **Time range** control offers **7d**, **14d**, **30d**, and **90d**. The default is 30 days. Changing the range re-filters windowed metrics on every tab. While the new range loads, the previous numbers stay on screen, dimmed.
+The **Time range** control offers **7d**, **14d**, **30d**, and **90d**. The default is 30 days. Changing the range re-filters windowed metrics on every tab. While the new range loads, the previous numbers stay on screen, dimmed, and the header reads **Loading…**. If the new range fails to load, the page says so and keeps showing the previous selection until a retry succeeds.
 
 The window is the last N days ending now. Session metrics count sessions **created** in the window; open-PR inventory is measured as of now regardless of the window. Daily charts plot every day in the window, so a day without sessions shows as zero, and the last day covers only today so far.
 
@@ -42,14 +42,14 @@ Scope filters every session number, chart, and table; the **Automations** table 
 
 The headline numbers come in two groups. The first is captioned with the scope (for example **Human sessions**):
 
-| Number              | Value                                                                                                                                                                                            |
-| ------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| **Sessions**        | Sessions created in the window, with the daily average and a sparkline of sessions per day.                                                                                                      |
-| **Active users**    | The number of distinct users with a session in the window, keyed by user ID and falling back to the source-control login for sessions without a linked user. The hint shows sessions per person. |
-| **Spend**           | The sum of every counted session's recorded cost, with the average per session.                                                                                                                  |
-| **Completion rate** | Completed divided by completed + failed + cancelled. Sessions still running, never started, or archived are not in the denominator. A dash until a session finishes.                             |
+| Number              | Value                                                                                                                                                                                                                                                          |
+| ------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Sessions**        | Sessions created in the window, with the daily average and a sparkline of sessions per day.                                                                                                                                                                    |
+| **Active users**    | The number of distinct users with a session in the window, keyed by user ID and falling back to the source-control login for sessions without a linked user. The hint shows attributed sessions per person; sessions with no recorded user are left out of it. |
+| **Spend**           | The sum of every counted session's recorded cost, with the average per session.                                                                                                                                                                                |
+| **Completion rate** | Completed divided by completed + failed + cancelled. Sessions still running, never started, or archived are not in the denominator. A dash until a session finishes.                                                                                           |
 
-The second group, **Pull requests · every source**, shows **PRs merged** (pull requests opened in the window that have merged, with the acceptance rate and a sparkline of merges per day) and **Cost per merged PR** (defined under [Pull requests](#pull-requests)).
+The second group, **Pull requests · every source**, shows **PRs merged** (pull requests merged during the window, with their average time to merge and a sparkline of merges per day) and **Cost per merged PR** (for pull requests opened in the window; defined under [Pull requests](#pull-requests)).
 
 Below them, **Sessions per day** and **Pull requests opened and merged** chart the window, and three lists show the top five repositories by sessions (with cost), models by spend (with cost per session), and people by sessions (with completion rate). Each panel links to the tab with the full detail.
 
@@ -107,17 +107,17 @@ Rates on this tab are computed over pull requests, not sessions. Sessions that n
 
 A sortable table of usage per person. Click any column heading to sort; click again to reverse.
 
-| Column             | Meaning                                                                                                              |
-| ------------------ | -------------------------------------------------------------------------------------------------------------------- |
-| **User**           | Display name or login. "Unknown user", marked "Sessions without linked user", collects sessions with no user record. |
-| **Daily sessions** | A sparkline of the person's sessions per day across the window.                                                      |
-| **Sessions**       | Session count.                                                                                                       |
-| **Completion**     | Completed divided by completed + failed + cancelled. Sessions still running are not in the denominator.              |
-| **PRs**            | Pull requests created by the person's sessions.                                                                      |
-| **Messages**       | Prompts sent across the person's sessions.                                                                           |
-| **Cost**           | Sum of recorded cost across the person's sessions.                                                                   |
-| **Avg duration**   | Average active duration per finished session; shown as a dash when there is none.                                    |
-| **Last active**    | Relative time of the person's most recent session activity.                                                          |
+| Column             | Meaning                                                                                                                            |
+| ------------------ | ---------------------------------------------------------------------------------------------------------------------------------- |
+| **User**           | Display name or login. "Unknown user", marked "Sessions without linked user", collects sessions with no user record.               |
+| **Daily sessions** | A sparkline of the person's sessions per day across the window.                                                                    |
+| **Sessions**       | Session count.                                                                                                                     |
+| **Completion**     | Completed divided by completed + failed + cancelled. Sessions still running are not in the denominator; a dash until one finishes. |
+| **PRs**            | Pull requests created by the person's sessions.                                                                                    |
+| **Messages**       | Prompts sent across the person's sessions.                                                                                         |
+| **Cost**           | Sum of recorded cost across the person's sessions.                                                                                 |
+| **Avg duration**   | Average active duration per finished session; shown as a dash when there is none.                                                  |
+| **Last active**    | Relative time of the person's most recent session activity.                                                                        |
 
 **People by source** is the same breakdown as **Where sessions start** on the Usage tab.
 

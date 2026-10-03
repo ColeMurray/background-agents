@@ -19,7 +19,7 @@ const STATUS_ROWS = [
 /** Completion rate as the headline, with every status as a labelled count. */
 export function AnalyticsSessionStatusSummary({ status }: { status: AnalyticsStatusBreakdown }) {
   const finished = getFinishedSessionCount(status);
-  const completion = finished > 0 ? getCompletionRate(status) : null;
+  const completion = getCompletionRate(status);
   return (
     <div>
       <div className="flex items-baseline gap-2">

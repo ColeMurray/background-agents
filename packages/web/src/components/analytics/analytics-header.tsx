@@ -11,6 +11,7 @@ import {
 import { CollapsedSidebarControls, useSidebarContext } from "@/components/sidebar-layout";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { SegmentedControl } from "@/components/ui/segmented-control";
+import { cn } from "@/lib/utils";
 import {
   ANALYTICS_RANGE_LABELS,
   ANALYTICS_REFRESH_INTERVAL_MS,
@@ -40,6 +41,7 @@ export function AnalyticsHeader({
   onDaysChange,
   onScopeChange,
   scopeDisabled,
+  freshness,
   tabs,
 }: {
   dashboard?: AnalyticsDashboardResponse;
@@ -49,6 +51,8 @@ export function AnalyticsHeader({
   onScopeChange: (scope: AnalyticsScope) => void;
   /** Pull request metrics ignore scope, so their tab turns the control off. */
   scopeDisabled: boolean;
+  /** Whether the numbers on screen match the selected filters. */
+  freshness: AnalyticsFreshness;
   tabs: ReactNode;
 }) {
   const { isOpen } = useSidebarContext();
@@ -63,7 +67,7 @@ export function AnalyticsHeader({
               {formatAnalyticsWindow(dashboard.window)}
             </span>
           ) : null}
-          <LiveStatus generatedAt={dashboard?.generatedAt} />
+          <LiveStatus generatedAt={dashboard?.generatedAt} freshness={freshness} />
         </div>
         <div className="flex flex-wrap items-center gap-2">
           <div
@@ -89,7 +93,7 @@ export function AnalyticsHeader({
       </div>
       <div className="mx-auto flex max-w-7xl items-end justify-between gap-4 px-4 sm:px-6 lg:px-8">
         {tabs}
-        <div className="hidden pb-1 sm:block">
+        <div className="shrink-0 pb-1">
           <AboutThisData />
         </div>
       </div>
@@ -97,14 +101,36 @@ export function AnalyticsHeader({
   );
 }
 
+export type AnalyticsFreshness = "current" | "loading" | "previous";
+
 /** "Updated 12s ago" beside a live dot; ticks on its own between refreshes. */
-function LiveStatus({ generatedAt }: { generatedAt?: number }) {
+function LiveStatus({
+  generatedAt,
+  freshness,
+}: {
+  generatedAt?: number;
+  freshness: AnalyticsFreshness;
+}) {
   const [now, setNow] = useState(() => Date.now());
   useEffect(() => {
     const timer = window.setInterval(() => setNow(Date.now()), 5_000);
     return () => window.clearInterval(timer);
   }, []);
   if (generatedAt === undefined) return null;
+  if (freshness !== "current") {
+    return (
+      <span className="inline-flex items-center gap-1.5 whitespace-nowrap text-xs text-muted-foreground">
+        <span
+          aria-hidden="true"
+          className={cn(
+            "h-1.5 w-1.5 rounded-full",
+            freshness === "loading" ? "animate-pulse bg-muted-foreground" : "bg-warning"
+          )}
+        />
+        {freshness === "loading" ? "Loading…" : "Showing the previous selection"}
+      </span>
+    );
+  }
 
   const seconds = Math.max(0, Math.round((now - generatedAt) / 1000));
   const age =
@@ -161,9 +187,13 @@ function ScopeHelp() {
 function AboutThisData() {
   return (
     <Popover>
-      <PopoverTrigger className="inline-flex items-center gap-1 rounded px-1.5 py-1 text-xs text-muted-foreground hover:text-foreground focus-visible:outline focus-visible:outline-2 focus-visible:outline-ring">
+      <PopoverTrigger
+        aria-label="About this data"
+        className="inline-flex items-center gap-1 rounded px-1.5 py-1 text-xs text-muted-foreground hover:text-foreground focus-visible:outline focus-visible:outline-2 focus-visible:outline-ring"
+      >
         <InfoIcon />
-        About this data
+        {/* Icon only on phones, where the tabs need the width. */}
+        <span className="hidden sm:inline">About this data</span>
       </PopoverTrigger>
       <PopoverContent align="end" className="w-96 p-3 text-xs leading-5 text-muted-foreground">
         <div className="mb-1.5 text-sm font-medium text-foreground">About this data</div>

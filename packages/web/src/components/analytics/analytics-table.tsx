@@ -12,8 +12,10 @@ export interface AnalyticsTableColumn<Row> {
   header: string;
   align?: "left" | "right";
   cell: (row: Row) => ReactNode;
-  /** Makes the column sortable by this value. */
-  sortValue?: (row: Row) => number | string;
+  /** Makes the column sortable by this value; rows without one (null) always sort last. */
+  sortValue?: (row: Row) => number | string | null;
+  /** Direction of the first click; defaults to A→Z for text and largest first for numbers. */
+  defaultSortDirection?: SortDirection;
   /** Draws a magnitude bar beside the value, scaled to the column's largest value. */
   barValue?: (row: Row) => number;
   /** Hides the column below a breakpoint, for secondary measures. */
@@ -56,6 +58,11 @@ export function AnalyticsTable<Row>({
     return [...rows].sort((left, right) => {
       const a = sortValue(left);
       const b = sortValue(right);
+      // Missing values trail in both directions rather than leading one of them.
+      if (a === null || b === null) {
+        if (a !== b) return a === null ? 1 : -1;
+        return rowKey(left).localeCompare(rowKey(right));
+      }
       const compared =
         typeof a === "number" && typeof b === "number" ? a - b : String(a).localeCompare(String(b));
       return compared * sign || rowKey(left).localeCompare(rowKey(right));
@@ -80,9 +87,12 @@ export function AnalyticsTable<Row>({
       if (current?.columnId === column.id) {
         return { columnId: column.id, direction: current.direction === "desc" ? "asc" : "desc" };
       }
+      if (column.defaultSortDirection) {
+        return { columnId: column.id, direction: column.defaultSortDirection };
+      }
       // Names read best A→Z; measures read best largest first.
-      const textual = typeof column.sortValue?.(rows[0]) === "string";
-      return { columnId: column.id, direction: textual ? "asc" : "desc" };
+      const sample = rows.map((row) => column.sortValue?.(row)).find((value) => value != null);
+      return { columnId: column.id, direction: typeof sample === "string" ? "asc" : "desc" };
     });
   }
 

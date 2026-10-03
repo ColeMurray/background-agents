@@ -59,11 +59,76 @@ describe("AnalyticsPeopleTable", () => {
     expect(row).toHaveTextContent("10%");
   });
 
-  it("draws each person's daily sessions from their timeseries group", () => {
+  it("draws each person's daily sessions from their user key", () => {
     const { container } = render(<AnalyticsPeopleTable dashboard={analyticsDashboard()} />);
     const sparklines = container.querySelectorAll("tbody svg");
     // Anna, Zoe and the unknown user each have activity in the window.
     expect(sparklines).toHaveLength(3);
+  });
+
+  it("gives people who share a display name their own daily sessions", () => {
+    const dashboard = analyticsDashboard();
+    const { container } = render(
+      <AnalyticsPeopleTable
+        dashboard={{
+          ...dashboard,
+          timeseries: {
+            series: [
+              { date: "2026-09-21", groups: { "user-1": 3, "user-2": 1 } },
+              { date: "2026-09-22", groups: { "user-1": 1, "user-2": 3 } },
+            ],
+          },
+          breakdowns: {
+            ...dashboard.breakdowns,
+            user: {
+              entries: [
+                breakdownEntry("user-1", { displayName: "Alex", sessions: 4 }),
+                breakdownEntry("user-2", { displayName: "Alex", sessions: 3 }),
+              ],
+            },
+          },
+        }}
+      />
+    );
+    const lines = [...container.querySelectorAll("tbody svg path:last-child")].map((path) =>
+      path.getAttribute("d")
+    );
+    expect(lines).toHaveLength(2);
+    expect(lines[0]).not.toBe(lines[1]);
+  });
+
+  it("shows a dash for people with no finished sessions and sorts them below 0%", async () => {
+    const user = userEvent.setup();
+    const dashboard = analyticsDashboard();
+    render(
+      <AnalyticsPeopleTable
+        dashboard={{
+          ...dashboard,
+          breakdowns: {
+            ...dashboard.breakdowns,
+            user: {
+              entries: [
+                breakdownEntry("running", {
+                  displayName: "Running",
+                  completed: 0,
+                  failed: 0,
+                  cancelled: 0,
+                }),
+                breakdownEntry("failing", {
+                  displayName: "Failing",
+                  completed: 0,
+                  failed: 2,
+                  cancelled: 0,
+                }),
+              ],
+            },
+          },
+        }}
+      />
+    );
+    expect(screen.getByRole("row", { name: /Running/ })).toHaveTextContent("—");
+    await user.click(screen.getByRole("button", { name: "Completion" }));
+    expect(firstCells()).toEqual(["FFailing", "RRunning"]);
   });
 
   it("shows an empty message when nobody is attributed", () => {

@@ -76,7 +76,7 @@ const EXTRA_COLUMNS: Record<ExtraColumn, AnalyticsTableColumn<AnalyticsBreakdown
     header: "Cache hit",
     align: "right",
     hideBelow: "2xl",
-    sortValue: (entry) => getCacheHitRatio(entry) ?? -1,
+    sortValue: getCacheHitRatio,
     cell: (entry) => formatAnalyticsRatio(getCacheHitRatio(entry)),
   },
 };

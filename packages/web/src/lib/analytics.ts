@@ -195,13 +195,14 @@ export function getFinishedSessionCount(counts: SessionOutcomeCounts): number {
   return counts.completed + counts.failed + counts.cancelled;
 }
 
-export function getCompletionRate(counts: SessionOutcomeCounts): number {
+/** Completed over finished sessions; null until a session has finished. */
+export function getCompletionRate(counts: SessionOutcomeCounts): number | null {
   const finished = getFinishedSessionCount(counts);
-  return finished > 0 ? counts.completed / finished : 0;
+  return finished > 0 ? counts.completed / finished : null;
 }
 
 export function formatCompletionRate(counts: SessionOutcomeCounts): string {
-  return `${Math.round(getCompletionRate(counts) * 100)}%`;
+  return formatAnalyticsRatio(getCompletionRate(counts));
 }
 
 export function getAnalyticsDimensionLabels(
@@ -302,32 +303,26 @@ export function getDailySessionCounts(dashboard: AnalyticsDashboardResponse): Da
   }));
 }
 
-/** The timeseries groups by display name, falling back to SCM login, then the unknown key. */
-export function getUserTimeseriesGroup(
-  entry: Pick<AnalyticsBreakdownEntry, "key" | "displayName">
-): string {
-  return entry.key === ANALYTICS_UNKNOWN_USER_KEY
-    ? ANALYTICS_UNKNOWN_USER_KEY
-    : (entry.displayName ?? entry.key);
-}
-
-/** Daily session counts for each timeseries group, aligned to the window's days. */
-export function getDailySessionCountsByGroup(
+/**
+ * Daily session counts per user, aligned to the window's days and keyed like
+ * the user breakdown (user ID, else SCM login, else the unknown-user key).
+ */
+export function getDailySessionCountsByUser(
   dashboard: AnalyticsDashboardResponse
 ): Map<string, number[]> {
   const dates = getAnalyticsWindowDates(dashboard.window);
   const positions = new Map(dates.map((date, index) => [date, index]));
-  const byGroup = new Map<string, number[]>();
+  const byUser = new Map<string, number[]>();
   for (const point of dashboard.timeseries.series) {
     const position = positions.get(point.date);
     if (position === undefined) continue;
-    for (const [group, count] of Object.entries(point.groups)) {
-      const counts = byGroup.get(group) ?? new Array<number>(dates.length).fill(0);
+    for (const [userKey, count] of Object.entries(point.groups)) {
+      const counts = byUser.get(userKey) ?? new Array<number>(dates.length).fill(0);
       counts[position] += count;
-      byGroup.set(group, counts);
+      byUser.set(userKey, counts);
     }
   }
-  return byGroup;
+  return byUser;
 }
 
 export interface DailyPullRequestCount {

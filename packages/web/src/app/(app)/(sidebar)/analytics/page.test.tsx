@@ -12,16 +12,14 @@ import AnalyticsPage from "./page";
 
 expect.extend(matchers);
 
-const { mockReplace, mockSearchParams, mockUseAnalyticsDashboard } = vi.hoisted(() => ({
-  mockReplace: vi.fn(),
-  mockSearchParams: { value: new URLSearchParams() },
+const { mockUseAnalyticsDashboard } = vi.hoisted(() => ({
   mockUseAnalyticsDashboard: vi.fn(),
 }));
 
+// Next syncs useSearchParams with native history calls; read the jsdom URL the same way.
 vi.mock("next/navigation", () => ({
   usePathname: () => "/analytics",
-  useRouter: () => ({ replace: mockReplace }),
-  useSearchParams: () => mockSearchParams.value,
+  useSearchParams: () => new URLSearchParams(window.location.search),
 }));
 
 vi.mock("next/link", () => ({
@@ -54,6 +52,7 @@ function dashboardResult(
     dashboard: AnalyticsDashboardResponse | undefined;
     loading: boolean;
     stale: boolean;
+    validating: boolean;
     error: unknown;
   }> = {}
 ) {
@@ -61,19 +60,19 @@ function dashboardResult(
     dashboard: analyticsDashboard(),
     loading: false,
     stale: false,
+    validating: false,
     error: undefined,
     ...overrides,
   };
 }
 
 function renderAt(search: string, result = dashboardResult()) {
-  mockSearchParams.value = new URLSearchParams(search);
+  window.history.replaceState(null, "", search ? `/analytics?${search}` : "/analytics");
   mockUseAnalyticsDashboard.mockReturnValue(result);
   return render(<AnalyticsPage />);
 }
 
 beforeEach(() => {
-  mockReplace.mockReset();
   mockUseAnalyticsDashboard.mockReset();
 });
 
@@ -103,17 +102,29 @@ describe("AnalyticsPage", () => {
     expect(screen.getByRole("region", { name: "By provider" })).toBeInTheDocument();
   });
 
-  it("writes filter changes to the URL and keeps the open tab", async () => {
+  it("writes filter changes to the URL, keeps the open tab, and leaves defaults out", async () => {
+    const user = userEvent.setup();
+    const { rerender } = renderAt("tab=cost");
+
+    await user.click(screen.getByRole("radio", { name: "7d" }));
+    expect(window.location.search).toBe("?tab=cost&days=7");
+
+    // Next re-renders the page from the new URL; the test does it by hand.
+    rerender(<AnalyticsPage />);
+    expect(mockUseAnalyticsDashboard).toHaveBeenLastCalledWith(7, "human");
+    await user.click(screen.getByRole("radio", { name: "30d" }));
+    expect(window.location.search).toBe("?tab=cost");
+  });
+
+  it("keeps both of two quick changes made before the page re-renders", async () => {
     const user = userEvent.setup();
     renderAt("tab=cost");
 
+    // Neither click re-renders the page here, so the second change must build on the
+    // URL the first one wrote rather than on the params from the last render.
     await user.click(screen.getByRole("radio", { name: "7d" }));
-    expect(mockReplace).toHaveBeenLastCalledWith("/analytics?tab=cost&days=7", { scroll: false });
-
     await user.click(screen.getByRole("radio", { name: "Automations" }));
-    expect(mockReplace).toHaveBeenLastCalledWith("/analytics?tab=cost&scope=automation", {
-      scroll: false,
-    });
+    expect(window.location.search).toBe("?tab=cost&days=7&scope=automation");
   });
 
   it("switches tabs through the URL, including from overview links", async () => {
@@ -121,15 +132,11 @@ describe("AnalyticsPage", () => {
     renderAt("days=14");
 
     await user.click(screen.getByRole("tab", { name: "Pull requests" }));
-    expect(mockReplace).toHaveBeenLastCalledWith("/analytics?days=14&tab=pull-requests", {
-      scroll: false,
-    });
+    expect(window.location.search).toBe("?days=14&tab=pull-requests");
 
     const topPeople = screen.getByRole("region", { name: "Most active people" });
     await user.click(within(topPeople).getByRole("button", { name: "People" }));
-    expect(mockReplace).toHaveBeenLastCalledWith("/analytics?days=14&tab=people", {
-      scroll: false,
-    });
+    expect(window.location.search).toBe("?days=14&tab=people");
   });
 
   it("turns the scope control off on the pull requests tab, where it does not apply", () => {
@@ -169,7 +176,7 @@ describe("AnalyticsPage", () => {
       "true"
     );
 
-    mockSearchParams.value = new URLSearchParams("tab=usage&days=7");
+    window.history.replaceState(null, "", "/analytics?tab=usage&days=7");
     rerender(<AnalyticsPage />);
     expect(within(sources()).getByRole("button", { name: "All sources" })).toHaveAttribute(
       "aria-pressed",
@@ -192,13 +199,32 @@ describe("AnalyticsPage", () => {
     expect(screen.queryByRole("table")).not.toBeInTheDocument();
   });
 
-  it("dims the previous snapshot while a new range loads, and shows a placeholder at first", () => {
-    const { unmount } = renderAt("", dashboardResult({ stale: true }));
+  it("dims the previous snapshot as busy while a new range loads", () => {
+    renderAt("", dashboardResult({ stale: true, validating: true }));
+
     expect(
       screen.getByRole("region", { name: "Human sessions" }).closest("[aria-busy]")
     ).toHaveAttribute("aria-busy", "true");
-    unmount();
+    expect(screen.getByText("Loading…")).toBeInTheDocument();
+    expect(screen.queryByText(/^Updated/)).not.toBeInTheDocument();
+  });
 
+  it("says when a failed range change leaves the previous selection on screen", () => {
+    renderAt(
+      "days=7",
+      dashboardResult({ stale: true, validating: false, error: new Error("range failed") })
+    );
+
+    expect(screen.getByRole("alert")).toHaveTextContent(
+      "Analytics for the selected range and scope failed to load"
+    );
+    expect(screen.getByText("Showing the previous selection")).toBeInTheDocument();
+    expect(
+      screen.getByRole("region", { name: "Human sessions" }).closest("[aria-busy]")
+    ).toHaveAttribute("aria-busy", "false");
+  });
+
+  it("shows a placeholder on first load", () => {
     renderAt("", dashboardResult({ dashboard: undefined, loading: true }));
     expect(screen.getByRole("status", { name: "Loading analytics" })).toBeInTheDocument();
   });

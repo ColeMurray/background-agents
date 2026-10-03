@@ -1,7 +1,7 @@
 "use client";
 
 import { Suspense, useRef } from "react";
-import { usePathname, useRouter, useSearchParams } from "next/navigation";
+import { usePathname, useSearchParams } from "next/navigation";
 import { AnalyticsCostTab } from "@/components/analytics/analytics-cost-tab";
 import { AnalyticsHeader } from "@/components/analytics/analytics-header";
 import { AnalyticsOverviewTab } from "@/components/analytics/analytics-overview-tab";
@@ -30,17 +30,25 @@ export default function AnalyticsPage() {
 }
 
 function AnalyticsContent() {
-  const router = useRouter();
   const pathname = usePathname();
   const searchParams = useSearchParams();
   const view = parseAnalyticsView(searchParams);
-  const { dashboard, loading, stale, error } = useAnalyticsDashboard(view.days, view.scope);
+  const { dashboard, loading, stale, validating, error } = useAnalyticsDashboard(
+    view.days,
+    view.scope
+  );
+  // Waiting on the selected filters, versus left with the previous ones after a failure.
+  const freshness = !stale ? "current" : validating ? "loading" : "previous";
   const scrollRef = useRef<HTMLDivElement>(null);
   const filterKey = `${view.days}-${view.scope}`;
 
   function changeView(change: Partial<AnalyticsView>) {
-    const query = buildAnalyticsSearch(new URLSearchParams(searchParams.toString()), change);
-    router.replace(query ? `${pathname}?${query}` : pathname, { scroll: false });
+    // Build on the address bar, not the last rendered params: replaceState updates it
+    // synchronously, so quick successive changes compose instead of overwriting each other.
+    // Next syncs useSearchParams with native history calls, but only when the state passed
+    // is not its own (it skips state marked as internal), so pass null as its docs do.
+    const query = buildAnalyticsSearch(new URLSearchParams(window.location.search), change);
+    window.history.replaceState(null, "", query ? `${pathname}?${query}` : pathname);
   }
 
   function selectTab(tab: AnalyticsTab) {
@@ -65,10 +73,11 @@ function AnalyticsContent() {
           onDaysChange={(days) => changeView({ days })}
           onScopeChange={(scope) => changeView({ scope })}
           scopeDisabled={view.tab === "pull-requests"}
+          freshness={freshness}
           tabs={
             <TabsList
               aria-label="Analytics views"
-              className="-mb-px gap-5 overflow-x-auto border-b-0"
+              className="-mb-px min-w-0 gap-5 overflow-x-auto border-b-0"
             >
               {ANALYTICS_TABS.map((tab) => (
                 <TabsTrigger
@@ -86,13 +95,18 @@ function AnalyticsContent() {
         <main className="mx-auto max-w-7xl px-4 py-6 sm:px-6 lg:px-8">
           {error ? (
             <ErrorBanner role="alert" className="mb-4">
-              Analytics failed to load. The page will retry automatically, or you can refresh.
+              {freshness === "previous"
+                ? "Analytics for the selected range and scope failed to load. The previous selection is shown, dimmed, while the page retries."
+                : "Analytics failed to load. The page will retry automatically, or you can refresh."}
             </ErrorBanner>
           ) : null}
 
           {dashboard ? (
-            // The previous snapshot stays on screen, dimmed, until the new one arrives.
-            <div aria-busy={stale} className={cn("transition-opacity", stale && "opacity-60")}>
+            // A snapshot for other filters stays dimmed until the selected one arrives.
+            <div
+              aria-busy={freshness === "loading"}
+              className={cn("transition-opacity", stale && "opacity-60")}
+            >
               <TabsContent value="overview">
                 <AnalyticsOverviewTab dashboard={dashboard} onSelectTab={selectTab} />
               </TabsContent>

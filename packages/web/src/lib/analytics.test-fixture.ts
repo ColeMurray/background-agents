@@ -89,11 +89,11 @@ export function analyticsDashboard(
       },
     },
     timeseries: {
-      // The API omits quiet days: nothing on Sep 19–21.
+      // Keyed like the user breakdown. The API omits quiet days: nothing on Sep 19–21.
       series: [
-        { date: "2026-09-18", groups: { Zoe: 2, Anna: 1 } },
-        { date: "2026-09-22", groups: { Zoe: 3, __unknown__: 1 } },
-        { date: "2026-09-24", groups: { Anna: 5 } },
+        { date: "2026-09-18", groups: { "user-zoe": 2, "user-anna": 1 } },
+        { date: "2026-09-22", groups: { "user-zoe": 3, __unknown__: 1 } },
+        { date: "2026-09-24", groups: { "user-anna": 5 } },
       ],
     },
     sessionOrigins: [

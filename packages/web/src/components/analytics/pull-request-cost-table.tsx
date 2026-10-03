@@ -57,7 +57,7 @@ export function AnalyticsPullRequestCostTable({
       id: "costPerMerged",
       header: "Cost per merged PR",
       align: "right",
-      sortValue: (entry) => costPerMerged(entry) ?? -1,
+      sortValue: costPerMerged,
       barValue: (entry) => costPerMerged(entry) ?? 0,
       cell: (entry) => formatAnalyticsCost(costPerMerged(entry)),
     },

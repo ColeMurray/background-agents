@@ -1184,20 +1184,21 @@ describe("Analytics API", () => {
     const summary = await summaryRes.json<AnalyticsSummaryResponse>();
     expect(summary.activeUsers).toBe(2); // user-abc + bob
 
-    // Timeseries: uses display name from users table
+    // Timeseries: keyed like the user breakdown, by user ID before SCM login
     const timeseriesRes = await serviceFetch("https://test.local/analytics/timeseries?days=30");
     expect(timeseriesRes.status).toBe(200);
     const timeseries = await timeseriesRes.json<AnalyticsTimeseriesResponse>();
 
-    // All Alice's sessions should appear under "Alice Smith", not "alice"/"alice-gh"
+    // All Alice's sessions appear under her user ID, not "alice"/"alice-gh" or her name
     const allGroups = timeseries.series.flatMap((s) => Object.keys(s.groups));
-    expect(allGroups).toContain("Alice Smith");
+    expect(allGroups).toContain("user-abc");
+    expect(allGroups).not.toContain("Alice Smith");
     expect(allGroups).not.toContain("alice");
     expect(allGroups).not.toContain("alice-gh");
     expect(allGroups).toContain("bob");
   });
 
-  it("sums timeseries counts when distinct users share the same display name", async () => {
+  it("keeps distinct users who share a display name apart in the timeseries", async () => {
     const store = new SessionIndexStore(env.DB);
     const now = new Date().setUTCHours(12, 0, 0, 0);
     const dayAgo = now - 24 * 60 * 60 * 1000;
@@ -1239,12 +1240,11 @@ describe("Analytics API", () => {
     expect(res.status).toBe(200);
     const body = await res.json<AnalyticsTimeseriesResponse>();
 
-    // Both sessions land on the same date with the same "Alex" label
+    // Both sessions land on the same date, each under its own user ID
     const dayBucket = dateBucket(dayAgo);
     const dayEntry = body.series.find((s) => s.date === dayBucket);
     expect(dayEntry).toBeDefined();
-    // Reducer must sum, not overwrite: 1 + 1 = 2
-    expect(dayEntry!.groups["Alex"]).toBe(2);
+    expect(dayEntry!.groups).toEqual({ "user-alex-1": 1, "user-alex-2": 1 });
   });
 
   it("keeps the default dashboard population and existing resources identical to explicit human scope", async () => {

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { analyticsDashboard } from "@/lib/analytics.test-fixture";
+import { analyticsDashboard, breakdownEntry } from "@/lib/analytics.test-fixture";
 import { getCostKpis, getHeadlineKpiGroups, getPullRequestKpis } from "./analytics-kpi-items";
 
 describe("getHeadlineKpiGroups", () => {
@@ -35,6 +35,39 @@ describe("getHeadlineKpiGroups", () => {
     ]);
     expect(sessions.items[0].trend).toHaveLength(8);
     expect(sessions.items[3].detail).toBe("2 failed · 1 cancelled");
+  });
+
+  it("counts merges during the window, the same population as its sparkline and merge time", () => {
+    const dashboard = analyticsDashboard();
+    const [, pullRequests] = getHeadlineKpiGroups(dashboard);
+    const merged = pullRequests.items[0];
+    expect(merged).toMatchObject({ label: "PRs merged", value: "5", detail: "Avg 30h to merge" });
+    expect(merged.trend?.reduce((sum, count) => sum + count, 0)).toBe(
+      dashboard.pullRequests.mergedInWindow
+    );
+    expect(pullRequests.items[1]).toMatchObject({
+      label: "Cost per merged PR",
+      value: "$1.50",
+      detail: "PRs opened in range",
+    });
+  });
+
+  it("divides attributed sessions by attributed people", () => {
+    const dashboard = analyticsDashboard();
+    const [sessions] = getHeadlineKpiGroups({
+      ...dashboard,
+      summary: { ...dashboard.summary, totalSessions: 103, activeUsers: 1 },
+      breakdowns: {
+        ...dashboard.breakdowns,
+        user: {
+          entries: [
+            breakdownEntry("user-zoe", { displayName: "Zoe", sessions: 3 }),
+            breakdownEntry("__unknown__", { displayName: "Unknown user", sessions: 100 }),
+          ],
+        },
+      },
+    });
+    expect(sessions.items[1].detail).toBe("3 sessions per person");
   });
 
   it("shows no completion rate before any session finishes", () => {

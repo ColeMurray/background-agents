@@ -12,8 +12,7 @@ import {
   formatAnalyticsDuration,
   formatCompletionRate,
   getCompletionRate,
-  getDailySessionCountsByGroup,
-  getUserTimeseriesGroup,
+  getDailySessionCountsByUser,
 } from "@/lib/analytics";
 import { formatRelativeTime } from "@/lib/time";
 import { cn } from "@/lib/utils";
@@ -31,7 +30,8 @@ export function AnalyticsPeopleTable({
   dashboard: AnalyticsDashboardResponse;
   limit?: number;
 }) {
-  const activity = useMemo(() => getDailySessionCountsByGroup(dashboard), [dashboard]);
+  const entries = dashboard.breakdowns.user.entries;
+  const activity = useMemo(() => getDailySessionCountsByUser(dashboard), [dashboard]);
   const columns: AnalyticsTableColumn<AnalyticsBreakdownEntry>[] = [
     {
       id: "user",
@@ -45,10 +45,7 @@ export function AnalyticsPeopleTable({
       hideBelow: "md",
       cell: (entry) => (
         <span className="block w-32">
-          <AnalyticsSparkline
-            values={activity.get(getUserTimeseriesGroup(entry)) ?? []}
-            height={20}
-          />
+          <AnalyticsSparkline values={activity.get(entry.key) ?? []} height={20} />
         </span>
       ),
     },
@@ -112,7 +109,7 @@ export function AnalyticsPeopleTable({
   return (
     <AnalyticsTable
       label="Usage by person"
-      rows={dashboard.breakdowns.user.entries}
+      rows={entries}
       columns={columns}
       rowKey={(entry) => entry.key}
       initialSort={{ columnId: "sessions", direction: "desc" }}

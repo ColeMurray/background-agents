@@ -58,7 +58,7 @@ export function AnalyticsPullRequestRepoTable({
       id: "acceptance",
       header: "Acceptance",
       align: "right",
-      sortValue: (entry) => getPullRequestAcceptanceRate(entry) ?? -1,
+      sortValue: getPullRequestAcceptanceRate,
       cell: formatPullRequestAcceptanceRate,
     },
     {
@@ -66,7 +66,7 @@ export function AnalyticsPullRequestRepoTable({
       header: "Avg time to merge",
       align: "right",
       hideBelow: "md",
-      sortValue: (entry) => entry.avgTimeToMergeMs ?? Number.MAX_SAFE_INTEGER,
+      sortValue: (entry) => entry.avgTimeToMergeMs,
       cell: (entry) =>
         entry.avgTimeToMergeMs === null ? "—" : formatAnalyticsLongDuration(entry.avgTimeToMergeMs),
     },

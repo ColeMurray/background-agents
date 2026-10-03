@@ -81,6 +81,51 @@ describe("AnalyticsTable", () => {
     expect(screen.getByRole("columnheader", { name: "Name" })).not.toHaveAttribute("aria-sort");
   });
 
+  it("keeps rows without a value last in both directions", async () => {
+    const user = userEvent.setup();
+    const withMissing: Array<{ name: string; rate: number | null }> = [
+      { name: "none", rate: null },
+      { name: "low", rate: 0 },
+      { name: "high", rate: 0.8 },
+    ];
+    render(
+      <AnalyticsTable
+        label="Rates"
+        rows={withMissing}
+        rowKey={(row) => row.name}
+        columns={[
+          { id: "name", header: "Name", cell: (row) => row.name },
+          {
+            id: "rate",
+            header: "Rate",
+            align: "right",
+            sortValue: (row) => row.rate,
+            cell: (row) => String(row.rate ?? "—"),
+          },
+        ]}
+      />
+    );
+
+    await user.click(screen.getByRole("button", { name: "Rate" }));
+    expect(names()).toEqual(["high", "low", "none"]);
+    await user.click(screen.getByRole("button", { name: "Rate" }));
+    expect(names()).toEqual(["low", "high", "none"]);
+  });
+
+  it("starts with a column's explicit default direction", async () => {
+    const user = userEvent.setup();
+    render(
+      <AnalyticsTable
+        label="Things"
+        rows={rows}
+        rowKey={(row) => row.name}
+        columns={[columns[0], { ...columns[1], defaultSortDirection: "asc" }]}
+      />
+    );
+    await user.click(screen.getByRole("button", { name: "Sessions" }));
+    expect(names()).toEqual(["beta", "gamma", "alpha"]);
+  });
+
   it("limits rows until expanded", async () => {
     const user = userEvent.setup();
     render(
