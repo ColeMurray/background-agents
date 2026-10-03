@@ -69,7 +69,8 @@ import { useProviderAccounts } from "@/hooks/use-provider-accounts";
 import { useWarmDraftSession, type WarmDraftSessionRequest } from "@/hooks/use-warm-draft-session";
 import { useCurrentUserAuthorization } from "@/hooks/use-current-user-authorization";
 import { useActiveTeam } from "@/hooks/use-active-team";
-import { NEW_SESSION_PROMPT_DRAFT_ID, usePromptDraft } from "@/hooks/use-prompt-draft";
+import { usePromptDraft } from "@/hooks/use-prompt-draft";
+import { NEW_SESSION_PROMPT_DRAFT_ID } from "@/lib/prompt-drafts";
 import type { SessionVisibility } from "@open-inspect/shared/types/teams";
 import { resolveComposerAccess, type ComposerAccessDraft } from "@/lib/composer-access";
 import {

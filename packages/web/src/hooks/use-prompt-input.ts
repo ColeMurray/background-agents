@@ -34,7 +34,8 @@ export function usePromptInput(
   canSubmit: boolean,
   sendShortcut: KeyboardShortcutBinding
 ) {
-  const { prompt, promptRef, setPrompt } = usePromptDraft(sessionId);
+  const { prompt, promptRef, setPrompt, pendingRequestRef, setPendingRequest } =
+    usePromptDraft(sessionId);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
   const sessionAttachments = useSessionAttachments();
@@ -98,8 +99,13 @@ export function usePromptInput(
         reasoningEffort,
         attachmentIds: sessionAttachments.attachments.map((attachment) => attachment.id),
       });
-      const requestIdentity = resolvePromptRequestIdentity(signature, retryRequestRef.current);
+      // An unconfirmed send from before a reload may already be queued; reuse its ID.
+      const requestIdentity = resolvePromptRequestIdentity(
+        signature,
+        retryRequestRef.current ?? pendingRequestRef.current
+      );
       retryRequestRef.current = requestIdentity;
+      setPendingRequest(requestIdentity);
       const result = await sendPrompt(
         content,
         selectedModel,
@@ -111,9 +117,9 @@ export function usePromptInput(
         setSubmitError(
           result.message ??
             (result.reason === "timeout"
-              ? "Confirmation timed out. Retry while this page is open to reuse the same request."
+              ? "Confirmation timed out. Retry to reuse the same request."
               : result.reason === "disconnected"
-                ? "Disconnected before confirmation. Retry on this page after reconnecting."
+                ? "Disconnected before confirmation. Retry after reconnecting."
                 : "The prompt could not be queued.")
         );
         return;

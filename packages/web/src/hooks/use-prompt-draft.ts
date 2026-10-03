@@ -1,53 +1,70 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-
-const PROMPT_DRAFT_STORAGE_KEY_PREFIX = "open-inspect-prompt-draft:";
-
-/** Draft ID for the new-session composer, which has no session ID yet. */
-export const NEW_SESSION_PROMPT_DRAFT_ID = "new-session";
-
-function promptDraftStorageKey(draftId: string): string {
-  return `${PROMPT_DRAFT_STORAGE_KEY_PREFIX}${draftId}`;
-}
+import { useAuthSession } from "@/lib/auth-session";
+import {
+  parseStoredPromptRequest,
+  promptDraftRequestStorageKey,
+  promptDraftStorageKey,
+  readStoredValue,
+  writeStoredValue,
+} from "@/lib/prompt-drafts";
+import type { PromptRequestIdentity } from "@/lib/prompt-request-id";
 
 /**
- * Prompt text that survives page reloads. The draft starts empty so server and
- * client render the same markup, then adopts the stored draft after hydration.
- * Setting an empty prompt removes the stored draft.
+ * Prompt text that survives page reloads, scoped to the signed-in user. The
+ * draft starts empty so server and client render the same markup, then adopts
+ * the stored draft once the user is known. Setting an empty prompt removes the
+ * stored draft.
+ *
+ * The draft also remembers the identity of a send that has not been confirmed,
+ * so a retry after reload reuses its idempotency key. Any prompt change clears it.
  */
 export function usePromptDraft(draftId: string) {
-  const storageKey = promptDraftStorageKey(draftId);
+  const { data: authSession } = useAuthSession();
+  const userId = authSession?.user?.id;
+  const storageKey = userId ? promptDraftStorageKey(userId, draftId) : null;
   const [prompt, setPromptState] = useState("");
   const promptRef = useRef(prompt);
+  const pendingRequestRef = useRef<PromptRequestIdentity | null>(null);
 
   useEffect(() => {
-    let stored: string | null = null;
-    try {
-      stored = localStorage.getItem(storageKey);
-    } catch {
-      // Storage is optional; the composer starts empty when it is unavailable.
+    if (!storageKey) return;
+    const stored = readStoredValue(storageKey);
+    if (stored !== null) {
+      promptRef.current = stored;
+      setPromptState(stored);
+      pendingRequestRef.current = parseStoredPromptRequest(
+        readStoredValue(promptDraftRequestStorageKey(storageKey))
+      );
+    } else if (promptRef.current) {
+      // Keep text typed before the user was known instead of discarding it.
+      writeStoredValue(storageKey, promptRef.current);
     }
-    promptRef.current = stored ?? "";
-    setPromptState(stored ?? "");
   }, [storageKey]);
 
-  const setPrompt = useCallback(
-    (value: string) => {
-      promptRef.current = value;
-      setPromptState(value);
-      try {
-        if (value) {
-          localStorage.setItem(storageKey, value);
-        } else {
-          localStorage.removeItem(storageKey);
-        }
-      } catch {
-        // Continue with the in-memory draft when storage is unavailable or full.
+  const setPendingRequest = useCallback(
+    (identity: PromptRequestIdentity | null) => {
+      pendingRequestRef.current = identity;
+      if (storageKey) {
+        writeStoredValue(
+          promptDraftRequestStorageKey(storageKey),
+          identity ? JSON.stringify(identity) : null
+        );
       }
     },
     [storageKey]
   );
 
-  return { prompt, promptRef, setPrompt };
+  const setPrompt = useCallback(
+    (value: string) => {
+      promptRef.current = value;
+      setPromptState(value);
+      setPendingRequest(null);
+      if (storageKey) writeStoredValue(storageKey, value || null);
+    },
+    [setPendingRequest, storageKey]
+  );
+
+  return { prompt, promptRef, setPrompt, pendingRequestRef, setPendingRequest };
 }

@@ -527,7 +527,9 @@ describe("Home", () => {
 
     expect(await screen.findByText("Prompt rejected")).toBeInTheDocument();
     expect(mocks.routerPush).not.toHaveBeenCalled();
-    expect(localStorage.getItem("open-inspect-prompt-draft:new-session")).toBe("Investigate logs");
+    expect(localStorage.getItem("open-inspect-prompt-draft:user-1:new-session")).toBe(
+      "Investigate logs"
+    );
   });
 
   it("restores an unsent prompt draft after a reload", async () => {
@@ -549,13 +551,13 @@ describe("Home", () => {
     fireEvent.change(screen.getByPlaceholderText("What do you want to build?"), {
       target: { value: "Ship it" },
     });
-    expect(localStorage.getItem("open-inspect-prompt-draft:new-session")).toBe("Ship it");
+    expect(localStorage.getItem("open-inspect-prompt-draft:user-1:new-session")).toBe("Ship it");
     await waitFor(() => expect(fetch).toHaveBeenCalledWith("/api/sessions", expect.anything()));
 
     fireEvent.click(screen.getByRole("button", { name: /send/i }));
 
     await waitFor(() => expect(mocks.routerPush).toHaveBeenCalledWith("/session/session-1"));
-    expect(localStorage.getItem("open-inspect-prompt-draft:new-session")).toBeNull();
+    expect(localStorage.getItem("open-inspect-prompt-draft:user-1:new-session")).toBeNull();
   });
 
   it("sends the default harness with a model it can run", async () => {

@@ -17,6 +17,11 @@ const mocks = vi.hoisted(() => ({
   sendTyping: vi.fn(),
   clearAttachments: vi.fn(),
   uploadAll: vi.fn(),
+  userId: "user-1",
+}));
+
+vi.mock("@/lib/auth-session", () => ({
+  useAuthSession: () => ({ data: { user: { id: mocks.userId } }, status: "authenticated" }),
 }));
 
 vi.mock("@/hooks/use-session-attachments", () => ({
@@ -69,6 +74,7 @@ beforeEach(() => {
   mocks.sendTyping.mockReset();
   mocks.clearAttachments.mockReset();
   mocks.uploadAll.mockReset();
+  mocks.userId = "user-1";
 });
 
 afterEach(() => {
@@ -180,5 +186,85 @@ describe("usePromptInput", () => {
     await waitFor(() =>
       expect(screen.getByRole("textbox", { name: "Prompt" })).toHaveValue("Ship it")
     );
+  });
+
+  it("does not restore another user's draft", () => {
+    const { unmount } = render(<PromptHarness canSubmit />);
+    fireEvent.change(screen.getByRole("textbox", { name: "Prompt" }), {
+      target: { value: "Private draft" },
+    });
+    unmount();
+
+    mocks.userId = "user-2";
+    render(<PromptHarness canSubmit />);
+
+    expect(screen.getByRole("textbox", { name: "Prompt" })).toHaveValue("");
+  });
+
+  it("reuses the unconfirmed request ID when retrying the restored draft after a reload", async () => {
+    mocks.sendPrompt.mockResolvedValue({ ok: false, reason: "timeout" });
+    const { unmount } = render(<PromptHarness canSubmit />);
+    fireEvent.change(screen.getByRole("textbox", { name: "Prompt" }), {
+      target: { value: "Ship it" },
+    });
+    fireEvent.keyDown(screen.getByRole("textbox", { name: "Prompt" }), {
+      key: "Enter",
+      code: "Enter",
+      ctrlKey: true,
+    });
+    await waitFor(() => expect(mocks.sendPrompt).toHaveBeenCalledOnce());
+    const firstRequestId = mocks.sendPrompt.mock.calls[0][4];
+    unmount();
+
+    render(<PromptHarness canSubmit />);
+    const input = screen.getByRole("textbox", { name: "Prompt" });
+    await waitFor(() => expect(input).toHaveValue("Ship it"));
+    fireEvent.keyDown(input, { key: "Enter", code: "Enter", ctrlKey: true });
+
+    await waitFor(() => expect(mocks.sendPrompt).toHaveBeenCalledTimes(2));
+    expect(mocks.sendPrompt.mock.calls[1][4]).toBe(firstRequestId);
+  });
+
+  it("uses a new request ID once the restored draft is edited", async () => {
+    mocks.sendPrompt.mockResolvedValue({ ok: false, reason: "timeout" });
+    const { unmount } = render(<PromptHarness canSubmit />);
+    fireEvent.change(screen.getByRole("textbox", { name: "Prompt" }), {
+      target: { value: "Ship it" },
+    });
+    fireEvent.keyDown(screen.getByRole("textbox", { name: "Prompt" }), {
+      key: "Enter",
+      code: "Enter",
+      ctrlKey: true,
+    });
+    await waitFor(() => expect(mocks.sendPrompt).toHaveBeenCalledOnce());
+    const firstRequestId = mocks.sendPrompt.mock.calls[0][4];
+    unmount();
+
+    render(<PromptHarness canSubmit />);
+    const input = screen.getByRole("textbox", { name: "Prompt" });
+    await waitFor(() => expect(input).toHaveValue("Ship it"));
+    fireEvent.change(input, { target: { value: "Ship it now" } });
+    fireEvent.keyDown(input, { key: "Enter", code: "Enter", ctrlKey: true });
+
+    await waitFor(() => expect(mocks.sendPrompt).toHaveBeenCalledTimes(2));
+    expect(mocks.sendPrompt.mock.calls[1][4]).not.toBe(firstRequestId);
+  });
+
+  it("drops the stored draft instead of restoring a stale one when saving fails", async () => {
+    const { unmount } = render(<PromptHarness canSubmit />);
+    const input = screen.getByRole("textbox", { name: "Prompt" });
+    fireEvent.change(input, { target: { value: "Partial" } });
+    vi.spyOn(Storage.prototype, "setItem").mockImplementation(() => {
+      throw new DOMException("Quota exceeded", "QuotaExceededError");
+    });
+
+    fireEvent.change(input, { target: { value: "Partial draft that no longer fits" } });
+    expect(input).toHaveValue("Partial draft that no longer fits");
+    vi.restoreAllMocks();
+    unmount();
+
+    render(<PromptHarness canSubmit />);
+    await waitFor(() => expect(screen.getByRole("textbox", { name: "Prompt" })).toHaveValue(""));
+    expect(localStorage.getItem("open-inspect-prompt-draft:user-1:session-1")).toBeNull();
   });
 });
