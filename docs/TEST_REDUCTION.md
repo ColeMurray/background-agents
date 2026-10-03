@@ -85,9 +85,11 @@ independently; a high combined score cannot hide a branch regression.
 
 `.github/workflows/coverage.yml` runs the entire policy on every PR targeting `main` and every push
 to `main`, without path filters or `continue-on-error`. Control-plane, web, other TypeScript, and
-Python coverage run in parallel jobs; the final `Coverage` check fails if any job fails and uploads
-the combined coverage artifact. The workflow tests its gate, including CLI failure on low Python
-branch coverage.
+Python coverage run in parallel jobs. Control-plane coverage is further split into Vitest shards
+(`COVERAGE_SHARD=true` skips the per-shard floor); `Coverage (control-plane)` merges their blob
+reports and enforces the full-suite floor on the merged result. The final `Coverage` check fails if
+any job fails and uploads the combined coverage artifact. The workflow tests its gate, including CLI
+failure on low Python branch coverage.
 
 Repository rules are separate from workflow files: an administrator must add `Coverage` as a
 required status check in the main ruleset. The authenticated integration cannot administer rules
