@@ -24,11 +24,11 @@ describe("route policy table", () => {
   });
 
   it("publishes the complete canonical route catalog", () => {
-    expect(routes).toHaveLength(212);
+    expect(routes).toHaveLength(213);
 
     const paths = routes.map((route) => route.path);
-    expect(new Set(paths).size).toBe(160);
-    expect(new Set(routes.map((route) => `${route.method}:${route.path}`)).size).toBe(212);
+    expect(new Set(paths).size).toBe(161);
+    expect(new Set(routes.map((route) => `${route.method}:${route.path}`)).size).toBe(213);
   });
 
   it("gates run analytics with analytics.read", () => {
@@ -272,6 +272,18 @@ describe("route policy table", () => {
         expect(authorization.service.actorlessGrants).toEqual(expected);
       }
     }
+  });
+
+  it.each([
+    ["slack", "slack-bot"],
+    ["linear", "linear-bot"],
+  ] as const)("admits only the %s bot to its channel-binding lookup", (provider, service) => {
+    expect(routeFor("GET", `/channel-bindings/${provider}/C1`)?.authorization).toEqual({
+      kind: "service",
+      services: [service],
+      actor: "optional",
+      auditAllowed: true,
+    });
   });
 
   it("does not declare actorless grants on other routes", () => {

@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { buildRepoDescriptions, clearReposLocalCache, getAvailableRepos } from "./repos";
+import { buildRepoDescriptions, getAvailableRepos } from "./repos";
 import { createFakeKV, makeLinearBotEnv } from "../test-helpers";
 
 const validReposResponse = {
@@ -21,22 +21,10 @@ const validReposResponse = {
   cachedAt: "2026-08-02T00:00:00.000Z",
 };
 
-const cachedRepoConfig = {
-  id: "open-inspect/background-agents",
-  owner: "open-inspect",
-  name: "background-agents",
-  fullName: "open-inspect/background-agents",
-  displayName: "Background-Agents",
-  description: "Background-Agents",
-  defaultBranch: "main",
-  private: true,
-  language: null,
-  aliases: ["agents"],
-};
+const scope = { linearTeamId: "external-team-1", actorUserId: "user-1" };
 
 describe("getAvailableRepos", () => {
   beforeEach(() => {
-    clearReposLocalCache();
     vi.spyOn(Date, "now").mockReturnValue(1_700_000_000_000);
   });
 
@@ -44,66 +32,43 @@ describe("getAvailableRepos", () => {
     vi.restoreAllMocks();
   });
 
-  it("reads scoped catalogs fresh without reading or replacing either unscoped cache", async () => {
-    const { kv, putCalls } = createFakeKV({
-      "repos:cache": JSON.stringify([cachedRepoConfig]),
-    });
-    let scopedReads = 0;
+  it("reads each team-scoped catalog live without touching KV", async () => {
+    const { kv, putCalls } = createFakeKV();
+    let reads = 0;
     const fetch = vi.fn(async (input: string | URL | Request) => {
-      const url = new URL(String(input));
-      if (!url.searchParams.has("channel")) return Response.json(validReposResponse);
-      expect(url.searchParams.get("channel")).toBe("linear:external-team-1");
-      scopedReads += 1;
-      const name = `scoped-${scopedReads}`;
+      expect(new URL(String(input)).searchParams.get("channel")).toBe("linear:external-team-1");
+      reads += 1;
+      const name = `scoped-${reads}`;
       return Response.json({
         ...validReposResponse,
         repos: [{ ...validReposResponse.repos[0], name, fullName: `Open-Inspect/${name}` }],
       });
     });
     const env = makeLinearBotEnv(kv, { CONTROL_PLANE: { fetch } });
-    const unscoped = await getAvailableRepos(env);
-    vi.mocked(kv.get).mockClear();
-    putCalls.length = 0;
-    const scope = { linearTeamId: "external-team-1", actorUserId: "user-1" };
 
-    const scoped = await getAvailableRepos(env, "trace-1", scope);
-    expect(scoped[0].name).toBe("scoped-1");
+    const scoped = await getAvailableRepos(env, scope, "trace-1");
+    expect(scoped[0]).toMatchObject({ name: "scoped-1", aliases: ["agents"] });
     const descriptions = buildRepoDescriptions(scoped);
     expect(descriptions).toContain("open-inspect/scoped-1");
-    expect(descriptions).not.toContain("open-inspect/background-agents");
+    expect((await getAvailableRepos(env, scope, "trace-1"))[0].name).toBe("scoped-2");
     expect(fetch).toHaveBeenCalledTimes(2);
-    expect((await getAvailableRepos(env, "trace-1", scope))[0].name).toBe("scoped-2");
-    expect(await getAvailableRepos(env)).toBe(unscoped);
-    expect(fetch).toHaveBeenCalledTimes(3);
     expect(kv.get).not.toHaveBeenCalled();
     expect(putCalls).toEqual([]);
   });
 
   it.each(["denied", "unavailable", "network", "malformed", "invalid-json"])(
-    "rejects a scoped %s response instead of using stale repositories",
+    "rejects a %s response instead of using an empty catalog",
     async (failure) => {
-      const { kv, putCalls } = createFakeKV({
-        "repos:cache": JSON.stringify([cachedRepoConfig]),
-      });
-      const fetch = vi.fn(async (input: string | URL | Request) => {
-        if (!new URL(String(input)).searchParams.has("channel")) {
-          return Response.json(validReposResponse);
-        }
+      const fetch = vi.fn(async () => {
         if (failure === "network") throw new Error("Control plane unavailable");
         if (failure === "invalid-json") return new Response("{not-json");
         if (failure === "malformed") return Response.json({ repos: [{ owner: "Open-Inspect" }] });
         return new Response(null, { status: failure === "denied" ? 403 : 503 });
       });
+      const { kv } = createFakeKV();
       const env = makeLinearBotEnv(kv, { CONTROL_PLANE: { fetch } });
-      await getAvailableRepos(env);
-      vi.mocked(kv.get).mockClear();
-      putCalls.length = 0;
 
-      await expect(
-        getAvailableRepos(env, undefined, { linearTeamId: "external-team-1" })
-      ).rejects.toThrow();
-      expect(kv.get).not.toHaveBeenCalled();
-      expect(putCalls).toEqual([]);
+      await expect(getAvailableRepos(env, { linearTeamId: "external-team-1" })).rejects.toThrow();
     }
   );
 });

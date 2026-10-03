@@ -165,7 +165,7 @@ export async function resolveStoredSessionTarget(
     return repositoryTarget(session.repoOwner, session.repoName);
   }
   if (session.environmentId) {
-    const environment = await getEnvironmentById(env, session.environmentId, traceId, scope);
+    const environment = await getEnvironmentById(env, session.environmentId, scope, traceId);
     if (environment) return { kind: "environment", environment };
     log.warn("target.stored_environment_not_found", {
       trace_id: traceId,
@@ -188,7 +188,7 @@ async function resolveMappedTarget(
   scope: LinearChannelScope
 ): Promise<SessionTarget | null> {
   if ("environmentId" in config) {
-    const environment = await getEnvironmentById(env, config.environmentId, traceId, scope);
+    const environment = await getEnvironmentById(env, config.environmentId, scope, traceId);
     if (!environment) {
       log.warn("target.environment_not_found", {
         trace_id: traceId,
@@ -272,7 +272,7 @@ export async function resolveSessionTarget(
   // 3. An explicit `owner/repo` in the trigger comment — or in the reply to a
   //    clarification this resolver previously elicited — beats every heuristic
   //    below: it is the answer the elicitation asked for.
-  const repos = await getAvailableRepos(env, traceId, scope);
+  const repos = await getAvailableRepos(env, scope, traceId);
   if (comment?.body) {
     const named = matchExplicitRepo(comment.body, repos);
     if (named) {
@@ -320,6 +320,7 @@ export async function resolveSessionTarget(
 
   const classification = await classifyRepo(
     env,
+    repos,
     issue.title,
     issue.description,
     labelNames,
@@ -327,8 +328,7 @@ export async function resolveSessionTarget(
     issue.team?.name ?? null,
     issue.team?.key ?? null,
     comment?.body,
-    traceId,
-    scope
+    traceId
   );
 
   if (classification.needsClarification || !classification.repo) {

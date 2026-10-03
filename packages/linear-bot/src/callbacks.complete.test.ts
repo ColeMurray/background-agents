@@ -53,7 +53,11 @@ async function postFailedCompletion(options: {
   );
   const linearFetch = vi
     .spyOn(globalThis, "fetch")
-    .mockResolvedValue(Response.json({ data: { commentCreate: { success: true } } }));
+    .mockImplementation(async (_input, init) =>
+      String(init?.body).includes("IssueTeam")
+        ? Response.json({ data: { issue: { id: "issue-1", team: { id: "external-team-1" } } } })
+        : Response.json({ data: { commentCreate: { success: true } } })
+    );
   const env = makeLinearBotEnv(kv, {
     SERVICE_AUTH_SECRET: SECRET,
     LINEAR_API_KEY: "linear-key",
@@ -88,8 +92,8 @@ async function postFailedCompletion(options: {
 
   expect(response.status).toBe(200);
   await Promise.all(ctx.waitUntil.mock.calls.map(([promise]) => promise));
-  expect(linearFetch).toHaveBeenCalledOnce();
-  const body = JSON.parse(String(linearFetch.mock.calls[0][1]?.body));
+  expect(linearFetch).toHaveBeenCalledTimes(2);
+  const body = JSON.parse(String(linearFetch.mock.calls[1][1]?.body));
   return body.variables.input.body;
 }
 

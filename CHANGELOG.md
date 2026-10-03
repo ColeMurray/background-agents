@@ -11,6 +11,9 @@ requests create sessions in the bound team with current actor membership and rep
 checks, including for the installed app user used by unattended requests. Settings > Integrations >
 Linear controls whether unbound teams create workspace-level sessions (the default) or reject
 requests until bound. Catalog and completion reads carry the signed Linear team coordinate.
+Completion results post only while the issue remains in its launching Linear team; otherwise, or
+when the session can no longer be read for that team, Linear receives a notice without session
+content.
 
 ### Changed
 

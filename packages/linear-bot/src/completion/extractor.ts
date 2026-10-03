@@ -17,7 +17,9 @@ const log = createLogger("extractor");
 /**
  * Fetch events for a message and aggregate them into a response.
  *
- * Thin wrapper that maps the Linear-bot Env into the shared ExtractorDeps.
+ * Thin wrapper that maps the Linear-bot Env into the shared ExtractorDeps. Reads fail
+ * closed: a denied or unavailable team-scoped read throws instead of yielding an empty
+ * response that could be published as a successful completion.
  */
 export async function extractAgentResponse(
   env: Env,
@@ -30,6 +32,7 @@ export async function extractAgentResponse(
     {
       fetcher: env.CONTROL_PLANE,
       auth: resolveOutboundCredential("linear-bot", env),
+      failClosed: true,
       log,
     },
     sessionId,

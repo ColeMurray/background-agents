@@ -22,10 +22,12 @@ describe("fetchControlPlaneJson", () => {
       const env = makeLinearBotEnv(kv, { CONTROL_PLANE: { fetch } });
 
       await expect(
-        fetchControlPlaneJson(env, "/repos?refresh=true", "trace-1", {
-          linearTeamId: "external-team-1",
-          actorUserId,
-        })
+        fetchControlPlaneJson(
+          env,
+          "/repos?refresh=true",
+          { linearTeamId: "external-team-1", actorUserId },
+          "trace-1"
+        )
       ).resolves.toEqual({ repos: [] });
 
       const [input, init] = fetch.mock.calls[0];
@@ -58,18 +60,6 @@ describe("fetchControlPlaneJson", () => {
     }
   );
 
-  it("preserves unscoped callers without an actor or channel", async () => {
-    const fetch = vi.fn(async (_input: string | URL | Request, _init?: RequestInit) =>
-      Response.json({ repos: [] })
-    );
-    const { kv } = createFakeKV();
-    await fetchControlPlaneJson(makeLinearBotEnv(kv, { CONTROL_PLANE: { fetch } }), "/repos");
-
-    const [input, init] = fetch.mock.calls[0];
-    expect(String(input)).toBe("https://internal/repos");
-    expect(new Headers(init?.headers).has("X-OpenInspect-Actor")).toBe(false);
-  });
-
   it.each([403, 404, 503])("throws on scoped HTTP %s", async (status) => {
     const { kv } = createFakeKV();
     const env = makeLinearBotEnv(kv, {
@@ -77,7 +67,7 @@ describe("fetchControlPlaneJson", () => {
     });
 
     await expect(
-      fetchControlPlaneJson(env, "/repos", undefined, { linearTeamId: "external-team-1" })
+      fetchControlPlaneJson(env, "/repos", { linearTeamId: "external-team-1" })
     ).rejects.toBeInstanceOf(ControlPlaneRequestError);
   });
 });

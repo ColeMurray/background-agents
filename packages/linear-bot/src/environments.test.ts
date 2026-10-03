@@ -1,9 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  clearEnvironmentsLocalCache,
-  getAvailableEnvironments,
-  getEnvironmentById,
-} from "./environments";
+import { getAvailableEnvironments, getEnvironmentById } from "./environments";
 import { createFakeKV, makeLinearBotEnv } from "./test-helpers";
 
 const validEnvironment = {
@@ -23,9 +19,10 @@ const validEnvironment = {
   ],
 };
 
+const scope = { linearTeamId: "external-team-1", actorUserId: "user-1" };
+
 describe("getAvailableEnvironments", () => {
   beforeEach(() => {
-    clearEnvironmentsLocalCache();
     vi.spyOn(Date, "now").mockReturnValue(1_700_000_000_000);
   });
 
@@ -33,51 +30,34 @@ describe("getAvailableEnvironments", () => {
     vi.restoreAllMocks();
   });
 
-  it("looks up scoped environments through fresh reads without using either unscoped cache", async () => {
-    const { kv, putCalls } = createFakeKV({
-      "environments:cache": JSON.stringify([validEnvironment]),
-    });
-    let scopedReads = 0;
+  it("looks up team-scoped environments through live reads without touching KV", async () => {
+    const { kv, putCalls } = createFakeKV();
+    let reads = 0;
     const fetch = vi.fn(async (input: string | URL | Request) => {
-      const url = new URL(String(input));
-      if (!url.searchParams.has("channel")) {
-        return Response.json({ environments: [validEnvironment], total: 1 });
-      }
-      expect(url.searchParams.get("channel")).toBe("linear:external-team-1");
-      scopedReads += 1;
+      expect(new URL(String(input)).searchParams.get("channel")).toBe("linear:external-team-1");
+      reads += 1;
       return Response.json({
-        environments: [{ ...validEnvironment, id: "env_scoped", name: `Scoped ${scopedReads}` }],
+        environments: [{ ...validEnvironment, id: "env_scoped", name: `Scoped ${reads}` }],
         total: 1,
       });
     });
     const env = makeLinearBotEnv(kv, { CONTROL_PLANE: { fetch } });
-    const unscoped = await getAvailableEnvironments(env);
-    vi.mocked(kv.get).mockClear();
-    putCalls.length = 0;
-    const scope = { linearTeamId: "external-team-1", actorUserId: "user-1" };
 
-    expect((await getAvailableEnvironments(env, "trace-1", scope))[0].name).toBe("Scoped 1");
-    expect(await getEnvironmentById(env, "env_scoped", "trace-1", scope)).toMatchObject({
+    expect((await getAvailableEnvironments(env, scope, "trace-1"))[0].name).toBe("Scoped 1");
+    expect(await getEnvironmentById(env, "env_scoped", scope, "trace-1")).toMatchObject({
       id: "env_scoped",
       name: "Scoped 2",
     });
-    expect(await getEnvironmentById(env, validEnvironment.id, "trace-1", scope)).toBeUndefined();
-    expect(await getAvailableEnvironments(env)).toBe(unscoped);
-    expect(fetch).toHaveBeenCalledTimes(4);
+    expect(await getEnvironmentById(env, validEnvironment.id, scope, "trace-1")).toBeUndefined();
+    expect(fetch).toHaveBeenCalledTimes(3);
     expect(kv.get).not.toHaveBeenCalled();
     expect(putCalls).toEqual([]);
   });
 
   it.each(["denied", "unavailable", "network", "malformed", "invalid-json"])(
-    "rejects a scoped %s response instead of using stale environments",
+    "rejects a %s response instead of using an empty list",
     async (failure) => {
-      const { kv, putCalls } = createFakeKV({
-        "environments:cache": JSON.stringify([validEnvironment]),
-      });
-      const fetch = vi.fn(async (input: string | URL | Request) => {
-        if (!new URL(String(input)).searchParams.has("channel")) {
-          return Response.json({ environments: [validEnvironment], total: 1 });
-        }
+      const fetch = vi.fn(async () => {
         if (failure === "network") throw new Error("Control plane unavailable");
         if (failure === "invalid-json") return new Response("{not-json");
         if (failure === "malformed") {
@@ -85,16 +65,12 @@ describe("getAvailableEnvironments", () => {
         }
         return new Response(null, { status: failure === "denied" ? 403 : 503 });
       });
+      const { kv } = createFakeKV();
       const env = makeLinearBotEnv(kv, { CONTROL_PLANE: { fetch } });
-      await getAvailableEnvironments(env);
-      vi.mocked(kv.get).mockClear();
-      putCalls.length = 0;
 
       await expect(
-        getEnvironmentById(env, validEnvironment.id, undefined, { linearTeamId: "external-team-1" })
+        getEnvironmentById(env, validEnvironment.id, { linearTeamId: "external-team-1" })
       ).rejects.toThrow();
-      expect(kv.get).not.toHaveBeenCalled();
-      expect(putCalls).toEqual([]);
     }
   );
 });

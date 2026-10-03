@@ -71,7 +71,7 @@ describe("getLinearConfig", () => {
     }
   );
 
-  it("rejects scoped reads with missing signing credentials or an invalid repository", async () => {
+  it("rejects reads with missing signing credentials or an invalid repository", async () => {
     const fetch = vi.fn();
     const env = { CONTROL_PLANE: { fetch } } as unknown as Env;
     const scope = { linearTeamId: "external-team-1" };
@@ -81,6 +81,5 @@ describe("getLinearConfig", () => {
       getLinearConfig({ ...env, SERVICE_AUTH_SECRET: "test-secret" }, "invalid", scope)
     ).rejects.toThrow();
     expect(fetch).not.toHaveBeenCalled();
-    expect((await getLinearConfig(env, "acme/backend")).model).toBeNull();
   });
 });

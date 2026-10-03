@@ -4,7 +4,7 @@ import {
   CLASSIFICATION_REQUEST_TIMEOUT_MS,
   OPENAI_CLASSIFICATION_MAX_COMPLETION_TOKENS,
 } from "@open-inspect/shared/classification";
-import { clearReposLocalCache, getAvailableRepos } from "./repos";
+import { getAvailableRepos } from "./repos";
 import { createFakeKV, makeLinearBotEnv } from "../test-helpers";
 import type { Env, LinearChannelScope } from "../types";
 
@@ -111,9 +111,13 @@ describe("classifyRepo provider dispatch", () => {
     } as unknown as Fetcher;
   }
 
-  function classify(env: Env, scope?: LinearChannelScope) {
+  async function classify(
+    env: Env,
+    scope: LinearChannelScope = { linearTeamId: "external-team-1" }
+  ) {
     return classifyRepo(
       env,
+      await getAvailableRepos(env, scope, traceId),
       "Fix the login bug",
       "Users cannot log in",
       ["bug"],
@@ -121,8 +125,7 @@ describe("classifyRepo provider dispatch", () => {
       "Platform",
       "PLAT",
       undefined,
-      traceId,
-      scope
+      traceId
     );
   }
 
@@ -141,7 +144,6 @@ describe("classifyRepo provider dispatch", () => {
   }
 
   beforeEach(() => {
-    clearReposLocalCache();
     vi.unstubAllGlobals();
     vi.spyOn(Date, "now").mockReturnValue(1_700_000_000_000);
   });
@@ -151,7 +153,7 @@ describe("classifyRepo provider dispatch", () => {
     vi.unstubAllGlobals();
   });
 
-  it("scopes both prompt descriptions and candidate matching despite a warm workspace cache", async () => {
+  it("builds the prompt and matches candidates only from the team's catalog", async () => {
     const { kv } = createFakeKV();
     const catalog = twoRepoControlPlane();
     const fetch = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
@@ -159,20 +161,16 @@ describe("classifyRepo provider dispatch", () => {
       const body = (await response.json()) as {
         repos: Array<{ name: string; fullName: string }>;
       };
-      const url = new URL(String(input));
-      if (url.searchParams.has("channel")) {
-        expect(url.searchParams.get("channel")).toBe("linear:external-team-1");
-        expect(new Headers(init?.headers).get("X-OpenInspect-Actor")).toBe("linear:user-1");
-        body.repos = body.repos.map((repo) => ({
-          ...repo,
-          name: `allowed-${repo.name}`,
-          fullName: `acme/allowed-${repo.name}`,
-        }));
-      }
+      expect(new URL(String(input)).searchParams.get("channel")).toBe("linear:external-team-1");
+      expect(new Headers(init?.headers).get("X-OpenInspect-Actor")).toBe("linear:user-1");
+      body.repos = body.repos.map((repo) => ({
+        ...repo,
+        name: `allowed-${repo.name}`,
+        fullName: `acme/allowed-${repo.name}`,
+      }));
       return Response.json(body);
     });
     const env = makeLinearBotEnv(kv, { CONTROL_PLANE: { fetch } });
-    await getAvailableRepos(env);
     const fetchMock = vi.fn<typeof globalThis.fetch>(async () =>
       Response.json({
         content: [
@@ -201,7 +199,7 @@ describe("classifyRepo provider dispatch", () => {
     expect(body.messages[0].content).toContain("**acme/allowed-beta**");
     expect(body.messages[0].content).not.toContain("**acme/alpha**");
     expect(body.messages[0].content).not.toContain("**acme/beta**");
-    expect(fetch).toHaveBeenCalledTimes(2);
+    expect(fetch).toHaveBeenCalledOnce();
   });
 
   it("uses one scoped catalog snapshot for the prompt, matching, and alternatives", async () => {

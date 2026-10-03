@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { computeHmacHex } from "@open-inspect/shared/auth";
 import { callbacksRouter } from "./callbacks";
+import { makePlan } from "./plan";
 import { createFakeKV, makeExecutionContext, makeLinearBotEnv } from "./test-helpers";
 import * as linearClient from "./utils/linear-client";
 import type { LinearIssueDetails } from "./types";
@@ -41,6 +42,7 @@ beforeEach(() => {
   vi.spyOn(Date, "now").mockReturnValue(NOW);
   vi.spyOn(linearClient, "getLinearClient").mockResolvedValue(null);
   vi.spyOn(linearClient, "fetchIssueDetails").mockResolvedValue(null);
+  vi.spyOn(linearClient, "fetchIssueTeamIdWithApiKey").mockResolvedValue(null);
   vi.spyOn(linearClient, "emitAgentActivity").mockResolvedValue(true);
   vi.spyOn(linearClient, "updateAgentSession").mockResolvedValue(undefined);
   vi.spyOn(linearClient, "postIssueComment").mockResolvedValue({ success: true });
@@ -55,13 +57,15 @@ afterEach(() => {
 
 async function postCompletion(
   context: Record<string, unknown> = {},
-  storedMapping?: Record<string, unknown>
+  storedMapping?: Record<string, unknown>,
+  eventsStatus = 200
 ) {
   const { kv } = createFakeKV(
     storedMapping ? { "issue:issue-1": JSON.stringify(storedMapping) } : {}
   );
   const fetch = vi.fn(async (input: string | URL | Request) => {
     if (new URL(String(input)).pathname.endsWith("/events")) {
+      if (eventsStatus !== 200) return new Response(null, { status: eventsStatus });
       return Response.json({
         events: [
           {
@@ -119,59 +123,42 @@ function expectScopedReads(fetch: Awaited<ReturnType<typeof postCompletion>>["fe
   }
 }
 
-function expectNoCompletionReads(fetch: Awaited<ReturnType<typeof postCompletion>>["fetch"]) {
-  expect(fetch).not.toHaveBeenCalled();
-  expect(linearClient.emitAgentActivity).not.toHaveBeenCalled();
-  expect(linearClient.postIssueComment).not.toHaveBeenCalled();
+function expectWithheld(fetch: Awaited<ReturnType<typeof postCompletion>>["fetch"]) {
   const logs = JSON.stringify([
     vi.mocked(console.log).mock.calls,
     vi.mocked(console.warn).mock.calls,
     vi.mocked(console.error).mock.calls,
   ]);
   expect(logs).not.toContain(CONTENT);
+  const delivered = JSON.stringify([
+    vi.mocked(linearClient.emitAgentActivity).mock.calls,
+    vi.mocked(linearClient.postIssueComment).mock.calls,
+  ]);
+  expect(delivered).not.toContain(CONTENT);
+  expect(delivered).toContain("its results cannot be shared on this issue");
+  return fetch;
+}
+
+function withheldReasons(): string[] {
+  return vi
+    .mocked(console.warn)
+    .mock.calls.map(([line]) => JSON.parse(String(line)))
+    .filter((entry) => entry.outcome === "withheld")
+    .map((entry) => entry.skip_reason);
 }
 
 describe("completion channel scope", () => {
-  it("uses signed context without consulting mappings or fetching issue details", async () => {
-    const { fetch, kv } = await postCompletion(
-      { linearTeamId: "external-team-1" },
+  it("reads the signed team only after verifying the issue still belongs to it", async () => {
+    vi.mocked(linearClient.getLinearClient).mockResolvedValue(client);
+    vi.mocked(linearClient.fetchIssueDetails).mockResolvedValue(issue);
+
+    const { env, fetch, kv } = await postCompletion(
+      { ...agentContext, linearTeamId: "external-team-1" },
       { ...mapping, linearTeamId: "other-team" }
     );
 
     expectScopedReads(fetch);
     expect(kv.get).not.toHaveBeenCalled();
-    expect(linearClient.getLinearClient).not.toHaveBeenCalled();
-    expect(linearClient.fetchIssueDetails).not.toHaveBeenCalled();
-    expect(linearClient.postIssueComment).toHaveBeenCalledWith(
-      "fallback-key",
-      "issue-1",
-      expect.stringContaining(CONTENT)
-    );
-  });
-
-  it("recovers a legacy context's external team from its matching issue-session mapping", async () => {
-    const { fetch, kv } = await postCompletion(
-      {},
-      {
-        ...mapping,
-        linearTeamId: "external-team-1",
-        teamId: "internal-owner-team",
-      }
-    );
-
-    expectScopedReads(fetch);
-    expect(kv.get).toHaveBeenCalledWith("issue:issue-1", "json");
-    expect(linearClient.getLinearClient).not.toHaveBeenCalled();
-    expect(linearClient.fetchIssueDetails).not.toHaveBeenCalled();
-  });
-
-  it("recovers the external team through the verified app client and reuses it for delivery", async () => {
-    vi.mocked(linearClient.getLinearClient).mockResolvedValue(client);
-    vi.mocked(linearClient.fetchIssueDetails).mockResolvedValue(issue);
-
-    const { env, fetch } = await postCompletion(agentContext, mapping);
-
-    expectScopedReads(fetch);
     expect(linearClient.getLinearClient).toHaveBeenCalledOnce();
     expect(linearClient.getLinearClient).toHaveBeenCalledWith(env, "org-1", "app-user-1");
     expect(linearClient.fetchIssueDetails).toHaveBeenCalledWith(client, "issue-1");
@@ -182,8 +169,66 @@ describe("completion channel scope", () => {
     expect(linearClient.postIssueComment).not.toHaveBeenCalled();
   });
 
-  it.each([{ sessionId: "different-session" }, { issueId: "different-issue" }])(
-    "ignores a mismatched mapping %j and recovers via the verified client",
+  it("withholds content when the issue moved to another Linear team after launch", async () => {
+    vi.mocked(linearClient.getLinearClient).mockResolvedValue(client);
+    vi.mocked(linearClient.fetchIssueDetails).mockResolvedValue({
+      ...issue,
+      team: { ...issue.team, id: "external-team-2" },
+    });
+
+    const { fetch } = await postCompletion({ ...agentContext, linearTeamId: "external-team-1" });
+
+    expect(expectWithheld(fetch)).not.toHaveBeenCalled();
+    expect(withheldReasons()).toEqual(["issue_team_changed"]);
+    expect(linearClient.emitAgentActivity).toHaveBeenCalledWith(client, "agent-session-1", {
+      type: "error",
+      body: expect.any(String),
+    });
+    expect(linearClient.updateAgentSession).toHaveBeenCalledWith(client, "agent-session-1", {
+      plan: makePlan("failed"),
+    });
+  });
+
+  it.each([403, 404, 503])(
+    "withholds content instead of reporting success when the scoped read returns %s",
+    async (status) => {
+      vi.mocked(linearClient.getLinearClient).mockResolvedValue(client);
+      vi.mocked(linearClient.fetchIssueDetails).mockResolvedValue(issue);
+
+      const { fetch } = await postCompletion(
+        { ...agentContext, linearTeamId: "external-team-1" },
+        undefined,
+        status
+      );
+
+      expectWithheld(fetch);
+      expect(withheldReasons()).toEqual(["session_read_failed"]);
+      expect(linearClient.emitAgentActivity).toHaveBeenCalledWith(client, "agent-session-1", {
+        type: "error",
+        body: expect.any(String),
+      });
+      expect(linearClient.updateAgentSession).toHaveBeenCalledWith(client, "agent-session-1", {
+        plan: makePlan("failed"),
+      });
+    }
+  );
+
+  it("recovers a legacy context's launch team from its matching issue-session mapping", async () => {
+    vi.mocked(linearClient.getLinearClient).mockResolvedValue(client);
+    vi.mocked(linearClient.fetchIssueDetails).mockResolvedValue(issue);
+
+    const { fetch, kv } = await postCompletion(agentContext, {
+      ...mapping,
+      linearTeamId: "external-team-1",
+      teamId: "internal-owner-team",
+    });
+
+    expectScopedReads(fetch);
+    expect(kv.get).toHaveBeenCalledWith("issue:issue-1", "json");
+  });
+
+  it.each([{}, { sessionId: "different-session" }, { issueId: "different-issue" }])(
+    "scopes a legacy context without a matching launch team to the verified current team: %j",
     async (mismatch) => {
       vi.mocked(linearClient.getLinearClient).mockResolvedValue(client);
       vi.mocked(linearClient.fetchIssueDetails).mockResolvedValue(issue);
@@ -191,61 +236,56 @@ describe("completion channel scope", () => {
       const { fetch } = await postCompletion(agentContext, {
         ...mapping,
         ...mismatch,
-        linearTeamId: "wrong-team",
+        ...(Object.keys(mismatch).length > 0 ? { linearTeamId: "wrong-team" } : {}),
       });
 
       expectScopedReads(fetch);
-      expect(linearClient.fetchIssueDetails).toHaveBeenCalledWith(client, "issue-1");
     }
   );
 
-  it.each([{}, { organizationId: "org-1" }, { appUserId: "app-user-1" }])(
-    "skips legacy completion with no verifiable Linear client identity: %j",
-    async (context) => {
-      const { fetch } = await postCompletion(context, {
-        ...mapping,
-        teamId: "internal-owner-team",
-      });
+  it("verifies the current team with the fallback API key when no app client exists", async () => {
+    vi.mocked(linearClient.fetchIssueTeamIdWithApiKey).mockResolvedValue("external-team-1");
 
-      expectNoCompletionReads(fetch);
-      expect(linearClient.getLinearClient).not.toHaveBeenCalled();
-      expect(linearClient.fetchIssueDetails).not.toHaveBeenCalled();
-      expect(console.warn).toHaveBeenCalledWith(
-        expect.stringContaining('"skip_reason":"missing_linear_team_id"')
-      );
-    }
-  );
+    const { fetch } = await postCompletion({ linearTeamId: "external-team-1" });
 
-  it("skips legacy completion when verified credentials are unavailable, even with an API key", async () => {
-    const { fetch } = await postCompletion(agentContext, mapping);
+    expectScopedReads(fetch);
+    expect(linearClient.getLinearClient).not.toHaveBeenCalled();
+    expect(linearClient.fetchIssueTeamIdWithApiKey).toHaveBeenCalledWith("fallback-key", "issue-1");
+    expect(linearClient.postIssueComment).toHaveBeenCalledWith(
+      "fallback-key",
+      "issue-1",
+      expect.stringContaining(CONTENT)
+    );
+  });
 
-    expectNoCompletionReads(fetch);
-    expect(linearClient.getLinearClient).toHaveBeenCalled();
-    expect(linearClient.fetchIssueDetails).not.toHaveBeenCalled();
+  it("posts a content-free fallback notice when the API key cannot verify the issue", async () => {
+    const { fetch } = await postCompletion({}, { ...mapping, teamId: "internal-owner-team" });
+
+    expect(expectWithheld(fetch)).not.toHaveBeenCalled();
+    expect(withheldReasons()).toEqual(["issue_team_unverified"]);
+    expect(linearClient.postIssueComment).toHaveBeenCalledOnce();
   });
 
   it.each([
     null,
     { ...issue, team: { ...issue.team, id: " " } },
     { ...issue, id: "different-issue" },
-  ])(
-    "skips legacy completion when the verified issue cannot supply its external team: %j",
-    async (details) => {
-      vi.mocked(linearClient.getLinearClient).mockResolvedValue(client);
-      vi.mocked(linearClient.fetchIssueDetails).mockResolvedValue(details);
+  ])("withholds content when the verified issue has no usable team: %j", async (details) => {
+    vi.mocked(linearClient.getLinearClient).mockResolvedValue(client);
+    vi.mocked(linearClient.fetchIssueDetails).mockResolvedValue(details);
 
-      const { fetch } = await postCompletion(agentContext, mapping);
+    const { fetch } = await postCompletion({ ...agentContext, linearTeamId: "external-team-1" });
 
-      expectNoCompletionReads(fetch);
-    }
-  );
+    expect(expectWithheld(fetch)).not.toHaveBeenCalled();
+    expect(withheldReasons()).toEqual(["issue_team_unverified"]);
+  });
 
-  it("does not read completion content when verified issue recovery throws", async () => {
+  it("withholds content when verified issue lookup throws", async () => {
     vi.mocked(linearClient.getLinearClient).mockResolvedValue(client);
     vi.mocked(linearClient.fetchIssueDetails).mockRejectedValue(new Error("Linear unavailable"));
 
     const { fetch } = await postCompletion(agentContext, mapping);
 
-    expectNoCompletionReads(fetch);
+    expect(expectWithheld(fetch)).not.toHaveBeenCalled();
   });
 });

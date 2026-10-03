@@ -63,6 +63,8 @@ export interface ExtractorDeps {
   auth: OutboundServiceCredential;
   /** Revalidate outbound Slack delivery authority; protected read failures must abort delivery. */
   readPurpose?: "slack-post";
+  /** Throw on any failed read, as purpose-protected reads do, without sending a purpose. */
+  failClosed?: boolean;
   /** Structured logger. Falls back to a silent no-op if not provided. */
   log?: Logger;
 }
@@ -77,6 +79,10 @@ async function buildExtractorAuthHeaders(
     Accept: "application/json",
     ...(await buildOutboundAuthHeaders(deps.auth, { method: "GET", url, traceId })),
   };
+}
+
+function readsFailClosed(deps: ExtractorDeps): boolean {
+  return deps.failClosed === true || deps.readPurpose !== undefined;
 }
 
 /** Silent no-op logger used when the caller does not supply one. */
@@ -94,7 +100,7 @@ const noopLogger: Logger = {
  * Events are filtered server-side by `messageId`. Token events contain
  * cumulative text, so only the last one is kept. Artifacts are fetched from
  * the dedicated `/artifacts` endpoint. Unprotected consumers may fall back to
- * inline artifacts; purpose-protected consumers throw on any failed read.
+ * inline artifacts; fail-closed consumers throw on any failed read.
  * `channel` is an optional provider-qualified identity (for example, `slack:C123`).
  */
 export async function extractAgentResponse(
@@ -133,7 +139,7 @@ export async function extractAgentResponse(
           http_status: response.status,
           duration_ms: Date.now() - startTime,
         });
-        if (deps.readPurpose)
+        if (readsFailClosed(deps))
           throw new ProtectedReadError(
             `Control plane events read failed: ${response.status}`,
             response.status
@@ -155,7 +161,7 @@ export async function extractAgentResponse(
           error: new Error("Invalid events response"),
           duration_ms: Date.now() - startTime,
         });
-        if (deps.readPurpose) throw new ProtectedReadError("Invalid events response");
+        if (readsFailClosed(deps)) throw new ProtectedReadError("Invalid events response");
         return {
           textContent: "",
           toolCalls: [],
@@ -199,7 +205,7 @@ export async function extractAgentResponse(
       error: error instanceof Error ? error : new Error(String(error)),
       duration_ms: Date.now() - startTime,
     });
-    if (deps.readPurpose)
+    if (readsFailClosed(deps))
       throw error instanceof ProtectedReadError
         ? error
         : new ProtectedReadError("Control plane events read unavailable", undefined, {
@@ -317,7 +323,7 @@ async function fetchSessionArtifacts(
         outcome: "error",
         http_status: response.status,
       });
-      if (deps.readPurpose)
+      if (readsFailClosed(deps))
         throw new ProtectedReadError(
           `Control plane artifacts read failed: ${response.status}`,
           response.status
@@ -332,7 +338,7 @@ async function fetchSessionArtifacts(
         outcome: "error",
         error: new Error("Invalid artifacts response"),
       });
-      if (deps.readPurpose) throw new ProtectedReadError("Invalid artifacts response");
+      if (readsFailClosed(deps)) throw new ProtectedReadError("Invalid artifacts response");
       return [];
     }
     const data = parsed.data;
@@ -351,7 +357,7 @@ async function fetchSessionArtifacts(
       outcome: "error",
       error: error instanceof Error ? error : new Error(String(error)),
     });
-    if (deps.readPurpose)
+    if (readsFailClosed(deps))
       throw error instanceof ProtectedReadError
         ? error
         : new ProtectedReadError("Control plane artifacts read unavailable", undefined, {

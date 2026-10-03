@@ -39,6 +39,8 @@ export type RequestContext = AuthenticationRequestServices & {
   childSessionAdmission?: { row: SessionEntry & SessionAccessRow; viewer: SessionViewer };
   sessionMemberships?: ReadonlyMap<string, TeamRole>;
   serviceTeamId?: string | null;
+  /** An unbound Linear coordinate may read only workspace-owned sessions. */
+  serviceWorkspaceSessionsOnly?: boolean;
   serviceReadPurpose?: "slack-post";
   teamsEnforcementMode?: TeamsEnforcementMode;
   shadowSessionDenial?: string;

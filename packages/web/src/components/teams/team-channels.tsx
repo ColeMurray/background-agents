@@ -8,15 +8,15 @@ import {
   type TeamChannelBindingProvider,
 } from "@open-inspect/shared/types/team-channel-bindings";
 import { useTeamCapabilities } from "@/hooks/use-team-capabilities";
-import { useSlackChannels } from "@/hooks/use-slack-channels";
 import type { TeamResponse } from "@/hooks/use-teams";
 import { useAuthSession } from "@/lib/auth-session";
 import { browserApiFetch } from "@/lib/browser-api-fetch";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { ErrorBanner } from "@/components/ui/error-banner";
-import { Combobox } from "@/components/ui/combobox";
-import { ChevronDownIcon } from "@/components/ui/icons";
+import type { BindingEditor } from "./channel-binding-editors/binding-editor";
+import { useLinearBindingEditor } from "./channel-binding-editors/linear-binding-editor";
+import { useSlackBindingEditor } from "./channel-binding-editors/slack-binding-editor";
 
 export function TeamChannels({ team }: { team: TeamResponse }) {
   const { canManageBindings } = useTeamCapabilities(team);
@@ -32,48 +32,32 @@ export function TeamChannels({ team }: { team: TeamResponse }) {
     }
   );
   const [provider, setProvider] = useState<TeamChannelBindingProvider>("slack");
-  const [channelId, setChannelId] = useState("");
-  const [manualEntry, setManualEntry] = useState(false);
   const [kind, setKind] = useState<TeamChannelBindingKind>("source");
   const [pending, setPending] = useState(false);
   const [failure, setFailure] = useState<string | null>(null);
-  // Keep Slack discovery admission active while Slack bindings are displayed.
-  const {
-    channels,
-    error: channelsError,
-    accessDenied: channelsAccessDenied,
-    loading: channelsLoading,
-    mutate: reloadChannels,
-  } = useSlackChannels(
-    canManageBindings &&
-      (provider === "slack" ||
-        data?.bindings.some((binding) => binding.provider === "slack") === true),
-    team.id
-  );
   const disabled = !canManageBindings || !session?.user || pending || isLoading || !!error;
-  const providerDisabled = disabled || (provider === "slack" && channelsAccessDenied);
-  const isManualEntry = provider === "linear" || manualEntry;
-  const channelNames = new Map(channels.map((channel) => [channel.id, `#${channel.name}`]));
-  const channelOptions = channels
-    .filter((channel) => channel.isMember)
-    .sort((a, b) => a.name.localeCompare(b.name))
-    .map((channel) => ({
-      value: channel.id,
-      label: `#${channel.name}`,
-      description: channel.isPrivate ? "Private channel" : undefined,
-    }));
-  const selectedChannel = channelOptions.find((channel) => channel.value === channelId);
-  const pickerDisabled =
-    providerDisabled || channelsLoading || !!channelsError || !channelOptions.length;
-  const bindDisabled =
-    providerDisabled || (isManualEntry ? !channelId.trim() : pickerDisabled || !selectedChannel);
+  const editors: Record<TeamChannelBindingProvider, BindingEditor> = {
+    slack: useSlackBindingEditor({
+      id,
+      disabled,
+      pending,
+      teamId: team.id,
+      canManageBindings,
+      discoveryActive:
+        provider === "slack" ||
+        data?.bindings.some((binding) => binding.provider === "slack") === true,
+    }),
+    linear: useLinearBindingEditor({ id, disabled }),
+  };
+  const editor = editors[provider];
+  const providerDisabled = disabled || editor.locked;
 
   async function changeBinding(
     bindingProvider: TeamChannelBindingProvider,
     externalId: string,
     method: "PUT" | "DELETE"
   ) {
-    if (disabled || (bindingProvider === "slack" && channelsAccessDenied) || !externalId) return;
+    if (disabled || editors[bindingProvider].locked || !externalId) return;
     setPending(true);
     setFailure(null);
     try {
@@ -92,7 +76,7 @@ export function TeamChannels({ team }: { team: TeamResponse }) {
           typeof body?.error === "string" ? body.error : "Failed to update channel binding";
         throw new Error(typeof body?.code === "string" ? `${message} (${body.code})` : message);
       }
-      if (method === "PUT") setChannelId("");
+      if (method === "PUT") editors[bindingProvider].clearDraft();
       await mutate();
     } catch (cause) {
       setFailure(cause instanceof Error ? cause.message : "Failed to update channel binding");
@@ -114,7 +98,7 @@ export function TeamChannels({ team }: { team: TeamResponse }) {
         className="my-4 space-y-3 rounded-md border border-border-muted p-4"
         onSubmit={(event) => {
           event.preventDefault();
-          if (!bindDisabled) void changeBinding(provider, channelId.trim(), "PUT");
+          if (editor.canSubmit) void changeBinding(provider, editor.externalId, "PUT");
         }}
       >
         <fieldset
@@ -129,61 +113,21 @@ export function TeamChannels({ team }: { team: TeamResponse }) {
               id={`${id}-provider`}
               value={provider}
               onChange={(event) => {
-                setProvider(event.target.value as TeamChannelBindingProvider);
-                setChannelId("");
-                setManualEntry(false);
+                const next = event.target.value as TeamChannelBindingProvider;
+                editors[next].reset();
+                setProvider(next);
                 setFailure(null);
               }}
               className="w-full rounded border border-border bg-background px-2 py-2 text-sm disabled:opacity-50"
             >
-              <option value="slack">Slack</option>
-              <option value="linear">Linear</option>
+              {Object.entries(editors).map(([value, { providerLabel }]) => (
+                <option key={value} value={value}>
+                  {providerLabel}
+                </option>
+              ))}
             </select>
           </div>
-          <div className="min-w-0 flex-1 space-y-1">
-            <label
-              id={`${id}-channel-label`}
-              htmlFor={`${id}-channel`}
-              className="block text-sm font-medium"
-            >
-              {provider === "linear"
-                ? "Linear team ID"
-                : manualEntry
-                  ? "Slack channel ID"
-                  : "Slack channel"}
-            </label>
-            {isManualEntry ? (
-              <input
-                id={`${id}-channel`}
-                value={channelId}
-                onChange={(event) => setChannelId(event.target.value)}
-                placeholder={provider === "linear" ? "Linear team ID" : "C0123456789"}
-                autoComplete="off"
-                disabled={providerDisabled}
-                className="w-full rounded border border-border bg-background px-3 py-2 text-sm disabled:opacity-50"
-              />
-            ) : (
-              <Combobox
-                id={`${id}-channel`}
-                labelId={`${id}-channel-label`}
-                value={channelId}
-                onChange={setChannelId}
-                items={channelOptions}
-                searchable
-                searchPlaceholder="Search channels..."
-                dropdownWidth="w-full"
-                maxDisplayed={100}
-                disabled={pickerDisabled}
-                triggerClassName="flex w-full items-center justify-between gap-2 rounded border border-border bg-background px-3 py-2 text-sm disabled:opacity-50"
-              >
-                <span className="truncate">
-                  {selectedChannel?.label ??
-                    (channelsLoading ? "Loading channels..." : "Select a channel")}
-                </span>
-                <ChevronDownIcon className="h-4 w-4 shrink-0 text-muted-foreground" />
-              </Combobox>
-            )}
-          </div>
+          <div className="min-w-0 flex-1 space-y-1">{editor.field}</div>
           <div className="space-y-1">
             <label htmlFor={`${id}-kind`} className="block text-sm font-medium">
               Binding kind
@@ -199,68 +143,11 @@ export function TeamChannels({ team }: { team: TeamResponse }) {
               <option value="source">Source</option>
             </select>
           </div>
-          <Button type="submit" disabled={bindDisabled}>
-            {pending ? "Updating..." : provider === "linear" ? "Bind team" : "Bind channel"}
+          <Button type="submit" disabled={!editor.canSubmit}>
+            {pending ? "Updating..." : editor.bindLabel}
           </Button>
         </fieldset>
-        <p className="text-xs text-muted-foreground">
-          {provider === "linear" ? (
-            <>
-              Enter the Linear team ID, not its name or issue prefix. Enter a bound team&apos;s ID
-              to change its kind.
-            </>
-          ) : (
-            <>
-              Only channels the Slack bot has joined are listed. Invite it to a channel to add it
-              here; externally shared channels cannot be bound. Select a bound channel to change its
-              kind.
-            </>
-          )}
-        </p>
-        {provider === "slack" && (
-          <Button
-            type="button"
-            size="xs"
-            variant="ghost"
-            disabled={providerDisabled}
-            onClick={() => {
-              setManualEntry(!manualEntry);
-              setChannelId("");
-            }}
-          >
-            {manualEntry ? "Choose from channels" : "Enter a channel ID instead"}
-          </Button>
-        )}
-        {canManageBindings &&
-          provider === "slack" &&
-          (channelsError ? (
-            <ErrorBanner role="alert">
-              Unable to load Slack channels.{" "}
-              <Button
-                type="button"
-                size="xs"
-                variant="outline"
-                disabled={pending || channelsLoading}
-                onClick={() => void reloadChannels().catch(() => undefined)}
-              >
-                Retry channels
-              </Button>
-            </ErrorBanner>
-          ) : !channelsLoading && channelOptions.length === 0 ? (
-            <p className="text-sm text-muted-foreground">
-              No available channels. Invite the Slack bot to a channel, then{" "}
-              <Button
-                type="button"
-                size="xs"
-                variant="outline"
-                disabled={pending}
-                onClick={() => void reloadChannels().catch(() => undefined)}
-              >
-                Refresh channels
-              </Button>
-              .
-            </p>
-          ) : null)}
+        {editor.footer}
       </form>
       {!canManageBindings ? (
         <p className="text-sm text-muted-foreground">
@@ -303,24 +190,18 @@ export function TeamChannels({ team }: { team: TeamResponse }) {
                 >
                   <div className="min-w-0 space-y-1">
                     <p className="break-all text-sm text-foreground">
-                      {binding.provider === "slack"
-                        ? (channelNames.get(binding.externalId) ?? binding.externalId)
-                        : binding.externalId}
+                      {editors[binding.provider].displayName(binding.externalId)}
                     </p>
                     <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
-                      <span>{binding.provider === "slack" ? "Slack" : "Linear"}</span>
+                      <span>{editors[binding.provider].providerLabel}</span>
                       <Badge>{binding.kind === "primary" ? "Primary" : "Source"}</Badge>
                     </div>
                   </div>
                   <Button
                     size="sm"
                     variant="outline"
-                    disabled={disabled || (binding.provider === "slack" && channelsAccessDenied)}
-                    aria-label={
-                      binding.provider === "slack"
-                        ? `Unbind Slack channel ${channelNames.get(binding.externalId) ?? binding.externalId}`
-                        : `Unbind Linear team ${binding.externalId}`
-                    }
+                    disabled={disabled || editors[binding.provider].locked}
+                    aria-label={editors[binding.provider].unbindLabel(binding.externalId)}
                     onClick={() =>
                       void changeBinding(binding.provider, binding.externalId, "DELETE")
                     }

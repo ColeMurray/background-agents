@@ -1,13 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from "vitest";
-import {
-  buildFollowUpPrompt,
-  buildPrompt,
-  buildPromptContextPrompt,
-  escapeHtml,
-  handleAgentSessionEvent,
-} from "./webhook-handler";
-import { clearEnvironmentsLocalCache } from "./environments";
-import { clearReposLocalCache } from "./classifier/repos";
+import { handleAgentSessionEvent } from "./webhook-handler";
+import { buildFollowUpPrompt, buildPrompt, buildPromptContextPrompt, escapeHtml } from "./prompts";
 import type { Environment } from "@open-inspect/shared/types/environments";
 import { MAX_SESSION_INSTRUCTIONS_LENGTH } from "@open-inspect/shared/types/integrations";
 import { MAX_WEB_PROMPT_CHARS } from "@open-inspect/shared/types/prompts";
@@ -187,8 +180,6 @@ describe("handleAgentSessionEvent environment targets", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
-    clearEnvironmentsLocalCache();
-    clearReposLocalCache();
     vi.spyOn(console, "log").mockImplementation(() => undefined);
     vi.spyOn(console, "warn").mockImplementation(() => undefined);
     vi.spyOn(console, "error").mockImplementation(() => undefined);
@@ -1209,7 +1200,14 @@ describe("handleAgentSessionEvent environment targets", () => {
     expect(store.has("issue:issue-1")).toBe(true);
   });
 
-  it("warns and retains the session mapping when a stop team coordinate is missing", async () => {
+  it.each([
+    [
+      "the stored team when the webhook omits it",
+      "external-team-1",
+      "?channel=linear%3Aexternal-team-1",
+    ],
+    ["no channel for a legacy mapping without a team", undefined, ""],
+  ])("stops with %s", async (_label, storedTeamId, query) => {
     const { kv, store } = createFakeKV({
       "issue:issue-1": JSON.stringify({
         sessionId: "session-xyz",
@@ -1217,28 +1215,26 @@ describe("handleAgentSessionEvent environment targets", () => {
         issueIdentifier: "ENG-42",
         model: "anthropic/claude-haiku-4-5",
         createdAt: Date.now(),
+        ...(storedTeamId ? { linearTeamId: storedTeamId } : {}),
       }),
     });
     const env = makeLinearBotEnv(kv);
+    const controlPlaneFetch = (env.CONTROL_PLANE as unknown as { fetch: ReturnType<typeof vi.fn> })
+      .fetch;
+    controlPlaneFetch.mockResolvedValue(Response.json({ status: "stopping" }));
     const webhook = makeWebhook();
-    webhook.agentSession.issue!.team.id = "";
+    webhook.agentSession.issue = { id: "issue-1" } as typeof webhook.agentSession.issue;
     webhook.agentActivity = { userId: "human-user-1", signal: "stop" };
 
     await handleAgentSessionEvent(webhook, env, "trace-stop-team-missing");
 
-    expect(env.CONTROL_PLANE.fetch).not.toHaveBeenCalled();
-    expect(store.has("issue:issue-1")).toBe(true);
-    expect(
-      vi.mocked(console.warn).mock.calls.map(([line]) => JSON.parse(String(line)))
-    ).toContainEqual(
-      expect.objectContaining({
-        event: "agent_session.stop_team_missing",
-        agent_session_id: "agent-session-1",
-        issue_id: "issue-1",
-        session_id: "session-xyz",
-        trace_id: "trace-stop-team-missing",
-      })
+    expect(controlPlaneFetch).toHaveBeenCalledWith(
+      `https://internal/sessions/session-xyz/stop${query}`,
+      expect.objectContaining({ method: "POST" })
     );
+    const stopInit = controlPlaneFetch.mock.calls[0]?.[1] as RequestInit | undefined;
+    expect(new Headers(stopInit?.headers).get("X-OpenInspect-Actor")).toBe("linear:human-user-1");
+    expect(store.has("issue:issue-1")).toBe(false);
   });
 
   it("resolves current callback settings for an environment follow-up", async () => {

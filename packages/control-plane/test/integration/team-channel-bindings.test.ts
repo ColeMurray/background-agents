@@ -603,7 +603,7 @@ describe("service channel binding lookup", () => {
   );
 
   it.each(["slack", "linear"] as const)(
-    "grants %s lookup only to the matching bot and rejects unsupported providers",
+    "grants %s lookup only to the matching bot and routes no unsupported providers",
     async (provider) => {
       const team = await createTeam("engineering");
       await new TeamChannelBindingStore(env.DB).put(
@@ -640,8 +640,7 @@ describe("service channel binding lookup", () => {
             service: matchingService,
           }
         );
-        expect(unsupported.status).toBe(400);
-        expect(await unsupported.json()).toEqual({ error: "Unsupported channel binding provider" });
+        expect(unsupported.status).toBe(404);
       }
       expect(binding).not.toHaveBeenCalled();
       expect(settings).not.toHaveBeenCalled();

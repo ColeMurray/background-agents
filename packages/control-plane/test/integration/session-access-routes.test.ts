@@ -234,6 +234,37 @@ describe("HTTP session access by enforcement mode", () => {
     }
   );
 
+  it("revokes an unbound Linear coordinate's reads of team-owned sessions", async () => {
+    const { sessionName, team } = await session("team");
+    const bindings = new TeamChannelBindingStore(env.DB);
+    const bindingActor = { actorUserId: OWNER, requestId: "linear-unbind" };
+    await bindings.put(
+      { provider: "linear", externalId: "L1", teamId: team.id, kind: "source" },
+      bindingActor
+    );
+    const read = async (resource: "events" | "artifacts") =>
+      (
+        await fetchMode(`/sessions/${sessionName}/${resource}?channel=linear:L1`, "on", {
+          service: "linear-bot",
+        })
+      ).status;
+    expect(await read("events")).toBe(200);
+
+    await bindings.remove(team.id, "linear", "L1", bindingActor);
+    const runtime = vi.spyOn(env.SESSION, "get");
+    expect(await read("events")).toBe(404);
+    expect(await read("artifacts")).toBe(404);
+    expect(runtime).not.toHaveBeenCalled();
+    runtime.mockRestore();
+
+    await env.DB.prepare(
+      "UPDATE sessions SET owner_team_id = NULL, visibility = 'workspace' WHERE id = ?"
+    )
+      .bind(sessionName)
+      .run();
+    expect(await read("events")).toBe(200);
+  });
+
   it.each(["linear:", "unknown:L1", "slack:L1", "linear:L1&channel=linear:L2"])(
     "fails closed for invalid Linear event scope %s",
     async (channel) => {
@@ -429,7 +460,9 @@ describe("HTTP session access by enforcement mode", () => {
 
     it("denies bound channels writing to workspace-owned sessions", async () => {
       const { sessionName, team } = await session("workspace");
-      await env.DB.prepare("UPDATE sessions SET owner_team_id = NULL WHERE id = ?")
+      await env.DB.prepare(
+        "UPDATE sessions SET owner_team_id = NULL, visibility = 'workspace' WHERE id = ?"
+      )
         .bind(sessionName)
         .run();
       await bindSlackChannel(team.id);

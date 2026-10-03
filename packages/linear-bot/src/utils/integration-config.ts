@@ -32,28 +32,19 @@ const DEFAULT_CONFIG: ResolvedLinearConfig = {
   enabledRepos: null,
 };
 
+/**
+ * Read one repository's Linear settings for a Linear team. Failed reads throw rather
+ * than falling back to defaults; only an unconfigured repository uses defaults.
+ */
 export async function getLinearConfig(
   env: Env,
   repo: string,
-  scope?: LinearChannelScope
+  scope: LinearChannelScope
 ): Promise<ResolvedLinearConfig> {
-  if (!env.SERVICE_AUTH_SECRET && !scope) {
-    return DEFAULT_CONFIG;
-  }
-
   const repository = parseRepositoryFullName(repo);
-  if (!repository) {
-    if (scope) throw new Error("Invalid repository for scoped Linear config read");
-    return DEFAULT_CONFIG;
-  }
+  if (!repository) throw new Error("Invalid repository for Linear config read");
 
   const path = `/integration-settings/linear/resolved/${encodeRepositoryPathSegments(repository)}`;
-
-  try {
-    const body = await fetchControlPlaneJson(env, path, undefined, scope);
-    return resolvedLinearConfigResponseSchema.parse(body).config ?? DEFAULT_CONFIG;
-  } catch (error) {
-    if (scope) throw error;
-    return DEFAULT_CONFIG;
-  }
+  const body = await fetchControlPlaneJson(env, path, scope);
+  return resolvedLinearConfigResponseSchema.parse(body).config ?? DEFAULT_CONFIG;
 }

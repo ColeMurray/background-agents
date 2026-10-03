@@ -7,7 +7,7 @@ import type {
   ClassificationResult,
   RepoConfig,
 } from "@open-inspect/shared/types/repository-catalog";
-import type { Env, LinearChannelScope } from "../types";
+import type { Env } from "../types";
 import { z } from "zod";
 import {
   CLASSIFICATION_REQUEST_TIMEOUT_MS,
@@ -16,7 +16,7 @@ import {
   requireClassificationProviderKey,
   resolveClassificationProvider,
 } from "@open-inspect/shared/classification";
-import { getAvailableRepos, buildRepoDescriptions } from "./repos";
+import { buildRepoDescriptions } from "./repos";
 import { createLogger } from "../logger";
 
 const log = createLogger("classifier");
@@ -207,10 +207,12 @@ async function callOpenAI(
 }
 
 /**
- * Classify which repository a Linear issue belongs to.
+ * Classify which repository a Linear issue belongs to, using the caller's catalog
+ * snapshot so matching, alternatives, and the prompt all see the same repositories.
  */
 export async function classifyRepo(
   env: Env,
+  repos: RepoConfig[],
   issueTitle: string,
   issueDescription: string | null | undefined,
   labels: string[],
@@ -218,11 +220,8 @@ export async function classifyRepo(
   teamName: string | null | undefined,
   teamKey: string | null | undefined,
   triggerComment: string | null | undefined,
-  traceId?: string,
-  scope?: LinearChannelScope
+  traceId?: string
 ): Promise<ClassificationResult> {
-  const repos = await getAvailableRepos(env, traceId, scope);
-
   if (repos.length === 0) {
     return {
       repo: null,

@@ -1,6 +1,7 @@
 import {
   checkSessionAccess,
   sessionCapabilities,
+  type AccessDecision,
   type AccessDenialReason,
   type SessionAccessRow,
   type SessionAction,
@@ -122,7 +123,10 @@ export async function evaluateSessionAdmission(
   if (slot === "session") ctx.sessionAdmission = { row: accessRow, viewer };
   if (slot === "child") ctx.childSessionAdmission = { row: accessRow, viewer };
 
-  const read = checkSessionAccess(viewer, accessRow, "read");
+  const read: AccessDecision =
+    ctx.serviceWorkspaceSessionsOnly && row.ownerTeamId !== null
+      ? { allowed: false, reason: "not_member" }
+      : checkSessionAccess(viewer, accessRow, "read");
   if (
     !read.allowed &&
     (mode === "on" || (row.visibility === "private" && read.reason === "private"))
