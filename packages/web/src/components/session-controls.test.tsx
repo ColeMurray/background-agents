@@ -164,12 +164,66 @@ describe("SessionVisibilityControl", () => {
     expect(browserApiFetch).not.toHaveBeenCalled();
   });
 
-  it("loads membership for the owner team and warns about team visibility", async () => {
-    mocks.members = [];
+  it.each([true, false])(
+    "warns about owner membership inside the team confirmation when includeChildren is %s",
+    async (includeChildren) => {
+      mocks.members = [];
+      render(<SessionVisibilityControl {...baseProps} visibility="private" canChangeVisibility />);
+      if (!includeChildren) fireEvent.click(childrenBox());
+      await selectVisibility("Team");
+      expect(mocks.useMembers).toHaveBeenCalledWith("source");
+      expect(
+        within(screen.getByRole("alertdialog")).getByText(/owner is not a member.*may lose access/i)
+      ).toBeInTheDocument();
+      expect(browserApiFetch).not.toHaveBeenCalled();
+      fireEvent.click(confirmButton());
+      await waitFor(() => expect(mocks.updated).toHaveBeenCalledOnce());
+      expectMutation("/api/sessions/session%2Fid/visibility", {
+        visibility: "team",
+        includeChildren,
+      });
+    }
+  );
+
+  it("reverts a rejected session-only write without offering a retry", async () => {
+    vi.mocked(browserApiFetch).mockResolvedValueOnce(
+      Response.json(
+        { error: "Forbidden", code: "session_action_denied", reason_code: "not_owner" },
+        { status: 403 }
+      )
+    );
+    render(<SessionVisibilityControl {...baseProps} canChangeVisibility />);
+    fireEvent.click(childrenBox());
+    await selectVisibility("Private");
+    expect(await screen.findByRole("alert")).toHaveTextContent("not_owner");
+    expect(screen.queryByRole("button", { name: "Retry without child sessions" })).toBeNull();
+    expect(screen.getByRole("combobox", { name: "Visibility" })).toHaveTextContent("Team");
+  });
+
+  it("discards a retryable failed target when children are unchecked", async () => {
+    vi.mocked(browserApiFetch).mockResolvedValueOnce(
+      Response.json(
+        { error: "Descendant inaccessible", code: "descendant_inaccessible" },
+        { status: 409 }
+      )
+    );
+    render(<SessionVisibilityControl {...baseProps} canChangeVisibility />);
+    await selectVisibility("Private");
+    await screen.findByRole("button", { name: "Retry without child sessions" });
+    fireEvent.click(childrenBox());
+    expect(screen.queryByRole("alert")).toBeNull();
+    expect(screen.getByRole("combobox", { name: "Visibility" })).toHaveTextContent("Team");
+  });
+
+  it("restores the checkbox when a checkbox-triggered cascade fails", async () => {
+    vi.mocked(browserApiFetch).mockResolvedValueOnce(
+      Response.json({ error: "Session owner required", code: "owner_required" }, { status: 400 })
+    );
     render(<SessionVisibilityControl {...baseProps} visibility="private" canChangeVisibility />);
-    await selectVisibility("Team");
-    expect(mocks.useMembers).toHaveBeenCalledWith("source");
-    expect(screen.getByText(/owner is not a member.*may lose access/i)).toBeInTheDocument();
+    fireEvent.click(childrenBox());
+    fireEvent.click(childrenBox());
+    expect(await screen.findByRole("alert")).toHaveTextContent("owner_required");
+    expect(childrenBox()).not.toBeChecked();
   });
 
   it("disables unavailable team/private options and all controls without capabilities", async () => {
