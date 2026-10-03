@@ -1,9 +1,26 @@
-import type { SessionVisibility } from "@open-inspect/shared/types/teams";
+import { z } from "zod";
+import { sessionVisibilitySchema, type SessionVisibility } from "@open-inspect/shared/types/teams";
 
 export interface ComposerAccessDraft {
   contextKey: string;
   teamId: string | null;
   visibility: SessionVisibility;
+}
+
+const storedComposerAccessSchema = z.object({
+  contextKey: z.string(),
+  teamId: z.string().nullable(),
+  visibility: sessionVisibilitySchema,
+});
+
+export function parseStoredComposerAccess(value: string | null): ComposerAccessDraft | null {
+  if (value === null) return null;
+  try {
+    const parsed = storedComposerAccessSchema.safeParse(JSON.parse(value));
+    return parsed.success ? parsed.data : null;
+  } catch {
+    return null;
+  }
 }
 
 export function resolveComposerAccess(

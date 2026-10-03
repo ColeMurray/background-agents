@@ -10,6 +10,7 @@ export const AUTOMATION_INVOCATION_STATUS: Record<
   running: { label: "Running", tone: "info" },
   completed: { label: "Completed", tone: "success" },
   failed: { label: "Failed", tone: "danger" },
+  unauthorized: { label: "Unauthorized", tone: "danger" },
   partial_failed: { label: "Partial failure", tone: "warning" },
   skipped: { label: "Skipped", tone: "warning" },
 };

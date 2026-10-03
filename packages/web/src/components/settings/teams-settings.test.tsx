@@ -28,6 +28,7 @@ const mocks = vi.hoisted(() => ({
   remove: vi.fn(),
   setMember: vi.fn(),
   hasPermission: false,
+  viewerId: "user_viewer",
   candidates: [] as Array<{
     userId: string;
     displayName: string | null;
@@ -46,6 +47,12 @@ const mocks = vi.hoisted(() => ({
 vi.mock("@/hooks/use-current-user-authorization", () => ({
   useCurrentUserAuthorization: () => ({
     hasPermission: () => mocks.hasPermission,
+  }),
+}));
+vi.mock("@/lib/auth-session", () => ({
+  useAuthSession: () => ({
+    data: { user: { id: mocks.viewerId } },
+    status: "authenticated",
   }),
 }));
 vi.mock("@/hooks/use-teams", () => ({
@@ -111,6 +118,7 @@ beforeEach(() => {
   mocks.hasPermission = true;
   mocks.candidates = [];
   mocks.teams = [];
+  mocks.viewerId = "user_viewer";
   vi.mocked(browserApiFetch).mockResolvedValue(Response.json({ requireTeamOnCreate: false }));
 });
 afterEach(() => {
@@ -381,5 +389,49 @@ describe("Teams settings", () => {
     await user.click(await screen.findByRole("option", { name: /Grace/ }));
     fireEvent.click(screen.getByRole("button", { name: "Add" }));
     await waitFor(() => expect(mocks.setMember).toHaveBeenCalledWith("user_two", "member"));
+  });
+
+  it("lets a member without manage capability leave but not remove others", async () => {
+    mocks.remove.mockResolvedValue(undefined);
+    mocks.viewerId = "user_two";
+    const grace: TeamMember = {
+      ...member,
+      userId: "user_two",
+      role: "member",
+      displayName: "Grace",
+      email: "grace@example.com",
+    };
+    render(
+      <TeamMembersTable
+        team={{
+          ...team,
+          capabilities: { ...capabilities, canManageMembers: false, canLeave: true },
+        }}
+        members={[member, grace]}
+      />
+    );
+    expect(screen.getByRole("button", { name: "Remove Ada" })).toBeDisabled();
+    expect(screen.getByRole("combobox", { name: "Role for Grace" })).toBeDisabled();
+    fireEvent.click(screen.getByRole("button", { name: "Remove Grace" }));
+    await waitFor(() => expect(mocks.remove).toHaveBeenCalledWith("user_two"));
+  });
+
+  it("keeps a managing sole lead from removing themselves", () => {
+    mocks.viewerId = "user_one";
+    const grace: TeamMember = {
+      ...member,
+      userId: "user_two",
+      role: "member",
+      displayName: "Grace",
+      email: "grace@example.com",
+    };
+    render(
+      <TeamMembersTable
+        team={{ ...team, capabilities: { ...capabilities, canLeave: false } }}
+        members={[member, grace]}
+      />
+    );
+    expect(screen.getByRole("button", { name: "Remove Ada" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Remove Grace" })).toBeEnabled();
   });
 });

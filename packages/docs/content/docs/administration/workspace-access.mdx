@@ -115,6 +115,8 @@ Workspace-owned automation definitions are readable with automation read permiss
 
 The owning team and executor are different identities. The executor is the canonical workspace user whose authority is used for scheduled and event-driven runs, initially the creator. With the relevant feature permission, the executor or an owning-team lead can manage and trigger an eligible automation; Administrators and Owners have workspace-wide management and trigger permissions. Manual execution still requires the requester to qualify for the resulting session.
 
+Creating an automation also requires permission to create sessions, because its scheduled and event-driven runs execute under the creator's authority.
+
 | Run type                   | Runs under whose authority                                                                                                                                                                                                                                      |
 | -------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Scheduled and event-driven | The configured executor. At run time the executor must be active, allowed to create sessions and use the selected targets, and, for team automations, a current member of the active owning team. Target repository grants are rechecked.                       |

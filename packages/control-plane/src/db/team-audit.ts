@@ -57,6 +57,8 @@ export interface TeamAuditInput {
   after: unknown;
 }
 
+export type TeamAuditActor = Pick<TeamAuditInput, "requestId" | "actorUserId">;
+
 export class TeamAuditStore {
   constructor(private readonly db: SqlDatabase) {}
 
@@ -66,9 +68,5 @@ export class TeamAuditStore {
       { ...input, resourceType: "team", resourceId: input.teamId },
       onlyIfPreviousChanged
     );
-  }
-
-  async write(input: TeamAuditInput): Promise<void> {
-    await this.bind(input).run();
   }
 }

@@ -9,6 +9,7 @@ import { AutomationStore } from "../../src/db/automation-store";
 import { SessionCollaboratorStore } from "../../src/db/session-collaborators";
 import { SessionIndexStore } from "../../src/db/session-index";
 import { SlackChannelStore } from "../../src/db/slack-channel-store";
+import { TeamChannelBindingStore } from "../../src/db/team-channel-bindings";
 import { TeamMembershipStore } from "../../src/db/team-memberships";
 import { Scheduler } from "../../src/scheduler/scheduler";
 import { cleanD1Tables } from "./cleanup";
@@ -54,7 +55,8 @@ function createSteeringScheduler(mode: "off" | "shadow" | "on" = "shadow") {
 async function seedSteerableSession(
   sessionId = "session-steering",
   ownerTeamId: string | null = SESSION_TEAM,
-  visibility: SessionVisibility = "private"
+  visibility: SessionVisibility = "private",
+  automationTeamId: string | null = ownerTeamId
 ) {
   const automationId = `auto-${sessionId}`;
   const now = Date.now();
@@ -67,7 +69,7 @@ async function seedSteerableSession(
   )
     .bind(
       automationId,
-      AUTOMATION_TEAM,
+      automationTeamId,
       SESSION_OWNER,
       SESSION_OWNER,
       now,
@@ -144,6 +146,10 @@ describe("Scheduler Slack team steering (real D1)", () => {
       [WORKSPACE_OWNER, "member"],
     ]);
     await seedTeam(AUTOMATION_TEAM, [[SESSION_OWNER, "member"]]);
+    await new TeamChannelBindingStore(env.DB).put(
+      { provider: "slack", externalId: "C1", teamId: SESSION_TEAM, kind: "source" },
+      { actorUserId: SESSION_OWNER, requestId: "steering-fixture" }
+    );
   });
   afterEach(async () => {
     vi.restoreAllMocks();
@@ -173,6 +179,10 @@ describe("Scheduler Slack team steering (real D1)", () => {
     "preserves workspace collaboration-only steering in %s mode",
     async (mode) => {
       const { automationId } = await seedSteerableSession("session-steering", null, "workspace");
+      await new TeamChannelBindingStore(env.DB).remove(SESSION_TEAM, "slack", "C1", {
+        actorUserId: SESSION_OWNER,
+        requestId: "workspace-steering-fixture",
+      });
       await assignCustomRole(MEMBER, ["sessions.collaborate"]);
       const { scheduler, requests } = createSteeringScheduler(mode);
       const result = await scheduler.event(slackEvent(MEMBER));
@@ -266,7 +276,8 @@ describe("Scheduler Slack team steering (real D1)", () => {
     const targets = [
       await seedSteerableSession("1-denied"),
       await seedSteerableSession("2-allowed"),
-      await seedSteerableSession("3-foreign", AUTOMATION_TEAM),
+      // Keep this candidate in the channel's team so session authorization must reject it.
+      await seedSteerableSession("3-foreign", AUTOMATION_TEAM, "private", SESSION_TEAM),
     ];
     const collaborators = new SessionCollaboratorStore(env.DB);
     await collaborators.add("2-allowed", MEMBER, SESSION_OWNER);

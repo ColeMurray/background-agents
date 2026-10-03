@@ -28,6 +28,7 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import { GitHubAutofixSettingsFields } from "./github-autofix-settings-fields";
+import { GitHubAutoReviewDeprecationNotice } from "./github-auto-review-deprecation-notice";
 import {
   IntegrationSettingsMessage,
   IntegrationSettingsSection,
@@ -220,26 +221,31 @@ export function GlobalSettingsSection({
         }}
       />
 
-      <label
-        htmlFor="auto-review-toggle"
-        className="flex items-center justify-between px-4 py-3 border border-border hover:bg-muted/50 transition cursor-pointer mb-4 rounded-sm"
-      >
-        <div>
-          <span className="text-sm font-medium text-foreground">Auto-review new PRs</span>
-          <span className="text-sm text-muted-foreground ml-2">
-            Automatically review non-draft PRs when opened
-          </span>
-        </div>
-        <Switch
-          id="auto-review-toggle"
-          checked={autoReviewOnOpen}
-          onCheckedChange={(checked) => {
-            setAutoReviewOnOpen(checked);
-            setDirty(true);
-            setError("");
-          }}
-        />
-      </label>
+      <div className="mb-4">
+        <label
+          htmlFor="auto-review-toggle"
+          className="flex items-center justify-between px-4 py-3 border border-border hover:bg-muted/50 transition cursor-pointer rounded-sm"
+        >
+          <div>
+            <span className="text-sm font-medium text-foreground">Auto-review new PRs</span>
+            <span className="text-xs text-warning ml-2">Deprecated</span>
+            <span className="text-sm text-muted-foreground ml-2">
+              Automatically review non-draft PRs when opened
+            </span>
+          </div>
+          <Switch
+            id="auto-review-toggle"
+            aria-describedby="auto-review-deprecation"
+            checked={autoReviewOnOpen}
+            onCheckedChange={(checked) => {
+              setAutoReviewOnOpen(checked);
+              setDirty(true);
+              setError("");
+            }}
+          />
+        </label>
+        <GitHubAutoReviewDeprecationNotice id="auto-review-deprecation" />
+      </div>
 
       <div className="mb-4">
         <p className="text-sm font-medium text-foreground mb-2">Repository Scope</p>

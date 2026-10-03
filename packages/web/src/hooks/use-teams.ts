@@ -18,7 +18,7 @@ import { browserApiFetch, type BrowserApiPath } from "@/lib/browser-api-fetch";
 import { useAuthSession } from "@/lib/auth-session";
 import { ME_TEAMS_API_PATH, isMeTeamsCacheKey, meTeamsKey } from "@/lib/me-teams-cache";
 
-const TEAMS_KEY = "/api/teams";
+export const TEAMS_KEY = "/api/teams";
 // Missing or incomplete capabilities leave the team visible while every team action stays disabled.
 const teamSchema = teamResponseSchema.extend({
   capabilities: teamResponseSchema.shape.capabilities.partial().optional(),
@@ -30,6 +30,15 @@ const meTeamsSchema = meTeamsResponseSchema.extend({
   teams: z.array(teamSchema.extend({ role: teamRoleSchema })),
 });
 const membersSchema = z.object({ members: z.array(teamMemberSchema) });
+
+export function reconcileTeamDirectory(
+  current: z.infer<typeof teamsSchema> | undefined,
+  team: TeamResponse
+) {
+  return current
+    ? { teams: [...current.teams.filter((existing) => existing.id !== team.id), team] }
+    : current;
+}
 
 class TeamRequestError extends Error {
   constructor(
@@ -158,7 +167,11 @@ export function useTeam(id: string) {
     const team = await write(key, "PATCH", input, teamSchema);
     await Promise.allSettled([
       mutate(key, team, { revalidate: false }),
-      mutate(TEAMS_KEY),
+      mutate(
+        TEAMS_KEY,
+        (current: z.infer<typeof teamsSchema> | undefined) => reconcileTeamDirectory(current, team),
+        { revalidate: (data) => data === undefined }
+      ),
       mutate(isMeTeamsCacheKey),
     ]);
     return team;

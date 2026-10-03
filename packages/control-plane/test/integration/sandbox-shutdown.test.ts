@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { env } from "cloudflare:test";
 import type { SessionDO } from "../../src/cloudflare/durable-object";
+import { SessionStatusProjectionStore } from "../../src/db/session-status-projection-store";
 import {
   DEFAULT_LIFECYCLE_CONFIG,
   SandboxLifecycleManager,
@@ -303,6 +304,125 @@ describe("sandbox graceful shutdown wiring", () => {
     expect(response.status).toBe(503);
     expect(await response.text()).toBe("Sandbox is being saved");
   });
+
+  it("does not start preservation when the local archive status write fails", async () => {
+    const { stub } = await initNamedSession(`archive-status-write-failure-${Date.now()}`);
+    await seedSandboxAuth(stub, { authToken: AUTH_TOKEN, sandboxId: SANDBOX_ID, status: "ready" });
+    await seedShutdown(stub, {
+      generationReady: true,
+      runtimeReady: true,
+      protocolVersion: 1,
+      lifecyclePolicy: "confirmed",
+    });
+    await queryDO(stub, "UPDATE session SET status = 'completed'");
+    const shutdownBefore = await readShutdown(stub);
+
+    await runInSessionDO(stub, async (instance, state) => {
+      state.storage.sql.exec(
+        `CREATE TRIGGER fail_archive_status BEFORE UPDATE OF status ON session
+         WHEN NEW.status = 'archived'
+         BEGIN SELECT RAISE(ABORT, 'injected archive status write failure'); END`
+      );
+      try {
+        await expect(componentsOf(instance).sessionLifecycleHandler.archive()).rejects.toThrow(
+          "injected archive status write failure"
+        );
+      } finally {
+        state.storage.sql.exec("DROP TRIGGER fail_archive_status");
+      }
+    });
+
+    expect(await readShutdown(stub)).toEqual(shutdownBefore);
+    expect(await queryDO(stub, "SELECT status FROM session")).toEqual([{ status: "completed" }]);
+  });
+
+  it("keeps an archived sandbox alive while the status projection is pending", async () => {
+    const name = `archive-pending-projection-${Date.now()}`;
+    const { stub } = await initNamedSession(name);
+    await seedSandboxAuth(stub, { authToken: AUTH_TOKEN, sandboxId: SANDBOX_ID, status: "ready" });
+    await runInSessionDO(stub, (_instance, state) => {
+      state.storage.sql.exec("UPDATE sandbox SET modal_object_id = 'sb-live'");
+    });
+    await seedShutdown(stub, {
+      providerObjectId: "sb-live",
+      generationReady: true,
+      runtimeReady: true,
+      protocolVersion: 1,
+      lifecyclePolicy: "confirmed",
+    });
+    await queryDO(stub, "UPDATE session SET status = 'completed'");
+
+    // Create and release the gate inside the DO to retain its I/O context.
+    let releaseProjection: (() => void) | undefined;
+    await runInSessionDO(stub, () => {
+      const project = SessionStatusProjectionStore.prototype.project;
+      vi.spyOn(SessionStatusProjectionStore.prototype, "project").mockImplementationOnce(
+        async function (this: SessionStatusProjectionStore, ...args) {
+          await new Promise<void>((resolve) => {
+            releaseProjection = resolve;
+          });
+          return project.call(this, ...args);
+        }
+      );
+    });
+
+    const archiving = stub.fetch("http://internal/internal/archive", { method: "POST" });
+    const archiveSettled = archiving.catch(() => undefined);
+    try {
+      await vi.waitFor(() => expect(releaseProjection).toBeTypeOf("function"));
+      expect(await queryDO(stub, "SELECT status FROM session")).toEqual([{ status: "archived" }]);
+      const { ws, response } = await openSandboxWs(name, {
+        authToken: AUTH_TOKEN,
+        sandboxId: SANDBOX_ID,
+      });
+      expect(ws).toBeNull();
+      expect(response.status).toBe(503);
+      expect(await response.text()).toBe("Sandbox is being saved");
+      expect(await readShutdown(stub)).toMatchObject({
+        phase: "draining",
+        reason: "session_archived",
+      });
+    } finally {
+      await runInSessionDO(stub, () => {
+        releaseProjection?.();
+        vi.restoreAllMocks();
+      });
+      await archiveSettled;
+    }
+
+    expect((await archiving).status).toBe(200);
+    expect(await readShutdown(stub)).toMatchObject({
+      phase: "draining",
+      reason: "session_archived",
+    });
+  });
+
+  it.each(["missing", "legacy"])(
+    "tells an archived sandbox to exit when its shutdown record is %s",
+    async (policy) => {
+      const name = `archive-unmanaged-${policy}-${Date.now()}`;
+      const { stub } = await initNamedSession(name);
+      await seedSandboxAuth(stub, {
+        authToken: AUTH_TOKEN,
+        sandboxId: SANDBOX_ID,
+        status: "ready",
+      });
+      if (policy === "legacy") {
+        await seedShutdown(stub, { lifecyclePolicy: "legacy" });
+      }
+      await queryDO(stub, "UPDATE session SET status = 'completed'");
+
+      const archived = await stub.fetch("http://internal/internal/archive", { method: "POST" });
+      expect(archived.status).toBe(200);
+      const { ws, response } = await openSandboxWs(name, {
+        authToken: AUTH_TOKEN,
+        sandboxId: SANDBOX_ID,
+      });
+      expect(ws).toBeNull();
+      expect(response.status).toBe(410);
+      expect(await response.text()).toBe("Session is terminal");
+    }
+  );
 
   it("preserves a completed session status when shutdown begins between prompts", async () => {
     const name = `shutdown-completed-status-${Date.now()}`;

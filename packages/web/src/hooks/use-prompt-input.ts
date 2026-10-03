@@ -9,6 +9,7 @@ import {
   DEFAULT_ATTACHMENT_ONLY_MESSAGE,
   useSessionAttachments,
 } from "@/hooks/use-session-attachments";
+import { usePromptDraft } from "@/hooks/use-prompt-draft";
 import type { useSessionSocket } from "@/hooks/use-session-socket";
 import { isUnarchivedSessionListKey } from "@/lib/session-list";
 import {
@@ -33,7 +34,14 @@ export function usePromptInput(
   canSubmit: boolean,
   sendShortcut: KeyboardShortcutBinding
 ) {
-  const [prompt, setPromptState] = useState("");
+  const {
+    prompt,
+    promptRef,
+    setPrompt,
+    clearSubmittedPrompt,
+    pendingRequestRef,
+    setPendingRequest,
+  } = usePromptDraft(sessionId);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
   const sessionAttachments = useSessionAttachments();
@@ -46,11 +54,6 @@ export function usePromptInput(
   const attachmentDraftSignature = sessionAttachments.attachments
     .map((attachment) => attachment.id)
     .join("\u0000");
-  const promptRef = useRef(prompt);
-  const setPrompt = useCallback((value: string) => {
-    promptRef.current = value;
-    setPromptState(value);
-  }, []);
 
   const clearTypingTimeout = useCallback(() => {
     if (typingTimeoutRef.current) {
@@ -102,8 +105,13 @@ export function usePromptInput(
         reasoningEffort,
         attachmentIds: sessionAttachments.attachments.map((attachment) => attachment.id),
       });
-      const requestIdentity = resolvePromptRequestIdentity(signature, retryRequestRef.current);
+      // An unconfirmed send from before a reload may already be queued; reuse its ID.
+      const requestIdentity = resolvePromptRequestIdentity(
+        signature,
+        retryRequestRef.current ?? pendingRequestRef.current
+      );
       retryRequestRef.current = requestIdentity;
+      setPendingRequest(requestIdentity);
       const result = await sendPrompt(
         content,
         selectedModel,
@@ -115,16 +123,16 @@ export function usePromptInput(
         setSubmitError(
           result.message ??
             (result.reason === "timeout"
-              ? "Confirmation timed out. Retry while this page is open to reuse the same request."
+              ? "Confirmation timed out. Retry to reuse the same request."
               : result.reason === "disconnected"
-                ? "Disconnected before confirmation. Retry on this page after reconnecting."
+                ? "Disconnected before confirmation. Retry after reconnecting."
                 : "The prompt could not be queued.")
         );
         return;
       }
 
       retryRequestRef.current = null;
-      setPrompt("");
+      clearSubmittedPrompt(prompt);
       sessionAttachments.clearAttachments();
       mutate(isUnarchivedSessionListKey);
     } finally {
@@ -172,7 +180,7 @@ export function usePromptInput(
         setPrompt,
         input: inputRef.current,
       }),
-    [hasDraftAttachments, setPrompt]
+    [hasDraftAttachments, promptRef, setPrompt]
   );
 
   return {

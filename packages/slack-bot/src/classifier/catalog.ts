@@ -17,14 +17,18 @@ export interface TargetCatalog {
 }
 
 /**
- * Fetch both target lists concurrently. Each side is served from its own
- * cache; environments fail open to an empty list, so an environments outage
- * degrades the whole catalog to repository-only.
+ * Fetch both target lists concurrently. Channel reads are authorized afresh
+ * from the live binding and user; unscoped workspace reads use caches.
  */
-export async function loadTargetCatalog(env: Env, traceId?: string): Promise<TargetCatalog> {
+export async function loadTargetCatalog(
+  env: Env,
+  traceId?: string,
+  channelId?: string | null,
+  userId?: string
+): Promise<TargetCatalog> {
   const [repos, environments] = await Promise.all([
-    getAvailableRepos(env, traceId),
-    getAvailableEnvironments(env, traceId),
+    getAvailableRepos(env, traceId, channelId, userId),
+    getAvailableEnvironments(env, traceId, channelId, userId),
   ]);
   return { repos, environments };
 }

@@ -10,6 +10,7 @@ const githubSenderSchema = githubUserSchema.extend({
 });
 
 const repositorySchema = z.object({
+  id: z.number().int().positive().max(Number.MAX_SAFE_INTEGER),
   owner: githubUserSchema,
   name: z.string(),
   private: z.boolean(),

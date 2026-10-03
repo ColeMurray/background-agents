@@ -62,6 +62,7 @@ async function sandboxParent(
     defaultBranch: BASE_BRANCH,
     environmentId,
     userId: MEMBER,
+    canonicalUserId: MEMBER,
     scmLogin: "environment-member",
   });
   await env.DB.prepare("UPDATE sessions SET owner_team_id = ?, visibility = ? WHERE id = ?")
@@ -240,7 +241,9 @@ describe("session environment ownership compatibility", () => {
     "inherits %s into %s/%s without human use access",
     async (environmentId, ownerTeamId, visibility) => {
       const parent = await sandboxParent(environmentId, ownerTeamId, visibility);
-      await env.DB.prepare("DELETE FROM team_memberships WHERE user_id = ?").bind(MEMBER).run();
+      await env.DB.prepare("DELETE FROM team_memberships WHERE user_id = ? AND team_id != ?")
+        .bind(MEMBER, ownerTeamId ?? "")
+        .run();
       await env.DB.prepare("UPDATE user_role_assignments SET role_id = ? WHERE user_id = ?")
         .bind(BUILT_IN_ROLE_REGISTRY.viewer.id, MEMBER)
         .run();

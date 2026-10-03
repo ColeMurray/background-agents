@@ -177,9 +177,69 @@ describe("EnvironmentForm", () => {
     fireEvent.submit(container.querySelector("form")!);
     expect(onSubmit).toHaveBeenCalledTimes(1);
     expect(onSubmit.mock.calls[0][0]).not.toHaveProperty("teamId");
-    expect(onSubmit.mock.calls[0][0].repositories).toEqual([
-      { repoOwner: "acme", repoName: "web", baseBranch: "main" },
-    ]);
+  });
+
+  it("omits an unchanged repository selection from edit submissions", async () => {
+    mocks.reposValue = [repo("Acme", "Web", 1), repo("acme", "api", 2)];
+    const onSubmit = vi.fn();
+    const user = userEvent.setup();
+    render(
+      <EnvironmentForm
+        mode="edit"
+        initialValues={environment(
+          [
+            { repoOwner: "Acme", repoName: "Web" },
+            { repoOwner: "acme", repoName: "api" },
+          ],
+          { ownerTeamId: "team-1" }
+        )}
+        onSubmit={onSubmit}
+        onCancel={vi.fn()}
+        submitting={false}
+      />
+    );
+
+    await user.clear(screen.getByLabelText("Name"));
+    await user.type(screen.getByLabelText("Name"), "renamed");
+    await user.click(screen.getByRole("button", { name: /save environment/i }));
+
+    expect(onSubmit).toHaveBeenCalledWith({
+      name: "renamed",
+      description: null,
+      prebuildEnabled: false,
+    });
+  });
+
+  it("sends the full selection when an edit changes only one base branch", async () => {
+    mocks.reposValue = [repo("group/subgroup", "web", 1), repo("acme", "api", 2)];
+    const onSubmit = vi.fn();
+    const user = userEvent.setup();
+    render(
+      <EnvironmentForm
+        mode="edit"
+        initialValues={environment([
+          { repoOwner: "group/subgroup", repoName: "web" },
+          { repoOwner: "acme", repoName: "api" },
+        ])}
+        onSubmit={onSubmit}
+        onCancel={vi.fn()}
+        submitting={false}
+      />
+    );
+
+    const webRow = screen.getByTitle("group/subgroup/web").closest("div") as HTMLElement;
+    await user.click(within(webRow).getByRole("button", { name: "main" }));
+    await user.click(screen.getByRole("option", { name: "develop" }));
+    await user.click(screen.getByRole("button", { name: /save environment/i }));
+
+    expect(onSubmit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        repositories: [
+          { repoOwner: "group/subgroup", repoName: "web", baseBranch: "develop" },
+          { repoOwner: "acme", repoName: "api", baseBranch: "main" },
+        ],
+      })
+    );
   });
 
   it("preserves a nested owner namespace when saving", async () => {
@@ -188,7 +248,7 @@ describe("EnvironmentForm", () => {
     const user = userEvent.setup();
     render(
       <EnvironmentForm
-        mode="edit"
+        mode="create"
         initialValues={environment([{ repoOwner: "group/subgroup", repoName: "web" }])}
         onSubmit={onSubmit}
         onCancel={vi.fn()}
@@ -196,7 +256,7 @@ describe("EnvironmentForm", () => {
       />
     );
 
-    await user.click(screen.getByRole("button", { name: /save environment/i }));
+    await user.click(screen.getByRole("button", { name: /create environment/i }));
 
     expect(onSubmit).toHaveBeenCalledWith(
       expect.objectContaining({

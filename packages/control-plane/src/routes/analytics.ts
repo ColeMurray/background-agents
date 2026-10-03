@@ -3,6 +3,7 @@ import {
   ANALYTICS_DAYS,
   ANALYTICS_RUN_ORDER_BY,
   ANALYTICS_SCOPES,
+  DEFAULT_ANALYTICS_DAYS,
   DEFAULT_ANALYTICS_SCOPE,
   type AnalyticsDays,
   type AnalyticsScope,
@@ -30,7 +31,6 @@ import {
   requirePermission,
 } from "./shared";
 
-export const DEFAULT_ANALYTICS_DAYS: AnalyticsDays = 30;
 const DEFAULT_RUNS_LIMIT = 50;
 const MAX_RUNS_LIMIT = 100;
 

@@ -9,6 +9,9 @@ name = "open-inspect-web-local"
 main = ".open-next/worker.js"
 compatibility_date = "2025-08-15"
 compatibility_flags = ["nodejs_compat", "global_fetch_strictly_public"]
+# Keep-names makes esbuild emit __name() calls, which leak into next-themes'
+# inline script and throw in the browser.
+keep_names = false
 
 [assets]
 directory = ".open-next/assets"

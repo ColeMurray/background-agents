@@ -4,6 +4,7 @@ import { sqlDatabase } from "./helpers";
 import { AutomationStore, type AutomationRow } from "../../src/db/automation-store";
 import { SlackChannelStore } from "../../src/db/slack-channel-store";
 import { cleanD1Tables } from "./cleanup";
+import { TeamStore } from "../../src/db/teams";
 
 function makeAutomation(overrides?: Partial<AutomationRow>): AutomationRow {
   const now = Date.now();
@@ -76,5 +77,45 @@ describe("SlackChannelStore (D1 integration)", () => {
     await sqlDatabase(env.DB).batch(channels.bindChannelStatements("auto-s7", ["C9"]));
 
     expect((await channels.getWatchedSlackChannels()).sort()).toEqual(["C1", "C2", "C3"]);
+  });
+
+  it("selects only automations owned by the channel's current team", async () => {
+    const team = await new TeamStore(env.DB).create({
+      slug: "a",
+      name: "A",
+      joinPolicy: "invite_only",
+    });
+    const other = await new TeamStore(env.DB).create({
+      slug: "b",
+      name: "B",
+      joinPolicy: "invite_only",
+    });
+    const store = new AutomationStore(env.DB);
+    const channels = new SlackChannelStore(env.DB);
+    for (const [id, ownerTeamId] of [
+      ["workspace", null],
+      ["matching", team.id],
+      ["other", other.id],
+    ] as const) {
+      await store.create(makeSlackAutomation({ id, owner_team_id: ownerTeamId }));
+      await sqlDatabase(env.DB).batch(channels.bindChannelStatements(id, ["C1"]));
+    }
+    expect((await channels.getSlackAutomationsForChannel("C1")).map((row) => row.id)).toEqual([
+      "workspace",
+    ]);
+    await env.DB.prepare(
+      "INSERT INTO team_channel_bindings (provider, external_id, team_id, kind, created_at) VALUES ('slack', 'C1', ?, 'source', ?)"
+    )
+      .bind(team.id, Date.now())
+      .run();
+    expect((await channels.getSlackAutomationsForChannel("C1")).map((row) => row.id)).toEqual([
+      "matching",
+    ]);
+    await env.DB.prepare("UPDATE team_channel_bindings SET team_id = ? WHERE external_id = 'C1'")
+      .bind(other.id)
+      .run();
+    expect((await channels.getSlackAutomationsForChannel("C1")).map((row) => row.id)).toEqual([
+      "other",
+    ]);
   });
 });

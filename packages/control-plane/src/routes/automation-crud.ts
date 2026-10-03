@@ -57,7 +57,8 @@ import {
   GITHUB_USER_OR_SERVICE_ROUTE,
   json,
   error,
-  requirePermission,
+  permissionRequirement,
+  requireAll,
 } from "./shared";
 import { parseJsonBody } from "./body";
 import type { Env } from "../types";
@@ -239,6 +240,20 @@ async function handleCreateAutomation(
       ...body.triggerConfig!,
       conditions: normalizeSlackChannelConditions(body.triggerConfig!.conditions),
     };
+    if (
+      !(await new SlackChannelStore(ctx.db).hasCompatibleBindings(
+        extractSlackChannels(body.triggerConfig),
+        ownerTeamId
+      ))
+    ) {
+      return json(
+        {
+          error: "Slack channels must belong to the automation's team",
+          code: "channel_team_mismatch",
+        },
+        409
+      );
+    }
   }
 
   // Validate harness and model
@@ -677,6 +692,22 @@ async function handleUpdateAutomation(
     triggerConfigToValidate = body.triggerConfig;
   }
 
+  if (
+    existingTriggerType === "slack_event" &&
+    !(await new SlackChannelStore(ctx.db).hasCompatibleBindings(
+      extractSlackChannels(body.triggerConfig ?? existingTriggerConfig ?? undefined),
+      existing.owner_team_id
+    ))
+  ) {
+    return json(
+      {
+        error: "Slack channels must belong to the automation's team",
+        code: "channel_team_mismatch",
+      },
+      409
+    );
+  }
+
   if (triggerConfigToValidate) {
     let previousConfig: TriggerConfig | undefined;
     if (existingTriggerType === "github_event" && existingTriggerConfig !== null) {
@@ -794,7 +825,11 @@ automationCrudRoutes.post(
   "/automations",
   admit({
     ...GITHUB_USER_OR_SERVICE_ROUTE,
-    authorization: requirePermission("automations.create"),
+    // The creator becomes the executor, whose runs create sessions under its authority.
+    authorization: requireAll(
+      permissionRequirement("automations.create"),
+      permissionRequirement("sessions.create")
+    ),
   }),
   (c) => dispatch(c, handleCreateAutomation)
 );

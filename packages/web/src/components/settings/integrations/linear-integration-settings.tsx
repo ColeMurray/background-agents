@@ -8,9 +8,11 @@ import {
   parseRepositoryFullName,
 } from "@open-inspect/shared/types/repositories";
 import type { EnrichedRepository } from "@open-inspect/shared/types/repository-catalog";
-import type {
-  LinearBotSettings,
-  LinearGlobalConfig,
+import {
+  DEFAULT_LINEAR_UNBOUND_CHANNELS,
+  type LinearBotGlobalSettings,
+  type LinearBotSettings,
+  type LinearGlobalConfig,
 } from "@open-inspect/shared/types/integrations";
 import {
   MODEL_REASONING_CONFIG,
@@ -118,6 +120,7 @@ export function LinearIntegrationSettings() {
       <fieldset disabled={!canManageGlobal} className="min-w-0">
         <GlobalSettingsSection
           settings={settings}
+          canManageGlobal={canManageGlobal}
           availableRepos={availableRepos}
           enabledModelOptions={enabledModelOptions}
         />
@@ -125,7 +128,7 @@ export function LinearIntegrationSettings() {
 
       <SettingsCardSection
         title="Repository Overrides"
-        description="Override model selection and behavior for specific repositories."
+        description="Override model selection and behavior for specific repositories. The unbound Linear teams policy is workspace-wide and cannot be overridden per repository."
       >
         <fieldset disabled={!canManageRepos} className="min-w-0">
           <RepoOverridesSection
@@ -141,10 +144,12 @@ export function LinearIntegrationSettings() {
 
 function GlobalSettingsSection({
   settings,
+  canManageGlobal,
   availableRepos,
   enabledModelOptions,
 }: {
   settings: LinearGlobalConfig | null | undefined;
+  canManageGlobal: boolean;
   availableRepos: EnrichedRepository[];
   enabledModelOptions: ModelCategory[];
 }) {
@@ -166,37 +171,37 @@ function GlobalSettingsSection({
   const [issueSessionInstructions, setIssueSessionInstructions] = useState(
     settings?.defaults?.issueSessionInstructions ?? ""
   );
+  const [unboundChannels, setUnboundChannels] = useState<"workspace" | "reject">(
+    settings?.defaults?.unboundChannels ?? DEFAULT_LINEAR_UNBOUND_CHANNELS
+  );
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
   const [dirty, setDirty] = useState(false);
-  const [initialized, setInitialized] = useState(false);
   const [showResetDialog, setShowResetDialog] = useState(false);
 
   useEffect(() => {
-    if (settings !== undefined && !initialized) {
-      if (settings) {
-        setModel(settings.defaults?.model ?? "");
-        setEffort(settings.defaults?.reasoningEffort ?? "");
-        setEnabledRepos(settings.enabledRepos ?? []);
-        setRepoScopeMode(settings.enabledRepos === undefined ? "all" : "selected");
-        setAllowUserPreferenceOverride(settings.defaults?.allowUserPreferenceOverride ?? true);
-        setAllowLabelModelOverride(settings.defaults?.allowLabelModelOverride ?? true);
-        setEmitToolProgressActivities(settings.defaults?.emitToolProgressActivities ?? true);
-        setIssueSessionInstructions(settings.defaults?.issueSessionInstructions ?? "");
-      }
-      setInitialized(true);
-    }
-  }, [settings, initialized]);
+    if (settings === undefined || dirty || saving) return;
+    setModel(settings?.defaults?.model ?? "");
+    setEffort(settings?.defaults?.reasoningEffort ?? "");
+    setEnabledRepos(settings?.enabledRepos ?? []);
+    setRepoScopeMode(settings?.enabledRepos == null ? "all" : "selected");
+    setAllowUserPreferenceOverride(settings?.defaults?.allowUserPreferenceOverride ?? true);
+    setAllowLabelModelOverride(settings?.defaults?.allowLabelModelOverride ?? true);
+    setEmitToolProgressActivities(settings?.defaults?.emitToolProgressActivities ?? true);
+    setIssueSessionInstructions(settings?.defaults?.issueSessionInstructions ?? "");
+    setUnboundChannels(settings?.defaults?.unboundChannels ?? DEFAULT_LINEAR_UNBOUND_CHANNELS);
+  }, [settings, dirty, saving]);
 
   const isConfigured = settings !== null && settings !== undefined;
   const resetNotice =
-    "Reset all Linear settings to defaults? This enables both label/user model overrides.";
+    "Reset all Linear settings to defaults? This enables both label/user model overrides and restores the default policy for unbound Linear teams.";
 
   const handleReset = () => {
     setShowResetDialog(true);
   };
 
   const handleConfirmReset = async () => {
+    if (!canManageGlobal || saving) return;
     setSaving(true);
     setError("");
 
@@ -204,7 +209,7 @@ function GlobalSettingsSection({
       const res = await browserApiFetch(GLOBAL_SETTINGS_KEY, { method: "DELETE" });
 
       if (res.ok) {
-        mutate(GLOBAL_SETTINGS_KEY);
+        mutate(GLOBAL_SETTINGS_KEY, { settings: null });
         setModel("");
         setEffort("");
         setEnabledRepos([]);
@@ -213,6 +218,7 @@ function GlobalSettingsSection({
         setAllowLabelModelOverride(true);
         setEmitToolProgressActivities(true);
         setIssueSessionInstructions("");
+        setUnboundChannels(DEFAULT_LINEAR_UNBOUND_CHANNELS);
         setDirty(false);
         toast.success("Settings reset to defaults.");
       } else {
@@ -227,13 +233,15 @@ function GlobalSettingsSection({
   };
 
   const handleSave = async () => {
+    if (!canManageGlobal || saving || !dirty) return;
     setSaving(true);
     setError("");
 
-    const defaults: LinearBotSettings = {
+    const defaults: LinearBotGlobalSettings = {
       allowUserPreferenceOverride,
       allowLabelModelOverride,
       emitToolProgressActivities,
+      unboundChannels,
     };
 
     if (model) defaults.model = model;
@@ -253,7 +261,7 @@ function GlobalSettingsSection({
       });
 
       if (res.ok) {
-        mutate(GLOBAL_SETTINGS_KEY);
+        mutate(GLOBAL_SETTINGS_KEY, { settings: body });
         toast.success("Settings saved.");
         setDirty(false);
       } else {
@@ -281,161 +289,190 @@ function GlobalSettingsSection({
       title="Defaults & Scope"
       description="Global model, fallback behavior, and repository scope."
     >
-      {error && <Message tone="error" text={error} />}
+      <fieldset disabled={saving} className="min-w-0">
+        {error && <Message tone="error" text={error} />}
 
-      <ModelReasoningDefaultsFields
-        model={model}
-        reasoningEffort={effort}
-        modelOptions={enabledModelOptions}
-        onChange={(nextModel, nextEffort) => {
-          setModel(nextModel);
-          setEffort(nextEffort);
-          setDirty(true);
-          setError("");
-        }}
-      />
-
-      <div className="grid sm:grid-cols-2 gap-2 mb-4">
-        <label className="flex items-center justify-between px-3 py-2 border border-border rounded-sm cursor-pointer hover:bg-muted/50 transition text-sm">
-          <span>Allow user model preferences</span>
-          <Checkbox
-            checked={allowUserPreferenceOverride}
-            onCheckedChange={(checked) => {
-              setAllowUserPreferenceOverride(!!checked);
+        <div className="mb-4">
+          <label
+            htmlFor="linear-unbound-channels"
+            className="block text-sm font-medium text-foreground mb-2"
+          >
+            Unbound Linear teams
+          </label>
+          <p id="linear-unbound-channels-help" className="text-xs text-muted-foreground mb-2">
+            Choose what happens when a request comes from a Linear team without a team binding.
+            Manage bindings in a team&apos;s Channels tab. This policy applies workspace-wide.
+          </p>
+          <select
+            id="linear-unbound-channels"
+            aria-describedby="linear-unbound-channels-help"
+            value={unboundChannels}
+            disabled={saving}
+            onChange={(event) => {
+              setUnboundChannels(event.target.value as "workspace" | "reject");
               setDirty(true);
               setError("");
             }}
-          />
-        </label>
-        <label className="flex items-center justify-between px-3 py-2 border border-border rounded-sm cursor-pointer hover:bg-muted/50 transition text-sm">
-          <span>Allow model labels (model:*)</span>
-          <Checkbox
-            checked={allowLabelModelOverride}
-            onCheckedChange={(checked) => {
-              setAllowLabelModelOverride(!!checked);
-              setDirty(true);
-              setError("");
-            }}
-          />
-        </label>
-      </div>
+            className="w-full rounded border border-border bg-background px-2 py-2 text-sm disabled:opacity-50 sm:w-96"
+          >
+            <option value="workspace">Create workspace-level sessions</option>
+            <option value="reject">Reject requests until bound</option>
+          </select>
+        </div>
 
-      <div className="mb-4">
-        <label className="flex items-center justify-between px-3 py-2 border border-border rounded-sm cursor-pointer hover:bg-muted/50 transition text-sm">
-          <span>Emit tool progress activities</span>
-          <Checkbox
-            checked={emitToolProgressActivities}
-            onCheckedChange={(checked) => {
-              setEmitToolProgressActivities(!!checked);
-              setDirty(true);
-              setError("");
-            }}
-          />
-        </label>
-      </div>
-
-      <div className="mb-4">
-        <label
-          htmlFor="linear-issue-session-instructions"
-          className="block text-sm font-medium text-foreground mb-1"
-        >
-          Issue Session Instructions
-        </label>
-        <p className="text-xs text-muted-foreground mb-2">
-          Custom instructions appended to agent prompts for all Linear issue sessions. Use this to
-          guide how the agent approaches issues (e.g., coding standards, preferred tools, MR
-          conventions).
-        </p>
-        <Textarea
-          id="linear-issue-session-instructions"
-          value={issueSessionInstructions}
-          onChange={(e) => {
-            setIssueSessionInstructions(e.target.value);
+        <ModelReasoningDefaultsFields
+          model={model}
+          reasoningEffort={effort}
+          modelOptions={enabledModelOptions}
+          onChange={(nextModel, nextEffort) => {
+            setModel(nextModel);
+            setEffort(nextEffort);
             setDirty(true);
             setError("");
           }}
-          rows={3}
-          placeholder="e.g., Always run tests before pushing changes. Prefer minimal diffs."
-          className="resize-y"
         />
-      </div>
 
-      <div className="mb-4">
-        <p className="text-sm font-medium text-foreground mb-2">Repository Scope</p>
-        <div className="grid sm:grid-cols-2 gap-2 mb-3">
-          <RadioCard
-            name="linear-repo-scope"
-            checked={repoScopeMode === "all"}
-            onChange={() => {
-              setRepoScopeMode("all");
+        <div className="grid sm:grid-cols-2 gap-2 mb-4">
+          <label className="flex items-center justify-between px-3 py-2 border border-border rounded-sm cursor-pointer hover:bg-muted/50 transition text-sm">
+            <span>Allow user model preferences</span>
+            <Checkbox
+              checked={allowUserPreferenceOverride}
+              onCheckedChange={(checked) => {
+                setAllowUserPreferenceOverride(!!checked);
+                setDirty(true);
+                setError("");
+              }}
+            />
+          </label>
+          <label className="flex items-center justify-between px-3 py-2 border border-border rounded-sm cursor-pointer hover:bg-muted/50 transition text-sm">
+            <span>Allow model labels (model:*)</span>
+            <Checkbox
+              checked={allowLabelModelOverride}
+              onCheckedChange={(checked) => {
+                setAllowLabelModelOverride(!!checked);
+                setDirty(true);
+                setError("");
+              }}
+            />
+          </label>
+        </div>
+
+        <div className="mb-4">
+          <label className="flex items-center justify-between px-3 py-2 border border-border rounded-sm cursor-pointer hover:bg-muted/50 transition text-sm">
+            <span>Emit tool progress activities</span>
+            <Checkbox
+              checked={emitToolProgressActivities}
+              onCheckedChange={(checked) => {
+                setEmitToolProgressActivities(!!checked);
+                setDirty(true);
+                setError("");
+              }}
+            />
+          </label>
+        </div>
+
+        <div className="mb-4">
+          <label
+            htmlFor="linear-issue-session-instructions"
+            className="block text-sm font-medium text-foreground mb-1"
+          >
+            Issue Session Instructions
+          </label>
+          <p className="text-xs text-muted-foreground mb-2">
+            Custom instructions appended to agent prompts for all Linear issue sessions. Use this to
+            guide how the agent approaches issues (e.g., coding standards, preferred tools, MR
+            conventions).
+          </p>
+          <Textarea
+            id="linear-issue-session-instructions"
+            value={issueSessionInstructions}
+            onChange={(e) => {
+              setIssueSessionInstructions(e.target.value);
               setDirty(true);
               setError("");
             }}
-            label="All repositories"
-            description="Linear events can run against every accessible repository."
-          />
-          <RadioCard
-            name="linear-repo-scope"
-            checked={repoScopeMode === "selected"}
-            onChange={() => {
-              setRepoScopeMode("selected");
-              setDirty(true);
-              setError("");
-            }}
-            label="Selected repositories"
-            description="Linear events run only for repositories in the allowlist."
+            rows={3}
+            placeholder="e.g., Always run tests before pushing changes. Prefer minimal diffs."
+            className="resize-y"
           />
         </div>
 
-        {repoScopeMode === "selected" && (
-          <>
-            {availableRepos.length === 0 ? (
-              <p className="text-sm text-muted-foreground px-4 py-3 border border-border rounded-sm">
-                Repository filtering is unavailable because no repositories are accessible.
-              </p>
-            ) : (
-              <div className="border border-border max-h-56 overflow-y-auto rounded-sm">
-                {availableRepos.map((repo) => {
-                  const fullName = repo.fullName.toLowerCase();
-                  const isChecked = enabledRepos.includes(fullName);
+        <div className="mb-4">
+          <p className="text-sm font-medium text-foreground mb-2">Repository Scope</p>
+          <div className="grid sm:grid-cols-2 gap-2 mb-3">
+            <RadioCard
+              name="linear-repo-scope"
+              checked={repoScopeMode === "all"}
+              onChange={() => {
+                setRepoScopeMode("all");
+                setDirty(true);
+                setError("");
+              }}
+              label="All repositories"
+              description="Linear events can run against every accessible repository."
+            />
+            <RadioCard
+              name="linear-repo-scope"
+              checked={repoScopeMode === "selected"}
+              onChange={() => {
+                setRepoScopeMode("selected");
+                setDirty(true);
+                setError("");
+              }}
+              label="Selected repositories"
+              description="Linear events run only for repositories in the allowlist."
+            />
+          </div>
 
-                  return (
-                    <label
-                      key={repo.fullName}
-                      className="flex items-center gap-2 px-4 py-2 hover:bg-muted/50 transition cursor-pointer text-sm"
-                    >
-                      <Checkbox
-                        checked={isChecked}
-                        onCheckedChange={() => toggleRepo(repo.fullName)}
-                      />
-                      <span className="text-foreground">{repo.fullName}</span>
-                    </label>
-                  );
-                })}
-              </div>
-            )}
+          {repoScopeMode === "selected" && (
+            <>
+              {availableRepos.length === 0 ? (
+                <p className="text-sm text-muted-foreground px-4 py-3 border border-border rounded-sm">
+                  Repository filtering is unavailable because no repositories are accessible.
+                </p>
+              ) : (
+                <div className="border border-border max-h-56 overflow-y-auto rounded-sm">
+                  {availableRepos.map((repo) => {
+                    const fullName = repo.fullName.toLowerCase();
+                    const isChecked = enabledRepos.includes(fullName);
 
-            {enabledRepos.length === 0 && availableRepos.length > 0 && (
-              <p className="text-xs text-warning mt-1">
-                No repositories selected. The Linear integration will ignore all issues.
-              </p>
-            )}
-          </>
-        )}
-      </div>
+                    return (
+                      <label
+                        key={repo.fullName}
+                        className="flex items-center gap-2 px-4 py-2 hover:bg-muted/50 transition cursor-pointer text-sm"
+                      >
+                        <Checkbox
+                          checked={isChecked}
+                          onCheckedChange={() => toggleRepo(repo.fullName)}
+                        />
+                        <span className="text-foreground">{repo.fullName}</span>
+                      </label>
+                    );
+                  })}
+                </div>
+              )}
 
-      <div className="flex items-center gap-2">
-        <Button onClick={handleSave} disabled={saving || !dirty}>
-          {saving ? "Saving..." : "Save"}
-        </Button>
+              {enabledRepos.length === 0 && availableRepos.length > 0 && (
+                <p className="text-xs text-warning mt-1">
+                  No repositories selected. The Linear integration will ignore all issues.
+                </p>
+              )}
+            </>
+          )}
+        </div>
 
-        {isConfigured && (
-          <Button variant="destructive" onClick={handleReset} disabled={saving}>
-            Reset to defaults
+        <div className="flex items-center gap-2">
+          <Button onClick={handleSave} disabled={saving || !dirty}>
+            {saving ? "Saving..." : "Save"}
           </Button>
-        )}
-      </div>
 
+          {isConfigured && (
+            <Button variant="destructive" onClick={handleReset} disabled={saving}>
+              Reset to defaults
+            </Button>
+          )}
+        </div>
+      </fieldset>
       <AlertDialog open={showResetDialog} onOpenChange={setShowResetDialog}>
         <AlertDialogContent>
           <AlertDialogHeader>
@@ -444,7 +481,9 @@ function GlobalSettingsSection({
           </AlertDialogHeader>
           <AlertDialogFooter>
             <AlertDialogCancel>Cancel</AlertDialogCancel>
-            <AlertDialogAction onClick={handleConfirmReset}>Reset</AlertDialogAction>
+            <AlertDialogAction onClick={handleConfirmReset} disabled={!canManageGlobal || saving}>
+              Reset
+            </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
