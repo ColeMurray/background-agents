@@ -2,8 +2,9 @@
 /// <reference types="@testing-library/jest-dom" />
 
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import * as matchers from "@testing-library/jest-dom/matchers";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { useCurrentUserAuthorization } from "@/hooks/use-current-user-authorization";
 import { useWorkspaceAdministration } from "@/hooks/use-workspace-administration";
 import { WorkspaceSettings } from "./workspace-settings";
@@ -16,6 +17,12 @@ vi.mock("@/hooks/use-current-user-authorization", () => ({
 vi.mock("@/hooks/use-workspace-administration", () => ({
   useWorkspaceAdministration: vi.fn(),
 }));
+
+beforeAll(() => {
+  Element.prototype.hasPointerCapture = () => false;
+  Element.prototype.releasePointerCapture = () => {};
+  Element.prototype.scrollIntoView = vi.fn();
+});
 
 afterEach(() => {
   cleanup();
@@ -128,6 +135,7 @@ describe("WorkspaceSettings", () => {
   });
 
   it("disables a member's role and status controls while their update is pending", async () => {
+    const user = userEvent.setup();
     let finishUpdate!: () => void;
     const updateMember = vi.fn(() => new Promise<void>((resolve) => (finishUpdate = resolve)));
     const member = {
@@ -172,10 +180,13 @@ describe("WorkspaceSettings", () => {
     });
 
     render(<WorkspaceSettings />);
-    fireEvent.change(screen.getByRole("combobox"), {
-      target: { value: "role_builtin_administrator" },
-    });
+    await user.click(screen.getByRole("combobox", { name: "Role for Ada" }));
+    await user.click(await screen.findByRole("option", { name: "Administrator" }));
 
+    expect(updateMember).toHaveBeenCalledWith(member, {
+      kind: "role",
+      roleId: "role_builtin_administrator",
+    });
     await waitFor(() => expect(screen.getByRole("combobox")).toBeDisabled());
     expect(screen.getByRole("button", { name: "Suspend" })).toBeDisabled();
 

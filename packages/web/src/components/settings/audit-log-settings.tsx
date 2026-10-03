@@ -11,6 +11,13 @@ import {
 } from "@open-inspect/shared/types/audit-events";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import {
+  Select,
+  SelectTrigger,
+  SelectValue,
+  SelectContent,
+  SelectItem,
+} from "@/components/ui/select";
 import { useAuditEvents } from "@/hooks/use-audit-events";
 import { useTeams } from "@/hooks/use-teams";
 import { useCurrentUserAuthorization } from "@/hooks/use-current-user-authorization";
@@ -21,6 +28,8 @@ interface BadgeTreatment {
   label: string;
   className: string;
 }
+
+const ALL_TEAMS_VALUE = "all-teams";
 
 const OPERATION_OUTCOMES: Record<AuditOperationResult, BadgeTreatment> = {
   applied: { label: "Applied", className: "bg-success-muted text-success" },
@@ -236,20 +245,25 @@ export function AuditLogSettings() {
         <label htmlFor="audit-team-filter" className="text-sm font-medium">
           Team
         </label>
-        <select
-          id="audit-team-filter"
-          value={teamId}
-          onChange={(event) => setTeamId(event.target.value)}
+        <Select
+          value={teamId || ALL_TEAMS_VALUE}
+          onValueChange={(value) => setTeamId(value === ALL_TEAMS_VALUE ? "" : value)}
           disabled={teamsLoading || !!teamsError}
-          className="min-w-48 max-w-full rounded border border-border bg-background px-2 py-2 text-sm disabled:opacity-50"
         >
-          <option value="">All teams</option>
-          {teams.map((team) => (
-            <option key={team.id} value={team.id}>
-              {team.name}
-            </option>
-          ))}
-        </select>
+          <SelectTrigger id="audit-team-filter" className="w-auto min-w-48 max-w-full">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value={ALL_TEAMS_VALUE} disabled={teamsLoading || !!teamsError}>
+              All teams
+            </SelectItem>
+            {teams.map((team) => (
+              <SelectItem key={team.id} value={team.id} disabled={teamsLoading || !!teamsError}>
+                {team.name}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
         {teamsError && (
           <p role="status" className="text-xs text-destructive">
             Unable to load team filters.

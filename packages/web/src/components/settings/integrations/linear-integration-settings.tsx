@@ -303,21 +303,31 @@ function GlobalSettingsSection({
             Choose what happens when a request comes from a Linear team without a team binding.
             Manage bindings in a team&apos;s Channels tab. This policy applies workspace-wide.
           </p>
-          <select
-            id="linear-unbound-channels"
-            aria-describedby="linear-unbound-channels-help"
+          <Select
             value={unboundChannels}
-            disabled={saving}
-            onChange={(event) => {
-              setUnboundChannels(event.target.value as "workspace" | "reject");
+            disabled={!canManageGlobal || saving}
+            onValueChange={(value) => {
+              setUnboundChannels(value as "workspace" | "reject");
               setDirty(true);
               setError("");
             }}
-            className="w-full rounded border border-border bg-background px-2 py-2 text-sm disabled:opacity-50 sm:w-96"
           >
-            <option value="workspace">Create workspace-level sessions</option>
-            <option value="reject">Reject requests until bound</option>
-          </select>
+            <SelectTrigger
+              id="linear-unbound-channels"
+              aria-describedby="linear-unbound-channels-help"
+              className="w-full sm:w-96"
+            >
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="workspace" disabled={!canManageGlobal || saving}>
+                Create workspace-level sessions
+              </SelectItem>
+              <SelectItem value="reject" disabled={!canManageGlobal || saving}>
+                Reject requests until bound
+              </SelectItem>
+            </SelectContent>
+          </Select>
         </div>
 
         <ModelReasoningDefaultsFields
