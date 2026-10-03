@@ -4,7 +4,7 @@ description: Trigger an automation from any system with an authenticated JSON PO
 audience: team-owner
 owner: control-plane
 status: published
-lastReviewed: "2026-09-23"
+lastReviewed: "2026-10-02"
 relatedCode:
   - docs/AUTOMATIONS.md
   - packages/shared/src/triggers/types.ts
@@ -15,6 +15,7 @@ relatedCode:
   - packages/control-plane/src/webhooks/automation-webhook.ts
   - packages/control-plane/src/routes/automation-keys.ts
   - packages/control-plane/src/scheduler/scheduler.ts
+  - packages/control-plane/src/automation/authorization-guard.ts
 ---
 
 An Inbound Webhook automation gives you a URL and API key; any system that can send a JSON `POST` can start a session.
@@ -37,7 +38,9 @@ flowchart TB
     filters -->|No| none["ok: true, triggered: 0"]
     filters -->|Yes| dedupe{"idempotencyKey already seen?"}
     dedupe -->|Yes| skipped["ok: true, skipped: 1"]
-    dedupe -->|No| session["Session: instructions, then the payload context block"]
+    dedupe -->|No| execution{"Execution authorized?"}
+    execution -->|No| skipped
+    execution -->|Yes| session["Session: instructions, then the payload context block"]
     session --> triggered["ok: true, triggered: 1"]
 ```
 
@@ -141,13 +144,15 @@ A successful request returns:
 { "ok": true, "triggered": 1, "skipped": 0, "steered": 0 }
 ```
 
-| Field       | Meaning                                                                                            |
-| ----------- | -------------------------------------------------------------------------------------------------- |
-| `triggered` | Runs started by this delivery                                                                      |
-| `skipped`   | Matching runs not started because of duplicate delivery or concurrency protection                  |
-| `steered`   | Replies routed into an existing session; used by Slack thread replies and 0 for webhook deliveries |
+| Field       | Meaning                                                                                                 |
+| ----------- | ------------------------------------------------------------------------------------------------------- |
+| `triggered` | Runs started by this delivery                                                                           |
+| `skipped`   | Runs not started because of duplicate delivery, concurrency protection, or runtime authorization denial |
+| `steered`   | Replies routed into an existing session; used by Slack thread replies and 0 for webhook deliveries      |
 
 A request whose conditions do not match returns `ok: true` with `triggered: 0`.
+
+Runtime authorization denial returns `ok: true` with `triggered: 0` and `skipped: 1`, not `401`. It does not pause the automation or record a run-history invocation. Restore the required executor/team/target access before sending another delivery; **Resume** is not needed unless the automation was separately paused.
 
 ### Error responses
 
@@ -163,19 +168,19 @@ A paused automation accepts the request but starts nothing.
 
 ## Security
 
-- Treat the API key like a password. Anyone holding it can start sessions against the automation's repository under the owner's authority. Use **Regenerate Key** if it is exposed.
+- Treat the API key like a password. Anyone holding it can submit events that start sessions against the automation's repository under the stored executor's authority, subject to conditions and runtime authorization. Use **Regenerate Key** if it is exposed.
 - The payload reaches the agent as untrusted data inside the prompt. Keep instructions specific about which fields to act on, and do not ask the agent to follow instructions contained in the payload.
-- Runs execute with the automation owner's permissions; the sender's identity is not checked beyond the key.
+- Runs execute with the stored executor's permissions; the sender's identity is not checked beyond the key. For team automations, the executor must still belong to the active owning team, and current repository grants must cover the target. The key does not bypass these checks. Created sessions inherit the owning team and its default visibility; see [Ownership and execution](/automations/first-automation#ownership-and-execution).
 
 ## Troubleshooting
 
-| Symptom                       | Cause                                                                | Fix                                                                          |
-| ----------------------------- | -------------------------------------------------------------------- | ---------------------------------------------------------------------------- |
-| `401`                         | Missing `Authorization: Bearer` header, or the key was regenerated   | Copy the current key from the detail page; regenerate if it is lost          |
-| `415`                         | The `Content-Type` header is missing or not `application/json`       | Set the header explicitly; some HTTP clients default to form encoding        |
-| `404`                         | Wrong automation id, or the automation uses a different trigger type | Copy the URL from the detail page                                            |
-| `ok: true` but `triggered: 0` | A JSONPath filter did not match, or the automation is paused         | Compare the filter path with the actual payload; check the automation status |
-| Retries create no run         | The retry reused an `idempotencyKey` that already fired              | Expected; use a new key for a genuinely new event                            |
+| Symptom                       | Cause                                                                                                                  | Fix                                                                                                                                                                    |
+| ----------------------------- | ---------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `401`                         | Missing `Authorization: Bearer` header, or the key was regenerated                                                     | Copy the current key from the detail page; regenerate if it is lost                                                                                                    |
+| `415`                         | The `Content-Type` header is missing or not `application/json`                                                         | Set the header explicitly; some HTTP clients default to form encoding                                                                                                  |
+| `404`                         | Wrong automation id, or the automation uses a different trigger type                                                   | Copy the URL from the detail page                                                                                                                                      |
+| `ok: true` but `triggered: 0` | A filter did not match, the automation is paused, or the delivery was skipped (including runtime authorization denial) | Check filters and status; if `skipped: 1`, check duplicates/concurrency and the executor's active status, permissions, team membership, active team, and target grants |
+| Retries create no run         | The retry reused an `idempotencyKey` that already fired                                                                | Expected; use a new key for a genuinely new event                                                                                                                      |
 
 ## Next steps
 

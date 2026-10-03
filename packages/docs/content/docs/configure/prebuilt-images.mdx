@@ -4,7 +4,7 @@ description: Enable prebuilt images for a repository or an environment so sessio
 audience: team-owner
 owner: platform
 status: published
-lastReviewed: "2026-10-01"
+lastReviewed: "2026-10-02"
 relatedCode:
   - docs/IMAGE_PREBUILD.md
   - docs/HOW_IT_WORKS.md
@@ -14,6 +14,10 @@ relatedCode:
   - packages/web/src/components/settings/images-settings.tsx
   - packages/web/src/components/settings/image-build-status.tsx
   - packages/web/src/hooks/use-session-target-picker.ts
+  - packages/control-plane/src/image-builds/scope.ts
+  - packages/control-plane/src/db/team-secrets.ts
+  - packages/control-plane/src/routes/team-secrets.ts
+  - packages/control-plane/src/routes/image-builds.ts
 ---
 
 This page explains what a prebuilt image contains, how to enable one for a repository or an environment, what the statuses mean, when images are rebuilt, and what a session does with one.
@@ -77,7 +81,7 @@ The first build starts immediately. Repository images are built for the default 
 2. Turn on **Prebuild images**.
 3. Save.
 
-Saving with the toggle on starts the first build. The environment row also has a **Rebuild image** button. The toggle needs `environments.manage`; the rebuild button needs `environments.images.manage`.
+Saving with the toggle on starts the first build. The environment row also has a **Rebuild image** button. Both require environment management access: `environments.manage` and, for a team environment, owning-team lead or workspace Administrator/Owner authority. The rebuild button additionally requires `environments.images.manage`; that permission alone is insufficient, including for custom roles on workspace environments. Team environment builds must have current grants for their repositories. See [environment access](/configure/environments#ownership-and-access).
 
 ## Statuses
 
@@ -118,6 +122,7 @@ Builds also start immediately, outside the schedule, when you:
 - enable prebuilds for a repository;
 - save a prebuild-enabled environment;
 - change an environment's secrets (this also retires the existing ready image before the rebuild, so a rotated value cannot keep serving);
+- change or delete team secrets (invalidates images for that team's environments and schedules best-effort rebuilds where prebuilds are enabled);
 - click the rebuild button next to a repository in Settings › Images or on an environment row.
 
 Only one build runs per scope at a time. A trigger while a build is in flight does nothing. On a Daytona deployment every trigger, including the scheduler, starts a build only while admission is open.
@@ -129,7 +134,7 @@ Only one build runs per scope at a time. A trigger while a build is in flight do
 3. Refreshes OpenCode's model catalog, so sessions from the image resolve models as of the build. This step is best-effort; a failure is logged and the build continues.
 4. Saves the sandbox as the provider artifact.
 
-A failing `setup.sh` fails the whole build, and for environment builds the error names the repository. `.openinspect/start.sh` does not run in a build. Build-time secrets are exactly what the scope's sessions get: global plus repository secrets for a repository, global plus environment secrets for an environment.
+A failing `setup.sh` fails the whole build, and for environment builds the error names the repository. `.openinspect/start.sh` does not run in a build. Build-time secrets depend on the image's scope, not the team of a later session; see [Secrets and images](#secrets-and-images).
 
 Everything the setup scripts install (dependencies, build artifacts, caches) is captured in the artifact. See [Repository lifecycle scripts](/configure/lifecycle-scripts).
 
@@ -142,7 +147,7 @@ Everything the setup scripts install (dependencies, build artifacts, caches) is 
 | Vercel               | Execution is capped at 35 minutes because OpenInspect caps Vercel sandbox lifetime at 45 minutes.                                                                                                                                                |
 | Finalization reserve | Build sandboxes get an additional ten minutes for callback delivery and snapshot or checkpoint finalization.                                                                                                                                     |
 
-Do not worry much about build duration. Builds run in the background and sessions always get the last successfully built image. A 10-minute build is worthwhile if it saves 10 minutes on every session start.
+Builds run in the background. Sessions use the last successful image only while it remains eligible; an invalidated image is not reused. A 10-minute build is worthwhile if it saves 10 minutes on every session start.
 
 ## What happens at session start
 
@@ -164,11 +169,22 @@ If no matching ready image exists (disabled, first build not finished, no succes
 
 ## Secrets and images
 
-Image builds run `setup.sh` with the same secrets a session would get. Anything the script persists to disk (an `.npmrc`, a `.env` file, a downloaded credential) is captured in the image and re-served to every session that boots from it, even after you rotate the secret.
+Image builds run `setup.sh` with these layers, with later values winning:
+
+| Image scope           | Build-time secrets                                                                   |
+| --------------------- | ------------------------------------------------------------------------------------ |
+| Repository            | Global + repository. **No team secrets**: repository images are shared across teams. |
+| Workspace environment | Global + environment. No team or member-repository secrets.                          |
+| Team environment      | Global + owning team + environment. No member-repository secrets.                    |
+
+A team session receives its own team layer at runtime, including when it uses a workspace environment or shared repository image. Do not assume a team-only dependency credential will be available during those shared builds; use a team-owned environment when setup needs team secrets. See [Teams](/administration/teams).
+
+Anything the script persists to disk (an `.npmrc`, a `.env` file, a downloaded credential) is captured in the image and re-served to every session that boots from it. Rotation does not erase files from existing artifacts or running sandboxes.
 
 - Read secrets from the environment at runtime instead of writing them into files during setup. They are injected fresh on every session.
 - Changing an environment's secrets invalidates that environment's image automatically and triggers a rebuild, so a revoked value cannot keep serving from an old image.
-- Rotating repository or global secrets does not invalidate images. Stale on-disk material persists until the next commit-triggered rebuild.
+- Changing or deleting team secrets invalidates ready and in-progress images for environments owned by that team. Rebuild scheduling is best-effort and only for prebuild-enabled environments; inspect the build status rather than assuming a successful secret save means the rebuild succeeded. Repository images are not invalidated by team-secret changes.
+- Rotating repository or global secrets does not invalidate images. Stale on-disk material persists until the image is rebuilt; trigger a rebuild manually if needed.
 
 OpenInspect's own build plumbing never writes a credential into the image; what a setup script does with the values in its environment is the script's decision. Treat a scope's prebuilt image as no less sensitive than the scope's secrets.
 

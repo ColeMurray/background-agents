@@ -4,15 +4,25 @@ description: Run coding agents on a schedule or in response to webhooks, Sentry 
 audience: team-owner
 owner: control-plane
 status: published
-lastReviewed: "2026-09-23"
+lastReviewed: "2026-10-03"
 relatedCode:
+  - packages/control-plane/src/routes/automation-crud.ts
+  - packages/web/src/hooks/use-can-create-automation.ts
+  - packages/control-plane/src/automation/github-event-admission.ts
+  - packages/control-plane/src/db/github-automation-store.ts
   - docs/AUTOMATIONS.md
   - docs/AUTH.md
   - packages/shared/src/types/automations.ts
+  - packages/shared/src/types/session-access.ts
+  - packages/control-plane/src/routes/automation-executor.ts
+  - packages/control-plane/src/routes/automation-runs.ts
+  - packages/control-plane/src/automation/authorization-guard.ts
+  - packages/control-plane/src/routes/team-ownership.ts
   - packages/web/src/components/automations/trigger-type-selector.tsx
   - packages/web/src/components/automations/automation-status-badge.tsx
   - packages/web/src/lib/automation-invocation-status.ts
   - packages/control-plane/src/scheduler/scheduler.ts
+  - packages/control-plane/src/db/automation-store.ts
   - packages/control-plane/src/sandbox/execution-budget.ts
 ---
 
@@ -22,9 +32,9 @@ An automation stores a repository selection, a model, and a set of instructions 
 
 ## What an automation does
 
-Each firing creates an ordinary session. The session clones the configured repository, runs your instructions on the OpenCode or Claude Agent harness you chose, and can open a pull request like any other session. Sessions started by an automation are titled `[Auto] <automation name>` and appear in the sessions list alongside interactive sessions.
+An authorized, admitted firing starts an ordinary session. The session clones the configured repository, runs your instructions on the OpenCode or Claude Agent harness you chose, and can open a pull request like any other session. Sessions started by an automation are titled `[Auto] <automation name>` and appear in the sessions list alongside interactive sessions.
 
-Every trigger type follows the same path from firing to outcome, and repeated failures pause the automation:
+Authorized firings follow the path below. Repeated failures pause the automation; scheduled execution authorization denial pauses it immediately instead:
 
 ```mermaid
 flowchart TB
@@ -37,7 +47,9 @@ flowchart TB
         github[GitHub Event]
         slack[Slack Message]
     end
-    schedule & webhook & sentry & github & slack --> run["Run recorded in Run History"]
+    schedule & webhook & sentry & github & slack -->|Authorized and admitted| run["Run recorded in Run History"]
+    schedule -->|Authorization denied| denied["Skipped invocation; automation paused"]
+    denied -->|Restore access or reassign, then Resume| reset
     run --> session["Session titled [Auto] automation name"]
     session --> completed[Completed]
     session --> failed[Failed]
@@ -47,7 +59,7 @@ flowchart TB
     paused -->|Resume| reset
 ```
 
-Open **Automations** in the sidebar to see every automation in the workspace, or click **Browse templates** to start from a pre-built idea.
+Open **Automations** in the sidebar to see the automations available to you in the selected scope, or click **Browse templates** to start from a pre-built idea. Team-owned automations also appear on their team's **Automations** tab.
 
 ## Trigger types
 
@@ -115,38 +127,68 @@ The trigger type is fixed after creation. To change it, create a new automation.
 
 ## Who can create and manage automations
 
-Everyone with automation read access, Viewers included, sees every automation and its run history. Members create automations and manage and trigger their own; Administrators and Owners manage and trigger any. Scheduled and event-driven runs execute under the owner's authority, while a **Trigger Now** run executes under the authority of the person who clicked it. The full role table and run-authority rules are in [Workspace access](/administration/workspace-access#how-automation-access-works).
+Automations can be workspace-owned or team-owned. Ownership is separate from the **executor**, the canonical workspace user whose authority is used for scheduled and event-driven runs. The creator is initially the executor; changing the executor does not change the owning team.
+
+| Operation                   | Access required                                                                                                                                                                                                             |
+| --------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Read a workspace automation | Automation read permission, including the built-in Viewer role.                                                                                                                                                             |
+| Read a team automation      | Automation read permission plus either current owning-team membership or workspace Administrator/Owner status.                                                                                                              |
+| Create                      | Both `automations.create` and `sessions.create`, plus valid target access. A team executor must belong to the active owning team. The workspace's require-team-on-create policy also applies to new automation definitions. |
+| Manage or manually trigger  | The corresponding feature permission. Members can act as the executor or owning-team lead on an eligible automation; Administrators and Owners have workspace-wide management and trigger permissions.                      |
+| Reassign executor           | Automation management access plus owning-team lead or workspace Administrator/Owner authority. Executor status alone is insufficient.                                                                                       |
+
+Scheduled and event-driven runs use the configured executor. **Trigger Now** uses the requester, including their identity and linked source-control credentials. At run time, that execution user must still be active and allowed to create sessions and use the targets. For team automations, they must also remain a member of the active owning team, even if they are an Administrator or Owner. Repository grants and environment ownership/access are rechecked for the selected targets before launch.
+
+Generated sessions inherit the automation's owning team and the team's current default visibility; workspace-owned automations produce Workspace-visible sessions. Requiring a team for new definitions does not itself disable existing workspace-owned automation runs.
+
+### Reassigning an executor
+
+An authorized team lead or workspace Administrator/Owner can use the control-plane API rather than recreate the automation:
+
+```http
+PATCH /automations/<automation-id>
+Content-Type: application/json
+
+{ "userId": "<canonical-user-id>" }
+```
+
+The request must authenticate as an authorized human user. The replacement must be active and able to execute the stored targets; for a team automation they must belong to the active owning team. A successful change records `automation.executor_changed` in the [audit log](/administration/audit-log). This is an API operation, not a documented UI reassignment control.
+
+Reading an automation or its run history does not automatically grant access to generated sessions. When a session is not readable, its ID, title, and artifact summary are redacted from run history. Owner break-glass does not enumerate private session details in run lists; an individual run read can apply audited break-glass. See [Workspace access](/administration/workspace-access#how-automation-access-works) and [Teams](/administration/teams).
 
 ## Automation statuses
 
 The badge on each automation shows one of three states:
 
-| Status   | Meaning                                                                                                      |
-| -------- | ------------------------------------------------------------------------------------------------------------ |
-| Enabled  | Ready to fire on its trigger.                                                                                |
-| Degraded | Enabled but has recent consecutive failures. The badge shows the count, for example "Degraded (2 failures)". |
-| Paused   | Not firing. Either paused by a person or auto-paused after repeated failures.                                |
+| Status   | Meaning                                                                                                                 |
+| -------- | ----------------------------------------------------------------------------------------------------------------------- |
+| Enabled  | Ready to fire on its trigger.                                                                                           |
+| Degraded | Enabled but has recent consecutive failures. The badge shows the count, for example "Degraded (2 failures)".            |
+| Paused   | Not firing. Paused by a person, after repeated failures, or immediately after scheduled execution authorization denial. |
 
 ## Run statuses
 
-Each firing appears as one row in the automation's **Run History**:
+Each recorded invocation appears as one row in the automation's **Run History**. Generic event execution-authorization denials are not recorded there. GitHub repository-grant denials are an exception: matching events can produce a sessionless **Unauthorized** invocation with reason `repo_not_granted` before executor authorization, including when the executor cannot be resolved. A missing executor alone does not create that record.
 
-| Status          | Meaning                                                                      |
-| --------------- | ---------------------------------------------------------------------------- |
-| Starting        | A session is being created for this run.                                     |
-| Running         | At least one session is executing.                                           |
-| Completed       | Every session finished successfully.                                         |
-| Failed          | Every session failed. The failure reason is shown on the row.                |
-| Partial failure | A multi-repository firing where some repositories completed and some failed. |
-| Skipped         | The firing was skipped because a previous run was still active.              |
+| Status          | Meaning                                                                                                             |
+| --------------- | ------------------------------------------------------------------------------------------------------------------- |
+| Starting        | A session is being created for this run.                                                                            |
+| Running         | At least one session is executing.                                                                                  |
+| Completed       | Every session finished successfully.                                                                                |
+| Failed          | Every session failed. The failure reason is shown on the row.                                                       |
+| Partial failure | A multi-repository firing where some repositories completed and some failed.                                        |
+| Skipped         | A previous run was still active, or a scheduled firing was denied execution authorization.                          |
+| Unauthorized    | GitHub event admission found no owning-team grant for the repository (`repo_not_granted`); no session was launched. |
 
-Click **View session** on a row to open the session with its full output and artifacts.
+When the linked session is readable, click **View session** on a row to open its output and artifacts. Rows with redacted session details do not grant access to the session.
 
 ## Concurrency
 
 Scheduled and manual triggers allow one active run per automation: a schedule slot that comes due during an active run is recorded as **Skipped**, and **Trigger Now** is rejected. Event-driven triggers use per-event concurrency keys, so unrelated events (for example two different pull requests) can run at the same time. The scheduled rules are in [Schedules](/automations/schedules#one-active-run-at-a-time); event rules are on each trigger's page.
 
 ## Auto-pause after failures
+
+Scheduled execution authorization denial is separate from the failure threshold: it records a **Skipped** invocation, pauses the automation immediately, and clears the next run time without adding a failure strike. Restore the required executor/team/target access or [reassign the executor](#reassigning-an-executor), then click **Resume**. Restoring access or reassigning alone does not resume the schedule. Generic event execution-authorization denial increments the event response's `skipped` count without pausing the automation or recording a run-history invocation. GitHub's pre-admission repository-grant denial instead records **Unauthorized** as described above; it also counts as skipped in the event response and neither adds a failure strike nor resets existing failures.
 
 An automation that fails three consecutive times is paused automatically. Scheduled and manual runs both count. Runs that outlive their execution budget count as failures too. Skipped firings count neither way.
 

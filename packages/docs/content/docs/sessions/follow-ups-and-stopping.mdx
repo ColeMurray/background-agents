@@ -4,8 +4,12 @@ description: How follow-up prompts queue behind a running turn, what Stop does, 
 audience: user
 owner: control-plane
 status: published
-lastReviewed: "2026-09-28"
+lastReviewed: "2026-10-03"
 relatedCode:
+  - packages/web/src/hooks/use-prompt-input.ts
+  - packages/web/src/hooks/use-prompt-draft.ts
+  - packages/web/src/lib/prompt-drafts.ts
+  - packages/shared/src/types/session-access.ts
   - docs/HOW_IT_WORKS.md
   - packages/shared/src/types/session-activity.ts
   - packages/web/src/components/queued-prompt-stack.tsx
@@ -14,6 +18,8 @@ relatedCode:
 ---
 
 This page explains what happens when you send another prompt into a session that is already working, how to stop a turn, and which session states can still be prompted.
+
+These actions require access to the specific session as well as the relevant workspace permission. On team-owned sessions, current owning-team membership is required even for Administrators and Owners. Private prompting also requires being the owning user or an explicit collaborator; Owner break-glass read access alone is not enough. See [Multiplayer and sharing](/sessions/multiplayer-and-sharing).
 
 ## Sending a follow-up while a turn runs
 
@@ -50,6 +56,8 @@ sequenceDiagram
 A session may hold at most 50 unfinished (pending or processing) prompts; see [Limits](/reference/limits).
 
 While a turn runs the composer placeholder changes to "Add a follow-up..." and the send button reads "Queue". Queued prompts stack above the composer in run order, each row marked with a clock icon. Each row has a "Remove queued prompt" button if you have the `sessions.lifecycle` permission. Removing a prompt puts its text back in the composer so you can edit it and send it again.
+
+Unsent text, including a removed queued prompt restored into the composer, is saved in tab-scoped `sessionStorage` for your account and this session. It survives reloads in that tab, stays after a failed send, and clears after a successful send. Retrying an unchanged restored draft reuses an unconfirmed send's request identity; editing the text starts a new request identity. See [The composer](/sessions/session-page#the-composer) for storage and sign-out behavior.
 
 A prompt sent while the sandbox is still booting waits until the sandbox is ready, then dispatches. The header shows the boot phase while you wait.
 

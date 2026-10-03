@@ -4,7 +4,7 @@ description: Add .openinspect/setup.sh and .openinspect/start.sh to a repository
 audience: team-owner
 owner: sandbox-runtime
 status: published
-lastReviewed: "2026-09-28"
+lastReviewed: "2026-10-02"
 relatedCode:
   - README.md
   - docs/HOW_IT_WORKS.md
@@ -14,6 +14,11 @@ relatedCode:
   - packages/sandbox-runtime/src/sandbox_runtime/repository_boot.py
   - packages/sandbox-runtime/src/sandbox_runtime/runtime_config.py
   - packages/sandbox-images/install/languages.sh
+  - packages/control-plane/src/session/session-target-secrets.ts
+  - packages/control-plane/src/image-builds/scope.ts
+  - packages/control-plane/src/source-control/session-scope.ts
+  - packages/control-plane/src/source-control/repository-scope.ts
+  - packages/control-plane/src/source-control/credential-scope.ts
 ---
 
 This page explains the two optional scripts a repository can ship under `.openinspect/`, when each one runs, what happens when one fails, and what the scripts can rely on.
@@ -131,11 +136,17 @@ fi
 
 ### Secrets
 
-Secrets from [Settings › Secrets](/configure/secrets) are injected into the sandbox as environment variables at spawn time, so both scripts can read them. A session gets global secrets plus its target's secrets: the repository's secrets for a single-repository session, or the environment's secrets for a session launched from an environment. Image builds get exactly the same set the scope's sessions would get. System variables always take precedence over user-defined secrets.
+Secrets are injected into the sandbox as environment variables at spawn time, so both scripts can read them. A session gets **global + owning team (if any) + target secrets**, with later values winning. Repository targets use their repositories' secrets (the primary repository wins collisions); environment targets use environment secrets, never member-repository secrets. System variables always take precedence over user-defined secrets. See [Secrets](/configure/secrets).
+
+Build-time secrets differ: shared repository images get global + repository secrets and **exclude team secrets**. Environment images get global + the environment's owning team (if any) + environment secrets. If setup requires a team-only credential, use a team-owned environment rather than expecting it in a shared repository build. See [Secrets and images](/configure/prebuilt-images#secrets-and-images) for rotation and invalidation behavior.
 
 ### Git credentials for other repositories
 
-Git operations inside a script authenticate through a credential helper that the sandbox uses on demand. The helper authorizes HTTPS requests to the configured SCM host, so a script can clone another private repository on the same host when the shared app installation has access to it.
+Git operations inside a script authenticate through an on-demand credential helper for the configured SCM host. For GitHub, the token is limited to the session's **persisted repository set**. Team-owned sessions additionally intersect that set with current owning-team grants; workspace-owned sessions have no team-grant intersection. Installing the App on another repository, or giving the team an installation-wide grant, does not add that repository to the session's token.
+
+Private submodules, Git-backed package dependencies, and sibling-clone scripts therefore need their repositories included in the session target, such as an environment or ad-hoc multi-repository set. For team-owned sessions, those repositories also need the owning team's grants. Editing the environment later does not expand an existing session; create a new session with the updated set. Grant removal affects subsequent credential resolution, not immediate revocation of already-issued tokens.
+
+GitLab is an exception: its deployment-wide personal access token (PAT) is not narrowed per session. Do not interpret GitHub's token scoping as an equivalent GitLab credential boundary. See the canonical [credential boundaries](https://github.com/ColeMurray/background-agents/blob/main/docs/AUTH.md#repository-and-credential-boundaries) and the runtime [Git credentials](/reference/sandbox-environment#git-credentials) reference.
 
 ### Tunnel URLs
 
@@ -167,6 +178,13 @@ Local [MCP servers](/configure/mcp-servers) launched with `npx` are installed at
 ## Troubleshooting
 
 <Accordions>
+  <Accordion title="A private dependency or submodule can no longer be fetched">
+    For GitHub, check that the dependency repository is part of this session's repository set, that
+    the App can access it, and that the owning team's current grants cover it. Installation access
+    alone is not enough. Start a new session with the dependency included; changing an environment
+    does not change the repository set of an existing session. If only an image build fails, also
+    check whether setup expects a team secret that shared repository builds deliberately exclude.
+</Accordion>
   <Accordion title="setup.sh keeps failing in image builds">
     The build status shows **Failed** with the error next to the repository under Settings › Images,
     or on the environment's row under Settings › Environments. For an environment build, the error

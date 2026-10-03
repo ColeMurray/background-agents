@@ -4,8 +4,10 @@ description: What OpenInspect does, how a session runs from prompt to pull reque
 audience: user
 owner: platform
 status: published
-lastReviewed: "2026-09-28"
+lastReviewed: "2026-10-02"
 relatedCode:
+  - packages/shared/src/types/session-access.ts
+  - packages/control-plane/src/authorization/teams-enforcement.ts
   - README.md
   - docs/HOW_IT_WORKS.md
   - packages/shared/src/types/sessions.ts
@@ -71,16 +73,18 @@ From your side, each session comes down to four actions:
 
 ## Capability map
 
-| Area           | What it covers                                                                                                              | Start with                                           |
-| -------------- | --------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------- |
-| Sessions       | The session page, follow-ups and stopping, reviewing diffs, sandbox tools, sharing, child sessions, statuses, and recovery. | [Session page](/sessions/session-page)               |
-| Prompting      | When to delegate, how to write a prompt the agent can finish, templates, and workflow recipes.                              | [When to delegate](/prompting/when-to-delegate)      |
-| Configuration  | Lifecycle scripts, environments, prebuilt images, secrets, sandbox settings, source control, skills, MCP servers.           | [Lifecycle scripts](/configure/lifecycle-scripts)    |
-| Models         | Choosing a model and reasoning effort, the two agent harnesses, and provider accounts.                                      | [Choosing a model](/models/choosing-a-model)         |
-| Automations    | Sessions started by a schedule, an inbound webhook, a GitHub event, a Slack message, or a Sentry alert.                     | [Automations](/automations)                          |
-| Integrations   | Slack, GitHub (reviews, mentions, PR Feedback Autofix), and Linear.                                                         | [Integrations](/integrations)                        |
-| Administration | Workspace access and roles, the audit log, analytics, data controls, security, and deployment.                              | [Workspace access](/administration/workspace-access) |
+| Area           | What it covers                                                                                                                 | Start with                                           |
+| -------------- | ------------------------------------------------------------------------------------------------------------------------------ | ---------------------------------------------------- |
+| Sessions       | The session page, follow-ups and stopping, reviewing diffs, sandbox tools, sharing, child sessions, statuses, and recovery.    | [Session page](/sessions/session-page)               |
+| Prompting      | When to delegate, how to write a prompt the agent can finish, templates, and workflow recipes.                                 | [When to delegate](/prompting/when-to-delegate)      |
+| Configuration  | Lifecycle scripts, environments, prebuilt images, secrets, sandbox settings, source control, skills, MCP servers.              | [Lifecycle scripts](/configure/lifecycle-scripts)    |
+| Models         | Choosing a model and reasoning effort, the two agent harnesses, and provider accounts.                                         | [Choosing a model](/models/choosing-a-model)         |
+| Automations    | Sessions started by a schedule, an inbound webhook, a GitHub event, a Slack message, or a Sentry alert.                        | [Automations](/automations)                          |
+| Integrations   | Slack, GitHub (reviews, mentions, PR Feedback Autofix), and Linear.                                                            | [Integrations](/integrations)                        |
+| Administration | Workspace access and roles, [Teams](/administration/teams), the audit log, analytics, data controls, security, and deployment. | [Workspace access](/administration/workspace-access) |
 
 ## Where people stay in control
 
-The built-in pull-request tool opens PRs but does not merge them. The agent can also run the GitHub CLI, including merge commands, when its credentials and repository rules permit it. GitHub PRs are authored as the prompting user when a token can be resolved, or as the App otherwise. Enforce branch protection, required reviews, and status checks in your repository. Every session is visible to the workspace, every prompt is attributed to its author, and administrators can read the audit log to see who did what.
+The built-in pull-request tool opens PRs but does not merge them. The agent can also run the GitHub CLI, including merge commands, when its credentials and repository rules permit it. GitHub PRs are authored as the prompting user when a token can be resolved, or as the App otherwise. Enforce branch protection, required reviews, and status checks in your repository.
+
+Sessions have Workspace, Team, or Private visibility, separate from their fixed ownership. Team-owned actions require current team membership even for administrators; private sessions support explicit collaborators and audited Owner break-glass reads. Non-private Team read isolation requires enforcement to be `on`, rather than the default `shadow`; see [Deployment](/administration/deployment). Every prompt is attributed to its author, and administrators can read the audit log. See [Multiplayer and sharing](/sessions/multiplayer-and-sharing) for the access rules.

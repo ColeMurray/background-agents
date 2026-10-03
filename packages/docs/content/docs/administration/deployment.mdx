@@ -4,7 +4,7 @@ description: What an OpenInspect deployment consists of, what the operator confi
 audience: operator
 owner: platform
 status: published
-lastReviewed: "2026-09-28"
+lastReviewed: "2026-10-03"
 relatedCode:
   - README.md
   - docs/GETTING_STARTED.md
@@ -12,6 +12,15 @@ relatedCode:
   - docs/SETUP_GUIDE.md
   - docs/HOW_IT_WORKS.md
   - docs/DEBUGGING_PLAYBOOK.md
+  - terraform/environments/production/variables.tf
+  - terraform/environments/production/workers-control-plane.tf
+  - terraform/environments/aws-production/main.tf
+  - .github/workflows/terraform.yml
+  - packages/control-plane/src/authorization/teams-enforcement.ts
+  - packages/control-plane/src/authorization/session-admission.ts
+  - packages/control-plane/src/routes/teams.ts
+  - packages/control-plane/src/routes/channel-bindings.ts
+  - terraform/environments/production/modal.tf
 ---
 
 This page orients an operator: the parts of a deployment, the decisions made once at setup, and where the full runbooks are. It is not a step-by-step guide; those live in the repository.
@@ -27,7 +36,7 @@ This page orients an operator: the parts of a deployment, the decisions made onc
 | GitHub bot (optional) | Cloudflare Worker                                                          | Automatic PR reviews and `@mention` handling from GitHub webhooks.                                                                                  |
 | Linear bot (optional) | Cloudflare Worker                                                          | Starts sessions from Linear issue activity.                                                                                                         |
 
-Every client sees the same session state because state lives in the control plane, not in the client. A prompt sent from Slack or GitHub shows up on the web in real time.
+Authorized clients see the same session state because state lives in the control plane, not in the client. A prompt sent from Slack or GitHub shows up on the web in real time for users who can access that session.
 
 The AWS control plane can be deployed, but its runbook does not yet provide a supported first-Owner bootstrap. Until that is available, treat AWS as an incomplete deployment path rather than a production-ready alternative.
 
@@ -62,10 +71,44 @@ Provider differences that users notice (which resource and timeout settings appl
 | Branding: `app_name`         | Shown in the web tab title, sign-in page, landing hero, Slack and Linear messages, the pull request footer, and outbound User-Agent headers.                                                                                                                                        |
 | Branding: `app_icon_url`     | Optional. Replaces the built-in icon and favicon.                                                                                                                                                                                                                                   |
 | Execution timeout            | Optional control-plane variable `EXECUTION_TIMEOUT_MS`: the longest one prompt may run when the session's [sandbox settings](/configure/sandbox-settings) set no timeout. When unset, the limit is 2 hours.                                                                         |
+| Teams enforcement            | Terraform `teams_enforcement`, exposed to the control plane as `TEAMS_ENFORCEMENT`: `off`, `shadow` (default), or `on`. This is a session authorization rollout setting, not a switch disabling all team restrictions.                                                              |
 
 Web branding values are inlined at build time, so a rebrand needs a fresh web build; the bot and control-plane workers read the name at request time.
 
 For the Cloudflare/Vercel path, update the relevant configuration or secrets and apply Terraform. On AWS, changing an SSM secret requires `systemctl restart open-inspect` to load it into the running service; changing a `config` entry requires `terraform apply` and then that restart. `EXECUTION_TIMEOUT_MS` is set in the control plane's environment.
+
+## Teams enforcement
+
+The production Terraform input `teams_enforcement` accepts exactly three values:
+
+| Value    | Session access behavior                                                                                                                                                                   |
+| -------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `off`    | Uses legacy role-permission checks where the rollout applies, without evaluating the Teams decision for that action.                                                                      |
+| `shadow` | Default. Evaluates Teams decisions and records would-deny decisions while retaining legacy admission where the rollout applies. Non-private Team-visibility reads are not fully isolated. |
+| `on`     | Enforces the Teams session resolver, including non-private Team-visibility read isolation.                                                                                                |
+
+**Not all team restrictions are gated.** Private-session access and every non-read action on a team-owned session use the Teams resolver in all three modes. Repository grants, team-owned environment and automation access, runtime automation membership checks, scoped GitHub credentials, and require-team-on-create policy are separate controls; `off` and `shadow` do not turn them off. See [Workspace access](/administration/workspace-access) and [Teams](/administration/teams).
+
+For a direct production Terraform apply, set `teams_enforcement` in the deployment's Terraform inputs. Terraform writes it to the control-plane environment as `TEAMS_ENFORCEMENT`. In the repository's GitHub Actions Terraform workflow, both plan and apply resolve the value in this order:
+
+1. Repository Actions variable `TEAMS_ENFORCEMENT`.
+2. Repository Actions secret `TEAMS_ENFORCEMENT`, if the variable is unset or empty.
+3. `shadow`, if neither is set.
+
+The workflow passes that result as `TF_VAR_teams_enforcement`; a stale repository variable therefore overrides the secret. The control plane also defaults an unset or empty runtime value to `shadow` and rejects other values. The AWS production configuration currently sets `TEAMS_ENFORCEMENT = "shadow"` explicitly in its `config` map; changing it requires the AWS configuration update and service restart described above.
+
+Do not infer production read isolation from Teams being visible in the UI or a change having merged. Confirm the deployed version and effective value before relying on Team visibility as a read boundary. `shadow` audit entries are observations of would-deny decisions, not proof that a request was blocked.
+
+For a **fresh deployment**, explicitly opt in before creating team work:
+
+```hcl
+# terraform.tfvars: explicit opt-in, not a changed default
+teams_enforcement = "on"
+```
+
+This sets the control plane's `TEAMS_ENFORCEMENT=on`. If deploying through GitHub Actions, set the corresponding Actions variable to `on` so the workflow does not fall back to `shadow`.
+
+For an **existing deployment**, review production `shadow_denied:*` authorization audit entries before opting in. Investigate unexpected would-deny decisions and correct membership, repository grants, and bot bindings before enforcing. The default-flip gate requires that production audit review; no completed review or audit evidence is established here. Runtime and Terraform defaults remain `shadow`.
 
 ## Initial Owner bootstrap
 
@@ -77,6 +120,29 @@ For the Cloudflare/D1 deployment, Owner assignment is an explicit operator actio
 4. Verify the new Owner's assignment separately; `/health` reports control-plane liveness, not Owner bootstrap state.
 
 The exact commands are in the self-hosting guide linked below.
+
+## First team and session
+
+After Owner bootstrap, complete team setup explicitly:
+
+1. Open **Settings > Teams > Create team**, enter a name and slug, and create the first team. Its creator is automatically its first **Lead**; Owner bootstrap does not create a team.
+2. In the team's settings, choose **Join policy**: **Invite only** (the creation default) or **Open** for workspace users to join themselves. Choose the new-session **Default visibility**: **Team**, **Workspace**, or **Private**. Confirm effective `TEAMS_ENFORCEMENT=on` before relying on Team visibility as a read boundary.
+3. In **Teams > your team > Repositories**, grant named repositories or deliberately grant **All installation repositories**. New teams have no repository grants. Include all repositories needed by a selected environment.
+4. Have operators sign in, then add them to the team's member list, or have them use **Join team** for an open team. Assign Lead where team-management duties are needed. Workspace Owner/Administrator status does not replace membership for non-read session actions.
+5. Configure a model credential in the team's **Secrets** tab or another applicable [secret scope](/configure/secrets). Create a test session with the team, granted repository, intended visibility, and configured model selected. Verify checkout, streamed results, and another member's intended collaboration.
+6. Optionally enable **Require a team for new sessions** in **Settings > Teams** once members and grants are ready. This separate policy also covers new environments and automation definitions; it does not migrate existing workspace resources.
+
+## Modal secrets
+
+The legacy Modal `github-app` secret is optional and not required for Git credentials in fresh or restored sandboxes. Sandboxes request scoped credentials from the control plane on demand; keep the App private key in the control plane, not in sandbox secrets. The optional GitHub bot Worker still needs its own App credential bindings. Terraform supplies those separately when enabled.
+
+Modal still requires `internal-api` (`MODAL_API_SECRET` and `ALLOWED_CONTROL_PLANE_HOSTS`) and the `llm-api-keys` secret object. A fleet-wide model key can be empty when sessions use credentials from the control-plane secret store. Terraform provisions these required Modal secrets.
+
+## Bot team routing
+
+Bind Slack channels and external Linear teams in **Teams > your team > Channels**. In **Settings > Integrations > Slack**, save **Unbound channels**; in **Settings > Integrations > Linear**, save **Unbound Linear teams**. Each integration stores its own workspace-wide `unboundChannels` policy: `workspace` (default, create workspace-level sessions) or `reject` (reject until bound). These are integration UI settings, not environment variables or Terraform inputs.
+
+Workspace fallback does not bypass `requireTeamOnCreate` or other creation checks. Slack DMs bypass unbound-channel rejection as personal conversations, but still undergo session creation checks. Test a bound channel or Linear team and confirm the resulting session's owning team and repository. See [Slack](/integrations/slack) and [Linear](/integrations/linear) for the integration details.
 
 ## Keeping a deployment current
 

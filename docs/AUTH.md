@@ -1,13 +1,14 @@
 # Authentication and Authorization
 
 Open-Inspect uses authentication to establish who you are and workspace authorization to decide what
-you can do. This guide explains the behavior users and workspace administrators will see.
+you can do. This is the canonical guide to security, resource access, and credential boundaries;
+other guides summarize these rules for their audiences.
 
 > **Important:** Open-Inspect is designed for a single trusted organization. A deployment is one
-> workspace, and the source-control App installation defines the repositories available to that
-> workspace. Roles control which Open-Inspect features a person can use; teams and session
-> visibility further limit access to sessions. Neither is a replacement for source-control
-> repository permissions.
+> workspace. The GitHub App installation bounds GitHub repository reach; GitLab uses a deployment
+> PAT. Roles control which Open-Inspect features a person can use; teams and session visibility
+> further limit access to resources. Neither is a replacement for source-control repository
+> permissions.
 
 ---
 
@@ -59,6 +60,9 @@ Open-Inspect includes four built-in roles.
 | View image-build history                          |  Yes  |      Yes      |  Yes   |  Yes   |
 | Manage personal skill profiles                    |  Yes  |      Yes      |  Yes   |   No   |
 
+These are workspace feature permissions, not unconditional resource access. Team membership, lead
+authority, ownership, and session visibility add the checks described below.
+
 ### Owner
 
 Owners administer the workspace but do not automatically collaborate in other people's private
@@ -78,8 +82,9 @@ ownership, change who holds the Owner role, or suspend and restore an Owner.
 Members can create and use sessions, collaborate in sessions visible to them (with current
 owning-team membership for team-owned sessions, and private-session participation), use shared
 repositories and environments, and create automations. They can manage and manually trigger
-automations they own but cannot modify another person's automation or administer shared
-configuration. They can view workspace analytics.
+automations they execute and, as team leads, other automations owned by their team, subject to
+workspace permissions. Team leads can also manage team membership, grants, and secrets; leading a
+team does not grant workspace-wide configuration permissions. Members can view workspace analytics.
 
 ### Viewer
 
@@ -97,6 +102,13 @@ create teams in **Settings > Teams**; the creator becomes the first lead. Team m
 replace the workspace role: a person still needs the relevant session permission in addition to any
 team access.
 
+Open teams allow active workspace users to join; invite-only teams require a lead or workspace
+Owner/Administrator to add members. Leads and workspace Owners/Administrators can manage membership,
+lead/member roles, team metadata, and archive/restore. The last lead cannot leave, be removed, or be
+demoted: appoint another lead first. Members can leave using **Remove** on their own membership row
+in the team's Members tab or Settings detail, or through `DELETE /teams/:id/members/:userId` using
+their own user ID, subject to the same last-lead restriction.
+
 ### Team Directory and Pages
 
 Every active workspace user can list active teams and read their member lists, even without
@@ -111,9 +123,11 @@ and session owners. An unnamed user is labeled with a short user ID suffix inste
 address or full ID. This privacy rule applies in every team enforcement mode.
 
 A team's session overview is available to its members and workspace Owners and Administrators, with
-session visibility checks applied on the server. Team pages do not expose an audit activity feed.
-Team operations are still recorded in the workspace audit log behind `workspace.audit.read`; its
-team filter includes teams the reader does not belong to.
+session visibility checks applied on the server. Team pages also expose Repositories, Environments,
+Automations, Secrets, Channels, and Settings according to the viewer's capabilities and feature
+permissions. Team pages do not expose an audit activity feed. Team operations are still recorded in
+the workspace audit log behind `workspace.audit.read`; its team filter includes teams the reader
+does not belong to.
 
 The sidebar context defaults to **All my teams**, which leaves session lists unfiltered by team
 while preserving server visibility checks. Users with at least one active team can choose Workspace
@@ -121,9 +135,12 @@ while preserving server visibility checks. Users with at least one active team c
 without active teams have no selector and keep unfiltered lists. A stored Workspace or active-team
 choice is retained; unknown or archived selections fall back to All my teams.
 
-The new-session composer's team and visibility are draft-local choices initialized from the sidebar
-context. Changing them does not change the sidebar or command-menu recents. If a team is required
-and the context does not name one, the composer selects the user's first active team locally.
+The new-session composer's team and visibility are independent of the sidebar and command-menu
+recents. Explicit choices are saved in user-scoped localStorage and restored while the sidebar
+context matches; changing sidebar context clears that saved choice. Without a matching saved draft,
+the composer initializes from the sidebar context. If a team is required and the context does not
+name one, it selects the user's first active team locally. Changing teams within the composer
+preserves the selected audience when valid; it does not apply the new team's default automatically.
 
 ### Session Visibility
 
@@ -192,12 +209,17 @@ repository used by the session; archived teams cannot be selected. Without an ex
 team sessions use the team's default and teamless sessions default to `workspace`. `team` visibility
 requires a team; `private` requires a workspace user owner. A teamless session may still be private.
 
+For an agent-spawned child of a team-owned session, the active prompt author's canonical identity
+must resolve and still belong to the owning team. The child cannot borrow its parent owner's
+membership when that author is missing or no longer a member; creation fails with `not_member` in
+every enforcement mode. Child actions also check the active author's current access.
+
 Owners and Administrators can configure **Settings > Teams > Require a team for new sessions**
-(`requireTeamOnCreate`). It is off by default. When enabled, new sessions must select a team; it
-refuses session creation API requests without a team with `team_required`. The web app supports team
-selection; team selection in bots is a later phase, so their teamless creation API requests are also
-refused when the setting is enabled. Automation runs are exempt until automation team ownership is
-supported. The setting does not migrate or hide existing `ownerTeamId: null` workspace rows.
+(`requireTeamOnCreate`). It is off by default. Despite the setting's session-oriented label, it
+requires a team for new sessions, environment definitions, and automation definitions; creation
+requests without one fail with `team_required`. Teamless bot session creation requests are also
+refused. Existing workspace-owned automations can still run under their runtime authorization
+checks. The setting does not migrate or hide existing `ownerTeamId: null` workspace rows.
 
 Team leads and workspace Owners/Administrators manage repository grants in the team's Repositories
 tab or through `/teams/:id/repository-grants`. Team members and workspace Owners/Administrators can
@@ -205,7 +227,8 @@ read the grants. A team can have either installation-wide access or named grants
 ID, but not both. Creating a team does not grant repository access. Repository-backed team sessions
 without covering grants are refused with `target_team_missing_grant`. Repository-less team sessions
 do not need grants. Removing a grant advances the team's grant version and leaves existing
-repository references intact; grants do not yet narrow or revoke sandbox installation tokens.
+repository references intact. Current grants narrow subsequent GitHub sandbox credential resolution
+to covered session repositories, but do not immediately revoke already-issued tokens.
 
 Repository skills, repository secrets, and repository image builds remain workspace-level resources;
 grants do not assign them to an owning team. They keep their existing permission checks when no team
@@ -215,12 +238,26 @@ grants count for every repository. Importing repository secrets into an environm
 source repository's workspace-level grant access as well as the destination owning team's coverage,
 if the environment has an owning team. These checks apply in every `TEAMS_ENFORCEMENT` mode.
 
-Manual environment image builds instead follow the environment's owning team. For a team-owned
-environment, the caller must be a current member of that team or a workspace Owner/Administrator,
-and the active owning team must have grants covering every current repository in the environment.
-Membership or grants in another team cannot replace that coverage, including for Owners and
-Administrators. Workspace-level environment builds keep their existing checks. These rules apply in
-every `TEAMS_ENFORCEMENT` mode.
+### Environment Access
+
+Workspace environments are readable and usable with the relevant workspace permissions. Team-owned
+environments additionally require owning-team membership or a workspace Owner/Administrator role.
+Managing a team environment requires a team lead or workspace Owner/Administrator **and**
+`environments.manage`; workspace environments require that permission without the team-role check.
+Environment names are unique within their owning team or workspace, not across the deployment.
+
+Changing environment secrets, settings, or images requires environment management access in addition
+to the corresponding feature permission. This includes workspace environments: custom roles with
+only a secrets/settings/images permission do not thereby gain management access. Manual image builds
+also require the active owning team's grants to cover every current repository. Membership or grants
+in another team cannot replace that coverage, even for Owners and Administrators.
+
+A team environment can launch only into a session owned by that same team. A team's session catalog
+can also include readable workspace environments whose repositories its grants cover. Unbound bot
+catalog reads conceal team environments. These resource checks apply in every `TEAMS_ENFORCEMENT`
+mode.
+
+### Ownership and Discovery
 
 Sessions, automations, and environments cannot move between teams or between a team and the
 workspace. A session's owning team is fixed at creation: a team-owned session never becomes
@@ -230,10 +267,12 @@ or the team membership required for non-read actions.
 Visibility changes can include descendants. A cascading visibility change refuses the entire request
 if any included descendant is inaccessible or denies the requested action, including the
 current-membership check for each team-owned descendant; it does not silently skip that descendant.
-The web visibility control requires a changed selection and asks for confirmation when applying
-non-private visibility to child sessions, since private descendants will receive that visibility
-too. Team grants constrain repository selection, not the source-control App token already available
-to a running sandbox.
+The web visibility control autosaves selection changes. **Include child sessions** starts checked;
+unchecking it only scopes future changes to the parent, while checking it applies the current
+visibility to children even if the parent selection has not changed. Team changes and non-private
+child cascades ask for confirmation, since they can restrict collaborators or widen private-child
+access. Grant changes constrain subsequent credential resolution, not the token already available to
+a running sandbox.
 
 Session discovery and inbox filters compose on the server: `ownerFilter=started` matches the
 creator, `participating` also includes explicit collaborators and users with persisted read state,
@@ -253,6 +292,13 @@ Operators set `TEAMS_ENFORCEMENT` to `off`, `shadow` (the default), or `on`:
 - `shadow`: continue those legacy reads and workspace-owned actions while auditing would-be denials.
   Private access and the full action resolver for team-owned sessions remain enforced.
 - `on`: enforce visibility, team membership, and action/ownership rules for sessions.
+
+Production Terraform exposes this as `teams_enforcement` and passes it to the control-plane Worker.
+The Terraform CI workflow's plan and apply resolve `TEAMS_ENFORCEMENT` from the repository variable,
+then the same-named secret, then `shadow`. The AWS configuration also explicitly sets `shadow`. Set
+`on` to enforce non-private Team-visibility read isolation; deploying Teams alone does not enable
+it. Environment/automation ownership, repository grant, and team-secret checks are not disabled by
+this session rollout setting.
 
 No mode relaxes current owning-team membership for non-read actions, including for workspace Owners
 and Administrators. The visibility and collaborator mutation routes always enforce the session
@@ -283,21 +329,36 @@ remain open for up to five minutes after access changes. Recreating the session 
 
 ## How Automation Access Works
 
-Automation definitions and run history are visible workspace-wide to roles with automation read
-access. Creating, changing, and manually triggering automations use ownership rules.
+Automations have an immutable owning team (or workspace ownership) and a separate executor account,
+initially the creator. Workspace definitions and run history are readable with automation read
+permission; team definitions additionally require team membership or a workspace Owner/Administrator
+role. These checks apply in every session enforcement mode.
 
-- Members can manage and manually trigger automations they own.
-- Administrators and Owners can manage and manually trigger any automation.
-- Viewers can inspect automations but cannot create, change, or run them.
+Creating either workspace-owned or team-owned automations requires both `automations.create` and
+`sessions.create`, as well as target access and any applicable team membership.
 
-Automation ownership follows the signed-in account that created it, not a display name or external
-provider username.
+- Executors and owning-team leads can manage/trigger eligible automations with the corresponding
+  `own` permissions; `any` permissions allow those actions across eligible automations.
+- Built-in Administrators and Owners can manage and manually trigger any automation. A manual run of
+  a team automation still requires the requester to be a member of its active owning team.
+- Viewers can inspect eligible automations but cannot create, change, or run them.
+
+A team lead or workspace Owner/Administrator with automation management access can reassign the
+executor to an active, authorized user (a member of the active owning team for team automations).
+Reassignment is audited and does not change team ownership. Being the executor alone does not grant
+reassignment authority. See [executor reassignment](AUTOMATIONS.md#executor-reassignment).
+
+Reading an automation does not grant access to its sessions. Run history redacts linked session IDs,
+titles, and artifact summaries when the viewer cannot read those sessions.
 
 ### Scheduled and Event Runs
 
-Scheduled and event-driven runs execute under the automation owner's authority. At run time, the
-owner must still be active and allowed to create sessions and use every selected repository or
-environment. If those permissions have been removed, the run does not start.
+Scheduled and event-driven runs execute under the executor's authority. At run time, the executor
+must still be active and allowed to create sessions and use the selected targets. Team runs also
+require current membership in the active owning team and current grants covering the repositories
+that will run. Generated sessions inherit the automation's team and its default visibility;
+workspace automations generate workspace-owned, workspace-visible sessions. If authorization fails,
+the run does not start.
 
 ### Manual Runs
 
@@ -324,6 +385,53 @@ Some integrations also apply their own ingress rules. For example, the GitHub in
 require an allowed trigger user or sufficient repository collaborator access before it sends a
 request to Open-Inspect.
 
+### Slack and Linear Bindings
+
+Team leads and workspace Owners/Administrators manage Slack channel and Linear team bindings in
+**Teams > Channels**. Each external coordinate belongs to at most one Open-Inspect team; each team
+has at most one primary binding per provider, with additional source bindings. Both kinds route
+creation to that team. Bindings do not add members or repository grants, and changing a binding does
+not reassign existing sessions. Slack binding validation requires the bot to have joined the channel
+and rejects externally shared channels.
+
+Slack and Linear each have a separate `unboundChannels` integration setting in their respective
+**Settings > Integrations** page. `workspace` (default) permits unbound creation into workspace
+ownership; `reject` requires a binding. `requireTeamOnCreate` can still refuse workspace fallback.
+Binding lookup failures stop launch rather than silently falling back. Scoped classification and
+target mappings do not bypass membership, repository grants, or environment ownership.
+
+Slack interactive follow-ups never replace an unavailable session with a new one on `404`. Confirmed
+publication denial closes the thread; a later reply may reopen it only when posting is allowed
+again. An actor-specific forbidden follow-up is refused without closing the thread for other
+authorized users. Session publication, including queued media and `slack-notify`, refuses private
+sessions and destinations bound to a different team independently of session enforcement mode.
+Unbound destinations are not an outbound allowlist. Slack automation steering has its own scheduler
+path; see [Slack follow-ups](integrations/SLACK.md).
+
+Linear uses the external Linear team coordinate for ownership and scoped catalog/completion reads.
+Legacy KV repository/environment mappings select targets, not team ownership, and are not migrated
+into bindings automatically. The bot verifies the issue's current team before posting completion; if
+it changed from the launch team or a protected read fails, it withholds results. Unlike Slack's
+publication gate, Linear's actorless session reads retain the `off`/`shadow`/`on` session-read
+semantics: full Team read isolation still requires `on`. See [Linear](integrations/LINEAR.md).
+
+### GitHub Routing
+
+GitHub uses numeric repository IDs rather than channel bindings. Event automations match the
+repository and their owning team's grants, and run as their configured executor. A matching team
+automation denied its trigger-repository grant can record an `unauthorized` history entry with
+`repo_not_granted`, without a session or failure strike; other runtime authorization denials keep
+their existing skip behavior. This is distinct from the general event-denial path described in
+[Automations](AUTOMATIONS.md#managing-automations).
+
+Mentions use the linked PR session's owning team first, then an eligible sender team with a grant.
+Multiple eligible teams use the sender's most recent session in the repository to break the tie;
+unresolved identity or ambiguity falls back to workspace ownership. Routing is not permission to
+read the linked session and does not bypass session-creation checks or the require-team policy.
+Autofix continues in the PR's existing session. Deprecated auto-review-on-open remains
+workspace-owned; use a team-owned GitHub Event automation for team-owned reviews. See
+[GitHub](integrations/GITHUB.md).
+
 ## Suspension
 
 Suspending a member disables their workspace access without deleting their account or historical
@@ -334,19 +442,64 @@ After suspension:
 - New browser and bot operations are denied.
 - Existing browser sign-in sessions are invalidated.
 - Live browser session connections close within five minutes.
-- Scheduled and event-driven automations owned by the member no longer pass run authorization.
+- Scheduled and event-driven automations using the member as executor no longer pass run
+  authorization.
 - Existing session history and authorship remain intact.
 
-Suspension does not automatically stop a sandbox that is already executing. An Administrator or
-Owner can manage that session separately.
+Suspension does not automatically stop a sandbox that is already executing. A user with the required
+session action access can manage it separately; Administrators and Owners still need owning-team
+membership for team-owned session actions.
 
 ## Repository and Credential Boundaries
 
-Open-Inspect uses a shared source-control App installation for clone, fetch, and push operations.
-The App should be installed only on repositories intended for the workspace. Team repository grants
-check which repositories may be chosen for a team session; they do **not** narrow the shared
-installation token delivered to a sandbox. Token narrowing is a future phase, not a protection
-provided by team visibility today.
+Open-Inspect uses a shared GitHub App installation for GitHub clone, fetch, and push operations. The
+App should be installed only on repositories intended for the workspace. GitHub sandbox tokens are
+restricted to the persisted session repository set, intersected with current grants for team-owned
+sessions. Workspace-owned sessions have no team-grant intersection. Installation-wide team grants do
+not expand the session repository set. Editing an environment does not expand an existing session's
+copied repositories; private submodules, dependencies, and sibling clones need their repositories
+included before session creation and, for team-owned sessions, covered by the owning team's grants.
+Unresolvable or invalid repository IDs and empty scopes fail closed rather than falling back to
+installation-wide GitHub credentials.
+
+Grant removal affects subsequent credential resolution, not immediate revocation of issued tokens;
+those can remain valid until expiry. Installation-wide metadata/catalog operations remain separate.
+GitLab uses a deployment-wide PAT and ignores per-call credential scope; the helper's reported
+refresh time is a cache lifetime, not the PAT's expiry or revocation. Teams do not establish
+multi-tenant isolation. See
+[Sandbox Repository Access](GETTING_STARTED.md#sandbox-repository-access).
+
+### Credential Delivery and Snapshots
+
+Session git operations use `oi-git-credentials`, which authenticates to
+`POST /sessions/:id/scm-credentials` with the session's sandbox auth token. Git requests must use
+HTTPS and the configured `VCS_HOST`; GitHub repository restrictions are enforced by the issued
+token, not by a repository-path check in the helper. The normal session launch path brokers
+credentials instead of injecting a system clone token into the environment or remote URL. This is
+not a guarantee that credentials are absent from sandbox processes, files, or snapshots.
+
+The helper caches the successful response, including its `password` token, in `scm-creds.json` on
+disk with mode `0600`. The directory is selected by `OI_SCM_CRED_CACHE_DIR`: packaged images set it
+to `$HOME/.cache/openinspect/scm`, while the helper's fallback is `/run/oi`. It reuses the cache
+until five minutes before the reported expiry, serializes refreshes with a lock, and does not fall
+back to stale credentials when a refresh fails. A still-valid cached credential can be used without
+a new control-plane authorization check.
+
+Modal's snapshot path captures the full sandbox filesystem, not only `/workspace`, and does not
+clear the helper cache before capture. A snapshot can therefore contain and restore cached SCM
+tokens, as well as credentials written by setup scripts or agent-run code. Moving a file outside a
+repository does not exclude it from that snapshot. Short-lived GitHub tokens limit their usable
+lifetime, not their persistence; GitLab's cached PAT can outlive the helper's cache lifetime. Treat
+snapshots as sensitive artifacts, not credential-free backups.
+
+Image builds have no session credential broker and receive `VCS_CLONE_TOKEN` instead. For GitHub,
+repository builds are scoped to that repository; environment builds use the planned repositories,
+intersected with current owning-team grants when the environment is team-owned. For GitLab, the
+build credential is still the deployment PAT. This build-time delivery is not a single-use or
+snapshot-exclusion guarantee. Files written during a build can persist in prebuilt images; see
+[Secrets and Prebuilt Images](SECRETS.md#secrets-and-prebuilt-images).
+
+### User Credentials and Secrets
 
 A user's role determines whether they may read or use workspace repositories, but Open-Inspect does
 not compare that role with the user's personal GitHub access for each repository. Linked GitHub
