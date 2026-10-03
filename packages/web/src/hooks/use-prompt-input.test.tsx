@@ -201,6 +201,19 @@ describe("usePromptInput", () => {
     expect(screen.getByRole("textbox", { name: "Prompt" })).toHaveValue("");
   });
 
+  it("does not carry an in-memory draft into another account without a remount", async () => {
+    const { rerender } = render(<PromptHarness canSubmit />);
+    fireEvent.change(screen.getByRole("textbox", { name: "Prompt" }), {
+      target: { value: "Private draft" },
+    });
+
+    mocks.userId = "user-2";
+    rerender(<PromptHarness canSubmit />);
+
+    await waitFor(() => expect(screen.getByRole("textbox", { name: "Prompt" })).toHaveValue(""));
+    expect(localStorage.getItem("open-inspect-prompt-draft:user-2:session-1")).toBeNull();
+  });
+
   it("reuses the unconfirmed request ID when retrying the restored draft after a reload", async () => {
     mocks.sendPrompt.mockResolvedValue({ ok: false, reason: "timeout" });
     const { unmount } = render(<PromptHarness canSubmit />);

@@ -27,8 +27,16 @@ export function usePromptDraft(draftId: string) {
   const [prompt, setPromptState] = useState("");
   const promptRef = useRef(prompt);
   const pendingRequestRef = useRef<PromptRequestIdentity | null>(null);
+  const previousUserIdRef = useRef(userId);
 
   useEffect(() => {
+    if (previousUserIdRef.current && previousUserIdRef.current !== userId) {
+      // Signing out or switching accounts must not carry one account's draft into another.
+      promptRef.current = "";
+      setPromptState("");
+      pendingRequestRef.current = null;
+    }
+    previousUserIdRef.current = userId;
     if (!storageKey) return;
     const stored = readStoredValue(storageKey);
     if (stored !== null) {
@@ -41,7 +49,7 @@ export function usePromptDraft(draftId: string) {
       // Keep text typed before the user was known instead of discarding it.
       writeStoredValue(storageKey, promptRef.current);
     }
-  }, [storageKey]);
+  }, [storageKey, userId]);
 
   const setPendingRequest = useCallback(
     (identity: PromptRequestIdentity | null) => {
