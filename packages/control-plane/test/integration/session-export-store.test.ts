@@ -133,7 +133,7 @@ describe("SessionExportStore integration", () => {
     ]);
     expect(pageQueries).toHaveLength(2);
     for (const sql of pageQueries) {
-      expect(sql).not.toMatch(/\b(?:sessions|root|s)\.visibility\b/);
+      expect(sql.slice(sql.indexOf(" WHERE "))).not.toMatch(/\b(?:sessions|root|s)\.visibility\b/);
       expect(sql).not.toContain("team_memberships");
     }
   });

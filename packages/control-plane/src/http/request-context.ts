@@ -45,4 +45,5 @@ export type RequestContext = AuthenticationRequestServices & {
   teamsEnforcementMode?: TeamsEnforcementMode;
   shadowSessionDenial?: string;
   shadowBatchDenials?: { sessionId: string; reason: string }[];
+  shadowBatchDenialCount?: number;
 };
