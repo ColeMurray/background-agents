@@ -692,7 +692,8 @@ describe("SessionMessageQueue", () => {
 
     await h.queue.processMessageQueue();
 
-    expect(h.broadcast).toHaveBeenCalledWith({ type: "sandbox_spawning" });
+    // Lifecycle announces a launch only once it decides to launch one.
+    expect(h.broadcast).not.toHaveBeenCalledWith({ type: "sandbox_spawning" });
     expect(h.sandboxLifecycle.spawnSandbox).toHaveBeenCalledTimes(1);
     expect(h.repository.updateMessageToProcessing).not.toHaveBeenCalled();
     expect(h.repository.startMessageProcessing).not.toHaveBeenCalled();
@@ -835,7 +836,6 @@ describe("SessionMessageQueue", () => {
       expect.objectContaining({ message_id: "msg-b", reason: "no_sandbox" })
     );
     expect(h.sandboxLifecycle.spawnSandbox).toHaveBeenCalledTimes(1);
-    expect(h.broadcast).toHaveBeenCalledWith({ type: "sandbox_spawning" });
   });
 
   it("does not block queue processing on the sandbox spawn", async () => {

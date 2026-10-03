@@ -554,7 +554,7 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
     send: (ws, msg) => wsManager.send(ws, msg),
     getSandboxSocket: () => wsManager.getSandboxSocket(),
     isSpawning: () => lifecycleManager.isSpawning(),
-    spawnSandbox: () => lifecycleManager.spawnSandbox(),
+    warmSandbox: () => lifecycleManager.spawnSandbox("warm"),
     log,
   });
 
