@@ -179,7 +179,7 @@ export class SessionMessageQueue {
     command: Extract<GitHubAutofixSessionCommand, { type: "enqueue_feedback" }>
   ): Promise<EnqueueAutofixResponse> {
     const session = this.repository.getSession();
-    const sandboxRecoveryRequired = this.getSandboxPromptBlockReason() !== null;
+    const recoveryHold = this.getSandboxPromptBlockReason() !== null;
     const userId = `github:${command.author.id}`;
     const now = Date.now();
     const admission = this.messageRepository.admitAutofixMessage({
@@ -208,19 +208,31 @@ export class SessionMessageQueue {
       attemptLimit: command.attemptLimit,
       windowStart: now - AUTOFIX_ATTEMPT_WINDOW_MS,
       sessionClosed: !session || session.status === "archived" || session.status === "cancelled",
-      sandboxRecoveryRequired,
     });
-    if (admission.kind === "rejected") return admission;
+    const logFields = {
+      feedback_key: command.feedbackKey,
+      pull_request_number: command.pullRequest.number,
+      artifact_id: command.pullRequest.artifactId,
+      recovery_hold: recoveryHold,
+    };
+    if (admission.kind === "rejected") {
+      this.log.info("autofix.rejected", {
+        event: "autofix.rejected",
+        ...logFields,
+        reason: admission.reason,
+      });
+      return admission;
+    }
 
+    this.log.info("autofix.enqueue", {
+      event: "autofix.enqueue",
+      ...logFields,
+      message_id: admission.messageId,
+      outcome: admission.kind,
+    });
     if (admission.kind === "enqueued") {
       this.broadcastPromptQueue();
-      this.log.info("autofix.enqueue", {
-        event: "autofix.enqueue",
-        feedback_key: command.feedbackKey,
-        message_id: admission.messageId,
-        pull_request_number: command.pullRequest.number,
-        artifact_id: command.pullRequest.artifactId,
-      });
+      if (recoveryHold) await this.sessionStatus.transition("active");
     }
     await this.redrivePendingAutofix(admission.messageId);
     return admission;

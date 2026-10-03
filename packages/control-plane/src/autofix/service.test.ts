@@ -1,3 +1,4 @@
+import { DatabaseSync } from "node:sqlite";
 import { describe, expect, it, vi } from "vitest";
 import {
   GITHUB_AUTOFIX_DEFAULTS,
@@ -8,6 +9,16 @@ import { AutofixService } from "./service";
 import type { GitHubPullRequestFeedback } from "../source-control/providers/github-provider";
 import { SourceControlProviderError } from "../source-control/errors";
 import type { CredentialScope } from "../source-control";
+import { createLogger } from "../logger";
+import { createNodeSqlStorage } from "../node/sqlite-storage";
+import { EventRepository } from "../session/event-repository";
+import { SessionMessageQueue } from "../session/message-queue";
+import { MessageRepository } from "../session/message-repository";
+import { ParticipantRepository } from "../session/participant-repository";
+import { ParticipantService } from "../session/participant-service";
+import { initSchema } from "../session/schema";
+import { SessionAttachmentRepository } from "../session/session-attachment-repository";
+import { SessionCoreRepository } from "../session/session-core-repository";
 
 type ReviewFeedback = Extract<GitHubPullRequestFeedback, { kind: "review" }>;
 
@@ -188,6 +199,123 @@ describe("AutofixService", () => {
       "enqueued",
       2_000
     );
+  });
+
+  it("queues feedback during a recovery hold and deduplicates redelivery without skipping", async () => {
+    const h = buildService();
+    const db = new DatabaseSync(":memory:");
+    try {
+      const { sql, transactionSync } = createNodeSqlStorage(db);
+      initSchema(sql);
+      sql.exec(
+        `INSERT INTO session (id, status, created_at, updated_at)
+         VALUES ('session-1', 'failed', 1000, 1000)`
+      );
+      const attachments = new SessionAttachmentRepository(sql);
+      const messages = new MessageRepository(
+        sql,
+        transactionSync,
+        attachments,
+        new EventRepository(sql, transactionSync)
+      );
+      const participants = new ParticipantRepository(sql);
+      const log = createLogger("autofix-test", {}, "error");
+      const participantService = new ParticipantService({
+        repository: participants,
+        getProcessingMessageAuthor: () => null,
+        log,
+        generateId: () => "participant-1",
+      });
+      const transition = vi.fn();
+      const getSandboxPromptBlockReason = vi.fn(() => "Sandbox recovery required");
+      // The hold prevents redrive from reaching dispatch-only dependencies.
+      const queue = new SessionMessageQueue(
+        undefined as never,
+        log,
+        new SessionCoreRepository(sql, transactionSync),
+        messages,
+        participants,
+        attachments,
+        undefined as never,
+        { broadcast: vi.fn(), sendToSandbox: vi.fn() },
+        participantService,
+        undefined as never,
+        { transition } as never,
+        async () => null,
+        undefined as never,
+        undefined as never,
+        { touchUpdatedAt: vi.fn() },
+        "github",
+        undefined as never,
+        undefined as never,
+        () => 60_000,
+        () => true,
+        getSandboxPromptBlockReason
+      );
+      const processMessageQueue = vi.spyOn(queue, "processMessageQueue");
+      h.sessions.fetch.mockImplementation(async (...args: unknown[]) => {
+        const [, , request] = args as [string, string, RequestInit];
+        const command = JSON.parse(String(request.body)) as GitHubAutofixSessionCommand;
+        return Response.json(
+          command.type === "enqueue_feedback"
+            ? await queue.enqueueAutofix(command)
+            : await queue.lookupAutofix(command.feedbackKey)
+        );
+      });
+
+      const result = await h.service.process(PR_COMMENT_ENVELOPE);
+
+      expect(result).toEqual({
+        kind: "completed",
+        decision: "queued",
+        reason: "enqueued",
+        messageId: expect.any(String),
+      });
+      const messageId = messages.getAutofixMessageId("github:pr_comment:1234");
+      expect(messages.getNextPendingMessage()).toMatchObject({
+        id: messageId,
+        source: "github",
+        status: "pending",
+        content: expect.stringContaining("Please handle the null case."),
+        autofix_feedback_key: "github:pr_comment:1234",
+        autofix_pr_key: "github:99:42",
+      });
+      expect(h.feedbackStore.markQueued).toHaveBeenCalledWith(
+        "github:pr_comment:1234",
+        messageId,
+        "enqueued",
+        2_000
+      );
+
+      // Model redelivery before the queued receipt is observed by the feedback store.
+      const redelivery = await h.service.process({
+        ...PR_COMMENT_ENVELOPE,
+        deliveryId: "delivery-redelivery",
+      });
+
+      expect(redelivery).toEqual({
+        kind: "completed",
+        decision: "queued",
+        reason: "duplicate",
+        messageId,
+      });
+      expect(messages.getMessageCount()).toBe(1);
+      expect(messages.listPromptQueue()).toEqual([
+        { messageId, content: expect.any(String), status: "pending" },
+      ]);
+      expect(h.feedbackStore.markQueued).toHaveBeenLastCalledWith(
+        "github:pr_comment:1234",
+        messageId,
+        "duplicate",
+        2_000
+      );
+      expect(h.feedbackStore.markSkipped).not.toHaveBeenCalled();
+      expect(getSandboxPromptBlockReason).toHaveBeenCalled();
+      expect(transition).toHaveBeenCalledExactlyOnceWith("active");
+      expect(processMessageQueue).not.toHaveBeenCalled();
+    } finally {
+      db.close();
+    }
   });
 
   it("recovers an admitted message when the dispatch response is lost", async () => {
