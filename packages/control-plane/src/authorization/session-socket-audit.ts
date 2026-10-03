@@ -40,12 +40,13 @@ export async function auditSocketShadowDenied(
   const id = `ws-shadow-${await hashToken(JSON.stringify([connectionId, row.id, reason]))}`;
   await db
     .prepare(
-      `INSERT OR IGNORE INTO authorization_audit_events
+      `INSERT INTO authorization_audit_events
         (id, occurred_at, request_id, principal_kind, actor_user_id_snapshot,
          actor_service_snapshot, action, resource_type, resource_id, team_id,
          reason_code, operation_result, metadata_json)
        VALUES (?, ?, ?, 'user', ?, NULL, 'session.shadow_denied', 'session',
-               ?, ?, ?, 'denied', ?)`
+               ?, ?, ?, 'denied', ?)
+       ON CONFLICT (id) DO NOTHING`
     )
     .bind(
       id,

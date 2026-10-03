@@ -145,8 +145,9 @@ export async function handleListChildren(
     return json(childSessionListResponseSchema.parse({ children: visible }));
   }
 
+  const response = json(childSessionListResponseSchema.parse({ children }));
   recordShadowListDenials(ctx, readScope, children, teamsEnforcementMode(ctx, env));
-  return json(childSessionListResponseSchema.parse({ children }));
+  return response;
 }
 
 export async function handleGetChild(

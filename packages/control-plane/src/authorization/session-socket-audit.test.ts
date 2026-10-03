@@ -35,7 +35,7 @@ describe("auditSocketShadowDenied", () => {
     const ids = statement.bind.mock.calls.map((args) => args[0]);
     expect(ids[0]).toBe(ids[1]);
     expect(new Set(ids)).toHaveProperty("size", 4);
-    expect(prepare).toHaveBeenCalledWith(expect.stringContaining("INSERT OR IGNORE"));
+    expect(prepare).toHaveBeenCalledWith(expect.stringContaining("ON CONFLICT (id) DO NOTHING"));
     expect(statement.bind.mock.calls[0]).toEqual([
       expect.stringMatching(/^ws-shadow-/),
       expect.any(Number),

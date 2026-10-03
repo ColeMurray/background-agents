@@ -237,7 +237,6 @@ async function teamSessions(
   const sessions = Object.values(pages).flatMap(({ items }) =>
     items.flatMap(({ rootSession, descendantSessions }) => [rootSession, ...descendantSessions])
   );
-  recordShadowListDenials(ctx, sessionViewer, sessions, mode);
   const collaborators = await new SessionCollaboratorStore(ctx.db).listForSessions(
     sessions.map((row) => row.id),
     { privateOnly: true }
@@ -269,7 +268,7 @@ async function teamSessions(
     hasMore: page.hasMore,
     nextCursor: page.nextCursor ? encodeSessionInboxCursor(page.nextCursor) : null,
   });
-  return json(
+  const response = json(
     teamSessionsResponseSchema.parse(
       query.bucket === undefined
         ? {
@@ -280,6 +279,8 @@ async function teamSessions(
         : encodePage(pages[query.bucket])
     )
   );
+  recordShadowListDenials(ctx, sessionViewer, sessions, mode);
+  return response;
 }
 
 async function updateTeam(

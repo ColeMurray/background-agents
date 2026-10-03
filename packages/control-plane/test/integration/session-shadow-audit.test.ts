@@ -1,12 +1,15 @@
 import { createExecutionContext, env } from "cloudflare:test";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type {
-  SessionInboxPage,
-  SessionInboxSnapshot,
+import {
+  type SessionInboxPage,
+  type SessionInboxSnapshot,
+  sessionInboxPageSchema,
 } from "@open-inspect/shared/types/session-inbox";
-import type {
-  ChildSessionListResponse,
-  SessionListResponse,
+import {
+  type ChildSessionListResponse,
+  type SessionListResponse,
+  childSessionListResponseSchema,
+  sessionListResponseSchema,
 } from "@open-inspect/shared/types/sessions";
 import {
   TRACE_EXPORT_SCHEMA_VERSION,
@@ -15,6 +18,7 @@ import {
 import type { TeamsEnforcementMode } from "../../src/authorization/teams-enforcement";
 import { SessionIndexStore, type SessionEntry } from "../../src/db/session-index";
 import { SessionExportStore } from "../../src/db/session-export-store";
+import { SessionCollaboratorStore } from "../../src/db/session-collaborators";
 import { TeamMembershipStore } from "../../src/db/team-memberships";
 import { TeamStore } from "../../src/db/teams";
 import { cleanD1Tables } from "./cleanup";
@@ -184,6 +188,60 @@ describe("COL-270 HTTP session-list shadow audits", () => {
     expect(await on.json()).toMatchObject({ sessions: [{ id: "workspace" }], hasMore: false });
     await expectNoShadowAudit(on);
   });
+
+  it.each(["/sessions", "/sessions/inbox", "/sessions/inbox?category=finished"])(
+    "does not audit a returned page when collaborator decoration fails for %s",
+    async (path) => {
+      await session("team", { ownerTeamId: teamId, visibility: "team" });
+      vi.spyOn(SessionCollaboratorStore.prototype, "listForSessions").mockRejectedValue(
+        new Error("Collaborator lookup failed")
+      );
+
+      const response = await fetchMode(path, "shadow");
+      expect(response.status).toBe(500);
+      await expectNoShadowAudit(response);
+    }
+  );
+
+  it("does not retain evidence from a successful inbox category when another category fails", async () => {
+    await session("team", { ownerTeamId: teamId, visibility: "team" });
+    await session("workspace-broken", { status: "active" });
+    const decorate = vi
+      .spyOn(SessionCollaboratorStore.prototype, "listForSessions")
+      .mockImplementation(async (ids) => {
+        if (ids.includes("workspace-broken")) throw new Error("Category decoration failed");
+        return new Map();
+      });
+
+    const response = await fetchMode("/sessions/inbox", "shadow");
+    expect(response.status).toBe(500);
+    expect(decorate).toHaveBeenCalledWith(["team"], { privateOnly: true });
+    await expectNoShadowAudit(response);
+  });
+
+  it.each([
+    { path: "/sessions", schema: sessionListResponseSchema },
+    { path: "/sessions/inbox", schema: sessionInboxPageSchema },
+    { path: "/sessions/inbox?category=finished", schema: sessionInboxPageSchema },
+    { path: "/sessions/workspace-parent/children", schema: childSessionListResponseSchema },
+  ])(
+    "does not audit a returned page when response parsing fails for $path",
+    async ({ path, schema }) => {
+      await session("workspace-parent");
+      await session("team-child", {
+        parentSessionId: "workspace-parent",
+        ownerTeamId: teamId,
+        visibility: "team",
+      });
+      vi.spyOn(schema, "parse").mockImplementation(() => {
+        throw new Error("Response parsing failed");
+      });
+
+      const response = await fetchMode(path, "shadow");
+      expect(response.status).toBe(500);
+      await expectNoShadowAudit(response);
+    }
+  );
 
   it("audits only the returned offset page, not earlier rows or the lookahead session", async () => {
     await session("workspace", { updatedAt: 400 });

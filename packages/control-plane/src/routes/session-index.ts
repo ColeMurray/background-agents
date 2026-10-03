@@ -191,7 +191,6 @@ export async function handleListSessions(
     })
   );
   if (result instanceof Response) return result;
-  recordShadowListDenials(ctx, viewer, result.sessions, teamsEnforcementMode(ctx, env));
   const collaborators = await new SessionCollaboratorStore(ctx.db).listForSessions(
     result.sessions.map((row) => row.id),
     { privateOnly: true }
@@ -229,6 +228,7 @@ export async function handleListSessions(
   if (viewerUserId) {
     response.headers.set("Cache-Control", "private, no-store");
   }
+  recordShadowListDenials(ctx, viewer, result.sessions, teamsEnforcementMode(ctx, env));
   return response;
 }
 
@@ -291,6 +291,17 @@ export async function handleListSessionInbox(
     };
     const response = json(body);
     response.headers.set("Cache-Control", "private, no-store");
+    for (const page of Object.values(snapshot)) {
+      recordShadowListDenials(
+        ctx,
+        viewer,
+        page.items.flatMap(({ rootSession, descendantSessions }) => [
+          rootSession,
+          ...descendantSessions,
+        ]),
+        mode
+      );
+    }
     return response;
   }
 
@@ -316,6 +327,15 @@ export async function handleListSessionInbox(
     request_id: ctx.request_id,
     trace_id: ctx.trace_id,
   });
+  recordShadowListDenials(
+    ctx,
+    viewer,
+    result.items.flatMap(({ rootSession, descendantSessions }) => [
+      rootSession,
+      ...descendantSessions,
+    ]),
+    mode
+  );
   return response;
 }
 
@@ -326,7 +346,6 @@ async function encodeInboxPage(
   mode: TeamsEnforcementMode
 ) {
   const sessions = result.items.flatMap((item) => [item.rootSession, ...item.descendantSessions]);
-  recordShadowListDenials(ctx, viewer, sessions, mode);
   const collaborators = await new SessionCollaboratorStore(ctx.db).listForSessions(
     sessions.map((row) => row.id),
     { privateOnly: true }

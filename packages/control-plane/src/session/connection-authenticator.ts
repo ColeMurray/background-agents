@@ -449,8 +449,6 @@ export class SessionConnectionAuthenticator implements SessionUpgradeAdmission {
           return;
         }
       }
-      await this.observeShadowReadDenial(ws, resolution);
-
       const enrichment = await this.deps.snapshotReader.resolveSessionSnapshotEnrichment();
       const clientInfo: ClientInfo = {
         participantId: participant.id,
@@ -486,6 +484,7 @@ export class SessionConnectionAuthenticator implements SessionUpgradeAdmission {
         wsManager.close(ws, WS_CLOSE_INTERNAL_ERROR, "Session activation failed");
         return;
       }
+      await this.observeShadowReadDenial(ws, resolution);
       log.info("ws.connect", {
         event: "ws.connect",
         ws_type: "client",

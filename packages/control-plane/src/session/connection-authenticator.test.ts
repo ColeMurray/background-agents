@@ -661,6 +661,8 @@ describe("client session access", () => {
       auditPrivateBreakGlass,
       auditShadowDenied,
       resolveSessionViewer: deps.resolveSessionViewer,
+      snapshotReader: deps.snapshotReader,
+      activateClient: deps.wsManager.activateClient,
     };
   }
 
@@ -725,6 +727,45 @@ describe("client session access", () => {
     );
     expect(close).not.toHaveBeenCalled();
   });
+
+  it.each(["enrichment", "missing_snapshot", "snapshot_error", "send", "activation"] as const)(
+    "does not observe a shadow read when subscription fails at %s",
+    async (failure) => {
+      const { authenticator, auditShadowDenied, snapshotReader, activateClient, send, close } =
+        accessHarness("shadow", member, teamRow);
+      const error = new Error("Subscription failed");
+      if (failure === "enrichment") {
+        vi.mocked(snapshotReader.resolveSessionSnapshotEnrichment).mockRejectedValue(error);
+      } else if (failure === "missing_snapshot") {
+        vi.mocked(snapshotReader.readSessionSnapshot).mockReturnValue(null);
+      } else if (failure === "snapshot_error") {
+        vi.mocked(snapshotReader.readSessionSnapshot).mockImplementation(() => {
+          throw error;
+        });
+      } else if (failure === "send") {
+        send.mockReturnValue(false);
+      } else {
+        vi.mocked(activateClient).mockRejectedValue(error);
+      }
+
+      const socket = {} as WebSocket;
+      const subscription = authenticator.handleSubscribe(socket, {
+        token: "token",
+        clientId: "client",
+      });
+      if (failure === "enrichment") {
+        await expect(subscription).rejects.toThrow(error);
+      } else {
+        await subscription;
+        expect(close).toHaveBeenCalledWith(
+          socket,
+          failure === "send" || failure === "missing_snapshot" ? 4009 : 1011,
+          expect.any(String)
+        );
+      }
+      expect(auditShadowDenied).not.toHaveBeenCalled();
+    }
+  );
 
   it.each(["membership", "scope"])(
     "observes a fresh %s change midlease only once",
