@@ -133,6 +133,8 @@ describe("interpretAuditEvent", () => {
     "team.member_role_changed",
     "team.member_removed",
     "team.member_joined",
+    "team.binding_added",
+    "team.binding_removed",
     "team.secret_set",
     "team.secret_deleted",
     "automation.executor_changed",

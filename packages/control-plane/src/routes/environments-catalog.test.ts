@@ -3,6 +3,7 @@ import { BUILT_IN_ROLE_REGISTRY } from "@open-inspect/shared/rbac";
 import type * as AuthenticateModule from "../auth/authenticate";
 import * as requestAudit from "../authorization/request-audit";
 import { AuthorizationStore } from "../db/authorization-store";
+import { TeamChannelBindingStore } from "../db/team-channel-bindings";
 import {
   EnvironmentStore,
   toEnvironment,
@@ -321,6 +322,12 @@ describe("environment catalog team scope", () => {
   );
 
   it("scopes an acting service using its canonical actor's actual membership", async () => {
+    vi.spyOn(TeamChannelBindingStore.prototype, "get").mockResolvedValue({
+      provider: "slack",
+      externalId: "C-CATALOG",
+      teamId: TEAM_ID,
+      kind: "source",
+    });
     mocks.authenticate.mockImplementation(async (request: Request) => ({
       principal: {
         kind: "service",
@@ -335,7 +342,10 @@ describe("environment catalog team scope", () => {
       request,
     }));
 
-    expect(await (await list()).json()).toEqual({ environments: [fullCatalog[0]], total: 1 });
+    expect(await (await list("?channel=slack:C-CATALOG")).json()).toEqual({
+      environments: [fullCatalog[0]],
+      total: 1,
+    });
     // Both the team gate and the read-filter viewer resolve the canonical actor's memberships.
     const lookups = vi.mocked(TeamMembershipStore.prototype.listForUser).mock.calls;
     expect(lookups.length).toBeGreaterThan(0);

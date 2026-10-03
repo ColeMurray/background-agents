@@ -128,6 +128,54 @@ describe("AnalyticsStore row decoding", () => {
     );
   });
 
+  it("decodes session origins without merging users or sources", () => {
+    expect(
+      store.decodeSessionOrigins(
+        result([
+          { source: "user", user_key: "user-1", display_name: "Ada", sessions: 2 },
+          { source: "user", user_key: "user-2", display_name: "Ada", sessions: 1 },
+          { source: "slack-bot", user_key: "user-1", display_name: "Ada", sessions: 3 },
+          { source: "agent", user_key: "old-login", display_name: "old-login", sessions: 1 },
+          {
+            source: "automation",
+            user_key: "__unknown__",
+            display_name: "Unknown user",
+            sessions: 1,
+          },
+        ])
+      )
+    ).toEqual([
+      { source: "user", userKey: "user-1", displayName: "Ada", sessions: 2 },
+      { source: "user", userKey: "user-2", displayName: "Ada", sessions: 1 },
+      { source: "slack-bot", userKey: "user-1", displayName: "Ada", sessions: 3 },
+      { source: "agent", userKey: "old-login", displayName: "old-login", sessions: 1 },
+      { source: "automation", userKey: "__unknown__", displayName: "Unknown user", sessions: 1 },
+    ]);
+    expect(store.decodeSessionOrigins(result([]))).toEqual([]);
+  });
+
+  it.each([
+    { source: "invalid" },
+    { source: null },
+    { user_key: null },
+    { display_name: undefined },
+    { sessions: "2" },
+  ])("rejects malformed session origin fields: %j", (overrides) => {
+    expect(() =>
+      store.decodeSessionOrigins(
+        result([
+          {
+            source: "user",
+            user_key: "user-1",
+            display_name: "Ada",
+            sessions: 2,
+            ...overrides,
+          },
+        ])
+      )
+    ).toThrow("Invalid analytics session origin row");
+  });
+
   it("decodes nullable breakdown fields", () => {
     expect(
       store.decodeBreakdown(

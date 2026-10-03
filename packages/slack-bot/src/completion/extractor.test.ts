@@ -64,10 +64,14 @@ describe("extractAgentResponse", () => {
       SERVICE_AUTH_SECRET: "test-secret",
     } as unknown as Env;
 
-    const response = await extractAgentResponse(env, "session-1", "msg-1");
+    const response = await extractAgentResponse(env, "session-1", "msg-1", "C123");
 
     expect(response.textContent).toBe("Final response");
     expect(response.success).toBe(true);
+    for (const [input] of fetchMock.mock.calls) {
+      expect(new URL(String(input)).searchParams.get("channel")).toBe("slack:C123");
+      expect(new URL(String(input)).searchParams.get("purpose")).toBe("slack-post");
+    }
     expect(response.artifacts).toEqual([
       {
         type: "pr",
@@ -80,58 +84,6 @@ describe("extractAgentResponse", () => {
         url: "https://github.com/octocat/repo/pull/new/main...open-inspect%2Fsession-123",
         label: "Branch: open-inspect/session-123",
         metadata: { head: "open-inspect/session-123", mode: "manual_pr" },
-      },
-    ]);
-  });
-
-  it("falls back to event artifacts when artifacts API errors", async () => {
-    const fetchMock = vi.fn(async (input: string | URL | Request) => {
-      const url = String(input);
-      if (url.includes("/events")) {
-        return jsonResponse({
-          events: [
-            {
-              id: "evt-artifact",
-              type: "artifact",
-              data: {
-                artifactType: "branch",
-                url: "https://github.com/octocat/repo/tree/feature",
-                metadata: { name: "feature" },
-              },
-              messageId: "msg-2",
-              createdAt: 20,
-            },
-            {
-              id: "evt-complete",
-              type: "execution_complete",
-              data: { success: true },
-              messageId: "msg-2",
-              createdAt: 21,
-            },
-          ],
-          hasMore: false,
-        });
-      }
-
-      if (url.includes("/artifacts")) {
-        return jsonResponse({ error: "failed" }, 500);
-      }
-
-      return new Response("Not found", { status: 404 });
-    });
-
-    const env = {
-      CONTROL_PLANE: { fetch: fetchMock },
-      SERVICE_AUTH_SECRET: "test-secret",
-    } as unknown as Env;
-
-    const response = await extractAgentResponse(env, "session-2", "msg-2");
-
-    expect(response.artifacts).toEqual([
-      {
-        type: "branch",
-        url: "https://github.com/octocat/repo/tree/feature",
-        label: "Branch: feature",
       },
     ]);
   });

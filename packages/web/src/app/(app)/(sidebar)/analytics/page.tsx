@@ -17,6 +17,7 @@ import { AnalyticsPullRequestRepoTable } from "@/components/analytics/pull-reque
 import { AnalyticsRepoBarChart } from "@/components/analytics/repo-bar-chart";
 import { AnalyticsRunsTable } from "@/components/analytics/runs-table";
 import { AnalyticsSummaryCards } from "@/components/analytics/summary-cards";
+import { AnalyticsSessionOriginsCard } from "@/components/analytics/session-origins-card";
 import { AnalyticsTimeseriesChart } from "@/components/analytics/timeseries-chart";
 import { AnalyticsTokenCards } from "@/components/analytics/token-cards";
 import { AnalyticsUserTable } from "@/components/analytics/user-table";
@@ -44,6 +45,7 @@ export default function AnalyticsPage() {
   const [sortDirection, setSortDirection] = useState<AnalyticsSortDirection>("desc");
   const {
     summary,
+    sessionOrigins,
     timeseries,
     repoBreakdown,
     userBreakdown,
@@ -64,6 +66,7 @@ export default function AnalyticsPage() {
   );
   const hasCachedData = Boolean(
     summary ||
+    sessionOrigins?.length ||
     timeseries?.series?.length ||
     repoBreakdown?.entries?.length ||
     sortedUserEntries?.length ||
@@ -189,7 +192,7 @@ export default function AnalyticsPage() {
                     </ToggleGroup>
                   </div>
                   <div className="mt-3 text-xs leading-5 text-muted-foreground">
-                    Human: sessions people started, including via Slack, Linear and GitHub. Agents:
+                    Human: user/app and integration sessions (Slack, Linear and GitHub). Agents:
                     sessions spawned by other sessions. Automations: sessions started by
                     automations. All: every session.
                   </div>
@@ -207,6 +210,12 @@ export default function AnalyticsPage() {
           {!error || hasCachedData ? (
             <>
               <AnalyticsSummaryCards days={days} summary={summary} loading={loading} />
+
+              <AnalyticsSessionOriginsCard
+                key={`${days}-${scope}`}
+                entries={sessionOrigins}
+                loading={loading}
+              />
 
               <AnalyticsTokenCards summary={summary} loading={loading} />
 

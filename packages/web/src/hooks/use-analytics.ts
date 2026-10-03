@@ -16,6 +16,7 @@ export function useAnalyticsDashboard(days: AnalyticsDays, scope: AnalyticsScope
 
   return {
     summary: dashboard.data?.summary,
+    sessionOrigins: dashboard.data?.sessionOrigins,
     timeseries: dashboard.data?.timeseries,
     repoBreakdown: dashboard.data?.breakdowns.repository,
     userBreakdown: dashboard.data?.breakdowns.user,

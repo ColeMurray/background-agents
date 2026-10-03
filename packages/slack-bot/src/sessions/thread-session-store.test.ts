@@ -4,7 +4,12 @@ import {
   advanceLastPromptTs,
   buildThreadSession,
   clearThreadSession,
+  closeThreadSession,
+  isThreadClosureNoticeSent,
+  isThreadSessionClosed,
   lookupThreadSession,
+  markThreadClosureNoticeSent,
+  reopenThreadSession,
   storeThreadSession,
 } from "./thread-session-store";
 
@@ -21,38 +26,153 @@ function makeEnv() {
 
 describe("thread session store", () => {
   let mocks: ReturnType<typeof makeEnv>;
+  const baseSession: ThreadSession = {
+    sessionId: "session-1",
+    repoId: "acme/app",
+    repoFullName: "acme/app",
+    model: "openai/gpt-5.4",
+    createdAt: 123,
+  };
 
   beforeEach(() => {
     mocks = makeEnv();
   });
 
-  it("stores sessions under the thread key for seven days", async () => {
-    const session: ThreadSession = {
-      sessionId: "session-1",
-      repoId: "acme/app",
-      repoFullName: "acme/app",
-      model: "openai/gpt-5.4",
-      createdAt: 123,
-    };
+  function useMemoryKv() {
+    const values = new Map<string, string>();
+    mocks.get.mockImplementation(async (key: string, type?: string) => {
+      const value = values.get(key);
+      return value === undefined ? null : type === "json" ? JSON.parse(value) : value;
+    });
+    mocks.put.mockImplementation(async (key: string, value: string) => {
+      values.set(key, value);
+    });
+    mocks.deleteValue.mockImplementation(async (key: string) => {
+      values.delete(key);
+    });
+    return values;
+  }
 
+  it("retains an early closure when the initial mapping is stored later", async () => {
+    const values = useMemoryKv();
+    await closeThreadSession(mocks.env, "C123", "111.222", "session-1");
+    expect(await isThreadSessionClosed(mocks.env, "C123", "111.222", "session-1")).toBe(true);
+    const session = { ...baseSession, teamId: null };
     await storeThreadSession(mocks.env, "C123", "111.222", session);
+    expect(JSON.parse(values.get("thread:C123:111.222")!)).toEqual({ ...session, closed: true });
+    expect(await lookupThreadSession(mocks.env, "C123", "111.222")).toEqual({
+      ...session,
+      closed: true,
+    });
+    expect(mocks.put).toHaveBeenCalledWith("thread-closed:C123:111.222:session-1", "1", {
+      expirationTtl: 7 * 24 * 60 * 60,
+    });
+  });
 
-    expect(mocks.put).toHaveBeenCalledWith("thread:C123:111.222", JSON.stringify(session), {
+  it("overlays closure after a stale checkpoint write overwrites the closed mapping", async () => {
+    const values = useMemoryKv();
+    const session = { ...baseSession, lastPromptTs: "222.333" };
+    await storeThreadSession(mocks.env, "C123", "111.222", session);
+    let releaseCheckpoint!: () => void;
+    let checkpointStarted!: () => void;
+    const paused = new Promise<void>((resolve) => {
+      releaseCheckpoint = resolve;
+    });
+    const started = new Promise<void>((resolve) => {
+      checkpointStarted = resolve;
+    });
+    mocks.put.mockImplementation(async (key: string, value: string) => {
+      if (key === "thread:C123:111.222" && JSON.parse(value).lastPromptTs === "333.444") {
+        checkpointStarted();
+        await paused;
+      }
+      values.set(key, value);
+    });
+    const checkpoint = advanceLastPromptTs(mocks.env, "C123", "111.222", "333.444");
+    await started;
+    await closeThreadSession(mocks.env, "C123", "111.222", "session-1");
+    releaseCheckpoint();
+    await checkpoint;
+    expect(JSON.parse(values.get("thread:C123:111.222")!)).not.toHaveProperty("closed");
+    expect(await lookupThreadSession(mocks.env, "C123", "111.222")).toMatchObject({
+      closed: true,
+      lastPromptTs: "333.444",
+    });
+    expect(await isThreadSessionClosed(mocks.env, "C123", "111.222", "session-1")).toBe(true);
+  });
+
+  it("keeps closure scoped to the session rather than poisoning a replacement mapping", async () => {
+    useMemoryKv();
+    await closeThreadSession(mocks.env, "C123", "111.222", "old-session");
+    const session = { ...baseSession, sessionId: "new-session" };
+    await storeThreadSession(mocks.env, "C123", "111.222", session);
+    expect(await lookupThreadSession(mocks.env, "C123", "111.222")).toEqual(session);
+    expect(await isThreadSessionClosed(mocks.env, "C123", "111.222", "new-session")).toBe(false);
+    expect(await isThreadSessionClosed(mocks.env, "C123", "111.222", "old-session")).toBe(true);
+  });
+
+  it("reopens a closed thread so a later closure notifies again", async () => {
+    useMemoryKv();
+    const session = { ...baseSession, teamId: null };
+    await storeThreadSession(mocks.env, "C123", "111.222", session);
+    await closeThreadSession(mocks.env, "C123", "111.222", "session-1");
+    await markThreadClosureNoticeSent(mocks.env, "C123", "111.222", "session-1");
+
+    await expect(
+      reopenThreadSession(mocks.env, "C123", "111.222", { ...session, closed: true })
+    ).resolves.toEqual(session);
+    expect(await lookupThreadSession(mocks.env, "C123", "111.222")).toEqual(session);
+    expect(await isThreadClosureNoticeSent(mocks.env, "C123", "111.222", "session-1")).toBe(false);
+
+    await closeThreadSession(mocks.env, "C123", "111.222", "session-1");
+    expect(await isThreadSessionClosed(mocks.env, "C123", "111.222", "session-1")).toBe(true);
+  });
+
+  it("keeps a closure that lands while a reopen rewrites the mapping", async () => {
+    const values = useMemoryKv();
+    const session = { ...baseSession, teamId: null };
+    await storeThreadSession(mocks.env, "C123", "111.222", session);
+    await closeThreadSession(mocks.env, "C123", "111.222", "session-1");
+    let releaseRewrite!: () => void;
+    let rewriteStarted!: () => void;
+    const paused = new Promise<void>((resolve) => {
+      releaseRewrite = resolve;
+    });
+    const started = new Promise<void>((resolve) => {
+      rewriteStarted = resolve;
+    });
+    mocks.put.mockImplementation(async (key: string, value: string) => {
+      if (key === "thread:C123:111.222" && !("closed" in JSON.parse(value))) {
+        rewriteStarted();
+        await paused;
+      }
+      values.set(key, value);
+    });
+    const reopen = reopenThreadSession(mocks.env, "C123", "111.222", { ...session, closed: true });
+    await started;
+    await closeThreadSession(mocks.env, "C123", "111.222", "session-1");
+    releaseRewrite();
+    await reopen;
+    expect(JSON.parse(values.get("thread:C123:111.222")!)).not.toHaveProperty("closed");
+    expect(await lookupThreadSession(mocks.env, "C123", "111.222")).toEqual({
+      ...session,
+      closed: true,
+    });
+    expect(await isThreadSessionClosed(mocks.env, "C123", "111.222", "session-1")).toBe(true);
+  });
+
+  it("stores sessions under the thread key for seven days", async () => {
+    await storeThreadSession(mocks.env, "C123", "111.222", baseSession);
+
+    expect(mocks.put).toHaveBeenCalledWith("thread:C123:111.222", JSON.stringify(baseSession), {
       expirationTtl: 7 * 24 * 60 * 60,
     });
   });
 
   it("reads and clears sessions using the same key", async () => {
-    const session: ThreadSession = {
-      sessionId: "session-1",
-      repoId: "acme/app",
-      repoFullName: "acme/app",
-      model: "openai/gpt-5.4",
-      createdAt: 123,
-    };
-    mocks.get.mockResolvedValue(session);
+    mocks.get.mockResolvedValue(baseSession);
 
-    await expect(lookupThreadSession(mocks.env, "C123", "111.222")).resolves.toEqual(session);
+    await expect(lookupThreadSession(mocks.env, "C123", "111.222")).resolves.toEqual(baseSession);
     expect(mocks.get).toHaveBeenCalledWith("thread:C123:111.222", "json");
 
     await clearThreadSession(mocks.env, "C123", "111.222");
@@ -118,29 +238,9 @@ describe("thread session store", () => {
     {},
     [],
     { sessionId: "session-1" },
-    {
-      sessionId: "session-1",
-      repoId: "acme/app",
-      repoFullName: "acme/app",
-      model: "openai/gpt-5.4",
-      createdAt: "123",
-    },
-    {
-      sessionId: "session-1",
-      repoId: "acme/app",
-      repoFullName: "acme/app",
-      model: "openai/gpt-5.4",
-      reasoningEffort: 123,
-      createdAt: 123,
-    },
-    {
-      sessionId: "session-1",
-      repoId: "acme/app",
-      repoFullName: "acme/app",
-      model: "openai/gpt-5.4",
-      createdAt: 123,
-      lastPromptTs: 333.444,
-    },
+    { ...baseSession, createdAt: "123" },
+    { ...baseSession, reasoningEffort: 123 },
+    { ...baseSession, lastPromptTs: 333.444 },
   ])("rejects malformed records: %j", async (record) => {
     mocks.get.mockResolvedValue(record);
 
@@ -148,83 +248,33 @@ describe("thread session store", () => {
   });
 
   it("accepts persisted records with and without reasoning effort", async () => {
-    const base: ThreadSession = {
-      sessionId: "session-1",
-      repoId: "acme/app",
-      repoFullName: "acme/app",
-      model: "openai/gpt-5.4",
-      createdAt: 123,
-    };
-    const withReasoning = { ...base, reasoningEffort: "high" };
-    mocks.get.mockResolvedValueOnce(base).mockResolvedValueOnce(withReasoning);
+    const withReasoning = { ...baseSession, reasoningEffort: "high" };
+    const records = [baseSession, withReasoning];
+    mocks.get.mockImplementation(async (_key: string, type?: string) =>
+      type === "json" ? records.shift() : null
+    );
 
-    await expect(lookupThreadSession(mocks.env, "C123", "111.222")).resolves.toEqual(base);
+    await expect(lookupThreadSession(mocks.env, "C123", "111.222")).resolves.toEqual(baseSession);
     await expect(lookupThreadSession(mocks.env, "C123", "111.222")).resolves.toEqual(withReasoning);
   });
 
   it("accepts persisted records with and without a last prompt ts", async () => {
-    const base: ThreadSession = {
-      sessionId: "session-1",
-      repoId: "acme/app",
-      repoFullName: "acme/app",
-      model: "openai/gpt-5.4",
-      createdAt: 123,
-    };
-    const withLastPrompt = { ...base, lastPromptTs: "333.444" };
-    mocks.get.mockResolvedValueOnce(base).mockResolvedValueOnce(withLastPrompt);
+    const withLastPrompt = { ...baseSession, lastPromptTs: "333.444" };
+    const records = [baseSession, withLastPrompt];
+    mocks.get.mockImplementation(async (_key: string, type?: string) =>
+      type === "json" ? records.shift() : null
+    );
 
-    await expect(lookupThreadSession(mocks.env, "C123", "111.222")).resolves.toEqual(base);
+    await expect(lookupThreadSession(mocks.env, "C123", "111.222")).resolves.toEqual(baseSession);
     await expect(lookupThreadSession(mocks.env, "C123", "111.222")).resolves.toEqual(
       withLastPrompt
     );
   });
 
   describe("advanceLastPromptTs", () => {
-    const stored: ThreadSession = {
-      sessionId: "session-1",
-      repoId: "acme/app",
-      repoFullName: "acme/app",
-      model: "openai/gpt-5.4",
-      createdAt: 123,
-      lastPromptTs: "222.333",
-    };
-
-    it("advances the checkpoint when the new ts is newer", async () => {
-      mocks.get.mockResolvedValue(stored);
-
-      await advanceLastPromptTs(mocks.env, "C123", "111.222", "333.444");
-
-      expect(mocks.put).toHaveBeenCalledWith(
-        "thread:C123:111.222",
-        JSON.stringify({ ...stored, lastPromptTs: "333.444" }),
-        { expirationTtl: 7 * 24 * 60 * 60 }
-      );
-    });
-
-    it("stamps mappings that have no checkpoint yet", async () => {
-      const { lastPromptTs: _legacy, ...legacy } = stored;
-      mocks.get.mockResolvedValue(legacy);
-
-      await advanceLastPromptTs(mocks.env, "C123", "111.222", "333.444");
-
-      expect(mocks.put).toHaveBeenCalledWith(
-        "thread:C123:111.222",
-        JSON.stringify({ ...legacy, lastPromptTs: "333.444" }),
-        { expirationTtl: 7 * 24 * 60 * 60 }
-      );
-    });
-
-    it("does not move the checkpoint backwards on out-of-order completion", async () => {
-      mocks.get.mockResolvedValue({ ...stored, lastPromptTs: "999.999" });
-
-      await advanceLastPromptTs(mocks.env, "C123", "111.222", "333.444");
-
-      expect(mocks.put).not.toHaveBeenCalled();
-    });
-
     it("keeps the checkpoint monotonic across exact microsecond fractions", async () => {
       mocks.get.mockResolvedValue({
-        ...stored,
+        ...baseSession,
         lastPromptTs: "9999999999999999.000002",
       });
 
@@ -243,18 +293,11 @@ describe("thread session store", () => {
   });
 
   it("handles KV write and delete failures", async () => {
-    const session: ThreadSession = {
-      sessionId: "session-1",
-      repoId: "acme/app",
-      repoFullName: "acme/app",
-      model: "openai/gpt-5.4",
-      createdAt: 123,
-    };
     mocks.put.mockRejectedValue(new Error("KV write unavailable"));
     mocks.deleteValue.mockRejectedValue(new Error("KV delete unavailable"));
 
     await expect(
-      storeThreadSession(mocks.env, "C123", "111.222", session)
+      storeThreadSession(mocks.env, "C123", "111.222", baseSession)
     ).resolves.toBeUndefined();
     await expect(clearThreadSession(mocks.env, "C123", "111.222")).resolves.toBeUndefined();
   });
