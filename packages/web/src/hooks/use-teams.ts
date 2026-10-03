@@ -131,15 +131,8 @@ export function useTeams(enabled = true) {
       mutate(
         key,
         (current: TeamSnapshot<z.infer<typeof teamsSchema>> | undefined) =>
-          teamSnapshot({
-            teams: [
-              ...(current?.kind === "ready" ? current.value.teams : []).filter(
-                (existing) => existing.id !== team.id
-              ),
-              team,
-            ],
-          }),
-        { revalidate: false }
+          reconcileTeamDirectory(current, team),
+        { revalidate: (data) => data?.kind !== "ready" }
       ),
       mutate(userId ? meTeamsKey(userId) : null),
     ]);

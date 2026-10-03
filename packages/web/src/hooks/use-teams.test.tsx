@@ -393,6 +393,64 @@ describe("team hooks", () => {
     expect(result.current.directory.teams[0]?.slug).toBe(updated.slug);
   });
 
+  it.each(["absent", "pending", "denied"] as const)(
+    "does not seed a partial directory when creating while the directory is %s",
+    async (state) => {
+      const created = { ...readableTeam, id: "team_created", slug: "created" };
+      let finishInitialDirectory!: (response: Response) => void;
+      const initialDirectory = new Promise<Response>((resolve) => {
+        finishInitialDirectory = resolve;
+      });
+      let directoryRequests = 0;
+      vi.mocked(browserApiFetch).mockImplementation(async (path, init) => {
+        if (init?.method === "POST") return Response.json(created, { status: 201 });
+        if (path === TEAMS_KEY) {
+          directoryRequests += 1;
+          if (directoryRequests === 1 && state === "pending") return initialDirectory;
+          if (directoryRequests === 1 && state === "denied")
+            return Response.json({ error: "Forbidden" }, { status: 403 });
+          return Response.json({ teams: [readableTeam, created] });
+        }
+        return Response.json({ teams: [] });
+      });
+      const { result, rerender } = renderHook(({ enabled }) => useTeams(enabled), {
+        initialProps: { enabled: state !== "absent" },
+        wrapper,
+      });
+      if (state === "denied") {
+        await waitFor(() =>
+          expect(result.current.error).toMatchObject({ disposition: "authoritative-denial" })
+        );
+      } else if (state === "pending") {
+        await waitFor(() => expect(directoryRequests).toBe(1));
+        expect(result.current.loading).toBe(true);
+      }
+
+      await act(async () => {
+        await expect(
+          result.current.createTeam({ slug: created.slug, name: created.name })
+        ).resolves.toMatchObject({ id: created.id });
+      });
+      if (state === "absent") {
+        expect(directoryRequests).toBe(0);
+        rerender({ enabled: true });
+        expect(result.current.teams).toEqual([]);
+      }
+      await waitFor(() =>
+        expect(result.current.teams.map(({ id }) => id)).toEqual([readableTeam.id, created.id])
+      );
+      expect(directoryRequests).toBe(state === "absent" ? 1 : 2);
+      expect(result.current.error).toBeUndefined();
+      if (state === "pending") {
+        await act(async () => {
+          finishInitialDirectory(Response.json({ teams: [readableTeam] }));
+          await initialDirectory;
+        });
+        expect(result.current.teams.map(({ id }) => id)).toEqual([readableTeam.id, created.id]);
+      }
+    }
+  );
+
   it.each(["create", "update", "archive", "restore", "set-member", "remove-member"] as const)(
     "refreshes the user-scoped membership cache after %s",
     async (operation) => {
