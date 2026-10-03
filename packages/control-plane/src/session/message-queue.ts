@@ -478,7 +478,6 @@ export class SessionMessageQueue {
         outcome: "deferred",
         reason: "no_sandbox",
       });
-      this.messenger.broadcast({ type: "sandbox_spawning" });
       // Spawn in the background: a snapshot restore can take tens of seconds,
       // and awaiting it here holds the prompt HTTP response open past bot
       // callers' request timeouts. The message is already persisted as
