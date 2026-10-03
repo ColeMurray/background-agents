@@ -39,7 +39,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: coverage-data-control-plane
-          path: packages/*/coverage/
+          path: packages/control-plane/coverage/
           if-no-files-found: error
 
   web-coverage:
@@ -67,7 +67,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: coverage-data-web
-          path: packages/*/coverage/
+          path: packages/web/coverage/
           if-no-files-found: error
 
   other-ts-coverage:
@@ -99,7 +99,11 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: coverage-data-ts
-          path: packages/*/coverage/
+          path: |
+            packages/shared/coverage/
+            packages/slack-bot/coverage/
+            packages/linear-bot/coverage/
+            packages/github-bot/coverage/
           if-no-files-found: error
 
   python-coverage:
@@ -131,7 +135,9 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: coverage-data-python
-          path: packages/*/coverage/
+          path: |
+            packages/modal-infra/coverage/
+            packages/sandbox-runtime/coverage/
           if-no-files-found: error
 
   coverage:
@@ -148,14 +154,30 @@ jobs:
           TS_RESULT: ${{ needs.other-ts-coverage.result }}
           PYTHON_RESULT: ${{ needs.python-coverage.result }}
         run: |
-          for result in "$CP_RESULT" "$WEB_RESULT" "$TS_RESULT" "$PYTHON_RESULT"; do
-            test "$result" = success
+          status=0
+          for pair in "control-plane=$CP_RESULT" "web=$WEB_RESULT" "other-ts=$TS_RESULT" "python=$PYTHON_RESULT"; do
+            if [ "${pair#*=}" != success ]; then
+              echo "::error::${pair%%=*} coverage job result: ${pair#*=}"
+              status=1
+            fi
           done
+          exit "$status"
       - uses: actions/download-artifact@v4
         with:
-          pattern: coverage-data-*
+          name: coverage-data-control-plane
+          path: packages/control-plane/coverage/
+      - uses: actions/download-artifact@v4
+        with:
+          name: coverage-data-web
+          path: packages/web/coverage/
+      - uses: actions/download-artifact@v4
+        with:
+          name: coverage-data-ts
           path: packages/
-          merge-multiple: true
+      - uses: actions/download-artifact@v4
+        with:
+          name: coverage-data-python
+          path: packages/
       - name: Upload coverage reports
         if: always()
         uses: actions/upload-artifact@v4
