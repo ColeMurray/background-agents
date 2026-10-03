@@ -31,6 +31,7 @@ import type {
   AutomationCallbackContext,
   SlackCallbackContext,
 } from "@open-inspect/shared/types/session-api";
+import type { Team } from "@open-inspect/shared/types/teams";
 import { computeHmacHex } from "@open-inspect/shared/auth";
 import type { SandboxSettings } from "@open-inspect/shared/types/integrations";
 import { z } from "zod";
@@ -65,7 +66,6 @@ import { getUserAuth } from "../auth/user/runtime";
 import { GitHubAttributionUnavailableError } from "../source-control/github-credential-authority";
 import { UserStore } from "../db/user-store";
 import { TeamStore } from "../db/teams";
-import { TeamMembershipStore } from "../db/team-memberships";
 import { TeamRepositoryGrantStore } from "../db/team-repository-grants";
 import { AuthorizationService } from "../authorization/service";
 import { evaluateSessionAdmission } from "../authorization/session-admission";
@@ -92,7 +92,10 @@ import {
   resolveAutomationSessionTarget,
   type AutomationSessionTarget,
 } from "../automation/session-target";
-import { isAutomationExecutionAuthorized } from "../automation/authorization-guard";
+import {
+  isAutomationExecutionAuthorized,
+  type AutomationExecutionAuthorizationRequest,
+} from "../automation/authorization-guard";
 import type { RequestContext } from "../routes/shared";
 import { deliverWithRetry } from "../session/callback-delivery";
 import {
@@ -293,8 +296,17 @@ interface ExecutionPrincipal {
 }
 
 type StartInvocationResult =
-  /** Invocation inserted; children launched (some may have pre-failed). */
-  | { outcome: "started"; invocationId: string; runs: AutomationRunRow[]; launched: number }
+  /**
+   * Invocation inserted; children launched (some may have pre-failed). A launch-time
+   * authorization denial carries its reason code.
+   */
+  | {
+      outcome: "started";
+      invocationId: string;
+      runs: AutomationRunRow[];
+      launched: number;
+      authorizationDenial?: string;
+    }
   /** Overlap — a childless skipped invocation was recorded (schedule/event). */
   | { outcome: "skipped" }
   /**
@@ -340,6 +352,19 @@ const AUTOMATION_CONTEXT_GUARDRAIL =
  */
 export function composeAutomationPrompt(contextBlock: string, instructions: string): string {
   return `${instructions}\n---\n\n${contextBlock}\n\n---\n\n${AUTOMATION_CONTEXT_GUARDRAIL}`;
+}
+
+/** Reason code for an execution authorization denial, given the owning team's current state. */
+function executionDenialReason(team: Team | null): string {
+  return team?.archivedAt != null ? "team_archived" : "execution_authorization_denied";
+}
+
+/** What admission decided for a firing, re-checked as each child launches. */
+interface LaunchAdmission {
+  authorization: AutomationExecutionAuthorizationRequest;
+  team: Team | null;
+  /** Session target resolved at admission; required for team automations. */
+  target?: AutomationSessionTarget;
 }
 
 /** Coordinates authorized automation scheduling, dispatch, and completion handling. */
@@ -466,18 +491,14 @@ export class Scheduler {
       automation.owner_team_id === null
         ? null
         : await new TeamStore(this.db).getById(automation.owner_team_id);
-    if (
-      !(await isAutomationExecutionAuthorized(this.db, {
-        automationId: automation.id,
-        executionUserId: executionPrincipal.platformUserId,
-        requiresRepositoryUse: selection.length > 0,
-        requiresEnvironmentUse: environmentSelection.length > 0,
-      }))
-    ) {
-      return {
-        outcome: "unauthorized",
-        reason: team?.archivedAt != null ? "team_archived" : "execution_authorization_denied",
-      };
+    const authorization: AutomationExecutionAuthorizationRequest = {
+      automationId: automation.id,
+      executionUserId: executionPrincipal.platformUserId,
+      requiresRepositoryUse: selection.length > 0,
+      requiresEnvironmentUse: environmentSelection.length > 0,
+    };
+    if (!(await isAutomationExecutionAuthorized(this.db, authorization))) {
+      return { outcome: "unauthorized", reason: executionDenialReason(team) };
     }
     const resolutions = await resolveAutomationRepositories(this.env, selection);
 
@@ -660,6 +681,7 @@ export class Scheduler {
       }
     }
 
+    let authorizationDenial: string | undefined;
     const launchChild = async (child: AutomationRunRow): Promise<void> => {
       try {
         if (attributionError !== undefined) throw attributionError;
@@ -691,7 +713,12 @@ export class Scheduler {
           sessionId,
           executionPrincipal,
           claimedAt,
-          targetSnapshot && "target" in targetSnapshot ? targetSnapshot.target : undefined
+          {
+            authorization,
+            team,
+            target:
+              targetSnapshot && "target" in targetSnapshot ? targetSnapshot.target : undefined,
+          }
         );
         await this.sendPromptToSession(
           sessionId,
@@ -712,6 +739,13 @@ export class Scheduler {
           error: message,
         });
         try {
+          if (e instanceof AutomationExecutionUnauthorizedError) {
+            authorizationDenial ??= e.reason;
+            // Losing authorization is not an automation failure. Claim the invocation's
+            // failure accounting before the run turns failed so no path counts a strike;
+            // the next admission re-evaluates the principal and pauses if still denied.
+            await store.tryMarkInvocationFailureCounted(invocationId);
+          }
           await store.updateRun(child.id, {
             status: "failed",
             failure_reason: message,
@@ -760,7 +794,7 @@ export class Scheduler {
       }
     }
 
-    return { outcome: "started", invocationId, runs: children, launched };
+    return { outcome: "started", invocationId, runs: children, launched, authorizationDenial };
   }
 
   /**
@@ -864,6 +898,8 @@ export class Scheduler {
             // reports as failed, not processed.
             if (result.launched > 0) {
               processed++;
+            } else if (result.authorizationDenial !== undefined) {
+              skipped++;
             } else {
               failed++;
             }
@@ -1371,6 +1407,10 @@ export class Scheduler {
       throw new AutomationTriggerBlockedError();
     }
 
+    if (result.launched === 0 && result.authorizationDenial !== undefined) {
+      throw new AutomationExecutionUnauthorizedError(result.authorizationDenial);
+    }
+
     const runs = result.runs.map((run) =>
       toAutomationRun({ ...run, session_title: null, artifact_summary: null })
     );
@@ -1704,8 +1744,18 @@ export class Scheduler {
     executionPrincipal: ExecutionPrincipal,
     /** The instant the run claimed this session — what its deadline measures from. */
     startedAt: number,
-    authorizedTarget?: AutomationSessionTarget
+    admission: LaunchAdmission
   ): Promise<void> {
+    // Re-authorize with admission's requirements before doing any launch work: the principal
+    // may have left the team, been suspended, or lost a permission since admission.
+    if (!(await isAutomationExecutionAuthorized(this.db, admission.authorization))) {
+      const team =
+        automation.owner_team_id === null
+          ? null
+          : await new TeamStore(this.db).getById(automation.owner_team_id);
+      throw new AutomationExecutionUnauthorizedError(executionDenialReason(team));
+    }
+
     const ctx: RequestContext = {
       trace_id: `automation:${automation.id}`,
       request_id: run.id,
@@ -1714,11 +1764,11 @@ export class Scheduler {
       executionCtx: this.backgroundJobs,
     };
 
-    if (automation.owner_team_id !== null && !authorizedTarget) {
+    if (automation.owner_team_id !== null && !admission.target) {
       throw new Error("Team automation launch is missing its admitted target");
     }
     const target =
-      authorizedTarget ?? (await resolveAutomationSessionTarget(this.env, run, ctx, this.log));
+      admission.target ?? (await resolveAutomationSessionTarget(this.env, run, ctx, this.log));
 
     // Session-scoped integration settings resolve from the primary member
     // (design §6.2), with environment-bound runs layering that environment's
@@ -1752,27 +1802,10 @@ export class Scheduler {
     );
 
     const scmEnrichment = executionPrincipal.scmEnrichment;
-    // Re-read at launch: a team archived, or a principal removed from it, after invocation
-    // admission must not start sessions.
-    const team =
-      automation.owner_team_id === null
-        ? null
-        : await new TeamStore(this.db).getById(automation.owner_team_id);
-    if (automation.owner_team_id !== null && (!team || team.archivedAt !== null)) {
-      throw new AutomationExecutionUnauthorizedError("team_archived");
-    }
-    if (
-      team &&
-      !(await new TeamMembershipStore(this.db).listForUser(executionPrincipal.platformUserId)).has(
-        team.id
-      )
-    ) {
-      throw new AutomationExecutionUnauthorizedError();
-    }
 
     const sessionInput: SessionInitInput = {
       ownerTeamId: automation.owner_team_id,
-      visibility: team?.defaultVisibility ?? "workspace",
+      visibility: admission.team?.defaultVisibility ?? "workspace",
       sessionId,
       ...target,
       title: `[Auto] ${automation.name}`,

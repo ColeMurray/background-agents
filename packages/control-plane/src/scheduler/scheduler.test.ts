@@ -6,7 +6,7 @@
  * test/integration/automation-invocations.test.ts.
  */
 
-import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, vi, beforeEach } from "vitest";
 import { createTestBackgroundTasks } from "../background-tasks.test-support";
 import type { Env } from "../types";
 import type { SqlDatabase } from "../db/sql-database";
@@ -14,7 +14,6 @@ import type { FetchClient } from "../platform-ports";
 import { fakeSessionRuntimeDispatch } from "../router.test-support";
 import type { Logger } from "../logger";
 import type { AutomationRow, InvocationRunAggregate } from "../db/automation-store";
-import { TeamMembershipStore } from "../db/team-memberships";
 import type { SlackAutomationEvent } from "@open-inspect/shared/triggers";
 import type { Team } from "@open-inspect/shared/types/teams";
 import type { EffectiveAuthorization } from "@open-inspect/shared/rbac";
@@ -102,6 +101,7 @@ vi.mock("../session/skill-resolution", () => ({
   })),
 }));
 
+const { resolveManagedSkills } = await import("../session/skill-resolution");
 const { AutomationExecutionUnauthorizedError, EXECUTION_DEADLINE_GRACE_MS, Scheduler } =
   await import("./scheduler");
 
@@ -3417,16 +3417,107 @@ describe("Scheduler", () => {
     ];
     beforeEach(() => {
       mockTeamGetById.mockResolvedValue(activeTeam);
-      vi.spyOn(TeamMembershipStore.prototype, "listForUser").mockResolvedValue(
-        new Map([[teamId, "member"]])
-      );
       mockStore.getById.mockResolvedValue(teamAutomation);
       mockStore.getOverdueAutomations.mockResolvedValue([teamAutomation]);
       mockEnvironmentGetById.mockReset().mockResolvedValue(environment);
       mockEnvironmentRepositories.mockReset().mockResolvedValue(members);
     });
-    afterEach(() => {
-      vi.restoreAllMocks();
+    describe("launch-time re-authorization", () => {
+      function launchableRepositories(names: string[]) {
+        selectRepositories(
+          "auto-1",
+          names.map((name, index) =>
+            repositoryRow("auto-1", { repo_name: name, repo_id: 1000 + index })
+          )
+        );
+        mockCheckRepositoryAccess.mockImplementation(async ({ owner, name }) => ({
+          repoId: 1000 + names.indexOf(name),
+          repoOwner: owner,
+          repoName: name,
+          defaultBranch: "main",
+        }));
+        mockTeamGrantCovers.mockResolvedValue(true);
+      }
+
+      /** Admit the firing, then deny every launch. */
+      function denyAfterAdmission() {
+        mockIsAutomationExecutionAuthorized.mockResolvedValueOnce(true).mockResolvedValue(false);
+        // The failure-accounting CAS admits a single winner.
+        mockStore.tryMarkInvocationFailureCounted
+          .mockResolvedValueOnce(true)
+          .mockResolvedValue(false);
+        mockStore.getInvocationRunAggregate.mockResolvedValue(
+          aggregate({ total: 1, active: 0, failed: 1 })
+        );
+      }
+
+      it("re-checks admission's requirements before any launch work", async () => {
+        launchableRepositories(["web-app"]);
+        denyAfterAdmission();
+
+        await expect(createScheduler().trigger("auto-1", "manual-user")).rejects.toMatchObject({
+          name: "AutomationExecutionUnauthorizedError",
+          reason: "execution_authorization_denied",
+        });
+        const admissionRequest = {
+          automationId: "auto-1",
+          executionUserId: "manual-user",
+          requiresRepositoryUse: true,
+          requiresEnvironmentUse: false,
+        };
+        expect(mockIsAutomationExecutionAuthorized.mock.calls).toEqual([
+          [expect.anything(), admissionRequest],
+          [expect.anything(), admissionRequest],
+        ]);
+        expect(mockStore.setRunExecutionDeadline).not.toHaveBeenCalled();
+        expect(resolveManagedSkills).not.toHaveBeenCalled();
+        expect(mockSessionStoreCreate).not.toHaveBeenCalled();
+        expect(mockStore.updateRun).toHaveBeenCalledWith(
+          expect.any(String),
+          expect.objectContaining({
+            status: "failed",
+            failure_reason: "Automation execution principal is not authorized",
+          })
+        );
+        // The accounting claim precedes the failed run, so no path can count a strike.
+        expect(mockStore.tryMarkInvocationFailureCounted.mock.invocationCallOrder[0]).toBeLessThan(
+          mockStore.updateRun.mock.invocationCallOrder[0]
+        );
+        expect(mockStore.incrementConsecutiveFailures).not.toHaveBeenCalled();
+      });
+
+      it("reports a team archived after admission", async () => {
+        launchableRepositories(["web-app"]);
+        denyAfterAdmission();
+        mockTeamGetById
+          .mockResolvedValueOnce(activeTeam)
+          .mockResolvedValue({ ...activeTeam, archivedAt: 2 });
+
+        await expect(createScheduler().trigger("auto-1", "manual-user")).rejects.toMatchObject({
+          reason: "team_archived",
+        });
+      });
+
+      it("counts a scheduled launch denial as skipped without a failure strike", async () => {
+        launchableRepositories(["web-app"]);
+        denyAfterAdmission();
+
+        expect(await createScheduler().tick()).toEqual({ processed: 0, skipped: 1, failed: 0 });
+        expect(mockStore.incrementConsecutiveFailures).not.toHaveBeenCalled();
+        expect(mockStore.recordAuthorizationDenied).not.toHaveBeenCalled();
+      });
+
+      it("re-authorizes each fanned-out child with one guard query", async () => {
+        launchableRepositories(["web-app", "api", "worker"]);
+        mockStore.getInvocationRunAggregate.mockResolvedValue(aggregate({ total: 3, active: 3 }));
+
+        const result = await createScheduler().trigger("auto-1", "manual-user");
+
+        expect(result.runs.filter((run) => run.status === "running")).toHaveLength(3);
+        expect(mockIsAutomationExecutionAuthorized).toHaveBeenCalledTimes(1 + 3);
+        // Launch uses the admission snapshot of the team.
+        expect(mockTeamGetById).toHaveBeenCalledTimes(1);
+      });
     });
 
     it("checks resolved direct IDs before manual admission", async () => {

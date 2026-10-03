@@ -123,32 +123,6 @@ describe("automation team execution (integration)", () => {
     await expectNoLaunch(row.id);
   });
 
-  it("does not launch for an executor removed after invocation admission", async () => {
-    const row = await saveAutomation("auto-removed-after-admission");
-    const insert = AutomationStore.prototype.insertInvocationGuarded;
-    vi.spyOn(AutomationStore.prototype, "insertInvocationGuarded").mockImplementation(
-      async function (this: AutomationStore, params) {
-        const admitted = await insert.call(this, params);
-        // The executor leaves the team while the admitted run is still being set up.
-        await env.DB.prepare("DELETE FROM team_memberships WHERE team_id = ? AND user_id = ?")
-          .bind(TEAM, EXECUTOR)
-          .run();
-        return admitted;
-      }
-    );
-    expect(await createScheduler().tick()).toEqual({ processed: 0, skipped: 0, failed: 1 });
-    expect(await fetchRuns(row.id)).toEqual([
-      expect.objectContaining({
-        status: "failed",
-        failure_reason: "Automation execution principal is not authorized",
-      }),
-    ]);
-    const sessions = await env.DB.prepare("SELECT id FROM sessions WHERE automation_id = ?")
-      .bind(row.id)
-      .all();
-    expect(sessions.results).toEqual([]);
-  });
-
   it("rejects nonmember administrator manual execution", async () => {
     const row = await saveAutomation("auto-nonmember-requester");
     expect(await authorized(row.id)).toBe(true);
@@ -198,6 +172,88 @@ describe("automation team execution (integration)", () => {
     expect(
       (await store.listInvocations(row.id, { limit: 10, offset: 0 })).invocations
     ).toHaveLength(1);
+  });
+
+  describe("authorization lost after invocation admission", () => {
+    /** Run `change` right after the guarded insert admits the invocation, before launch. */
+    function afterAdmission(change: () => Promise<unknown>) {
+      const insert = AutomationStore.prototype.insertInvocationGuarded;
+      vi.spyOn(AutomationStore.prototype, "insertInvocationGuarded").mockImplementation(
+        async function (this: AutomationStore, params) {
+          const admitted = await insert.call(this, params);
+          await change();
+          return admitted;
+        }
+      );
+    }
+
+    function removeMember(userId: string) {
+      return env.DB.prepare("DELETE FROM team_memberships WHERE team_id = ? AND user_id = ?")
+        .bind(TEAM, userId)
+        .run();
+    }
+
+    async function expectDeniedLaunch(automationId: string) {
+      expect(await fetchRuns(automationId)).toEqual([
+        expect.objectContaining({
+          status: "failed",
+          failure_reason: "Automation execution principal is not authorized",
+        }),
+      ]);
+      const sessions = await env.DB.prepare("SELECT id FROM sessions WHERE automation_id = ?")
+        .bind(automationId)
+        .all();
+      expect(sessions.results).toEqual([]);
+    }
+
+    it.each([
+      ["is removed from the team", () => removeMember(EXECUTOR)],
+      [
+        "is suspended",
+        () => env.DB.prepare("UPDATE users SET suspended_at = 1 WHERE id = ?").bind(EXECUTOR).run(),
+      ],
+      [
+        "loses sessions.create",
+        () =>
+          env.DB.prepare(
+            "UPDATE user_role_assignments SET role_id = 'role_builtin_viewer' WHERE user_id = ?"
+          )
+            .bind(EXECUTOR)
+            .run(),
+      ],
+      [
+        "belongs to a team that is archived",
+        () => env.DB.prepare("UPDATE teams SET archived_at = 2 WHERE id = ?").bind(TEAM).run(),
+      ],
+    ])("does not launch or count a failure when the scheduled executor %s", async (_, change) => {
+      const row = await saveAutomation("auto-denied-at-launch");
+      afterAdmission(change);
+      expect(await createScheduler().tick()).toEqual({ processed: 0, skipped: 1, failed: 0 });
+      expect(await authorized(row.id)).toBe(false);
+      await expectDeniedLaunch(row.id);
+      // Two failures are already on record; a strike here would auto-pause at three.
+      expect(await new AutomationStore(env.DB).getById(row.id)).toMatchObject({
+        enabled: 1,
+        consecutive_failures: 2,
+      });
+    });
+
+    it("answers 403 when a manual requester is removed mid-launch", async () => {
+      const row = await saveAutomation("auto-manual-denied-at-launch");
+      afterAdmission(() => removeMember(LEAD));
+      const response = await serviceFetch(`https://cp.test/automations/${row.id}/trigger`, {
+        as: { userId: LEAD, role: "member" },
+        method: "POST",
+      });
+      expect(response.status).toBe(403);
+      expect(await response.json()).toMatchObject({
+        reason_code: "execution_authorization_denied",
+      });
+      await expectDeniedLaunch(row.id);
+      expect(await new AutomationStore(env.DB).getById(row.id)).toMatchObject({
+        consecutive_failures: 2,
+      });
+    });
   });
 
   it("launches a scheduled run after lead executor reassignment", async () => {
