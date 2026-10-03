@@ -2130,7 +2130,10 @@ describe("Scheduler", () => {
         const warn = vi
           .spyOn((scheduler as unknown as { log: Logger }).log, "warn")
           .mockImplementation(() => {});
-        return { scheduler, slackFetch, warn };
+        const info = vi
+          .spyOn((scheduler as unknown as { log: Logger }).log, "info")
+          .mockImplementation(() => {});
+        return { scheduler, slackFetch, warn, info };
       }
 
       it.each(["none", "invocation", "automation", "session", "channel"] as const)(
@@ -2269,6 +2272,82 @@ describe("Scheduler", () => {
         }
       );
 
+      it.each([
+        { visibility: "private", binding: { teamId: "team-a" }, reason: "private_session" },
+        { visibility: "workspace", binding: null, reason: "channel_team_mismatch" },
+        {
+          visibility: "workspace",
+          binding: { teamId: "team-b" },
+          reason: "channel_team_mismatch",
+        },
+      ])(
+        "retains closure and denial after $reason even when current scope allows completion",
+        async ({ visibility, binding, reason }) => {
+          vi.useFakeTimers();
+          try {
+            const { scheduler, slackFetch, warn, info } = createSlackCompletionHarness();
+            mockSessionStoreGet.mockResolvedValue({ ownerTeamId: "team-a", visibility });
+            mockTeamChannelBindingGet.mockResolvedValue(binding);
+            const firstAttempt = deferred<void>();
+            slackFetch
+              .mockImplementationOnce(async () => {
+                mockSessionStoreGet.mockResolvedValue({
+                  ownerTeamId: "team-a",
+                  visibility: "workspace",
+                });
+                mockTeamChannelBindingGet.mockResolvedValue({ teamId: "team-a" });
+                firstAttempt.resolve();
+                return new Response("unavailable", { status: 503 });
+              })
+              .mockResolvedValueOnce(new Response("ok"));
+            const completion = scheduler.runComplete(
+              runCompletion({ success: false, error: "secret error" })
+            );
+
+            await firstAttempt.promise;
+            await vi.advanceTimersByTimeAsync(1000);
+            await completion;
+
+            expect(mockStore.updateRun).toHaveBeenCalledOnce();
+            expect(mockSessionStoreGet).toHaveBeenCalledTimes(2);
+            expect(mockTeamChannelBindingGet).toHaveBeenCalledTimes(2);
+            expect(slackFetch.mock.calls.map(([url]) => url)).toEqual([
+              "https://internal/callbacks/thread_closed",
+              "https://internal/callbacks/thread_closed",
+            ]);
+            for (const [, init] of slackFetch.mock.calls) {
+              const body = JSON.parse(String(init?.body));
+              expect(body).toEqual({
+                kind: "slack.thread_closed",
+                sessionId: "sess-1",
+                timestamp: expect.any(Number),
+                context: { channel: "C1", threadTs: "1700000000.000200" },
+                signature: expect.any(String),
+              });
+              expect(await verifyCallbackSignature(body, "test-secret")).toBe(true);
+            }
+            expect(warn).toHaveBeenCalledWith(
+              "Slack completion callback failed",
+              expect.objectContaining({
+                event: "scheduler.slack_complete_failed",
+                attempt: 1,
+                http_status: 503,
+              })
+            );
+            expect(
+              info.mock.calls.filter(
+                ([, fields]) => fields?.event === "scheduler.slack_complete_denied"
+              )
+            ).toEqual([
+              ["Slack completion denied by session scope", expect.objectContaining({ reason })],
+              ["Slack completion denied by session scope", expect.objectContaining({ reason })],
+            ]);
+          } finally {
+            vi.useRealTimers();
+          }
+        }
+      );
+
       it.each(["invocation", "automation", "session", "channel"] as const)(
         "contains exhausted %s reads without transport or terminal duplicate publication",
         async (lookup) => {
@@ -2293,32 +2372,42 @@ describe("Scheduler", () => {
         }
       );
 
-      it("does not transport a timed-out attempt after its uncancelable D1 read finishes", async () => {
-        vi.useFakeTimers();
-        try {
-          const { scheduler, slackFetch } = createSlackCompletionHarness();
-          const pendingRead = deferred<unknown>();
-          const readStarted = deferred<void>();
-          mockSessionStoreGet.mockImplementationOnce(() => {
-            readStarted.resolve();
-            return pendingRead.promise;
-          });
-          const completion = scheduler.runComplete(runCompletion());
+      it.each(["workspace", "private"] as const)(
+        "does not transport a timed-out %s attempt after its uncancelable D1 read finishes",
+        async (visibility) => {
+          vi.useFakeTimers();
+          try {
+            const { scheduler, slackFetch, info } = createSlackCompletionHarness();
+            const pendingRead = deferred<unknown>();
+            const readStarted = deferred<void>();
+            mockSessionStoreGet.mockImplementationOnce(() => {
+              readStarted.resolve();
+              return pendingRead.promise;
+            });
+            const completion = scheduler.runComplete(runCompletion());
 
-          await readStarted.promise;
-          await vi.advanceTimersByTimeAsync(10_000);
-          pendingRead.resolve({ ownerTeamId: "team-a", visibility: "workspace" });
-          await vi.advanceTimersByTimeAsync(1000);
-          await completion;
+            await readStarted.promise;
+            await vi.advanceTimersByTimeAsync(10_000);
+            pendingRead.resolve({ ownerTeamId: "team-a", visibility });
+            await vi.advanceTimersByTimeAsync(1000);
+            await completion;
 
-          expect(mockStore.updateRun).toHaveBeenCalledOnce();
-          expect(mockSessionStoreGet).toHaveBeenCalledTimes(2);
-          expect(slackFetch).toHaveBeenCalledOnce();
-          expect(slackFetch.mock.calls[0][1]?.signal.aborted).toBe(false);
-        } finally {
-          vi.useRealTimers();
+            expect(mockStore.updateRun).toHaveBeenCalledOnce();
+            expect(mockSessionStoreGet).toHaveBeenCalledTimes(2);
+            expect(slackFetch).toHaveBeenCalledOnce();
+            expect(slackFetch.mock.calls[0][0]).toBe(
+              "https://internal/callbacks/automation-complete"
+            );
+            expect(slackFetch.mock.calls[0][1]?.signal.aborted).toBe(false);
+            expect(info).not.toHaveBeenCalledWith(
+              "Slack completion denied by session scope",
+              expect.anything()
+            );
+          } finally {
+            vi.useRealTimers();
+          }
         }
-      });
+      );
 
       it.each([{ SLACK_BOT: undefined }, { SERVICE_AUTH_SECRET_SLACK_BOT: undefined }])(
         "skips publication preparation when callback configuration is absent: %j",

@@ -135,6 +135,43 @@ describe("deliverMediaArtifacts", () => {
     ).toBe(false);
   });
 
+  it.each([403, 404, 503])(
+    "does not share successfully staged files after the channel is unbound: %s",
+    async (status) => {
+      let bound = true;
+      const env = makeEnv(
+        async () => {
+          expect(bound).toBe(true);
+          return mediaResponse();
+        },
+        async () => (bound ? Response.json({ artifacts: [] }) : new Response(null, { status }))
+      );
+      const fetch = vi
+        .spyOn(globalThis, "fetch")
+        .mockResolvedValueOnce(uploadTicket())
+        .mockImplementationOnce(async () => {
+          bound = false;
+          return new Response("OK");
+        });
+      const delivery = input(env, [IMAGE]);
+
+      await expect(deliverMediaArtifacts(delivery)).rejects.toMatchObject({
+        kind: status === 503 ? "unavailable" : "denied",
+      });
+
+      expect(delivery.onShareAttempt).not.toHaveBeenCalled();
+      expect(env.CONTROL_PLANE.fetch).toHaveBeenCalledTimes(2);
+      const [proofUrl] = vi.mocked(env.CONTROL_PLANE.fetch).mock.calls[1]!;
+      expect(new URL(String(proofUrl)).pathname).toBe("/sessions/session-1/artifacts");
+      expect(new URL(String(proofUrl)).searchParams.get("channel")).toBe("slack:C123");
+      expect(new URL(String(proofUrl)).searchParams.get("purpose")).toBe("slack-post");
+      expect(fetch).toHaveBeenCalledTimes(2);
+      expect(
+        fetch.mock.calls.some(([url]) => String(url).includes("files.completeUploadExternal"))
+      ).toBe(false);
+    }
+  );
+
   it("stages files serially and finalizes them in one ordered call", async () => {
     const env = makeEnv();
     const delivery = input(env, [IMAGE, { ...IMAGE, id: "image-2", caption: "Forecast" }]);
@@ -153,7 +190,7 @@ describe("deliverMediaArtifacts", () => {
 
     expect(result).toEqual({ uploaded: 2, failed: 0, omitted: 0 });
     expect(delivery.onShareAttempt).toHaveBeenCalledOnce();
-    expect(env.CONTROL_PLANE.fetch).toHaveBeenCalledTimes(2);
+    expect(env.CONTROL_PLANE.fetch).toHaveBeenCalledTimes(3);
     for (const [url, init] of vi.mocked(env.CONTROL_PLANE.fetch).mock.calls) {
       expect(new URL(String(url)).searchParams.get("channel")).toBe("slack:C123");
       expect(new URL(String(url)).searchParams.get("purpose")).toBe("slack-post");
@@ -268,7 +305,7 @@ describe("deliverMediaArtifacts", () => {
     );
 
     expect(result).toEqual({ uploaded: 1, failed: 1, omitted: 0 });
-    expect(env.CONTROL_PLANE.fetch).toHaveBeenCalledTimes(3);
+    expect(env.CONTROL_PLANE.fetch).toHaveBeenCalledTimes(4);
     expect(new URL(String(vi.mocked(env.CONTROL_PLANE.fetch).mock.calls[1]?.[0])).pathname).toBe(
       "/sessions/session-1/artifacts"
     );
@@ -297,7 +334,7 @@ describe("deliverMediaArtifacts", () => {
 
     expect(shareReportedBeforeFinalization).toBe(true);
     expect(delivery.onShareAttempt).toHaveBeenCalledOnce();
-    expect(env.CONTROL_PLANE.fetch).toHaveBeenCalledTimes(2);
+    expect(env.CONTROL_PLANE.fetch).toHaveBeenCalledTimes(3);
     expect(result).toEqual({ uploaded: 0, failed: 2, omitted: 0 });
   });
 
@@ -369,6 +406,7 @@ describe("deliverMediaArtifacts", () => {
       "/sessions/session-1/media/missing",
       "/sessions/session-1/artifacts",
       "/sessions/session-1/media/later",
+      "/sessions/session-1/artifacts",
     ]);
     const completeCall = slackFetch.mock.calls.find(([url]) =>
       String(url).includes("files.completeUploadExternal")

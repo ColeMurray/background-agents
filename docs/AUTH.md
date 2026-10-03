@@ -266,7 +266,10 @@ team-owned sessions, even when their visibility is `workspace`; channel-less ser
 their existing semantics. Slack publication, including `purpose=slack-post` reads, also requires a
 current matching channel binding for team-owned sessions in every mode. Private sessions cannot
 publish to Slack. Unbound DMs and never-bound channels have no team-session exception. Refused
-callbacks send only a coordinate-only thread closure, not session content.
+callbacks send only a coordinate-only thread closure, not session content. Queued completions
+recheck publication access immediately before posting text and sharing staged media. Once closure
+delivery starts, retries continue closing the thread even if the channel is rebound; rebinding does
+not resume that completion.
 
 The session boundary covers four paths, not just the session page:
 

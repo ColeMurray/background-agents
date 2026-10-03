@@ -92,7 +92,7 @@ export async function evaluateSessionAdmission(
   // Unbinding revokes scoped reads; publication is also narrower than workspace readability.
   // These scope checks remain enforced during rollback and shadow modes.
   if (
-    (ctx.serviceWorkspaceSessionsOnly && row.ownerTeamId !== null) ||
+    (ctx.serviceTeamId === null && row.ownerTeamId !== null) ||
     (ctx.serviceReadPurpose === "slack-post" &&
       slackPostGate(row, ctx.serviceTeamId ? { teamId: ctx.serviceTeamId } : null))
   ) {

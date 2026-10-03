@@ -761,10 +761,6 @@ async function enforceSessionRequirement(
         ctx.serviceTeamId =
           (await new TeamChannelBindingStore(ctx.db).get(scope.provider, scope.externalId))
             ?.teamId ?? null;
-        // Unbound integration coordinates cannot retain access to team-owned sessions.
-        if (ctx.serviceTeamId === null) {
-          ctx.serviceWorkspaceSessionsOnly = true;
-        }
         if (postRead) ctx.serviceReadPurpose = "slack-post";
       }
     }
