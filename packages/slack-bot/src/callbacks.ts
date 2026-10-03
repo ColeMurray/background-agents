@@ -2,14 +2,22 @@
  * Callback handlers for control-plane notifications.
  */
 
-import { postEphemeral } from "@open-inspect/shared/slack";
-import { verifyCallbackFromControlPlane } from "@open-inspect/shared/auth";
+import { postEphemeral, postMessage } from "@open-inspect/shared/slack";
+import { TOKEN_VALIDITY_MS, verifyCallbackFromControlPlane } from "@open-inspect/shared/auth";
 import { SLACK_ACTIVITY_REFRESH_KIND } from "@open-inspect/shared/types/session-api";
 import { Hono, type Context } from "hono";
 import { z } from "zod";
 import type { Env } from "./types";
 import { createSlackCompletionJob, type SlackCompletionJob } from "./completion/job";
 import { createLogger } from "./logger";
+import {
+  closeThreadSession,
+  isThreadClosureNoticeSent,
+  isThreadSessionClosed,
+  lookupThreadSession,
+  markThreadClosureNoticeSent,
+  THREAD_CLOSED_MESSAGE,
+} from "./sessions/thread-session-store";
 import {
   ASSISTANT_WORKING_STATUS,
   formatToolStatus,
@@ -74,6 +82,14 @@ const activityCallbackSchema = z.looseObject({
   timestamp: z.number(),
   signature: z.string(),
   context: slackCallbackContextSchema,
+});
+
+const threadClosedCallbackSchema = z.looseObject({
+  kind: z.literal("slack.thread_closed"),
+  sessionId: z.string().min(1),
+  timestamp: z.number().int().nonnegative(),
+  signature: z.string().min(1),
+  context: z.object({ channel: z.string().min(1), threadTs: z.string().min(1) }),
 });
 
 type ToolCallCallbackPayload = z.infer<typeof toolCallCallbackSchema>;
@@ -179,6 +195,9 @@ async function enqueueCompletion(
   path: string,
   startTime: number
 ): Promise<Response> {
+  if (await isThreadSessionClosed(c.env, job.channel, job.threadTs, job.sessionId)) {
+    return c.json({ ok: true });
+  }
   try {
     await c.env.SLACK_COMPLETION_QUEUE.send(job, { contentType: "json" });
   } catch (error) {
@@ -208,6 +227,65 @@ async function enqueueCompletion(
 }
 
 export const callbacksRouter = new Hono<{ Bindings: Env }>();
+
+callbacksRouter.post("/thread_closed", async (c) => {
+  const startTime = Date.now();
+  const traceId = c.req.header("x-trace-id") || crypto.randomUUID();
+  let payload: unknown;
+  try {
+    payload = await c.req.json();
+  } catch {
+    return rejectInvalidPayload(c, "/callbacks/thread_closed", traceId, startTime);
+  }
+  const parsed = threadClosedCallbackSchema.safeParse(payload);
+  if (!parsed.success || !isSignedCallbackPayload(payload)) {
+    return rejectInvalidPayload(c, "/callbacks/thread_closed", traceId, startTime);
+  }
+  const rejection = await rejectInvalidCallback(c, payload, {
+    path: "/callbacks/thread_closed",
+    traceId,
+    startTime,
+  });
+  if (rejection) return rejection;
+  const valid = parsed.data;
+  if (Math.abs(startTime - valid.timestamp) > TOKEN_VALIDITY_MS) {
+    return c.json({ error: "unauthorized" }, 401);
+  }
+  const { channel, threadTs } = valid.context;
+  try {
+    await closeThreadSession(c.env, channel, threadTs, valid.sessionId);
+    const mapping = await lookupThreadSession(c.env, channel, threadTs);
+    if (mapping && mapping.sessionId !== valid.sessionId) return c.json({ ok: true });
+    if (await isThreadClosureNoticeSent(c.env, channel, threadTs, valid.sessionId)) {
+      return c.json({ ok: true });
+    }
+  } catch (error) {
+    log.error("slack.thread_closed.persist", {
+      trace_id: traceId,
+      session_id: valid.sessionId,
+      error: error instanceof Error ? error : new Error(String(error)),
+    });
+    return c.json({ error: "closure persistence failed" }, 503);
+  }
+  try {
+    const result = await postMessage(c.env.SLACK_BOT_TOKEN, channel, THREAD_CLOSED_MESSAGE, {
+      thread_ts: threadTs,
+    });
+    if (!result.ok) {
+      log.warn("slack.thread_closed.post", { trace_id: traceId, slack_error: result.error });
+      return c.json({ error: "closure notice delivery failed" }, 503);
+    }
+    await markThreadClosureNoticeSent(c.env, channel, threadTs, valid.sessionId);
+  } catch (error) {
+    log.error("slack.thread_closed.deliver", {
+      trace_id: traceId,
+      session_id: valid.sessionId,
+      error: error instanceof Error ? error : new Error(String(error)),
+    });
+    return c.json({ error: "closure notice delivery failed" }, 503);
+  }
+  return c.json({ ok: true });
+});
 
 /**
  * Callback endpoint for session completion notifications.

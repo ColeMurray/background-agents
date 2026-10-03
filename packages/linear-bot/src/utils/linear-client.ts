@@ -33,6 +33,12 @@ export const LINEAR_GRAPHQL_TIMEOUT_MS = 15_000;
 /** Largest non-2xx response body read to recover Linear's error messages. */
 const LINEAR_ERROR_BODY_MAX_BYTES = 16 * 1024;
 
+const linearIssueTeamResponseSchema = z.object({
+  data: z.object({
+    issue: z.object({ id: z.string(), team: z.object({ id: z.string() }) }).nullable(),
+  }),
+});
+
 const linearCommentCreateResponseSchema = z.object({
   data: z
     .object({
@@ -429,6 +435,40 @@ export async function verifyLinearWebhook(
 }
 
 // ─── Comment Posting (fallback) ──────────────────────────────────────────────
+
+/**
+ * Read an issue's current Linear team with the fallback API key. Returns null when the
+ * issue cannot be verified, so callers withhold content rather than guess the destination.
+ */
+export async function fetchIssueTeamIdWithApiKey(
+  apiKey: string,
+  issueId: string
+): Promise<string | null> {
+  try {
+    const response = await fetch(LINEAR_API_URL, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: apiKey,
+      },
+      body: JSON.stringify({
+        query: `
+          query IssueTeam($id: String!) {
+            issue(id: $id) { id team { id } }
+          }
+        `,
+        variables: { id: issueId },
+      }),
+      signal: AbortSignal.timeout(LINEAR_GRAPHQL_TIMEOUT_MS),
+    });
+    if (!response.ok) return null;
+    const result = linearIssueTeamResponseSchema.safeParse(await response.json().catch(() => null));
+    const issue = result.success ? result.data.data.issue : null;
+    return issue?.id === issueId ? issue.team.id.trim() || null : null;
+  } catch {
+    return null;
+  }
+}
 
 export async function postIssueComment(
   apiKey: string,

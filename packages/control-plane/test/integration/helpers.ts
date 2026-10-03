@@ -242,6 +242,7 @@ export async function initSession(overrides?: {
   reasoningEffort?: string;
   sandboxSettings?: SandboxSettings;
   userId?: string;
+  canonicalUserId?: string;
   scmLogin?: string;
   providerAuth?: SessionModelProviderAuthInput[];
 }) {
@@ -277,7 +278,7 @@ export async function initSession(overrides?: {
     ],
     environmentId: defaults.environmentId ?? null,
     status: "created",
-    userId: defaults.userId,
+    userId: defaults.canonicalUserId ?? defaults.userId,
     providerAuth,
     createdAt: now,
     updatedAt: now,

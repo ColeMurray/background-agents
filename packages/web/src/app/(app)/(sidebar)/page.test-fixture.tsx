@@ -28,6 +28,7 @@ const mocks = vi.hoisted(() => {
     requireTeamOnCreate: false,
   };
   return {
+    userId: "user-1",
     routerPush: vi.fn(),
     toastError: vi.fn(),
     mutateMock: vi.fn(),
@@ -123,7 +124,7 @@ export const environment = {
 };
 
 vi.mock("@/lib/auth-session", () => ({
-  useAuthSession: () => ({ data: { user: { id: "user-1" } }, status: "authenticated" }),
+  useAuthSession: () => ({ data: { user: { id: mocks.userId } }, status: "authenticated" }),
 }));
 
 vi.mock("@/hooks/use-current-user-authorization", () => ({
@@ -277,6 +278,7 @@ beforeEach(() => {
   mocks.providerAccountsLoadingValue = false;
   mocks.keyboardShortcuts = DEFAULT_KEYBOARD_SHORTCUTS;
   mocks.canCreateSession = true;
+  mocks.userId = "user-1";
   mocks.activeTeamId = null;
   mocks.scope = undefined;
   mocks.teams = [];
@@ -308,6 +310,7 @@ beforeEach(() => {
 afterEach(() => {
   cleanup();
   localStorage.clear();
+  sessionStorage.clear();
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
 });

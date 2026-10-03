@@ -102,6 +102,90 @@ describe("RunHistory", () => {
     expect(screen.queryByRole("button", { name: /repositories/ })).not.toBeInTheDocument();
   });
 
+  it("renders a childless unauthorized firing as a grant denial without a session", () => {
+    const invocation = makeInvocation({
+      status: "unauthorized",
+      source: "event",
+      skipReason: "repo_not_granted",
+      runs: [],
+    });
+
+    render(<RunHistory invocations={[invocation]} total={1} loading={false} hasMore={false} />);
+
+    expect(screen.getByText("Unauthorized")).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        "Repository is not granted to the automation's team. No sandbox or session was created."
+      )
+    ).toBeInTheDocument();
+    expect(screen.queryByText("repo_not_granted")).not.toBeInTheDocument();
+    expect(screen.queryByRole("link")).not.toBeInTheDocument();
+  });
+
+  it.each(["skipReason", "failureReason"] as const)(
+    "renders an unauthorized run's %s as a grant denial, not a launched session",
+    (reasonField) => {
+      const invocation = makeInvocation({
+        status: "unauthorized",
+        source: "event",
+        runs: [
+          makeRun({
+            status: "unauthorized",
+            sessionId: null,
+            sessionTitle: null,
+            startedAt: null,
+            [reasonField]: "repo_not_granted",
+          }),
+        ],
+      });
+
+      render(<RunHistory invocations={[invocation]} total={1} loading={false} hasMore={false} />);
+
+      expect(screen.getByText("Unauthorized")).toBeInTheDocument();
+      expect(
+        screen.getByText(
+          "Repository is not granted to the automation's team. No sandbox or session was created."
+        )
+      ).toBeInTheDocument();
+      expect(screen.queryByText("repo_not_granted")).not.toBeInTheDocument();
+      expect(screen.queryByText("1m 0s")).not.toBeInTheDocument();
+      expect(screen.queryByRole("link")).not.toBeInTheDocument();
+    }
+  );
+
+  it("counts unauthorized targets and shows their grant denial in expanded history", () => {
+    const invocation = makeInvocation({
+      status: "partial_failed",
+      runs: [
+        makeRun(),
+        makeRun({
+          id: "run-denied",
+          status: "unauthorized",
+          repoName: "api",
+          sessionId: null,
+          sessionTitle: null,
+          startedAt: null,
+          failureReason: "repo_not_granted",
+        }),
+      ],
+    });
+
+    render(<RunHistory invocations={[invocation]} total={1} loading={false} hasMore={false} />);
+
+    expect(screen.getByText("1 completed, 1 unauthorized")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: /2 repositories/ }));
+    expect(screen.getByText("Unauthorized")).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        "Repository is not granted to the automation's team. No sandbox or session was created."
+      )
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByRole("link", { name: "View session for acme/api" })
+    ).not.toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "View session for acme/web-app" })).toBeInTheDocument();
+  });
+
   it("renders a failed single run with its failure reason", () => {
     const invocation = makeInvocation({
       status: "failed",

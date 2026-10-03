@@ -108,6 +108,8 @@ Automation definitions and run history are visible workspace-wide to any role wi
 
 Ownership follows the signed-in account that created the automation, not a display name or an external provider username.
 
+Creating an automation also requires permission to create sessions, because its scheduled and event-driven runs execute under the creator's authority.
+
 | Run type                   | Runs under whose authority                                                                                                                                                                                                                                      |
 | -------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Scheduled and event-driven | The automation owner. At run time the owner must still be active and allowed to create sessions and use every selected repository or environment. If not, the run does not start.                                                                               |

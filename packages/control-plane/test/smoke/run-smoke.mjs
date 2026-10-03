@@ -29,6 +29,7 @@ const BRIDGE_REPLY = process.env.BRIDGE_REPLY ?? "Acknowledged by the smoke brid
  */
 const ACTOR = "slack:U-COMPOSE-SMOKE";
 const ACTOR_EMAIL = "compose-smoke@open-inspect.test";
+const CHANNEL_SCOPE = "slack:CCOMPOSESMOKE";
 
 /** Budgets for the two waits that depend on the container doing real work. */
 const PROMPT_ROUND_TRIP_TIMEOUT_MS = 60_000;
@@ -198,11 +199,14 @@ async function attachmentRoundTrip(sessionId) {
   // Serialized once so the signature covers the exact multipart bytes sent.
   const encoded = new Request("http://smoke.invalid/", { method: "POST", body: form });
   const body = new Uint8Array(await encoded.arrayBuffer());
-  const upload = await signedRequest(`/sessions/${sessionId}/attachments`, {
-    method: "POST",
-    body,
-    headers: { "Content-Type": encoded.headers.get("Content-Type") },
-  });
+  const upload = await signedRequest(
+    `/sessions/${sessionId}/attachments?channel=${encodeURIComponent(CHANNEL_SCOPE)}`,
+    {
+      method: "POST",
+      body,
+      headers: { "Content-Type": encoded.headers.get("Content-Type") },
+    }
+  );
   const uploaded = await upload.json().catch(() => null);
   if (upload.status !== 201) fail(`attachment upload returned ${upload.status}`, uploaded);
   if (!uploaded?.attachmentId) fail("attachment upload returned no attachmentId", uploaded);
@@ -250,10 +254,13 @@ async function main() {
   pass("client socket subscribed");
 
   const promptContent = "Say hello from the compose smoke.";
-  const prompt = await signedFetch(`/sessions/${sessionId}/prompt`, {
-    method: "POST",
-    body: { content: promptContent },
-  });
+  const prompt = await signedFetch(
+    `/sessions/${sessionId}/prompt?channel=${encodeURIComponent(CHANNEL_SCOPE)}`,
+    {
+      method: "POST",
+      body: { content: promptContent },
+    }
+  );
   if (prompt.status !== 200 && prompt.status !== 202) {
     fail(`prompt returned ${prompt.status}`, prompt.body);
   }

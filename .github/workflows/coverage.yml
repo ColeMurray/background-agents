@@ -1,0 +1,59 @@
+name: Coverage
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  coverage:
+    name: Coverage
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v6
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - uses: astral-sh/setup-uv@v6
+        with:
+          version: "0.9.7"
+      - name: Install and build shared
+        run: |
+          npm ci
+          npm run build -w @open-inspect/shared
+      - name: Test the coverage gate
+        run: node --test scripts/check-coverage.test.mjs
+      - name: Enforce TypeScript coverage
+        run: |
+          for package in control-plane web shared slack-bot linear-bot github-bot; do
+            npm run test:coverage -w "@open-inspect/$package" -- --maxWorkers=1
+            node scripts/check-coverage.mjs "$package" "packages/$package/coverage/coverage-summary.json"
+          done
+      - name: Enforce Python statement and branch coverage
+        run: |
+          for package in modal-infra sandbox-runtime; do
+            uv run --frozen --project "packages/$package" --extra dev pytest "packages/$package/tests" --cov="packages/$package/src" --cov-branch --cov-report="json:packages/$package/coverage/coverage.json"
+            node scripts/check-coverage.mjs "$package" "packages/$package/coverage/coverage.json"
+          done
+      - name: Upload coverage reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: production-coverage
+          path: packages/*/coverage/
+          if-no-files-found: error

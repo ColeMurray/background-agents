@@ -1,11 +1,13 @@
 import { postBlocks, postMessage, removeReaction } from "@open-inspect/shared/slack";
 import type { AgentResponse } from "@open-inspect/shared/types/artifacts";
+import { ProtectedReadError } from "@open-inspect/shared/completion/extractor";
 import type { Env } from "../types";
 import { createLogger } from "../logger";
 import { extractAgentResponse } from "./extractor";
 import { buildCompletionBlocks, truncateError } from "./blocks";
 import { deliverMediaArtifacts } from "./media-upload";
 import type { SlackCompletionJob } from "./job";
+import { isThreadSessionClosed } from "../sessions/thread-session-store";
 
 const log = createLogger("completion-delivery");
 
@@ -48,7 +50,15 @@ export function shouldDeclineReply(
   return text === "" || NO_REPLY_PATTERN.test(text);
 }
 
-export async function processSlackCompletion(job: SlackCompletionJob, env: Env): Promise<void> {
+export type SlackCompletionDeliveryResult =
+  | { kind: "ack" }
+  /** Preparation failures before any publication attempt permit replay. */
+  | { kind: "retry" };
+
+export async function processSlackCompletion(
+  job: SlackCompletionJob,
+  env: Env
+): Promise<SlackCompletionDeliveryResult> {
   const startTime = Date.now();
   const base = {
     trace_id: job.traceId,
@@ -58,14 +68,42 @@ export async function processSlackCompletion(job: SlackCompletionJob, env: Env):
     message_id: job.messageId,
     channel: job.channel,
   };
+  let shouldClearReaction = false;
+  let publicationAttempted = false;
 
   try {
+    if (await isThreadSessionClosed(env, job.channel, job.threadTs, job.sessionId))
+      return { kind: "ack" };
     const agentResponse = await extractAgentResponse(
       env,
       job.sessionId,
       job.messageId,
+      job.channel,
       job.traceId
     );
+    if (await isThreadSessionClosed(env, job.channel, job.threadTs, job.sessionId))
+      return { kind: "ack" };
+    const mediaArtifacts = agentResponse.mediaArtifacts ?? [];
+    let unavailableMedia = 0;
+    // Complete protected media reads before emitting any completion message or fallback metadata.
+    if (mediaArtifacts.length > 0) {
+      const mediaResult = await deliverMediaArtifacts({
+        env,
+        sessionId: job.sessionId,
+        messageId: job.messageId,
+        channel: job.channel,
+        threadTs: job.threadTs,
+        artifacts: mediaArtifacts,
+        traceId: job.traceId,
+        onShareAttempt: () => {
+          publicationAttempted = true;
+        },
+      });
+      unavailableMedia = mediaResult.failed + mediaResult.omitted;
+      if (await isThreadSessionClosed(env, job.channel, job.threadTs, job.sessionId))
+        return { kind: "ack" };
+    }
+    shouldClearReaction = true;
     agentResponse.error = agentResponse.error || job.error;
 
     if (!agentResponse.textContent && agentResponse.toolCalls.length === 0 && !job.success) {
@@ -77,6 +115,7 @@ export async function processSlackCompletion(job: SlackCompletionJob, env: Env):
         agent_error: agentResponse.error || "Unknown error",
         duration_ms: Date.now() - startTime,
       });
+      publicationAttempted = true;
       await postMessage(env.SLACK_BOT_TOKEN, job.channel, `The agent failed: ${displayError}`, {
         thread_ts: job.threadTs,
         blocks: [
@@ -97,7 +136,7 @@ export async function processSlackCompletion(job: SlackCompletionJob, env: Env):
           },
         ],
       });
-      return;
+      return { kind: "ack" };
     }
 
     if (shouldDeclineReply(job, agentResponse)) {
@@ -109,7 +148,7 @@ export async function processSlackCompletion(job: SlackCompletionJob, env: Env):
         tool_call_count: agentResponse.toolCalls.length,
         duration_ms: Date.now() - startTime,
       });
-      return;
+      return { kind: "ack" };
     }
 
     const blocks = buildCompletionBlocks(
@@ -125,6 +164,7 @@ export async function processSlackCompletion(job: SlackCompletionJob, env: Env):
       env.WEB_APP_URL
     );
     // Without top-level text, Slack derives screen-reader text from the blocks.
+    publicationAttempted = true;
     const postResult = await postBlocks(env.SLACK_BOT_TOKEN, job.channel, blocks, {
       thread_ts: job.threadTs,
     });
@@ -136,29 +176,19 @@ export async function processSlackCompletion(job: SlackCompletionJob, env: Env):
         retry_after: postResult.retryAfter,
       });
       // A network error can be ambiguous; replaying the job may duplicate a Slack completion.
-      return;
+      return { kind: "ack" };
     }
 
-    const mediaArtifacts = agentResponse.mediaArtifacts ?? [];
-    if (mediaArtifacts.length > 0) {
-      const mediaResult = await deliverMediaArtifacts({
-        env,
-        sessionId: job.sessionId,
-        messageId: job.messageId,
-        channel: job.channel,
-        threadTs: job.threadTs,
-        artifacts: mediaArtifacts,
-        traceId: job.traceId,
-      });
-      const unavailable = mediaResult.failed + mediaResult.omitted;
-      if (unavailable > 0) {
-        await postMessage(
-          env.SLACK_BOT_TOKEN,
-          job.channel,
-          `${unavailable} media artifact${unavailable === 1 ? " is" : "s are"} available in the session but could not be attached here.`,
-          { thread_ts: job.threadTs }
-        );
-      }
+    if (
+      unavailableMedia > 0 &&
+      !(await isThreadSessionClosed(env, job.channel, job.threadTs, job.sessionId))
+    ) {
+      await postMessage(
+        env.SLACK_BOT_TOKEN,
+        job.channel,
+        `${unavailableMedia} media artifact${unavailableMedia === 1 ? " is" : "s are"} available in the session but could not be attached here.`,
+        { thread_ts: job.threadTs }
+      );
     }
 
     log.info("callback.complete", {
@@ -171,6 +201,7 @@ export async function processSlackCompletion(job: SlackCompletionJob, env: Env):
       has_text: Boolean(agentResponse.textContent),
       duration_ms: Date.now() - startTime,
     });
+    return { kind: "ack" };
   } catch (error) {
     log.error("callback.complete", {
       ...base,
@@ -178,8 +209,15 @@ export async function processSlackCompletion(job: SlackCompletionJob, env: Env):
       error: error instanceof Error ? error : new Error(String(error)),
       duration_ms: Date.now() - startTime,
     });
+    if (!publicationAttempted) shouldClearReaction = false;
+    return {
+      kind:
+        publicationAttempted || (error instanceof ProtectedReadError && error.kind === "denied")
+          ? "ack"
+          : "retry",
+    };
   } finally {
-    if (job.reactionMessageTs) {
+    if (shouldClearReaction && job.reactionMessageTs) {
       await clearThinkingReaction(env, job.channel, job.reactionMessageTs, job.traceId);
     }
   }

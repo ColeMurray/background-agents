@@ -4,7 +4,45 @@ New features, integrations, and notable improvements to Open-Inspect — newest 
 
 ## Unreleased
 
+### Added
+
+Team leads and workspace administrators can bind Linear teams from a team's Channels tab. Linear
+requests create sessions in the bound team with current actor membership and repository-grant
+checks, including for the installed app user used by unattended requests. Settings > Integrations >
+Linear controls whether unbound teams create workspace-level sessions (the default) or reject
+requests until bound. Catalog and completion reads carry the signed Linear team coordinate.
+Completion results post only while the issue remains in its launching Linear team; otherwise, or
+when the session can no longer be read for that team, Linear receives a notice without session
+content.
+
 ### Changed
+
+**Team-aware GitHub routing.** GitHub routing uses numeric repository IDs so renames do not change
+the team destination. Each matching event automation fires once for its owning team when that team
+has a repository or installation grant, using its own executor and creating a team-owned session. An
+automation whose team has lost the repository grant records an `unauthorized` run with reason
+`repo_not_granted`, without creating a sandbox or session. Mentions use the pull request's existing
+session team first, then the sender's granted team; when several teams qualify, the sender's most
+recent session in that repository breaks the tie. Otherwise routing falls back to workspace
+ownership. Trigger-user allowlists, membership checks, and creation-time repository grant checks
+still apply. Autofix continues in the pull request's existing session. `requireTeamOnCreate` remains
+enforced: workspace fallback does not bypass the require-team creation policy.
+
+GitHub grant-version races are retried with fresh admission checks. If they do not settle, the event
+remains eligible for redelivery rather than being finalized as skipped. Forwarding retries retain
+completed bot startup/refusal progress without storing session data or repeating those effects.
+Redelivery is not scheduled automatically; partial startup failures and KV consistency still prevent
+an exactly-once guarantee. Neutral grant denials no longer hide a missed successful failure reset.
+
+GitHub automation selections with unresolved repository IDs no longer match events by name. Reselect
+and save their repositories to resolve IDs. Upgrade the GitHub bot and control plane together: event
+envelopes without a numeric repository ID are rejected rather than routed by display names.
+
+**GitHub auto-review is deprecated.** Global and repository-override **Auto-review new PRs**
+settings now point to the existing **Review new PRs** automation template. Create a team-owned
+automation from that template to replace the setting. During the deprecation window, legacy
+auto-review remains workspace-owned and subject to `requireTeamOnCreate`; it does not select a team
+automatically.
 
 Team-owned session actions now require current owning-team membership in every `TEAMS_ENFORCEMENT`
 mode, including for Owners and Administrators. Visibility still determines read access; collaborator
@@ -55,6 +93,18 @@ session ownership. Team-only legacy OAuth refresh tokens do not enable managed a
 keys remain usable. Team-secret read and decryption errors abort environment builds rather than
 falling back to other secret scopes.
 
+Team leads and administrators can manage primary and source Slack channel bindings in a team's
+Channels tab. Settings > Integrations > Slack now controls whether unbound channels create
+workspace-level sessions (the default) or reject requests until bound. Binding changes appear in the
+workspace audit log.
+
+Slack-created sessions carry the channel's team and enforce the requesting user's membership.
+Unavailable threads close instead of starting replacement sessions; a later reply reopens the thread
+once the channel's binding and the session's visibility allow posting again. Session notifications
+and the `slack-notify` tool refuse private sessions and destinations bound to another team,
+including queued completion text and media. Slack-triggered automations run only in channels
+matching their ownership.
+
 **Team-owned environments.** The environment form offers team ownership, and team pages include an
 Environments tab. Team environments are visible to their members and administrators, and controls
 use server capabilities. Environment names are unique within each team. Sessions, including
@@ -66,6 +116,18 @@ environment secrets, settings, or images now also requires `environments.manage`
 holding only `environments.secrets.manage`, `environments.settings.manage`, or
 `environments.images.manage` lose those actions. Actorless bots see only workspace environments,
 both in lists and by ID.
+
+**Team-owned automations.** The automation form offers team ownership, and team pages include an
+Automations tab. Team automations are visible to their members and administrators, and controls use
+server capabilities. Automation leads can manage team work and reassign departed executors; executor
+reassignment verifies the candidate's launch permissions before writing and is audited as
+`automation.executor_changed`. Selected environments must belong to the automation's team.
+Executions require active membership, an unarchived team, and current repository grants, and their
+sessions inherit the team's default visibility. Slack follow-ups use the persisted session's
+collaboration decision, and automation history redacts inaccessible session metadata. Existing
+automations retain their ownership and visibility. The require-team creation setting also applies to
+new automations. These owned-resource checks apply in every session enforcement mode; source-control
+token narrowing remains a separate change.
 
 ### Removed
 

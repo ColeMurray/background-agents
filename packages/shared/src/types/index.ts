@@ -107,12 +107,32 @@ export type { Team, TeamRole, TeamJoinPolicy, SessionVisibility, TeamMembership 
 export { teamIdSchema } from "./team-id";
 
 export {
+  teamChannelBindingProviderSchema,
+  teamChannelBindingKindSchema,
+  teamChannelBindingSchema,
+  putTeamChannelBindingRequestSchema,
+  teamChannelBindingResponseSchema,
+  teamChannelBindingsResponseSchema,
+  channelBindingResponseSchema,
+} from "./team-channel-bindings";
+export type {
+  TeamChannelBindingProvider,
+  TeamChannelBindingKind,
+  TeamChannelBinding,
+  PutTeamChannelBindingRequest,
+  TeamChannelBindingResponse,
+  TeamChannelBindingsResponse,
+  ChannelBindingResponse,
+} from "./team-channel-bindings";
+
+export {
   SESSION_ACTIONS,
   AUTOMATION_ACTIONS,
   ENVIRONMENT_ACTIONS,
   checkSessionAccess,
   sessionCapabilities,
   checkAutomationAccess,
+  checkAutomationExecutorReassignment,
   automationCapabilities,
   checkEnvironmentAccess,
   environmentCapabilities,
@@ -303,6 +323,8 @@ export type {
   AutomationRepository,
   AutomationRepositoryInput,
   Automation,
+  AutomationCapabilities,
+  AutomationView,
   AutomationExecutionSummary,
   AutomationListItem,
   CreateAutomationRequest,
@@ -389,6 +411,7 @@ export {
   ANALYTICS_DAYS,
   ANALYTICS_BREAKDOWN_BY,
   ANALYTICS_SCOPES,
+  DEFAULT_ANALYTICS_DAYS,
   DEFAULT_ANALYTICS_SCOPE,
   ANALYTICS_SPAWN_SOURCE_SCOPE,
   ANALYTICS_SCOPE_SPAWN_SOURCES,
@@ -407,6 +430,7 @@ export type {
   AnalyticsTimeseriesResponse,
   AnalyticsBreakdownEntry,
   AnalyticsBreakdownResponse,
+  AnalyticsSessionOriginEntry,
   SessionRun,
   AnalyticsRunsResponse,
   AnalyticsPullRequestFunnel,

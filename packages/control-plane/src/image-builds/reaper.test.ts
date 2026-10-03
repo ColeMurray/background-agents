@@ -272,11 +272,16 @@ describe("ImageBuildReaper unbound source recovery", () => {
 });
 
 describe("ImageBuildReaper orphan operation reconciliation", () => {
-  const operation = (id: string, createdAt: number = conclusivelyAbsentAt) => ({
+  const operation = (
+    id: string,
+    createdAt: number = conclusivelyAbsentAt,
+    deadlineAt: number | null = null
+  ) => ({
     id,
     provider: "daytona" as const,
     provider_session_id: "sandbox-7",
     provider_operation_ref: `oi-image-${id}`,
+    provider_operation_deadline_at: deadlineAt,
     created_at: createdAt,
   });
 
@@ -297,7 +302,11 @@ describe("ImageBuildReaper orphan operation reconciliation", () => {
 
   it("settles an absent operation only once a capture can no longer be running", async () => {
     const store = createStore();
-    store.listUnresolvedOperations.mockResolvedValue([operation("b-1")]);
+    // No deadline recorded — every row written before the reservation column
+    // existed — so the registration-anchored estimate is the only bound.
+    store.listUnresolvedOperations.mockResolvedValue([
+      operation("b-1", conclusivelyAbsentAt, null),
+    ]);
     const adapter = createRecoverableAdapter();
     adapter.reconcileOrphanOperation.mockResolvedValue({ type: "absent" });
     const { reaper } = createReaper({ store, adapter });
@@ -322,6 +331,39 @@ describe("ImageBuildReaper orphan operation reconciliation", () => {
     // nothing on the row naming it.
     expect(result).toEqual({ reconciled: 0, retained: 1 });
     expect(store.clearProviderOperation).not.toHaveBeenCalled();
+  });
+
+  it("keeps an absent operation whose recorded deadline has not passed", async () => {
+    const store = createStore();
+    // The registration-anchored estimate has lapsed, but the capture was
+    // reserved late enough that its own deadline is still live: the source it
+    // reads is still there to publish a snapshot nothing else would name.
+    store.listUnresolvedOperations.mockResolvedValue([
+      operation("b-1", conclusivelyAbsentAt, now + 1),
+    ]);
+    const adapter = createRecoverableAdapter();
+    adapter.reconcileOrphanOperation.mockResolvedValue({ type: "absent" });
+    const { reaper } = createReaper({ store, adapter });
+
+    const result = await reaper.reconcileUnresolvedOperations(ctx, now);
+
+    expect(result).toEqual({ reconciled: 0, retained: 1 });
+    expect(store.clearProviderOperation).not.toHaveBeenCalled();
+  });
+
+  it("settles an absent operation once its recorded deadline has passed", async () => {
+    const store = createStore();
+    // Exhausted at the deadline, not after it, exactly as the attempt that
+    // reserved it gives up.
+    store.listUnresolvedOperations.mockResolvedValue([operation("b-1", conclusivelyAbsentAt, now)]);
+    const adapter = createRecoverableAdapter();
+    adapter.reconcileOrphanOperation.mockResolvedValue({ type: "absent" });
+    const { reaper } = createReaper({ store, adapter });
+
+    const result = await reaper.reconcileUnresolvedOperations(ctx, now);
+
+    expect(result).toEqual({ reconciled: 1, retained: 0 });
+    expect(store.clearProviderOperation).toHaveBeenCalledWith("b-1", "oi-image-b-1");
   });
 
   it("keeps an operation that has not settled", async () => {

@@ -1,20 +1,10 @@
 /**
- * Control-plane read plumbing shared by the bot's cached data modules
- * (repos, environments): the authenticated fetch and the cache TTLs every
- * cached read uses. Mirrors slack-bot's classifier/control-plane.ts.
+ * Team-scoped control-plane reads shared by the repos, environments, and
+ * integration-settings modules.
  */
 
-import type { Env } from "./types";
+import type { Env, LinearChannelScope } from "./types";
 import { signedControlPlaneFetch } from "./internal-auth";
-
-/** Local cache TTL in milliseconds (1 minute). */
-export const LOCAL_CACHE_TTL_MS = 60 * 1000;
-
-/**
- * Expiration for the KV last-known-good caches (repos, environments), in
- * seconds — the unit Cloudflare KV's `expirationTtl` expects.
- */
-export const KV_CACHE_TTL_SECONDS = 300;
 
 /** A non-OK control-plane response, carrying the status for structured logs. */
 export class ControlPlaneRequestError extends Error {
@@ -28,18 +18,25 @@ export class ControlPlaneRequestError extends Error {
 }
 
 /**
- * GET a control-plane endpoint and return its JSON body, throwing
- * {@link ControlPlaneRequestError} on a non-OK response — the loader shape
- * cached resources expect.
+ * GET a control-plane endpoint on behalf of one Linear team and return its JSON
+ * body, throwing {@link ControlPlaneRequestError} on a non-OK response.
  */
 export async function fetchControlPlaneJson(
   env: Env,
   path: string,
+  scope: LinearChannelScope,
   traceId?: string
 ): Promise<unknown> {
+  const url = new URL(`https://internal${path}`);
+  url.searchParams.set("channel", `linear:${scope.linearTeamId}`);
   const response = await signedControlPlaneFetch(
     env,
-    { method: "GET", url: `https://internal${path}`, traceId },
+    {
+      method: "GET",
+      url: url.toString(),
+      traceId,
+      actor: scope.actorUserId ? `linear:${scope.actorUserId}` : undefined,
+    },
     { headers: { Accept: "application/json" } }
   );
   if (!response.ok) {

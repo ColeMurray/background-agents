@@ -108,6 +108,11 @@ export type ProjectRepoMapping = Record<string, z.infer<typeof projectTargetSche
 
 // ─── Issue-to-Session Mapping ────────────────────────────────────────────────
 
+export interface LinearChannelScope {
+  linearTeamId: string;
+  actorUserId?: string;
+}
+
 /**
  * The issue→session mapping persisted in KV. Canonical as a schema because the
  * stored value is untrusted on read: `lookupIssueSession` parses with this, so
@@ -117,6 +122,8 @@ export const issueSessionSchema = z.object({
   sessionId: z.string(),
   issueId: z.string(),
   issueIdentifier: z.string(),
+  /** External Linear team coordinate; optional for mappings stored before bindings. */
+  linearTeamId: z.string().trim().min(1).optional(),
   /** Set for repository sessions; absent for environment sessions. */
   repoOwner: z.string().optional(),
   repoName: z.string().optional(),
