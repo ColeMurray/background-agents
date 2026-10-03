@@ -45,8 +45,6 @@ on:
 
 permissions:
   contents: read
-  pull-requests: write
-  issues: write
 
 concurrency:
   group: terraform-${{ github.ref }}
@@ -90,6 +88,12 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     needs: [check-secrets]
+    outputs:
+      fmt: ${{ steps.fmt.outcome }}
+      init: ${{ steps.init.outcome }}
+      validate: ${{ steps.validate.outcome }}
+      test: ${{ steps.test.outcome }}
+      modal-test: ${{ steps.modal_test.outcome }}
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -129,50 +133,14 @@ jobs:
           terraform test
         working-directory: terraform/modules/modal-app
 
-      - name: Post Validation Results
-        if: always() && github.event_name == 'pull_request'
-        uses: actions/github-script@v8
-        with:
-          script: |
-            const hasSecrets = '${{ needs.check-secrets.outputs.has-secrets }}' === 'true';
-            const planNote = hasSecrets
-              ? ''
-              : '\n\n> **Note:** Terraform plan was skipped because secrets are not configured. This is expected for external contributors. See [docs/GETTING_STARTED.md](docs/GETTING_STARTED.md) for setup instructions.';
-
-            const output = `### Terraform Validation Results
-
-            | Step | Status |
-            |------|--------|
-            | Format | ${{ steps.fmt.outcome == 'success' && '✅' || '⚠️' }} |
-            | Init | ${{ steps.init.outcome == 'success' && '✅' || '❌' }} |
-            | Validate | ${{ steps.validate.outcome == 'success' && '✅' || '❌' }} |
-            | Tests | ${{ steps.test.outcome == 'success' && '✅' || '❌' }} |
-            | Modal module tests | ${{ steps.modal_test.outcome == 'success' && '✅' || '❌' }} |
-            ${planNote}
-
-            *Pushed by: @${{ github.actor }}, Action: \`${{ github.event_name }}\`*`;
-
-            try {
-              await github.rest.issues.createComment({
-                issue_number: context.issue.number,
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                body: output
-              });
-            } catch (error) {
-              if (error.status === 403) {
-                core.notice('Could not post PR comment — GITHUB_TOKEN has read-only access (expected for fork PRs).');
-              } else {
-                throw error;
-              }
-            }
-
   plan:
     name: Plan
     runs-on: ubuntu-latest
     timeout-minutes: 15
     needs: [validate, check-secrets]
     if: github.event_name == 'pull_request' && needs.check-secrets.outputs.has-secrets == 'true'
+    outputs:
+      outcome: ${{ steps.plan.outcome }}
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -198,6 +166,8 @@ jobs:
         uses: hashicorp/setup-terraform@v4
         with:
           terraform_version: ${{ env.TF_VERSION }}
+          # Capture output as a file, not the wrapper's multiline step outputs.
+          terraform_wrapper: false
 
       - name: Terraform Init
         env:
@@ -225,11 +195,14 @@ jobs:
 
       - name: Terraform Plan
         id: plan
+        shell: bash
         run: |
+          set -euo pipefail
+          # Plan text must not be interpreted as runner workflow commands either.
+          command_token="$(openssl rand -hex 32)"
+          echo "::stop-commands::$command_token"
+          trap 'printf "\n::%s::\n" "$command_token"' EXIT
           terraform plan -no-color -out=tfplan 2>&1 | tee plan_output.txt
-          echo "plan<<EOF" >> $GITHUB_OUTPUT
-          cat plan_output.txt | head -c 60000 >> $GITHUB_OUTPUT
-          echo "EOF" >> $GITHUB_OUTPUT
         working-directory: ${{ env.TF_WORKING_DIR }}
         continue-on-error: true
         env:
@@ -326,41 +299,114 @@ jobs:
           TF_VAR_docs_site_enabled: "${{ vars.DOCS_SITE_ENABLED || secrets.DOCS_SITE_ENABLED || 'false' }}"
           TF_VAR_docs_custom_domain: ${{ vars.DOCS_CUSTOM_DOMAIN || secrets.DOCS_CUSTOM_DOMAIN }}
 
-      - name: Post Plan Results
-        uses: actions/github-script@v8
+      - name: Prepare Plan Comment
+        if: always() && (steps.plan.outcome == 'success' || steps.plan.outcome == 'failure')
+        env:
+          PLAN_OUTCOME: ${{ steps.plan.outcome }}
+        run: node "$GITHUB_WORKSPACE/scripts/terraform-plan-comment.mjs" plan_output.txt plan_comment.txt "$PLAN_OUTCOME"
+        working-directory: ${{ env.TF_WORKING_DIR }}
+
+      - name: Upload Plan Comment
+        if: always() && (steps.plan.outcome == 'success' || steps.plan.outcome == 'failure')
+        uses: actions/upload-artifact@v4
         with:
-          script: |
-            const planOutcome = '${{ steps.plan.outcome }}';
-            const plan = `${{ steps.plan.outputs.plan }}`;
-
-            const truncatedPlan = plan.length > 60000
-              ? plan.substring(0, 60000) + '\n... (truncated)'
-              : plan;
-
-            const output = `### Terraform Plan Results
-
-            **Status:** ${planOutcome === 'success' ? '✅ Success' : '❌ Failed'}
-
-            <details><summary>Show Plan</summary>
-
-            \`\`\`terraform
-            ${truncatedPlan}
-            \`\`\`
-
-            </details>
-
-            *Pushed by: @${{ github.actor }}*`;
-
-            github.rest.issues.createComment({
-              issue_number: context.issue.number,
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              body: output
-            });
+          name: terraform-plan-comment
+          path: ${{ env.TF_WORKING_DIR }}/plan_comment.txt
+          if-no-files-found: error
+          retention-days: 1
 
       - name: Plan Status
-        if: steps.plan.outcome == 'failure'
+        if: always() && steps.plan.outcome == 'failure'
         run: exit 1
+
+  comment:
+    name: Comment
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    needs: [validate, check-secrets, plan]
+    if: always() && !cancelled() && github.event_name == 'pull_request'
+    permissions:
+      pull-requests: write
+    # No checkout or execution of PR code. Artifacts are read only as comment data.
+    steps:
+      - name: Post Validation Results
+        uses: actions/github-script@v8
+        env:
+          HAS_SECRETS: ${{ needs.check-secrets.outputs.has-secrets }}
+          FORMAT_OUTCOME: ${{ needs.validate.outputs.fmt }}
+          INIT_OUTCOME: ${{ needs.validate.outputs.init }}
+          VALIDATE_OUTCOME: ${{ needs.validate.outputs.validate }}
+          TEST_OUTCOME: ${{ needs.validate.outputs.test }}
+          MODAL_TEST_OUTCOME: ${{ needs.validate.outputs.modal-test }}
+        with:
+          script: |
+            const statuses = {
+              Format: process.env.FORMAT_OUTCOME,
+              Init: process.env.INIT_OUTCOME,
+              Validate: process.env.VALIDATE_OUTCOME,
+              Tests: process.env.TEST_OUTCOME,
+              'Modal module tests': process.env.MODAL_TEST_OUTCOME
+            };
+            const rows = Object.entries(statuses).map(([step, outcome]) =>
+              `| ${step} | ${outcome === 'success' ? 'Success' : outcome || 'skipped'} |`
+            ).join('\n');
+            const planNote = process.env.HAS_SECRETS === 'true'
+              ? ''
+              : '\n\n> **Note:** Terraform plan was skipped because secrets are not configured. This is expected for external contributors. See [docs/GETTING_STARTED.md](docs/GETTING_STARTED.md) for setup instructions.';
+            const output = `### Terraform Validation Results
+
+            | Step | Status |
+            |------|--------|
+            ${rows}
+            ${planNote}
+
+            *Pushed by: @${context.actor}, Action: \`${context.eventName}\`*`;
+
+            try {
+              await github.rest.issues.createComment({
+                issue_number: context.issue.number,
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                body: output
+              });
+            } catch (error) {
+              if (error.status === 403) {
+                core.notice('Could not post PR comment: GITHUB_TOKEN has read-only access (expected for fork PRs).');
+              } else {
+                throw error;
+              }
+            }
+
+      - name: Download Plan Comment
+        if: needs.plan.outputs.outcome == 'success' || needs.plan.outputs.outcome == 'failure'
+        uses: actions/download-artifact@v4
+        with:
+          name: terraform-plan-comment
+          path: ${{ runner.temp }}/terraform-plan-comment
+
+      - name: Post Plan Results
+        if: needs.plan.outputs.outcome == 'success' || needs.plan.outputs.outcome == 'failure'
+        uses: actions/github-script@v8
+        env:
+          PLAN_COMMENT_PATH: ${{ runner.temp }}/terraform-plan-comment/plan_comment.txt
+        with:
+          script: |
+            const fs = require('node:fs');
+            const body = fs.readFileSync(process.env.PLAN_COMMENT_PATH, 'utf8');
+            try {
+              await github.rest.issues.createComment({
+                issue_number: context.issue.number,
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                body
+              });
+            } catch (error) {
+              if (error.status === 403) {
+                core.notice('Could not post PR comment: GITHUB_TOKEN has read-only access (expected for fork PRs).');
+              } else {
+                throw error;
+              }
+            }
 
   apply:
     name: Apply
