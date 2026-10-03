@@ -7,15 +7,11 @@ import { MEMORY_SEARCH_LIMITS, memorySearchSchema } from "@open-inspect/shared/t
 import { createNodeSqlDatabase, type NodeSqlDatabase } from "../node/sqlite-database";
 import { applyMigrations } from "../node/migrate";
 import { seedSearchFacts } from "../../test/conformance/memory-search-fixtures";
-import { searchMemories, type MemorySearchScope } from "./memory-search";
+import { searchMemories, type SearchPartition } from "./memory-search";
 import type { SqlDatabase } from "./sql-database";
 
 const OWNER = "owner";
-const personal: MemorySearchScope = {
-  scope: { type: "personal" },
-  ownerUserId: OWNER,
-  repoId: null,
-};
+const personal: SearchPartition = { partition: { type: "personal", userId: OWNER } };
 let db: NodeSqlDatabase;
 beforeEach(() => {
   const sqlite = new DatabaseSync(":memory:");
@@ -29,16 +25,14 @@ afterEach(() => db.close());
 
 describe("portable memory search", () => {
   it("uses real Node SQLite, preserves ranking across scopes and respects result limits", async () => {
-    const environment: MemorySearchScope = {
-      scope: { type: "environment", environmentId: "dev" },
-      ownerUserId: null,
-      repoId: null,
+    const environment: SearchPartition = {
+      partition: { type: "environment", environmentId: "dev" },
     };
     await seedSearchFacts(db, OWNER, [
       { id: "personal-body", content: "needle", updatedAt: 100 },
-      { id: "environment-title", title: "needle", scope: environment.scope },
+      { id: "environment-title", title: "needle", partition: environment.partition },
       { id: "personal-title", title: "needle" },
-      { id: "other-owner", title: "needle", ownerUserId: "other" },
+      { id: "other-owner", title: "needle", partition: { type: "personal", userId: "other" } },
     ]);
     expect(
       await searchMemories(db, memorySearchSchema.parse({ query: "needle", limit: 2 }), [

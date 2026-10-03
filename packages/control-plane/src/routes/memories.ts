@@ -2,26 +2,36 @@ import { Hono } from "hono";
 import { z } from "zod";
 import {
   createMemorySchema,
+  MEMORY_ACTIONS,
+  MEMORY_LIST_MAX_PAGE_SIZE,
+  MEMORY_LIST_PAGE_SIZE,
   memoryActionSchema,
   memoryPreferencesSchema,
-  memoryScopeSchema,
+  memoryPreviewSchema,
+  memoryScopeFromSearchParams,
   memoryStatusSchema,
   reviseMemorySchema,
-  type MemoryRecord,
+  type MemoryAction,
+  type MemoryDto,
+  type MemoryScope,
 } from "@open-inspect/shared/types/memories";
-import { repositoriesInputSchema } from "@open-inspect/shared/types/repositories";
 import {
-  MemoryConflictError,
-  MemoryStore,
-  MemoryValidationError,
-  type MemoryActor,
-} from "../db/memories";
+  authorizeMemoryManagement,
+  authorizeMemoryTarget,
+  type MemoryManagementAccess,
+} from "../authorization/memory-access";
 import { EnvironmentStore } from "../db/environments";
-import { resolveSessionMemory } from "../session/memory-resolution";
+import { MemoryPreferenceStore } from "../db/memory-preferences";
+import { MemoryStore } from "../db/memories";
+import { toMemoryDto } from "../memory/dto";
+import { partitionScope } from "../memory/partition";
+import { resolveSessionMemory } from "../memory/resolve-session-memory";
+import type { MemoryActor, MemoryRecord } from "../memory/types";
 import { admit, dispatch } from "../routing/admit";
 import type { ControlPlaneHonoEnv } from "../routing/hono-env";
 import type { Env } from "../types";
 import { parseBody } from "./body";
+import { expectedRevision, memoryErrorResponse } from "./memory-errors";
 import {
   activeSelf,
   error,
@@ -30,7 +40,6 @@ import {
   SCM_AGNOSTIC_HUMAN_USER_ROUTE,
   type UserRouteContext,
 } from "./shared";
-import { authorizeMemoryScope } from "./memory-access";
 
 /** Bind human provenance to the admitted canonical principal, not editable request fields. */
 const actor = (ctx: UserRouteContext): MemoryActor => ({
@@ -38,108 +47,112 @@ const actor = (ctx: UserRouteContext): MemoryActor => ({
   userId: ctx.principal.userId,
   requestId: ctx.request_id,
 });
-/** Project server-derived management capabilities; the UI never infers permission from status alone. */
-function view(record: MemoryRecord, canManage: boolean) {
-  return {
-    ...record,
-    capabilities: {
-      canEdit: canManage && record.status !== "archived",
-      canArchive: canManage,
-      canApprove: canManage && record.status === "proposed",
-    },
-  };
+
+const paginationSchema = z.object({
+  offset: z.coerce.number().int().min(0).max(1_000_000),
+  limit: z.coerce.number().int().min(1).max(MEMORY_LIST_MAX_PAGE_SIZE),
+});
+
+async function dto(
+  store: MemoryStore,
+  record: MemoryRecord,
+  canManage: boolean
+): Promise<MemoryDto> {
+  const replacements = await store.replacementIds([record.id]);
+  return toMemoryDto(record, canManage, replacements.get(record.id) ?? []);
 }
-/** Translate expected write conflicts/validation failures while preserving unexpected errors. */
-export function memoryWriteError(cause: unknown): Response {
-  if (cause instanceof MemoryConflictError) return error(cause.message, 409);
-  if (cause instanceof MemoryValidationError) return error(cause.message, 400);
-  throw cause;
+
+/** Load a record and authorize it against its own partition; inaccessible records are concealed. */
+async function authorizedRecord(
+  store: MemoryStore,
+  env: Env,
+  ctx: UserRouteContext,
+  id: string,
+  mode: "read" | "write"
+): Promise<{ record: MemoryRecord; access: MemoryManagementAccess } | Response> {
+  const record = await store.get(id);
+  if (!record) return error("Memory not found", 404);
+  const scope: MemoryScope = partitionScope(record.partition);
+  const access = await authorizeMemoryManagement(ctx, env, scope, mode, record);
+  return access instanceof Response ? access : { record, access };
 }
-const previewSchema = z
-  .object({
-    repositories: repositoriesInputSchema.optional(),
-    environmentId: z.string().min(1).optional(),
-    includePersonalMemories: z.boolean().optional(),
-  })
-  .strict();
 
 /** Authorize one catalog scope before returning a bounded management page. */
 async function list(request: Request, env: Env, _params: object, ctx: UserRouteContext) {
   const query = new URL(request.url).searchParams;
-  const scopeResult = memoryScopeSchema.safeParse(
-    query.get("scope") === "repository"
-      ? { type: "repository", repoOwner: query.get("repoOwner"), repoName: query.get("repoName") }
-      : query.get("scope") === "environment"
-        ? { type: "environment", environmentId: query.get("environmentId") }
-        : { type: query.get("scope") ?? "personal" }
-  );
+  const scope = memoryScopeFromSearchParams(query);
   const status = memoryStatusSchema.safeParse(query.get("status") ?? "active");
-  if (!scopeResult.success || !status.success) return error("Invalid memory scope or status", 400);
-  const pagination = z
-    .object({
-      offset: z.coerce.number().int().min(0).max(1_000_000),
-      limit: z.coerce.number().int().min(1).max(100),
-    })
-    .safeParse({ offset: query.get("offset") ?? 0, limit: query.get("limit") ?? 50 });
+  if (!scope || !status.success) return error("Invalid memory scope or status", 400);
+  const pagination = paginationSchema.safeParse({
+    offset: query.get("offset") ?? 0,
+    limit: query.get("limit") ?? MEMORY_LIST_PAGE_SIZE,
+  });
   if (!pagination.success) return error("Invalid memory pagination", 400);
   const { offset, limit } = pagination.data;
-  const access = await authorizeMemoryScope(ctx, env, scopeResult.data, false);
+  const access = await authorizeMemoryManagement(ctx, env, scope, "read");
   if (access instanceof Response) return access;
-  const records = await new MemoryStore(ctx.db).list(
-    scopeResult.data,
-    ctx.principal.userId,
-    status.data,
-    access.repoId,
+  const store = new MemoryStore(ctx.db);
+  // One extra row tells us whether another page exists.
+  const records = await store.list(access.partition, {
+    status: status.data,
     offset,
-    limit + 1
-  );
+    limit: limit + 1,
+  });
+  const page = records.slice(0, limit);
+  const replacements = await store.replacementIds(page.map((record) => record.id));
   return json({
-    memories: records.slice(0, limit).map((record) => view(record, access.canManage)),
+    memories: page.map((record) =>
+      toMemoryDto(record, access.canManage, replacements.get(record.id) ?? [])
+    ),
     nextOffset: records.length > limit ? offset + limit : null,
     canCreate: access.canManage,
   });
 }
-/** Admit human creation/replacement and bind the resolved stable repository identity. */
+
+/** Admit human creation/replacement into the authorized partition. */
 async function create(request: Request, env: Env, _params: object, ctx: UserRouteContext) {
   const body = await parseBody(request, createMemorySchema, "Invalid memory");
   if (body instanceof Response) return body;
-  const access = await authorizeMemoryScope(ctx, env, body.scope, true);
+  const access = await authorizeMemoryManagement(ctx, env, body.scope, "write");
   if (access instanceof Response) return access;
-  try {
-    return json(
-      { memory: view(await new MemoryStore(ctx.db).create(body, actor(ctx), access.repoId), true) },
-      201
-    );
-  } catch (cause) {
-    return memoryWriteError(cause);
-  }
-}
-/** Conceal inaccessible records and return the current revision with management capabilities. */
-async function get(_request: Request, env: Env, params: { id: string }, ctx: UserRouteContext) {
-  const record = await new MemoryStore(ctx.db).get(params.id);
-  if (!record) return error("Memory not found", 404);
-  const access = await authorizeMemoryScope(ctx, env, record.scope, false, record);
-  return access instanceof Response ? access : json({ memory: view(record, access.canManage) });
-}
-/** Authorize an edit and require the revision the user actually reviewed. */
-async function revise(request: Request, env: Env, params: { id: string }, ctx: UserRouteContext) {
+  const { scope: _scope, supersedesMemoryId, ...content } = body;
   const store = new MemoryStore(ctx.db);
-  const record = await store.get(params.id);
-  if (!record) return error("Memory not found", 404);
-  const access = await authorizeMemoryScope(ctx, env, record.scope, true, record);
-  if (access instanceof Response) return access;
-  const body = await parseBody(request, reviseMemorySchema, "Invalid memory revision");
-  if (body instanceof Response) return body;
-  const { expectedRevisionId, ...content } = body;
   try {
-    return json({
-      memory: view(await store.revise(record.id, content, expectedRevisionId, actor(ctx)), true),
-    });
+    const record = await store.create(
+      { partition: access.partition, content, supersedesMemoryId },
+      actor(ctx)
+    );
+    return json({ memory: await dto(store, record, true) }, 201);
   } catch (cause) {
-    return memoryWriteError(cause);
+    return memoryErrorResponse(cause);
   }
 }
-/** Apply record-level read authorization before exposing any historical content. */
+
+async function get(_request: Request, env: Env, params: { id: string }, ctx: UserRouteContext) {
+  const store = new MemoryStore(ctx.db);
+  const found = await authorizedRecord(store, env, ctx, params.id, "read");
+  if (found instanceof Response) return found;
+  return json({ memory: await dto(store, found.record, found.access.canManage) });
+}
+
+/** Edit against the revision the user reviewed (`If-Match`). */
+async function revise(request: Request, env: Env, params: { id: string }, ctx: UserRouteContext) {
+  const revision = expectedRevision(request);
+  if (revision instanceof Response) return revision;
+  const store = new MemoryStore(ctx.db);
+  const found = await authorizedRecord(store, env, ctx, params.id, "write");
+  if (found instanceof Response) return found;
+  const content = await parseBody(request, reviseMemorySchema, "Invalid memory revision");
+  if (content instanceof Response) return content;
+  try {
+    const record = await store.revise(found.record.id, content, revision, actor(ctx));
+    return json({ memory: await dto(store, record, true) });
+  } catch (cause) {
+    return memoryErrorResponse(cause);
+  }
+}
+
+/** Record-level read authorization applies before any historical content is exposed. */
 async function revisions(
   _request: Request,
   env: Env,
@@ -147,81 +160,77 @@ async function revisions(
   ctx: UserRouteContext
 ) {
   const store = new MemoryStore(ctx.db);
-  const record = await store.get(params.id);
-  if (!record) return error("Memory not found", 404);
-  const access = await authorizeMemoryScope(ctx, env, record.scope, false, record);
-  return access instanceof Response
-    ? access
-    : json({ revisions: await store.revisions(record.id) });
+  const found = await authorizedRecord(store, env, ctx, params.id, "read");
+  if (found instanceof Response) return found;
+  return json({ revisions: await store.revisions(found.record.id) });
 }
-/** Build a lifecycle endpoint with scope authorization and optimistic revision fencing. */
-function transition(action: "archive" | "restore" | "approve" | "reject") {
+
+/** A lifecycle endpoint fenced by the reviewed revision (`If-Match`). */
+function transition(action: MemoryAction) {
   return async (request: Request, env: Env, params: { id: string }, ctx: UserRouteContext) => {
+    const revision = expectedRevision(request);
+    if (revision instanceof Response) return revision;
     const store = new MemoryStore(ctx.db);
-    const record = await store.get(params.id);
-    if (!record) return error("Memory not found", 404);
-    const access = await authorizeMemoryScope(ctx, env, record.scope, true, record);
-    if (access instanceof Response) return access;
+    const found = await authorizedRecord(store, env, ctx, params.id, "write");
+    if (found instanceof Response) return found;
     const body = await parseBody(request, memoryActionSchema, "Invalid memory action");
     if (body instanceof Response) return body;
     try {
-      return json({
-        memory: view(
-          await store.transition(
-            record.id,
-            action,
-            body.expectedRevisionId,
-            actor(ctx),
-            body.reason
-          ),
-          true
-        ),
-      });
+      const record = await store.transition(
+        found.record.id,
+        action,
+        revision,
+        actor(ctx),
+        body.reason
+      );
+      return json({ memory: await dto(store, record, true) });
     } catch (cause) {
-      return memoryWriteError(cause);
+      return memoryErrorResponse(cause);
     }
   };
 }
-/** Resolve a non-persisted selection after authorizing every environment/repository target. */
+
+/**
+ * Resolve the selection a new session would pin, without persisting it. Targets get the same
+ * human admission as management reads, then the same memory filtering as session creation.
+ */
 async function preview(request: Request, env: Env, _params: object, ctx: UserRouteContext) {
-  const body = await parseBody(request, previewSchema, "Invalid memory target");
+  const body = await parseBody(request, memoryPreviewSchema, "Invalid memory target");
   if (body instanceof Response) return body;
-  let repositories = body.repositories ?? [];
+  let repositories: { repoOwner: string; repoName: string }[] = body.repositories ?? [];
   if (body.environmentId) {
-    const access = await authorizeMemoryScope(
+    const access = await authorizeMemoryManagement(
       ctx,
       env,
       { type: "environment", environmentId: body.environmentId },
-      false
+      "read"
     );
     if (access instanceof Response) return access;
     repositories = (
       await new EnvironmentStore(ctx.db).getRepositoriesForEnvironment(body.environmentId)
-    ).map((repo) => ({ repoOwner: repo.repo_owner, repoName: repo.repo_name, baseBranch: null }));
+    ).map((repo) => ({ repoOwner: repo.repo_owner, repoName: repo.repo_name }));
   }
-  const resolvedRepositories = [];
+  const resolved = [];
   for (const repo of repositories) {
-    const access = await authorizeMemoryScope(
+    const access = await authorizeMemoryManagement(
       ctx,
       env,
-      { type: "repository", repoOwner: repo.repoOwner, repoName: repo.repoName },
-      false
+      { type: "repository", ...repo },
+      "read"
     );
     if (access instanceof Response) return access;
-    resolvedRepositories.push({ ...repo, repoId: access.repoId });
+    if (access.partition.type === "repository")
+      resolved.push({ ...repo, repoId: access.partition.repoId });
   }
-  return json(
-    await resolveSessionMemory(
-      ctx.db,
-      {
-        canonicalUserId: ctx.principal.userId,
-        repositories: resolvedRepositories,
-        environmentId: body.environmentId ?? null,
-      },
-      body.includePersonalMemories
-    )
-  );
+  const target = await authorizeMemoryTarget(ctx, {
+    userId: ctx.principal.userId,
+    ownerTeamId: null,
+    repositories: resolved,
+    environmentId: body.environmentId ?? null,
+  });
+  return json(await resolveSessionMemory(ctx.db, target, body.includePersonalMemories));
 }
+
 /** Read only the admitted principal's canonical personal-memory default. */
 async function getPreferences(
   _request: Request,
@@ -229,14 +238,15 @@ async function getPreferences(
   _params: object,
   ctx: UserRouteContext
 ) {
-  return json(await new MemoryStore(ctx.db).getPreferences(ctx.principal.userId));
+  return json(await new MemoryPreferenceStore(ctx.db).get(ctx.principal.userId));
 }
-/** Validate and save the owner default without changing existing sessions. */
+
+/** Save the owner default for future sessions; existing sessions are unchanged. */
 async function setPreferences(request: Request, _env: Env, _params: object, ctx: UserRouteContext) {
   const body = await parseBody(request, memoryPreferencesSchema, "Invalid memory preferences");
   return body instanceof Response
     ? body
-    : json(await new MemoryStore(ctx.db).setPreferences(ctx.principal.userId, body));
+    : json(await new MemoryPreferenceStore(ctx.db).set(ctx.principal.userId, body));
 }
 
 export const memoryRoutes = new Hono<ControlPlaneHonoEnv>();
@@ -261,5 +271,5 @@ memoryRoutes.post("/memories", self, (c) => dispatch(c, create));
 memoryRoutes.get("/memories/:id", self, (c) => dispatch(c, get));
 memoryRoutes.patch("/memories/:id", self, (c) => dispatch(c, revise));
 memoryRoutes.get("/memories/:id/revisions", self, (c) => dispatch(c, revisions));
-for (const action of ["archive", "restore", "approve", "reject"] as const)
+for (const action of MEMORY_ACTIONS)
   memoryRoutes.post(`/memories/:id/${action}`, self, (c) => dispatch(c, transition(action)));

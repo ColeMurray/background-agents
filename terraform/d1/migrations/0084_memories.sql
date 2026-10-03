@@ -2,14 +2,16 @@
 -- after target deletion so historical manifests do not block environment cleanup.
 CREATE TABLE memories (
   id TEXT PRIMARY KEY,
+  -- Partition identity: the owner user ID (personal), stable repository ID (repository), or
+  -- environment ID (environment). Repository names are display-only and never authorize.
   scope_type TEXT NOT NULL CHECK (scope_type IN ('personal', 'repository', 'environment')),
-  owner_user_id TEXT,
+  scope_key TEXT NOT NULL,
   repo_owner TEXT,
   repo_name TEXT,
-  repo_id INTEGER,
-  environment_id TEXT,
   memory_type TEXT NOT NULL CHECK (memory_type IN ('fact', 'directive')),
   status TEXT NOT NULL CHECK (status IN ('proposed', 'active', 'archived')),
+  archive_kind TEXT CHECK (archive_kind IN ('archived', 'rejected', 'superseded')),
+  archive_note TEXT,
   current_revision_id TEXT,
   author_kind TEXT NOT NULL CHECK (author_kind IN ('user', 'agent')),
   author_user_id TEXT,
@@ -20,27 +22,20 @@ CREATE TABLE memories (
   decided_by TEXT,
   archived_at INTEGER,
   archived_by TEXT,
-  archive_reason TEXT,
   last_operation_id TEXT NOT NULL,
   created_at INTEGER NOT NULL,
   updated_at INTEGER NOT NULL,
+  CHECK ((scope_type = 'repository') = (repo_owner IS NOT NULL AND repo_name IS NOT NULL)),
+  CHECK (scope_type = 'repository' OR (repo_owner IS NULL AND repo_name IS NULL)),
   CHECK (
-    (scope_type = 'personal' AND owner_user_id IS NOT NULL AND repo_owner IS NULL AND repo_name IS NULL AND environment_id IS NULL)
-    OR (scope_type = 'repository' AND owner_user_id IS NULL AND repo_owner IS NOT NULL AND repo_name IS NOT NULL AND environment_id IS NULL)
-    OR (scope_type = 'environment' AND owner_user_id IS NULL AND repo_owner IS NULL AND repo_name IS NULL AND environment_id IS NOT NULL)
+    (status = 'archived' AND archived_at IS NOT NULL AND archive_kind IS NOT NULL)
+    OR (status <> 'archived' AND archived_at IS NULL AND archive_kind IS NULL AND archive_note IS NULL)
   ),
-  CHECK ((status = 'archived' AND archived_at IS NOT NULL) OR (status <> 'archived' AND archived_at IS NULL)),
   CHECK (author_kind = 'user' OR author_session_id IS NOT NULL)
 );
-CREATE INDEX idx_memories_personal ON memories(owner_user_id, status) WHERE scope_type = 'personal';
-CREATE INDEX idx_memories_repository ON memories(lower(repo_owner), lower(repo_name), status) WHERE scope_type = 'repository';
-CREATE INDEX idx_memories_environment ON memories(environment_id, status) WHERE scope_type = 'environment';
-CREATE INDEX idx_memories_personal_directive_selection ON memories(owner_user_id, created_at, id) WHERE scope_type = 'personal' AND status = 'active' AND memory_type = 'directive';
-CREATE INDEX idx_memories_personal_fact_selection ON memories(owner_user_id, updated_at DESC, id) WHERE scope_type = 'personal' AND status = 'active' AND memory_type = 'fact';
-CREATE INDEX idx_memories_repository_directive_selection ON memories(lower(repo_owner), lower(repo_name), repo_id, created_at, id) WHERE scope_type = 'repository' AND status = 'active' AND memory_type = 'directive';
-CREATE INDEX idx_memories_repository_fact_selection ON memories(lower(repo_owner), lower(repo_name), repo_id, updated_at DESC, id) WHERE scope_type = 'repository' AND status = 'active' AND memory_type = 'fact';
-CREATE INDEX idx_memories_environment_directive_selection ON memories(environment_id, created_at, id) WHERE scope_type = 'environment' AND status = 'active' AND memory_type = 'directive';
-CREATE INDEX idx_memories_environment_fact_selection ON memories(environment_id, updated_at DESC, id) WHERE scope_type = 'environment' AND status = 'active' AND memory_type = 'fact';
+CREATE INDEX idx_memories_partition ON memories(scope_type, scope_key, status, updated_at DESC, id);
+CREATE INDEX idx_memories_directive_selection ON memories(scope_type, scope_key, created_at, id) WHERE status = 'active' AND memory_type = 'directive';
+CREATE INDEX idx_memories_fact_selection ON memories(scope_type, scope_key, updated_at DESC, id) WHERE status = 'active' AND memory_type = 'fact';
 CREATE INDEX idx_memories_author_session ON memories(author_session_id, status);
 CREATE INDEX idx_memories_supersedes ON memories(supersedes_memory_id);
 
@@ -69,7 +64,7 @@ CREATE TABLE memory_preferences (
 
 CREATE TABLE session_memory_manifests (
   session_id TEXT PRIMARY KEY REFERENCES sessions(id) ON DELETE CASCADE,
-  resolver_version INTEGER NOT NULL,
+  selection_version INTEGER NOT NULL,
   manifest_sha256 TEXT NOT NULL,
   include_personal_memories INTEGER NOT NULL CHECK (include_personal_memories IN (0, 1)),
   personal_owner_user_id TEXT,
@@ -86,7 +81,7 @@ CREATE TABLE session_memory_items (
   memory_id TEXT NOT NULL REFERENCES memories(id) ON DELETE RESTRICT,
   revision_id TEXT NOT NULL,
   scope_json TEXT NOT NULL,
-  inclusion TEXT NOT NULL CHECK (inclusion IN ('directive', 'catalog')),
+  inclusion TEXT NOT NULL CHECK (inclusion IN ('full', 'summary')),
   estimated_tokens INTEGER NOT NULL,
   PRIMARY KEY(session_id, memory_id),
   UNIQUE(session_id, position),

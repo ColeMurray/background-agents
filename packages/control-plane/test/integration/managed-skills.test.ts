@@ -9,6 +9,7 @@ import { resolveManagedSkills } from "../../src/session/skill-resolution";
 import { buildSkillRevision, hashSessionSkillManifest } from "../../src/skills/content-addressing";
 import { cleanD1Tables } from "./cleanup";
 import { initNamedSessionDO, seedSandboxAuthHash, serviceFetch, sqlDatabase } from "./helpers";
+import { inheritedPin, resolvedPin } from "../../src/session/pinned";
 
 const content = {
   description: "Managed deployment instructions",
@@ -126,12 +127,12 @@ describe("managed skills persistence and resolution", () => {
       createdAt: Date.now(),
       updatedAt: Date.now(),
     };
-    await sessions.create({ ...base, id: "parent", skillManifest: manifest });
+    await sessions.create({ ...base, id: "parent", skills: resolvedPin(manifest) });
     await sessions.create({
       ...base,
       id: "child",
       parentSessionId: "parent",
-      skillManifestSourceSessionId: "parent",
+      skills: inheritedPin("parent"),
     });
 
     const store = new SessionSkillStore(env.DB);
@@ -422,7 +423,7 @@ describe("managed skills persistence and resolution", () => {
       status: "created" as const,
       createdAt: Date.now(),
       updatedAt: Date.now(),
-      skillManifest: manifest,
+      skills: resolvedPin(manifest),
     });
 
     // The installation query is keyed by session id, so manifest width costs no
@@ -473,7 +474,7 @@ describe("managed skills persistence and resolution", () => {
       status: "created" as const,
       createdAt: Date.now(),
       updatedAt: Date.now(),
-      skillManifest: manifest,
+      skills: resolvedPin(manifest),
     });
     const { stub } = await initNamedSessionDO("paged");
     await seedSandboxAuthHash(stub, { authToken: "paged-token", sandboxId: "sandbox-paged" });

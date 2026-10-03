@@ -3,7 +3,9 @@ import type { SessionListRepository } from "@open-inspect/shared/types/repositor
 import type { SessionStatus } from "@open-inspect/shared/types/sessions";
 import type { SessionVisibility } from "@open-inspect/shared/types/teams";
 import { SessionIndexStore } from "../../src/db/session-index";
-import { resolveSessionMemory } from "../../src/session/memory-resolution";
+import type { AuthorizedMemoryTarget } from "../../src/authorization/memory-access";
+import { resolveSessionMemory } from "../../src/memory/resolve-session-memory";
+import { inheritedPin, resolvedPin } from "../../src/session/pinned";
 
 interface MemorySessionOptions {
   userId: string;
@@ -14,6 +16,26 @@ interface MemorySessionOptions {
   status?: SessionStatus;
   includePersonalMemories?: boolean;
   parentSessionId?: string;
+}
+
+/**
+ * A memory target that skips `authorizeMemoryTarget`: tests seed users and grants explicitly and
+ * assert access at the read/write boundary, which rechecks grants on every request.
+ */
+export function memoryTargetForTest(target: {
+  userId: string | null;
+  repositories?: readonly { repoOwner: string; repoName: string; repoId?: number | null }[];
+  environmentId?: string | null;
+}): AuthorizedMemoryTarget {
+  return {
+    userId: target.userId,
+    repositories: (target.repositories ?? []).map((repo) => ({
+      repoOwner: repo.repoOwner,
+      repoName: repo.repoName,
+      repoId: repo.repoId ?? null,
+    })),
+    environmentId: target.environmentId ?? null,
+  } as unknown as AuthorizedMemoryTarget;
 }
 
 /**
@@ -41,15 +63,14 @@ export async function seedMemorySession(id: string, options: MemorySessionOption
     createdAt: 1,
     updatedAt: 1,
     ...(options.parentSessionId
-      ? {
-          parentSessionId: options.parentSessionId,
-          memoryManifestSourceSessionId: options.parentSessionId,
-        }
+      ? { parentSessionId: options.parentSessionId, memory: inheritedPin(options.parentSessionId) }
       : {
-          memoryManifest: await resolveSessionMemory(
-            env.DB,
-            { canonicalUserId: options.userId, repositories, environmentId },
-            options.includePersonalMemories ?? true
+          memory: resolvedPin(
+            await resolveSessionMemory(
+              env.DB,
+              memoryTargetForTest({ userId: options.userId, repositories, environmentId }),
+              options.includePersonalMemories ?? true
+            )
           ),
         }),
   });

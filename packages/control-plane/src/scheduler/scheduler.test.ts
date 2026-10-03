@@ -1,6 +1,6 @@
-vi.mock("../session/memory-resolution", () => ({
+vi.mock("../memory/resolve-session-memory", () => ({
   resolveSessionMemory: vi.fn(async () => ({
-    resolverVersion: 1,
+    selectionVersion: 1,
     manifestSha256: "0".repeat(64),
     resolvedAt: 1,
     includePersonalMemories: false,
@@ -12,6 +12,9 @@ vi.mock("../session/memory-resolution", () => ({
     items: [],
   })),
 }));
+vi.mock("../authorization/memory-access", () => ({
+  authorizeMemoryTarget: vi.fn(async (_ctx: unknown, target: object) => target),
+}));
 /**
  * Unit tests for Scheduler.
  *
@@ -20,7 +23,8 @@ vi.mock("../session/memory-resolution", () => ({
  * test/integration/automation-invocations.test.ts.
  */
 
-import { resolveSessionMemory } from "../session/memory-resolution";
+import { authorizeMemoryTarget } from "../authorization/memory-access";
+import { resolveSessionMemory } from "../memory/resolve-session-memory";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { createTestBackgroundTasks } from "../background-tasks.test-support";
 import type { Env } from "../types";
@@ -47,7 +51,6 @@ const mockEvaluateSessionAdmission = vi.hoisted(() => vi.fn());
 const mockTeamGetById = vi.hoisted(() =>
   vi.fn<(id: string) => Promise<Team | null>>().mockResolvedValue(null)
 );
-const mockListTeamsForRepository = vi.hoisted(() => vi.fn().mockResolvedValue([]));
 const mockTeamGrantCovers = vi.hoisted(() =>
   vi
     .fn<(teamId: string, repoIds: readonly (number | null)[]) => Promise<boolean>>()
@@ -62,7 +65,7 @@ vi.mock("../db/teams", () => ({
 
 vi.mock("../db/team-repository-grants", () => ({
   TeamRepositoryGrantStore: vi.fn().mockImplementation(function () {
-    return { covers: mockTeamGrantCovers, listTeamsForRepository: mockListTeamsForRepository };
+    return { covers: mockTeamGrantCovers };
   }),
 }));
 
@@ -580,7 +583,6 @@ describe("Scheduler", () => {
     ]);
     mockProviderAuthList.mockResolvedValue([]);
     mockIsAutomationExecutionAuthorized.mockResolvedValue(true);
-    mockListTeamsForRepository.mockReset().mockResolvedValue([]);
     mockGetEffectiveAuthorization.mockReset().mockResolvedValue(steeringAuthorization());
     mockEvaluateSessionAdmission
       .mockReset()
@@ -625,10 +627,11 @@ describe("Scheduler", () => {
       const result = await scheduler.tick();
 
       expect(result).toMatchObject({ processed: 1 });
-      expect(resolveSessionMemory).toHaveBeenCalledWith(
+      expect(authorizeMemoryTarget).toHaveBeenCalledWith(
         expect.anything(),
-        expect.objectContaining({ canonicalUserId: sampleAutomation.user_id })
+        expect.objectContaining({ userId: sampleAutomation.user_id, ownerTeamId: null })
       );
+      expect(resolveSessionMemory).toHaveBeenCalled();
 
       expect(mockStore.insertInvocationGuarded).toHaveBeenCalledTimes(1);
       const params = mockStore.insertInvocationGuarded.mock.calls[0][0];

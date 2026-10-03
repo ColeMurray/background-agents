@@ -22,8 +22,6 @@ import {
   type SlackAutomationEvent,
   type TriggerConfig,
 } from "@open-inspect/shared/triggers";
-import { resolveSessionMemory } from "../session/memory-resolution";
-import { authorizeWorkspaceRepositories } from "../routes/workspace-repository-authorization";
 import { nextCronOccurrence } from "@open-inspect/shared/cron";
 import type {
   AutomationInvocationSource,
@@ -87,6 +85,9 @@ import { resolveSessionScopedSettings } from "../session/integration-settings-re
 import { resolveExecutionBudgetMs } from "../sandbox/execution-budget";
 import { MAX_IMAGE_BUILD_PROVIDER_SESSION_TIMEOUT_MS } from "../image-builds/timeouts";
 import { resolveManagedSkills } from "../session/skill-resolution";
+import { resolvedPin } from "../session/pinned";
+import { authorizeMemoryTarget } from "../authorization/memory-access";
+import { resolveSessionMemory } from "../memory/resolve-session-memory";
 import type { EnqueuePromptRequest } from "../session/enqueue-prompt-contract";
 import { resolveAutomationRepositories } from "../automation/repository";
 import {
@@ -1729,20 +1730,6 @@ export class Scheduler {
       (target.repoOwner && target.repoName
         ? [{ repoOwner: target.repoOwner, repoName: target.repoName, repoId: target.repoId }]
         : []);
-    ctx.authorization = await new AuthorizationService(this.db).getEffectiveAuthorization(
-      executionPrincipal.platformUserId
-    );
-    if (
-      await authorizeWorkspaceRepositories(ctx, {
-        repositories: scopeMembers.map((repo) => ({
-          owner: repo.repoOwner,
-          name: repo.repoName,
-          repoId: repo.repoId ?? null,
-        })),
-      })
-    ) {
-      throw new AutomationExecutionUnauthorizedError("repository_grant_required");
-    }
     const { codeServerEnabled, vncEnabled, sandboxSettings } = await resolveSessionScopedSettings(
       this.db,
       scopeMembers,
@@ -1776,14 +1763,15 @@ export class Scheduler {
       throw new AutomationExecutionUnauthorizedError("team_archived");
     }
 
-    const memoryManifest = await resolveSessionMemory(this.db, {
-      canonicalUserId: executionPrincipal.platformUserId,
+    const memoryTarget = await authorizeMemoryTarget(ctx, {
+      userId: executionPrincipal.platformUserId,
+      ownerTeamId: automation.owner_team_id,
       repositories: scopeMembers,
       environmentId: target.environmentId,
     });
 
     const sessionInput: SessionInitInput = {
-      memoryManifest,
+      memory: resolvedPin(await resolveSessionMemory(this.db, memoryTarget)),
       ownerTeamId: automation.owner_team_id,
       visibility: team?.defaultVisibility ?? "workspace",
       sessionId,
@@ -1806,7 +1794,7 @@ export class Scheduler {
       spawnDepth: 0,
       automationId: automation.id,
       automationRunId: run.id,
-      managedSkillsManifest,
+      managedSkills: resolvedPin(managedSkillsManifest),
       providerAuth,
     };
 

@@ -2,6 +2,7 @@ import { createExecutionContext, env } from "cloudflare:test";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { memorySearchResponseSchema } from "@open-inspect/shared/types/memories";
 import { MemoryStore } from "../../src/db/memories";
+import type { MemoryPartition } from "../../src/memory/partition";
 import { seedMemorySession } from "./memory-test-helpers";
 import { SessionMemoryStore } from "../../src/db/session-memories";
 import * as searchStore from "../../src/db/memory-search";
@@ -19,11 +20,13 @@ import {
 const OWNER = "22222222222222222222222222222222";
 const OTHER = "33333333333333333333333333333333";
 const repo = { repoOwner: "acme/group", repoName: "api", repoId: 123, baseBranch: "main" };
-const repositoryScope = {
-  type: "repository" as const,
+const repoPartition: MemoryPartition = {
+  type: "repository",
+  repoId: repo.repoId,
   repoOwner: repo.repoOwner,
   repoName: repo.repoName,
 };
+const devPartition: MemoryPartition = { type: "environment", environmentId: "dev" };
 
 /** Create a real indexed session and bind tools to its own sandbox credential. */
 async function sandbox(
@@ -173,13 +176,19 @@ describe("session memory discovery", () => {
     });
     await seedSearchFacts(env.DB, OWNER, [
       { id: "personal", title: "needle" },
-      { id: "other-user", title: "needle", ownerUserId: OTHER },
-      { id: "api", title: "needle", scope: repositoryScope, repoId: 123 },
-      { id: "web", title: "needle", scope: { ...repositoryScope, repoName: "web" }, repoId: 456 },
-      { id: "wrong-id", title: "needle", scope: repositoryScope, repoId: 789 },
-      { id: "null-id", title: "needle", scope: repositoryScope },
-      { id: "environment", title: "needle", scope: { type: "environment", environmentId: "dev" } },
-      { id: "other-env", title: "needle", scope: { type: "environment", environmentId: "other" } },
+      { id: "other-user", title: "needle", partition: { type: "personal", userId: OTHER } },
+      { id: "api", title: "needle", partition: repoPartition },
+      { id: "web", title: "needle", partition: { ...repoPartition, repoName: "web", repoId: 456 } },
+      // Same names, different stable ID: a reused name never matches.
+      { id: "wrong-id", title: "needle", partition: { ...repoPartition, repoId: 789 } },
+      // Same stable ID, stale display name: a renamed repository keeps its memories.
+      { id: "renamed", title: "needle", partition: { ...repoPartition, repoOwner: "old-owner" } },
+      { id: "environment", title: "needle", partition: devPartition },
+      {
+        id: "other-env",
+        title: "needle",
+        partition: { type: "environment", environmentId: "other" },
+      },
     ]);
     const call = await sandbox("scopes", { repositories: [repo, second], environmentId: "dev" });
     const all = memorySearchResponseSchema.parse(await (await call({ query: "needle" })).json());
@@ -187,6 +196,7 @@ describe("session memory discovery", () => {
       "api",
       "environment",
       "personal",
+      "renamed",
       "web",
     ]);
     expect(
@@ -241,8 +251,7 @@ describe("session memory discovery", () => {
           id: "secret",
           title: "needle",
           description: "PRIVATE_SCOPE_SENTINEL",
-          scope: repositoryScope,
-          repoId: 123,
+          partition: repoPartition,
         },
       ]);
       const call = await sandbox(`revoked-${when}`, { repositories: [repo] });
@@ -290,7 +299,7 @@ describe("session memory discovery", () => {
   });
   it("does not authorize a legacy session repository using names alone", async () => {
     await seedSearchFacts(env.DB, OWNER, [
-      { id: "legacy-secret", title: "needle", scope: repositoryScope, repoId: 123 },
+      { id: "legacy-secret", title: "needle", partition: repoPartition },
     ]);
     const call = await sandbox("legacy-scope", { repositories: [{ ...repo, repoId: null }] });
     expect((await call({ query: "needle", scope: "repository" })).status).toBe(403);
@@ -303,7 +312,7 @@ describe("session memory discovery", () => {
           id: "environment-secret",
           title: "needle",
           description: "PRIVATE_ENV_SENTINEL",
-          scope: { type: "environment", environmentId: "dev" },
+          partition: devPartition,
         },
       ]);
       const call = await sandbox(`changed-${change}`, { environmentId: "dev" });

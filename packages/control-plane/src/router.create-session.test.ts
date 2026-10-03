@@ -1,6 +1,6 @@
-vi.mock("./session/memory-resolution", () => ({
+vi.mock("./memory/resolve-session-memory", () => ({
   resolveSessionMemory: vi.fn(async () => ({
-    resolverVersion: 1,
+    selectionVersion: 1,
     manifestSha256: "0".repeat(64),
     resolvedAt: 1,
     includePersonalMemories: false,
@@ -11,6 +11,9 @@ vi.mock("./session/memory-resolution", () => ({
     truncatedCount: 0,
     items: [],
   })),
+}));
+vi.mock("./authorization/memory-access", () => ({
+  authorizeMemoryTarget: vi.fn(async (_ctx: unknown, target: object) => target),
 }));
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { generateEncryptionKey } from "./auth/crypto";

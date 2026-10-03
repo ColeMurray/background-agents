@@ -1,11 +1,13 @@
 import { createExecutionContext, env } from "cloudflare:test";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { MemoryStore } from "../../src/db/memories";
+import { SessionMemoryStore } from "../../src/db/session-memories";
 import { Scheduler } from "../../src/scheduler/scheduler";
 import { createCloudflareEnv } from "../../src/cloudflare/platform";
-import { seedMemorySession } from "./memory-test-helpers";
+import { memoryTargetForTest, seedMemorySession } from "./memory-test-helpers";
 import { SessionCollaboratorStore } from "../../src/db/session-collaborators";
-import { resolveSessionMemory } from "../../src/session/memory-resolution";
+import type { MemoryPartition } from "../../src/memory/partition";
+import { resolveSessionMemory } from "../../src/memory/resolve-session-memory";
 import { GitHubSourceControlProvider } from "../../src/source-control/providers/github-provider";
 import { cleanD1Tables } from "./cleanup";
 import { initNamedSessionDO, routeRequest, seedActiveUser, seedSandboxAuthHash } from "./helpers";
@@ -27,6 +29,15 @@ const content = {
   content: "Use the staging environment",
 };
 const actor = { kind: "user" as const, userId: MEMBER, requestId: "setup" };
+const repoPartition: MemoryPartition = {
+  type: "repository",
+  repoId: repo.repoId,
+  repoOwner: repo.repoOwner,
+  repoName: repo.repoName,
+};
+const devPartition: MemoryPartition = { type: "environment", environmentId: "dev" };
+const createRecord = (partition: MemoryPartition, extra: { supersedesMemoryId?: string } = {}) =>
+  new MemoryStore(env.DB).create({ partition, content, ...extra }, actor);
 const request = (path: string, method = "GET", body?: unknown, userId = MEMBER) =>
   ownershipRequest(path, {
     method,
@@ -79,12 +90,13 @@ describe("memory shared-scope authorization", () => {
     });
     const { stub } = await initNamedSessionDO(id);
     await seedSandboxAuthHash(stub, { authToken: `token-${id}`, sandboxId: `sandbox-${id}` });
-    return (scope: unknown) =>
+    /** Post agent tool input: a session-relative scope plus optional repository selector. */
+    return (target: Record<string, unknown>) =>
       routeRequest(
         new Request(`https://test.local/sessions/${id}/sandbox-memory`, {
           method: "POST",
           headers: { Authorization: `Bearer token-${id}`, "Content-Type": "application/json" },
-          body: JSON.stringify({ ...content, scope }),
+          body: JSON.stringify({ ...content, ...target }),
         }),
         env,
         createExecutionContext()
@@ -95,13 +107,12 @@ describe("memory shared-scope authorization", () => {
     "infers the sole repository with environment %s",
     async (environmentId) => {
       const write = await sandboxSession(`sole-${environmentId}`, [repo], environmentId);
-      const response = await write({ type: "repository" });
+      const response = await write({ scope: "repository" });
       expect(response.status).toBe(201);
       const result = await response.json<{ id: string; status: string }>();
       expect(result.status).toBe("proposed");
       expect(await new MemoryStore(env.DB).get(result.id)).toMatchObject({
-        repoId: repo.repoId,
-        scope: { type: "repository", repoOwner: repo.repoOwner, repoName: repo.repoName },
+        partition: repoPartition,
       });
     }
   );
@@ -116,7 +127,7 @@ describe("memory shared-scope authorization", () => {
         repo_name: second.repoName,
       });
       const write = await sandboxSession(`multi-${environmentId}`, [repo, second], environmentId);
-      const ambiguous = await write({ type: "repository" });
+      const ambiguous = await write({ scope: "repository" });
       expect(ambiguous.status).toBe(400);
       const message = await ambiguous.text();
       expect(message).toContain("repoOwner and repoName");
@@ -127,27 +138,27 @@ describe("memory shared-scope authorization", () => {
         n: 0,
       });
       const response = await write({
-        type: "repository",
+        scope: "repository",
         repoOwner: " ACME/GROUP ",
         repoName: " WEB ",
       });
       expect(response.status).toBe(201);
       const { id } = await response.json<{ id: string }>();
       expect(await new MemoryStore(env.DB).get(id)).toMatchObject({
-        repoId: 456,
-        scope: {
+        partition: {
           type: "repository",
+          repoId: 456,
           repoOwner: second.repoOwner,
           repoName: second.repoName,
         },
       });
       if (environmentId) {
-        const environment = await write({ type: "environment" });
+        const environment = await write({ scope: "environment" });
         expect(environment.status).toBe(201);
         const { id } = await environment.json<{ id: string }>();
         expect(await new MemoryStore(env.DB).get(id)).toMatchObject({
           status: "proposed",
-          scope: { type: "environment", environmentId: "dev" },
+          partition: devPartition,
         });
       }
     }
@@ -157,85 +168,70 @@ describe("memory shared-scope authorization", () => {
     // This user can use the other repository, but it is deliberately absent from the session.
     await seedGrant("engineering", { repo_id: 456, repo_owner: repo.repoOwner, repo_name: "web" });
     const write = await sandboxSession("invalid-target");
-    for (const [scope, status] of [
-      [{ type: "repository", repoOwner: repo.repoOwner, repoName: "web" }, 403],
-      [{ type: "repository", repoOwner: repo.repoOwner }, 400],
-      [{ type: "repository", repoId: 123 }, 400],
-      [{ type: "environment" }, 403],
-      [{ type: "environment", environmentId: "dev" }, 400],
+    for (const [target, status] of [
+      [{ scope: "repository", repoOwner: repo.repoOwner, repoName: "web" }, 403],
+      [{ scope: "repository", repoOwner: repo.repoOwner }, 400],
+      [{ scope: "personal", repoOwner: repo.repoOwner, repoName: repo.repoName }, 400],
+      [{ scope: "repository", repoId: 123 }, 400],
+      [{ scope: "environment" }, 403],
+      [{ scope: "environment", environmentId: "dev" }, 400],
+      [{ scope: { type: "repository" } }, 400],
     ] as const)
-      expect((await write(scope)).status).toBe(status);
+      expect((await write(target)).status).toBe(status);
     const noRepo = await sandboxSession("no-repository", []);
-    expect((await noRepo({ type: "repository" })).status).toBe(403);
+    expect((await noRepo({ scope: "repository" })).status).toBe(403);
     const legacy = await sandboxSession("legacy-repository", [{ ...repo, repoId: null }]);
-    expect((await legacy({ type: "repository" })).status).toBe(403);
+    expect((await legacy({ scope: "repository" })).status).toBe(403);
     expect(await env.DB.prepare("SELECT COUNT(*) AS n FROM memories").first()).toEqual({ n: 0 });
     expect(await env.DB.prepare("SELECT COUNT(*) AS n FROM memory_revisions").first()).toEqual({
       n: 0,
     });
   });
 
-  it.each([123, null])(
-    "does not transfer records with repo ID %s to a reused repository name",
-    async (repoId) => {
-      const scope = {
-        type: "repository" as const,
-        repoOwner: repo.repoOwner,
-        repoName: repo.repoName,
-      };
-      const record = await new MemoryStore(env.DB).create({ ...content, scope }, actor, repoId);
-      vi.mocked(GitHubSourceControlProvider.prototype.checkRepositoryAccess).mockResolvedValue({
-        ...repo,
-        repoId: 456,
-        defaultBranch: "main",
-      });
-      expect((await request(`/memories/${record.id}`)).status).toBe(404);
-      expect((await request(`/memories/${record.id}/revisions`)).status).toBe(404);
-      const query = new URLSearchParams({
-        scope: "repository",
-        repoOwner: repo.repoOwner,
-        repoName: repo.repoName,
-      });
-      expect(await (await request(`/memories?${query}`)).json()).toMatchObject({ memories: [] });
-      const preview = await request("/memories/preview", "POST", {
-        repositories: [{ repoOwner: repo.repoOwner, repoName: repo.repoName }],
-      });
-      expect(preview.status).toBe(200);
-      expect(await preview.json()).toMatchObject({ items: [] });
-      expect(
-        (
-          await resolveSessionMemory(env.DB, {
-            canonicalUserId: MEMBER,
-            environmentId: null,
-            repositories: [{ ...repo, repoId: 456 }],
-          })
-        ).items
-      ).toEqual([]);
-      await expect(
-        new MemoryStore(env.DB).create(
-          { ...content, scope, supersedesMemoryId: record.id },
-          actor,
-          456
+  it("does not transfer records to a reused repository name", async () => {
+    const record = await createRecord(repoPartition);
+    vi.mocked(GitHubSourceControlProvider.prototype.checkRepositoryAccess).mockResolvedValue({
+      ...repo,
+      repoId: 456,
+      defaultBranch: "main",
+    });
+    expect((await request(`/memories/${record.id}`)).status).toBe(404);
+    expect((await request(`/memories/${record.id}/revisions`)).status).toBe(404);
+    const query = new URLSearchParams({
+      scope: "repository",
+      repoOwner: repo.repoOwner,
+      repoName: repo.repoName,
+    });
+    expect(await (await request(`/memories?${query}`)).json()).toMatchObject({ memories: [] });
+    const preview = await request("/memories/preview", "POST", {
+      repositories: [{ repoOwner: repo.repoOwner, repoName: repo.repoName }],
+    });
+    expect(preview.status).toBe(200);
+    expect(await preview.json()).toMatchObject({ items: [] });
+    expect(
+      (
+        await resolveSessionMemory(
+          env.DB,
+          memoryTargetForTest({ userId: MEMBER, repositories: [{ ...repo, repoId: 456 }] })
         )
-      ).rejects.toThrow(/same scope/);
-    }
-  );
+      ).items
+    ).toEqual([]);
+    await expect(
+      createRecord({ ...repoPartition, repoId: 456 }, { supersedesMemoryId: record.id })
+    ).rejects.toThrow(/same scope/);
+  });
 
-  it("denies workspace creation before resolving a repository owned by another team", async () => {
-    const denied = await request(
+  it("omits repository memories the creator cannot read without deciding session admission", async () => {
+    await createRecord(repoPartition);
+    const created = await request(
       "/sessions",
       "POST",
-      {
-        repoOwner: repo.repoOwner,
-        repoName: repo.repoName,
-      },
+      { repoOwner: repo.repoOwner, repoName: repo.repoName },
       OUTSIDER
     );
-    expect(denied.status).toBe(403);
-    expect(await denied.json()).toMatchObject({ code: "repository_grant_required" });
-    expect(
-      await env.DB.prepare("SELECT COUNT(*) AS n FROM session_memory_manifests").first()
-    ).toEqual({ n: 0 });
+    expect(created.status).toBe(201);
+    const { sessionId } = await created.json<{ sessionId: string }>();
+    expect((await new SessionMemoryStore(env.DB).load(sessionId))?.manifest.items).toEqual([]);
   });
 
   it("does not inject repository memories into an unauthorized workspace automation", async () => {
@@ -253,31 +249,20 @@ describe("memory shared-scope authorization", () => {
     )
       .bind(repo.repoOwner, repo.repoName, repo.repoId)
       .run();
+    await createRecord(repoPartition);
     await new Scheduler(env.DB, createCloudflareEnv(env), { submit() {} }).tick();
-    expect(
-      await env.DB.prepare(
-        "SELECT COUNT(*) AS n FROM sessions WHERE automation_id = 'memory-auto'"
-      ).first()
-    ).toEqual({ n: 0 });
-    expect(
-      await env.DB.prepare(
-        "SELECT status, failure_reason FROM automation_runs WHERE automation_id = 'memory-auto'"
-      ).first()
-    ).toMatchObject({
-      status: "failed",
-      failure_reason: "Automation execution principal is not authorized",
-    });
+    const session = await env.DB.prepare(
+      "SELECT id FROM sessions WHERE automation_id = 'memory-auto'"
+    ).first<{ id: string }>();
+    expect(session).not.toBeNull();
+    expect((await new SessionMemoryStore(env.DB).load(session!.id))?.manifest.items).toEqual([]);
   });
 
   it.each([
     { type: "repository" as const, repoOwner: repo.repoOwner, repoName: repo.repoName },
     { type: "environment" as const, environmentId: "dev" },
   ])("requires both scope membership and management authority for $type", async (scope) => {
-    const record = await new MemoryStore(env.DB).create(
-      { ...content, scope },
-      actor,
-      scope.type === "repository" ? 123 : null
-    );
+    const record = await createRecord(scope.type === "repository" ? repoPartition : devPartition);
     const read = await request(`/memories/${record.id}`);
     expect(read.status).toBe(200);
     expect(await read.json()).toMatchObject({ memory: { capabilities: { canEdit: false } } });
@@ -301,14 +286,7 @@ describe("memory shared-scope authorization", () => {
         await env.DB.prepare("DELETE FROM team_repository_grants").run();
         await env.DB.prepare("DELETE FROM team_memberships WHERE user_id = ?").bind(MEMBER).run();
       }
-      const record = await new MemoryStore(env.DB).create(
-        {
-          ...content,
-          scope: { type: "repository", repoOwner: repo.repoOwner, repoName: repo.repoName },
-        },
-        actor,
-        123
-      );
+      const record = await createRecord(repoPartition);
       await seedMemorySession(sessionId, {
         userId: MEMBER,
         ownerTeamId: ownership === "team" ? "engineering" : null,
@@ -344,24 +322,16 @@ describe("memory shared-scope authorization", () => {
       }
       expect((await sandbox()).status).toBe(403);
       expect((await sandbox(`/${record.id}`)).status).toBe(404);
-      expect(
-        (await sandbox("", "POST", { ...content, scope: { type: "repository" } })).status
-      ).toBe(403);
+      expect((await sandbox("", "POST", { ...content, scope: "repository" })).status).toBe(403);
     }
   );
 
-  it.each([
-    "personal failure",
-    "team archive",
-    "grant removal",
-    "workspace membership removal",
-    "environment transfer",
-    "suspension",
-    "failed",
-    "completed",
-    "cancelled",
-    "archived",
-  ])("rejects a write when %s wins after route authorization", async (change) => {
+  /**
+   * Commit-time fencing covers facts about the writing session (liveness, owner suspension,
+   * personal auto-save eligibility). Grant changes are not re-encoded in SQL: they are checked
+   * just before the write and on every later read, and shared-scope agent writes are proposals.
+   */
+  async function raceWrite(change: string, during: () => Promise<unknown>) {
     const sessionId = `race-${change.replaceAll(" ", "-")}`;
     const workspaceOrPersonal = ["workspace membership removal", "personal failure"].includes(
       change
@@ -380,65 +350,96 @@ describe("memory shared-scope authorization", () => {
     vi.spyOn(MemoryStore.prototype, "create").mockImplementationOnce(async function (
       this: MemoryStore,
       input,
-      author,
-      repoId
+      author
     ) {
-      if (change === "personal failure") {
-        expect(author.allowPersonalAutoSave).toBe(true);
-        await env.DB.prepare("UPDATE sessions SET status = 'failed' WHERE id = ?")
-          .bind(sessionId)
-          .run();
-      } else if (change === "team archive")
-        await env.DB.prepare("UPDATE teams SET archived_at = 1 WHERE id = 'engineering'").run();
-      else if (change === "workspace membership removal")
-        await env.DB.prepare("DELETE FROM team_memberships WHERE user_id = ?").bind(MEMBER).run();
-      else if (change === "grant removal")
+      if (change === "personal failure")
+        expect(author.kind === "agent" && author.personalAutoSave).toBe(true);
+      await during();
+      return original.call(this, input, author);
+    });
+    const scope =
+      change === "personal failure"
+        ? "personal"
+        : change === "environment transfer"
+          ? "environment"
+          : "repository";
+    const sandbox = (path: string, body: object) =>
+      routeRequest(
+        new Request(`https://test.local/sessions/${sessionId}/sandbox-memory${path}`, {
+          method: "POST",
+          headers: { Authorization: "Bearer race-token", "Content-Type": "application/json" },
+          body: JSON.stringify(body),
+        }),
+        env,
+        createExecutionContext()
+      );
+    return {
+      response: await sandbox("", { ...content, scope }),
+      search: () => sandbox("/search", { query: "deploy", scope }),
+    };
+  }
+
+  it.each(["personal failure", "suspension", "failed", "completed", "cancelled", "archived"])(
+    "rejects a write when %s wins after route authorization",
+    async (change) => {
+      const { response } = await raceWrite(change, () =>
+        change === "personal failure"
+          ? env.DB.prepare("UPDATE sessions SET status = 'failed' WHERE id = ?")
+              .bind(`race-${change.replaceAll(" ", "-")}`)
+              .run()
+          : change === "suspension"
+            ? env.DB.prepare("UPDATE users SET suspended_at = 1 WHERE id = ?").bind(MEMBER).run()
+            : env.DB.prepare("UPDATE sessions SET status = ? WHERE id = ?")
+                .bind(change, `race-${change}`)
+                .run()
+      );
+      expect(response.status).toBe(409);
+      expect(await env.DB.prepare("SELECT COUNT(*) AS count FROM memories").first()).toEqual({
+        count: 0,
+      });
+      expect(
+        await env.DB.prepare("SELECT COUNT(*) AS count FROM memory_revisions").first()
+      ).toEqual({ count: 0 });
+      expect(
         await env.DB.prepare(
-          "DELETE FROM team_repository_grants WHERE team_id = 'engineering'"
-        ).run();
-      else if (change === "environment transfer") {
+          "SELECT COUNT(*) AS count FROM authorization_audit_events WHERE action = 'memory.created'"
+        ).first()
+      ).toEqual({ count: 0 });
+    }
+  );
+
+  it.each([
+    [
+      "team archive",
+      () => env.DB.prepare("UPDATE teams SET archived_at = 1 WHERE id = 'engineering'").run(),
+    ],
+    [
+      "grant removal",
+      () =>
+        env.DB.prepare("DELETE FROM team_repository_grants WHERE team_id = 'engineering'").run(),
+    ],
+    [
+      "workspace membership removal",
+      () => env.DB.prepare("DELETE FROM team_memberships WHERE user_id = ?").bind(MEMBER).run(),
+    ],
+    [
+      "environment transfer",
+      async () => {
         await seedTeam("other-team");
         await env.DB.prepare(
           "UPDATE environments SET owner_team_id = 'other-team' WHERE id = 'dev'"
         ).run();
-      } else if (change === "suspension")
-        await env.DB.prepare("UPDATE users SET suspended_at = 1 WHERE id = ?").bind(MEMBER).run();
-      else
-        await env.DB.prepare("UPDATE sessions SET status = ? WHERE id = ?")
-          .bind(change, sessionId)
-          .run();
-      return original.call(this, input, author, repoId);
-    });
-    const response = await routeRequest(
-      new Request(`https://test.local/sessions/${sessionId}/sandbox-memory`, {
-        method: "POST",
-        headers: { Authorization: "Bearer race-token", "Content-Type": "application/json" },
-        body: JSON.stringify({
-          ...content,
-          scope:
-            change === "personal failure"
-              ? { type: "personal" }
-              : change === "environment transfer"
-                ? { type: "environment" }
-                : { type: "repository" },
-        }),
-      }),
-      env,
-      createExecutionContext()
-    );
-    expect(response.status).toBe(409);
-    expect(await env.DB.prepare("SELECT COUNT(*) AS count FROM memories").first()).toEqual({
-      count: 0,
-    });
-    expect(await env.DB.prepare("SELECT COUNT(*) AS count FROM memory_revisions").first()).toEqual({
-      count: 0,
-    });
-    expect(
-      await env.DB.prepare(
-        "SELECT COUNT(*) AS count FROM authorization_audit_events WHERE action = 'memory.created'"
-      ).first()
-    ).toEqual({ count: 0 });
-  });
+      },
+    ],
+  ] as const)(
+    "records a proposal when %s races the write, then denies later access",
+    async (change, during) => {
+      const { response, search } = await raceWrite(change, during);
+      expect(response.status).toBe(201);
+      expect(await response.json()).toMatchObject({ status: "proposed" });
+      expect((await search()).status).toBe(403);
+    }
+  );
 
   it("permanently revokes personal autosave when a collaborator was added and removed", async () => {
     await seedMemorySession("private", { userId: MEMBER, status: "created" });
@@ -452,8 +453,8 @@ describe("memory shared-scope authorization", () => {
     ).toEqual({ personal_auto_save_eligible: 0 });
     await expect(
       new MemoryStore(env.DB).create(
-        { ...content, scope: { type: "personal" } },
-        { ...actor, kind: "agent", sessionId: "private", allowPersonalAutoSave: true }
+        { partition: { type: "personal", userId: MEMBER }, content },
+        { ...actor, kind: "agent", sessionId: "private", personalAutoSave: true }
       )
     ).rejects.toThrow(/session access/);
   });

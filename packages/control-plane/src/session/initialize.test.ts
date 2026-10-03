@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { initializeSession, type SessionInitInput } from "./initialize";
+import { resolvedPin } from "./pinned";
 import { SessionIndexStore } from "../db/session-index";
 import { SessionInternalPaths } from "./contracts";
 import type { SqlDatabase } from "../db/sql-database";
@@ -38,8 +39,8 @@ describe("initializeSession", () => {
     sandboxSettings: {},
     automationId: null,
     automationRunId: null,
-    memoryManifest: {
-      resolverVersion: 1,
+    memory: resolvedPin({
+      selectionVersion: 1,
       manifestSha256: "0".repeat(64),
       resolvedAt: 1,
       includePersonalMemories: false,
@@ -49,14 +50,14 @@ describe("initializeSession", () => {
       estimatedTokens: 0,
       truncatedCount: 0,
       items: [],
-    },
-    managedSkillsManifest: {
+    }),
+    managedSkills: resolvedPin({
       selection: { mode: "all" },
       resolverVersion: 1,
       manifestSha256: "0".repeat(64),
       resolvedAt: 1,
       skills: [],
-    },
+    }),
     providerAuth: [
       {
         provider: "openai",
@@ -149,24 +150,6 @@ describe("initializeSession", () => {
       buildTimeoutSeconds: 2400,
       terminalEnabled: true,
     });
-  });
-
-  it("requires exactly one resolved or inherited managed skills manifest", async () => {
-    await expect(
-      initializeSession(
-        createEnv(),
-        { ...baseInput, managedSkillsManifest: undefined },
-        ctx as never
-      )
-    ).rejects.toThrow("Session must resolve or inherit exactly one managed skills manifest");
-    await expect(
-      initializeSession(
-        createEnv(),
-        { ...baseInput, managedSkillsSourceSessionId: "parent-session" },
-        ctx as never
-      )
-    ).rejects.toThrow("Session must resolve or inherit exactly one managed skills manifest");
-    expect(createMock).not.toHaveBeenCalled();
   });
 
   it("throws when D1 write fails and does not call DO init", async () => {

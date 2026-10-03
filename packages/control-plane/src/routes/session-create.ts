@@ -1,5 +1,3 @@
-import { resolveSessionMemory } from "../session/memory-resolution";
-import { authorizeWorkspaceRepositories } from "./workspace-repository-authorization";
 import { Hono } from "hono";
 import { admit, dispatch } from "../routing/admit";
 import type { ControlPlaneHonoEnv } from "../routing/hono-env";
@@ -27,6 +25,9 @@ import { initializeSession, type SessionInitInput } from "../session/initialize"
 import { resolveGitHubEnrichmentForRequest } from "../session/identity";
 import { resolveSessionScopedSettings } from "../session/integration-settings-resolution";
 import { resolveManagedSkills, SkillResolutionError } from "../session/skill-resolution";
+import { resolvedPin } from "../session/pinned";
+import { authorizeMemoryTarget } from "../authorization/memory-access";
+import { resolveSessionMemory } from "../memory/resolve-session-memory";
 import type { Env } from "../types";
 import { resolveSessionProviderAuth } from "../session/provider-account-resolution";
 import { ProviderAccountSelectionPolicyError } from "../model-provider-accounts/selection-policy";
@@ -245,14 +246,6 @@ export async function handleCreateSession(
   // from a saved environment layers its overrides on top (design §13.5).
   const scopeMembers =
     repositories ?? (repoOwner && repoName ? [{ repoOwner, repoName, repoId }] : []);
-  const memoryAccessDenied = await authorizeWorkspaceRepositories(ctx, {
-    repositories: scopeMembers.map((repo) => ({
-      owner: repo.repoOwner,
-      name: repo.repoName,
-      repoId: repo.repoId ?? null,
-    })),
-  });
-  if (memoryAccessDenied) return memoryAccessDenied;
   const { codeServerEnabled, vncEnabled, sandboxSettings } = await resolveSessionScopedSettings(
     ctx.db,
     scopeMembers,
@@ -294,14 +287,20 @@ export async function handleCreateSession(
     throw e;
   }
 
+  const memoryTarget = await authorizeMemoryTarget(ctx, {
+    userId: resolvedUserId,
+    ownerTeamId: teamId,
+    repositories: scopeMembers,
+    environmentId,
+  });
   const memoryManifest = await resolveSessionMemory(
     ctx.db,
-    { canonicalUserId: resolvedUserId, repositories: scopeMembers, environmentId },
+    memoryTarget,
     body.includePersonalMemories
   );
 
   const input: SessionInitInput = {
-    memoryManifest,
+    memory: resolvedPin(memoryManifest),
     ownerTeamId: teamId,
     visibility,
     sessionId,
@@ -327,7 +326,7 @@ export async function handleCreateSession(
     vncEnabled,
     sandboxSettings,
     spawnSource,
-    managedSkillsManifest,
+    managedSkills: resolvedPin(managedSkillsManifest),
     providerAuth,
   };
 
