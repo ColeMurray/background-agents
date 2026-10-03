@@ -102,6 +102,7 @@ vi.mock("../session/skill-resolution", () => ({
   })),
 }));
 
+const { resolveManagedSkills } = await import("../session/skill-resolution");
 const { AutomationExecutionUnauthorizedError, EXECUTION_DEADLINE_GRACE_MS, Scheduler } =
   await import("./scheduler");
 
@@ -3593,6 +3594,159 @@ describe("Scheduler", () => {
       mockStore.getOverdueAutomations.mockResolvedValue([teamAutomation]);
       mockEnvironmentGetById.mockReset().mockResolvedValue(environment);
       mockEnvironmentRepositories.mockReset().mockResolvedValue(members);
+    });
+    describe("launch-time re-authorization", () => {
+      function launchableRepositories(names: string[]) {
+        selectRepositories(
+          "auto-1",
+          names.map((name, index) =>
+            repositoryRow("auto-1", { repo_name: name, repo_id: 1000 + index })
+          )
+        );
+        mockCheckRepositoryAccess.mockImplementation(async ({ owner, name }) => ({
+          repoId: 1000 + names.indexOf(name),
+          repoOwner: owner,
+          repoName: name,
+          defaultBranch: "main",
+        }));
+        mockTeamGrantCovers.mockResolvedValue(true);
+      }
+
+      /** Admit the firing, then deny every launch. */
+      function denyAfterAdmission() {
+        mockIsAutomationExecutionAuthorized.mockResolvedValueOnce(true).mockResolvedValue(false);
+      }
+
+      it("re-checks admission's requirements as the last step before session creation", async () => {
+        launchableRepositories(["web-app"]);
+        denyAfterAdmission();
+        mockStore.getInvocationRunAggregate.mockResolvedValue(aggregate({ total: 1, active: 0 }));
+
+        await expect(createScheduler().trigger("auto-1", "manual-user")).rejects.toMatchObject({
+          name: "AutomationExecutionUnauthorizedError",
+          reason: "execution_authorization_denied",
+        });
+        const admissionRequest = {
+          automationId: "auto-1",
+          executionUserId: "manual-user",
+          requiresRepositoryUse: true,
+          requiresEnvironmentUse: false,
+        };
+        expect(mockIsAutomationExecutionAuthorized.mock.calls).toEqual([
+          [expect.anything(), admissionRequest],
+          [expect.anything(), admissionRequest],
+        ]);
+        const launchCheck = mockIsAutomationExecutionAuthorized.mock.invocationCallOrder[1];
+        expect(launchCheck).toBeGreaterThan(
+          mockStore.setRunExecutionDeadline.mock.invocationCallOrder[0]
+        );
+        expect(launchCheck).toBeGreaterThan(
+          vi.mocked(resolveManagedSkills).mock.invocationCallOrder[0]
+        );
+        expect(mockSessionStoreCreate).not.toHaveBeenCalled();
+        expect(mockStore.updateRun).toHaveBeenCalledWith(expect.any(String), {
+          status: "unauthorized",
+          failure_reason: "execution_authorization_denied",
+          session_id: null,
+          completed_at: expect.any(Number),
+        });
+        expect(mockStore.tryMarkInvocationFailureCounted).not.toHaveBeenCalled();
+        expect(mockStore.incrementConsecutiveFailures).not.toHaveBeenCalled();
+      });
+
+      it("reports a team archived after admission", async () => {
+        launchableRepositories(["web-app"]);
+        denyAfterAdmission();
+        mockTeamGetById
+          .mockResolvedValueOnce(activeTeam)
+          .mockResolvedValue({ ...activeTeam, archivedAt: 2 });
+
+        await expect(createScheduler().trigger("auto-1", "manual-user")).rejects.toMatchObject({
+          reason: "team_archived",
+        });
+      });
+
+      it("counts a scheduled launch denial as skipped without a failure strike", async () => {
+        launchableRepositories(["web-app"]);
+        denyAfterAdmission();
+
+        expect(await createScheduler().tick()).toEqual({ processed: 0, skipped: 1, failed: 0 });
+        expect(mockStore.incrementConsecutiveFailures).not.toHaveBeenCalled();
+        expect(mockStore.recordAuthorizationDenied).not.toHaveBeenCalled();
+      });
+
+      describe("mixed fan-out with a denied and a genuinely failed child", () => {
+        beforeEach(() => {
+          launchableRepositories(["web-app", "api"]);
+          // "api" fails resolution before launch; "web-app" is denied at launch.
+          mockCheckRepositoryAccess.mockImplementation(async ({ owner, name }) =>
+            name === "api"
+              ? null
+              : { repoId: 1000, repoOwner: owner, repoName: name, defaultBranch: "main" }
+          );
+          denyAfterAdmission();
+          mockStore.getInvocationRunAggregate.mockResolvedValue(
+            aggregate({ total: 2, active: 0, failed: 1 })
+          );
+        });
+
+        it("fails a manual trigger and counts the genuine failure", async () => {
+          const trigger = createScheduler().trigger("auto-1", "manual-user");
+          await expect(trigger).rejects.toThrow("Failed to trigger automation");
+          await expect(trigger).rejects.not.toBeInstanceOf(AutomationExecutionUnauthorizedError);
+          expect(mockStore.updateRun).toHaveBeenCalledWith(
+            expect.any(String),
+            expect.objectContaining({ status: "unauthorized" })
+          );
+          expect(mockStore.tryMarkInvocationFailureCounted).toHaveBeenCalledTimes(1);
+          expect(mockStore.incrementConsecutiveFailures).toHaveBeenCalledTimes(1);
+        });
+
+        it("reports a scheduled firing as failed, not skipped", async () => {
+          expect(await createScheduler().tick()).toEqual({ processed: 0, skipped: 0, failed: 1 });
+          expect(mockStore.incrementConsecutiveFailures).toHaveBeenCalledTimes(1);
+        });
+      });
+
+      it("counts an event launch denial as skipped", async () => {
+        mockGetSlackAutomationsForChannel.mockResolvedValue([sampleSlackAutomation]);
+        mockStore.getLatestSteerableRunForThread.mockResolvedValue(null);
+        mockStore.getActiveRunForKey.mockResolvedValue(null);
+        denyAfterAdmission();
+
+        expect(await createScheduler().event(makeSlackEvent())).toEqual({
+          triggered: 0,
+          skipped: 1,
+          steered: 0,
+        });
+        expect(mockStore.incrementConsecutiveFailures).not.toHaveBeenCalled();
+      });
+
+      it("re-authorizes each fanned-out child against current team state", async () => {
+        launchableRepositories(["web-app", "api", "worker"]);
+        mockStore.getInvocationRunAggregate.mockResolvedValue(aggregate({ total: 3, active: 3 }));
+
+        const result = await createScheduler().trigger("auto-1", "manual-user");
+
+        expect(result.runs.filter((run) => run.status === "running")).toHaveLength(3);
+        expect(mockIsAutomationExecutionAuthorized).toHaveBeenCalledTimes(1 + 3);
+        // One admission read plus one launch read per child.
+        expect(mockTeamGetById).toHaveBeenCalledTimes(1 + 3);
+      });
+
+      it("uses the team's default visibility as of launch", async () => {
+        launchableRepositories(["web-app"]);
+        mockTeamGetById
+          .mockResolvedValueOnce({ ...activeTeam, defaultVisibility: "workspace" })
+          .mockResolvedValue({ ...activeTeam, defaultVisibility: "private" });
+        mockStore.getInvocationRunAggregate.mockResolvedValue(aggregate({ total: 1, active: 1 }));
+
+        await createScheduler().trigger("auto-1", "manual-user");
+
+        expect(mockSessionStoreCreate).toHaveBeenCalledWith(
+          expect.objectContaining({ ownerTeamId: teamId, visibility: "private" })
+        );
+      });
     });
 
     it("checks resolved direct IDs before manual admission", async () => {

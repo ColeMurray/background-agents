@@ -5,6 +5,7 @@ import {
 } from "@open-inspect/shared/triggers";
 import {
   AutomationStore,
+  allRunsUnauthorized,
   parseAutomationTriggerFields,
   type AutomationRepositoryInsert,
   type AutomationRow,
@@ -99,6 +100,7 @@ export async function admitGitHubEvent(
       switch (result.outcome) {
         case "started":
           if (result.launched > 0) triggered++;
+          else if (allRunsUnauthorized(result.runs)) skipped++;
           break;
         case "unauthorized":
           log.warn("Skipped event automation after execution authorization denial", {
