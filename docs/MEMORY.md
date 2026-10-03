@@ -42,17 +42,33 @@ a different participant cannot write to the inherited owner's personal scope.
 
 ## Architecture and implementation
 
-| Layer            | Responsibility                                                                                                                                                                                   |
-| ---------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| Shared contracts | Strict scope/content/provenance schemas, record limits, manifest types and `memories.manage_own`.                                                                                                |
-| D1               | Migration `0084_memories.sql`: records, immutable revisions, per-user default, session manifest headers and ordered revision references.                                                         |
-| Memory store     | Atomic revision/supersession/status mutations, optimistic concurrency, per-session write quotas and content-free audit events.                                                                   |
-| Resolver         | Canonical personal identity, ordered repositories, optional environment, deterministic selection and whole-record truncation.                                                                    |
-| Session creation | Save the resolved manifest in the same database transaction as the session index, before sandbox warming. Schedulers use the execution owner's default. Children copy the parent's selection.    |
-| Runtime boot     | Fetch the installation using the sandbox's session-bound bearer token, clear stale restored content, then atomically write owner-readable `oi-memory.md` in the harness configuration directory. |
-| OpenCode         | Add the memory file to `instructions`; expose `memory_read`, `memory_search` and `memory_write` custom tools.                                                                                    |
-| Claude           | Append the same file text to repository guidance; expose the three memory tools through the existing SDK MCP server.                                                                             |
-| Web              | Cookie-authenticated proxy routes, owner/shared management pages, composer toggle/preview and session diagnostics.                                                                               |
+| Layer            | Where                                                                     | Responsibility                                                                                                                                                                                 |
+| ---------------- | ------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Shared contracts | `packages/shared/src/types/memories.ts`, `memory-tools.ts`                | Wire schemas (management DTOs, manifests, sandbox requests/responses), limits, scope helpers, the lifecycle transition table and the agent tool definitions. `memories.manage_own`.            |
+| Domain           | `control-plane/src/memory/`                                               | Partitions (stable scope identity), selection and budget, rendering, initial status, DTO projection, and `SessionMemoryService` for agent operations. Pure modules never touch D1.             |
+| Access policy    | `control-plane/src/authorization/memory-access.ts`                        | Human management admission, `SharedMemoryAccess` for session principals, and `authorizeMemoryTarget` for new sessions.                                                                         |
+| Stores           | `control-plane/src/db/memories.ts`, `session-memories.ts`, …              | SQL only: revisioned records and lifecycle, pinned manifests, preferences, search and the commit-time agent write guard. Queries are built with the `sql` fragment template.                   |
+| D1               | Migration `0084_memories.sql`                                             | Records partitioned by `(scope_type, scope_key)`, immutable revisions, per-user default, session manifest headers and ordered revision references.                                             |
+| Session creation | `routes/session-create.ts`, scheduler, child spawn                        | Resolve and pin the manifest in the session insert's transaction (`Pinned<T>`: resolved for roots, inherited by children). Schedulers use the execution owner's default.                       |
+| Runtime boot     | `sandbox-runtime/src/sandbox_runtime/memories.py`                         | Fetch the installation with the session-bound token, clear stale restored content, then atomically write owner-readable `oi-memory.md` in the harness configuration directory.                 |
+| Harness tools    | `tools/_memory.js`, `harness/memory_tools.py`                             | Both harnesses build `memory_read`, `memory_search` and `memory_write` from the generated specs and forward arguments verbatim. OpenCode reads the file via `instructions`; Claude appends it. |
+| Web              | `web/src/hooks/use-memories.ts`, `components/settings/memories-settings/` | Typed queries and mutations (revision fencing via `If-Match`), owner/shared management pages, composer control/preview and session diagnostics.                                                |
+
+### Extending memory
+
+- **A new scope** (for example, team): add it to `MEMORY_SCOPE_TYPES` and `memoryScopeSchema`, then
+  follow the compiler — every switch over scopes and partitions is exhaustive (`partition.ts`,
+  `target.ts`, `memory-access.ts`, the write guard, the shared scope helpers and the web settings
+  link). Storage needs no new columns or indexes; extend the `scope_type` check constraint.
+- **A new lifecycle action or state:** add an entry to `MEMORY_TRANSITIONS`; the store, routes, DTO
+  capabilities and web action buttons all derive from it.
+- **A new agent tool:** add it to `MEMORY_TOOLS` in `packages/shared/src/memory-tools.ts`, run
+  `npm run generate:memory-tools -w @open-inspect/shared`, and add a four-line OpenCode wrapper in
+  `tools/`. The Claude harness picks it up from the generated JSON. A shared test fails when the
+  generated artifacts are stale.
+- **Selection semantics:** bump `MEMORY_SELECTION_VERSION`. It is provenance only; loaders never
+  branch on it, and rendering always uses the current format with its own hard limit, so existing
+  sessions keep booting.
 
 No project scope, embeddings, automatic memory search, repository writes or new infrastructure
 services are required. Memory estimates are available on the session manifest; a broader
@@ -110,9 +126,9 @@ owner-only, including when the caller is another administrator.
 | `GET /memories?scope=...&status=...&offset=...&limit=...` | Page through one scope (`personal`, `repository`, or `environment`) and status (`active`, `proposed`, or `archived`). Repository scope also takes `repoOwner` and `repoName`; environment takes `environmentId`. `nextOffset` is null at the last page. |
 | `POST /memories`                                          | Create or propose a replacement via `supersedesMemoryId`.                                                                                                                                                                                               |
 | `GET /memories/:id`                                       | Current record and server-calculated management capabilities.                                                                                                                                                                                           |
-| `PATCH /memories/:id`                                     | Revise with `expectedRevisionId`.                                                                                                                                                                                                                       |
+| `PATCH /memories/:id`                                     | Revise content; `If-Match: <currentRevisionId>` is required (428 when missing, 409 when stale).                                                                                                                                                         |
 | `GET /memories/:id/revisions`                             | Immutable revision history.                                                                                                                                                                                                                             |
-| `POST /memories/:id/{action}`                             | `archive`, `restore`, `approve`, or `reject` with `expectedRevisionId`; archive accepts an optional reason.                                                                                                                                             |
+| `POST /memories/:id/{action}`                             | `approve`, `reject`, `archive`, or `restore` with `If-Match`; archive and reject accept an optional note. Transitions follow `MEMORY_TRANSITIONS`.                                                                                                      |
 | `POST /memories/preview`                                  | Resolve a target for the current user without creating a session.                                                                                                                                                                                       |
 | `GET, PUT /memory-preferences`                            | Read/save the current user's personal inclusion default.                                                                                                                                                                                                |
 | `GET /sessions/:id/memories`                              | Session-readable pinned diagnostics.                                                                                                                                                                                                                    |
@@ -122,14 +138,21 @@ owner-only, including when the caller is another administrator.
 | `POST /sessions/:id/sandbox-memory/search`                | Session-authorized lexical discovery of active current facts, including records outside the boot catalog.                                                                                                                                               |
 
 Sandbox routes reject credentials belonging to another session and recheck current workspace/team
-repository grants and environment ownership. Agent inserts repeat these checks atomically and
-require an active owner and a live (`created`/`active`) session; settled sessions must be
-reactivated by a fresh prompt before writing. Repository identities require a stable ID; legacy
-null-ID memories fail closed rather than becoming accessible when a name is reused. Audits record
-record/revision/status/actor/session IDs, never memory content or private archive-reason text. Scope
-identifiers are retained after target deletion to preserve historical manifests. There is no
-hard-delete endpoint. Restoring an approved memory is allowed only when its entire replacement
-family has no active record.
+repository grants and environment ownership on every installation, read, search and write. Agent
+inserts additionally enforce, atomically, the facts about the writing session: an active owner, a
+live (`created`/`active`) session that still reaches the target partition, personal auto-save
+eligibility, quotas and the replacement predecessor. Settled sessions must be reactivated by a fresh
+prompt before writing. Grant rules are deliberately not duplicated in that SQL guard: a grant
+revoked in the milliseconds between the route check and the insert can leave a shared-scope
+_proposal_, which every later read denies and a human must approve. Repository memories are keyed by
+the stable repository ID, so a reused name never inherits them and a renamed repository keeps them.
+
+New sessions never fail because of memory: `authorizeMemoryTarget` omits repositories or an
+environment that the session principal cannot read from the selection, and session admission remains
+`authorizeSessionTarget`'s job. Audits record record/revision/status/actor/session IDs, never memory
+content or private archive-reason text. Scope identifiers are retained after target deletion to
+preserve historical manifests. There is no hard-delete endpoint. Restoring an approved memory is
+allowed only when its entire replacement family has no active record.
 
 ### Agent write destinations
 
@@ -154,11 +177,12 @@ stable ID is denied. Sandbox writes do not accept `environmentId`; environment i
 derived from the session. Human management APIs still require explicit repository/environment
 identities.
 
-Both harnesses send the same relative request to `POST /sessions/:id/sandbox-memory`, with
-`scope: { type: "repository" }`, `{ type: "environment" }`, or `{ type: "personal" }`; an explicit
-repository selector lives inside that scope object. The server resolves a complete scope before
-performing the existing current-access and commit-time checks. Inference does not change approval,
-opt-out, quotas, replacement rules, or pinned context.
+Both harnesses forward the tool arguments unchanged to `POST /sessions/:id/sandbox-memory`; the
+endpoint's request schema is the tool input schema (`sandboxMemoryWriteSchema`), so `scope` is
+`"repository"`, `"environment"`, or `"personal"` and an explicit selector is the top-level
+`repoOwner`/`repoName` pair. The server resolves a complete scope before performing the existing
+current-access and commit-time checks. Inference does not change approval, opt-out, quotas,
+replacement rules, or pinned context.
 
 ## Local verification
 
