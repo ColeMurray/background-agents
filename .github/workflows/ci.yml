@@ -6,6 +6,7 @@ on:
     paths:
       - ".env.example"
       - ".github/workflows/ci.yml"
+      - ".github/workflows/terraform.yml"
       - ".nvmrc"
       - ".prettierignore"
       - ".prettierrc"
@@ -42,6 +43,7 @@ on:
     paths:
       - ".env.example"
       - ".github/workflows/ci.yml"
+      - ".github/workflows/terraform.yml"
       - ".nvmrc"
       - ".prettierignore"
       - ".prettierrc"
