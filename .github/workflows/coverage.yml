@@ -21,7 +21,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        shard: ["1/6", "2/6", "3/6", "4/6", "5/6", "6/6"]
+        shard: ["1/10", "2/10", "3/10", "4/10", "5/10", "6/10", "7/10", "8/10", "9/10", "10/10"]
     steps:
       - uses: actions/checkout@v6
         with:
@@ -65,7 +65,7 @@ jobs:
           npm run build -w @open-inspect/shared
       - name: Enforce web coverage
         run: |
-          npm run test:coverage -w @open-inspect/web -- --maxWorkers=2
+          npm run test:coverage -w @open-inspect/web -- --maxWorkers=3
           node scripts/check-coverage.mjs web packages/web/coverage/coverage-summary.json
       - name: Upload web coverage
         if: always()
