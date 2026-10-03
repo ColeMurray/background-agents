@@ -37,10 +37,16 @@ import {
   type ListSessionInboxSnapshotResult,
 } from "./session-inbox-store";
 import { INACTIVE_SESSION_STATUS_SQL } from "@open-inspect/shared/types/session-activity";
-import { readStateFromRow, unreadSql, type ViewerReadStateRow } from "./session-read-state";
-import { parseSessionRow, toSessionFields as toEntry, type SessionRow } from "./session-row";
+import { readStateFromRow, unreadSql, viewerReadStateRowSchema } from "./session-read-state";
+import {
+  parseSessionRow,
+  sessionRowSchema,
+  toSessionFields as toEntry,
+  type SessionRow,
+} from "./session-row";
 import { SessionAuditStore } from "./session-audit";
 import type { SqlDatabase, SqlStatement } from "./sql-database";
+import { z } from "zod";
 
 const CHILD_ADMISSION_LEASE_TTL_MS = 5 * 60 * 1000;
 
@@ -55,6 +61,8 @@ export interface ChildAdmissionLease {
  * descendant CTE run away; spawn-time depth caps keep real trees far below it.
  */
 const MAX_DESCENDANT_DEPTH = 10;
+
+const viewerSessionRowSchema = z.intersection(sessionRowSchema, viewerReadStateRowSchema);
 
 /**
  * One member of a session's repository set — the identity subset of the
@@ -148,8 +156,6 @@ export interface ListSessionsResult {
   sessions: SessionEntry[];
   hasMore: boolean;
 }
-
-type ViewerSessionRow = SessionRow & ViewerReadStateRow;
 
 function toProviderAuth(row: SessionModelProviderAuthRow): SessionModelProviderAuthInput {
   const auth = sessionModelProviderAuthSchema.parse({
@@ -566,23 +572,25 @@ export class SessionIndexStore {
              ORDER BY paged_sessions.updated_at DESC, paged_sessions.id DESC`
           )
           .bind(...pageParams, viewerUserId)
-          .all<ViewerSessionRow>()
+          .all<unknown>()
       : await this.db
           .prepare(pageSql)
           .bind(...pageParams)
-          .all<SessionRow>();
+          .all<unknown>();
 
-    const rows = result.results || [];
-    const sessions = await this.attachListMetadata(
-      rows.slice(0, limit).map((row) => ({
-        ...toEntry(row),
-        ...(viewerUserId ? { readState: readStateFromRow(row as ViewerSessionRow) } : {}),
-      }))
-    );
+    const rawRows = result.results ?? [];
+    const pageRows = rawRows.slice(0, limit);
+    const entries = viewerUserId
+      ? z
+          .array(viewerSessionRowSchema)
+          .parse(pageRows)
+          .map((row) => ({ ...toEntry(row), readState: readStateFromRow(row) }))
+      : z.array(sessionRowSchema).parse(pageRows).map(toEntry);
+    const sessions = await this.attachListMetadata(entries);
 
     return {
       sessions,
-      hasMore: rows.length > limit,
+      hasMore: rawRows.length > limit,
     };
   }
 
@@ -723,8 +731,12 @@ export class SessionIndexStore {
          WHERE sessions.id = ?`
       )
       .bind(userId, sessionId)
-      .first<ViewerReadStateRow>();
-    return row ? readStateFromRow(row) : null;
+      .first<unknown>();
+    if (!row) return null;
+
+    const parsed = viewerReadStateRowSchema.safeParse(row);
+    if (!parsed.success) throw new Error("Malformed persisted session read-state row");
+    return readStateFromRow(parsed.data);
   }
 
   async updateTitle(id: string, title: string, updatedAt: number): Promise<boolean> {
