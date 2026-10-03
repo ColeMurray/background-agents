@@ -201,34 +201,66 @@ describe("classifyRepo provider dispatch", () => {
     expect(body.messages[0].content).toContain("**acme/allowed-beta**");
     expect(body.messages[0].content).not.toContain("**acme/alpha**");
     expect(body.messages[0].content).not.toContain("**acme/beta**");
-    expect(fetch).toHaveBeenCalledTimes(3);
+    expect(fetch).toHaveBeenCalledTimes(2);
   });
 
-  it.each([1, 2])(
-    "propagates a scoped catalog denial on read %s instead of clarifying",
-    async (deniedRead) => {
-      const { kv } = createFakeKV();
-      const catalog = twoRepoControlPlane();
-      let reads = 0;
-      const fetch = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
-        reads += 1;
-        expect(new URL(String(input)).searchParams.get("channel")).toBe("linear:external-team-1");
-        return reads === deniedRead
-          ? new Response(null, { status: 403 })
-          : catalog.fetch(input, init);
-      });
-      const fetchMock = vi.fn();
-      vi.stubGlobal("fetch", fetchMock);
+  it("uses one scoped catalog snapshot for the prompt, matching, and alternatives", async () => {
+    const { kv } = createFakeKV();
+    const catalog = twoRepoControlPlane();
+    let reads = 0;
+    const fetch = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+      reads += 1;
+      return reads === 1
+        ? catalog.fetch(input, init)
+        : Response.json({ repos: [], cached: false, cachedAt: "2026-08-02T00:00:00.000Z" });
+    });
+    const fetchMock = vi.fn<typeof globalThis.fetch>(async () =>
+      Response.json({
+        content: [
+          {
+            type: "tool_use",
+            name: "classify_repository",
+            input: {
+              repoId: "acme/alpha",
+              confidence: "high",
+              reasoning: "Matches",
+              alternatives: ["acme/beta"],
+            },
+          },
+        ],
+      })
+    );
+    vi.stubGlobal("fetch", fetchMock);
 
-      await expect(
-        classify(makeLinearBotEnv(kv, { CONTROL_PLANE: { fetch } }), {
-          linearTeamId: "external-team-1",
-        })
-      ).rejects.toThrow();
-      expect(fetchMock).not.toHaveBeenCalled();
-      expect(kv.get).not.toHaveBeenCalled();
-    }
-  );
+    const result = await classify(makeLinearBotEnv(kv, { CONTROL_PLANE: { fetch } }), {
+      linearTeamId: "external-team-1",
+    });
+
+    expect(result.repo?.id).toBe("acme/alpha");
+    expect(result.alternatives?.map((repo) => repo.id)).toEqual(["acme/beta"]);
+    const body = JSON.parse(String(fetchMock.mock.calls[0][1]?.body));
+    expect(body.messages[0].content).toContain("**acme/alpha**");
+    expect(body.messages[0].content).toContain("**acme/beta**");
+    expect(fetch).toHaveBeenCalledOnce();
+  });
+
+  it("propagates a scoped catalog denial instead of clarifying", async () => {
+    const { kv } = createFakeKV();
+    const fetch = vi.fn(async (input: string | URL | Request) => {
+      expect(new URL(String(input)).searchParams.get("channel")).toBe("linear:external-team-1");
+      return new Response(null, { status: 403 });
+    });
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(
+      classify(makeLinearBotEnv(kv, { CONTROL_PLANE: { fetch } }), {
+        linearTeamId: "external-team-1",
+      })
+    ).rejects.toThrow();
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(kv.get).not.toHaveBeenCalled();
+  });
 
   it("sends a spec-compliant OpenAI request when CLASSIFICATION_MODEL selects an OpenAI model", async () => {
     const { kv } = createFakeKV();

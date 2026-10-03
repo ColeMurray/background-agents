@@ -1209,6 +1209,38 @@ describe("handleAgentSessionEvent environment targets", () => {
     expect(store.has("issue:issue-1")).toBe(true);
   });
 
+  it("warns and retains the session mapping when a stop team coordinate is missing", async () => {
+    const { kv, store } = createFakeKV({
+      "issue:issue-1": JSON.stringify({
+        sessionId: "session-xyz",
+        issueId: "issue-1",
+        issueIdentifier: "ENG-42",
+        model: "anthropic/claude-haiku-4-5",
+        createdAt: Date.now(),
+      }),
+    });
+    const env = makeLinearBotEnv(kv);
+    const webhook = makeWebhook();
+    webhook.agentSession.issue!.team.id = "";
+    webhook.agentActivity = { userId: "human-user-1", signal: "stop" };
+
+    await handleAgentSessionEvent(webhook, env, "trace-stop-team-missing");
+
+    expect(env.CONTROL_PLANE.fetch).not.toHaveBeenCalled();
+    expect(store.has("issue:issue-1")).toBe(true);
+    expect(
+      vi.mocked(console.warn).mock.calls.map(([line]) => JSON.parse(String(line)))
+    ).toContainEqual(
+      expect.objectContaining({
+        event: "agent_session.stop_team_missing",
+        agent_session_id: "agent-session-1",
+        issue_id: "issue-1",
+        session_id: "session-xyz",
+        trace_id: "trace-stop-team-missing",
+      })
+    );
+  });
+
   it("resolves current callback settings for an environment follow-up", async () => {
     const { kv } = createFakeKV({
       "oauth:client-credentials:org-1": validToken(),

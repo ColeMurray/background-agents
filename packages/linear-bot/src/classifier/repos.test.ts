@@ -119,10 +119,13 @@ describe("getAvailableRepos", () => {
     putCalls.length = 0;
     const scope = { linearTeamId: "external-team-1", actorUserId: "user-1" };
 
-    expect((await getAvailableRepos(env, "trace-1", scope))[0].name).toBe("scoped-1");
-    const descriptions = await buildRepoDescriptions(env, "trace-1", scope);
-    expect(descriptions).toContain("open-inspect/scoped-2");
+    const scoped = await getAvailableRepos(env, "trace-1", scope);
+    expect(scoped[0].name).toBe("scoped-1");
+    const descriptions = buildRepoDescriptions(scoped);
+    expect(descriptions).toContain("open-inspect/scoped-1");
     expect(descriptions).not.toContain("open-inspect/background-agents");
+    expect(fetch).toHaveBeenCalledTimes(2);
+    expect((await getAvailableRepos(env, "trace-1", scope))[0].name).toBe("scoped-2");
     expect(await getAvailableRepos(env)).toBe(unscoped);
     expect(fetch).toHaveBeenCalledTimes(3);
     expect(kv.get).not.toHaveBeenCalled();
@@ -156,4 +159,8 @@ describe("getAvailableRepos", () => {
       expect(putCalls).toEqual([]);
     }
   );
+});
+
+it("formats an empty catalog without fetching repositories", () => {
+  expect(buildRepoDescriptions([])).toBe("No repositories are currently available.");
 });

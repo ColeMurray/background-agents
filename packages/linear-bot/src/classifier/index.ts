@@ -84,19 +84,17 @@ const classifyRepoStrictJsonSchema = {
 /**
  * Build classification prompt from Linear issue context.
  */
-async function buildClassificationPrompt(
-  env: Env,
+function buildClassificationPrompt(
+  repos: RepoConfig[],
   issueTitle: string,
   issueDescription: string | null | undefined,
   labels: string[],
   projectName: string | null | undefined,
   teamName: string | null | undefined,
   teamKey: string | null | undefined,
-  triggerComment: string | null | undefined,
-  traceId?: string,
-  scope?: LinearChannelScope
-): Promise<string> {
-  const repoDescriptions = await buildRepoDescriptions(env, traceId, scope);
+  triggerComment: string | null | undefined
+): string {
+  const repoDescriptions = buildRepoDescriptions(repos);
 
   const escapeUntrusted = (s: string) =>
     s
@@ -243,18 +241,15 @@ export async function classifyRepo(
     };
   }
 
-  // Catalog failures must propagate rather than turn into stale candidate suggestions.
-  const prompt = await buildClassificationPrompt(
-    env,
+  const prompt = buildClassificationPrompt(
+    repos,
     issueTitle,
     issueDescription,
     labels,
     projectName,
     teamName,
     teamKey,
-    triggerComment,
-    traceId,
-    scope
+    triggerComment
   );
 
   try {

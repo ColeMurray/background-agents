@@ -246,7 +246,16 @@ async function handleStop(webhook: AgentSessionWebhook, env: Env, traceId: strin
         return;
       }
       const linearTeamId = webhook.agentSession.issue?.team.id ?? existingSession.linearTeamId;
-      if (!linearTeamId) return;
+      if (!linearTeamId) {
+        log.warn("Linear stop skipped because its team coordinate is missing", {
+          event: "agent_session.stop_team_missing",
+          agent_session_id: agentSessionId,
+          issue_id: issueId,
+          session_id: existingSession.sessionId,
+          trace_id: traceId,
+        });
+        return;
+      }
       stopUrl.searchParams.set("channel", `linear:${linearTeamId}`);
       try {
         const stopRes = await signedControlPlaneFetch(env, {

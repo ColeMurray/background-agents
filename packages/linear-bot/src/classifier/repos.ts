@@ -72,12 +72,7 @@ export function clearReposLocalCache(): void {
   reposResource.invalidate();
 }
 
-export async function buildRepoDescriptions(
-  env: Env,
-  traceId?: string,
-  scope?: LinearChannelScope
-): Promise<string> {
-  const repos = await getAvailableRepos(env, traceId, scope);
+export function buildRepoDescriptions(repos: RepoConfig[]): string {
   if (repos.length === 0) return "No repositories are currently available.";
 
   return repos
