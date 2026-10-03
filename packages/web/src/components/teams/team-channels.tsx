@@ -14,6 +14,13 @@ import { browserApiFetch } from "@/lib/browser-api-fetch";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { ErrorBanner } from "@/components/ui/error-banner";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import type { BindingEditor } from "./channel-binding-editors/binding-editor";
 import { useLinearBindingEditor } from "./channel-binding-editors/linear-binding-editor";
 import { useSlackBindingEditor } from "./channel-binding-editors/slack-binding-editor";
@@ -109,39 +116,46 @@ export function TeamChannels({ team }: { team: TeamResponse }) {
             <label htmlFor={`${id}-provider`} className="block text-sm font-medium">
               Provider
             </label>
-            <select
-              id={`${id}-provider`}
+            <Select
               value={provider}
-              onChange={(event) => {
-                const next = event.target.value as TeamChannelBindingProvider;
+              disabled={disabled}
+              onValueChange={(value) => {
+                const next = value as TeamChannelBindingProvider;
                 editors[next].reset();
                 setProvider(next);
                 setFailure(null);
               }}
-              className="w-full rounded border border-border bg-background px-2 py-2 text-sm disabled:opacity-50"
             >
-              {Object.entries(editors).map(([value, { providerLabel }]) => (
-                <option key={value} value={value}>
-                  {providerLabel}
-                </option>
-              ))}
-            </select>
+              <SelectTrigger id={`${id}-provider`}>
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {Object.entries(editors).map(([value, { providerLabel }]) => (
+                  <SelectItem key={value} value={value}>
+                    {providerLabel}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
           </div>
           <div className="min-w-0 flex-1 space-y-1">{editor.field}</div>
           <div className="space-y-1">
             <label htmlFor={`${id}-kind`} className="block text-sm font-medium">
               Binding kind
             </label>
-            <select
-              id={`${id}-kind`}
+            <Select
               value={kind}
               disabled={providerDisabled}
-              onChange={(event) => setKind(event.target.value as TeamChannelBindingKind)}
-              className="w-full rounded border border-border bg-background px-2 py-2 text-sm disabled:opacity-50"
+              onValueChange={(value) => setKind(value as TeamChannelBindingKind)}
             >
-              <option value="primary">Primary</option>
-              <option value="source">Source</option>
-            </select>
+              <SelectTrigger id={`${id}-kind`}>
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="primary">Primary</SelectItem>
+                <SelectItem value="source">Source</SelectItem>
+              </SelectContent>
+            </Select>
           </div>
           <Button type="submit" disabled={!editor.canSubmit}>
             {pending ? "Updating..." : editor.bindLabel}

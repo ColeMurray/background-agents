@@ -13,6 +13,7 @@ import {
 } from "@testing-library/react";
 import * as matchers from "@testing-library/jest-dom/matchers";
 import type { ReactNode } from "react";
+import userEvent from "@testing-library/user-event";
 import { SWRConfig } from "swr";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { TeamResponse } from "@/hooks/use-teams";
@@ -84,8 +85,16 @@ const bindings = [
 let listedBindings = bindings.slice(0, 0);
 
 beforeAll(() => {
+  Element.prototype.hasPointerCapture = () => false;
+  Element.prototype.releasePointerCapture = () => {};
   Element.prototype.scrollIntoView = vi.fn();
 });
+
+async function chooseOption(combobox: string, option: string) {
+  const user = userEvent.setup();
+  await user.click(screen.getByRole("combobox", { name: combobox }));
+  await user.click(await screen.findByRole("option", { name: option }));
+}
 
 beforeEach(() => {
   vi.resetAllMocks();
@@ -128,9 +137,7 @@ describe("Team channels", () => {
     });
     expect(within(screen.getByRole("listbox")).getAllByRole("option")).toHaveLength(1);
     fireEvent.click(screen.getByRole("option", { name: "#design-announcements" }));
-    fireEvent.change(screen.getByRole("combobox", { name: "Binding kind" }), {
-      target: { value: "primary" },
-    });
+    await chooseOption("Binding kind", "Primary");
     let finish!: (response: Response) => void;
     const mutation = new Promise<Response>((resolve) => {
       finish = resolve;
@@ -190,9 +197,7 @@ describe("Team channels", () => {
       await screen.findByText("No channel bindings yet.");
       expect(screen.getByRole("combobox", { name: "Provider" })).toBeEnabled();
       vi.mocked(browserApiFetch).mockClear();
-      fireEvent.change(screen.getByRole("combobox", { name: "Provider" }), {
-        target: { value: "linear" },
-      });
+      await chooseOption("Provider", "Linear");
       expect(screen.queryByRole("alert")).not.toBeInTheDocument();
       expect(screen.queryByPlaceholderText("Search channels...")).not.toBeInTheDocument();
       expect(screen.queryByRole("button", { name: "Enter a channel ID instead" })).toBeNull();
@@ -200,9 +205,7 @@ describe("Team channels", () => {
       fireEvent.change(screen.getByRole("textbox", { name: "Linear team ID" }), {
         target: { value: " linear/team " },
       });
-      fireEvent.change(screen.getByRole("combobox", { name: "Binding kind" }), {
-        target: { value: "primary" },
-      });
+      await chooseOption("Binding kind", "Primary");
       listedBindings = [{ ...bindings[2], externalId: "linear/team", kind: "primary" }];
       vi.mocked(browserApiFetch).mockResolvedValueOnce(Response.json({ ok: true }));
       fireEvent.click(screen.getByRole("button", { name: "Bind team" }));
@@ -216,9 +219,7 @@ describe("Team channels", () => {
       expect(browserApiFetch).toHaveBeenCalledWith(key);
       expect(browserApiFetch).toHaveBeenCalledTimes(2);
       await waitFor(() => expect(screen.getByRole("combobox", { name: "Provider" })).toBeEnabled());
-      fireEvent.change(screen.getByRole("combobox", { name: "Provider" }), {
-        target: { value: "slack" },
-      });
+      await chooseOption("Provider", "Slack");
       expect(screen.getByRole("button", { name: /^Slack channel/ })).toBeDisabled();
     }
   );
@@ -234,9 +235,7 @@ describe("Team channels", () => {
     await screen.findByRole("alert");
     const unbind = await screen.findByRole("button", { name: "Unbind Linear team linear_team" });
     expect(unbind).toBeEnabled();
-    fireEvent.change(screen.getByRole("combobox", { name: "Provider" }), {
-      target: { value: "linear" },
-    });
+    await chooseOption("Provider", "Linear");
     expect(screen.getByRole("button", { name: "Unbind Slack channel C_HOME" })).toBeDisabled();
     vi.mocked(browserApiFetch).mockClear();
     listedBindings = [];
@@ -257,9 +256,7 @@ describe("Team channels", () => {
     );
     render(<TeamChannels team={team} />, { wrapper });
     await screen.findByText("No channel bindings yet.");
-    fireEvent.change(screen.getByRole("combobox", { name: "Provider" }), {
-      target: { value: "linear" },
-    });
+    await chooseOption("Provider", "Linear");
     fireEvent.change(screen.getByRole("textbox", { name: "Linear team ID" }), {
       target: { value: "linear_team" },
     });
@@ -284,9 +281,7 @@ describe("Team channels", () => {
   it("preserves a refused Linear draft and withholds controls when capabilities are revoked", async () => {
     const view = render(<TeamChannels team={team} />, { wrapper });
     await screen.findByText("No channel bindings yet.");
-    fireEvent.change(screen.getByRole("combobox", { name: "Provider" }), {
-      target: { value: "linear" },
-    });
+    await chooseOption("Provider", "Linear");
     fireEvent.change(screen.getByRole("textbox", { name: "Linear team ID" }), {
       target: { value: "linear_team" },
     });
