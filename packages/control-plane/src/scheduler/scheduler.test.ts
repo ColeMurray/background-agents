@@ -3611,7 +3611,12 @@ describe("Scheduler", () => {
         const automation = { ...sampleSlackAutomation, owner_team_id: ownerTeamId };
         mockStore.getById.mockResolvedValue(automation);
         mockGetSlackAutomationsForChannel.mockResolvedValue([automation]);
-        const scheduler = createScheduler();
+        const scheduler = createScheduler(
+          createEnv({
+            SLACK_BOT: { fetch: vi.fn() },
+            SERVICE_AUTH_SECRET_SLACK_BOT: "test-secret",
+          })
+        );
 
         if (slackDestination) {
           expect(await scheduler.event(makeSlackEvent())).toMatchObject({ triggered: 1 });
@@ -3622,6 +3627,32 @@ describe("Scheduler", () => {
         expect(mockSessionStoreCreate).toHaveBeenCalledOnce();
         expect(mockSessionStoreCreate).toHaveBeenCalledWith(
           expect.objectContaining({ ownerTeamId, visibility })
+        );
+      }
+    );
+
+    it.each([
+      [false, "test-secret"],
+      [true, undefined],
+      [true, ""],
+      [false, undefined],
+    ] as const)(
+      "retains private defaults with Slack binding %s and signing secret %s",
+      async (bindingEnabled, secret) => {
+        mockTeamGetById.mockResolvedValue({ ...activeTeam, defaultVisibility: "private" });
+        const automation = { ...sampleSlackAutomation, owner_team_id: teamId };
+        mockGetSlackAutomationsForChannel.mockResolvedValue([automation]);
+        const scheduler = createScheduler(
+          createEnv({
+            SLACK_BOT: bindingEnabled ? { fetch: vi.fn() } : undefined,
+            SERVICE_AUTH_SECRET_SLACK_BOT: secret,
+          })
+        );
+
+        expect(await scheduler.event(makeSlackEvent())).toMatchObject({ triggered: 1 });
+        expect(mockSessionStoreCreate).toHaveBeenCalledOnce();
+        expect(mockSessionStoreCreate).toHaveBeenCalledWith(
+          expect.objectContaining({ ownerTeamId: teamId, visibility: "private" })
         );
       }
     );

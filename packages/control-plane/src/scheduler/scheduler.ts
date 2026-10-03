@@ -1829,7 +1829,11 @@ export class Scheduler {
 
     let visibility = team?.defaultVisibility ?? "workspace";
     // Slack output cannot be published from a private session.
-    if (parseSlackTriggerMetadata(invocation.trigger_metadata)?.messageTs) {
+    if (
+      this.env.SLACK_BOT &&
+      callbackSigningSecret(this.env, "slack-bot") &&
+      parseSlackTriggerMetadata(invocation.trigger_metadata)?.messageTs
+    ) {
       visibility = team ? "team" : "workspace";
     }
 
