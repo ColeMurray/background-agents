@@ -4,7 +4,7 @@ import { checkSessionAccess } from "@open-inspect/shared";
 import { sessionVisibilitySchema } from "@open-inspect/shared/types/teams";
 import { SessionAuditStore } from "../db/session-audit";
 import { SessionCollaboratorStore } from "../db/session-collaborators";
-import type { SessionEntry } from "../db/session-index";
+import { SessionIndexStore } from "../db/session-index";
 import { SessionScopeStore } from "../db/session-scope-store";
 import { evaluateSessionAdmissions } from "../authorization/session-admission";
 import { UserStore } from "../db/user-store";
@@ -33,9 +33,8 @@ async function admitDescendants(
   ctx: RequestContext,
   env: Env,
   ids: readonly string[]
-): Promise<Response | SessionEntry[]> {
-  const rows: SessionEntry[] = [];
-  for await (const { row, outcome } of evaluateSessionAdmissions(
+): Promise<Response | null> {
+  for await (const { outcome } of evaluateSessionAdmissions(
     ctx,
     env,
     ids,
@@ -44,9 +43,8 @@ async function admitDescendants(
   )) {
     if (outcome.kind === "not_found") return error("Session not found", 404);
     if (outcome.kind === "action_denied") return denied(outcome.reason);
-    rows.push(row!);
   }
-  return rows;
+  return null;
 }
 
 async function changeVisibility(
@@ -67,16 +65,19 @@ async function changeVisibility(
     params.id,
     ...(body.includeChildren ? await scope.listDescendantIds(params.id) : []),
   ];
-  const descendants = await admitDescendants(ctx, env, ids.slice(1));
-  if (descendants instanceof Response) return descendants;
-  const rows = [admission.row, ...descendants];
-  if (body.visibility === "private" && rows.some((row) => !row.userId))
+  const descendantIds = ids.slice(1);
+  const descendantDenial = await admitDescendants(ctx, env, descendantIds);
+  if (descendantDenial) return descendantDenial;
+  // Refresh descendants after admission so mutation audits observe concurrent scope changes.
+  const descendants = await new SessionIndexStore(ctx.db).getByIds(descendantIds);
+  const rows = [admission.row, ...descendantIds.map((id) => descendants.get(id) ?? null)];
+  if (body.visibility === "private" && rows.some((row) => !row?.userId))
     return json({ error: "Session owner required", code: "owner_required" }, 400);
-  if (body.visibility === "team" && rows.some((row) => !row.ownerTeamId))
+  if (body.visibility === "team" && rows.some((row) => !row?.ownerTeamId))
     return json({ error: "A team is required", code: "team_required" }, 400);
   const auditStore = new SessionAuditStore(ctx.db);
   const audits = rows.flatMap((row) =>
-    row.visibility !== body.visibility
+    row && row.visibility !== body.visibility
       ? [
           {
             sessionId: row.id,

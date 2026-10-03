@@ -435,6 +435,63 @@ describe("evaluateSessionAdmissions iteration and reads", () => {
     }
   );
 
+  it.each(
+    (["sessions", "collaborators"] as const).flatMap((source) =>
+      (["missing", "hidden", "action-denied"] as const).map((refusal) => ({ source, refusal }))
+    )
+  )(
+    "returns the first $refusal before a later $source chunk can fail",
+    async ({ source, refusal }) => {
+      const ids = Array.from(
+        { length: MAX_D1_QUERY_PARAMETERS + 1 },
+        (_, index) => `session-${index}`
+      );
+      if (refusal !== "missing") {
+        sessions.set(
+          ids[0],
+          session(ids[0], {
+            ownerTeamId: "team",
+            visibility: refusal === "hidden" ? "private" : "workspace",
+          })
+        );
+      }
+      vi.mocked(SessionIndexStore.prototype.getByIds).mockImplementation(async (chunk) => {
+        if (source === "sessions" && chunk.includes(ids.at(-1)!))
+          throw new Error("Later session chunk failed");
+        return new Map([...sessions].filter(([id]) => chunk.includes(id)));
+      });
+      vi.mocked(SessionCollaboratorStore.prototype.listForSessions).mockImplementation(
+        async (chunk) => {
+          if (source === "collaborators" && chunk.includes(ids.at(-1)!))
+            throw new Error("Later collaborator chunk failed");
+          return new Map();
+        }
+      );
+      const batch = request();
+      const items = evaluateSessionAdmissions(
+        batch.ctx,
+        createTestEnv({ TEAMS_ENFORCEMENT: "on" }),
+        ids,
+        "lifecycle"
+      );
+      expect((await items.next()).value).toMatchObject({
+        sessionId: ids[0],
+        outcome:
+          refusal === "action-denied"
+            ? { kind: "action_denied", reason: "not_member" }
+            : { kind: "not_found" },
+      });
+      await items.return(undefined);
+      expect(SessionIndexStore.prototype.getByIds).toHaveBeenCalledExactlyOnceWith(
+        ids.slice(0, MAX_D1_QUERY_PARAMETERS)
+      );
+      expect(SessionCollaboratorStore.prototype.listForSessions).toHaveBeenCalledTimes(
+        refusal === "missing" ? 0 : 1
+      );
+      expect(batch.audits).toEqual([]);
+    }
+  );
+
   it("preserves caller order, missing rows, repeated IDs, and break-glass audit evidence", async () => {
     sessions.set("private-a", session("private-a", { visibility: "private" }));
     sessions.set("private-b", session("private-b", { visibility: "private", ownerTeamId: "team" }));
@@ -459,6 +516,46 @@ describe("evaluateSessionAdmissions iteration and reads", () => {
       { sessionId: "private-b", teamId: "team" },
     ]);
   });
+
+  it.each(["sessions", "collaborators"] as const)(
+    "propagates a later %s chunk failure only when iteration reaches it",
+    async (source) => {
+      const ids = Array.from(
+        { length: MAX_D1_QUERY_PARAMETERS + 1 },
+        (_, index) => `session-${index}`
+      );
+      for (const id of ids) sessions.set(id, session(id));
+      const cause = new Error("Later chunk failed");
+      if (source === "sessions") {
+        vi.mocked(SessionIndexStore.prototype.getByIds).mockImplementation(async (chunk) => {
+          if (chunk.includes(ids.at(-1)!)) throw cause;
+          return new Map([...sessions].filter(([id]) => chunk.includes(id)));
+        });
+      } else {
+        vi.mocked(SessionCollaboratorStore.prototype.listForSessions).mockImplementation(
+          async (chunk) => {
+            if (chunk.includes(ids.at(-1)!)) throw cause;
+            return new Map();
+          }
+        );
+      }
+      const items = evaluateSessionAdmissions(
+        request().ctx,
+        createTestEnv({ TEAMS_ENFORCEMENT: "on" }),
+        ids,
+        "lifecycle"
+      );
+      for (const id of ids.slice(0, MAX_D1_QUERY_PARAMETERS)) {
+        expect((await items.next()).value).toMatchObject({
+          sessionId: id,
+          outcome: { kind: "allowed" },
+        });
+      }
+      expect(SessionIndexStore.prototype.getByIds).toHaveBeenCalledTimes(1);
+      expect(SessionCollaboratorStore.prototype.listForSessions).toHaveBeenCalledTimes(1);
+      await expect(items.next()).rejects.toBe(cause);
+    }
+  );
 
   it("appends shadow denials in caller order without replacing existing request evidence", async () => {
     sessions.set("team-a", session("team-a", { visibility: "team", ownerTeamId: "team" }));
@@ -562,7 +659,7 @@ describe("evaluateSessionAdmissions iteration and reads", () => {
     }
   );
 
-  it("uses one bulk call per store and one request viewer for many IDs", async () => {
+  it("uses bounded bulk calls per store and one request viewer for many IDs", async () => {
     const ids = Array.from(
       { length: MAX_D1_QUERY_PARAMETERS * 3 + 7 },
       (_, index) => `session-${index}`
@@ -582,12 +679,19 @@ describe("evaluateSessionAdmissions iteration and reads", () => {
     expect(
       actual.every(({ outcome }) => outcome.kind === "allowed" && outcome.legacyPermission === null)
     ).toBe(true);
-    expect(SessionIndexStore.prototype.getByIds).toHaveBeenCalledExactlyOnceWith(ids);
-    expect(SessionCollaboratorStore.prototype.listForSessions).toHaveBeenCalledTimes(1);
-    const [collaboratorIds, options] = vi.mocked(SessionCollaboratorStore.prototype.listForSessions)
-      .mock.calls[0];
-    expect([...collaboratorIds].sort()).toEqual([...ids].sort());
-    expect(options?.privateOnly).not.toBe(true);
+    for (const lookup of [
+      SessionIndexStore.prototype.getByIds,
+      SessionCollaboratorStore.prototype.listForSessions,
+    ]) {
+      const calls = vi.mocked(lookup).mock.calls;
+      expect(calls).toHaveLength(Math.ceil(ids.length / MAX_D1_QUERY_PARAMETERS));
+      expect(calls.flatMap(([chunk]) => chunk)).toEqual(ids);
+      for (const [chunk] of calls)
+        expect(chunk.length).toBeLessThanOrEqual(MAX_D1_QUERY_PARAMETERS);
+    }
+    for (const [, options] of vi.mocked(SessionCollaboratorStore.prototype.listForSessions).mock
+      .calls)
+      expect(options?.privateOnly).not.toBe(true);
     expect(SessionIndexStore.prototype.get).not.toHaveBeenCalled();
     expect(SessionCollaboratorStore.prototype.listUserIds).not.toHaveBeenCalled();
     expect(TeamMembershipStore.prototype.listForUser).toHaveBeenCalledExactlyOnceWith("user");

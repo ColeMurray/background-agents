@@ -159,6 +159,73 @@ describe("session scope routes", () => {
     }
   });
 
+  it.each([
+    { initial: "private", current: "workspace", changed: true },
+    { initial: "workspace", current: "private", changed: false },
+    { initial: "team", current: "workspace", changed: true },
+  ] as const)(
+    "audits persisted visibility after a descendant changes from $initial to $current during admission",
+    async ({ initial, current, changed }) => {
+      await session("root");
+      await session("child", "root");
+      const team = await new TeamStore(env.DB).create({
+        slug: "audit-race",
+        name: "Audit race",
+        joinPolicy: "invite_only",
+      });
+      await new TeamMembershipStore(env.DB).add(team.id, OWNER);
+      await env.DB.prepare(
+        "UPDATE sessions SET visibility = ?, owner_team_id = ? WHERE id = 'child'"
+      )
+        .bind(initial, team.id)
+        .run();
+      const original = SessionCollaboratorStore.prototype.listForSessions;
+      const read = vi
+        .spyOn(SessionCollaboratorStore.prototype, "listForSessions")
+        .mockImplementation(async function (this: SessionCollaboratorStore, ...args) {
+          const result = await original.apply(this, args);
+          await env.DB.prepare("UPDATE sessions SET visibility = ? WHERE id = 'child'")
+            .bind(current)
+            .run();
+          return result;
+        });
+      try {
+        const response = await request("/sessions/root/visibility", "PUT", {
+          visibility: "private",
+        });
+        expect(response.status).toBe(200);
+        expect((await new SessionIndexStore(env.DB).get("child"))?.visibility).toBe("private");
+        const audits = await env.DB.prepare(
+          `SELECT team_id, metadata_json FROM authorization_audit_events
+        WHERE request_id = ? AND resource_id = 'child' AND action = 'session.visibility_changed'`
+        )
+          .bind(response.headers.get("x-request-id"))
+          .all<{ team_id: string | null; metadata_json: string }>();
+        expect(
+          audits.results.map((row) => ({
+            teamId: row.team_id,
+            metadata: JSON.parse(row.metadata_json),
+          }))
+        ).toEqual(
+          changed
+            ? [
+                {
+                  teamId: team.id,
+                  metadata: {
+                    before: { visibility: current },
+                    requested: {},
+                    after: { visibility: "private" },
+                  },
+                },
+              ]
+            : []
+        );
+      } finally {
+        read.mockRestore();
+      }
+    }
+  );
+
   it("refuses a readable but non-owned descendant without changing any visibility", async () => {
     await session("root");
     await session("child", "root", COLLABORATOR);

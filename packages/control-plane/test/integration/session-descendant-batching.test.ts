@@ -172,7 +172,7 @@ describe("session descendant authorization batching (real D1)", () => {
 
   afterEach(() => vi.restoreAllMocks());
 
-  it("keeps visibility authorization SELECTs constant for 1 and 20 descendants and reuses admitted rows", async () => {
+  it("keeps visibility SELECTs constant for 1 and 20 descendants with a fresh pre-write bulk read", async () => {
     const counts = [];
     for (const size of [1, 20]) {
       const root = `visibility-${size}`;
@@ -187,7 +187,7 @@ describe("session descendant authorization batching (real D1)", () => {
       expect(body.affectedSessionIds.sort()).toEqual([...ids].sort());
       expect(result.reads).toMatchObject({
         sessionGets: 1,
-        sessionBatches: 1,
+        sessionBatches: 2,
         memberships: 1,
         collaboratorGets: 1,
         collaboratorBatches: 1,
@@ -195,8 +195,8 @@ describe("session descendant authorization batching (real D1)", () => {
         descendantLists: 1,
       });
       expect(result.sessionGets).toEqual([root]);
-      expect(result.sessionBatches).toHaveLength(1);
-      expect(result.sessionBatches[0].sort()).toEqual(ids.slice(1).sort());
+      expect(result.sessionBatches).toHaveLength(2);
+      for (const batch of result.sessionBatches) expect(batch.sort()).toEqual(ids.slice(1).sort());
       expect(result.collaboratorBatches).toHaveLength(1);
       expect(result.collaboratorBatches[0].sort()).toEqual(ids.slice(1).sort());
       counts.push(result.reads);

@@ -9,6 +9,7 @@ import {
   type SessionViewer,
 } from "@open-inspect/shared";
 import type { PermissionId } from "@open-inspect/shared/rbac";
+import { MAX_D1_QUERY_PARAMETERS } from "../db/query-limits";
 import { SessionCollaboratorStore } from "../db/session-collaborators";
 import { SessionIndexStore, type SessionEntry } from "../db/session-index";
 import type { RequestContext } from "../http/request-context";
@@ -94,29 +95,32 @@ export async function* evaluateSessionAdmissions(
 ): AsyncGenerator<SessionAdmissionResult> {
   if (!ids.length) return;
   const mode = enforceAlways ? "on" : teamsEnforcementMode(ctx, env);
-  const rows = await new SessionIndexStore(ctx.db).getByIds(ids);
-  let collaborators: Promise<ReadonlyMap<string, string[]>> | undefined;
   let viewer: Promise<SessionViewer> | undefined;
   let rollbackViewer: Promise<SessionViewer> | undefined;
   const getViewer = (includeMemberships: boolean) =>
     includeMemberships
       ? (viewer ??= resourceViewer(ctx))
       : (rollbackViewer ??= resourceViewer(ctx, false));
-  for (const sessionId of ids) {
-    const row = rows.get(sessionId) ?? null;
-    const outcome = await evaluateLoadedSessionAdmission(
-      ctx,
-      row,
-      action,
-      mode,
-      null,
-      getViewer,
-      async () =>
-        (await (collaborators ??= new SessionCollaboratorStore(ctx.db).listForSessions(ids))).get(
-          sessionId
-        ) ?? []
-    );
-    yield { sessionId, row, outcome };
+  for (let offset = 0; offset < ids.length; offset += MAX_D1_QUERY_PARAMETERS) {
+    const chunk = ids.slice(offset, offset + MAX_D1_QUERY_PARAMETERS);
+    const rows = await new SessionIndexStore(ctx.db).getByIds(chunk);
+    let collaborators: Promise<ReadonlyMap<string, string[]>> | undefined;
+    for (const sessionId of chunk) {
+      const row = rows.get(sessionId) ?? null;
+      const outcome = await evaluateLoadedSessionAdmission(
+        ctx,
+        row,
+        action,
+        mode,
+        null,
+        getViewer,
+        async () =>
+          (
+            await (collaborators ??= new SessionCollaboratorStore(ctx.db).listForSessions(chunk))
+          ).get(sessionId) ?? []
+      );
+      yield { sessionId, row, outcome };
+    }
   }
 }
 
