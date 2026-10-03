@@ -229,8 +229,6 @@ describe("MediaLightbox", () => {
     expect(screen.getByText("2 of 3")).toBeInTheDocument();
     fireEvent.keyDown(window, { key: "ArrowRight" });
     expect(onSelectArtifact).toHaveBeenLastCalledWith("artifact-2");
-    fireEvent.keyDown(window, { key: "ArrowLeft" });
-    expect(onSelectArtifact).toHaveBeenLastCalledWith("artifact-1");
 
     rerender(
       <MediaLightbox
@@ -240,6 +238,8 @@ describe("MediaLightbox", () => {
         onSelectArtifact={onSelectArtifact}
       />
     );
+    fireEvent.keyDown(window, { key: "ArrowLeft" });
+    expect(onSelectArtifact).toHaveBeenLastCalledWith("artifact-video-1");
     onSelectArtifact.mockClear();
     expect(screen.getByText("Confirmation page")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Next media" })).toBeDisabled();
