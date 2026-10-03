@@ -300,7 +300,7 @@ export type SpawnAction =
  *   stopped/stale/failed
  * - Skip if already spawning/connecting
  * - Skip if ready with active WebSocket
- * - Wait if ready without WebSocket but recently spawned
+ * - Wait if ready without WebSocket and previously connected or recently spawned
  * - Wait during cooldown period (unless failed/stopped)
  * - Skip if already spawning in memory
  * - Spawn if all conditions pass
@@ -403,6 +403,11 @@ export function evaluateSpawnDecision(
   if (state.status === "ready") {
     if (state.hasActiveWebSocket) {
       return { action: "skip", reason: "sandbox ready with active WebSocket" };
+    }
+    // A previously connected source may reconnect after a control-plane restart.
+    // Let the heartbeat alarm determine whether it needs to be retired.
+    if (state.hasConnected) {
+      return { action: "wait", reason: "bridge disconnected; heartbeat check pending" };
     }
     // If no WebSocket but was recently spawned, wait for reconnect
     if (timeSinceLastSpawn < config.readyWaitMs) {
