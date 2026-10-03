@@ -214,20 +214,24 @@ describe("AuditLogSettings", () => {
     expect(article.getByText("Applied")).toBeInTheDocument();
   });
 
-  it("labels a session shadow denial without fabricating an HTTP response", () => {
-    const article = renderSingle(
-      createEvent("denied", {
-        action: "session.shadow_denied",
-        resourceType: "session",
-        reasonCode: "shadow_denied:not_member",
-        metadata: { before: {}, requested: {}, after: {}, channel: "ws" },
-      })
-    );
-    expect(article.getByText("Session read shadow denied")).toBeInTheDocument();
-    expect(article.getByText("Denied")).toBeInTheDocument();
-    expect(article.getByText("shadow_denied:not_member")).toBeInTheDocument();
-    expect(article.queryByText("HTTP response")).not.toBeInTheDocument();
-  });
+  it.each(["applied", "no_op", "denied", "rejected"] as const)(
+    "renders a shadow denial as informational Would deny despite stored result %s",
+    (operationResult) => {
+      const article = renderSingle(
+        createEvent(operationResult, {
+          action: "session.shadow_denied",
+          resourceType: "session",
+          reasonCode: "shadow_denied:not_member",
+          metadata: { before: {}, requested: {}, after: {}, channel: "ws" },
+        })
+      );
+      expect(article.getByText("Session read shadow observation")).toBeInTheDocument();
+      expect(article.getByText("Would deny")).toHaveClass("bg-info-muted", "text-info");
+      expect(article.queryByText("Denied")).not.toBeInTheDocument();
+      expect(article.getByText("shadow_denied:not_member")).toBeInTheDocument();
+      expect(article.queryByText("HTTP response")).not.toBeInTheDocument();
+    }
+  );
 
   it("renders outcomes, stable summaries, timestamps, and expandable structured details", async () => {
     hook.events = [
@@ -362,11 +366,14 @@ describe("AuditLogSettings", () => {
     expect(scrollIntoView).toHaveBeenCalledWith({ block: "start" });
   });
 
-  it("explains what an authorization decision does and does not prove", () => {
+  it("explains how decisions and shadow observations differ from operation outcomes", () => {
     render(<AuditLogSettings />);
 
     expect(
       screen.getByText(/They do not confirm that the requested change took effect/)
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(/Would deny describe hypothetical denials, not enforced denials/)
     ).toBeInTheDocument();
   });
 

@@ -288,23 +288,27 @@ day across all reader seams. These records are observation only: requests and su
 use the current mode's authorization rules. `off` and `on` do not emit shadow records.
 
 - HTTP item routes use `authorization.request_allowed` with `shadow_denied:<reason>`.
-- Session lists, inbox snapshots/pages (including descendants), team session pages, child lists, and
-  bulk exports use one `shadow_denied:batch` row per request that returns would-be-hidden rows.
+- Session lists, inbox snapshots/pages (including descendants), child lists, and bulk exports use
+  one `shadow_denied:batch` row per request that returns would-be-hidden rows.
   `metadata_json.shadowDenials` samples the first 50 session IDs and reasons; `shadowDenialCount`
   counts all would-be-hidden rows in the returned page, not the lookahead row. Run exports include
   rows hidden by either their own or their root's enforced visibility.
+- Team session pages have no shadow delta: admission requires target-team membership or workspace
+  admin status in every mode, and every returned row belongs to that same team. Those readers
+  already pass the enforced team visibility clause, so no observation hook is needed.
 - WebSocket subscribe and subsequent read checks use `session.shadow_denied` with `channel: "ws"`
   and `shadow_denied:<reason>`, at most once per connection/session/reason during the authorization
   lease, including after hibernation. Repeated presence, history, or typing checks do not add rows
-  for an already-observed reason. A new connection can add a new record.
+  for an already-observed reason. A new connection can add a new record. These best-effort writes
+  run in the background without delaying subscription completion or commands.
 - Analytics totals, breakdowns, grouped run analytics, and other aggregate counts are deliberately
   not observed: attributing their difference would require additional SQL. There is no second
   aggregate query or per-session lookup for shadow auditing.
 
-The workspace audit viewer labels WebSocket records as **Session read shadow denied** and exposes
-the reason and metadata. For daily counts split by seam and reason, run this query against the
-existing D1 `authorization_audit_events` table, replacing the start date with the start of the
-shadow release:
+The workspace audit viewer labels WebSocket records as **Session read shadow observation**, uses a
+**Would deny** observation badge rather than **Denied**, and exposes the reason and metadata. For
+daily counts split by seam and reason, run this query against the existing D1
+`authorization_audit_events` table, replacing the start date with the start of the shadow release:
 
 ```sql
 WITH shadow AS (

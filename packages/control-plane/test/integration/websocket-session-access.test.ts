@@ -4,6 +4,7 @@ import { TeamStore } from "../../src/db/teams";
 import { TeamMembershipStore } from "../../src/db/team-memberships";
 import { SessionCollaboratorStore } from "../../src/db/session-collaborators";
 import { createCloudflareEnv } from "../../src/cloudflare/platform";
+import { createCloudflareBackgroundTasks } from "../../src/cloudflare/background-tasks";
 import { createDurableObjectSessionPlatform } from "../../src/cloudflare/session-platform";
 import { createSessionRuntime } from "../../src/session/components";
 import { cleanD1Tables } from "./cleanup";
@@ -51,6 +52,14 @@ describe("session WebSocket D1 access", () => {
       .bind(sessionId)
       .all();
     return results;
+  }
+
+  async function waitForShadowAuditRows(sessionId: string, count: number) {
+    return vi.waitFor(async () => {
+      const rows = await shadowAuditRows(sessionId);
+      expect(rows).toHaveLength(count);
+      return rows;
+    });
   }
 
   async function repeatReadOnlyCommands(ws: WebSocket, stub: DurableObjectStub) {
@@ -106,7 +115,8 @@ describe("session WebSocket D1 access", () => {
         });
         ws.send(JSON.stringify({ type: "subscribe", token, clientId: "nonmember" }));
         expect((await subscribed).some((message) => message.type === "subscribed")).toBe(true);
-        const audit = await shadowAuditRows(name);
+        const audit =
+          mode === "shadow" ? await waitForShadowAuditRows(name, 1) : await shadowAuditRows(name);
         expect(audit).toHaveLength(mode === "shadow" ? 1 : 0);
         if (mode === "shadow") {
           expect(audit[0]).toMatchObject({
@@ -142,7 +152,7 @@ describe("session WebSocket D1 access", () => {
             expect((await subscribedAgain).some((message) => message.type === "subscribed")).toBe(
               true
             );
-            expect(await shadowAuditRows(name)).toHaveLength(2);
+            await waitForShadowAuditRows(name, 2);
           } finally {
             reconnected.close();
           }
@@ -209,7 +219,7 @@ describe("session WebSocket D1 access", () => {
     });
     try {
       expect(messages.some((message) => message.type === "subscribed")).toBe(true);
-      const audit = await shadowAuditRows(name);
+      const audit = await waitForShadowAuditRows(name, 1);
       expect(audit).toHaveLength(1);
       const presence = collectMessages(ws, {
         until: (message) => message.type === "presence_update",
@@ -217,12 +227,25 @@ describe("session WebSocket D1 access", () => {
       await runInSessionDO(stub, async (_instance, state) => {
         const [socket] = state.getWebSockets();
         expect(state.getTags(socket)).toContain(`wsid:${audit[0].request_id}`);
+        const pending: Promise<unknown>[] = [];
         // Independent graphs have neither recovered client state nor the in-memory denial cache.
         const runtimes = [0, 1].map(() =>
-          createSessionRuntime(createDurableObjectSessionPlatform(state, env.DB), {
-            ...createCloudflareEnv(env),
-            TEAMS_ENFORCEMENT: "shadow",
-          })
+          createSessionRuntime(
+            {
+              ...createDurableObjectSessionPlatform(state, env.DB),
+              createBackgroundTasks: (log) =>
+                createCloudflareBackgroundTasks(
+                  {
+                    waitUntil: (task) => {
+                      pending.push(task);
+                      state.waitUntil(task);
+                    },
+                  },
+                  log
+                ),
+            },
+            { ...createCloudflareEnv(env), TEAMS_ENFORCEMENT: "shadow" }
+          )
         );
         for (const runtime of runtimes) {
           expect(Array.from(runtime.internals.wsManager.getAuthenticatedClients())).toEqual([]);
@@ -237,6 +260,8 @@ describe("session WebSocket D1 access", () => {
             { userId },
           ]);
         }
+        expect(pending).toHaveLength(2);
+        await Promise.all(pending);
       });
       expect((await presence).some((message) => message.type === "presence_update")).toBe(true);
       expect(await shadowAuditRows(name)).toEqual(audit);

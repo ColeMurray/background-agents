@@ -57,7 +57,6 @@ import {
   type RouteAuthorization,
 } from "./shared";
 import { createLogger } from "../logger";
-import { recordShadowListDenials } from "../authorization/session-shadow-audit";
 
 const PRIVATE = { cacheControl: "private, no-store" } as const;
 const logger = createLogger("router:teams");
@@ -268,7 +267,7 @@ async function teamSessions(
     hasMore: page.hasMore,
     nextCursor: page.nextCursor ? encodeSessionInboxCursor(page.nextCursor) : null,
   });
-  const response = json(
+  return json(
     teamSessionsResponseSchema.parse(
       query.bucket === undefined
         ? {
@@ -279,8 +278,6 @@ async function teamSessions(
         : encodePage(pages[query.bucket])
     )
   );
-  recordShadowListDenials(ctx, sessionViewer, sessions, mode);
-  return response;
 }
 
 async function updateTeam(

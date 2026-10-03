@@ -484,7 +484,7 @@ export class SessionConnectionAuthenticator implements SessionUpgradeAdmission {
         wsManager.close(ws, WS_CLOSE_INTERNAL_ERROR, "Session activation failed");
         return;
       }
-      await this.observeShadowReadDenial(ws, resolution);
+      this.observeShadowReadDenial(ws, resolution);
       log.info("ws.connect", {
         event: "ws.connect",
         ws_type: "client",
@@ -558,16 +558,16 @@ export class SessionConnectionAuthenticator implements SessionUpgradeAdmission {
       );
       return { kind: "revoked" };
     }
-    await this.observeShadowReadDenial(ws, resolution);
+    this.observeShadowReadDenial(ws, resolution);
     const decision = this.decide(resolution, action);
     return decision.allowed ? { kind: "allowed" } : { kind: "denied", reason: decision.reason };
   }
 
   /** Observe only allowed reads; a hypothetical denial must never revoke the lease. */
-  private async observeShadowReadDenial(
+  private observeShadowReadDenial(
     ws: SessionWebSocket,
     resolution: Extract<SessionViewerResolution, { kind: "valid" }>
-  ): Promise<void> {
+  ): void {
     if (resolution.mode !== "shadow") return;
     try {
       const decision = checkSessionAccess(resolution.viewer, resolution.row, "read");
@@ -579,17 +579,25 @@ export class SessionConnectionAuthenticator implements SessionUpgradeAdmission {
       if (connection.kind !== "client" || !connection.wsId) {
         throw new Error("Missing WebSocket ID for shadow audit");
       }
+      const connectionId = connection.wsId;
       if (!observed) {
         observed = new Set();
         this.shadowDenials.set(ws, observed);
       }
-      // Reserve before awaiting, including failed writes, to avoid command/retry storms.
+      // Reserve synchronously so pending or failed writes cannot cause a retry storm.
       observed.add(key);
-      await this.deps.auditShadowDenied(
-        resolution.authorization.userId,
-        resolution.row,
-        decision.reason,
-        connection.wsId
+      this.deps.backgroundTasks.submit(
+        () =>
+          this.deps.auditShadowDenied(
+            resolution.authorization.userId,
+            resolution.row,
+            decision.reason,
+            connectionId
+          ),
+        {
+          name: "session.shadow_denied",
+          context: { user_id: resolution.authorization.userId, session_id: resolution.row.id },
+        }
       );
     } catch (error) {
       this.deps.log.error("WebSocket shadow denial audit failed", {
