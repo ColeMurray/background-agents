@@ -11,7 +11,7 @@ import {
 } from "@open-inspect/shared/types/teams";
 import { useRepos } from "@/hooks/use-repos";
 import { useTeamCapabilities } from "@/hooks/use-team-capabilities";
-import type { TeamResponse } from "@/hooks/use-teams";
+import { teamCacheKey, type TeamResponse } from "@/hooks/use-teams";
 import { useAuthSession } from "@/lib/auth-session";
 import { browserApiFetch, type BrowserApiPath } from "@/lib/browser-api-fetch";
 import { Badge } from "@/components/ui/badge";
@@ -32,6 +32,7 @@ export function TeamRepositories({ team }: { team: TeamResponse }) {
   const archived = team.archivedAt !== null;
   const catalog = useRepos(canManageRepositories && !archived);
   const teamPath = `/api/teams/${encodeURIComponent(team.id)}` as const;
+  const teamKey = teamCacheKey(teamPath, session?.user.id);
   const path = `${teamPath}/repository-grants` as const;
   const result = useSWR<{ grants: TeamRepositoryGrant[] }, Error>(
     session?.user.id ? ([path, session.user.id] as const) : null,
@@ -99,7 +100,7 @@ export function TeamRepositories({ team }: { team: TeamResponse }) {
       await result.mutate({ grants: nextGrants }, { revalidate: false });
       await Promise.allSettled([
         result.mutate(),
-        mutate(teamPath),
+        mutate(teamKey),
         mutate(`/api/repos?teamId=${encodeURIComponent(team.id)}`),
         mutate(`/api/environments?teamId=${encodeURIComponent(team.id)}`),
       ]);

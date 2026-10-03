@@ -1,6 +1,5 @@
 "use client";
 
-import { isWorkspaceAdmin } from "@open-inspect/shared/rbac";
 import {
   createContext,
   createElement,
@@ -12,30 +11,21 @@ import {
 } from "react";
 import { useAuthSession } from "@/lib/auth-session";
 import { isRetryableTeamError, useMeTeams } from "./use-teams";
-import { useCurrentUserAuthorization } from "./use-current-user-authorization";
 
 const ACTIVE_TEAM_STORAGE_KEY = "open-inspect-active-team";
 
 function useActiveTeamState() {
   const { data: session } = useAuthSession();
   const memberships = useMeTeams();
-  const {
-    authorization,
-    loading: authorizationLoading,
-    error: authorizationError,
-  } = useCurrentUserAuthorization();
+  const { canListAllTeams } = memberships;
   const [selection, setSelection] = useState<string | null>(null);
   const [hydratedUserId, setHydratedUserId] = useState<string | null>(null);
   const userId = session?.user.id ?? null;
   // Only the sidebar tolerates transient refresh failures with a successful snapshot.
-  const membershipsError =
+  const error =
     memberships.hasData && isRetryableTeamError(memberships.error) ? undefined : memberships.error;
-  const teams = membershipsError
-    ? []
-    : memberships.teams.filter((team) => team.archivedAt === null);
-  const loading = memberships.loading || authorizationLoading || hydratedUserId !== userId;
-  const error = membershipsError ?? (authorization ? undefined : authorizationError);
-  const canListAllTeams = isWorkspaceAdmin(authorization?.role.key);
+  const teams = error ? [] : memberships.teams.filter((team) => team.archivedAt === null);
+  const loading = memberships.loading || hydratedUserId !== userId;
 
   useEffect(() => {
     let stored = "all-my-teams";
@@ -87,7 +77,8 @@ function useActiveTeamState() {
     setActiveTeam,
     teams,
     scope,
-    requireTeamOnCreate: membershipsError ? false : memberships.requireTeamOnCreate,
+    canListAllTeams,
+    requireTeamOnCreate: error ? false : memberships.requireTeamOnCreate,
     loading,
     error,
   };

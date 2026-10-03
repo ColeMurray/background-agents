@@ -9,7 +9,7 @@ import type { Env } from "../types";
 import type { Logger } from "../logger";
 import type { PermissionId } from "@open-inspect/shared/rbac";
 import type { ServiceName } from "@open-inspect/shared/service-auth";
-import type { TeamCapabilities } from "@open-inspect/shared/types/team-access";
+import type { TeamAdmissionNeed, TeamAdmissionRequirement } from "../routing/team-admission";
 import type { SessionAction } from "@open-inspect/shared";
 import {
   createSourceControlProviderFromEnv,
@@ -46,8 +46,7 @@ export type RouteAuthorizationRequirement =
       operation: "read" | "manage" | "trigger";
       automationIdParam: string;
     }
-  | { kind: "team"; teamIdParam: string; need: keyof TeamCapabilities | "read" | "member" }
-  | { kind: "team"; teamIdParam: string; need: "removeMember"; targetUserIdParam: string }
+  | TeamAdmissionRequirement
   | { kind: "environment"; idParam: string; need: "read" | "manage" | "use" }
   | { kind: "session"; sessionIdParam: string; action: SessionAction; enforceAlways?: boolean };
 
@@ -215,7 +214,7 @@ export function requireEnvironment(
 }
 
 export function requireTeam(
-  need: keyof TeamCapabilities | "read" | "member",
+  need: Exclude<TeamAdmissionNeed, "removeMember">,
   options?: { teamIdParam?: string; auditAllowed?: boolean }
 ): Extract<RouteAuthorization, { kind: "active-user" }> {
   const requirement: RouteAuthorizationRequirement = {

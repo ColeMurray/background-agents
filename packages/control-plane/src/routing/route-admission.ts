@@ -1,26 +1,19 @@
 /** Framework-neutral authentication and authorization for a matched route. */
 
-import { isWorkspaceAdmin, type PermissionId } from "@open-inspect/shared/rbac";
 import { authenticate, isAuthError } from "../auth/authenticate";
 import type { Principal } from "../auth/principal";
 import {
   evaluateOwnedResourceAdmission,
   ownedResourceAdmissionResponse,
 } from "../authorization/owned-resource-admission";
-import type {
-  AuthorizationDecisionRequirement,
-  RouteAuthorizationDecision,
-} from "../authorization/request-audit";
+import type { RouteAuthorizationDecision } from "../authorization/request-audit";
 import { AuthorizationError, AuthorizationService } from "../authorization/service";
 import { serviceAllowsPermission } from "../authorization/service-permissions";
 import { parseChannelScope } from "../authorization/channel-scope";
-import { evaluateSessionAdmission, viewerFromContext } from "../authorization/session-admission";
+import { evaluateSessionAdmission } from "../authorization/session-admission";
 import { legacyPermissionForAction } from "../authorization/teams-enforcement";
-import { TeamStore } from "../db/teams";
 import { TeamChannelBindingStore } from "../db/team-channel-bindings";
-import { TeamMembershipStore } from "../db/team-memberships";
 import { SessionIndexStore } from "../db/session-index";
-import { resolveTeamAccess } from "@open-inspect/shared/types/team-access";
 import { UserStore } from "../db/user-store";
 import type { RequestContext } from "../http/request-context";
 import { error, json } from "../http/responses";
@@ -37,6 +30,13 @@ import { createSessionRuntimeClient } from "../session/runtime-client";
 import { resolveScmProviderFromEnv, SourceControlProviderError } from "../source-control";
 import type { Env } from "../types";
 import { logPrincipal } from "./request-lifecycle";
+import { enforceTeamRequirement } from "./team-admission";
+import {
+  authorizationDenial,
+  authorizationUnavailable,
+  type AuthorizationEvidence,
+  type AuthorizationFailure,
+} from "./authorization-evidence";
 
 const logger = createLogger("router");
 
@@ -52,19 +52,6 @@ export type RouteAdmissionResult =
       /** Present for authorization denials; absent for authentication and infrastructure failures. */
       decision?: DeniedAuthorizationDecision;
     };
-
-/** A denial with optional audit evidence; infrastructure failures carry none. */
-export interface AuthorizationFailure {
-  response: Response;
-  decision?: DeniedAuthorizationDecision;
-  /** Deployment-capability refusals skip the general request log, as at the final gate. */
-  requestLog?: "emit" | "skip";
-}
-
-interface AuthorizationEvidence {
-  requirements: AuthorizationDecisionRequirement[];
-  effectivePermissions: PermissionId[];
-}
 
 type RouteAuthorizationResult =
   | { kind: "allowed"; decision: AllowedAuthorizationDecision }
@@ -85,33 +72,6 @@ function denied(
 
 function emptyEvidence(): AuthorizationEvidence {
   return { requirements: [], effectivePermissions: [] };
-}
-
-function authorizationDenial(
-  response: Response,
-  evidence: AuthorizationEvidence,
-  failedRequirement: AuthorizationDecisionRequirement,
-  reasonCode: string,
-  reason: string,
-  failedPermission?: PermissionId
-): AuthorizationFailure {
-  return {
-    response,
-    decision: {
-      kind: "denied",
-      ...evidence,
-      requirements: [...evidence.requirements, failedRequirement],
-      reasonCode,
-      reason,
-      ...(failedPermission ? { failedPermission } : {}),
-    },
-  };
-}
-
-function authorizationUnavailable(): AuthorizationFailure {
-  return {
-    response: json({ error: "Authorization unavailable", code: "authorization_unavailable" }, 503),
-  };
 }
 
 function resultForFailure(
@@ -620,103 +580,6 @@ async function enforceOwnedResourceRequirement(
     }
     evidence.requirements.push(requirement);
     if (result.effectivePermission) evidence.effectivePermissions.push(result.effectivePermission);
-    return null;
-  } catch {
-    return authorizationUnavailable();
-  }
-}
-
-async function enforceTeamRequirement(
-  requirement: Extract<RouteAuthorizationRequirement, { kind: "team" }>,
-  params: RouteParams,
-  ctx: RequestContext,
-  evidence: AuthorizationEvidence
-): Promise<AuthorizationFailure | null> {
-  if (ctx.principal?.kind !== "user") {
-    return authorizationDenial(
-      json({ error: "Forbidden", code: "service_capability_required" }, 403),
-      evidence,
-      requirement,
-      "service_capability_required",
-      "Forbidden"
-    );
-  }
-  const teamId = params[requirement.teamIdParam];
-  if (!teamId) return { response: json({ error: "Invalid team route" }, 400) };
-  try {
-    const team = await new TeamStore(ctx.db).getById(teamId);
-    if (!team)
-      return authorizationDenial(
-        error("Team not found", 404),
-        evidence,
-        requirement,
-        "team_not_visible",
-        "Team not found"
-      );
-    const memberships = new TeamMembershipStore(ctx.db);
-    const viewer = viewerFromContext(
-      ctx,
-      (ctx.sessionMemberships ??= await memberships.listForUser(ctx.principal.userId))
-    );
-    if (viewer.kind !== "user") throw new Error("Missing team viewer");
-    const isAdmin = isWorkspaceAdmin(viewer.roleKey);
-    const isMember = isAdmin || viewer.memberships.has(teamId);
-    if (
-      !isMember &&
-      (requirement.need === "member" ||
-        requirement.need === "removeMember" ||
-        (requirement.need === "read" && team.archivedAt !== null))
-    )
-      return authorizationDenial(
-        error("Team not found", 404),
-        evidence,
-        requirement,
-        "team_not_visible",
-        "Team not found"
-      );
-    const access = resolveTeamAccess(
-      {
-        userId: viewer.userId,
-        roleKey: viewer.roleKey,
-        memberships: viewer.memberships,
-      },
-      { ...team, leadCount: await memberships.countLeads(teamId) }
-    );
-    let capabilityDenied: boolean;
-    if (requirement.need === "removeMember") {
-      const targetUserId = params[requirement.targetUserIdParam];
-      if (!targetUserId) return { response: error("Invalid team member route", 400) };
-      capabilityDenied = targetUserId !== viewer.userId && !access.canManageMembers;
-      // Preserve the existing 404 for an absent target membership.
-      if (
-        capabilityDenied &&
-        !(await memberships.listMembers(teamId)).some((member) => member.userId === targetUserId)
-      ) {
-        return { response: error("Team membership not found", 404) };
-      }
-    } else {
-      capabilityDenied =
-        requirement.need !== "read" && requirement.need !== "member" && !access[requirement.need];
-    }
-    if (capabilityDenied) {
-      const reasonCode =
-        requirement.need === "canJoin"
-          ? team.archivedAt !== null
-            ? "team_archived"
-            : team.joinPolicy === "invite_only"
-              ? "invite_only"
-              : "already_member"
-          : "team_capability_required";
-      return authorizationDenial(
-        json({ error: "Forbidden", code: reasonCode, reason_code: reasonCode }, 403),
-        evidence,
-        requirement,
-        reasonCode,
-        "Forbidden"
-      );
-    }
-    evidence.requirements.push(requirement);
-    ctx.teamAdmission = { team, access };
     return null;
   } catch {
     return authorizationUnavailable();

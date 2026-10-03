@@ -72,6 +72,11 @@ export const updateTeamRequestSchema = z.object({
 });
 
 export const teamCapabilitiesSchema = z.object({
+  // Independently deployed web clients must fail closed against older server responses.
+  canReadTeamSessions: z.boolean().default(false),
+  canReadTeamRepositories: z.boolean().default(false),
+  canReadTeamEnvironments: z.boolean().default(false),
+  canReadAutomations: z.boolean().default(false),
   canJoin: z.boolean(),
   canLeave: z.boolean(),
   canEditMetadata: z.boolean(),
@@ -106,8 +111,13 @@ export const teamMemberSchema = teamMembershipSchema.extend({
   avatarUrl: z.string().nullable(),
 });
 
+export const workspaceTeamCapabilitiesSchema = z.object({
+  canListAllTeams: z.boolean().default(false),
+});
+
 export const meTeamsResponseSchema = z.object({
   teams: z.array(teamResponseSchema.extend({ role: teamRoleSchema })),
+  capabilities: workspaceTeamCapabilitiesSchema.default({ canListAllTeams: false }),
   // Older control-plane responses omit the setting during independent rollouts.
   requireTeamOnCreate: z.boolean().default(false),
 });

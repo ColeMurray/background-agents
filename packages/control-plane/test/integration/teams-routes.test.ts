@@ -1,6 +1,10 @@
 import { createExecutionContext, env } from "cloudflare:test";
 import { beforeEach, describe, expect, it } from "vitest";
-import { BUILT_IN_ROLE_REGISTRY } from "@open-inspect/shared/rbac";
+import {
+  BUILT_IN_ROLE_REGISTRY,
+  permissionsForBuiltInRole,
+  type PermissionId,
+} from "@open-inspect/shared/rbac";
 import {
   meTeamsResponseSchema,
   teamSessionsResponseSchema,
@@ -13,6 +17,7 @@ import { TeamMembershipStore } from "../../src/db/team-memberships";
 import { TeamSettingsStore } from "../../src/db/team-settings";
 import type { SqlDatabase, SqlStatement } from "../../src/db/sql-database";
 import { routeRequest, serviceFetch, serviceRequestHeaders, sqlDatabase } from "./helpers";
+import { assignCustomRole } from "./ownership-test-helpers";
 import {
   BASE,
   OWNER,
@@ -130,6 +135,7 @@ describe("team routes", () => {
     expect(await (await request("/me/teams")).json()).toEqual({
       teams: [],
       requireTeamOnCreate: false,
+      capabilities: { canListAllTeams: true },
     });
     await setRole(OWNER, "administrator");
     const created = await request("/teams", "POST", { slug: "engineering", name: "Engineering" });
@@ -171,6 +177,7 @@ describe("team routes", () => {
       expect(meTeamsResponseSchema.parse(await response.json())).toEqual({
         teams: [],
         requireTeamOnCreate,
+        capabilities: { canListAllTeams: false },
       });
     }
   });
@@ -183,6 +190,119 @@ describe("team routes", () => {
       .run();
     expect((await request("/me/teams")).status).toBe(403);
   });
+
+  it.each([
+    ...(["owner", "administrator", "member", "viewer"] as const).map((roleKey) => ({
+      roleKey,
+      permissions: permissionsForBuiltInRole(roleKey),
+    })),
+    ...(
+      [
+        [],
+        ["sessions.read"],
+        ["environments.read"],
+        ["automations.read"],
+        ["sessions.read", "environments.read"],
+        ["sessions.read", "automations.read"],
+        ["environments.read", "automations.read"],
+        ["sessions.read", "environments.read", "automations.read"],
+      ] satisfies PermissionId[][]
+    ).map((permissions: PermissionId[]) => ({ roleKey: null, permissions })),
+  ])(
+    "returns $roleKey team capabilities across memberships (permissions: $permissions)",
+    async ({ roleKey, permissions }) => {
+      if (roleKey === null) {
+        await assignCustomRole(OWNER, permissions);
+      } else {
+        await setRole(OWNER, roleKey);
+      }
+      const hasSessionsRead = permissions.includes("sessions.read");
+      const hasEnvironmentsRead = permissions.includes("environments.read");
+      const hasAutomationRead = permissions.includes("automations.read");
+      const isAdmin = roleKey === "owner" || roleKey === "administrator";
+      const team = await new TeamStore(env.DB).create({
+        slug: "capabilities",
+        name: "Capabilities",
+        joinPolicy: "invite_only",
+      });
+      const memberships = new TeamMembershipStore(env.DB);
+      await memberships.add(team.id, MEMBER, "lead");
+
+      for (const teamRole of [undefined, "member", "lead"] as const) {
+        if (teamRole === "member") await memberships.add(team.id, OWNER);
+        if (teamRole === "lead") await memberships.setRole(team.id, OWNER, "lead");
+        const eligible = isAdmin || teamRole !== undefined;
+        const manages = isAdmin || teamRole === "lead";
+        const capabilities = {
+          canReadTeamSessions: eligible && hasSessionsRead,
+          canReadTeamRepositories: eligible,
+          canReadTeamEnvironments: eligible && hasEnvironmentsRead,
+          canReadAutomations: eligible && hasAutomationRead,
+          canJoin: false,
+          canLeave: teamRole !== undefined,
+          canEditMetadata: manages,
+          canManageMembers: manages,
+          canManageRepositories: manages,
+          canManageBindings: manages,
+          canManageAutomations: manages,
+          canManageEnvironments: manages,
+          canManageSecrets: manages,
+          canArchive: manages,
+        };
+
+        const directory = await request("/teams?membership=all");
+        expect(directory.status).toBe(200);
+        expect(await directory.json()).toMatchObject({
+          teams: [{ id: team.id, capabilities }],
+        });
+        const detail = await request(`/teams/${team.id}`);
+        expect(detail.status).toBe(200);
+        expect(await detail.json()).toMatchObject({ id: team.id, capabilities });
+        const mine = await request("/me/teams");
+        expect(mine.status).toBe(200);
+        expect(await mine.json()).toMatchObject({
+          capabilities: { canListAllTeams: isAdmin },
+          teams: teamRole === undefined ? [] : [{ id: team.id, role: teamRole, capabilities }],
+        });
+
+        const sessions = await request(`/teams/${team.id}/sessions`);
+        expect(sessions.status, `${teamRole ?? "nonmember"}/sessions`).toBe(
+          !eligible ? 404 : hasSessionsRead ? 200 : 403
+        );
+        if (!eligible) expect(await sessions.json()).toEqual({ error: "Team not found" });
+        else if (!hasSessionsRead) {
+          expect(await sessions.json()).toEqual({
+            error: "Forbidden",
+            code: "permission_required",
+            permission: "sessions.read",
+          });
+        }
+
+        const repositories = await request(`/teams/${team.id}/repository-grants`);
+        expect(repositories.status, `${teamRole ?? "nonmember"}/repository-grants`).toBe(
+          eligible ? 200 : 404
+        );
+        if (!eligible) expect(await repositories.json()).toEqual({ error: "Team not found" });
+
+        const environments = await request(`/environments?ownerTeamId=${team.id}`);
+        expect(environments.status, `${teamRole ?? "nonmember"}/environments`).toBe(
+          hasEnvironmentsRead ? 200 : 403
+        );
+        if (!hasEnvironmentsRead) {
+          expect(await environments.json()).toEqual({
+            error: "Forbidden",
+            code: "permission_required",
+            permission: "environments.read",
+          });
+        } else if (!eligible) {
+          expect(await environments.json()).toEqual({ environments: [], total: 0 });
+        }
+        expect((await request(`/teams/${team.id}`, "PATCH", { name: "Renamed" })).status).toBe(
+          manages ? 200 : 403
+        );
+      }
+    }
+  );
 
   it("reports member counts on list, membership and detail responses", async () => {
     const created = await request("/teams", "POST", { slug: "counted", name: "Counted" });
@@ -557,8 +677,17 @@ describe("team routes", () => {
         expect(detail.status).toBe(200);
         expect(await detail.json()).toMatchObject({
           id: archived.id,
-          capabilities: { canArchive: canRestore },
+          capabilities: {
+            canArchive: canRestore,
+            canReadTeamSessions: true,
+            canReadTeamRepositories: true,
+            canReadTeamEnvironments: true,
+            canReadAutomations: true,
+          },
         });
+        for (const suffix of ["sessions", "repository-grants"]) {
+          expect((await request(`/teams/${archived.id}/${suffix}`)).status).toBe(200);
+        }
         const members = await request(`/teams/${archived.id}/members`);
         expect(members.status).toBe(200);
         expect(await members.json()).toMatchObject({
@@ -764,10 +893,12 @@ describe("team routes", () => {
     await new TeamMembershipStore(env.DB).add(team.id, OWNER);
     await env.DB.prepare("UPDATE users SET suspended_at = 1 WHERE id = ?").bind(OWNER).run();
     for (const path of [
+      "/me/teams",
       "/teams?membership=all",
       `/teams/${team.id}`,
       `/teams/${team.id}/members`,
       `/teams/${team.id}/sessions`,
+      `/teams/${team.id}/repository-grants`,
     ]) {
       expect((await request(path)).status, path).toBe(403);
     }
@@ -775,6 +906,7 @@ describe("team routes", () => {
     await env.DB.prepare("DELETE FROM user_role_assignments WHERE user_id = ?").bind(OWNER).run();
     expect((await request("/teams?membership=all")).status).toBe(403);
     expect((await request(`/teams/${team.id}/sessions`)).status).toBe(403);
+    expect((await request(`/teams/${team.id}/repository-grants`)).status).toBe(403);
   });
 
   it("allows directory reads without session or audit permissions but keeps both inaccessible", async () => {

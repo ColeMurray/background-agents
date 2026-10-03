@@ -1,9 +1,11 @@
 // @vitest-environment jsdom
 /// <reference types="@testing-library/jest-dom" />
 
-import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import * as matchers from "@testing-library/jest-dom/matchers";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { SWRConfig, unstable_serialize } from "swr";
+import { TEAMS_KEY, teamCacheKey } from "@/hooks/use-teams";
 import type { TeamResponse } from "@/hooks/use-teams";
 import { TeamsIndex } from "./teams-index";
 import { TeamPage } from "./team-page";
@@ -29,10 +31,12 @@ vi.mock("next/navigation", () => ({ useRouter: () => ({ replace: mocks.replace }
 vi.mock("@/lib/auth-session", () => ({
   useAuthSession: () => ({ data: { user: { id: "user_one" } }, status: "authenticated" }),
 }));
-vi.mock("@/hooks/use-teams", () => ({
+vi.mock("@/hooks/use-teams", async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
   useTeams: () => ({ teams: mocks.teams, loading: false, error: null, joinTeam: mocks.join }),
   useMeTeams: () => ({
     teams: mocks.mine,
+    canListAllTeams: false,
     loading: mocks.membershipLoading,
     error: mocks.membershipError,
   }),
@@ -90,6 +94,10 @@ const team: TeamResponse = {
   memberCount: 2,
 };
 const denied = {
+  canReadTeamSessions: false,
+  canReadTeamRepositories: false,
+  canReadTeamEnvironments: false,
+  canReadAutomations: false,
   canJoin: false,
   canLeave: false,
   canEditMetadata: false,
@@ -100,6 +108,13 @@ const denied = {
   canManageEnvironments: false,
   canManageSecrets: false,
   canArchive: false,
+};
+const readable = {
+  ...denied,
+  canReadTeamSessions: true,
+  canReadTeamRepositories: true,
+  canReadTeamEnvironments: true,
+  canReadAutomations: true,
 };
 
 beforeEach(() => {
@@ -193,6 +208,25 @@ describe("Teams index", () => {
 });
 
 describe("Team page tabs", () => {
+  it.each(["absent", "denied"] as const)(
+    "does not populate a %s directory snapshot when reconciling a canonical slug",
+    async (state) => {
+      const cache = new Map();
+      const key = unstable_serialize(teamCacheKey(TEAMS_KEY, "user_one"));
+      const snapshot =
+        state === "denied" ? { kind: "denied", error: new Error("Forbidden") } : undefined;
+      if (snapshot) cache.set(key, { data: snapshot });
+      mocks.currentTeam = { ...team, slug: "product-design" };
+      render(
+        <SWRConfig value={{ provider: () => cache }}>
+          <TeamPage slug="design" />
+        </SWRConfig>
+      );
+      await waitFor(() => expect(mocks.replace).toHaveBeenCalledWith("/teams/product-design"));
+      expect(cache.get(key)?.data).toBe(snapshot);
+    }
+  );
+
   it("follows navigation to a different active team", () => {
     mocks.teams = [
       team,
@@ -231,47 +265,55 @@ describe("Team page tabs", () => {
     }
   );
 
-  it("shows the header and Members to a nonmember, even if mutation capabilities are present", () => {
-    mocks.teams = [
-      {
-        ...team,
-        capabilities: {
-          ...denied,
-          canEditMetadata: true,
-          canArchive: true,
-          canManageSecrets: true,
+  it.each(["member", "administrator", "owner"])(
+    "shows mutation-granted tabs independently of denied resource reads for a %s",
+    (role) => {
+      mocks.role = role;
+      mocks.mine = [team];
+      mocks.teams = [
+        {
+          ...team,
+          capabilities: {
+            ...denied,
+            canEditMetadata: true,
+            canArchive: true,
+            canManageSecrets: true,
+            canManageBindings: true,
+          },
         },
-      },
-    ];
-    render(<TeamPage slug="design" />);
-    expect(screen.getByRole("heading", { name: "Design" })).toBeInTheDocument();
-    const tabs = within(screen.getByRole("navigation", { name: "Team tabs" }));
-    expect(tabs.getByRole("button", { name: "Members" })).toBeInTheDocument();
-    expect(tabs.queryByRole("button", { name: "Overview" })).not.toBeInTheDocument();
-    expect(tabs.queryByRole("button", { name: "Channels" })).not.toBeInTheDocument();
-    expect(tabs.queryByRole("button", { name: "Activity" })).not.toBeInTheDocument();
-    expect(tabs.queryByRole("button", { name: "Repositories" })).not.toBeInTheDocument();
-    expect(tabs.queryByRole("button", { name: "Secrets" })).not.toBeInTheDocument();
-    expect(tabs.queryByRole("button", { name: "Environments" })).not.toBeInTheDocument();
-    expect(tabs.queryByRole("button", { name: "Automations" })).not.toBeInTheDocument();
-    expect(tabs.queryByRole("button", { name: "Settings" })).not.toBeInTheDocument();
-    expect(screen.getByText("Team member table")).toBeInTheDocument();
-    expect(screen.queryByText("Team session buckets")).not.toBeInTheDocument();
-  });
+      ];
+      render(<TeamPage slug="design" />);
+      expect(screen.getByRole("heading", { name: "Design" })).toBeInTheDocument();
+      const tabs = within(screen.getByRole("navigation", { name: "Team tabs" }));
+      expect(tabs.getByRole("button", { name: "Members" })).toBeInTheDocument();
+      expect(tabs.queryByRole("button", { name: "Overview" })).not.toBeInTheDocument();
+      expect(tabs.getByRole("button", { name: "Channels" })).toBeInTheDocument();
+      expect(tabs.queryByRole("button", { name: "Activity" })).not.toBeInTheDocument();
+      expect(tabs.queryByRole("button", { name: "Repositories" })).not.toBeInTheDocument();
+      expect(tabs.getByRole("button", { name: "Secrets" })).toBeInTheDocument();
+      expect(tabs.queryByRole("button", { name: "Environments" })).not.toBeInTheDocument();
+      expect(tabs.queryByRole("button", { name: "Automations" })).not.toBeInTheDocument();
+      expect(tabs.getByRole("button", { name: "Settings" })).toBeInTheDocument();
+      expect(screen.getByText("Team member table")).toBeInTheDocument();
+      expect(screen.queryByText("Team session buckets")).not.toBeInTheDocument();
+    }
+  );
 
   it.each(["member", "administrator", "owner"])("never offers an Activity tab to a %s", (role) => {
     mocks.role = role;
     mocks.mine = role === "member" ? [team] : [];
+    mocks.teams = [{ ...team, capabilities: readable }];
     render(<TeamPage slug="design" />);
     const tabs = within(screen.getByRole("navigation", { name: "Team tabs" }));
     expect(tabs.getByRole("button", { name: "Overview" })).toBeInTheDocument();
     expect(tabs.getByRole("button", { name: "Members" })).toBeInTheDocument();
-    expect(tabs.getByRole("button", { name: "Channels" })).toBeInTheDocument();
+    expect(tabs.queryByRole("button", { name: "Channels" })).not.toBeInTheDocument();
     expect(tabs.queryByRole("button", { name: "Activity" })).not.toBeInTheDocument();
   });
 
-  it("shows member Overview, Members, and Repositories but no Settings without capabilities", () => {
-    mocks.mine = [team];
+  it("shows server-granted work to a nonmember without raw permissions or mutation grants", () => {
+    mocks.permissions = [];
+    mocks.teams = [{ ...team, capabilities: readable }];
     render(<TeamPage slug="design" />);
     expect(screen.getByText("Team session buckets")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Settings" })).not.toBeInTheDocument();
@@ -281,10 +323,10 @@ describe("Team page tabs", () => {
     expect(screen.getByText("Team member table")).toBeInTheDocument();
   });
 
-  it("mounts scoped resources and unmounts them when membership disappears", () => {
+  it("mounts scoped resources and unmounts them when fresh work capabilities are revoked", () => {
     mocks.mine = [team];
     mocks.teams = [
-      { ...team, capabilities: { ...denied, canEditMetadata: true, canManageSecrets: true } },
+      { ...team, capabilities: { ...readable, canEditMetadata: true, canManageSecrets: true } },
     ];
     const view = render(<TeamPage slug="design" />);
     const tabs = within(screen.getByRole("navigation", { name: "Team tabs" }));
@@ -292,16 +334,20 @@ describe("Team page tabs", () => {
     expect(screen.getByText("Environments for team_design")).toBeInTheDocument();
     fireEvent.click(tabs.getByRole("button", { name: "Automations" }));
     expect(screen.getByText("Automations for team_design")).toBeInTheDocument();
-    mocks.mine = [];
+    mocks.currentTeam = {
+      ...mocks.teams[0],
+      capabilities: { ...readable, canReadTeamEnvironments: false, canReadAutomations: false },
+    };
     view.rerender(<TeamPage slug="design" />);
     expect(screen.queryByText("Automations for team_design")).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Automations" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Environments" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Overview" })).toBeInTheDocument();
   });
 
-  it("hides the Automations tab without automations.read", () => {
+  it("hides the Automations tab when server-denied even with automations.read", () => {
     mocks.mine = [team];
-    mocks.permissions = [];
+    mocks.teams = [{ ...team, capabilities: { ...readable, canReadAutomations: false } }];
     render(<TeamPage slug="design" />);
     const tabs = within(screen.getByRole("navigation", { name: "Team tabs" }));
     expect(tabs.getByRole("button", { name: "Environments" })).toBeInTheDocument();
@@ -309,16 +355,17 @@ describe("Team page tabs", () => {
   });
 
   it.each(["owner", "administrator"])(
-    "allows %s Overview but still requires settings capabilities",
+    "allows server-granted %s Overview but still requires settings capabilities",
     (role) => {
       mocks.role = role;
+      mocks.teams = [{ ...team, capabilities: readable }];
       const view = render(<TeamPage slug="design" />);
       expect(screen.getByRole("button", { name: "Overview" })).toBeInTheDocument();
       expect(screen.getByRole("button", { name: "Members" })).toBeInTheDocument();
       fireEvent.click(screen.getByRole("button", { name: "Repositories" }));
       expect(screen.getByText("Team repository grants")).toBeInTheDocument();
       expect(screen.queryByRole("button", { name: "Settings" })).not.toBeInTheDocument();
-      mocks.teams = [{ ...team, capabilities: { ...denied, canArchive: true } }];
+      mocks.teams = [{ ...team, capabilities: { ...readable, canArchive: true } }];
       view.rerender(<TeamPage slug="design" />);
       fireEvent.click(screen.getByRole("button", { name: "Settings" }));
       expect(screen.getByText("Team settings editor")).toBeInTheDocument();
@@ -327,66 +374,71 @@ describe("Team page tabs", () => {
 
   it("passes fresh server repository capabilities to the repository tab", () => {
     mocks.mine = [team];
-    mocks.teams = [{ ...team, capabilities: { ...denied, canManageRepositories: true } }];
+    mocks.teams = [{ ...team, capabilities: { ...readable, canManageRepositories: true } }];
     const view = render(<TeamPage slug="design" />);
     fireEvent.click(screen.getByRole("button", { name: "Repositories" }));
     expect(mocks.repositories).toHaveBeenLastCalledWith({ team: mocks.teams[0] });
-    mocks.currentTeam = { ...team, capabilities: denied };
+    mocks.currentTeam = { ...team, capabilities: readable };
     view.rerender(<TeamPage slug="design" />);
     expect(mocks.repositories).toHaveBeenLastCalledWith({ team: mocks.currentTeam });
     expect(screen.getByText("Team repository grants")).toBeInTheDocument();
   });
 
-  it("unmounts Overview when membership disappears", () => {
-    mocks.mine = [team];
-    const view = render(<TeamPage slug="design" />);
-    expect(screen.getByText("Team session buckets")).toBeInTheDocument();
-    mocks.mine = [];
-    view.rerender(<TeamPage slug="design" />);
-    expect(screen.queryByText("Team session buckets")).not.toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "Overview" })).not.toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "Channels" })).not.toBeInTheDocument();
-    expect(screen.getByText("Team member table")).toBeInTheDocument();
-  });
+  it.each([
+    ["canReadTeamSessions", "Overview", "Team session buckets", false],
+    ["canReadTeamSessions", "Overview", "Team session buckets", undefined],
+    ["canReadTeamRepositories", "Repositories", "Team repository grants", false],
+    ["canReadTeamRepositories", "Repositories", "Team repository grants", undefined],
+    ["canReadTeamEnvironments", "Environments", "Environments for team_design", false],
+    ["canReadTeamEnvironments", "Environments", "Environments for team_design", undefined],
+  ] as const)(
+    "revokes %s for %s (%s) when its fresh grant becomes %s",
+    (grant, tab, content, value) => {
+      mocks.mine = [team];
+      mocks.teams = [{ ...team, capabilities: readable }];
+      const view = render(<TeamPage slug="design" />);
+      fireEvent.click(screen.getByRole("button", { name: tab }));
+      expect(screen.getByText(content)).toBeInTheDocument();
+      mocks.currentTeam = { ...team, capabilities: { ...readable, [grant]: value } };
+      view.rerender(<TeamPage slug="design" />);
+      expect(screen.queryByText(content)).not.toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: tab })).not.toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "Automations" })).toBeInTheDocument();
+      expect(screen.getByText("Team member table")).toBeInTheDocument();
+    }
+  );
 
-  it("unmounts repository grants when membership disappears", () => {
-    mocks.mine = [team];
-    const view = render(<TeamPage slug="design" />);
-    fireEvent.click(screen.getByRole("button", { name: "Repositories" }));
-    expect(screen.getByText("Team repository grants")).toBeInTheDocument();
-    mocks.mine = [];
-    view.rerender(<TeamPage slug="design" />);
-    expect(screen.queryByText("Team repository grants")).not.toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "Repositories" })).not.toBeInTheDocument();
-    expect(screen.getByText("Team member table")).toBeInTheDocument();
-  });
-
-  it.each(["loading", "failed"])("withholds private tabs while membership is %s", (state) => {
-    mocks.mine = [team];
-    mocks.membershipLoading = state === "loading";
-    mocks.membershipError = state === "failed" ? new Error("Forbidden") : null;
-    render(<TeamPage slug="design" />);
-    expect(screen.getByText("Team member table")).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "Overview" })).not.toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "Channels" })).not.toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "Repositories" })).not.toBeInTheDocument();
-  });
+  it.each(["loading", "failed"])(
+    "uses fresh server grants independently of %s membership lookup",
+    (state) => {
+      mocks.mine = [team];
+      mocks.membershipLoading = state === "loading";
+      mocks.membershipError = state === "failed" ? new Error("Forbidden") : null;
+      mocks.teams = [{ ...team, capabilities: readable }];
+      render(<TeamPage slug="design" />);
+      expect(screen.getByText("Team session buckets")).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "Overview" })).toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: "Channels" })).not.toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "Repositories" })).toBeInTheDocument();
+    }
+  );
 
   it("unmounts Settings when the server revokes metadata and archive capabilities", () => {
     mocks.mine = [team];
-    mocks.teams = [{ ...team, capabilities: { ...denied, canEditMetadata: true } }];
+    mocks.teams = [{ ...team, capabilities: { ...readable, canEditMetadata: true } }];
     const view = render(<TeamPage slug="design" />);
     fireEvent.click(screen.getByRole("button", { name: "Settings" }));
     expect(screen.getByText("Team settings editor")).toBeInTheDocument();
-    mocks.currentTeam = { ...team, capabilities: denied };
+    mocks.currentTeam = { ...team, capabilities: readable };
     view.rerender(<TeamPage slug="design" />);
     expect(screen.queryByText("Team settings editor")).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Settings" })).not.toBeInTheDocument();
   });
 
-  it("withholds private content after the current user is suspended", () => {
+  it("withholds private content when the server denies a suspended user", () => {
     mocks.mine = [team];
     mocks.suspendedAt = 1;
+    mocks.teams = [{ ...team, capabilities: denied }];
     render(<TeamPage slug="design" />);
     expect(screen.queryByText("Team session buckets")).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Overview" })).not.toBeInTheDocument();
@@ -395,6 +447,7 @@ describe("Team page tabs", () => {
 
   it("unmounts private content when fresh team metadata reports an archive", () => {
     mocks.mine = [team];
+    mocks.teams = [{ ...team, capabilities: readable }];
     const view = render(<TeamPage slug="design" />);
     expect(screen.getByText("Team session buckets")).toBeInTheDocument();
     mocks.currentTeam = { ...team, archivedAt: 2 };
@@ -411,7 +464,12 @@ describe("Team page tabs", () => {
       mocks.teams = [
         {
           ...team,
-          capabilities: { ...denied, canManageSecrets: true, canArchive: role === "lead" },
+          capabilities: {
+            ...readable,
+            canManageSecrets: true,
+            canManageBindings: role === "lead",
+            canArchive: role === "lead",
+          },
         },
       ];
       render(<TeamPage slug="design" />);
@@ -424,7 +482,7 @@ describe("Team page tabs", () => {
         "Environments",
         "Automations",
         "Secrets",
-        "Channels",
+        ...(role === "lead" ? ["Channels"] : []),
         ...(role === "lead" ? ["Settings"] : []),
       ]);
       if (role === "lead") {
@@ -453,7 +511,7 @@ describe("Team page tabs", () => {
     }
   );
 
-  it.each([denied, { canManageSecrets: true }, { ...denied, canManageSecrets: undefined }])(
+  it.each([readable, { canManageSecrets: true }, { ...readable, canManageSecrets: undefined }])(
     "withholds Secrets from a member with denied or incomplete capabilities %s",
     (capabilities) => {
       mocks.mine = [team];
@@ -469,7 +527,7 @@ describe("Team page tabs", () => {
     "unmounts Secrets when fresh server capabilities become denied, missing, or incomplete: %s",
     (capabilities) => {
       mocks.mine = [team];
-      mocks.teams = [{ ...team, capabilities: { ...denied, canManageSecrets: true } }];
+      mocks.teams = [{ ...team, capabilities: { ...readable, canManageSecrets: true } }];
       const view = render(<TeamPage slug="design" />);
       fireEvent.click(screen.getByRole("button", { name: "Secrets" }));
       expect(screen.getByText("Team secrets editor for team_design")).toBeInTheDocument();
@@ -484,10 +542,10 @@ describe("Team page tabs", () => {
   );
 
   it.each(["removed", "loading", "failed", "suspended", "archived"])(
-    "unmounts Secrets when current membership or team access becomes %s",
+    "unmounts Secrets when fresh server access is revoked after membership or team access becomes %s",
     (state) => {
       mocks.mine = [team];
-      mocks.teams = [{ ...team, capabilities: { ...denied, canManageSecrets: true } }];
+      mocks.teams = [{ ...team, capabilities: { ...readable, canManageSecrets: true } }];
       const view = render(<TeamPage slug="design" />);
       fireEvent.click(screen.getByRole("button", { name: "Secrets" }));
       expect(screen.getByText("Team secrets editor for team_design")).toBeInTheDocument();
@@ -496,11 +554,136 @@ describe("Team page tabs", () => {
       if (state === "loading") mocks.membershipLoading = true;
       if (state === "failed") mocks.membershipError = new Error("Forbidden");
       if (state === "suspended") mocks.suspendedAt = 1;
-      if (state === "archived") mocks.currentTeam = { ...mocks.teams[0], archivedAt: 2 };
+      mocks.currentTeam = {
+        ...mocks.teams[0],
+        capabilities: { ...mocks.teams[0].capabilities, canManageSecrets: false },
+        ...(state === "archived" ? { archivedAt: 2 } : {}),
+      };
       view.rerender(<TeamPage slug="design" />);
 
       expect(screen.queryByText("Team secrets editor for team_design")).not.toBeInTheDocument();
       expect(screen.queryByRole("button", { name: "Secrets" })).not.toBeInTheDocument();
+    }
+  );
+
+  it.each([
+    undefined,
+    { ...denied, canReadTeamSessions: undefined },
+    { canReadTeamSessions: true, canReadAutomations: true },
+  ])("fails closed for missing or incomplete work capabilities %j", (capabilities) => {
+    mocks.role = "owner";
+    mocks.mine = [team];
+    mocks.teams = [{ ...team, capabilities }];
+    render(<TeamPage slug="design" />);
+    expect(screen.getByText("Team member table")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Overview" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Automations" })).not.toBeInTheDocument();
+  });
+
+  it.each([
+    ["canReadTeamSessions", "Overview", "Team session buckets"],
+    ["canReadTeamRepositories", "Repositories", "Team repository grants"],
+    ["canReadTeamEnvironments", "Environments", "Environments for team_design"],
+    ["canReadAutomations", "Automations", "Automations for team_design"],
+    ["canManageBindings", "Channels", "Team channel bindings"],
+    ["canManageSecrets", "Secrets", "Team secrets editor for team_design"],
+    ["canEditMetadata", "Settings", "Team settings editor"],
+    ["canArchive", "Settings", "Team settings editor"],
+  ] as const)(
+    "uses only %s to grant %s, without other grants from ownership or membership",
+    (grant, tab, content) => {
+      mocks.role = "owner";
+      mocks.mine = [team];
+      mocks.permissions = [
+        "sessions.read",
+        "repositories.read",
+        "environments.read",
+        "automations.read",
+      ];
+      mocks.teams = [{ ...team, capabilities: { ...denied, [grant]: true } }];
+      render(<TeamPage slug="design" />);
+      const tabs = within(screen.getByRole("navigation", { name: "Team tabs" }));
+      expect(tabs.getAllByRole("button").map((button) => button.textContent)).toEqual(
+        tab === "Overview" ? ["Overview", "Members"] : ["Members", tab]
+      );
+      fireEvent.click(tabs.getByRole("button", { name: tab }));
+      expect(screen.getByText(content)).toBeInTheDocument();
+    }
+  );
+
+  it.each([
+    ["canReadTeamSessions", "Overview"],
+    ["canReadTeamRepositories", "Repositories"],
+    ["canReadTeamEnvironments", "Environments"],
+    ["canReadAutomations", "Automations"],
+  ] as const)("defaults missing %s to false without revoking other tabs", (grant, tab) => {
+    mocks.role = "owner";
+    mocks.mine = [team];
+    mocks.teams = [
+      {
+        ...team,
+        capabilities: {
+          ...readable,
+          canManageBindings: true,
+          canManageSecrets: true,
+          canEditMetadata: true,
+          [grant]: undefined,
+        },
+      },
+    ];
+    render(<TeamPage slug="design" />);
+    const tabs = within(screen.getByRole("navigation", { name: "Team tabs" }));
+    expect(tabs.getAllByRole("button").map((button) => button.textContent)).toEqual(
+      [
+        "Overview",
+        "Members",
+        "Repositories",
+        "Environments",
+        "Automations",
+        "Secrets",
+        "Channels",
+        "Settings",
+      ].filter((name) => name !== tab)
+    );
+  });
+
+  it("does not infer sessions or environment reads for a custom-role team member", () => {
+    mocks.role = "custom";
+    mocks.mine = [team];
+    mocks.permissions = ["repositories.read", "automations.read"];
+    mocks.teams = [
+      {
+        ...team,
+        capabilities: {
+          ...readable,
+          canReadTeamSessions: undefined,
+          canReadTeamEnvironments: undefined,
+        },
+      },
+    ];
+    render(<TeamPage slug="design" />);
+    const tabs = within(screen.getByRole("navigation", { name: "Team tabs" }));
+    expect(tabs.getAllByRole("button").map((button) => button.textContent)).toEqual([
+      "Members",
+      "Repositories",
+      "Automations",
+    ]);
+    expect(screen.getByText("Team member table")).toBeInTheDocument();
+  });
+
+  it.each([false, undefined])(
+    "unmounts Automations when fresh canReadAutomations becomes %s",
+    (canReadAutomations) => {
+      mocks.permissions = [];
+      mocks.teams = [{ ...team, capabilities: readable }];
+      const view = render(<TeamPage slug="design" />);
+      fireEvent.click(screen.getByRole("button", { name: "Automations" }));
+      expect(screen.getByText("Automations for team_design")).toBeInTheDocument();
+      mocks.currentTeam = { ...team, capabilities: { ...readable, canReadAutomations } };
+      view.rerender(<TeamPage slug="design" />);
+      expect(screen.queryByText("Automations for team_design")).not.toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: "Automations" })).not.toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "Overview" })).toBeInTheDocument();
     }
   );
 });

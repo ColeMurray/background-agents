@@ -4,6 +4,10 @@ import { teamCapabilitiesSchema } from "@open-inspect/shared/types/teams";
 type TeamCapabilities = z.infer<typeof teamCapabilitiesSchema>;
 
 const DENIED: TeamCapabilities = {
+  canReadTeamSessions: false,
+  canReadTeamRepositories: false,
+  canReadTeamEnvironments: false,
+  canReadAutomations: false,
   canJoin: false,
   canLeave: false,
   canEditMetadata: false,
@@ -16,7 +20,7 @@ const DENIED: TeamCapabilities = {
   canArchive: false,
 };
 
-/** Reads server-computed capabilities; absent or incomplete responses cannot grant controls. */
+/** Reads server-computed capabilities; missing required fields cannot grant controls. */
 export function useTeamCapabilities(
   team: { capabilities?: Partial<TeamCapabilities> | null } | null | undefined
 ): TeamCapabilities {
