@@ -8,7 +8,7 @@ import type { ReactNode } from "react";
 import { SWRConfig } from "swr";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { TeamRepositoryGrant } from "@open-inspect/shared/types/teams";
-import type { TeamResponse } from "@/hooks/use-teams";
+import { useTeam, type TeamResponse } from "@/hooks/use-teams";
 import { browserApiFetch } from "@/lib/browser-api-fetch";
 import { TeamRepositories } from "./team-repositories";
 
@@ -176,6 +176,54 @@ describe("Team repository grants", () => {
     await userEvent.setup().click(screen.getByRole("combobox", { name: "Repository" }));
     expect(await screen.findByRole("option", { name: "acme/web" })).toBeInTheDocument();
     expect(screen.queryByRole("option", { name: "group/subgroup/api" })).not.toBeInTheDocument();
+  });
+
+  it("revalidates the viewer-scoped team detail after a grant write", async () => {
+    const teamPath = "/api/teams/team%2Fone";
+    let detail = team;
+    vi.mocked(browserApiFetch).mockImplementation(async (path, init) => {
+      if (path === teamPath) return Response.json(detail);
+      if (init?.method === "PUT") {
+        mocks.grants = [namedGrant];
+        detail = { ...team, grantsVersion: 1, capabilities: denied };
+        return Response.json({ grant: namedGrant });
+      }
+      return Response.json({ grants: mocks.grants });
+    });
+    function TeamDetailSubscriber() {
+      const { team: currentTeam } = useTeam(team.id);
+      return (
+        <>
+          <output aria-label="Team detail">{JSON.stringify(currentTeam)}</output>
+          {currentTeam && <TeamRepositories team={currentTeam} />}
+        </>
+      );
+    }
+
+    render(<TeamDetailSubscriber />, { wrapper });
+    await screen.findByText("This team has no repository grants.");
+    expect(JSON.parse(screen.getByLabelText("Team detail").textContent!)).toMatchObject({
+      grantsVersion: 0,
+      capabilities: { canManageRepositories: true },
+    });
+    expect(
+      vi.mocked(browserApiFetch).mock.calls.filter(([path]) => path === teamPath)
+    ).toHaveLength(1);
+    await chooseOption("Repository", "group/subgroup/api");
+    fireEvent.click(screen.getByRole("button", { name: "Add grant" }));
+
+    await waitFor(() =>
+      expect(JSON.parse(screen.getByLabelText("Team detail").textContent!)).toMatchObject({
+        grantsVersion: 1,
+        capabilities: denied,
+      })
+    );
+    expect(
+      vi.mocked(browserApiFetch).mock.calls.filter(([path]) => path === teamPath)
+    ).toHaveLength(2);
+    expect(screen.getByText("Named repository grant")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Add grant" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Remove/ })).not.toBeInTheDocument();
   });
 
   it("adds installation-wide access and disables mixing named grants", async () => {

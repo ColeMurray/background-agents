@@ -9,6 +9,7 @@ const state = vi.hoisted(() => ({
   activeTeamId: null as string | null,
   scope: "workspace" as string | undefined,
   roleKey: "member",
+  capabilities: { canListAllTeams: false } as { canListAllTeams?: boolean } | undefined,
   setActiveTeam: vi.fn(),
 }));
 vi.mock("@/hooks/use-active-team", () => ({
@@ -21,6 +22,9 @@ vi.mock("@/hooks/use-active-team", () => ({
 }));
 vi.mock("@/hooks/use-current-user-authorization", () => ({
   useCurrentUserAuthorization: () => ({ authorization: { role: { key: state.roleKey } } }),
+}));
+vi.mock("@/hooks/use-teams", () => ({
+  useMeTeams: () => ({ capabilities: state.capabilities }),
 }));
 vi.mock("@/components/ui/select", () => ({
   Select: ({
@@ -53,6 +57,7 @@ beforeEach(() => {
   state.activeTeamId = null;
   state.scope = "workspace";
   state.roleKey = "member";
+  state.capabilities = { canListAllTeams: false };
   state.setActiveTeam.mockClear();
 });
 afterEach(cleanup);
@@ -88,14 +93,39 @@ describe("team switcher", () => {
     fireEvent.change(screen.getByRole("combobox"), { target: { value: "team_beta" } });
     expect(state.setActiveTeam).toHaveBeenCalledWith("team_beta");
   });
-  it.each(["owner", "administrator"])("offers All teams to a server-authorized %s", (roleKey) => {
-    state.teams = [
-      { id: "team_alpha", slug: "alpha", name: "Alpha" },
-      { id: "team_beta", slug: "beta", name: "Beta" },
-    ];
-    state.roleKey = roleKey;
-    render(<TeamSwitcher />);
+  it.each(["owner", "administrator", "member", "viewer", "custom"])(
+    "offers All teams with a server grant regardless of role %s",
+    (roleKey) => {
+      state.teams = [
+        { id: "team_alpha", slug: "alpha", name: "Alpha" },
+        { id: "team_beta", slug: "beta", name: "Beta" },
+      ];
+      state.roleKey = roleKey;
+      state.capabilities = { canListAllTeams: true };
+      render(<TeamSwitcher />);
+      expect(screen.getByRole("option", { name: "All teams" })).toBeTruthy();
+    }
+  );
+
+  it.each([undefined, {}, { canListAllTeams: false }])(
+    "withholds All teams from an owner when capabilities are %j",
+    (capabilities) => {
+      state.teams = [{ id: "team_alpha", slug: "alpha", name: "Alpha" }];
+      state.roleKey = "owner";
+      state.capabilities = capabilities;
+      render(<TeamSwitcher />);
+      expect(screen.queryByRole("option", { name: "All teams" })).toBeNull();
+    }
+  );
+
+  it("removes All teams when a fresh server response revokes the grant", () => {
+    state.teams = [{ id: "team_alpha", slug: "alpha", name: "Alpha" }];
+    state.capabilities = { canListAllTeams: true };
+    const { rerender } = render(<TeamSwitcher />);
     expect(screen.getByRole("option", { name: "All teams" })).toBeTruthy();
+    state.capabilities = { canListAllTeams: false };
+    rerender(<TeamSwitcher />);
+    expect(screen.queryByRole("option", { name: "All teams" })).toBeNull();
   });
 
   it("links to the selected team's page and updates the link when the selection changes", () => {

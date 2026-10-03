@@ -1,7 +1,10 @@
 import { isWorkspaceAdmin } from "@open-inspect/shared/rbac";
 import { Hono } from "hono";
 import { z } from "zod";
-import { resolveTeamAccess } from "@open-inspect/shared/types/team-access";
+import {
+  resolveTeamAccess,
+  resolveWorkspaceTeamAccess,
+} from "@open-inspect/shared/types/team-access";
 import {
   createTeamRequestSchema,
   teamRoleSchema,
@@ -78,7 +81,12 @@ const sessionsQuerySchema = z.object({
 function viewer(ctx: RequestContext) {
   if (ctx.principal?.kind !== "user" || !ctx.authorization)
     throw new Error("Team route not admitted");
-  return { userId: ctx.principal.userId, roleKey: ctx.authorization.role.key };
+  return {
+    userId: ctx.principal.userId,
+    roleKey: ctx.authorization.role.key,
+    suspended: ctx.authorization.suspendedAt !== null,
+    permissions: ctx.authorization.permissions,
+  };
 }
 
 async function responseTeam(
@@ -169,6 +177,7 @@ async function meTeams(_request: Request, _env: Env, _params: object, ctx: Reque
   const { requireTeamOnCreate } = await new TeamSettingsStore(ctx.db).get();
   return json({
     requireTeamOnCreate,
+    capabilities: resolveWorkspaceTeamAccess(subject),
     teams: await Promise.all(
       teams.map(async (team) => ({
         ...(await responseTeam(

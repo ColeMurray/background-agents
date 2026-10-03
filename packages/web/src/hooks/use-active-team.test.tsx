@@ -6,7 +6,6 @@ import type { ReactNode } from "react";
 import { SWRConfig, useSWRConfig } from "swr";
 import { browserApiFetch } from "@/lib/browser-api-fetch";
 import { meTeamsKey } from "@/lib/me-teams-cache";
-import { currentUserAuthorizationKey } from "./use-current-user-authorization";
 import { ActiveTeamProvider, useActiveTeam } from "./use-active-team";
 import { useSidebarSessions } from "./use-sidebar-sessions";
 import { TeamSwitcher } from "@/components/team-switcher";
@@ -19,6 +18,7 @@ vi.mock("@/lib/auth-session", () => ({
 vi.mock("@/lib/browser-api-fetch", () => ({ browserApiFetch: vi.fn() }));
 
 let roleKey: string | null = "member";
+let canListAllTeams: boolean | undefined = false;
 
 function authorizationResponse() {
   return Response.json({
@@ -37,6 +37,7 @@ function membershipsResponse() {
   return Response.json({
     teams: [team("team_alpha"), team("team_beta"), team("team_old", 1)],
     requireTeamOnCreate: true,
+    ...(canListAllTeams === undefined ? {} : { capabilities: { canListAllTeams } }),
   });
 }
 
@@ -105,6 +106,7 @@ function wrapper({ children }: { children: ReactNode }) {
 beforeEach(() => {
   localStorage.clear();
   roleKey = "member";
+  canListAllTeams = false;
   vi.mocked(browserApiFetch).mockImplementation(async (path) =>
     path === "/api/me/authorization" ? authorizationResponse() : membershipsResponse()
   );
@@ -243,8 +245,8 @@ describe("active team context", () => {
     expect(result.current.scope).toBeUndefined();
   });
 
-  it.each(["member", "viewer", null])(
-    "reconciles stored All teams to All my teams for role %s",
+  it.each(["owner", "administrator", "member", "viewer", null])(
+    "reconciles stored All teams when the server denies role %s",
     async (role) => {
       roleKey = role;
       localStorage.setItem("open-inspect-active-team", "all-teams");
@@ -259,35 +261,50 @@ describe("active team context", () => {
     }
   );
 
-  it.each(["owner", "administrator"])("preserves All teams for role %s", async (role) => {
-    roleKey = role;
+  it.each(["owner", "administrator", "member", "viewer", null])(
+    "preserves server-granted All teams for role %s",
+    async (role) => {
+      roleKey = role;
+      canListAllTeams = true;
+      localStorage.setItem("open-inspect-active-team", "all-teams");
+      const { result } = renderHook(useActiveTeam, { wrapper });
+      await waitFor(() => expect(result.current.loading).toBe(false));
+      expect(result.current.scope).toBe("all");
+      expect(localStorage.getItem("open-inspect-active-team")).toBe("all-teams");
+    }
+  );
+
+  it("fails closed when workspace capabilities are missing even for an owner", async () => {
+    roleKey = "owner";
+    canListAllTeams = undefined;
     localStorage.setItem("open-inspect-active-team", "all-teams");
     const { result } = renderHook(useActiveTeam, { wrapper });
     await waitFor(() => expect(result.current.loading).toBe(false));
-    expect(result.current.scope).toBe("all");
-    expect(localStorage.getItem("open-inspect-active-team")).toBe("all-teams");
+    expect(result.current.scope).toBeUndefined();
+    expect(localStorage.getItem("open-inspect-active-team")).toBe("all-my-teams");
   });
 
   it.each(["owner", "administrator"])(
-    "reconciles All teams after a %s is demoted without restoring it on a later promotion",
+    "reconciles All teams after server revocation for a %s without restoring it on a later grant",
     async (role) => {
       roleKey = role;
+      canListAllTeams = true;
       localStorage.setItem("open-inspect-active-team", "all-teams");
       const { result } = renderHook(
         () => ({ context: useActiveTeam(), mutate: useSWRConfig().mutate }),
         { wrapper }
       );
       await waitFor(() => expect(result.current.context.scope).toBe("all"));
-      roleKey = "member";
+      canListAllTeams = false;
       await act(async () => {
-        await result.current.mutate(currentUserAuthorizationKey(USER_ID));
+        await result.current.mutate(meTeamsKey(USER_ID));
       });
       expect(result.current.context.scope).toBeUndefined();
       expect(localStorage.getItem("open-inspect-active-team")).toBe("all-my-teams");
 
-      roleKey = role;
+      canListAllTeams = true;
       await act(async () => {
-        await result.current.mutate(currentUserAuthorizationKey(USER_ID));
+        await result.current.mutate(meTeamsKey(USER_ID));
       });
       expect(result.current.context.scope).toBeUndefined();
       expect(localStorage.getItem("open-inspect-active-team")).toBe("all-my-teams");
@@ -296,42 +313,68 @@ describe("active team context", () => {
     }
   );
 
-  it("waits for authorization before reconciling a stored aggregate scope", async () => {
+  it("waits for workspace capabilities before reconciling a stored aggregate scope", async () => {
     roleKey = "owner";
+    canListAllTeams = true;
     localStorage.setItem("open-inspect-active-team", "all-teams");
-    let resolveAuthorization: ((response: Response) => void) | undefined;
-    const pendingAuthorization = new Promise<Response>((resolve) => {
-      resolveAuthorization = resolve;
+    let resolveMemberships: ((response: Response) => void) | undefined;
+    const pendingMemberships = new Promise<Response>((resolve) => {
+      resolveMemberships = resolve;
     });
     vi.mocked(browserApiFetch).mockImplementation(async (path) =>
-      path === "/api/me/authorization" ? pendingAuthorization : membershipsResponse()
+      path === "/api/me/teams" ? pendingMemberships : authorizationResponse()
     );
     const { result } = renderHook(useActiveTeam, { wrapper });
-    await waitFor(() => expect(result.current.teams).toHaveLength(2));
     expect(result.current.loading).toBe(true);
     expect(result.current.scope).toBeUndefined();
     expect(localStorage.getItem("open-inspect-active-team")).toBe("all-teams");
 
     await act(async () => {
-      resolveAuthorization?.(authorizationResponse());
+      resolveMemberships?.(membershipsResponse());
     });
     await waitFor(() => expect(result.current.loading).toBe(false));
     expect(result.current.scope).toBe("all");
     expect(localStorage.getItem("open-inspect-active-team")).toBe("all-teams");
   });
 
-  it("blocks context readiness when authorization fails without discarding the preference", async () => {
+  it("blocks context readiness when workspace capabilities fail without discarding the preference", async () => {
     localStorage.setItem("open-inspect-active-team", "all-teams");
     vi.mocked(browserApiFetch).mockImplementation(async (path) =>
-      path === "/api/me/authorization"
+      path === "/api/me/teams"
         ? Response.json({ error: "Unavailable" }, { status: 503 })
-        : membershipsResponse()
+        : authorizationResponse()
     );
     const { result } = renderHook(useActiveTeam, { wrapper });
     await waitFor(() => expect(result.current.error).toBeTruthy());
     expect(result.current.scope).toBeUndefined();
     expect(localStorage.getItem("open-inspect-active-team")).toBe("all-teams");
   });
+
+  it.each([503, 403, "invalid-schema"] as const)(
+    "trusts a cached All teams grant only for retryable refresh failure %s",
+    async (failure) => {
+      canListAllTeams = true;
+      localStorage.setItem("open-inspect-active-team", "all-teams");
+      const { result } = renderHook(
+        () => ({ context: useActiveTeam(), mutate: useSWRConfig().mutate }),
+        { wrapper }
+      );
+      await waitFor(() => expect(result.current.context.scope).toBe("all"));
+      vi.mocked(browserApiFetch).mockResolvedValue(
+        failure === "invalid-schema"
+          ? Response.json({ teams: [], capabilities: { canListAllTeams: "true" } })
+          : Response.json({ error: "Unavailable" }, { status: failure })
+      );
+      await act(async () => {
+        await result.current.mutate(meTeamsKey(USER_ID));
+      });
+      expect(result.current.context.scope).toBe(failure === 503 ? "all" : undefined);
+      expect(Boolean(result.current.context.error)).toBe(failure !== 503);
+      expect(localStorage.getItem("open-inspect-active-team")).toBe(
+        failure === 503 ? "all-teams" : "all-my-teams"
+      );
+    }
+  );
 
   it("reconciles a stored team against active memberships and loads the creation setting", async () => {
     localStorage.setItem("open-inspect-active-team", "team_beta");

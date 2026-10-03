@@ -678,6 +678,8 @@ async function enforceTeamRequirement(
       {
         userId: viewer.userId,
         roleKey: viewer.roleKey,
+        suspended: viewer.suspended,
+        permissions: viewer.permissions,
         memberships: viewer.memberships,
       },
       { ...team, leadCount: await memberships.countLeads(teamId) }

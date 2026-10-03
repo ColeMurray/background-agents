@@ -92,7 +92,8 @@ describe("scope refresh with real SWR caches", () => {
   it.each(
     [
       buildSessionsPageKey({ teamIds: ["team_source", "team_target"], offset: 100 }),
-      "/api/teams",
+      ["/api/teams", "viewer"],
+      ["/api/teams/team_source", "viewer"],
       "/api/teams/team_source/sessions?cursor=page2",
       ["/api/teams/team_source/sessions?bucket=finished", "viewer"],
       "/api/activity?teamId=team_source",
@@ -203,7 +204,7 @@ describe("scope refresh with real SWR caches", () => {
         const inbox = useSWR(["/api/sessions/inbox?mine=true", "viewer"], ([path]) =>
           fetchPage(path)
         );
-        const teams = useSWR("/api/teams", fetchPage);
+        const teams = useSWR(["/api/teams", "viewer"], ([path]) => fetchPage(path));
         const sourceBucket = useSWR(
           "/api/teams/team_source/sessions?bucket=in_progress",
           fetchPage
