@@ -74,28 +74,64 @@ describe("useAnalyticsDashboard", () => {
 
   it("uses one SWR resource per range and scope and retains a complete cached snapshot on failure", () => {
     const error = new Error("refresh failed");
-    vi.mocked(useSWR).mockReturnValue({ data: snapshot, error, isLoading: false } as never);
+    vi.mocked(useSWR).mockReturnValue({
+      data: snapshot,
+      error,
+      isLoading: false,
+      isValidating: false,
+    } as never);
 
-    const { result } = renderHook(() => useAnalyticsDashboard(30, "agent"));
+    const { result } = renderHook(() => useAnalyticsDashboard(30, "human"));
 
     expect(useSWR).toHaveBeenCalledTimes(1);
-    expect(useSWR).toHaveBeenCalledWith("/api/analytics/dashboard?days=30&scope=agent", {
+    expect(useSWR).toHaveBeenCalledWith("/api/analytics/dashboard?days=30&scope=human", {
       refreshInterval: ANALYTICS_REFRESH_INTERVAL_MS,
+      keepPreviousData: true,
     });
-    expect(result.current).toMatchObject({
-      summary: snapshot.summary,
-      sessionOrigins: snapshot.sessionOrigins,
-      timeseries: snapshot.timeseries,
-      repoBreakdown: snapshot.breakdowns.repository,
-      userBreakdown: snapshot.breakdowns.user,
-      modelBreakdown: snapshot.breakdowns.model,
-      harnessBreakdown: snapshot.breakdowns.harness,
-      providerBreakdown: snapshot.breakdowns.provider,
-      automationBreakdown: snapshot.breakdowns.automation,
-      runs: snapshot.runs,
-      pullRequests: snapshot.pullRequests,
+    expect(result.current).toEqual({
+      dashboard: snapshot,
       loading: false,
+      stale: false,
+      validating: false,
       error,
+    });
+  });
+
+  it("marks the previous range's snapshot as stale while the requested one loads", () => {
+    vi.mocked(useSWR).mockReturnValue({ data: snapshot, isLoading: true } as never);
+
+    expect(renderHook(() => useAnalyticsDashboard(7, "human")).result.current).toMatchObject({
+      dashboard: snapshot,
+      loading: false,
+      stale: true,
+    });
+    expect(renderHook(() => useAnalyticsDashboard(30, "agent")).result.current.stale).toBe(true);
+  });
+
+  it("keeps a failed range change's previous snapshot stale but not in flight", () => {
+    const error = new Error("range failed");
+    vi.mocked(useSWR).mockReturnValue({
+      data: snapshot,
+      error,
+      isLoading: false,
+      isValidating: false,
+    } as never);
+
+    expect(renderHook(() => useAnalyticsDashboard(7, "human")).result.current).toMatchObject({
+      dashboard: snapshot,
+      stale: true,
+      validating: false,
+      error,
+    });
+  });
+
+  it("reports loading only while there is nothing to show", () => {
+    vi.mocked(useSWR).mockReturnValue({ data: undefined, isLoading: true } as never);
+
+    expect(renderHook(() => useAnalyticsDashboard(30, "human")).result.current).toMatchObject({
+      dashboard: undefined,
+      loading: true,
+      stale: false,
     });
   });
 
@@ -107,6 +143,7 @@ describe("useAnalyticsDashboard", () => {
 
     expect(useSWR).toHaveBeenCalledWith(null, {
       refreshInterval: ANALYTICS_REFRESH_INTERVAL_MS,
+      keepPreviousData: true,
     });
   });
 });

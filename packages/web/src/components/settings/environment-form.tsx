@@ -29,7 +29,8 @@ export interface EnvironmentFormValues {
   name: string;
   description: string | null;
   prebuildEnabled: boolean;
-  repositories: RepositoryInput[];
+  /** Omitted when an edit leaves the selection unchanged, so it is not revalidated as a replacement. */
+  repositories?: RepositoryInput[];
 }
 
 /**
@@ -126,20 +127,33 @@ export function EnvironmentForm({
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (!canSubmit) return;
+    const repositories = selectedKeys.map((key) => {
+      const entry: RepositoryInput = parseRepositoryFullName(key) ?? {
+        repoOwner: "",
+        repoName: "",
+      };
+      const branch = branchByKey[key]?.trim();
+      if (branch) entry.baseBranch = branch;
+      return entry;
+    });
+    const initialRepositories = initialValues?.repositories ?? [];
+    const repositoriesUnchanged =
+      mode === "edit" &&
+      repositories.length === initialRepositories.length &&
+      repositories.every(
+        (repository, index) =>
+          selectedKeys[index] ===
+            repositorySelectionKey(
+              initialRepositories[index].repoOwner,
+              initialRepositories[index].repoName
+            ) && (repository.baseBranch ?? "") === initialRepositories[index].baseBranch
+      );
     onSubmit({
       ...(mode === "create" ? { teamId } : {}),
       name: name.trim(),
       description: description.trim() ? description.trim() : null,
       prebuildEnabled,
-      repositories: selectedKeys.map((key) => {
-        const entry: RepositoryInput = parseRepositoryFullName(key) ?? {
-          repoOwner: "",
-          repoName: "",
-        };
-        const branch = branchByKey[key]?.trim();
-        if (branch) entry.baseBranch = branch;
-        return entry;
-      }),
+      ...(repositoriesUnchanged ? {} : { repositories }),
     });
   };
 

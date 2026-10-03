@@ -274,13 +274,12 @@ export class AnalyticsStore {
       .prepare(
         `SELECT
            s.created_at / ${MS_PER_DAY} AS day_index,
-           COALESCE(MAX(NULLIF(u.display_name, '')), MAX(NULLIF(s.scm_login, '')), '__unknown__') AS group_key,
+           ${USER_KEY_EXPRESSION} AS group_key,
            COUNT(*) AS count
          FROM sessions s
-         LEFT JOIN users u ON s.user_id = u.id
          WHERE s.created_at >= ? AND s.created_at < ?
               ${sql} ${visible.sql ? `AND ${visible.sql}` : ""}
-         GROUP BY day_index, COALESCE(s.user_id, '__unlinked__' || COALESCE(s.scm_login, '__none__'))
+         GROUP BY day_index, group_key
          ORDER BY day_index ASC, group_key ASC`
       )
       .bind(filters.startAt, filters.endAt, ...binds, ...visible.params);

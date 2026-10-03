@@ -13,8 +13,9 @@ import {
 import type { SqlStatement } from "../db/sql-database";
 import { AnalyticsStore } from "../db/analytics-store";
 import { AnalyticsDashboardStore } from "../db/analytics-dashboard-store";
+import { DEFAULT_ANALYTICS_DAYS } from "@open-inspect/shared/types/analytics";
 import { SessionRunStore } from "../db/session-run-store";
-import { analyticsRoutes, DEFAULT_ANALYTICS_DAYS } from "./analytics";
+import { analyticsRoutes } from "./analytics";
 
 const FIXED_NOW = 1_700_000_000_000;
 const mockDashboardStore = { get: vi.fn() };

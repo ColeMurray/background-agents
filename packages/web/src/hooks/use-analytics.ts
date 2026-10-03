@@ -9,24 +9,22 @@ import { ANALYTICS_REFRESH_INTERVAL_MS } from "@/lib/analytics";
 
 export function useAnalyticsDashboard(days: AnalyticsDays, scope: AnalyticsScope) {
   const { data: session } = useAuthSession();
-  const dashboard = useSWR<AnalyticsDashboardResponse>(
+  const { data, error, isLoading, isValidating } = useSWR<AnalyticsDashboardResponse>(
     session ? `/api/analytics/dashboard?days=${days}&scope=${scope}` : null,
-    { refreshInterval: ANALYTICS_REFRESH_INTERVAL_MS }
+    // Keep the last snapshot on screen while another range or scope loads.
+    { refreshInterval: ANALYTICS_REFRESH_INTERVAL_MS, keepPreviousData: true }
   );
 
   return {
-    summary: dashboard.data?.summary,
-    sessionOrigins: dashboard.data?.sessionOrigins,
-    timeseries: dashboard.data?.timeseries,
-    repoBreakdown: dashboard.data?.breakdowns.repository,
-    userBreakdown: dashboard.data?.breakdowns.user,
-    modelBreakdown: dashboard.data?.breakdowns.model,
-    harnessBreakdown: dashboard.data?.breakdowns.harness,
-    providerBreakdown: dashboard.data?.breakdowns.provider,
-    automationBreakdown: dashboard.data?.breakdowns.automation,
-    runs: dashboard.data?.runs,
-    pullRequests: dashboard.data?.pullRequests,
-    loading: !dashboard.data && dashboard.isLoading,
-    error: dashboard.error,
+    dashboard: data,
+    loading: !data && isLoading,
+    /**
+     * The snapshot belongs to another range or scope: kept on screen while the
+     * requested one loads, and still there if that request failed.
+     */
+    stale: Boolean(data && (data.window.days !== days || data.window.scope !== scope)),
+    /** A request is in flight, whether a first load, a key change, a retry, or a refresh. */
+    validating: isValidating,
+    error,
   };
 }

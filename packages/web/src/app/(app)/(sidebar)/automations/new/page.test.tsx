@@ -40,7 +40,8 @@ vi.mock("@/hooks/use-teams", () => ({
 }));
 vi.mock("@/hooks/use-current-user-authorization", () => ({
   useCurrentUserAuthorization: () => ({
-    hasPermission: (permission: string) => permission === "automations.create" && canCreate,
+    hasPermission: (permission: string) =>
+      canCreate && (permission === "automations.create" || permission === "sessions.create"),
     loading: false,
   }),
 }));
