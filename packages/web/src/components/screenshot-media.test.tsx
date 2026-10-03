@@ -8,6 +8,7 @@ import * as matchers from "@testing-library/jest-dom/matchers";
 import { MediaLightbox } from "./media-lightbox";
 import { ScreenshotArtifactCard } from "./screenshot-artifact-card";
 import { MediaSection } from "./sidebar/media-section";
+import type { Artifact } from "@/types/session";
 
 expect.extend(matchers);
 
@@ -84,24 +85,47 @@ describe("ScreenshotArtifactCard", () => {
   });
 });
 
+const screenshotArtifact: Artifact = {
+  id: "artifact-1",
+  type: "screenshot",
+  url: "sessions/session-1/media/artifact-1.png",
+  metadata: {
+    caption: "Checkout page",
+    sourceUrl: "https://app.example.com/checkout",
+  },
+  createdAt: 1234,
+};
+
+const videoArtifact: Artifact = {
+  id: "artifact-video-1",
+  type: "video",
+  url: "sessions/session-1/media/artifact-video-1.mp4",
+  metadata: {
+    caption: "Checkout flow",
+    sourceUrl: "https://app.example.com/checkout",
+    durationMs: 3000,
+    dimensions: { width: 1280, height: 720 },
+  },
+  createdAt: 1235,
+};
+
+const confirmationArtifact: Artifact = {
+  id: "artifact-2",
+  type: "screenshot",
+  url: "sessions/session-1/media/artifact-2.png",
+  metadata: { caption: "Confirmation page" },
+  createdAt: 1236,
+};
+
 describe("MediaLightbox", () => {
   it("renders the selected screenshot preview", () => {
-    const onOpenChange = vi.fn();
+    const onSelectArtifact = vi.fn();
     render(
       <MediaLightbox
         sessionId="session-1"
-        artifact={{
-          id: "artifact-1",
-          type: "screenshot",
-          url: "sessions/session-1/media/artifact-1.png",
-          metadata: {
-            caption: "Checkout page",
-            sourceUrl: "https://app.example.com/checkout",
-          },
-          createdAt: 1234,
-        }}
-        open={true}
-        onOpenChange={onOpenChange}
+        artifacts={[screenshotArtifact]}
+        selectedArtifactId="artifact-1"
+        onSelectArtifact={onSelectArtifact}
       />
     );
 
@@ -114,29 +138,19 @@ describe("MediaLightbox", () => {
       "src",
       "/api/sessions/session-1/media/artifact-1"
     );
+    expect(screen.queryByRole("button", { name: "Next media" })).not.toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: "Close media viewer" }));
-    expect(onOpenChange).toHaveBeenCalledWith(false);
+    expect(onSelectArtifact).toHaveBeenCalledWith(null);
   });
 
   it("renders the selected video preview with controls", () => {
     render(
       <MediaLightbox
         sessionId="session-1"
-        artifact={{
-          id: "artifact-video-1",
-          type: "video",
-          url: "sessions/session-1/media/artifact-video-1.mp4",
-          metadata: {
-            caption: "Checkout flow",
-            sourceUrl: "https://app.example.com/checkout",
-            durationMs: 3000,
-            dimensions: { width: 1280, height: 720 },
-          },
-          createdAt: 1234,
-        }}
-        open={true}
-        onOpenChange={vi.fn()}
+        artifacts={[videoArtifact]}
+        selectedArtifactId="artifact-video-1"
+        onSelectArtifact={vi.fn()}
       />
     );
 
@@ -148,8 +162,20 @@ describe("MediaLightbox", () => {
   });
 
   it("renders loading and empty states distinctly", () => {
+    const loadingArtifact: Artifact = {
+      id: "artifact-1",
+      type: "screenshot",
+      url: null,
+      metadata: { caption: "Loading shot" },
+      createdAt: 1234,
+    };
     const { rerender } = render(
-      <MediaLightbox sessionId="session-1" artifact={null} open={true} onOpenChange={vi.fn()} />
+      <MediaLightbox
+        sessionId="session-1"
+        artifacts={[loadingArtifact]}
+        selectedArtifactId="missing-artifact"
+        onSelectArtifact={vi.fn()}
+      />
     );
 
     expect(screen.getByText("No media selected")).toBeInTheDocument();
@@ -157,15 +183,9 @@ describe("MediaLightbox", () => {
     rerender(
       <MediaLightbox
         sessionId="session-1"
-        artifact={{
-          id: "artifact-1",
-          type: "screenshot",
-          url: null,
-          metadata: { caption: "Loading shot" },
-          createdAt: 1234,
-        }}
-        open={true}
-        onOpenChange={vi.fn()}
+        artifacts={[loadingArtifact]}
+        selectedArtifactId="artifact-1"
+        onSelectArtifact={vi.fn()}
       />
     );
 
@@ -176,20 +196,87 @@ describe("MediaLightbox", () => {
     render(
       <MediaLightbox
         sessionId="session-1"
-        artifact={{
-          id: "artifact-1",
-          type: "screenshot",
-          url: null,
-          metadata: { caption: "Broken shot" },
-          createdAt: 1234,
-        }}
-        open={true}
-        onOpenChange={vi.fn()}
+        artifacts={[
+          {
+            id: "artifact-1",
+            type: "screenshot",
+            url: null,
+            metadata: { caption: "Broken shot" },
+            createdAt: 1234,
+          },
+        ]}
+        selectedArtifactId="artifact-1"
+        onSelectArtifact={vi.fn()}
       />
     );
 
     fireEvent.error(screen.getByAltText("Broken shot"));
     expect(screen.getByText("Preview unavailable")).toBeInTheDocument();
+  });
+
+  it("navigates between artifacts with the arrow keys and stops at the ends", () => {
+    const artifacts = [screenshotArtifact, videoArtifact, confirmationArtifact];
+    const onSelectArtifact = vi.fn();
+    const { rerender } = render(
+      <MediaLightbox
+        sessionId="session-1"
+        artifacts={artifacts}
+        selectedArtifactId="artifact-video-1"
+        onSelectArtifact={onSelectArtifact}
+      />
+    );
+
+    expect(screen.getByText("2 of 3")).toBeInTheDocument();
+    fireEvent.keyDown(window, { key: "ArrowRight" });
+    expect(onSelectArtifact).toHaveBeenLastCalledWith("artifact-2");
+    fireEvent.keyDown(window, { key: "ArrowLeft" });
+    expect(onSelectArtifact).toHaveBeenLastCalledWith("artifact-1");
+
+    rerender(
+      <MediaLightbox
+        sessionId="session-1"
+        artifacts={artifacts}
+        selectedArtifactId="artifact-2"
+        onSelectArtifact={onSelectArtifact}
+      />
+    );
+    onSelectArtifact.mockClear();
+    expect(screen.getByText("Confirmation page")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Next media" })).toBeDisabled();
+    fireEvent.keyDown(window, { key: "ArrowRight" });
+    expect(onSelectArtifact).not.toHaveBeenCalled();
+  });
+
+  it("navigates with the previous and next buttons", () => {
+    const onSelectArtifact = vi.fn();
+    render(
+      <MediaLightbox
+        sessionId="session-1"
+        artifacts={[screenshotArtifact, confirmationArtifact]}
+        selectedArtifactId="artifact-1"
+        onSelectArtifact={onSelectArtifact}
+      />
+    );
+
+    expect(screen.getByRole("button", { name: "Previous media" })).toBeDisabled();
+    fireEvent.click(screen.getByRole("button", { name: "Next media" }));
+    expect(onSelectArtifact).toHaveBeenCalledWith("artifact-2");
+  });
+
+  it("leaves arrow keys to a focused video and ignores modified arrow keys", () => {
+    const onSelectArtifact = vi.fn();
+    render(
+      <MediaLightbox
+        sessionId="session-1"
+        artifacts={[videoArtifact, confirmationArtifact]}
+        selectedArtifactId="artifact-video-1"
+        onSelectArtifact={onSelectArtifact}
+      />
+    );
+
+    fireEvent.keyDown(screen.getByLabelText("Checkout flow video"), { key: "ArrowRight" });
+    fireEvent.keyDown(window, { key: "ArrowRight", metaKey: true });
+    expect(onSelectArtifact).not.toHaveBeenCalled();
   });
 });
 
