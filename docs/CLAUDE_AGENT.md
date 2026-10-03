@@ -194,6 +194,9 @@ fix instead.
   groups the sub-agent's activity under it the same way. Background sub-agents would let the turn
   end before their work is done and deliver their findings on a later turn nobody reads; as a second
   guard, the harness ignores the result of any turn it did not submit.
+- **Memory.** The child runs with `CLAUDE_CODE_DISABLE_AUTO_MEMORY=1`, so Claude Code's file-based
+  auto memory (the `memory/` directory under `CLAUDE_CONFIG_DIR` and its system-prompt section) is
+  off. Open-Inspect's memory tools are the agent's only memory system.
 - **Follow-ups queue.** Both harnesses hold follow-up prompts until the running turn completes.
 - **Image.** The sandbox image pins `claude-agent-sdk`, whose wheel bundles the `claude` binary. The
   runtime manifest's `harnessMinimumGeneration` controls which prepared images new Claude sessions

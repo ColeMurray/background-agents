@@ -1,12 +1,12 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { anthropicMessagesResponseSchema, classifyRepo, classifyToolInputSchema } from "./index";
 import {
   CLASSIFICATION_REQUEST_TIMEOUT_MS,
   OPENAI_CLASSIFICATION_MAX_COMPLETION_TOKENS,
 } from "@open-inspect/shared/classification";
-import { clearReposLocalCache } from "./repos";
+import { getAvailableRepos } from "./repos";
 import { createFakeKV, makeLinearBotEnv } from "../test-helpers";
-import type { Env } from "../types";
+import type { Env, LinearChannelScope } from "../types";
 
 describe("anthropicMessagesResponseSchema", () => {
   it("parses a response with the consumed tool block fields", () => {
@@ -111,9 +111,13 @@ describe("classifyRepo provider dispatch", () => {
     } as unknown as Fetcher;
   }
 
-  function classify(env: Env) {
+  async function classify(
+    env: Env,
+    scope: LinearChannelScope = { linearTeamId: "external-team-1" }
+  ) {
     return classifyRepo(
       env,
+      await getAvailableRepos(env, scope, traceId),
       "Fix the login bug",
       "Users cannot log in",
       ["bug"],
@@ -140,8 +144,120 @@ describe("classifyRepo provider dispatch", () => {
   }
 
   beforeEach(() => {
-    clearReposLocalCache();
     vi.unstubAllGlobals();
+    vi.spyOn(Date, "now").mockReturnValue(1_700_000_000_000);
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+  });
+
+  it("builds the prompt and matches candidates only from the team's catalog", async () => {
+    const { kv } = createFakeKV();
+    const catalog = twoRepoControlPlane();
+    const fetch = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+      const response = await catalog.fetch(input, init);
+      const body = (await response.json()) as {
+        repos: Array<{ name: string; fullName: string }>;
+      };
+      expect(new URL(String(input)).searchParams.get("channel")).toBe("linear:external-team-1");
+      expect(new Headers(init?.headers).get("X-OpenInspect-Actor")).toBe("linear:user-1");
+      body.repos = body.repos.map((repo) => ({
+        ...repo,
+        name: `allowed-${repo.name}`,
+        fullName: `acme/allowed-${repo.name}`,
+      }));
+      return Response.json(body);
+    });
+    const env = makeLinearBotEnv(kv, { CONTROL_PLANE: { fetch } });
+    const fetchMock = vi.fn<typeof globalThis.fetch>(async () =>
+      Response.json({
+        content: [
+          {
+            type: "tool_use",
+            name: "classify_repository",
+            input: {
+              repoId: "acme/alpha",
+              confidence: "high",
+              reasoning: "Matches",
+              alternatives: ["acme/allowed-beta", "acme/beta"],
+            },
+          },
+        ],
+      })
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await classify(env, { linearTeamId: "external-team-1", actorUserId: "user-1" });
+
+    expect(result.repo).toBeNull();
+    expect(result.alternatives?.map((repo) => repo.id)).toEqual(["acme/allowed-beta"]);
+    expect(result.needsClarification).toBe(true);
+    const body = JSON.parse(fetchMock.mock.calls[0][1]!.body as string);
+    expect(body.messages[0].content).toContain("**acme/allowed-alpha**");
+    expect(body.messages[0].content).toContain("**acme/allowed-beta**");
+    expect(body.messages[0].content).not.toContain("**acme/alpha**");
+    expect(body.messages[0].content).not.toContain("**acme/beta**");
+    expect(fetch).toHaveBeenCalledOnce();
+  });
+
+  it("uses one scoped catalog snapshot for the prompt, matching, and alternatives", async () => {
+    const { kv } = createFakeKV();
+    const catalog = twoRepoControlPlane();
+    let reads = 0;
+    const fetch = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+      reads += 1;
+      return reads === 1
+        ? catalog.fetch(input, init)
+        : Response.json({ repos: [], cached: false, cachedAt: "2026-08-02T00:00:00.000Z" });
+    });
+    const fetchMock = vi.fn<typeof globalThis.fetch>(async () =>
+      Response.json({
+        content: [
+          {
+            type: "tool_use",
+            name: "classify_repository",
+            input: {
+              repoId: "acme/alpha",
+              confidence: "high",
+              reasoning: "Matches",
+              alternatives: ["acme/beta"],
+            },
+          },
+        ],
+      })
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await classify(makeLinearBotEnv(kv, { CONTROL_PLANE: { fetch } }), {
+      linearTeamId: "external-team-1",
+    });
+
+    expect(result.repo?.id).toBe("acme/alpha");
+    expect(result.alternatives?.map((repo) => repo.id)).toEqual(["acme/beta"]);
+    const body = JSON.parse(String(fetchMock.mock.calls[0][1]?.body));
+    expect(body.messages[0].content).toContain("**acme/alpha**");
+    expect(body.messages[0].content).toContain("**acme/beta**");
+    expect(fetch).toHaveBeenCalledOnce();
+  });
+
+  it("propagates a scoped catalog denial instead of clarifying", async () => {
+    const { kv } = createFakeKV();
+    const fetch = vi.fn(async (input: string | URL | Request) => {
+      expect(new URL(String(input)).searchParams.get("channel")).toBe("linear:external-team-1");
+      return new Response(null, { status: 403 });
+    });
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(
+      classify(makeLinearBotEnv(kv, { CONTROL_PLANE: { fetch } }), {
+        linearTeamId: "external-team-1",
+      })
+    ).rejects.toThrow();
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(kv.get).not.toHaveBeenCalled();
   });
 
   it("sends a spec-compliant OpenAI request when CLASSIFICATION_MODEL selects an OpenAI model", async () => {
@@ -182,6 +298,7 @@ describe("classifyRepo provider dispatch", () => {
     expect(body.model).toBe("gpt-5.4-mini");
     // gpt-5-family models reject an explicit temperature with HTTP 400.
     expect(body).not.toHaveProperty("temperature");
+    expect(body).not.toHaveProperty("reasoning_effort");
     expect(body.max_completion_tokens).toBe(OPENAI_CLASSIFICATION_MAX_COMPLETION_TOKENS);
     expect(body).not.toHaveProperty("max_tokens");
     expect(body.response_format.type).toBe("json_schema");
@@ -190,6 +307,40 @@ describe("classifyRepo provider dispatch", () => {
     expect(schema.additionalProperties).toBe(false);
     expect(schema.required).toEqual(["repoId", "confidence", "reasoning", "alternatives"]);
     expect(schema.properties.repoId.type).toEqual(["string", "null"]);
+  });
+
+  it("sends CLASSIFICATION_REASONING_EFFORT as reasoning_effort", async () => {
+    const { kv } = createFakeKV();
+    const env = makeLinearBotEnv(kv, {
+      CONTROL_PLANE: twoRepoControlPlane(),
+      CLASSIFICATION_MODEL: "openai/gpt-6.1-sol",
+      CLASSIFICATION_REASONING_EFFORT: "low",
+      OPENAI_API_KEY: "openai-key",
+    });
+
+    const fetchMock = vi.fn<typeof fetch>(async () =>
+      Response.json({
+        choices: [
+          {
+            message: {
+              content: JSON.stringify({
+                repoId: "acme/alpha",
+                confidence: "high",
+                reasoning: "Matches",
+                alternatives: [],
+              }),
+            },
+          },
+        ],
+      })
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await classify(env);
+
+    const body = JSON.parse(fetchMock.mock.calls[0][1]!.body as string);
+    expect(body.model).toBe("gpt-6.1-sol");
+    expect(body.reasoning_effort).toBe("low");
   });
 
   it("degrades to a clarification result with alternatives on a non-2xx OpenAI response", async () => {

@@ -1,11 +1,20 @@
 import { describe, it, expect } from "vitest";
 import { normalizeGitHubEvent } from "./normalizer";
-import { GITHUB_WEBHOOK_EVENT_CATALOG } from "./webhook-types";
-import type { GitHubAutomationEvent } from "../types";
+import {
+  GITHUB_WEBHOOK_EVENT_CATALOG,
+  checkSuiteEventSchema,
+  issueCommentEventSchema,
+  issuesEventSchema,
+  pullRequestEventSchema,
+  pullRequestReviewCommentEventSchema,
+  workflowRunEventSchema,
+} from "./webhook-types";
+import { githubAutomationEventSchema, type GitHubAutomationEvent } from "../types";
 
 // ─── Shared fixture data ───────────────────────────────────────────────────────
 
 const repo = {
+  id: 9001,
   name: "my-app",
   owner: { login: "acme-org" },
 };
@@ -803,6 +812,101 @@ const CATALOG_PAYLOADS: Record<string, [event: string, payload: Record<string, u
   ],
   "issues.labeled": ["issues", issuesLabeledPayload],
 };
+
+const RAW_EVENT_SCHEMAS = {
+  pull_request: pullRequestEventSchema,
+  issue_comment: issueCommentEventSchema,
+  pull_request_review_comment: pullRequestReviewCommentEventSchema,
+  check_suite: checkSuiteEventSchema,
+  workflow_run: workflowRunEventSchema,
+  issues: issuesEventSchema,
+} as const;
+
+describe("GitHub repository routing identity", () => {
+  it.each(Object.entries(CATALOG_PAYLOADS))(
+    "%s carries the numeric repository id through normalization and schema boundaries",
+    (eventType, [header, payload]) => {
+      const schema = RAW_EVENT_SCHEMAS[header as keyof typeof RAW_EVENT_SCHEMAS];
+      for (const repositoryId of [1, repo.id, Number.MAX_SAFE_INTEGER]) {
+        const raw = { ...payload, repository: { ...repo, id: repositoryId } };
+        expect(schema.parse(raw).repository).toHaveProperty("id", repositoryId);
+
+        const event = normalizeGitHubEvent(header, raw);
+        expect(event).toMatchObject({
+          eventType,
+          repositoryId,
+          repoOwner: repo.owner.login,
+          repoName: repo.name,
+          actor: sender.login,
+        });
+        expect(githubAutomationEventSchema.parse(event)).toEqual(event);
+      }
+    }
+  );
+
+  it.each(Object.entries(CATALOG_PAYLOADS))(
+    "%s rejects missing or invalid repository ids without falling back to owner/name",
+    (_eventType, [header, payload]) => {
+      const schema = RAW_EVENT_SCHEMAS[header as keyof typeof RAW_EVENT_SCHEMAS];
+      const invalidRepositories = [
+        undefined,
+        null,
+        {},
+        { name: repo.name, owner: repo.owner },
+        ...[
+          undefined,
+          null,
+          String(repo.id),
+          0,
+          -1,
+          1.5,
+          Number.MAX_SAFE_INTEGER + 1,
+          NaN,
+          Infinity,
+        ].map((id) => ({ ...repo, id })),
+      ];
+
+      for (const repository of invalidRepositories) {
+        const raw = { ...payload, repository };
+        expect(schema.safeParse(raw).success).toBe(false);
+        expect(normalizeGitHubEvent(header, raw)).toBeNull();
+      }
+    }
+  );
+
+  it("preserves routing identity when a repository is renamed or transferred", () => {
+    const event = normalizeGitHubEvent("pull_request", {
+      ...pullRequestOpenedPayload,
+      repository: { ...repo, name: "renamed-app", owner: { login: "new-org" } },
+    });
+
+    expect(event).toMatchObject({
+      repositoryId: repo.id,
+      repoOwner: "new-org",
+      repoName: "renamed-app",
+    });
+  });
+
+  it("does not substitute the PR base repository id for a missing webhook repository id", () => {
+    expect(
+      normalizeGitHubEvent("pull_request", {
+        ...pullRequestOpenedPayload,
+        repository: { name: repo.name, owner: repo.owner },
+        pull_request: { ...basePR, base: { ...basePR.base, repo: { id: repo.id } } },
+      })
+    ).toBeNull();
+  });
+
+  it("still accepts an absent sender without guessing an actor", () => {
+    const event = normalizeGitHubEvent("pull_request", {
+      ...pullRequestOpenedPayload,
+      sender: undefined,
+    });
+
+    expect(event).toMatchObject({ repositoryId: repo.id });
+    expect(event?.actor).toBeUndefined();
+  });
+});
 
 describe("GITHUB_WEBHOOK_EVENT_CATALOG supportedConditions", () => {
   it.each(GITHUB_WEBHOOK_EVENT_CATALOG.map((entry) => [`${entry.event}.${entry.action}`, entry]))(

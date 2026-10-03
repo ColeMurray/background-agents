@@ -105,12 +105,16 @@ export const openAiChatCompletionEnvelopeSchema = z.object({
  *
  * No `temperature` is sent — gpt-5-family models accept only the default and
  * reject an explicit value with HTTP 400 `unsupported_value`.
+ *
+ * `reasoningEffort` is sent as `reasoning_effort` only when set; otherwise
+ * OpenAI applies the model's default effort.
  */
 export async function callOpenAIStructured(
   apiKey: string,
   model: string,
   prompt: string,
-  schema: { name: string; schema: unknown }
+  schema: { name: string; schema: unknown },
+  reasoningEffort?: string
 ): Promise<unknown> {
   const response = await fetch("https://api.openai.com/v1/chat/completions", {
     method: "POST",
@@ -120,6 +124,7 @@ export async function callOpenAIStructured(
     },
     body: JSON.stringify({
       model,
+      ...(reasoningEffort ? { reasoning_effort: reasoningEffort } : {}),
       max_completion_tokens: OPENAI_CLASSIFICATION_MAX_COMPLETION_TOKENS,
       messages: [{ role: "user", content: prompt }],
       response_format: {

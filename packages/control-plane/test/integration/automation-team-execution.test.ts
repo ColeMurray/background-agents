@@ -196,9 +196,8 @@ describe("automation team execution (integration)", () => {
     async function expectDeniedLaunch(automationId: string, reason: string) {
       expect(await fetchRuns(automationId)).toEqual([
         expect.objectContaining({
-          status: "skipped",
-          skip_reason: reason,
-          failure_reason: null,
+          status: "unauthorized",
+          failure_reason: reason,
           session_id: null,
         }),
       ]);
@@ -242,7 +241,7 @@ describe("automation team execution (integration)", () => {
           limit: 10,
           offset: 0,
         });
-        expect(invocations).toEqual([expect.objectContaining({ status: "skipped" })]);
+        expect(invocations).toEqual([expect.objectContaining({ status: "unauthorized" })]);
         // Two failures are already on record; a strike here would auto-pause at three.
         expect(await new AutomationStore(env.DB).getById(row.id)).toMatchObject({
           enabled: 1,

@@ -90,6 +90,8 @@ export const AUDIT_OPERATION_ACTIONS = [
   "team.member_role_changed",
   "team.member_removed",
   "team.member_joined",
+  "team.binding_added",
+  "team.binding_removed",
   "team.grant_added",
   "team.grant_removed",
   "team.secret_set",

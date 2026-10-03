@@ -413,6 +413,32 @@ variable "classification_openai_api_key" {
   }
 }
 
+variable "classification_reasoning_effort" {
+  description = "Reasoning effort the Slack and Linear bot classifiers request from an OpenAI classification_model, sent as reasoning_effort (for example \"low\"). Blank sends none, so OpenAI applies the model's default."
+  type        = string
+  default     = ""
+  nullable    = false
+
+  # Only the OpenAI transport sends reasoning_effort; an Anthropic classifier
+  # would silently ignore the setting.
+  validation {
+    condition = (
+      var.classification_reasoning_effort == "" ||
+      startswith(var.classification_model, "openai/") ||
+      startswith(var.classification_model, "gpt-")
+    )
+    error_message = "classification_reasoning_effort applies only to an OpenAI classification_model. Leave it blank for an Anthropic model."
+  }
+
+  # Supported efforts differ by model, so OpenAI validates the value itself. A
+  # padded or mis-cased value would still reach it verbatim and fail every
+  # classification with HTTP 400, so reject anything but a lowercase word.
+  validation {
+    condition     = var.classification_reasoning_effort == "" || can(regex("^[a-z]+$", var.classification_reasoning_effort))
+    error_message = "classification_reasoning_effort must be blank or a lowercase OpenAI reasoning effort such as \"low\", with no surrounding whitespace."
+  }
+}
+
 # =============================================================================
 # Security Secrets
 # =============================================================================

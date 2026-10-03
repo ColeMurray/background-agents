@@ -2,11 +2,10 @@
 
 The SDK spawns the ``claude`` binary as a child of the bridge process. This
 module owns that child: it launches it through the clean-environment wrapper
-(``claude_env.py``), holds the one credential in memory, translates SDK
-messages into bridge events, applies the cost-baseline rule, and reconnects
-with ``resume=`` when the transport drops. It never emits
-``execution_complete``; the bridge terminalises every turn from the
-``TurnOutcome`` returned here.
+(``claude_env.py``), holds the one credential in memory, delivers translated
+bridge events, and reconnects with ``resume=`` when the transport drops. It
+never emits ``execution_complete``; the bridge terminalises every turn from
+the ``TurnOutcome`` returned here.
 """
 
 from __future__ import annotations
@@ -15,24 +14,10 @@ import asyncio
 import os
 import uuid
 from collections.abc import AsyncIterator, Callable, Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Final, Protocol
 
-from claude_agent_sdk import (
-    AssistantMessage,
-    ClaudeAgentOptions,
-    ClaudeSDKClient,
-    ConversationResetMessage,
-    MessageOrigin,
-    RateLimitEvent,
-    ResultMessage,
-    StreamEvent,
-    SystemMessage,
-    TextBlock,
-    ToolResultBlock,
-    ToolUseBlock,
-    UserMessage,
-)
+from claude_agent_sdk import ClaudeAgentOptions, ClaudeSDKClient
 
 from ..attachment_processor import (
     MAX_SESSION_ATTACHMENTS_PER_MESSAGE,
@@ -44,7 +29,6 @@ from ..credentials.provider_credential_client import (
     RuntimeCredentialUnavailable,
 )
 from .base import (
-    BridgeEvent,
     EventSink,
     HarnessId,
     HarnessPrompt,
@@ -60,10 +44,14 @@ from .claude_env import (
     resolve_api_key_credential,
     write_clean_env_wrapper,
 )
+from .claude_logging import ClaudeTrajectoryLogger
 from .claude_tools import OI_TOOL_SERVER_NAME, ControlPlaneToolClient, ToolServerConfig
+from .claude_translate import ClaudeTranslator, ClaudeTurnState
 
 if TYPE_CHECKING:
     from pathlib import Path
+
+    from claude_agent_sdk import Message
 
     from ..log_config import StructuredLogger
 
@@ -98,14 +86,6 @@ ALLOWED_TOOLS: Final = (
     "KillShell",
 )
 DISALLOWED_TOOLS: Final = ("AskUserQuestion",)
-# Claude's sub-agent tool. The timeline groups child activity under the
-# runtime-neutral task tool, so the vendor name never reaches the wire.
-SUBAGENT_TOOL_NAME: Final = "Agent"
-TASK_TOOL_NAME: Final = "task"
-# The SDK qualifies every MCP tool as ``mcp__<server>__<tool>``. First-party
-# tools drop the qualification so the wire carries the same ids OpenCode
-# emits; external servers keep theirs so the timeline can name the server.
-OI_TOOL_PREFIX: Final = f"mcp__{OI_TOOL_SERVER_NAME}__"
 MAX_RECONNECTS_PER_SESSION: Final = 3
 # The CLI writes one NDJSON message per stdout line, and the SDK transport
 # fails the turn when a single line outgrows its buffer, so the ceiling has to
@@ -124,10 +104,6 @@ _ATTACHMENT_BASE64_BYTES: Final = MAX_SESSION_ATTACHMENTS_PER_MESSAGE * (
 _STDOUT_MESSAGE_HEADROOM_BYTES: Final = 16 * 1024 * 1024
 # Bounds one line; the transport only buffers what actually arrives.
 MAX_STDOUT_MESSAGE_BYTES: Final = _ATTACHMENT_BASE64_BYTES + _STDOUT_MESSAGE_HEADROOM_BYTES
-AUTHENTICATION_FAILED_MESSAGE: Final = (
-    "Anthropic rejected this session's credential. Reconnect the Claude account in "
-    "Settings (or check ANTHROPIC_API_KEY) and start a new session."
-)
 
 
 class SdkClient(Protocol):
@@ -141,7 +117,7 @@ class SdkClient(Protocol):
 
     async def interrupt(self) -> None: ...
 
-    def receive_messages(self) -> AsyncIterator[Any]: ...
+    def receive_messages(self) -> AsyncIterator[Message]: ...
 
 
 SdkClientFactory = Callable[[Any], SdkClient]
@@ -157,50 +133,6 @@ class ClaudeHarnessConfig:
     # Appended to the claude_code preset system prompt (repo guidance notes).
     system_prompt_append: str | None = None
     tools: ToolServerConfig | None = None
-
-
-@dataclass
-class _MessageText:
-    message_id: str | None
-    text: str = ""
-
-
-def _injected_origin(origin: MessageOrigin | None) -> MessageOrigin | None:
-    """The origin when it names a turn the session started on its own."""
-    if origin is None or origin.get("kind") == "human":
-        return None
-    return origin
-
-
-@dataclass
-class _TurnState:
-    message_id: str
-    # None: the previous turn reported no running total, so the next total
-    # cannot be split between the two turns.
-    cost_baseline: float | None
-    texts: list[_MessageText] = field(default_factory=list)
-    last_token_content: str = ""
-    tool_names: dict[str, str] = field(default_factory=dict)
-    tool_args: dict[str, dict[str, Any]] = field(default_factory=dict)
-    emitted_error: bool = False
-    step_id: str | None = None
-    # Inside a turn the session injected (background task, channel, peer):
-    # skip everything until that turn's result.
-    injected: bool = False
-
-    def turn_text(self) -> str:
-        return "\n\n".join(entry.text for entry in self.texts if entry.text)
-
-    def entry_for(self, message_id: str | None) -> _MessageText:
-        for entry in self.texts:
-            if entry.message_id == message_id and message_id is not None:
-                return entry
-        if self.texts and self.texts[-1].message_id is None:
-            self.texts[-1].message_id = message_id
-            return self.texts[-1]
-        entry = _MessageText(message_id)
-        self.texts.append(entry)
-        return entry
 
 
 def bare_model_id(model: str | None, default: str) -> str:
@@ -247,43 +179,6 @@ def mcp_server_options(servers: tuple[Mapping[str, Any], ...]) -> dict[str, Any]
     return config
 
 
-def _canonical_tool_name(name: str) -> str:
-    """The runtime-neutral tool id a ``tool_call`` event carries."""
-    if name == SUBAGENT_TOOL_NAME:
-        return TASK_TOOL_NAME
-    if name.startswith(OI_TOOL_PREFIX):
-        return name[len(OI_TOOL_PREFIX) :]
-    return name
-
-
-def _tool_result_text(content: Any) -> str:
-    if content is None:
-        return ""
-    if isinstance(content, str):
-        return content
-    parts: list[str] = []
-    for item in content:
-        if isinstance(item, dict) and item.get("type") == "text":
-            parts.append(str(item.get("text", "")))
-    return "\n".join(parts)
-
-
-def _usage_tokens(usage: Mapping[str, Any] | None) -> dict[str, Any] | None:
-    if not usage:
-        return None
-    cache = {
-        "read": usage.get("cache_read_input_tokens"),
-        "write": usage.get("cache_creation_input_tokens"),
-    }
-    tokens: dict[str, Any] = {
-        "input": usage.get("input_tokens"),
-        "output": usage.get("output_tokens"),
-        "cache": {k: v for k, v in cache.items() if isinstance(v, int)},
-    }
-    tokens = {k: v for k, v in tokens.items() if v not in (None, {})}
-    return tokens or None
-
-
 class ClaudeHarness:
     id = HarnessId.CLAUDE
 
@@ -306,13 +201,14 @@ class ClaudeHarness:
         self.limits = limits
         self.credential_client = credential_client
         self.environ = environ if environ is not None else os.environ
+        self._translator = ClaudeTranslator()
+        self._trajectory = ClaudeTrajectoryLogger(log)
         self._client_factory = client_factory
         self._options_factory = options_factory
         self._tool_server_factory = tool_server_factory
         self._transcript_exists = transcript_exists or _default_transcript_exists
         self._binary = binary
 
-        self.session_id: str | None = None
         self.credential: ClaudeCredential | None = None
         self.wrapper_path: Path | None = None
         self._client: SdkClient | None = None
@@ -322,13 +218,21 @@ class ClaudeHarness:
         self._resume_on_connect = False
         self._needs_reconnect = False
         self._reconnects = 0
-        self._cost_baseline: float | None = 0.0
-        # Set by a conversation reset: the next result carries the new id.
-        self._session_rotated = False
         self._interrupted = False
         self._tool_client: ControlPlaneToolClient | None = None
         self._tool_server: Any = None
-        self.init_info: dict[str, Any] | None = None
+
+    @property
+    def session_id(self) -> str | None:
+        return self._translator.session_id
+
+    @session_id.setter
+    def session_id(self, value: str | None) -> None:
+        self._translator.session_id = value
+
+    @property
+    def init_info(self) -> dict[str, Any] | None:
+        return self._translator.init_info
 
     # --- lifecycle -----------------------------------------------------------
 
@@ -346,7 +250,7 @@ class ClaudeHarness:
         )
         if self.config.tools is not None and self._tool_client is None:
             self._tool_client = ControlPlaneToolClient(self.config.tools, self.log)
-        self.log.info(
+        self._trajectory.diagnostic(
             "claude.open",
             auth_mode=self.credential.mode.value,
             config_dir=str(self.config.config_dir),
@@ -383,17 +287,25 @@ class ClaudeHarness:
 
     async def resume_session(self, persisted_id: str) -> bool:
         if not self._transcript_exists(persisted_id, self.config.workdir, self.config.config_dir):
-            self.log.info("claude.session.invalid", agent_session_id=persisted_id)
+            self._trajectory.diagnostic("claude.session.invalid", agent_session_id=persisted_id)
             return False
         self.session_id = persisted_id
+        self._trajectory.reset_session(persisted_id)
+        self._translator.reset_tracking()
         self._resume_on_connect = True
-        self.log.info("claude.session.ensure", agent_session_id=persisted_id, action="loaded")
+        self._trajectory.diagnostic(
+            "claude.session.ensure", agent_session_id=persisted_id, action="loaded"
+        )
         return True
 
     async def create_session(self) -> None:
         self.session_id = str(uuid.uuid4())
+        self._trajectory.reset_session(self.session_id)
+        self._translator.reset_tracking()
         self._resume_on_connect = False
-        self.log.info("claude.session.ensure", agent_session_id=self.session_id, action="created")
+        self._trajectory.diagnostic(
+            "claude.session.ensure", agent_session_id=self.session_id, action="created"
+        )
 
     # --- connection ------------------------------------------------------------
 
@@ -428,6 +340,7 @@ class ClaudeHarness:
             "include_partial_messages": True,
             "forward_subagent_text": False,
             "max_buffer_size": MAX_STDOUT_MESSAGE_BYTES,
+            "stderr": self._trajectory.stderr,
             **reasoning_options(model, reasoning_effort),
         }
         if self._resume_on_connect:
@@ -472,8 +385,8 @@ class ClaudeHarness:
         self._connected_effort = reasoning_effort
         self._needs_reconnect = False
         # A fresh child starts its running total at zero (§5.3 baseline rule).
-        self._cost_baseline = 0.0
-        self.log.info(
+        self._translator.cost_baseline = 0.0
+        self._trajectory.diagnostic(
             "claude.connected",
             model=model,
             reasoning_effort=reasoning_effort,
@@ -494,15 +407,32 @@ class ClaudeHarness:
         try:
             await client.disconnect()
         except Exception as error:
-            self.log.warn("claude.disconnect_error", exc=error)
+            self._trajectory.diagnostic("claude.disconnect_error", level="warn", exc=error)
             return False
         if self._client is client:
             self._client = None
+        self._trajectory.reset_session(self.session_id)
+        self._translator.reset_tracking()
         return True
 
     # --- prompt ------------------------------------------------------------
 
     async def run_prompt(self, prompt: HarnessPrompt, emit: EventSink) -> TurnOutcome:
+        log_token = self._trajectory.begin(prompt.message_id, self.session_id)
+        outcome = None
+        try:
+            outcome = await self._run_prompt(prompt, emit)
+            return outcome
+        except asyncio.CancelledError:
+            outcome = TurnOutcome(success=False, error="Task was cancelled", cancelled=True)
+            raise
+        except Exception as error:
+            outcome = TurnOutcome.failed(str(error) or type(error).__name__)
+            raise
+        finally:
+            self._trajectory.finish(outcome, log_token)
+
+    async def _run_prompt(self, prompt: HarnessPrompt, emit: EventSink) -> TurnOutcome:
         try:
             model = bare_model_id(prompt.model, self.config.default_model)
         except ValueError as error:
@@ -525,17 +455,19 @@ class ClaudeHarness:
         except HarnessStartError:
             raise
         except TimeoutError:
-            self.log.error("claude.connect_timeout", message_id=prompt.message_id)
+            self._trajectory.diagnostic("claude.connect_timeout", level="error")
             self._needs_reconnect = True
             await self._interrupt_within_budget()
             return TurnOutcome.failed(f"Claude agent did not start within {max_duration:.0f}s.")
         except Exception as error:
-            self.log.error("claude.connect_error", exc=error, message_id=prompt.message_id)
+            self._trajectory.diagnostic("claude.connect_error", level="error", exc=error)
             self._needs_reconnect = True
             return TurnOutcome.failed(f"Claude agent failed to start: {error}")
 
         self._interrupted = False
-        state = _TurnState(message_id=prompt.message_id, cost_baseline=self._cost_baseline)
+        state = ClaudeTurnState(
+            message_id=prompt.message_id, cost_baseline=self._translator.cost_baseline
+        )
         try:
             async with asyncio.timeout_at(deadline):
                 await client.query(self._user_messages(prompt))
@@ -548,13 +480,14 @@ class ClaudeHarness:
                         break
                     except TimeoutError as error:
                         raise _InactivityTimeout from error
-                    if self._belongs_to_injected_turn(state, message):
-                        continue
-                    events, outcome = self._translate(state, message)
-                    for event in events:
+                    translation = self._translator.translate(
+                        state, message, interrupted=self._interrupted
+                    )
+                    self._trajectory.emit(translation)
+                    for event in translation.events:
                         await emit(event)
-                    if outcome is not None:
-                        return outcome
+                    if translation.outcome is not None:
+                        return translation.outcome
             self._needs_reconnect = True
             return TurnOutcome.failed(
                 "The Claude agent stream ended before the turn completed.",
@@ -569,9 +502,9 @@ class ClaudeHarness:
             return TurnOutcome.failed(f"Prompt exceeded max duration of {max_duration:.0f}s.")
         except _InactivityTimeout:
             timeout_seconds = self.limits.inactivity_timeout_seconds
-            self.log.error(
+            self._trajectory.diagnostic(
                 "claude.inactivity_timeout",
-                message_id=prompt.message_id,
+                level="error",
                 timeout_s=timeout_seconds,
             )
             await self._interrupt_within_budget()
@@ -580,36 +513,9 @@ class ClaudeHarness:
                 f"Claude agent produced no output for {timeout_seconds:.0f}s."
             )
         except Exception as error:
-            self.log.error("claude.turn_error", exc=error, message_id=prompt.message_id)
+            self._trajectory.diagnostic("claude.turn_error", level="error", exc=error)
             self._needs_reconnect = True
             return TurnOutcome.failed(f"Claude agent transport failed: {error}")
-
-    def _belongs_to_injected_turn(self, state: _TurnState, message: Any) -> bool:
-        """Every message of a turn the session injected, not of this prompt.
-
-        The streaming connection can interleave turns the CLI starts on its
-        own (task notifications, channel and peer messages). Only the user
-        message that opens such a turn and the result that closes it carry
-        ``origin``; the assistant messages, stream events and tool results
-        between them do not. So a non-human user message opens the skip, its
-        result closes it, and nothing in between reaches the timeline. Our
-        own prompts are stamped ``origin: human``. The injected turn's spend
-        stays in the running total and lands on the prompt in flight, so the
-        session's cost still adds up.
-        """
-        if isinstance(message, UserMessage):
-            if (origin := _injected_origin(message.origin)) is not None:
-                state.injected = True
-                self.log.info("claude.injected_turn_started", origin_kind=origin["kind"])
-            return state.injected
-        if isinstance(message, ResultMessage):
-            if (origin := _injected_origin(message.origin)) is not None:
-                state.injected = False
-                self.log.info("claude.injected_turn_ignored", origin_kind=origin["kind"])
-                return True
-            state.injected = False
-            return False
-        return state.injected
 
     async def _interrupt_within_budget(self) -> bool:
         """Interrupt within the cleanup budget; drop the child if that hangs too.
@@ -621,12 +527,12 @@ class ClaudeHarness:
             async with asyncio.timeout(budget):
                 return await self._interrupt_quietly()
         except TimeoutError:
-            self.log.warn("claude.interrupt_timeout", timeout_s=budget)
+            self._trajectory.diagnostic("claude.interrupt_timeout", level="warn", timeout_s=budget)
         try:
             async with asyncio.timeout(budget):
                 await self._disconnect()
         except TimeoutError:
-            self.log.warn("claude.disconnect_timeout", timeout_s=budget)
+            self._trajectory.diagnostic("claude.disconnect_timeout", level="warn", timeout_s=budget)
         return False
 
     async def _interrupt_quietly(self) -> bool:
@@ -635,7 +541,7 @@ class ClaudeHarness:
         try:
             await self._client.interrupt()
         except Exception as error:
-            self.log.warn("claude.interrupt_error", exc=error)
+            self._trajectory.diagnostic("claude.interrupt_error", level="warn", exc=error)
             return False
         return True
 
@@ -674,21 +580,28 @@ class ClaudeHarness:
                     async with asyncio.timeout_at(interrupt_deadline):
                         await client.interrupt()
                 except TimeoutError:
-                    self.log.warn(
+                    self._trajectory.diagnostic(
                         "claude.preservation_interrupt_timeout",
+                        level="warn",
                         timeout_s=timeout_seconds / 2,
                     )
                 except Exception as error:
-                    self.log.warn("claude.interrupt_error", exc=error)
+                    self._trajectory.diagnostic("claude.interrupt_error", level="warn", exc=error)
                 await client.disconnect()
                 if self._client is client:
                     self._client = None
+                self._trajectory.reset_session(self.session_id)
+                self._translator.reset_tracking()
                 return True
         except TimeoutError:
-            self.log.warn("claude.preservation_stop_timeout", timeout_s=timeout_seconds)
+            self._trajectory.diagnostic(
+                "claude.preservation_stop_timeout", level="warn", timeout_s=timeout_seconds
+            )
             return False
         except Exception as error:
-            self.log.warn("claude.preservation_disconnect_error", exc=error)
+            self._trajectory.diagnostic(
+                "claude.preservation_disconnect_error", level="warn", exc=error
+            )
             return False
 
     async def _user_messages(self, prompt: HarnessPrompt) -> AsyncIterator[dict[str, Any]]:
@@ -712,245 +625,6 @@ class ClaudeHarness:
             # Lets the result of this prompt be told apart from injected turns.
             "origin": {"kind": "human"},
         }
-
-    # --- translation (§5.2) -------------------------------------------------
-
-    def _translate(
-        self, state: _TurnState, message: Any
-    ) -> tuple[list[BridgeEvent], TurnOutcome | None]:
-        events: list[BridgeEvent] = []
-        if isinstance(message, SystemMessage):
-            if message.subtype == "init":
-                self.init_info = dict(message.data)
-                self.log.info(
-                    "claude.init",
-                    model=message.data.get("model"),
-                    tool_count=len(message.data.get("tools") or []),
-                )
-            elif message.subtype == "compact_boundary":
-                events.append({"type": "context_compacted", "messageId": state.message_id})
-            return events, None
-
-        if isinstance(message, StreamEvent):
-            if message.parent_tool_use_id:
-                return events, None
-            raw = message.event
-            kind = raw.get("type")
-            if kind == "message_start":
-                message_id = (raw.get("message") or {}).get("id")
-                state.texts.append(_MessageText(message_id))
-                if state.step_id is None:
-                    state.step_id = str(uuid.uuid4())
-                    events.append(
-                        {
-                            "type": "step_start",
-                            "messageId": state.message_id,
-                            "stepId": state.step_id,
-                        }
-                    )
-            elif kind == "content_block_delta":
-                delta = raw.get("delta") or {}
-                if delta.get("type") == "text_delta" and delta.get("text"):
-                    entry = state.texts[-1] if state.texts else state.entry_for(None)
-                    entry.text += str(delta["text"])
-                    events.extend(self._token_event(state))
-            return events, None
-
-        if isinstance(message, AssistantMessage):
-            is_subtask = bool(message.parent_tool_use_id)
-            if not is_subtask:
-                if state.step_id is None:
-                    state.step_id = str(uuid.uuid4())
-                    events.append(
-                        {
-                            "type": "step_start",
-                            "messageId": state.message_id,
-                            "stepId": state.step_id,
-                        }
-                    )
-                final_text = "".join(
-                    block.text for block in message.content if isinstance(block, TextBlock)
-                )
-                if final_text:
-                    entry = state.entry_for(message.message_id)
-                    if len(final_text) > len(entry.text):
-                        entry.text = final_text
-                        events.extend(self._token_event(state))
-            for block in message.content:
-                if isinstance(block, ToolUseBlock):
-                    state.tool_names[block.id] = _canonical_tool_name(block.name)
-                    state.tool_args[block.id] = dict(block.input)
-                    events.append(
-                        self._tool_event(
-                            state,
-                            call_id=block.id,
-                            status="running",
-                            output="",
-                            parent_tool_use_id=message.parent_tool_use_id,
-                        )
-                    )
-            if message.error:
-                events.extend(self._error_events(state, message.error))
-            return events, None
-
-        if isinstance(message, UserMessage):
-            if isinstance(message.content, str):
-                return events, None
-            for block in message.content:
-                if isinstance(block, ToolResultBlock):
-                    events.append(
-                        self._tool_event(
-                            state,
-                            call_id=block.tool_use_id,
-                            status="error" if block.is_error else "completed",
-                            output=_tool_result_text(block.content),
-                            parent_tool_use_id=message.parent_tool_use_id,
-                        )
-                    )
-            return events, None
-
-        if isinstance(message, RateLimitEvent):
-            info = message.rate_limit_info
-            if info.status in ("allowed_warning", "rejected"):
-                detail = f"Anthropic rate limit {info.status}"
-                if info.rate_limit_type:
-                    detail += f" ({info.rate_limit_type})"
-                if info.resets_at:
-                    detail += f"; resets at {info.resets_at}"
-                events.append({"type": "warning", "scope": "provider", "message": detail})
-            return events, None
-
-        if isinstance(message, ConversationResetMessage):
-            # The running total restarts, and the messages that follow carry
-            # the new session id the next resume and snapshot must use.
-            self._cost_baseline = 0.0
-            state.cost_baseline = 0.0
-            self._session_rotated = True
-            return events, None
-
-        if isinstance(message, ResultMessage):
-            if (
-                self._session_rotated
-                and message.session_id
-                and message.session_id != self.session_id
-            ):
-                self.log.info(
-                    "claude.session.rotated",
-                    agent_session_id=message.session_id,
-                    previous_session_id=self.session_id,
-                )
-                self.session_id = message.session_id
-                self._session_rotated = False
-            total = message.total_cost_usd
-            if total is None:
-                # No total means no baseline for the next turn either.
-                message_cost = 0.0
-                self._cost_baseline = None
-                events.append(
-                    {
-                        "type": "warning",
-                        "scope": "provider",
-                        "message": "The Claude agent reported no cost for this turn; it is recorded as 0.",
-                    }
-                )
-            elif state.cost_baseline is None:
-                # The previous turn's share of this total is unknowable, so
-                # neither turn is charged and the baseline re-anchors here.
-                message_cost = 0.0
-                self._cost_baseline = total
-                events.append(
-                    {
-                        "type": "warning",
-                        "scope": "provider",
-                        "message": (
-                            "The Claude agent reported no cost for the previous turn, so this "
-                            "turn's cost cannot be separated from it; it is recorded as 0."
-                        ),
-                    }
-                )
-            else:
-                message_cost = max(total - state.cost_baseline, 0.0)
-                self._cost_baseline = total
-            finish: BridgeEvent = {
-                "type": "step_finish",
-                "messageId": state.message_id,
-                "stepId": state.step_id or str(uuid.uuid4()),
-                "cost": message_cost,
-                "messageCostUsd": message_cost,
-                "reason": message.subtype,
-            }
-            tokens = _usage_tokens(message.usage)
-            if tokens:
-                finish["tokens"] = tokens
-            events.append(finish)
-            if self._interrupted:
-                return events, TurnOutcome(
-                    success=False,
-                    error="Task was cancelled",
-                    cancelled=True,
-                    message_cost_usd=message_cost,
-                )
-            if message.is_error or message.subtype != "success":
-                detail = message.result or "; ".join(message.errors or []) or message.subtype
-                if not state.emitted_error:
-                    events.append(
-                        {"type": "error", "error": str(detail), "messageId": state.message_id}
-                    )
-                return events, TurnOutcome.failed(str(detail), message_cost_usd=message_cost)
-            return events, TurnOutcome.ok(message_cost_usd=message_cost)
-
-        return events, None
-
-    def _token_event(self, state: _TurnState) -> list[BridgeEvent]:
-        content = state.turn_text()
-        if not content or content == state.last_token_content:
-            return []
-        state.last_token_content = content
-        return [{"type": "token", "content": content, "messageId": state.message_id}]
-
-    def _tool_event(
-        self,
-        state: _TurnState,
-        *,
-        call_id: str,
-        status: str,
-        output: str,
-        parent_tool_use_id: str | None,
-    ) -> BridgeEvent:
-        event: BridgeEvent = {
-            "type": "tool_call",
-            "tool": state.tool_names.get(call_id, "tool"),
-            "args": state.tool_args.get(call_id, {}),
-            "callId": call_id,
-            "status": status,
-            "output": output,
-            "messageId": state.message_id,
-        }
-        if parent_tool_use_id:
-            event["isSubtask"] = True
-            event["taskCallId"] = parent_tool_use_id
-        return event
-
-    def _error_events(self, state: _TurnState, error: str) -> list[BridgeEvent]:
-        if error == "authentication_failed":
-            if state.emitted_error:
-                return []
-            state.emitted_error = True
-            # No account-state mutation here: the sandbox is not authoritative.
-            return [
-                {
-                    "type": "error",
-                    "error": AUTHENTICATION_FAILED_MESSAGE,
-                    "messageId": state.message_id,
-                }
-            ]
-        return [
-            {
-                "type": "warning",
-                "scope": "provider",
-                "message": f"Anthropic reported {error.replace('_', ' ')} on this turn.",
-            }
-        ]
 
 
 class _InactivityTimeout(Exception):

@@ -195,7 +195,8 @@ jobs:
           pip install -e ".[dev]"
 
       - name: Run tests
-        run: pytest tests/ -v
+        # Dump stacks and exit stalled tests before the job timeout prevents log upload.
+        run: pytest tests/ -v --durations=20 -o faulthandler_timeout=60 -o faulthandler_exit_on_timeout=true
 
       - name: Run Node.js tests
         run: node --test tests/*.test.mjs

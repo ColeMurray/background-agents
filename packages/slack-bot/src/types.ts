@@ -32,6 +32,7 @@ export interface Env {
   WEB_APP_URL: string;
   DEFAULT_MODEL: string;
   CLASSIFICATION_MODEL: string;
+  CLASSIFICATION_REASONING_EFFORT?: string; // OpenAI classifiers only; unset keeps the model default
   APP_NAME?: string;
 
   // Secrets
@@ -55,6 +56,8 @@ export interface Env {
  */
 export interface ThreadContext {
   channelId: string;
+  teamId?: string | null;
+  userId?: string;
   channelName?: string;
   channelDescription?: string;
   threadTs?: string;
@@ -98,6 +101,9 @@ export type BackgroundTaskScheduler = (promise: Promise<void>) => void;
  */
 export interface ThreadSession {
   sessionId: string;
+  /** Missing only on mappings persisted before channel bindings. */
+  teamId?: string | null;
+  closed?: true;
   /** Session-target id: a repo id, environment id, or the no-repository sentinel. */
   repoId: string;
   /** Session-target display label, including `No repository` for an empty sandbox. */

@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  automationInvocationStatusSchema,
   validateAutomationTargetCounts,
   createAutomationRequestSchema,
   listAutomationsResponseSchema,
@@ -140,6 +141,32 @@ describe("listAutomationsResponseSchema", () => {
         nextCursor: null,
       }).success
     ).toBe(false);
+  });
+});
+
+describe("automation grant-denial statuses", () => {
+  it("adds unauthorized without changing the existing invocation statuses", () => {
+    expect(automationInvocationStatusSchema.options).toEqual([
+      "starting",
+      "running",
+      "completed",
+      "failed",
+      "partial_failed",
+      "skipped",
+      "unauthorized",
+    ]);
+  });
+
+  it("accepts unauthorized invocation status in recent execution summaries", () => {
+    const recentExecutions = [{ id: "inv-denied", status: "unauthorized", createdAt: 123 }];
+    const response = listAutomationsResponseSchema.parse({
+      automations: [{ ...automation, recentExecutions }],
+      hasMore: false,
+      nextCursor: null,
+    });
+
+    expect(automationInvocationStatusSchema.parse("unauthorized")).toBe("unauthorized");
+    expect(response.automations[0].recentExecutions).toEqual(recentExecutions);
   });
 });
 

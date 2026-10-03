@@ -257,14 +257,14 @@ async def test_bridge_restart_exhaustion_is_fatal(tmp_path, monkeypatch):
     assert supervisor.shutdown_event.is_set()
 
 
-async def test_opencode_restarts_do_not_rematerialize_managed_skills(tmp_path, monkeypatch):
+async def test_opencode_restarts_do_not_rematerialize_managed_skills(tmp_path):
     supervisor, _repository, opencode_server, *_ = _supervisor(tmp_path, [])
     supervisor._repository_boot_result = RepositoryBootResult(True, [], True, True, (), tmp_path)
     opencode_server.exit_code.return_value = 1
     supervisor._report_fatal_error = AsyncMock()
-    monkeypatch.setattr("sandbox_runtime.supervisor.asyncio.sleep", AsyncMock())
+    supervisor._wait_for_shutdown = AsyncMock(return_value=False)
 
-    await SandboxSupervisor.monitor_processes(supervisor)
+    await asyncio.wait_for(SandboxSupervisor.monitor_processes(supervisor), timeout=1)
 
     assert opencode_server.start.await_count == supervisor.MAX_RESTARTS
     supervisor.managed_skills.materialize.assert_not_awaited()

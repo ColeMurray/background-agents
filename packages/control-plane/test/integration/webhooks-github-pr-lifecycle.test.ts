@@ -88,6 +88,7 @@ function makePullRequestEvent(
     concurrencyKey: "pr:7",
     contextBlock: "",
     meta: {},
+    repositoryId: 12345,
     repoOwner: "acme",
     repoName: "web-app",
     branch: `open-inspect/${sessionName}`,
@@ -230,6 +231,7 @@ describe("PR lifecycle tracking on /internal/github-event", () => {
       concurrencyKey: "issue:1",
       contextBlock: "",
       meta: {},
+      repositoryId: 12345,
       repoOwner: "acme",
       repoName: "web-app",
     });

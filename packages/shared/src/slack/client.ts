@@ -403,6 +403,8 @@ export function authTest(token: string): Promise<SlackEnvelope<SlackAuthTestResu
 const slackChannelInfoSchema = z.object({
   id: z.string(),
   name: z.string(),
+  is_member: z.boolean().optional(),
+  is_ext_shared: z.boolean().optional(),
   topic: z.object({ value: z.string() }).optional(),
   purpose: z.object({ value: z.string() }).optional(),
 });

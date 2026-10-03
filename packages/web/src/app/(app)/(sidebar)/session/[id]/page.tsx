@@ -304,10 +304,6 @@ function SessionContent({
       artifacts.filter((artifact) => artifact.type === "screenshot" || artifact.type === "video"),
     [artifacts]
   );
-  const selectedMediaArtifact = useMemo(
-    () => mediaArtifacts.find((artifact) => artifact.id === selectedMediaArtifactId) ?? null,
-    [mediaArtifacts, selectedMediaArtifactId]
-  );
   const primaryRepo =
     sessionState?.repositories?.[0] ??
     (sessionState?.repoOwner && sessionState?.repoName
@@ -613,13 +609,9 @@ function SessionContent({
 
       <MediaLightbox
         sessionId={sessionId}
-        artifact={selectedMediaArtifact}
-        open={selectedMediaArtifactId !== null}
-        onOpenChange={(open) => {
-          if (!open) {
-            setSelectedMediaArtifactId(null);
-          }
-        }}
+        artifacts={mediaArtifacts}
+        selectedArtifactId={selectedMediaArtifactId}
+        onSelectArtifact={setSelectedMediaArtifactId}
       />
     </div>
   );

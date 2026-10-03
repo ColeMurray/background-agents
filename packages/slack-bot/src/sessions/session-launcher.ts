@@ -1,4 +1,4 @@
-import { postMessage } from "@open-inspect/shared/slack";
+import { escapeMrkdwnText, postMessage } from "@open-inspect/shared/slack";
 import type { CallbackContext } from "@open-inspect/shared/types/session-api";
 import { normalizeValidModels, type ValidModel } from "@open-inspect/shared/models";
 import { getAuthoritativeModels, getAvailableModels } from "../app-home/models";
@@ -76,6 +76,7 @@ export async function loadAuthoritativeSlackLaunchSettings(
 
 export interface StartSessionOptions {
   target: SlackSessionTarget;
+  teamId?: string | null;
   channel: string;
   threadTs: string;
   messageText: string;
@@ -113,6 +114,7 @@ export async function startSessionAndSendPrompt(
 ): Promise<StartSessionResult | null> {
   const {
     target,
+    teamId,
     channel,
     threadTs,
     messageText,
@@ -193,6 +195,7 @@ export async function startSessionAndSendPrompt(
 
   const session = await createSession(env, {
     target,
+    teamId,
     model,
     reasoningEffort,
     branch,
@@ -201,13 +204,23 @@ export async function startSessionAndSendPrompt(
     actorDisplayName: actor.displayName,
     actorEmail: actor.email,
   });
-  if (!session) {
-    await postMessage(
-      env.SLACK_BOT_TOKEN,
-      channel,
-      "Sorry, I couldn't create a session. Please try again.",
-      { thread_ts: threadTs }
-    );
+  if (!session || "error" in session) {
+    const failure = session?.error;
+    let message = "Sorry, I couldn't create a session. Please try again.";
+    if (
+      failure?.status === 403 &&
+      (failure.code === "not_member" ||
+        (failure.code === "session_action_denied" && failure.reasonCode === "not_member"))
+    ) {
+      message = "you are not a member of this channel's team";
+    } else if (
+      failure?.status === 409 &&
+      failure.code === "target_team_missing_grant" &&
+      failure.repository
+    ) {
+      message = `This channel's team does not have access to repository ${escapeMrkdwnText(failure.repository)}.`;
+    }
+    await postMessage(env.SLACK_BOT_TOKEN, channel, message, { thread_ts: threadTs });
     return null;
   }
 
@@ -232,9 +245,7 @@ export async function startSessionAndSendPrompt(
     attachments: preparedImages,
     imageOnly: Boolean(imageOnly),
     callbackContext,
-    // Normally empty — the session was just created with these settings. It is
-    // set only when recovering a stale thread, where the replacement keeps the
-    // thread's defaults and the follow-up's own flags stay a one-turn override.
+    // Usually empty: session-opening flags already became session defaults.
     ...firstPrompt.turnPlan.promptOverrides,
     channel,
     threadTs,
@@ -257,7 +268,7 @@ export async function startSessionAndSendPrompt(
     env,
     channel,
     threadTs,
-    buildThreadSession(session.sessionId, target, model, reasoningEffort, messageTs)
+    buildThreadSession(session.sessionId, target, model, reasoningEffort, messageTs, teamId)
   );
   return { sessionId: session.sessionId, sessionDefaults, differsFromUserDefaults };
 }

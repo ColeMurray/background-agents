@@ -179,3 +179,27 @@ export async function postReaction(
     return false;
   }
 }
+
+export async function postIssueComment(
+  token: string,
+  url: string,
+  body: string,
+  userAgent: string = DEFAULT_APP_NAME
+): Promise<boolean> {
+  try {
+    const response = await fetch(url, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${token}`,
+        Accept: "application/vnd.github+json",
+        "X-GitHub-Api-Version": "2022-11-28",
+        "User-Agent": userAgent,
+      },
+      body: JSON.stringify({ body }),
+      signal: AbortSignal.timeout(GITHUB_API_REQUEST_TIMEOUT_MS),
+    });
+    return response.ok;
+  } catch {
+    return false;
+  }
+}
