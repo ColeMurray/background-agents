@@ -60,6 +60,11 @@ class DockerService:
         """Whether the daemon exit was requested by preparation or supervisor teardown."""
         return self._exit_expected
 
+    @property
+    def running(self) -> bool:
+        """Whether the owned daemon leader is still alive."""
+        return self._process is not None and self._process.returncode is None
+
     async def start(self) -> None:
         """Start the daemon and wait, under a deadline, until ``docker info`` succeeds."""
         if self._process is not None:

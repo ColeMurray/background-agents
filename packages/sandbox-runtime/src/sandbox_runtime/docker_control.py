@@ -51,10 +51,48 @@ class DockerControl:
         self._server = await asyncio.start_unix_server(self._handle, path=self.path)
         Path(self.path).chmod(0o600)
 
-    async def stop(self) -> None:
+    async def restart(
+        self,
+        shutdown_event: asyncio.Event,
+        *,
+        stop_watch: Callable[[], Awaitable[None]] | None = None,
+    ) -> bool:
+        """Atomically replace the daemon unless preparation or teardown has fenced it."""
+        task = asyncio.current_task()
+        assert task is not None
+
+        def fenced() -> bool:
+            # Owned-process cleanup can consume task cancellation.
+            return (
+                self.prepared or self.stopping or shutdown_event.is_set() or task.cancelling() > 0
+            )
+
+        async with self._lock:
+            if self.prepared or self.stopping or shutdown_event.is_set():
+                return False
+            try:
+                if stop_watch is not None:
+                    await stop_watch()
+                # Even an already-cancelled recovery must reap the daemon from
+                # its interrupted preparation before abandoning the replacement.
+                await self.service.stop()
+                if fenced():
+                    return False
+                await self.service.start()
+            except Exception:
+                if fenced():
+                    return False
+                raise
+            return not fenced()
+
+    async def stop(self, stop_watch: Callable[[], Awaitable[None]] | None = None) -> None:
         self.stopping = True
         if self._server:
             self._server.close()
+        # The watcher may hold the lock during readiness. Fence its replacement
+        # first, then cancel it before waiting for control operations to drain.
+        if stop_watch is not None:
+            await stop_watch()
         handlers = tuple(self._handlers)
         for task in handlers:
             task.cancel()
@@ -77,16 +115,22 @@ class DockerControl:
                 return
             async with asyncio.timeout(CONTROL_TIMEOUT_SECONDS):
                 command = await reader.readline()
+                recover = False
                 async with self._lock:
                     if command == b"prepare\n" and not self.prepared and not self.stopping:
                         try:
                             async with asyncio.timeout(PREPARATION_TIMEOUT_SECONDS):
-                                await self.service.prepare_for_snapshot()
+                                if self.service.running:
+                                    await self.service.prepare_for_snapshot()
+                                else:
+                                    # Crash-consistent saves fence daemon writes, not
+                                    # detached workloads or application transactions.
+                                    await self.service.stop()
+                                    self.service.log.info("docker.prepare_daemon_not_running")
                         except (Exception, asyncio.CancelledError) as error:
                             if self.recover is not None and not self.stopping:
                                 self.service.log.error("docker.prepare_failed", exc=error)
-                                await self.recover()
-                                self.prepared = False
+                                recover = True
                         else:
                             self.prepared = True
                     result = (
@@ -96,6 +140,10 @@ class DockerControl:
                         and command in (b"prepare\n", b"status\n")
                         else b"not_prepared\n"
                     )
+                # Recovery uses the public restart operation, which takes the
+                # lock itself and honors a newer prepare that won the race.
+                if recover and self.recover is not None:
+                    await self.recover()
                 writer.write(result)
                 await writer.drain()
         except (Exception, asyncio.CancelledError):

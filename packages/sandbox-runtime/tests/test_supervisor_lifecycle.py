@@ -6,6 +6,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from sandbox_runtime import supervisor as supervisor_module
+from sandbox_runtime.docker_control import DockerControl
 from sandbox_runtime.repository_boot import RepositoryBootResult
 from sandbox_runtime.runtime_config import BootMode, RuntimeConfig
 from sandbox_runtime.supervisor import SandboxSupervisor
@@ -290,10 +291,14 @@ async def test_code_server_restart_exhaustion_is_nonfatal(tmp_path, monkeypatch)
 def _docker_service(events, *, prepare_error=None):
     service = MagicMock()
     service.exit_expected = False
+    service.start_timeout_seconds = 0.5
+    service.stop_timeout_seconds = 0.1
     exited = asyncio.Event()
 
     async def start():
         events.append("docker:start")
+        service.exit_expected = False
+        exited.clear()
 
     async def wait():
         await exited.wait()
@@ -330,6 +335,13 @@ def _docker_supervisor(tmp_path, events, monkeypatch, **service_kwargs):
         workspace_path=tmp_path,
     )
     supervisor.docker_service = _docker_service(events, **service_kwargs)
+    supervisor.docker_control = DockerControl(
+        supervisor.docker_service,
+        str(tmp_path / "control.sock"),
+        supervisor._recover_docker_after_prepare,
+    )
+    supervisor.BACKOFF_BASE = 0.01
+    supervisor.BACKOFF_MAX = 0.01
     return supervisor, repository, *rest
 
 
@@ -344,6 +356,20 @@ async def test_docker_starts_before_repository_boot_and_stops_last(tmp_path, mon
 
     assert events[:3] == ["docker:start", "desktop", "repository:fresh"]
     assert events[-1] == "docker:stop"
+
+
+async def test_run_uses_shutdown_as_the_only_teardown_path(tmp_path, monkeypatch):
+    supervisor, *_ = _docker_supervisor(tmp_path, [], monkeypatch)
+    monkeypatch.delenv("IMAGE_BUILD_MODE", raising=False)
+    supervisor.docker_control.stop = AsyncMock(wraps=supervisor.docker_control.stop)
+    supervisor.shutdown = AsyncMock(wraps=supervisor.shutdown)
+
+    assert await supervisor.run() is True
+
+    supervisor.shutdown.assert_awaited_once()
+    supervisor.docker_control.stop.assert_awaited_once()
+    assert supervisor._docker_watch_task is None
+    supervisor.docker_service.stop.assert_awaited_once()
 
 
 async def test_standard_boot_never_touches_docker(tmp_path, monkeypatch):
@@ -460,22 +486,35 @@ async def test_daemon_exit_during_build_hooks_fails_the_build(tmp_path, monkeypa
         supervisor.log.error.assert_any_call("image_build.failure_report_failed")
 
 
-async def test_daemon_exit_during_session_is_fatal(tmp_path, monkeypatch):
+@pytest.mark.parametrize("exhaust_budget", [False, True])
+async def test_daemon_exit_during_session_is_nonfatal(tmp_path, monkeypatch, exhaust_budget):
     events = []
     supervisor, *_ = _docker_supervisor(tmp_path, events, monkeypatch)
     monkeypatch.delenv("IMAGE_BUILD_MODE", raising=False)
     supervisor._report_fatal_error = AsyncMock()
 
     async def monitor():
-        supervisor.docker_service.exited.set()
-        await supervisor.shutdown_event.wait()
+        for attempt in range(supervisor.MAX_RESTARTS + 1 if exhaust_budget else 1):
+            supervisor.docker_service.exited.set()
+            async with asyncio.timeout(2):
+                while not supervisor.shutdown_event.is_set():
+                    if attempt == supervisor.MAX_RESTARTS:
+                        if supervisor._docker_watch_task.done():
+                            break
+                    elif supervisor.docker_service.start.await_count == attempt + 2:
+                        break
+                    await asyncio.sleep(0.01)
+            assert not supervisor.shutdown_event.is_set()
+        supervisor.shutdown_event.set()
 
-    supervisor.monitor_processes = AsyncMock(side_effect=monitor)
-
-    assert await supervisor.run() is False
-
-    supervisor._report_fatal_error.assert_awaited_once()
-    assert "exited unexpectedly" in supervisor._report_fatal_error.await_args.args[0]
+    supervisor.monitor_processes.side_effect = monitor
+    assert await supervisor.run() is True
+    supervisor._report_fatal_error.assert_not_awaited()
+    supervisor.log.info.assert_any_call("docker.restarted", restart_count=1)
+    if exhaust_budget:
+        supervisor.log.error.assert_any_call(
+            "docker.unavailable", restart_count=supervisor.MAX_RESTARTS
+        )
 
 
 async def test_requested_shutdown_during_docker_start_is_not_a_failure(tmp_path, monkeypatch):
@@ -498,22 +537,25 @@ async def test_requested_shutdown_during_docker_start_is_not_a_failure(tmp_path,
     callback.report_failure.assert_not_awaited()
 
 
-async def test_daemon_exit_during_interactive_boot_is_fatal(tmp_path, monkeypatch):
+async def test_daemon_exit_during_interactive_boot_does_not_interrupt_boot(tmp_path, monkeypatch):
     events = []
     supervisor, repository, *_ = _docker_supervisor(tmp_path, events, monkeypatch)
     monkeypatch.delenv("IMAGE_BUILD_MODE", raising=False)
     supervisor._report_fatal_error = AsyncMock()
+    result = RepositoryBootResult(True, [], True, True, (), tmp_path)
 
     async def boot(_mode, _ports):
         supervisor.docker_service.exited.set()
-        await asyncio.Event().wait()
+        await asyncio.sleep(0.05)
+        return result
 
     repository.boot = AsyncMock(side_effect=boot)
 
-    assert await supervisor.run() is False
+    assert await supervisor.run() is True
 
-    supervisor._report_fatal_error.assert_awaited_once()
-    assert "exited unexpectedly" in supervisor._report_fatal_error.await_args.args[0]
+    supervisor._report_fatal_error.assert_not_awaited()
+    supervisor.harness_process.start.assert_awaited_once()
+    assert not supervisor.shutdown_event.is_set()
 
 
 async def test_requested_shutdown_with_docker_running_is_not_a_failure(tmp_path, monkeypatch):
