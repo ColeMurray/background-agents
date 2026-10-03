@@ -15,7 +15,10 @@ import { browserApiFetch } from "@/lib/browser-api-fetch";
 import { useSWRConfig } from "swr";
 import { invalidateAutomationCache } from "@/lib/automation-cache";
 import { useAutomationScope } from "@/hooks/use-automation-scope";
-import { sameEnvironmentIds } from "@/components/automations/automation-target-selection";
+import {
+  sameEnvironmentIds,
+  sameRepositories,
+} from "@/components/automations/automation-target-selection";
 
 export default function EditAutomationPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = use(params);
@@ -40,13 +43,19 @@ export default function EditAutomationPage({ params }: { params: Promise<{ id: s
     setError("");
 
     try {
-      const { environmentIds, ...otherValues } = values;
+      // Unchanged targets are omitted so an edit that leaves them alone is not
+      // revalidated as a target replacement.
+      const { repositories, environmentIds, ...otherValues } = values;
       const res = await browserApiFetch(`/api/automations/${id}`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(
-          sameEnvironmentIds(environmentIds, automation.environmentIds) ? otherValues : values
-        ),
+        body: JSON.stringify({
+          ...otherValues,
+          ...(sameRepositories(repositories, automation.repositories) ? {} : { repositories }),
+          ...(sameEnvironmentIds(environmentIds, automation.environmentIds)
+            ? {}
+            : { environmentIds }),
+        }),
       });
 
       if (!res.ok) {
