@@ -2,12 +2,15 @@ import {
   INITIAL_SESSION_READ_STATE_VERSION,
   type SessionReadState,
 } from "@open-inspect/shared/types/sessions";
+import { z } from "zod";
 
-export interface ViewerReadStateRow {
-  unread: number;
-  latest_terminal_message_id: string | null;
-  latest_terminal_message_created_at: number | null;
-}
+export const viewerReadStateRowSchema = z.object({
+  unread: z.number(),
+  latest_terminal_message_id: z.string().nullable(),
+  latest_terminal_message_created_at: z.number().nullable(),
+});
+
+export type ViewerReadStateRow = z.infer<typeof viewerReadStateRowSchema>;
 
 /** Requires `users AS viewer` and `session_read_states AS read_state` joins. */
 export function unreadSql(sessionAlias: string): string {

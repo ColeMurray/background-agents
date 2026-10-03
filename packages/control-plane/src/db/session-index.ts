@@ -38,7 +38,13 @@ import {
 } from "./session-inbox-store";
 import { INACTIVE_SESSION_STATUS_SQL } from "@open-inspect/shared/types/session-activity";
 import { readStateFromRow, unreadSql, type ViewerReadStateRow } from "./session-read-state";
-import { parseSessionRow, toSessionFields as toEntry, type SessionRow } from "./session-row";
+import {
+  parseRequiredSessionRow,
+  parseSessionRow,
+  parseViewerSessionRow,
+  toSessionFields as toEntry,
+  type SessionRow,
+} from "./session-row";
 import { SessionAuditStore } from "./session-audit";
 import type { SqlDatabase, SqlStatement } from "./sql-database";
 
@@ -148,8 +154,6 @@ export interface ListSessionsResult {
   sessions: SessionEntry[];
   hasMore: boolean;
 }
-
-type ViewerSessionRow = SessionRow & ViewerReadStateRow;
 
 function toProviderAuth(row: SessionModelProviderAuthRow): SessionModelProviderAuthInput {
   const auth = sessionModelProviderAuthSchema.parse({
@@ -566,23 +570,24 @@ export class SessionIndexStore {
              ORDER BY paged_sessions.updated_at DESC, paged_sessions.id DESC`
           )
           .bind(...pageParams, viewerUserId)
-          .all<ViewerSessionRow>()
+          .all<unknown>()
       : await this.db
           .prepare(pageSql)
           .bind(...pageParams)
-          .all<SessionRow>();
+          .all<unknown>();
 
-    const rows = result.results || [];
-    const sessions = await this.attachListMetadata(
-      rows.slice(0, limit).map((row) => ({
-        ...toEntry(row),
-        ...(viewerUserId ? { readState: readStateFromRow(row as ViewerSessionRow) } : {}),
-      }))
-    );
+    const rawRows = result.results ?? [];
+    const entries = viewerUserId
+      ? rawRows.slice(0, limit).map((row) => {
+          const parsed = parseViewerSessionRow(row);
+          return { ...toEntry(parsed), readState: readStateFromRow(parsed) };
+        })
+      : rawRows.slice(0, limit).map((row) => toEntry(parseRequiredSessionRow(row)));
+    const sessions = await this.attachListMetadata(entries);
 
     return {
       sessions,
-      hasMore: rows.length > limit,
+      hasMore: rawRows.length > limit,
     };
   }
 
