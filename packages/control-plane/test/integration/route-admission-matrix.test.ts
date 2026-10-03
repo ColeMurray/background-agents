@@ -114,6 +114,16 @@ function environmentRequirementFor(route: RouteContract) {
     : undefined;
 }
 
+function actorlessServicesFor(route: RouteContract) {
+  const authorization = route.authorization;
+  if (authorization.kind === "service") return authorization.services;
+  if (authorization.kind === "active-user" && authorization.service.kind === "actor") {
+    const grants = authorization.service.actorlessGrants;
+    if (grants?.length) return grants.map((grant) => grant.service);
+  }
+  throw new Error(`${route.method} ${route.path} has no explicit service policy`);
+}
+
 let automationSequence = 0;
 async function createAutomation(): Promise<string> {
   const id = `matrix-automation-${automationSequence++}`;
@@ -252,14 +262,16 @@ describe("route admission matrix", { timeout: MATRIX_TIMEOUT_MS }, () => {
 
     for (const route of serviceRoutes) {
       const identity = `${route.method} ${route.path}`;
-      if (route.authorization.kind !== "service") {
-        throw new Error(`${identity} declares service authentication without a service policy`);
-      }
       const url = `${BASE}${materialize(route, {})}`;
-      const services: readonly string[] = route.authorization.services;
-      const allowedService = route.authorization.services[0];
+      const allowedServices = actorlessServicesFor(route);
+      const services: readonly string[] = allowedServices;
+      const allowedService = allowedServices[0];
       const deniedService = BOT_SERVICES.find((service) => !services.includes(service));
       if (!deniedService) throw new Error(`${identity} admits every bot service`);
+      const denialCode =
+        route.authorization.kind === "service"
+          ? "service_capability_required"
+          : "service_actor_required";
 
       const admitted = await serviceFetch(url, {
         method: route.method,
@@ -275,7 +287,7 @@ describe("route admission matrix", { timeout: MATRIX_TIMEOUT_MS }, () => {
       });
       expect(wrongBot.status, `${identity} wrong bot`).toBe(403);
       await expect(wrongBot.json(), identity).resolves.toMatchObject({
-        code: "service_capability_required",
+        code: denialCode,
       });
 
       const browser = await serviceFetch(url, {
@@ -284,7 +296,7 @@ describe("route admission matrix", { timeout: MATRIX_TIMEOUT_MS }, () => {
       });
       expect(browser.status, `${identity} browser owner`).toBe(403);
       await expect(browser.json(), identity).resolves.toMatchObject({
-        code: "service_capability_required",
+        code: denialCode,
       });
 
       observed.push(
@@ -575,15 +587,11 @@ describe("route admission sentinel", { timeout: MATRIX_TIMEOUT_MS }, () => {
           await expectReach(wrongSandbox, "bearer", false);
           break;
         case "service": {
-          if (route.authorization.kind !== "service") throw new Error(identity);
-          const services: readonly string[] = route.authorization.services;
+          const allowedServices = actorlessServicesFor(route);
+          const services: readonly string[] = allowedServices;
           const denied = BOT_SERVICES.find((service) => !services.includes(service));
           if (!denied) throw new Error(`${identity} admits every bot service`);
-          await expectReach(
-            await botHeaders(url, method, route.authorization.services[0]),
-            "bot",
-            true
-          );
+          await expectReach(await botHeaders(url, method, allowedServices[0]), "bot", true);
           await expectReach(await botHeaders(url, method, denied), "wrong bot", false);
           await expectReach(owner, "web", false);
           await expectReach({}, "anonymous", false);

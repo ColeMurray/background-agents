@@ -327,7 +327,7 @@ export function toAutomationRun(row: EnrichedRunRow): AutomationRun {
 // order: childless ⇒ skipped (new skips are childless; the app enforces
 // skip_reason on them); any active child ⇒ starting until any child has left
 // 'starting', then running; all-terminal: all skipped ⇒ skipped (legacy
-// backfilled skip rows), no failure ⇒ completed, no success ⇒ failed,
+// backfilled skip rows), any denied child ⇒ unauthorized, no failure ⇒ completed, no success ⇒ failed,
 // otherwise partial_failed.
 
 const DERIVED_INVOCATION_STATUS_SQL = `CASE
@@ -338,6 +338,7 @@ const DERIVED_INVOCATION_STATUS_SQL = `CASE
       ELSE 'running'
     END
   WHEN SUM(CASE WHEN r.status = 'skipped' THEN 1 ELSE 0 END) = COUNT(r.id) THEN 'skipped'
+  WHEN SUM(CASE WHEN r.status = 'unauthorized' THEN 1 ELSE 0 END) > 0 THEN 'unauthorized'
   WHEN SUM(CASE WHEN r.status = 'failed' THEN 1 ELSE 0 END) = 0 THEN 'completed'
   WHEN SUM(CASE WHEN r.status = 'completed' THEN 1 ELSE 0 END) = 0 THEN 'failed'
   ELSE 'partial_failed'
@@ -360,6 +361,7 @@ export function deriveInvocationStatus(counts: {
   failed: number;
   completed: number;
   skipped: number;
+  unauthorized: number;
   // Required: distinguishes "starting" from "running". InvocationRunAggregate
   // folds both into `active` and has no `starting`, so it must not be passed here.
   starting: number;
@@ -369,6 +371,7 @@ export function deriveInvocationStatus(counts: {
     return counts.starting === counts.total ? "starting" : "running";
   }
   if (counts.skipped === counts.total) return "skipped";
+  if (counts.unauthorized > 0) return "unauthorized";
   if (counts.failed === 0) return "completed";
   if (counts.completed === 0) return "failed";
   return "partial_failed";
@@ -1504,7 +1507,7 @@ export class AutomationStore {
 
   /**
    * Automations still carrying consecutive_failures whose LATEST recent
-   * non-skip invocation may be a fully-completed one (missed reset). The
+   * accounting-relevant invocation may be a fully-completed one (missed reset). The
    * caller verifies completeness via the sibling aggregate before resetting —
    * a newer failed invocation naturally disqualifies its automation here.
    */
@@ -1517,6 +1520,10 @@ export class AutomationStore {
         `SELECT a.id AS automation_id,
                 (SELECT i.id FROM automation_invocations i
                  WHERE i.automation_id = a.id AND i.skip_reason IS NULL AND i.created_at >= ?
+                   AND EXISTS (
+                     SELECT 1 FROM automation_runs r
+                     WHERE r.invocation_id = i.id
+                       AND r.status IN ('starting', 'running', 'completed', 'failed'))
                  ORDER BY i.created_at DESC LIMIT 1) AS invocation_id
          FROM automations a
          WHERE a.consecutive_failures > 0 AND a.deleted_at IS NULL

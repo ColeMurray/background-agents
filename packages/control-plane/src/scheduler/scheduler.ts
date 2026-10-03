@@ -94,6 +94,7 @@ import {
   type AutomationSessionTarget,
 } from "../automation/session-target";
 import { isAutomationExecutionAuthorized } from "../automation/authorization-guard";
+import { admitGitHubEvent } from "../automation/github-event-admission";
 import type { RequestContext } from "../routes/shared";
 import { retryDelivery } from "../session/callback-delivery";
 import {
@@ -273,6 +274,8 @@ interface StartInvocationParams {
   triggerMetadata?: string | null;
   /** Pre-fetched repository selection (the tick passes its batched fetch). */
   repositories?: AutomationRepositoryInsert[];
+  /** GitHub event identity that repository resolution must preserve. */
+  eventRepositoryId?: number;
   /** Pre-fetched environment selection (the tick passes its batched fetch). */
   environments?: AutomationEnvironmentRow[];
   /** Complete prompt to use directly, or as the fallback for a lazy override. */
@@ -293,7 +296,7 @@ interface ExecutionPrincipal {
   scmEnrichment: GitHubEnrichment | null;
 }
 
-type StartInvocationResult =
+export type StartInvocationResult =
   /** Invocation inserted; children launched (some may have pre-failed). */
   | { outcome: "started"; invocationId: string; runs: AutomationRunRow[]; launched: number }
   /** Overlap — a childless skipped invocation was recorded (schedule/event). */
@@ -481,6 +484,16 @@ export class Scheduler {
       };
     }
     const resolutions = await resolveAutomationRepositories(this.env, selection);
+    for (const resolution of resolutions) {
+      if (
+        params.eventRepositoryId !== undefined &&
+        resolution.repository !== null &&
+        resolution.repository.repoId !== params.eventRepositoryId
+      ) {
+        resolution.repository = null;
+        resolution.error = "Repository identity changed during event resolution";
+      }
+    }
 
     const invocationId = generateId();
     const scheduledAt = params.scheduledAt ?? now;
@@ -1092,6 +1105,26 @@ export class Scheduler {
   /** Match an inbound event to authorized automations and start or steer their invocations. */
   async event(event: AutomationEvent): Promise<SchedulerEventResult> {
     const store = new AutomationStore(this.db);
+    if (event.source === "github") {
+      return admitGitHubEvent(
+        this.db,
+        event,
+        (automation, repositories) =>
+          this.startInvocation(store, {
+            automation,
+            repositories,
+            source: "event",
+            triggerKey: event.triggerKey,
+            concurrencyKey: event.concurrencyKey,
+            eventRepositoryId: event.repositoryId,
+            instructionsOverride: composeAutomationPrompt(
+              event.contextBlock,
+              automation.instructions
+            ),
+          }),
+        this.log
+      );
+    }
 
     // 1. Find matching automations
     let candidates: AutomationRow[];
@@ -1113,12 +1146,11 @@ export class Scheduler {
             : [];
         break;
       }
-      case "github":
       case "linear":
         candidates = await store.getAutomationsForEvent(
           event.repoOwner,
           event.repoName,
-          event.source === "github" ? "github_event" : "linear_event",
+          "linear_event",
           event.eventType
         );
         break;
@@ -1306,6 +1338,8 @@ export class Scheduler {
           skipped++;
           break;
         case "deduplicated":
+          skipped++;
+          break;
         case "blocked":
           skipped++;
           break;
