@@ -1,10 +1,22 @@
 "use client";
 
-import { useId, useState } from "react";
+import {
+  createContext,
+  useContext,
+  useId,
+  useState,
+  type Dispatch,
+  type ReactNode,
+  type SetStateAction,
+} from "react";
 import { useSWRConfig } from "swr";
 import { sessionVisibilitySchema, type SessionVisibility } from "@open-inspect/shared/types/teams";
 import { useTeamMembers } from "@/hooks/use-teams";
-import { SessionScopeError, updateSessionScope } from "@/lib/session-scope";
+import {
+  SessionScopeError,
+  SessionScopeRefreshError,
+  updateSessionScope,
+} from "@/lib/session-scope";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -27,6 +39,35 @@ export interface SessionVisibilityControlProps {
   visibility: SessionVisibility;
   canChangeVisibility: boolean;
   onUpdated: () => Promise<void>;
+}
+
+interface VisibilityState {
+  selection: SessionVisibility | null;
+  pending: boolean;
+  failure: {
+    target: SessionVisibility;
+    includedChildren: boolean;
+    error: Error;
+  } | null;
+}
+
+const SessionVisibilityContext = createContext<{
+  state: VisibilityState;
+  setState: Dispatch<SetStateAction<VisibilityState>>;
+} | null>(null);
+
+/** Save and recovery state survives inspector remounts at responsive breakpoints. */
+export function SessionVisibilityProvider({ children }: { children: ReactNode }) {
+  const [state, setState] = useState<VisibilityState>({
+    selection: null,
+    pending: false,
+    failure: null,
+  });
+  return (
+    <SessionVisibilityContext.Provider value={{ state, setState }}>
+      {children}
+    </SessionVisibilityContext.Provider>
+  );
 }
 
 /** Membership is only an access warning; server session capabilities authorize the mutation. */
@@ -64,17 +105,21 @@ export function SessionVisibilityControl({
 }: SessionVisibilityControlProps) {
   const { mutate, cache } = useSWRConfig();
   const id = useId();
-  // Holds the in-flight or failed selection; otherwise the control follows refreshed snapshots.
-  const [selection, setSelection] = useState<SessionVisibility | null>(null);
+  const context = useContext(SessionVisibilityContext);
+  if (!context) throw new Error("Session visibility provider is missing");
+  const {
+    state: { selection, pending, failure },
+    setState,
+  } = context;
+  // Retain an acknowledged target if refreshing the snapshot fails.
   const selected = selection ?? visibility;
-  const [includeChildren, setIncludeChildren] = useState(true);
   const [confirm, setConfirm] = useState<{
     target: SessionVisibility;
-    children: boolean;
+    includeChildren: boolean;
+    applyToChildren: boolean;
   } | null>(null);
-  const [pending, setPending] = useState(false);
-  const [failure, setFailure] = useState<Error | null>(null);
-  const editable = canChangeVisibility && !pending;
+  const refreshFailure = failure?.error instanceof SessionScopeRefreshError ? failure.error : null;
+  const editable = canChangeVisibility && !pending && !refreshFailure;
 
   function isAllowed(target: SessionVisibility) {
     return (target !== "team" || !!ownerTeamId) && (target !== "private" || !!ownerUserId);
@@ -82,11 +127,7 @@ export function SessionVisibilityControl({
 
   async function changeVisibility(target: SessionVisibility, children: boolean) {
     if (!editable || !isAllowed(target)) return;
-    const previousChildren = includeChildren;
-    setPending(true);
-    setFailure(null);
-    setSelection(target);
-    setIncludeChildren(children);
+    setState({ selection: target, pending: true, failure: null });
     try {
       await updateSessionScope(
         `/api/sessions/${encodeURIComponent(sessionId)}/visibility`,
@@ -97,28 +138,33 @@ export function SessionVisibilityControl({
         onUpdated,
         { mutate, cache }
       );
-      setSelection(null);
+      setState({ selection: null, pending: false, failure: null });
     } catch (cause) {
-      // Keep the failed attempt only when "Retry without child sessions" is offered.
-      if (!(children && cause instanceof SessionScopeError && cause.canRetryWithoutChildren)) {
-        setSelection(null);
-        setIncludeChildren(previousChildren);
-      }
-      setFailure(cause instanceof Error ? cause : new Error("Failed to change visibility"));
-    } finally {
-      setPending(false);
+      setState({
+        selection: cause instanceof SessionScopeRefreshError ? target : selection,
+        pending: false,
+        failure: {
+          target,
+          includedChildren: children,
+          error: cause instanceof Error ? cause : new Error("Failed to change visibility"),
+        },
+      });
     }
   }
 
-  /**
-   * Cascading a non-private visibility can expose private children, and team visibility can
-   * revoke the owner's access, so both require confirmation.
-   */
-  function requestChange(target: SessionVisibility, children: boolean) {
-    setFailure(null);
-    if ((children && target !== "private") || target === "team") setConfirm({ target, children });
-    else void changeVisibility(target, children);
+  async function retryRefresh() {
+    if (!refreshFailure || pending) return;
+    setState((current) => ({ ...current, pending: true }));
+    try {
+      await refreshFailure.retryRefresh();
+      setState({ selection: null, pending: false, failure: null });
+    } catch {
+      setState((current) => ({ ...current, pending: false }));
+    }
   }
+
+  // Keep recovery available when a failed snapshot refresh revokes capabilities.
+  if (!canChangeVisibility && !pending && !failure && !confirm) return null;
 
   return (
     <div className="space-y-3">
@@ -132,7 +178,7 @@ export function SessionVisibilityControl({
           onValueChange={(value) => {
             const parsed = sessionVisibilitySchema.safeParse(value);
             if (parsed.success && parsed.data !== selected)
-              requestChange(parsed.data, includeChildren);
+              setConfirm({ target: parsed.data, includeChildren: false, applyToChildren: false });
           }}
         >
           <SelectTrigger id={`${id}-visibility`} density="compact" className="h-8 w-40">
@@ -152,31 +198,25 @@ export function SessionVisibilityControl({
       {selected === "team" && ownerTeamId && (
         <SessionTeamOwnerWarning teamId={ownerTeamId} ownerUserId={ownerUserId} />
       )}
-      {failure && <ErrorBanner role="alert">{failure.message}</ErrorBanner>}
+      {failure &&
+        (refreshFailure ? (
+          <p role="status" className="text-xs text-muted-foreground">
+            Visibility saved, but refreshing session data failed.
+          </p>
+        ) : (
+          <ErrorBanner role="alert">{failure.error.message}</ErrorBanner>
+        ))}
       <div className="flex items-center justify-between gap-2">
-        <label
-          className="flex min-w-0 items-center gap-2 text-xs text-muted-foreground"
-          htmlFor={`${id}-children`}
+        <Button
+          size="xs"
+          variant="outline"
+          disabled={!editable}
+          onClick={() =>
+            setConfirm({ target: selected, includeChildren: true, applyToChildren: true })
+          }
         >
-          <Checkbox
-            id={`${id}-children`}
-            checked={includeChildren}
-            disabled={!editable}
-            onCheckedChange={(checked) => {
-              // Checking applies the current visibility to children; unchecking only scopes
-              // future changes to this session.
-              if (checked === true) requestChange(selected, true);
-              else {
-                // Dismissing a retryable cascade failure discards its unsaved target.
-                if (failure) setSelection(null);
-                setIncludeChildren(false);
-                setFailure(null);
-              }
-            }}
-            className="h-3.5 w-3.5 shrink-0"
-          />
-          Include child sessions
-        </label>
+          Apply to child sessions
+        </Button>
         {pending && <span className="text-xs text-muted-foreground">Updating...</span>}
       </div>
       <AlertDialog
@@ -188,16 +228,32 @@ export function SessionVisibilityControl({
         <AlertDialogContent>
           <AlertDialogHeader>
             <AlertDialogTitle>
-              {confirm?.children
+              {confirm?.includeChildren
                 ? "Change child session visibility?"
                 : "Change session visibility?"}
             </AlertDialogTitle>
             <AlertDialogDescription>
-              {confirm?.children
+              {confirm?.includeChildren
                 ? `This will change this session and any child sessions to ${confirm.target} visibility. Any private child sessions will change to ${confirm.target} visibility.`
                 : `This will change this session to ${confirm?.target} visibility.`}
             </AlertDialogDescription>
           </AlertDialogHeader>
+          {confirm && !confirm.applyToChildren && (
+            <label
+              htmlFor={`${id}-children`}
+              className="flex items-center gap-2 text-sm text-muted-foreground"
+            >
+              <Checkbox
+                id={`${id}-children`}
+                checked={confirm.includeChildren}
+                disabled={!editable}
+                onCheckedChange={(checked) =>
+                  setConfirm({ ...confirm, includeChildren: checked === true })
+                }
+              />
+              Also change child sessions
+            </label>
+          )}
           {confirm?.target === "team" && ownerTeamId && (
             <SessionTeamOwnerWarning teamId={ownerTeamId} ownerUserId={ownerUserId} />
           )}
@@ -206,7 +262,7 @@ export function SessionVisibilityControl({
             <AlertDialogAction
               disabled={!editable}
               onClick={() => {
-                if (confirm) void changeVisibility(confirm.target, confirm.children);
+                if (confirm) void changeVisibility(confirm.target, confirm.includeChildren);
               }}
             >
               Change visibility
@@ -214,14 +270,19 @@ export function SessionVisibilityControl({
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
-      {includeChildren &&
-        failure instanceof SessionScopeError &&
-        failure.canRetryWithoutChildren && (
+      {refreshFailure && (
+        <Button size="xs" variant="outline" disabled={pending} onClick={() => void retryRefresh()}>
+          Retry refresh
+        </Button>
+      )}
+      {failure?.includedChildren &&
+        failure.error instanceof SessionScopeError &&
+        failure.error.canRetryWithoutChildren && (
           <Button
             size="xs"
             variant="outline"
             disabled={!editable}
-            onClick={() => void changeVisibility(selected, false)}
+            onClick={() => void changeVisibility(failure.target, false)}
           >
             Retry without child sessions
           </Button>

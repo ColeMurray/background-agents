@@ -14,6 +14,7 @@ import { SessionPromptComposer } from "@/components/session-prompt-composer";
 import { ActionBar } from "@/components/action-bar";
 import { QueuedPromptStack } from "@/components/queued-prompt-stack";
 import { SessionRightSidebar } from "@/components/session-right-sidebar";
+import { SessionVisibilityProvider } from "@/components/session-visibility-control";
 import { Group as PanelGroup, Panel, Separator as PanelResizeHandle } from "react-resizable-panels";
 import { TerminalPanel } from "@/components/terminal-panel";
 import { archiveSession } from "@/lib/archive-session";
@@ -71,7 +72,11 @@ export default function SessionPage() {
   const initialSnapshot = useSessionSnapshot();
   const socket = useSessionSocket(initialSnapshot.session.id, initialSnapshot);
   if (socket.sessionGone) notFound();
-  return <SessionContent initialSnapshot={initialSnapshot} socket={socket} />;
+  return (
+    <SessionVisibilityProvider>
+      <SessionContent initialSnapshot={initialSnapshot} socket={socket} />
+    </SessionVisibilityProvider>
+  );
 }
 
 function SessionContent({

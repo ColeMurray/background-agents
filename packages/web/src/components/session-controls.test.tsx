@@ -1,15 +1,28 @@
 // @vitest-environment jsdom
 /// <reference types="@testing-library/jest-dom" />
 
-import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import {
+  act,
+  cleanup,
+  fireEvent,
+  render as renderView,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/react";
+import type { ReactNode } from "react";
 import * as matchers from "@testing-library/jest-dom/matchers";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { browserApiFetch } from "@/lib/browser-api-fetch";
-import { SessionVisibilityControl } from "./session-visibility-control";
+import { SessionVisibilityControl, SessionVisibilityProvider } from "./session-visibility-control";
 import { CollaboratorsSection } from "./sidebar/collaborators-section";
 
 expect.extend(matchers);
+
+function render(ui: ReactNode) {
+  return renderView(ui, { wrapper: SessionVisibilityProvider });
+}
 
 beforeAll(() => {
   Element.prototype.hasPointerCapture = () => false;
@@ -93,32 +106,37 @@ beforeEach(() => {
 afterEach(cleanup);
 
 describe("SessionVisibilityControl", () => {
-  const childrenBox = () => screen.getByRole("checkbox", { name: "Include child sessions" });
+  const childrenBox = () => screen.getByRole("checkbox", { name: "Also change child sessions" });
+  const applyButton = () => screen.getByRole("button", { name: "Apply to child sessions" });
   const confirmButton = () =>
     within(screen.getByRole("alertdialog")).getByRole("button", { name: "Change visibility" });
 
-  it("saves immediately when a visibility is selected, without a save button", async () => {
+  it("saves a confirmed visibility without a separate save button or persistent child preference", async () => {
     render(<SessionVisibilityControl {...baseProps} canChangeVisibility />);
     expect(screen.getByRole("combobox", { name: "Visibility" }).tagName).toBe("BUTTON");
-    expect(childrenBox()).toBeChecked();
+    expect(screen.queryByRole("checkbox")).toBeNull();
     expect(screen.queryByRole("button", { name: "Save" })).toBeNull();
     await selectVisibility("Private");
-    expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
+    expect(childrenBox()).not.toBeChecked();
+    expect(browserApiFetch).not.toHaveBeenCalled();
+    fireEvent.click(confirmButton());
     await waitFor(() => expect(mocks.updated).toHaveBeenCalledOnce());
     expectMutation("/api/sessions/session%2Fid/visibility", {
       visibility: "private",
-      includeChildren: true,
+      includeChildren: false,
     });
     expect(mocks.mutate).toHaveBeenCalledWith(expect.any(Function));
   });
 
-  it("scopes later changes to this session after unchecking children without saving", async () => {
+  it("does not retain the child choice after cancelling a confirmation", async () => {
     render(<SessionVisibilityControl {...baseProps} canChangeVisibility />);
+    await selectVisibility("Private");
     fireEvent.click(childrenBox());
-    expect(childrenBox()).not.toBeChecked();
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
     expect(browserApiFetch).not.toHaveBeenCalled();
     await selectVisibility("Workspace");
-    expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
+    expect(childrenBox()).not.toBeChecked();
+    fireEvent.click(confirmButton());
     await waitFor(() => expect(mocks.updated).toHaveBeenCalledOnce());
     expectMutation("/api/sessions/session%2Fid/visibility", {
       visibility: "workspace",
@@ -126,36 +144,24 @@ describe("SessionVisibilityControl", () => {
     });
   });
 
-  it.each(["workspace", "team"] as const)(
-    "confirms before checking children applies %s visibility to them",
+  it.each(["workspace", "team", "private"] as const)(
+    "confirms the explicit action to apply %s visibility to children",
     async (visibility) => {
       render(
         <SessionVisibilityControl {...baseProps} visibility={visibility} canChangeVisibility />
       );
-      fireEvent.click(childrenBox());
-      fireEvent.click(childrenBox());
+      fireEvent.click(applyButton());
       expect(browserApiFetch).not.toHaveBeenCalled();
+      expect(screen.queryByRole("checkbox")).toBeNull();
       fireEvent.click(confirmButton());
       await waitFor(() => expect(mocks.updated).toHaveBeenCalledOnce());
       expectMutation("/api/sessions/session%2Fid/visibility", {
         visibility,
         includeChildren: true,
       });
-      expect(childrenBox()).toBeChecked();
+      expect(screen.queryByRole("checkbox")).toBeNull();
     }
   );
-
-  it("applies private visibility to children immediately when checked", async () => {
-    render(<SessionVisibilityControl {...baseProps} visibility="private" canChangeVisibility />);
-    fireEvent.click(childrenBox());
-    fireEvent.click(childrenBox());
-    expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
-    await waitFor(() => expect(mocks.updated).toHaveBeenCalledOnce());
-    expectMutation("/api/sessions/session%2Fid/visibility", {
-      visibility: "private",
-      includeChildren: true,
-    });
-  });
 
   it("does not save when the current visibility is reselected", async () => {
     render(<SessionVisibilityControl {...baseProps} canChangeVisibility />);
@@ -169,8 +175,8 @@ describe("SessionVisibilityControl", () => {
     async (includeChildren) => {
       mocks.members = [];
       render(<SessionVisibilityControl {...baseProps} visibility="private" canChangeVisibility />);
-      if (!includeChildren) fireEvent.click(childrenBox());
       await selectVisibility("Team");
+      if (includeChildren) fireEvent.click(childrenBox());
       expect(mocks.useMembers).toHaveBeenCalledWith("source");
       expect(
         within(screen.getByRole("alertdialog")).getByText(/owner is not a member.*may lose access/i)
@@ -193,14 +199,14 @@ describe("SessionVisibilityControl", () => {
       )
     );
     render(<SessionVisibilityControl {...baseProps} canChangeVisibility />);
-    fireEvent.click(childrenBox());
     await selectVisibility("Private");
+    fireEvent.click(confirmButton());
     expect(await screen.findByRole("alert")).toHaveTextContent("not_owner");
     expect(screen.queryByRole("button", { name: "Retry without child sessions" })).toBeNull();
     expect(screen.getByRole("combobox", { name: "Visibility" })).toHaveTextContent("Team");
   });
 
-  it("discards a retryable failed target when children are unchecked", async () => {
+  it("keeps the persisted value and original failure after cancelling another change", async () => {
     vi.mocked(browserApiFetch).mockResolvedValueOnce(
       Response.json(
         { error: "Descendant inaccessible", code: "descendant_inaccessible" },
@@ -208,25 +214,35 @@ describe("SessionVisibilityControl", () => {
       )
     );
     render(<SessionVisibilityControl {...baseProps} canChangeVisibility />);
-    await selectVisibility("Private");
-    await screen.findByRole("button", { name: "Retry without child sessions" });
+    await selectVisibility("Workspace");
     fireEvent.click(childrenBox());
-    expect(screen.queryByRole("alert")).toBeNull();
+    fireEvent.click(confirmButton());
+    await screen.findByRole("button", { name: "Retry without child sessions" });
+    await selectVisibility("Private");
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    expect(screen.getByRole("alert")).toHaveTextContent("descendant_inaccessible");
     expect(screen.getByRole("combobox", { name: "Visibility" })).toHaveTextContent("Team");
+    fireEvent.click(screen.getByRole("button", { name: "Retry without child sessions" }));
+    await waitFor(() => expect(mocks.updated).toHaveBeenCalledOnce());
+    expectMutation("/api/sessions/session%2Fid/visibility", {
+      visibility: "workspace",
+      includeChildren: false,
+    });
   });
 
-  it("restores the checkbox when a checkbox-triggered cascade fails", async () => {
+  it("reports an explicit child action failure without changing the visibility", async () => {
     vi.mocked(browserApiFetch).mockResolvedValueOnce(
       Response.json({ error: "Session owner required", code: "owner_required" }, { status: 400 })
     );
     render(<SessionVisibilityControl {...baseProps} visibility="private" canChangeVisibility />);
-    fireEvent.click(childrenBox());
-    fireEvent.click(childrenBox());
+    fireEvent.click(applyButton());
+    fireEvent.click(confirmButton());
     expect(await screen.findByRole("alert")).toHaveTextContent("owner_required");
-    expect(childrenBox()).not.toBeChecked();
+    expect(screen.getByRole("combobox", { name: "Visibility" })).toHaveTextContent("Private");
+    expect(screen.queryByRole("checkbox")).toBeNull();
   });
 
-  it("disables unavailable team/private options and all controls without capabilities", async () => {
+  it("hides idle controls without capabilities and disables unavailable team/private options", async () => {
     const { rerender } = render(
       <SessionVisibilityControl
         {...baseProps}
@@ -236,8 +252,8 @@ describe("SessionVisibilityControl", () => {
         canChangeVisibility={false}
       />
     );
-    expect(screen.getByRole("combobox", { name: "Visibility" })).toBeDisabled();
-    expect(childrenBox()).toBeDisabled();
+    expect(screen.queryByRole("combobox", { name: "Visibility" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Apply to child sessions" })).toBeNull();
     rerender(
       <SessionVisibilityControl
         {...baseProps}
@@ -271,6 +287,7 @@ describe("SessionVisibilityControl", () => {
       );
       const label = target.charAt(0).toUpperCase() + target.slice(1);
       await selectVisibility(label);
+      fireEvent.click(childrenBox());
       const confirmation = within(screen.getByRole("alertdialog"));
       expect(
         confirmation.getByText(
@@ -283,6 +300,7 @@ describe("SessionVisibilityControl", () => {
       expect(browserApiFetch).not.toHaveBeenCalled();
 
       await selectVisibility(label);
+      fireEvent.click(childrenBox());
       fireEvent.click(confirmButton());
       await waitFor(() => expect(mocks.updated).toHaveBeenCalledOnce());
       expect(browserApiFetch).toHaveBeenCalledOnce();
@@ -303,7 +321,7 @@ describe("SessionVisibilityControl", () => {
     expect(browserApiFetch).not.toHaveBeenCalled();
   });
 
-  it("retries a cascade only after an explicit click and keeps selected visibility", async () => {
+  it("retries the failed cascade target only after an explicit click", async () => {
     vi.mocked(browserApiFetch).mockResolvedValueOnce(
       Response.json(
         { error: "Forbidden", code: "session_action_denied", reason_code: "not_owner" },
@@ -312,10 +330,11 @@ describe("SessionVisibilityControl", () => {
     );
     render(<SessionVisibilityControl {...baseProps} canChangeVisibility />);
     await selectVisibility("Workspace");
+    fireEvent.click(childrenBox());
     fireEvent.click(confirmButton());
     const retry = await screen.findByRole("button", { name: "Retry without child sessions" });
     expect(screen.getByRole("alert")).toHaveTextContent("not_owner");
-    expect(screen.getByRole("combobox", { name: "Visibility" })).toHaveTextContent("Workspace");
+    expect(screen.getByRole("combobox", { name: "Visibility" })).toHaveTextContent("Team");
     expect(browserApiFetch).toHaveBeenCalledOnce();
     fireEvent.click(retry);
     expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
@@ -325,7 +344,32 @@ describe("SessionVisibilityControl", () => {
       visibility: "workspace",
       includeChildren: false,
     });
-    expect(childrenBox()).not.toBeChecked();
+    expect(screen.queryByRole("checkbox")).toBeNull();
+  });
+
+  it("does not offer another cascade retry after a session-only retry fails", async () => {
+    vi.mocked(browserApiFetch)
+      .mockResolvedValueOnce(Response.json({ error: "Forbidden" }, { status: 403 }))
+      .mockResolvedValueOnce(Response.json({ error: "Still forbidden" }, { status: 403 }));
+    render(<SessionVisibilityControl {...baseProps} canChangeVisibility />);
+    await selectVisibility("Workspace");
+    fireEvent.click(childrenBox());
+    fireEvent.click(confirmButton());
+    fireEvent.click(await screen.findByRole("button", { name: "Retry without child sessions" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("Still forbidden");
+    expect(screen.queryByRole("button", { name: "Retry without child sessions" })).toBeNull();
+    expectMutation("/api/sessions/session%2Fid/visibility", {
+      visibility: "workspace",
+      includeChildren: false,
+    });
+    await selectVisibility("Workspace");
+    fireEvent.click(confirmButton());
+    await waitFor(() => expect(mocks.updated).toHaveBeenCalledOnce());
+    expectMutation("/api/sessions/session%2Fid/visibility", {
+      visibility: "workspace",
+      includeChildren: false,
+    });
+    expect(browserApiFetch).toHaveBeenCalledTimes(3);
   });
 
   it("guards a retry without children when the visibility capability is revoked", async () => {
@@ -337,6 +381,8 @@ describe("SessionVisibilityControl", () => {
     );
     const { rerender } = render(<SessionVisibilityControl {...baseProps} canChangeVisibility />);
     await selectVisibility("Private");
+    fireEvent.click(childrenBox());
+    fireEvent.click(confirmButton());
     const retry = await screen.findByRole("button", { name: "Retry without child sessions" });
     rerender(<SessionVisibilityControl {...baseProps} canChangeVisibility={false} />);
     expect(retry).toBeDisabled();
@@ -353,6 +399,7 @@ describe("SessionVisibilityControl", () => {
       );
       render(<SessionVisibilityControl {...baseProps} canChangeVisibility />);
       await selectVisibility("Private");
+      fireEvent.click(confirmButton());
       expect(await screen.findByRole("alert")).toHaveTextContent(code);
       expect(screen.queryByRole("button", { name: "Retry without child sessions" })).toBeNull();
       expect(screen.getByRole("combobox", { name: "Visibility" })).toHaveTextContent("Team");
@@ -369,14 +416,90 @@ describe("SessionVisibilityControl", () => {
     );
     render(<SessionVisibilityControl {...baseProps} canChangeVisibility />);
     await selectVisibility("Private");
+    fireEvent.click(confirmButton());
     await waitFor(() => expect(mocks.updated).toHaveBeenCalledOnce());
     expect(screen.getByRole("combobox", { name: "Visibility" })).toBeDisabled();
-    expect(childrenBox()).toBeDisabled();
+    expect(applyButton()).toBeDisabled();
     expect(screen.getByText("Updating...")).toBeInTheDocument();
-    finishRefresh();
+    await act(async () => finishRefresh());
     await waitFor(() => expect(screen.getByRole("combobox", { name: "Visibility" })).toBeEnabled());
     expect(screen.queryByText("Updating...")).toBeNull();
     expect(browserApiFetch).toHaveBeenCalledOnce();
+  });
+
+  it.each(["snapshot", "invalidation", "revalidation"])(
+    "keeps a committed visibility when %s fails and retries only refreshing",
+    async (stage) => {
+      if (stage === "snapshot") mocks.updated.mockRejectedValueOnce(new Error("Offline"));
+      else if (stage === "invalidation") mocks.mutate.mockRejectedValueOnce(new Error("Offline"));
+      else
+        mocks.mutate.mockResolvedValueOnce(undefined).mockRejectedValueOnce(new Error("Offline"));
+      const { rerender } = render(<SessionVisibilityControl {...baseProps} canChangeVisibility />);
+      await selectVisibility("Workspace");
+      fireEvent.click(childrenBox());
+      fireEvent.click(confirmButton());
+      expect(await screen.findByText(/visibility saved, but refreshing/i)).toBeInTheDocument();
+      expect(screen.queryByRole("alert")).toBeNull();
+      expect(screen.getByRole("combobox", { name: "Visibility" })).toHaveTextContent("Workspace");
+      expect(screen.getByRole("combobox", { name: "Visibility" })).toBeDisabled();
+      expect(applyButton()).toBeDisabled();
+      expect(screen.queryByRole("button", { name: "Retry without child sessions" })).toBeNull();
+      // Snapshot errors fail capabilities closed, but refresh recovery stays available.
+      rerender(<SessionVisibilityControl {...baseProps} canChangeVisibility={false} />);
+      expect(screen.getByRole("combobox", { name: "Visibility" })).toBeDisabled();
+      const retry = screen.getByRole("button", { name: "Retry refresh" });
+      expect(retry).toBeEnabled();
+      mocks.updated.mockRejectedValueOnce(new Error("Still offline"));
+      fireEvent.click(retry);
+      await waitFor(() => expect(retry).toBeEnabled());
+      expect(screen.getByText(/visibility saved, but refreshing/i)).toBeInTheDocument();
+      expect(screen.getByRole("combobox", { name: "Visibility" })).toHaveTextContent("Workspace");
+      expect(browserApiFetch).toHaveBeenCalledOnce();
+      rerender(
+        <SessionVisibilityControl {...baseProps} visibility="workspace" canChangeVisibility />
+      );
+      fireEvent.click(retry);
+      await waitFor(() =>
+        expect(screen.queryByRole("button", { name: "Retry refresh" })).toBeNull()
+      );
+      expect(screen.getByRole("combobox", { name: "Visibility" })).toHaveTextContent("Workspace");
+      expect(mocks.updated).toHaveBeenCalledTimes(stage === "invalidation" ? 2 : 3);
+      expect(browserApiFetch).toHaveBeenCalledOnce();
+    }
+  );
+
+  it("does not carry a child choice between two mounted layout instances", async () => {
+    const view = render(
+      <>
+        <div data-testid="desktop">
+          <SessionVisibilityControl {...baseProps} canChangeVisibility />
+        </div>
+        <div data-testid="mobile">
+          <SessionVisibilityControl {...baseProps} canChangeVisibility />
+        </div>
+      </>
+    );
+    async function chooseIn(layout: "desktop" | "mobile", target: string) {
+      fireEvent.keyDown(within(view.getByTestId(layout)).getByRole("combobox"), { key: "Enter" });
+      fireEvent.click(await screen.findByRole("option", { name: target }));
+    }
+    await chooseIn("desktop", "Workspace");
+    fireEvent.click(childrenBox());
+    fireEvent.click(confirmButton());
+    await waitFor(() => expect(mocks.updated).toHaveBeenCalledOnce());
+    expectMutation("/api/sessions/session%2Fid/visibility", {
+      visibility: "workspace",
+      includeChildren: true,
+    });
+    await chooseIn("mobile", "Private");
+    expect(childrenBox()).not.toBeChecked();
+    fireEvent.click(confirmButton());
+    await waitFor(() => expect(mocks.updated).toHaveBeenCalledTimes(2));
+    expectMutation("/api/sessions/session%2Fid/visibility", {
+      visibility: "private",
+      includeChildren: false,
+    });
+    expect(browserApiFetch).toHaveBeenCalledTimes(2);
   });
 });
 

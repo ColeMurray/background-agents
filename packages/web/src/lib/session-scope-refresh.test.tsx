@@ -7,7 +7,11 @@ import useSWRInfinite from "swr/infinite";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { browserApiFetch } from "./browser-api-fetch";
 import { buildSessionsPageKey } from "./session-list";
-import { updateSessionScope } from "./session-scope";
+import {
+  isSessionScopeCacheKey,
+  SessionScopeRefreshError,
+  updateSessionScope,
+} from "./session-scope";
 
 vi.mock("./browser-api-fetch", () => ({ browserApiFetch: vi.fn() }));
 
@@ -21,6 +25,94 @@ beforeEach(() => vi.resetAllMocks());
 afterEach(cleanup);
 
 describe("scope refresh with real SWR caches", () => {
+  it("does not invalidate the removed activity endpoint", () => {
+    expect(isSessionScopeCacheKey("/api/activity")).toBe(false);
+    expect(isSessionScopeCacheKey("/api/activity?teamId=source")).toBe(false);
+    expect(isSessionScopeCacheKey(["/api/activity", "viewer"])).toBe(false);
+  });
+
+  it("retries an acknowledged write's snapshot refresh without resending the write", async () => {
+    vi.mocked(browserApiFetch).mockResolvedValue(new Response(null, { status: 204 }));
+    const cause = new Error("Snapshot unavailable");
+    const snapshot = vi.fn().mockRejectedValueOnce(cause).mockResolvedValue(undefined);
+    const { result } = renderHook(() => useSWRConfig(), { wrapper });
+    let failure!: SessionScopeRefreshError;
+    await act(async () => {
+      try {
+        await updateSessionScope(
+          "/api/sessions/s1/visibility",
+          { method: "PUT", body: { visibility: "workspace", includeChildren: true } },
+          snapshot,
+          result.current
+        );
+      } catch (error) {
+        expect(error).toBeInstanceOf(SessionScopeRefreshError);
+        failure = error as SessionScopeRefreshError;
+      }
+    });
+    expect(failure.cause).toBe(cause);
+    await act(() => failure.retryRefresh());
+    expect(snapshot).toHaveBeenCalledTimes(2);
+    expect(browserApiFetch).toHaveBeenCalledOnce();
+  });
+
+  it.each(["inbox", "infinite"])(
+    "detects a real SWR %s revalidation error and retries only the refresh",
+    async (resource) => {
+      vi.mocked(browserApiFetch).mockResolvedValue(new Response(null, { status: 204 }));
+      const fetchInbox = vi.fn().mockResolvedValue({ version: 1 });
+      const fetchPage = vi.fn().mockResolvedValue({ version: 1 });
+      const snapshot = vi.fn().mockResolvedValue(undefined);
+      const { result } = renderHook(
+        () => {
+          const config = useSWRConfig();
+          const inbox = useSWR(["/api/sessions/inbox", "viewer"], fetchInbox, {
+            shouldRetryOnError: false,
+          });
+          const list = useSWRInfinite(
+            (page) => buildSessionsPageKey({ teamIds: ["team_source"], offset: page * 50 }),
+            fetchPage,
+            { shouldRetryOnError: false }
+          );
+          return {
+            config,
+            inboxData: inbox.data,
+            listData: list.data,
+            inboxError: inbox.error,
+            listError: list.error,
+          };
+        },
+        { wrapper }
+      );
+      await waitFor(() => {
+        expect(result.current.inboxData).toEqual({ version: 1 });
+        expect(result.current.listData).toEqual([{ version: 1 }]);
+      });
+      const cause = new Error("Discovery unavailable");
+      (resource === "inbox" ? fetchInbox : fetchPage).mockRejectedValueOnce(cause);
+      let failure!: SessionScopeRefreshError;
+      await act(async () => {
+        try {
+          await updateSessionScope(
+            "/api/sessions/s1/visibility",
+            { method: "PUT" },
+            snapshot,
+            result.current.config
+          );
+        } catch (error) {
+          expect(error).toBeInstanceOf(SessionScopeRefreshError);
+          failure = error as SessionScopeRefreshError;
+        }
+      });
+      expect(failure.cause).toBe(cause);
+      await act(() => failure.retryRefresh());
+      expect(result.current.inboxError).toBeUndefined();
+      expect(result.current.listError).toBeUndefined();
+      expect(snapshot).toHaveBeenCalledTimes(2);
+      expect(browserApiFetch).toHaveBeenCalledOnce();
+    }
+  );
+
   it("completes a scope write without refetching membership or unmounting the terminal", async () => {
     const sandboxAccess = { ttydUrl: "https://terminal.example", ttydToken: "token" };
     const meTeams = { teams: [{ id: "source" }] };
@@ -95,7 +187,6 @@ describe("scope refresh with real SWR caches", () => {
       "/api/teams",
       "/api/teams/team_source/sessions?cursor=page2",
       ["/api/teams/team_source/sessions?bucket=finished", "viewer"],
-      "/api/activity?teamId=team_source",
       ["/api/audit-events?cursor=page2", "viewer"],
       ["/api/sessions/inbox?category=finished", "viewer"],
     ].map((key) => ({ key }))
@@ -179,7 +270,7 @@ describe("scope refresh with real SWR caches", () => {
     expect(fetchPage).toHaveBeenCalledTimes(5);
   });
 
-  it("refetches every discovery page, both team scopes, inbox, activity, and audit without timestamp changes", async () => {
+  it("refetches every discovery page, both team scopes, inbox, and audit without timestamp changes", async () => {
     let version = 1;
     const fetchPage = vi.fn(async (path: string) => ({ path, version, updatedAt: 1 }));
     const snapshot = vi.fn().mockResolvedValue(undefined);
@@ -271,7 +362,6 @@ describe("scope refresh with real SWR caches", () => {
         result.current.teams,
         result.current.sourceBucket,
         result.current.targetBucket,
-        result.current.activity,
         result.current.audit,
       ]) {
         expect(resource.data?.version).toBe(1);
@@ -302,13 +392,16 @@ describe("scope refresh with real SWR caches", () => {
       result.current.teams,
       result.current.sourceBucket,
       result.current.targetBucket,
-      result.current.activity,
       result.current.audit,
     ]) {
       expect(list.data?.version).toBe(2);
       expect(fetchPage.mock.calls.filter(([path]) => path === list.data?.path)).toHaveLength(2);
     }
     expect(result.current.unrelated.data?.version).toBe(1);
+    expect(result.current.activity.data?.version).toBe(1);
+    expect(
+      fetchPage.mock.calls.filter(([path]) => path === "/api/activity?teamId=team_target")
+    ).toHaveLength(1);
     expect(fetchPage.mock.calls.filter(([path]) => path === "/api/repos")).toHaveLength(1);
     expect(result.current.sessionSnapshot.data?.version).toBe(2);
     expect(fetchPage.mock.calls.filter(([path]) => path === "/api/sessions/s1")).toHaveLength(2);

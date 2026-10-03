@@ -329,7 +329,7 @@ export function SessionRightSidebarContent({
                 />
               </CollapsibleSection>
             )}
-            {scope && capabilities.changeVisibility && (
+            {scope && (
               <SessionVisibilityControl
                 {...scope}
                 sessionId={sessionId}
