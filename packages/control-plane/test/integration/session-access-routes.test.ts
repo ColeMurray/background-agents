@@ -334,6 +334,30 @@ describe("HTTP session access by enforcement mode", () => {
   );
 
   it.each(["off", "shadow", "on"])(
+    "blocks queued Slack publication after channel unbinding in %s mode",
+    async (mode) => {
+      const { sessionName, team } = await session("workspace");
+      await bindSlackChannel(team.id);
+      const path = `/sessions/${sessionName}/events?channel=slack:C1&purpose=slack-post`;
+      expect((await fetchMode(path, mode, { service: "slack-bot" })).status).toBe(200);
+      await env.DB.prepare(
+        "DELETE FROM team_channel_bindings WHERE provider = 'slack' AND external_id = 'C1'"
+      ).run();
+      const runtime = vi.spyOn(env.SESSION, "get");
+      for (const resource of ["events", "artifacts", "media/artifact_1"]) {
+        const read = await fetchMode(
+          `/sessions/${sessionName}/${resource}?channel=slack:C1&purpose=slack-post`,
+          mode,
+          { service: "slack-bot" }
+        );
+        expect(read.status).toBe(404);
+        expect(await read.json()).toEqual({ error: "Session not found" });
+      }
+      expect(runtime).not.toHaveBeenCalled();
+    }
+  );
+
+  it.each(["off", "shadow", "on"])(
     "blocks queued Slack publication after channel rebinding in %s mode",
     async (mode) => {
       const { sessionName, team } = await session("workspace");

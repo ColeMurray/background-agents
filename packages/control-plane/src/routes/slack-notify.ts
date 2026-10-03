@@ -92,7 +92,7 @@ export async function handleSlackNotify(
     repo: repoScope,
   };
 
-  if (slackPostGate(session, null)) {
+  if (session.visibility === "private") {
     logDenial(sessionId, ctx, parsed, audit, "session_scope_denied");
     return failureResponse("session_scope_denied", "This session cannot post to Slack.");
   }

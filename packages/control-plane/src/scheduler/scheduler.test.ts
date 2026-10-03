@@ -2110,7 +2110,7 @@ describe("Scheduler", () => {
       mockSessionStoreGet
         .mockReset()
         .mockResolvedValue({ ownerTeamId: "team-a", visibility: "workspace" });
-      mockTeamChannelBindingGet.mockReset().mockResolvedValue(null);
+      mockTeamChannelBindingGet.mockReset().mockResolvedValue({ teamId: "team-a" });
     });
 
     describe("Slack publication preparation retries", () => {
@@ -2231,11 +2231,11 @@ describe("Scheduler", () => {
         expect(await verifyCallbackSignature(body, "test-secret")).toBe(true);
       });
 
-      it("rechecks preparation and scope after transport failure without a nested loop", async () => {
+      it("rechecks preparation and scope after transport failure and unbinding without a nested loop", async () => {
         const { scheduler, slackFetch, warn } = createSlackCompletionHarness();
         mockTeamChannelBindingGet
-          .mockResolvedValueOnce(null)
-          .mockResolvedValue({ teamId: "team-b" });
+          .mockResolvedValueOnce({ teamId: "team-a" })
+          .mockResolvedValue(null);
         slackFetch.mockResolvedValue(new Response("unavailable", { status: 503 }));
         const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
         try {

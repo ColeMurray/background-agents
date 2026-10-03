@@ -13,13 +13,13 @@ export interface SlackPostScope {
 
 export type SlackPostDenial = "missing_session" | "private_session" | "channel_team_mismatch";
 
-/** Workspace readability does not authorize publication into another team's channel. */
+/** Publication requires current channel ownership to match session ownership. */
 export function slackPostGate(
   session: SlackPostSession | null,
   binding: SlackPostChannelBinding | null
 ): SlackPostDenial | null {
   if (!session) return "missing_session";
   if (session.visibility === "private") return "private_session";
-  if (binding && binding.teamId !== session.ownerTeamId) return "channel_team_mismatch";
+  if ((binding?.teamId ?? null) !== session.ownerTeamId) return "channel_team_mismatch";
   return null;
 }

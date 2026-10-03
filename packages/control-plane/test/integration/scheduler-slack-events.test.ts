@@ -8,6 +8,7 @@ import {
   seedSandboxAuth,
   waitForSandboxStatus,
   seedActiveUser,
+  serviceFetch,
   sqlDatabase,
 } from "./helpers";
 import { getUserAuth } from "../../src/auth/user/runtime";
@@ -124,9 +125,15 @@ describe("Scheduler slack event handling (integration)", () => {
     expect(metadata.messageTs).toBe(event.ts);
   });
 
-  it.each(["private", "workspace", "team", null] as const)(
-    "posts Slack run results despite owning team default %s",
-    async (defaultVisibility) => {
+  it.each([
+    ["private", false],
+    ["workspace", false],
+    ["team", false],
+    [null, false],
+    ["private", true],
+  ] as const)(
+    "gates Slack run results for team default %s, binding removed %s",
+    async (defaultVisibility, bindingRemoved) => {
       const teamId = defaultVisibility ? "team-slack" : null;
       if (teamId) {
         await seedTeam(teamId, [["user-1", "member"]]);
@@ -161,6 +168,12 @@ describe("Scheduler slack event handling (integration)", () => {
         visibility: teamId ? "team" : "workspace",
       });
 
+      if (bindingRemoved) {
+        await env.DB.prepare(
+          "DELETE FROM team_channel_bindings WHERE provider = 'slack' AND external_id = 'C1'"
+        ).run();
+      }
+
       await scheduler.runComplete({
         automationId: id,
         runId: run.id,
@@ -171,15 +184,38 @@ describe("Scheduler slack event handling (integration)", () => {
 
       expect((await store.getRunById(id, run.id))?.status).toBe("completed");
       expect(slackFetch).toHaveBeenCalledOnce();
-      expect(slackFetch.mock.calls[0][0]).toBe("https://internal/callbacks/automation-complete");
+      expect(slackFetch.mock.calls[0][0]).toBe(
+        bindingRemoved
+          ? "https://internal/callbacks/thread_closed"
+          : "https://internal/callbacks/automation-complete"
+      );
       const body = JSON.parse(String(slackFetch.mock.calls[0][1]?.body));
-      expect(body).toMatchObject({
-        sessionId: run.session_id,
-        success: true,
-        channel: "C1",
-        reactionMessageTs: event.ts,
-      });
+      expect(body).toMatchObject(
+        bindingRemoved
+          ? {
+              kind: "slack.thread_closed",
+              sessionId: run.session_id,
+              context: { channel: "C1", threadTs: event.ts },
+            }
+          : {
+              sessionId: run.session_id,
+              success: true,
+              channel: "C1",
+              reactionMessageTs: event.ts,
+            }
+      );
       expect(await verifyCallbackSignature(body, "outbound-test-secret")).toBe(true);
+
+      for (const resource of ["events", "artifacts"]) {
+        const read = await serviceFetch(
+          `https://test.local/sessions/${run.session_id}/${resource}?channel=slack:C1&purpose=slack-post`,
+          { service: "slack-bot" }
+        );
+        expect(read.status).toBe(bindingRemoved ? 404 : 200);
+        expect(await read.json()).toMatchObject(
+          bindingRemoved ? { error: "Session not found" } : { [resource]: expect.any(Array) }
+        );
+      }
     }
   );
 

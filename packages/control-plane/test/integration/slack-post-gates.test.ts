@@ -29,6 +29,12 @@ const refusals: Array<{
   },
   { name: "team-visible cross-team session", visibility: "team", boundTeamId: "team-b" },
   { name: "workspace-visible cross-team session", visibility: "workspace", boundTeamId: "team-b" },
+  { name: "team-visible session in an unbound channel", visibility: "team", boundTeamId: null },
+  {
+    name: "team-owned workspace-visible session in an unbound channel",
+    visibility: "workspace",
+    boundTeamId: null,
+  },
 ];
 
 async function setScope(sessionId: string, scope: (typeof refusals)[number]): Promise<void> {
