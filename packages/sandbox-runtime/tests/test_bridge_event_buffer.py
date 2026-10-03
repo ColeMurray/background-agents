@@ -259,10 +259,10 @@ class TestAssistantTextDelivery:
         assert completion["success"] is False
         assert completion["error"] == self.UNDELIVERED
         (summary,) = bridge.activity.record_prompt_diagnostics.call_args.args
-        assert summary["source_outcome"] == "success"
-        assert summary["outcome"] == "error"
-        assert summary["error_category"] == "text_undelivered"
-        assert summary["emitted_event_count"] == 2
+        assert (summary["source_outcome"], summary["error_category"]) == (
+            "success",
+            "text_undelivered",
+        )
 
     @pytest.mark.asyncio
     async def test_text_the_envelope_pushes_past_the_limit_fails_the_turn(

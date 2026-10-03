@@ -722,7 +722,6 @@ class AgentBridge:
         reasoning_effort = cmd.get("reasoningEffort")
         raw_attachments = cmd.get("attachments")
         author_data = cmd.get("author", {})
-        outcome = "success"
         source_outcome: str | None = None
         error_category: str | None = None
         error_type: str | None = None
@@ -840,19 +839,14 @@ class AgentBridge:
                     reasoning_effort=reasoning_effort,
                 )
 
-            if had_error:
-                outcome = "error"
-
         except asyncio.CancelledError:
             # This top-level command boundary settles cancellation just like
             # other prompt failures, while the turn's cost is still available.
             # The done callback remains a fallback for cancellation before start.
-            outcome = "cancelled"
             error_category = "cancelled"
             had_error = True
             error_message = "Task was cancelled"
         except Exception as e:
-            outcome = "error"
             error_category = "exception"
             error_type = type(e).__qualname__
             had_error = True
@@ -865,7 +859,6 @@ class AgentBridge:
                 {
                     "model": model,
                     "reasoning_effort": reasoning_effort,
-                    "outcome": outcome,
                     "harness_id": self._harness_id.value,
                     "source_outcome": source_outcome,
                     "phase": phase,

@@ -143,17 +143,18 @@ class ActivitySupervisor:
     ) -> None:
         """Summarize the turn once, from the terminal event the client receives."""
         fields = dict(activity.diagnostics or {"phase": "not_started"})
-        outcome = fields.pop("outcome", None)
-        if event.get("success"):
-            outcome = "success"
-        elif completed.cancelled():
-            outcome = "cancelled"
+        if completed.cancelled():
             fields.setdefault("error_category", "cancelled")
-        elif outcome not in ("cancelled", "error"):
-            outcome = "error"
-            fields.setdefault("error_category", "exception")
         if activity.interruption_error is not None:
             fields["error_category"] = "interrupted"
+        category = fields.get("error_category")
+        outcome = (
+            "success"
+            if event.get("success")
+            else "cancelled"
+            if category == "cancelled"
+            else "error"
+        )
         if "messageCostUsd" in event:
             fields["message_cost_usd"] = event["messageCostUsd"]
         self._log.info(

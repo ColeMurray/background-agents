@@ -1,9 +1,9 @@
 {
-  "runtimeVersion": "v75-sandbox-transport-diagnostics",
-  "generation": 75,
+  "runtimeVersion": "v73-node-24",
+  "generation": 73,
   "minimumCompatibleGeneration": 62,
   "minimumPreservationGeneration": 71,
-  "minimumRebuildGeneration": 75,
+  "minimumRebuildGeneration": 73,
   "harnessMinimumGeneration": {
     "claude": 73,
     "opencode": 73
