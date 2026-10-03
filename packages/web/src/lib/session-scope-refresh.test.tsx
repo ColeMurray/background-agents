@@ -57,7 +57,7 @@ describe("scope refresh with real SWR caches", () => {
   });
 
   it.each(["inbox", "infinite"])(
-    "detects a real SWR %s revalidation error and retries only the refresh",
+    "treats a real SWR %s revalidation error as best-effort after refreshing the snapshot",
     async (resource) => {
       vi.mocked(browserApiFetch).mockResolvedValue(new Response(null, { status: 204 }));
       const fetchInbox = vi.fn().mockResolvedValue({ version: 1 });
@@ -90,25 +90,147 @@ describe("scope refresh with real SWR caches", () => {
       });
       const cause = new Error("Discovery unavailable");
       (resource === "inbox" ? fetchInbox : fetchPage).mockRejectedValueOnce(cause);
-      let failure!: SessionScopeRefreshError;
-      await act(async () => {
-        try {
-          await updateSessionScope(
-            "/api/sessions/s1/visibility",
-            { method: "PUT" },
-            snapshot,
-            result.current.config
-          );
-        } catch (error) {
-          expect(error).toBeInstanceOf(SessionScopeRefreshError);
-          failure = error as SessionScopeRefreshError;
-        }
+      await act(() =>
+        updateSessionScope(
+          "/api/sessions/s1/visibility",
+          { method: "PUT" },
+          snapshot,
+          result.current.config
+        )
+      );
+      expect(resource === "inbox" ? result.current.inboxError : result.current.listError).toBe(
+        cause
+      );
+      expect(snapshot).toHaveBeenCalledOnce();
+      expect(browserApiFetch).toHaveBeenCalledOnce();
+    }
+  );
+
+  it.each(["before", "after"])(
+    "does not use a concurrent SWR error settling %s the snapshot as the scope result",
+    async (timing) => {
+      vi.mocked(browserApiFetch).mockResolvedValue(new Response(null, { status: 204 }));
+      let failConcurrent!: (error: Error) => void;
+      const fetchInbox = vi
+        .fn()
+        .mockResolvedValueOnce({ version: 1 })
+        .mockImplementationOnce(
+          () =>
+            new Promise((_, reject) => {
+              failConcurrent = reject;
+            })
+        )
+        .mockResolvedValue({ version: 2 });
+      let finishSnapshot!: () => void;
+      const snapshot = vi.fn(
+        () =>
+          new Promise<void>((resolve) => {
+            finishSnapshot = resolve;
+          })
+      );
+      const { result } = renderHook(
+        () => {
+          const config = useSWRConfig();
+          const inbox = useSWR(["/api/sessions/inbox", "viewer"], fetchInbox, {
+            shouldRetryOnError: false,
+          });
+          return { config, inbox, data: inbox.data, error: inbox.error };
+        },
+        { wrapper }
+      );
+      await waitFor(() => expect(result.current.data).toEqual({ version: 1 }));
+      let concurrent!: Promise<unknown>;
+      act(() => {
+        concurrent = result.current.inbox.mutate();
       });
-      expect(failure.cause).toBe(cause);
-      await act(() => failure.retryRefresh());
-      expect(result.current.inboxError).toBeUndefined();
-      expect(result.current.listError).toBeUndefined();
-      expect(snapshot).toHaveBeenCalledTimes(2);
+      await waitFor(() => expect(fetchInbox).toHaveBeenCalledTimes(2));
+      let update!: Promise<void>;
+      act(() => {
+        update = updateSessionScope(
+          "/api/sessions/s1/visibility",
+          { method: "PUT" },
+          snapshot,
+          result.current.config
+        );
+      });
+      await waitFor(() => expect(snapshot).toHaveBeenCalledOnce());
+      await waitFor(() => expect(fetchInbox).toHaveBeenCalledTimes(3));
+      const cause = new Error("Older inbox request failed");
+      if (timing === "before") {
+        await act(async () => {
+          failConcurrent(cause);
+          await concurrent;
+        });
+        expect(result.current.error).toBe(cause);
+      }
+      await act(async () => {
+        finishSnapshot();
+        await update;
+      });
+      if (timing === "after") {
+        await act(async () => {
+          failConcurrent(cause);
+          await concurrent;
+        });
+        expect(result.current.error).toBe(cause);
+      }
+      expect(snapshot).toHaveBeenCalledOnce();
+      expect(browserApiFetch).toHaveBeenCalledOnce();
+    }
+  );
+
+  it.each(["success", "failure"])(
+    "reports snapshot %s and permits recovery while discovery revalidation is pending",
+    async (outcome) => {
+      vi.mocked(browserApiFetch).mockResolvedValue(new Response(null, { status: 204 }));
+      let finishDiscovery!: (data: { version: number }) => void;
+      const fetchInbox = vi
+        .fn()
+        .mockResolvedValueOnce({ version: 1 })
+        .mockImplementationOnce(
+          () =>
+            new Promise((resolve) => {
+              finishDiscovery = resolve;
+            })
+        )
+        .mockResolvedValue({ version: 2 });
+      const cause = new Error("Snapshot unavailable");
+      const snapshot = vi.fn().mockResolvedValue(undefined);
+      if (outcome === "failure") snapshot.mockRejectedValueOnce(cause);
+      const { result } = renderHook(
+        () => {
+          const config = useSWRConfig();
+          const inbox = useSWR("/api/sessions/inbox", fetchInbox);
+          return { config, data: inbox.data };
+        },
+        { wrapper }
+      );
+      await waitFor(() => expect(result.current.data).toEqual({ version: 1 }));
+      const completed = vi.fn();
+      act(() => {
+        void updateSessionScope(
+          "/api/sessions/s1/visibility",
+          { method: "PUT" },
+          snapshot,
+          result.current.config
+        ).then(
+          () => completed(null),
+          (error) => completed(error)
+        );
+      });
+      await waitFor(() => expect(fetchInbox).toHaveBeenCalledTimes(2));
+      await waitFor(() => expect(completed).toHaveBeenCalledOnce());
+      const error = completed.mock.calls[0][0];
+      if (outcome === "failure") {
+        expect(error).toBeInstanceOf(SessionScopeRefreshError);
+        expect(error.cause).toBe(cause);
+        await act(() => error.retryRefresh());
+        expect(snapshot).toHaveBeenCalledTimes(2);
+      } else {
+        expect(error).toBeNull();
+        expect(snapshot).toHaveBeenCalledOnce();
+      }
+      await act(async () => finishDiscovery({ version: 2 }));
       expect(browserApiFetch).toHaveBeenCalledOnce();
     }
   );

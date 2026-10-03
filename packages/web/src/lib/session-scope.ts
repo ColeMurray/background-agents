@@ -95,31 +95,29 @@ export async function updateSessionScope(
       `${message}${details.length ? ` (${details.join(", ")})` : ""}`
     );
   }
+  async function refreshDiscovery() {
+    for (const listener of scopeChangeListeners) listener();
+    const infiniteKeys = [...cache.keys()].filter(
+      (key) =>
+        key.startsWith(INFINITE_CACHE_PREFIX) &&
+        isSessionScopeCacheKey(key.slice(INFINITE_CACHE_PREFIX.length))
+    );
+    // Invalidate inactive pages too: a predicate revalidation only fetches mounted hooks.
+    // SWR skips aggregates in predicate mutations, so clear those explicitly as well.
+    await Promise.allSettled([
+      mutate(isSessionScopeCacheKey, undefined, { revalidate: false }),
+      ...infiniteKeys.map((key) => mutate(key, undefined, { revalidate: false })),
+    ]);
+    await Promise.allSettled([
+      mutate(isSessionScopeCacheKey),
+      ...infiniteKeys.map((key) => mutate(key)),
+    ]);
+  }
   async function refresh() {
+    // Discovery caches are best-effort; their shared errors cannot identify this attempt.
+    void refreshDiscovery().catch(() => {});
     try {
-      for (const listener of scopeChangeListeners) listener();
-      const infiniteKeys = [...cache.keys()].filter(
-        (key) =>
-          key.startsWith(INFINITE_CACHE_PREFIX) &&
-          isSessionScopeCacheKey(key.slice(INFINITE_CACHE_PREFIX.length))
-      );
-      // Invalidate inactive pages too: a predicate revalidation only fetches mounted hooks.
-      // SWR skips aggregates in predicate mutations, so clear those explicitly as well.
-      await Promise.all([
-        mutate(isSessionScopeCacheKey, undefined, { revalidate: false }),
-        ...infiniteKeys.map((key) => mutate(key, undefined, { revalidate: false })),
-      ]);
-      await Promise.all([
-        Promise.resolve().then(onUpdated),
-        mutate(isSessionScopeCacheKey),
-        ...infiniteKeys.map((key) => mutate(key)),
-      ]);
-      // Revalidation-only SWR mutations resolve even when a fetcher fails.
-      for (const key of cache.keys()) {
-        const entry = cache.get(key);
-        const resourceKey = entry && "_k" in entry ? (entry._k ?? key) : key;
-        if (isSessionScopeCacheKey(resourceKey) && entry?.error) throw entry.error;
-      }
+      await onUpdated();
     } catch (cause) {
       throw new SessionScopeRefreshError(refresh, cause);
     }

@@ -17,7 +17,7 @@ import type { SessionDiffState } from "@open-inspect/shared/types/session-diffs"
 import { browserApiFetch } from "@/lib/browser-api-fetch";
 import { SessionDetailsOverlay } from "./session-details-overlay";
 import { SessionRightSidebar } from "./session-right-sidebar";
-import { SessionVisibilityProvider } from "./session-visibility-control";
+import { SessionScopeProvider } from "./session-scope-provider";
 import { useSessionInspectorTab } from "@/hooks/use-session-inspector-tab";
 import { resolveSessionCapabilities, type SessionCapabilities } from "@/lib/session-capabilities";
 import type { SessionScopeControls } from "@/lib/session-scope";
@@ -28,7 +28,7 @@ import {
 } from "@/app/(app)/(sidebar)/session/[id]/session-snapshot-provider";
 
 function render(ui: ReactNode) {
-  return renderView(ui, { wrapper: SessionVisibilityProvider });
+  return renderView(ui, { wrapper: SessionScopeProvider });
 }
 
 vi.mock("@/lib/browser-api-fetch", () => ({ browserApiFetch: vi.fn() }));
@@ -38,7 +38,13 @@ vi.mock("@/hooks/use-teams", () => ({
   useTeamMembers: () => ({ members: [{ userId: "user_owner" }], loading: false, error: undefined }),
 }));
 vi.mock("@/hooks/use-session-collaborator-candidates", () => ({
-  useSessionCollaboratorCandidates: () => ({ candidates: [], loading: false, error: undefined }),
+  useSessionCollaboratorCandidates: () => ({
+    candidates: [
+      { userId: "user_added", displayName: "New collaborator", email: null, avatarUrl: null },
+    ],
+    loading: false,
+    error: undefined,
+  }),
 }));
 
 vi.mock("swr", () => ({
@@ -224,90 +230,134 @@ describe("SessionRightSidebar", () => {
     expect(screen.queryByText("Unnamed user \u00b7 orator")).not.toBeInTheDocument();
   });
 
-  it("preserves committed visibility and refresh recovery when desktop details remount as mobile", async () => {
-    const user = userEvent.setup();
-    const initial: SessionSnapshot = {
-      session: {
-        ...SESSION,
-        ownerTeamId: "team_design",
-        ownerUserId: "user_owner",
-        visibility: "private",
-        capabilities: {
-          canRead: true,
-          canCollaborate: true,
-          canManageLifecycle: true,
-          canDelete: true,
-          canSandbox: true,
-          canManageCollaborators: true,
-          canChangeVisibility: true,
+  it.each(["visibility", "collaborator add", "collaborator remove"])(
+    "preserves acknowledged %s recovery when desktop details remount as mobile",
+    async (operation) => {
+      const user = userEvent.setup();
+      const initial: SessionSnapshot = {
+        session: {
+          ...SESSION,
+          ownerTeamId: "team_design",
+          ownerUserId: "user_owner",
+          visibility: "private",
+          collaborators: ["user_collaborator"],
+          capabilities: {
+            canRead: true,
+            canCollaborate: true,
+            canManageLifecycle: true,
+            canDelete: true,
+            canSandbox: true,
+            canManageCollaborators: true,
+            canChangeVisibility: true,
+          },
         },
-      },
-      artifacts: [],
-      timeline: { events: [], hasMore: false, cursor: null },
-      promptQueue: [],
-    };
-    vi.mocked(browserApiFetch)
-      .mockResolvedValueOnce(Response.json({ ok: true }))
-      .mockRejectedValueOnce(new Error("Snapshot offline"))
-      .mockResolvedValueOnce(
-        Response.json({ ...initial, session: { ...initial.session, visibility: "workspace" } })
-      );
-
-    function Details({ mobile }: { mobile: boolean }) {
-      const current = useSessionSnapshot();
-      const refresh = useRefreshSessionSnapshot();
-      const props = {
-        sessionId: current.session.id,
-        sessionState: current.session,
-        participants: [],
-        presenceSynced: false,
-        events: [],
         artifacts: [],
-        onOpenMedia: vi.fn(),
-        capabilities: resolveSessionCapabilities(current.session.capabilities),
-        scope: {
-          ownerTeamId: current.session.ownerTeamId ?? null,
-          ownerUserId: current.session.ownerUserId ?? null,
-          visibility: current.session.visibility!,
-          collaborators: [],
-          onUpdated: refresh,
-        },
+        timeline: { events: [], hasMore: false, cursor: null },
+        promptQueue: [],
       };
-      return mobile ? (
-        <Overlay {...props} open isPhone onOpenChange={vi.fn()} />
-      ) : (
-        <Sidebar {...props} />
-      );
-    }
+      vi.mocked(browserApiFetch)
+        .mockResolvedValueOnce(Response.json({ ok: true }))
+        .mockRejectedValueOnce(new Error("Snapshot offline"))
+        .mockResolvedValueOnce(
+          Response.json({
+            ...initial,
+            session: {
+              ...initial.session,
+              visibility: operation === "visibility" ? "workspace" : "private",
+              collaborators:
+                operation === "collaborator add"
+                  ? ["user_collaborator", "user_added"]
+                  : operation === "collaborator remove"
+                    ? []
+                    : initial.session.collaborators,
+            },
+          })
+        );
 
-    const { rerender } = render(
-      <SessionSnapshotProvider snapshot={initial}>
-        <Details mobile={false} />
-      </SessionSnapshotProvider>
-    );
-    selectTab("Info");
-    const trigger = screen.getByRole("combobox", { name: "Visibility" });
-    act(() => trigger.focus());
-    await user.keyboard("{Enter}");
-    await user.click(await screen.findByRole("option", { name: "Workspace" }));
-    await user.click(screen.getByRole("button", { name: "Change visibility" }));
-    expect(await screen.findByText(/visibility saved, but refreshing/i)).toBeInTheDocument();
-    rerender(
-      <SessionSnapshotProvider snapshot={initial}>
-        <Details mobile />
-      </SessionSnapshotProvider>
-    );
-    expect(screen.getByRole("combobox", { name: "Visibility" })).toHaveTextContent("Workspace");
-    expect(screen.getByRole("combobox", { name: "Visibility" })).toBeDisabled();
-    await user.click(screen.getByRole("button", { name: "Retry refresh" }));
-    await waitFor(() => expect(screen.queryByRole("button", { name: "Retry refresh" })).toBeNull());
-    expect(screen.getByRole("combobox", { name: "Visibility" })).toHaveTextContent("Workspace");
-    expect(screen.getByRole("combobox", { name: "Visibility" })).toBeEnabled();
-    expect(browserApiFetch).toHaveBeenCalledTimes(3);
-    expect(
-      vi.mocked(browserApiFetch).mock.calls.filter(([, init]) => init?.method === "PUT")
-    ).toHaveLength(1);
-  });
+      function Details({ mobile }: { mobile: boolean }) {
+        const current = useSessionSnapshot();
+        const refresh = useRefreshSessionSnapshot();
+        const props = {
+          sessionId: current.session.id,
+          sessionState: current.session,
+          participants: [],
+          presenceSynced: false,
+          events: [],
+          artifacts: [],
+          onOpenMedia: vi.fn(),
+          capabilities: resolveSessionCapabilities(current.session.capabilities),
+          scope: {
+            ownerTeamId: current.session.ownerTeamId ?? null,
+            ownerUserId: current.session.ownerUserId ?? null,
+            visibility: current.session.visibility!,
+            collaborators: current.session.collaborators ?? [],
+            onUpdated: refresh,
+          },
+        };
+        return mobile ? (
+          <Overlay {...props} open isPhone onOpenChange={vi.fn()} />
+        ) : (
+          <Sidebar {...props} />
+        );
+      }
+
+      const { rerender } = render(
+        <SessionSnapshotProvider snapshot={initial}>
+          <Details mobile={false} />
+        </SessionSnapshotProvider>
+      );
+      selectTab("Info");
+      if (operation === "collaborator remove") {
+        await user.click(screen.getByRole("button", { name: "Remove Unnamed user \u00b7 orator" }));
+      } else {
+        const trigger = screen.getByRole("combobox", {
+          name: operation === "visibility" ? "Visibility" : "Add collaborator",
+        });
+        act(() => trigger.focus());
+        await user.keyboard("{Enter}");
+        await user.click(
+          await screen.findByRole("option", {
+            name: operation === "visibility" ? "Workspace" : "New collaborator",
+          })
+        );
+        await user.click(
+          screen.getByRole("button", {
+            name: operation === "visibility" ? "Change visibility" : "Add",
+          })
+        );
+      }
+      expect(await screen.findByText(/change saved, but refreshing/i)).toBeInTheDocument();
+      rerender(
+        <SessionSnapshotProvider snapshot={initial}>
+          <Details mobile />
+        </SessionSnapshotProvider>
+      );
+      if (operation === "visibility") {
+        expect(screen.getByRole("combobox", { name: "Visibility" })).toHaveTextContent("Workspace");
+        expect(screen.getByRole("combobox", { name: "Visibility" })).toBeDisabled();
+      } else {
+        expect(screen.queryByText("Collaborators")).toBeNull();
+      }
+      await user.click(screen.getByRole("button", { name: "Retry refresh" }));
+      await waitFor(() =>
+        expect(screen.queryByRole("button", { name: "Retry refresh" })).toBeNull()
+      );
+      expect(screen.getByRole("combobox", { name: "Visibility" })).toHaveTextContent(
+        operation === "visibility" ? "Workspace" : "Private"
+      );
+      expect(screen.getByRole("combobox", { name: "Visibility" })).toBeEnabled();
+      if (operation === "collaborator add")
+        expect(screen.getByText("New collaborator")).toBeInTheDocument();
+      if (operation === "collaborator remove")
+        expect(screen.queryByText("Unnamed user \u00b7 orator")).toBeNull();
+      expect(browserApiFetch).toHaveBeenCalledTimes(3);
+      expect(
+        vi
+          .mocked(browserApiFetch)
+          .mock.calls.filter(([, init]) => init?.method === "PUT" || init?.method === "DELETE")
+      ).toHaveLength(1);
+    }
+  );
 
   it.each([true, false])(
     "dismisses only the visibility dropdown on the first Escape (phone=%s)",

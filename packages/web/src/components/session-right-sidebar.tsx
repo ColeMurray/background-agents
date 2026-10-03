@@ -40,6 +40,7 @@ import { sessionActionErrorMessage } from "@/lib/session-action-error";
 import { toast } from "sonner";
 import type { SessionScopeControls } from "@/lib/session-scope";
 import { SessionVisibilityControl } from "./session-visibility-control";
+import { SessionScopeRefreshNotice } from "./session-scope-provider";
 import { CollaboratorsSection } from "./sidebar/collaborators-section";
 
 interface SessionRightSidebarProps {
@@ -336,6 +337,7 @@ export function SessionRightSidebarContent({
                 canChangeVisibility={capabilities.changeVisibility}
               />
             )}
+            {scope && <SessionScopeRefreshNotice />}
             {scope?.visibility === "private" && capabilities.manageCollaborators && (
               <CollaboratorsSection
                 {...scope}
