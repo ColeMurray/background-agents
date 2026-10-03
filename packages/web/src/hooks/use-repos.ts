@@ -1,5 +1,6 @@
 import useSWR from "swr";
 import { useAuthSession } from "@/lib/auth-session";
+import { usableFetchData } from "@/lib/swr-fetch-error";
 
 export interface Repo {
   id: number;
@@ -30,9 +31,11 @@ export function useRepos(enabled = true, teamId?: string | null) {
       : null
   );
 
+  const usable = usableFetchData(data, error);
+
   return {
-    repos: data?.repos ?? [],
-    teamHasRepositoryGrants: data?.teamHasRepositoryGrants,
+    repos: usable?.repos ?? [],
+    teamHasRepositoryGrants: usable?.teamHasRepositoryGrants,
     // The fetch is gated on the auth session, so the list is still loading
     // while the session itself resolves — don't report an authoritative [].
     loading: enabled && (status === "loading" || isLoading),
