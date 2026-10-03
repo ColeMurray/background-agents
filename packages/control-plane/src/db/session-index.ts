@@ -37,16 +37,16 @@ import {
   type ListSessionInboxSnapshotResult,
 } from "./session-inbox-store";
 import { INACTIVE_SESSION_STATUS_SQL } from "@open-inspect/shared/types/session-activity";
-import { readStateFromRow, unreadSql, type ViewerReadStateRow } from "./session-read-state";
+import { readStateFromRow, unreadSql, viewerReadStateRowSchema } from "./session-read-state";
 import {
-  parseRequiredSessionRow,
   parseSessionRow,
-  parseViewerSessionRow,
+  sessionRowSchema,
   toSessionFields as toEntry,
   type SessionRow,
 } from "./session-row";
 import { SessionAuditStore } from "./session-audit";
 import type { SqlDatabase, SqlStatement } from "./sql-database";
+import { z } from "zod";
 
 const CHILD_ADMISSION_LEASE_TTL_MS = 5 * 60 * 1000;
 
@@ -61,6 +61,8 @@ export interface ChildAdmissionLease {
  * descendant CTE run away; spawn-time depth caps keep real trees far below it.
  */
 const MAX_DESCENDANT_DEPTH = 10;
+
+const viewerSessionRowSchema = z.intersection(sessionRowSchema, viewerReadStateRowSchema);
 
 /**
  * One member of a session's repository set — the identity subset of the
@@ -577,12 +579,13 @@ export class SessionIndexStore {
           .all<unknown>();
 
     const rawRows = result.results ?? [];
+    const pageRows = rawRows.slice(0, limit);
     const entries = viewerUserId
-      ? rawRows.slice(0, limit).map((row) => {
-          const parsed = parseViewerSessionRow(row);
-          return { ...toEntry(parsed), readState: readStateFromRow(parsed) };
-        })
-      : rawRows.slice(0, limit).map((row) => toEntry(parseRequiredSessionRow(row)));
+      ? z
+          .array(viewerSessionRowSchema)
+          .parse(pageRows)
+          .map((row) => ({ ...toEntry(row), readState: readStateFromRow(row) }))
+      : z.array(sessionRowSchema).parse(pageRows).map(toEntry);
     const sessions = await this.attachListMetadata(entries);
 
     return {
@@ -728,8 +731,12 @@ export class SessionIndexStore {
          WHERE sessions.id = ?`
       )
       .bind(userId, sessionId)
-      .first<ViewerReadStateRow>();
-    return row ? readStateFromRow(row) : null;
+      .first<unknown>();
+    if (!row) return null;
+
+    const parsed = viewerReadStateRowSchema.safeParse(row);
+    if (!parsed.success) throw new Error("Malformed persisted session read-state row");
+    return readStateFromRow(parsed.data);
   }
 
   async updateTitle(id: string, title: string, updatedAt: number): Promise<boolean> {

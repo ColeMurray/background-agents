@@ -4,11 +4,18 @@ import {
 } from "@open-inspect/shared/types/sessions";
 import { z } from "zod";
 
-export const viewerReadStateRowSchema = z.object({
-  unread: z.number(),
-  latest_terminal_message_id: z.string().nullable(),
-  latest_terminal_message_created_at: z.number().nullable(),
-});
+export const viewerReadStateRowSchema = z.union([
+  z.object({
+    unread: z.literal(0),
+    latest_terminal_message_id: z.null(),
+    latest_terminal_message_created_at: z.null(),
+  }),
+  z.object({
+    unread: z.union([z.literal(0), z.literal(1)]),
+    latest_terminal_message_id: z.string(),
+    latest_terminal_message_created_at: z.number(),
+  }),
+]);
 
 export type ViewerReadStateRow = z.infer<typeof viewerReadStateRowSchema>;
 
@@ -36,6 +43,6 @@ export function readStateFromRow(row: ViewerReadStateRow): SessionReadState {
     : {
         latestMessageId: row.latest_terminal_message_id,
         unread: row.unread === 1,
-        version: row.latest_terminal_message_created_at ?? INITIAL_SESSION_READ_STATE_VERSION,
+        version: row.latest_terminal_message_created_at,
       };
 }

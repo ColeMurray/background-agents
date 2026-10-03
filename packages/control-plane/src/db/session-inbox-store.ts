@@ -1,5 +1,6 @@
 import {
   SESSION_INBOX_CATEGORIES,
+  sessionInboxCategorySchema,
   type SessionInboxCategory,
   type SessionInboxSession,
 } from "@open-inspect/shared/types/session-inbox";
@@ -7,10 +8,11 @@ import type { SessionVisibility } from "@open-inspect/shared/types/teams";
 import { buildSessionListPredicates, type SessionListFilters } from "./session-list-predicates";
 import { attachSessionListMetadata } from "./session-list-metadata";
 import type { SessionInboxCursor } from "./session-inbox-cursor";
-import { readStateFromRow, unreadSql } from "./session-read-state";
+import { readStateFromRow, unreadSql, viewerReadStateRowSchema } from "./session-read-state";
 import { assertD1QueryParameterLimit } from "./query-limits";
-import { parseInboxSessionRow, type InboxSessionRow } from "./session-row";
+import { sessionRowSchema } from "./session-row";
 import type { SqlDatabase, SqlStatement } from "./sql-database";
+import { z } from "zod";
 
 /** Viewer, filtering, and pagination inputs for an inbox query. */
 export interface ListSessionInboxOptions extends Pick<
@@ -41,6 +43,17 @@ export type ScopedInboxSession = SessionInboxSession & {
 };
 
 export type ListSessionInboxSnapshotResult = Record<SessionInboxCategory, ListSessionInboxResult>;
+
+const inboxSessionRowSchema = z.intersection(
+  z.intersection(sessionRowSchema, viewerReadStateRowSchema),
+  z.object({
+    effective_root_session_id: z.string(),
+    latest_updated_at: z.number(),
+    category: sessionInboxCategorySchema,
+  })
+);
+
+type InboxSessionRow = z.infer<typeof inboxSessionRowSchema>;
 
 interface InboxPageData {
   roots: Array<[string, InboxSessionRow[]]>;
@@ -75,10 +88,8 @@ export class SessionInboxStore {
   /** List one inbox category with viewer-specific read state. */
   async list(options: ListSessionInboxOptions): Promise<ListSessionInboxResult> {
     const result = await this.bindInboxQuery(options).all<unknown>();
-    const page = this.buildPageData(
-      options.limit,
-      (result.results ?? []).map(parseInboxSessionRow)
-    );
+    const rows = z.array(inboxSessionRowSchema).parse(result.results ?? []);
+    const page = this.buildPageData(options.limit, rows);
     const sessionsWithMetadata = await attachSessionListMetadata(
       this.db,
       page.roots.flatMap(([, lineage]) => lineage.map(toListItem))
@@ -94,7 +105,7 @@ export class SessionInboxStore {
     options: Omit<ListSessionInboxOptions, "category" | "cursor">
   ): Promise<ListSessionInboxSnapshotResult> {
     const result = await this.bindInboxSnapshotQuery(options).all<unknown>();
-    const rows = (result.results ?? []).map(parseInboxSessionRow);
+    const rows = z.array(inboxSessionRowSchema).parse(result.results ?? []);
     const pages = SESSION_INBOX_CATEGORIES.map((category) =>
       this.buildPageData(
         options.limit,

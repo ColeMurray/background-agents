@@ -3,11 +3,9 @@ import {
   getValidHarnessOrDefault,
   harnessIdSchema,
 } from "@open-inspect/shared/harnesses";
-import { sessionInboxCategorySchema } from "@open-inspect/shared/types/session-inbox";
 import { sessionStatusSchema, spawnSourceSchema } from "@open-inspect/shared/types/sessions";
 import { sessionVisibilitySchema } from "@open-inspect/shared/types/teams";
 import { z } from "zod";
-import { viewerReadStateRowSchema } from "./session-read-state";
 
 /** Persisted D1 session row shared by index and export readers. */
 export const sessionRowSchema = z.object({
@@ -47,40 +45,10 @@ export const sessionRowSchema = z.object({
 
 export type SessionRow = z.infer<typeof sessionRowSchema>;
 
-export const viewerSessionRowSchema = sessionRowSchema.extend(viewerReadStateRowSchema.shape);
-
-export type ViewerSessionRow = z.infer<typeof viewerSessionRowSchema>;
-
-export const inboxSessionRowSchema = viewerSessionRowSchema.extend({
-  effective_root_session_id: z.string(),
-  latest_updated_at: z.number(),
-  category: sessionInboxCategorySchema,
-});
-
-export type InboxSessionRow = z.infer<typeof inboxSessionRowSchema>;
-
 export function parseSessionRow(row: unknown): SessionRow | null {
   if (row === null || row === undefined) return null;
   const parsed = sessionRowSchema.safeParse(row);
   if (!parsed.success) throw new Error("Malformed persisted session index row");
-  return parsed.data;
-}
-
-export function parseRequiredSessionRow(row: unknown): SessionRow {
-  const parsed = parseSessionRow(row);
-  if (!parsed) throw new Error("Malformed persisted session index row");
-  return parsed;
-}
-
-export function parseViewerSessionRow(row: unknown): ViewerSessionRow {
-  const parsed = viewerSessionRowSchema.safeParse(row);
-  if (!parsed.success) throw new Error("Malformed persisted session index row");
-  return parsed.data;
-}
-
-export function parseInboxSessionRow(row: unknown): InboxSessionRow {
-  const parsed = inboxSessionRowSchema.safeParse(row);
-  if (!parsed.success) throw new Error("Malformed persisted session inbox row");
   return parsed.data;
 }
 
