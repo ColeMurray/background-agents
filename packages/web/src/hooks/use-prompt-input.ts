@@ -9,6 +9,7 @@ import {
   DEFAULT_ATTACHMENT_ONLY_MESSAGE,
   useSessionAttachments,
 } from "@/hooks/use-session-attachments";
+import { usePromptDraft } from "@/hooks/use-prompt-draft";
 import type { useSessionSocket } from "@/hooks/use-session-socket";
 import { isUnarchivedSessionListKey } from "@/lib/session-list";
 import {
@@ -33,7 +34,7 @@ export function usePromptInput(
   canSubmit: boolean,
   sendShortcut: KeyboardShortcutBinding
 ) {
-  const [prompt, setPromptState] = useState("");
+  const { prompt, promptRef, setPrompt } = usePromptDraft(sessionId);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
   const sessionAttachments = useSessionAttachments();
@@ -46,11 +47,6 @@ export function usePromptInput(
   const attachmentDraftSignature = sessionAttachments.attachments
     .map((attachment) => attachment.id)
     .join("\u0000");
-  const promptRef = useRef(prompt);
-  const setPrompt = useCallback((value: string) => {
-    promptRef.current = value;
-    setPromptState(value);
-  }, []);
 
   const clearTypingTimeout = useCallback(() => {
     if (typingTimeoutRef.current) {
@@ -172,7 +168,7 @@ export function usePromptInput(
         setPrompt,
         input: inputRef.current,
       }),
-    [hasDraftAttachments, setPrompt]
+    [hasDraftAttachments, promptRef, setPrompt]
   );
 
   return {

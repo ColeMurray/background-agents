@@ -527,6 +527,35 @@ describe("Home", () => {
 
     expect(await screen.findByText("Prompt rejected")).toBeInTheDocument();
     expect(mocks.routerPush).not.toHaveBeenCalled();
+    expect(localStorage.getItem("open-inspect-prompt-draft:new-session")).toBe("Investigate logs");
+  });
+
+  it("restores an unsent prompt draft after a reload", async () => {
+    const { unmount } = render(<Home />);
+    fireEvent.change(screen.getByPlaceholderText("What do you want to build?"), {
+      target: { value: "A long prompt that should survive a refresh" },
+    });
+    unmount();
+
+    render(<Home />);
+
+    expect(await screen.findByPlaceholderText("What do you want to build?")).toHaveValue(
+      "A long prompt that should survive a refresh"
+    );
+  });
+
+  it("clears the stored prompt draft once the session starts", async () => {
+    render(<Home />);
+    fireEvent.change(screen.getByPlaceholderText("What do you want to build?"), {
+      target: { value: "Ship it" },
+    });
+    expect(localStorage.getItem("open-inspect-prompt-draft:new-session")).toBe("Ship it");
+    await waitFor(() => expect(fetch).toHaveBeenCalledWith("/api/sessions", expect.anything()));
+
+    fireEvent.click(screen.getByRole("button", { name: /send/i }));
+
+    await waitFor(() => expect(mocks.routerPush).toHaveBeenCalledWith("/session/session-1"));
+    expect(localStorage.getItem("open-inspect-prompt-draft:new-session")).toBeNull();
   });
 
   it("sends the default harness with a model it can run", async () => {
