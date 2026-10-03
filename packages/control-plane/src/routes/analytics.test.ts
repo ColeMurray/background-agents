@@ -11,7 +11,8 @@ import {
 import type { Env } from "../types";
 import type { SqlStatement } from "../db/sql-database";
 import { AnalyticsDashboardStore } from "../db/analytics-dashboard-store";
-import { analyticsRoutes, DEFAULT_ANALYTICS_DAYS } from "./analytics";
+import { DEFAULT_ANALYTICS_DAYS } from "@open-inspect/shared/types/analytics";
+import { analyticsRoutes } from "./analytics";
 
 const FIXED_NOW = 1_700_000_000_000;
 

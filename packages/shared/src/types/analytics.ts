@@ -2,6 +2,7 @@ import { spawnSourceSchema, type SpawnSource } from "./sessions";
 
 export const ANALYTICS_DAYS = [7, 14, 30, 90] as const;
 export type AnalyticsDays = (typeof ANALYTICS_DAYS)[number];
+export const DEFAULT_ANALYTICS_DAYS: AnalyticsDays = 30;
 
 export const ANALYTICS_BREAKDOWN_BY = [
   "user",

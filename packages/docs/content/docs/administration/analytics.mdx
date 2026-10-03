@@ -1,90 +1,125 @@
 ---
 title: Analytics
-description: What the Analytics page measures, how each card and chart is calculated, and how session cost is derived.
+description: What the Analytics page measures, how each number, chart, and table is calculated, and how session cost is derived.
 audience: team-owner
 owner: web
 status: published
-lastReviewed: "2026-09-28"
+lastReviewed: "2026-10-02"
 relatedCode:
   - packages/shared/src/types/analytics.ts
   - packages/web/src/app/(app)/(sidebar)/analytics/page.tsx
   - packages/web/src/lib/analytics.ts
-  - packages/web/src/components/analytics/summary-cards.tsx
-  - packages/web/src/components/analytics/user-table.tsx
-  - packages/web/src/components/analytics/pull-request-cards.tsx
+  - packages/web/src/components/analytics/analytics-kpi-items.ts
+  - packages/web/src/components/analytics/people-table.tsx
+  - packages/web/src/components/analytics/session-sources.tsx
   - packages/control-plane/src/db/analytics-store.ts
   - packages/control-plane/src/routes/analytics.ts
 ---
 
-The Analytics page in the sidebar shows usage across sessions, repositories, and users for a chosen window, plus outcomes for the pull requests those sessions opened.
+The Analytics page in the sidebar shows usage across sessions, repositories, and users for a chosen window, plus outcomes for the pull requests those sessions opened. It has five tabs: **Overview**, **Usage**, **Cost**, **Pull requests**, and **People**.
 
 ## Who can view it
 
-Every role can open Analytics; it requires only `analytics.read`, which Viewers have. The page refreshes itself every 30 seconds.
+Every role can open Analytics; it requires only `analytics.read`, which Viewers have. The page refreshes itself every 30 seconds; the header shows when the numbers were last updated.
 
 ## Time range
 
-The **Time range** control offers **7d**, **14d**, **30d**, and **90d**. The default is 30 days. Changing the range re-filters windowed metrics on the page.
+The **Time range** control offers **7d**, **14d**, **30d**, and **90d**. The default is 30 days. Changing the range re-filters windowed metrics on every tab. While the new range loads, the previous numbers stay on screen, dimmed.
 
-The window is the last N days ending now. Session metrics count sessions **created** in the window; open-PR inventory is measured as of now regardless of the window.
+The window is the last N days ending now. Session metrics count sessions **created** in the window; open-PR inventory is measured as of now regardless of the window. Daily charts plot every day in the window, so a day without sessions shows as zero, and the last day covers only today so far.
+
+The range, scope, and tab are part of the page URL, so a link opens the same view.
 
 ## Which sessions are counted
 
-The **Scope** control offers **Human** (the default: sessions with `user`, `slack-bot`, `linear-bot`, or `github-bot` spawn sources, including bot-triggered sessions), **Agents** (sessions spawned by other sessions), **Automations** (sessions started by automations), and **All** (every session). It filters session cards, charts, and breakdowns; the automation breakdown appears for Automations and All. The Pull Requests section is different: it counts every pull request created through OpenInspect regardless of session scope, including automation runs, and shows where they came from under **By Source**.
+The **Scope** control offers **Human** (the default: sessions with `user`, `slack-bot`, `linear-bot`, or `github-bot` spawn sources, including bot-triggered sessions), **Agents** (sessions spawned by other sessions), **Automations** (sessions started by automations), and **All** (every session). The info button beside it explains each option.
 
-The header carries an **Includes legacy sessions** badge. Older sessions recorded before cost, pull request, and duration values were tracked are still counted, and the page notes that they may show zero for those values. PR counts reflect pull requests created through OpenInspect's own pull-request flow.
+Scope filters every session number, chart, and table; the **Automations** table on the Usage tab appears for Automations and All. Pull request numbers are different: they count every pull request created through OpenInspect regardless of session scope, including automation runs. The Overview labels them **Pull requests · every source**, and on the **Pull requests** tab the scope control is turned off.
 
-## Summary cards
+**About this data** in the header lists the page's caveats. Older sessions recorded before cost, pull request, and duration values were tracked are still counted and may show zero for those values. PR counts reflect pull requests created through OpenInspect's own pull-request flow.
 
-| Card                   | Value                                                                                                                                                                               |
-| ---------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Total Sessions**     | Sessions created in the window ("Across the last N days").                                                                                                                          |
-| **Active Users**       | "Distinct SCM logins": the number of distinct users with a session in the window, keyed by user ID and falling back to the source-control login for sessions without a linked user. |
-| **Total Cost**         | "Summed across sessions": the sum of every counted session's recorded cost.                                                                                                         |
-| **Avg Cost / Session** | "Average per session": Total Cost divided by Total Sessions.                                                                                                                        |
+## Overview
 
-Below the cards, **Status Mix** shows how many sessions in the window are in each status: completed, active, created, failed, cancelled, and archived. See [Lifecycle and statuses](/sessions/lifecycle-and-statuses).
+The headline numbers come in two groups. The first is captioned with the scope (for example **Human sessions**):
 
-## Sessions Over Time
+| Number              | Value                                                                                                                                                                                            |
+| ------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| **Sessions**        | Sessions created in the window, with the daily average and a sparkline of sessions per day.                                                                                                      |
+| **Active users**    | The number of distinct users with a session in the window, keyed by user ID and falling back to the source-control login for sessions without a linked user. The hint shows sessions per person. |
+| **Spend**           | The sum of every counted session's recorded cost, with the average per session.                                                                                                                  |
+| **Completion rate** | Completed divided by completed + failed + cancelled. Sessions still running, never started, or archived are not in the denominator. A dash until a session finishes.                             |
 
-An area chart of daily session counts by user. The five users with the most sessions are listed as badges above the chart, with a "+N more" badge for the rest. Sessions without a linked user appear as "Unknown user". Hover a day to see each user's count.
+The second group, **Pull requests · every source**, shows **PRs merged** (pull requests opened in the window that have merged, with the acceptance rate and a sparkline of merges per day) and **Cost per merged PR** (defined under [Pull requests](#pull-requests)).
 
-## Sessions by Repository
+Below them, **Sessions per day** and **Pull requests opened and merged** chart the window, and three lists show the top five repositories by sessions (with cost), models by spend (with cost per session), and people by sessions (with completion rate). Each panel links to the tab with the full detail.
 
-A horizontal bar chart of session volume per repository, with **Tracked repos** and **Top repo** tiles. Hovering a bar shows that repository's sessions, cost, PRs, and messages. Sessions with no repository are grouped under "No repository".
+## Usage
 
-## Per-User Breakdown
+**Sessions per day** charts the daily session count across the window.
 
-A sortable table. Click any column heading to sort; click again to reverse.
+**Where sessions start** ranks session sources (User / app, Slack, GitHub, Linear, Agent sub-sessions, Automations) by sessions, beside the users those sessions are attributed to. Select a source to narrow the users to it; **All sources** resets. Sources describe how a session was created, not later messages. User / app includes user-authenticated creation and historical sessions whose source defaulted to user; it does not mean browser-only usage. Users reflect recorded attribution: the requesting actor, the attributed user for an agent sub-session, or the automation owner or manual triggerer. **How attribution works** under the panel repeats these rules. Private sessions are excluded.
 
-| Column              | Meaning                                                                                                  |
-| ------------------- | -------------------------------------------------------------------------------------------------------- |
-| **User**            | Display name or login. Rows labeled "Sessions without linked user" collect sessions with no user record. |
-| **Sessions**        | Session count, with badges for completed, failed, and cancelled sessions.                                |
-| **Completion Rate** | Completed divided by completed + failed + cancelled. Sessions still running are not in the denominator.  |
-| **PRs**             | Pull requests created by the user's sessions.                                                            |
-| **Messages**        | Prompts sent across the user's sessions.                                                                 |
-| **Total Cost**      | Sum of recorded cost across the user's sessions.                                                         |
-| **Avg Duration**    | Average active duration per session; shown as a dash when there is none.                                 |
-| **Last Active**     | Relative time of the user's most recent session activity.                                                |
+**How sessions ended** shows the completion rate and the count of sessions in each status: completed, failed, cancelled, archived, running, and never started. See [Lifecycle and statuses](/sessions/lifecycle-and-statuses).
 
-## Pull Requests
+**Repositories** lists each repository's sessions, completion rate, PRs, messages, and cost. When every repository shares one owner, the owner is shown once above the table. Sessions with no repository are grouped under "No repository".
 
-Rates in this section are computed over pull requests, not sessions. Sessions that never open a pull request (questions, research, debugging) are out of scope here by design.
+**Automations** appears for the Automations and All scopes and lists each automation's sessions, cost, cost per session, completion rate, and PRs.
 
-| Card                  | Value                                                                                                                                                                                                                     |
-| --------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **PRs Created**       | Pull requests opened in the window.                                                                                                                                                                                       |
-| **Acceptance Rate**   | Merged divided by resolved, where resolved is merged plus closed without merging. Still-open PRs are not in the denominator. Shown as a dash until something has resolved. The hint reads "N merged · M closed unmerged". |
-| **Avg Time to Merge** | Mean time from open to merge for pull requests merged in the window; the hint counts "N merged in range". A dash when nothing merged.                                                                                     |
-| **Open PRs**          | Pull requests open right now, not limited to the window, with the average age, or "Nothing waiting on review".                                                                                                            |
-| **Cost / Merged PR**  | The total cost of sessions that produced a pull request in the window, divided by the number merged. A dash until something has merged.                                                                                   |
+## Cost
 
-**By Source** tiles show, for each origin of the sessions behind these pull requests (user, automation, Slack, and so on), how many were created and how many merged.
+The numbers across the top:
 
-**Pull Requests Over Time** plots daily created versus merged counts. Created is bucketed by the day the PR was opened; merged by the day it merged.
+| Number                      | Value                                                                                                                   |
+| --------------------------- | ----------------------------------------------------------------------------------------------------------------------- |
+| **Spend**                   | The sum of every counted session's recorded cost, with the average per session.                                         |
+| **Cache hit ratio**         | Cache reads divided by cache reads plus input tokens.                                                                   |
+| **Billed to subscriptions** | The share of sessions billed through a connected subscription. Those sessions report $0.                                |
+| **Tokens**                  | Input plus output tokens, split into each.                                                                              |
+| **Private sessions**        | The cost of private sessions in the same window and scope, which Spend excludes. Only Owners and Administrators see it. |
 
-**PRs by Repository** lists, for pull requests opened in the window: Repository, Created, Merged, Closed, Acceptance (the same merged ÷ resolved definition per repository), and Avg Time to Merge.
+**By model**, **By provider**, and **By harness** list sessions, cost, and cost per session for each, sorted by cost. The provider table also shows how many sessions ran **On subscription**; the harness table shows the completion rate. Narrow screens hide secondary columns such as PRs and cache hit ratio.
+
+**Most expensive runs** lists the costliest runs in the window, up to 20. A run is a root session plus every sub-session it spawned, so its cost and session count include the whole family. Each run links to its root session.
+
+**Tokens** gives the totals for input, output, cache read, cache write, and reasoning tokens. Reasoning tokens are reported by OpenCode only. Token totals cover sessions created since token capture was enabled; older sessions count as zero.
+
+## Pull requests
+
+Rates on this tab are computed over pull requests, not sessions. Sessions that never open a pull request (questions, research, debugging) are out of scope here by design.
+
+| Number                 | Value                                                                                                                                                                                                                     |
+| ---------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Opened**             | Pull requests opened in the window.                                                                                                                                                                                       |
+| **Acceptance rate**    | Merged divided by resolved, where resolved is merged plus closed without merging. Still-open PRs are not in the denominator. Shown as a dash until something has resolved. The hint reads "N merged · M closed unmerged". |
+| **Avg time to merge**  | Mean time from open to merge for pull requests merged in the window; the hint counts "N merged in range". A dash when nothing merged.                                                                                     |
+| **Open now**           | Pull requests open right now, not limited to the window, with the average age, or "Nothing waiting on review".                                                                                                            |
+| **Cost per merged PR** | The total cost of sessions that produced a pull request in the window, divided by the number merged. A dash until something has merged.                                                                                   |
+
+**Pull requests over time** plots daily opened versus merged counts. Opened is bucketed by the day the PR was opened; merged by the day it merged.
+
+**Where they stand** splits the pull requests opened in the window into merged, open, draft, and closed unmerged, and lists **By source** where the sessions behind them came from (user or app, automation, Slack, and so on) with how many merged.
+
+**By repository** lists, for pull requests opened in the window: Opened, Merged, Closed, Acceptance (the same merged ÷ resolved definition per repository), and Avg time to merge.
+
+**Cost per merged PR** breaks that figure down by the **Models** or **Harnesses** of the sessions that produced the pull requests.
+
+## People
+
+A sortable table of usage per person. Click any column heading to sort; click again to reverse.
+
+| Column             | Meaning                                                                                                              |
+| ------------------ | -------------------------------------------------------------------------------------------------------------------- |
+| **User**           | Display name or login. "Unknown user", marked "Sessions without linked user", collects sessions with no user record. |
+| **Daily sessions** | A sparkline of the person's sessions per day across the window.                                                      |
+| **Sessions**       | Session count.                                                                                                       |
+| **Completion**     | Completed divided by completed + failed + cancelled. Sessions still running are not in the denominator.              |
+| **PRs**            | Pull requests created by the person's sessions.                                                                      |
+| **Messages**       | Prompts sent across the person's sessions.                                                                           |
+| **Cost**           | Sum of recorded cost across the person's sessions.                                                                   |
+| **Avg duration**   | Average active duration per finished session; shown as a dash when there is none.                                    |
+| **Last active**    | Relative time of the person's most recent session activity.                                                          |
+
+**People by source** is the same breakdown as **Where sessions start** on the Usage tab.
 
 ## How cost is derived
 
@@ -93,7 +128,7 @@ Cost figures are sums of each session's recorded cost. A session's cost is a run
 - **OpenCode** reports the priced cost of each step, and the session total accumulates those values.
 - **Claude Agent** reports a cumulative cost per turn, and the session records the increase over the previous turn. When the harness reports no cost for a turn, the turn is recorded as $0 and the session timeline shows a warning saying so. The next turn's cost cannot then be separated from the missing one, so it is also recorded as $0 before accounting resumes.
 
-Nothing on this page estimates cost independently of what the harness reported. Values under $1 are shown with extra precision. Per-session cost caps are covered in [Spend limits](/sessions/spend-limits).
+Nothing on this page estimates cost independently of what the harness reported. Amounts show cents below $1,000 and whole dollars above; amounts under one cent show as `<$0.01`. Per-session cost caps are covered in [Spend limits](/sessions/spend-limits).
 
 ## Troubleshooting
 
@@ -104,13 +139,19 @@ Nothing on this page estimates cost independently of what the harness reported. 
 
 </Accordion>
   <Accordion title="A user shows sessions but $0 cost">
-    The sessions predate cost tracking, or their turns ran on a harness that reported no cost. Open
-    a session and check its timeline for a provider warning.
+    The sessions predate cost tracking, ran on a subscription that reports $0, or their turns ran
+    on a harness that reported no cost. Open a session and check its timeline for a provider
+    warning.
 
 </Accordion>
-  <Accordion title="Active Users looks too high">
+  <Accordion title="Active users looks too high">
     A person can be counted twice when older sessions carry only a source-control login and newer
     ones carry a user ID. The count settles once historical sessions are linked to users.
+
+</Accordion>
+  <Accordion title="The scope control is greyed out">
+    You are on the Pull requests tab. Pull request numbers include every source, so scope does not
+    apply there. Switch to another tab to change it.
 
 </Accordion>
 </Accordions>

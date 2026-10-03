@@ -76,26 +76,34 @@ describe("useAnalyticsDashboard", () => {
     const error = new Error("refresh failed");
     vi.mocked(useSWR).mockReturnValue({ data: snapshot, error, isLoading: false } as never);
 
-    const { result } = renderHook(() => useAnalyticsDashboard(30, "agent"));
+    const { result } = renderHook(() => useAnalyticsDashboard(30, "human"));
 
     expect(useSWR).toHaveBeenCalledTimes(1);
-    expect(useSWR).toHaveBeenCalledWith("/api/analytics/dashboard?days=30&scope=agent", {
+    expect(useSWR).toHaveBeenCalledWith("/api/analytics/dashboard?days=30&scope=human", {
       refreshInterval: ANALYTICS_REFRESH_INTERVAL_MS,
+      keepPreviousData: true,
     });
-    expect(result.current).toMatchObject({
-      summary: snapshot.summary,
-      sessionOrigins: snapshot.sessionOrigins,
-      timeseries: snapshot.timeseries,
-      repoBreakdown: snapshot.breakdowns.repository,
-      userBreakdown: snapshot.breakdowns.user,
-      modelBreakdown: snapshot.breakdowns.model,
-      harnessBreakdown: snapshot.breakdowns.harness,
-      providerBreakdown: snapshot.breakdowns.provider,
-      automationBreakdown: snapshot.breakdowns.automation,
-      runs: snapshot.runs,
-      pullRequests: snapshot.pullRequests,
+    expect(result.current).toEqual({ dashboard: snapshot, loading: false, stale: false, error });
+  });
+
+  it("marks the previous range's snapshot as stale while the requested one loads", () => {
+    vi.mocked(useSWR).mockReturnValue({ data: snapshot, isLoading: true } as never);
+
+    expect(renderHook(() => useAnalyticsDashboard(7, "human")).result.current).toMatchObject({
+      dashboard: snapshot,
       loading: false,
-      error,
+      stale: true,
+    });
+    expect(renderHook(() => useAnalyticsDashboard(30, "agent")).result.current.stale).toBe(true);
+  });
+
+  it("reports loading only while there is nothing to show", () => {
+    vi.mocked(useSWR).mockReturnValue({ data: undefined, isLoading: true } as never);
+
+    expect(renderHook(() => useAnalyticsDashboard(30, "human")).result.current).toMatchObject({
+      dashboard: undefined,
+      loading: true,
+      stale: false,
     });
   });
 
@@ -107,6 +115,7 @@ describe("useAnalyticsDashboard", () => {
 
     expect(useSWR).toHaveBeenCalledWith(null, {
       refreshInterval: ANALYTICS_REFRESH_INTERVAL_MS,
+      keepPreviousData: true,
     });
   });
 });
