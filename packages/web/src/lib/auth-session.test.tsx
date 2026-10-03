@@ -23,7 +23,7 @@ import {
 
 afterEach(() => {
   cleanup();
-  localStorage.clear();
+  sessionStorage.clear();
   vi.resetAllMocks();
   vi.unstubAllGlobals();
 });
@@ -201,15 +201,15 @@ describe("signOut", () => {
 
   it("removes stored prompt drafts but keeps other preferences", async () => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(Response.json({ success: true })));
-    localStorage.setItem("open-inspect-prompt-draft:user-1:new-session", "Secret plan");
-    localStorage.setItem("open-inspect-prompt-draft:user-1:session-1:request", "{}");
-    localStorage.setItem("open-inspect-sidebar-open", "true");
+    sessionStorage.setItem("open-inspect-prompt-draft:user-1:new-session", "Secret plan");
+    sessionStorage.setItem("open-inspect-prompt-draft:user-1:session-1:request", "{}");
+    sessionStorage.setItem("open-inspect-sidebar-open", "true");
 
     await signOut();
 
-    expect(localStorage.getItem("open-inspect-prompt-draft:user-1:new-session")).toBeNull();
-    expect(localStorage.getItem("open-inspect-prompt-draft:user-1:session-1:request")).toBeNull();
-    expect(localStorage.getItem("open-inspect-sidebar-open")).toBe("true");
+    expect(sessionStorage.getItem("open-inspect-prompt-draft:user-1:new-session")).toBeNull();
+    expect(sessionStorage.getItem("open-inspect-prompt-draft:user-1:session-1:request")).toBeNull();
+    expect(sessionStorage.getItem("open-inspect-sidebar-open")).toBe("true");
   });
 
   it("does not clear local state when server-side sign-out fails", async () => {
@@ -217,10 +217,10 @@ describe("signOut", () => {
       "fetch",
       vi.fn().mockResolvedValue(Response.json({ error: "Unavailable" }, { status: 503 }))
     );
-    localStorage.setItem("open-inspect-prompt-draft:user-1:new-session", "Draft");
+    sessionStorage.setItem("open-inspect-prompt-draft:user-1:new-session", "Draft");
 
     await expect(signOut()).rejects.toThrow("Sign-out failed with status 503");
     expect(mocks.mutate).not.toHaveBeenCalled();
-    expect(localStorage.getItem("open-inspect-prompt-draft:user-1:new-session")).toBe("Draft");
+    expect(sessionStorage.getItem("open-inspect-prompt-draft:user-1:new-session")).toBe("Draft");
   });
 });

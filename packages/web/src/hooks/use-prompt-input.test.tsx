@@ -79,7 +79,7 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup();
-  localStorage.clear();
+  sessionStorage.clear();
 });
 
 describe("usePromptInput", () => {
@@ -211,7 +211,42 @@ describe("usePromptInput", () => {
     rerender(<PromptHarness canSubmit />);
 
     await waitFor(() => expect(screen.getByRole("textbox", { name: "Prompt" })).toHaveValue(""));
-    expect(localStorage.getItem("open-inspect-prompt-draft:user-2:session-1")).toBeNull();
+    expect(sessionStorage.getItem("open-inspect-prompt-draft:user-2:session-1")).toBeNull();
+  });
+
+  it("keeps drafts in tab-scoped storage", () => {
+    render(<PromptHarness canSubmit />);
+    fireEvent.change(screen.getByRole("textbox", { name: "Prompt" }), {
+      target: { value: "Tab draft" },
+    });
+
+    expect(sessionStorage.getItem("open-inspect-prompt-draft:user-1:session-1")).toBe("Tab draft");
+    expect(localStorage.length).toBe(0);
+  });
+
+  it("does not erase a newer draft when an earlier send completes after a remount", async () => {
+    let resolveSend: (result: { ok: true }) => void = () => {};
+    mocks.sendPrompt.mockReturnValue(new Promise((resolve) => (resolveSend = resolve)));
+    const { unmount } = render(<PromptHarness canSubmit />);
+    const firstInput = screen.getByRole("textbox", { name: "Prompt" });
+    fireEvent.change(firstInput, { target: { value: "First prompt" } });
+    fireEvent.keyDown(firstInput, { key: "Enter", code: "Enter", ctrlKey: true });
+    await waitFor(() => expect(mocks.sendPrompt).toHaveBeenCalledOnce());
+    unmount();
+
+    render(<PromptHarness canSubmit />);
+    const input = screen.getByRole("textbox", { name: "Prompt" });
+    await waitFor(() => expect(input).toHaveValue("First prompt"));
+    fireEvent.change(input, { target: { value: "Newer draft" } });
+    resolveSend({ ok: true });
+    await Promise.resolve();
+
+    await waitFor(() =>
+      expect(sessionStorage.getItem("open-inspect-prompt-draft:user-1:session-1")).toBe(
+        "Newer draft"
+      )
+    );
+    expect(input).toHaveValue("Newer draft");
   });
 
   it("reuses the unconfirmed request ID when retrying the restored draft after a reload", async () => {
@@ -278,6 +313,6 @@ describe("usePromptInput", () => {
 
     render(<PromptHarness canSubmit />);
     await waitFor(() => expect(screen.getByRole("textbox", { name: "Prompt" })).toHaveValue(""));
-    expect(localStorage.getItem("open-inspect-prompt-draft:user-1:session-1")).toBeNull();
+    expect(sessionStorage.getItem("open-inspect-prompt-draft:user-1:session-1")).toBeNull();
   });
 });

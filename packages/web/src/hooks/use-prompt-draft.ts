@@ -12,7 +12,8 @@ import {
 import type { PromptRequestIdentity } from "@/lib/prompt-request-id";
 
 /**
- * Prompt text that survives page reloads, scoped to the signed-in user. The
+ * Prompt text that survives page reloads, scoped to the signed-in user and
+ * kept in tab-scoped sessionStorage so drafts end with the tab. The
  * draft starts empty so server and client render the same markup, then adopts
  * the stored draft once the user is known. Setting an empty prompt removes the
  * stored draft.
@@ -74,5 +75,31 @@ export function usePromptDraft(draftId: string) {
     [setPendingRequest, storageKey]
   );
 
-  return { prompt, promptRef, setPrompt, pendingRequestRef, setPendingRequest };
+  /**
+   * Clears a sent prompt without erasing a newer draft: a send can finish after
+   * this composer unmounts and a fresh one has stored different text.
+   */
+  const clearSubmittedPrompt = useCallback(
+    (submitted: string) => {
+      if (promptRef.current === submitted) {
+        promptRef.current = "";
+        setPromptState("");
+        pendingRequestRef.current = null;
+      }
+      if (storageKey && readStoredValue(storageKey) === submitted) {
+        writeStoredValue(storageKey, null);
+        writeStoredValue(promptDraftRequestStorageKey(storageKey), null);
+      }
+    },
+    [storageKey]
+  );
+
+  return {
+    prompt,
+    promptRef,
+    setPrompt,
+    clearSubmittedPrompt,
+    pendingRequestRef,
+    setPendingRequest,
+  };
 }

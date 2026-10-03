@@ -15,7 +15,7 @@ export function promptDraftRequestStorageKey(draftStorageKey: string): string {
 
 export function readStoredValue(key: string): string | null {
   try {
-    return localStorage.getItem(key);
+    return sessionStorage.getItem(key);
   } catch {
     return null;
   }
@@ -25,13 +25,13 @@ export function readStoredValue(key: string): string | null {
 export function writeStoredValue(key: string, value: string | null): void {
   try {
     if (value === null) {
-      localStorage.removeItem(key);
+      sessionStorage.removeItem(key);
     } else {
-      localStorage.setItem(key, value);
+      sessionStorage.setItem(key, value);
     }
   } catch {
     try {
-      localStorage.removeItem(key);
+      sessionStorage.removeItem(key);
     } catch {
       // Storage is unavailable; the draft lives only in memory.
     }
@@ -58,15 +58,15 @@ export function parseStoredPromptRequest(value: string | null): PromptRequestIde
   return null;
 }
 
-/** Removes every stored draft so prompt text does not outlive the signed-in account. */
+/** Removes this tab's stored drafts so prompt text does not outlive the signed-in account. */
 export function clearStoredPromptDrafts(): void {
   try {
     const keys: string[] = [];
-    for (let index = 0; index < localStorage.length; index++) {
-      const key = localStorage.key(index);
+    for (let index = 0; index < sessionStorage.length; index++) {
+      const key = sessionStorage.key(index);
       if (key?.startsWith(PROMPT_DRAFT_STORAGE_KEY_PREFIX)) keys.push(key);
     }
-    keys.forEach((key) => localStorage.removeItem(key));
+    keys.forEach((key) => sessionStorage.removeItem(key));
   } catch {
     // Storage is unavailable, so there are no drafts to clear.
   }

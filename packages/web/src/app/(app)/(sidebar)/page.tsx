@@ -133,7 +133,7 @@ export default function Home() {
   });
   const [modelPreferenceDraft, setModelPreferenceDraft] = useState<ModelPreference | null>(null);
   const [harness, setHarness] = useState<HarnessId>(DEFAULT_HARNESS);
-  const { prompt, setPrompt } = usePromptDraft(NEW_SESSION_PROMPT_DRAFT_ID);
+  const { prompt, setPrompt, clearSubmittedPrompt } = usePromptDraft(NEW_SESSION_PROMPT_DRAFT_ID);
   const [warmRequested, setWarmRequested] = useState(false);
   const [skillSelection, setSkillSelection] = useState<SessionSkillSelection>({ mode: "all" });
   const [providerSelections, setProviderSelections] = useState<ModelProviderSelections>({});
@@ -388,7 +388,7 @@ export default function Home() {
 
       if (res.ok) {
         consumeWarmSession(sessionId);
-        setPrompt("");
+        clearSubmittedPrompt(prompt);
         sessionAttachments.clearAttachments();
         mutate(isUnarchivedSessionListKey);
         mutate(isSessionInboxKey);

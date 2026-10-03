@@ -34,8 +34,14 @@ export function usePromptInput(
   canSubmit: boolean,
   sendShortcut: KeyboardShortcutBinding
 ) {
-  const { prompt, promptRef, setPrompt, pendingRequestRef, setPendingRequest } =
-    usePromptDraft(sessionId);
+  const {
+    prompt,
+    promptRef,
+    setPrompt,
+    clearSubmittedPrompt,
+    pendingRequestRef,
+    setPendingRequest,
+  } = usePromptDraft(sessionId);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
   const sessionAttachments = useSessionAttachments();
@@ -126,7 +132,7 @@ export function usePromptInput(
       }
 
       retryRequestRef.current = null;
-      setPrompt("");
+      clearSubmittedPrompt(prompt);
       sessionAttachments.clearAttachments();
       mutate(isUnarchivedSessionListKey);
     } finally {
