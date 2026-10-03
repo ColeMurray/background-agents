@@ -232,7 +232,6 @@ export class SessionMessageQueue {
     });
     if (admission.kind === "enqueued") {
       this.broadcastPromptQueue();
-      if (recoveryHold) await this.sessionStatus.transition("active");
     }
     await this.redrivePendingAutofix(admission.messageId);
     return admission;
@@ -251,9 +250,10 @@ export class SessionMessageQueue {
 
     const session = this.repository.getSession();
     if (!session || session.status === "archived" || session.status === "cancelled") return;
-    if (this.getSandboxPromptBlockReason()) return;
 
+    // Retry pending-work status projection even while recovery prevents dispatch.
     await this.sessionStatus.transition("active");
+    if (this.getSandboxPromptBlockReason()) return;
     await this.processMessageQueue();
   }
 

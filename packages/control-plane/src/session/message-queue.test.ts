@@ -510,37 +510,47 @@ describe("SessionMessageQueue", () => {
     );
   });
 
-  it("re-drives duplicate pending Autofix work without admitting another message", async () => {
-    const h = buildQueue();
-    h.repository.admitAutofixMessage.mockReturnValue({
-      kind: "duplicate",
-      messageId: "msg-existing",
-    });
+  it.each([false, true])(
+    "reconciles duplicate pending Autofix work while held=%s",
+    async (held) => {
+      const h = buildQueue(
+        () => !held,
+        () => (held ? "Sandbox recovery required" : null)
+      );
+      h.repository.admitAutofixMessage.mockReturnValue({
+        kind: "duplicate",
+        messageId: "msg-existing",
+      });
 
-    const result = await h.queue.enqueueAutofix({
-      type: "enqueue_feedback",
-      feedbackKey: "github:review:1234",
-      pullRequest: { repositoryId: "99", number: 42, artifactId: "artifact-1" },
-      prompt: "Address the submitted review feedback.",
-      author: { id: "7", login: "alice" },
-      origin: {
-        kind: "review",
-        authorType: "human",
-        feedbackUrl: "https://github.com/acme/widgets/pull/42#pullrequestreview-1234",
-      },
-      attemptLimit: 10,
-    });
+      const result = await h.queue.enqueueAutofix({
+        type: "enqueue_feedback",
+        feedbackKey: "github:review:1234",
+        pullRequest: { repositoryId: "99", number: 42, artifactId: "artifact-1" },
+        prompt: "Address the submitted review feedback.",
+        author: { id: "7", login: "alice" },
+        origin: {
+          kind: "review",
+          authorType: "human",
+          feedbackUrl: "https://github.com/acme/widgets/pull/42#pullrequestreview-1234",
+        },
+        attemptLimit: 10,
+      });
 
-    expect(result).toEqual({ kind: "duplicate", messageId: "msg-existing" });
-    expect(h.log.info).toHaveBeenCalledWith(
-      "autofix.enqueue",
-      expect.objectContaining({ outcome: "duplicate", message_id: "msg-existing" })
-    );
-    expect(h.sessionStatus.transition).toHaveBeenCalledWith("active");
-    expect(h.broadcast).not.toHaveBeenCalledWith(
-      expect.objectContaining({ type: "sandbox_event" })
-    );
-  });
+      expect(result).toEqual({ kind: "duplicate", messageId: "msg-existing" });
+      expect(h.log.info).toHaveBeenCalledWith(
+        "autofix.enqueue",
+        expect.objectContaining({ outcome: "duplicate", message_id: "msg-existing" })
+      );
+      expect(h.sessionStatus.transition).toHaveBeenCalledWith("active");
+      expect(h.broadcast).not.toHaveBeenCalledWith(
+        expect.objectContaining({ type: "sandbox_event" })
+      );
+      if (held) {
+        expect(h.repository.getNextPendingMessage).not.toHaveBeenCalled();
+        expect(h.sandboxLifecycle.spawnSandbox).not.toHaveBeenCalled();
+      }
+    }
+  );
 
   it("passes closed-session state into atomic Autofix admission", async () => {
     const h = buildQueue();
@@ -685,16 +695,23 @@ describe("SessionMessageQueue", () => {
     expect(h.repository.getNextPendingMessage).not.toHaveBeenCalled();
   });
 
-  it("looks up and re-drives pending Autofix work", async () => {
-    const h = buildQueue();
-    h.repository.getAutofixMessageId.mockReturnValue("msg-existing");
+  it.each([false, true])(
+    "looks up and reconciles pending Autofix work while held=%s",
+    async (held) => {
+      const h = buildQueue(
+        () => !held,
+        () => (held ? "Sandbox recovery required" : null)
+      );
+      h.repository.getAutofixMessageId.mockReturnValue("msg-existing");
 
-    await expect(h.queue.lookupAutofix("github:review:1234")).resolves.toEqual({
-      kind: "found",
-      messageId: "msg-existing",
-    });
-    expect(h.sessionStatus.transition).toHaveBeenCalledWith("active");
-  });
+      await expect(h.queue.lookupAutofix("github:review:1234")).resolves.toEqual({
+        kind: "found",
+        messageId: "msg-existing",
+      });
+      expect(h.sessionStatus.transition).toHaveBeenCalledWith("active");
+      if (held) expect(h.repository.getNextPendingMessage).not.toHaveBeenCalled();
+    }
+  );
 
   it("cancels a pending prompt and confirms it to the requester", async () => {
     const h = buildQueue();

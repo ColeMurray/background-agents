@@ -4,6 +4,7 @@ import type { GitHubAutofixSessionCommand } from "@open-inspect/shared";
 import type { SessionDO } from "../../src/cloudflare/durable-object";
 import { createDurableObjectSessionPlatform } from "../../src/cloudflare/session-platform";
 import { GlobalSecretsStore } from "../../src/db/global-secrets";
+import { SessionStatusProjectionStore } from "../../src/db/session-status-projection-store";
 import type { SessionWebSocket } from "../../src/platform-ports";
 import { ModalSandboxProvider } from "../../src/sandbox/providers/modal-provider";
 import { SANDBOX_RUNTIME_VERSION } from "../../src/sandbox/runtime-manifest";
@@ -288,13 +289,25 @@ describe("Autofix feedback across sandbox recovery", () => {
       await env.DB.prepare("UPDATE sessions SET status = 'failed' WHERE id = ?")
         .bind(sessionName)
         .run();
+      const projection = vi
+        .spyOn(SessionStatusProjectionStore.prototype, "project")
+        .mockRejectedValueOnce(new Error("D1 temporarily unavailable"));
       const messageId = await h.enqueue(feedback(1));
       expect(state.storage.sql.exec("SELECT status FROM session").one()).toMatchObject({
         status: "active",
       });
       expect(
         await env.DB.prepare("SELECT status FROM sessions WHERE id = ?").bind(sessionName).first()
+      ).toMatchObject({ status: "failed" });
+      await expect(h.messageQueue.enqueueAutofix(feedback(1))).resolves.toEqual({
+        kind: "duplicate",
+        messageId,
+      });
+      expect(projection).toHaveBeenCalledTimes(2);
+      expect(
+        await env.DB.prepare("SELECT status FROM sessions WHERE id = ?").bind(sessionName).first()
       ).toMatchObject({ status: "active" });
+      expect(h.rows()).toEqual([{ id: messageId, status: "pending" }]);
       expect(h.prompts()).toEqual([]);
       expect(h.create).not.toHaveBeenCalled();
       expect(h.restore).not.toHaveBeenCalled();
@@ -346,6 +359,67 @@ describe("Autofix feedback across sandbox recovery", () => {
       expect(h.prompts().map((prompt) => prompt.messageId)).toEqual([messageId]);
       await h.complete(messageId);
       expect(h.rows()).toEqual([{ id: messageId, status: "completed" }]);
+    });
+  });
+
+  it("retains feedback during a provider mismatch with no currently available recovery action", async () => {
+    const stub = await recoverySession();
+    await runInSessionDO(stub, async (instance, state) => {
+      const h = recoveryHarness(instance, state, { phase: "unknown", provider: "modal-vm" });
+      expect(h.lifecycleManager.shutdownSnapshot()).toMatchObject({
+        phase: "unknown",
+        availableRecoveryActions: [],
+        discardAvailable: false,
+      });
+      const messageId = await h.enqueue(feedback(1));
+      await h.messageQueue.processMessageQueue();
+      await h.settle();
+      expect(h.rows()).toEqual([{ id: messageId, status: "pending" }]);
+      expect(h.prompts()).toEqual([]);
+      expect(h.create).not.toHaveBeenCalled();
+      expect(h.restore).not.toHaveBeenCalled();
+      expect(h.stop).not.toHaveBeenCalled();
+    });
+  });
+
+  it("queues feedback when an in-flight discard temporarily exposes no recovery actions", async () => {
+    const stub = await recoverySession();
+    await runInSessionDO(stub, async (instance, state) => {
+      const h = recoveryHarness(instance, state);
+      let confirmStop!: () => void;
+      h.stop.mockReturnValueOnce(
+        new Promise((resolve) => {
+          confirmStop = () => resolve({ success: true });
+        })
+      );
+      const discard = h.lifecycleManager.recoverShutdown("discard");
+      try {
+        await vi.waitFor(() => expect(h.stop).toHaveBeenCalledOnce());
+        expect(h.lifecycleManager.shutdownSnapshot()).toMatchObject({
+          phase: "unknown",
+          availableRecoveryActions: [],
+          discardAvailable: false,
+        });
+        const messageId = await h.enqueue(feedback(1));
+        expect(h.rows()).toEqual([{ id: messageId, status: "pending" }]);
+        expect(h.prompts()).toEqual([]);
+        expect(h.create).not.toHaveBeenCalled();
+        expect(h.restore).not.toHaveBeenCalled();
+
+        confirmStop();
+        await discard;
+        await h.settle();
+        expect(h.create).toHaveBeenCalledOnce();
+        expect(h.restore).not.toHaveBeenCalled();
+        await h.ready();
+        expect(h.prompts().map((prompt) => prompt.messageId)).toEqual([messageId]);
+        await h.complete(messageId);
+        expect(h.rows()).toEqual([{ id: messageId, status: "completed" }]);
+      } finally {
+        confirmStop();
+        await discard;
+        await h.settle();
+      }
     });
   });
 

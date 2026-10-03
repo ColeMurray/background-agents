@@ -311,7 +311,8 @@ describe("AutofixService", () => {
       );
       expect(h.feedbackStore.markSkipped).not.toHaveBeenCalled();
       expect(getSandboxPromptBlockReason).toHaveBeenCalled();
-      expect(transition).toHaveBeenCalledExactlyOnceWith("active");
+      expect(transition).toHaveBeenCalledTimes(2);
+      expect(transition).toHaveBeenLastCalledWith("active");
       expect(processMessageQueue).not.toHaveBeenCalled();
     } finally {
       db.close();
