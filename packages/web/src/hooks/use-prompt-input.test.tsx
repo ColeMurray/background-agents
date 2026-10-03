@@ -8,6 +8,7 @@ import {
   DEFAULT_KEYBOARD_SHORTCUTS,
   type KeyboardShortcutBinding,
 } from "@open-inspect/shared/types/keyboard-shortcuts";
+import { readStoredPromptDraft } from "@/lib/prompt-drafts";
 import { usePromptInput } from "./use-prompt-input";
 
 expect.extend(matchers);
@@ -220,7 +221,9 @@ describe("usePromptInput", () => {
       target: { value: "Tab draft" },
     });
 
-    expect(sessionStorage.getItem("open-inspect-prompt-draft:user-1:session-1")).toBe("Tab draft");
+    expect(readStoredPromptDraft("open-inspect-prompt-draft:user-1:session-1")?.prompt).toBe(
+      "Tab draft"
+    );
     expect(localStorage.length).toBe(0);
   });
 
@@ -242,11 +245,45 @@ describe("usePromptInput", () => {
     await Promise.resolve();
 
     await waitFor(() =>
-      expect(sessionStorage.getItem("open-inspect-prompt-draft:user-1:session-1")).toBe(
-        "Newer draft"
-      )
+      expect(readStoredPromptDraft("open-inspect-prompt-draft:user-1:session-1")).toEqual({
+        prompt: "Newer draft",
+        pendingRequest: null,
+      })
     );
     expect(input).toHaveValue("Newer draft");
+  });
+
+  it("starts empty instead of inheriting the previous draft when the session changes", async () => {
+    const { rerender } = render(<PromptHarness canSubmit />);
+    fireEvent.change(screen.getByRole("textbox", { name: "Prompt" }), {
+      target: { value: "Session one draft" },
+    });
+
+    rerender(<PromptHarness canSubmit sessionId="session-2" />);
+
+    await waitFor(() => expect(screen.getByRole("textbox", { name: "Prompt" })).toHaveValue(""));
+    expect(sessionStorage.getItem("open-inspect-prompt-draft:user-1:session-2")).toBeNull();
+    expect(readStoredPromptDraft("open-inspect-prompt-draft:user-1:session-1")?.prompt).toBe(
+      "Session one draft"
+    );
+  });
+
+  it("does not restore a draft whose request ID could not be saved", async () => {
+    mocks.sendPrompt.mockResolvedValue({ ok: false, reason: "timeout" });
+    const { unmount } = render(<PromptHarness canSubmit />);
+    const input = screen.getByRole("textbox", { name: "Prompt" });
+    fireEvent.change(input, { target: { value: "Ship it" } });
+    vi.spyOn(Storage.prototype, "setItem").mockImplementation(() => {
+      throw new DOMException("Quota exceeded", "QuotaExceededError");
+    });
+
+    fireEvent.keyDown(input, { key: "Enter", code: "Enter", ctrlKey: true });
+    await waitFor(() => expect(mocks.sendPrompt).toHaveBeenCalledOnce());
+    vi.restoreAllMocks();
+    unmount();
+
+    render(<PromptHarness canSubmit />);
+    await waitFor(() => expect(screen.getByRole("textbox", { name: "Prompt" })).toHaveValue(""));
   });
 
   it("reuses the unconfirmed request ID when retrying the restored draft after a reload", async () => {

@@ -1,3 +1,4 @@
+import { z } from "zod";
 import type { PromptRequestIdentity } from "@/lib/prompt-request-id";
 
 const PROMPT_DRAFT_STORAGE_KEY_PREFIX = "open-inspect-prompt-draft:";
@@ -5,29 +6,45 @@ const PROMPT_DRAFT_STORAGE_KEY_PREFIX = "open-inspect-prompt-draft:";
 /** Draft ID for the new-session composer, which has no session ID yet. */
 export const NEW_SESSION_PROMPT_DRAFT_ID = "new-session";
 
+/**
+ * A draft and the identity of its unconfirmed send, stored as one record so a
+ * restored draft never loses the idempotency key of a send that may have landed.
+ */
+export type StoredPromptDraft = {
+  prompt: string;
+  pendingRequest: PromptRequestIdentity | null;
+};
+
+const storedPromptDraftSchema = z.object({
+  prompt: z.string().min(1),
+  pendingRequest: z.object({ signature: z.string(), clientRequestId: z.string() }).nullable(),
+});
+
 export function promptDraftStorageKey(userId: string, draftId: string): string {
   return `${PROMPT_DRAFT_STORAGE_KEY_PREFIX}${userId}:${draftId}`;
 }
 
-export function promptDraftRequestStorageKey(draftStorageKey: string): string {
-  return `${draftStorageKey}:request`;
-}
-
-export function readStoredValue(key: string): string | null {
+export function readStoredPromptDraft(key: string): StoredPromptDraft | null {
   try {
-    return sessionStorage.getItem(key);
+    const value = sessionStorage.getItem(key);
+    if (value === null) return null;
+    const parsed = storedPromptDraftSchema.safeParse(JSON.parse(value));
+    return parsed.success ? parsed.data : null;
   } catch {
     return null;
   }
 }
 
-/** Writes or removes a value; a failed write drops the stale value so it is never restored. */
-export function writeStoredValue(key: string, value: string | null): void {
+/**
+ * Writes or removes a draft. An empty prompt removes it, and a failed write
+ * drops the stale record so an outdated draft is never restored.
+ */
+export function writeStoredPromptDraft(key: string, draft: StoredPromptDraft | null): void {
   try {
-    if (value === null) {
-      sessionStorage.removeItem(key);
+    if (draft?.prompt) {
+      sessionStorage.setItem(key, JSON.stringify(draft));
     } else {
-      sessionStorage.setItem(key, value);
+      sessionStorage.removeItem(key);
     }
   } catch {
     try {
@@ -36,26 +53,6 @@ export function writeStoredValue(key: string, value: string | null): void {
       // Storage is unavailable; the draft lives only in memory.
     }
   }
-}
-
-export function parseStoredPromptRequest(value: string | null): PromptRequestIdentity | null {
-  if (!value) return null;
-  try {
-    const parsed: unknown = JSON.parse(value);
-    if (
-      parsed &&
-      typeof parsed === "object" &&
-      "signature" in parsed &&
-      "clientRequestId" in parsed &&
-      typeof parsed.signature === "string" &&
-      typeof parsed.clientRequestId === "string"
-    ) {
-      return { signature: parsed.signature, clientRequestId: parsed.clientRequestId };
-    }
-  } catch {
-    // Ignore malformed values; the next send uses a fresh request ID.
-  }
-  return null;
 }
 
 /** Removes this tab's stored drafts so prompt text does not outlive the signed-in account. */

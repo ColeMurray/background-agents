@@ -202,13 +202,13 @@ describe("signOut", () => {
   it("removes stored prompt drafts but keeps other preferences", async () => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(Response.json({ success: true })));
     sessionStorage.setItem("open-inspect-prompt-draft:user-1:new-session", "Secret plan");
-    sessionStorage.setItem("open-inspect-prompt-draft:user-1:session-1:request", "{}");
+    sessionStorage.setItem("open-inspect-prompt-draft:user-2:session-1", "{}");
     sessionStorage.setItem("open-inspect-sidebar-open", "true");
 
     await signOut();
 
     expect(sessionStorage.getItem("open-inspect-prompt-draft:user-1:new-session")).toBeNull();
-    expect(sessionStorage.getItem("open-inspect-prompt-draft:user-1:session-1:request")).toBeNull();
+    expect(sessionStorage.getItem("open-inspect-prompt-draft:user-2:session-1")).toBeNull();
     expect(sessionStorage.getItem("open-inspect-sidebar-open")).toBe("true");
   });
 

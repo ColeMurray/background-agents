@@ -7,6 +7,7 @@ import userEvent from "@testing-library/user-event";
 import { DEFAULT_MODEL } from "@open-inspect/shared/models";
 import { DEFAULT_KEYBOARD_SHORTCUTS } from "@open-inspect/shared/types/keyboard-shortcuts";
 import { isSessionInboxKey } from "@/lib/session-inbox-api";
+import { readStoredPromptDraft } from "@/lib/prompt-drafts";
 import { isUnarchivedSessionListKey } from "@/lib/session-list";
 import { environment, mocks, repo, sessionCreateBody } from "./page.test-fixture";
 import Home from "./page";
@@ -527,7 +528,7 @@ describe("Home", () => {
 
     expect(await screen.findByText("Prompt rejected")).toBeInTheDocument();
     expect(mocks.routerPush).not.toHaveBeenCalled();
-    expect(sessionStorage.getItem("open-inspect-prompt-draft:user-1:new-session")).toBe(
+    expect(readStoredPromptDraft("open-inspect-prompt-draft:user-1:new-session")?.prompt).toBe(
       "Investigate logs"
     );
   });
@@ -551,7 +552,9 @@ describe("Home", () => {
     fireEvent.change(screen.getByPlaceholderText("What do you want to build?"), {
       target: { value: "Ship it" },
     });
-    expect(sessionStorage.getItem("open-inspect-prompt-draft:user-1:new-session")).toBe("Ship it");
+    expect(readStoredPromptDraft("open-inspect-prompt-draft:user-1:new-session")?.prompt).toBe(
+      "Ship it"
+    );
     await waitFor(() => expect(fetch).toHaveBeenCalledWith("/api/sessions", expect.anything()));
 
     fireEvent.click(screen.getByRole("button", { name: /send/i }));

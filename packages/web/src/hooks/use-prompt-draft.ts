@@ -3,11 +3,9 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useAuthSession } from "@/lib/auth-session";
 import {
-  parseStoredPromptRequest,
-  promptDraftRequestStorageKey,
   promptDraftStorageKey,
-  readStoredValue,
-  writeStoredValue,
+  readStoredPromptDraft,
+  writeStoredPromptDraft,
 } from "@/lib/prompt-drafts";
 import type { PromptRequestIdentity } from "@/lib/prompt-request-id";
 
@@ -19,7 +17,8 @@ import type { PromptRequestIdentity } from "@/lib/prompt-request-id";
  * stored draft.
  *
  * The draft also remembers the identity of a send that has not been confirmed,
- * so a retry after reload reuses its idempotency key. Any prompt change clears it.
+ * in the same stored record, so a retry after reload reuses its idempotency
+ * key. Any prompt change clears it.
  */
 export function usePromptDraft(draftId: string) {
   const { data: authSession } = useAuthSession();
@@ -28,38 +27,37 @@ export function usePromptDraft(draftId: string) {
   const [prompt, setPromptState] = useState("");
   const promptRef = useRef(prompt);
   const pendingRequestRef = useRef<PromptRequestIdentity | null>(null);
-  const previousUserIdRef = useRef(userId);
+  const previousOwnerRef = useRef({ userId, draftId });
 
   useEffect(() => {
-    if (previousUserIdRef.current && previousUserIdRef.current !== userId) {
-      // Signing out or switching accounts must not carry one account's draft into another.
+    const previous = previousOwnerRef.current;
+    previousOwnerRef.current = { userId, draftId };
+    if (previous.draftId !== draftId || (previous.userId && previous.userId !== userId)) {
+      // A different draft or account must not inherit the previous one's text.
       promptRef.current = "";
       setPromptState("");
       pendingRequestRef.current = null;
     }
-    previousUserIdRef.current = userId;
     if (!storageKey) return;
-    const stored = readStoredValue(storageKey);
-    if (stored !== null) {
-      promptRef.current = stored;
-      setPromptState(stored);
-      pendingRequestRef.current = parseStoredPromptRequest(
-        readStoredValue(promptDraftRequestStorageKey(storageKey))
-      );
+    const stored = readStoredPromptDraft(storageKey);
+    if (stored) {
+      promptRef.current = stored.prompt;
+      setPromptState(stored.prompt);
+      pendingRequestRef.current = stored.pendingRequest;
     } else if (promptRef.current) {
       // Keep text typed before the user was known instead of discarding it.
-      writeStoredValue(storageKey, promptRef.current);
+      writeStoredPromptDraft(storageKey, { prompt: promptRef.current, pendingRequest: null });
     }
-  }, [storageKey, userId]);
+  }, [draftId, storageKey, userId]);
 
   const setPendingRequest = useCallback(
     (identity: PromptRequestIdentity | null) => {
       pendingRequestRef.current = identity;
       if (storageKey) {
-        writeStoredValue(
-          promptDraftRequestStorageKey(storageKey),
-          identity ? JSON.stringify(identity) : null
-        );
+        writeStoredPromptDraft(storageKey, {
+          prompt: promptRef.current,
+          pendingRequest: identity,
+        });
       }
     },
     [storageKey]
@@ -69,10 +67,10 @@ export function usePromptDraft(draftId: string) {
     (value: string) => {
       promptRef.current = value;
       setPromptState(value);
-      setPendingRequest(null);
-      if (storageKey) writeStoredValue(storageKey, value || null);
+      pendingRequestRef.current = null;
+      if (storageKey) writeStoredPromptDraft(storageKey, { prompt: value, pendingRequest: null });
     },
-    [setPendingRequest, storageKey]
+    [storageKey]
   );
 
   /**
@@ -86,9 +84,8 @@ export function usePromptDraft(draftId: string) {
         setPromptState("");
         pendingRequestRef.current = null;
       }
-      if (storageKey && readStoredValue(storageKey) === submitted) {
-        writeStoredValue(storageKey, null);
-        writeStoredValue(promptDraftRequestStorageKey(storageKey), null);
+      if (storageKey && readStoredPromptDraft(storageKey)?.prompt === submitted) {
+        writeStoredPromptDraft(storageKey, null);
       }
     },
     [storageKey]
