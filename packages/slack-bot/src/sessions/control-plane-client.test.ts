@@ -171,12 +171,17 @@ describe("control plane client request payloads", () => {
     vi.restoreAllMocks();
   });
 
-  it.each(["team-a", null])("sends explicit team scope %s on launch", async (teamId) => {
+  it.each([
+    ["team-a", "team"],
+    [null, "workspace"],
+    [undefined, "workspace"],
+  ] as const)("sends non-private visibility for team scope %s", async (teamId, visibility) => {
     const fetch = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) =>
       okJson({ sessionId: "s1", status: "created" })
     );
     await createSession(makeEnv(fetch), { target, model: "openai/gpt-5.4", teamId });
-    expect(parseRequestBody(fetch)).toMatchObject({ teamId });
+    expect(parseRequestBody(fetch)).toMatchObject({ visibility });
+    if (teamId !== undefined) expect(parseRequestBody(fetch)).toMatchObject({ teamId });
   });
 
   it.each([
@@ -223,6 +228,7 @@ describe("control plane client request payloads", () => {
       repoOwner: "acme",
       repoName: "app",
       branch: "feature/slack-images",
+      visibility: "workspace",
       model: "openai/gpt-5.4",
       reasoningEffort: "high",
       actorDisplayName: "Ada Lovelace",
@@ -243,6 +249,7 @@ describe("control plane client request payloads", () => {
 
     expect(parseRequestBody(fetch)).toEqual({
       environmentId: "env-1",
+      visibility: "workspace",
       model: "anthropic/claude-sonnet-4-6",
     });
   });
@@ -261,6 +268,7 @@ describe("control plane client request payloads", () => {
     expect(parseRequestBody(fetch)).toEqual({
       repoOwner: null,
       repoName: null,
+      visibility: "workspace",
       model: "anthropic/claude-sonnet-4-6",
     });
   });

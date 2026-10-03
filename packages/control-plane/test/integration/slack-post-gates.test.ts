@@ -6,9 +6,11 @@ import { createCloudflareEnv } from "../../src/cloudflare/platform";
 import { createDurableObjectSessionPlatform } from "../../src/cloudflare/session-platform";
 import { createSessionRuntime } from "../../src/session/components";
 import { AutomationStore } from "../../src/db/automation-store";
+import { SessionIndexStore } from "../../src/db/session-index";
+import { TeamMembershipStore } from "../../src/db/team-memberships";
 import { Scheduler } from "../../src/scheduler/scheduler";
 import { cleanD1Tables } from "./cleanup";
-import { initSession, seedActiveUser } from "./helpers";
+import { initSession, seedActiveUser, serviceFetch } from "./helpers";
 import { makeRunRow, seedRun } from "./run-helpers";
 import { runInSessionDO } from "./session-do-access";
 
@@ -27,6 +29,12 @@ const refusals: Array<{
   },
   { name: "team-visible cross-team session", visibility: "team", boundTeamId: "team-b" },
   { name: "workspace-visible cross-team session", visibility: "workspace", boundTeamId: "team-b" },
+  { name: "team-visible session in an unbound channel", visibility: "team", boundTeamId: null },
+  {
+    name: "team-owned workspace-visible session in an unbound channel",
+    visibility: "workspace",
+    boundTeamId: null,
+  },
 ];
 
 async function setScope(sessionId: string, scope: (typeof refusals)[number]): Promise<void> {
@@ -73,6 +81,74 @@ describe("Slack outbound post gates (real D1)", () => {
         .bind(teamId, teamId, teamId)
         .run();
     }
+  });
+
+  it.each([
+    ["team-a", "team"],
+    [null, "workspace"],
+  ] as const)("posts completion for a Slack launch in scope %s", async (teamId, visibility) => {
+    await env.DB.prepare(
+      "UPDATE teams SET default_visibility = 'private' WHERE id = 'team-a'"
+    ).run();
+    await new TeamMembershipStore(env.DB).add("team-a", "user-1");
+    await env.DB.prepare(
+      "INSERT INTO user_identities (id, user_id, provider, provider_user_id, provider_issuer, created_at, updated_at) VALUES ('slack-user-1', 'user-1', 'slack', 'U1', 'https://slack.com', 1, 1)"
+    ).run();
+    if (teamId) {
+      await env.DB.prepare(
+        "INSERT INTO team_channel_bindings (provider, external_id, team_id, kind, created_at) VALUES ('slack', 'C1', ?, 'source', 1)"
+      )
+        .bind(teamId)
+        .run();
+    }
+
+    const created = await serviceFetch("https://test.local/sessions", {
+      service: "slack-bot",
+      actor: "slack:U1",
+      method: "POST",
+      body: JSON.stringify({ teamId, visibility, model: "anthropic/claude-sonnet-4-6" }),
+    });
+    expect(created.status).toBe(201);
+    const { sessionId } = await created.json<{ sessionId: string }>();
+    expect(await new SessionIndexStore(env.DB).get(sessionId)).toMatchObject({
+      ownerTeamId: teamId,
+      visibility,
+      spawnSource: "slack-bot",
+    });
+    const context = {
+      source: "slack",
+      channel: "C1",
+      threadTs: "1700000000.000200",
+      repoFullName: "No repository",
+      model: "anthropic/claude-sonnet-4-6",
+    };
+    const prompted = await serviceFetch(
+      `https://test.local/sessions/${sessionId}/prompt?channel=slack:C1`,
+      {
+        service: "slack-bot",
+        actor: "slack:U1",
+        method: "POST",
+        body: JSON.stringify({ content: "Run tests", source: "slack", callbackContext: context }),
+      }
+    );
+    expect(prompted.status).toBe(200);
+    const { messageId } = await prompted.json<{ messageId: string }>();
+    const slackFetch = vi.fn().mockResolvedValue(new Response("ok"));
+    const stub = env.SESSION.get(env.SESSION.idFromName(sessionId));
+    await runInSessionDO(stub, async (_instance, state) => {
+      const runtime = createSessionRuntime(createDurableObjectSessionPlatform(state, env.DB), {
+        ...createCloudflareEnv(env),
+        SLACK_BOT: { fetch: slackFetch },
+        SERVICE_AUTH_SECRET_SLACK_BOT: "outbound-test-secret",
+      });
+      await runtime.internals.callbackService.notifyComplete(messageId, true);
+    });
+
+    expect(slackFetch).toHaveBeenCalledOnce();
+    expect(slackFetch.mock.calls[0][0]).toBe("https://internal/callbacks/complete");
+    const body = JSON.parse(String(slackFetch.mock.calls[0][1]?.body));
+    expect(body).toMatchObject({ sessionId, messageId, success: true, context });
+    expect(await verifyCallbackSignature(body, "outbound-test-secret")).toBe(true);
   });
 
   describe.each(["complete", "tool_call", "activity"] as const)("session callback: %s", (path) => {

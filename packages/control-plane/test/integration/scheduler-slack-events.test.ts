@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { env } from "cloudflare:test";
+import { verifyCallbackSignature } from "@open-inspect/shared/auth";
 import {
   collectMessages,
   initNamedSession,
@@ -7,16 +8,19 @@ import {
   seedSandboxAuth,
   waitForSandboxStatus,
   seedActiveUser,
+  serviceFetch,
   sqlDatabase,
 } from "./helpers";
 import { getUserAuth } from "../../src/auth/user/runtime";
 import { AutomationStore, type AutomationRow } from "../../src/db/automation-store";
 import { SlackChannelStore } from "../../src/db/slack-channel-store";
+import { SessionIndexStore } from "../../src/db/session-index";
 import type { SlackAutomationEvent } from "@open-inspect/shared/triggers";
 import { cleanD1Tables } from "./cleanup";
 import { Scheduler } from "../../src/scheduler/scheduler";
 import { createCloudflareEnv } from "../../src/cloudflare/platform";
 import { makeRunRow, seedRun, fetchRuns } from "./run-helpers";
+import { seedTeam } from "./ownership-test-helpers";
 
 function makeAutomation(overrides?: Partial<AutomationRow>): AutomationRow {
   const now = Date.now();
@@ -119,6 +123,119 @@ describe("Scheduler slack event handling (integration)", () => {
     const metadata = JSON.parse(invocation!.trigger_metadata!);
     expect(metadata.channel).toBe("C1");
     expect(metadata.messageTs).toBe(event.ts);
+  });
+
+  it.each([
+    ["private", false],
+    ["workspace", false],
+    ["team", false],
+    [null, false],
+    ["private", true],
+  ] as const)(
+    "gates Slack run results for team default %s, binding removed %s",
+    async (defaultVisibility, bindingRemoved) => {
+      const teamId = defaultVisibility ? "team-slack" : null;
+      if (teamId) {
+        await seedTeam(teamId, [["user-1", "member"]]);
+        await env.DB.prepare("UPDATE teams SET default_visibility = ? WHERE id = ?")
+          .bind(defaultVisibility, teamId)
+          .run();
+        await env.DB.prepare(
+          "INSERT INTO team_channel_bindings (provider, external_id, team_id, kind, created_at) VALUES ('slack', 'C1', ?, 'source', 1)"
+        )
+          .bind(teamId)
+          .run();
+      }
+      const store = new AutomationStore(env.DB);
+      const id = await seedSlackAutomation(store, { owner_team_id: teamId });
+      const slackFetch = vi.fn().mockResolvedValue(new Response("ok"));
+      const scheduler = new Scheduler(
+        env.DB,
+        {
+          ...createCloudflareEnv(env),
+          SLACK_BOT: { fetch: slackFetch },
+          SERVICE_AUTH_SECRET_SLACK_BOT: "outbound-test-secret",
+        },
+        { submit() {} }
+      );
+      const event = makeSlackEvent();
+
+      expect(await scheduler.event(event)).toEqual({ triggered: 1, skipped: 0, steered: 0 });
+      const [run] = await fetchRuns(id);
+      expect(run.status).toBe("running");
+      expect(await new SessionIndexStore(env.DB).get(run.session_id!)).toMatchObject({
+        ownerTeamId: teamId,
+        visibility: teamId ? "team" : "workspace",
+      });
+
+      if (bindingRemoved) {
+        await env.DB.prepare(
+          "DELETE FROM team_channel_bindings WHERE provider = 'slack' AND external_id = 'C1'"
+        ).run();
+      }
+
+      await scheduler.runComplete({
+        automationId: id,
+        runId: run.id,
+        sessionId: run.session_id!,
+        messageId: "msg-1",
+        success: true,
+      });
+
+      expect((await store.getRunById(id, run.id))?.status).toBe("completed");
+      expect(slackFetch).toHaveBeenCalledOnce();
+      expect(slackFetch.mock.calls[0][0]).toBe(
+        bindingRemoved
+          ? "https://internal/callbacks/thread_closed"
+          : "https://internal/callbacks/automation-complete"
+      );
+      const body = JSON.parse(String(slackFetch.mock.calls[0][1]?.body));
+      expect(body).toMatchObject(
+        bindingRemoved
+          ? {
+              kind: "slack.thread_closed",
+              sessionId: run.session_id,
+              context: { channel: "C1", threadTs: event.ts },
+            }
+          : {
+              sessionId: run.session_id,
+              success: true,
+              channel: "C1",
+              reactionMessageTs: event.ts,
+            }
+      );
+      expect(await verifyCallbackSignature(body, "outbound-test-secret")).toBe(true);
+
+      for (const resource of ["events", "artifacts"]) {
+        const read = await serviceFetch(
+          `https://test.local/sessions/${run.session_id}/${resource}?channel=slack:C1&purpose=slack-post`,
+          { service: "slack-bot" }
+        );
+        expect(read.status).toBe(bindingRemoved ? 404 : 200);
+        expect(await read.json()).toMatchObject(
+          bindingRemoved ? { error: "Session not found" } : { [resource]: expect.any(Array) }
+        );
+      }
+    }
+  );
+
+  it("retains the private team default for a manual Slack automation run without a Slack destination", async () => {
+    await seedTeam("team-slack", [["user-1", "member"]]);
+    await env.DB.prepare(
+      "UPDATE teams SET default_visibility = 'private' WHERE id = 'team-slack'"
+    ).run();
+    const store = new AutomationStore(env.DB);
+    const id = await seedSlackAutomation(store, { owner_team_id: "team-slack" });
+
+    await new Scheduler(env.DB, createCloudflareEnv(env), { submit() {} }).trigger(id, "user-1");
+
+    const [run] = await fetchRuns(id);
+    expect(run.status).toBe("running");
+    expect((await store.getInvocationById(run.invocation_id))?.trigger_metadata).toBeNull();
+    expect(await new SessionIndexStore(env.DB).get(run.session_id!)).toMatchObject({
+      ownerTeamId: "team-slack",
+      visibility: "private",
+    });
   });
 
   it("does not trigger when the text_match condition fails", async () => {

@@ -120,7 +120,7 @@ function seedActiveSession(opts?: {
     reasoningEffort: null,
     baseBranch: null,
     status: opts?.status ?? "active",
-    ownerTeamId: opts?.ownerTeamId ?? "team-a",
+    ownerTeamId: opts?.ownerTeamId === undefined ? "team-a" : opts.ownerTeamId,
     visibility: opts?.visibility ?? "workspace",
     parentSessionId: opts?.parentSessionId ?? null,
     spawnSource: opts?.spawnSource ?? "user",
@@ -148,7 +148,7 @@ beforeEach(async () => {
   vi.resetModules();
   ({ handleSlackNotify } = await import("./slack-notify"));
   vi.clearAllMocks();
-  channelBindingStoreMock.get.mockResolvedValue(null);
+  channelBindingStoreMock.get.mockResolvedValue({ teamId: "team-a" });
   listChannelsMock.mockResolvedValue({
     ok: true,
     channels: [
@@ -262,19 +262,22 @@ describe("handleSlackNotify", () => {
       expect(listChannelsMock).toHaveBeenCalledTimes(2);
     });
 
-    it("checks the current binding even when the channel name is cached", async () => {
-      expect((await callHandler({ channel: "#ops", text: "Done" })).status).toBe(200);
-      channelBindingStoreMock.get.mockResolvedValue({ teamId: "team-b" });
-      fetchMock.mockClear();
-      const refused = await callHandler({ channel: "ops", text: "secret text" });
-      expect(refused.status).toBe(403);
-      expect(await refused.json()).toMatchObject({ error: "session_scope_denied" });
-      expect(listChannelsMock).toHaveBeenCalledOnce();
-      expect(channelBindingStoreMock.get).toHaveBeenCalledTimes(2);
-      expect(channelBindingStoreMock.get).toHaveBeenLastCalledWith("slack", "C1");
-      expect(fetchMock).not.toHaveBeenCalled();
-      expect(sessionFetchMock).not.toHaveBeenCalled();
-    });
+    it.each([null, { teamId: "team-b" }])(
+      "checks the current binding %j even when the channel name is cached",
+      async (binding) => {
+        expect((await callHandler({ channel: "#ops", text: "Done" })).status).toBe(200);
+        channelBindingStoreMock.get.mockResolvedValue(binding);
+        fetchMock.mockClear();
+        const refused = await callHandler({ channel: "ops", text: "secret text" });
+        expect(refused.status).toBe(403);
+        expect(await refused.json()).toMatchObject({ error: "session_scope_denied" });
+        expect(listChannelsMock).toHaveBeenCalledOnce();
+        expect(channelBindingStoreMock.get).toHaveBeenCalledTimes(2);
+        expect(channelBindingStoreMock.get).toHaveBeenLastCalledWith("slack", "C1");
+        expect(fetchMock).not.toHaveBeenCalled();
+        expect(sessionFetchMock).not.toHaveBeenCalled();
+      }
+    );
 
     it("does not cache failed listings or missing names", async () => {
       listChannelsMock.mockResolvedValueOnce({ ok: false, error: "ratelimited", retryAfter: 30 });
@@ -709,8 +712,9 @@ describe("handleSlackNotify", () => {
     expect(logEntry?.request_reason).toBeNull();
   });
 
-  it("passes a channel ID without a Slack channel lookup", async () => {
-    seedActiveSession();
+  it("posts a workspace-owned session to an unbound channel ID without a Slack channel lookup", async () => {
+    seedActiveSession({ ownerTeamId: null });
+    channelBindingStoreMock.get.mockResolvedValue(null);
     integrationStoreMock.getResolvedConfig.mockResolvedValue({
       enabledRepos: null,
       settings: { agentNotificationsEnabled: true, mentionsPolicy: "allow" },

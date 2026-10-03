@@ -80,6 +80,7 @@ export async function createSession(
     actorDisplayName: params.actorDisplayName,
     actorEmail: params.actorEmail,
     teamId: params.teamId,
+    visibility: params.teamId ? "team" : "workspace",
   });
   const response = await signedControlPlaneFetch(env, {
     method: "POST",

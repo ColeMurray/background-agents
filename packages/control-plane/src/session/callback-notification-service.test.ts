@@ -75,7 +75,9 @@ function createTestHarness(overrides?: {
       ownerTeamId: "team-a",
       visibility: "workspace",
     }),
-    getChannelBinding: vi.fn<SlackPostScope["getChannelBinding"]>().mockResolvedValue(null),
+    getChannelBinding: vi
+      .fn<SlackPostScope["getChannelBinding"]>()
+      .mockResolvedValue({ teamId: "team-a" }),
   };
 
   const env: CallbackServiceEnv = {
@@ -269,6 +271,10 @@ describe("CallbackNotificationService", () => {
       "calls binding with signed payload on success: %j",
       async (binding) => {
         harness.slackPostScope.getChannelBinding.mockResolvedValue(binding);
+        harness.slackPostScope.getSession.mockResolvedValue({
+          ownerTeamId: binding?.teamId ?? null,
+          visibility: "workspace",
+        });
         vi.mocked(harness.repository.getMessageCallbackContext).mockReturnValue({
           callback_context: JSON.stringify({ channel: "C123", threadTs: "1234.5678" }),
           source: "slack",
@@ -418,10 +424,10 @@ describe("CallbackNotificationService", () => {
         }
       );
 
-      it("rechecks scope after transport failure and replaces completion with closure", async () => {
+      it("rechecks scope after transport failure and replaces completion with closure on unbinding", async () => {
         harness.slackPostScope.getChannelBinding
-          .mockResolvedValueOnce(null)
-          .mockResolvedValue({ teamId: "team-b" });
+          .mockResolvedValueOnce({ teamId: "team-a" })
+          .mockResolvedValue(null);
         harness.slackBot.fetch
           .mockResolvedValueOnce(new Response("unavailable", { status: 503 }))
           .mockResolvedValueOnce(new Response("ok"));
@@ -831,7 +837,7 @@ describe("CallbackNotificationService", () => {
     it.each([null, { teamId: "team-a" }, { teamId: "team-b" }])(
       "posts a signed refresh or safe closure for a slack message: %j",
       async (binding) => {
-        const denied = binding?.teamId === "team-b";
+        const denied = binding?.teamId !== "team-a";
         harness.slackPostScope.getChannelBinding.mockResolvedValue(binding);
         const fetchMock = withSlackMessage();
 
@@ -1052,6 +1058,10 @@ describe("CallbackNotificationService", () => {
       "skips when throttled (< 3s since last call): %j",
       async (binding) => {
         harness.slackPostScope.getChannelBinding.mockResolvedValue(binding);
+        harness.slackPostScope.getSession.mockResolvedValue({
+          ownerTeamId: binding?.teamId ?? null,
+          visibility: "workspace",
+        });
         vi.mocked(harness.repository.getMessageCallbackContext).mockReturnValue({
           callback_context: JSON.stringify({ channel: "C123" }),
           source: "slack",

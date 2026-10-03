@@ -19,6 +19,7 @@ import { verifyCallbackSignature } from "@open-inspect/shared/auth";
 import type { Team } from "@open-inspect/shared/types/teams";
 import type { EffectiveAuthorization } from "@open-inspect/shared/rbac";
 import type * as SessionAdmissionModule from "../authorization/session-admission";
+import * as SlackCompletionModule from "./slack-completion";
 
 const mockCheckRepositoryAccess = vi.hoisted(() => vi.fn());
 const mockResolveSessionProviderAuth = vi.hoisted(() =>
@@ -2110,7 +2111,7 @@ describe("Scheduler", () => {
       mockSessionStoreGet
         .mockReset()
         .mockResolvedValue({ ownerTeamId: "team-a", visibility: "workspace" });
-      mockTeamChannelBindingGet.mockReset().mockResolvedValue(null);
+      mockTeamChannelBindingGet.mockReset().mockResolvedValue({ teamId: "team-a" });
     });
 
     describe("Slack publication preparation retries", () => {
@@ -2231,11 +2232,11 @@ describe("Scheduler", () => {
         expect(await verifyCallbackSignature(body, "test-secret")).toBe(true);
       });
 
-      it("rechecks preparation and scope after transport failure without a nested loop", async () => {
+      it("rechecks preparation and scope after transport failure and unbinding without a nested loop", async () => {
         const { scheduler, slackFetch, warn } = createSlackCompletionHarness();
         mockTeamChannelBindingGet
-          .mockResolvedValueOnce(null)
-          .mockResolvedValue({ teamId: "team-b" });
+          .mockResolvedValueOnce({ teamId: "team-a" })
+          .mockResolvedValue(null);
         slackFetch.mockResolvedValue(new Response("unavailable", { status: 503 }));
         const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
         try {
@@ -3594,6 +3595,99 @@ describe("Scheduler", () => {
       mockEnvironmentGetById.mockReset().mockResolvedValue(environment);
       mockEnvironmentRepositories.mockReset().mockResolvedValue(members);
     });
+
+    it.each([
+      ["private", true, teamId, "team"],
+      ["workspace", true, teamId, "team"],
+      ["team", true, teamId, "team"],
+      ["private", false, teamId, "private"],
+      ["workspace", false, teamId, "workspace"],
+      ["team", false, teamId, "team"],
+      ["private", true, null, "workspace"],
+      ["private", false, null, "workspace"],
+    ] as const)(
+      "selects visibility for default %s, Slack destination %s, owner %s",
+      async (defaultVisibility, slackDestination, ownerTeamId, visibility) => {
+        mockTeamGetById.mockResolvedValue({ ...activeTeam, defaultVisibility });
+        const automation = { ...sampleSlackAutomation, owner_team_id: ownerTeamId };
+        mockStore.getById.mockResolvedValue(automation);
+        mockGetSlackAutomationsForChannel.mockResolvedValue([automation]);
+        const scheduler = createScheduler(
+          createEnv({
+            SLACK_BOT: { fetch: vi.fn() },
+            SERVICE_AUTH_SECRET_SLACK_BOT: "test-secret",
+          })
+        );
+
+        if (slackDestination) {
+          expect(await scheduler.event(makeSlackEvent())).toMatchObject({ triggered: 1 });
+        } else {
+          await scheduler.trigger(automation.id, "user-1");
+        }
+
+        expect(mockSessionStoreCreate).toHaveBeenCalledOnce();
+        expect(mockSessionStoreCreate).toHaveBeenCalledWith(
+          expect.objectContaining({ ownerTeamId, visibility })
+        );
+      }
+    );
+
+    it("keeps Slack launch visibility independent of completion metadata parsing", async () => {
+      mockTeamGetById.mockResolvedValue({ ...activeTeam, defaultVisibility: "private" });
+      const automation = { ...sampleSlackAutomation, owner_team_id: teamId };
+      mockGetSlackAutomationsForChannel.mockResolvedValue([automation]);
+      const scheduler = createScheduler(
+        createEnv({
+          SLACK_BOT: { fetch: vi.fn() },
+          SERVICE_AUTH_SECRET_SLACK_BOT: "test-secret",
+        })
+      );
+      const parseMetadata = vi
+        .spyOn(SlackCompletionModule, "parseSlackTriggerMetadata")
+        .mockReturnValue(null);
+      try {
+        expect(await scheduler.event(makeSlackEvent())).toMatchObject({ triggered: 1 });
+        expect(mockSessionStoreCreate).toHaveBeenCalledWith(
+          expect.objectContaining({ ownerTeamId: teamId, visibility: "team" })
+        );
+        expect(parseMetadata).not.toHaveBeenCalled();
+        expect(mockStore.insertInvocationGuarded).toHaveBeenCalledWith(
+          expect.objectContaining({
+            invocation: expect.objectContaining({
+              trigger_metadata: JSON.stringify({ channel: "C1", messageTs: "1700000000.000200" }),
+            }),
+          })
+        );
+      } finally {
+        parseMetadata.mockRestore();
+      }
+    });
+
+    it.each([
+      [false, "test-secret"],
+      [true, undefined],
+      [true, ""],
+      [false, undefined],
+    ] as const)(
+      "retains private defaults with Slack binding %s and signing secret %s",
+      async (bindingEnabled, secret) => {
+        mockTeamGetById.mockResolvedValue({ ...activeTeam, defaultVisibility: "private" });
+        const automation = { ...sampleSlackAutomation, owner_team_id: teamId };
+        mockGetSlackAutomationsForChannel.mockResolvedValue([automation]);
+        const scheduler = createScheduler(
+          createEnv({
+            SLACK_BOT: bindingEnabled ? { fetch: vi.fn() } : undefined,
+            SERVICE_AUTH_SECRET_SLACK_BOT: secret,
+          })
+        );
+
+        expect(await scheduler.event(makeSlackEvent())).toMatchObject({ triggered: 1 });
+        expect(mockSessionStoreCreate).toHaveBeenCalledOnce();
+        expect(mockSessionStoreCreate).toHaveBeenCalledWith(
+          expect.objectContaining({ ownerTeamId: teamId, visibility: "private" })
+        );
+      }
+    );
 
     it("checks resolved direct IDs before manual admission", async () => {
       selectRepositories("auto-1", [repositoryRow("auto-1")]);
