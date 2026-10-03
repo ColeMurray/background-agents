@@ -194,12 +194,12 @@ export interface SandboxState {
   /** Whether an active WebSocket connection exists */
   hasActiveWebSocket: boolean;
   /**
-   * Whether this generation's bridge has ever connected (its `last_heartbeat`
-   * is set; the reservation clears it). A connected generation is alive as
+   * This generation's last bridge heartbeat, or null if its bridge never
+   * connected (the reservation clears it). A connected generation is alive as
    * far as the provider is concerned, so age alone never justifies replacing
    * it: a dropped socket is the heartbeat alarm's to judge.
    */
-  hasConnected?: boolean;
+  lastHeartbeat: number | null;
 }
 
 /**
@@ -288,7 +288,7 @@ export type SpawnAction =
   | { action: "restore"; snapshotImageId: string; snapshotRuntimeVersion: string }
   | { action: "skip"; reason: string }
   | { action: "wait"; reason: string }
-  | { action: "await_reconnect" };
+  | { action: "await_reconnect"; lastHeartbeat: number };
 
 /**
  * Evaluate what spawn action to take.
@@ -318,6 +318,7 @@ export type SpawnAction =
  *     snapshotImageId: "img-123",
  *     snapshotRuntimeVersion: "v59-runtime",
  *     hasActiveWebSocket: false,
+ *     lastHeartbeat: null,
  *   },
  *   DEFAULT_SPAWN_CONFIG,
  *   Date.now(),
@@ -381,11 +382,11 @@ export function evaluateSpawnDecision(
   // has launched nothing to wait for.
   if (
     !state.hasActiveWebSocket &&
-    state.hasConnected &&
+    state.lastHeartbeat !== null &&
     state.status !== "pending" &&
     !isDeadSandboxStatus(state.status)
   ) {
-    return { action: "await_reconnect" };
+    return { action: "await_reconnect", lastHeartbeat: state.lastHeartbeat };
   }
 
   if (state.status === "spawning" || state.status === "connecting") {

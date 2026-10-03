@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { COMPATIBLE_RUNTIME_VERSION } from "../../image-builds/test-helpers";
+import { DEFAULT_CIRCUIT_BREAKER_CONFIG } from "./decisions";
 import { DEFAULT_LIFECYCLE_CONFIG } from "./manager";
 import { createAlarmFixture, createMockProvider, createMockSandbox } from "./test-helpers";
 
@@ -67,19 +68,72 @@ describe("sandbox continuity while its bridge reconnects", () => {
     }
   );
 
-  it.each(LIVE_STATUSES)(
-    "restores the %s status for clients told a spawn was starting",
-    async (status) => {
-      const h = createAlarmFixture(connectedSource({ status }));
+  it.each(
+    LIVE_STATUSES.flatMap((status) => [[status, "spawn"] as const, [status, "warm"] as const])
+  )("announces nothing while a %s source awaits its reconnect (%s)", async (status, intent) => {
+    const h = createAlarmFixture(connectedSource({ status }));
 
-      await h.manager.spawnSandbox();
+    await h.manager.spawnSandbox(intent);
 
-      expect(h.broadcaster.messages).toEqual([
-        { type: "sandbox_status", status },
-        ...(status === "ready" ? [{ type: "sandbox_access_changed" }] : []),
-      ]);
-    }
-  );
+    expect(h.broadcaster.messages).toEqual([]);
+  });
+
+  it("keeps persisted and client state aligned when the deadline cannot be armed", async () => {
+    const sandbox = connectedSource();
+    const h = createAlarmFixture(sandbox);
+    vi.mocked(h.alarmScheduler.schedule).mockRejectedValueOnce(new Error("alarm unavailable"));
+    const original = { ...sandbox };
+
+    await expect(h.manager.spawnSandbox()).resolves.toBeUndefined();
+
+    expect(h.broadcaster.messages).toEqual([]);
+    expect(sandbox).toEqual(original);
+    expect(h.provider.createSandbox).not.toHaveBeenCalled();
+  });
+
+  it("awaits the reconnect of a connected source while the launch circuit breaker is open", async () => {
+    const sandbox = connectedSource({
+      spawn_failure_count: DEFAULT_CIRCUIT_BREAKER_CONFIG.threshold,
+      last_spawn_failure: NOW,
+    });
+    const h = createAlarmFixture(sandbox);
+
+    await h.manager.spawnSandbox();
+
+    expect(h.alarmScheduler.schedule).toHaveBeenCalledExactlyOnceWith(
+      RECENT_HEARTBEAT + heartbeat.timeoutMs + 1
+    );
+    expect(h.broadcaster.messages).toEqual([]);
+    expect(h.provider.createSandbox).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["spawn", "sandbox_spawning"],
+    ["warm", "sandbox_warming"],
+  ] as const)("announces a %s launch as %s once it decides to launch", async (intent, type) => {
+    const h = createAlarmFixture(createMockSandbox({ created_at: LONG_AGO, last_heartbeat: null }));
+
+    await h.manager.spawnSandbox(intent);
+
+    expect(h.provider.createSandbox).toHaveBeenCalledOnce();
+    expect(h.broadcaster.messages[0]).toEqual({ type });
+  });
+
+  it("announces no launch the open circuit breaker refuses", async () => {
+    const h = createAlarmFixture(
+      createMockSandbox({
+        created_at: LONG_AGO,
+        last_heartbeat: null,
+        spawn_failure_count: DEFAULT_CIRCUIT_BREAKER_CONFIG.threshold,
+        last_spawn_failure: NOW,
+      })
+    );
+
+    await h.manager.spawnSandbox();
+
+    expect(h.provider.createSandbox).not.toHaveBeenCalled();
+    expect(h.broadcaster.messages).not.toContainEqual({ type: "sandbox_spawning" });
+  });
 
   it("keeps the same source after its bridge reconnects", async () => {
     const sandbox = connectedSource();
