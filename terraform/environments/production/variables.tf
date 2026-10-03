@@ -429,6 +429,14 @@ variable "classification_reasoning_effort" {
     )
     error_message = "classification_reasoning_effort applies only to an OpenAI classification_model. Leave it blank for an Anthropic model."
   }
+
+  # Supported efforts differ by model, so OpenAI validates the value itself. A
+  # padded or mis-cased value would still reach it verbatim and fail every
+  # classification with HTTP 400, so reject anything but a lowercase word.
+  validation {
+    condition     = var.classification_reasoning_effort == "" || can(regex("^[a-z]+$", var.classification_reasoning_effort))
+    error_message = "classification_reasoning_effort must be blank or a lowercase OpenAI reasoning effort such as \"low\", with no surrounding whitespace."
+  }
 }
 
 # =============================================================================

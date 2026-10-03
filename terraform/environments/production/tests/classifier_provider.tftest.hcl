@@ -244,6 +244,19 @@ run "rejects_reasoning_effort_for_anthropic_classifier" {
   expect_failures = [var.classification_reasoning_effort]
 }
 
+# The value reaches OpenAI verbatim, so padding would fail every request.
+run "rejects_padded_reasoning_effort" {
+  command = plan
+
+  variables {
+    classification_model            = "openai/gpt-6.1-sol"
+    classification_openai_api_key   = "test-openai-key"
+    classification_reasoning_effort = "low "
+  }
+
+  expect_failures = [var.classification_reasoning_effort]
+}
+
 run "prefixed_openai_model_resolves_to_openai" {
   command = plan
 
