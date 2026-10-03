@@ -19,8 +19,8 @@ import {
 import {
   effectiveSessionCapabilities,
   teamsEnforcementMode,
-  viewerFromContext,
 } from "../authorization/session-admission";
+import { resourceViewer } from "../authorization/resource-viewer";
 import { SessionIndexStore } from "../db/session-index";
 import { SessionCollaboratorStore } from "../db/session-collaborators";
 import { encodeSessionInboxCursor, parseSessionInboxCursor } from "../db/session-inbox-cursor";
@@ -213,7 +213,7 @@ async function teamSessions(
   const cursor = parseSessionInboxCursor(query.cursor);
   if (!cursor.ok) return error(cursor.error, 400);
   const subject = viewer(ctx);
-  const sessionViewer = viewerFromContext(ctx, ctx.sessionMemberships ?? new Map());
+  const sessionViewer = await resourceViewer(ctx);
   const mode = teamsEnforcementMode(ctx, env);
   const options = {
     teamIds: [admittedTeam(ctx).id],

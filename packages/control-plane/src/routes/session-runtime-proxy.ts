@@ -17,12 +17,11 @@ import { UserStore } from "../db/user-store";
 import { SessionIndexStore } from "../db/session-index";
 import { checkSessionAccess } from "@open-inspect/shared";
 import { SessionCollaboratorStore } from "../db/session-collaborators";
-import { TeamMembershipStore } from "../db/team-memberships";
 import {
   effectiveSessionCapabilities,
   teamsEnforcementMode,
-  viewerFromContext,
 } from "../authorization/session-admission";
+import { resourceViewer } from "../authorization/resource-viewer";
 import { resolverDecides } from "../authorization/teams-enforcement";
 import type { SubscriptionProviderId } from "@open-inspect/shared/types/provider-accounts";
 import { SessionInternalPaths, type SessionInternalPath } from "../session/contracts";
@@ -185,16 +184,7 @@ async function handleSessionSnapshot(
   if (!parsed.success) return error("Invalid session snapshot", 502);
   const row = ctx.sessionAdmission?.row ?? (await new SessionIndexStore(ctx.db).get(sessionId));
   if (!row) return error("Session not found", 404);
-  const viewer =
-    ctx.sessionAdmission?.viewer ??
-    viewerFromContext(
-      ctx,
-      ctx.authorization
-        ? (ctx.sessionMemberships ??= await new TeamMembershipStore(ctx.db).listForUser(
-            ctx.authorization.userId
-          ))
-        : new Map()
-    );
+  const viewer = ctx.sessionAdmission?.viewer ?? (await resourceViewer(ctx));
   const collaborators =
     ctx.sessionAdmission?.row.collaboratorIds ??
     (await new SessionCollaboratorStore(ctx.db).listUserIds(sessionId));

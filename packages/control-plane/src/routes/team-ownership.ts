@@ -7,8 +7,8 @@ import { isWorkspaceAdmin } from "@open-inspect/shared/rbac";
 import type { Team } from "@open-inspect/shared/types/teams";
 import { parseChannelScope } from "../authorization/channel-scope";
 import { auditRouteAuthorizationDecision } from "../authorization/request-audit";
+import { resourceViewer } from "../authorization/resource-viewer";
 import { TeamChannelBindingStore } from "../db/team-channel-bindings";
-import { TeamMembershipStore } from "../db/team-memberships";
 import { TeamRepositoryGrantStore } from "../db/team-repository-grants";
 import { TeamSettingsStore } from "../db/team-settings";
 import { TeamStore } from "../db/teams";
@@ -122,13 +122,12 @@ export async function admitTeamCatalog(
 ): Promise<TeamRepositoryGrants | Response> {
   const authorization = ctx.authorization;
   const roleKey = authorization?.role.key;
+  const active = !!authorization && (await new TeamStore(ctx.db).isActive(catalogTeamId));
+  const viewer = active && !isWorkspaceAdmin(roleKey) ? await resourceViewer(ctx) : null;
   const allowed =
-    !!authorization &&
-    (await new TeamStore(ctx.db).isActive(catalogTeamId)) &&
+    active &&
     (isWorkspaceAdmin(roleKey) ||
-      (ctx.sessionMemberships ??= await new TeamMembershipStore(ctx.db).listForUser(
-        authorization.userId
-      )).has(catalogTeamId));
+      (viewer?.kind === "user" && viewer.memberships.has(catalogTeamId)));
   if (!allowed) {
     return denyTeamCatalog(request, ctx, catalogTeamId, path);
   }

@@ -1,5 +1,7 @@
 import { createExecutionContext, env } from "cloudflare:test";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { AuthorizationStore } from "../../src/db/authorization-store";
+import { SessionIndexStore } from "../../src/db/session-index";
 import { TeamStore } from "../../src/db/teams";
 import { TeamMembershipStore } from "../../src/db/team-memberships";
 import { SessionCollaboratorStore } from "../../src/db/session-collaborators";
@@ -16,6 +18,14 @@ import {
   serviceRequestHeaders,
   waitForSandboxStatus,
 } from "./helpers";
+
+function deferred<T>(value: T) {
+  let release!: () => void;
+  const promise = new Promise<T>((resolve) => {
+    release = () => resolve(value);
+  });
+  return { promise, release };
+}
 
 describe("session WebSocket D1 access", () => {
   beforeEach(cleanD1Tables);
@@ -158,6 +168,84 @@ describe("session WebSocket D1 access", () => {
       }
     }
   );
+
+  it("starts authorization and session reads before either resolves", async () => {
+    const { name, team } = await scopedSession("team", "on");
+    const userId = `parallel-authorization-${crypto.randomUUID()}`;
+    const { token } = await issueClientWsToken(name, { userId, canonicalUserId: userId });
+    await new TeamMembershipStore(env.DB).add(team.id, userId);
+    const authorizationGate = deferred(
+      await new AuthorizationStore(env.DB).getEffectiveAuthorization(userId)
+    );
+    const sessionGate = deferred(await new SessionIndexStore(env.DB).get(name));
+    const { ws } = await openClientWs(name);
+    const authorization = vi
+      .spyOn(AuthorizationStore.prototype, "getEffectiveAuthorization")
+      .mockReturnValue(authorizationGate.promise);
+    const session = vi
+      .spyOn(SessionIndexStore.prototype, "get")
+      .mockReturnValue(sessionGate.promise);
+    const memberships = vi.spyOn(TeamMembershipStore.prototype, "listForUser");
+    const collaborators = vi.spyOn(SessionCollaboratorStore.prototype, "listUserIds");
+    const subscribed = collectMessages(ws, { until: (message) => message.type === "subscribed" });
+    try {
+      ws.send(JSON.stringify({ type: "subscribe", token, clientId: "parallel-authorization" }));
+      await vi.waitFor(() => {
+        expect(authorization).toHaveBeenCalledExactlyOnceWith(userId);
+        expect(session).toHaveBeenCalledExactlyOnceWith(name);
+      });
+      expect(memberships).not.toHaveBeenCalled();
+      expect(collaborators).not.toHaveBeenCalled();
+      authorizationGate.release();
+      sessionGate.release();
+      expect((await subscribed).some((message) => message.type === "subscribed")).toBe(true);
+    } finally {
+      authorizationGate.release();
+      sessionGate.release();
+      await subscribed;
+      authorization.mockRestore();
+      session.mockRestore();
+      memberships.mockRestore();
+      collaborators.mockRestore();
+      ws.close();
+    }
+  });
+
+  it("starts membership and collaborator reads before either resolves", async () => {
+    const { name, team } = await scopedSession("team", "on");
+    const userId = `parallel-memberships-${crypto.randomUUID()}`;
+    const { token } = await issueClientWsToken(name, { userId, canonicalUserId: userId });
+    await new TeamMembershipStore(env.DB).add(team.id, userId);
+    const membershipsGate = deferred(await new TeamMembershipStore(env.DB).listForUser(userId));
+    const collaboratorsGate = deferred(
+      await new SessionCollaboratorStore(env.DB).listUserIds(name)
+    );
+    const { ws } = await openClientWs(name);
+    const memberships = vi
+      .spyOn(TeamMembershipStore.prototype, "listForUser")
+      .mockReturnValue(membershipsGate.promise);
+    const collaborators = vi
+      .spyOn(SessionCollaboratorStore.prototype, "listUserIds")
+      .mockReturnValue(collaboratorsGate.promise);
+    const subscribed = collectMessages(ws, { until: (message) => message.type === "subscribed" });
+    try {
+      ws.send(JSON.stringify({ type: "subscribe", token, clientId: "parallel-memberships" }));
+      await vi.waitFor(() => {
+        expect(memberships).toHaveBeenCalledExactlyOnceWith(userId);
+        expect(collaborators).toHaveBeenCalledExactlyOnceWith(name);
+      });
+      membershipsGate.release();
+      collaboratorsGate.release();
+      expect((await subscribed).some((message) => message.type === "subscribed")).toBe(true);
+    } finally {
+      membershipsGate.release();
+      collaboratorsGate.release();
+      await subscribed;
+      memberships.mockRestore();
+      collaborators.mockRestore();
+      ws.close();
+    }
+  });
 
   it.each(["off", "shadow", "on"] as const)(
     "sends visibility capabilities for a non-owner team lead in %s mode",

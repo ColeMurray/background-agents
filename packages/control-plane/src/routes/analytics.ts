@@ -11,9 +11,8 @@ import {
 import { type AnalyticsFilters, AnalyticsStore } from "../db/analytics-store";
 import { AnalyticsDashboardStore } from "../db/analytics-dashboard-store";
 import { SessionRunStore } from "../db/session-run-store";
-import { TeamMembershipStore } from "../db/team-memberships";
-import { teamsEnforcementMode, viewerFromContext } from "../authorization/session-admission";
-import type { TeamRole } from "@open-inspect/shared/types/teams";
+import { teamsEnforcementMode } from "../authorization/session-admission";
+import { resourceViewer } from "../authorization/resource-viewer";
 import {
   type PullRequestAnalyticsFilters,
   PullRequestAnalyticsStore,
@@ -92,13 +91,8 @@ function getPullRequestFilters(days: AnalyticsDays): PullRequestAnalyticsFilters
 }
 
 async function analyticsAccess(ctx: RequestContext, env: Env) {
-  const memberships = ctx.authorization
-    ? (ctx.sessionMemberships ??= await new TeamMembershipStore(ctx.db).listForUser(
-        ctx.authorization.userId
-      ))
-    : new Map<string, TeamRole>();
   return {
-    viewer: viewerFromContext(ctx, memberships),
+    viewer: await resourceViewer(ctx),
     mode: teamsEnforcementMode(ctx, env),
   };
 }

@@ -505,6 +505,10 @@ describe("handleCancelChild", () => {
     vi.spyOn(SessionIndexStore.prototype, "get").mockImplementation(
       async (id) => ({ id, ownerTeamId: null, visibility: "workspace" }) as never
     );
+    vi.spyOn(SessionIndexStore.prototype, "getByIds").mockImplementation(
+      async (ids) =>
+        new Map(ids.map((id) => [id, { id, ownerTeamId: null, visibility: "workspace" } as never]))
+    );
     vi.spyOn(SessionIndexStore.prototype, "listActiveDescendantIds").mockResolvedValue([
       "deep-failure",
       "later-success",

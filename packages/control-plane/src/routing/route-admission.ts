@@ -14,7 +14,8 @@ import type {
 import { AuthorizationError, AuthorizationService } from "../authorization/service";
 import { serviceAllowsPermission } from "../authorization/service-permissions";
 import { parseChannelScope } from "../authorization/channel-scope";
-import { evaluateSessionAdmission, viewerFromContext } from "../authorization/session-admission";
+import { resourceViewer } from "../authorization/resource-viewer";
+import { evaluateSessionAdmission } from "../authorization/session-admission";
 import { legacyPermissionForAction } from "../authorization/teams-enforcement";
 import { TeamStore } from "../db/teams";
 import { TeamChannelBindingStore } from "../db/team-channel-bindings";
@@ -654,10 +655,7 @@ async function enforceTeamRequirement(
         "Team not found"
       );
     const memberships = new TeamMembershipStore(ctx.db);
-    const viewer = viewerFromContext(
-      ctx,
-      (ctx.sessionMemberships ??= await memberships.listForUser(ctx.principal.userId))
-    );
+    const viewer = await resourceViewer(ctx);
     if (viewer.kind !== "user") throw new Error("Missing team viewer");
     const isAdmin = isWorkspaceAdmin(viewer.roleKey);
     const isMember = isAdmin || viewer.memberships.has(teamId);

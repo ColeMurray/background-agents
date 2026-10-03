@@ -16,13 +16,11 @@ import {
   type SessionEntry,
 } from "../db/session-index";
 import { SessionCollaboratorStore } from "../db/session-collaborators";
-import { TeamMembershipStore } from "../db/team-memberships";
-import { AuthorizationError, AuthorizationService } from "../authorization/service";
+import { resourceViewer, viewerForUser } from "../authorization/resource-viewer";
 import { checkSessionAccess, type SessionAction, type SessionViewer } from "@open-inspect/shared";
 import {
-  evaluateSessionAdmission,
+  evaluateSessionAdmissions,
   teamsEnforcementMode,
-  viewerFromContext,
 } from "../authorization/session-admission";
 import { createLogger } from "../logger";
 import { SessionInternalPaths } from "../session/contracts";
@@ -49,7 +47,12 @@ function sandboxChildAccess(
   activeAuthor?: ActivePromptAuthor
 ) {
   let viewerPromise: Promise<SessionViewer | null> | undefined;
-  return async (child: SessionEntry, action: SessionAction): Promise<boolean> => {
+  let collaboratorsPromise: Promise<ReadonlyMap<string, string[]>> | undefined;
+  return async (
+    child: SessionEntry,
+    action: SessionAction,
+    batchIds?: readonly string[]
+  ): Promise<boolean> => {
     if (ctx.principal?.kind !== "sandbox" || ctx.principal.sessionId !== parent.id) return false;
     if (child.ownerTeamId !== parent.ownerTeamId) return false;
     // Non-read actions on team-owned children need the active prompt author's current membership.
@@ -74,25 +77,19 @@ function sandboxChildAccess(
       }
       const userId = author.canonicalUserId;
       if (!userId) return null;
-      let authorization;
-      try {
-        authorization = await new AuthorizationService(ctx.db).getEffectiveAuthorization(userId);
-      } catch (cause) {
-        if (cause instanceof AuthorizationError) return null;
-        throw cause;
-      }
-      return {
-        kind: "user" as const,
-        userId,
-        roleKey: authorization.role.key,
-        permissions: authorization.permissions,
-        suspended: authorization.suspendedAt !== null,
-        memberships: await new TeamMembershipStore(ctx.db).listForUser(userId),
-      };
+      return (await viewerForUser(ctx.db, userId))?.viewer ?? null;
     })();
     const viewer = await viewerPromise;
     if (!viewer || viewer.kind !== "user") return false;
-    const collaboratorIds = await new SessionCollaboratorStore(ctx.db).listUserIds(child.id);
+    const collaboratorStore = new SessionCollaboratorStore(ctx.db);
+    const collaboratorIds =
+      child.visibility !== "private"
+        ? []
+        : batchIds
+          ? ((await (collaboratorsPromise ??= collaboratorStore.listForSessions(batchIds))).get(
+              child.id
+            ) ?? [])
+          : await collaboratorStore.listUserIds(child.id);
     if (
       child.visibility === "private" &&
       child.userId !== viewer.userId &&
@@ -122,24 +119,23 @@ export async function handleListChildren(
   const parentId = params.id;
 
   const sessionStore = new SessionIndexStore(ctx.db);
+  const mode = teamsEnforcementMode(ctx, env);
   const readScope =
     ctx.principal?.kind === "sandbox"
       ? { kind: "internal" as const, reason: "parent-bound sandbox" }
-      : (ctx.sessionAdmission?.viewer ??
-        viewerFromContext(ctx, ctx.sessionMemberships ?? new Map()));
-  const children = await sessionStore.listByParent(
-    parentId,
-    readScope,
-    teamsEnforcementMode(ctx, env)
-  );
+      : (ctx.sessionAdmission?.viewer ?? (await resourceViewer(ctx, mode !== "off")));
+  const children = await sessionStore.listByParent(parentId, readScope, mode);
 
   if (ctx.principal?.kind === "sandbox" && children.length) {
     const parent = await sessionStore.get(parentId);
     if (!parent) return error("Session not found", 404);
     const canAccess = sandboxChildAccess(ctx, parent);
+    const privateIds = children
+      .filter((child) => child.visibility === "private")
+      .map((child) => child.id);
     const visible: SessionEntry[] = [];
     for (const child of children) {
-      if (await canAccess(child, "read")) visible.push(child);
+      if (await canAccess(child, "read", privateIds)) visible.push(child);
     }
     return json(childSessionListResponseSchema.parse({ children: visible }));
   }
@@ -344,21 +340,23 @@ export async function handleCancelChild(
   const cancelNested = body.cancelNested ?? true;
 
   const descendantIds = cancelNested ? await sessionStore.listActiveDescendantIds(childId) : [];
-  for (const descendantId of descendantIds) {
-    if (canAccess) {
-      const descendant = await sessionStore.get(descendantId);
-      if (!descendant || !(await canAccess(descendant, "lifecycle"))) {
+  if (canAccess && descendantIds.length) {
+    const descendants = await sessionStore.getByIds(descendantIds);
+    const privateIds = descendantIds.filter((id) => descendants.get(id)?.visibility === "private");
+    for (const descendantId of descendantIds) {
+      const descendant = descendants.get(descendantId);
+      if (!descendant || !(await canAccess(descendant, "lifecycle", privateIds))) {
         return error("Child session not found", 404);
       }
-    } else {
-      const result = await evaluateSessionAdmission(ctx, env, descendantId, "lifecycle", null);
-      if (result.kind === "not_found") return error("Child session not found", 404);
-      if (result.kind === "action_denied") {
-        return json(
-          { error: "Forbidden", code: "session_action_denied", reason_code: result.reason },
-          403
-        );
-      }
+    }
+  } else if (!canAccess) {
+    const result = await evaluateSessionAdmissions(ctx, env, descendantIds, "lifecycle");
+    if (result.kind === "denied") {
+      if (result.outcome.kind === "not_found") return error("Child session not found", 404);
+      return json(
+        { error: "Forbidden", code: "session_action_denied", reason_code: result.outcome.reason },
+        403
+      );
     }
   }
 

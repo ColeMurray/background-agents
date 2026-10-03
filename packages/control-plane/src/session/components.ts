@@ -162,6 +162,7 @@ import { SessionStatusService } from "./session-status-service";
 import { createSessionRuntimeClientForTrace } from "./runtime-client";
 import { SessionTitleService } from "./title-service";
 import { parseArtifactMetadata } from "./artifact-metadata";
+import { userViewer } from "../authorization/resource-viewer";
 import { AuthorizationError, AuthorizationService } from "../authorization/service";
 import { parseTeamsEnforcementMode, resolverDecides } from "../authorization/teams-enforcement";
 import { auditSocketPrivateBreakGlass } from "../authorization/session-socket-audit";
@@ -868,11 +869,10 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
           new AuthorizationService(db).getEffectiveAuthorization(userId),
           sessionIndexStore.get(getPublicSessionId()),
         ]);
-        if (authorization.suspendedAt !== null) return { kind: "rejected" };
-        if (!session) return { kind: "rejected" };
+        if (authorization.suspendedAt !== null || !session) return { kind: "rejected" };
         const enforceScope = resolverDecides(mode, session, "read");
         const [memberships, collaboratorIds] = await Promise.all([
-          resolverDecides(mode, session, "collaborate") || options?.includeMemberships
+          resolverDecides(mode, session, "collaborate") || options?.includeMemberships === true
             ? teamMembershipStore.listForUser(userId)
             : new Map<string, TeamRole>(),
           enforceScope ? sessionCollaboratorStore.listUserIds(session.id) : [],
@@ -881,14 +881,7 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
           kind: "valid",
           mode,
           authorization,
-          viewer: {
-            kind: "user",
-            userId: authorization.userId,
-            roleKey: authorization.role.key,
-            permissions: authorization.permissions,
-            suspended: false,
-            memberships,
-          },
+          viewer: userViewer(authorization, memberships),
           row: {
             id: session.id,
             ownerUserId: session.userId ?? null,
