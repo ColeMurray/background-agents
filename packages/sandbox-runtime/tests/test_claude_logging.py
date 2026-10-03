@@ -30,6 +30,8 @@ from sandbox_runtime.harness.claude_translate import (
 )
 from sandbox_runtime.log_config import JSONFormatter, get_logger
 
+MAX_TEST_NODE_ID_BYTES = 256
+
 
 @pytest.mark.parametrize(
     "text",
@@ -176,8 +178,11 @@ def test_one_bad_record_does_not_suppress_later_records_or_typed_result(failure)
         {str(index): "value" for index in range(10_000)},
         {"items": list(range(100_000)), "unvisited": object()},
     ],
+    ids=["long-text", "wide-list", "wide-dict", "truncated-before-unsupported"],
 )
-def test_large_payload_previews_are_bounded(value):
+def test_large_payload_previews_are_bounded(value, request):
+    # Verbose CI reports node IDs before executing the test, so keep payloads out.
+    assert len(request.node.nodeid.encode("utf-8")) < MAX_TEST_NODE_ID_BYTES
     log = MagicMock()
     trajectory = ClaudeTrajectoryLogger(log)
     trajectory.diagnostic("test", payload_preview=value)
@@ -195,8 +200,10 @@ def test_large_payload_previews_are_bounded(value):
         "\u00e9" * (PREVIEW_MAX_BYTES // 2 + 1),
         "\U0001f680" * (PREVIEW_MAX_BYTES // 4 + 1),
     ],
+    ids=["ascii-limit", "ascii-over-limit", "utf8-limit", "utf8-over-limit", "emoji-over-limit"],
 )
-def test_text_preview_respects_utf8_byte_limit(text):
+def test_text_preview_respects_utf8_byte_limit(text, request):
+    assert len(request.node.nodeid.encode("utf-8")) < MAX_TEST_NODE_ID_BYTES
     log = MagicMock()
     trajectory = ClaudeTrajectoryLogger(log)
     trajectory.diagnostic("test", payload_preview=text)
