@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { MemoryStore } from "../../src/db/memories";
 import { Scheduler } from "../../src/scheduler/scheduler";
 import { createCloudflareEnv } from "../../src/cloudflare/platform";
-import { SessionIndexStore } from "../../src/db/session-index";
+import { seedMemorySession } from "./memory-test-helpers";
 import { SessionCollaboratorStore } from "../../src/db/session-collaborators";
 import { resolveSessionMemory } from "../../src/session/memory-resolution";
 import { GitHubSourceControlProvider } from "../../src/source-control/providers/github-provider";
@@ -70,27 +70,12 @@ describe("memory shared-scope authorization", () => {
     repositories: (Omit<typeof repo, "repoId"> & { repoId: number | null })[] = [repo],
     environmentId: string | null = null
   ) {
-    await new SessionIndexStore(env.DB).create({
-      id,
-      title: null,
+    await seedMemorySession(id, {
       userId: MEMBER,
       ownerTeamId: "engineering",
       visibility: "team",
-      repoOwner: repositories[0]?.repoOwner ?? null,
-      repoName: repositories[0]?.repoName ?? null,
       repositories,
       environmentId,
-      model: "anthropic/claude-sonnet-4-6",
-      reasoningEffort: null,
-      baseBranch: repositories[0]?.baseBranch ?? null,
-      status: "active",
-      createdAt: 1,
-      updatedAt: 1,
-      memoryManifest: await resolveSessionMemory(env.DB, {
-        canonicalUserId: MEMBER,
-        repositories,
-        environmentId,
-      }),
     });
     const { stub } = await initNamedSessionDO(id);
     await seedSandboxAuthHash(stub, { authToken: `token-${id}`, sandboxId: `sandbox-${id}` });
@@ -324,28 +309,13 @@ describe("memory shared-scope authorization", () => {
         actor,
         123
       );
-      const manifest = await resolveSessionMemory(env.DB, {
-        canonicalUserId: MEMBER,
-        repositories: [repo],
-        environmentId: ownership === "team" ? "dev" : null,
-      });
-      await new SessionIndexStore(env.DB).create({
-        id: sessionId,
-        title: null,
+      await seedMemorySession(sessionId, {
         userId: MEMBER,
         ownerTeamId: ownership === "team" ? "engineering" : null,
         visibility: ownership,
-        repoOwner: repo.repoOwner,
-        repoName: repo.repoName,
         repositories: [repo],
         environmentId: ownership === "team" ? "dev" : null,
-        model: "anthropic/claude-sonnet-4-6",
-        reasoningEffort: null,
-        baseBranch: "main",
         status: "created",
-        createdAt: 1,
-        updatedAt: 1,
-        memoryManifest: manifest,
       });
       const { stub } = await initNamedSessionDO(sessionId);
       await seedSandboxAuthHash(stub, { authToken: "scoped-token", sandboxId: "sandbox-scoped" });
@@ -393,36 +363,16 @@ describe("memory shared-scope authorization", () => {
     "archived",
   ])("rejects a write when %s wins after route authorization", async (change) => {
     const sessionId = `race-${change.replaceAll(" ", "-")}`;
-    await new SessionIndexStore(env.DB).create({
-      id: sessionId,
-      title: null,
+    const workspaceOrPersonal = ["workspace membership removal", "personal failure"].includes(
+      change
+    );
+    await seedMemorySession(sessionId, {
       userId: MEMBER,
-      ownerTeamId: ["workspace membership removal", "personal failure"].includes(change)
-        ? null
-        : "engineering",
+      ownerTeamId: workspaceOrPersonal ? null : "engineering",
       visibility:
-        change === "personal failure"
-          ? "private"
-          : change === "workspace membership removal"
-            ? "workspace"
-            : "team",
-      repoOwner: repo.repoOwner,
-      repoName: repo.repoName,
+        change === "personal failure" ? "private" : workspaceOrPersonal ? "workspace" : "team",
       repositories: [repo],
-      environmentId: ["workspace membership removal", "personal failure"].includes(change)
-        ? null
-        : "dev",
-      model: "anthropic/claude-sonnet-4-6",
-      reasoningEffort: null,
-      baseBranch: "main",
-      status: "active",
-      createdAt: 1,
-      updatedAt: 1,
-      memoryManifest: await resolveSessionMemory(env.DB, {
-        canonicalUserId: MEMBER,
-        repositories: [repo],
-        environmentId: "dev",
-      }),
+      environmentId: workspaceOrPersonal ? null : "dev",
     });
     const { stub } = await initNamedSessionDO(sessionId);
     await seedSandboxAuthHash(stub, { authToken: "race-token", sandboxId: "sandbox-race" });
@@ -491,27 +441,7 @@ describe("memory shared-scope authorization", () => {
   });
 
   it("permanently revokes personal autosave when a collaborator was added and removed", async () => {
-    const manifest = await resolveSessionMemory(env.DB, {
-      canonicalUserId: MEMBER,
-      repositories: [],
-      environmentId: null,
-    });
-    await new SessionIndexStore(env.DB).create({
-      id: "private",
-      title: null,
-      userId: MEMBER,
-      ownerTeamId: null,
-      visibility: "private",
-      repoOwner: null,
-      repoName: null,
-      model: "anthropic/claude-sonnet-4-6",
-      reasoningEffort: null,
-      baseBranch: null,
-      status: "created",
-      createdAt: 1,
-      updatedAt: 1,
-      memoryManifest: manifest,
-    });
+    await seedMemorySession("private", { userId: MEMBER, status: "created" });
     const collaborators = new SessionCollaboratorStore(env.DB);
     await collaborators.add("private", OUTSIDER, MEMBER);
     await collaborators.remove("private", OUTSIDER);

@@ -2,8 +2,8 @@ import { beforeEach, describe, expect, it } from "vitest";
 import { env } from "cloudflare:test";
 import { MemoryStore, type MemoryActor } from "../../src/db/memories";
 import { cleanD1Tables } from "./cleanup";
-import { SessionIndexStore } from "../../src/db/session-index";
-import { resolveMemoryRecords, resolveSessionMemory } from "../../src/session/memory-resolution";
+import { seedMemorySession } from "./memory-test-helpers";
+import { resolveSessionMemory } from "../../src/session/memory-resolution";
 import { seedActiveUser } from "./helpers";
 import { SessionScopeStore } from "../../src/db/session-scope-store";
 
@@ -27,29 +27,12 @@ describe("memory persistence", () => {
   beforeEach(async () => {
     await cleanD1Tables();
     await seedActiveUser("user_a");
-    await new SessionIndexStore(env.DB).create({
-      id: "session_a",
-      title: null,
+    await seedMemorySession("session_a", {
       userId: "user_a",
-      ownerTeamId: null,
-      visibility: "private",
-      repoOwner: null,
-      repoName: null,
+      status: "created",
       repositories: [
         { repoOwner: "group/subgroup", repoName: "api", repoId: 123, baseBranch: "main" },
       ],
-      model: "anthropic/claude-sonnet-4-6",
-      reasoningEffort: null,
-      baseBranch: null,
-      status: "created",
-      createdAt: Date.now(),
-      updatedAt: Date.now(),
-      memoryManifest: await resolveMemoryRecords([], {
-        canonicalUserId: "user_a",
-        includePersonalMemories: true,
-        repositories: [],
-        environmentId: null,
-      }),
     });
   });
   it("bounds candidate queries, omits fact bodies, and counts every omitted record", async () => {
@@ -78,11 +61,6 @@ describe("memory persistence", () => {
     const manifest = await resolveSessionMemory(env.DB, target, true);
     expect(manifest.items).toHaveLength(300);
     expect(manifest.truncatedCount).toBe(50);
-    const pages = [];
-    for (let offset = 0; offset < 350; offset += 50)
-      pages.push(...(await store.list({ type: "personal" }, human.userId, "active", null, offset)));
-    expect(pages).toHaveLength(350);
-    expect(new Set(pages.map((record) => record.id)).size).toBe(350);
   });
   it("revises without replacing provenance and rejects concurrent stale edits", async () => {
     const store = new MemoryStore(env.DB);

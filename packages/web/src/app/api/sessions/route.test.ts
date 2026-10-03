@@ -36,16 +36,6 @@ describe("sessions API route", () => {
     vi.resetAllMocks();
   });
 
-  it("forwards the personal-memory opt-out without accepting identity", async () => {
-    vi.mocked(getServerAuthSession).mockResolvedValue({ user: { id: "owner" } } as never);
-    vi.mocked(controlPlaneUserFetch).mockResolvedValue(
-      Response.json({ sessionId: "new", status: "created" }, { status: 201 })
-    );
-    await POST(postRequest({ includePersonalMemories: false, userId: "attacker" }));
-    expect(controlPlaneBody()).toMatchObject({ includePersonalMemories: false });
-    expect(controlPlaneBody()).not.toHaveProperty("userId");
-  });
-
   it("forwards allowed session query params", async () => {
     vi.mocked(controlPlaneUserFetch).mockResolvedValue(
       Response.json({ sessions: [], hasMore: false }, { status: 200 })
@@ -208,12 +198,17 @@ describe("sessions API route (POST)", () => {
         body: JSON.stringify({
           teamId: "team-1",
           visibility: "team",
+          includePersonalMemories: false,
           grants: ["repo-1"],
           ...hostileIdentityFields,
         }),
       })
     );
-    expect(controlPlaneBody()).toEqual({ teamId: "team-1", visibility: "team" });
+    expect(controlPlaneBody()).toEqual({
+      teamId: "team-1",
+      visibility: "team",
+      includePersonalMemories: false,
+    });
     expect(response.status).toBe(409);
     await expect(response.json()).resolves.toEqual({
       error: "Team archived",

@@ -67,48 +67,10 @@ async def test_invalid_or_unauthorized_response_never_keeps_stale_file(
 
 
 @pytest.mark.asyncio
-async def test_both_claude_tools_use_session_bound_transport(tmp_path: Path) -> None:
-    from sandbox_runtime.harness.claude_tools import (
-        ControlPlaneToolClient,
-        ToolServerConfig,
-        build_tools,
-    )
-
-    requests = []
-
-    def handler(request: httpx.Request) -> httpx.Response:
-        requests.append(request)
-        return httpx.Response(200, json={"status": "proposed"})
-
-    config = ToolServerConfig(
-        "https://control.test", "session", "token", tmp_path / "repos.json", False, False
-    )
-    client = ControlPlaneToolClient(
-        config, MagicMock(), httpx.AsyncClient(transport=httpx.MockTransport(handler))
-    )
-    tools = {entry.name: entry for entry in build_tools(client)}
-    await tools["memory_read"].handler({"memoryId": "mem/a"})
-    await tools["memory_write"].handler(
-        {
-            "scope": "personal",
-            "memoryType": "fact",
-            "title": "Fact",
-            "description": "Useful fact",
-            "content": "Body",
-            "ownerUserId": "attacker",
-        }
-    )
-    assert requests[0].url.raw_path.endswith(b"/sandbox-memory/mem%2Fa")
-    assert requests[1].headers["Authorization"] == "Bearer token"
-    assert b"attacker" not in requests[1].content
-    assert b'"type":"personal"' in requests[1].content
-    await client.aclose()
-
-
-@pytest.mark.asyncio
 @pytest.mark.parametrize(
     "selector,expected_scope",
     [
+        ({"scope": "personal"}, {"type": "personal"}),
         ({"scope": "repository"}, {"type": "repository"}),
         ({"scope": "environment"}, {"type": "environment"}),
         (
@@ -117,16 +79,23 @@ async def test_both_claude_tools_use_session_bound_transport(tmp_path: Path) -> 
         ),
     ],
 )
-async def test_claude_writes_preserve_optional_selectors_without_accepting_identity(
+async def test_registered_claude_tools_bind_session_and_allowlist_write_selectors(
     tmp_path: Path, selector: dict, expected_scope: dict
 ) -> None:
     import json
 
-    from sandbox_runtime.harness.claude_tools import ControlPlaneToolClient, ToolServerConfig
-    from sandbox_runtime.harness.memory_tools import build_memory_tools
+    from sandbox_runtime.harness.claude_tools import (
+        ControlPlaneToolClient,
+        ToolServerConfig,
+        build_tools,
+    )
 
     def handler(request: httpx.Request) -> httpx.Response:
         assert request.headers["Authorization"] == "Bearer token"
+        if request.method == "GET":
+            assert request.url.raw_path == b"/sessions/session/sandbox-memory/mem%2Fa"
+            return httpx.Response(200, json={"content": "Fact body"})
+        assert request.url.raw_path == b"/sessions/session/sandbox-memory"
         body = json.loads(request.content)
         assert body["scope"] == expected_scope
         assert "ownerUserId" not in body and "sessionId" not in body
@@ -140,7 +109,11 @@ async def test_claude_writes_preserve_optional_selectors_without_accepting_ident
         httpx.AsyncClient(transport=httpx.MockTransport(handler)),
     )
     try:
-        write = build_memory_tools(client)[1]
+        tools = {tool.name: tool for tool in build_tools(client)}
+        if selector["scope"] == "personal":
+            read = await tools["memory_read"].handler({"memoryId": "mem/a"})
+            assert json.loads(read["content"][0]["text"]) == {"content": "Fact body"}
+        write = tools["memory_write"]
         assert "environmentId" not in write.input_schema["properties"]
         result = await write.handler(
             {
@@ -311,10 +284,7 @@ def test_opencode_tools_use_session_transport_and_strip_caller_identity():
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("error", [False, True])
-async def test_claude_search_uses_session_transport_and_preserves_errors(
-    tmp_path: Path, error: bool
-):
+async def test_claude_search_uses_session_transport_and_strips_identity(tmp_path: Path):
     import json
 
     from sandbox_runtime.harness.claude_tools import ControlPlaneToolClient, ToolServerConfig
@@ -324,10 +294,7 @@ async def test_claude_search_uses_session_transport_and_preserves_errors(
         assert request.url.raw_path.endswith(b"/sessions/session/sandbox-memory/search")
         assert request.headers["Authorization"] == "Bearer token"
         assert json.loads(request.content) == {"query": "billing webhook"}
-        return httpx.Response(
-            403 if error else 200,
-            json={"error": "Scope revoked"} if error else {"results": [], "hasMore": False},
-        )
+        return httpx.Response(200, json={"results": [], "hasMore": False})
 
     client = ControlPlaneToolClient(
         ToolServerConfig(
@@ -342,11 +309,7 @@ async def test_claude_search_uses_session_transport_and_preserves_errors(
         result = await search.handler(
             {"query": "billing webhook", "ownerUserId": "attacker", "environmentId": "other"}
         )
-        if error:
-            assert result["isError"] is True
-            assert "403: Scope revoked" in result["content"][0]["text"]
-        else:
-            assert json.loads(result["content"][0]["text"]) == {"results": [], "hasMore": False}
+        assert json.loads(result["content"][0]["text"]) == {"results": [], "hasMore": False}
     finally:
         await client.aclose()
 

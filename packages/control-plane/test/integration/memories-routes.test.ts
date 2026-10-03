@@ -7,7 +7,7 @@ import {
 } from "@open-inspect/shared/types/memories";
 import { MemoryStore } from "../../src/db/memories";
 import { mergeUsers } from "../../src/db/user-merge";
-import { SessionIndexStore } from "../../src/db/session-index";
+import { seedMemorySession } from "./memory-test-helpers";
 import { SessionMemoryStore } from "../../src/db/session-memories";
 import { resolveSessionMemory } from "../../src/session/memory-resolution";
 import { cleanD1Tables } from "./cleanup";
@@ -37,28 +37,12 @@ async function createMemory() {
 }
 async function session(id: string, include = true, parent?: string) {
   if (parent) await seedActiveUser(OTHER);
-  const manifest = await resolveSessionMemory(
-    env.DB,
-    { canonicalUserId: OWNER, repositories: [], environmentId: null },
-    include
-  );
-  await new SessionIndexStore(env.DB).create({
-    id,
-    title: null,
+  await seedMemorySession(id, {
     userId: parent ? OTHER : OWNER,
-    ownerTeamId: null,
     visibility: "workspace",
-    repoOwner: null,
-    repoName: null,
-    model: "anthropic/claude-sonnet-4-6",
-    reasoningEffort: null,
-    baseBranch: null,
     status: "created",
-    createdAt: Date.now(),
-    updatedAt: Date.now(),
-    ...(parent
-      ? { parentSessionId: parent, memoryManifestSourceSessionId: parent }
-      : { memoryManifest: manifest }),
+    includePersonalMemories: include,
+    parentSessionId: parent,
   });
   const { stub } = await initNamedSessionDO(id);
   await seedSandboxAuthHash(stub, { authToken: `token-${id}`, sandboxId: `sandbox-${id}` });
@@ -110,23 +94,15 @@ describe("memory HTTP lifecycle and session boundaries", () => {
     expect(own.status).toBe(200);
     expect(own.headers.get("cache-control")).toBe("private, no-store");
   });
-  it("persists the personal default and lets an explicit override win", async () => {
-    await createMemory();
-    expect(
-      (await request("/memory-preferences", "PUT", { includePersonalMemories: false })).status
-    ).toBe(200);
-    const target = { canonicalUserId: OWNER, repositories: [], environmentId: null };
-    expect((await resolveSessionMemory(env.DB, target)).items).toHaveLength(0);
-    expect((await resolveSessionMemory(env.DB, target, true)).items).toHaveLength(1);
+  it("persists the effective preference through the real create-session route", async () => {
+    const record = await createMemory();
+    await request("/memory-preferences", "PUT", { includePersonalMemories: false });
     const preview = await request("/memories/preview", "POST", {
       includePersonalMemories: false,
       repositories: [],
     });
+    expect(preview.status).toBe(200);
     expect(sessionMemoryManifestSchema.parse(await preview.json()).items).toHaveLength(0);
-  });
-  it("persists the effective preference through the real create-session route", async () => {
-    const record = await createMemory();
-    await request("/memory-preferences", "PUT", { includePersonalMemories: false });
     for (const override of [undefined, true]) {
       const response = await request("/sessions", "POST", {
         title: "Memory create-session integration",

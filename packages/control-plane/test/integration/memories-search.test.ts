@@ -2,10 +2,9 @@ import { createExecutionContext, env } from "cloudflare:test";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { memorySearchResponseSchema } from "@open-inspect/shared/types/memories";
 import { MemoryStore } from "../../src/db/memories";
-import { SessionIndexStore } from "../../src/db/session-index";
+import { seedMemorySession } from "./memory-test-helpers";
 import { SessionMemoryStore } from "../../src/db/session-memories";
 import * as searchStore from "../../src/db/memory-search";
-import { resolveSessionMemory } from "../../src/session/memory-resolution";
 import { seedSearchFacts } from "../conformance/memory-search-fixtures";
 import { cleanD1Tables } from "./cleanup";
 import { initNamedSessionDO, routeRequest, seedActiveUser, seedSandboxAuthHash } from "./helpers";
@@ -36,36 +35,14 @@ async function sandbox(
     environmentId?: string;
   } = {}
 ) {
-  const repositories = options.repositories ?? [];
-  await new SessionIndexStore(env.DB).create({
-    id,
-    title: null,
+  await seedMemorySession(id, {
     userId: OWNER,
     ownerTeamId: "engineering",
     visibility: "team",
-    repoOwner: repositories[0]?.repoOwner ?? null,
-    repoName: repositories[0]?.repoName ?? null,
-    repositories,
-    environmentId: options.environmentId ?? null,
-    model: "anthropic/claude-sonnet-4-6",
-    reasoningEffort: null,
-    baseBranch: repositories[0]?.baseBranch ?? null,
-    status: "active",
-    createdAt: 1,
-    updatedAt: 1,
-    ...(options.parent
-      ? { parentSessionId: options.parent, memoryManifestSourceSessionId: options.parent }
-      : {
-          memoryManifest: await resolveSessionMemory(
-            env.DB,
-            {
-              canonicalUserId: OWNER,
-              repositories,
-              environmentId: options.environmentId ?? null,
-            },
-            options.include ?? true
-          ),
-        }),
+    repositories: options.repositories,
+    environmentId: options.environmentId,
+    includePersonalMemories: options.include,
+    parentSessionId: options.parent,
   });
   const { stub } = await initNamedSessionDO(id);
   await seedSandboxAuthHash(stub, { authToken: `token-${id}`, sandboxId: `sandbox-${id}` });
