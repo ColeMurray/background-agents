@@ -38,6 +38,7 @@ import {
   evaluateCircuitBreaker,
   evaluateSpawnDecision,
   evaluateWarmDecision,
+  heartbeatStaleAt,
   isDeadSandboxStatus,
   isSnapshotRuntimeCompatible,
   shouldStopSandboxOnSessionCancel,
@@ -590,6 +591,14 @@ export class SandboxLifecycleManager
         });
         return;
 
+      case "await_reconnect":
+        this.log.info("Spawn decision: await reconnect", {
+          sandbox_status: spawnState.status,
+          last_heartbeat: sandboxState?.last_heartbeat ?? null,
+        });
+        await this.awaitBridgeReconnect(spawnState.status, sandboxState?.last_heartbeat ?? now);
+        return;
+
       case "restore":
         this.log.info("Spawn decision: restore", {
           snapshot_image_id: spawnDecision.snapshotImageId,
@@ -622,6 +631,21 @@ export class SandboxLifecycleManager
         await this.doSpawn();
         return;
     }
+  }
+
+  /**
+   * Hold a generation whose bridge dropped for its reconnect. Callers announce
+   * a spawn before deciding, so republish the persisted status (and access, which
+   * that announcement cleared). Arm the heartbeat deadline: the alarm already
+   * armed may be an inactivity extension minutes out, and it must not decide
+   * when a source that never returns is retired and the queue re-driven.
+   */
+  private async awaitBridgeReconnect(status: SandboxStatus, lastHeartbeat: number): Promise<void> {
+    this.broadcaster.broadcast({ type: "sandbox_status", status });
+    if (status === "ready") this.broadcaster.broadcast({ type: "sandbox_access_changed" });
+    await this.alarmScheduler.schedule(
+      Math.max(Date.now() + 1, heartbeatStaleAt(lastHeartbeat, this.config.heartbeat))
+    );
   }
 
   /**
