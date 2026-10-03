@@ -985,7 +985,7 @@ describe("POST /events", () => {
     slackFetch.mockRestore();
   });
 
-  it.each([404, 503, "malformed", "network"] as const)(
+  it.each([404, 503, "unbound", "malformed", "network"] as const)(
     "refuses a new request before classification when binding lookup fails: %s",
     async (failure) => {
       const slackFetch = mockSlackFetch();
@@ -993,6 +993,8 @@ describe("POST /events", () => {
       const env = makeSessionEnv();
       env.CONTROL_PLANE.fetch.mockImplementation(async () => {
         if (failure === "network") throw new Error("offline");
+        if (failure === "unbound")
+          return Response.json({ code: "channel_unbound" }, { status: 404 });
         return failure === "malformed"
           ? Response.json({ teamId: null, kind: "primary" })
           : new Response(null, { status: failure });
@@ -1026,7 +1028,7 @@ describe("POST /events", () => {
         expect.objectContaining({
           channel: "D123",
           thread_ts: "111.222",
-          text: expect.stringContaining(failure === 404 ? "bind" : "verify"),
+          text: expect.stringContaining(failure === "unbound" ? "not bound" : "couldn't verify"),
         }),
       ]);
       classify.mockRestore();
@@ -1119,7 +1121,16 @@ describe("POST /events", () => {
       }
     );
 
-    it.each(["unavailable", "network", "timeout", "malformed", "invalid-json"] as const)(
+    it.each([
+      "unavailable",
+      "network",
+      "timeout",
+      "malformed",
+      "invalid-json",
+      "404-empty",
+      "404-router",
+      "404-invalid-json",
+    ] as const)(
       "preserves the thread and its completion when binding lookup is %s, then forwards after recovery",
       async (failure) => {
         const channel = type === "message" ? "D123" : "C123";
@@ -1147,6 +1158,10 @@ describe("POST /events", () => {
             if (failure === "timeout") throw new DOMException("timed out", "TimeoutError");
             if (failure === "malformed") return Response.json({ teamId: "team-a" });
             if (failure === "invalid-json") return new Response("{");
+            if (failure === "404-empty") return new Response(null, { status: 404 });
+            if (failure === "404-router")
+              return Response.json({ code: "not_found" }, { status: 404 });
+            if (failure === "404-invalid-json") return new Response("{", { status: 404 });
             return new Response(null, { status: 503 });
           }
           if (url.pathname.endsWith("/events") || url.pathname.endsWith("/artifacts")) {

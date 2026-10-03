@@ -18,29 +18,42 @@ type ChannelBindingLookupResult =
   | { kind: "rejected"; error: ControlPlaneRequestError }
   | { kind: "unavailable"; error: unknown };
 
-/** Binding reads are authority: never cache them or fall back to workspace scope. */
 export async function getChannelBinding(
   env: Env,
   channel: string,
   traceId?: string
 ): Promise<ChannelBindingResponse> {
-  const path = `/channel-bindings/slack/${encodeURIComponent(channel)}`;
-  const response = await controlPlaneFetch(env, path, traceId, OUTBOUND_REQUEST_TIMEOUT_MS);
-  if (!response.ok) throw new ControlPlaneRequestError(path, response.status);
-  return channelBindingResponseSchema.parse(await response.json());
+  const result = await lookupChannelBinding(env, channel, traceId);
+  if (result.kind === "resolved") return result.binding;
+  throw result.error;
 }
 
+/** Binding reads are authority: never cache them or fall back to workspace scope. */
 export async function lookupChannelBinding(
   env: Env,
   channel: string,
   traceId?: string
 ): Promise<ChannelBindingLookupResult> {
   try {
-    return { kind: "resolved", binding: await getChannelBinding(env, channel, traceId) };
-  } catch (error) {
-    if (error instanceof ControlPlaneRequestError && error.status === 404) {
-      return { kind: "rejected", error };
+    const path = `/channel-bindings/slack/${encodeURIComponent(channel)}`;
+    const response = await controlPlaneFetch(env, path, traceId, OUTBOUND_REQUEST_TIMEOUT_MS);
+    if (!response.ok) {
+      const error = new ControlPlaneRequestError(path, response.status);
+      if (response.status === 404) {
+        const body: unknown = await response.json().catch(() => null);
+        if (
+          typeof body === "object" &&
+          body !== null &&
+          "code" in body &&
+          body.code === "channel_unbound"
+        ) {
+          return { kind: "rejected", error };
+        }
+      }
+      return { kind: "unavailable", error };
     }
+    return { kind: "resolved", binding: channelBindingResponseSchema.parse(await response.json()) };
+  } catch (error) {
     return { kind: "unavailable", error };
   }
 }
