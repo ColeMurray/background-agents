@@ -1,7 +1,5 @@
 "use client";
 
-import { MemoriesSection } from "./sidebar/memories-section";
-
 import { useMemo, useState, type ReactNode } from "react";
 import { CollapsibleSection } from "./sidebar/collapsible-section";
 import { ParticipantsSection } from "./sidebar/participants-section";
@@ -29,6 +27,7 @@ import type { DiffSelection } from "@/lib/session-diffs";
 import { deriveSessionDiffView } from "@/lib/session-diffs";
 import { DiffRetryNotice } from "@/components/diff-retry-notice";
 import { ManagedSkillsSection } from "./sidebar/managed-skills-section";
+import { MemoriesSection } from "./sidebar/memories-section";
 import { BudgetSection } from "./sidebar/budget-section";
 import { DetailsSection } from "./sidebar/details-section";
 import type { SessionCapabilities } from "@/lib/session-capabilities";

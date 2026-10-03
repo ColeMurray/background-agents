@@ -2,11 +2,13 @@
 
 import { useState } from "react";
 import {
-  memoryContentSchema,
   MEMORY_LIMITS,
+  MEMORY_TYPES,
+  memoryContentSchema,
+  memoryTypeSchema,
   type MemoryContent,
-  type MemoryView,
 } from "@open-inspect/shared/types/memories";
+import { memoryTypeLabel } from "@/lib/memories";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
@@ -18,14 +20,16 @@ import {
   SelectItem,
 } from "@/components/ui/select";
 
-/** Validate editable content locally; the parent owns scope, provenance, and revision fencing. */
+/** Validate editable content locally; the parent owns scope, transport, and server errors. */
 export function MemoryEditor({
   record,
+  busy,
   onSave,
   onCancel,
 }: {
-  record?: MemoryView;
-  onSave: (content: MemoryContent) => Promise<void>;
+  record?: MemoryContent;
+  busy: boolean;
+  onSave: (content: MemoryContent) => void;
   onCancel: () => void;
 }) {
   const [draft, setDraft] = useState<MemoryContent>({
@@ -35,43 +39,39 @@ export function MemoryEditor({
     content: record?.content ?? "",
   });
   const [error, setError] = useState("");
-  const [saving, setSaving] = useState(false);
   const limit = MEMORY_LIMITS[draft.memoryType];
   return (
     <form
       className="space-y-4 rounded-sm border border-border p-4"
-      onSubmit={async (event) => {
+      onSubmit={(event) => {
         event.preventDefault();
         const parsed = memoryContentSchema.safeParse(draft);
         if (!parsed.success) {
           setError(parsed.error.issues[0]?.message ?? "Invalid memory");
           return;
         }
-        setSaving(true);
         setError("");
-        try {
-          await onSave(parsed.data);
-        } catch (cause) {
-          setError(cause instanceof Error ? cause.message : "Save failed");
-        } finally {
-          setSaving(false);
-        }
+        onSave(parsed.data);
       }}
     >
       <h3 className="font-medium">{record ? "Edit memory" : "New memory"}</h3>
       <Select
         value={draft.memoryType}
-        onValueChange={(value) =>
-          setDraft({ ...draft, memoryType: value === "directive" ? "directive" : "fact" })
-        }
-        disabled={saving}
+        onValueChange={(value) => {
+          const memoryType = memoryTypeSchema.safeParse(value);
+          if (memoryType.success) setDraft({ ...draft, memoryType: memoryType.data });
+        }}
+        disabled={busy}
       >
         <SelectTrigger aria-label="Memory type">
           <SelectValue />
         </SelectTrigger>
         <SelectContent>
-          <SelectItem value="fact">Fact · read when relevant</SelectItem>
-          <SelectItem value="directive">Directive · always included</SelectItem>
+          {MEMORY_TYPES.map((type) => (
+            <SelectItem key={type} value={type}>
+              {memoryTypeLabel(type)}
+            </SelectItem>
+          ))}
         </SelectContent>
       </Select>
       <label className="block text-sm">
@@ -83,7 +83,7 @@ export function MemoryEditor({
           value={draft.title}
           maxLength={MEMORY_LIMITS.title}
           onChange={(e) => setDraft({ ...draft, title: e.target.value })}
-          disabled={saving}
+          disabled={busy}
         />
       </label>
       <label className="block text-sm">
@@ -95,10 +95,11 @@ export function MemoryEditor({
           value={draft.description}
           maxLength={MEMORY_LIMITS.description}
           onChange={(e) => setDraft({ ...draft, description: e.target.value })}
-          disabled={saving}
+          disabled={busy}
         />
         <span className="text-xs text-muted-foreground">
-          At least 10 characters. Helps the agent decide when this is relevant.
+          At least {MEMORY_LIMITS.descriptionMin} characters. Helps the agent decide when this is
+          relevant.
         </span>
       </label>
       <label className="block text-sm">
@@ -111,7 +112,7 @@ export function MemoryEditor({
           value={draft.content}
           maxLength={limit}
           onChange={(e) => setDraft({ ...draft, content: e.target.value })}
-          disabled={saving}
+          disabled={busy}
         />
       </label>
       {error && (
@@ -120,10 +121,10 @@ export function MemoryEditor({
         </p>
       )}
       <div className="flex gap-2">
-        <Button type="submit" disabled={saving}>
-          {saving ? "Saving…" : "Save memory"}
+        <Button type="submit" disabled={busy}>
+          {busy ? "Saving…" : "Save memory"}
         </Button>
-        <Button type="button" variant="outline" disabled={saving} onClick={onCancel}>
+        <Button type="button" variant="outline" disabled={busy} onClick={onCancel}>
           Cancel
         </Button>
       </div>

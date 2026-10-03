@@ -1,8 +1,5 @@
 "use client";
 
-import { useMemoryPreferences, useMemoryPreview } from "@/hooks/use-memories";
-import { MemoryPreview } from "@/components/memory-preview";
-
 import { useAuthSession } from "@/lib/auth-session";
 import { browserApiFetch } from "@/lib/browser-api-fetch";
 import { toast } from "sonner";
@@ -61,6 +58,13 @@ import {
   type SkillResolutionPreviewResponse,
 } from "@/hooks/use-managed-skills";
 import type { SessionTargetRequestFields } from "@/lib/session-target";
+import { useMemoryPreferences, useMemoryPreview } from "@/hooks/use-memories";
+import { PersonalMemoryControl } from "@/components/personal-memory-control";
+import {
+  includePersonalMemoriesInput,
+  memoryPreviewInput,
+  type PersonalMemoryChoice,
+} from "@/lib/memories";
 import type { PromptSkillSuggestionSource } from "@/lib/prompt-skill-completion";
 import type {
   ModelProviderSelections,
@@ -135,10 +139,8 @@ export default function Home() {
   const [modelPreferenceDraft, setModelPreferenceDraft] = useState<ModelPreference | null>(null);
   const [harness, setHarness] = useState<HarnessId>(DEFAULT_HARNESS);
   const [prompt, setPrompt] = useState("");
-  const memoryPreferences = useMemoryPreferences(!!session);
-  const [personalMemoryOverride, setPersonalMemoryOverride] = useState<boolean | null>(null);
-  const includePersonalMemories =
-    personalMemoryOverride ?? memoryPreferences.data?.includePersonalMemories;
+  const memoryPreferences = useMemoryPreferences();
+  const [personalMemoryChoice, setPersonalMemoryChoice] = useState<PersonalMemoryChoice>("default");
   const [warmRequested, setWarmRequested] = useState(false);
   const [skillSelection, setSkillSelection] = useState<SessionSkillSelection>({ mode: "all" });
   const [providerSelections, setProviderSelections] = useState<ModelProviderSelections>({});
@@ -153,8 +155,7 @@ export default function Home() {
   const targetRequestFields = buildRequestFields();
   const currentSkillPreviewTarget = session ? skillPreviewTarget(targetRequestFields) : null;
   const memoryPreview = useMemoryPreview(
-    currentSkillPreviewTarget,
-    personalMemoryOverride ?? undefined
+    memoryPreviewInput(targetRequestFields, personalMemoryChoice)
   );
   const {
     preview: skillPreview,
@@ -268,7 +269,7 @@ export default function Home() {
           model: selectedModel,
           reasoningEffort,
           skillSelection,
-          includePersonalMemories: personalMemoryOverride ?? undefined,
+          includePersonalMemories: includePersonalMemoriesInput(personalMemoryChoice),
           providerSelections: availableProviderSelections,
           teamId,
           visibility,
@@ -468,14 +469,15 @@ export default function Home() {
       skillSelection={skillSelection}
       setSkillSelection={setSkillSelection}
       memoryControls={
-        <MemoryPreview
-          includePersonalMemories={includePersonalMemories}
+        <PersonalMemoryControl
+          choice={personalMemoryChoice}
+          savedDefault={memoryPreferences.preferences?.includePersonalMemories}
           disabled={creating}
-          onChange={(value) => {
-            if (!submitInFlightRef.current) setPersonalMemoryOverride(value);
+          onChange={(choice) => {
+            if (!submitInFlightRef.current) setPersonalMemoryChoice(choice);
           }}
-          preview={memoryPreview.data}
-          loading={!memoryPreferences.data && !memoryPreferences.error}
+          preview={memoryPreview.preview}
+          loading={memoryPreferences.loading}
           error={memoryPreferences.error || memoryPreview.error}
           onRetry={() => {
             void memoryPreferences.mutate();

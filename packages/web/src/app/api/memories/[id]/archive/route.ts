@@ -1,6 +1,9 @@
+import type { MemoryAction } from "@open-inspect/shared/types/memories";
 import { settingsProxy } from "@/lib/settings-proxy";
 
+const action: MemoryAction = "archive";
+
 export const { POST } = settingsProxy(
-  ({ id }: { id: string }) => `/memories/${encodeURIComponent(id)}/archive`,
+  ({ id }: { id: string }) => `/memories/${encodeURIComponent(id)}/${action}`,
   "memories"
 );
