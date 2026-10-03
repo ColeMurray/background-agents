@@ -84,11 +84,10 @@ Vitest configs and report checker share this policy. Python statement and branch
 independently; a high combined score cannot hide a branch regression.
 
 `.github/workflows/coverage.yml` runs the entire policy on every PR targeting `main` and every push
-to `main`, without path filters or `continue-on-error`. Control-plane and web coverage run in
-parallel shards; the final `Coverage` check merges their reports before enforcing full-suite floors
-and fails if any shard or other package job fails. It also fails on missing/invalid reports or any
-metric below its floor, and uploads the combined coverage artifact. The workflow tests its gate,
-including CLI failure on low Python branch coverage.
+to `main`, without path filters or `continue-on-error`. Control-plane, web, other TypeScript, and
+Python coverage run in parallel jobs; the final `Coverage` check fails if any job fails and uploads
+the combined coverage artifact. The workflow tests its gate, including CLI failure on low Python
+branch coverage.
 
 Repository rules are separate from workflow files: an administrator must add `Coverage` as a
 required status check in the main ruleset. The authenticated integration cannot administer rules
@@ -97,12 +96,12 @@ setting remains outstanding; the workflow alone is not claimed to make GitHub me
 
 ```bash
 npm run build -w @open-inspect/shared
-npm run test:coverage -w @open-inspect/control-plane -- --maxWorkers=1
-npm run test:coverage -w @open-inspect/web -- --maxWorkers=1
-npm run test:coverage -w @open-inspect/shared -- --maxWorkers=1
-npm run test:coverage -w @open-inspect/slack-bot -- --maxWorkers=1
-npm run test:coverage -w @open-inspect/linear-bot -- --maxWorkers=1
-npm run test:coverage -w @open-inspect/github-bot -- --maxWorkers=1
+npm run test:coverage -w @open-inspect/control-plane
+npm run test:coverage -w @open-inspect/web
+npm run test:coverage -w @open-inspect/shared
+npm run test:coverage -w @open-inspect/slack-bot
+npm run test:coverage -w @open-inspect/linear-bot
+npm run test:coverage -w @open-inspect/github-bot
 
 uv run --frozen --project packages/modal-infra --extra dev pytest packages/modal-infra/tests --cov=packages/modal-infra/src --cov-branch --cov-report=json:packages/modal-infra/coverage/coverage.json
 node scripts/check-coverage.mjs modal-infra packages/modal-infra/coverage/coverage.json

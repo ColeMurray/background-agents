@@ -15,13 +15,9 @@ concurrency:
 
 jobs:
   control-plane-coverage:
-    name: Coverage (control-plane ${{ matrix.shard }})
+    name: Coverage (control-plane)
     runs-on: ubuntu-latest
-    timeout-minutes: 20
-    strategy:
-      fail-fast: false
-      matrix:
-        shard: ["1/10", "2/10", "3/10", "4/10", "5/10", "6/10", "7/10", "8/10", "9/10", "10/10"]
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v6
         with:
@@ -34,27 +30,22 @@ jobs:
         run: |
           npm ci
           npm run build -w @open-inspect/shared
-      - name: Run control-plane coverage shard
-        env:
-          COVERAGE_SHARD: "true"
-        run: npm run test:coverage -w @open-inspect/control-plane -- --shard=${{ matrix.shard }} --maxWorkers=2 --reporter=default --reporter=github-actions --reporter=blob --coverage.reporter=json-summary
-      - name: Upload shard report
+      - name: Enforce control-plane coverage
+        run: |
+          npm run test:coverage -w @open-inspect/control-plane
+          node scripts/check-coverage.mjs control-plane packages/control-plane/coverage/coverage-summary.json
+      - name: Upload control-plane coverage
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: control-plane-coverage-${{ strategy.job-index }}
-          path: packages/control-plane/.vitest-reports/
-          include-hidden-files: true
+          name: coverage-data-control-plane
+          path: packages/*/coverage/
           if-no-files-found: error
 
   web-coverage:
-    name: Coverage (web ${{ matrix.shard }})
+    name: Coverage (web)
     runs-on: ubuntu-latest
     timeout-minutes: 15
-    strategy:
-      fail-fast: false
-      matrix:
-        shard: ["1/2", "2/2"]
     steps:
       - uses: actions/checkout@v6
         with:
@@ -67,17 +58,16 @@ jobs:
         run: |
           npm ci
           npm run build -w @open-inspect/shared
-      - name: Run web coverage shard
-        env:
-          COVERAGE_SHARD: "true"
-        run: npm run test:coverage -w @open-inspect/web -- --shard=${{ matrix.shard }} --maxWorkers=2 --reporter=default --reporter=github-actions --reporter=blob --coverage.reporter=json-summary
-      - name: Upload shard report
+      - name: Enforce web coverage
+        run: |
+          npm run test:coverage -w @open-inspect/web
+          node scripts/check-coverage.mjs web packages/web/coverage/coverage-summary.json
+      - name: Upload web coverage
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: web-coverage-${{ strategy.job-index }}
-          path: packages/web/.vitest-reports/
-          include-hidden-files: true
+          name: coverage-data-web
+          path: packages/*/coverage/
           if-no-files-found: error
 
   other-ts-coverage:
@@ -101,10 +91,10 @@ jobs:
       - name: Enforce TypeScript coverage
         run: |
           for package in shared slack-bot linear-bot github-bot; do
-            npm run test:coverage -w "@open-inspect/$package" -- --maxWorkers=1
+            npm run test:coverage -w "@open-inspect/$package"
             node scripts/check-coverage.mjs "$package" "packages/$package/coverage/coverage-summary.json"
           done
-      - name: Upload TypeScript coverage
+      - name: Upload other TypeScript coverage
         if: always()
         uses: actions/upload-artifact@v4
         with:
@@ -161,37 +151,6 @@ jobs:
           for result in "$CP_RESULT" "$WEB_RESULT" "$TS_RESULT" "$PYTHON_RESULT"; do
             test "$result" = success
           done
-      - uses: actions/checkout@v6
-        with:
-          persist-credentials: false
-      - uses: actions/setup-node@v6
-        with:
-          node-version-file: .nvmrc
-          cache: npm
-      - name: Install and build shared
-        run: |
-          npm ci
-          npm run build -w @open-inspect/shared
-      - uses: actions/download-artifact@v4
-        with:
-          pattern: control-plane-coverage-*
-          path: packages/control-plane/.vitest-reports
-          merge-multiple: true
-      - name: Merge and enforce control-plane coverage
-        working-directory: packages/control-plane
-        run: |
-          npx vitest --merge-reports=.vitest-reports --config vitest.coverage.config.ts --coverage
-          node ../../scripts/check-coverage.mjs control-plane coverage/coverage-summary.json
-      - uses: actions/download-artifact@v4
-        with:
-          pattern: web-coverage-*
-          path: packages/web/.vitest-reports
-          merge-multiple: true
-      - name: Merge and enforce web coverage
-        working-directory: packages/web
-        run: |
-          npx vitest --merge-reports=.vitest-reports --config vitest.config.ts --coverage
-          node ../../scripts/check-coverage.mjs web coverage/coverage-summary.json
       - uses: actions/download-artifact@v4
         with:
           pattern: coverage-data-*
