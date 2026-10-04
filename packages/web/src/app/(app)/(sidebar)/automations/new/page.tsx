@@ -183,6 +183,7 @@ function NewAutomationContent() {
             key={teamId ?? ""}
             mode="create"
             initialValues={initialValues}
+            requireTeam={searchParams.get("requireTeam") === "true"}
             onSubmit={handleSubmit}
             submitting={submitting}
           />

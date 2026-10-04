@@ -13,9 +13,11 @@ import { auditEventRoutes } from "./audit-events";
 import { autofixRoutes } from "./autofix";
 import { automationRoutes } from "./automations";
 import { browserAuthRoutes } from "./browser-auth";
+import { channelBindingRoutes } from "./channel-bindings";
 import { commitSigningRoutes } from "./commit-signing";
 import { environmentSecretsRoutes } from "./environment-secrets";
 import { environmentRoutes } from "./environments";
+import { githubRoutingRoutes } from "./github-route";
 import { healthRoutes } from "./health";
 import { imageBuildRoutes } from "./image-builds";
 import { integrationSettingsRoutes } from "./integration-settings";
@@ -33,6 +35,7 @@ import { slackNotifyRoutes } from "./slack-notify";
 import { signInProviderRoutes } from "./sign-in-providers";
 import { skillRoutes } from "./skills";
 import { teamRoutes } from "./teams";
+import { teamChannelBindingRoutes } from "./team-channel-bindings";
 import { teamSecretsRoutes } from "./team-secrets";
 import { teamSettingsRoutes } from "./settings-teams";
 
@@ -43,8 +46,10 @@ export const catalog: readonly RouteModule[] = [
   browserAuthRoutes,
   signInProviderRoutes,
 
+  teamChannelBindingRoutes,
   teamRoutes,
   teamSettingsRoutes,
+  channelBindingRoutes,
 
   // Session management, then the agent-initiated Slack notification
   sessionRoutes,
@@ -110,4 +115,7 @@ export const catalog: readonly RouteModule[] = [
 
   // Webhooks (public routes — auth handled per-route)
   webhookRoutes,
+
+  // Read-only GitHub bot routing hints
+  githubRoutingRoutes,
 ];

@@ -30,6 +30,8 @@ export type RouteAuthorizationDecision =
       auditAllowed: boolean;
       shadowReason?: string;
       shadowDenials?: readonly { sessionId: string; reason: string }[];
+      shadowDenialCount?: number;
+      shadowDenialReason?: string;
     })
   | (AuthorizationDecisionEvidence & {
       kind: "denied";
@@ -41,7 +43,12 @@ export type RouteAuthorizationDecision =
 export function shouldAuditAllowedDecision(
   decision: Extract<RouteAuthorizationDecision, { kind: "allowed" }>
 ): boolean {
-  return decision.auditAllowed || !!decision.shadowReason || !!decision.shadowDenials?.length;
+  return (
+    decision.auditAllowed ||
+    !!decision.shadowReason ||
+    !!decision.shadowDenials?.length ||
+    (decision.shadowDenialCount ?? 0) > 0
+  );
 }
 
 /**
@@ -78,9 +85,13 @@ export async function auditRouteAuthorizationDecision(input: {
   const action = allowed
     ? AUTHORIZATION_DECISION_ACTIONS.allowed
     : AUTHORIZATION_DECISION_ACTIONS.denied;
+  const shadowDenialCount =
+    decision.kind === "allowed"
+      ? (decision.shadowDenialCount ?? decision.shadowDenials?.length ?? 0)
+      : 0;
   const shadowCode =
     decision.kind === "allowed"
-      ? decision.shadowDenials?.length
+      ? shadowDenialCount > 0
         ? "shadow_denied:batch"
         : decision.shadowReason
           ? `shadow_denied:${decision.shadowReason}`
@@ -110,8 +121,17 @@ export async function auditRouteAuthorizationDecision(input: {
     requestId: input.ctx.request_id,
     traceId: input.ctx.trace_id,
     ...(decision.kind === "allowed" ? { admission: decision.admission } : {}),
-    ...(decision.kind === "allowed" && decision.shadowDenials?.length
-      ? { shadowDenials: decision.shadowDenials }
+    ...(decision.kind === "allowed" && shadowDenialCount > 0
+      ? {
+          shadowDenialCount,
+          ...(decision.shadowDenialReason
+            ? { shadowDenialReason: decision.shadowDenialReason }
+            : {}),
+          ...(decision.shadowDenials?.length ? { shadowDenials: decision.shadowDenials } : {}),
+        }
+      : {}),
+    ...(decision.kind === "allowed" && decision.shadowReason
+      ? { shadowReason: decision.shadowReason }
       : {}),
     ...(principal.kind === "service" && principal.actor
       ? {

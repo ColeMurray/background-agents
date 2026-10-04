@@ -8,6 +8,7 @@ import type { ControlPlaneHonoEnv } from "../routing/hono-env";
 
 import {
   getPermalink,
+  listChannels,
   postBlocks,
   sanitizeAgentText,
   splitIntoSlackSections,
@@ -18,6 +19,8 @@ import {
 import type { SlackGlobalSettings } from "@open-inspect/shared/types/integrations";
 import { IntegrationSettingsStore, resolveSlackSettings } from "../db/integration-settings";
 import { SessionIndexStore } from "../db/session-index";
+import { TeamChannelBindingStore } from "../db/team-channel-bindings";
+import { slackPostGate } from "../authorization/slack-post-gate";
 import { createLogger } from "../logger";
 import type { Env } from "../types";
 import { GITHUB_SANDBOX_FALLBACK_ROUTE, json, requireSession, type RequestContext } from "./shared";
@@ -35,6 +38,19 @@ const RAW_TEXT_INPUT_MAX_LENGTH = 12_000;
 const CHANNEL_INPUT_MAX_LENGTH = 80;
 /** Reason field cap; recorded for audit only. */
 const REASON_MAX_LENGTH = 500;
+const CHANNEL_NAME_CACHE_TTL_MS = 60_000;
+const CHANNEL_NAME_CACHE_MAX_ENTRIES = 1_000;
+const channelNameCache = new Map<string, { id: string; expiresAt: number }>();
+
+function cacheChannelName(token: string, channel: { id: string; name: string }, expiresAt: number) {
+  const key = JSON.stringify([token, channel.name.toLowerCase()]);
+  channelNameCache.delete(key);
+  channelNameCache.set(key, { id: channel.id, expiresAt });
+  if (channelNameCache.size > CHANNEL_NAME_CACHE_MAX_ENTRIES) {
+    const oldestKey = channelNameCache.keys().next().value;
+    if (oldestKey !== undefined) channelNameCache.delete(oldestKey);
+  }
+}
 
 interface ParsedBody {
   channel: string;
@@ -61,7 +77,8 @@ export async function handleSlackNotify(
   const parsed = await parseBody(request);
   if (parsed instanceof Response) return parsed;
 
-  const session = await new SessionIndexStore(ctx.db).get(sessionId);
+  const sessionStore = new SessionIndexStore(ctx.db);
+  const session = await sessionStore.get(sessionId);
   if (!session) {
     return failureResponse("invalid_input", "Session not found.");
   }
@@ -74,6 +91,12 @@ export async function handleSlackNotify(
     parent_session_id: session.parentSessionId ?? null,
     repo: repoScope,
   };
+
+  // The target binding is unknown until channel name resolution below.
+  if (session.visibility === "private") {
+    logDenial(sessionId, ctx, parsed, audit, "session_scope_denied");
+    return failureResponse("session_scope_denied", "This session cannot post to Slack.");
+  }
 
   const token = env.SLACK_BOT_TOKEN;
   if (!token) {
@@ -120,6 +143,47 @@ export async function handleSlackNotify(
     );
   }
 
+  let targetChannelId = parsed.channel;
+  if (!/^[CDG][A-Z0-9]+$/.test(targetChannelId)) {
+    const name = parsed.channel.replace(/^#/, "").toLowerCase();
+    const cacheKey = JSON.stringify([token, name]);
+    const cached = channelNameCache.get(cacheKey);
+    if (cached && cached.expiresAt > Date.now()) {
+      targetChannelId = cached.id;
+    } else {
+      channelNameCache.delete(cacheKey);
+      const listing = await listChannels(token, { signal: request.signal });
+      if (!listing.ok) {
+        const reason = mapSlackError(listing.error);
+        logDenial(sessionId, ctx, parsed, audit, reason, listing.retryAfter);
+        return failureResponse(reason, listing.error, listing.retryAfter);
+      }
+      const expiresAt = Date.now() + CHANNEL_NAME_CACHE_TTL_MS;
+      for (const channel of listing.channels) cacheChannelName(token, channel, expiresAt);
+      const channel = listing.channels.find((candidate) => candidate.name.toLowerCase() === name);
+      if (!channel) {
+        logDenial(sessionId, ctx, parsed, audit, "channel_not_found_or_forbidden");
+        return failureResponse("channel_not_found_or_forbidden", "Slack channel was not found.");
+      }
+      // A large listing must not evict the name this request actually resolved.
+      cacheChannelName(token, channel, expiresAt);
+      targetChannelId = channel.id;
+    }
+  }
+
+  // Re-read after name resolution: only the authoritative, current row permits publication.
+  const [currentSession, channelBinding] = await Promise.all([
+    sessionStore.get(sessionId),
+    new TeamChannelBindingStore(ctx.db).get("slack", targetChannelId),
+  ]);
+  if (slackPostGate(currentSession, channelBinding)) {
+    logDenial(sessionId, ctx, parsed, audit, "session_scope_denied");
+    return failureResponse(
+      "session_scope_denied",
+      "This session cannot post to this Slack channel."
+    );
+  }
+
   const sections = splitIntoSlackSections(sanitized.text);
   const blocks = buildBlocks({
     sections,
@@ -128,7 +192,7 @@ export async function handleSlackNotify(
     webAppUrl: env.WEB_APP_URL,
   });
   // Without top-level text, Slack derives screen-reader text from the blocks.
-  const post = await postBlocks(token, parsed.channel, blocks, {
+  const post = await postBlocks(token, targetChannelId, blocks, {
     thread_ts: parsed.threadTs,
     signal: request.signal,
   });

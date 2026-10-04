@@ -265,6 +265,10 @@ classification_openai_api_key = ""
 # classification_openai_api_key.
 # classification_model = "claude-haiku-4-5"
 
+# Reasoning effort for an OpenAI classification_model, sent as reasoning_effort.
+# Leave blank to use the model's default. Not supported for Anthropic models.
+# classification_reasoning_effort = "low"
+
 # =============================================================================
 # Security Secrets
 # =============================================================================

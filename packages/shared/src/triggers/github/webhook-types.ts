@@ -139,8 +139,8 @@ export function isGitHubConditionSupported(
 // the static payload type via `z.infer` AND validates the raw webhook body at
 // runtime via `safeParse` (see normalizer.ts). Only the fields consumed by the
 // normalizer (trigger/concurrency keys, meta) and the context renderer are
-// modeled; `z.object` strips unknown keys. Every field beyond the identity key
-// is optional, so the inferred types stay loose enough for the defensive,
+// modeled; `z.object` strips unknown keys. The repository id and primary object
+// identity keys are required; optional fields support the defensive,
 // optional-chained reads in normalizer.ts and context.ts. Fields GitHub models
 // as `T | null` (an empty PR/issue `body`, an un-merged PR's `merged`) are
 // `.nullable()` so a valid payload that sends `null` parses instead of being
@@ -151,6 +151,7 @@ const userSchema = z.object({
 });
 
 const repositorySchema = z.object({
+  id: z.number().int().positive().max(Number.MAX_SAFE_INTEGER),
   name: z.string().optional(),
   owner: userSchema.optional(),
 });
@@ -159,7 +160,7 @@ const labelArraySchema = z.array(z.object({ name: z.string().optional() }));
 
 const baseEventSchema = z.object({
   action: z.string(),
-  repository: repositorySchema.optional(),
+  repository: repositorySchema,
   sender: userSchema.optional(),
 });
 

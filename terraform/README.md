@@ -190,7 +190,8 @@ Keep credentials in Actions **Secrets**. Non-secret configuration (account/appli
 settings, feature flags, allowlists, and branding) can use Actions **Variables** instead. The
 workflows prefer a non-empty variable, then the same-named secret, then the existing default where
 one exists. Existing secret-only deployments continue to work; an empty variable falls back to the
-secret rather than clearing it. `CLASSIFICATION_MODEL` remains variable-only.
+secret rather than clearing it. `CLASSIFICATION_MODEL` and `CLASSIFICATION_REASONING_EFFORT` remain
+variable-only.
 
 See [the CI/CD setup guide](../docs/GETTING_STARTED.md#set-up-cicd-optional) for the complete
 variable list and bulk upload examples using `gh variable set` and `gh secret set`.

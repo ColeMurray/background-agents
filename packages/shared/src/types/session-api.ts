@@ -61,6 +61,8 @@ const linearCallbackContextBaseSchema = z.strictObject({
   issueId: nonEmptyStringSchema,
   issueIdentifier: nonEmptyStringSchema,
   issueUrl: nonEmptyStringSchema,
+  /** External Linear team used for scoped reads; absent in persisted legacy contexts. */
+  linearTeamId: nonEmptyStringSchema.optional(),
   /** Settings repository when one can be resolved for this Linear message. */
   repoFullName: nonEmptyStringSchema.optional(),
   model: nonEmptyStringSchema,

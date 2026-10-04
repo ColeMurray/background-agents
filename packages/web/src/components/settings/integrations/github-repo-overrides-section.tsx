@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useId, useState } from "react";
 import { mutate } from "swr";
 import { toast } from "sonner";
 import {
@@ -32,6 +32,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { GitHubAutofixSettingsFields } from "./github-autofix-settings-fields";
+import { GitHubAutoReviewDeprecationNotice } from "./github-auto-review-deprecation-notice";
 
 const REPO_SETTINGS_KEY = "/api/integration-settings/github/repos";
 
@@ -140,6 +141,7 @@ function RepoOverrideRow({
   defaultAutoReviewOnOpen: boolean;
   defaultAutofix: ResolvedGitHubAutofixSettings;
 }) {
+  const autoReviewNoticeId = useId();
   const [model, setModel] = useState(entry.settings.model ?? "");
   const [effort, setEffort] = useState(entry.settings.reasoningEffort ?? "");
   const [triggerUserMode, setTriggerUserMode] = useState<"global" | "override">(
@@ -327,10 +329,13 @@ function RepoOverrideRow({
       </div>
 
       <div>
-        <p className="text-xs font-medium text-muted-foreground mb-1">Auto-review new PRs</p>
+        <p className="text-xs font-medium text-muted-foreground mb-1">
+          Auto-review new PRs
+          <span className="text-warning ml-2">Deprecated</span>
+        </p>
         <div className="flex items-center gap-2 mb-1">
           <Select value={autoReviewMode} onValueChange={handleAutoReviewModeChange}>
-            <SelectTrigger density="compact" className="w-48">
+            <SelectTrigger density="compact" className="w-48" aria-describedby={autoReviewNoticeId}>
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
@@ -341,6 +346,7 @@ function RepoOverrideRow({
           {autoReviewMode === "override" && (
             <label className="flex items-center gap-2 text-xs text-foreground">
               <Switch
+                aria-describedby={autoReviewNoticeId}
                 checked={autoReviewOnOpen}
                 onCheckedChange={(checked) => {
                   setAutoReviewOnOpen(checked);
@@ -351,6 +357,7 @@ function RepoOverrideRow({
             </label>
           )}
         </div>
+        <GitHubAutoReviewDeprecationNotice id={autoReviewNoticeId} />
       </div>
 
       <div>

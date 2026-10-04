@@ -385,6 +385,74 @@ describe("handleSpawnChild prompt enqueue handling", () => {
     return initRequest.json<{ reasoningEffort: string | null }>();
   }
 
+  it.each([undefined, null, "nonmember-author"])(
+    "refuses a team child when the active author is unresolved or a nonmember (%s)",
+    async (canonicalUserId) => {
+      const context = {
+        ...spawnContext,
+        promptAuthor: { ...spawnContext.promptAuthor, userId: "slack:U2", canonicalUserId },
+      };
+      const store = makeStore("canonical-user-123", context, null, "team_alpha");
+      vi.mocked(SessionIndexStore).mockImplementation(function () {
+        return store as never;
+      });
+      vi.mocked(TeamMembershipStore.prototype.listForUser).mockImplementation(async (userId) =>
+        userId === "canonical-user-123"
+          ? new Map([["team_alpha", "member"]])
+          : new Map([["team_other", "member"]])
+      );
+      const { env, childStub } = makeSuccessfulEnv(context, [
+        ...actorTargetPermissions,
+        "repositories.use",
+      ]);
+
+      const response = await makeRequest(env);
+
+      expect(response.status).toBe(403);
+      await expect(response.json()).resolves.toMatchObject({ code: "not_member" });
+      expect(resolveRepoOrError).not.toHaveBeenCalled();
+      expect(store.acquireChildAdmissionLease).not.toHaveBeenCalled();
+      expect(store.create).not.toHaveBeenCalled();
+      expect(childStub.fetch).not.toHaveBeenCalled();
+      if (canonicalUserId) {
+        expect(TeamMembershipStore.prototype.listForUser).toHaveBeenCalledWith(canonicalUserId);
+      }
+    }
+  );
+
+  it("uses the active author's membership and ownership rather than the parent owner's", async () => {
+    const context = {
+      ...spawnContext,
+      promptAuthor: {
+        ...spawnContext.promptAuthor,
+        userId: "slack:U2",
+        canonicalUserId: "canonical-author-2",
+      },
+    };
+    const store = makeStore("former-owner", context, null, "team_alpha");
+    vi.mocked(SessionIndexStore).mockImplementation(function () {
+      return store as never;
+    });
+    vi.mocked(TeamMembershipStore.prototype.listForUser).mockImplementation(async (userId) =>
+      userId === "former-owner" ? new Map() : new Map([["team_alpha", "member"]])
+    );
+    vi.mocked(resolveRepoOrError).mockResolvedValue({
+      repoId: 12345,
+      repoOwner: "acme",
+      repoName: "web-app",
+      defaultBranch: "main",
+    });
+    vi.spyOn(TeamStore.prototype, "isActive").mockResolvedValue(true);
+    vi.spyOn(TeamRepositoryGrantStore.prototype, "covers").mockResolvedValue(true);
+    const { env } = makeSuccessfulEnv(context, [...actorTargetPermissions, "repositories.use"]);
+
+    expect((await makeRequest(env)).status).toBe(201);
+    expect(TeamMembershipStore.prototype.listForUser).toHaveBeenCalledWith("canonical-author-2");
+    expect(store.create).toHaveBeenCalledWith(
+      expect.objectContaining({ ownerTeamId: "team_alpha", userId: "canonical-author-2" })
+    );
+  });
+
   it("inherits the parent's reasoning effort when omitted", async () => {
     const store = makeStore();
     vi.mocked(SessionIndexStore).mockImplementation(function () {

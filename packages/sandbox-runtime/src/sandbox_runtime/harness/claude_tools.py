@@ -50,6 +50,7 @@ _STATUS_LABELS: Final = {
 _SLACK_REASON_GUIDANCE: Final = {
     "feature_unavailable": "The deployment is not configured to send agent notifications. Tell the user this is unavailable.",
     "feature_disabled": "Agent notifications are disabled for this repository. Ask the user to enable them in integration settings.",
+    "session_scope_denied": "This session cannot post to this channel because of its visibility or team ownership. Do not retry in another channel without the user's permission.",
     "channel_not_found_or_forbidden": "The channel was not found, is archived, or the bot is not in it. If the channel name is correct and not archived, ask the user to invite the bot.",
     "empty_message_after_sanitization": "The message body was empty after sanitization. Try again with non-empty content.",
     "rate_limited": "Slack rate-limited the request. Wait before retrying.",

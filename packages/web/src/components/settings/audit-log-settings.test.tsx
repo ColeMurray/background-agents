@@ -27,6 +27,8 @@ const filters = vi.hoisted(() => ({
   teams: vi.fn(),
   memberships: vi.fn(),
   allowed: true,
+  teamsLoading: false,
+  teamsError: null as Error | null,
 }));
 vi.mock("@/hooks/use-audit-events", () => ({
   useAuditEvents: (...args: unknown[]) => {
@@ -46,8 +48,8 @@ vi.mock("@/hooks/use-teams", () => ({
         { id: "team_two", name: "Engineering", archivedAt: null },
         { id: "team_archived", name: "Archived team", archivedAt: 1 },
       ],
-      loading: false,
-      error: null,
+      loading: filters.teamsLoading,
+      error: filters.teamsError,
     };
   },
   useMeTeams: () => {
@@ -123,6 +125,8 @@ function renderSingle(event: Record<string, unknown>) {
 
 beforeEach(() => {
   filters.allowed = true;
+  filters.teamsLoading = false;
+  filters.teamsError = null;
   filters.audit.mockReset();
   filters.teams.mockReset();
   filters.memberships.mockReset();
@@ -145,18 +149,39 @@ afterEach(cleanup);
 
 describe("AuditLogSettings", () => {
   it("lets a workspace Owner filter audit events by a team they are not a member of", async () => {
+    const user = userEvent.setup();
     render(<AuditLogSettings />);
     expect(filters.teams).toHaveBeenLastCalledWith(true);
     expect(filters.memberships).not.toHaveBeenCalled();
-    expect(screen.getByRole("option", { name: "Engineering" })).toBeInTheDocument();
-    await userEvent.selectOptions(screen.getByRole("combobox", { name: "Team" }), "team_two");
+    await user.click(screen.getByLabelText("Team"));
+    await user.click(await screen.findByRole("option", { name: "Engineering" }));
     expect(filters.audit).toHaveBeenLastCalledWith({ teamId: "team_two", enabled: true });
+    expect(screen.getByRole("combobox", { name: "Team" })).toHaveTextContent("Engineering");
+
+    await user.click(screen.getByLabelText("Team"));
+    await user.click(await screen.findByRole("option", { name: "All teams" }));
+    expect(filters.audit).toHaveBeenLastCalledWith({ teamId: undefined, enabled: true });
+    expect(screen.getByRole("combobox", { name: "Team" })).toHaveTextContent("All teams");
   });
 
   it("includes archived teams in the audit filter", async () => {
+    const user = userEvent.setup();
     render(<AuditLogSettings />);
-    await userEvent.selectOptions(screen.getByRole("combobox", { name: "Team" }), "team_archived");
+    await user.click(screen.getByRole("combobox", { name: "Team" }));
+    await user.click(await screen.findByRole("option", { name: "Archived team" }));
     expect(filters.audit).toHaveBeenLastCalledWith({ teamId: "team_archived", enabled: true });
+  });
+
+  it("disables the team filter while teams load or fail to load", () => {
+    filters.teamsLoading = true;
+    const { rerender } = render(<AuditLogSettings />);
+    expect(screen.getByLabelText("Team")).toBeDisabled();
+
+    filters.teamsLoading = false;
+    filters.teamsError = new Error("failed");
+    rerender(<AuditLogSettings />);
+    expect(screen.getByLabelText("Team")).toBeDisabled();
+    expect(screen.getByRole("status")).toHaveTextContent("Unable to load team filters.");
   });
 
   it("withholds the feed and filters without the existing audit permission", () => {
@@ -199,6 +224,8 @@ describe("AuditLogSettings", () => {
     ["team.grant_removed", "Team repository grant removed"],
     ["team.secret_set", "Team secret set"],
     ["team.secret_deleted", "Team secret deleted"],
+    ["team.binding_added", "Team channel binding added"],
+    ["team.binding_removed", "Team channel binding removed"],
     ["automation.executor_changed", "Automation executor changed"],
   ])("labels %s as an operation in the workspace audit viewer", (action, label) => {
     const article = renderSingle(createEvent("applied", { action }));
@@ -211,6 +238,25 @@ describe("AuditLogSettings", () => {
     expect(article.getByText("Private session break-glass read")).toBeInTheDocument();
     expect(article.getByText("Applied")).toBeInTheDocument();
   });
+
+  it.each(["applied", "no_op", "denied", "rejected"] as const)(
+    "renders a shadow denial as informational Would deny despite stored result %s",
+    (operationResult) => {
+      const article = renderSingle(
+        createEvent(operationResult, {
+          action: "session.shadow_denied",
+          resourceType: "session",
+          reasonCode: "shadow_denied:not_member",
+          metadata: { before: {}, requested: {}, after: {}, channel: "ws" },
+        })
+      );
+      expect(article.getByText("Session read shadow observation")).toBeInTheDocument();
+      expect(article.getByText("Would deny")).toHaveClass("bg-info-muted", "text-info");
+      expect(article.queryByText("Denied")).not.toBeInTheDocument();
+      expect(article.getByText("shadow_denied:not_member")).toBeInTheDocument();
+      expect(article.queryByText("HTTP response")).not.toBeInTheDocument();
+    }
+  );
 
   it("renders outcomes, stable summaries, timestamps, and expandable structured details", async () => {
     hook.events = [
@@ -345,11 +391,14 @@ describe("AuditLogSettings", () => {
     expect(scrollIntoView).toHaveBeenCalledWith({ block: "start" });
   });
 
-  it("explains what an authorization decision does and does not prove", () => {
+  it("explains how decisions and shadow observations differ from operation outcomes", () => {
     render(<AuditLogSettings />);
 
     expect(
       screen.getByText(/They do not confirm that the requested change took effect/)
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(/Would deny describe hypothetical denials, not enforced denials/)
     ).toBeInTheDocument();
   });
 

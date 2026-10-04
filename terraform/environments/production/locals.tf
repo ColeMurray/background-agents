@@ -65,6 +65,11 @@ locals {
     : { ANTHROPIC_API_KEY = { value = local.classifier_anthropic_api_key } }
   )
 
+  # Bound only when set, so an unconfigured classifier keeps the model default.
+  classifier_reasoning_effort_bindings = var.classification_reasoning_effort != "" ? {
+    CLASSIFICATION_REASONING_EFFORT = { value = var.classification_reasoning_effort }
+  } : {}
+
   # Deployment-wide LLM keys injected into Modal session sandboxes. Every key stays
   # present with an empty value when unconfigured, so clearing one reconciles the
   # old credential away on the next apply; Modal rejects a secret with no keys at

@@ -1,5 +1,6 @@
 import useSWR from "swr";
 import { useAuthSession } from "@/lib/auth-session";
+import { usableFetchData } from "@/lib/swr-fetch-error";
 import type {
   Environment,
   ListEnvironmentsResponse,
@@ -35,7 +36,7 @@ export function useEnvironments(scope: EnvironmentListScope = {}): {
   );
 
   return {
-    environments: data?.environments ?? [],
+    environments: usableFetchData(data, error)?.environments ?? [],
     // The fetch is gated on the auth session, so the list is still loading
     // while the session itself resolves — don't report an authoritative [].
     loading: status === "loading" || isLoading,

@@ -7,6 +7,8 @@ import {
   type SpawnSource,
 } from "@open-inspect/shared/types/sessions";
 import { z } from "zod";
+import { sessionVisibilitySchema } from "@open-inspect/shared/types/teams";
+import { shadowListDenies } from "../authorization/session-shadow-audit";
 import { DEFAULT_BASE_BRANCH } from "../repos/default-branch";
 import type { TeamsEnforcementMode } from "../authorization/teams-enforcement";
 import { sessionRepositoryRowSchema, toSessionRepository } from "./session-list-metadata";
@@ -63,6 +65,8 @@ const exportPageRowSchema = sessionRowSchema.extend({ snapshot_max: z.number().o
 const runsExportPageRowSchema = exportPageRowSchema.extend({
   root_session_id: z.string(),
   root_created_at: z.number(),
+  root_owner_team_id: z.string().nullable(),
+  root_visibility: sessionVisibilitySchema,
 });
 
 function toExportRow(
@@ -102,10 +106,11 @@ export type ExportSelection =
   | { scope: "runs"; cursor: RunsExportCursor | null };
 export type ListSessionsForExportOptions = ExportFilters & ExportSelection;
 
-type ExportPage<Cursor> = { sessions: SessionExportRow[] } & (
-  | { hasMore: false; nextCursor: null }
-  | { hasMore: true; nextCursor: Cursor }
-);
+type ExportPage<Cursor> = {
+  sessions: SessionExportRow[];
+  /** Internal-only evidence from the selected page, never exported on the wire. */
+  shadowDenialCount?: number;
+} & ({ hasMore: false; nextCursor: null } | { hasMore: true; nextCursor: Cursor });
 
 type SessionsPage = { scope: "sessions" } & ExportPage<SessionExportCursor>;
 export type RunsPage = { scope: "runs" } & ExportPage<RunsExportCursor>;
@@ -190,6 +195,15 @@ export class SessionExportStore {
         limit: options.limit,
         snapshotMax: options.cursor?.snapshotMaxRowId,
         schema: exportPageRowSchema,
+        ...(options.mode === "shadow"
+          ? {
+              shadowDenies: (row: z.infer<typeof exportPageRowSchema>) =>
+                shadowListDenies(options.readScope, {
+                  ownerTeamId: row.owner_team_id,
+                  visibility: row.visibility,
+                }),
+            }
+          : {}),
         makeCursor: (last, snapshotMaxRowId) => ({
           createdAt: last.created_at,
           id: last.id,
@@ -266,13 +280,27 @@ export class SessionExportStore {
     return {
       scope: "runs",
       ...(await this.loadPage({
-        select: `s.*, root.created_at AS root_created_at${snapshotColumn}`,
+        select: `s.*, root.created_at AS root_created_at,
+                 root.owner_team_id AS root_owner_team_id, root.visibility AS root_visibility${snapshotColumn}`,
         pageFrom,
         pageId: "s.id",
         bindings,
         limit: options.limit,
         snapshotMax: options.cursor?.snapshotMaxRowId,
         schema: runsExportPageRowSchema,
+        ...(options.mode === "shadow"
+          ? {
+              shadowDenies: (row: z.infer<typeof runsExportPageRowSchema>) =>
+                shadowListDenies(options.readScope, {
+                  ownerTeamId: row.owner_team_id,
+                  visibility: row.visibility,
+                }) ||
+                shadowListDenies(options.readScope, {
+                  ownerTeamId: row.root_owner_team_id,
+                  visibility: row.root_visibility,
+                }),
+            }
+          : {}),
         makeCursor: (last, snapshotMaxRowId) => ({
           scope: "runs",
           rootCreatedAt: last.root_created_at,
@@ -295,6 +323,7 @@ export class SessionExportStore {
     snapshotMax,
     schema,
     makeCursor,
+    shadowDenies,
   }: {
     select: string;
     pageFrom: string;
@@ -304,6 +333,7 @@ export class SessionExportStore {
     snapshotMax: number | undefined;
     schema: z.ZodType<Row>;
     makeCursor: (last: Row, snapshotMax: number) => Cursor;
+    shadowDenies?: (row: Row) => boolean;
   }): Promise<ExportPage<Cursor>> {
     const pageIds = `SELECT ${pageId} ${pageFrom} LIMIT ?`;
     const [sessionResult, repositoryResult, pullRequestResult] = await this.db.batch([
@@ -386,12 +416,21 @@ export class SessionExportStore {
         pullRequestsBySession.get(row.id) ?? []
       )
     );
-    if (!hasMore) return { sessions, hasMore: false, nextCursor: null };
+    const evidence = shadowDenies
+      ? {
+          shadowDenialCount: pageRows.reduce(
+            (count, row) => count + (shadowDenies(row) ? 1 : 0),
+            0
+          ),
+        }
+      : {};
+    if (!hasMore) return { sessions, ...evidence, hasMore: false, nextCursor: null };
 
     const snapshot = snapshotMax ?? rows[0]?.snapshot_max;
     if (snapshot === undefined) throw new Error("Session export page is missing its fence");
     return {
       sessions,
+      ...evidence,
       hasMore: true,
       nextCursor: makeCursor(pageRows[pageRows.length - 1], snapshot),
     };

@@ -38,7 +38,12 @@ export type RequestContext = AuthenticationRequestServices & {
   sessionAdmission?: { row: SessionEntry & SessionAccessRow; viewer: SessionViewer };
   childSessionAdmission?: { row: SessionEntry & SessionAccessRow; viewer: SessionViewer };
   sessionMemberships?: ReadonlyMap<string, TeamRole>;
+  /** Undefined means no coordinate; null means a supplied coordinate is unbound. */
+  serviceTeamId?: string | null;
+  serviceReadPurpose?: "slack-post";
   teamsEnforcementMode?: TeamsEnforcementMode;
   shadowSessionDenial?: string;
+  /** Per-session evidence for explicit body-ID action batches, not collection reads. */
   shadowBatchDenials?: { sessionId: string; reason: string }[];
+  shadowListDenialCount?: number;
 };

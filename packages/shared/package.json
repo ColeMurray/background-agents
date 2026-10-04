@@ -78,6 +78,10 @@
       "import": "./dist/types/teams.js",
       "types": "./dist/types/teams.d.ts"
     },
+    "./types/team-channel-bindings": {
+      "import": "./dist/types/team-channel-bindings.js",
+      "types": "./dist/types/team-channel-bindings.d.ts"
+    },
     "./types/team-access": {
       "import": "./dist/types/team-access.js",
       "types": "./dist/types/team-access.d.ts"
@@ -228,11 +232,13 @@
     "dev": "tsc --watch",
     "typecheck": "tsc --noEmit && tsc --noEmit -p tsconfig.test.json",
     "test": "vitest run",
+    "test:coverage": "vitest run --coverage",
     "lint": "eslint src/",
     "lint:fix": "eslint src/ --fix",
     "generate:memory-tools": "UPDATE_MEMORY_TOOL_SPECS=1 vitest run src/memory-tools.test.ts"
   },
   "devDependencies": {
+    "@vitest/coverage-v8": "^4.1.11",
     "typescript": "^5.7.2",
     "vitest": "^4.1.11"
   },

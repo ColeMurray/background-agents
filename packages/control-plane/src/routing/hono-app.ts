@@ -182,6 +182,12 @@ export function createControlPlaneApp(
     const decision = {
       ...result.decision,
       ...(context.shadowSessionDenial ? { shadowReason: context.shadowSessionDenial } : {}),
+      ...(context.shadowListDenialCount
+        ? {
+            shadowDenialCount: context.shadowListDenialCount,
+            shadowDenialReason: "not_member",
+          }
+        : {}),
       ...(context.shadowBatchDenials?.length ? { shadowDenials: context.shadowBatchDenials } : {}),
     };
     if (shouldAuditAllowedDecision(decision)) {

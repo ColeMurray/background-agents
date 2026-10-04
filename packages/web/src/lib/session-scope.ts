@@ -28,7 +28,7 @@ export function isSessionScopeCacheKey(key: unknown): boolean {
     ? rawPath.slice(INFINITE_CACHE_PREFIX.length)
     : rawPath;
   return (
-    ["/api/sessions/inbox", "/api/teams", "/api/activity", "/api/audit-events"].some(
+    ["/api/sessions/inbox", "/api/teams", "/api/audit-events"].some(
       (prefix) => path === prefix || path.startsWith(`${prefix}?`) || path.startsWith(`${prefix}/`)
     ) || isSessionListKey(path)
   );
@@ -50,6 +50,17 @@ export class SessionScopeError extends Error {
       this.status === 404 ||
       (this.status === 409 && this.code === "descendant_inaccessible")
     );
+  }
+}
+
+/** The write was acknowledged; retry only the refresh, never the mutation. */
+export class SessionScopeRefreshError extends Error {
+  constructor(
+    readonly retryRefresh: () => Promise<void>,
+    cause: unknown
+  ) {
+    super("Change saved, but refreshing session data failed.", { cause });
+    this.name = "SessionScopeRefreshError";
   }
 }
 
@@ -84,21 +95,32 @@ export async function updateSessionScope(
       `${message}${details.length ? ` (${details.join(", ")})` : ""}`
     );
   }
-  for (const listener of scopeChangeListeners) listener();
-  const infiniteKeys = [...cache.keys()].filter(
-    (key) =>
-      key.startsWith(INFINITE_CACHE_PREFIX) &&
-      isSessionScopeCacheKey(key.slice(INFINITE_CACHE_PREFIX.length))
-  );
-  // Invalidate inactive pages too: a predicate revalidation only fetches mounted hooks.
-  // SWR skips aggregates in predicate mutations, so clear those explicitly as well.
-  await Promise.all([
-    mutate(isSessionScopeCacheKey, undefined, { revalidate: false }),
-    ...infiniteKeys.map((key) => mutate(key, undefined, { revalidate: false })),
-  ]);
-  await Promise.all([
-    Promise.resolve().then(onUpdated),
-    mutate(isSessionScopeCacheKey),
-    ...infiniteKeys.map((key) => mutate(key)),
-  ]);
+  async function refreshDiscovery() {
+    for (const listener of scopeChangeListeners) listener();
+    const infiniteKeys = [...cache.keys()].filter(
+      (key) =>
+        key.startsWith(INFINITE_CACHE_PREFIX) &&
+        isSessionScopeCacheKey(key.slice(INFINITE_CACHE_PREFIX.length))
+    );
+    // Invalidate inactive pages too: a predicate revalidation only fetches mounted hooks.
+    // SWR skips aggregates in predicate mutations, so clear those explicitly as well.
+    await Promise.allSettled([
+      mutate(isSessionScopeCacheKey, undefined, { revalidate: false }),
+      ...infiniteKeys.map((key) => mutate(key, undefined, { revalidate: false })),
+    ]);
+    await Promise.allSettled([
+      mutate(isSessionScopeCacheKey),
+      ...infiniteKeys.map((key) => mutate(key)),
+    ]);
+  }
+  async function refresh() {
+    // Discovery caches are best-effort; their shared errors cannot identify this attempt.
+    void refreshDiscovery().catch(() => {});
+    try {
+      await onUpdated();
+    } catch (cause) {
+      throw new SessionScopeRefreshError(refresh, cause);
+    }
+  }
+  await refresh();
 }

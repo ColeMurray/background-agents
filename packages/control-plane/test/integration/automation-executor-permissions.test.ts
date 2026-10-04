@@ -283,4 +283,33 @@ describe("automation executor launch permissions (integration)", () => {
       "missing_permission"
     );
   });
+
+  it.each([
+    { owner: "team", teamId: TEAM },
+    { owner: "workspace", teamId: null },
+  ])("rejects $owner creation by an executor without sessions.create", async ({ teamId }) => {
+    await customRole(EXECUTOR, [
+      "automations.create",
+      ...LAUNCH_PERMISSIONS.filter((permission) => permission !== "sessions.create"),
+    ]);
+    const response = await serviceFetch("https://cp.test/automations", {
+      as: { userId: EXECUTOR, role: "member" },
+      method: "POST",
+      body: JSON.stringify({
+        name: "Unlaunchable executor",
+        instructions: "Run tests",
+        scheduleCron: "0 9 * * *",
+        scheduleTz: "UTC",
+        teamId,
+      }),
+    });
+    expect(response.status).toBe(403);
+    await expect(response.json()).resolves.toMatchObject({
+      code: "permission_required",
+      permission: "sessions.create",
+    });
+    expect(await env.DB.prepare("SELECT COUNT(*) AS count FROM automations").first()).toEqual({
+      count: 0,
+    });
+  });
 });

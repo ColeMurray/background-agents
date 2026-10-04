@@ -6,11 +6,19 @@ import {
   interpretAuditEvent,
   type AuditEvent,
   type AuditEventInterpretation,
+  type AuditObservationAction,
   type AuditOperationAction,
   type AuditOperationResult,
 } from "@open-inspect/shared/types/audit-events";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import {
+  Select,
+  SelectTrigger,
+  SelectValue,
+  SelectContent,
+  SelectItem,
+} from "@/components/ui/select";
 import { useAuditEvents } from "@/hooks/use-audit-events";
 import { useTeams } from "@/hooks/use-teams";
 import { useCurrentUserAuthorization } from "@/hooks/use-current-user-authorization";
@@ -21,6 +29,8 @@ interface BadgeTreatment {
   label: string;
   className: string;
 }
+
+const ALL_TEAMS_VALUE = "all-teams";
 
 const OPERATION_OUTCOMES: Record<AuditOperationResult, BadgeTreatment> = {
   applied: { label: "Applied", className: "bg-success-muted text-success" },
@@ -33,6 +43,10 @@ const OPERATION_OUTCOMES: Record<AuditOperationResult, BadgeTreatment> = {
 const AUTHORIZATION_DECISIONS: Record<"allowed" | "denied", BadgeTreatment> = {
   allowed: { label: "Allowed", className: "bg-info-muted text-info" },
   denied: { label: "Denied", className: "bg-destructive-muted text-destructive" },
+};
+
+const OBSERVATIONS: Record<"would_deny", BadgeTreatment> = {
+  would_deny: { label: "Would deny", className: "bg-info-muted text-info" },
 };
 
 // The client cannot say what an unrecognized action's stored result means.
@@ -72,12 +86,19 @@ const OPERATION_LABELS: Record<AuditOperationAction, string> = {
   "team.grant_removed": "Team repository grant removed",
   "team.secret_set": "Team secret set",
   "team.secret_deleted": "Team secret deleted",
+  "team.binding_added": "Team channel binding added",
+  "team.binding_removed": "Team channel binding removed",
   "automation.executor_changed": "Automation executor changed",
+};
+
+const OBSERVATION_LABELS: Record<AuditObservationAction, string> = {
+  "session.shadow_denied": "Session read shadow observation",
 };
 
 const ACTION_LABELS = new Map<string, string>([
   [AUTHORIZATION_DECISION_ACTIONS.allowed, "Authorization allowed"],
   [AUTHORIZATION_DECISION_ACTIONS.denied, "Authorization denied"],
+  ...Object.entries(OBSERVATION_LABELS),
   ...Object.entries(OPERATION_LABELS),
 ]);
 
@@ -89,6 +110,8 @@ function badgeTreatment(interpretation: AuditEventInterpretation): BadgeTreatmen
   switch (interpretation.kind) {
     case "authorization_decision":
       return AUTHORIZATION_DECISIONS[interpretation.decision];
+    case "observation":
+      return OBSERVATIONS[interpretation.observation];
     case "operation":
       return OPERATION_OUTCOMES[interpretation.result];
     case "unknown":
@@ -229,32 +252,38 @@ export function AuditLogSettings() {
         Audit log
       </h2>
       <p className="mb-2 text-sm text-muted-foreground">
-        Review workspace operations and authorization decisions. Events are shown newest first.
+        Review workspace operations, authorization decisions, and observations. Events are shown
+        newest first.
       </p>
       <p className="mb-6 text-sm text-muted-foreground">
         Authorization decisions record whether a request was allowed or denied and the HTTP response
         it returned. They do not confirm that the requested change took effect. Applied, No change,
-        and Rejected are recorded only by the operation that made or refused the change.
+        and Rejected are recorded only by the operation that made or refused the change. Shadow
+        observations marked Would deny describe hypothetical denials, not enforced denials or
+        operation outcomes.
       </p>
 
       <div className="mb-6 flex flex-wrap items-center gap-3">
         <label htmlFor="audit-team-filter" className="text-sm font-medium">
           Team
         </label>
-        <select
-          id="audit-team-filter"
-          value={teamId}
-          onChange={(event) => setTeamId(event.target.value)}
+        <Select
+          value={teamId || ALL_TEAMS_VALUE}
+          onValueChange={(value) => setTeamId(value === ALL_TEAMS_VALUE ? "" : value)}
           disabled={teamsLoading || !!teamsError}
-          className="min-w-48 max-w-full rounded border border-border bg-background px-2 py-2 text-sm disabled:opacity-50"
         >
-          <option value="">All teams</option>
-          {teams.map((team) => (
-            <option key={team.id} value={team.id}>
-              {team.name}
-            </option>
-          ))}
-        </select>
+          <SelectTrigger id="audit-team-filter" className="w-auto min-w-48 max-w-full">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value={ALL_TEAMS_VALUE}>All teams</SelectItem>
+            {teams.map((team) => (
+              <SelectItem key={team.id} value={team.id}>
+                {team.name}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
         {teamsError && (
           <p role="status" className="text-xs text-destructive">
             Unable to load team filters.

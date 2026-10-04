@@ -459,6 +459,19 @@ export default tseslint.config(
       ],
     },
   },
+  {
+    files: ["packages/web/src/**/*.tsx"],
+    rules: {
+      "no-restricted-syntax": [
+        "error",
+        {
+          selector: 'JSXOpeningElement[name.name="select"]',
+          message:
+            "Use Select / SelectTrigger / SelectContent / SelectItem from @/components/ui/select instead of a native <select>.",
+        },
+      ],
+    },
+  },
   // Cloudflare Workers specific config
   {
     files: ["packages/control-plane/**/*.ts"],

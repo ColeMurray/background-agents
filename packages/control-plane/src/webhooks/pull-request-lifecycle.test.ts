@@ -18,6 +18,7 @@ function createEvent(
     concurrencyKey: "pr:7",
     contextBlock: "",
     meta: {},
+    repositoryId: 9001,
     repoOwner: "acme",
     repoName: "web",
     branch: "open-inspect/public-session-1",

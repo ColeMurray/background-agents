@@ -11,12 +11,13 @@ export const auditEventTimestampSchema = z
   .max(MAX_AUDIT_EVENT_TIMESTAMP_MS);
 
 /**
- * Stored result for workspace operations and authorization decisions.
+ * Stored result for workspace audit events.
  *
  * For events written by an operation owner (for example `workspace.member_role_updated`), this is
  * the domain outcome. For authorization decision actions it only encodes the admission decision:
- * `applied` there means "allowed", not that the operation succeeded. Use `interpretAuditEvent`
- * rather than reading this field directly.
+ * `applied` there means "allowed", not that the operation succeeded. For observation actions, a
+ * stored `denied` is hypothetical, not enforced. Use `interpretAuditEvent` rather than reading
+ * this field directly.
  */
 export const auditOperationResultSchema = z.enum(["applied", "no_op", "denied", "rejected"]);
 
@@ -69,6 +70,9 @@ export const AUTHORIZATION_DECISION_ACTIONS = {
   denied: "authorization.request_denied",
 } as const;
 
+/** Observation-only actions: hypothetical shadow-policy decisions, not enforced domain outcomes. */
+export const AUDIT_OBSERVATION_ACTIONS = ["session.shadow_denied"] as const;
+
 /** Actions written by the operation owner alongside the change; their result is the domain outcome. */
 export const AUDIT_OPERATION_ACTIONS = [
   "memory.created",
@@ -97,6 +101,8 @@ export const AUDIT_OPERATION_ACTIONS = [
   "team.member_role_changed",
   "team.member_removed",
   "team.member_joined",
+  "team.binding_added",
+  "team.binding_removed",
   "team.grant_added",
   "team.grant_removed",
   "team.secret_set",
@@ -121,11 +127,14 @@ export const authorizationDecisionMetadataV1Schema = z.looseObject({
  * - `authorization_decision`: the request was allowed or denied and, when v1 metadata parses,
  *   returned `httpStatus`. It never establishes a domain effect, even on a 2xx. Legacy rows and
  *   unknown metadata versions have no status.
+ * - `observation`: shadow policy would deny the read. It does not establish an enforced denial or
+ *   domain outcome, regardless of the legacy stored result.
  * - `operation`: the operation owner recorded this domain outcome.
  * - `unknown`: an action this contract does not recognize; its stored result is not interpreted.
  */
 export type AuditEventInterpretation =
   | { kind: "authorization_decision"; decision: "allowed" | "denied"; httpStatus: number | null }
+  | { kind: "observation"; observation: "would_deny" }
   | { kind: "operation"; result: AuditOperationResult }
   | { kind: "unknown" };
 
@@ -133,6 +142,7 @@ const DECISIONS_BY_ACTION = new Map<string, "allowed" | "denied">([
   [AUTHORIZATION_DECISION_ACTIONS.allowed, "allowed"],
   [AUTHORIZATION_DECISION_ACTIONS.denied, "denied"],
 ]);
+const OBSERVATION_ACTIONS: ReadonlySet<string> = new Set(AUDIT_OBSERVATION_ACTIONS);
 const OPERATION_ACTIONS: ReadonlySet<string> = new Set(AUDIT_OPERATION_ACTIONS);
 
 export function interpretAuditEvent(
@@ -147,6 +157,9 @@ export function interpretAuditEvent(
       httpStatus: metadata.success ? metadata.data.httpStatus : null,
     };
   }
+  if (OBSERVATION_ACTIONS.has(event.action)) {
+    return { kind: "observation", observation: "would_deny" };
+  }
   if (OPERATION_ACTIONS.has(event.action)) {
     return { kind: "operation", result: event.operationResult };
   }
@@ -155,6 +168,7 @@ export function interpretAuditEvent(
 
 export type AuditOperationResult = z.infer<typeof auditOperationResultSchema>;
 export type AuditOperationAction = (typeof AUDIT_OPERATION_ACTIONS)[number];
+export type AuditObservationAction = (typeof AUDIT_OBSERVATION_ACTIONS)[number];
 export type AuthorizationDecisionMetadataV1 = z.infer<typeof authorizationDecisionMetadataV1Schema>;
 export type AuditPrincipalKind = z.infer<typeof auditPrincipalKindSchema>;
 export type AuditEventMetadata = z.infer<typeof auditEventMetadataSchema>;

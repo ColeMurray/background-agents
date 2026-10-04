@@ -260,6 +260,17 @@ access resolver, including in `off` and `shadow` modes. Those modes do not relax
 checks or the checks on descendants included in a cascading operation. Collaborator self-removal
 remains read-only-authorized in every mode.
 
+Actorless Slack and Linear reads scoped to an unbound integration coordinate can read only
+workspace-owned, non-private sessions in every mode. Unbinding immediately revokes scoped reads of
+team-owned sessions, even when their visibility is `workspace`; channel-less service reads keep
+their existing semantics. Slack publication, including `purpose=slack-post` reads, also requires a
+current matching channel binding for team-owned sessions in every mode. Private sessions cannot
+publish to Slack. Unbound DMs and never-bound channels have no team-session exception. Refused
+callbacks send only a coordinate-only thread closure, not session content. Queued completions
+recheck publication access immediately before posting text and sharing staged media. Once closure
+delivery starts, retries continue closing the thread even if the channel is rebound; rebinding does
+not resume that completion.
+
 The session boundary covers four paths, not just the session page:
 
 - **HTTP item routes** authorize by the persisted session row before serving snapshots, actions,
@@ -280,6 +291,80 @@ The session boundary covers four paths, not just the session page:
 New HTTP requests reflect role, membership, collaborator, and visibility changes on the next check.
 Live browser connections are rechecked at least every five minutes, so an existing connection may
 remain open for up to five minutes after access changes. Recreating the session is not required.
+
+### Reviewing Shadow Denials
+
+Before switching `TEAMS_ENFORCEMENT` from `shadow` to `on`, review would-be denied requests per UTC
+day across all reader seams. These records are observation only: requests and subscriptions still
+use the current mode's authorization rules. `off` and `on` do not emit shadow records.
+
+- HTTP item routes use `authorization.request_allowed` with `shadow_denied:<reason>`.
+- Session lists, inbox snapshots/pages (including descendants), child lists, and bulk exports use
+  one `shadow_denied:batch` row per request that returns would-be-hidden rows.
+  `metadata_json.shadowDenialCount` counts all would-be-hidden rows in the returned page, not the
+  lookahead row; `shadowDenialReason` is `not_member`. No returned-session ID samples are collected
+  or stored. Run exports count rows hidden by either their own or their root's enforced visibility.
+- Team session pages have no shadow delta: admission requires target-team membership or workspace
+  admin status in every mode, and every returned row belongs to that same team. Those readers
+  already pass the enforced team visibility clause, so no observation hook is needed.
+- WebSocket subscribe and subsequent read checks use `session.shadow_denied` with `channel: "ws"`
+  and `shadow_denied:<reason>`, at most once per connection/session/reason during the authorization
+  lease, including after hibernation. Repeated presence, history, or typing checks do not add rows
+  for an already-observed reason. A new connection can add a new record. These best-effort writes
+  run in the background without delaying subscription completion or commands.
+- Analytics totals, breakdowns, grouped run analytics, and other aggregate counts are deliberately
+  not observed: attributing their difference would require additional SQL. There is no second
+  aggregate query or per-session lookup for shadow auditing.
+
+The workspace audit viewer labels WebSocket records as **Session read shadow observation**, uses a
+**Would deny** observation badge rather than **Denied**, and exposes the reason and metadata. For
+daily counts split by seam and reason, run this query against the existing D1
+`authorization_audit_events` table, replacing the start date with the start of the shadow release:
+
+```sql
+WITH shadow AS (
+  SELECT id, date(occurred_at / 1000, 'unixepoch') AS day,
+         CASE WHEN action = 'session.shadow_denied' THEN 'websocket'
+              WHEN reason_code = 'shadow_denied:batch'
+                   AND json_extract(metadata_json, '$.httpMethod') = 'GET'
+                THEN 'http_list'
+              ELSE 'http_item' END AS seam,
+         reason_code, metadata_json
+  FROM authorization_audit_events
+  WHERE occurred_at >= unixepoch('2026-10-01') * 1000
+    AND reason_code LIKE 'shadow_denied:%'
+    AND action IN ('authorization.request_allowed', 'session.shadow_denied')
+), reasons AS (
+  SELECT id, day, seam, substr(reason_code, 15) AS reason
+  FROM shadow WHERE reason_code != 'shadow_denied:batch'
+  UNION
+  SELECT id, day, seam, json_extract(metadata_json, '$.shadowDenialReason') AS reason
+  FROM shadow
+  WHERE reason_code = 'shadow_denied:batch'
+    AND json_extract(metadata_json, '$.shadowDenialReason') IS NOT NULL
+  UNION
+  SELECT s.id, s.day, s.seam, json_extract(d.value, '$.reason') AS reason
+  FROM shadow s, json_each(s.metadata_json, '$.shadowDenials') d
+  WHERE s.reason_code = 'shadow_denied:batch'
+  UNION
+  SELECT id, day, 'http_item', json_extract(metadata_json, '$.shadowReason')
+  FROM shadow
+  WHERE reason_code = 'shadow_denied:batch'
+    AND json_extract(metadata_json, '$.shadowReason') IS NOT NULL
+)
+SELECT day, seam, reason, COUNT(*) AS would_be_denied_requests
+FROM reasons
+GROUP BY day, seam, reason
+ORDER BY day, seam, reason;
+```
+
+For cross-team denial volume, select the `not_member` results. Counts are affected HTTP requests or
+WebSocket leases, not hidden session rows, unique users, or messages. Current collection records
+store only the count and reason. The query also reads per-session reasons from older batch records
+and existing explicit body-ID mutation audits; `UNION` deduplicates request/reason pairs. A children
+request can appear in both item and list seams if its parent and returned children would both be
+hidden. Audit persistence is best effort; write failures are logged without changing access. Account
+for these failures and the aggregate gap when interpreting the release.
 
 ## How Automation Access Works
 

@@ -14,6 +14,7 @@ import { SessionPromptComposer } from "@/components/session-prompt-composer";
 import { ActionBar } from "@/components/action-bar";
 import { QueuedPromptStack } from "@/components/queued-prompt-stack";
 import { SessionRightSidebar } from "@/components/session-right-sidebar";
+import { SessionScopeProvider } from "@/components/session-scope-provider";
 import { Group as PanelGroup, Panel, Separator as PanelResizeHandle } from "react-resizable-panels";
 import { TerminalPanel } from "@/components/terminal-panel";
 import { archiveSession } from "@/lib/archive-session";
@@ -71,7 +72,11 @@ export default function SessionPage() {
   const initialSnapshot = useSessionSnapshot();
   const socket = useSessionSocket(initialSnapshot.session.id, initialSnapshot);
   if (socket.sessionGone) notFound();
-  return <SessionContent initialSnapshot={initialSnapshot} socket={socket} />;
+  return (
+    <SessionScopeProvider>
+      <SessionContent initialSnapshot={initialSnapshot} socket={socket} />
+    </SessionScopeProvider>
+  );
 }
 
 function SessionContent({
@@ -303,10 +308,6 @@ function SessionContent({
     () =>
       artifacts.filter((artifact) => artifact.type === "screenshot" || artifact.type === "video"),
     [artifacts]
-  );
-  const selectedMediaArtifact = useMemo(
-    () => mediaArtifacts.find((artifact) => artifact.id === selectedMediaArtifactId) ?? null,
-    [mediaArtifacts, selectedMediaArtifactId]
   );
   const primaryRepo =
     sessionState?.repositories?.[0] ??
@@ -613,13 +614,9 @@ function SessionContent({
 
       <MediaLightbox
         sessionId={sessionId}
-        artifact={selectedMediaArtifact}
-        open={selectedMediaArtifactId !== null}
-        onOpenChange={(open) => {
-          if (!open) {
-            setSelectedMediaArtifactId(null);
-          }
-        }}
+        artifacts={mediaArtifacts}
+        selectedArtifactId={selectedMediaArtifactId}
+        onSelectArtifact={setSelectedMediaArtifactId}
       />
     </div>
   );

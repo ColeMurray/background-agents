@@ -11,6 +11,7 @@ import { permissionsForBuiltInRole } from "@open-inspect/shared/rbac";
 import { useAuthSession } from "@/lib/auth-session";
 import { browserApiFetch } from "@/lib/browser-api-fetch";
 import { CollaboratorsSection } from "./collaborators-section";
+import { SessionScopeProvider } from "../session-scope-provider";
 
 expect.extend(matchers);
 vi.mock("@/lib/auth-session", () => ({ useAuthSession: vi.fn() }));
@@ -31,7 +32,7 @@ function wrapper({ children }: { children: ReactNode }) {
     <SWRConfig
       value={{ provider: () => new Map(), dedupingInterval: 0, shouldRetryOnError: false }}
     >
-      {children}
+      <SessionScopeProvider>{children}</SessionScopeProvider>
     </SWRConfig>
   );
 }

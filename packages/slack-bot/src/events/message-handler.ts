@@ -14,6 +14,11 @@ import {
   type SlackImageAttachment,
 } from "../attachments";
 import { createClassifier } from "../classifier";
+import {
+  CHANNEL_BINDING_UNAVAILABLE_MESSAGE,
+  lookupChannelBinding,
+  resolveChannelBinding,
+} from "../channel-bindings";
 import { loadTargetCatalog } from "../classifier/catalog";
 import { stripMentions } from "../dm-utils";
 import {
@@ -36,6 +41,7 @@ import {
 } from "../messages/context";
 import { storePendingRequest } from "../pending-requests/pending-request-store";
 import { deliverPrompt } from "../sessions/prompt-delivery";
+import { checkPublicationAccess } from "../sessions/control-plane-client";
 import {
   loadAuthoritativeSlackLaunchSettings,
   startSessionAndSendPrompt,
@@ -43,17 +49,18 @@ import {
 } from "../sessions/session-launcher";
 import {
   advanceLastPromptTs,
-  clearThreadSession,
+  closeThreadSession,
   lookupThreadSession,
+  reopenThreadSession,
+  THREAD_CLOSED_MESSAGE,
 } from "../sessions/thread-session-store";
 import { buildTargetClarificationBlocks, getTargetCatalogNotice } from "../target-clarification";
 import { targetId } from "../targets";
-import type { BackgroundTaskScheduler, Env } from "../types";
+import type { BackgroundTaskScheduler, Env, ThreadSession } from "../types";
 import { resolveSlackActorIdentity, type SlackActorIdentity } from "../user-identity";
 import {
   EMPTY_INLINE_PROMPT_OPTIONS,
   hasInlinePromptOptions,
-  normalizeModelSelection,
   parseInlinePromptFlags,
   resolveInlinePromptOptions,
   type InlinePromptOptions,
@@ -78,8 +85,14 @@ function hasRunnableContent(content: IncomingMessageContent): boolean {
   return Boolean(content.text) || content.images.length > 0 || content.forwarded.hasBody;
 }
 
+type ThreadSessionAdmission =
+  | { kind: "launch" }
+  | { kind: "followUp"; session: ThreadSession; threadTs: string }
+  | { kind: "stop" };
+
 interface IncomingMessageParams {
   content: IncomingMessageContent;
+  admission: Exclude<ThreadSessionAdmission, { kind: "stop" }>;
   user: string;
   channel: string;
   ts: string;
@@ -91,6 +104,54 @@ interface IncomingMessageParams {
   scheduleBackground: BackgroundTaskScheduler;
 }
 
+async function resolveThreadSessionAdmission(
+  env: Env,
+  channel: string,
+  threadTs: string | undefined,
+  traceId?: string
+): Promise<ThreadSessionAdmission> {
+  if (!threadTs) return { kind: "launch" };
+  let session = await lookupThreadSession(env, channel, threadTs);
+  if (!session) return { kind: "launch" };
+  const result = await lookupChannelBinding(env, channel, traceId);
+  if (result.kind === "unavailable") {
+    log.warn("channel_binding.followup_unavailable", {
+      trace_id: traceId,
+      channel,
+      error: result.error,
+    });
+    await postMessage(env.SLACK_BOT_TOKEN, channel, CHANNEL_BINDING_UNAVAILABLE_MESSAGE, {
+      thread_ts: threadTs,
+    });
+    return { kind: "stop" };
+  }
+  // Legacy mappings predate team ownership and represent workspace sessions.
+  const bindingMatches =
+    result.kind === "resolved" && result.binding.teamId === (session.teamId ?? null);
+  if (!session.closed && !bindingMatches) {
+    await closeThreadSession(env, channel, threadTs, session.sessionId);
+    session = { ...session, closed: true };
+  } else if (
+    session.closed &&
+    bindingMatches &&
+    // Bindings and visibility can change back, so a reply re-checks a closure live.
+    (await checkPublicationAccess(env, session.sessionId, channel, traceId)) === "allowed"
+  ) {
+    session = await reopenThreadSession(env, channel, threadTs, session);
+    log.info("thread_session.reopened", {
+      trace_id: traceId,
+      session_id: session.sessionId,
+      channel,
+      thread_ts: threadTs,
+    });
+  }
+  if (session.closed) {
+    await postMessage(env.SLACK_BOT_TOKEN, channel, THREAD_CLOSED_MESSAGE, { thread_ts: threadTs });
+    return { kind: "stop" };
+  }
+  return { kind: "followUp", session, threadTs };
+}
+
 /**
  * Route one user message: follow up on the thread's existing session when there
  * is one, otherwise classify the target and launch a new session (or ask for
@@ -100,6 +161,7 @@ interface IncomingMessageParams {
 async function handleIncomingMessage(params: IncomingMessageParams): Promise<void> {
   const {
     content,
+    admission,
     user,
     channel,
     ts,
@@ -139,149 +201,156 @@ async function handleIncomingMessage(params: IncomingMessageParams): Promise<voi
   const promptText = forwardedContext + requestText;
   let actor: SlackActorIdentity | undefined;
 
-  let recoveredLaunchPlan: SessionLaunchPlan | undefined;
-
-  if (threadTs) {
-    const existingSession = await lookupThreadSession(env, channel, threadTs);
-    if (existingSession) {
-      let turnPlan: ResolvedTurnPlan | undefined;
-      if (hasInlineOverrides) {
-        const enabledModels = await getAuthoritativeModels(env, traceId);
-        if (!enabledModels) {
-          await postMessage(env.SLACK_BOT_TOKEN, channel, MODEL_PREFERENCES_UNAVAILABLE_MESSAGE, {
-            thread_ts: threadTs,
-          });
-          return;
-        }
-        const resolvedTurn = resolveInlinePromptOptions(
-          inlinePromptOptions,
-          {
-            model: existingSession.model,
-            reasoningEffort: existingSession.reasoningEffort,
-          },
-          enabledModels
-        );
-        if (!resolvedTurn.ok) {
-          await postMessage(env.SLACK_BOT_TOKEN, channel, resolvedTurn.error, {
-            thread_ts: threadTs,
-          });
-          return;
-        }
-        turnPlan = resolvedTurn.turnPlan;
+  if (admission.kind === "followUp") {
+    const { session: existingSession, threadTs } = admission;
+    let turnPlan: ResolvedTurnPlan | undefined;
+    if (hasInlineOverrides) {
+      const enabledModels = await getAuthoritativeModels(env, traceId);
+      if (!enabledModels) {
+        await postMessage(env.SLACK_BOT_TOKEN, channel, MODEL_PREFERENCES_UNAVAILABLE_MESSAGE, {
+          thread_ts: threadTs,
+        });
+        return;
       }
-      if (hasInlineOverrides) {
-        scheduleStartingStatus(scheduleBackground, env, channel, threadTs, traceId);
+      const resolvedTurn = resolveInlinePromptOptions(
+        inlinePromptOptions,
+        {
+          model: existingSession.model,
+          reasoningEffort: existingSession.reasoningEffort,
+        },
+        enabledModels
+      );
+      if (!resolvedTurn.ok) {
+        await postMessage(env.SLACK_BOT_TOKEN, channel, resolvedTurn.error, {
+          thread_ts: threadTs,
+        });
+        return;
       }
-      const callbackContext: CallbackContext = {
-        source: "slack",
-        channel,
-        threadTs,
-        repoFullName: existingSession.repoFullName,
-        model: turnPlan?.effective.model ?? existingSession.model,
-        reasoningEffort: turnPlan?.effective.reasoningEffort ?? existingSession.reasoningEffort,
-        reactionMessageTs: ts,
-      };
-      const channelContext = channelName
-        ? formatChannelContext(channelName, channelDescription)
-        : "";
-      // The session already has its own turns, so only forward the human
-      // discussion that happened in the thread since the last prompt.
-      const [resolvedActor, interimHistory] = await Promise.all([
-        resolveSlackActorIdentity(env.SLACK_BOT_TOKEN, user),
-        existingSession.lastPromptTs
-          ? fetchInteractiveThreadContext(
-              env,
-              channel,
-              threadTs,
-              {
-                beforeTs: ts,
-                sinceTs: existingSession.lastPromptTs,
-                includeBotMessages: false,
-              },
-              traceId
-            )
-          : Promise.resolve(undefined),
-      ]);
-      actor = resolvedActor;
-      const interimContext = interimHistory
-        ? formatInterimThreadContext(interimHistory.messages)
-        : "";
-      const promptResult = await deliverPrompt(env, {
-        sessionId: existingSession.sessionId,
-        content:
-          channelContext +
-          interimContext +
-          formatAttributedRequest(actor.senderLabel, requestText, forwarded.entries),
-        authorId: `slack:${user}`,
-        attachments: await preparePromptImageAttachments(
-          env,
-          images,
-          imageOnly ? [] : (interimHistory?.images ?? []),
-          traceId
-        ),
-        imageOnly,
-        callbackContext,
-        ...turnPlan?.promptOverrides,
-        channel,
-        threadTs,
-        traceId,
-      });
-      if (promptResult.ok) {
-        // Only advance the checkpoint past messages we know were considered.
-        // When the interim fetch failed, keeping the old watermark lets the
-        // next follow-up retry the window; at worst it re-includes this
-        // message's text as interim context.
-        const interimFetchFailed = Boolean(existingSession.lastPromptTs) && !interimHistory;
-        if (!interimFetchFailed) {
-          await advanceLastPromptTs(env, channel, threadTs, ts);
-        }
-        const reactionResult = await addReaction(env.SLACK_BOT_TOKEN, channel, ts, "eyes");
-        if (!reactionResult.ok && reactionResult.error !== "already_reacted") {
-          log.warn("slack.reaction.add", {
-            trace_id: traceId,
+      turnPlan = resolvedTurn.turnPlan;
+    }
+    if (hasInlineOverrides) {
+      scheduleStartingStatus(scheduleBackground, env, channel, threadTs, traceId);
+    }
+    const callbackContext: CallbackContext = {
+      source: "slack",
+      channel,
+      threadTs,
+      repoFullName: existingSession.repoFullName,
+      model: turnPlan?.effective.model ?? existingSession.model,
+      reasoningEffort: turnPlan?.effective.reasoningEffort ?? existingSession.reasoningEffort,
+      reactionMessageTs: ts,
+    };
+    const channelContext = channelName ? formatChannelContext(channelName, channelDescription) : "";
+    // The session already has its own turns, so only forward the human
+    // discussion that happened in the thread since the last prompt.
+    const [resolvedActor, interimHistory] = await Promise.all([
+      resolveSlackActorIdentity(env.SLACK_BOT_TOKEN, user),
+      existingSession.lastPromptTs
+        ? fetchInteractiveThreadContext(
+            env,
             channel,
-            message_ts: ts,
-            reaction: "eyes",
-            slack_error: reactionResult.error,
-          });
-        }
-        return;
+            threadTs,
+            {
+              beforeTs: ts,
+              sinceTs: existingSession.lastPromptTs,
+              includeBotMessages: false,
+            },
+            traceId
+          )
+        : Promise.resolve(undefined),
+    ]);
+    actor = resolvedActor;
+    const interimContext = interimHistory
+      ? formatInterimThreadContext(interimHistory.messages)
+      : "";
+    const promptResult = await deliverPrompt(env, {
+      sessionId: existingSession.sessionId,
+      content:
+        channelContext +
+        interimContext +
+        formatAttributedRequest(actor.senderLabel, requestText, forwarded.entries),
+      authorId: `slack:${user}`,
+      attachments: await preparePromptImageAttachments(
+        env,
+        images,
+        imageOnly ? [] : (interimHistory?.images ?? []),
+        traceId
+      ),
+      imageOnly,
+      callbackContext,
+      ...turnPlan?.promptOverrides,
+      channel,
+      threadTs,
+      traceId,
+    });
+    if (promptResult.ok) {
+      // Only advance the checkpoint past messages we know were considered.
+      // When the interim fetch failed, keeping the old watermark lets the
+      // next follow-up retry the window; at worst it re-includes this
+      // message's text as interim context.
+      const interimFetchFailed = Boolean(existingSession.lastPromptTs) && !interimHistory;
+      if (!interimFetchFailed) {
+        await advanceLastPromptTs(env, channel, threadTs, ts);
       }
-      // An image-only follow-up that lost every image sends no prompt; the
-      // user was already told inside deliverPrompt.
-      if (promptResult.reason === "no_images_delivered") return;
-      if (promptResult.reason === "transient") {
-        await postMessage(
-          env.SLACK_BOT_TOKEN,
+      const reactionResult = await addReaction(env.SLACK_BOT_TOKEN, channel, ts, "eyes");
+      if (!reactionResult.ok && reactionResult.error !== "already_reacted") {
+        log.warn("slack.reaction.add", {
+          trace_id: traceId,
           channel,
-          "Sorry, I couldn't send your follow-up. Please try again.",
-          { thread_ts: threadTs }
-        );
-        return;
+          message_ts: ts,
+          reaction: "eyes",
+          slack_error: reactionResult.error,
+        });
       }
-      log.warn("thread_session.stale", {
+      return;
+    }
+    if (promptResult.reason === "channel_scope_denied") {
+      await closeThreadSession(env, channel, threadTs, existingSession.sessionId);
+      await postMessage(env.SLACK_BOT_TOKEN, channel, THREAD_CLOSED_MESSAGE, {
+        thread_ts: threadTs,
+      });
+      return;
+    }
+    // An image-only follow-up that lost every image sends no prompt; the
+    // user was already told inside deliverPrompt.
+    if (promptResult.reason === "no_images_delivered") return;
+    if (promptResult.reason === "transient") {
+      await postMessage(
+        env.SLACK_BOT_TOKEN,
+        channel,
+        "Sorry, I couldn't send your follow-up. Please try again.",
+        { thread_ts: threadTs }
+      );
+      return;
+    }
+    if (promptResult.reason === "forbidden") {
+      await postMessage(env.SLACK_BOT_TOKEN, channel, "you do not have access to this session", {
+        thread_ts: threadTs,
+      });
+      return;
+    }
+    // Actor-concealed 404s must not disable a thread that remains publishable for the channel.
+    if (
+      (await checkPublicationAccess(env, existingSession.sessionId, channel, traceId)) === "denied"
+    ) {
+      log.warn("thread_session.closed", {
         trace_id: traceId,
         session_id: existingSession.sessionId,
         channel,
         thread_ts: threadTs,
       });
-      await clearThreadSession(env, channel, threadTs);
-      // The replacement session stands in for the one the thread was already
-      // using, so it inherits that session's model rather than resetting to
-      // App Home preferences, and this message's own flags stay the one-turn
-      // override they would have been had the session still been alive.
-      recoveredLaunchPlan = {
-        sessionDefaults: turnPlan?.sessionDefaults ?? normalizeModelSelection(existingSession),
-        promptOverrides: turnPlan?.promptOverrides,
-      };
+      await closeThreadSession(env, channel, threadTs, existingSession.sessionId);
     }
+    await postMessage(env.SLACK_BOT_TOKEN, channel, THREAD_CLOSED_MESSAGE, { thread_ts: threadTs });
+    return;
   }
 
+  const binding = await resolveChannelBinding(env, channel, threadTs || ts, traceId);
+  if (!binding) return;
+  const { teamId } = binding;
   let launchSettings: SlackLaunchSettings | undefined;
-  // A recovery keeps the defaults the thread was already running; otherwise
-  // flags on a session-opening message become that session's defaults.
-  let launchPlan: SessionLaunchPlan | undefined = recoveredLaunchPlan;
-  if (!recoveredLaunchPlan && hasInlineOverrides) {
+  let launchPlan: SessionLaunchPlan | undefined;
+  if (hasInlineOverrides) {
     const authoritativeLaunchSettings = await loadAuthoritativeSlackLaunchSettings(
       env,
       user,
@@ -325,15 +394,24 @@ async function handleIncomingMessage(params: IncomingMessageParams): Promise<voi
 
   const result = await createClassifier(env).classify(
     promptText,
-    { channelId: channel, channelName, channelDescription, threadTs, previousMessages },
+    {
+      channelId: channel,
+      teamId,
+      userId: user,
+      channelName,
+      channelDescription,
+      threadTs,
+      previousMessages,
+    },
     traceId
   );
   if (result.needsClarification || !result.target) {
-    const catalog = await loadTargetCatalog(env, traceId);
+    const catalog = await loadTargetCatalog(env, traceId, channel, user);
     const clarificationThreadTs = threadTs || ts;
     const requestId = crypto.randomUUID();
     await storePendingRequest(env, {
       requestId,
+      teamId,
       channel,
       threadTs: clarificationThreadTs,
       message: requestText,
@@ -395,6 +473,7 @@ async function handleIncomingMessage(params: IncomingMessageParams): Promise<voi
   actor ??= await resolveSlackActorIdentity(env.SLACK_BOT_TOKEN, user);
   const sessionResult = await startSessionAndSendPrompt(env, {
     target: result.target,
+    teamId,
     channel,
     threadTs: threadKey,
     messageText: formatAttributedRequest(actor.senderLabel, requestText, forwarded.entries),
@@ -445,6 +524,13 @@ export async function handleAppMention(
   traceId: string | undefined,
   scheduleBackground: BackgroundTaskScheduler
 ): Promise<void> {
+  const admission = await resolveThreadSessionAdmission(
+    env,
+    event.channel,
+    event.thread_ts,
+    traceId
+  );
+  if (admission.kind === "stop") return;
   const parsedFlags = parseInlinePromptFlags(stripMentions(event.text));
   const messageText = parsedFlags.ok ? parsedFlags.text : "";
   const threadKey = event.thread_ts || event.ts;
@@ -518,6 +604,7 @@ export async function handleAppMention(
   }
   await handleIncomingMessage({
     content,
+    admission,
     user: event.user,
     channel: event.channel,
     ts: event.ts,
@@ -548,6 +635,13 @@ export async function handleDirectMessage(
   scheduleBackground: BackgroundTaskScheduler
 ): Promise<void> {
   log.info("slack.dm.received", { trace_id: traceId, user: event.user, channel: event.channel });
+  const admission = await resolveThreadSessionAdmission(
+    env,
+    event.channel,
+    event.thread_ts,
+    traceId
+  );
+  if (admission.kind === "stop") return;
   const parsedFlags = parseInlinePromptFlags(stripMentions(event.text));
   const messageText = parsedFlags.ok ? parsedFlags.text : "";
   const forwarded = collectForwardedMessages(event.attachments);
@@ -564,6 +658,7 @@ export async function handleDirectMessage(
     scheduleStartingStatus(scheduleBackground, env, event.channel, threadKey, traceId);
   await handleIncomingMessage({
     content,
+    admission,
     user: event.user,
     channel: event.channel,
     ts: event.ts,

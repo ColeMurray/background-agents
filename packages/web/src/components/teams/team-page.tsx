@@ -1,9 +1,14 @@
 "use client";
 
 import { isWorkspaceAdmin } from "@open-inspect/shared/rbac";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
+import { useSWRConfig } from "swr";
 import {
+  TEAMS_KEY,
+  isRetryableTeamError,
+  reconcileTeamDirectory,
   useMeTeams,
   useTeam,
   useTeamMembers,
@@ -21,6 +26,7 @@ import { TeamRepositories } from "./team-repositories";
 import { TeamEnvironments } from "./team-environments";
 import { TeamAutomations } from "./team-automations";
 import { TeamSecrets } from "./team-secrets";
+import { TeamChannels } from "./team-channels";
 
 type TeamTab =
   | "Overview"
@@ -29,13 +35,26 @@ type TeamTab =
   | "Environments"
   | "Automations"
   | "Secrets"
+  | "Channels"
   | "Settings";
 
 export function TeamPage({ slug }: { slug: string }) {
   const { teams, loading, error } = useTeams();
   const mine = useMeTeams();
   const { authorization, hasPermission } = useCurrentUserAuthorization();
-  const team = teams.find((candidate) => candidate.slug === slug && candidate.archivedAt === null);
+  const [shownTeam, setShownTeam] = useState<{ id: string | null; routeSlug: string }>({
+    id: null,
+    routeSlug: slug,
+  });
+  // Retain identity on the current route, even when another team reuses its slug.
+  const team =
+    (shownTeam.routeSlug === slug
+      ? teams.find((candidate) => candidate.id === shownTeam.id && candidate.archivedAt === null)
+      : undefined) ??
+    teams.find((candidate) => candidate.slug === slug && candidate.archivedAt === null);
+  if (shownTeam.routeSlug !== slug || (team && team.id !== shownTeam.id)) {
+    setShownTeam({ id: team?.id ?? null, routeSlug: slug });
+  }
   const role = authorization?.role.key;
   const admin = authorization?.suspendedAt === null && isWorkspaceAdmin(role);
   const member =
@@ -50,12 +69,14 @@ export function TeamPage({ slug }: { slug: string }) {
         Loading team...
       </p>
     );
-  if (error) return <ErrorBanner role="alert">Unable to load team.</ErrorBanner>;
+  if (error && (!team || !isRetryableTeamError(error)))
+    return <ErrorBanner role="alert">Unable to load team.</ErrorBanner>;
   if (!team) return <p className="text-sm text-muted-foreground">Team not found.</p>;
   return (
     <TeamContent
       key={team.id}
       initialTeam={team}
+      slug={slug}
       canViewWork={admin || member}
       canReadAutomations={hasPermission("automations.read")}
     />
@@ -64,14 +85,35 @@ export function TeamPage({ slug }: { slug: string }) {
 
 function TeamContent({
   initialTeam,
+  slug,
   canViewWork,
   canReadAutomations,
 }: {
   initialTeam: TeamResponse;
+  slug: string;
   canViewWork: boolean;
   canReadAutomations: boolean;
 }) {
+  const router = useRouter();
+  const { mutate } = useSWRConfig();
   const { team: currentTeam, error } = useTeam(initialTeam.id);
+  // The ID-keyed detail cache holds the PATCH response even when directory reads lag.
+  const canonicalSlug = !error && currentTeam?.archivedAt === null ? currentTeam.slug : undefined;
+  useEffect(() => {
+    if (!currentTeam || !canonicalSlug || canonicalSlug === slug) return;
+    let cancelled = false;
+    void mutate(
+      TEAMS_KEY,
+      (current: { teams: TeamResponse[] } | undefined) =>
+        reconcileTeamDirectory(current, currentTeam),
+      { revalidate: false }
+    ).then(() => {
+      if (!cancelled) router.replace(`/teams/${encodeURIComponent(canonicalSlug)}`);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [router, mutate, slug, canonicalSlug, currentTeam]);
   const team = currentTeam ?? initialTeam;
   const capabilities = useTeamCapabilities(team);
   const [tab, setTab] = useState<TeamTab>("Overview");
@@ -80,6 +122,7 @@ function TeamContent({
     : ["Members"];
   if (canViewWork && canReadAutomations) tabs.push("Automations");
   if (canViewWork && capabilities.canManageSecrets) tabs.push("Secrets");
+  if (canViewWork) tabs.push("Channels");
   if (canViewWork && (capabilities.canEditMetadata || capabilities.canArchive))
     tabs.push("Settings");
   const activeTab = tabs.includes(tab) ? tab : "Members";
@@ -130,6 +173,7 @@ function TeamContent({
       {activeTab === "Secrets" && canViewWork && capabilities.canManageSecrets && (
         <TeamSecrets teamId={team.id} capabilities={team.capabilities} />
       )}
+      {activeTab === "Channels" && <TeamChannels team={team} />}
       {activeTab === "Settings" && <TeamDetail team={team} />}
     </section>
   );
