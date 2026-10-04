@@ -4,13 +4,13 @@ CREATE TABLE memories (
   id TEXT PRIMARY KEY,
   -- Partition identity: the owner user ID (personal), stable repository ID (repository), or
   -- environment ID (environment). Repository names are display-only and never authorize.
-  scope_type TEXT NOT NULL CHECK (scope_type IN ('personal', 'repository', 'environment')),
-  scope_key TEXT NOT NULL,
+  partition_type TEXT NOT NULL CHECK (partition_type IN ('personal', 'repository', 'environment')),
+  partition_key TEXT NOT NULL,
   repo_owner TEXT,
   repo_name TEXT,
   memory_type TEXT NOT NULL CHECK (memory_type IN ('fact', 'directive')),
   status TEXT NOT NULL CHECK (status IN ('proposed', 'active', 'archived')),
-  archive_kind TEXT CHECK (archive_kind IN ('archived', 'rejected', 'superseded')),
+  archive_kind TEXT CHECK (archive_kind IN ('manual', 'rejected', 'superseded')),
   archive_note TEXT,
   current_revision_id TEXT,
   author_kind TEXT NOT NULL CHECK (author_kind IN ('user', 'agent')),
@@ -25,17 +25,17 @@ CREATE TABLE memories (
   last_operation_id TEXT NOT NULL,
   created_at INTEGER NOT NULL,
   updated_at INTEGER NOT NULL,
-  CHECK ((scope_type = 'repository') = (repo_owner IS NOT NULL AND repo_name IS NOT NULL)),
-  CHECK (scope_type = 'repository' OR (repo_owner IS NULL AND repo_name IS NULL)),
+  CHECK ((partition_type = 'repository') = (repo_owner IS NOT NULL AND repo_name IS NOT NULL)),
+  CHECK (partition_type = 'repository' OR (repo_owner IS NULL AND repo_name IS NULL)),
   CHECK (
     (status = 'archived' AND archived_at IS NOT NULL AND archive_kind IS NOT NULL)
     OR (status <> 'archived' AND archived_at IS NULL AND archive_kind IS NULL AND archive_note IS NULL)
   ),
   CHECK (author_kind = 'user' OR author_session_id IS NOT NULL)
 );
-CREATE INDEX idx_memories_partition ON memories(scope_type, scope_key, status, updated_at DESC, id);
-CREATE INDEX idx_memories_directive_selection ON memories(scope_type, scope_key, created_at, id) WHERE status = 'active' AND memory_type = 'directive';
-CREATE INDEX idx_memories_fact_selection ON memories(scope_type, scope_key, updated_at DESC, id) WHERE status = 'active' AND memory_type = 'fact';
+CREATE INDEX idx_memories_partition ON memories(partition_type, partition_key, status, updated_at DESC, id);
+CREATE INDEX idx_memories_directive_selection ON memories(partition_type, partition_key, created_at, id) WHERE status = 'active' AND memory_type = 'directive';
+CREATE INDEX idx_memories_fact_selection ON memories(partition_type, partition_key, updated_at DESC, id) WHERE status = 'active' AND memory_type = 'fact';
 CREATE INDEX idx_memories_author_session ON memories(author_session_id, status);
 CREATE INDEX idx_memories_supersedes ON memories(supersedes_memory_id);
 

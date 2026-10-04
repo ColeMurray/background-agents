@@ -27,7 +27,7 @@ export async function seedSearchFacts(db: SqlDatabase, owner: string, facts: Sea
     created_at: fact.updatedAt ?? 1,
     updated_at: fact.updatedAt ?? 1,
     archived_at: fact.status === "archived" ? 1 : null,
-    archive_kind: fact.status === "archived" ? "archived" : null,
+    archive_kind: fact.status === "archived" ? "manual" : null,
   }));
   const revisions = facts.map((fact) => ({
     id: `rev_${fact.id}`,

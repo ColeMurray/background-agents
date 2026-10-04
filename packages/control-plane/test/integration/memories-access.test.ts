@@ -106,7 +106,7 @@ describe("memory shared-scope authorization", () => {
     "infers the sole repository with environment %s",
     async (environmentId) => {
       const write = await sandboxSession(`sole-${environmentId}`, [repo], environmentId);
-      const response = await write({ scope: "repository" });
+      const response = await write({ scopeType: "repository" });
       expect(response.status).toBe(201);
       const result = await response.json<{ id: string; status: string }>();
       expect(result.status).toBe("proposed");
@@ -126,7 +126,7 @@ describe("memory shared-scope authorization", () => {
         repo_name: second.repoName,
       });
       const write = await sandboxSession(`multi-${environmentId}`, [repo, second], environmentId);
-      const ambiguous = await write({ scope: "repository" });
+      const ambiguous = await write({ scopeType: "repository" });
       expect(ambiguous.status).toBe(400);
       const message = await ambiguous.text();
       expect(message).toContain("repoOwner and repoName");
@@ -137,7 +137,7 @@ describe("memory shared-scope authorization", () => {
         n: 0,
       });
       const response = await write({
-        scope: "repository",
+        scopeType: "repository",
         repoOwner: " ACME/GROUP ",
         repoName: " WEB ",
       });
@@ -152,7 +152,7 @@ describe("memory shared-scope authorization", () => {
         },
       });
       if (environmentId) {
-        const environment = await write({ scope: "environment" });
+        const environment = await write({ scopeType: "environment" });
         expect(environment.status).toBe(201);
         const { id } = await environment.json<{ id: string }>();
         expect(await new MemoryRecordStore(env.DB).get(id)).toMatchObject({
@@ -168,19 +168,19 @@ describe("memory shared-scope authorization", () => {
     await seedGrant("engineering", { repo_id: 456, repo_owner: repo.repoOwner, repo_name: "web" });
     const write = await sandboxSession("invalid-target");
     for (const [target, status] of [
-      [{ scope: "repository", repoOwner: repo.repoOwner, repoName: "web" }, 403],
-      [{ scope: "repository", repoOwner: repo.repoOwner }, 400],
-      [{ scope: "personal", repoOwner: repo.repoOwner, repoName: repo.repoName }, 400],
-      [{ scope: "repository", repoId: 123 }, 400],
-      [{ scope: "environment" }, 403],
-      [{ scope: "environment", environmentId: "dev" }, 400],
+      [{ scopeType: "repository", repoOwner: repo.repoOwner, repoName: "web" }, 403],
+      [{ scopeType: "repository", repoOwner: repo.repoOwner }, 400],
+      [{ scopeType: "personal", repoOwner: repo.repoOwner, repoName: repo.repoName }, 400],
+      [{ scopeType: "repository", repoId: 123 }, 400],
+      [{ scopeType: "environment" }, 403],
+      [{ scopeType: "environment", environmentId: "dev" }, 400],
       [{ scope: { type: "repository" } }, 400],
     ] as const)
       expect((await write(target)).status).toBe(status);
     const noRepo = await sandboxSession("no-repository", []);
-    expect((await noRepo({ scope: "repository" })).status).toBe(403);
+    expect((await noRepo({ scopeType: "repository" })).status).toBe(403);
     const legacy = await sandboxSession("legacy-repository", [{ ...repo, repoId: null }]);
-    expect((await legacy({ scope: "repository" })).status).toBe(403);
+    expect((await legacy({ scopeType: "repository" })).status).toBe(403);
     expect(await env.DB.prepare("SELECT COUNT(*) AS n FROM memories").first()).toEqual({ n: 0 });
     expect(await env.DB.prepare("SELECT COUNT(*) AS n FROM memory_revisions").first()).toEqual({
       n: 0,
@@ -194,10 +194,11 @@ describe("memory shared-scope authorization", () => {
       repoId: 456,
       defaultBranch: "main",
     });
-    expect((await request(`/memories/${record.id}`)).status).toBe(404);
-    expect((await request(`/memories/${record.id}/revisions`)).status).toBe(404);
+    // The record still belongs to repository 123 and is managed by that identity.
+    expect((await request(`/memories/${record.id}`)).status).toBe(200);
+    expect((await request(`/memories/${record.id}/revisions`)).status).toBe(200);
     const query = new URLSearchParams({
-      scope: "repository",
+      scopeType: "repository",
       repoOwner: repo.repoOwner,
       repoName: repo.repoName,
     });
@@ -326,7 +327,7 @@ describe("memory shared-scope authorization", () => {
       }
       expect((await sandbox()).status).toBe(403);
       expect((await sandbox(`/${record.id}`)).status).toBe(404);
-      expect((await sandbox("", "POST", { ...content, scope: "repository" })).status).toBe(403);
+      expect((await sandbox("", "POST", { ...content, scopeType: "repository" })).status).toBe(403);
     }
   );
 
@@ -378,8 +379,8 @@ describe("memory shared-scope authorization", () => {
         createExecutionContext()
       );
     return {
-      response: await sandbox("", { ...content, scope }),
-      search: () => sandbox("/search", { query: "deploy", scope }),
+      response: await sandbox("", { ...content, scopeType: scope }),
+      search: () => sandbox("/search", { query: "deploy", scopeType: scope }),
     };
   }
 

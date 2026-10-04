@@ -4,12 +4,15 @@ import {
   type MemoryInclusion,
   type MemoryStatus,
   type MemoryType,
-  type SessionMemoryDiagnostics,
-  type SessionMemoryManifest,
 } from "@open-inspect/shared/types/memories";
 import { partitionFromColumns, type PartitionColumns } from "../memory/partition";
 import { emptyManifest } from "../memory/selection";
-import type { MemorySession, PinnedMemoryEntry } from "../memory/types";
+import type {
+  MemorySession,
+  PinnedItemDrift,
+  PinnedMemoryEntry,
+  SessionMemoryManifest,
+} from "../memory/types";
 import type { Pinned } from "../session/pinned";
 import { bulkInsertStatements } from "./bulk-insert";
 import type { SqlDatabase, SqlStatement } from "./sql-database";
@@ -42,8 +45,8 @@ interface PinnedItemRow extends PartitionColumns {
 
 export interface LoadedSessionMemory {
   manifest: SessionMemoryManifest;
-  /** The manifest plus live drift flags, for inspection only. */
-  diagnostics: SessionMemoryDiagnostics;
+  /** Live drift for each manifest item, in the same order; for inspection only. */
+  drift: PinnedItemDrift[];
   /** Pinned revisions to render; fact bodies are never loaded. */
   entries: PinnedMemoryEntry[];
 }
@@ -158,7 +161,7 @@ export class SessionMemorySelectionStore {
       this.db
         .prepare(
           `SELECT i.memory_id, i.revision_id, i.scope_json, i.inclusion, i.estimated_tokens,
-            m.scope_type, m.scope_key, m.repo_owner, m.repo_name, m.current_revision_id, m.status,
+            m.partition_type, m.partition_key, m.repo_owner, m.repo_name, m.current_revision_id, m.status,
             r.revision_number, r.memory_type, r.title, r.description,
             CASE WHEN i.inclusion = 'full' THEN r.content ELSE NULL END AS content
           FROM session_memory_items i JOIN memories m ON m.id = i.memory_id
@@ -175,7 +178,7 @@ export class SessionMemorySelectionStore {
         .first<{ created_at: number }>();
       if (!session) return null;
       const manifest = await emptyManifest(session.created_at);
-      return { manifest, diagnostics: { ...manifest, items: [] }, entries: [] };
+      return { manifest, drift: [], entries: [] };
     }
     const items = rows.results as PinnedItemRow[];
     const manifest: SessionMemoryManifest = {
@@ -201,14 +204,10 @@ export class SessionMemorySelectionStore {
     };
     return {
       manifest,
-      diagnostics: {
-        ...manifest,
-        items: manifest.items.map((item, index) => ({
-          ...item,
-          changed: items[index].current_revision_id !== item.revisionId,
-          archived: items[index].status === "archived",
-        })),
-      },
+      drift: items.map((row) => ({
+        revisedSinceSelection: row.current_revision_id !== row.revision_id,
+        archivedSinceSelection: row.status === "archived",
+      })),
       entries: items.map((row, index): PinnedMemoryEntry => {
         const base = {
           memoryId: row.memory_id,

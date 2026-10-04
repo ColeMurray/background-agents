@@ -177,7 +177,7 @@ export class MemoryRecordStore {
             SELECT m.*, r.title, r.description, r.revision_number,
               CASE WHEN m.memory_type = 'directive' THEN r.content ELSE NULL END AS content,
               ROW_NUMBER() OVER (
-                PARTITION BY m.scope_type, m.scope_key, m.memory_type
+                PARTITION BY m.partition_type, m.partition_key, m.memory_type
                 ORDER BY CASE WHEN m.memory_type = 'directive' THEN m.created_at ELSE -m.updated_at END,
                   m.id
               ) AS rank_in_partition
@@ -268,10 +268,10 @@ export class MemoryRecordStore {
       prepareSql(
         this.db,
         sql`INSERT INTO memories
-          (id, scope_type, scope_key, repo_owner, repo_name, memory_type, status, current_revision_id,
+          (id, partition_type, partition_key, repo_owner, repo_name, memory_type, status, current_revision_id,
            author_kind, author_user_id, author_session_id, supersedes_memory_id, supersedes_revision_id,
            approved_at, last_operation_id, created_at, updated_at)
-          SELECT ${id}, ${columns.scope_type}, ${columns.scope_key}, ${columns.repo_owner},
+          SELECT ${id}, ${columns.partition_type}, ${columns.partition_key}, ${columns.repo_owner},
             ${columns.repo_name}, ${content.memoryType}, ${status}, NULL, ${actor.kind},
             ${actor.userId}, ${actorSessionId(actor)}, ${predecessor?.id ?? null},
             ${predecessor?.currentRevisionId ?? null}, ${status === "active" ? now : null},
@@ -358,7 +358,7 @@ export class MemoryRecordStore {
     action: MemoryAction,
     expectedRevisionId: string,
     actor: MemoryActor,
-    note?: string
+    archiveNote?: string
   ): Promise<MemoryRecord> {
     const current = await this.get(id);
     if (!current || current.currentRevisionId !== expectedRevisionId)
@@ -389,7 +389,7 @@ export class MemoryRecordStore {
       prepareSql(
         this.db,
         sql`UPDATE memories SET status = ${next.status}, archive_kind = ${next.archiveKind},
-            archive_note = ${archived ? (note ?? null) : null},
+            archive_note = ${archived ? (archiveNote ?? null) : null},
             approved_at = ${action === "approve" ? now : current.approvedAt},
             decided_by = ${actor.userId}, archived_at = ${archived ? now : null},
             archived_by = ${archived ? actor.userId : null},

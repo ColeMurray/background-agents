@@ -203,20 +203,20 @@ describe("session memory discovery", () => {
       await (
         await call({
           query: "needle",
-          scope: "repository",
+          scopeType: "repository",
           repoOwner: " ACME/GROUP ",
           repoName: " WEB ",
         })
       ).json()
     ).toMatchObject({ results: [{ id: "web" }], hasMore: false });
     expect(
-      await (await call({ query: "needle", scope: "repository", limit: 1 })).json()
+      await (await call({ query: "needle", scopeType: "repository", limit: 1 })).json()
     ).toMatchObject({ results: [{ id: "api" }], hasMore: true });
     expect(
       (
         await call({
           query: "needle",
-          scope: "repository",
+          scopeType: "repository",
           repoOwner: "acme",
           repoName: "unattached",
         })
@@ -239,8 +239,8 @@ describe("session memory discovery", () => {
       results: [],
       hasMore: false,
     });
-    expect((await excluded({ query: "needle", scope: "personal" })).status).toBe(403);
-    expect((await excluded({ query: "needle", scope: "environment" })).status).toBe(403);
+    expect((await excluded({ query: "needle", scopeType: "personal" })).status).toBe(403);
+    expect((await excluded({ query: "needle", scopeType: "environment" })).status).toBe(403);
   });
 
   it.each(["before", "during"])(
@@ -269,7 +269,7 @@ describe("session memory discovery", () => {
           return result;
         });
       }
-      const response = await call({ query: "needle", scope: "repository" });
+      const response = await call({ query: "needle", scopeType: "repository" });
       expect(response.status).toBe(403);
       expect(await response.text()).not.toContain("PRIVATE_SCOPE_SENTINEL");
     }
@@ -286,7 +286,7 @@ describe("session memory discovery", () => {
       { query: "needle", limit: 1.5 },
       { query: "needle", ownerUserId: OTHER },
       { query: "needle", environmentId: "other" },
-      { query: "needle", scope: "repository", repoOwner: "acme" },
+      { query: "needle", scopeType: "repository", repoOwner: "acme" },
       { query: "needle", repoOwner: "acme", repoName: "api" },
     ])
       expect((await call(body)).status).toBe(400);
@@ -305,7 +305,7 @@ describe("session memory discovery", () => {
       { id: "legacy-secret", title: "needle", partition: repoPartition },
     ]);
     const call = await sandbox("legacy-scope", { repositories: [{ ...repo, repoId: null }] });
-    expect((await call({ query: "needle", scope: "repository" })).status).toBe(403);
+    expect((await call({ query: "needle", scopeType: "repository" })).status).toBe(403);
   });
   it.each(["environment transfer", "team archive"])(
     "conceals results when %s happens during search",
@@ -333,7 +333,7 @@ describe("session memory discovery", () => {
         ).run();
         return result;
       });
-      const response = await call({ query: "needle", scope: "environment" });
+      const response = await call({ query: "needle", scopeType: "environment" });
       expect(response.status).toBe(403);
       expect(await response.text()).not.toContain("PRIVATE_ENV_SENTINEL");
     }

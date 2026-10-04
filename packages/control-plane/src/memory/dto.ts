@@ -2,9 +2,11 @@ import {
   allowedMemoryActions,
   canReviseMemory,
   type MemoryDto,
+  type MemorySelectionSummary,
+  type SessionMemorySelectionStatus,
 } from "@open-inspect/shared/types/memories";
 import { partitionScope } from "./partition";
-import type { MemoryRecord } from "./types";
+import type { MemoryRecord, PinnedItemDrift, SessionMemoryManifest } from "./types";
 
 /**
  * Project a record for the management UI. Capabilities combine the shared lifecycle table with
@@ -41,4 +43,33 @@ export function toMemoryDto(
       actions: canManage ? allowedMemoryActions(record) : [],
     },
   };
+}
+
+/** A selection as people see it: items and sizes, without the owner, hash, or timestamps. */
+export function toSelectionSummary(manifest: SessionMemoryManifest): MemorySelectionSummary {
+  return {
+    includePersonalMemories: manifest.includePersonalMemories,
+    directiveChars: manifest.directiveChars,
+    catalogChars: manifest.catalogChars,
+    estimatedTokens: manifest.estimatedTokens,
+    truncatedCount: manifest.truncatedCount,
+    items: manifest.items.map((item) => ({
+      memoryId: item.memoryId,
+      revisionNumber: item.revisionNumber,
+      scope: item.scope,
+      memoryType: item.memoryType,
+      title: item.title,
+      inclusion: item.inclusion,
+      estimatedTokens: item.estimatedTokens,
+    })),
+  };
+}
+
+/** A live session's selection summary with each item's drift since it was pinned. */
+export function toSelectionStatus(
+  manifest: SessionMemoryManifest,
+  drift: readonly PinnedItemDrift[]
+): SessionMemorySelectionStatus {
+  const summary = toSelectionSummary(manifest);
+  return { ...summary, items: summary.items.map((item, index) => ({ ...item, ...drift[index] })) };
 }

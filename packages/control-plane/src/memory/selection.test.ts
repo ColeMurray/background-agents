@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { SessionMemoryManifest } from "@open-inspect/shared/types/memories";
+import type { SessionMemoryManifest } from "./types";
 import type { MemoryPartition } from "./partition";
 import { partitionScope } from "./partition";
 import { renderMemorySection } from "./render";

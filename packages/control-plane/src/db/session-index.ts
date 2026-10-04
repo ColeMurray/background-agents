@@ -1,5 +1,5 @@
 import { DEFAULT_HARNESS, type HarnessId } from "@open-inspect/shared/harnesses";
-import type { SessionMemoryManifest } from "@open-inspect/shared/types/memories";
+import type { SessionMemoryManifest } from "../memory/types";
 import {
   type PullRequestSummary,
   type SessionReadAction,

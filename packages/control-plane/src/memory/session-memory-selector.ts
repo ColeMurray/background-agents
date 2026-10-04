@@ -1,4 +1,4 @@
-import type { SessionMemoryManifest } from "@open-inspect/shared/types/memories";
+import type { SessionMemoryManifest } from "./types";
 import type { SessionMemoryAccessPolicy } from "../authorization/memory-access";
 import type { MemoryPreferenceStore } from "../db/memory-preferences";
 import type { MemoryRecordStore } from "../db/memory-records";

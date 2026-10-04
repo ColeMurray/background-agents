@@ -107,8 +107,10 @@ export class SessionMemoryService {
       return {
         id: record.id,
         status: "archived",
+        // Archived rows always carry a kind (enforced by the table CHECK).
+        archiveKind: record.archiveKind!,
         archivedAt: record.archivedAt,
-        reason: record.archiveNote,
+        archiveNote: record.archiveNote,
       };
     }
     if (
@@ -214,7 +216,7 @@ export class SessionMemoryService {
   }
 
   private writePartition(session: MemorySession, input: SandboxMemoryWriteInput): MemoryPartition {
-    switch (input.scope) {
+    switch (input.scopeType) {
       case "repository": {
         if (input.repoOwner === undefined && session.target.repositories.length > 1)
           throw new MemoryValidationError(
@@ -238,7 +240,7 @@ export class SessionMemoryService {
           throw new MemoryAccessError("Personal memory owner differs from this session owner");
         return { type: "personal", userId: session.target.personalOwnerUserId };
       default: {
-        const exhaustive: never = input.scope;
+        const exhaustive: never = input.scopeType;
         throw new Error(`Unhandled memory scope: ${String(exhaustive)}`);
       }
     }
@@ -250,8 +252,8 @@ export class SessionMemoryService {
     input: MemorySearchInput
   ): FactSearchPartition[] {
     const partitions: FactSearchPartition[] = [];
-    const wants = (scope: NonNullable<MemorySearchInput["scope"]>) =>
-      !input.scope || input.scope === scope;
+    const wants = (scopeType: NonNullable<MemorySearchInput["scopeType"]>) =>
+      !input.scopeType || input.scopeType === scopeType;
     if (wants("personal")) {
       const access = personalReadAccess(session);
       if (access !== "none" && session.target.personalOwnerUserId)
@@ -259,12 +261,12 @@ export class SessionMemoryService {
           partition: { type: "personal", userId: session.target.personalOwnerUserId },
           ...(access === "pinned" ? { pinnedIn: session.id } : {}),
         });
-      else if (input.scope)
+      else if (input.scopeType)
         throw new MemoryAccessError("Personal memory is excluded from this session");
     }
     if (wants("repository")) {
       const repositories = this.selectRepositories(session, input);
-      if (input.scope && !repositories.length)
+      if (input.scopeType && !repositories.length)
         throw new MemoryAccessError("Repository is outside this session");
       for (const repo of repositories) {
         const partition = repositoryPartition(repo);
@@ -277,7 +279,7 @@ export class SessionMemoryService {
         partitions.push({
           partition: { type: "environment", environmentId: session.target.environmentId },
         });
-      else if (input.scope)
+      else if (input.scopeType)
         throw new MemoryAccessError("This session has no associated environment");
     }
     return partitions;

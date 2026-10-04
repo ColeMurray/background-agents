@@ -1,10 +1,6 @@
 import { DEFAULT_HARNESS } from "@open-inspect/shared/harnesses";
-import {
-  MEMORY_LIMITS,
-  MEMORY_SELECTION_VERSION,
-  type SessionMemoryItem,
-  type SessionMemoryManifest,
-} from "@open-inspect/shared/types/memories";
+import { MEMORY_LIMITS, MEMORY_SELECTION_VERSION } from "@open-inspect/shared/types/memories";
+import type { SessionMemoryItem, SessionMemoryManifest } from "./types";
 import { hashToken } from "../auth/crypto";
 import { partitionKey, partitionScope, type MemoryPartition } from "./partition";
 import {
@@ -90,7 +86,7 @@ class MemoryBudget {
       chars = candidate.content.length;
       const partitionTotal = (this.partitionChars.get(partition) ?? 0) + chars;
       admitted = [
-        this.fits(partition, partitionTotal > MEMORY_LIMITS.directiveScope),
+        this.fits(partition, partitionTotal > MEMORY_LIMITS.directiveCharsPerPartition),
         this.fits("directives", this.directiveChars + chars > MEMORY_LIMITS.directives),
         this.fits("directiveRecords", this.directiveCount >= MEMORY_LIMITS.directiveRecords),
       ].every(Boolean);

@@ -242,17 +242,19 @@ const SKILL_CATALOG_GENERATION_OPERATION: MergeOperation = {
       .bind(loserId),
 };
 
-/** Personal memories are partitioned by owner: `scope_key` holds the user ID for personal rows. */
+/** Personal memories are partitioned by owner: `partition_key` holds the user ID for personal rows. */
 const PERSONAL_MEMORY_OWNER_OPERATION: MergeOperation = {
   key: "memoriesOwnedRepointed",
   execute: (db, survivorId, loserId) =>
     db
-      .prepare("UPDATE memories SET scope_key = ? WHERE scope_type = 'personal' AND scope_key = ?")
+      .prepare(
+        "UPDATE memories SET partition_key = ? WHERE partition_type = 'personal' AND partition_key = ?"
+      )
       .bind(survivorId, loserId),
   preview: (db, _survivorId, loserId) =>
     db
       .prepare(
-        "SELECT COUNT(*) AS count FROM memories WHERE scope_type = 'personal' AND scope_key = ?"
+        "SELECT COUNT(*) AS count FROM memories WHERE partition_type = 'personal' AND partition_key = ?"
       )
       .bind(loserId),
 };

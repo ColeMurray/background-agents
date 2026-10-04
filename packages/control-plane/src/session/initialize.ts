@@ -1,5 +1,5 @@
 import type { HarnessId } from "@open-inspect/shared/harnesses";
-import type { SessionMemoryManifest } from "@open-inspect/shared/types/memories";
+import type { SessionMemoryManifest } from "../memory/types";
 import type { Env } from "../types";
 import type { RequestContext } from "../routes/shared";
 import type { SpawnSource } from "@open-inspect/shared/types/sessions";

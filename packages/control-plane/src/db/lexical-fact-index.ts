@@ -69,7 +69,7 @@ export class LexicalFactIndex implements FactSearchIndex {
     const patterns = query.terms.map(likeContains);
     const rows = await prepareSql(
       this.db,
-      sql`SELECT m.id, m.scope_type, m.scope_key, m.repo_owner, m.repo_name,
+      sql`SELECT m.id, m.partition_type, m.partition_key, m.repo_owner, m.repo_name,
           r.id AS revision_id, r.title, r.description
         ${CURRENT_MEMORY}
         WHERE m.status = 'active' AND m.memory_type = 'fact'

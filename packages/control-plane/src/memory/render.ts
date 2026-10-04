@@ -2,10 +2,10 @@ import { HARNESS_IDS, type HarnessId } from "@open-inspect/shared/harnesses";
 import { harnessMemoryToolName } from "@open-inspect/shared/memory-tools";
 import {
   MEMORY_LIMITS,
-  memoryScopeKey,
+  memoryScopeDisplayKey,
   type MemoryScope,
-  type SessionMemoryManifest,
 } from "@open-inspect/shared/types/memories";
+import type { SessionMemoryManifest } from "./types";
 
 /** The fields one rendered line needs. */
 export type RenderableMemory = { memoryId: string; scope: MemoryScope; title: string } & (
@@ -42,7 +42,7 @@ export const MEMORY_SECTION_OVERHEAD_CHARS =
  * entry; it preserves the data framing but is not a semantic prompt-injection boundary.
  */
 export function renderMemoryEntry(entry: RenderableMemory): string {
-  const label = `[${memoryScopeKey(entry.scope)}]`;
+  const label = `[${memoryScopeDisplayKey(entry.scope)}]`;
   return entry.inclusion === "full"
     ? `- ${label} ${JSON.stringify(entry.content)}`
     : `- ${entry.memoryId} ${label} ${JSON.stringify(entry.title)}: ${JSON.stringify(entry.description)}`;

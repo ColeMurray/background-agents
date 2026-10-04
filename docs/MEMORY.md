@@ -48,7 +48,7 @@ a different participant cannot write to the inherited owner's personal scope.
 | Domain           | `control-plane/src/memory/`                                                 | Partitions (stable scope identity), selection and budget, rendering, initial status, DTO projection, `SessionMemorySelector` for new sessions and `SessionMemoryService` for agent operations. Services receive their stores through constructors; `*-factory.ts` modules and routes wire D1. |
 | Access policy    | `control-plane/src/authorization/memory-access.ts`                          | `MemoryManagementPolicy` for humans and `SessionMemoryAccessPolicy` for session principals, both returning typed decisions with stores injected; `memory-access-factory.ts` wires D1.                                                                                                         |
 | Stores           | `control-plane/src/db/memory-records.ts`, `session-memory-selections.ts`, … | SQL only: revisioned records and lifecycle, pinned manifests, preferences, search and the commit-time agent write guard. Queries are built with the `sql` fragment template.                                                                                                                  |
-| D1               | Migration `0084_memories.sql`                                               | Records partitioned by `(scope_type, scope_key)`, immutable revisions, per-user default, session manifest headers and ordered revision references.                                                                                                                                            |
+| D1               | Migration `0084_memories.sql`                                               | Records partitioned by `(partition_type, partition_key)`, immutable revisions, per-user default, session manifest headers and ordered revision references.                                                                                                                                    |
 | Session creation | `routes/session-create.ts`, scheduler, child spawn                          | Resolve and pin the manifest in the session insert's transaction (`Pinned<T>`: resolved for roots, inherited by children). Schedulers use the execution owner's default.                                                                                                                      |
 | Runtime boot     | `sandbox-runtime/src/sandbox_runtime/memories.py`                           | Fetch the installation with the session-bound token, clear stale restored content, then atomically write owner-readable `oi-memory.md` in the harness configuration directory.                                                                                                                |
 | Harness tools    | `tools/_memory.js`, `harness/memory_tools.py`                               | Both harnesses build `memory_read`, `memory_search` and `memory_write` from the generated specs and forward arguments verbatim. OpenCode reads the file via `instructions`; Claude appends it.                                                                                                |
@@ -59,7 +59,7 @@ a different participant cannot write to the inherited owner's personal scope.
 - **A new scope** (for example, team): add it to `MEMORY_SCOPE_TYPES` and `memoryScopeSchema`, then
   follow the compiler — every switch over scopes and partitions is exhaustive (`partition.ts`,
   `target.ts`, `memory-access.ts`, the write guard, the shared scope helpers and the web settings
-  link). Storage needs no new columns or indexes; extend the `scope_type` check constraint.
+  link). Storage needs no new columns or indexes; extend the `partition_type` check constraint.
 - **A new lifecycle action or state:** add an entry to `MEMORY_TRANSITIONS`; the store, routes, DTO
   capabilities and web action buttons all derive from it.
 - **A new agent tool:** add it to `MEMORY_TOOLS` in `packages/shared/src/memory-tools.ts`, run
@@ -84,8 +84,8 @@ fetching; new content is installed through a unique exclusive 0600 file and atom
   sandbox restarts and restores. A child copies the same selection and personal owner, not the
   spawning participant's personal catalog.
 - `memory_read` returns the **current** fact body and provenance. A pinned archived record returns
-  only its archive notice. Proposals, unpinned archives, and directives cannot be expanded by
-  sandbox tools.
+  only its archive notice (`archiveKind`, `archivedAt`, `archiveNote`). Proposals, unpinned
+  archives, and directives cannot be expanded by sandbox tools.
 - A top-level session may directly read an active fact in its authorized scopes even if budget
   truncation omitted it. An inherited child cannot expand into unpinned personal records.
 - Editing or archiving does not rewrite an existing session's injected text. New sessions resolve
@@ -128,10 +128,10 @@ owner-only, including when the caller is another administrator.
 | `GET /memories/:id`                                       | Current record and server-calculated management capabilities.                                                                                                                                                                                           |
 | `PATCH /memories/:id`                                     | Revise content; `If-Match: <currentRevisionId>` is required (428 when missing, 409 when stale).                                                                                                                                                         |
 | `GET /memories/:id/revisions`                             | Immutable revision history.                                                                                                                                                                                                                             |
-| `POST /memories/:id/{action}`                             | `approve`, `reject`, `archive`, or `restore` with `If-Match`; archive and reject accept an optional note. Transitions follow `MEMORY_TRANSITIONS`.                                                                                                      |
-| `POST /memories/preview`                                  | Resolve a target for the current user without creating a session.                                                                                                                                                                                       |
+| `POST /memories/:id/{action}`                             | `approve`, `reject`, `archive`, or `restore` with `If-Match`; only `archive` and `reject` accept an optional `archiveNote`. Transitions follow `MEMORY_TRANSITIONS`.                                                                                    |
+| `POST /memories/preview`                                  | Summarize the selection a new session would pin (items, sizes, omissions), without creating it.                                                                                                                                                         |
 | `GET, PUT /memory-preferences`                            | Read/save the current user's personal inclusion default.                                                                                                                                                                                                |
-| `GET /sessions/:id/memories`                              | Session-readable pinned diagnostics.                                                                                                                                                                                                                    |
+| `GET /sessions/:id/memories`                              | The pinned selection summary with per-item drift, readable with the session.                                                                                                                                                                            |
 | `GET /sessions/:id/sandbox-memory`                        | Sandbox-bound rendered installation.                                                                                                                                                                                                                    |
 | `GET /sessions/:id/sandbox-memory/:memoryId`              | Sandbox-bound live read.                                                                                                                                                                                                                                |
 | `POST /sessions/:id/sandbox-memory`                       | Sandbox-bound agent write with scope/approval/quota checks.                                                                                                                                                                                             |
@@ -146,11 +146,14 @@ prompt before writing. Grant rules are deliberately not duplicated in that SQL g
 revoked in the milliseconds between the route check and the insert can leave a shared-scope
 _proposal_, which every later read denies and a human must approve. Repository memories are keyed by
 the stable repository ID, so a reused name never inherits them and a renamed repository keeps them.
+Record-level management (read, edit, history, lifecycle actions) authorizes the stored partition
+identity directly and never resolves a record through its display names. Browser responses for
+previews and session status carry a selection summary only, never the personal owner or hash.
 
 New sessions never fail because of memory: `SessionMemorySelector` omits repositories or an
 environment that the session principal cannot read from the selection, and session admission remains
 `authorizeSessionTarget`'s job. Audits record record/revision/status/actor/session IDs, never memory
-content or private archive-reason text. Scope identifiers are retained after target deletion to
+content or private archive-note text. Scope identifiers are retained after target deletion to
 preserve historical manifests. There is no hard-delete endpoint. Restoring an approved memory is
 allowed only when its entire replacement family has no active record.
 
@@ -161,7 +164,7 @@ repository, or the associated environment from the authenticated session:
 
 ```javascript
 memory_write({
-  scope: "repository", // Or "personal" / "environment"
+  scopeType: "repository", // Or "personal" / "environment"
   memoryType: "fact",
   title: "Integration test setup",
   description: "Database preparation required before the integration suite.",
@@ -178,7 +181,7 @@ derived from the session. Human management APIs still require explicit repositor
 identities.
 
 Both harnesses forward the tool arguments unchanged to `POST /sessions/:id/sandbox-memory`; the
-endpoint's request schema is the tool input schema (`sandboxMemoryWriteSchema`), so `scope` is
+endpoint's request schema is the tool input schema (`sandboxMemoryWriteSchema`), so `scopeType` is
 `"repository"`, `"environment"`, or `"personal"` and an explicit selector is the top-level
 `repoOwner`/`repoName` pair. The server resolves a complete scope before performing the existing
 current-access and commit-time checks. Inference does not change approval, opt-out, quotas,
@@ -193,10 +196,10 @@ proposals, archives, or historical revision text. Search results contain IDs, re
 labels, titles and descriptions; call `memory_read` for the body.
 
 ```javascript
-memory_search({ query: "billing webhook deduplication", scope: "repository", limit: 10 });
+memory_search({ query: "billing webhook deduplication", scopeType: "repository", limit: 10 });
 ```
 
-Omit `scope` to search permitted session scopes. Repository scope searches all attached
+Omit `scopeType` to search permitted session scopes. Repository scope searches all attached
 repositories; optionally supply both `repoOwner` and `repoName` to select one. Personal owner and
 environment identity are derived from the session. Personal opt-out excludes personal results, and
 inherited children can discover only their pinned personal memory IDs. Selected shared scopes are

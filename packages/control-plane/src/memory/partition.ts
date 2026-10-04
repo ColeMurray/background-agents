@@ -14,8 +14,8 @@ export type MemoryPartition =
 
 /** The storage columns that encode a partition. */
 export interface PartitionColumns {
-  scope_type: MemoryScopeType;
-  scope_key: string;
+  partition_type: MemoryScopeType;
+  partition_key: string;
   repo_owner: string | null;
   repo_name: string | null;
 }
@@ -39,28 +39,28 @@ export function partitionKey(partition: MemoryPartition): string {
 
 export function partitionColumns(partition: MemoryPartition): PartitionColumns {
   return {
-    scope_type: partition.type,
-    scope_key: partitionKey(partition),
+    partition_type: partition.type,
+    partition_key: partitionKey(partition),
     repo_owner: partition.type === "repository" ? partition.repoOwner : null,
     repo_name: partition.type === "repository" ? partition.repoName : null,
   };
 }
 
 export function partitionFromColumns(row: PartitionColumns): MemoryPartition {
-  switch (row.scope_type) {
+  switch (row.partition_type) {
     case "personal":
-      return { type: "personal", userId: row.scope_key };
+      return { type: "personal", userId: row.partition_key };
     case "repository":
       return {
         type: "repository",
-        repoId: Number(row.scope_key),
+        repoId: Number(row.partition_key),
         repoOwner: row.repo_owner!,
         repoName: row.repo_name!,
       };
     case "environment":
-      return { type: "environment", environmentId: row.scope_key };
+      return { type: "environment", environmentId: row.partition_key };
     default:
-      return unreachable(row.scope_type);
+      return unreachable(row.partition_type);
   }
 }
 
@@ -84,5 +84,5 @@ export function samePartition(a: MemoryPartition, b: MemoryPartition): boolean {
 
 /** Match rows of one partition; queries alias the memories table as `m`. */
 export function partitionPredicate(partition: MemoryPartition): SqlFragment {
-  return sql`m.scope_type = ${partition.type} AND m.scope_key = ${partitionKey(partition)}`;
+  return sql`m.partition_type = ${partition.type} AND m.partition_key = ${partitionKey(partition)}`;
 }

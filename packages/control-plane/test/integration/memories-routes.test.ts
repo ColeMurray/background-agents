@@ -2,8 +2,8 @@ import { beforeEach, describe, expect, it } from "vitest";
 import { env, SELF } from "cloudflare:test";
 import {
   memoryDtoSchema,
-  sessionMemoryManifestSchema,
-  sessionMemoryDiagnosticsSchema,
+  memorySelectionSummarySchema,
+  sessionMemorySelectionStatusSchema,
 } from "@open-inspect/shared/types/memories";
 import { MemoryPreferenceStore } from "../../src/db/memory-preferences";
 import { MemoryRecordStore } from "../../src/db/memory-records";
@@ -24,7 +24,7 @@ const fields = {
 };
 /** Human management body and the equivalent session-relative agent tool input. */
 const content = { ...fields, scope: { type: "personal" as const } };
-const agentWrite = { ...fields, scope: "personal" as const };
+const agentWrite = { ...fields, scopeType: "personal" as const };
 const request = (path: string, method = "GET", body?: unknown, userId = OWNER, revision?: string) =>
   serviceFetch(`${BASE}${path}`, {
     method,
@@ -100,7 +100,10 @@ describe("memory HTTP lifecycle and session boundaries", () => {
       repositories: [],
     });
     expect(preview.status).toBe(200);
-    expect(sessionMemoryManifestSchema.parse(await preview.json()).items).toHaveLength(0);
+    const previewBody = await preview.json();
+    expect(memorySelectionSummarySchema.parse(previewBody).items).toHaveLength(0);
+    expect(previewBody).not.toHaveProperty("personalOwnerUserId");
+    expect(previewBody).not.toHaveProperty("manifestSha256");
     for (const override of [undefined, true]) {
       const response = await request("/sessions", "POST", {
         title: "Memory create-session integration",
@@ -113,8 +116,9 @@ describe("memory HTTP lifecycle and session boundaries", () => {
       expect(manifest.items.map((item) => item.memoryId)).toEqual(override ? [record.id] : []);
       const view = await request(`/sessions/${sessionId}/memories`);
       expect(view.status).toBe(200);
-      expect(sessionMemoryDiagnosticsSchema.parse(await view.json()).manifestSha256).toBe(
-        manifest.manifestSha256
+      const status = sessionMemorySelectionStatusSchema.parse(await view.json());
+      expect(status.items.map((item) => item.memoryId)).toEqual(
+        manifest.items.map((item) => item.memoryId)
       );
     }
   });
@@ -134,13 +138,14 @@ describe("memory HTTP lifecycle and session boundaries", () => {
     const loaded = (await new SessionMemorySelectionStore(env.DB).load("pinned"))!;
     expect(loaded.manifest.items[0]).not.toHaveProperty("changed");
     expect(loaded.manifest.items[0]).not.toHaveProperty("archived");
-    const diagnostic = sessionMemoryDiagnosticsSchema.parse(
+    const status = sessionMemorySelectionStatusSchema.parse(
       await (await request("/sessions/pinned/memories")).json()
     );
-    expect(diagnostic.items[0]).toMatchObject({
-      revisionId: record.currentRevisionId,
-      changed: true,
-      archived: false,
+    expect(status.items[0]).toMatchObject({
+      memoryId: record.id,
+      revisionNumber: 1,
+      revisedSinceSelection: true,
+      archivedSinceSelection: false,
     });
     expect(loaded.entries[0]).not.toHaveProperty("status");
     expect(loaded.entries[0]).not.toHaveProperty("updatedAt");
@@ -156,16 +161,20 @@ describe("memory HTTP lifecycle and session boundaries", () => {
       headers: { Authorization: "Bearer token-other" },
     });
     expect(wrong.status).toBe(401);
-    await act(record.id, "archive", changed.currentRevisionId, { reason: "Outdated" });
-    const archivedDiagnostic = sessionMemoryDiagnosticsSchema.parse(
+    await act(record.id, "archive", changed.currentRevisionId, { archiveNote: "Outdated" });
+    const archivedStatus = sessionMemorySelectionStatusSchema.parse(
       await (await request("/sessions/pinned/memories")).json()
     );
-    expect(archivedDiagnostic.items[0]).toMatchObject({ changed: true, archived: true });
+    expect(archivedStatus.items[0]).toMatchObject({
+      revisedSinceSelection: true,
+      archivedSinceSelection: true,
+    });
     expect(await (await sandbox(`/${record.id}`)).json()).toEqual({
       id: record.id,
       status: "archived",
+      archiveKind: "manual",
       archivedAt: expect.any(Number),
-      reason: "Outdated",
+      archiveNote: "Outdated",
     });
     expect(
       (
@@ -230,7 +239,7 @@ describe("memory HTTP lifecycle and session boundaries", () => {
               }
             );
       const decision = await act(record.id, action, record.currentRevisionId, {
-        reason: "Private archive reason",
+        archiveNote: "Private archive reason",
       });
       expect(decision.status).toBe(200);
       const response = await sandbox(`/${record.id}`);

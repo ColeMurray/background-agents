@@ -4,6 +4,7 @@ import { createSessionMemoryAccessPolicy } from "../authorization/memory-access-
 import { MemoryRecordStore } from "../db/memory-records";
 import { LexicalFactIndex } from "../db/lexical-fact-index";
 import { SessionMemorySelectionStore } from "../db/session-memory-selections";
+import { toSelectionStatus } from "../memory/dto";
 import { SessionMemoryService } from "../memory/session-memory-service";
 import { admit, dispatch } from "../routing/admit";
 import type { ControlPlaneHonoEnv } from "../routing/hono-env";
@@ -21,10 +22,12 @@ import {
   type UserRouteContext,
 } from "./shared";
 
-/** Pinned selection plus live drift flags, under session-read admission. */
+/** The pinned selection as people see it, with live drift, under session-read admission. */
 async function view(_request: Request, _env: Env, params: { id: string }, ctx: UserRouteContext) {
   const loaded = await new SessionMemorySelectionStore(ctx.db).load(params.id);
-  return loaded ? json(loaded.diagnostics) : error("Session not found", 404);
+  return loaded
+    ? json(toSelectionStatus(loaded.manifest, loaded.drift))
+    : error("Session not found", 404);
 }
 
 /** Compose the service from D1-backed dependencies for one admitted sandbox request. */

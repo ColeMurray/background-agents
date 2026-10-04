@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import type { SessionMemoryManifest } from "@open-inspect/shared/types/memories";
+import type { SessionMemoryManifest } from "./types";
 import type { LoadedSessionMemory } from "../db/session-memory-selections";
 import { MemoryAccessError, MemoryNotFoundError, MemoryValidationError } from "./errors";
 import type { MemoryPartition } from "./partition";
@@ -107,7 +107,7 @@ const fact = {
 describe("SessionMemoryService.write", () => {
   it("infers the sole repository and derives provenance from the session", async () => {
     const { service, deps } = setup();
-    await expect(service.write("session", { ...fact, scope: "repository" })).resolves.toEqual({
+    await expect(service.write("session", { ...fact, scopeType: "repository" })).resolves.toEqual({
       id: "created",
       status: "proposed",
       revisionId: "rev_created",
@@ -135,11 +135,16 @@ describe("SessionMemoryService.write", () => {
     const { service, deps } = setup({
       session: memorySession({ target: { repositories: [api, web] } }),
     });
-    await expect(service.write("session", { ...fact, scope: "repository" })).rejects.toThrow(
+    await expect(service.write("session", { ...fact, scopeType: "repository" })).rejects.toThrow(
       MemoryValidationError
     );
     await expect(
-      service.write("session", { ...fact, scope: "repository", repoOwner: "acme", repoName: "web" })
+      service.write("session", {
+        ...fact,
+        scopeType: "repository",
+        repoOwner: "acme",
+        repoName: "web",
+      })
     ).resolves.toMatchObject({ id: "created" });
     expect(deps.records.create).toHaveBeenCalledTimes(1);
     expect(deps.records.create.mock.calls[0][0].partition).toEqual({ type: "repository", ...web });
@@ -149,7 +154,7 @@ describe("SessionMemoryService.write", () => {
     const { service, deps } = setup({
       session: memorySession({ inherited: true, principal: { userId: "collaborator" } }),
     });
-    await expect(service.write("session", { ...fact, scope: "personal" })).rejects.toThrow(
+    await expect(service.write("session", { ...fact, scopeType: "personal" })).rejects.toThrow(
       MemoryAccessError
     );
     expect(deps.records.create).not.toHaveBeenCalled();
@@ -157,7 +162,7 @@ describe("SessionMemoryService.write", () => {
 
   it("denies a write when the principal can no longer read the partition", async () => {
     const { service, deps } = setup({ readable: [false] });
-    await expect(service.write("session", { ...fact, scope: "repository" })).rejects.toThrow(
+    await expect(service.write("session", { ...fact, scopeType: "repository" })).rejects.toThrow(
       MemoryAccessError
     );
     expect(deps.records.create).not.toHaveBeenCalled();
@@ -264,7 +269,7 @@ describe("SessionMemoryService.installation", () => {
     inclusion: "summary",
     description: "How to run the tests",
   };
-  const loaded = { manifest, diagnostics: { ...manifest, items: [] }, entries: [entry] };
+  const loaded = { manifest, drift: [], entries: [entry] };
 
   it("renders the pinned selection for the session's harness", async () => {
     const { service } = setup({ loaded, session: memorySession({ harness: "claude" }) });

@@ -3,8 +3,10 @@ import type {
   MemoryArchiveKind,
   MemoryAuthorKind,
   MemoryContent,
+  MemoryInclusion,
   MemoryScope,
   MemoryStatus,
+  MemoryType,
 } from "@open-inspect/shared/types/memories";
 import type { MemoryPartition } from "./partition";
 
@@ -85,3 +87,40 @@ export type PinnedMemoryEntry = {
   partition: MemoryPartition;
   title: string;
 } & ({ inclusion: "full"; content: string } | { inclusion: "summary"; description: string });
+
+/** One selected revision; omitted records are counted, never persisted as items. */
+export interface SessionMemoryItem {
+  memoryId: string;
+  revisionId: string;
+  revisionNumber: number;
+  /** Display scope pinned with the selection. */
+  scope: MemoryScope;
+  memoryType: MemoryType;
+  title: string;
+  inclusion: MemoryInclusion;
+  estimatedTokens: number;
+}
+
+/**
+ * The selection pinned for a session's lifetime, inherited by children and reused on restore.
+ * Server-only: it carries the personal owner and selection hash, so people are shown a
+ * `MemorySelectionSummary` instead. Token estimates include rendering overhead.
+ */
+export interface SessionMemoryManifest {
+  selectionVersion: number;
+  manifestSha256: string;
+  resolvedAt: number;
+  includePersonalMemories: boolean;
+  personalOwnerUserId: string | null;
+  directiveChars: number;
+  catalogChars: number;
+  estimatedTokens: number;
+  truncatedCount: number;
+  items: SessionMemoryItem[];
+}
+
+/** How a pinned item's record has changed since the selection was made. */
+export interface PinnedItemDrift {
+  revisedSinceSelection: boolean;
+  archivedSinceSelection: boolean;
+}

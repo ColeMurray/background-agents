@@ -5,7 +5,7 @@ import {
   MEMORY_ACTIONS,
   MEMORY_LIST_MAX_PAGE_SIZE,
   MEMORY_LIST_PAGE_SIZE,
-  memoryActionSchema,
+  memoryActionBodySchemas,
   memoryPreferencesSchema,
   memoryPreviewSchema,
   memoryScopeFromSearchParams,
@@ -13,15 +13,14 @@ import {
   reviseMemorySchema,
   type MemoryAction,
   type MemoryDto,
-  type MemoryScope,
+  type MemoryActionBody,
 } from "@open-inspect/shared/types/memories";
 import { type MemoryManagementPolicy } from "../authorization/memory-access";
 import { createMemoryManagementPolicy } from "../authorization/memory-access-factory";
 import { EnvironmentStore } from "../db/environments";
 import { MemoryPreferenceStore } from "../db/memory-preferences";
 import { MemoryRecordStore } from "../db/memory-records";
-import { toMemoryDto } from "../memory/dto";
-import { partitionScope } from "../memory/partition";
+import { toMemoryDto, toSelectionSummary } from "../memory/dto";
 import { createSessionMemorySelector } from "../memory/session-memory-selector-factory";
 import type { MemoryActor, MemoryRecord } from "../memory/types";
 import { admit, dispatch } from "../routing/admit";
@@ -68,8 +67,7 @@ async function authorizedRecord(
 ): Promise<{ record: MemoryRecord; canManage: boolean } | Response> {
   const record = await store.get(id);
   if (!record) return error("Memory not found", 404);
-  const scope: MemoryScope = partitionScope(record.partition);
-  const decision = await policy.authorize(scope, mode, record);
+  const decision = await policy.authorizeRecord(record, mode);
   return decision.kind === "denied"
     ? memoryDenialResponse(decision.denial)
     : { record, canManage: decision.canManage };
@@ -87,7 +85,7 @@ async function list(request: Request, env: Env, _params: object, ctx: UserRouteC
   });
   if (!pagination.success) return error("Invalid memory pagination", 400);
   const { offset, limit } = pagination.data;
-  const access = await createMemoryManagementPolicy(ctx, env).authorize(scope, "read");
+  const access = await createMemoryManagementPolicy(ctx, env).authorizeScope(scope, "read");
   if (access.kind === "denied") return memoryDenialResponse(access.denial);
   const store = new MemoryRecordStore(ctx.db);
   // One extra row tells us whether another page exists.
@@ -111,7 +109,7 @@ async function list(request: Request, env: Env, _params: object, ctx: UserRouteC
 async function create(request: Request, env: Env, _params: object, ctx: UserRouteContext) {
   const body = await parseBody(request, createMemorySchema, "Invalid memory");
   if (body instanceof Response) return body;
-  const access = await createMemoryManagementPolicy(ctx, env).authorize(body.scope, "write");
+  const access = await createMemoryManagementPolicy(ctx, env).authorizeScope(body.scope, "write");
   if (access.kind === "denied") return memoryDenialResponse(access.denial);
   const { scope: _scope, supersedesMemoryId, ...content } = body;
   const store = new MemoryRecordStore(ctx.db);
@@ -191,7 +189,11 @@ function transition(action: MemoryAction) {
       "write"
     );
     if (found instanceof Response) return found;
-    const body = await parseBody(request, memoryActionSchema, "Invalid memory action");
+    const body = await parseBody(
+      request,
+      memoryActionBodySchemas[action] as z.ZodType<MemoryActionBody>,
+      "Invalid memory action"
+    );
     if (body instanceof Response) return body;
     try {
       const record = await store.transition(
@@ -199,7 +201,7 @@ function transition(action: MemoryAction) {
         action,
         revision,
         actor(ctx),
-        body.reason
+        "archiveNote" in body ? body.archiveNote : undefined
       );
       return json({ memory: await dto(store, record, true) });
     } catch (cause) {
@@ -209,7 +211,7 @@ function transition(action: MemoryAction) {
 }
 
 /**
- * Resolve the selection a new session would pin, without persisting it. Targets get the same
+ * Summarize the selection a new session would pin, without persisting it. Targets get the same
  * human admission as management reads, then the same memory filtering as session creation.
  */
 async function preview(request: Request, env: Env, _params: object, ctx: UserRouteContext) {
@@ -218,7 +220,7 @@ async function preview(request: Request, env: Env, _params: object, ctx: UserRou
   const policy = createMemoryManagementPolicy(ctx, env);
   let repositories: { repoOwner: string; repoName: string }[] = body.repositories ?? [];
   if (body.environmentId) {
-    const access = await policy.authorize(
+    const access = await policy.authorizeScope(
       { type: "environment", environmentId: body.environmentId },
       "read"
     );
@@ -229,19 +231,18 @@ async function preview(request: Request, env: Env, _params: object, ctx: UserRou
   }
   const resolved = [];
   for (const repo of repositories) {
-    const access = await policy.authorize({ type: "repository", ...repo }, "read");
+    const access = await policy.authorizeScope({ type: "repository", ...repo }, "read");
     if (access.kind === "denied") return memoryDenialResponse(access.denial);
     if (access.partition.type === "repository")
       resolved.push({ ...repo, repoId: access.partition.repoId });
   }
-  return json(
-    await createSessionMemorySelector(ctx).select({
-      principal: { userId: ctx.principal.userId, ownerTeamId: null },
-      repositories: resolved,
-      environmentId: body.environmentId ?? null,
-      includePersonalMemories: body.includePersonalMemories,
-    })
-  );
+  const selection = await createSessionMemorySelector(ctx).select({
+    principal: { userId: ctx.principal.userId, ownerTeamId: null },
+    repositories: resolved,
+    environmentId: body.environmentId ?? null,
+    includePersonalMemories: body.includePersonalMemories,
+  });
+  return json(toSelectionSummary(selection));
 }
 
 /** Read only the admitted principal's canonical personal-memory default. */
