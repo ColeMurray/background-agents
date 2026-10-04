@@ -129,7 +129,7 @@ describe("selection summary contracts", () => {
     directiveChars: 0,
     catalogChars: 4,
     estimatedTokens: 1,
-    truncatedCount: 2,
+    omittedCount: 2,
     items: [item],
   };
   it("requires drift flags only on session status and bounds both", () => {

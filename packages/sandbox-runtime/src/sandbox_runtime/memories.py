@@ -61,15 +61,15 @@ def append_memory(guidance: str | None, config_dir: Path) -> str | None:
 
 
 @dataclass(frozen=True)
-class SessionMemoryInstallation:
+class RenderedSessionMemory:
     """A session's pinned memory, rendered by the control plane for its harness."""
 
     manifest_sha256: str
     rendered: str
 
 
-def _validate_installation(body: bytes, max_rendered_chars: int) -> SessionMemoryInstallation:
-    """Parse an untrusted versioned installation response."""
+def _validate_rendered(body: bytes, max_rendered_chars: int) -> RenderedSessionMemory:
+    """Parse an untrusted versioned rendered-memory response."""
     try:
         payload = json.loads(body)
     except (ValueError, UnicodeError) as error:
@@ -86,11 +86,11 @@ def _validate_installation(body: bytes, max_rendered_chars: int) -> SessionMemor
         or len(rendered) > max_rendered_chars
     ):
         raise RuntimeError("Invalid rendered session memory")
-    return SessionMemoryInstallation(manifest_sha256, rendered)
+    return RenderedSessionMemory(manifest_sha256, rendered)
 
 
 class SessionMemoryClient:
-    """Fetch one session's memory installation with credentials bound to that session."""
+    """Fetch one session's rendered memory with credentials bound to that session."""
 
     def __init__(
         self,
@@ -108,7 +108,7 @@ class SessionMemoryClient:
         self.max_rendered_chars = max_rendered_chars
         self.transport = transport
 
-    async def fetch_installation(self) -> SessionMemoryInstallation:
+    async def fetch_rendered(self) -> RenderedSessionMemory:
         """Retry transient failures under the shared control-plane fetch policy.
 
         Raises RuntimeError once the fetch fails permanently or the payload is invalid.
@@ -123,13 +123,13 @@ class SessionMemoryClient:
             )
         except (ResponseTooLargeError, httpx.HTTPError, OSError) as error:
             raise RuntimeError("Session memory could not be loaded") from error
-        return _validate_installation(body, self.max_rendered_chars)
+        return _validate_rendered(body, self.max_rendered_chars)
 
 
-class MemoryInstallationSource(Protocol):
+class RenderedMemorySource(Protocol):
     """Where the materializer gets a session's rendered memory."""
 
-    async def fetch_installation(self) -> SessionMemoryInstallation: ...
+    async def fetch_rendered(self) -> RenderedSessionMemory: ...
 
 
 class MemoryMaterializer:
@@ -139,7 +139,7 @@ class MemoryMaterializer:
     are not trusted: each call clears old context before fetching the pinned selection.
     """
 
-    def __init__(self, client: MemoryInstallationSource, destination: Path, log: Any) -> None:
+    def __init__(self, client: RenderedMemorySource, destination: Path, log: Any) -> None:
         self.client = client
         self.destination = destination
         self.log = log
@@ -153,12 +153,12 @@ class MemoryMaterializer:
         # on an empty response, failed fetch, or malformed payload.
         self.destination.unlink(missing_ok=True)
         remove_abandoned_staging(self.destination)
-        installation = await self.client.fetch_installation()
-        if installation.rendered:
-            atomic_write_private(self.destination, installation.rendered)
+        memory = await self.client.fetch_rendered()
+        if memory.rendered:
+            atomic_write_private(self.destination, memory.rendered)
         # Never log memory text; the manifest digest identifies the pinned selection.
         self.log.info(
             "memory.materialized",
-            manifest_sha256=installation.manifest_sha256,
-            rendered_chars=len(installation.rendered),
+            manifest_sha256=memory.manifest_sha256,
+            rendered_chars=len(memory.rendered),
         )

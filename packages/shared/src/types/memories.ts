@@ -285,7 +285,8 @@ export const memoryDtoSchema = memoryContentSchema.safeExtend({
   revisionNumber: z.number().int(),
   ...authorFields,
   supersedesMemoryId: z.string().nullable(),
-  replacementMemoryIds: z.array(z.string()),
+  /** Records that supersede this one (the reverse of `supersedesMemoryId`). */
+  supersededByMemoryIds: z.array(z.string()),
   approvedAt: z.number().nullable(),
   archivedAt: z.number().nullable(),
   updatedAt: z.number(),
@@ -335,7 +336,7 @@ export const memorySelectionSummarySchema = z.object({
   directiveChars: z.number(),
   catalogChars: z.number(),
   estimatedTokens: z.number(),
-  truncatedCount: z.number(),
+  omittedCount: z.number(),
   items: z.array(selectionItemSummarySchema).max(MAX_SELECTION_ITEMS),
 });
 export type MemorySelectionSummary = z.infer<typeof memorySelectionSummarySchema>;
@@ -439,15 +440,15 @@ export type MemorySearchResponse = z.infer<typeof memorySearchResponseSchema>;
 // ---------------------------------------------------------------------------
 
 export const SANDBOX_MEMORY_SCHEMA_VERSION = 1;
-/** Boot-time context for one session: the pinned selection rendered for its harness. */
-export const sandboxMemoryInstallationSchema = z
+/** A session's pinned selection rendered for its harness, installed as boot-time context. */
+export const renderedSessionMemorySchema = z
   .object({
     schemaVersion: z.literal(SANDBOX_MEMORY_SCHEMA_VERSION),
     manifestSha256: z.string(),
     rendered: z.string().max(MEMORY_LIMITS.rendered),
   })
   .strict();
-export type SandboxMemoryInstallation = z.infer<typeof sandboxMemoryInstallationSchema>;
+export type RenderedSessionMemory = z.infer<typeof renderedSessionMemorySchema>;
 
 export const sandboxMemoryReadSchema = z
   .object({ memoryId: memoryIdSchema.describe("Memory ID from the catalog or memory_search") })

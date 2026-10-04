@@ -13,8 +13,8 @@ from sandbox_runtime.harness.claude_tools import (
 from sandbox_runtime.memories import (
     MEMORY_TOOL_SPECS,
     MemoryMaterializer,
+    RenderedSessionMemory,
     SessionMemoryClient,
-    SessionMemoryInstallation,
     append_memory,
     memory_text,
 )
@@ -22,7 +22,7 @@ from sandbox_runtime.memories import (
 MANIFEST_SHA256 = "a" * 64
 
 
-def installation(rendered: object) -> dict:
+def rendered_response(rendered: object) -> dict:
     return {"schemaVersion": 1, "manifestSha256": MANIFEST_SHA256, "rendered": rendered}
 
 
@@ -53,7 +53,7 @@ async def test_authenticated_fetch_replaces_stale_memory(tmp_path: Path) -> None
     def handler(request: httpx.Request) -> httpx.Response:
         assert request.url.raw_path == b"/sessions/session%2Fa/sandbox-memory"
         assert request.headers["Authorization"] == "Bearer test-token"
-        return httpx.Response(200, json=installation("exact rendered text\n"))
+        return httpx.Response(200, json=rendered_response("exact rendered text\n"))
 
     await materializer(tmp_path, handler).materialize()
     assert memory_text(tmp_path) == "exact rendered text\n"
@@ -64,7 +64,9 @@ async def test_authenticated_fetch_replaces_stale_memory(tmp_path: Path) -> None
 async def test_empty_memory_removes_restored_memory_and_staging(tmp_path: Path) -> None:
     (tmp_path / "oi-memory.md").write_text("another session's memory")
     (tmp_path / ".oi-memory.md-abandoned.tmp").write_text("stale private memory")
-    await materializer(tmp_path, lambda _: httpx.Response(200, json=installation(""))).materialize()
+    await materializer(
+        tmp_path, lambda _: httpx.Response(200, json=rendered_response(""))
+    ).materialize()
     assert not (tmp_path / "oi-memory.md").exists()
     assert not list(tmp_path.glob("*.tmp"))
     assert append_memory(None, tmp_path) is None
@@ -76,10 +78,10 @@ async def test_empty_memory_removes_restored_memory_and_staging(tmp_path: Path) 
     [
         (404, {"error": "Not found"}),
         (403, {"error": "Forbidden"}),
-        (200, {**installation("unsafe"), "schemaVersion": 2}),
-        (200, installation([])),
+        (200, {**rendered_response("unsafe"), "schemaVersion": 2}),
+        (200, rendered_response([])),
         (200, {"schemaVersion": 1, "rendered": "no manifest"}),
-        (200, installation("x" * (MEMORY_TOOL_SPECS["limits"]["renderedChars"] + 1))),
+        (200, rendered_response("x" * (MEMORY_TOOL_SPECS["limits"]["renderedChars"] + 1))),
     ],
 )
 async def test_failed_or_invalid_response_never_keeps_stale_file(
@@ -103,7 +105,7 @@ async def test_transient_failures_retry_with_the_shared_policy(tmp_path: Path, m
 
     def handler(_request: httpx.Request) -> httpx.Response:
         status = next(statuses, 200)
-        return httpx.Response(status, json=installation("recovered") if status == 200 else {})
+        return httpx.Response(status, json=rendered_response("recovered") if status == 200 else {})
 
     sleep = AsyncMock()
     monkeypatch.setattr("sandbox_runtime.control_plane_fetch.asyncio.sleep", sleep)
@@ -119,7 +121,7 @@ async def test_exhausted_retries_and_oversized_responses_fail(tmp_path: Path, mo
     monkeypatch.setattr("sandbox_runtime.memories.MAX_MEMORY_RESPONSE_BYTES", 10)
     with pytest.raises(RuntimeError, match="could not be loaded"):
         await materializer(
-            tmp_path, lambda _: httpx.Response(200, json=installation("too large"))
+            tmp_path, lambda _: httpx.Response(200, json=rendered_response("too large"))
         ).materialize()
 
 
@@ -128,7 +130,7 @@ async def test_staging_symlinks_do_not_overwrite_their_targets(tmp_path: Path) -
     target.write_text("do not modify")
     (tmp_path / ".oi-memory.md-restored.tmp").symlink_to(target)
     await materializer(
-        tmp_path, lambda _: httpx.Response(200, json=installation("private"))
+        tmp_path, lambda _: httpx.Response(200, json=rendered_response("private"))
     ).materialize()
     assert target.read_text() == "do not modify"
     assert memory_text(tmp_path) == "private"
@@ -138,12 +140,12 @@ async def test_staging_symlinks_do_not_overwrite_their_targets(tmp_path: Path) -
 
 async def test_failed_install_removes_private_staging_file(tmp_path: Path, monkeypatch) -> None:
     def fail_replace(self, destination):
-        raise OSError("installation failed")
+        raise OSError("write failed")
 
     monkeypatch.setattr(Path, "replace", fail_replace)
-    with pytest.raises(OSError, match="installation failed"):
+    with pytest.raises(OSError, match="write failed"):
         await materializer(
-            tmp_path, lambda _: httpx.Response(200, json=installation("private"))
+            tmp_path, lambda _: httpx.Response(200, json=rendered_response("private"))
         ).materialize()
     assert not list(tmp_path.glob("*.tmp"))
     assert memory_text(tmp_path) is None
@@ -339,10 +341,10 @@ async def test_both_harnesses_receive_exact_memory_and_empty_parity(tmp_path, mo
 
 
 class FakeInstallationSource:
-    def __init__(self, result: SessionMemoryInstallation | Exception) -> None:
+    def __init__(self, result: RenderedSessionMemory | Exception) -> None:
         self.result = result
 
-    async def fetch_installation(self) -> SessionMemoryInstallation:
+    async def fetch_rendered(self) -> RenderedSessionMemory:
         if isinstance(self.result, Exception):
             raise self.result
         return self.result
@@ -352,7 +354,7 @@ async def test_materializer_installs_from_any_injected_source(tmp_path: Path) ->
     destination = tmp_path / "oi-memory.md"
     destination.write_text("stale")
     log = MagicMock()
-    source = FakeInstallationSource(SessionMemoryInstallation(MANIFEST_SHA256, "pinned\n"))
+    source = FakeInstallationSource(RenderedSessionMemory(MANIFEST_SHA256, "pinned\n"))
     await MemoryMaterializer(source, destination, log).materialize()
     assert destination.read_text() == "pinned\n"
     log.info.assert_called_once_with(
