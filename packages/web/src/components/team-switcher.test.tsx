@@ -9,7 +9,7 @@ const state = vi.hoisted(() => ({
   teams: [] as { id: string; slug: string; name: string }[],
   activeTeamId: null as string | null,
   scope: "workspace" as string | undefined,
-  roleKey: "member",
+  canListAllTeams: false,
   setActiveTeam: vi.fn(),
 }));
 vi.mock("@/hooks/use-active-team", () => ({
@@ -17,18 +17,16 @@ vi.mock("@/hooks/use-active-team", () => ({
     teams: state.teams,
     activeTeamId: state.activeTeamId,
     scope: state.scope,
+    canListAllTeams: state.canListAllTeams,
     setActiveTeam: state.setActiveTeam,
   }),
-}));
-vi.mock("@/hooks/use-current-user-authorization", () => ({
-  useCurrentUserAuthorization: () => ({ authorization: { role: { key: state.roleKey } } }),
 }));
 
 beforeEach(() => {
   state.teams = [];
   state.activeTeamId = null;
   state.scope = "workspace";
-  state.roleKey = "member";
+  state.canListAllTeams = false;
   state.setActiveTeam.mockClear();
 });
 afterEach(cleanup);
@@ -68,20 +66,38 @@ describe("team switcher", () => {
     await user.click(await screen.findByRole("option", { name: "Beta" }));
     expect(state.setActiveTeam).toHaveBeenCalledWith("team_beta");
   });
-  it.each(["owner", "administrator"])(
-    "offers All teams to a server-authorized %s",
-    async (roleKey) => {
-      state.teams = [
-        { id: "team_alpha", slug: "alpha", name: "Alpha" },
-        { id: "team_beta", slug: "beta", name: "Beta" },
-      ];
-      state.roleKey = roleKey;
-      const user = userEvent.setup();
-      render(<TeamSwitcher />);
-      await user.click(screen.getByRole("combobox", { name: "Active team" }));
-      expect(screen.getByRole("option", { name: "All teams" })).toBeTruthy();
-    }
-  );
+  it("offers All teams with the server grant", async () => {
+    state.teams = [
+      { id: "team_alpha", slug: "alpha", name: "Alpha" },
+      { id: "team_beta", slug: "beta", name: "Beta" },
+    ];
+    state.canListAllTeams = true;
+    const user = userEvent.setup();
+    render(<TeamSwitcher />);
+    await user.click(screen.getByRole("combobox", { name: "Active team" }));
+    expect(screen.getByRole("option", { name: "All teams" })).toBeTruthy();
+  });
+
+  it("withholds All teams when the context denies the grant", async () => {
+    state.teams = [{ id: "team_alpha", slug: "alpha", name: "Alpha" }];
+    state.canListAllTeams = false;
+    const user = userEvent.setup();
+    render(<TeamSwitcher />);
+    await user.click(screen.getByRole("combobox", { name: "Active team" }));
+    expect(screen.queryByRole("option", { name: "All teams" })).toBeNull();
+  });
+
+  it("removes All teams when a fresh server response revokes the grant", async () => {
+    state.teams = [{ id: "team_alpha", slug: "alpha", name: "Alpha" }];
+    state.canListAllTeams = true;
+    const user = userEvent.setup();
+    const { rerender } = render(<TeamSwitcher />);
+    await user.click(screen.getByRole("combobox", { name: "Active team" }));
+    expect(screen.getByRole("option", { name: "All teams" })).toBeTruthy();
+    state.canListAllTeams = false;
+    rerender(<TeamSwitcher />);
+    expect(screen.queryByRole("option", { name: "All teams" })).toBeNull();
+  });
 
   it("links to the selected team's page and updates the link when the selection changes", () => {
     state.teams = [

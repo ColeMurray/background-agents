@@ -1,6 +1,5 @@
 "use client";
 
-import { isWorkspaceAdmin } from "@open-inspect/shared/rbac";
 import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
@@ -46,6 +45,7 @@ function SessionsContent() {
     scope: activeTeamScope,
     setActiveTeam,
     teams,
+    canListAllTeams,
     loading: teamLoading,
     error: teamError,
   } = useActiveTeam();
@@ -72,12 +72,7 @@ function SessionsContent() {
   }, [parsed, teamContext]);
   const invalidParams = parsed.success ? [] : parsed.invalidParams;
   const hasFilters = hasSessionDiscoveryFilters(query, teamContext);
-  const {
-    authorization,
-    hasPermission,
-    loading: authorizationLoading,
-  } = useCurrentUserAuthorization();
-  const canViewAllTeams = isWorkspaceAdmin(authorization?.role.key);
+  const { hasPermission, loading: authorizationLoading } = useCurrentUserAuthorization();
   const canReadSessions = hasPermission("sessions.read");
   const canCreateSession = hasPermission("sessions.create");
   const { data: authSession } = useAuthSession();
@@ -307,7 +302,7 @@ function SessionsContent() {
                   repositories={repositoryOptions}
                   environments={environments}
                   teams={teams}
-                  canViewAllTeams={canViewAllTeams}
+                  canViewAllTeams={canListAllTeams}
                   hasFilters={hasSessionDiscoveryFilters(controlsQuery, teamContext)}
                   onChange={changeFilters}
                   onClear={clearFilters}

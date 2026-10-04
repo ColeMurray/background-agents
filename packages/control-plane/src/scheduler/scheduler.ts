@@ -89,6 +89,8 @@ import { resolveSessionScopedSettings } from "../session/integration-settings-re
 import { resolveExecutionBudgetMs } from "../sandbox/execution-budget";
 import { MAX_IMAGE_BUILD_PROVIDER_SESSION_TIMEOUT_MS } from "../image-builds/timeouts";
 import { resolveManagedSkills } from "../session/skill-resolution";
+import { resolvedPin } from "../session/pinned";
+import { createSessionMemorySelector } from "../memory/session-memory-selector-factory";
 import type { EnqueuePromptRequest } from "../session/enqueue-prompt-contract";
 import { resolveAutomationRepositories } from "../automation/repository";
 import {
@@ -1818,7 +1820,7 @@ export class Scheduler {
     const scopeMembers =
       target.repositories ??
       (target.repoOwner && target.repoName
-        ? [{ repoOwner: target.repoOwner, repoName: target.repoName }]
+        ? [{ repoOwner: target.repoOwner, repoName: target.repoName, repoId: target.repoId }]
         : []);
     const { codeServerEnabled, vncEnabled, sandboxSettings } = await resolveSessionScopedSettings(
       this.db,
@@ -1856,7 +1858,17 @@ export class Scheduler {
     ]);
     if (!authorized) throw new AutomationExecutionUnauthorizedError(executionDenialReason(team));
 
+    const memorySelection = await createSessionMemorySelector(ctx).select({
+      principal: {
+        userId: executionPrincipal.platformUserId,
+        ownerTeamId: automation.owner_team_id,
+      },
+      repositories: scopeMembers,
+      environmentId: target.environmentId,
+    });
+
     const sessionInput: SessionInitInput = {
+      memory: resolvedPin(memorySelection),
       ownerTeamId: automation.owner_team_id,
       visibility: team?.defaultVisibility ?? "workspace",
       sessionId,
@@ -1879,7 +1891,7 @@ export class Scheduler {
       spawnDepth: 0,
       automationId: automation.id,
       automationRunId: run.id,
-      managedSkillsManifest,
+      managedSkills: resolvedPin(managedSkillsManifest),
       providerAuth,
     };
 

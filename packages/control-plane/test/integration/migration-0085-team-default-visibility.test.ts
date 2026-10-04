@@ -7,9 +7,9 @@ import { cleanD1Tables } from "./cleanup";
 beforeEach(cleanD1Tables);
 afterEach(cleanD1Tables);
 
-describe("migration 0084: team default visibility", () => {
+describe("migration 0085: team default visibility", () => {
   it("upgrades legacy defaults without changing private sessions or team dependents", async () => {
-    // Integration setup applies all migrations; remove only 0084's fences to seed legacy rows.
+    // Integration setup applies all migrations; remove only 0085's fences to seed legacy rows.
     await env.DB.batch([
       env.DB.prepare("DROP TRIGGER teams_default_visibility_insert"),
       env.DB.prepare("DROP TRIGGER teams_default_visibility_update"),
@@ -83,9 +83,9 @@ describe("migration 0084: team default visibility", () => {
     };
 
     const migration = env.TEST_MIGRATIONS.find(
-      (candidate) => candidate.name === "0084_team_default_visibility.sql"
+      (candidate) => candidate.name === "0085_team_default_visibility.sql"
     );
-    if (!migration) throw new Error("Migration 0084 not found in TEST_MIGRATIONS");
+    if (!migration) throw new Error("Migration 0085 not found in TEST_MIGRATIONS");
     await env.DB.batch(migration.queries.map((query) => env.DB.prepare(query)));
 
     expect(await snapshot()).toEqual(expected);

@@ -25,6 +25,8 @@ import { initializeSession, type SessionInitInput } from "../session/initialize"
 import { resolveGitHubEnrichmentForRequest } from "../session/identity";
 import { resolveSessionScopedSettings } from "../session/integration-settings-resolution";
 import { resolveManagedSkills, SkillResolutionError } from "../session/skill-resolution";
+import { resolvedPin } from "../session/pinned";
+import { createSessionMemorySelector } from "../memory/session-memory-selector-factory";
 import type { Env } from "../types";
 import { resolveSessionProviderAuth } from "../session/provider-account-resolution";
 import { ProviderAccountSelectionPolicyError } from "../model-provider-accounts/selection-policy";
@@ -241,7 +243,8 @@ export async function handleCreateSession(
   // §6.2). In list mode that is repositories[0]; otherwise the scalar pair — the
   // two are the same repo by the row-0-mirrors-scalars invariant. Launching
   // from a saved environment layers its overrides on top (design §13.5).
-  const scopeMembers = repositories ?? (repoOwner && repoName ? [{ repoOwner, repoName }] : []);
+  const scopeMembers =
+    repositories ?? (repoOwner && repoName ? [{ repoOwner, repoName, repoId }] : []);
   const { codeServerEnabled, vncEnabled, sandboxSettings } = await resolveSessionScopedSettings(
     ctx.db,
     scopeMembers,
@@ -283,7 +286,15 @@ export async function handleCreateSession(
     throw e;
   }
 
+  const memorySelection = await createSessionMemorySelector(ctx).select({
+    principal: { userId: resolvedUserId, ownerTeamId: teamId },
+    repositories: scopeMembers,
+    environmentId,
+    includePersonalMemories: body.includePersonalMemories,
+  });
+
   const input: SessionInitInput = {
+    memory: resolvedPin(memorySelection),
     ownerTeamId: teamId,
     visibility,
     sessionId,
@@ -309,7 +320,7 @@ export async function handleCreateSession(
     vncEnabled,
     sandboxSettings,
     spawnSource,
-    managedSkillsManifest,
+    managedSkills: resolvedPin(managedSkillsManifest),
     providerAuth,
   };
 

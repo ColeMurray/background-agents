@@ -8,7 +8,15 @@ import { useAuthSession } from "@/lib/auth-session";
 import { browserApiFetch } from "@/lib/browser-api-fetch";
 import { ME_TEAMS_API_PATH, meTeamsKey } from "@/lib/me-teams-cache";
 import { useTeamCapabilities } from "./use-team-capabilities";
-import { isRetryableTeamError, useMeTeams, useTeam, useTeamMembers, useTeams } from "./use-teams";
+import {
+  TEAMS_KEY,
+  isRetryableTeamError,
+  teamCacheKey,
+  useMeTeams,
+  useTeam,
+  useTeamMembers,
+  useTeams,
+} from "./use-teams";
 
 vi.mock("@/lib/auth-session", () => ({ useAuthSession: vi.fn() }));
 vi.mock("@/lib/browser-api-fetch", () => ({ browserApiFetch: vi.fn() }));
@@ -80,7 +88,11 @@ describe("team hooks", () => {
       await waitFor(() => expect(result.current.mine.hasData).toBe(true));
       const cachedTeams = result.current.mine.teams;
       const cachedData = result.current.cache.get(unstable_serialize(meTeamsKey("user_one")))?.data;
-      expect(cachedData).toEqual({ teams: [membership], requireTeamOnCreate: true });
+      expect(cachedData).toEqual({
+        teams: [membership],
+        capabilities: { canListAllTeams: false },
+        requireTeamOnCreate: true,
+      });
       expect(result.current.cache.get(ME_TEAMS_API_PATH)).toBeUndefined();
       expect(browserApiFetch).toHaveBeenCalledWith(ME_TEAMS_API_PATH);
 
@@ -223,6 +235,7 @@ describe("team hooks", () => {
       await waitFor(() =>
         expect(result.current.cache.get(unstable_serialize(meTeamsKey("user_one")))?.data).toEqual({
           teams: [membership],
+          capabilities: { canListAllTeams: false },
           requireTeamOnCreate: true,
         })
       );
@@ -407,7 +420,9 @@ describe("team hooks", () => {
 
     await act(() => result.current.detail.updateTeam({ slug: "product-design" }));
 
-    expect(result.current.cache.get("/api/teams")?.data).toBeUndefined();
+    expect(
+      result.current.cache.get(unstable_serialize(teamCacheKey(TEAMS_KEY, "user_one")))?.data
+    ).toBeUndefined();
     expect(result.current.detail.team?.slug).toBe("product-design");
     expect(
       vi.mocked(browserApiFetch).mock.calls.filter(([path]) => path === "/api/teams")

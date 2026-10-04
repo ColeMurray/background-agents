@@ -4,8 +4,9 @@
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import * as matchers from "@testing-library/jest-dom/matchers";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { SWRConfig, useSWRConfig } from "swr";
-import type { TeamResponse } from "@/hooks/use-teams";
+import { SWRConfig, unstable_serialize, useSWRConfig } from "swr";
+import { TEAMS_KEY, teamCacheKey, type TeamResponse } from "@/hooks/use-teams";
+import { useAuthSession } from "@/lib/auth-session";
 import { TeamPage } from "./team-page";
 
 expect.extend(matchers);
@@ -14,16 +15,15 @@ const router = vi.hoisted(() => ({ replace: vi.fn() }));
 const { replace } = router;
 
 vi.mock("next/navigation", () => ({ useRouter: () => router }));
-vi.mock("@/lib/auth-session", () => ({
-  useAuthSession: () => ({ data: { user: { id: "user_one" } }, status: "authenticated" }),
-}));
+vi.mock("@/lib/auth-session", () => ({ useAuthSession: vi.fn() }));
 vi.mock("@/hooks/use-current-user-authorization", () => ({
   useCurrentUserAuthorization: () => ({
-    authorization: { role: { key: "owner" }, suspendedAt: null },
-    hasPermission: (permission: string) => permission === "automations.read",
+    authorization: { role: { key: "viewer" }, suspendedAt: null },
+    hasPermission: () => false,
   }),
 }));
 vi.mock("./team-overview", () => ({ TeamOverview: () => <p>Team session buckets</p> }));
+vi.mock("./team-automations", () => ({ TeamAutomations: () => <p>Team automation work</p> }));
 vi.mock("@/components/settings/team-members-table", () => ({
   TeamMembersTable: () => <p>Team member table</p>,
 }));
@@ -32,9 +32,15 @@ let stored: TeamResponse;
 let reusedSlugTeam: TeamResponse | undefined;
 let directoryRefresh: "fresh" | "stale" | "failed";
 const fetchMock = vi.fn<typeof fetch>();
+const directoryKey = unstable_serialize(teamCacheKey(TEAMS_KEY, "user_one"));
+const detailKey = unstable_serialize(teamCacheKey("/api/teams/team_design", "user_one"));
 
 beforeEach(() => {
   vi.clearAllMocks();
+  vi.mocked(useAuthSession).mockReturnValue({
+    data: { user: { id: "user_one" } },
+    status: "authenticated",
+  });
   reusedSlugTeam = undefined;
   directoryRefresh = "fresh";
   stored = {
@@ -51,6 +57,10 @@ beforeEach(() => {
     updatedAt: 1,
     memberCount: 0,
     capabilities: {
+      canReadTeamSessions: true,
+      canReadTeamRepositories: true,
+      canReadTeamEnvironments: true,
+      canReadAutomations: true,
       canJoin: false,
       canLeave: false,
       canEditMetadata: true,
@@ -108,6 +118,7 @@ function renderPage(slug: string) {
           revalidateOnFocus: false,
           revalidateOnReconnect: false,
           shouldRetryOnError: false,
+          keepPreviousData: true,
         }}
       >
         <RefreshDirectory />
@@ -120,10 +131,181 @@ function renderPage(slug: string) {
 
 function RefreshDirectory() {
   const { mutate } = useSWRConfig();
-  return <button onClick={() => void mutate("/api/teams")}>Refresh directory</button>;
+  const { data: session } = useAuthSession();
+  const userId = session?.user.id;
+  return (
+    <>
+      <button onClick={() => void mutate(teamCacheKey(TEAMS_KEY, userId))}>
+        Refresh directory
+      </button>
+      <button onClick={() => void mutate(teamCacheKey("/api/teams/team_design", userId))}>
+        Refresh team
+      </button>
+    </>
+  );
 }
 
 describe("TeamPage", () => {
+  it.each([false, undefined] as const)(
+    "unmounts Overview when fresh canReadTeamSessions is %s despite directory grants",
+    async (canReadTeamSessions) => {
+      directoryRefresh = "stale";
+      const { cache } = renderPage("design");
+      await screen.findByText("Team session buckets");
+      await waitFor(() => expect(cache.get(detailKey)?.data).toBeDefined());
+      stored = { ...stored, capabilities: { ...stored.capabilities, canReadTeamSessions } };
+      fireEvent.click(screen.getByRole("button", { name: "Refresh team" }));
+      await screen.findByText("Team member table");
+      expect(screen.queryByText("Team session buckets")).not.toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: "Overview" })).not.toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "Automations" })).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "Repositories" })).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "Environments" })).toBeInTheDocument();
+      expect(cache.get(directoryKey)?.data.teams[0].capabilities.canReadTeamSessions).toBe(true);
+    }
+  );
+
+  it.each([false, undefined] as const)(
+    "unmounts Automations when fresh canReadAutomations is %s despite directory grants",
+    async (canReadAutomations) => {
+      directoryRefresh = "stale";
+      const { cache } = renderPage("design");
+      fireEvent.click(await screen.findByRole("button", { name: "Automations" }));
+      expect(screen.getByText("Team automation work")).toBeInTheDocument();
+      await waitFor(() => expect(cache.get(detailKey)?.data).toBeDefined());
+      stored = { ...stored, capabilities: { ...stored.capabilities, canReadAutomations } };
+      fireEvent.click(screen.getByRole("button", { name: "Refresh team" }));
+      await waitFor(() =>
+        expect(screen.queryByText("Team automation work")).not.toBeInTheDocument()
+      );
+      expect(screen.queryByRole("button", { name: "Automations" })).not.toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "Overview" })).toBeInTheDocument();
+      expect(cache.get(directoryKey)?.data.teams[0].capabilities.canReadAutomations).toBe(true);
+    }
+  );
+
+  it.each([401, 403, 404, "invalid-schema"] as const)(
+    "does not trust cached work grants after terminal detail failure %s",
+    async (failure) => {
+      const { cache } = renderPage("design");
+      await screen.findByText("Team session buckets");
+      await waitFor(() => expect(cache.get(detailKey)?.data).toBeDefined());
+      const fetchNormally = fetchMock.getMockImplementation()!;
+      fetchMock.mockImplementation((input, init) =>
+        String(input) === "/api/teams/team_design"
+          ? Promise.resolve(
+              failure === "invalid-schema"
+                ? Response.json({ ...stored, capabilities: { canReadTeamSessions: "true" } })
+                : Response.json({ error: "Forbidden" }, { status: failure })
+            )
+          : fetchNormally(input, init)
+      );
+      fireEvent.click(screen.getByRole("button", { name: "Refresh team" }));
+      expect(await screen.findByRole("alert")).toHaveTextContent("Unable to load team.");
+      expect(screen.queryByText("Team session buckets")).not.toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: "Overview" })).not.toBeInTheDocument();
+      expect(cache.get(detailKey)?.error).toBeDefined();
+    }
+  );
+
+  it.each(["directory", "detail"] as const)(
+    "isolates work grants from a late account-A %s response while account B is pending",
+    async (source) => {
+      const { cache, rerender } = renderPage("design");
+      await screen.findByText("Team session buckets");
+      await waitFor(() => expect(cache.get(detailKey)?.data).toBeDefined());
+      const oldPath = source === "directory" ? TEAMS_KEY : "/api/teams/team_design";
+      let finishOldResponse!: (response: Response) => void;
+      const oldResponse = new Promise<Response>((resolve) => {
+        finishOldResponse = resolve;
+      });
+      const fetchNormally = fetchMock.getMockImplementation()!;
+      fetchMock.mockImplementation((input, init) =>
+        String(input) === oldPath ? oldResponse : fetchNormally(input, init)
+      );
+      fireEvent.click(
+        screen.getByRole("button", {
+          name: source === "directory" ? "Refresh directory" : "Refresh team",
+        })
+      );
+      await waitFor(() =>
+        expect(cache.get(source === "directory" ? directoryKey : detailKey)?.isValidating).toBe(
+          true
+        )
+      );
+
+      const newResponses = new Map<string, (response: Response) => void>();
+      fetchMock.mockImplementation((input, init) => {
+        const path = String(input);
+        return path === TEAMS_KEY || path === "/api/teams/team_design"
+          ? new Promise((resolve) => newResponses.set(path, resolve))
+          : fetchNormally(input, init);
+      });
+      vi.mocked(useAuthSession).mockReturnValue({
+        data: { user: { id: "user_two" } },
+        status: "authenticated",
+      });
+      rerender(<TeamPage slug="design" />);
+      expect(screen.getByText("Loading team...")).toBeInTheDocument();
+      expect(screen.queryByText("Team session buckets")).not.toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: "Overview" })).not.toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: "Automations" })).not.toBeInTheDocument();
+
+      const denied = {
+        ...stored,
+        capabilities: {
+          ...stored.capabilities,
+          canReadTeamSessions: false,
+          canReadTeamRepositories: false,
+          canReadTeamEnvironments: false,
+          canReadAutomations: false,
+        },
+      };
+      await act(async () => {
+        newResponses.get(TEAMS_KEY)?.(Response.json({ teams: [denied] }));
+      });
+      await screen.findByText("Team member table");
+      expect(screen.queryByText("Team session buckets")).not.toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: "Overview" })).not.toBeInTheDocument();
+      expect(
+        cache.get(unstable_serialize(teamCacheKey("/api/teams/team_design", "user_two")))?.data
+      ).toBeUndefined();
+
+      await act(async () => {
+        finishOldResponse(
+          Response.json(
+            source === "directory" ? { teams: [stored] } : { ...stored, slug: "old-account-rename" }
+          )
+        );
+        await oldResponse;
+      });
+      await waitFor(() =>
+        expect(cache.get(source === "directory" ? directoryKey : detailKey)?.isValidating).toBe(
+          false
+        )
+      );
+      expect(screen.queryByText("Team session buckets")).not.toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: "Overview" })).not.toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: "Automations" })).not.toBeInTheDocument();
+      expect(replace).not.toHaveBeenCalled();
+      expect(
+        cache.get(unstable_serialize(teamCacheKey(TEAMS_KEY, "user_two")))?.data.teams[0]
+      ).toMatchObject({ slug: "design", capabilities: { canReadTeamSessions: false } });
+
+      await act(async () => {
+        newResponses.get("/api/teams/team_design")?.(Response.json(denied));
+      });
+      await waitFor(() =>
+        expect(
+          cache.get(unstable_serialize(teamCacheKey("/api/teams/team_design", "user_two")))?.data
+        ).toBeDefined()
+      );
+      expect(screen.queryByText("Team session buckets")).not.toBeInTheDocument();
+      expect(cache.get(TEAMS_KEY)).toBeUndefined();
+      expect(cache.get("/api/teams/team_design")).toBeUndefined();
+    }
+  );
+
   it.each([
     ["fresh", false],
     ["fresh", true],
@@ -149,17 +331,17 @@ describe("TeamPage", () => {
       expect(screen.queryByText("Team not found.")).not.toBeInTheDocument();
       expect(screen.getByRole("textbox", { name: "Slug" })).toHaveValue("product-design");
       expect(replace).toHaveBeenCalledWith("/teams/product-design");
-      expect(cache.get("/api/teams")?.data?.teams).toContainEqual(stored);
-      expect(cache.get("/api/teams")?.data?.teams).toContainEqual(
+      expect(cache.get(directoryKey)?.data?.teams).toContainEqual(stored);
+      expect(cache.get(directoryKey)?.data?.teams).toContainEqual(
         expect.objectContaining({ id: "team_other", slug: "engineering" })
       );
-      expect(cache.get("/api/teams/team_design")?.data).toEqual(stored);
+      expect(cache.get(detailKey)?.data).toEqual(stored);
       expect(fetchMock.mock.calls.filter(([path]) => path === "/api/teams")).toHaveLength(1);
 
       if (reuseOldSlug) {
         fireEvent.click(screen.getByRole("button", { name: "Refresh directory" }));
         await waitFor(() =>
-          expect(cache.get("/api/teams")?.data?.teams).toContainEqual(reusedSlugTeam)
+          expect(cache.get(directoryKey)?.data?.teams).toContainEqual(reusedSlugTeam)
         );
         expect(screen.getByRole("heading", { level: 1, name: "Design" })).toBeInTheDocument();
         expect(screen.getByRole("textbox", { name: "Slug" })).toHaveValue("product-design");
@@ -184,7 +366,7 @@ describe("TeamPage", () => {
         />
       );
 
-      expect(cache.get("/api/teams")?.data?.teams).toContainEqual(
+      expect(cache.get(directoryKey)?.data?.teams).toContainEqual(
         expect.objectContaining({ id: "team_design", slug: "product-design" })
       );
       expect(screen.getByRole("heading", { level: 1, name: "Design" })).toBeInTheDocument();
@@ -230,8 +412,8 @@ describe("TeamPage", () => {
         await pendingRefresh;
       });
 
-      expect(cache.get("/api/teams")?.data?.teams).toContainEqual(stored);
-      expect(cache.get("/api/teams/team_design")?.data).toEqual(stored);
+      expect(cache.get(directoryKey)?.data?.teams).toContainEqual(stored);
+      expect(cache.get(detailKey)?.data).toEqual(stored);
       if (refresh === "forbidden") {
         expect(screen.getByRole("alert")).toHaveTextContent("Unable to load team.");
         expect(screen.queryByRole("button", { name: "Save changes" })).not.toBeInTheDocument();

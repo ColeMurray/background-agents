@@ -4,8 +4,18 @@ description: Sign in to an existing OpenInspect deployment, start a session agai
 audience: user
 owner: web
 status: published
-lastReviewed: "2026-09-28"
+lastReviewed: "2026-10-03"
 relatedCode:
+  - packages/web/src/hooks/use-prompt-draft.ts
+  - packages/web/src/lib/prompt-drafts.ts
+  - packages/web/src/lib/auth-session.tsx
+  - packages/web/src/lib/composer-access.ts
+  - packages/control-plane/src/authorization/teams-enforcement.ts
+  - packages/web/src/components/session-access-selector.tsx
+  - packages/control-plane/src/routes/team-ownership.ts
+  - packages/control-plane/src/routes/session-target-authorization.ts
+  - packages/control-plane/src/routes/workspace-repository-authorization.ts
+  - packages/control-plane/src/session/session-target-secrets.ts
   - packages/web/src/app/(app)/(sidebar)/page.tsx
   - packages/web/src/components/session-target-picker.tsx
   - packages/web/src/components/session-header.tsx
@@ -24,8 +34,9 @@ This page takes you from signing in to reading the agent's first result in one s
 
 - Your team already runs an OpenInspect deployment and you have its URL.
 - You have been admitted to the workspace. Admission is configured by the operator (allowed GitHub users, email addresses, email domains, or GitHub organization membership).
-- Your role is Member or higher. Viewers can read sessions but cannot create or prompt them.
+- Your role is Member or higher. Viewers can read sessions they have access to but cannot create or prompt them. Workspace roles and team membership are separate; see [Workspace access](/administration/workspace-access).
 - For a GitHub-backed deployment, the GitHub App is installed on the repository you want to work in. If it is not, the repository does not appear in the picker. Other source-control providers use their configured repository access.
+- For a team-owned session, you are a current member of an active team and that team has grants for every selected repository. A newly created team starts without repository grants; ask a team lead or workspace administrator to configure them under [Teams](/administration/teams).
 - At least one model is enabled under Settings › Models, with its provider credentials configured. An administrator does this once.
 
 <Steps>
@@ -45,7 +56,13 @@ New users receive the Member role. For GitHub pull requests, signing in with Git
 
 The home page is the new-session composer, headed "Welcome to" followed by the deployment's app name. The text area's placeholder reads "What do you want to build?". You can also open it from anywhere with Cmd/Ctrl+Shift+O.
 
-Above the text area, the target picker decides what the sandbox works on. Its search field reads "Search environments and repositories...". Choose one of:
+Before choosing a target, open the composer's session access selector. Review both the **team context** (the owning team, or **No team** when allowed) and the audience: **Workspace**, the selected team's audience, or **Private**. A draft initialized from the active sidebar team uses that team's default visibility; the required-team fallback also uses its team's default. Changing the team inside the composer preserves the current audience rather than applying the new team's default. For example, choosing a team while the audience is Workspace leaves it Workspace-visible. Review and explicitly change the audience before sending if needed. Team visibility requires a team. If the workspace requires team ownership and you have no eligible membership, the composer says **Join a team to create a session.** See [Teams](/administration/teams).
+
+Ownership is fixed when the session is created. Workspace visibility does not remove team ownership, and changing the sidebar's discovery scope is not a way to transfer a session. Private access is enforced in every deployment mode, but non-private Team read isolation requires `TEAMS_ENFORCEMENT=on`; the default is `shadow`. See [Multiplayer and sharing](/sessions/multiplayer-and-sharing) and [Deployment](/administration/deployment).
+
+Explicit team and audience choices are remembered in user-scoped `localStorage` in this browser and restored when you return, but only while the sidebar context matches. Changing sidebar scope discards that saved choice and uses the new context's defaults. Composer choices do not change sidebar scope. Invalid stored choices are ignored, and team selection is rechecked against current memberships and the required-team policy.
+
+Above the text area, the target picker decides what the sandbox works on. Its search field reads "Search environments and repositories...". Choices reflect the selected team context and your access. Choose one of:
 
 | Target                    | What you get                                                                                                                                                                                         |
 | ------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -54,9 +71,11 @@ Above the text area, the target picker decides what the sandbox works on. Its se
 | **An environment**        | A saved repository set with a base branch per repository, its own secrets, and optional prebuilt images. Environments are listed first when any exist.                                               |
 | **No repository**         | An empty sandbox for scratch work ("Start without cloning a repository").                                                                                                                            |
 
-Below the composer, a note states which secrets the session receives. An environment session uses global secrets plus the environment's secrets. An ad-hoc set uses global secrets plus each selected repository's secrets, and the note offers to save the set as an environment.
+A team-owned environment can launch only into a session owned by that same team. Eligible workspace-owned environments can also appear in a team's catalog, but all their repositories must satisfy that team's grants. Check both the owning team and the environment before sending.
 
-If the picker says "No repositories found", check the deployment's repository access (for GitHub, the App installation and its repository selection). You can still start without a repository.
+Secrets resolve from global values, then the owning team's values (if any), then the target environment or selected repositories; later values override earlier ones. Environment sessions do not inherit their member repositories' secrets. In an ad-hoc set the primary repository wins duplicate keys, and the composer offers to save the set as an environment. See [Secrets](/configure/secrets).
+
+If the picker says "No repositories found", check the selected team's repository grants as well as the deployment's repository access (for GitHub, the App installation and its repository selection). Installation access alone does not grant a team access. You can start without a repository if your role and team-creation policy allow it.
 
 </Step>
 
@@ -115,7 +134,9 @@ A good first prompt names one outcome, the place in the code it concerns, and ho
 In packages/web, the "Copy link" button on the session header does not show any confirmation after copying. Add a brief "Copied" state on the button for two seconds after a successful copy, matching how the branch-name copy button in the sidebar behaves. Add or update the component test, run the web test suite for the files you touched, and report the command you ran and its result. Do not open a pull request yet.
 ```
 
-Send with the send button or Cmd/Ctrl+Enter (the default keyboard shortcut; it can be customized). Typing in the composer already starts warming a sandbox ("Warming sandbox..." appears beside the send button), so the session is often ready by the time you send. You are taken to the session page at `/session/<id>`.
+Unsent prompt text is saved separately from team/audience preferences, in this tab's `sessionStorage` for your account. It returns after a reload or navigation back in the same tab. A successful send clears the submitted draft; a failed send keeps it. Emptying the prompt or successfully signing out clears it, and storage ends with the tab. Attachments are not part of this text draft. If browser storage is unavailable, the text stays only in memory.
+
+Send with the send button or Cmd/Ctrl+Enter (the default keyboard shortcut; it can be customized). Typing in the composer already starts warming a sandbox ("Warming sandbox..." appears beside the send button), so the session is often ready by the time you send. Restoring a saved draft alone does not start warming; the next input change can, or sending creates the session directly. You are taken to the session page at `/session/<id>`.
 
 </Step>
 
@@ -153,14 +174,16 @@ If the result is not what you wanted, send a follow-up in the same session. The 
 
 ## Troubleshooting
 
-| Symptom                                                                 | Cause                                                                                  | Fix                                                                                                                   |
-| ----------------------------------------------------------------------- | -------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------- |
-| **Access Denied** page after signing in                                 | Your identity was verified but the deployment's admission rules did not include you.   | Ask a workspace Owner or Administrator to add you (GitHub user, email, domain, or organization), then sign in again.  |
-| "You don't have permission to create sessions."                         | Your role is Viewer.                                                                   | Ask a workspace Owner or Administrator to change your role under Settings › Workspace access.                         |
-| "No repositories found."                                                | No repositories are accessible through the deployment's source-control integration.    | Start without a repository, or ask the operator to check access (on GitHub, the App installation and repo selection). |
-| Send button disabled with "Select at least one repository"              | **Multiple repositories** is selected but the set is empty.                            | Choose at least one repository, or switch to a single repository or **No repository**.                                |
-| Model menu is empty or the send fails with a model availability message | No enabled model can run on the selected harness.                                      | Switch the harness to OpenCode, or ask a workspace Owner or Administrator to enable a model under Settings › Models.  |
-| Boot stops with a failed phase                                          | `start.sh` in the primary repository exited non-zero, or the boot exceeded its budget. | Read the header's status popover for the phase, fix the script, and send the prompt again to start a new sandbox.     |
+| Symptom                                                                 | Cause                                                                                             | Fix                                                                                                                  |
+| ----------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------- |
+| **Access Denied** page after signing in                                 | Your identity was verified but the deployment's admission rules did not include you.              | Ask a workspace Owner or Administrator to add you (GitHub user, email, domain, or organization), then sign in again. |
+| "You don't have permission to create sessions."                         | Your role is Viewer.                                                                              | Ask a workspace Owner or Administrator to change your role under Settings › Workspace access.                        |
+| "No repositories found."                                                | The selected team lacks grants, or the source-control integration has no accessible repositories. | Check team context and ask a lead or administrator to check grants; ask the operator to check installation access.   |
+| "Join a team to create a session." or `team_required`                   | Workspace policy requires an owning team.                                                         | Join an eligible team or ask its lead to add you, then choose it in the composer.                                    |
+| `environment_team_mismatch` or `target_team_missing_grant`              | The environment belongs to another team, or the selected team lacks a repository grant.           | Choose an environment allowed for this team, or ask a lead or administrator to review repository grants.             |
+| Send button disabled with "Select at least one repository"              | **Multiple repositories** is selected but the set is empty.                                       | Choose at least one repository, or switch to a single repository or **No repository**.                               |
+| Model menu is empty or the send fails with a model availability message | No enabled model can run on the selected harness.                                                 | Switch the harness to OpenCode, or ask a workspace Owner or Administrator to enable a model under Settings › Models. |
+| Boot stops with a failed phase                                          | `start.sh` in the primary repository exited non-zero, or the boot exceeded its budget.            | Read the header's status popover for the phase, fix the script, and send the prompt again to start a new sandbox.    |
 
 ## Next steps
 

@@ -44,6 +44,7 @@ import {
 } from "./shared";
 import { type SessionRouteContext, dispatchSession } from "./session-route";
 import { DEFAULT_BASE_BRANCH } from "../repos/default-branch";
+import { inheritedPin } from "../session/pinned";
 import { authorizeEnvironmentTarget, authorizeSessionTarget } from "./session-target-authorization";
 
 const logger = createLogger("router:session-child-spawn");
@@ -332,7 +333,8 @@ export async function handleSpawnChild(
     spawnDepth: childDepth,
     automationId: parentSession?.automationId ?? null,
     automationRunId: parentSession?.automationRunId ?? null,
-    managedSkillsSourceSessionId: parentId,
+    managedSkills: inheritedPin(parentId),
+    memory: inheritedPin(parentId),
     providerAuth: providerAuth.map((auth) => ({
       ...auth,
       inheritedFromSessionId: parentId,

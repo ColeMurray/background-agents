@@ -4,8 +4,9 @@ description: Build a weekly scheduled automation that opens a dependency-update 
 audience: team-owner
 owner: control-plane
 status: published
-lastReviewed: "2026-09-23"
+lastReviewed: "2026-10-03"
 relatedCode:
+  - packages/web/src/hooks/use-can-create-automation.ts
   - docs/AUTOMATIONS.md
   - docs/AVAILABLE_MODELS.md
   - packages/web/src/components/automations/automation-form.tsx
@@ -15,14 +16,22 @@ relatedCode:
   - packages/web/src/components/automations/cron-picker.tsx
   - packages/web/src/components/automations/run-history.tsx
   - packages/control-plane/src/routes/automation-lifecycle.ts
+  - packages/shared/src/types/session-access.ts
+  - packages/control-plane/src/routes/automation-crud.ts
+  - packages/control-plane/src/routes/automation-executor.ts
+  - packages/control-plane/src/routes/automation-runs.ts
+  - packages/control-plane/src/automation/authorization-guard.ts
+  - packages/control-plane/src/scheduler/scheduler.ts
+  - packages/control-plane/src/db/automation-store.ts
 ---
 
 This tutorial walks you through a scheduled automation that opens a dependency-update pull request every Monday morning, then shows you how to test it and read the results.
 
 ## Prerequisites
 
-- A workspace role of Member, Administrator, or Owner. Viewers cannot create automations.
-- A repository the GitHub App is installed on. Only those repositories appear in the picker.
+- Both `automations.create` and `sessions.create`, granted by the built-in Member, Administrator, and Owner roles. Viewers cannot create automations. Custom roles need both permissions because the creator becomes the initial executor.
+- A repository the GitHub App can access. For a team automation, the owning team also needs a current repository grant; newly created teams have no grants until configured.
+- Current membership in the active team if you are creating a team-owned automation, including when you are a workspace Administrator or Owner.
 - At least one enabled model under Settings › Models that your chosen harness can run.
 
 <Steps>
@@ -30,6 +39,8 @@ This tutorial walks you through a scheduled automation that opens a dependency-u
 ### Open the create form
 
 Open **Automations** in the sidebar and click **Create Automation**. If you would rather start from a pre-filled example, click **Browse templates** instead and choose one; the same form opens with fields already filled in (see [Automation templates](/automations/templates)).
+
+You can also start from a team's **Automations** tab. Choose the owning **Team** in the form, or **Workspace (no team)** if policy permits. Changing the team clears selected targets so you can choose from the new scope. Ownership cannot be changed after creation. If the workspace requires teams for new resources, select an active team you belong to. See [Teams](/administration/teams).
 
 ![The Create Automation form with the trigger type picker, name, repository configuration, agent, model, and reasoning effort fields](/images/automations/create-automation.webp "Create Automation: choose a trigger type, name it, pick the repository, then the agent, model, and reasoning effort.")
 
@@ -107,13 +118,15 @@ Click **Create Automation**. You land on the automation's detail page, which sho
 <Step>
 ### Test it with Trigger Now
 
-Click **Trigger Now** on the detail page. A run starts immediately under your own authority, and the scheduled next run does not move. If it is rejected, a run is already active; the full rules are in [Schedules](/automations/schedules#trigger-now).
+Click **Trigger Now** on the detail page. A run starts immediately under your own authority, and the scheduled next run does not move. It can be rejected because a run is already active, you no longer qualify to execute it, or the team's grants changed. The full rules are in [Schedules](/automations/schedules#trigger-now).
 
 </Step>
 <Step>
 ### Read the run history
 
-Each firing is one row in **Run History** with a status badge, the session title, the duration, and a **View session** link. Click **View session** to open the full session, watch the agent, and review its diff and pull request. Older rows load with **Load more**.
+Each firing is one row in **Run History** with a status badge and duration. When you can read the linked session, its title and **View session** link are available. Click **View session** to open it, watch the agent, and review its diff and pull request. Older rows load with **Load more**.
+
+Reading an automation does not grant access to all sessions it created. Run-history responses hide the session ID, title, and artifact summary when the linked session is not readable; the run row itself remains. History lists do not expose private sessions through an Owner's break-glass authority.
 
 If a run fails, the failure reason appears under the row.
 
@@ -128,14 +141,28 @@ If a run fails, the failure reason appears under the row.
 </Step>
 </Steps>
 
+## Ownership and execution
+
+The **owning team** and **executor** are separate. Team ownership controls the resource's scope; the executor is the user whose authority scheduled and event-driven runs use. The creator is the initial executor. Workspace-owned automations have no owning team but still have an executor.
+
+At run time, the executor must still be active and permitted to create sessions and use the targets. For team automations, they must belong to the active owning team and its grants must cover every target repository. **Trigger Now** checks the requester instead, including membership even for Administrators and Owners. Management authority alone is not execution authority.
+
+New sessions inherit the automation's owning team and that team's default session visibility at launch. Workspace-owned automations create workspace-visible sessions. The person reading the automation must still pass each linked session's read checks; see [Teams](/administration/teams) for visibility and deployment enforcement details.
+
+### Change the executor
+
+Executor reassignment is currently **API-only**, not a control in the automation form. Ask an authorized team lead or workspace Administrator/Owner to [reassign the executor](/automations#reassigning-an-executor) to an active user who qualifies to launch the stored targets. This preserves the automation's ownership and history.
+
 ## Troubleshooting
 
-| Symptom                                                 | Cause                                                                                                           | Fix                                                                                                                                 |
-| ------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------- |
-| The **Create Automation** button stays disabled         | A required field is empty, the schedule is invalid, or no enabled model is compatible with the selected harness | Fill in the name and instructions, check the cron picker's validation message, or enable a compatible model under Settings › Models |
-| The repository you want is not in the picker            | The GitHub App is not installed on it                                                                           | Ask an operator to add it to the installation; see [GitHub integration](/integrations/github)                                       |
-| A scheduled run never starts                            | The owner lost access to the repository, or was suspended                                                       | Scheduled runs use the owner's authority; restore access or recreate the automation under another account                           |
-| The badge says Degraded or the automation paused itself | Three consecutive failures                                                                                      | Open a failed run's **View session**, fix the cause, use **Trigger Now** to verify, then **Resume**                                 |
+| Symptom                                                             | Cause                                                                                                                                | Fix                                                                                                                                                 |
+| ------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------- |
+| The **Create Automation** button stays disabled                     | A required field is empty, the schedule is invalid, or no enabled model is compatible with the selected harness                      | Fill in the name and instructions, check the cron picker's validation message, or enable a compatible model under Settings › Models                 |
+| The repository you want is not in the picker                        | The GitHub App cannot access it, or the selected team lacks a grant                                                                  | Check installation access and the team's Repositories tab; see [Teams](/administration/teams)                                                       |
+| A scheduled firing is Skipped and the automation pauses immediately | Execution authorization was denied: the executor lost access or team membership, the team was archived, or target grants are missing | Restore the required access or ask an authorized lead/admin to [reassign the executor](#change-the-executor) through the API, then click **Resume** |
+| **Trigger Now** is denied although you can edit the automation      | Management access does not guarantee execution access                                                                                | Check your current team membership, session/target permissions, and the team's grants                                                               |
+| A run has no session title or **View session** link                 | No session was created, or you cannot read the linked session                                                                        | Check the failure reason and session access; automation read access does not bypass session visibility                                              |
+| The badge says Degraded or the automation paused after failed runs  | Recent consecutive failures; three failures pause it                                                                                 | Open a failed run's **View session**, fix the cause, use **Trigger Now** to verify, then **Resume**                                                 |
 
 ## Next steps
 

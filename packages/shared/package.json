@@ -217,6 +217,14 @@
     "./types/audit-events": {
       "import": "./dist/types/audit-events.js",
       "types": "./dist/types/audit-events.d.ts"
+    },
+    "./types/memories": {
+      "import": "./dist/types/memories.js",
+      "types": "./dist/types/memories.d.ts"
+    },
+    "./memory-tools": {
+      "import": "./dist/memory-tools.js",
+      "types": "./dist/memory-tools.d.ts"
     }
   },
   "scripts": {
@@ -226,7 +234,8 @@
     "test": "vitest run",
     "test:coverage": "vitest run --coverage",
     "lint": "eslint src/",
-    "lint:fix": "eslint src/ --fix"
+    "lint:fix": "eslint src/ --fix",
+    "generate:memory-contract": "UPDATE_MEMORY_CONTRACT=1 vitest run src/memory-tools.test.ts"
   },
   "devDependencies": {
     "@vitest/coverage-v8": "^4.1.11",

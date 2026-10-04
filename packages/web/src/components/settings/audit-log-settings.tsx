@@ -56,6 +56,13 @@ const UNRECOGNIZED: BadgeTreatment = {
 };
 
 const OPERATION_LABELS: Record<AuditOperationAction, string> = {
+  "memory.created": "Memory created",
+  "memory.revised": "Memory revised",
+  "memory.archived": "Memory archived",
+  "memory.restored": "Memory restored",
+  "memory.approved": "Memory approved",
+  "memory.rejected": "Memory rejected",
+  "memory.superseded": "Memory superseded",
   "session.private_break_glass": "Private session break-glass read",
   "session.visibility_changed": "Session visibility changed",
   "session.moved": "Session moved",

@@ -198,12 +198,17 @@ describe("sessions API route (POST)", () => {
         body: JSON.stringify({
           teamId: "team-1",
           visibility: "team",
+          includePersonalMemories: false,
           grants: ["repo-1"],
           ...hostileIdentityFields,
         }),
       })
     );
-    expect(controlPlaneBody()).toEqual({ teamId: "team-1", visibility: "team" });
+    expect(controlPlaneBody()).toEqual({
+      teamId: "team-1",
+      visibility: "team",
+      includePersonalMemories: false,
+    });
     expect(response.status).toBe(409);
     await expect(response.json()).resolves.toEqual({
       error: "Team archived",

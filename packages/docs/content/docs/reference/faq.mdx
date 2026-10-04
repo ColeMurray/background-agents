@@ -6,6 +6,10 @@ owner: platform
 status: published
 lastReviewed: "2026-10-04"
 relatedCode:
+  - packages/shared/src/types/session-access.ts
+  - packages/shared/src/types/team-access.ts
+  - packages/control-plane/src/authorization/teams-enforcement.ts
+  - packages/control-plane/src/session/session-target-secrets.ts
   - docs/HOW_IT_WORKS.md
   - docs/AUTH.md
   - docs/SECRETS.md
@@ -48,7 +52,11 @@ It queues. Prompts are processed in order, and a session may hold up to 50 unfin
 
 ### Who can see my session?
 
-It depends on the session's Team, Workspace, or Private visibility. Private sessions are for the session owner and explicit collaborators, with an audited read exception for workspace Owners. Team defaults are Team or Workspace, but you can explicitly choose Private, including for a team-owned session. Prompting requires collaboration permission and session access; team-owned prompting also requires current team membership. See [Multiplayer and sharing](/sessions/multiplayer-and-sharing) for the full rules and enforcement modes.
+It depends on visibility and your deployment's enforcement mode. Workspace-visible sessions are readable by admitted workspace users with session read permission. With Teams enforcement on, Team visibility limits reads to owning-team members and workspace Administrators or Owners. Private sessions are for the owning user and explicit collaborators, with audited break-glass read access for workspace Owners only; that exception does not grant prompting or sandbox access.
+
+Team defaults are **Team** or **Workspace**, never Private, but you can explicitly choose **Private** for an individual session, including a team-owned one. Prompting requires collaboration permission and session access; private collaborators on team-owned sessions must retain current team membership.
+
+The default enforcement mode is `shadow`, which does not isolate non-private Team reads. Private access and team-owned action checks apply in every mode. Except for collaborator self-removal, every non-read action on a team-owned session requires current owning-team membership, even for administrators. Visibility can change, but ownership cannot. See [Multiplayer and sharing](/sessions/multiplayer-and-sharing), [Teams](/administration/teams), and [Deployment](/administration/deployment).
 
 ### My prompt failed with a message naming a boot phase. What now?
 
@@ -62,7 +70,7 @@ There is no dedicated merge tool; the pull-request tool creates and updates PRs.
 
 ### Where do secrets go?
 
-Add them under Settings › Secrets (global or per repository) or on an environment's Secrets tab. They are stored encrypted and injected into the sandbox as environment variables at spawn. A session receives global secrets plus its target's secrets, and repository or environment values override global ones with the same key. Values are never shown back in the browser. See [Secrets](/configure/secrets).
+Add them under Settings › Secrets (global or per repository), a team's Secrets tab, or an environment's Secrets tab, subject to your management access. They are stored encrypted and injected into the sandbox as environment variables at spawn. Precedence is global, owning team (if any), then target repository or environment; later values win. Environment sessions do not inherit their member repositories' secrets. Values are never shown back in the browser. See [Secrets](/configure/secrets).
 
 ### Why is my session not using the prebuilt image?
 
@@ -108,11 +116,11 @@ Pause it from the automations list or its detail page. An automation that fails 
 
 ### Who can change settings, secrets, and integrations?
 
-Owners and Administrators. Members can create sessions and their own automations but cannot administer shared configuration, and Viewers have read-only access. Only Owners can transfer ownership or change who holds the Owner role. See [Workspace access](/administration/workspace-access).
+Workspace Owners and Administrators manage workspace configuration. Team leads can manage team resources where their workspace permissions and resource-specific checks allow it, including team secrets; a team role does not replace a workspace role. Only Owners can transfer workspace ownership or change who holds the Owner role. See [Workspace access](/administration/workspace-access) and [Teams](/administration/teams).
 
 ### Can I get an archived session back?
 
-Yes. Open Settings › Data Controls, find the session in the archived list, and restore it. Restoring needs session lifecycle permission. See [Data controls](/administration/data-controls).
+Yes, if you still have access. Open Settings › Data Controls, find the session in the archived list, and restore it. Restoring needs session lifecycle permission and, for a team-owned session, current owning-team membership even for administrators. See [Data controls](/administration/data-controls).
 
 ## Next steps
 

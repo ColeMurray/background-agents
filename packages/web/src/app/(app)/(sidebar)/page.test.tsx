@@ -34,6 +34,20 @@ function activeOpenAiAccount(id: string): (typeof mocks.providerAccountsValue)[n
 }
 
 describe("Home", () => {
+  it("creates sessions using the saved personal-memory preference without a composer override", async () => {
+    render(<Home />);
+    expect(
+      screen.queryByRole("checkbox", { name: "Include my personal memories" })
+    ).not.toBeInTheDocument();
+    fireEvent.change(screen.getByPlaceholderText("What do you want to build?"), {
+      target: { value: "Do some work" },
+    });
+    await waitFor(() => expect(fetch).toHaveBeenCalledWith("/api/sessions", expect.anything()));
+    expect(sessionCreateBody()).not.toHaveProperty("includePersonalMemories");
+    fireEvent.click(screen.getByRole("button", { name: /send/i }));
+    await waitFor(() => expect(mocks.routerPush).toHaveBeenCalledWith("/session/session-1"));
+  });
+
   it("shows the first prompt's server denial reason in a toast without navigating", async () => {
     vi.mocked(fetch).mockImplementation(async (input) =>
       String(input).endsWith("/prompt")

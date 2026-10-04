@@ -508,34 +508,25 @@ The former `/operator/sessions/archive` and `/internal/operator-archive` proposa
 
 ### GitHub App Token Flow
 
-The system uses two types of GitHub tokens:
+The sandbox helper calls `/sessions/:id/scm-credentials` with its sandbox auth token. The control
+plane resolves the persisted session repositories, intersects current owning-team grants only for
+team-owned sessions, and passes that scope to the provider. GitHub mints a short-lived installation
+token for that scope; GitLab returns its deployment-wide PAT without narrowing it. Installation-wide
+metadata/catalog credentials are separate from GitHub session credentials.
 
-| Token            | Used For           | Delivery                      | Access Scope                     |
-| ---------------- | ------------------ | ----------------------------- | -------------------------------- |
-| GitHub App Token | Clone, fetch, push | Brokered to credential helper | All repos where App is installed |
-| User OAuth Token | Create PRs         | Server-only                   | User's accessible repos          |
-
-Session sandboxes, including snapshot restores, do not receive `GITHUB_TOKEN`, `GITHUB_APP_TOKEN`,
-or `VCS_CLONE_TOKEN` for normal git operations. Git invokes the sandbox credential helper, which
-calls `/sessions/:id/scm-credentials` with the sandbox auth token and receives short-lived
-credentials on demand. The helper preserves the existing installation-wide model by serving
-credentials for HTTPS git requests to the configured SCM host, including setup/start hooks that
-clone auxiliary private repos. This avoids stale embedded credentials in long-running sessions and
-persistent resumes. One-shot image builds still receive `VCS_CLONE_TOKEN` because they have no
-session to broker through.
-
-If a `create-pr` request is triggered by a participant without a user OAuth token (for example,
-Slack-created or Google-login sessions), the sandbox can still push the branch with brokered GitHub
-App credentials and the control plane returns a manual GitHub `pull/new` URL instead of failing the
-request.
+The helper caches the returned password on disk; Modal filesystem snapshots can retain that cache.
+Grant changes constrain subsequent credential resolution, not already-issued tokens. Image builds
+receive `VCS_CLONE_TOKEN` because they have no session broker. For the authoritative delivery,
+provider, user-identity, and snapshot boundaries, see
+[Repository and Credential Boundaries](../../docs/AUTH.md#repository-and-credential-boundaries).
 
 ### Why This Matters
 
-- **No per-user repo access validation**: When a session is created, the system does not verify that
-  the user has access to the requested repository
+- **No personal GitHub access comparison**: Session creation checks Open-Inspect permissions and
+  resource access, not the user's personal GitHub repository permissions
 - **Shared GitHub App installation**: A single `GITHUB_APP_INSTALLATION_ID` is used for all users
-- **Trust boundary is the organization**: All users with access to the web app can work with any
-  repository the GitHub App is installed on
+- **Trust boundary is the organization**: Teams and session visibility add internal access controls,
+  not multi-tenant isolation. See [Authentication and Authorization](../../docs/AUTH.md).
 
 ### Configuration
 

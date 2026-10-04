@@ -4,10 +4,17 @@ description: Start OpenInspect sessions from Slack channels and DMs, continue th
 audience: user
 owner: integrations
 status: published
-lastReviewed: "2026-09-28"
+lastReviewed: "2026-10-03"
 relatedCode:
   - docs/integrations/SLACK.md
   - packages/shared/src/types/integrations.ts
+  - packages/control-plane/src/routes/channel-bindings.ts
+  - packages/control-plane/src/routes/team-channel-bindings.ts
+  - packages/control-plane/src/routes/team-ownership.ts
+  - packages/control-plane/src/authorization/slack-post-gate.ts
+  - packages/control-plane/src/authorization/teams-enforcement.ts
+  - packages/slack-bot/src/events/message-handler.ts
+  - packages/slack-bot/src/classifier/catalog.ts
   - packages/web/src/components/settings/integrations/slack-integration-settings.tsx
   - docs/HOW_IT_WORKS.md
 ---
@@ -146,7 +153,7 @@ The agent receives the forwarded text with links as written, its images (same si
 
 ### Target dropdowns
 
-Dropdowns show the repositories and environments accessible to the deployment plus **No repository** (an empty sandbox). They belong to the pending thread, not to a personal repository list. OpenInspect keeps the original request for one hour; once you choose, the session starts with that request and thread context.
+Dropdowns show the repositories and environments available in the channel's scope plus **No repository** (an empty sandbox). They belong to the pending thread, not to a personal GitHub repository list. OpenInspect keeps the original request for one hour; once you choose, it rechecks the binding and starts with that request and thread context. A picker saved before a channel changes teams cannot launch into the new team.
 
 In shared channels, only the original requester can choose. If the dropdown has expired, send the request again and name the target.
 
@@ -155,6 +162,8 @@ In shared channels, only the original requester can choose. If the dropdown has 
 A top-level request starts a thread. For interactive sessions, reply in that thread with an `@mention` in channels; in a DM thread, reply without a mention. Text, images, and forwarded messages on unmentioned channel replies are not delivered as interactive follow-ups. Slack message automations handle unmentioned channel text separately.
 
 The thread stays connected to the session for about 7 days. Replying after that, or outside the thread, may start target selection again and create a new session.
+
+A failure on an existing mapping does not create a replacement session. A missing session or a channel-scope refusal produces a closed-thread message. On a follow-up 404, the bot separately checks publication access and marks the mapping closed only if that check confirms denial. An actor-specific 403 does not close the thread for other authorized people; neither does an actor-concealed 404 when publication to the channel remains allowed. The bot also rechecks bindings on mapped follow-ups. A closed mapping can reopen when its original binding matches again and publication is allowed.
 
 Each follow-up includes up to ten recent thread messages posted after the previous prompt and before the new one, encoded as untrusted records with speaker and timestamp. The bot adds an eyes reaction while it works on a follow-up and removes it when the completion reply is posted.
 
@@ -189,6 +198,20 @@ The model list comes from the models enabled under Settings › Models. Branch p
 
 Administrators manage these workspace-wide Slack settings.
 
+### Team channel bindings
+
+A team lead or workspace administrator binds channels in the team's **Channels** tab. **Primary** marks its main Slack binding; **Source** adds another channel that routes new interactive sessions to that team. Both determine session ownership, not the repository or an automatic notification destination. A channel belongs to only one team, and a team has at most one primary binding per provider. The bot must already be a member; externally shared Slack Connect channels cannot be bound.
+
+The integration policy `unboundChannels` defaults to `workspace`: unbound channels start workspace-owned sessions. `reject` refuses new interactive requests in unbound channels until a binding is added. Unbound DMs remain workspace-scoped under either policy. Lookup failures stop the request rather than silently changing its ownership.
+
+Classification and pickers use live channel- and actor-scoped catalogs. A bound team's catalog requires membership or workspace-admin access and is filtered by repository grants and eligible environments. Creating a team-owned session checks actual team membership and the selected target's grants. Being in the Slack channel does not make you a member of the OpenInspect team; routing rules do not grant access.
+
+<Callout type="warn" title="Team enforcement rollout">
+  `TEAMS_ENFORCEMENT` still defaults to `shadow`, not `on`. Do not assume full team-read isolation
+  in that mode. Binding, creation, catalog, Slack follow-up channel, private-access, and publication
+  checks described here do not mean every team read is enforced.
+</Callout>
+
 ### Routing rules
 
 Map keywords to repositories or environments under **Routing rules** so common requests route without guessing. With `frontend → acme/web-app` and `api → acme/backend`:
@@ -213,17 +236,19 @@ Set workspace-wide instructions under **Session Instructions**. They are appende
 
 ### Agent notifications
 
-Interactive sessions always get their thread replies. Agent notifications are separate: with them enabled, the agent can post an extra message to a channel when you explicitly ask:
+Interactive sessions get thread replies only while publication is allowed. Agent notifications are separate: with them enabled, the agent can post an extra message to a channel when you explicitly ask:
 
 ```text
 When you finish, post a short summary to #eng-updates.
 ```
 
 1. Turn on **Enable agent notifications**.
-2. Invite the OpenInspect bot to every channel agents may post to. Channel membership is the access boundary; remove the bot to remove access.
+2. Invite the OpenInspect bot to every channel agents may post to. Bot membership is necessary, but does not override publication checks.
 3. Optionally add repository overrides to inherit, force on, or force off notifications per repository.
 
 Changes apply to new sessions. Slack can still reject missing, archived, inaccessible, or rate-limited targets.
+
+Private-session output is refused. A channel bound to a different owning team also refuses output, even if the session is workspace-visible. These live checks cover notifications, managed completions, and generated media. An unbound destination is not automatically a cross-team refusal, so bindings are not an outbound allowlist.
 
 The **Mentions policy** setting is workspace-wide and controls direct user mentions like `<@U123>`:
 
@@ -237,14 +262,14 @@ Broadcast tokens (`@channel`, `@here`, `@everyone`, and subteam mentions) are al
 
 ## Channel message triggers
 
-An automation can start a session when someone posts a matching message in a watched channel, with no mention. Those runs take the message text only (attachments and forwarded bodies are not read), and every thread reply continues the same session for 7 days. See [Slack message triggers](/automations/slack-messages) for conditions, setup, and the threat model.
+An automation can start a session when someone posts a matching message in a watched channel, with no mention. Those runs take the message text only (attachments and forwarded bodies are not read), and authorized thread replies can continue the same session for 7 days. Runs retain the automation's saved owning team, not the channel's interactive routing choice. See [Slack message triggers](/automations/slack-messages) for authorization, publication, conditions, and setup.
 
 ## Admin and safety notes
 
 - Slack bot tokens stay server-side and are never sent to sandboxes.
 - Slack requests are verified before OpenInspect acts on them.
-- Slack-created sessions use deployment-level repository access: the repositories shown are those the GitHub App installation can reach, not a per-user list. Slack identity linking is best-effort and does not grant repository access.
-- To restrict what Slack sessions can touch, limit the GitHub App installation and invite the bot only into trusted channels.
+- The source-control installation is the outer repository boundary, not a per-Slack-user GitHub permission list. Team bindings, memberships, and repository grants further constrain team work.
+- Invite the bot only into trusted channels. Identity linking does not itself grant team membership.
 - Bot messages are ignored, so the bot does not respond to itself.
 - Notification text is sanitized and shortened to fit Slack block limits; extremely large raw inputs are rejected.
 

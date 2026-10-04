@@ -61,6 +61,7 @@ export const PERMISSION_IDS = [
   "integrations.read",
   "mcp_servers.manage",
   "mcp_servers.read",
+  "memories.manage_own",
   "models.preferences.manage",
   "provider_accounts.manage",
   "provider_accounts.read",
@@ -157,6 +158,7 @@ const MEMBER_PERMISSIONS = new Set<PermissionId>([
   "sessions.lifecycle",
   "sessions.sandbox_access",
   "skill_profiles.manage_own",
+  "memories.manage_own",
 ]);
 
 /** Validates permission identifiers at API and storage boundaries. */

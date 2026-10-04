@@ -4,7 +4,7 @@ description: Start a session when a pull request, issue, comment, check suite, o
 audience: team-owner
 owner: control-plane
 status: published
-lastReviewed: "2026-09-23"
+lastReviewed: "2026-10-03"
 relatedCode:
   - docs/AUTOMATIONS.md
   - docs/integrations/GITHUB.md
@@ -14,6 +14,9 @@ relatedCode:
   - packages/web/src/components/automations/condition-labels.ts
   - packages/web/src/components/automations/condition-builder.tsx
   - packages/control-plane/src/routes/automation-validation.ts
+  - packages/control-plane/src/automation/github-event-admission.ts
+  - packages/control-plane/src/db/github-automation-store.ts
+  - packages/control-plane/src/scheduler/scheduler.ts
 ---
 
 A GitHub Event automation starts a session when a supported webhook event arrives for its repository and every configured condition passes.
@@ -38,6 +41,20 @@ flowchart TB
 - The repository must be installed on the GitHub App so it appears in the picker.
 
 The GitHub bot's own scope settings (who may trigger bot workflows, and in which repositories) do not gate automations. Automations are matched separately by repository, event type, enabled state, and conditions.
+
+## Team ownership and repository grants
+
+An event run keeps the automation's saved owning team, or workspace ownership. It does not use the triggering sender's memberships to choose a team. That routing is specific to direct GitHub mentions.
+
+Matching uses GitHub's numeric repository ID, not just its `owner/name`. A rename preserves identity, and the run uses the current owner and repository name from the event. Each candidate is checked again before admission for its enabled state, event type, conditions, and exactly one matching repository.
+
+A team-owned automation needs a current repository or installation grant covering that ID. Grant coverage is checked during admission and launch; revocation prevents a run even if its conditions match. Restoring the grant allows later events, but does not replay skipped events. Normal automation execution authorization also applies; a valid webhook or an **Actor** condition is not itself a repository grant.
+
+A matching event denied for missing grant coverage is recorded as an `unauthorized` run with reason `repo_not_granted`, without creating a session.
+
+For team-owned automatic reviews, use a GitHub Event automation. The integration setting **Auto-review new PRs** is a separate, deprecated workspace-owned review-on-open path and does not use team mention routing. It is not disabled merely because it is deprecated.
+
+The runtime default for `TEAMS_ENFORCEMENT` remains `shadow`, not `on`. These automation admission checks do not imply full team-read isolation for the resulting session.
 
 ## One repository, one event type
 

@@ -27,10 +27,12 @@ const teamMocks = vi.hoisted(() => ({
   error: undefined as unknown,
   setActiveTeam: vi.fn(),
   roleKey: "member",
+  canListAllTeams: false,
   realContext: false,
 }));
 
-vi.mock("@/hooks/use-teams", () => ({
+vi.mock("@/hooks/use-teams", async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
   useMeTeams: () => ({
     teams: [
       { id: "team_alpha", name: "Alpha", role: "member", archivedAt: null },
@@ -39,6 +41,8 @@ vi.mock("@/hooks/use-teams", () => ({
     loading: teamMocks.loading,
     error: teamMocks.error,
     requireTeamOnCreate: false,
+    canListAllTeams: teamMocks.canListAllTeams,
+    hasData: !teamMocks.loading && !teamMocks.error,
   }),
 }));
 
@@ -226,6 +230,7 @@ describe("SessionsPage", () => {
     teamMocks.loading = false;
     teamMocks.error = undefined;
     teamMocks.roleKey = "member";
+    teamMocks.canListAllTeams = false;
     teamMocks.setActiveTeam.mockReset();
     teamMocks.realContext = false;
     localStorage.clear();
@@ -568,6 +573,7 @@ describe("SessionsPage", () => {
     (activeTeamId, teamIds, scope, label) => {
       teamMocks.activeTeamId = activeTeamId;
       teamMocks.roleKey = "administrator";
+      teamMocks.canListAllTeams = true;
       mockSearchParamsState.value = new URLSearchParams(
         "q=login&ownerFilter=started&visibility=team"
       );
@@ -620,6 +626,7 @@ describe("SessionsPage", () => {
   it.each(["workspace", "all"])("honors explicit scope=%s over the active team", (scope) => {
     teamMocks.activeTeamId = "team_alpha";
     teamMocks.roleKey = "administrator";
+    teamMocks.canListAllTeams = true;
     mockSearchParamsState.value = new URLSearchParams({ scope });
     render(<SessionsPage />);
     expect(lastQuery()).toMatchObject({ scope, teamIds: undefined });
@@ -793,26 +800,50 @@ describe("SessionsPage", () => {
     rerender(<SessionsPage />);
     expect(mockReplace).toHaveBeenLastCalledWith("/sessions?q=login", { scroll: false });
     teamMocks.roleKey = "administrator";
+    teamMocks.canListAllTeams = true;
     teamMocks.activeTeamId = "all-teams";
     rerender(<SessionsPage />);
     expect(mockReplace).toHaveBeenLastCalledWith("/sessions?q=login&scope=all", { scroll: false });
   });
 
-  it.each(["owner", "administrator", "member"])(
-    "gates All teams by server role %s, not session permissions",
-    (roleKey) => {
+  it.each([
+    ["owner", false],
+    ["administrator", false],
+    ["member", true],
+    ["custom", true],
+  ] as const)(
+    "gates All teams by server capability for role %s with grant %s, not session permissions",
+    (roleKey, canListAllTeams) => {
       teamMocks.roleKey = roleKey;
+      teamMocks.canListAllTeams = canListAllTeams;
       mockPermissions.add("sessions.manage");
       render(<SessionsPage />);
       fireEvent.keyDown(screen.getByRole("combobox", { name: "Team" }), { key: "Enter" });
-      expect(screen.queryByRole("option", { name: "All teams" }) !== null).toBe(
-        roleKey !== "member"
-      );
+      expect(screen.queryByRole("option", { name: "All teams" }) !== null).toBe(canListAllTeams);
       expect(screen.getByRole("option", { name: "Workspace" })).toBeInTheDocument();
       expect(screen.getByRole("option", { name: "All my teams" })).toBeInTheDocument();
       expect(screen.getByRole("option", { name: "Alpha" })).toBeInTheDocument();
     }
   );
+
+  it("uses the normalized denied context grant even for an owner", () => {
+    teamMocks.roleKey = "owner";
+    teamMocks.canListAllTeams = false;
+    mockPermissions.add("sessions.manage");
+    render(<SessionsPage />);
+    fireEvent.keyDown(screen.getByRole("combobox", { name: "Team" }), { key: "Enter" });
+    expect(screen.queryByRole("option", { name: "All teams" })).not.toBeInTheDocument();
+  });
+
+  it("withdraws the All teams filter option after a server revocation", () => {
+    teamMocks.canListAllTeams = true;
+    const { rerender } = render(<SessionsPage />);
+    fireEvent.keyDown(screen.getByRole("combobox", { name: "Team" }), { key: "Enter" });
+    expect(screen.getByRole("option", { name: "All teams" })).toBeInTheDocument();
+    teamMocks.canListAllTeams = false;
+    rerender(<SessionsPage />);
+    expect(screen.queryByRole("option", { name: "All teams" })).not.toBeInTheDocument();
+  });
 
   it("does not fetch a fallback context before active teams load or when they fail", () => {
     teamMocks.loading = true;

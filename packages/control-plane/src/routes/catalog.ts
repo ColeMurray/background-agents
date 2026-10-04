@@ -22,6 +22,7 @@ import { imageBuildRoutes } from "./image-builds";
 import { integrationSettingsRoutes } from "./integration-settings";
 import { keyboardShortcutRoutes } from "./keyboard-shortcuts";
 import { mcpServerRoutes } from "./mcp-servers";
+import { memoryRoutes } from "./memories";
 import { modelPreferencesRoutes } from "./model-preferences";
 import { modelProviderAccountRoutes } from "./model-provider-accounts";
 import { providerRuntimeCredentialRoutes } from "./provider-runtime-credentials";
@@ -104,6 +105,9 @@ export const catalog: readonly RouteModule[] = [
 
   // Personal keyboard shortcuts
   keyboardShortcutRoutes,
+
+  // Personal and shared memories, preferences, and new-session previews
+  memoryRoutes,
 
   // Workspace roles, members, and current-user authorization
   rbacRoutes,

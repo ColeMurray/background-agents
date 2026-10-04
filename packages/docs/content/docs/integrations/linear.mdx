@@ -4,10 +4,18 @@ description: Start OpenInspect sessions by mentioning or assigning the Linear Ag
 audience: user
 owner: integrations
 status: published
-lastReviewed: "2026-09-23"
+lastReviewed: "2026-10-03"
 relatedCode:
   - docs/integrations/LINEAR.md
   - packages/shared/src/types/integrations.ts
+  - packages/control-plane/src/routes/channel-bindings.ts
+  - packages/control-plane/src/routes/team-ownership.ts
+  - packages/control-plane/src/authorization/session-admission.ts
+  - packages/control-plane/src/authorization/teams-enforcement.ts
+  - packages/linear-bot/src/launch-admission.ts
+  - packages/linear-bot/src/control-plane.ts
+  - packages/linear-bot/src/callbacks.ts
+  - terraform/d1/migrations/0083_teams.sql
   - packages/web/src/components/settings/integrations/linear-integration-settings.tsx
   - docs/HOW_IT_WORKS.md
 ---
@@ -107,6 +115,24 @@ Administrators can map Linear projects or teams to repositories, and those mappi
 
 If the resolved repository is outside the Linear **Repository Scope**, Linear shows an error and no session starts.
 
+### Team ownership versus target mappings
+
+A team lead or workspace administrator can bind an external Linear team ID in an OpenInspect team's **Channels** tab. **Primary** marks its main binding for that provider; **Source** also routes new sessions to that team. An external Linear team belongs to only one OpenInspect team, and a team has at most one primary binding per provider. Enter the Linear team ID, not a team name or issue-key prefix. Slack channel discovery is not needed.
+
+Legacy `config:team-repos` and `config:project-repos` mappings select a repository or environment. They do **not** assign OpenInspect team ownership, grant membership, or grant repository access. The teams database migration does not convert those KV mappings into bindings. To adopt team ownership, explicitly add the binding, OpenInspect members, and repository grants; retain any target mappings you still need for target selection. Adding a binding does not reassign existing sessions.
+
+Linear's `unboundChannels` policy defaults to `workspace`: unbound Linear teams start workspace-owned sessions. `reject` asks for a binding instead and creates no session. A failed binding lookup also stops launch instead of silently choosing workspace ownership.
+
+Repository, environment, and resolved integration-setting lookups carry the external Linear team scope. Actor-bearing catalogs require membership or workspace-admin access, and creating a team session checks actual membership and target grants. Failed scoped lookups do not fall back to workspace-wide catalogs. A legacy target mapping cannot make an unavailable target accessible.
+
+Discovery and callback reads can run without a human actor under narrow Linear-bot service permissions, still scoped to the Linear team. That does not impersonate a member or grant arbitrary session creation. Automation-created delegations use the installed app user as the acting identity for creation.
+
+<Callout type="warn" title="Team enforcement rollout">
+  `TEAMS_ENFORCEMENT` remains `shadow` by default, not `on`. Team-read denials can be audited rather
+  than blocked in that mode, so scoped reads alone do not guarantee cross-team output isolation.
+  Private-session access remains enforced.
+</Callout>
+
 ## What Linear shows
 
 | Activity            | What it means                                                   |
@@ -118,6 +144,8 @@ If the resolved repository is outside the Linear **Repository Scope**, Linear sh
 | Completion or error | The session finished, failed, or could not continue             |
 
 When a session starts, Linear receives a **View Session** link. If the agent opens a pull request, Linear receives a **Pull Request** link when the session finishes. Live output, logs, artifacts, and file changes are in the web session.
+
+Completion content is checked before posting. The bot verifies the issue's current Linear team and withholds results if it changed from the recorded launch team or cannot be verified. It then reads events and artifacts without a human actor, scoped to the verified team. Denied or failed reads produce a generic results-withheld error, not session content or a PR link. Older callbacks recover the launch team from a matching issue-session mapping when possible; otherwise they use the verified current team for the scoped read. Team-visibility enforcement on those reads depends on the rollout mode above.
 
 OpenInspect changes an issue's status at most once, when a person starts a session:
 

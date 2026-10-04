@@ -289,6 +289,15 @@ beforeEach(() => {
   mocks.routerPush.mockReset();
   mocks.toastError.mockReset();
   mocks.mutateMock.mockReset();
+  // Radix Checkbox measures itself via ResizeObserver, which jsdom lacks.
+  vi.stubGlobal(
+    "ResizeObserver",
+    class {
+      observe() {}
+      unobserve() {}
+      disconnect() {}
+    }
+  );
   vi.stubGlobal(
     "fetch",
     vi.fn(async (input: RequestInfo | URL) => {

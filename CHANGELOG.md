@@ -4,6 +4,63 @@ New features, integrations, and notable improvements to Open-Inspect — newest 
 
 ## Unreleased
 
+### Teams: Consolidated Release Summary
+
+Teams now provide ownership, membership, repository grants, secrets, and bot routing within one
+trusted workspace. This summary collects the operator-visible Teams changes; the dated entries below
+retain their implementation history.
+
+- **First-team setup:** create a team after bootstrapping the workspace Owner, add members/leads,
+  grant repositories, and verify a team-owned session. Existing workspace-owned resources are not
+  migrated. The creator is the first lead; the last lead cannot leave or be removed. Members can
+  leave with **Remove** on their own row. See [Getting Started](docs/GETTING_STARTED.md).
+- **Ownership and visibility:** sessions support Workspace, Team, and Private visibility and private
+  collaborators. Ownership cannot move between teams or to/from the workspace. Every team-owned
+  non-read session action requires current owning-team membership, even for administrators. Agent
+  child actions and spawns check the active prompt author's membership rather than borrowing the
+  parent owner's identity. Owners' private break-glass reads are audited and do not grant prompting
+  or sandbox access.
+- **Delete rule:** under enforcement, `sessions.delete` also requires session ownership, owning-team
+  lead status, or workspace administrative authority. Team-owned sessions apply the rule in every
+  mode, including current membership; private-session checks also remain enforced in every mode.
+- **Enforcement:** `TEAMS_ENFORCEMENT` still defaults to `shadow`, not `on`. The first-team
+  deployment instructions explicitly enable `on` for a fresh deployment. Existing deployments must
+  review `shadow_denied:*` audit activity before opting in. This documentation update does not flip
+  runtime or Terraform defaults or claim that the shadow audit rollout gate has been completed.
+- **Repository credentials:** GitHub sandbox tokens cover only persisted session repositories,
+  intersected with current grants for team-owned sessions. Include private dependencies in the
+  session target. Issued/cached tokens are not immediately revoked, and filesystem snapshots can
+  retain the credential cache. GitLab retains its deployment-wide PAT. Modal's `github-app` secret
+  is no longer required for fresh or restored sandboxes; the control plane brokers credentials.
+- **Owned resources and secrets:** environments and automations can be team-owned, with scoped
+  discovery and management. Automation creation requires both `automations.create` and
+  `sessions.create`; execution rechecks membership and grants. Team secrets layer between global and
+  target secrets. Team environment builds include them, shared repository images do not, and
+  team-secret changes invalidate affected environment images. Executors can be reassigned through
+  the API; scheduled authorization denial pauses immediately and requires **Resume** after recovery.
+- **Slack routing:** primary/source channel bindings select ownership and scope target discovery.
+  `unboundChannels` defaults to `workspace`; `reject` requires a binding. An interactive follow-up
+  receiving `404` no longer starts a replacement session in the same thread. Confirmed publication
+  denial closes the thread; actor-specific forbidden follow-ups do not close it for other users.
+  Private and mismatched bound-team session publication is refused, including queued media and
+  `slack-notify`. Slack-triggered automations enforce channel ownership.
+- **GitHub routing:** numeric repository IDs drive event automation and mention routing. Mentions
+  prefer a linked PR session's team, then an eligible sender team, then workspace fallback; creation
+  checks still apply. Event automations use their own team/executor and can record neutral
+  `unauthorized` grant denials without starting a session. Auto-review-on-open is deprecated and
+  remains workspace-owned; replace it with a team-owned review automation. Deploy the GitHub bot and
+  control plane together, and reselect legacy automation repositories with unresolved IDs.
+- **Linear routing:** external Linear teams bind through **Teams > Channels**. Its independent
+  `unboundChannels` setting defaults to `workspace`, with `reject` available. Existing target
+  mappings do not become ownership bindings. Scoped catalog/completion reads carry the Linear team
+  coordinate; completion content is withheld when the issue changes teams or the protected read
+  fails. Team-read isolation still depends on enforcement mode.
+- **Discovery and audit:** team pages include Channels alongside owned resources. Session visibility
+  autosaves with confirmation for Team changes and non-private child cascades. Explicit composer
+  team/audience choices persist per user while sidebar context matches. Team/member/grant/binding/
+  secret and session-sharing changes appear in the workspace audit log; there is no team Activity
+  feed, and directory emails are limited to workspace member administrators.
+
 ### Added
 
 Team leads and workspace administrators can bind Linear teams from a team's Channels tab. Linear

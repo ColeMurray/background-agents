@@ -1,6 +1,7 @@
 import { z } from "zod";
 import type { SqlDatabase } from "./sql-database";
 import { SessionAuditStore, type SessionAuditInput } from "./session-audit";
+import { SessionMemorySelectionStore } from "./session-memory-selections";
 import { MAX_D1_QUERY_PARAMETERS } from "./query-limits";
 
 const collaboratorSchema = z.object({ session_id: z.string(), user_id: z.string() });
@@ -65,9 +66,11 @@ export class SessionCollaboratorStore {
          VALUES (?, ?, ?, ?) ON CONFLICT (session_id, user_id) DO NOTHING`
       )
       .bind(sessionId, userId, addedBy, Date.now());
-    const result = audit
-      ? (await this.db.batch([statement, new SessionAuditStore(this.db).bind(audit, true)]))[0]
-      : await statement.run();
+    const [result] = await this.db.batch([
+      statement,
+      ...(audit ? [new SessionAuditStore(this.db).bind(audit, true)] : []),
+      new SessionMemorySelectionStore(this.db).bindRevokePersonalAutoSave(sessionId, userId),
+    ]);
     return result.meta.changes > 0;
   }
 

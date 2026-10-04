@@ -18,6 +18,7 @@ vi.mock("@/hooks/use-active-team", () => ({
   useActiveTeam: () => ({
     activeTeamId: null,
     scope: undefined,
+    canListAllTeams: false,
     teams: [],
     setActiveTeam: vi.fn(),
   }),

@@ -9,7 +9,7 @@ import type { Env } from "../types";
 import type { Logger } from "../logger";
 import type { PermissionId } from "@open-inspect/shared/rbac";
 import type { ServiceName } from "@open-inspect/shared/service-auth";
-import type { TeamCapabilities } from "@open-inspect/shared/types/team-access";
+import type { TeamAdmissionNeed, TeamAdmissionRequirement } from "../routing/team-admission";
 import type { SessionAction } from "@open-inspect/shared";
 import {
   createSourceControlProviderFromEnv,
@@ -46,8 +46,7 @@ export type RouteAuthorizationRequirement =
       operation: "read" | "manage" | "trigger";
       automationIdParam: string;
     }
-  | { kind: "team"; teamIdParam: string; need: keyof TeamCapabilities | "read" | "member" }
-  | { kind: "team"; teamIdParam: string; need: "removeMember"; targetUserIdParam: string }
+  | TeamAdmissionRequirement
   | { kind: "environment"; idParam: string; need: "read" | "manage" | "use" }
   | { kind: "session"; sessionIdParam: string; action: SessionAction; enforceAlways?: boolean };
 
@@ -139,6 +138,7 @@ const AUDITED_ALLOWED_PERMISSIONS = new Set<PermissionId>([
   "sessions.lifecycle",
   "sessions.sandbox_access",
   "skill_profiles.manage_own",
+  "memories.manage_own",
   "skills.manage",
   "workspace.members.manage",
   "workspace.transfer_ownership",
@@ -215,7 +215,7 @@ export function requireEnvironment(
 }
 
 export function requireTeam(
-  need: keyof TeamCapabilities | "read" | "member",
+  need: Exclude<TeamAdmissionNeed, "removeMember">,
   options?: { teamIdParam?: string; auditAllowed?: boolean }
 ): Extract<RouteAuthorization, { kind: "active-user" }> {
   const requirement: RouteAuthorizationRequirement = {
@@ -462,4 +462,18 @@ export async function resolveRepoOrError(
     throw new HttpError("Repository is not installed for the GitHub App", 404);
   }
   return resolved;
+}
+
+/** Installed-repository resolution bound to one request, for policies that receive it as a dependency. */
+export class InstalledRepositoryResolver {
+  constructor(
+    private readonly env: Env,
+    private readonly ctx: RequestContext,
+    private readonly logger: Logger
+  ) {}
+
+  /** The repository's stable identity; throws an HttpError when it is not installed. */
+  resolve(owner: string, name: string): Promise<RepositoryAccessResult> {
+    return resolveRepoOrError(this.env, owner, name, this.ctx, this.logger);
+  }
 }

@@ -1,4 +1,5 @@
 import { DEFAULT_HARNESS, type HarnessId } from "@open-inspect/shared/harnesses";
+import type { SessionMemorySelection } from "../memory/types";
 import {
   type PullRequestSummary,
   type SessionReadAction,
@@ -20,6 +21,7 @@ import {
   sessionModelProviderAuthSchema,
   SUBSCRIPTION_PROVIDER_IDS,
 } from "@open-inspect/shared/types/provider-accounts";
+import type { Pinned } from "../session/pinned";
 import type { SessionSkillManifestInput } from "../session/skill-resolution";
 import {
   assertProviderAuthSelection,
@@ -27,6 +29,7 @@ import {
   type SessionModelProviderAuthInput,
 } from "../model-provider-accounts/provider-auth-contracts";
 import { bulkInsertStatements } from "./bulk-insert";
+import { SessionMemorySelectionStore } from "./session-memory-selections";
 import { SessionStatusProjectionStore } from "./session-status-projection-store";
 import { attachSessionListMetadata } from "./session-list-metadata";
 import { buildSessionListPredicates, type SessionListFilters } from "./session-list-predicates";
@@ -117,10 +120,10 @@ export interface SessionEntry {
 
 /** Declarative fields used only when creating a session index row. */
 export interface CreateSessionCommand extends SessionEntry {
-  /** Resolved manifest to persist atomically with a new top-level session. */
-  skillManifest?: SessionSkillManifestInput;
-  /** Parent manifest to copy atomically for an agent-spawned child. */
-  skillManifestSourceSessionId?: string;
+  /** Memory selection to pin atomically with the session row. */
+  memory?: Pinned<SessionMemorySelection>;
+  /** Managed-skill manifest to pin atomically with the session row. */
+  managedSkills?: Pinned<SessionSkillManifestInput>;
   /** Complete immutable model-provider authentication snapshot. */
   providerAuth?: SessionModelProviderAuthInput[];
   /** Copy access grants with the parent row in the creation batch. */
@@ -214,10 +217,6 @@ export class SessionIndexStore {
   async create(session: CreateSessionCommand): Promise<void> {
     const repository = normalizeSessionRepositoryFields(session);
 
-    if (session.skillManifest && session.skillManifestSourceSessionId) {
-      throw new Error("Session cannot both resolve and copy a managed skill manifest");
-    }
-
     const providers = new Set<string>();
     for (const auth of session.providerAuth ?? []) {
       assertProviderAuthSelection(
@@ -281,11 +280,11 @@ export class SessionIndexStore {
         )
     );
 
-    const manifestStmts = session.skillManifest
-      ? this.bindManifestInserts(session.id, session.skillManifest)
-      : session.skillManifestSourceSessionId
-        ? this.bindManifestCopy(session.id, session.skillManifestSourceSessionId)
-        : [];
+    const manifestStmts = !session.managedSkills
+      ? []
+      : session.managedSkills.kind === "resolved"
+        ? this.bindManifestInserts(session.id, session.managedSkills.value)
+        : this.bindManifestCopy(session.id, session.managedSkills.parentSessionId);
     const providerAuthStmts = (session.providerAuth ?? []).map((auth) =>
       this.db
         .prepare(
@@ -314,6 +313,9 @@ export class SessionIndexStore {
       sessionStmt,
       ...repositoryStmts,
       ...manifestStmts,
+      ...(session.memory
+        ? new SessionMemorySelectionStore(this.db).bindPinned(session.id, session.memory)
+        : []),
       ...providerAuthStmts,
       ...(session.collaboratorSourceSessionId
         ? [

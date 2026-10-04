@@ -32,6 +32,7 @@ if TYPE_CHECKING:
     from .docker_service import DockerService
     from .harness.base import HarnessProcessOwner
     from .managed_skills import ManagedSkillsMaterializer
+    from .memories import MemoryMaterializer
     from .repository_boot import RepositoryBoot, RepositoryBootResult
     from .web_terminal import WebTerminal
 
@@ -72,6 +73,7 @@ class SandboxSupervisor:
         shutdown_event: asyncio.Event,
         log: Any,
         *,
+        memory: MemoryMaterializer | None = None,
         boot_events: BootEventLog | None = None,
         docker_service: DockerService | None = None,
     ) -> None:
@@ -99,6 +101,7 @@ class SandboxSupervisor:
         self.code_server = code_server
         self.web_terminal = web_terminal
         self.browser_desktop = browser_desktop
+        self.memory = memory
         self.managed_skills = managed_skills
         self.shutdown_event = shutdown_event
         self.log = log
@@ -624,6 +627,10 @@ class SandboxSupervisor:
         if self.managed_skills is not None:
             with self.boot_events.phase_scope("skills"):
                 await self.managed_skills.materialize(boot_result.repositories, boot_result.workdir)
+
+        if self.memory is not None:
+            with self.boot_events.phase_scope("memory"):
+                await self.memory.materialize()
 
         try:
             await self.code_server.start(boot_result.workdir)
