@@ -113,8 +113,8 @@ collaborator picker are shown only to viewers with `workspace.members.read`.
 A team's session overview is available to its members and workspace Owners and Administrators, still
 subject to session visibility. Team tabs appear according to the viewer's capabilities. Team
 operations are recorded in the workspace audit log, which `workspace.audit.read` holders can filter
-by any team. Sidebar and composer team selections only narrow what is shown; they never widen
-access.
+by any team. Sidebar team selections only narrow which readable sessions are listed. The new-session
+composer's team and visibility, by contrast, set the created session's ownership and audience.
 
 ### Session Visibility
 
@@ -141,8 +141,9 @@ All rows also require session read permission.
   the session owner or a workspace Owner can add or remove other collaborators. On a team-owned
   session, collaborators must be current team members (others are rejected with `not_team_member`),
   and leaving the team ends their access.
-- **Owners and participants are attribution, not access.** A session's owner is its creator, not its
-  team. Runtime participants and the **Mine** filter do not grant or limit access.
+- **Session owners and participants differ.** A session's owner is its creator, not its team, and
+  can read it even when private (with session read permission). Runtime participants and the
+  **Mine** filter are attribution and discovery only; they do not grant or limit access.
 
 Each action also needs its own permission: prompting needs collaboration, sandbox use needs sandbox
 access, and lifecycle operations need lifecycle permission. Deleting a team-owned session, or any
@@ -166,7 +167,8 @@ Team leads and workspace Owners/Administrators manage repository grants in the t
 tab. A team has either installation-wide access or named grants by repository ID, and no grants by
 default. Repository-backed team sessions without covering grants fail with
 `target_team_missing_grant`; repository-less team sessions need no grants. Removing a grant narrows
-future sandbox credentials but does not revoke issued tokens.
+future GitHub sandbox credentials but does not revoke issued tokens; GitLab's deployment PAT is
+never narrowed.
 
 Repository skills, secrets, and image builds remain workspace-level resources. Once any team grants
 a repository, using them requires membership in an active granting team (lead for repository
@@ -216,7 +218,8 @@ Session access is enforced on four paths:
 - **HTTP item routes** authorize against the stored session and return a non-enumerating `404` for
   hidden sessions.
 - **Lists and aggregates**, including search, inbox, bulk export, and analytics, filter by
-  visibility before returning results.
+  visibility before returning results. Administrative analytics can include an unattributed total
+  cost of private sessions without exposing the sessions.
 - **Durable Object connections** recheck subscriptions and commands against the current session.
 - **Sandbox access** is a separate action; being able to read a session does not grant its sandbox.
 
@@ -341,17 +344,19 @@ rejects them (`reject`).
 In every enforcement mode, actorless bot reads scoped to an unbound channel or Linear team see only
 workspace-owned, non-private sessions, so unbinding immediately revokes access to that team's
 sessions. Slack never posts private sessions or posts team-owned sessions to a channel not bound to
-that team; refused threads are closed without session content. Linear withholds completion results
-if the issue has moved to another Linear team, and its other bot reads follow `TEAMS_ENFORCEMENT`.
-See [Slack](integrations/SLACK.md) and [Linear](integrations/LINEAR.md).
+that team; confirmed publication denials close the thread without session content, while a follow-up
+refused for one user does not close it for others. Linear withholds completion results if the issue
+has moved to another Linear team, and its other bot reads follow `TEAMS_ENFORCEMENT`. See
+[Slack](integrations/SLACK.md) and [Linear](integrations/LINEAR.md).
 
 ### GitHub Routing
 
 GitHub routes by numeric repository ID rather than channel bindings. Event automations run as their
 executor for their owning team, which must still hold a grant for the repository. Mentions use the
-linked PR session's team, then a team of the sender that holds a grant, then workspace ownership.
-Routing never bypasses session-creation checks or the require-team policy. Deprecated
-auto-review-on-open remains workspace-owned; use a team-owned GitHub Event automation instead. See
+linked PR session's team, then a team of the sender that holds a grant (broken by their most recent
+session when several qualify), then workspace ownership when neither resolves. Routing never
+bypasses session-creation checks or the require-team policy. Deprecated auto-review-on-open remains
+workspace-owned; use a team-owned GitHub Event automation instead. See
 [GitHub](integrations/GITHUB.md).
 
 ## Suspension
