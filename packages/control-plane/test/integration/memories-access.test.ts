@@ -7,7 +7,7 @@ import { createCloudflareEnv } from "../../src/cloudflare/platform";
 import { memoryTargetForTest, seedMemorySession } from "./memory-test-helpers";
 import { SessionCollaboratorStore } from "../../src/db/session-collaborators";
 import type { MemoryPartition } from "../../src/memory/partition";
-import { resolveSessionMemory } from "../../src/memory/resolve-session-memory";
+import { createSessionMemoryResolver } from "../../src/memory/session-memory-resolver-factory";
 import { GitHubSourceControlProvider } from "../../src/source-control/providers/github-provider";
 import { cleanD1Tables } from "./cleanup";
 import { initNamedSessionDO, routeRequest, seedActiveUser, seedSandboxAuthHash } from "./helpers";
@@ -210,8 +210,7 @@ describe("memory shared-scope authorization", () => {
     expect(await preview.json()).toMatchObject({ items: [] });
     expect(
       (
-        await resolveSessionMemory(
-          env.DB,
+        await createSessionMemoryResolver(env.DB).resolve(
           memoryTargetForTest({ userId: MEMBER, repositories: [{ ...repo, repoId: 456 }] })
         )
       ).items

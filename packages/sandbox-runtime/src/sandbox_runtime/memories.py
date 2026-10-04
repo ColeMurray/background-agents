@@ -1,8 +1,9 @@
 """Materialize pinned session memory before either agent harness starts."""
 
 import json
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Final, TypedDict, cast
+from typing import Any, Final, Protocol, TypedDict, cast
 from urllib.parse import quote
 
 import httpx
@@ -59,8 +60,16 @@ def append_memory(guidance: str | None, config_dir: Path) -> str | None:
     return f"{guidance}\n\n{text}" if guidance else text
 
 
-def _validate_response(body: bytes) -> tuple[str, str]:
-    """Return ``(manifestSha256, rendered)`` from an untrusted versioned response."""
+@dataclass(frozen=True)
+class SessionMemoryInstallation:
+    """A session's pinned memory, rendered by the control plane for its harness."""
+
+    manifest_sha256: str
+    rendered: str
+
+
+def _validate_installation(body: bytes, max_rendered_chars: int) -> SessionMemoryInstallation:
+    """Parse an untrusted versioned installation response."""
     try:
         payload = json.loads(body)
     except (ValueError, UnicodeError) as error:
@@ -74,47 +83,36 @@ def _validate_response(body: bytes) -> tuple[str, str]:
     if (
         not isinstance(manifest_sha256, str)
         or not isinstance(rendered, str)
-        or len(rendered) > MEMORY_TOOL_SPECS["limits"]["renderedChars"]
+        or len(rendered) > max_rendered_chars
     ):
         raise RuntimeError("Invalid rendered session memory")
-    return manifest_sha256, rendered
+    return SessionMemoryInstallation(manifest_sha256, rendered)
 
 
-class MemoryMaterializer:
-    """Install control-plane-rendered context using credentials bound to one session.
-
-    Boot must finish materialization before starting either harness. Restored files
-    are not trusted: each call clears old context before fetching the pinned selection.
-    """
+class SessionMemoryClient:
+    """Fetch one session's memory installation with credentials bound to that session."""
 
     def __init__(
         self,
         control_plane_url: str,
         session_id: str,
         sandbox_token: str,
-        config_dir: Path,
-        log: Any,
         *,
+        max_rendered_chars: int,
         transport: httpx.AsyncBaseTransport | None = None,
     ) -> None:
         self.url = (
             f"{control_plane_url.rstrip('/')}/sessions/{quote(session_id, safe='')}/sandbox-memory"
         )
         self.headers = {"Authorization": f"Bearer {sandbox_token}"}
-        self.destination = memory_path(config_dir)
-        self.log = log
+        self.max_rendered_chars = max_rendered_chars
         self.transport = transport
 
-    async def materialize(self) -> None:
-        """Replace context atomically with an owner-readable file, or leave no file.
+    async def fetch_installation(self) -> SessionMemoryInstallation:
+        """Retry transient failures under the shared control-plane fetch policy.
 
-        Transient failures retry under the shared control-plane fetch policy; any
-        other failure propagates to fail the memory boot phase.
+        Raises RuntimeError once the fetch fails permanently or the payload is invalid.
         """
-        # A restored image may contain another session's context. Never retain it
-        # on an empty response, failed fetch, or malformed payload.
-        self.destination.unlink(missing_ok=True)
-        remove_abandoned_staging(self.destination)
         try:
             body = await fetch_bounded(
                 self.url,
@@ -125,10 +123,42 @@ class MemoryMaterializer:
             )
         except (ResponseTooLargeError, httpx.HTTPError, OSError) as error:
             raise RuntimeError("Session memory could not be loaded") from error
-        manifest_sha256, rendered = _validate_response(body)
-        if rendered:
-            atomic_write_private(self.destination, rendered)
+        return _validate_installation(body, self.max_rendered_chars)
+
+
+class MemoryInstallationSource(Protocol):
+    """Where the materializer gets a session's rendered memory."""
+
+    async def fetch_installation(self) -> SessionMemoryInstallation: ...
+
+
+class MemoryMaterializer:
+    """Install control-plane-rendered context before either harness starts.
+
+    Boot must finish materialization before starting either harness. Restored files
+    are not trusted: each call clears old context before fetching the pinned selection.
+    """
+
+    def __init__(self, client: MemoryInstallationSource, destination: Path, log: Any) -> None:
+        self.client = client
+        self.destination = destination
+        self.log = log
+
+    async def materialize(self) -> None:
+        """Replace context atomically with an owner-readable file, or leave no file.
+
+        Any fetch or validation failure propagates to fail the memory boot phase.
+        """
+        # A restored image may contain another session's context. Never retain it
+        # on an empty response, failed fetch, or malformed payload.
+        self.destination.unlink(missing_ok=True)
+        remove_abandoned_staging(self.destination)
+        installation = await self.client.fetch_installation()
+        if installation.rendered:
+            atomic_write_private(self.destination, installation.rendered)
         # Never log memory text; the manifest digest identifies the pinned selection.
         self.log.info(
-            "memory.materialized", manifest_sha256=manifest_sha256, rendered_chars=len(rendered)
+            "memory.materialized",
+            manifest_sha256=installation.manifest_sha256,
+            rendered_chars=len(installation.rendered),
         )

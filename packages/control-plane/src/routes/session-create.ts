@@ -27,7 +27,7 @@ import { resolveSessionScopedSettings } from "../session/integration-settings-re
 import { resolveManagedSkills, SkillResolutionError } from "../session/skill-resolution";
 import { resolvedPin } from "../session/pinned";
 import { createSharedMemoryAccess } from "../authorization/memory-access-factory";
-import { resolveSessionMemory } from "../memory/resolve-session-memory";
+import { createSessionMemoryResolver } from "../memory/session-memory-resolver-factory";
 import type { Env } from "../types";
 import { resolveSessionProviderAuth } from "../session/provider-account-resolution";
 import { ProviderAccountSelectionPolicyError } from "../model-provider-accounts/selection-policy";
@@ -293,8 +293,7 @@ export async function handleCreateSession(
     repositories: scopeMembers,
     environmentId,
   });
-  const memoryManifest = await resolveSessionMemory(
-    ctx.db,
+  const memoryManifest = await createSessionMemoryResolver(ctx.db).resolve(
     memoryTarget,
     body.includePersonalMemories
   );

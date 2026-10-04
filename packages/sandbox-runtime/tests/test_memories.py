@@ -13,6 +13,8 @@ from sandbox_runtime.harness.claude_tools import (
 from sandbox_runtime.memories import (
     MEMORY_TOOL_SPECS,
     MemoryMaterializer,
+    SessionMemoryClient,
+    SessionMemoryInstallation,
     append_memory,
     memory_text,
 )
@@ -25,14 +27,14 @@ def installation(rendered: object) -> dict:
 
 
 def materializer(path: Path, handler: object) -> MemoryMaterializer:
-    return MemoryMaterializer(
+    client = SessionMemoryClient(
         "https://control.test",
         "session/a",
         "test-token",
-        path,
-        MagicMock(),
+        max_rendered_chars=MEMORY_TOOL_SPECS["limits"]["renderedChars"],
         transport=httpx.MockTransport(handler),
     )
+    return MemoryMaterializer(client, path / "oi-memory.md", MagicMock())
 
 
 def tool_client(tmp_path: Path, handler: object) -> ControlPlaneToolClient:
@@ -334,3 +336,31 @@ async def test_both_harnesses_receive_exact_memory_and_empty_parity(tmp_path, mo
     ].system_prompt_append == "Workspace guidance (AGENTS.md):\n\nRepository guidance" + (
         "\n\n" + text if text else ""
     )
+
+
+class FakeInstallationSource:
+    def __init__(self, result: SessionMemoryInstallation | Exception) -> None:
+        self.result = result
+
+    async def fetch_installation(self) -> SessionMemoryInstallation:
+        if isinstance(self.result, Exception):
+            raise self.result
+        return self.result
+
+
+async def test_materializer_installs_from_any_injected_source(tmp_path: Path) -> None:
+    destination = tmp_path / "oi-memory.md"
+    destination.write_text("stale")
+    log = MagicMock()
+    source = FakeInstallationSource(SessionMemoryInstallation(MANIFEST_SHA256, "pinned\n"))
+    await MemoryMaterializer(source, destination, log).materialize()
+    assert destination.read_text() == "pinned\n"
+    log.info.assert_called_once_with(
+        "memory.materialized", manifest_sha256=MANIFEST_SHA256, rendered_chars=7
+    )
+
+    destination.write_text("stale")
+    failing = FakeInstallationSource(RuntimeError("Session memory could not be loaded"))
+    with pytest.raises(RuntimeError):
+        await MemoryMaterializer(failing, destination, log).materialize()
+    assert not destination.exists()

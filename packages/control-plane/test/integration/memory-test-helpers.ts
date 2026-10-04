@@ -4,7 +4,7 @@ import type { SessionStatus } from "@open-inspect/shared/types/sessions";
 import type { SessionVisibility } from "@open-inspect/shared/types/teams";
 import { SessionIndexStore } from "../../src/db/session-index";
 import type { AuthorizedMemoryTarget } from "../../src/authorization/memory-access";
-import { resolveSessionMemory } from "../../src/memory/resolve-session-memory";
+import { createSessionMemoryResolver } from "../../src/memory/session-memory-resolver-factory";
 import { inheritedPin, resolvedPin } from "../../src/session/pinned";
 
 interface MemorySessionOptions {
@@ -66,8 +66,7 @@ export async function seedMemorySession(id: string, options: MemorySessionOption
       ? { parentSessionId: options.parentSessionId, memory: inheritedPin(options.parentSessionId) }
       : {
           memory: resolvedPin(
-            await resolveSessionMemory(
-              env.DB,
+            await createSessionMemoryResolver(env.DB).resolve(
               memoryTargetForTest({ userId: options.userId, repositories, environmentId }),
               options.includePersonalMemories ?? true
             )

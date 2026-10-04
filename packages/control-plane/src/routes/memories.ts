@@ -28,7 +28,7 @@ import { MemoryPreferenceStore } from "../db/memory-preferences";
 import { MemoryRecordStore } from "../db/memory-records";
 import { toMemoryDto } from "../memory/dto";
 import { partitionScope } from "../memory/partition";
-import { resolveSessionMemory } from "../memory/resolve-session-memory";
+import { createSessionMemoryResolver } from "../memory/session-memory-resolver-factory";
 import type { MemoryActor, MemoryRecord } from "../memory/types";
 import { admit, dispatch } from "../routing/admit";
 import type { ControlPlaneHonoEnv } from "../routing/hono-env";
@@ -244,7 +244,9 @@ async function preview(request: Request, env: Env, _params: object, ctx: UserRou
     repositories: resolved,
     environmentId: body.environmentId ?? null,
   });
-  return json(await resolveSessionMemory(ctx.db, target, body.includePersonalMemories));
+  return json(
+    await createSessionMemoryResolver(ctx.db).resolve(target, body.includePersonalMemories)
+  );
 }
 
 /** Read only the admitted principal's canonical personal-memory default. */

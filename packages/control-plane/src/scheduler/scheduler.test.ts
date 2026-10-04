@@ -1,5 +1,5 @@
-vi.mock("../memory/resolve-session-memory", () => ({
-  resolveSessionMemory: vi.fn(async () => ({
+const mockResolveSessionMemory = vi.hoisted(() =>
+  vi.fn(async () => ({
     selectionVersion: 1,
     manifestSha256: "0".repeat(64),
     resolvedAt: 1,
@@ -10,7 +10,10 @@ vi.mock("../memory/resolve-session-memory", () => ({
     estimatedTokens: 0,
     truncatedCount: 0,
     items: [],
-  })),
+  }))
+);
+vi.mock("../memory/session-memory-resolver-factory", () => ({
+  createSessionMemoryResolver: () => ({ resolve: mockResolveSessionMemory }),
 }));
 const mockAuthorizeMemoryTarget = vi.hoisted(() => vi.fn(async (target: object) => target));
 vi.mock("../authorization/memory-access-factory", () => ({
@@ -24,7 +27,6 @@ vi.mock("../authorization/memory-access-factory", () => ({
  * test/integration/automation-invocations.test.ts.
  */
 
-import { resolveSessionMemory } from "../memory/resolve-session-memory";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { createTestBackgroundTasks } from "../background-tasks.test-support";
 import type { Env } from "../types";
@@ -630,7 +632,7 @@ describe("Scheduler", () => {
       expect(mockAuthorizeMemoryTarget).toHaveBeenCalledWith(
         expect.objectContaining({ userId: sampleAutomation.user_id, ownerTeamId: null })
       );
-      expect(resolveSessionMemory).toHaveBeenCalled();
+      expect(mockResolveSessionMemory).toHaveBeenCalled();
 
       expect(mockStore.insertInvocationGuarded).toHaveBeenCalledTimes(1);
       const params = mockStore.insertInvocationGuarded.mock.calls[0][0];

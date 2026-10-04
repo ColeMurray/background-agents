@@ -3,7 +3,7 @@ import { env } from "cloudflare:test";
 import type { MemoryContent } from "@open-inspect/shared/types/memories";
 import { MemoryRecordStore, type NewMemory } from "../../src/db/memory-records";
 import type { MemoryPartition } from "../../src/memory/partition";
-import { resolveSessionMemory } from "../../src/memory/resolve-session-memory";
+import { createSessionMemoryResolver } from "../../src/memory/session-memory-resolver-factory";
 import type { MemoryActor } from "../../src/memory/types";
 import { cleanD1Tables } from "./cleanup";
 import { memoryTargetForTest, seedMemorySession } from "./memory-test-helpers";
@@ -60,8 +60,7 @@ describe("memory persistence", () => {
         .filter((candidate) => candidate.memoryType === "fact")
         .every((candidate) => candidate.content === null)
     ).toBe(true);
-    const manifest = await resolveSessionMemory(
-      env.DB,
+    const manifest = await createSessionMemoryResolver(env.DB).resolve(
       memoryTargetForTest({ userId: human.userId }),
       true
     );

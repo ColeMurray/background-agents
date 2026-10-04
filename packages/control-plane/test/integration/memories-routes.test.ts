@@ -10,7 +10,7 @@ import { MemoryRecordStore } from "../../src/db/memory-records";
 import { mergeUsers } from "../../src/db/user-merge";
 import { memoryTargetForTest, seedMemorySession } from "./memory-test-helpers";
 import { SessionMemorySelectionStore } from "../../src/db/session-memory-selections";
-import { resolveSessionMemory } from "../../src/memory/resolve-session-memory";
+import { createSessionMemoryResolver } from "../../src/memory/session-memory-resolver-factory";
 import { cleanD1Tables } from "./cleanup";
 import { initNamedSessionDO, seedActiveUser, seedSandboxAuthHash, serviceFetch } from "./helpers";
 
@@ -169,7 +169,8 @@ describe("memory HTTP lifecycle and session boundaries", () => {
       reason: "Outdated",
     });
     expect(
-      (await resolveSessionMemory(env.DB, memoryTargetForTest({ userId: OWNER }))).items
+      (await createSessionMemoryResolver(env.DB).resolve(memoryTargetForTest({ userId: OWNER })))
+        .items
     ).toHaveLength(0);
   });
   it("does not live-expand pinned, revised, or unpinned directives", async () => {

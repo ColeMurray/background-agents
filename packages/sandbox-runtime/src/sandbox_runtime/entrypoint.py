@@ -26,7 +26,7 @@ from .image_build_context_start import (
 from .image_environment import apply_image_environment
 from .log_config import configure_logging, get_logger
 from .managed_skills import ManagedSkillsClient, ManagedSkillsMaterializer
-from .memories import MemoryMaterializer
+from .memories import MEMORY_TOOL_SPECS, MemoryMaterializer, SessionMemoryClient, memory_path
 from .modal_image_build_start import MODAL_IMAGE_BUILD_START_ARGUMENT, run_modal_image_build
 from .opencode_server import OpenCodeServer, resolve_opencode_global_config_dir
 from .repository_boot import RepositoryBoot
@@ -107,10 +107,13 @@ def _build_memory(
         log.info("memory.disabled", reason="no_control_plane_session")
         return None
     return MemoryMaterializer(
-        config.control_plane_url,
-        config.session_id,
-        config.sandbox_token,
-        harness_config_dir(config.harness, claude_config_dir),
+        SessionMemoryClient(
+            config.control_plane_url,
+            config.session_id,
+            config.sandbox_token,
+            max_rendered_chars=MEMORY_TOOL_SPECS["limits"]["renderedChars"],
+        ),
+        memory_path(harness_config_dir(config.harness, claude_config_dir)),
         log,
     )
 

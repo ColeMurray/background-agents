@@ -15,12 +15,12 @@ from urllib.parse import quote
 
 import httpx
 
-from ..memories import MEMORY_TOOL_SPECS, MemoryToolSpec
 from .tool_results import error_result, error_text, text_result
 
 if TYPE_CHECKING:
-    from collections.abc import Mapping
+    from collections.abc import Mapping, Sequence
 
+    from ..memories import MemoryToolSpec
     from .claude_tools import ControlPlaneToolClient
 
 _PATH_PARAM: Final = re.compile(r"\{(\w+)\}")
@@ -29,8 +29,9 @@ _PATH_PARAM: Final = re.compile(r"\{(\w+)\}")
 class MemoryTools:
     """One generic handler for every memory endpoint; ``build`` binds it to each spec."""
 
-    def __init__(self, client: ControlPlaneToolClient) -> None:
+    def __init__(self, client: ControlPlaneToolClient, specs: Sequence[MemoryToolSpec]) -> None:
         self.client = client
+        self.specs = specs
 
     async def execute(self, spec: MemoryToolSpec, args: Mapping[str, Any]) -> dict[str, Any]:
         name = spec["name"]
@@ -56,5 +57,5 @@ class MemoryTools:
             tool(spec["name"], spec["description"], spec["inputSchema"])(
                 functools.partial(self.execute, spec)
             )
-            for spec in MEMORY_TOOL_SPECS["tools"]
+            for spec in self.specs
         ]

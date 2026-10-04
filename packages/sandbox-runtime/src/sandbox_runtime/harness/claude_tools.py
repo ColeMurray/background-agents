@@ -22,6 +22,7 @@ from urllib.parse import quote, urlencode
 
 import httpx
 
+from ..memories import MEMORY_TOOL_SPECS
 from ..repo_config import load_repo_manifest
 from .memory_tools import MemoryTools
 from .tool_results import error_text, text_result
@@ -932,7 +933,7 @@ def build_tools(client: ControlPlaneToolClient) -> list[Any]:
             },
         )(handlers.upload_media)
     )
-    tools.extend(MemoryTools(client).build())
+    tools.extend(MemoryTools(client, MEMORY_TOOL_SPECS["tools"]).build())
     return tools
 
 

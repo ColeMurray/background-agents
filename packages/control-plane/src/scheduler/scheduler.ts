@@ -87,7 +87,7 @@ import { MAX_IMAGE_BUILD_PROVIDER_SESSION_TIMEOUT_MS } from "../image-builds/tim
 import { resolveManagedSkills } from "../session/skill-resolution";
 import { resolvedPin } from "../session/pinned";
 import { createSharedMemoryAccess } from "../authorization/memory-access-factory";
-import { resolveSessionMemory } from "../memory/resolve-session-memory";
+import { createSessionMemoryResolver } from "../memory/session-memory-resolver-factory";
 import type { EnqueuePromptRequest } from "../session/enqueue-prompt-contract";
 import { resolveAutomationRepositories } from "../automation/repository";
 import {
@@ -1771,7 +1771,7 @@ export class Scheduler {
     });
 
     const sessionInput: SessionInitInput = {
-      memory: resolvedPin(await resolveSessionMemory(this.db, memoryTarget)),
+      memory: resolvedPin(await createSessionMemoryResolver(this.db).resolve(memoryTarget)),
       ownerTeamId: automation.owner_team_id,
       visibility: team?.defaultVisibility ?? "workspace",
       sessionId,
