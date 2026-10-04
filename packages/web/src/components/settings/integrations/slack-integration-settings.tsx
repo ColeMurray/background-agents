@@ -163,7 +163,7 @@ export function SlackIntegrationSettings() {
       </SettingsCardSection>
 
       <fieldset disabled={!canManageGlobal} className="min-w-0">
-        <GlobalSettingsSection settings={settings} />
+        <GlobalSettingsSection settings={settings} canManageGlobal={canManageGlobal} />
       </fieldset>
 
       <fieldset disabled={!canManageGlobal} className="min-w-0">
@@ -188,7 +188,13 @@ export function SlackIntegrationSettings() {
   );
 }
 
-function GlobalSettingsSection({ settings }: { settings: SlackGlobalConfig | null | undefined }) {
+function GlobalSettingsSection({
+  settings,
+  canManageGlobal,
+}: {
+  settings: SlackGlobalConfig | null | undefined;
+  canManageGlobal: boolean;
+}) {
   const { enabledModels, enabledModelOptions, loading: modelsLoading } = useEnabledModels();
   const [agentNotificationsEnabled, setAgentNotificationsEnabled] = useState(
     settings?.defaults?.agentNotificationsEnabled ?? false
@@ -334,19 +340,26 @@ function GlobalSettingsSection({ settings }: { settings: SlackGlobalConfig | nul
           Choose what happens when a request comes from a Slack channel without a team binding.
           Manage bindings in a team&apos;s Channels tab.
         </p>
-        <select
-          id="slack-unbound-channels"
-          aria-describedby="slack-unbound-channels-help"
+        <Select
           value={unboundChannels}
-          onChange={(event) => {
-            setUnboundChannels(event.target.value as "workspace" | "reject");
+          disabled={!canManageGlobal}
+          onValueChange={(value) => {
+            setUnboundChannels(value as "workspace" | "reject");
             setDirty(true);
           }}
-          className="w-full rounded border border-border bg-background px-2 py-2 text-sm disabled:opacity-50 sm:w-96"
         >
-          <option value="workspace">Create workspace-level sessions</option>
-          <option value="reject">Reject requests until the channel is bound</option>
-        </select>
+          <SelectTrigger
+            id="slack-unbound-channels"
+            aria-describedby="slack-unbound-channels-help"
+            className="w-full sm:w-96"
+          >
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="workspace">Create workspace-level sessions</SelectItem>
+            <SelectItem value="reject">Reject requests until the channel is bound</SelectItem>
+          </SelectContent>
+        </Select>
       </div>
 
       <div className="mb-4">

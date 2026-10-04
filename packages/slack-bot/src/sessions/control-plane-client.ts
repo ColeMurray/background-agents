@@ -6,6 +6,7 @@ import {
 } from "@open-inspect/shared/types/session-api";
 import type { SessionAttachmentReference } from "@open-inspect/shared/types/session-attachments";
 import { listArtifactsResponseSchema } from "@open-inspect/shared/types/artifacts";
+import { ProtectedReadError } from "@open-inspect/shared/completion/extractor";
 import { signedControlPlaneFetch, type ControlPlaneEnv } from "../internal-auth";
 import { createLogger } from "../logger";
 import { buildSessionTargetRequestFields, targetId, type SlackSessionTarget } from "../targets";
@@ -57,6 +58,20 @@ export async function checkPublicationAccess(
   } catch {
     return "unavailable";
   }
+}
+
+export async function requirePublicationAccess(
+  env: ControlPlaneEnv,
+  sessionId: string,
+  channel: string,
+  traceId?: string
+): Promise<void> {
+  const access = await checkPublicationAccess(env, sessionId, channel, traceId);
+  if (access !== "allowed")
+    throw new ProtectedReadError(
+      `Control plane publication access ${access}`,
+      access === "denied" ? 403 : undefined
+    );
 }
 
 export async function createSession(

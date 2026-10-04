@@ -85,7 +85,6 @@ export interface AdmitAutofixMessageData {
   attemptLimit: number | null;
   windowStart: number;
   sessionClosed: boolean;
-  sandboxRecoveryRequired?: boolean;
 }
 
 export type AutofixMessageAdmission =
@@ -93,12 +92,7 @@ export type AutofixMessageAdmission =
   | { kind: "duplicate"; messageId: string }
   | {
       kind: "rejected";
-      reason:
-        | "session_closed"
-        | "sandbox_recovery_required"
-        | "budget_exhausted"
-        | "queue_full"
-        | "attempt_limit";
+      reason: "session_closed" | "budget_exhausted" | "queue_full" | "attempt_limit";
     };
 
 /** Options for listing messages. */
@@ -259,9 +253,6 @@ export class MessageRepository {
       }
       if (data.sessionClosed) {
         return { kind: "rejected", reason: "session_closed" };
-      }
-      if (data.sandboxRecoveryRequired) {
-        return { kind: "rejected", reason: "sandbox_recovery_required" };
       }
       if (this.getPendingOrProcessingCount() >= MAX_UNFINISHED_PROMPTS) {
         return { kind: "rejected", reason: "queue_full" };

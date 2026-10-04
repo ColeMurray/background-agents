@@ -355,6 +355,11 @@ END`;
  * TS twin of DERIVED_INVOCATION_STATUS_SQL over a sibling aggregate. Keep the
  * two in lockstep.
  */
+/** True when a firing produced children and every one was denied authorization. */
+export function allRunsUnauthorized(runs: readonly Pick<AutomationRunRow, "status">[]): boolean {
+  return runs.length > 0 && runs.every((run) => run.status === "unauthorized");
+}
+
 export function deriveInvocationStatus(counts: {
   total: number;
   active: number;

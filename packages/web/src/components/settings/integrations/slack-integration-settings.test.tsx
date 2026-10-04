@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 /// <reference types="@testing-library/jest-dom" />
 
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import * as matchers from "@testing-library/jest-dom/matchers";
@@ -131,19 +131,6 @@ function repo(fullName: string): EnrichedRepository {
   } as unknown as EnrichedRepository;
 }
 
-// Radix Select uses pointer-capture APIs that jsdom doesn't implement.
-beforeAll(() => {
-  if (!Element.prototype.hasPointerCapture) {
-    Element.prototype.hasPointerCapture = () => false;
-  }
-  if (!Element.prototype.releasePointerCapture) {
-    Element.prototype.releasePointerCapture = () => {};
-  }
-  if (!Element.prototype.scrollIntoView) {
-    Element.prototype.scrollIntoView = () => {};
-  }
-});
-
 beforeEach(() => {
   authorization.canManageGlobal = true;
   fetchMock.mockReset();
@@ -187,16 +174,53 @@ describe("SlackIntegrationSettings", () => {
 
     const allowRadio = screen.getByRole("radio", { name: /allow/i }) as HTMLInputElement;
     expect(allowRadio.checked).toBe(true);
-    expect(screen.getByRole("combobox", { name: "Unbound channels" })).toHaveValue("workspace");
+    expect(screen.getByRole("combobox", { name: "Unbound channels" })).toHaveTextContent(
+      "Create workspace-level sessions"
+    );
+    expect(screen.getByRole("combobox", { name: "Unbound channels" })).toHaveAttribute(
+      "aria-describedby",
+      "slack-unbound-channels-help"
+    );
     expect(screen.getByLabelText(/session instructions/i)).toHaveAttribute("maxlength", "10000");
   });
 
-  it("disables the unbound policy without global integration-management permission", () => {
+  it("closes the open policy menu when permission is revoked without changing the value", async () => {
+    const user = userEvent.setup();
+    setupSWR({ global: null });
+    const { rerender } = render(<SlackIntegrationSettings />);
+    const policy = screen.getByRole("combobox", { name: "Unbound channels" });
+    await user.click(policy);
+    expect(screen.getByRole("listbox")).toBeInTheDocument();
+    expect(
+      screen.getByRole("option", { name: "Reject requests until the channel is bound" })
+    ).toBeInTheDocument();
+
+    authorization.canManageGlobal = false;
+    rerender(<SlackIntegrationSettings />);
+    await waitFor(() => expect(screen.queryByRole("listbox")).not.toBeInTheDocument());
+    expect(screen.queryAllByRole("option")).toHaveLength(0);
+    expect(policy).toBeDisabled();
+    expect(policy).toHaveAttribute("disabled");
+    expect(policy).toHaveTextContent("Create workspace-level sessions");
+
+    authorization.canManageGlobal = true;
+    rerender(<SlackIntegrationSettings />);
+    expect(policy).toBeEnabled();
+    expect(policy).toHaveTextContent("Create workspace-level sessions");
+    expect(screen.getByRole("button", { name: /^save$/i })).toBeDisabled();
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("disables the unbound policy without global integration-management permission", async () => {
+    const user = userEvent.setup();
     authorization.canManageGlobal = false;
     setupSWR({ global: null });
     render(<SlackIntegrationSettings />);
     expect(screen.getByRole("combobox", { name: "Unbound channels" })).toBeDisabled();
+    expect(screen.getByRole("combobox", { name: "Unbound channels" })).toHaveAttribute("disabled");
     expect(screen.getByRole("button", { name: /^save$/i })).toBeDisabled();
+    await user.click(screen.getByRole("combobox", { name: "Unbound channels" }));
+    expect(screen.queryByRole("listbox")).not.toBeInTheDocument();
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
@@ -224,7 +248,9 @@ describe("SlackIntegrationSettings", () => {
     );
     rerender(<SlackIntegrationSettings />);
     await waitFor(() =>
-      expect(screen.getByRole("combobox", { name: "Unbound channels" })).toHaveValue("workspace")
+      expect(screen.getByRole("combobox", { name: "Unbound channels" })).toHaveTextContent(
+        "Create workspace-level sessions"
+      )
     );
   });
 
@@ -332,7 +358,10 @@ describe("SlackIntegrationSettings", () => {
     render(<SlackIntegrationSettings />);
 
     expect(screen.getByRole("button", { name: /^save$/i })).toBeDisabled();
-    await user.selectOptions(screen.getByRole("combobox", { name: "Unbound channels" }), "reject");
+    await user.click(screen.getByRole("combobox", { name: "Unbound channels" }));
+    await user.click(
+      await screen.findByRole("option", { name: "Reject requests until the channel is bound" })
+    );
     expect(screen.getByRole("button", { name: /^save$/i })).toBeEnabled();
     await user.type(screen.getByLabelText(/session instructions/i), "Prefer minimal diffs.");
     await user.click(screen.getByRole("button", { name: /^save$/i }));
@@ -494,7 +523,9 @@ describe("SlackIntegrationSettings", () => {
     );
     expect((screen.getByRole("radio", { name: /strip/i }) as HTMLInputElement).checked).toBe(true);
     expect(screen.getByLabelText(/session instructions/i)).toHaveValue("Prefer minimal diffs.");
-    expect(screen.getByRole("combobox", { name: "Unbound channels" })).toHaveValue("reject");
+    expect(screen.getByRole("combobox", { name: "Unbound channels" })).toHaveTextContent(
+      "Reject requests until the channel is bound"
+    );
   });
 
   // Regression: dirty edits must not be clobbered by SWR revalidation.
@@ -503,7 +534,10 @@ describe("SlackIntegrationSettings", () => {
     setupSWR({ global: null });
     const { rerender } = render(<SlackIntegrationSettings />);
 
-    await user.selectOptions(screen.getByRole("combobox", { name: "Unbound channels" }), "reject");
+    await user.click(screen.getByRole("combobox", { name: "Unbound channels" }));
+    await user.click(
+      await screen.findByRole("option", { name: "Reject requests until the channel is bound" })
+    );
     await user.click(screen.getByRole("switch", { name: /enable agent notifications/i }));
     expect(screen.getByRole("switch", { name: /enable agent notifications/i })).toHaveAttribute(
       "aria-checked",
@@ -528,7 +562,9 @@ describe("SlackIntegrationSettings", () => {
       "true"
     );
     expect((screen.getByRole("radio", { name: /allow/i }) as HTMLInputElement).checked).toBe(true);
-    expect(screen.getByRole("combobox", { name: "Unbound channels" })).toHaveValue("reject");
+    expect(screen.getByRole("combobox", { name: "Unbound channels" })).toHaveTextContent(
+      "Reject requests until the channel is bound"
+    );
   });
 
   // Regression: per-repo row must resync when entry.settings changes from SWR.

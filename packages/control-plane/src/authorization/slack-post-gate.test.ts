@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { slackPostGate, type SlackPostSession } from "./slack-post-gate";
+import { slackPostGate } from "./slack-post-gate";
 
 describe("slackPostGate", () => {
   it("refuses a missing session even for an unbound channel", () => {
@@ -37,11 +37,16 @@ describe("slackPostGate", () => {
     }
   );
 
-  it.each([
-    { ownerTeamId: "team-a", visibility: "team" },
-    { ownerTeamId: "team-a", visibility: "workspace" },
-    { ownerTeamId: null, visibility: "workspace" },
-  ] satisfies SlackPostSession[])("allows an unbound channel for %j", (session) => {
-    expect(slackPostGate(session, null)).toBeNull();
+  it.each(["team", "workspace"] as const)(
+    "refuses team-owned %s-visible sessions in an unbound channel",
+    (visibility) => {
+      expect(slackPostGate({ ownerTeamId: "team-a", visibility }, null)).toBe(
+        "channel_team_mismatch"
+      );
+    }
+  );
+
+  it("allows a workspace-owned session in an unbound channel", () => {
+    expect(slackPostGate({ ownerTeamId: null, visibility: "workspace" }, null)).toBeNull();
   });
 });

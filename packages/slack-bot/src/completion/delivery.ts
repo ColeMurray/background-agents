@@ -8,6 +8,7 @@ import { buildCompletionBlocks, truncateError } from "./blocks";
 import { deliverMediaArtifacts } from "./media-upload";
 import type { SlackCompletionJob } from "./job";
 import { isThreadSessionClosed } from "../sessions/thread-session-store";
+import { requirePublicationAccess } from "../sessions/control-plane-client";
 
 const log = createLogger("completion-delivery");
 
@@ -115,6 +116,7 @@ export async function processSlackCompletion(
         agent_error: agentResponse.error || "Unknown error",
         duration_ms: Date.now() - startTime,
       });
+      await requirePublicationAccess(env, job.sessionId, job.channel, job.traceId);
       publicationAttempted = true;
       await postMessage(env.SLACK_BOT_TOKEN, job.channel, `The agent failed: ${displayError}`, {
         thread_ts: job.threadTs,
@@ -164,6 +166,7 @@ export async function processSlackCompletion(
       env.WEB_APP_URL
     );
     // Without top-level text, Slack derives screen-reader text from the blocks.
+    await requirePublicationAccess(env, job.sessionId, job.channel, job.traceId);
     publicationAttempted = true;
     const postResult = await postBlocks(env.SLACK_BOT_TOKEN, job.channel, blocks, {
       thread_ts: job.threadTs,
@@ -183,6 +186,7 @@ export async function processSlackCompletion(
       unavailableMedia > 0 &&
       !(await isThreadSessionClosed(env, job.channel, job.threadTs, job.sessionId))
     ) {
+      await requirePublicationAccess(env, job.sessionId, job.channel, job.traceId);
       await postMessage(
         env.SLACK_BOT_TOKEN,
         job.channel,

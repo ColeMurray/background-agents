@@ -10,7 +10,7 @@ import type { Env } from "../types";
 import { signedControlPlaneFetch } from "../internal-auth";
 import { createLogger } from "../logger";
 import { OUTBOUND_REQUEST_TIMEOUT_MS } from "../request-options";
-import { checkPublicationAccess } from "../sessions/control-plane-client";
+import { requirePublicationAccess } from "../sessions/control-plane-client";
 import { isThreadSessionClosed } from "../sessions/thread-session-store";
 
 export const SLACK_MEDIA_MAX_FILES_PER_COMPLETION = 5;
@@ -99,17 +99,7 @@ export async function deliverMediaArtifacts(
     if (stage.sizeBytes !== undefined) attemptedBytes += stage.sizeBytes;
     if (stage.kind === "failed") {
       // Failed staging may conceal revoked access to staged files or already-extracted text.
-      const access = await checkPublicationAccess(
-        input.env,
-        input.sessionId,
-        input.channel,
-        input.traceId
-      );
-      if (access !== "allowed")
-        throw new ProtectedReadError(
-          `Control plane publication access ${access}`,
-          access === "denied" ? 403 : undefined
-        );
+      await requirePublicationAccess(input.env, input.sessionId, input.channel, input.traceId);
       result.failed += 1;
       continue;
     }
@@ -122,6 +112,8 @@ export async function deliverMediaArtifacts(
   )
     return result;
 
+  // Staging does not grant publication authority; the binding may have changed during upload.
+  await requirePublicationAccess(input.env, input.sessionId, input.channel, input.traceId);
   input.onShareAttempt();
   const complete = await completeExternalUpload(input.env.SLACK_BOT_TOKEN, {
     files: staged,
