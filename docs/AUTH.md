@@ -290,9 +290,9 @@ use the current mode's authorization rules. `off` and `on` do not emit shadow re
 - HTTP item routes use `authorization.request_allowed` with `shadow_denied:<reason>`.
 - Session lists, inbox snapshots/pages (including descendants), child lists, and bulk exports use
   one `shadow_denied:batch` row per request that returns would-be-hidden rows.
-  `metadata_json.shadowDenials` samples the first 50 session IDs and reasons; `shadowDenialCount`
-  counts all would-be-hidden rows in the returned page, not the lookahead row. Run exports include
-  rows hidden by either their own or their root's enforced visibility.
+  `metadata_json.shadowDenialCount` counts all would-be-hidden rows in the returned page, not the
+  lookahead row; `shadowDenialReason` is `not_member`. No returned-session ID samples are collected
+  or stored. Run exports count rows hidden by either their own or their root's enforced visibility.
 - Team session pages have no shadow delta: admission requires target-team membership or workspace
   admin status in every mode, and every returned row belongs to that same team. Those readers
   already pass the enforced team visibility clause, so no observation hook is needed.
@@ -327,6 +327,11 @@ WITH shadow AS (
   SELECT id, day, seam, substr(reason_code, 15) AS reason
   FROM shadow WHERE reason_code != 'shadow_denied:batch'
   UNION
+  SELECT id, day, seam, json_extract(metadata_json, '$.shadowDenialReason') AS reason
+  FROM shadow
+  WHERE reason_code = 'shadow_denied:batch'
+    AND json_extract(metadata_json, '$.shadowDenialReason') IS NOT NULL
+  UNION
   SELECT s.id, s.day, s.seam, json_extract(d.value, '$.reason') AS reason
   FROM shadow s, json_each(s.metadata_json, '$.shadowDenials') d
   WHERE s.reason_code = 'shadow_denied:batch'
@@ -343,11 +348,12 @@ ORDER BY day, seam, reason;
 ```
 
 For cross-team denial volume, select the `not_member` results. Counts are affected HTTP requests or
-WebSocket leases, not denied session IDs, unique users, or messages. `UNION` deduplicates a batch's
-sampled reasons; list batches have only `not_member`, so sampling IDs does not undercount affected
-list requests. A children request can appear in both item and list seams if its parent and returned
-children would both be hidden. Audit persistence is best effort; write failures are logged without
-changing access. Account for these failures and the aggregate gap when interpreting the release.
+WebSocket leases, not hidden session rows, unique users, or messages. Current collection records
+store only the count and reason. The query also reads per-session reasons from older batch records
+and existing explicit body-ID mutation audits; `UNION` deduplicates request/reason pairs. A children
+request can appear in both item and list seams if its parent and returned children would both be
+hidden. Audit persistence is best effort; write failures are logged without changing access. Account
+for these failures and the aggregate gap when interpreting the release.
 
 ## How Automation Access Works
 

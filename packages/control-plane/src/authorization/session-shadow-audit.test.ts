@@ -7,8 +7,7 @@ import type { TeamRole } from "@open-inspect/shared/types/teams";
 import { describe, expect, it } from "vitest";
 import type { RequestContext } from "../http/request-context";
 import {
-  MAX_SHADOW_DENIAL_IDS,
-  recordShadowBatchDenial,
+  recordShadowListDenialCount,
   recordShadowListDenials,
   shadowListDenies,
 } from "./session-shadow-audit";
@@ -83,19 +82,53 @@ describe("list shadow observation", () => {
     expect(ctx).toEqual({});
   });
 
-  it("caps the sample across pages on the same request and keeps the total", () => {
+  it("keeps the exact count across returned pages without retaining session IDs", () => {
     const ctx = {} as RequestContext;
     const rows = Array.from({ length: 75 }, (_, index) => ({ ...row, id: `session_${index}` }));
     recordShadowListDenials(ctx, viewer, rows.slice(0, 30), "shadow");
     recordShadowListDenials(ctx, viewer, rows.slice(30), "shadow");
-    expect(ctx.shadowBatchDenialCount).toBe(rows.length);
-    expect(ctx.shadowBatchDenials).toEqual(
-      rows
-        .slice(0, MAX_SHADOW_DENIAL_IDS)
-        .map(({ id }) => ({ sessionId: id, reason: "not_member" }))
+    expect(ctx).toEqual({ shadowListDenialCount: rows.length });
+    expect(ctx).not.toHaveProperty("shadowBatchDenials");
+  });
+
+  it("counts only eligible rows without requiring row IDs", () => {
+    const ctx = {} as RequestContext;
+    recordShadowListDenials(
+      ctx,
+      viewer,
+      [
+        { ownerTeamId: row.ownerTeamId, visibility: "team" },
+        { ownerTeamId: null, visibility: "workspace" },
+        { ownerTeamId: row.ownerTeamId, visibility: "private" },
+      ],
+      "shadow"
     );
-    recordShadowBatchDenial(ctx, "batch-action", "not_owner_or_lead");
-    expect(ctx.shadowBatchDenialCount).toBe(rows.length + 1);
-    expect(ctx.shadowBatchDenials).toHaveLength(MAX_SHADOW_DENIAL_IDS);
+    expect(ctx).toEqual({ shadowListDenialCount: 1 });
+  });
+
+  it("leaves zero observations unrecorded", () => {
+    const ctx = {} as RequestContext;
+    recordShadowListDenialCount(ctx, 0);
+    recordShadowListDenials(ctx, viewer, [], "shadow");
+    recordShadowListDenials(ctx, viewer, [{ ...row, visibility: "workspace" }], "shadow");
+    expect(ctx).toEqual({});
+  });
+
+  it("adds positive counts without changing item or explicit body-ID mutation evidence", () => {
+    const shadowBatchDenials = [{ sessionId: "batch-action", reason: "not_owner_or_lead" }];
+    const ctx = {
+      shadowSessionDenial: "not_member",
+      shadowBatchDenials,
+    } as RequestContext;
+    recordShadowListDenialCount(ctx, 30);
+    recordShadowListDenialCount(ctx, 44);
+    recordShadowListDenials(ctx, viewer, [row], "shadow");
+    recordShadowListDenialCount(ctx, 0);
+    expect(ctx).toEqual({
+      shadowSessionDenial: "not_member",
+      shadowBatchDenials: [{ sessionId: "batch-action", reason: "not_owner_or_lead" }],
+      shadowListDenialCount: 75,
+    });
+    expect(ctx.shadowBatchDenials).toBe(shadowBatchDenials);
   });
 });

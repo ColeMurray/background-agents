@@ -44,6 +44,7 @@ export type RequestContext = AuthenticationRequestServices & {
   serviceReadPurpose?: "slack-post";
   teamsEnforcementMode?: TeamsEnforcementMode;
   shadowSessionDenial?: string;
+  /** Per-session evidence for explicit body-ID action batches, not collection reads. */
   shadowBatchDenials?: { sessionId: string; reason: string }[];
-  shadowBatchDenialCount?: number;
+  shadowListDenialCount?: number;
 };

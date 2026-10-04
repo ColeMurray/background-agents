@@ -17,7 +17,6 @@ import type { RequestContext } from "../http/request-context";
 import type { Env } from "../types";
 import { auditPrivateSessionBreakGlass } from "./request-audit";
 import { slackPostGate } from "./slack-post-gate";
-import { recordShadowBatchDenial } from "./session-shadow-audit";
 import {
   legacyPermissionForAction,
   parseTeamsEnforcementMode,
@@ -150,7 +149,7 @@ export async function evaluateSessionAdmission(
         ? decision.reason
         : null;
     if (reason) {
-      if (slot === null) recordShadowBatchDenial(ctx, sessionId, reason);
+      if (slot === null) (ctx.shadowBatchDenials ??= []).push({ sessionId, reason });
       else ctx.shadowSessionDenial ??= reason;
     }
   }

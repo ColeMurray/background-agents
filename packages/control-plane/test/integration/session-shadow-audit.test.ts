@@ -101,8 +101,7 @@ async function expectNoShadowAudit(response: Response) {
 
 async function expectShadowAudit(
   response: Response,
-  sessionIds: string[],
-  shadowDenialCount = sessionIds.length,
+  shadowDenialCount: number,
   shadowReason?: string
 ) {
   const rows = await auditRows(response);
@@ -119,13 +118,22 @@ async function expectShadowAudit(
       responseCode: "shadow_denied:batch",
       requestId: response.headers.get("x-request-id"),
       shadowDenialCount,
+      shadowDenialReason: "not_member",
     },
   });
-  expect(rows[0].metadata.shadowDenials).toEqual(
-    sessionIds.map((sessionId) => ({ sessionId, reason: "not_member" }))
+  expect(rows[0].metadata).not.toHaveProperty("shadowDenials");
+  expect(
+    Object.keys(rows[0].metadata)
+      .filter((key) => key.startsWith("shadow"))
+      .sort()
+  ).toEqual(
+    shadowReason === undefined
+      ? ["shadowDenialCount", "shadowDenialReason"]
+      : ["shadowDenialCount", "shadowDenialReason", "shadowReason"]
   );
   if (shadowReason === undefined) expect(rows[0].metadata).not.toHaveProperty("shadowReason");
   else expect(rows[0].metadata.shadowReason).toBe(shadowReason);
+  return rows[0].metadata;
 }
 
 async function exportLines(response: Response): Promise<TraceExportLine[]> {
@@ -181,7 +189,7 @@ describe("COL-270 HTTP session-list shadow audits", () => {
     const shadow = await fetchMode("/sessions", "shadow");
     expect(shadow.status).toBe(200);
     expect(await shadow.json()).toEqual(baseline);
-    await expectShadowAudit(shadow, ["team"]);
+    await expectShadowAudit(shadow, 1);
 
     const on = await fetchMode("/sessions", "on");
     expect(on.status).toBe(200);
@@ -258,7 +266,7 @@ describe("COL-270 HTTP session-list shadow audits", () => {
       expect(response.status).toBe(200);
       expect(await response.json()).toMatchObject({ sessions: [{ id }], hasMore: true });
       if (offset === 0) await expectNoShadowAudit(response);
-      else await expectShadowAudit(response, [id]);
+      else await expectShadowAudit(response, 1);
     }
   });
 
@@ -313,7 +321,7 @@ describe("COL-270 HTTP session-list shadow audits", () => {
       const shadow = await fetchMode(path, "shadow");
       expect(shadow.status).toBe(200);
       expect(await shadow.json()).toEqual(baseline);
-      await expectShadowAudit(shadow, ["team-child", "team-grandchild"]);
+      await expectShadowAudit(shadow, 2);
 
       const on = await fetchMode(path, "on");
       expect(on.status).toBe(200);
@@ -326,7 +334,36 @@ describe("COL-270 HTTP session-list shadow audits", () => {
     }
   });
 
-  it("caps inbox denial IDs at the first 50 descendants, counts all, and excludes the lookahead lineage", async () => {
+  it("records one count-only audit across all inbox categories on the same request", async () => {
+    await session("team-attention", { ownerTeamId: teamId, visibility: "team" });
+    await session("team-progress", { ownerTeamId: teamId, visibility: "team", status: "active" });
+    await session("team-finished", { ownerTeamId: teamId, visibility: "team" });
+    await new SessionIndexStore(env.DB).recordLatestTerminalMessage({
+      sessionId: "team-attention",
+      messageId: "attention-message",
+      messageCreatedAt: Date.now(),
+      terminalMessageCompletedAt: Date.now(),
+    });
+
+    const response = await fetchMode("/sessions/inbox", "shadow");
+    expect(response.status).toBe(200);
+    const body = await response.json<SessionInboxSnapshot>();
+    expect(body.categories.needs_attention.items.map(({ rootSession }) => rootSession.id)).toEqual([
+      "team-attention",
+    ]);
+    expect(body.categories.in_progress.items.map(({ rootSession }) => rootSession.id)).toEqual([
+      "team-progress",
+    ]);
+    expect(body.categories.finished.items.map(({ rootSession }) => rootSession.id)).toEqual([
+      "team-finished",
+    ]);
+    const metadata = JSON.stringify(await expectShadowAudit(response, 3));
+    for (const id of ["team-attention", "team-progress", "team-finished", teamId]) {
+      expect(metadata).not.toContain(id);
+    }
+  });
+
+  it("counts all 55 inbox descendants without IDs and excludes the lookahead lineage", async () => {
     await session("workspace-root", { updatedAt: 10000 });
     const children = Array.from({ length: 55 }, (_, index) => `team-child-${index}`);
     for (const [index, id] of children.entries()) {
@@ -364,7 +401,10 @@ describe("COL-270 HTTP session-list shadow audits", () => {
       expect(page.items[0].descendantSessions.map(({ id }) => id)).toEqual(children);
       expect(JSON.stringify(page)).not.toContain('"id":"lookahead-root"');
       expect(JSON.stringify(page)).not.toContain('"id":"lookahead-child"');
-      await expectShadowAudit(response, children.slice(0, 50), children.length);
+      const metadata = JSON.stringify(await expectShadowAudit(response, children.length));
+      for (const id of [...children, "lookahead-root", "lookahead-child", teamId]) {
+        expect(metadata).not.toContain(id);
+      }
 
       const next = await fetchMode(
         `/sessions/inbox?${new URLSearchParams({ category: "finished", cursor: page.nextCursor! })}`,
@@ -381,7 +421,10 @@ describe("COL-270 HTTP session-list shadow audits", () => {
         hasMore: false,
         nextCursor: null,
       });
-      await expectShadowAudit(next, ["lookahead-root", "lookahead-child"]);
+      const nextMetadata = JSON.stringify(await expectShadowAudit(next, 2));
+      for (const id of ["lookahead-root", "lookahead-child", teamId]) {
+        expect(nextMetadata).not.toContain(id);
+      }
     }
   });
 
@@ -409,7 +452,7 @@ describe("COL-270 HTTP session-list shadow audits", () => {
       expect(body.children.map(({ id }) => id)).toEqual(
         mode === "on" ? ["workspace-child"] : ["team-child", "workspace-child"]
       );
-      if (mode === "shadow") await expectShadowAudit(response, ["team-child"]);
+      if (mode === "shadow") await expectShadowAudit(response, 1);
       else await expectNoShadowAudit(response);
     }
   });
@@ -425,7 +468,10 @@ describe("COL-270 HTTP session-list shadow audits", () => {
     const response = await fetchMode("/sessions/team-parent/children", "shadow");
     expect(response.status).toBe(200);
     expect(await response.json()).toMatchObject({ children: [{ id: "team-child" }] });
-    await expectShadowAudit(response, ["team-child"], 1, "not_member");
+    const metadata = JSON.stringify(await expectShadowAudit(response, 1, "not_member"));
+    for (const id of ["team-child", teamId]) {
+      expect(metadata).not.toContain(id);
+    }
   });
 
   describe("streamed exports", () => {
@@ -474,7 +520,7 @@ describe("COL-270 HTTP session-list shadow audits", () => {
           expect(response.status).toBe(200);
           expect(response.headers.get("content-type")).toBe("application/x-ndjson");
           expect(response.bodyUsed).toBe(false);
-          if (mode === "shadow") await expectShadowAudit(response, ["team"]);
+          if (mode === "shadow") await expectShadowAudit(response, 1);
           else {
             await expectNoShadowAudit(response);
             expect(await auditRows(response)).toMatchObject([
@@ -514,7 +560,7 @@ describe("COL-270 HTTP session-list shadow audits", () => {
     );
 
     it.each(["sessions", "runs"] as const)(
-      "caps %s export audit IDs at the first 50 with the exact page count before streaming",
+      "records the exact %s export page count without IDs before streaming",
       async (scope) => {
         const ids = Array.from({ length: 57 }, (_, index) => `team-${index}`);
         for (const [index, id] of ids.entries()) {
@@ -527,7 +573,10 @@ describe("COL-270 HTTP session-list shadow audits", () => {
 
         const response = await fetchMode(`/sessions/export?scope=${scope}&limit=55`, "shadow");
         expect(response.status).toBe(200);
-        await expectShadowAudit(response, ids.slice(0, 50), 55);
+        const metadata = JSON.stringify(await expectShadowAudit(response, 55));
+        for (const id of [...ids, teamId]) {
+          expect(metadata).not.toContain(id);
+        }
         expect(response.bodyUsed).toBe(false);
         const lines = await exportLines(response);
         expect(lines.filter((line) => line.type === "session").map(({ id }) => id)).toEqual(
@@ -541,7 +590,10 @@ describe("COL-270 HTTP session-list shadow audits", () => {
           "shadow"
         );
         expect(next.status).toBe(200);
-        await expectShadowAudit(next, ids.slice(55));
+        const nextMetadata = JSON.stringify(await expectShadowAudit(next, ids.length - 55));
+        for (const id of [...ids, teamId]) {
+          expect(nextMetadata).not.toContain(id);
+        }
         expect(next.bodyUsed).toBe(false);
         const nextLines = await exportLines(next);
         expect(nextLines.filter((line) => line.type === "session").map(({ id }) => id)).toEqual(
@@ -551,7 +603,7 @@ describe("COL-270 HTTP session-list shadow audits", () => {
       }
     );
 
-    it("records a workspace-visible child's ID when runs export would hide it through the root gate", async () => {
+    it("counts a workspace-visible child when runs export would hide it through the root gate", async () => {
       await session("team-root", {
         ownerTeamId: teamId,
         visibility: "team",
@@ -576,7 +628,7 @@ describe("COL-270 HTTP session-list shadow audits", () => {
       for (const mode of ["off", "shadow", "on"] as const) {
         const response = await fetchMode("/sessions/export?scope=runs", mode);
         expect(response.status).toBe(200);
-        if (mode === "shadow") await expectShadowAudit(response, ["team-root", "workspace-child"]);
+        if (mode === "shadow") await expectShadowAudit(response, 2);
         else await expectNoShadowAudit(response);
         expect(response.bodyUsed).toBe(false);
         const lines = await exportLines(response);

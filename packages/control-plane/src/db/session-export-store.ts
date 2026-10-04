@@ -109,7 +109,7 @@ export type ListSessionsForExportOptions = ExportFilters & ExportSelection;
 type ExportPage<Cursor> = {
   sessions: SessionExportRow[];
   /** Internal-only evidence from the selected page, never exported on the wire. */
-  shadowDeniedSessionIds?: string[];
+  shadowDenialCount?: number;
 } & ({ hasMore: false; nextCursor: null } | { hasMore: true; nextCursor: Cursor });
 
 type SessionsPage = { scope: "sessions" } & ExportPage<SessionExportCursor>;
@@ -417,7 +417,12 @@ export class SessionExportStore {
       )
     );
     const evidence = shadowDenies
-      ? { shadowDeniedSessionIds: pageRows.filter(shadowDenies).map((row) => row.id) }
+      ? {
+          shadowDenialCount: pageRows.reduce(
+            (count, row) => count + (shadowDenies(row) ? 1 : 0),
+            0
+          ),
+        }
       : {};
     if (!hasMore) return { sessions, ...evidence, hasMore: false, nextCursor: null };
 

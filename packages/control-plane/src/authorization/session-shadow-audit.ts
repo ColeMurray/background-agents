@@ -4,7 +4,6 @@ import type { SessionReadScope } from "../db/session-visibility";
 import type { RequestContext } from "../http/request-context";
 import type { TeamsEnforcementMode } from "./teams-enforcement";
 
-export const MAX_SHADOW_DENIAL_IDS = 50;
 type VisibilityRow = Pick<SessionAccessRow, "ownerTeamId" | "visibility">;
 
 /** Only the team clause differs between legacy and enforced list visibility. */
@@ -16,25 +15,18 @@ export function shadowListDenies(viewer: SessionReadScope, row: VisibilityRow): 
         (row.ownerTeamId === null || !viewer.memberships.has(row.ownerTeamId));
 }
 
-export function recordShadowBatchDenial(
-  ctx: RequestContext,
-  sessionId: string,
-  reason: string
-): void {
-  ctx.shadowBatchDenialCount = (ctx.shadowBatchDenialCount ?? 0) + 1;
-  const denials = (ctx.shadowBatchDenials ??= []);
-  if (denials.length < MAX_SHADOW_DENIAL_IDS) denials.push({ sessionId, reason });
+export function recordShadowListDenialCount(ctx: RequestContext, count: number): void {
+  if (count > 0) ctx.shadowListDenialCount = (ctx.shadowListDenialCount ?? 0) + count;
 }
 
 /** Observe only returned rows, without changing the response or reading D1 again. */
 export function recordShadowListDenials(
   ctx: RequestContext,
   viewer: SessionReadScope,
-  rows: readonly (VisibilityRow & { id: string })[],
+  rows: readonly VisibilityRow[],
   mode: TeamsEnforcementMode
 ): void {
   if (mode !== "shadow" || viewer.kind === "internal") return;
-  for (const row of rows) {
-    if (shadowListDenies(viewer, row)) recordShadowBatchDenial(ctx, row.id, "not_member");
-  }
+  const count = rows.reduce((total, row) => total + (shadowListDenies(viewer, row) ? 1 : 0), 0);
+  recordShadowListDenialCount(ctx, count);
 }

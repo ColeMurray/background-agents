@@ -38,7 +38,7 @@ import {
 import { createLogger, type Logger } from "../logger";
 import { teamsEnforcementMode, viewerFromContext } from "../authorization/session-admission";
 import { TeamMembershipStore } from "../db/team-memberships";
-import { recordShadowBatchDenial } from "../authorization/session-shadow-audit";
+import { recordShadowListDenialCount } from "../authorization/session-shadow-audit";
 import { readBoundedBytes } from "../http/bounded-body";
 import { admit } from "../routing/admit";
 import type { ControlPlaneHonoEnv } from "../routing/hono-env";
@@ -330,9 +330,7 @@ async function handleExport(
     // defer selection errors to the generator to preserve the NDJSON error response.
     selectedPage = selectPage();
     const page = await selectedPage.catch(() => null);
-    for (const sessionId of page?.shadowDeniedSessionIds ?? []) {
-      recordShadowBatchDenial(ctx, sessionId, "not_member");
-    }
+    recordShadowListDenialCount(ctx, page?.shadowDenialCount ?? 0);
   }
   async function* records(): AsyncGenerator<ExportRecord> {
     const page = await (selectedPage ?? selectPage());
