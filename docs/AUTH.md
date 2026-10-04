@@ -161,7 +161,8 @@ member and fail with `not_member` otherwise; they never borrow the parent owner'
 
 **Settings > Teams > Require a team for new sessions** (`requireTeamOnCreate`, off by default)
 requires a team for new sessions, environments, and automations, including bot-created sessions.
-Requests without one fail with `team_required`. Existing workspace-owned resources are unaffected.
+Requests without one fail with `team_required`. Existing workspace-owned resources are unaffected,
+and existing workspace-owned automations still run and create workspace-owned sessions.
 
 Team leads and workspace Owners/Administrators manage repository grants in the team's Repositories
 tab. A team has either installation-wide access or named grants by repository ID, and no grants by
@@ -279,8 +280,8 @@ GROUP BY day, seam, reason
 ORDER BY day, seam, reason;
 ```
 
-`not_member` results show cross-team denials. Counts are affected requests or WebSocket connections,
-not hidden sessions or unique users.
+`not_member` results cover any viewer outside the owning team, including users who belong to no
+team. Counts are affected requests or WebSocket connections, not hidden sessions or unique users.
 
 ## How Automation Access Works
 
