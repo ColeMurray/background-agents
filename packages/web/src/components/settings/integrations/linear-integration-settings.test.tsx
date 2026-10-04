@@ -338,4 +338,30 @@ describe("LinearIntegrationSettings harness", () => {
     const body = JSON.parse(String(vi.mocked(browserApiFetch).mock.calls[0][1]?.body));
     expect(body.settings).toMatchObject({ harness: "opencode", model: "openai/gpt-6-sol" });
   });
+
+  const fallbackNotice =
+    "Sessions for this repo will run on OpenCode until the harness and model are compatible.";
+
+  it("warns when a repository harness clashes with the inherited global model", () => {
+    setupSWR({
+      settings: { defaults: { model: "openai/gpt-5.4" } },
+      overrides: [{ repo: "acme/web", settings: { harness: "claude" } }],
+    });
+    render(<LinearIntegrationSettings />);
+    const row = screen.getByText("acme/web").parentElement!;
+
+    expect(row).toHaveTextContent(
+      `Model "openai/gpt-5.4" cannot run on the Claude Agent harness. ${fallbackNotice}`
+    );
+  });
+
+  it("does not warn when a stale global model normalizes to one the harness can run", () => {
+    setupSWR({
+      settings: { defaults: { model: "openai/gpt-5" } },
+      overrides: [{ repo: "acme/web", settings: { harness: "claude" } }],
+    });
+    render(<LinearIntegrationSettings />);
+
+    expect(screen.queryByText(/until the harness and model are compatible/)).toBeNull();
+  });
 });

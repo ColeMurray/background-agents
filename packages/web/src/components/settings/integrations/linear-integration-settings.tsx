@@ -16,12 +16,14 @@ import {
 } from "@open-inspect/shared/types/integrations";
 import {
   MODEL_REASONING_CONFIG,
+  getValidModelOrDefault,
   isValidReasoningEffort,
   type ModelCategory,
   type ValidModel,
 } from "@open-inspect/shared/models";
 import {
   DEFAULT_HARNESS,
+  checkHarnessCompatibility,
   getHarnessLabel,
   getValidHarnessOrDefault,
   harnessSupportsModel,
@@ -145,6 +147,7 @@ export function LinearIntegrationSettings() {
             availableRepos={availableRepos}
             enabledModelOptions={enabledModelOptions}
             inheritedHarness={getValidHarnessOrDefault(settings?.defaults?.harness)}
+            inheritedModel={settings?.defaults?.model}
           />
         </fieldset>
       </SettingsCardSection>
@@ -549,11 +552,13 @@ function RepoOverridesSection({
   availableRepos,
   enabledModelOptions,
   inheritedHarness,
+  inheritedModel,
 }: {
   overrides: RepoSettingsEntry[];
   availableRepos: EnrichedRepository[];
   enabledModelOptions: ModelCategory[];
   inheritedHarness: HarnessId;
+  inheritedModel: string | undefined;
 }) {
   const [addingRepo, setAddingRepo] = useState("");
 
@@ -600,6 +605,7 @@ function RepoOverridesSection({
               entry={entry}
               enabledModelOptions={enabledModelOptions}
               inheritedHarness={inheritedHarness}
+              inheritedModel={inheritedModel}
             />
           ))}
         </div>
@@ -634,10 +640,12 @@ function RepoOverrideRow({
   entry,
   enabledModelOptions,
   inheritedHarness,
+  inheritedModel,
 }: {
   entry: RepoSettingsEntry;
   enabledModelOptions: ModelCategory[];
   inheritedHarness: HarnessId;
+  inheritedModel: string | undefined;
 }) {
   const [harness, setHarness] = useState(entry.settings.harness);
   const [model, setModel] = useState(entry.settings.model ?? "");
@@ -656,6 +664,11 @@ function RepoOverrideRow({
 
   const reasoningConfig = model ? MODEL_REASONING_CONFIG[model as ValidModel] : undefined;
   const effectiveHarness = harness ?? inheritedHarness;
+  // Save-time validation only sees one level; a clash across levels falls back at launch.
+  const effectiveModel = model || inheritedModel;
+  const mismatch = effectiveModel
+    ? checkHarnessCompatibility(effectiveHarness, getValidModelOrDefault(effectiveModel))
+    : null;
 
   const handleHarnessChange = (newHarness: HarnessId | undefined) => {
     setHarness(newHarness);
@@ -832,6 +845,13 @@ function RepoOverrideRow({
           Remove
         </Button>
       </div>
+
+      {mismatch && (
+        <p className="text-xs text-warning">
+          {mismatch.message} Sessions for this repo will run on OpenCode until the harness and model
+          are compatible.
+        </p>
+      )}
     </div>
   );
 }
