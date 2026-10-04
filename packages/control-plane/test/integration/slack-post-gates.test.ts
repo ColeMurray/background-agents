@@ -1,7 +1,8 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from "vitest";
 import { env } from "cloudflare:test";
 import { verifyCallbackSignature } from "@open-inspect/shared/auth";
 import type { SessionVisibility } from "@open-inspect/shared/types/teams";
+import type { SlackPostDenial } from "../../src/authorization/slack-post-gate";
 import { createCloudflareEnv } from "../../src/cloudflare/platform";
 import { createDurableObjectSessionPlatform } from "../../src/cloudflare/session-platform";
 import { createSessionRuntime } from "../../src/session/components";
@@ -16,17 +17,55 @@ const refusals: Array<{
   name: string;
   visibility: SessionVisibility;
   boundTeamId: string | null;
+  reason: SlackPostDenial;
   missing?: boolean;
+  removeBinding?: boolean;
 }> = [
-  { name: "missing session", visibility: "workspace", boundTeamId: null, missing: true },
-  { name: "private session", visibility: "private", boundTeamId: null },
+  {
+    name: "missing session",
+    visibility: "workspace",
+    boundTeamId: null,
+    reason: "missing_session",
+    missing: true,
+  },
+  {
+    name: "private session",
+    visibility: "private",
+    boundTeamId: null,
+    reason: "private_session",
+  },
   {
     name: "private session in its own team's channel",
     visibility: "private",
     boundTeamId: "team-a",
+    reason: "private_session",
   },
-  { name: "team-visible cross-team session", visibility: "team", boundTeamId: "team-b" },
-  { name: "workspace-visible cross-team session", visibility: "workspace", boundTeamId: "team-b" },
+  {
+    name: "team-visible cross-team session",
+    visibility: "team",
+    boundTeamId: "team-b",
+    reason: "channel_team_mismatch",
+  },
+  {
+    name: "workspace-visible cross-team session",
+    visibility: "workspace",
+    boundTeamId: "team-b",
+    reason: "channel_team_mismatch",
+  },
+  {
+    name: "team-visible session after channel unbinding",
+    visibility: "team",
+    boundTeamId: "team-a",
+    reason: "channel_team_mismatch",
+    removeBinding: true,
+  },
+  {
+    name: "workspace-visible session after channel unbinding",
+    visibility: "workspace",
+    boundTeamId: "team-a",
+    reason: "channel_team_mismatch",
+    removeBinding: true,
+  },
 ];
 
 async function setScope(sessionId: string, scope: (typeof refusals)[number]): Promise<void> {
@@ -63,6 +102,8 @@ async function expectSafeClosure(slackFetch: ReturnType<typeof vi.fn>, sessionId
 }
 
 describe("Slack outbound post gates (real D1)", () => {
+  let logSpy: MockInstance<typeof console.log>;
+
   beforeEach(async () => {
     await cleanD1Tables();
     await seedActiveUser("user-1");
@@ -73,9 +114,18 @@ describe("Slack outbound post gates (real D1)", () => {
         .bind(teamId, teamId, teamId)
         .run();
     }
+    logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
   });
 
-  describe.each(["complete", "tool_call", "activity"] as const)("session callback: %s", (path) => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  describe.each([
+    { path: "complete", logMessage: "callback.complete_delivery" },
+    { path: "tool_call", logMessage: "callback.tool_call" },
+    { path: "activity", logMessage: "callback.activity_refresh" },
+  ])("session callback: $path", ({ path, logMessage }) => {
     it.each(refusals)("sends only a safe closure for $name", async (scope) => {
       const { stub, sessionName } = await initSession();
       await setScope(sessionName, scope);
@@ -103,7 +153,13 @@ describe("Slack outbound post gates (real D1)", () => {
           LINEAR_BOT: { fetch: linearFetch },
           SERVICE_AUTH_SECRET_SLACK_BOT: "outbound-test-secret",
           SERVICE_AUTH_SECRET_LINEAR_BOT: "linear-test-secret",
+          LOG_LEVEL: "info",
         });
+        if (scope.removeBinding) {
+          await env.DB.prepare(
+            "DELETE FROM team_channel_bindings WHERE provider = 'slack' AND external_id = 'C1'"
+          ).run();
+        }
         const callbacks = runtime.internals.callbackService;
         if (path === "complete") {
           await callbacks.notifyComplete("msg-1", false, "secret error");
@@ -121,6 +177,14 @@ describe("Slack outbound post gates (real D1)", () => {
 
       await expectSafeClosure(slackFetch, sessionName);
       expect(linearFetch).not.toHaveBeenCalled();
+      expect(logSpy.mock.calls.map(([line]) => JSON.parse(String(line)))).toContainEqual(
+        expect.objectContaining({
+          msg: logMessage,
+          session_id: sessionName,
+          outcome: "rejected",
+          reject_reason: scope.reason,
+        })
+      );
     });
   });
 
@@ -169,6 +233,11 @@ describe("Slack outbound post gates (real D1)", () => {
       },
       { submit() {} }
     );
+    if (scope.removeBinding) {
+      await env.DB.prepare(
+        "DELETE FROM team_channel_bindings WHERE provider = 'slack' AND external_id = 'C1'"
+      ).run();
+    }
 
     await scheduler.runComplete({
       automationId: "auto-1",
@@ -182,5 +251,13 @@ describe("Slack outbound post gates (real D1)", () => {
     expect((await store.getRunById("auto-1", run.id))?.status).toBe("failed");
     await expectSafeClosure(slackFetch, sessionName);
     expect(linearFetch).not.toHaveBeenCalled();
+    expect(logSpy.mock.calls.map(([line]) => JSON.parse(String(line)))).toContainEqual(
+      expect.objectContaining({
+        event: "scheduler.slack_complete_denied",
+        run_id: run.id,
+        session_id: sessionName,
+        reason: scope.reason,
+      })
+    );
   });
 });

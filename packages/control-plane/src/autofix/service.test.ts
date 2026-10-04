@@ -190,6 +190,28 @@ describe("AutofixService", () => {
     );
   });
 
+  it.each(["enqueued", "duplicate"] as const)(
+    "records %s session admission as queued",
+    async (kind) => {
+      const h = buildService();
+      h.sessions.fetch.mockResolvedValueOnce(Response.json({ kind, messageId: "message-1" }));
+
+      await expect(h.service.process(PR_COMMENT_ENVELOPE)).resolves.toEqual({
+        kind: "completed",
+        decision: "queued",
+        reason: kind,
+        messageId: "message-1",
+      });
+      expect(h.feedbackStore.markQueued).toHaveBeenCalledWith(
+        "github:pr_comment:1234",
+        "message-1",
+        kind,
+        2_000
+      );
+      expect(h.feedbackStore.markSkipped).not.toHaveBeenCalled();
+    }
+  );
+
   it("recovers an admitted message when the dispatch response is lost", async () => {
     const h = buildService();
     h.sessions.fetch

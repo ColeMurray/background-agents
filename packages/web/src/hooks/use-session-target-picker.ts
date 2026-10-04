@@ -162,15 +162,11 @@ export function useSessionTargetPicker({
   defaultEnvironmentId?: string | null;
 } = {}): SessionTargetSelection {
   const {
-    repos: catalogRepos,
+    repos,
     loading: loadingRepos,
     error: reposError,
     teamHasRepositoryGrants,
   } = useRepos(true, teamId);
-  const repos = useMemo(
-    () => (teamId && reposError ? [] : catalogRepos),
-    [teamId, reposError, catalogRepos]
-  );
   const noRepositoryGrants =
     !!teamId && !loadingRepos && !reposError && teamHasRepositoryGrants === false;
   const repositoryGrantError = noRepositoryGrants ? "This team has no repository grants." : null;
@@ -191,6 +187,12 @@ export function useSessionTargetPicker({
       : draftTarget?.kind === "repo" || draftTarget?.kind === "repos"
         ? reposError
         : null;
+  const inSelectionContext =
+    selectionContext.teamId === teamId &&
+    selectionContext.defaultEnvironmentId === defaultEnvironmentId;
+  // A failed catalog neither confirms nor replaces this context's target; a draft left from
+  // another team or default still falls back to the new context's catalogs.
+  const catalogErrorHoldsTarget = !!targetCatalogError && inSelectionContext;
   const explicitTargetUnavailable =
     hasExplicitSelection &&
     !!draftTarget &&
@@ -208,13 +210,13 @@ export function useSessionTargetPicker({
     !loadingEnvironments &&
     selectionContext.teamId === teamId &&
     !(teamId && draftTarget?.kind === "none" && !hasExplicitSelection) &&
-    (hasExplicitSelection || selectionContext.defaultEnvironmentId === defaultEnvironmentId) &&
+    (hasExplicitSelection || inSelectionContext) &&
     !selectionError &&
-    !(hasExplicitSelection && targetCatalogError) &&
     targetIsAvailable(draftTarget, repos, environments)
       ? draftTarget
       : null;
-  const pickerTarget = hasExplicitSelection ? draftTarget : sessionTarget;
+  const pickerTarget =
+    hasExplicitSelection || catalogErrorHoldsTarget ? draftTarget : sessionTarget;
 
   const selectedRepository =
     sessionTarget?.kind === "repo" ? parseRepositoryFullName(sessionTarget.repoFullName) : null;
@@ -251,7 +253,7 @@ export function useSessionTargetPicker({
       }
       return;
     }
-    if (sessionTarget) return;
+    if (sessionTarget || catalogErrorHoldsTarget) return;
 
     let nextTarget: SessionTarget | null = null;
     if (
@@ -287,6 +289,7 @@ export function useSessionTargetPicker({
     setSessionTarget(nextTarget);
     setSelectionContext({ teamId, defaultEnvironmentId });
   }, [
+    catalogErrorHoldsTarget,
     defaultEnvironmentId,
     draftTarget,
     environments,

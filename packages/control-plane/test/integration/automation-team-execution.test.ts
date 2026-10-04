@@ -1,5 +1,5 @@
 import { env } from "cloudflare:test";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SessionVisibility } from "@open-inspect/shared/types/teams";
 import { isAutomationExecutionAuthorized } from "../../src/automation/authorization-guard";
 import { createCloudflareEnv } from "../../src/cloudflare/platform";
@@ -107,7 +107,10 @@ describe("automation team execution (integration)", () => {
       [ADMIN, "member"],
     ]);
   });
-  afterEach(cleanD1Tables);
+  afterEach(async () => {
+    vi.restoreAllMocks();
+    await cleanD1Tables();
+  });
 
   it("rejects a departed executor despite other-team membership", async () => {
     const row = await saveAutomation("auto-departed-executor");
@@ -169,6 +172,100 @@ describe("automation team execution (integration)", () => {
     expect(
       (await store.listInvocations(row.id, { limit: 10, offset: 0 })).invocations
     ).toHaveLength(1);
+  });
+
+  describe("authorization lost after invocation admission", () => {
+    /** Run `change` right after the guarded insert admits the invocation, before launch. */
+    function afterAdmission(change: () => Promise<unknown>) {
+      const insert = AutomationStore.prototype.insertInvocationGuarded;
+      vi.spyOn(AutomationStore.prototype, "insertInvocationGuarded").mockImplementation(
+        async function (this: AutomationStore, params) {
+          const admitted = await insert.call(this, params);
+          await change();
+          return admitted;
+        }
+      );
+    }
+
+    function removeMember(userId: string) {
+      return env.DB.prepare("DELETE FROM team_memberships WHERE team_id = ? AND user_id = ?")
+        .bind(TEAM, userId)
+        .run();
+    }
+
+    async function expectDeniedLaunch(automationId: string, reason: string) {
+      expect(await fetchRuns(automationId)).toEqual([
+        expect.objectContaining({
+          status: "unauthorized",
+          failure_reason: reason,
+          session_id: null,
+        }),
+      ]);
+      const sessions = await env.DB.prepare("SELECT id FROM sessions WHERE automation_id = ?")
+        .bind(automationId)
+        .all();
+      expect(sessions.results).toEqual([]);
+    }
+
+    it.each([
+      ["is removed from the team", "execution_authorization_denied", () => removeMember(EXECUTOR)],
+      [
+        "is suspended",
+        "execution_authorization_denied",
+        () => env.DB.prepare("UPDATE users SET suspended_at = 1 WHERE id = ?").bind(EXECUTOR).run(),
+      ],
+      [
+        "loses sessions.create",
+        "execution_authorization_denied",
+        () =>
+          env.DB.prepare(
+            "UPDATE user_role_assignments SET role_id = 'role_builtin_viewer' WHERE user_id = ?"
+          )
+            .bind(EXECUTOR)
+            .run(),
+      ],
+      [
+        "belongs to a team that is archived",
+        "team_archived",
+        () => env.DB.prepare("UPDATE teams SET archived_at = 2 WHERE id = ?").bind(TEAM).run(),
+      ],
+    ])(
+      "does not launch or count a failure when the scheduled executor %s",
+      async (_, reason, change) => {
+        const row = await saveAutomation("auto-denied-at-launch");
+        afterAdmission(change);
+        expect(await createScheduler().tick()).toEqual({ processed: 0, skipped: 1, failed: 0 });
+        expect(await authorized(row.id)).toBe(false);
+        await expectDeniedLaunch(row.id, reason);
+        const { invocations } = await new AutomationStore(env.DB).listInvocations(row.id, {
+          limit: 10,
+          offset: 0,
+        });
+        expect(invocations).toEqual([expect.objectContaining({ status: "unauthorized" })]);
+        // Two failures are already on record; a strike here would auto-pause at three.
+        expect(await new AutomationStore(env.DB).getById(row.id)).toMatchObject({
+          enabled: 1,
+          consecutive_failures: 2,
+        });
+      }
+    );
+
+    it("answers 403 when a manual requester is removed mid-launch", async () => {
+      const row = await saveAutomation("auto-manual-denied-at-launch");
+      afterAdmission(() => removeMember(LEAD));
+      const response = await serviceFetch(`https://cp.test/automations/${row.id}/trigger`, {
+        as: { userId: LEAD, role: "member" },
+        method: "POST",
+      });
+      expect(response.status).toBe(403);
+      expect(await response.json()).toMatchObject({
+        reason_code: "execution_authorization_denied",
+      });
+      await expectDeniedLaunch(row.id, "execution_authorization_denied");
+      expect(await new AutomationStore(env.DB).getById(row.id)).toMatchObject({
+        consecutive_failures: 2,
+      });
+    });
   });
 
   it("launches a scheduled run after lead executor reassignment", async () => {

@@ -14,7 +14,11 @@ import {
   type SlackImageAttachment,
 } from "../attachments";
 import { createClassifier } from "../classifier";
-import { getChannelBinding, resolveChannelBinding } from "../channel-bindings";
+import {
+  CHANNEL_BINDING_UNAVAILABLE_MESSAGE,
+  lookupChannelBinding,
+  resolveChannelBinding,
+} from "../channel-bindings";
 import { loadTargetCatalog } from "../classifier/catalog";
 import { stripMentions } from "../dm-utils";
 import {
@@ -81,9 +85,14 @@ function hasRunnableContent(content: IncomingMessageContent): boolean {
   return Boolean(content.text) || content.images.length > 0 || content.forwarded.hasBody;
 }
 
+type ThreadSessionAdmission =
+  | { kind: "launch" }
+  | { kind: "followUp"; session: ThreadSession; threadTs: string }
+  | { kind: "stop" };
+
 interface IncomingMessageParams {
   content: IncomingMessageContent;
-  existingSession: ThreadSession | null;
+  admission: Exclude<ThreadSessionAdmission, { kind: "stop" }>;
   user: string;
   channel: string;
   ts: string;
@@ -95,21 +104,30 @@ interface IncomingMessageParams {
   scheduleBackground: BackgroundTaskScheduler;
 }
 
-async function resolveExistingThreadSession(
+async function resolveThreadSessionAdmission(
   env: Env,
   channel: string,
   threadTs: string | undefined,
   traceId?: string
-): Promise<ThreadSession | null> {
-  if (!threadTs) return null;
+): Promise<ThreadSessionAdmission> {
+  if (!threadTs) return { kind: "launch" };
   let session = await lookupThreadSession(env, channel, threadTs);
-  if (!session) return null;
-  const binding = await getChannelBinding(env, channel, traceId).catch((error) => {
-    log.warn("channel_binding.followup_unavailable", { trace_id: traceId, channel, error });
-    return null;
-  });
+  if (!session) return { kind: "launch" };
+  const result = await lookupChannelBinding(env, channel, traceId);
+  if (result.kind === "unavailable") {
+    log.warn("channel_binding.followup_unavailable", {
+      trace_id: traceId,
+      channel,
+      error: result.error,
+    });
+    await postMessage(env.SLACK_BOT_TOKEN, channel, CHANNEL_BINDING_UNAVAILABLE_MESSAGE, {
+      thread_ts: threadTs,
+    });
+    return { kind: "stop" };
+  }
   // Legacy mappings predate team ownership and represent workspace sessions.
-  const bindingMatches = binding !== null && binding.teamId === (session.teamId ?? null);
+  const bindingMatches =
+    result.kind === "resolved" && result.binding.teamId === (session.teamId ?? null);
   if (!session.closed && !bindingMatches) {
     await closeThreadSession(env, channel, threadTs, session.sessionId);
     session = { ...session, closed: true };
@@ -129,8 +147,9 @@ async function resolveExistingThreadSession(
   }
   if (session.closed) {
     await postMessage(env.SLACK_BOT_TOKEN, channel, THREAD_CLOSED_MESSAGE, { thread_ts: threadTs });
+    return { kind: "stop" };
   }
-  return session;
+  return { kind: "followUp", session, threadTs };
 }
 
 /**
@@ -142,7 +161,7 @@ async function resolveExistingThreadSession(
 async function handleIncomingMessage(params: IncomingMessageParams): Promise<void> {
   const {
     content,
-    existingSession,
+    admission,
     user,
     channel,
     ts,
@@ -182,7 +201,8 @@ async function handleIncomingMessage(params: IncomingMessageParams): Promise<voi
   const promptText = forwardedContext + requestText;
   let actor: SlackActorIdentity | undefined;
 
-  if (threadTs && existingSession) {
+  if (admission.kind === "followUp") {
+    const { session: existingSession, threadTs } = admission;
     let turnPlan: ResolvedTurnPlan | undefined;
     if (hasInlineOverrides) {
       const enabledModels = await getAuthoritativeModels(env, traceId);
@@ -504,13 +524,13 @@ export async function handleAppMention(
   traceId: string | undefined,
   scheduleBackground: BackgroundTaskScheduler
 ): Promise<void> {
-  const existingSession = await resolveExistingThreadSession(
+  const admission = await resolveThreadSessionAdmission(
     env,
     event.channel,
     event.thread_ts,
     traceId
   );
-  if (existingSession?.closed) return;
+  if (admission.kind === "stop") return;
   const parsedFlags = parseInlinePromptFlags(stripMentions(event.text));
   const messageText = parsedFlags.ok ? parsedFlags.text : "";
   const threadKey = event.thread_ts || event.ts;
@@ -584,7 +604,7 @@ export async function handleAppMention(
   }
   await handleIncomingMessage({
     content,
-    existingSession,
+    admission,
     user: event.user,
     channel: event.channel,
     ts: event.ts,
@@ -615,13 +635,13 @@ export async function handleDirectMessage(
   scheduleBackground: BackgroundTaskScheduler
 ): Promise<void> {
   log.info("slack.dm.received", { trace_id: traceId, user: event.user, channel: event.channel });
-  const existingSession = await resolveExistingThreadSession(
+  const admission = await resolveThreadSessionAdmission(
     env,
     event.channel,
     event.thread_ts,
     traceId
   );
-  if (existingSession?.closed) return;
+  if (admission.kind === "stop") return;
   const parsedFlags = parseInlinePromptFlags(stripMentions(event.text));
   const messageText = parsedFlags.ok ? parsedFlags.text : "";
   const forwarded = collectForwardedMessages(event.attachments);
@@ -638,7 +658,7 @@ export async function handleDirectMessage(
     scheduleStartingStatus(scheduleBackground, env, event.channel, threadKey, traceId);
   await handleIncomingMessage({
     content,
-    existingSession,
+    admission,
     user: event.user,
     channel: event.channel,
     ts: event.ts,

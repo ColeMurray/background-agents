@@ -4,6 +4,7 @@ import {
   evaluateConnectingTimeout,
   evaluateHeartbeatHealth,
   evaluateInactivityTimeout,
+  heartbeatStaleAt,
   isDeadSandboxStatus,
   type BootBudgetConfig,
   type ConnectingTimeoutConfig,
@@ -91,7 +92,7 @@ export function evaluateAlarmPolicy(
             ? inactivity.nextCheckMs
             : Math.min(
                 inactivity.nextCheckMs,
-                Math.max(1, sandbox.last_heartbeat + config.heartbeat.timeoutMs + 1 - now)
+                Math.max(1, heartbeatStaleAt(sandbox.last_heartbeat, config.heartbeat) - now)
               ),
       };
   }

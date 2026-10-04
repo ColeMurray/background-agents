@@ -102,6 +102,7 @@ vi.mock("../session/skill-resolution", () => ({
   })),
 }));
 
+const { resolveManagedSkills } = await import("../session/skill-resolution");
 const { AutomationExecutionUnauthorizedError, EXECUTION_DEADLINE_GRACE_MS, Scheduler } =
   await import("./scheduler");
 
@@ -2110,7 +2111,7 @@ describe("Scheduler", () => {
       mockSessionStoreGet
         .mockReset()
         .mockResolvedValue({ ownerTeamId: "team-a", visibility: "workspace" });
-      mockTeamChannelBindingGet.mockReset().mockResolvedValue(null);
+      mockTeamChannelBindingGet.mockReset().mockResolvedValue({ teamId: "team-a" });
     });
 
     describe("Slack publication preparation retries", () => {
@@ -2130,7 +2131,10 @@ describe("Scheduler", () => {
         const warn = vi
           .spyOn((scheduler as unknown as { log: Logger }).log, "warn")
           .mockImplementation(() => {});
-        return { scheduler, slackFetch, warn };
+        const info = vi
+          .spyOn((scheduler as unknown as { log: Logger }).log, "info")
+          .mockImplementation(() => {});
+        return { scheduler, slackFetch, warn, info };
       }
 
       it.each(["none", "invocation", "automation", "session", "channel"] as const)(
@@ -2198,6 +2202,7 @@ describe("Scheduler", () => {
 
       it.each([
         { visibility: "private", binding: null, reason: "private_session" },
+        { visibility: "workspace", binding: null, reason: "channel_team_mismatch" },
         {
           visibility: "workspace",
           binding: { teamId: "team-b" },
@@ -2231,39 +2236,118 @@ describe("Scheduler", () => {
         expect(await verifyCallbackSignature(body, "test-secret")).toBe(true);
       });
 
-      it("rechecks preparation and scope after transport failure without a nested loop", async () => {
-        const { scheduler, slackFetch, warn } = createSlackCompletionHarness();
-        mockTeamChannelBindingGet
-          .mockResolvedValueOnce(null)
-          .mockResolvedValue({ teamId: "team-b" });
-        slackFetch.mockResolvedValue(new Response("unavailable", { status: 503 }));
-        const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
-        try {
-          await scheduler.runComplete(runCompletion({ success: false, error: "secret error" }));
+      it.each([null, { teamId: "team-b" }])(
+        "rechecks preparation and scope after transport failure without a nested loop: %j",
+        async (binding) => {
+          const { scheduler, slackFetch, warn } = createSlackCompletionHarness();
+          mockTeamChannelBindingGet
+            .mockResolvedValueOnce({ teamId: "team-a" })
+            .mockResolvedValue(binding);
+          slackFetch.mockResolvedValue(new Response("unavailable", { status: 503 }));
+          const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
+          try {
+            await scheduler.runComplete(runCompletion({ success: false, error: "secret error" }));
 
-          expect(mockStore.updateRun).toHaveBeenCalledOnce();
-          expect(mockStore.getInvocationById).toHaveBeenCalledTimes(2);
-          expect(mockStore.getById).toHaveBeenCalledTimes(2);
-          expect(mockSessionStoreGet).toHaveBeenCalledTimes(2);
-          expect(mockTeamChannelBindingGet).toHaveBeenCalledTimes(2);
-          expect(slackFetch.mock.calls.map(([url]) => url)).toEqual([
-            "https://internal/callbacks/automation-complete",
-            "https://internal/callbacks/thread_closed",
-          ]);
-          const closure = JSON.parse(String(slackFetch.mock.calls[1][1]?.body));
-          expect(closure.context).toEqual({ channel: "C1", threadTs: "1700000000.000200" });
-          expect(closure).not.toHaveProperty("error");
-          expect(closure).not.toHaveProperty("messageId");
-          expect(setTimeoutSpy.mock.calls.map(([, ms]) => ms)).toEqual([10_000, 1000, 10_000]);
-          expect(
-            warn.mock.calls
-              .filter(([, fields]) => fields?.event === "scheduler.slack_complete_failed")
-              .map(([, fields]) => fields?.attempt)
-          ).toEqual([1, 2]);
-        } finally {
-          setTimeoutSpy.mockRestore();
+            expect(mockStore.updateRun).toHaveBeenCalledOnce();
+            expect(mockStore.getInvocationById).toHaveBeenCalledTimes(2);
+            expect(mockStore.getById).toHaveBeenCalledTimes(2);
+            expect(mockSessionStoreGet).toHaveBeenCalledTimes(2);
+            expect(mockTeamChannelBindingGet).toHaveBeenCalledTimes(2);
+            expect(slackFetch.mock.calls.map(([url]) => url)).toEqual([
+              "https://internal/callbacks/automation-complete",
+              "https://internal/callbacks/thread_closed",
+            ]);
+            const closure = JSON.parse(String(slackFetch.mock.calls[1][1]?.body));
+            expect(closure.context).toEqual({ channel: "C1", threadTs: "1700000000.000200" });
+            expect(closure).not.toHaveProperty("error");
+            expect(closure).not.toHaveProperty("messageId");
+            expect(setTimeoutSpy.mock.calls.map(([, ms]) => ms)).toEqual([10_000, 1000, 10_000]);
+            expect(
+              warn.mock.calls
+                .filter(([, fields]) => fields?.event === "scheduler.slack_complete_failed")
+                .map(([, fields]) => fields?.attempt)
+            ).toEqual([1, 2]);
+          } finally {
+            setTimeoutSpy.mockRestore();
+          }
         }
-      });
+      );
+
+      it.each([
+        { visibility: "private", binding: { teamId: "team-a" }, reason: "private_session" },
+        { visibility: "workspace", binding: null, reason: "channel_team_mismatch" },
+        {
+          visibility: "workspace",
+          binding: { teamId: "team-b" },
+          reason: "channel_team_mismatch",
+        },
+      ])(
+        "retains closure and denial after $reason even when current scope allows completion",
+        async ({ visibility, binding, reason }) => {
+          vi.useFakeTimers();
+          try {
+            const { scheduler, slackFetch, warn, info } = createSlackCompletionHarness();
+            mockSessionStoreGet.mockResolvedValue({ ownerTeamId: "team-a", visibility });
+            mockTeamChannelBindingGet.mockResolvedValue(binding);
+            const firstAttempt = deferred<void>();
+            slackFetch
+              .mockImplementationOnce(async () => {
+                mockSessionStoreGet.mockResolvedValue({
+                  ownerTeamId: "team-a",
+                  visibility: "workspace",
+                });
+                mockTeamChannelBindingGet.mockResolvedValue({ teamId: "team-a" });
+                firstAttempt.resolve();
+                return new Response("unavailable", { status: 503 });
+              })
+              .mockResolvedValueOnce(new Response("ok"));
+            const completion = scheduler.runComplete(
+              runCompletion({ success: false, error: "secret error" })
+            );
+
+            await firstAttempt.promise;
+            await vi.advanceTimersByTimeAsync(1000);
+            await completion;
+
+            expect(mockStore.updateRun).toHaveBeenCalledOnce();
+            expect(mockSessionStoreGet).toHaveBeenCalledTimes(2);
+            expect(mockTeamChannelBindingGet).toHaveBeenCalledTimes(2);
+            expect(slackFetch.mock.calls.map(([url]) => url)).toEqual([
+              "https://internal/callbacks/thread_closed",
+              "https://internal/callbacks/thread_closed",
+            ]);
+            for (const [, init] of slackFetch.mock.calls) {
+              const body = JSON.parse(String(init?.body));
+              expect(body).toEqual({
+                kind: "slack.thread_closed",
+                sessionId: "sess-1",
+                timestamp: expect.any(Number),
+                context: { channel: "C1", threadTs: "1700000000.000200" },
+                signature: expect.any(String),
+              });
+              expect(await verifyCallbackSignature(body, "test-secret")).toBe(true);
+            }
+            expect(warn).toHaveBeenCalledWith(
+              "Slack completion callback failed",
+              expect.objectContaining({
+                event: "scheduler.slack_complete_failed",
+                attempt: 1,
+                http_status: 503,
+              })
+            );
+            expect(
+              info.mock.calls.filter(
+                ([, fields]) => fields?.event === "scheduler.slack_complete_denied"
+              )
+            ).toEqual([
+              ["Slack completion denied by session scope", expect.objectContaining({ reason })],
+              ["Slack completion denied by session scope", expect.objectContaining({ reason })],
+            ]);
+          } finally {
+            vi.useRealTimers();
+          }
+        }
+      );
 
       it.each(["invocation", "automation", "session", "channel"] as const)(
         "contains exhausted %s reads without transport or terminal duplicate publication",
@@ -2289,32 +2373,42 @@ describe("Scheduler", () => {
         }
       );
 
-      it("does not transport a timed-out attempt after its uncancelable D1 read finishes", async () => {
-        vi.useFakeTimers();
-        try {
-          const { scheduler, slackFetch } = createSlackCompletionHarness();
-          const pendingRead = deferred<unknown>();
-          const readStarted = deferred<void>();
-          mockSessionStoreGet.mockImplementationOnce(() => {
-            readStarted.resolve();
-            return pendingRead.promise;
-          });
-          const completion = scheduler.runComplete(runCompletion());
+      it.each(["workspace", "private"] as const)(
+        "does not transport a timed-out %s attempt after its uncancelable D1 read finishes",
+        async (visibility) => {
+          vi.useFakeTimers();
+          try {
+            const { scheduler, slackFetch, info } = createSlackCompletionHarness();
+            const pendingRead = deferred<unknown>();
+            const readStarted = deferred<void>();
+            mockSessionStoreGet.mockImplementationOnce(() => {
+              readStarted.resolve();
+              return pendingRead.promise;
+            });
+            const completion = scheduler.runComplete(runCompletion());
 
-          await readStarted.promise;
-          await vi.advanceTimersByTimeAsync(10_000);
-          pendingRead.resolve({ ownerTeamId: "team-a", visibility: "workspace" });
-          await vi.advanceTimersByTimeAsync(1000);
-          await completion;
+            await readStarted.promise;
+            await vi.advanceTimersByTimeAsync(10_000);
+            pendingRead.resolve({ ownerTeamId: "team-a", visibility });
+            await vi.advanceTimersByTimeAsync(1000);
+            await completion;
 
-          expect(mockStore.updateRun).toHaveBeenCalledOnce();
-          expect(mockSessionStoreGet).toHaveBeenCalledTimes(2);
-          expect(slackFetch).toHaveBeenCalledOnce();
-          expect(slackFetch.mock.calls[0][1]?.signal.aborted).toBe(false);
-        } finally {
-          vi.useRealTimers();
+            expect(mockStore.updateRun).toHaveBeenCalledOnce();
+            expect(mockSessionStoreGet).toHaveBeenCalledTimes(2);
+            expect(slackFetch).toHaveBeenCalledOnce();
+            expect(slackFetch.mock.calls[0][0]).toBe(
+              "https://internal/callbacks/automation-complete"
+            );
+            expect(slackFetch.mock.calls[0][1]?.signal.aborted).toBe(false);
+            expect(info).not.toHaveBeenCalledWith(
+              "Slack completion denied by session scope",
+              expect.anything()
+            );
+          } finally {
+            vi.useRealTimers();
+          }
         }
-      });
+      );
 
       it.each([{ SLACK_BOT: undefined }, { SERVICE_AUTH_SECRET_SLACK_BOT: undefined }])(
         "skips publication preparation when callback configuration is absent: %j",
@@ -3593,6 +3687,159 @@ describe("Scheduler", () => {
       mockStore.getOverdueAutomations.mockResolvedValue([teamAutomation]);
       mockEnvironmentGetById.mockReset().mockResolvedValue(environment);
       mockEnvironmentRepositories.mockReset().mockResolvedValue(members);
+    });
+    describe("launch-time re-authorization", () => {
+      function launchableRepositories(names: string[]) {
+        selectRepositories(
+          "auto-1",
+          names.map((name, index) =>
+            repositoryRow("auto-1", { repo_name: name, repo_id: 1000 + index })
+          )
+        );
+        mockCheckRepositoryAccess.mockImplementation(async ({ owner, name }) => ({
+          repoId: 1000 + names.indexOf(name),
+          repoOwner: owner,
+          repoName: name,
+          defaultBranch: "main",
+        }));
+        mockTeamGrantCovers.mockResolvedValue(true);
+      }
+
+      /** Admit the firing, then deny every launch. */
+      function denyAfterAdmission() {
+        mockIsAutomationExecutionAuthorized.mockResolvedValueOnce(true).mockResolvedValue(false);
+      }
+
+      it("re-checks admission's requirements as the last step before session creation", async () => {
+        launchableRepositories(["web-app"]);
+        denyAfterAdmission();
+        mockStore.getInvocationRunAggregate.mockResolvedValue(aggregate({ total: 1, active: 0 }));
+
+        await expect(createScheduler().trigger("auto-1", "manual-user")).rejects.toMatchObject({
+          name: "AutomationExecutionUnauthorizedError",
+          reason: "execution_authorization_denied",
+        });
+        const admissionRequest = {
+          automationId: "auto-1",
+          executionUserId: "manual-user",
+          requiresRepositoryUse: true,
+          requiresEnvironmentUse: false,
+        };
+        expect(mockIsAutomationExecutionAuthorized.mock.calls).toEqual([
+          [expect.anything(), admissionRequest],
+          [expect.anything(), admissionRequest],
+        ]);
+        const launchCheck = mockIsAutomationExecutionAuthorized.mock.invocationCallOrder[1];
+        expect(launchCheck).toBeGreaterThan(
+          mockStore.setRunExecutionDeadline.mock.invocationCallOrder[0]
+        );
+        expect(launchCheck).toBeGreaterThan(
+          vi.mocked(resolveManagedSkills).mock.invocationCallOrder[0]
+        );
+        expect(mockSessionStoreCreate).not.toHaveBeenCalled();
+        expect(mockStore.updateRun).toHaveBeenCalledWith(expect.any(String), {
+          status: "unauthorized",
+          failure_reason: "execution_authorization_denied",
+          session_id: null,
+          completed_at: expect.any(Number),
+        });
+        expect(mockStore.tryMarkInvocationFailureCounted).not.toHaveBeenCalled();
+        expect(mockStore.incrementConsecutiveFailures).not.toHaveBeenCalled();
+      });
+
+      it("reports a team archived after admission", async () => {
+        launchableRepositories(["web-app"]);
+        denyAfterAdmission();
+        mockTeamGetById
+          .mockResolvedValueOnce(activeTeam)
+          .mockResolvedValue({ ...activeTeam, archivedAt: 2 });
+
+        await expect(createScheduler().trigger("auto-1", "manual-user")).rejects.toMatchObject({
+          reason: "team_archived",
+        });
+      });
+
+      it("counts a scheduled launch denial as skipped without a failure strike", async () => {
+        launchableRepositories(["web-app"]);
+        denyAfterAdmission();
+
+        expect(await createScheduler().tick()).toEqual({ processed: 0, skipped: 1, failed: 0 });
+        expect(mockStore.incrementConsecutiveFailures).not.toHaveBeenCalled();
+        expect(mockStore.recordAuthorizationDenied).not.toHaveBeenCalled();
+      });
+
+      describe("mixed fan-out with a denied and a genuinely failed child", () => {
+        beforeEach(() => {
+          launchableRepositories(["web-app", "api"]);
+          // "api" fails resolution before launch; "web-app" is denied at launch.
+          mockCheckRepositoryAccess.mockImplementation(async ({ owner, name }) =>
+            name === "api"
+              ? null
+              : { repoId: 1000, repoOwner: owner, repoName: name, defaultBranch: "main" }
+          );
+          denyAfterAdmission();
+          mockStore.getInvocationRunAggregate.mockResolvedValue(
+            aggregate({ total: 2, active: 0, failed: 1 })
+          );
+        });
+
+        it("fails a manual trigger and counts the genuine failure", async () => {
+          const trigger = createScheduler().trigger("auto-1", "manual-user");
+          await expect(trigger).rejects.toThrow("Failed to trigger automation");
+          await expect(trigger).rejects.not.toBeInstanceOf(AutomationExecutionUnauthorizedError);
+          expect(mockStore.updateRun).toHaveBeenCalledWith(
+            expect.any(String),
+            expect.objectContaining({ status: "unauthorized" })
+          );
+          expect(mockStore.tryMarkInvocationFailureCounted).toHaveBeenCalledTimes(1);
+          expect(mockStore.incrementConsecutiveFailures).toHaveBeenCalledTimes(1);
+        });
+
+        it("reports a scheduled firing as failed, not skipped", async () => {
+          expect(await createScheduler().tick()).toEqual({ processed: 0, skipped: 0, failed: 1 });
+          expect(mockStore.incrementConsecutiveFailures).toHaveBeenCalledTimes(1);
+        });
+      });
+
+      it("counts an event launch denial as skipped", async () => {
+        mockGetSlackAutomationsForChannel.mockResolvedValue([sampleSlackAutomation]);
+        mockStore.getLatestSteerableRunForThread.mockResolvedValue(null);
+        mockStore.getActiveRunForKey.mockResolvedValue(null);
+        denyAfterAdmission();
+
+        expect(await createScheduler().event(makeSlackEvent())).toEqual({
+          triggered: 0,
+          skipped: 1,
+          steered: 0,
+        });
+        expect(mockStore.incrementConsecutiveFailures).not.toHaveBeenCalled();
+      });
+
+      it("re-authorizes each fanned-out child against current team state", async () => {
+        launchableRepositories(["web-app", "api", "worker"]);
+        mockStore.getInvocationRunAggregate.mockResolvedValue(aggregate({ total: 3, active: 3 }));
+
+        const result = await createScheduler().trigger("auto-1", "manual-user");
+
+        expect(result.runs.filter((run) => run.status === "running")).toHaveLength(3);
+        expect(mockIsAutomationExecutionAuthorized).toHaveBeenCalledTimes(1 + 3);
+        // One admission read plus one launch read per child.
+        expect(mockTeamGetById).toHaveBeenCalledTimes(1 + 3);
+      });
+
+      it("uses the team's default visibility as of launch", async () => {
+        launchableRepositories(["web-app"]);
+        mockTeamGetById
+          .mockResolvedValueOnce({ ...activeTeam, defaultVisibility: "workspace" })
+          .mockResolvedValue({ ...activeTeam, defaultVisibility: "private" });
+        mockStore.getInvocationRunAggregate.mockResolvedValue(aggregate({ total: 1, active: 1 }));
+
+        await createScheduler().trigger("auto-1", "manual-user");
+
+        expect(mockSessionStoreCreate).toHaveBeenCalledWith(
+          expect.objectContaining({ ownerTeamId: teamId, visibility: "private" })
+        );
+      });
     });
 
     it("checks resolved direct IDs before manual admission", async () => {
