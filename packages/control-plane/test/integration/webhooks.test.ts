@@ -646,6 +646,7 @@ describe("POST /webhooks/automation/:id", () => {
       const response = await getStatus(automation.id, invocationId!);
 
       expect(response.status).toBe(200);
+      expect(response.headers.get("cache-control")).toBe("private, no-store");
       expect(await response.json<WebhookInvocationStatusResponse>()).toEqual({
         invocationId,
         status: "running",

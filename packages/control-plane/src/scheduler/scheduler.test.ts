@@ -3701,6 +3701,35 @@ describe("Scheduler", () => {
       expect(mockStore.insertInvocationGuarded).not.toHaveBeenCalled();
     });
 
+    it.each([
+      { path: "the overlap pre-check", active: true, inserted: true },
+      { path: "a lost guarded insert", active: false, inserted: false },
+    ])(
+      "resolves a concurrent same-key delivery admitted after the trigger-key check ($path)",
+      async ({ active, inserted }) => {
+        mockGetSlackAutomationsForChannel.mockResolvedValue([sampleSlackAutomation]);
+        mockStore.getLatestSteerableRunForThread.mockResolvedValue(null);
+        mockStore.getActiveRunForKey.mockResolvedValue(
+          active ? sampleRunRow({ id: "original-child" }) : null
+        );
+        mockStore.insertInvocationGuarded.mockResolvedValueOnce({ inserted });
+        // The original commits its invocation between the pre-check and the overlap.
+        mockStore.getInvocationIdByTriggerKey
+          .mockResolvedValueOnce(null)
+          .mockResolvedValueOnce("inv-original");
+
+        const result = await createScheduler().event(makeSlackEvent());
+
+        expect(result).toEqual({
+          triggered: 0,
+          skipped: 1,
+          steered: 0,
+          invocationIds: ["inv-original"],
+        });
+        expect(mockStore.insertSkippedInvocation).not.toHaveBeenCalled();
+      }
+    );
+
     it("falls through to a new trigger when steering the session fails", async () => {
       mockGetSlackAutomationsForChannel.mockResolvedValue([sampleSlackAutomation]);
       // A completed run is steerable, but the enqueue will fail; with the run no

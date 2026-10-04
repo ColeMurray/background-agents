@@ -820,6 +820,17 @@ export class Scheduler {
   ): Promise<StartInvocationResult> {
     if (params.source === "manual") return { outcome: "blocked", reason: "concurrent_run_active" };
 
+    // A concurrent same-key delivery may have admitted this event since the
+    // pre-check; its invocation commits with its active child, so the overlap
+    // just observed may be that firing.
+    if (params.triggerKey) {
+      const ownerId = await store.getInvocationIdByTriggerKey(
+        params.automation.id,
+        params.triggerKey
+      );
+      if (ownerId) return { outcome: "deduplicated", invocationId: ownerId };
+    }
+
     const now = Date.now();
     const invocationId = generateId();
     const { inserted } = await store.insertSkippedInvocation(

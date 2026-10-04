@@ -148,6 +148,10 @@ automationWebhookRoutes.post(
 
 automationWebhookRoutes.get(
   "/webhooks/automation/:id/invocations/:invocationId",
-  admit({ ...SCM_AGNOSTIC_HANDLER_AUTHENTICATED_ROUTE, authorization: NO_AUTHORIZATION }),
+  admit({
+    ...SCM_AGNOSTIC_HANDLER_AUTHENTICATED_ROUTE,
+    authorization: NO_AUTHORIZATION,
+    cacheControl: "private, no-store",
+  }),
   (c) => dispatch(c, handleWebhookInvocationStatus)
 );
