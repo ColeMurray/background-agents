@@ -82,7 +82,7 @@ export type SandboxAlarmResult =
   | "sandbox_failed"
   | "sandbox_terminated"
   | { kind: "boot_budget_exceeded"; reason: string }
-  | { kind: "connect_retries_exhausted"; reason: string };
+  | { kind: "connect_timeout_unrecoverable"; reason: string };
 
 export interface SandboxAlarm {
   handleAlarm(): Promise<SandboxAlarmResult>;
