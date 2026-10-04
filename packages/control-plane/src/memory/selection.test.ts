@@ -76,7 +76,7 @@ describe("memory selection", () => {
     expect(ids(await selectWithinBudget(candidates, target))).toEqual(["repo", "mine"]);
     const optedOut = await selectWithinBudget(candidates, { ...target, personalOwnerUserId: null });
     expect(ids(optedOut)).toEqual(["repo"]);
-    expect(optedOut).toMatchObject({ includePersonalMemories: false, personalOwnerUserId: null });
+    expect(optedOut.personalOwnerUserId).toBeNull();
   });
   it("is deterministic across input order and uses id to break equal timestamps", async () => {
     const candidates = [candidate("b"), candidate("a")];

@@ -24,7 +24,7 @@ import {
 
 /** The pinned selection as people see it, with live drift, under session-read admission. */
 async function view(_request: Request, _env: Env, params: { id: string }, ctx: UserRouteContext) {
-  const loaded = await new SessionMemorySelectionStore(ctx.db).load(params.id);
+  const loaded = await new SessionMemorySelectionStore(ctx.db).loadSelection(params.id);
   return loaded
     ? json(toSelectionStatus(loaded.selection, loaded.drift))
     : error("Session not found", 404);

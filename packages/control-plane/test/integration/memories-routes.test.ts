@@ -111,8 +111,9 @@ describe("memory HTTP lifecycle and session boundaries", () => {
       });
       expect(response.status).toBe(201);
       const { sessionId } = await response.json<{ sessionId: string }>();
-      const manifest = (await new SessionMemorySelectionStore(env.DB).load(sessionId))!.selection;
-      expect(manifest.includePersonalMemories).toBe(override ?? false);
+      const manifest = (await new SessionMemorySelectionStore(env.DB).loadSelection(sessionId))!
+        .selection;
+      expect(manifest.personalOwnerUserId).toBe(override ? OWNER : null);
       expect(manifest.items.map((item) => item.memoryId)).toEqual(override ? [record.id] : []);
       const view = await request(`/sessions/${sessionId}/memories`);
       expect(view.status).toBe(200);
@@ -135,7 +136,7 @@ describe("memory HTTP lifecycle and session boundaries", () => {
       record.currentRevisionId
     );
     expect(revision.status).toBe(200);
-    const loaded = (await new SessionMemorySelectionStore(env.DB).load("pinned"))!;
+    const loaded = (await new SessionMemorySelectionStore(env.DB).loadSelection("pinned"))!;
     expect(loaded.selection.items[0]).not.toHaveProperty("changed");
     expect(loaded.selection.items[0]).not.toHaveProperty("archived");
     const status = sessionMemorySelectionStatusSchema.parse(
@@ -216,9 +217,9 @@ describe("memory HTTP lifecycle and session boundaries", () => {
     const child = await session("child-excluded", true, "excluded");
     expect((await child(`/${record.id}`)).status).toBe(404);
     expect(
-      (await new SessionMemorySelectionStore(env.DB).load("child-excluded"))?.selection
-        .includePersonalMemories
-    ).toBe(false);
+      (await new SessionMemorySelectionStore(env.DB).loadSelection("child-excluded"))?.selection
+        .personalOwnerUserId
+    ).toBeNull();
   });
   it.each(["archive", "reject"] as const)(
     "conceals an unpinned record after %s, even when the sandbox knows its ID",
@@ -287,11 +288,13 @@ describe("memory HTTP lifecycle and session boundaries", () => {
     const record = await createMemory();
     await request("/memory-preferences", "GET", undefined, OTHER);
     await session("merged-owner");
-    const before = (await new SessionMemorySelectionStore(env.DB).load("merged-owner"))!.selection;
+    const before = (await new SessionMemorySelectionStore(env.DB).loadSelection("merged-owner"))!
+      .selection;
     await request("/memory-preferences", "PUT", { includePersonalMemories: false });
     await act(record.id, "archive", record.currentRevisionId);
     await mergeUsers(env.DB, { survivorId: OTHER, loserId: OWNER });
-    const after = (await new SessionMemorySelectionStore(env.DB).load("merged-owner"))!.selection;
+    const after = (await new SessionMemorySelectionStore(env.DB).loadSelection("merged-owner"))!
+      .selection;
     expect(after.manifestSha256).toBe(before.manifestSha256);
     expect(after.personalOwnerUserId).toBe(OTHER);
     expect(await new MemoryPreferenceStore(env.DB).get(OTHER)).toEqual({

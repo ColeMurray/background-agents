@@ -8,8 +8,7 @@ function sessionReaches(partition: MemoryPartition): SqlFragment {
   switch (partition.type) {
     case "personal":
       return sql`EXISTS (SELECT 1 FROM session_memory_manifests manifest
-        WHERE manifest.session_id = s.id AND manifest.include_personal_memories = 1
-          AND manifest.personal_owner_user_id = s.user_id
+        WHERE manifest.session_id = s.id AND manifest.personal_owner_user_id = s.user_id
           AND manifest.personal_owner_user_id = ${partition.userId})`;
     case "repository":
       return sql`EXISTS (SELECT 1 FROM session_repositories sr
@@ -47,7 +46,7 @@ export function personalAutoSaveGuard(sessionId: string, ownerUserId: string | n
   return sql`EXISTS (SELECT 1 FROM session_memory_manifests manifest
     JOIN sessions s ON s.id = manifest.session_id
     WHERE manifest.session_id = ${sessionId} AND manifest.personal_auto_save_eligible = 1
-      AND manifest.include_personal_memories = 1 AND manifest.personal_owner_user_id = ${ownerUserId}
+      AND manifest.personal_owner_user_id = ${ownerUserId}
       AND s.visibility = 'private' AND s.user_id = manifest.personal_owner_user_id)`;
 }
 

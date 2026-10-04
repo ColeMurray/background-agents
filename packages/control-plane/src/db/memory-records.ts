@@ -1,6 +1,7 @@
 import {
   MEMORY_CONTENT_KEYS,
-  MEMORY_LIMITS,
+  MEMORY_SELECTION_BUDGET,
+  MEMORY_AGENT_WRITE_QUOTAS,
   MEMORY_TRANSITIONS,
   memoryContentSchema,
   type MemoryAction,
@@ -183,8 +184,8 @@ export class MemoryRecordStore {
               ) AS rank_in_partition
             ${CURRENT_MEMORY} WHERE ${active}
           ) ranked
-          WHERE (memory_type = 'directive' AND rank_in_partition <= ${MEMORY_LIMITS.directiveRecords})
-            OR (memory_type = 'fact' AND rank_in_partition <= ${MEMORY_LIMITS.catalogRecords})`
+          WHERE (memory_type = 'directive' AND rank_in_partition <= ${MEMORY_SELECTION_BUDGET.directiveRecords})
+            OR (memory_type = 'fact' AND rank_in_partition <= ${MEMORY_SELECTION_BUDGET.catalogRecords})`
       ),
     ]);
     const candidates = (ranked.results as MemoryRow[]).map(candidateFromRow);
@@ -266,10 +267,12 @@ export class MemoryRecordStore {
     if (actor.kind === "agent") {
       guards.push(
         agentWriteGuard(actor, input.partition),
-        agentWriteQuota(actor.sessionId, MEMORY_LIMITS.writesPerSession)
+        agentWriteQuota(actor.sessionId, MEMORY_AGENT_WRITE_QUOTAS.records)
       );
       if (status === "proposed")
-        guards.push(pendingProposalQuota(actor.sessionId, MEMORY_LIMITS.pendingPerSession));
+        guards.push(
+          pendingProposalQuota(actor.sessionId, MEMORY_AGENT_WRITE_QUOTAS.pendingProposals)
+        );
       else guards.push(personalAutoSaveGuard(actor.sessionId, actor.userId));
     }
     if (predecessor)
@@ -394,7 +397,9 @@ export class MemoryRecordStore {
       guards.push(sql`EXISTS (SELECT 1 FROM memories old WHERE old.id = memories.supersedes_memory_id
         AND old.current_revision_id = memories.supersedes_revision_id AND old.status = 'active')`);
     if (next.status === "proposed" && current.authorSessionId)
-      guards.push(pendingProposalQuota(current.authorSessionId, MEMORY_LIMITS.pendingPerSession));
+      guards.push(
+        pendingProposalQuota(current.authorSessionId, MEMORY_AGENT_WRITE_QUOTAS.pendingProposals)
+      );
 
     const operationId = generateId();
     const now = Date.now();

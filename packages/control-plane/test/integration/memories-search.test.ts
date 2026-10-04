@@ -95,9 +95,9 @@ describe("session memory discovery", () => {
     ]);
     const call = await sandbox("large-corpus");
     expect(
-      (await new SessionMemorySelectionStore(env.DB).load("large-corpus"))!.selection.items.some(
-        (item) => item.memoryId === "old"
-      )
+      (await new SessionMemorySelectionStore(env.DB).loadSelection(
+        "large-corpus"
+      ))!.selection.items.some((item) => item.memoryId === "old")
     ).toBe(false);
     const response = await call({ query: "billing webhook deduplication" });
     expect(response.status).toBe(200);

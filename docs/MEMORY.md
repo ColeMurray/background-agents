@@ -63,8 +63,8 @@ a different participant cannot write to the inherited owner's personal scope.
 - **A new lifecycle action or state:** add an entry to `MEMORY_TRANSITIONS`; the store, routes, DTO
   capabilities and web action buttons all derive from it.
 - **A new agent tool:** add it to `MEMORY_TOOLS` in `packages/shared/src/memory-tools.ts`, run
-  `npm run generate:memory-tools -w @open-inspect/shared`, and add a four-line OpenCode wrapper in
-  `tools/`. The Claude harness picks it up from the generated JSON. A shared test fails when the
+  `npm run generate:memory-contract -w @open-inspect/shared`, and add a four-line OpenCode wrapper
+  in `tools/`. The Claude harness picks it up from the generated JSON. A shared test fails when the
   generated artifacts are stale.
 - **Selection semantics:** bump `MEMORY_SELECTION_VERSION`. It is provenance only; loaders never
   branch on it, and rendering always uses the current format with its own hard limit, so existing

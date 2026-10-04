@@ -31,7 +31,7 @@ export interface SessionMemoryServiceDeps {
    * What one session sees: the session itself (principal, targets, harness, auto-save
    * eligibility), its pinned selection, and whether a record is pinned in it.
    */
-  selections: Pick<SessionMemorySelectionStore, "loadSession" | "load" | "isPinned">;
+  selections: Pick<SessionMemorySelectionStore, "loadSession" | "loadSelection" | "isPinned">;
   /** The memory records themselves (content, revisions, lifecycle), independent of any session. */
   records: Pick<MemoryRecordStore, "get" | "create">;
   /** Ranked search over current active facts. */
@@ -65,10 +65,10 @@ export class SessionMemoryService {
   /** The pinned boot context, rendered for the session's harness. */
   async renderedContext(sessionId: string): Promise<RenderedSessionMemory> {
     const session = await this.loadSession(sessionId);
-    const loaded = await this.selections.load(sessionId);
+    const loaded = await this.selections.loadSelection(sessionId);
     if (!loaded) throw new MemoryNotFoundError("Session not found");
     if (
-      !(await this.canRead(
+      !(await this.mayAccessShared(
         session,
         loaded.entries.map((entry) => entry.partition)
       ))
@@ -98,7 +98,7 @@ export class SessionMemoryService {
       if (access === "none" || (access === "pinned" && !pinned)) throw new MemoryNotFoundError();
     }
     if (record.status === "archived") {
-      if (!pinned || !(await this.canRead(session, [record.partition])))
+      if (!pinned || !(await this.mayAccessShared(session, [record.partition])))
         throw new MemoryNotFoundError();
       return {
         id: record.id,
@@ -114,7 +114,7 @@ export class SessionMemoryService {
       !sourcePartitions(session.sources).some((partition) =>
         samePartition(partition, record.partition)
       ) ||
-      !(await this.canRead(session, [record.partition]))
+      !(await this.mayAccessShared(session, [record.partition]))
     )
       throw new MemoryNotFoundError();
     return {
@@ -145,7 +145,8 @@ export class SessionMemoryService {
   ): Promise<SandboxMemoryWriteResult> {
     const session = await this.loadSession(sessionId);
     const partition = this.writePartition(session, input);
-    if (!(await this.canRead(session, [partition]))) throw new MemoryAccessError(SCOPE_UNAVAILABLE);
+    if (!(await this.mayAccessShared(session, [partition])))
+      throw new MemoryAccessError(SCOPE_UNAVAILABLE);
     const memory = await this.records.create(
       {
         partition,
@@ -166,6 +167,7 @@ export class SessionMemoryService {
       },
       { personalAutoSaveEligible: session.personalAutoSaveEligible }
     );
+    if (memory.status === "archived") throw new Error("A newly created memory cannot be archived");
     return { id: memory.id, status: memory.status, revisionId: memory.currentRevisionId };
   }
 
@@ -174,13 +176,13 @@ export class SessionMemoryService {
     const session = await this.loadSession(sessionId);
     const partitions = this.searchPartitions(session, input);
     const all = partitions.map((entry) => entry.partition);
-    if (!(await this.canRead(session, all))) throw new MemoryAccessError(SCOPE_UNAVAILABLE);
+    if (!(await this.mayAccessShared(session, all))) throw new MemoryAccessError(SCOPE_UNAVAILABLE);
     const hits = await this.factIndex.search({
       terms: memorySearchTerms(input.query),
       partitions,
       limit: input.limit,
     });
-    if (!(await this.canRead(session, all))) throw new MemoryAccessError(SCOPE_UNAVAILABLE);
+    if (!(await this.mayAccessShared(session, all))) throw new MemoryAccessError(SCOPE_UNAVAILABLE);
     return factSearchResponse(hits, input.limit);
   }
 
@@ -190,7 +192,8 @@ export class SessionMemoryService {
     return session;
   }
 
-  private async canRead(
+  /** Whether the session principal may currently access these shared partitions. */
+  private async mayAccessShared(
     session: MemorySession,
     partitions: readonly MemoryPartition[]
   ): Promise<boolean> {

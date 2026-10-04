@@ -111,7 +111,7 @@ export interface SessionMemorySelection {
   selectionVersion: number;
   manifestSha256: string;
   resolvedAt: number;
-  includePersonalMemories: boolean;
+  /** The pinned personal owner; null when personal memory is excluded. */
   personalOwnerUserId: string | null;
   directiveChars: number;
   catalogChars: number;

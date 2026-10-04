@@ -233,7 +233,7 @@ describe("memory shared-scope authorization", () => {
     expect(created.status).toBe(201);
     const { sessionId } = await created.json<{ sessionId: string }>();
     expect(
-      (await new SessionMemorySelectionStore(env.DB).load(sessionId))?.selection.items
+      (await new SessionMemorySelectionStore(env.DB).loadSelection(sessionId))?.selection.items
     ).toEqual([]);
   });
 
@@ -259,7 +259,7 @@ describe("memory shared-scope authorization", () => {
     ).first<{ id: string }>();
     expect(session).not.toBeNull();
     expect(
-      (await new SessionMemorySelectionStore(env.DB).load(session!.id))?.selection.items
+      (await new SessionMemorySelectionStore(env.DB).loadSelection(session!.id))?.selection.items
     ).toEqual([]);
   });
 

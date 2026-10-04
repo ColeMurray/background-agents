@@ -40,7 +40,6 @@ describe("SessionMemorySelector", () => {
       { type: "personal", userId: "owner" },
     ]);
     expect(manifest).toMatchObject({
-      includePersonalMemories: true,
       personalOwnerUserId: "owner",
       omittedCount: 3,
     });
@@ -48,7 +47,7 @@ describe("SessionMemorySelector", () => {
 
   it("applies the saved default unless the session overrides it", async () => {
     const { selector: subject, deps } = selector(false);
-    expect((await subject.select(request)).includePersonalMemories).toBe(false);
+    expect((await subject.select(request)).personalOwnerUserId).toBeNull();
     expect(deps.preferences.get).toHaveBeenCalledWith("owner");
     deps.preferences.get.mockClear();
     const included = await subject.select({ ...request, includePersonalMemories: true });

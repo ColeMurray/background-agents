@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import type { SessionMemorySelection } from "./types";
-import type { LoadedSessionMemory } from "../db/session-memory-selections";
+import type { PinnedSelection } from "../db/session-memory-selections";
 import { MemoryAccessError, MemoryNotFoundError, MemoryValidationError } from "./errors";
 import type { MemoryPartition } from "./partition";
 import { SessionMemoryService, type SessionMemoryServiceDeps } from "./session-memory-service";
@@ -64,7 +64,7 @@ function setup(
     session?: MemorySession;
     records?: MemoryRecord[];
     pinned?: string[];
-    loaded?: LoadedSessionMemory;
+    loaded?: PinnedSelection;
     readable?: boolean[];
   } = {}
 ) {
@@ -73,7 +73,7 @@ function setup(
   const deps = {
     selections: {
       loadSession: vi.fn(async () => options.session ?? memorySession()),
-      load: vi.fn(async () => options.loaded ?? null),
+      loadSelection: vi.fn(async () => options.loaded ?? null),
       isPinned: vi.fn(async (_session: string, id: string) => !!options.pinned?.includes(id)),
     },
     records: {
@@ -241,7 +241,6 @@ describe("SessionMemoryService.renderedContext", () => {
     selectionVersion: 1,
     manifestSha256: "hash",
     resolvedAt: 1,
-    includePersonalMemories: true,
     personalOwnerUserId: "owner",
     directiveChars: 0,
     catalogChars: 10,

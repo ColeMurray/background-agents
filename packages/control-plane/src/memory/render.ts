@@ -1,7 +1,7 @@
 import { HARNESS_IDS, type HarnessId } from "@open-inspect/shared/harnesses";
 import { harnessMemoryToolName } from "@open-inspect/shared/memory-tools";
 import {
-  MEMORY_LIMITS,
+  MEMORY_SELECTION_BUDGET,
   memoryScopeDisplayKey,
   type MemoryScope,
 } from "@open-inspect/shared/types/memories";
@@ -70,7 +70,7 @@ export function renderMemorySection(
     if (!entry || entry.memoryId !== item.memoryId || entry.inclusion !== item.inclusion)
       throw new Error(`Missing pinned memory revision ${item.revisionId}`);
     const line = renderMemoryEntry(entry);
-    if (renderedChars + line.length + 1 > MEMORY_LIMITS.rendered) {
+    if (renderedChars + line.length + 1 > MEMORY_SELECTION_BUDGET.renderedChars) {
       omitted++;
       continue;
     }

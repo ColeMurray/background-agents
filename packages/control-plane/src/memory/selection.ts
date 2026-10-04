@@ -1,5 +1,8 @@
 import { DEFAULT_HARNESS } from "@open-inspect/shared/harnesses";
-import { MEMORY_LIMITS, MEMORY_SELECTION_VERSION } from "@open-inspect/shared/types/memories";
+import {
+  MEMORY_SELECTION_BUDGET,
+  MEMORY_SELECTION_VERSION,
+} from "@open-inspect/shared/types/memories";
 import type { SessionMemoryItem, SessionMemorySelection } from "./types";
 import { hashToken } from "../auth/crypto";
 import { partitionKey, partitionScope, type MemoryPartition } from "./partition";
@@ -77,7 +80,7 @@ class MemoryBudget {
   admit(candidate: MemoryCandidate, entryChars: number): boolean {
     const rendered = this.fits(
       "rendered",
-      this.renderedChars + entryChars > MEMORY_LIMITS.rendered
+      this.renderedChars + entryChars > MEMORY_SELECTION_BUDGET.renderedChars
     );
     let admitted: boolean;
     let chars: number;
@@ -86,9 +89,15 @@ class MemoryBudget {
       chars = candidate.content.length;
       const partitionTotal = (this.partitionChars.get(partition) ?? 0) + chars;
       admitted = [
-        this.fits(partition, partitionTotal > MEMORY_LIMITS.directiveCharsPerPartition),
-        this.fits("directives", this.directiveChars + chars > MEMORY_LIMITS.directives),
-        this.fits("directiveRecords", this.directiveCount >= MEMORY_LIMITS.directiveRecords),
+        this.fits(partition, partitionTotal > MEMORY_SELECTION_BUDGET.directiveCharsPerPartition),
+        this.fits(
+          "directives",
+          this.directiveChars + chars > MEMORY_SELECTION_BUDGET.directiveChars
+        ),
+        this.fits(
+          "directiveRecords",
+          this.directiveCount >= MEMORY_SELECTION_BUDGET.directiveRecords
+        ),
       ].every(Boolean);
       if (admitted && rendered) {
         this.partitionChars.set(partition, partitionTotal);
@@ -99,8 +108,8 @@ class MemoryBudget {
       chars = candidate.title.length + candidate.description.length;
       admitted = this.fits(
         "catalog",
-        this.catalogChars + chars > MEMORY_LIMITS.catalog ||
-          this.factCount >= MEMORY_LIMITS.catalogRecords
+        this.catalogChars + chars > MEMORY_SELECTION_BUDGET.catalogChars ||
+          this.factCount >= MEMORY_SELECTION_BUDGET.catalogRecords
       );
       if (admitted && rendered) {
         this.catalogChars += chars;
@@ -159,12 +168,10 @@ export async function selectWithinBudget(
       estimatedTokens: Math.ceil(chars / 4),
     });
   }
-  const includePersonalMemories = target.personalOwnerUserId !== null;
   const manifest: SessionMemorySelection = {
     selectionVersion: MEMORY_SELECTION_VERSION,
-    manifestSha256: await hashSelection(includePersonalMemories, items),
+    manifestSha256: await hashSelection(target.personalOwnerUserId !== null, items),
     resolvedAt,
-    includePersonalMemories,
     personalOwnerUserId: target.personalOwnerUserId,
     directiveChars: budget.directiveChars,
     catalogChars: budget.catalogChars,

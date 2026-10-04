@@ -66,7 +66,7 @@ CREATE TABLE session_memory_manifests (
   session_id TEXT PRIMARY KEY REFERENCES sessions(id) ON DELETE CASCADE,
   selection_version INTEGER NOT NULL,
   manifest_sha256 TEXT NOT NULL,
-  include_personal_memories INTEGER NOT NULL CHECK (include_personal_memories IN (0, 1)),
+  -- The pinned personal owner; NULL when personal memory is excluded from the session.
   personal_owner_user_id TEXT,
   personal_auto_save_eligible INTEGER NOT NULL DEFAULT 0 CHECK (personal_auto_save_eligible IN (0, 1)),
   directive_chars INTEGER NOT NULL,

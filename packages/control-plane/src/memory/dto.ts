@@ -48,7 +48,7 @@ export function toMemoryDto(
 /** A selection as people see it: items and sizes, without the owner, hash, or timestamps. */
 export function toSelectionSummary(manifest: SessionMemorySelection): MemorySelectionSummary {
   return {
-    includePersonalMemories: manifest.includePersonalMemories,
+    includePersonalMemories: manifest.personalOwnerUserId !== null,
     directiveChars: manifest.directiveChars,
     catalogChars: manifest.catalogChars,
     estimatedTokens: manifest.estimatedTokens,

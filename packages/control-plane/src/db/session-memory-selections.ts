@@ -21,7 +21,6 @@ interface ManifestRow {
   selection_version: number;
   manifest_sha256: string;
   resolved_at: number;
-  include_personal_memories: number;
   personal_owner_user_id: string | null;
   directive_chars: number;
   catalog_chars: number;
@@ -43,7 +42,8 @@ interface PinnedItemRow extends PartitionColumns {
   status: MemoryStatus;
 }
 
-export interface LoadedSessionMemory {
+/** A session's pinned selection, the live drift of its items, and its renderable revisions. */
+export interface PinnedSelection {
   selection: SessionMemorySelection;
   /** Live drift for each manifest item, in the same order; for inspection only. */
   drift: PinnedItemDrift[];
@@ -77,8 +77,8 @@ export class SessionMemorySelectionStore {
       this.db
         .prepare(
           `INSERT INTO session_memory_manifests
-      (session_id, selection_version, manifest_sha256, resolved_at, include_personal_memories, personal_owner_user_id, directive_chars, catalog_chars, estimated_tokens, omitted_count, personal_auto_save_eligible)
-      SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CASE WHEN visibility = 'private' AND parent_session_id IS NULL
+      (session_id, selection_version, manifest_sha256, resolved_at, personal_owner_user_id, directive_chars, catalog_chars, estimated_tokens, omitted_count, personal_auto_save_eligible)
+      SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, CASE WHEN visibility = 'private' AND parent_session_id IS NULL
         AND NOT EXISTS (SELECT 1 FROM session_collaborators WHERE session_id = sessions.id AND user_id <> sessions.user_id)
         THEN 1 ELSE 0 END FROM sessions WHERE id = ?`
         )
@@ -87,7 +87,6 @@ export class SessionMemorySelectionStore {
           manifest.selectionVersion,
           manifest.manifestSha256,
           manifest.resolvedAt,
-          manifest.includePersonalMemories ? 1 : 0,
           manifest.personalOwnerUserId,
           manifest.directiveChars,
           manifest.catalogChars,
@@ -116,8 +115,8 @@ export class SessionMemorySelectionStore {
       this.db
         .prepare(
           `INSERT INTO session_memory_manifests
-      (session_id, selection_version, manifest_sha256, resolved_at, include_personal_memories, personal_owner_user_id, directive_chars, catalog_chars, estimated_tokens, omitted_count)
-      SELECT ?, selection_version, manifest_sha256, resolved_at, include_personal_memories, personal_owner_user_id, directive_chars, catalog_chars, estimated_tokens, omitted_count FROM session_memory_manifests WHERE session_id = ?`
+      (session_id, selection_version, manifest_sha256, resolved_at, personal_owner_user_id, directive_chars, catalog_chars, estimated_tokens, omitted_count)
+      SELECT ?, selection_version, manifest_sha256, resolved_at, personal_owner_user_id, directive_chars, catalog_chars, estimated_tokens, omitted_count FROM session_memory_manifests WHERE session_id = ?`
         )
         .bind(childId, parentId),
       this.db
@@ -153,7 +152,7 @@ export class SessionMemorySelectionStore {
    * Sessions that predate memory get empty context; nonexistent sessions return null.
    * Callers must authorize the session and recheck shared-partition access before rendering.
    */
-  async load(sessionId: string): Promise<LoadedSessionMemory | null> {
+  async loadSelection(sessionId: string): Promise<PinnedSelection | null> {
     const [headers, rows] = await this.db.batch<ManifestRow | PinnedItemRow>([
       this.db
         .prepare("SELECT * FROM session_memory_manifests WHERE session_id = ?")
@@ -185,7 +184,6 @@ export class SessionMemorySelectionStore {
       selectionVersion: header.selection_version,
       manifestSha256: header.manifest_sha256,
       resolvedAt: header.resolved_at,
-      includePersonalMemories: header.include_personal_memories === 1,
       personalOwnerUserId: header.personal_owner_user_id,
       directiveChars: header.directive_chars,
       catalogChars: header.catalog_chars,
@@ -234,7 +232,7 @@ export class SessionMemorySelectionStore {
       this.db
         .prepare(
           `SELECT s.user_id, s.owner_team_id, s.harness, s.repo_owner, s.repo_name, s.environment_id,
-             s.parent_session_id, m.personal_owner_user_id, m.include_personal_memories,
+             s.parent_session_id, m.personal_owner_user_id,
              m.personal_auto_save_eligible
            FROM sessions s LEFT JOIN session_memory_manifests m ON m.session_id = s.id WHERE s.id = ?`
         )
@@ -255,7 +253,6 @@ export class SessionMemorySelectionStore {
           environment_id: string | null;
           parent_session_id: string | null;
           personal_owner_user_id: string | null;
-          include_personal_memories: number | null;
           personal_auto_save_eligible: number | null;
         }
       | undefined;
@@ -269,8 +266,7 @@ export class SessionMemorySelectionStore {
       id: sessionId,
       principal: { userId: session.user_id, ownerTeamId: session.owner_team_id },
       sources: {
-        personalOwnerUserId:
-          session.include_personal_memories === 1 ? session.personal_owner_user_id : null,
+        personalOwnerUserId: session.personal_owner_user_id,
         environmentId: session.environment_id,
         repositories: repos.length
           ? repos.map((repo) => ({
