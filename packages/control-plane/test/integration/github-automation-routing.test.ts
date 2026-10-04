@@ -325,7 +325,12 @@ describe("GitHub automation routing (real D1 and SessionDO)", () => {
     const event = githubEvent();
     const scheduler = createScheduler();
 
-    expect(await scheduler.event(event)).toEqual({ triggered: 3, skipped: 1, steered: 0 });
+    expect(await scheduler.event(event)).toEqual({
+      triggered: 3,
+      skipped: 1,
+      steered: 0,
+      invocationIds: [expect.any(String), expect.any(String), expect.any(String)],
+    });
     expect(automationRepositories.resolveAutomationRepositories).toHaveBeenCalledTimes(3);
     expect(
       vi
@@ -340,7 +345,12 @@ describe("GitHub automation routing (real D1 and SessionDO)", () => {
         .sort()
     ).toEqual(["auto-github-a", "auto-github-b", "auto-github-workspace"]);
 
-    expect(await scheduler.event(event)).toEqual({ triggered: 0, skipped: 4, steered: 0 });
+    expect(await scheduler.event(event)).toEqual({
+      triggered: 0,
+      skipped: 4,
+      steered: 0,
+      invocationIds: [expect.any(String), expect.any(String), expect.any(String)],
+    });
     expect(sessionInitialization.initializeSession).toHaveBeenCalledTimes(3);
     await expectLaunchedSession("auto-github-a", TEAM_A, EXECUTOR_A, event);
     await expectLaunchedSession("auto-github-b", TEAM_B, EXECUTOR_B, event);
@@ -357,7 +367,12 @@ describe("GitHub automation routing (real D1 and SessionDO)", () => {
     const scheduler = createScheduler();
 
     for (let delivery = 0; delivery < 2; delivery++) {
-      expect(await scheduler.event(event)).toEqual({ triggered: 0, skipped: 1, steered: 0 });
+      expect(await scheduler.event(event)).toEqual({
+        triggered: 0,
+        skipped: 1,
+        steered: 0,
+        invocationIds: [],
+      });
     }
     await expectUnauthorizedRun("auto-github-revoked", event);
     expect(await fetchRuns("auto-github-revoked")).toHaveLength(1);
@@ -382,7 +397,12 @@ describe("GitHub automation routing (real D1 and SessionDO)", () => {
       return candidates;
     });
     const event = githubEvent();
-    expect(await createScheduler().event(event)).toEqual({ triggered: 0, skipped: 1, steered: 0 });
+    expect(await createScheduler().event(event)).toEqual({
+      triggered: 0,
+      skipped: 1,
+      steered: 0,
+      invocationIds: [],
+    });
     await expectUnauthorizedRun(id, event);
     expect(sessionInitialization.initializeSession).not.toHaveBeenCalled();
   });
@@ -426,8 +446,18 @@ describe("GitHub automation routing (real D1 and SessionDO)", () => {
       const event = githubEvent();
       const scheduler = createScheduler();
 
-      expect(await scheduler.event(event)).toEqual({ triggered: 1, skipped: 0, steered: 0 });
-      expect(await scheduler.event(event)).toEqual({ triggered: 0, skipped: 1, steered: 0 });
+      expect(await scheduler.event(event)).toEqual({
+        triggered: 1,
+        skipped: 0,
+        steered: 0,
+        invocationIds: [expect.any(String)],
+      });
+      expect(await scheduler.event(event)).toEqual({
+        triggered: 0,
+        skipped: 1,
+        steered: 0,
+        invocationIds: [expect.any(String)],
+      });
       await expectLaunchedSession(id, TEAM_A, EXECUTOR_A, event);
       expect(sessionInitialization.initializeSession).toHaveBeenCalledOnce();
     }
@@ -454,6 +484,7 @@ describe("GitHub automation routing (real D1 and SessionDO)", () => {
       triggered: 0,
       skipped: 0,
       steered: 0,
+      invocationIds: [expect.any(String)],
     });
     expect(await fetchRuns(id)).toEqual([
       expect.objectContaining({
@@ -479,7 +510,12 @@ describe("GitHub automation routing (real D1 and SessionDO)", () => {
       }
     );
     const event = githubEvent();
-    expect(await createScheduler().event(event)).toEqual({ triggered: 0, skipped: 1, steered: 0 });
+    expect(await createScheduler().event(event)).toEqual({
+      triggered: 0,
+      skipped: 1,
+      steered: 0,
+      invocationIds: [],
+    });
     await expectUnauthorizedRun(id, event);
     expect(sessionInitialization.initializeSession).not.toHaveBeenCalled();
   });
@@ -501,7 +537,12 @@ describe("GitHub automation routing (real D1 and SessionDO)", () => {
       }
     );
     const event = githubEvent();
-    expect(await createScheduler().event(event)).toEqual({ triggered: 1, skipped: 0, steered: 0 });
+    expect(await createScheduler().event(event)).toEqual({
+      triggered: 1,
+      skipped: 0,
+      steered: 0,
+      invocationIds: [expect.any(String)],
+    });
     await expectLaunchedSession(id, TEAM_A, EXECUTOR_A, event);
     expect(sessionInitialization.initializeSession).toHaveBeenCalledOnce();
   });
@@ -545,7 +586,12 @@ describe("GitHub automation routing (real D1 and SessionDO)", () => {
     expect(forwarded.status).toBe(502);
     expect(await forwarded.json()).toEqual({ ok: false, error: "Failed to reach scheduler" });
     churn.mockRestore();
-    expect(await scheduler.event(event)).toEqual({ triggered: 1, skipped: 1, steered: 0 });
+    expect(await scheduler.event(event)).toEqual({
+      triggered: 1,
+      skipped: 1,
+      steered: 0,
+      invocationIds: [expect.any(String), expect.any(String)],
+    });
     await expectLaunchedSession(id, TEAM_A, EXECUTOR_A, event);
   });
 
@@ -580,7 +626,12 @@ describe("GitHub automation routing (real D1 and SessionDO)", () => {
       }
     );
     const event = githubEvent();
-    expect(await createScheduler().event(event)).toEqual({ triggered: 1, skipped: 0, steered: 0 });
+    expect(await createScheduler().event(event)).toEqual({
+      triggered: 1,
+      skipped: 0,
+      steered: 0,
+      invocationIds: [expect.any(String)],
+    });
     await expectLaunchedSession(id, TEAM_A, EXECUTOR_A, event);
     expect(sessionInitialization.initializeSession).toHaveBeenCalledOnce();
   });
@@ -616,7 +667,12 @@ describe("GitHub automation routing (real D1 and SessionDO)", () => {
     const scheduler = createScheduler();
 
     for (let delivery = 0; delivery < 2; delivery++) {
-      expect(await scheduler.event(event)).toEqual({ triggered: 0, skipped: 1, steered: 0 });
+      expect(await scheduler.event(event)).toEqual({
+        triggered: 0,
+        skipped: 1,
+        steered: 0,
+        invocationIds: [],
+      });
     }
     await expectUnauthorizedRun(id, event);
     const runs = await fetchRuns(id);
@@ -644,6 +700,7 @@ describe("GitHub automation routing (real D1 and SessionDO)", () => {
       triggered: 0,
       skipped: 0,
       steered: 0,
+      invocationIds: [],
     });
     for (const id of [
       "auto-github-disabled",
@@ -672,6 +729,7 @@ describe("GitHub automation routing (real D1 and SessionDO)", () => {
       triggered: 0,
       skipped: 0,
       steered: 0,
+      invocationIds: [],
     });
     await expectNoRecords("auto-github-wrong-id-team");
     await expectNoRecords("auto-github-wrong-id-workspace");
@@ -688,7 +746,12 @@ describe("GitHub automation routing (real D1 and SessionDO)", () => {
     ).toEqual({ count: 0 });
     const event = githubEvent();
 
-    expect(await createScheduler().event(event)).toEqual({ triggered: 1, skipped: 0, steered: 0 });
+    expect(await createScheduler().event(event)).toEqual({
+      triggered: 1,
+      skipped: 0,
+      steered: 0,
+      invocationIds: [expect.any(String)],
+    });
     await expectLaunchedSession(id, null, WORKSPACE_EXECUTOR, event);
     expect(automationRepositories.resolveAutomationRepositories).toHaveBeenCalledWith(
       expect.anything(),

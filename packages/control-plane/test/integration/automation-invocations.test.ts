@@ -961,6 +961,38 @@ describe("automation invocations (D1 integration)", () => {
       expect(single.runs.map((run) => run.id)).toEqual(["run-legacy"]);
     });
 
+    it("reads one invocation exactly as the listing shows it, scoped to its automation", async () => {
+      const store = await seedMixedHistory("auto-get-inv");
+      const { invocations } = await store.listInvocations("auto-get-inv", { limit: 50, offset: 0 });
+
+      for (const listed of invocations) {
+        expect(await store.getInvocation("auto-get-inv", listed.id)).toEqual(listed);
+      }
+      expect(await store.getInvocation("auto-other", "inv-multi")).toBeNull();
+      expect(await store.getInvocation("auto-get-inv", "inv-missing")).toBeNull();
+    });
+
+    it("finds the invocation that owns an event trigger key, never a skip", async () => {
+      const store = await seedMixedHistory("auto-trigger-key");
+      await store.insertInvocationGuarded({
+        invocation: makeInvocation("auto-trigger-key", {
+          id: "inv-event",
+          source: "event",
+          trigger_key: "webhook:idem:abc",
+        }),
+        children: [makeChild("auto-trigger-key")],
+        overlapScope: { kind: "automation" },
+      });
+
+      expect(await store.getInvocationIdByTriggerKey("auto-trigger-key", "webhook:idem:abc")).toBe(
+        "inv-event"
+      );
+      expect(await store.getInvocationIdByTriggerKey("auto-other", "webhook:idem:abc")).toBeNull();
+      expect(
+        await store.getInvocationIdByTriggerKey("auto-trigger-key", "webhook:idem:other")
+      ).toBeNull();
+    });
+
     it("batches bounded recent execution summaries across automations", async () => {
       const store = await seedMixedHistory("auto-recent-a");
       await store.create(makeAutomation({ id: "auto-recent-b" }));

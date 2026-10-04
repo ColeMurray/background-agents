@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { SELF, env } from "cloudflare:test";
+import type { WebhookInvocationStatusResponse, WebhookTriggerResponse } from "@open-inspect/shared";
 import { AutomationStore, type AutomationRow } from "../../src/db/automation-store";
 import { hashApiKey } from "../../src/auth/webhook-key";
 import { encryptToken } from "../../src/auth/crypto";
@@ -412,6 +413,19 @@ describe("POST /webhooks/automation/:id", () => {
     return automation;
   }
 
+  async function postWebhook(
+    automationId: string,
+    body: Record<string, unknown>
+  ): Promise<WebhookTriggerResponse> {
+    const response = await SELF.fetch(`https://test.local/webhooks/automation/${automationId}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${TEST_API_KEY}` },
+      body: JSON.stringify(body),
+    });
+    expect(response.status).toBe(200);
+    return response.json<WebhookTriggerResponse>();
+  }
+
   it("returns 200 with valid API key", async () => {
     const automation = await createWebhookAutomation();
 
@@ -425,8 +439,44 @@ describe("POST /webhooks/automation/:id", () => {
     });
 
     expect(response.status).toBe(200);
-    const result = await response.json<{ ok: boolean }>();
+    const result = await response.json<WebhookTriggerResponse>();
     expect(result.ok).toBe(true);
+    expect(result.invocationId).toEqual(expect.any(String));
+    const invocation = await new AutomationStore(env.DB).getInvocationById(result.invocationId!);
+    expect(invocation?.automation_id).toBe(automation.id);
+  });
+
+  it("returns the original invocation ID for a retry with the same idempotency key", async () => {
+    const automation = await createWebhookAutomation();
+    const body = { action: "deploy", idempotencyKey: "client-request-42" };
+
+    const first = await postWebhook(automation.id, body);
+    const retry = await postWebhook(automation.id, body);
+
+    expect(first.invocationId).toEqual(expect.any(String));
+    expect(retry).toMatchObject({ triggered: 0, skipped: 1, invocationId: first.invocationId });
+  });
+
+  it("returns a null invocation ID when the body does not match the conditions", async () => {
+    const automation = await createWebhookAutomation({
+      trigger_config: JSON.stringify({
+        conditions: [
+          {
+            type: "jsonpath",
+            operator: "all_match",
+            value: [{ path: "$.action", comparison: "eq", value: "never" }],
+          },
+        ],
+      }),
+    });
+
+    expect(await postWebhook(automation.id, { action: "deploy" })).toEqual({
+      ok: true,
+      triggered: 0,
+      skipped: 0,
+      steered: 0,
+      invocationId: null,
+    });
   });
 
   it("returns 401 with invalid API key", async () => {
@@ -533,5 +583,74 @@ describe("POST /webhooks/automation/:id", () => {
     });
 
     expect(response.status).toBe(413);
+  });
+
+  describe("GET /webhooks/automation/:id/invocations/:invocationId", () => {
+    function getStatus(automationId: string, invocationId: string, apiKey = TEST_API_KEY) {
+      return SELF.fetch(
+        `https://test.local/webhooks/automation/${automationId}/invocations/${invocationId}`,
+        apiKey ? { headers: { Authorization: `Bearer ${apiKey}` } } : {}
+      );
+    }
+
+    it.each([
+      { name: "a missing API key", apiKey: "", target: "own", status: 401 },
+      { name: "a wrong API key", apiKey: "wrong-key", target: "own", status: 401 },
+      {
+        name: "another automation's invocation",
+        apiKey: TEST_API_KEY,
+        target: "other",
+        status: 404,
+      },
+      { name: "an unknown invocation", apiKey: TEST_API_KEY, target: "missing", status: 404 },
+    ])("rejects $name with $status", async ({ apiKey, target, status }) => {
+      const automation = await createWebhookAutomation();
+      const other = await createWebhookAutomation();
+      const { invocationId } = await postWebhook(automation.id, { action: "deploy" });
+      const automationId = target === "other" ? other.id : automation.id;
+
+      const response = await getStatus(
+        automationId,
+        target === "missing" ? "inv-missing" : invocationId!,
+        apiKey
+      );
+
+      expect(response.status).toBe(status);
+    });
+
+    it("hides invocations the webhook did not cause", async () => {
+      const automation = await createWebhookAutomation();
+      const now = Date.now();
+      await env.DB.prepare(
+        `INSERT INTO automation_invocations
+           (id, automation_id, source, scheduled_at, trigger_key, concurrency_key,
+            trigger_metadata, skip_reason, failure_counted_at, created_at, updated_at)
+         VALUES (?, ?, 'manual', NULL, NULL, NULL, NULL, NULL, NULL, ?, ?)`
+      )
+        .bind("inv-manual", automation.id, now, now)
+        .run();
+
+      expect((await getStatus(automation.id, "inv-manual")).status).toBe(404);
+    });
+
+    it("returns the derived status with only run IDs, statuses, and session IDs", async () => {
+      const automation = await createWebhookAutomation();
+      const { invocationId } = await postWebhook(automation.id, { action: "deploy" });
+      await env.DB.prepare(
+        `UPDATE automation_runs SET status = 'running', session_id = ? WHERE invocation_id = ?`
+      )
+        .bind("sess-webhook", invocationId)
+        .run();
+      const [run] = await fetchRuns(automation.id);
+
+      const response = await getStatus(automation.id, invocationId!);
+
+      expect(response.status).toBe(200);
+      expect(await response.json<WebhookInvocationStatusResponse>()).toEqual({
+        invocationId,
+        status: "running",
+        runs: [{ id: run!.id, status: "running", sessionId: "sess-webhook" }],
+      });
+    });
   });
 });

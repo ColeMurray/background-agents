@@ -102,6 +102,11 @@ import {
   type AutomationExecutionAuthorizationRequest,
 } from "../automation/authorization-guard";
 import { admitGitHubEvent } from "../automation/github-event-admission";
+import {
+  firingInvocationId,
+  type AutomationTriggerBlockedReason,
+  type StartInvocationResult,
+} from "./invocation-outcome";
 import type { RequestContext } from "../routes/shared";
 import { retryDelivery } from "../session/callback-delivery";
 import {
@@ -232,19 +237,20 @@ export interface SchedulerTickResult {
   failed: number;
 }
 
+export type { AutomationTriggerBlockedReason, StartInvocationResult } from "./invocation-outcome";
+
 export interface SchedulerEventResult {
   triggered: number;
   skipped: number;
   steered: number;
+  /** Invocations representing this event's firings (see firingInvocationId). */
+  invocationIds: string[];
 }
 
 export interface SchedulerTriggerResult {
   invocationId: string;
   runs: AutomationRun[];
 }
-
-/** Why a firing was refused without recording an invocation. */
-export type AutomationTriggerBlockedReason = "concurrent_run_active" | "team_grants_changed";
 
 export class AutomationTriggerBlockedError extends Error {
   constructor(readonly reason: AutomationTriggerBlockedReason = "concurrent_run_active") {
@@ -302,21 +308,6 @@ interface ExecutionPrincipal {
   participantUserId: string;
   scmEnrichment: GitHubEnrichment | null;
 }
-
-export type StartInvocationResult =
-  /** Invocation inserted; children launched (some may have pre-failed or been denied). */
-  | { outcome: "started"; invocationId: string; runs: AutomationRunRow[]; launched: number }
-  /** Overlap — a childless skipped invocation was recorded (schedule/event). */
-  | { outcome: "skipped" }
-  /**
-   * Overlap on a manual firing, or team grants changed during admission — nothing
-   * recorded; manual callers answer 409.
-   */
-  | { outcome: "blocked"; reason: AutomationTriggerBlockedReason }
-  /** Idempotency/dedup collision — another firing owns this slot or event. */
-  | { outcome: "deduplicated" }
-  /** The execution principal cannot launch the immutable target snapshot. */
-  | { outcome: "unauthorized"; reason?: string };
 
 type SchedulerPromptRequest = Pick<
   EnqueuePromptRequest,
@@ -461,6 +452,16 @@ export class Scheduler {
     if (!executionPrincipal) return { outcome: "unauthorized" };
     const now = Date.now();
     const concurrencyKey = params.concurrencyKey ?? null;
+    const triggerKey = params.triggerKey ?? null;
+
+    // A redelivered event (or a webhook retry with the same idempotency key)
+    // belongs to the firing that already admitted it — even while that firing
+    // is still running, which the overlap check below would otherwise record
+    // as a fresh skip.
+    if (triggerKey !== null) {
+      const ownerId = await store.getInvocationIdByTriggerKey(automation.id, triggerKey);
+      if (ownerId) return { outcome: "deduplicated", invocationId: ownerId };
+    }
 
     // Schedule/manual firings block on any active run of the automation; event
     // firings block per concurrency key (an automation-wide guard would
@@ -608,7 +609,7 @@ export class Scheduler {
       automation_id: automation.id,
       source,
       scheduled_at: params.scheduledAt ?? null,
-      trigger_key: params.triggerKey ?? null,
+      trigger_key: triggerKey,
       concurrency_key: concurrencyKey,
       trigger_metadata: params.triggerMetadata ?? null,
       skip_reason: null,
@@ -641,7 +642,13 @@ export class Scheduler {
           // slot must not move next_run_at behind a newer tick's advance.
           await store.advanceNextRunAt(automation.id, params.advanceToNextRunAt);
         }
-        return { outcome: "deduplicated" };
+        return {
+          outcome: "deduplicated",
+          invocationId:
+            triggerKey === null
+              ? null
+              : await store.getInvocationIdByTriggerKey(automation.id, triggerKey),
+        };
       }
       throw e;
     }
@@ -814,9 +821,10 @@ export class Scheduler {
     if (params.source === "manual") return { outcome: "blocked", reason: "concurrent_run_active" };
 
     const now = Date.now();
-    await store.insertSkippedInvocation(
+    const invocationId = generateId();
+    const { inserted } = await store.insertSkippedInvocation(
       {
-        id: generateId(),
+        id: invocationId,
         automation_id: params.automation.id,
         source: params.source,
         scheduled_at: params.scheduledAt ?? null,
@@ -835,7 +843,7 @@ export class Scheduler {
         ? { fromSlot: params.scheduledAt, nextRunAt: params.advanceToNextRunAt }
         : undefined
     );
-    return { outcome: "skipped" };
+    return { outcome: "skipped", invocationId: inserted ? invocationId : null };
   }
 
   // ─── Tick handler ────────────────────────────────────────────────────────
@@ -1234,6 +1242,7 @@ export class Scheduler {
 
     let triggered = 0;
     let skipped = 0;
+    const invocationIds: string[] = [];
     // Follow-ups routed into an already-active thread's session (slack steering).
     let steered = 0;
     // Surface at most one concurrency-skip ephemeral per event, even when
@@ -1345,6 +1354,8 @@ export class Scheduler {
             }
           : {}),
       });
+      const invocationId = firingInvocationId(result);
+      if (invocationId) invocationIds.push(invocationId);
 
       switch (result.outcome) {
         case "started":
@@ -1395,7 +1406,7 @@ export class Scheduler {
       candidates: candidates.length,
     });
 
-    return { triggered, skipped, steered };
+    return { triggered, skipped, steered, invocationIds };
   }
 
   // ─── Manual trigger ──────────────────────────────────────────────────────
