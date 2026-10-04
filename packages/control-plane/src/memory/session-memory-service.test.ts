@@ -73,11 +73,15 @@ function setup(
         record("created", { partition: input.partition, status: "proposed" })
       ),
     },
-    search: vi.fn<SessionMemoryServiceDeps["search"]>(async () => ({
-      results: [],
-      hasMore: false,
-    })),
-    sharedAccess: vi.fn(async () => ({ canRead: async () => readable.shift() ?? true })),
+    factSearch: {
+      search: vi.fn<SessionMemoryServiceDeps["factSearch"]["search"]>(async () => ({
+        results: [],
+        hasMore: false,
+      })),
+    },
+    sharedAccess: {
+      forPrincipal: vi.fn(async () => ({ canRead: async () => readable.shift() ?? true })),
+    },
     requestId: "request",
   } satisfies SessionMemoryServiceDeps;
   return { deps, service: new SessionMemoryService(deps) };
@@ -112,7 +116,10 @@ describe("SessionMemoryService.write", () => {
         personalAutoSave: true,
       }
     );
-    expect(deps.sharedAccess).toHaveBeenCalledWith({ userId: "owner", ownerTeamId: null });
+    expect(deps.sharedAccess.forPrincipal).toHaveBeenCalledWith({
+      userId: "owner",
+      ownerTeamId: null,
+    });
   });
 
   it("requires a selector in multi-repository sessions and never writes on rejection", async () => {
@@ -191,7 +198,7 @@ describe("SessionMemoryService.search", () => {
   it("restricts a child's personal search to pinned records", async () => {
     const { service, deps } = setup({ context: sessionContext({ inherited: true }) });
     await service.search("session", { query: "needle", limit: 10 });
-    expect(deps.search).toHaveBeenCalledWith({ query: "needle", limit: 10 }, [
+    expect(deps.factSearch.search).toHaveBeenCalledWith({ query: "needle", limit: 10 }, [
       { partition: { type: "personal", userId: "owner" }, pinnedSessionId: "session" },
       { partition: { type: "repository", ...api } },
     ]);
@@ -202,7 +209,7 @@ describe("SessionMemoryService.search", () => {
     await expect(service.search("session", { query: "needle", limit: 10 })).rejects.toThrow(
       MemoryAccessError
     );
-    expect(deps.search).toHaveBeenCalledTimes(1);
+    expect(deps.factSearch.search).toHaveBeenCalledTimes(1);
   });
 });
 

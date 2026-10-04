@@ -2,7 +2,7 @@ import { Hono } from "hono";
 import { memorySearchSchema, sandboxMemoryWriteSchema } from "@open-inspect/shared/types/memories";
 import { createSharedMemoryAccess } from "../authorization/memory-access-factory";
 import { MemoryRecordStore } from "../db/memory-records";
-import { searchMemories } from "../db/memory-search";
+import { MemorySearchStore } from "../db/memory-search";
 import { SessionMemorySelectionStore } from "../db/session-memory-selections";
 import { SessionMemoryService } from "../memory/session-memory-service";
 import { admit, dispatch } from "../routing/admit";
@@ -29,12 +29,11 @@ async function view(_request: Request, _env: Env, params: { id: string }, ctx: U
 
 /** Compose the service from D1-backed dependencies for one admitted sandbox request. */
 function sessionMemoryService(ctx: SandboxRouteContext): SessionMemoryService {
-  const sharedAccess = createSharedMemoryAccess(ctx);
   return new SessionMemoryService({
     selections: new SessionMemorySelectionStore(ctx.db),
     records: new MemoryRecordStore(ctx.db),
-    search: (input, partitions) => searchMemories(ctx.db, input, partitions),
-    sharedAccess: (principal) => sharedAccess.forPrincipal(principal),
+    factSearch: new MemorySearchStore(ctx.db),
+    sharedAccess: createSharedMemoryAccess(ctx),
     requestId: ctx.request_id,
   });
 }

@@ -1,4 +1,4 @@
-import { isWorkspaceAdmin } from "@open-inspect/shared/rbac";
+import { isWorkspaceAdmin, type EffectiveAuthorization } from "@open-inspect/shared/rbac";
 import { TeamMembershipStore } from "../db/team-memberships";
 import { TeamRepositoryGrantStore } from "../db/team-repository-grants";
 import { TeamStore } from "../db/teams";
@@ -91,4 +91,30 @@ export async function authorizeWorkspaceRepositories(
     if (!allowed) return deniedRepository(repository);
   }
   return null;
+}
+
+/**
+ * Workspace repository-grant admission evaluated as a given principal, for policies that check
+ * someone other than (or in addition to) the caller. The request's cached team memberships are
+ * reused only when the principal is the caller.
+ */
+export class RepositoryGrantAuthorizer {
+  constructor(private readonly ctx: RequestContext) {}
+
+  /** A denial response, or null when every repository is allowed. */
+  authorize(
+    authorization: EffectiveAuthorization,
+    repositories: readonly RepositoryAuthorizationTarget[],
+    options: { requireLead?: boolean } = {}
+  ): Promise<Response | null> {
+    const sameUser = authorization.userId === this.ctx.authorization?.userId;
+    return authorizeWorkspaceRepositories(
+      {
+        ...this.ctx,
+        authorization,
+        sessionMemberships: sameUser ? this.ctx.sessionMemberships : undefined,
+      },
+      { repositories, ...options }
+    );
+  }
 }

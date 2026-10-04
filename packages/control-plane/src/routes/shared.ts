@@ -464,3 +464,17 @@ export async function resolveRepoOrError(
   }
   return resolved;
 }
+
+/** Installed-repository resolution bound to one request, for policies that receive it as a dependency. */
+export class InstalledRepositoryResolver {
+  constructor(
+    private readonly env: Env,
+    private readonly ctx: RequestContext,
+    private readonly logger: Logger
+  ) {}
+
+  /** The repository's stable identity; throws an HttpError when it is not installed. */
+  resolve(owner: string, name: string): Promise<RepositoryAccessResult> {
+    return resolveRepoOrError(this.env, owner, name, this.ctx, this.logger);
+  }
+}

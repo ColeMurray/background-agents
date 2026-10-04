@@ -8,11 +8,11 @@ import { error } from "../http/responses";
 import type { MemoryPartition } from "../memory/partition";
 import { repositoryPartition } from "../memory/target";
 import type { MemoryRecord, MemoryTarget } from "../memory/types";
-import type { RepositoryAuthorizationTarget } from "../routes/workspace-repository-authorization";
-import type { RepositoryAccessResult } from "../source-control/types";
+import type { InstalledRepositoryResolver } from "../routes/shared";
+import type { RepositoryGrantAuthorizer } from "../routes/workspace-repository-authorization";
 import {
   ownedResourceAdmissionResponse,
-  type OwnedResourceAdmissionOutcome,
+  type EnvironmentAdmissionEvaluator,
 } from "./owned-resource-admission";
 import { AuthorizationError } from "./service";
 
@@ -28,12 +28,8 @@ import { AuthorizationError } from "./service";
  * `memory-access-factory.ts` wires the D1-backed implementations for a request.
  */
 
-/** Workspace/team repository-grant admission; returns a denial response, or null when allowed. */
-export type RepositoryGrantCheck = (
-  authorization: EffectiveAuthorization,
-  repositories: readonly RepositoryAuthorizationTarget[],
-  options?: { requireLead?: boolean }
-) => Promise<Response | null>;
+/** Workspace/team repository-grant admission evaluated as a given principal. */
+export type RepositoryGrants = Pick<RepositoryGrantAuthorizer, "authorize">;
 
 // ---------------------------------------------------------------------------
 // Human management
@@ -49,14 +45,11 @@ export interface MemoryManagementPolicyDeps {
   /** The admitted principal's canonical user ID and effective authorization. */
   userId: string;
   authorization: EffectiveAuthorization | undefined;
-  /** Resolve an installed repository to its stable identity; throws an HttpError when absent. */
-  resolveRepository: (owner: string, name: string) => Promise<RepositoryAccessResult>;
+  /** Installed-repository resolution to stable identities. */
+  repositories: Pick<InstalledRepositoryResolver, "resolve">;
   /** Environment ownership admission for the principal. */
-  environmentAdmission: (
-    environmentId: string,
-    need: "read" | "manage"
-  ) => Promise<OwnedResourceAdmissionOutcome>;
-  repositoryGrants: RepositoryGrantCheck;
+  environments: Pick<EnvironmentAdmissionEvaluator, "evaluate">;
+  repositoryGrants: RepositoryGrants;
 }
 
 /**
@@ -89,9 +82,9 @@ export class MemoryManagementPolicy {
         return { partition: { type: "personal", userId }, canManage: true };
       }
       case "environment": {
-        const read = await this.deps.environmentAdmission(scope.environmentId, "read");
+        const read = await this.deps.environments.evaluate(scope.environmentId, "read");
         if (read.kind !== "allowed") return ownedResourceAdmissionResponse(read);
-        const manage = await this.deps.environmentAdmission(scope.environmentId, "manage");
+        const manage = await this.deps.environments.evaluate(scope.environmentId, "manage");
         const canManage =
           manage.kind === "allowed" && permissions.includes("environments.settings.manage");
         return granted(canManage, { type: "environment", environmentId: scope.environmentId });
@@ -99,7 +92,7 @@ export class MemoryManagementPolicy {
       case "repository": {
         if (!permissions.includes("repositories.read") || !this.deps.authorization)
           return error("Repository read permission required", 403);
-        const repo = await this.deps.resolveRepository(scope.repoOwner, scope.repoName);
+        const repo = await this.deps.repositories.resolve(scope.repoOwner, scope.repoName);
         const partition = repositoryPartition(repo);
         // Names may be reused after deletion/rename; only the stable ID grants continuity.
         if (
@@ -109,11 +102,14 @@ export class MemoryManagementPolicy {
         )
           return error("Memory not found", 404);
         const repositories = [{ owner: repo.repoOwner, name: repo.repoName, repoId: repo.repoId }];
-        const denied = await this.deps.repositoryGrants(this.deps.authorization, repositories);
+        const denied = await this.deps.repositoryGrants.authorize(
+          this.deps.authorization,
+          repositories
+        );
         if (denied) return denied;
         const canManage =
           permissions.includes("repositories.settings.manage") &&
-          !(await this.deps.repositoryGrants(this.deps.authorization, repositories, {
+          !(await this.deps.repositoryGrants.authorize(this.deps.authorization, repositories, {
             requireLead: true,
           }));
         return granted(canManage, partition);
@@ -155,7 +151,7 @@ export interface SharedMemoryAccessDeps {
   grants: Pick<TeamRepositoryGrantStore, "covers">;
   environments: Pick<EnvironmentStore, "getById">;
   authorization: Pick<AuthorizationService, "getEffectiveAuthorization">;
-  repositoryGrants: RepositoryGrantCheck;
+  repositoryGrants: RepositoryGrants;
 }
 
 declare const authorizedMemoryTarget: unique symbol;
@@ -249,7 +245,8 @@ export class SharedMemoryAccess {
         return false;
     } else {
       if (!ownerAuthorization || ownerAuthorization.suspendedAt !== null) return false;
-      if (await this.deps.repositoryGrants(ownerAuthorization, repositories)) return false;
+      if (await this.deps.repositoryGrants.authorize(ownerAuthorization, repositories))
+        return false;
     }
     for (const partition of partitions) {
       if (partition.type !== "environment") continue;

@@ -7,7 +7,7 @@ import { MEMORY_SEARCH_LIMITS, memorySearchSchema } from "@open-inspect/shared/t
 import { createNodeSqlDatabase, type NodeSqlDatabase } from "../node/sqlite-database";
 import { applyMigrations } from "../node/migrate";
 import { seedSearchFacts } from "../../test/conformance/memory-search-fixtures";
-import { searchMemories, type SearchPartition } from "./memory-search";
+import { MemorySearchStore, type SearchPartition } from "./memory-search";
 import type { SqlDatabase } from "./sql-database";
 
 const OWNER = "owner";
@@ -35,10 +35,10 @@ describe("portable memory search", () => {
       { id: "other-owner", title: "needle", partition: { type: "personal", userId: "other" } },
     ]);
     expect(
-      await searchMemories(db, memorySearchSchema.parse({ query: "needle", limit: 2 }), [
-        personal,
-        environment,
-      ])
+      await new MemorySearchStore(db).search(
+        memorySearchSchema.parse({ query: "needle", limit: 2 }),
+        [personal, environment]
+      )
     ).toMatchObject({
       results: [{ id: "environment-title" }, { id: "personal-title" }],
       hasMore: true,
@@ -55,8 +55,7 @@ describe("portable memory search", () => {
         content: "needle PRIVATE_BODY",
       }))
     );
-    const result = await searchMemories(
-      db,
+    const result = await new MemorySearchStore(db).search(
       memorySearchSchema.parse({ query: "needle", limit: 20 }),
       [personal]
     );
@@ -109,9 +108,10 @@ describe.skipIf(!process.env.MEMORY_SEARCH_BENCHMARK)("memory search corpus meas
         const durations: number[] = [];
         for (let repeat = 0; repeat < 5; repeat++) {
           const start = performance.now();
-          const result = await searchMemories(measured, memorySearchSchema.parse({ query }), [
-            personal,
-          ]);
+          const result = await new MemorySearchStore(measured).search(
+            memorySearchSchema.parse({ query }),
+            [personal]
+          );
           durations.push(performance.now() - start);
           expect(result.results.length).toBe(query === "common" ? 10 : 1);
         }

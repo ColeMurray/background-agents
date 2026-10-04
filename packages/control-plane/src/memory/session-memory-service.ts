@@ -7,9 +7,9 @@ import {
   type SandboxMemoryWriteInput,
   type SandboxMemoryWriteResult,
 } from "@open-inspect/shared/types/memories";
-import type { MemoryPrincipal, PrincipalMemoryAccess } from "../authorization/memory-access";
+import type { SharedMemoryAccess } from "../authorization/memory-access";
 import type { MemoryRecordStore } from "../db/memory-records";
-import type { SearchPartition } from "../db/memory-search";
+import type { MemorySearchStore, SearchPartition } from "../db/memory-search";
 import type { SessionMemorySelectionStore } from "../db/session-memory-selections";
 import { MemoryAccessError, MemoryNotFoundError, MemoryValidationError } from "./errors";
 import { partitionScope, samePartition, type MemoryPartition } from "./partition";
@@ -38,12 +38,9 @@ export interface SessionMemoryServiceDeps {
   /** The memory records themselves (content, revisions, lifecycle), independent of any session. */
   records: Pick<MemoryRecordStore, "get" | "create">;
   /** Lexical search over current facts in the given partitions. */
-  search: (
-    input: MemorySearchInput,
-    partitions: readonly SearchPartition[]
-  ) => Promise<MemorySearchResponse>;
+  factSearch: Pick<MemorySearchStore, "search">;
   /** The session principal's current shared-partition access, loaded fresh for every check. */
-  sharedAccess: (principal: MemoryPrincipal) => Promise<PrincipalMemoryAccess>;
+  sharedAccess: Pick<SharedMemoryAccess, "forPrincipal">;
   /** Recorded as provenance on agent writes. */
   requestId: string;
 }
@@ -56,14 +53,14 @@ export interface SessionMemoryServiceDeps {
 export class SessionMemoryService {
   private readonly selections: SessionMemoryServiceDeps["selections"];
   private readonly records: SessionMemoryServiceDeps["records"];
-  private readonly searchFacts: SessionMemoryServiceDeps["search"];
+  private readonly factSearch: SessionMemoryServiceDeps["factSearch"];
   private readonly sharedAccess: SessionMemoryServiceDeps["sharedAccess"];
   private readonly requestId: string;
 
   constructor(deps: SessionMemoryServiceDeps) {
     this.selections = deps.selections;
     this.records = deps.records;
-    this.searchFacts = deps.search;
+    this.factSearch = deps.factSearch;
     this.sharedAccess = deps.sharedAccess;
     this.requestId = deps.requestId;
   }
@@ -176,7 +173,7 @@ export class SessionMemoryService {
     const partitions = this.searchPartitions(context, input);
     const all = partitions.map((entry) => entry.partition);
     if (!(await this.canRead(context, all))) throw new MemoryAccessError(SCOPE_UNAVAILABLE);
-    const result = await this.searchFacts(input, partitions);
+    const result = await this.factSearch.search(input, partitions);
     if (!(await this.canRead(context, all))) throw new MemoryAccessError(SCOPE_UNAVAILABLE);
     return result;
   }
@@ -191,7 +188,7 @@ export class SessionMemoryService {
     context: SessionMemoryContext,
     partitions: readonly MemoryPartition[]
   ): Promise<boolean> {
-    const access = await this.sharedAccess({
+    const access = await this.sharedAccess.forPrincipal({
       userId: context.sessionUserId,
       ownerTeamId: context.ownerTeamId,
     });

@@ -41,7 +41,9 @@ function sharedAccess(overrides: Partial<SharedMemoryAccessDeps> = {}) {
       ),
     },
     authorization: { getEffectiveAuthorization: vi.fn(async () => authorization()) },
-    repositoryGrants: vi.fn<SharedMemoryAccessDeps["repositoryGrants"]>(async () => null),
+    repositoryGrants: {
+      authorize: vi.fn<SharedMemoryAccessDeps["repositoryGrants"]["authorize"]>(async () => null),
+    },
   };
   return { deps, access: new SharedMemoryAccess({ ...deps, ...overrides }) };
 }
@@ -63,10 +65,10 @@ describe("SharedMemoryAccess", () => {
     const { access, deps } = sharedAccess();
     const owner = await access.forPrincipal({ userId: USER, ownerTeamId: null });
     expect(await owner.canRead([api])).toBe(true);
-    deps.repositoryGrants.mockResolvedValueOnce(denied());
+    deps.repositoryGrants.authorize.mockResolvedValueOnce(denied());
     expect(await owner.canRead([api])).toBe(false);
     expect(deps.authorization.getEffectiveAuthorization).toHaveBeenCalledTimes(1);
-    expect(deps.repositoryGrants).toHaveBeenCalledWith(authorization(), [
+    expect(deps.repositoryGrants.authorize).toHaveBeenCalledWith(authorization(), [
       { owner: "acme", name: "api", repoId: 1 },
     ]);
   });
@@ -121,18 +123,26 @@ function managementPolicy(
   const deps = {
     userId: USER,
     authorization: authorization(permissions),
-    resolveRepository: vi.fn<MemoryManagementPolicyDeps["resolveRepository"]>(async () => ({
-      repoId: 1,
-      repoOwner: "acme",
-      repoName: "api",
-      defaultBranch: "main",
-    })),
-    environmentAdmission: vi.fn<MemoryManagementPolicyDeps["environmentAdmission"]>(async () => ({
-      kind: "allowed" as const,
-      effectivePermission: null,
-      admission: {} as never,
-    })),
-    repositoryGrants: vi.fn<MemoryManagementPolicyDeps["repositoryGrants"]>(async () => null),
+    repositories: {
+      resolve: vi.fn<MemoryManagementPolicyDeps["repositories"]["resolve"]>(async () => ({
+        repoId: 1,
+        repoOwner: "acme",
+        repoName: "api",
+        defaultBranch: "main",
+      })),
+    },
+    environments: {
+      evaluate: vi.fn<MemoryManagementPolicyDeps["environments"]["evaluate"]>(async () => ({
+        kind: "allowed" as const,
+        effectivePermission: null,
+        admission: {} as never,
+      })),
+    },
+    repositoryGrants: {
+      authorize: vi.fn<MemoryManagementPolicyDeps["repositoryGrants"]["authorize"]>(
+        async () => null
+      ),
+    },
   };
   return { deps, policy: new MemoryManagementPolicy({ ...deps, ...overrides }) };
 }
@@ -159,7 +169,7 @@ describe("MemoryManagementPolicy", () => {
       "repositories.settings.manage",
     ]);
     const scope = { type: "repository" as const, repoOwner: "acme", repoName: "api" };
-    deps.repositoryGrants.mockImplementation(async (_auth, _repos, options) =>
+    deps.repositoryGrants.authorize.mockImplementation(async (_auth, _repos, options) =>
       options?.requireLead ? denied() : null
     );
     expect(await policy.authorize(scope, "read")).toEqual({ partition: api, canManage: false });
@@ -182,7 +192,7 @@ describe("MemoryManagementPolicy", () => {
 
   it("returns environment admission denials unchanged", async () => {
     const { policy, deps } = managementPolicy(["environments.settings.manage"]);
-    deps.environmentAdmission.mockResolvedValueOnce({
+    deps.environments.evaluate.mockResolvedValueOnce({
       kind: "denied",
       response: { error: "Environment not found" },
       status: 404,

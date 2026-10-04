@@ -225,6 +225,15 @@ export function admittedEnvironment(ctx: RequestContext): EnvironmentAdmission {
   return ctx.environmentAdmission;
 }
 
+/** Environment admission bound to one request, for policies that receive it as a dependency. */
+export class EnvironmentAdmissionEvaluator {
+  constructor(private readonly ctx: RequestContext) {}
+
+  evaluate(id: string, need: EnvironmentNeed): Promise<OwnedResourceAdmissionOutcome> {
+    return evaluateEnvironmentAdmission(this.ctx, id, need);
+  }
+}
+
 /** HTTP response for an outcome that did not admit the resource. */
 export function ownedResourceAdmissionResponse(
   outcome: Exclude<OwnedResourceAdmissionOutcome | AutomationAdmissionOutcome, { kind: "allowed" }>
