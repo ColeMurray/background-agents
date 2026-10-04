@@ -6,13 +6,12 @@ facts with lexical `memory_search`, and reads relevant bodies with `memory_read`
 
 ## User experience
 
-| Surface                    | Behavior                                                                                                                                                                       |
-| -------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| Settings → Memories        | Manage your personal facts and directives, review proposals, edit, archive, restore, supersede, revert to an earlier revision and inspect history.                             |
-| Settings → Shared memories | Select a repository or environment. Readers see its catalog; authorized maintainers can manage it.                                                                             |
-| Personal default           | **Include my personal memories in new sessions by default** is initially enabled. It applies to web, integration-created and scheduled sessions.                               |
-| New-session composer       | Override the default with **Include my personal memories**. The preview shows selected counts, estimated tokens and omissions. Changing the selection replaces a warmed draft. |
-| Session sidebar → Memories | Inspect pinned revisions, omitted records, estimates and subsequent edits/archives.                                                                                            |
+| Surface                    | Behavior                                                                                                                                           |
+| -------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Settings → Memories        | Manage your personal facts and directives, review proposals, edit, archive, restore, supersede, revert to an earlier revision and inspect history. |
+| Settings → Shared memories | Select a repository or environment. Readers see its catalog; authorized maintainers can manage it.                                                 |
+| Personal default           | **Include my personal memories in new sessions** is initially enabled. It applies to web, integration-created and scheduled sessions.              |
+| Session sidebar → Memories | Pinned memories grouped by scope; hover for revision and estimate. Flags omitted records and subsequent edits/archives.                            |
 
 Personal memories can be included in **shared sessions**. Included content may appear in responses
 and be visible to collaborators. This does not give collaborators access to the owner's personal
@@ -52,7 +51,7 @@ a different participant cannot write to the inherited owner's personal scope.
 | Session creation | `routes/session-create.ts`, scheduler, child spawn                          | Select and pin the session's memories in the session insert's transaction (`Pinned<T>`: resolved for roots, inherited by children). Schedulers use the execution owner's default.                                                                                                                                                     |
 | Runtime boot     | `sandbox-runtime/src/sandbox_runtime/memories.py`                           | Fetch the rendered memory with the session-bound token, clear stale restored content, then atomically write owner-readable `oi-memory.md` in the harness configuration directory.                                                                                                                                                     |
 | Harness tools    | `tools/_memory.js`, `harness/memory_tools.py`                               | Both harnesses build `memory_read`, `memory_search` and `memory_write` from the generated specs and forward arguments verbatim. OpenCode reads the file via `instructions`; Claude appends it.                                                                                                                                        |
-| Web              | `web/src/hooks/use-memories.ts`, `components/settings/memories-settings/`   | Typed queries and mutations (revision fencing via `If-Match`), owner/shared management pages, composer control/preview and session diagnostics.                                                                                                                                                                                       |
+| Web              | `web/src/hooks/use-memories.ts`, `components/settings/memories-settings/`   | Typed queries and mutations (revision fencing via `If-Match`), owner/shared management pages and session diagnostics.                                                                                                                                                                                                                 |
 
 ### Extending memory
 

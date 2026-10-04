@@ -231,9 +231,7 @@ describe("memory management", () => {
   it("saves the default opt-out and explains the shared-session audience", async () => {
     render(<MemoriesSettings />);
     expect(screen.getByText(/may appear in agent responses/)).toBeTruthy();
-    fireEvent.click(
-      screen.getByLabelText("Include my personal memories in new sessions by default")
-    );
+    fireEvent.click(screen.getByLabelText("Include my personal memories in new sessions"));
     await waitFor(() =>
       expect(mocks.setMemoryPreferences).toHaveBeenCalledWith({ includePersonalMemories: false })
     );

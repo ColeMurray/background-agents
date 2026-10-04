@@ -4,13 +4,11 @@ import {
   type MemoryArchiveKind,
   type MemoryAuthorKind,
   type MemoryInclusion,
-  type MemoryPreviewInput,
   type MemoryScope,
   type MemoryStatus,
   type MemoryType,
 } from "@open-inspect/shared/types/memories";
 import type { SettingsCategory } from "@/components/settings/settings-registry";
-import type { SessionTargetRequestFields } from "@/lib/session-target";
 
 export const MEMORY_TYPE_LABELS: Record<
   MemoryType,
@@ -73,42 +71,6 @@ export function memorySettingsLink(scope: MemoryScope, id: string): string {
   query.set("tab", memorySettingsCategory(scope));
   query.set("memoryId", id);
   return `/settings?${query}`;
-}
-
-/** A per-session override of the saved personal-memory default. */
-export type PersonalMemoryChoice = "default" | "include" | "exclude";
-
-/** The request field for a choice; `undefined` lets the server apply the saved default. */
-export function includePersonalMemoriesInput(choice: PersonalMemoryChoice): boolean | undefined {
-  switch (choice) {
-    case "default":
-      return undefined;
-    case "include":
-      return true;
-    case "exclude":
-      return false;
-  }
-}
-
-/** Preview the selection for the composer's current target without creating a session. */
-export function memoryPreviewInput(
-  fields: SessionTargetRequestFields | null,
-  choice: PersonalMemoryChoice
-): MemoryPreviewInput | null {
-  if (!fields) return null;
-  const includePersonalMemories = includePersonalMemoriesInput(choice);
-  if ("environmentId" in fields) {
-    return { environmentId: fields.environmentId, includePersonalMemories };
-  }
-  if ("repositories" in fields) {
-    return { repositories: fields.repositories, includePersonalMemories };
-  }
-  if (!fields.repoOwner || !fields.repoName) return { includePersonalMemories };
-  const { repoOwner, repoName, branch } = fields;
-  return {
-    repositories: [{ repoOwner, repoName, ...(branch ? { baseBranch: branch } : {}) }],
-    includePersonalMemories,
-  };
 }
 
 /** A mutation failure's message for display, or `fallback` for non-Error throws. */

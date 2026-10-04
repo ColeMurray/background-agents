@@ -47,11 +47,11 @@ function PersonalMemoryDefault() {
           disabled={!preferences || saving}
           onCheckedChange={(checked) => void save(checked)}
         />
-        <label htmlFor={switchId}>Include my personal memories in new sessions by default</label>
+        <label htmlFor={switchId}>Include my personal memories in new sessions</label>
       </div>
       <p className="text-xs text-muted-foreground">
-        Applies across web and integration-created sessions. You can override it when starting a web
-        session. Existing sessions keep their original selection.
+        Applies to all new web and integration-created sessions. Existing sessions keep their
+        original selection.
       </p>
       <p className="text-xs text-muted-foreground">{PERSONAL_MEMORY_DISCLOSURE}</p>
       {(saveError || loadError) && (

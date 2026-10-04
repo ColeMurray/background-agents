@@ -34,72 +34,16 @@ function activeOpenAiAccount(id: string): (typeof mocks.providerAccountsValue)[n
 }
 
 describe("Home", () => {
-  it("locks memory selection while session creation and prompt submission are pending", async () => {
-    let finishCreate!: (response: Response) => void;
-    const creation = new Promise<Response>((resolve) => {
-      finishCreate = resolve;
-    });
-    let finishPrompt!: (response: Response) => void;
-    const prompt = new Promise<Response>((resolve) => {
-      finishPrompt = resolve;
-    });
-    vi.mocked(fetch).mockImplementation((input) =>
-      String(input).endsWith("/prompt") ? prompt : creation
-    );
+  it("creates sessions using the saved personal-memory preference without a composer override", async () => {
     render(<Home />);
-    const toggle = screen.getByRole("checkbox", { name: "Include my personal memories" });
+    expect(
+      screen.queryByRole("checkbox", { name: "Include my personal memories" })
+    ).not.toBeInTheDocument();
     fireEvent.change(screen.getByPlaceholderText("What do you want to build?"), {
       target: { value: "Do some work" },
     });
     await waitFor(() => expect(fetch).toHaveBeenCalledWith("/api/sessions", expect.anything()));
-    const originalRequest = sessionCreateBody();
-    fireEvent.click(screen.getByRole("button", { name: /send/i }));
-    expect(toggle).toBeDisabled();
-    fireEvent.click(toggle);
-    expect(sessionCreateBody()).toEqual(originalRequest);
-    finishCreate(Response.json({ sessionId: "session-1", status: "created" }));
-    await waitFor(() =>
-      expect(fetch).toHaveBeenCalledWith("/api/sessions/session-1/prompt", expect.anything())
-    );
-    expect(toggle).toBeDisabled();
-    expect(vi.mocked(fetch).mock.calls.filter(([url]) => url === "/api/sessions")).toHaveLength(1);
-    finishPrompt(Response.json({ success: true }));
-    await waitFor(() => expect(mocks.routerPush).toHaveBeenCalledWith("/session/session-1"));
-    expect(toggle).not.toBeDisabled();
-  });
-
-  it.each(["loading", "error"])(
-    "creates sessions while preferences are %s using the server default",
-    async (state) => {
-      mocks.memoryPreferencesLoading = state === "loading";
-      mocks.memoryPreferencesError = state === "error" ? new Error("Unavailable") : undefined;
-      render(<Home />);
-      expect(
-        screen.getByRole("checkbox", { name: "Include my personal memories" })
-      ).toHaveAttribute("aria-checked", "mixed");
-      fireEvent.change(screen.getByPlaceholderText("What do you want to build?"), {
-        target: { value: "Do some work" },
-      });
-      await waitFor(() => expect(fetch).toHaveBeenCalledWith("/api/sessions", expect.anything()));
-      expect(sessionCreateBody()).not.toHaveProperty("includePersonalMemories");
-      fireEvent.click(screen.getByRole("button", { name: /send/i }));
-      await waitFor(() => expect(mocks.routerPush).toHaveBeenCalledWith("/session/session-1"));
-    }
-  );
-
-  it("allows explicit opt-out after a preference error", async () => {
-    mocks.memoryPreferencesError = new Error("Unavailable");
-    render(<Home />);
-    const toggle = screen.getByRole("checkbox", { name: "Include my personal memories" });
-    fireEvent.click(toggle);
-    fireEvent.click(toggle);
-    expect(toggle).not.toBeChecked();
-    fireEvent.change(screen.getByPlaceholderText("What do you want to build?"), {
-      target: { value: "Do some work" },
-    });
-    await waitFor(() =>
-      expect(sessionCreateBody()).toMatchObject({ includePersonalMemories: false })
-    );
+    expect(sessionCreateBody()).not.toHaveProperty("includePersonalMemories");
     fireEvent.click(screen.getByRole("button", { name: /send/i }));
     await waitFor(() => expect(mocks.routerPush).toHaveBeenCalledWith("/session/session-1"));
   });

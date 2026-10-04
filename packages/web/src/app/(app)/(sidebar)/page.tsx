@@ -58,13 +58,6 @@ import {
   type SkillResolutionPreviewResponse,
 } from "@/hooks/use-managed-skills";
 import type { SessionTargetRequestFields } from "@/lib/session-target";
-import { useMemoryPreferences, useMemoryPreview } from "@/hooks/use-memories";
-import { SessionMemoryControls } from "@/components/session-memory-controls";
-import {
-  includePersonalMemoriesInput,
-  memoryPreviewInput,
-  type PersonalMemoryChoice,
-} from "@/lib/memories";
 import type { PromptSkillSuggestionSource } from "@/lib/prompt-skill-completion";
 import type {
   ModelProviderSelections,
@@ -186,8 +179,6 @@ export default function Home() {
   const [modelPreferenceDraft, setModelPreferenceDraft] = useState<ModelPreference | null>(null);
   const [harness, setHarness] = useState<HarnessId>(DEFAULT_HARNESS);
   const { prompt, setPrompt, clearSubmittedPrompt } = usePromptDraft(NEW_SESSION_PROMPT_DRAFT_ID);
-  const memoryPreferences = useMemoryPreferences();
-  const [personalMemoryChoice, setPersonalMemoryChoice] = useState<PersonalMemoryChoice>("default");
   const [warmRequested, setWarmRequested] = useState(false);
   const [skillSelection, setSkillSelection] = useState<SessionSkillSelection>({ mode: "all" });
   const [providerSelections, setProviderSelections] = useState<ModelProviderSelections>({});
@@ -201,9 +192,6 @@ export default function Home() {
   const { enabledModels, enabledModelOptions, loading: loadingEnabledModels } = useEnabledModels();
   const targetRequestFields = buildRequestFields();
   const currentSkillPreviewTarget = session ? skillPreviewTarget(targetRequestFields) : null;
-  const memoryPreview = useMemoryPreview(
-    memoryPreviewInput(targetRequestFields, personalMemoryChoice)
-  );
   const {
     preview: skillPreview,
     loading: skillPreviewLoading,
@@ -316,7 +304,6 @@ export default function Home() {
           model: selectedModel,
           reasoningEffort,
           skillSelection,
-          includePersonalMemories: includePersonalMemoriesInput(personalMemoryChoice),
           providerSelections: availableProviderSelections,
           teamId,
           visibility,
@@ -516,24 +503,6 @@ export default function Home() {
       modelOptions={modelSelection.options}
       skillSelection={skillSelection}
       setSkillSelection={setSkillSelection}
-      memoryControls={
-        <SessionMemoryControls
-          choice={personalMemoryChoice}
-          savedDefault={memoryPreferences.preferences?.includePersonalMemories}
-          disabled={creating}
-          onChange={(choice) => {
-            if (!submitInFlightRef.current) setPersonalMemoryChoice(choice);
-          }}
-          preview={memoryPreview.preview}
-          preferencesLoading={memoryPreferences.loading}
-          previewLoading={memoryPreview.loading}
-          error={memoryPreferences.error || memoryPreview.error}
-          onRetry={() => {
-            void memoryPreferences.mutate();
-            void memoryPreview.mutate();
-          }}
-        />
-      }
       skillPreviewTarget={currentSkillPreviewTarget}
       skillPreview={skillPreview}
       skillPreviewLoading={skillPreviewLoading}
@@ -572,7 +541,6 @@ function HomeContent({
   modelOptions,
   skillSelection,
   setSkillSelection,
-  memoryControls,
   skillPreviewTarget,
   skillPreview,
   skillPreviewLoading,
@@ -613,7 +581,6 @@ function HomeContent({
   modelOptions: ModelCategory[];
   skillSelection: SessionSkillSelection;
   setSkillSelection: (value: SessionSkillSelection) => void;
-  memoryControls: React.ReactNode;
   skillPreviewTarget: Omit<SkillResolutionPreviewInput, "selection"> | null;
   skillPreview: SkillResolutionPreviewResponse | null;
   skillPreviewLoading: boolean;
@@ -698,8 +665,6 @@ function HomeContent({
               <div className="mb-3 flex flex-wrap items-center gap-2 px-4 sm:gap-4">
                 <SessionTargetPicker {...picker.pickerProps} disabled={creating} />
               </div>
-
-              {memoryControls}
 
               <div
                 className={`border border-border bg-input ${isDraggingOver ? "ring-2 ring-accent" : ""}`}

@@ -8,7 +8,6 @@ import {
   memoryResponseSchema,
   memoryRevisionsResponseSchema,
   memoryScopeToSearchParams,
-  memorySelectionSummarySchema,
   sessionMemorySelectionStatusSchema,
   type CreateMemoryInput,
   type MemoryAction,
@@ -16,7 +15,6 @@ import {
   type MemoryContent,
   type MemoryDto,
   type MemoryPreferences,
-  type MemoryPreviewInput,
   type MemoryScope,
   type MemoryStatus,
 } from "@open-inspect/shared/types/memories";
@@ -104,17 +102,6 @@ export function useSessionMemories(sessionId: string) {
     { refreshInterval: SESSION_MEMORIES_REFRESH_INTERVAL_MS }
   );
   return { diagnostics: data, loading: isLoading, error };
-}
-
-/** Preview without persisting a session; the whole input participates in the SWR cache key. */
-export function useMemoryPreview(input: MemoryPreviewInput | null) {
-  const { data: session, status: authStatus } = useAuthSession();
-  const { data, isLoading, error, mutate } = useSWR(
-    session && input ? ([`${MEMORIES_KEY}/preview`, input] as const) : null,
-    ([path, body]) =>
-      apiRequest(path, memorySelectionSummarySchema, { method: "POST", body: JSON.stringify(body) })
-  );
-  return { preview: data, loading: authStatus === "loading" || isLoading, error, mutate };
 }
 
 /** Send only the editable fields so callers can pass a record or revision directly. */
