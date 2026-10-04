@@ -1,6 +1,6 @@
 import { Hono } from "hono";
 import { memorySearchSchema, sandboxMemoryWriteSchema } from "@open-inspect/shared/types/memories";
-import { createSharedMemoryAccess } from "../authorization/memory-access-factory";
+import { createSessionMemoryAccessPolicy } from "../authorization/memory-access-factory";
 import { MemoryRecordStore } from "../db/memory-records";
 import { MemorySearchStore } from "../db/memory-search";
 import { SessionMemorySelectionStore } from "../db/session-memory-selections";
@@ -33,7 +33,7 @@ function sessionMemoryService(ctx: SandboxRouteContext): SessionMemoryService {
     selections: new SessionMemorySelectionStore(ctx.db),
     records: new MemoryRecordStore(ctx.db),
     factSearch: new MemorySearchStore(ctx.db),
-    sharedAccess: createSharedMemoryAccess(ctx),
+    access: createSessionMemoryAccessPolicy(ctx),
     requestId: ctx.request_id,
   });
 }

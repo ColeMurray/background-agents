@@ -7,7 +7,7 @@ import {
   type SandboxMemoryWriteInput,
   type SandboxMemoryWriteResult,
 } from "@open-inspect/shared/types/memories";
-import type { SharedMemoryAccess } from "../authorization/memory-access";
+import type { SessionMemoryAccessPolicy } from "../authorization/memory-access";
 import type { MemoryRecordStore } from "../db/memory-records";
 import type { MemorySearchStore, SearchPartition } from "../db/memory-search";
 import type { SessionMemorySelectionStore } from "../db/session-memory-selections";
@@ -39,8 +39,8 @@ export interface SessionMemoryServiceDeps {
   records: Pick<MemoryRecordStore, "get" | "create">;
   /** Lexical search over current facts in the given partitions. */
   factSearch: Pick<MemorySearchStore, "search">;
-  /** The session principal's current shared-partition access, loaded fresh for every check. */
-  sharedAccess: Pick<SharedMemoryAccess, "forPrincipal">;
+  /** Whether the session principal may currently read shared partitions; rechecked per operation. */
+  access: Pick<SessionMemoryAccessPolicy, "check">;
   /** Recorded as provenance on agent writes. */
   requestId: string;
 }
@@ -54,14 +54,14 @@ export class SessionMemoryService {
   private readonly selections: SessionMemoryServiceDeps["selections"];
   private readonly records: SessionMemoryServiceDeps["records"];
   private readonly factSearch: SessionMemoryServiceDeps["factSearch"];
-  private readonly sharedAccess: SessionMemoryServiceDeps["sharedAccess"];
+  private readonly access: SessionMemoryServiceDeps["access"];
   private readonly requestId: string;
 
   constructor(deps: SessionMemoryServiceDeps) {
     this.selections = deps.selections;
     this.records = deps.records;
     this.factSearch = deps.factSearch;
-    this.sharedAccess = deps.sharedAccess;
+    this.access = deps.access;
     this.requestId = deps.requestId;
   }
 
@@ -188,11 +188,11 @@ export class SessionMemoryService {
     context: SessionMemoryContext,
     partitions: readonly MemoryPartition[]
   ): Promise<boolean> {
-    const access = await this.sharedAccess.forPrincipal({
-      userId: context.sessionUserId,
-      ownerTeamId: context.ownerTeamId,
-    });
-    return access.canRead(partitions);
+    const decision = await this.access.check(
+      { userId: context.sessionUserId, ownerTeamId: context.ownerTeamId },
+      partitions
+    );
+    return decision.kind === "granted";
   }
 
   /** Resolve a session-relative selector; multi-repository sessions must name the repository. */

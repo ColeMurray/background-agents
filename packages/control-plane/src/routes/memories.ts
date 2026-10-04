@@ -16,16 +16,13 @@ import {
   type MemoryScope,
 } from "@open-inspect/shared/types/memories";
 import { type MemoryManagementPolicy } from "../authorization/memory-access";
-import {
-  createMemoryManagementPolicy,
-  createSharedMemoryAccess,
-} from "../authorization/memory-access-factory";
+import { createMemoryManagementPolicy } from "../authorization/memory-access-factory";
 import { EnvironmentStore } from "../db/environments";
 import { MemoryPreferenceStore } from "../db/memory-preferences";
 import { MemoryRecordStore } from "../db/memory-records";
 import { toMemoryDto } from "../memory/dto";
 import { partitionScope } from "../memory/partition";
-import { createSessionMemoryResolver } from "../memory/session-memory-resolver-factory";
+import { createSessionMemorySelector } from "../memory/session-memory-selector-factory";
 import type { MemoryActor, MemoryRecord } from "../memory/types";
 import { admit, dispatch } from "../routing/admit";
 import type { ControlPlaneHonoEnv } from "../routing/hono-env";
@@ -237,14 +234,13 @@ async function preview(request: Request, env: Env, _params: object, ctx: UserRou
     if (access.partition.type === "repository")
       resolved.push({ ...repo, repoId: access.partition.repoId });
   }
-  const target = await createSharedMemoryAccess(ctx).authorizeTarget({
-    userId: ctx.principal.userId,
-    ownerTeamId: null,
-    repositories: resolved,
-    environmentId: body.environmentId ?? null,
-  });
   return json(
-    await createSessionMemoryResolver(ctx.db).resolve(target, body.includePersonalMemories)
+    await createSessionMemorySelector(ctx).select({
+      principal: { userId: ctx.principal.userId, ownerTeamId: null },
+      repositories: resolved,
+      environmentId: body.environmentId ?? null,
+      includePersonalMemories: body.includePersonalMemories,
+    })
   );
 }
 

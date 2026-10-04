@@ -6,7 +6,7 @@ import { createLogger } from "../logger";
 import { InstalledRepositoryResolver, type UserRouteContext } from "../routes/shared";
 import { RepositoryGrantAuthorizer } from "../routes/workspace-repository-authorization";
 import type { Env } from "../types";
-import { MemoryManagementPolicy, SharedMemoryAccess } from "./memory-access";
+import { MemoryManagementPolicy, SessionMemoryAccessPolicy } from "./memory-access";
 import { EnvironmentAdmissionEvaluator } from "./owned-resource-admission";
 import { AuthorizationService } from "./service";
 
@@ -26,9 +26,9 @@ export function createMemoryManagementPolicy(
   });
 }
 
-/** Wire shared-partition access checks to D1 for one request. */
-export function createSharedMemoryAccess(ctx: RequestContext): SharedMemoryAccess {
-  return new SharedMemoryAccess({
+/** Wire session-principal access checks to D1 for one request. */
+export function createSessionMemoryAccessPolicy(ctx: RequestContext): SessionMemoryAccessPolicy {
+  return new SessionMemoryAccessPolicy({
     teams: new TeamStore(ctx.db),
     grants: new TeamRepositoryGrantStore(ctx.db),
     environments: new EnvironmentStore(ctx.db),

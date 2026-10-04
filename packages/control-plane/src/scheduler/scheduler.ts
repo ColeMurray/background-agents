@@ -90,8 +90,7 @@ import { resolveExecutionBudgetMs } from "../sandbox/execution-budget";
 import { MAX_IMAGE_BUILD_PROVIDER_SESSION_TIMEOUT_MS } from "../image-builds/timeouts";
 import { resolveManagedSkills } from "../session/skill-resolution";
 import { resolvedPin } from "../session/pinned";
-import { createSharedMemoryAccess } from "../authorization/memory-access-factory";
-import { createSessionMemoryResolver } from "../memory/session-memory-resolver-factory";
+import { createSessionMemorySelector } from "../memory/session-memory-selector-factory";
 import type { EnqueuePromptRequest } from "../session/enqueue-prompt-contract";
 import { resolveAutomationRepositories } from "../automation/repository";
 import {
@@ -1859,15 +1858,17 @@ export class Scheduler {
     ]);
     if (!authorized) throw new AutomationExecutionUnauthorizedError(executionDenialReason(team));
 
-    const memoryTarget = await createSharedMemoryAccess(ctx).authorizeTarget({
-      userId: executionPrincipal.platformUserId,
-      ownerTeamId: automation.owner_team_id,
+    const memoryManifest = await createSessionMemorySelector(ctx).select({
+      principal: {
+        userId: executionPrincipal.platformUserId,
+        ownerTeamId: automation.owner_team_id,
+      },
       repositories: scopeMembers,
       environmentId: target.environmentId,
     });
 
     const sessionInput: SessionInitInput = {
-      memory: resolvedPin(await createSessionMemoryResolver(this.db).resolve(memoryTarget)),
+      memory: resolvedPin(memoryManifest),
       ownerTeamId: automation.owner_team_id,
       visibility: team?.defaultVisibility ?? "workspace",
       sessionId,

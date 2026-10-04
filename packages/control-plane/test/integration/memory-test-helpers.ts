@@ -3,8 +3,9 @@ import type { SessionListRepository } from "@open-inspect/shared/types/repositor
 import type { SessionStatus } from "@open-inspect/shared/types/sessions";
 import type { SessionVisibility } from "@open-inspect/shared/types/teams";
 import { SessionIndexStore } from "../../src/db/session-index";
-import type { AuthorizedMemoryTarget } from "../../src/authorization/memory-access";
-import { createSessionMemoryResolver } from "../../src/memory/session-memory-resolver-factory";
+import { MemoryPreferenceStore } from "../../src/db/memory-preferences";
+import { MemoryRecordStore } from "../../src/db/memory-records";
+import { SessionMemorySelector } from "../../src/memory/session-memory-selector";
 import { inheritedPin, resolvedPin } from "../../src/session/pinned";
 
 interface MemorySessionOptions {
@@ -19,29 +20,22 @@ interface MemorySessionOptions {
 }
 
 /**
- * A memory target that skips `SharedMemoryAccess.authorizeTarget`: tests seed users and grants explicitly and
- * assert access at the read/write boundary, which rechecks grants on every request.
+ * A selector over the real stores whose access check grants every shared partition. Tests seed
+ * users and grants explicitly and assert access at the read/write boundary, which rechecks grants
+ * on every request; selection-time filtering is covered by the selector's unit tests.
  */
-export function memoryTargetForTest(target: {
-  userId: string | null;
-  repositories?: readonly { repoOwner: string; repoName: string; repoId?: number | null }[];
-  environmentId?: string | null;
-}): AuthorizedMemoryTarget {
-  return {
-    userId: target.userId,
-    repositories: (target.repositories ?? []).map((repo) => ({
-      repoOwner: repo.repoOwner,
-      repoName: repo.repoName,
-      repoId: repo.repoId ?? null,
-    })),
-    environmentId: target.environmentId ?? null,
-  } as unknown as AuthorizedMemoryTarget;
+export function memorySelectorForTest(): SessionMemorySelector {
+  return new SessionMemorySelector({
+    preferences: new MemoryPreferenceStore(env.DB),
+    records: new MemoryRecordStore(env.DB),
+    access: { check: async () => ({ kind: "granted" }) },
+  });
 }
 
 /**
  * Persist a real session and its memory selection in the same D1 batch.
  * Callers seed users/grants and bind sandbox credentials explicitly; this helper
- * neither authorizes scopes nor mocks the resolver or session-memory store.
+ * neither authorizes scopes nor mocks the session-memory stores.
  */
 export async function seedMemorySession(id: string, options: MemorySessionOptions) {
   const repositories = options.repositories ?? [];
@@ -66,10 +60,12 @@ export async function seedMemorySession(id: string, options: MemorySessionOption
       ? { parentSessionId: options.parentSessionId, memory: inheritedPin(options.parentSessionId) }
       : {
           memory: resolvedPin(
-            await createSessionMemoryResolver(env.DB).resolve(
-              memoryTargetForTest({ userId: options.userId, repositories, environmentId }),
-              options.includePersonalMemories ?? true
-            )
+            await memorySelectorForTest().select({
+              principal: { userId: options.userId, ownerTeamId: options.ownerTeamId ?? null },
+              repositories,
+              environmentId,
+              includePersonalMemories: options.includePersonalMemories ?? true,
+            })
           ),
         }),
   });

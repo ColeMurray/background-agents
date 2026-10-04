@@ -5,10 +5,10 @@ import type { MemoryPartition } from "../memory/partition";
 import type { MemoryRecord } from "../memory/types";
 import {
   MemoryManagementPolicy,
-  SharedMemoryAccess,
+  SessionMemoryAccessPolicy,
   type MemoryManagementDecision,
   type MemoryManagementPolicyDeps,
-  type SharedMemoryAccessDeps,
+  type SessionMemoryAccessPolicyDeps,
 } from "./memory-access";
 import { AuthorizationError } from "./service";
 
@@ -32,10 +32,10 @@ function authorization(
 
 const ungranted = { owner: "acme", name: "api", repoId: 1 };
 
-function sharedAccess(overrides: Partial<SharedMemoryAccessDeps> = {}) {
+function sessionPolicy(overrides: Partial<SessionMemoryAccessPolicyDeps> = {}) {
   const deps = {
     teams: { isActive: vi.fn(async () => true) },
-    grants: { covers: vi.fn<SharedMemoryAccessDeps["grants"]["covers"]>(async () => true) },
+    grants: { covers: vi.fn<SessionMemoryAccessPolicyDeps["grants"]["covers"]>(async () => true) },
     environments: {
       getById: vi.fn(async (id: string) =>
         id === "dev" ? ({ id, owner_team_id: "team" } as EnvironmentRow) : null
@@ -43,33 +43,45 @@ function sharedAccess(overrides: Partial<SharedMemoryAccessDeps> = {}) {
     },
     authorization: { getEffectiveAuthorization: vi.fn(async () => authorization()) },
     repositoryGrants: {
-      ungrantedRepository: vi.fn<SharedMemoryAccessDeps["repositoryGrants"]["ungrantedRepository"]>(
-        async () => null
-      ),
+      ungrantedRepository: vi.fn<
+        SessionMemoryAccessPolicyDeps["repositoryGrants"]["ungrantedRepository"]
+      >(async () => null),
     },
   };
-  return { deps, access: new SharedMemoryAccess({ ...deps, ...overrides }) };
+  return { deps, policy: new SessionMemoryAccessPolicy({ ...deps, ...overrides }) };
 }
 
-describe("SharedMemoryAccess", () => {
+const team = { userId: USER, ownerTeamId: "team" };
+const workspace = { userId: USER, ownerTeamId: null };
+const GRANTED = { kind: "granted" };
+
+describe("SessionMemoryAccessPolicy", () => {
   it("checks team activity and grant coverage for team sessions", async () => {
-    const { access, deps } = sharedAccess();
-    const team = await access.forPrincipal({ userId: USER, ownerTeamId: "team" });
-    expect(await team.canRead([api, dev, personal])).toBe(true);
+    const { policy, deps } = sessionPolicy();
+    expect(await policy.check(team, [api, dev, personal])).toEqual(GRANTED);
     expect(deps.grants.covers).toHaveBeenCalledWith("team", [1]);
     expect(deps.authorization.getEffectiveAuthorization).not.toHaveBeenCalled();
     deps.grants.covers.mockResolvedValueOnce(false);
-    expect(await team.canRead([api])).toBe(false);
+    expect(await policy.check(team, [api])).toEqual({
+      kind: "denied",
+      reason: "repository_ungranted",
+    });
     deps.teams.isActive.mockResolvedValueOnce(false);
-    expect(await team.canRead([personal])).toBe(false);
+    expect(await policy.check(team, [personal])).toEqual({
+      kind: "denied",
+      reason: "team_inactive",
+    });
   });
 
   it("evaluates workspace sessions as their owner, loading authorization once", async () => {
-    const { access, deps } = sharedAccess();
-    const owner = await access.forPrincipal({ userId: USER, ownerTeamId: null });
-    expect(await owner.canRead([api])).toBe(true);
+    const { policy, deps } = sessionPolicy();
+    expect(await policy.check(workspace, [api])).toEqual(GRANTED);
     deps.repositoryGrants.ungrantedRepository.mockResolvedValueOnce(ungranted);
-    expect(await owner.canRead([api])).toBe(false);
+    expect(await policy.check(workspace, [api])).toEqual({
+      kind: "denied",
+      reason: "repository_ungranted",
+      partition: api,
+    });
     expect(deps.authorization.getEffectiveAuthorization).toHaveBeenCalledTimes(1);
     expect(deps.repositoryGrants.ungrantedRepository).toHaveBeenCalledWith(authorization(), [
       { owner: "acme", name: "api", repoId: 1 },
@@ -85,37 +97,22 @@ describe("SharedMemoryAccess", () => {
       },
     ],
   ])("denies a workspace session whose owner %s", async (_case, load) => {
-    const { access } = sharedAccess({ authorization: { getEffectiveAuthorization: load } });
-    const owner = await access.forPrincipal({ userId: USER, ownerTeamId: null });
-    expect(await owner.canRead([])).toBe(false);
+    const { policy } = sessionPolicy({ authorization: { getEffectiveAuthorization: load } });
+    expect(await policy.check(workspace, [])).toEqual({
+      kind: "denied",
+      reason: "owner_unavailable",
+    });
   });
 
   it("denies environments that are missing or owned by another team", async () => {
-    const { access } = sharedAccess();
-    const otherTeam = await access.forPrincipal({ userId: USER, ownerTeamId: "other" });
-    expect(await otherTeam.canRead([dev])).toBe(false);
-    const team = await access.forPrincipal({ userId: USER, ownerTeamId: "team" });
-    expect(await team.canRead([{ type: "environment", environmentId: "gone" }])).toBe(false);
-  });
-
-  it("omits unreadable or unidentified targets instead of rejecting the session", async () => {
-    const { access, deps } = sharedAccess();
-    deps.grants.covers.mockImplementation(async (_team, ids) => !ids.includes(2));
-    const target = await access.authorizeTarget({
-      userId: USER,
-      ownerTeamId: "other",
-      repositories: [
-        { repoOwner: "acme", repoName: "api", repoId: 1 },
-        { repoOwner: "acme", repoName: "web", repoId: 2 },
-        { repoOwner: "acme", repoName: "legacy", repoId: null },
-      ],
-      environmentId: "dev",
+    const { policy } = sessionPolicy();
+    expect(await policy.check({ userId: USER, ownerTeamId: "other" }, [dev])).toEqual({
+      kind: "denied",
+      reason: "environment_unavailable",
+      partition: dev,
     });
-    expect(target).toEqual({
-      userId: USER,
-      repositories: [{ repoOwner: "acme", repoName: "api", repoId: 1 }],
-      environmentId: null,
-    });
+    const gone: MemoryPartition = { type: "environment", environmentId: "gone" };
+    expect(await policy.check(team, [gone])).toMatchObject({ reason: "environment_unavailable" });
   });
 });
 

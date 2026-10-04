@@ -3,10 +3,9 @@ import { env } from "cloudflare:test";
 import type { MemoryContent } from "@open-inspect/shared/types/memories";
 import { MemoryRecordStore, type NewMemory } from "../../src/db/memory-records";
 import type { MemoryPartition } from "../../src/memory/partition";
-import { createSessionMemoryResolver } from "../../src/memory/session-memory-resolver-factory";
 import type { MemoryActor } from "../../src/memory/types";
 import { cleanD1Tables } from "./cleanup";
-import { memoryTargetForTest, seedMemorySession } from "./memory-test-helpers";
+import { memorySelectorForTest, seedMemorySession } from "./memory-test-helpers";
 import { seedActiveUser } from "./helpers";
 import { SessionScopeStore } from "../../src/db/session-scope-store";
 
@@ -60,10 +59,12 @@ describe("memory persistence", () => {
         .filter((candidate) => candidate.memoryType === "fact")
         .every((candidate) => candidate.content === null)
     ).toBe(true);
-    const manifest = await createSessionMemoryResolver(env.DB).resolve(
-      memoryTargetForTest({ userId: human.userId }),
-      true
-    );
+    const manifest = await memorySelectorForTest().select({
+      principal: { userId: human.userId, ownerTeamId: null },
+      repositories: [],
+      environmentId: null,
+      includePersonalMemories: true,
+    });
     expect(manifest.items).toHaveLength(300);
     expect(manifest.truncatedCount).toBe(50);
   });

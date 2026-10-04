@@ -1,4 +1,4 @@
-const mockResolveSessionMemory = vi.hoisted(() =>
+const mockSelectSessionMemory = vi.hoisted(() =>
   vi.fn(async () => ({
     selectionVersion: 1,
     manifestSha256: "0".repeat(64),
@@ -12,12 +12,8 @@ const mockResolveSessionMemory = vi.hoisted(() =>
     items: [],
   }))
 );
-vi.mock("../memory/session-memory-resolver-factory", () => ({
-  createSessionMemoryResolver: () => ({ resolve: mockResolveSessionMemory }),
-}));
-const mockAuthorizeMemoryTarget = vi.hoisted(() => vi.fn(async (target: object) => target));
-vi.mock("../authorization/memory-access-factory", () => ({
-  createSharedMemoryAccess: () => ({ authorizeTarget: mockAuthorizeMemoryTarget }),
+vi.mock("../memory/session-memory-selector-factory", () => ({
+  createSessionMemorySelector: () => ({ select: mockSelectSessionMemory }),
 }));
 /**
  * Unit tests for Scheduler.
@@ -639,10 +635,11 @@ describe("Scheduler", () => {
       const result = await scheduler.tick();
 
       expect(result).toMatchObject({ processed: 1 });
-      expect(mockAuthorizeMemoryTarget).toHaveBeenCalledWith(
-        expect.objectContaining({ userId: sampleAutomation.user_id, ownerTeamId: null })
+      expect(mockSelectSessionMemory).toHaveBeenCalledWith(
+        expect.objectContaining({
+          principal: { userId: sampleAutomation.user_id, ownerTeamId: null },
+        })
       );
-      expect(mockResolveSessionMemory).toHaveBeenCalled();
 
       expect(mockStore.insertInvocationGuarded).toHaveBeenCalledTimes(1);
       const params = mockStore.insertInvocationGuarded.mock.calls[0][0];

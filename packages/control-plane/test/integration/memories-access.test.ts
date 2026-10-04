@@ -4,10 +4,9 @@ import { MemoryRecordStore } from "../../src/db/memory-records";
 import { SessionMemorySelectionStore } from "../../src/db/session-memory-selections";
 import { Scheduler } from "../../src/scheduler/scheduler";
 import { createCloudflareEnv } from "../../src/cloudflare/platform";
-import { memoryTargetForTest, seedMemorySession } from "./memory-test-helpers";
+import { memorySelectorForTest, seedMemorySession } from "./memory-test-helpers";
 import { SessionCollaboratorStore } from "../../src/db/session-collaborators";
 import type { MemoryPartition } from "../../src/memory/partition";
-import { createSessionMemoryResolver } from "../../src/memory/session-memory-resolver-factory";
 import { GitHubSourceControlProvider } from "../../src/source-control/providers/github-provider";
 import { cleanD1Tables } from "./cleanup";
 import { initNamedSessionDO, routeRequest, seedActiveUser, seedSandboxAuthHash } from "./helpers";
@@ -210,9 +209,11 @@ describe("memory shared-scope authorization", () => {
     expect(await preview.json()).toMatchObject({ items: [] });
     expect(
       (
-        await createSessionMemoryResolver(env.DB).resolve(
-          memoryTargetForTest({ userId: MEMBER, repositories: [{ ...repo, repoId: 456 }] })
-        )
+        await memorySelectorForTest().select({
+          principal: { userId: MEMBER, ownerTeamId: null },
+          repositories: [{ ...repo, repoId: 456 }],
+          environmentId: null,
+        })
       ).items
     ).toEqual([]);
     await expect(

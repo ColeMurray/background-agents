@@ -26,8 +26,7 @@ import { resolveGitHubEnrichmentForRequest } from "../session/identity";
 import { resolveSessionScopedSettings } from "../session/integration-settings-resolution";
 import { resolveManagedSkills, SkillResolutionError } from "../session/skill-resolution";
 import { resolvedPin } from "../session/pinned";
-import { createSharedMemoryAccess } from "../authorization/memory-access-factory";
-import { createSessionMemoryResolver } from "../memory/session-memory-resolver-factory";
+import { createSessionMemorySelector } from "../memory/session-memory-selector-factory";
 import type { Env } from "../types";
 import { resolveSessionProviderAuth } from "../session/provider-account-resolution";
 import { ProviderAccountSelectionPolicyError } from "../model-provider-accounts/selection-policy";
@@ -287,16 +286,12 @@ export async function handleCreateSession(
     throw e;
   }
 
-  const memoryTarget = await createSharedMemoryAccess(ctx).authorizeTarget({
-    userId: resolvedUserId,
-    ownerTeamId: teamId,
+  const memoryManifest = await createSessionMemorySelector(ctx).select({
+    principal: { userId: resolvedUserId, ownerTeamId: teamId },
     repositories: scopeMembers,
     environmentId,
+    includePersonalMemories: body.includePersonalMemories,
   });
-  const memoryManifest = await createSessionMemoryResolver(ctx.db).resolve(
-    memoryTarget,
-    body.includePersonalMemories
-  );
 
   const input: SessionInitInput = {
     memory: resolvedPin(memoryManifest),

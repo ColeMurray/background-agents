@@ -79,8 +79,12 @@ function setup(
         hasMore: false,
       })),
     },
-    sharedAccess: {
-      forPrincipal: vi.fn(async () => ({ canRead: async () => readable.shift() ?? true })),
+    access: {
+      check: vi.fn(async () =>
+        (readable.shift() ?? true)
+          ? ({ kind: "granted" } as const)
+          : ({ kind: "denied", reason: "repository_ungranted" } as const)
+      ),
     },
     requestId: "request",
   } satisfies SessionMemoryServiceDeps;
@@ -116,10 +120,9 @@ describe("SessionMemoryService.write", () => {
         personalAutoSave: true,
       }
     );
-    expect(deps.sharedAccess.forPrincipal).toHaveBeenCalledWith({
-      userId: "owner",
-      ownerTeamId: null,
-    });
+    expect(deps.access.check).toHaveBeenCalledWith({ userId: "owner", ownerTeamId: null }, [
+      { type: "repository", ...api },
+    ]);
   });
 
   it("requires a selector in multi-repository sessions and never writes on rejection", async () => {

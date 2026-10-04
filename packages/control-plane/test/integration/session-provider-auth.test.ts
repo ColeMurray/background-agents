@@ -5,9 +5,8 @@ import { ModelProviderAccountStore } from "../../src/db/model-provider-accounts"
 import { ProviderDefaultStore } from "../../src/db/provider-account-defaults";
 import { SessionIndexStore } from "../../src/db/session-index";
 import { initializeSession } from "../../src/session/initialize";
-import { createSessionMemoryResolver } from "../../src/memory/session-memory-resolver-factory";
 import { resolvedPin } from "../../src/session/pinned";
-import { memoryTargetForTest } from "./memory-test-helpers";
+import { memorySelectorForTest } from "./memory-test-helpers";
 import { resolveSessionProviderAuth } from "../../src/session/provider-account-resolution";
 import { cleanD1Tables } from "./cleanup";
 
@@ -60,7 +59,11 @@ describe("session provider auth persistence", () => {
         platformUserId: null,
         participantCanonicalUserId: null,
         memory: resolvedPin(
-          await createSessionMemoryResolver(env.DB).resolve(memoryTargetForTest({ userId: null }))
+          await memorySelectorForTest().select({
+            principal: { userId: null, ownerTeamId: null },
+            repositories: [],
+            environmentId: null,
+          })
         ),
         managedSkills: resolvedPin({
           selection: { mode: "all" },
