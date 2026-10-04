@@ -219,7 +219,7 @@ describe("status writes after a provider await (COL-99)", () => {
           sandboxId: config.sandboxId,
           providerObjectId: "provider-obj-replacement",
           createdAt: Date.now(),
-          lifetime: { kind: "unknown" },
+          lifetime: noLifetime(),
         }));
       const shutdown = {
         ...createUnmanagedShutdown(),
@@ -253,7 +253,7 @@ describe("status writes after a provider await (COL-99)", () => {
         sandboxId: sandbox.modal_sandbox_id!,
         providerObjectId: "provider-obj-late",
         createdAt: Date.now(),
-        lifetime: { kind: "unknown" },
+        lifetime: noLifetime(),
       });
       await spawning;
 
