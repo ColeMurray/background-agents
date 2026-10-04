@@ -237,7 +237,7 @@ describe("status writes after a provider await (COL-99)", () => {
       const spawning = manager.spawnSandbox();
       await vi.waitFor(() => expect(createSandbox).toHaveBeenCalledOnce());
       await vi.advanceTimersByTimeAsync(DEFAULT_LIFECYCLE_CONFIG.connectingTimeout.timeoutMs + 1);
-      await expect(manager.handleAlarm()).resolves.toBe("sandbox_failed");
+      await expect(manager.handleAlarm()).resolves.toBe("sandbox_terminated");
 
       resolveCreate({
         sandboxId: sandbox.modal_sandbox_id!,

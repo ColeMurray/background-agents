@@ -67,12 +67,22 @@ export interface SandboxAttachment {
   onRefusedReconnect(): "retry" | "exit";
 }
 
-/** The lifecycle result consumed by the existing alarm coordinator. */
+/**
+ * The lifecycle result consumed by the existing alarm coordinator.
+ *
+ * - `sandbox_failed`: the generation failed but may still come up or is held
+ *   for recovery, so pending prompts wait for the next spawn.
+ * - `sandbox_terminated`: the generation is gone, so the queue is re-driven
+ *   onto a replacement.
+ * - An object result abandons the boot: the prompt it was for fails with
+ *   `reason` and nothing re-drives it.
+ */
 export type SandboxAlarmResult =
   | "no_action"
   | "sandbox_failed"
   | "sandbox_terminated"
-  | { kind: "boot_budget_exceeded"; reason: string };
+  | { kind: "boot_budget_exceeded"; reason: string }
+  | { kind: "connect_retries_exhausted"; reason: string };
 
 export interface SandboxAlarm {
   handleAlarm(): Promise<SandboxAlarmResult>;
