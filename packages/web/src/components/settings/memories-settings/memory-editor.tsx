@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import {
-  MEMORY_LIMITS,
+  MEMORY_CONTENT_LIMITS,
   MEMORY_TYPES,
   memoryContentSchema,
   memoryTypeSchema,
@@ -39,7 +39,7 @@ export function MemoryEditor({
     content: record?.content ?? "",
   });
   const [error, setError] = useState("");
-  const limit = MEMORY_LIMITS[draft.memoryType];
+  const limit = MEMORY_CONTENT_LIMITS.body[draft.memoryType];
   return (
     <form
       className="space-y-4 rounded-sm border border-border p-4"
@@ -77,11 +77,11 @@ export function MemoryEditor({
       <label className="block text-sm">
         Title{" "}
         <span className="text-muted-foreground">
-          {draft.title.length}/{MEMORY_LIMITS.title}
+          {draft.title.length}/{MEMORY_CONTENT_LIMITS.title}
         </span>
         <Input
           value={draft.title}
-          maxLength={MEMORY_LIMITS.title}
+          maxLength={MEMORY_CONTENT_LIMITS.title}
           onChange={(e) => setDraft({ ...draft, title: e.target.value })}
           disabled={busy}
         />
@@ -89,17 +89,17 @@ export function MemoryEditor({
       <label className="block text-sm">
         Description{" "}
         <span className="text-muted-foreground">
-          {draft.description.length}/{MEMORY_LIMITS.description}
+          {draft.description.length}/{MEMORY_CONTENT_LIMITS.description}
         </span>
         <Input
           value={draft.description}
-          maxLength={MEMORY_LIMITS.description}
+          maxLength={MEMORY_CONTENT_LIMITS.description}
           onChange={(e) => setDraft({ ...draft, description: e.target.value })}
           disabled={busy}
         />
         <span className="text-xs text-muted-foreground">
-          At least {MEMORY_LIMITS.descriptionMin} characters. Helps the agent decide when this is
-          relevant.
+          At least {MEMORY_CONTENT_LIMITS.descriptionMin} characters. Helps the agent decide when
+          this is relevant.
         </span>
       </label>
       <label className="block text-sm">

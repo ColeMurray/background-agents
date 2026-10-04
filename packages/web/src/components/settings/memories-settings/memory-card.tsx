@@ -1,7 +1,7 @@
 "use client";
 
 import {
-  MEMORY_LIMITS,
+  MEMORY_CONTENT_LIMITS,
   type MemoryAction,
   type MemoryContent,
   type MemoryDto,
@@ -142,7 +142,7 @@ export function MemoryCard({
             Archive note (optional)
             <Input
               value={archiving.archiveNote}
-              maxLength={MEMORY_LIMITS.archiveNote}
+              maxLength={MEMORY_CONTENT_LIMITS.archiveNote}
               onChange={(event) => onPanelChange({ ...archiving, archiveNote: event.target.value })}
             />
           </label>

@@ -5,5 +5,6 @@ const action: MemoryAction = "restore";
 
 export const { POST } = settingsProxy(
   ({ id }: { id: string }) => `/memories/${encodeURIComponent(id)}/${action}`,
-  "memories"
+  "memory",
+  { POST: `${action} memory` }
 );
