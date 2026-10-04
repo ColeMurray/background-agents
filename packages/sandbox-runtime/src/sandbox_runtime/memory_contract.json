@@ -1,5 +1,5 @@
 {
-  "$comment": "Generated from packages/shared/src/memory-tools.ts by `npm run generate:memory-tools -w @open-inspect/shared`. Do not edit.",
+  "$comment": "Generated from packages/shared/src/memory-tools.ts by `npm run generate:memory-contract -w @open-inspect/shared`. Do not edit.",
   "tools": [
     {
       "name": "memory_read",
@@ -135,6 +135,7 @@
       }
     }
   ],
+  "sandboxSchemaVersion": 1,
   "limits": {
     "renderedChars": 240000
   }

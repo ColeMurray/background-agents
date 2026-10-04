@@ -20,7 +20,7 @@ from .tool_results import error_result, error_text, text_result
 if TYPE_CHECKING:
     from collections.abc import Mapping, Sequence
 
-    from ..memories import MemoryToolSpec
+    from ..memory_contract import MemoryToolSpec
     from .claude_tools import ControlPlaneToolClient
 
 _PATH_PARAM: Final = re.compile(r"\{(\w+)\}")

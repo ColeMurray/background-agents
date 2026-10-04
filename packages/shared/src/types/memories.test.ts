@@ -8,7 +8,7 @@ import {
   MEMORY_TRANSITIONS,
   sandboxMemoryWriteSchema,
   reviseMemorySchema,
-  MEMORY_LIMITS,
+  MEMORY_CONTENT_LIMITS,
   memoryActionBodySchemas,
   memorySelectionSummarySchema,
   sessionMemorySelectionStatusSchema,
@@ -73,12 +73,15 @@ describe("memory write contracts", () => {
     const directive = {
       ...fields,
       memoryType: "directive",
-      content: "a".repeat(MEMORY_LIMITS.directive + 1),
+      content: "a".repeat(MEMORY_CONTENT_LIMITS.body.directive + 1),
     };
     expect(createMemorySchema.safeParse({ ...directive, scope: fact.scope }).success).toBe(false);
     expect(reviseMemorySchema.safeParse(directive).success).toBe(false);
     expect(
-      createMemorySchema.safeParse({ ...fact, content: "a".repeat(MEMORY_LIMITS.fact) }).success
+      createMemorySchema.safeParse({
+        ...fact,
+        content: "a".repeat(MEMORY_CONTENT_LIMITS.body.fact),
+      }).success
     ).toBe(true);
   });
   it("rejects unknown scopes and insufficient catalog descriptions", () => {

@@ -1,5 +1,5 @@
-// Generated from packages/shared/src/memory-tools.ts by `npm run generate:memory-tools -w @open-inspect/shared`. Do not edit.
-export const MEMORY_TOOL_SPECS = {
+// Generated from packages/shared/src/memory-tools.ts by `npm run generate:memory-contract -w @open-inspect/shared`. Do not edit.
+export const MEMORY_CONTRACT = {
   "tools": [
     {
       "name": "memory_read",
@@ -135,6 +135,7 @@ export const MEMORY_TOOL_SPECS = {
       }
     }
   ],
+  "sandboxSchemaVersion": 1,
   "limits": {
     "renderedChars": 240000
   }

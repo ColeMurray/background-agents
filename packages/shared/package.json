@@ -235,7 +235,7 @@
     "test:coverage": "vitest run --coverage",
     "lint": "eslint src/",
     "lint:fix": "eslint src/ --fix",
-    "generate:memory-tools": "UPDATE_MEMORY_TOOL_SPECS=1 vitest run src/memory-tools.test.ts"
+    "generate:memory-contract": "UPDATE_MEMORY_CONTRACT=1 vitest run src/memory-tools.test.ts"
   },
   "devDependencies": {
     "@vitest/coverage-v8": "^4.1.11",

@@ -26,7 +26,8 @@ from .image_build_context_start import (
 from .image_environment import apply_image_environment
 from .log_config import configure_logging, get_logger
 from .managed_skills import ManagedSkillsClient, ManagedSkillsMaterializer
-from .memories import MEMORY_TOOL_SPECS, MemoryMaterializer, SessionMemoryClient, memory_path
+from .memories import MemoryMaterializer, SessionMemoryClient, memory_path
+from .memory_contract import RENDERED_MEMORY_MAX_CHARS
 from .modal_image_build_start import MODAL_IMAGE_BUILD_START_ARGUMENT, run_modal_image_build
 from .opencode_server import OpenCodeServer, resolve_opencode_global_config_dir
 from .repository_boot import RepositoryBoot
@@ -111,7 +112,7 @@ def _build_memory(
             config.control_plane_url,
             config.session_id,
             config.sandbox_token,
-            max_rendered_chars=MEMORY_TOOL_SPECS["limits"]["renderedChars"],
+            max_rendered_chars=RENDERED_MEMORY_MAX_CHARS,
         ),
         memory_path(harness_config_dir(config.harness, claude_config_dir)),
         log,

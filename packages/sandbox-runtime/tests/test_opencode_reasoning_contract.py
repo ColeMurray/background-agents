@@ -163,7 +163,7 @@ async def wire_server(tmp_path, reasoning_config, request):
                 "memory_write.js",
                 "memory_search.js",
                 "_memory.js",
-                "_memory-tool-specs.js",
+                "_memory-contract.js",
                 "_bridge-client.js",
             ):
                 shutil.copy(source / name, destination / name)

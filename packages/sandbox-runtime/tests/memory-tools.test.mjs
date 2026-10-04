@@ -16,7 +16,7 @@ function respondWith(response) {
 
 const { executeMemoryTool, memoryToolArgs, memoryToolDefinition } =
   await import("../src/sandbox_runtime/tools/_memory.js");
-const { MEMORY_TOOL_SPECS } = await import("../src/sandbox_runtime/tools/_memory-tool-specs.js");
+const { MEMORY_CONTRACT } = await import("../src/sandbox_runtime/tools/_memory-contract.js");
 
 /** Records the zod builder calls the converter makes; the plugin's zod is not installed here. */
 function recordingSchema() {
@@ -78,7 +78,7 @@ test("converter rejects schema types it does not understand", () => {
 });
 
 test("every generated spec converts and exposes its description", () => {
-  for (const spec of MEMORY_TOOL_SPECS.tools) {
+  for (const spec of MEMORY_CONTRACT.tools) {
     const definition = memoryToolDefinition(recordingSchema(), spec.name);
     assert.equal(definition.description, spec.description);
     assert.deepEqual(Object.keys(definition.args), Object.keys(spec.inputSchema.properties));

@@ -7,10 +7,10 @@
  * not declare; the control plane derives identity and write authority.
  */
 import { bridgeFetch, extractError } from "./_bridge-client.js";
-import { MEMORY_TOOL_SPECS } from "./_memory-tool-specs.js";
+import { MEMORY_CONTRACT } from "./_memory-contract.js";
 
 function memoryToolSpec(name) {
-  const spec = MEMORY_TOOL_SPECS.tools.find((candidate) => candidate.name === name);
+  const spec = MEMORY_CONTRACT.tools.find((candidate) => candidate.name === name);
   if (!spec) throw new Error(`Unknown memory tool: ${name}`);
   return spec;
 }

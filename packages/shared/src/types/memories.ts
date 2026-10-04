@@ -1,22 +1,28 @@
 import { z } from "zod";
 import { repositoriesInputSchema, repositoryPairInputSchema } from "./repositories";
 
-/** Content/catalog lengths use JavaScript string length; write quotas count records, not revisions. */
-export const MEMORY_LIMITS = {
+/** Per-record content limits, in JavaScript string length. */
+export const MEMORY_CONTENT_LIMITS = {
   title: 200,
   descriptionMin: 10,
   description: 420,
-  directive: 2_000,
-  fact: 20_000,
-  directiveCharsPerPartition: 6_000,
-  directiveRecords: 100,
-  directives: 12_000,
-  catalog: 24_000,
-  catalogRecords: 200,
-  rendered: 240_000,
-  writesPerSession: 20,
-  pendingPerSession: 5,
+  /** Body length by memory type; directives are always injected in full, so they stay short. */
+  body: { fact: 20_000, directive: 2_000 },
   archiveNote: 1_000,
+} as const;
+/** What one session's pinned selection may hold; records beyond a budget are omitted whole. */
+export const MEMORY_SELECTION_BUDGET = {
+  directiveCharsPerPartition: 6_000,
+  directiveChars: 12_000,
+  directiveRecords: 100,
+  catalogChars: 24_000,
+  catalogRecords: 200,
+  renderedChars: 240_000,
+} as const;
+/** Per-session limits on agent writes; they count records, not revisions. */
+export const MEMORY_AGENT_WRITE_QUOTAS = {
+  records: 20,
+  pendingProposals: 5,
 } as const;
 /** Management list paging; the control plane fetches one extra row to compute `nextOffset`. */
 export const MEMORY_LIST_PAGE_SIZE = 50;
@@ -187,13 +193,17 @@ export function canReviseMemory(state: MemoryLifecycleState): boolean {
 export const memoryContentSchema = z
   .object({
     memoryType: memoryTypeSchema,
-    title: z.string().trim().min(1).max(MEMORY_LIMITS.title),
-    description: z.string().trim().min(MEMORY_LIMITS.descriptionMin).max(MEMORY_LIMITS.description),
-    content: z.string().min(1).max(MEMORY_LIMITS.fact),
+    title: z.string().trim().min(1).max(MEMORY_CONTENT_LIMITS.title),
+    description: z
+      .string()
+      .trim()
+      .min(MEMORY_CONTENT_LIMITS.descriptionMin)
+      .max(MEMORY_CONTENT_LIMITS.description),
+    content: z.string().min(1).max(MEMORY_CONTENT_LIMITS.body.fact),
   })
   .strict()
   .superRefine((value, ctx) => {
-    const limit = MEMORY_LIMITS[value.memoryType];
+    const limit = MEMORY_CONTENT_LIMITS.body[value.memoryType];
     if (
       value.content.length > limit ||
       new TextEncoder().encode(value.content).length > limit * 4
@@ -223,7 +233,7 @@ export type CreateMemoryInput = z.infer<typeof createMemorySchema>;
 /** Revisions and lifecycle actions are fenced by the reviewed revision in `If-Match`. */
 export const reviseMemorySchema = memoryContentSchema;
 const archiveNoteBodySchema = z
-  .object({ archiveNote: z.string().trim().max(MEMORY_LIMITS.archiveNote).optional() })
+  .object({ archiveNote: z.string().trim().max(MEMORY_CONTENT_LIMITS.archiveNote).optional() })
   .strict();
 const emptyBodySchema = z.object({}).strict();
 /**
@@ -315,7 +325,8 @@ export const MEMORY_SELECTION_VERSION = 1;
 export const MEMORY_INCLUSIONS = ["full", "summary"] as const;
 export const memoryInclusionSchema = z.enum(MEMORY_INCLUSIONS);
 export type MemoryInclusion = z.infer<typeof memoryInclusionSchema>;
-const MAX_SELECTION_ITEMS = MEMORY_LIMITS.directiveRecords + MEMORY_LIMITS.catalogRecords;
+const MAX_SELECTION_ITEMS =
+  MEMORY_SELECTION_BUDGET.directiveRecords + MEMORY_SELECTION_BUDGET.catalogRecords;
 
 const selectionItemSummarySchema = z.object({
   memoryId: z.string(),
@@ -422,8 +433,8 @@ export const memorySearchResultSchema = z
     id: z.string(),
     revisionId: z.string(),
     scope: memoryScopeSchema,
-    title: z.string().max(MEMORY_LIMITS.title),
-    description: z.string().max(MEMORY_LIMITS.description),
+    title: z.string().max(MEMORY_CONTENT_LIMITS.title),
+    description: z.string().max(MEMORY_CONTENT_LIMITS.description),
   })
   .strict();
 export type MemorySearchResult = z.infer<typeof memorySearchResultSchema>;
@@ -445,7 +456,7 @@ export const renderedSessionMemorySchema = z
   .object({
     schemaVersion: z.literal(SANDBOX_MEMORY_SCHEMA_VERSION),
     manifestSha256: z.string(),
-    rendered: z.string().max(MEMORY_LIMITS.rendered),
+    rendered: z.string().max(MEMORY_SELECTION_BUDGET.renderedChars),
   })
   .strict();
 export type RenderedSessionMemory = z.infer<typeof renderedSessionMemorySchema>;
@@ -500,7 +511,8 @@ export const sandboxMemoryWriteSchema = memoryContentSchema
   })
   .superRefine(checkRepositorySelector);
 export type SandboxMemoryWriteInput = z.infer<typeof sandboxMemoryWriteSchema>;
+/** A new record is active (auto-saved) or awaiting review; it is never created archived. */
 export const sandboxMemoryWriteResultSchema = z
-  .object({ id: z.string(), status: memoryStatusSchema, revisionId: z.string() })
+  .object({ id: z.string(), status: z.enum(["active", "proposed"]), revisionId: z.string() })
   .strict();
 export type SandboxMemoryWriteResult = z.infer<typeof sandboxMemoryWriteResultSchema>;

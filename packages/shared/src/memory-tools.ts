@@ -2,10 +2,10 @@
  * Agent-facing memory tool contract.
  *
  * This module is the single definition of the memory tools both sandbox harnesses expose. The
- * sandbox runtime cannot import TypeScript, so `npm run generate:memory-tools -w
- * @open-inspect/shared` writes the derived specs into the runtime package (a JSON file for the
- * Python harness, an ES module for the OpenCode tools); `memory-tools.test.ts` fails when they
- * are stale.
+ * sandbox runtime cannot import TypeScript, so `npm run generate:memory-contract -w
+ * @open-inspect/shared` writes the derived contract (tool specs, sandbox schema version, and
+ * runtime limits) into the runtime package: a JSON file for Python, an ES module for the OpenCode
+ * tools. `memory-tools.test.ts` fails when they are stale.
  *
  * Tool inputs are the sandbox endpoint request schemas, so harnesses forward arguments verbatim
  * (after dropping unknown keys) and never reshape request bodies.
@@ -13,7 +13,8 @@
 import { z } from "zod";
 import type { HarnessId } from "./harnesses";
 import {
-  MEMORY_LIMITS,
+  MEMORY_SELECTION_BUDGET,
+  SANDBOX_MEMORY_SCHEMA_VERSION,
   memorySearchSchema,
   sandboxMemoryReadSchema,
   sandboxMemoryWriteSchema,
@@ -76,14 +77,17 @@ export interface MemoryToolSpec {
   path: string;
   inputSchema: Record<string, unknown>;
 }
-export interface MemoryToolSpecs {
+/** Everything the sandbox runtime needs from this contract, generated for both harnesses. */
+export interface MemorySandboxContract {
   tools: MemoryToolSpec[];
+  /** The `schemaVersion` the runtime accepts on rendered memory responses. */
+  sandboxSchemaVersion: number;
   /** Runtime-enforced bounds that mirror control-plane limits. */
   limits: { renderedChars: number };
 }
 
-/** Derive the harness-neutral specs from the zod contract. */
-export function buildMemoryToolSpecs(): MemoryToolSpecs {
+/** Derive the harness-neutral contract from the zod schemas and shared constants. */
+export function buildMemorySandboxContract(): MemorySandboxContract {
   return {
     tools: MEMORY_TOOL_NAMES.map((name) => {
       const tool = MEMORY_TOOLS[name];
@@ -99,23 +103,24 @@ export function buildMemoryToolSpecs(): MemoryToolSpecs {
         inputSchema,
       };
     }),
-    limits: { renderedChars: MEMORY_LIMITS.rendered },
+    sandboxSchemaVersion: SANDBOX_MEMORY_SCHEMA_VERSION,
+    limits: { renderedChars: MEMORY_SELECTION_BUDGET.renderedChars },
   };
 }
 
 const GENERATED_HEADER =
-  "Generated from packages/shared/src/memory-tools.ts by `npm run generate:memory-tools -w @open-inspect/shared`. Do not edit.";
-/** Repo-relative output paths for {@link formatMemoryToolSpecFiles}. */
-export const MEMORY_TOOL_SPEC_FILES = {
-  json: "packages/sandbox-runtime/src/sandbox_runtime/memory_tool_specs.json",
-  module: "packages/sandbox-runtime/src/sandbox_runtime/tools/_memory-tool-specs.js",
+  "Generated from packages/shared/src/memory-tools.ts by `npm run generate:memory-contract -w @open-inspect/shared`. Do not edit.";
+/** Repo-relative output paths for {@link formatMemoryContractFiles}. */
+export const MEMORY_CONTRACT_FILES = {
+  json: "packages/sandbox-runtime/src/sandbox_runtime/memory_contract.json",
+  module: "packages/sandbox-runtime/src/sandbox_runtime/tools/_memory-contract.js",
 } as const;
 
-export function formatMemoryToolSpecFiles(): Record<keyof typeof MEMORY_TOOL_SPEC_FILES, string> {
-  const specs = buildMemoryToolSpecs();
-  const json = JSON.stringify(specs, null, 2);
+export function formatMemoryContractFiles(): Record<keyof typeof MEMORY_CONTRACT_FILES, string> {
+  const contract = buildMemorySandboxContract();
+  const json = JSON.stringify(contract, null, 2);
   return {
-    json: `${JSON.stringify({ $comment: GENERATED_HEADER, ...specs }, null, 2)}\n`,
-    module: `// ${GENERATED_HEADER}\nexport const MEMORY_TOOL_SPECS = ${json};\n`,
+    json: `${JSON.stringify({ $comment: GENERATED_HEADER, ...contract }, null, 2)}\n`,
+    module: `// ${GENERATED_HEADER}\nexport const MEMORY_CONTRACT = ${json};\n`,
   };
 }

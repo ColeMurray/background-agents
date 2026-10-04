@@ -11,13 +11,13 @@ from sandbox_runtime.harness.claude_tools import (
     build_tools,
 )
 from sandbox_runtime.memories import (
-    MEMORY_TOOL_SPECS,
     MemoryMaterializer,
     RenderedSessionMemory,
     SessionMemoryClient,
     append_memory,
     memory_text,
 )
+from sandbox_runtime.memory_contract import MEMORY_TOOL_SPECS, RENDERED_MEMORY_MAX_CHARS
 
 MANIFEST_SHA256 = "a" * 64
 
@@ -31,7 +31,7 @@ def materializer(path: Path, handler: object) -> MemoryMaterializer:
         "https://control.test",
         "session/a",
         "test-token",
-        max_rendered_chars=MEMORY_TOOL_SPECS["limits"]["renderedChars"],
+        max_rendered_chars=RENDERED_MEMORY_MAX_CHARS,
         transport=httpx.MockTransport(handler),
     )
     return MemoryMaterializer(client, path / "oi-memory.md", MagicMock())
@@ -81,7 +81,7 @@ async def test_empty_memory_removes_restored_memory_and_staging(tmp_path: Path) 
         (200, {**rendered_response("unsafe"), "schemaVersion": 2}),
         (200, rendered_response([])),
         (200, {"schemaVersion": 1, "rendered": "no manifest"}),
-        (200, rendered_response("x" * (MEMORY_TOOL_SPECS["limits"]["renderedChars"] + 1))),
+        (200, rendered_response("x" * (RENDERED_MEMORY_MAX_CHARS + 1))),
     ],
 )
 async def test_failed_or_invalid_response_never_keeps_stale_file(
@@ -166,10 +166,9 @@ async def test_claude_memory_tools_are_the_generated_specs(tmp_path: Path) -> No
         tools = build_tools(client)
     finally:
         await client.aclose()
-    memory_tools = tools[-len(MEMORY_TOOL_SPECS["tools"]) :]
+    memory_tools = tools[-len(MEMORY_TOOL_SPECS) :]
     assert [(tool.name, tool.description, tool.input_schema) for tool in memory_tools] == [
-        (spec["name"], spec["description"], spec["inputSchema"])
-        for spec in MEMORY_TOOL_SPECS["tools"]
+        (spec["name"], spec["description"], spec["inputSchema"]) for spec in MEMORY_TOOL_SPECS
     ]
 
 

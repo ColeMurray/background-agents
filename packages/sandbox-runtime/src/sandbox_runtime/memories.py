@@ -3,39 +3,15 @@
 import json
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Final, Protocol, TypedDict, cast
+from typing import Any, Final, Protocol
 from urllib.parse import quote
 
 import httpx
 
 from .control_plane_fetch import ResponseTooLargeError, fetch_bounded
 from .durable_files import atomic_write_private, remove_abandoned_staging
+from .memory_contract import SANDBOX_MEMORY_SCHEMA_VERSION
 
-
-class MemoryToolSpec(TypedDict):
-    name: str
-    description: str
-    method: str
-    # Below ``/sessions/:id``; ``{name}`` segments are filled from (and consume) input fields.
-    path: str
-    inputSchema: dict[str, Any]
-
-
-class MemoryLimits(TypedDict):
-    renderedChars: int
-
-
-class MemoryToolSpecs(TypedDict):
-    tools: list[MemoryToolSpec]
-    limits: MemoryLimits
-
-
-# Generated from packages/shared/src/memory-tools.ts; the OpenCode tools read the JS twin.
-_SPECS_PATH = Path(__file__).with_name("memory_tool_specs.json")
-MEMORY_TOOL_SPECS = cast("MemoryToolSpecs", json.loads(_SPECS_PATH.read_text()))
-
-# Mirrors SANDBOX_MEMORY_SCHEMA_VERSION in packages/shared/src/types/memories.ts.
-SANDBOX_MEMORY_SCHEMA_VERSION: Final = 1
 MEMORY_FILENAME: Final = "oi-memory.md"
 MAX_MEMORY_RESPONSE_BYTES: Final = 2 * 1024 * 1024
 MEMORY_FETCH_TIMEOUT_SECONDS: Final = 30.0
