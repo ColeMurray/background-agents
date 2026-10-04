@@ -92,7 +92,7 @@ flowchart TB
 
 **Suggested changes.** Ask for suggestions explicitly, for example `@my-app[bot] suggest a fix` or `@my-app[bot] propose a change, don't push`. The agent then leaves GitHub suggested changes instead of pushing: as a reply in the review thread you mentioned it in, or as a comment-only review for other lines. In a review thread, it may also answer a question with a suggestion for the thread's own lines. A request to make a change still gets a change, never a suggestion in its place. The agent doesn't add suggestions to outdated threads, file-level comments, or comments on removed lines, because GitHub can't apply them there.
 
-**Branch and session behavior.** Comment-triggered sessions start from the repository's default branch, not the PR head branch, so use them for answers and discussion rather than asking the agent to push to the PR branch. If you do ask for a code change, the agent checks out the PR branch with `gh pr checkout` before pushing. Each accepted webhook starts a new session; GitHub comments do not continue an existing session the way Slack replies do, though the agent reads the current PR conversation when it needs context. Mentions on ordinary issues are ignored, and so are the bot's own comments.
+**Branch and session behavior.** Comment-triggered sessions start from the repository's default branch, not the PR head branch. If you ask for a code change, the agent checks out the PR branch with `gh pr checkout` before pushing. Each accepted webhook starts a new session; GitHub comments do not continue an existing session the way Slack replies do, though the agent reads the current PR conversation when it needs context. Mentions on ordinary issues are ignored, and so are the bot's own comments.
 
 ### Team routing
 

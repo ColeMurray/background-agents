@@ -139,6 +139,7 @@ describe("buildThreadSuggestionRules", () => {
       endLine: 12,
     });
     expect(rules).toContain("replaces lines 10-12 of `src/it's.ts`");
+    expect(rules).toContain("If that command fails, do not put a suggestion block");
     expect(rules).toContain("commit d34db33fd34db33fd34db33fd34db33fd34db33f");
     expect(rules).toContain(
       `git fetch --quiet --depth=1 origin d34db33fd34db33fd34db33fd34db33fd34db33f && git show 'd34db33fd34db33fd34db33fd34db33fd34db33f:src/it'\\''s.ts' | sed -n '10,12p'`

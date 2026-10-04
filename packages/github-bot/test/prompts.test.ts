@@ -381,7 +381,7 @@ describe("buildCommentActionPrompt", () => {
       "git show 'd34db33fd34db33fd34db33fd34db33fd34db33f:src/cache.ts' | sed -n '10,12p'"
     );
     expect(prompt).toContain(
-      "git show 'd34db33fd34db33fd34db33fd34db33fd34db33f:src/cache.ts' | sed -n '10,12p'"
+      "git show '<head commit>:<file path>' | sed -n '<start_line>,<line>p'"
     );
   });
 

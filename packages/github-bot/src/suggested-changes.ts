@@ -93,6 +93,7 @@ export function buildThreadSuggestionRules(path: string, target: ThreadSuggestio
   commit ${commitId}. GitHub fixes a reply's range to its thread, so you cannot change it. Print
   those exact lines with:
   ${buildReadLinesCommand(commitId, path, `${startLine},${endLine}`)}
+  If that command fails, do not put a suggestion block in a reply to this thread.
 - In this thread you may also answer a question with a suggestion instead of describing the fix in
   prose, when the fix is confined to exactly those lines.`;
 }
