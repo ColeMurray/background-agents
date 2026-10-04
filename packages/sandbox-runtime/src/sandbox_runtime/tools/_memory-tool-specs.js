@@ -52,7 +52,7 @@ export const MEMORY_TOOL_SPECS = {
             "minLength": 1,
             "maxLength": 20000
           },
-          "scope": {
+          "scopeType": {
             "type": "string",
             "enum": [
               "personal",
@@ -83,7 +83,7 @@ export const MEMORY_TOOL_SPECS = {
           "title",
           "description",
           "content",
-          "scope"
+          "scopeType"
         ],
         "additionalProperties": false
       }
@@ -102,8 +102,8 @@ export const MEMORY_TOOL_SPECS = {
             "maxLength": 256,
             "description": "Short literal keywords; every term must match"
           },
-          "scope": {
-            "description": "Restrict to one scope; omit to search every permitted session scope",
+          "scopeType": {
+            "description": "Restrict to one scope type; omit to search every permitted session scope",
             "type": "string",
             "enum": [
               "personal",

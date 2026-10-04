@@ -174,9 +174,9 @@ async def test_claude_memory_tools_are_the_generated_specs(tmp_path: Path) -> No
 @pytest.mark.parametrize(
     "selector",
     [
-        {"scope": "personal"},
-        {"scope": "environment"},
-        {"scope": "repository", "repoOwner": "group/subgroup", "repoName": "api"},
+        {"scopeType": "personal"},
+        {"scopeType": "environment"},
+        {"scopeType": "repository", "repoOwner": "group/subgroup", "repoName": "api"},
     ],
 )
 async def test_claude_write_sends_flat_arguments_without_caller_identity(

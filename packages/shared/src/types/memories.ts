@@ -8,7 +8,7 @@ export const MEMORY_LIMITS = {
   description: 420,
   directive: 2_000,
   fact: 20_000,
-  directiveScope: 6_000,
+  directiveCharsPerPartition: 6_000,
   directiveRecords: 100,
   directives: 12_000,
   catalog: 24_000,
@@ -47,8 +47,11 @@ function unreachable(value: never): never {
   throw new Error(`Unhandled memory variant: ${JSON.stringify(value)}`);
 }
 
-/** Stable grouping/display key; not an authorization key (personal omits owner identity). */
-export function memoryScopeKey(scope: MemoryScope): string {
+/**
+ * A stable key for grouping and displaying a scope (e.g. `repository:acme/api`). Not an identity
+ * or authorization key: personal omits the owner, and repository names are display names.
+ */
+export function memoryScopeDisplayKey(scope: MemoryScope): string {
   switch (scope.type) {
     case "personal":
       return "personal";
@@ -116,8 +119,11 @@ export type MemoryType = z.infer<typeof memoryTypeSchema>;
 export const MEMORY_STATUSES = ["proposed", "active", "archived"] as const;
 export const memoryStatusSchema = z.enum(MEMORY_STATUSES);
 export type MemoryStatus = z.infer<typeof memoryStatusSchema>;
-/** Why an archived record left circulation; the free-text note is separate. */
-export const MEMORY_ARCHIVE_KINDS = ["archived", "rejected", "superseded"] as const;
+/**
+ * Why an archived record left circulation: a person archived it (`manual`), a proposal was
+ * rejected, or an approved replacement superseded it. Any free-text note is `archiveNote`.
+ */
+export const MEMORY_ARCHIVE_KINDS = ["manual", "rejected", "superseded"] as const;
 export const memoryArchiveKindSchema = z.enum(MEMORY_ARCHIVE_KINDS);
 export type MemoryArchiveKind = z.infer<typeof memoryArchiveKindSchema>;
 export const MEMORY_AUTHOR_KINDS = ["user", "agent"] as const;
@@ -156,7 +162,7 @@ export const MEMORY_TRANSITIONS = {
   archive: {
     from: ["proposed", "active"],
     auditAction: "memory.archived",
-    to: () => ({ status: "archived", archiveKind: "archived" }),
+    to: () => ({ status: "archived", archiveKind: "manual" }),
   },
   restore: {
     from: ["archived"],
@@ -216,10 +222,27 @@ export const createMemorySchema = memoryContentSchema.safeExtend({
 export type CreateMemoryInput = z.infer<typeof createMemorySchema>;
 /** Revisions and lifecycle actions are fenced by the reviewed revision in `If-Match`. */
 export const reviseMemorySchema = memoryContentSchema;
-export const memoryActionSchema = z
-  .object({ reason: z.string().max(MEMORY_LIMITS.archiveNote).optional() })
+const archiveNoteBodySchema = z
+  .object({ archiveNote: z.string().trim().max(MEMORY_LIMITS.archiveNote).optional() })
   .strict();
-export type MemoryActionInput = z.infer<typeof memoryActionSchema>;
+const emptyBodySchema = z.object({}).strict();
+/**
+ * Request body for each lifecycle action. Only actions that archive accept an `archiveNote`;
+ * the others take no fields, so a note can never be silently dropped.
+ */
+export const memoryActionBodySchemas = {
+  approve: emptyBodySchema,
+  reject: archiveNoteBodySchema,
+  archive: archiveNoteBodySchema,
+  restore: emptyBodySchema,
+} as const satisfies Record<MemoryAction, z.ZodType>;
+export type MemoryActionBody<A extends MemoryAction = MemoryAction> = z.infer<
+  (typeof memoryActionBodySchemas)[A]
+>;
+/** Whether an action's body accepts an `archiveNote` (the actions that archive a record). */
+export function memoryActionAcceptsNote(action: MemoryAction): boolean {
+  return "archiveNote" in memoryActionBodySchemas[action].shape;
+}
 export const memoryPreferencesSchema = z.object({ includePersonalMemories: z.boolean() }).strict();
 export type MemoryPreferences = z.infer<typeof memoryPreferencesSchema>;
 /** Preview the selection a new session would pin, without persisting it. */
@@ -291,10 +314,10 @@ export const MEMORY_SELECTION_VERSION = 1;
 export const MEMORY_INCLUSIONS = ["full", "summary"] as const;
 export const memoryInclusionSchema = z.enum(MEMORY_INCLUSIONS);
 export type MemoryInclusion = z.infer<typeof memoryInclusionSchema>;
+const MAX_SELECTION_ITEMS = MEMORY_LIMITS.directiveRecords + MEMORY_LIMITS.catalogRecords;
 
-const sessionMemoryItemSchema = z.object({
+const selectionItemSummarySchema = z.object({
   memoryId: z.string(),
-  revisionId: z.string(),
   revisionNumber: z.number().int(),
   scope: memoryScopeSchema,
   memoryType: memoryTypeSchema,
@@ -302,34 +325,32 @@ const sessionMemoryItemSchema = z.object({
   inclusion: memoryInclusionSchema,
   estimatedTokens: z.number(),
 });
-/** One selected revision; omitted records are counted, never persisted as items. */
-export type SessionMemoryItem = z.infer<typeof sessionMemoryItemSchema>;
-const MAX_MANIFEST_ITEMS = MEMORY_LIMITS.directiveRecords + MEMORY_LIMITS.catalogRecords;
 /**
- * Session-lifetime selection inherited by children and reused on sandbox restore.
- * Pinning preserves injected context, but does not authorize management or bypass current grants.
- * Token estimates include rendering overhead and are not provider-measured consumption.
+ * What a session's memory selection contains, for people: the selected items, their size, and
+ * how many records were omitted for budget. Server identity (personal owner, selection hash,
+ * versions, timestamps) is deliberately absent. Token counts estimate rendered text.
  */
-export const sessionMemoryManifestSchema = z.object({
-  selectionVersion: z.number().int(),
-  manifestSha256: z.string(),
-  resolvedAt: z.number(),
+export const memorySelectionSummarySchema = z.object({
   includePersonalMemories: z.boolean(),
-  personalOwnerUserId: z.string().nullable(),
   directiveChars: z.number(),
   catalogChars: z.number(),
   estimatedTokens: z.number(),
   truncatedCount: z.number(),
-  items: z.array(sessionMemoryItemSchema).max(MAX_MANIFEST_ITEMS),
+  items: z.array(selectionItemSummarySchema).max(MAX_SELECTION_ITEMS),
 });
-export type SessionMemoryManifest = z.infer<typeof sessionMemoryManifestSchema>;
-/** Live drift flags are part of the inspection response, not the immutable selection. */
-export const sessionMemoryDiagnosticsSchema = sessionMemoryManifestSchema.extend({
+export type MemorySelectionSummary = z.infer<typeof memorySelectionSummarySchema>;
+/** A live session's pinned selection, with whether each item has since been revised or archived. */
+export const sessionMemorySelectionStatusSchema = memorySelectionSummarySchema.extend({
   items: z
-    .array(sessionMemoryItemSchema.extend({ changed: z.boolean(), archived: z.boolean() }))
-    .max(MAX_MANIFEST_ITEMS),
+    .array(
+      selectionItemSummarySchema.extend({
+        revisedSinceSelection: z.boolean(),
+        archivedSinceSelection: z.boolean(),
+      })
+    )
+    .max(MAX_SELECTION_ITEMS),
 });
-export type SessionMemoryDiagnostics = z.infer<typeof sessionMemoryDiagnosticsSchema>;
+export type SessionMemorySelectionStatus = z.infer<typeof sessionMemorySelectionStatusSchema>;
 
 // ---------------------------------------------------------------------------
 // Fact search
@@ -359,12 +380,12 @@ const repositorySelectorShape = {
     .describe("Repository name; supply with repoOwner to pick one of several session repositories"),
 };
 function checkRepositorySelector(
-  input: { scope?: MemoryScopeType; repoOwner?: string; repoName?: string },
+  input: { scopeType?: MemoryScopeType; repoOwner?: string; repoName?: string },
   ctx: z.RefinementCtx
 ): void {
   if ((input.repoOwner === undefined) !== (input.repoName === undefined))
     ctx.addIssue({ code: "custom", message: "repoOwner and repoName must be provided together" });
-  if (input.repoOwner !== undefined && input.scope !== "repository")
+  if (input.repoOwner !== undefined && input.scopeType !== "repository")
     ctx.addIssue({ code: "custom", message: "Repository selectors require repository scope" });
 }
 
@@ -381,9 +402,9 @@ export const memorySearchSchema = z
         "Too many search terms"
       )
       .describe("Short literal keywords; every term must match"),
-    scope: memoryScopeTypeSchema
+    scopeType: memoryScopeTypeSchema
       .optional()
-      .describe("Restrict to one scope; omit to search every permitted session scope"),
+      .describe("Restrict to one scope type; omit to search every permitted session scope"),
     ...repositorySelectorShape,
     limit: z
       .number()
@@ -453,8 +474,9 @@ export const sandboxMemoryReadResultSchema = z.discriminatedUnion("status", [
     .object({
       id: z.string(),
       status: z.literal("archived"),
+      archiveKind: memoryArchiveKindSchema,
       archivedAt: z.number().nullable(),
-      reason: z.string().nullable(),
+      archiveNote: z.string().nullable(),
     })
     .strict(),
 ]);
@@ -467,7 +489,9 @@ export type SandboxMemoryReadResult = z.infer<typeof sandboxMemoryReadResultSche
  */
 export const sandboxMemoryWriteSchema = memoryContentSchema
   .safeExtend({
-    scope: memoryScopeTypeSchema.describe("Where to store the memory, relative to this session"),
+    scopeType: memoryScopeTypeSchema.describe(
+      "Where to store the memory, relative to this session"
+    ),
     ...repositorySelectorShape,
     supersedesMemoryId: memoryIdSchema
       .optional()

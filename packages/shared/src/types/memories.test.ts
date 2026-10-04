@@ -9,8 +9,9 @@ import {
   sandboxMemoryWriteSchema,
   reviseMemorySchema,
   MEMORY_LIMITS,
-  sessionMemoryManifestSchema,
-  sessionMemoryDiagnosticsSchema,
+  memoryActionBodySchemas,
+  memorySelectionSummarySchema,
+  sessionMemorySelectionStatusSchema,
 } from "./memories";
 
 const fact = {
@@ -25,7 +26,7 @@ describe("memory write contracts", () => {
     "accepts a session-relative %s scope only for sandbox writes",
     (type) => {
       const { scope: _scope, ...fields } = fact;
-      expect(sandboxMemoryWriteSchema.parse({ ...fields, scope: type }).scope).toBe(type);
+      expect(sandboxMemoryWriteSchema.parse({ ...fields, scopeType: type }).scopeType).toBe(type);
       expect(createMemorySchema.safeParse({ ...fact, scope: { type } }).success).toBe(
         type === "personal"
       );
@@ -36,20 +37,20 @@ describe("memory write contracts", () => {
     expect(
       sandboxMemoryWriteSchema.parse({
         ...fields,
-        scope: "repository",
+        scopeType: "repository",
         repoOwner: " Acme/Subgroup ",
         repoName: " API ",
       })
-    ).toMatchObject({ scope: "repository", repoOwner: "acme/subgroup", repoName: "api" });
+    ).toMatchObject({ scopeType: "repository", repoOwner: "acme/subgroup", repoName: "api" });
   });
   it.each([
-    { scope: "repository", repoOwner: "acme" },
-    { scope: "repository", repoName: "api" },
-    { scope: "personal", repoOwner: "acme", repoName: "api" },
-    { scope: "repository", repoId: 123 },
-    { scope: "environment", environmentId: "other" },
-    { scope: "personal", ownerUserId: "other" },
-  ])("rejects partial selectors and caller-derived identities: $scope", (selector) => {
+    { scopeType: "repository", repoOwner: "acme" },
+    { scopeType: "repository", repoName: "api" },
+    { scopeType: "personal", repoOwner: "acme", repoName: "api" },
+    { scopeType: "repository", repoId: 123 },
+    { scopeType: "environment", environmentId: "other" },
+    { scopeType: "personal", ownerUserId: "other" },
+  ])("rejects partial selectors and caller-derived identities: $scopeType", (selector) => {
     const { scope: _scope, ...fields } = fact;
     expect(sandboxMemoryWriteSchema.safeParse({ ...fields, ...selector }).success).toBe(false);
   });
@@ -98,7 +99,7 @@ describe("memory search contract", () => {
     expect(
       memorySearchSchema.parse({
         query: "needle",
-        scope: "repository",
+        scopeType: "repository",
         repoOwner: " Group/Subgroup ",
         repoName: " API ",
       })
@@ -113,44 +114,50 @@ describe("memory search contract", () => {
   });
 });
 
-describe("pinned memory and diagnostic contracts", () => {
-  it("requires drift flags only on diagnostics and bounds both response types", () => {
-    const item = {
-      memoryId: "mem_a",
-      revisionId: "rev_a",
-      revisionNumber: 1,
-      scope: { type: "personal" },
-      memoryType: "fact",
-      title: "Fact",
-      inclusion: "summary",
-      estimatedTokens: 1,
-    };
-    const manifest = {
-      selectionVersion: 1,
-      manifestSha256: "hash",
-      resolvedAt: 1,
-      includePersonalMemories: true,
-      personalOwnerUserId: "owner",
-      directiveChars: 0,
-      catalogChars: 4,
-      estimatedTokens: 1,
-      truncatedCount: 2,
-      items: [item],
-    };
-    expect(sessionMemoryManifestSchema.safeParse(manifest).success).toBe(true);
-    expect(sessionMemoryDiagnosticsSchema.safeParse(manifest).success).toBe(false);
+describe("selection summary contracts", () => {
+  const item = {
+    memoryId: "mem_a",
+    revisionNumber: 1,
+    scope: { type: "personal" },
+    memoryType: "fact",
+    title: "Fact",
+    inclusion: "summary",
+    estimatedTokens: 1,
+  };
+  const summary = {
+    includePersonalMemories: true,
+    directiveChars: 0,
+    catalogChars: 4,
+    estimatedTokens: 1,
+    truncatedCount: 2,
+    items: [item],
+  };
+  it("requires drift flags only on session status and bounds both", () => {
+    expect(memorySelectionSummarySchema.safeParse(summary).success).toBe(true);
+    expect(sessionMemorySelectionStatusSchema.safeParse(summary).success).toBe(false);
     expect(
-      sessionMemoryDiagnosticsSchema.safeParse({
-        ...manifest,
-        items: [{ ...item, changed: false, archived: false }],
+      sessionMemorySelectionStatusSchema.safeParse({
+        ...summary,
+        items: [{ ...item, revisedSinceSelection: false, archivedSinceSelection: false }],
       }).success
     ).toBe(true);
     expect(
-      sessionMemoryManifestSchema.safeParse({
-        ...manifest,
+      memorySelectionSummarySchema.safeParse({
+        ...summary,
         items: Array.from({ length: 301 }, () => item),
       }).success
     ).toBe(false);
+  });
+});
+
+describe("memory action bodies", () => {
+  it("accepts an archive note only on actions that archive", () => {
+    expect(memoryActionBodySchemas.archive.parse({ archiveNote: " Outdated " })).toEqual({
+      archiveNote: "Outdated",
+    });
+    expect(memoryActionBodySchemas.reject.safeParse({ archiveNote: "No" }).success).toBe(true);
+    expect(memoryActionBodySchemas.approve.safeParse({ archiveNote: "x" }).success).toBe(false);
+    expect(memoryActionBodySchemas.restore.safeParse({ archiveNote: "x" }).success).toBe(false);
   });
 });
 
@@ -192,6 +199,10 @@ describe("memory lifecycle table", () => {
     expect(MEMORY_TRANSITIONS.reject.to({ status: "proposed", approvedAt: null })).toEqual({
       status: "archived",
       archiveKind: "rejected",
+    });
+    expect(MEMORY_TRANSITIONS.archive.to({ status: "active", approvedAt: 1 })).toEqual({
+      status: "archived",
+      archiveKind: "manual",
     });
   });
 });

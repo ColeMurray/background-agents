@@ -42,7 +42,7 @@ test("converter maps string, enum, and integer constraints onto the plugin schem
     type: "object",
     properties: {
       query: { type: "string", minLength: 2, maxLength: 256, description: "Keywords" },
-      scope: { type: "string", enum: ["personal", "repository"] },
+      scopeType: { type: "string", enum: ["personal", "repository"] },
       limit: { type: "integer", minimum: 1, maximum: 20, default: 10 },
     },
     required: ["query"],
@@ -55,7 +55,7 @@ test("converter maps string, enum, and integer constraints onto the plugin schem
     ["max", 256],
     ["describe", "Keywords"],
   ]);
-  assert.deepEqual(args.scope.calls, [["enum", ["personal", "repository"]], ["optional"]]);
+  assert.deepEqual(args.scopeType.calls, [["enum", ["personal", "repository"]], ["optional"]]);
   assert.deepEqual(args.limit.calls, [
     ["number"],
     ["int"],
@@ -104,7 +104,7 @@ test("memory_read fills the encoded path parameter and sends no body", async () 
 test("memory_write sends the flat arguments without caller identity", async () => {
   respondWith(Response.json({ status: "proposed" }, { status: 201 }));
   const declared = {
-    scope: "repository",
+    scopeType: "repository",
     repoOwner: "group/subgroup",
     repoName: "api",
     memoryType: "fact",
