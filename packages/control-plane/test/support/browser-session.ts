@@ -1,4 +1,5 @@
 import { getCookies } from "better-auth/cookies";
+import { makeSignature } from "better-auth/crypto";
 import { BUILT_IN_ROLE_REGISTRY, type BuiltInRoleKey } from "@open-inspect/shared/rbac";
 import { createUserAuth, type UserAuthConfig } from "../../src/auth/user/better-auth";
 import type { SqlDatabase } from "../../src/db/sql-database";
@@ -24,7 +25,7 @@ export interface BrowserSessionSeed extends BrowserSessionRecord {
   suspendedAt?: number;
 }
 
-/** A cookie in Playwright storage-state form. */
+/** A login cookie with the attributes the production authority sets on it. */
 export interface BrowserCookie {
   name: string;
   value: string;
@@ -37,9 +38,10 @@ export interface BrowserCookie {
   sameSite: "Lax" | "Strict" | "None";
 }
 
-export interface BrowserStorageState {
-  cookies: BrowserCookie[];
-  origins: Array<{ origin: string; localStorage: Array<{ name: string; value: string }> }>;
+/** A signed-in browser: the cookie itself and the request header that carries it. */
+export interface BrowserSession {
+  cookieHeader: string;
+  cookie: BrowserCookie;
 }
 
 /** Test-only canonical bootstrap. Existing users keep their current authorization state. */
@@ -47,7 +49,7 @@ export async function seedBrowserSession(
   database: SqlDatabase,
   auth: BrowserAuth,
   seed: BrowserSessionSeed
-): Promise<{ cookieHeader: string; storageState: BrowserStorageState }> {
+): Promise<BrowserSession> {
   const existing = await database
     .prepare("SELECT id FROM users WHERE id = ?")
     .bind(seed.userId)
@@ -95,7 +97,7 @@ export async function mintBrowserSession(
   database: SqlDatabase,
   auth: BrowserAuth,
   session: BrowserSessionRecord
-): Promise<{ cookieHeader: string; storageState: BrowserStorageState }> {
+): Promise<BrowserSession> {
   await insertAuthSession(database, session).run();
   return sessionCookie(database, auth, session);
 }
@@ -126,27 +128,16 @@ async function sessionCookie(
   database: SqlDatabase,
   auth: BrowserAuth,
   session: BrowserSessionRecord
-): Promise<{ cookieHeader: string; storageState: BrowserStorageState }> {
-  const key = await crypto.subtle.importKey(
-    "raw",
-    new TextEncoder().encode(auth.secret),
-    { name: "HMAC", hash: "SHA-256" },
-    false,
-    ["sign"]
-  );
-  const signature = new Uint8Array(
-    await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(session.token))
-  );
+): Promise<BrowserSession> {
+  // Better Auth's own signer, so the value is exactly what its cookie reader verifies.
+  const signature = await makeSignature(session.token, auth.secret);
   const cookie = browserCookie(
     database,
     auth,
-    encodeURIComponent(`${session.token}.${btoa(String.fromCharCode(...signature))}`),
+    encodeURIComponent(`${session.token}.${signature}`),
     session.expiresAtMs
   );
-  return {
-    cookieHeader: `${cookie.name}=${cookie.value}`,
-    storageState: { cookies: [cookie], origins: [] },
-  };
+  return { cookieHeader: `${cookie.name}=${cookie.value}`, cookie };
 }
 
 function browserCookie(

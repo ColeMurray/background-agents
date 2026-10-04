@@ -374,8 +374,28 @@ export async function startFakeModalServer({
     },
   };
 
+  const holdTurnsNow = () => {
+    holdTurns = true;
+  };
+  const releaseTurnsNow = () => {
+    holdTurns = false;
+    for (const turn of [...pendingTurns.values()]) turn.finish();
+  };
+  /** The driver's control surface, so a test in another process can pace turns. */
+  const CONTROLS = new Map([
+    ["/__smoke/hold", holdTurnsNow],
+    ["/__smoke/release", releaseTurnsNow],
+  ]);
+
   const server = createServer((req, res) => {
     const path = new URL(req.url ?? "/", "http://localhost").pathname;
+
+    const control = CONTROLS.get(path);
+    if (control && req.method === "POST") {
+      control();
+      res.writeHead(204).end();
+      return;
+    }
 
     if (path === "/__smoke/state" && req.method === "GET") {
       sendJson(res, 200, {
@@ -422,13 +442,8 @@ export async function startFakeModalServer({
     get activeBridges() {
       return bridges.size;
     },
-    holdTurns() {
-      holdTurns = true;
-    },
-    releaseTurns() {
-      holdTurns = false;
-      for (const turn of [...pendingTurns.values()]) turn.finish();
-    },
+    holdTurns: holdTurnsNow,
+    releaseTurns: releaseTurnsNow,
     close() {
       return (stopped ??= (async () => {
         closing = true;

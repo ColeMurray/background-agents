@@ -16,11 +16,10 @@
   "include": [
     "src/**/*.ts",
     "test/conformance/**/*.ts",
-    "test/preview/**/*.ts",
+    "test/smoke/**/*.ts",
     "test/support/**/*.ts",
     "vitest.config.ts",
-    "vitest.integration.config.ts",
-    "vitest.preview.config.ts"
+    "vitest.integration.config.ts"
   ],
   "exclude": ["node_modules"]
 }

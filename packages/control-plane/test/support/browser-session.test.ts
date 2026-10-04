@@ -40,7 +40,7 @@ describe("portable browser sessions against the actual Better Auth reader", () =
         expiresAtMs: Date.now() + 60_000,
       };
       const fixture = await seedBrowserSession(db, { publicWebOrigin, secret }, seed);
-      const cookie = fixture.storageState.cookies[0];
+      const cookie = fixture.cookie;
       expect(cookie.secure).toBe(publicWebOrigin.startsWith("https:"));
       expect(cookie.name).toBe(`${cookie.secure ? "__Secure-" : ""}openinspect.session_token`);
       expect(cookie.httpOnly).toBe(true);
@@ -111,8 +111,8 @@ describe("portable browser sessions against the actual Better Auth reader", () =
       expiresAtMs: seed.expiresAtMs,
     });
     expect((await read(again.cookieHeader))?.user.id).toBe(seed.userId);
-    expect(again.storageState.cookies[0]).toEqual({
-      ...first.storageState.cookies[0],
+    expect(again.cookie).toEqual({
+      ...first.cookie,
       value: expect.stringContaining("second-token"),
     });
     expect(await userRows()).toEqual(before);
@@ -126,7 +126,7 @@ describe("portable browser sessions against the actual Better Auth reader", () =
       })
     ).rejects.toThrow(/FOREIGN KEY/);
     expect(signedOutBrowserCookie(db, auth)).toEqual({
-      ...first.storageState.cookies[0],
+      ...first.cookie,
       value: "",
       expires: 0,
     });
