@@ -195,6 +195,77 @@ describe("status writes after a provider await (COL-99)", () => {
     expect(sandbox.modal_object_id).toBe("provider-obj-late");
   });
 
+  it("re-drives the queue once a launch the watchdog failed mid-provider-call settles", async () => {
+    // The in-flight launch holds startup admission when the watchdog fires, so
+    // the alarm's queue pump is refused and a replacement spawn would skip.
+    vi.useFakeTimers();
+    try {
+      const sandbox = createMockSandbox({
+        status: "pending",
+        last_heartbeat: null,
+        modal_object_id: null,
+      });
+      const storage = createMockStorage(createMockSession(), sandbox);
+      let resolveCreate!: (result: CreateSandboxResult) => void;
+      const createSandbox = vi
+        .fn<(config: CreateSandboxConfig) => Promise<CreateSandboxResult>>()
+        .mockImplementationOnce(
+          () =>
+            new Promise<CreateSandboxResult>((resolve) => {
+              resolveCreate = resolve;
+            })
+        )
+        .mockImplementation(async (config) => ({
+          sandboxId: config.sandboxId,
+          providerObjectId: "provider-obj-replacement",
+          createdAt: Date.now(),
+          lifetime: { kind: "unknown" },
+        }));
+      const shutdown = {
+        ...createUnmanagedShutdown(),
+        reserveStartup: vi.fn((_createdAt, _policy, persist) => persist()),
+      } satisfies SandboxShutdownLifecycle;
+      const resumeQueuedWork = vi.fn(async () => manager.spawnSandbox());
+      const manager = createTestLifecycleManager(
+        createMockProvider({
+          capabilities: { supportsExplicitStop: true },
+          createSandbox,
+          stopSandbox: vi.fn(async () => ({ success: true })),
+        }),
+        storage,
+        storage,
+        createMockBroadcaster(),
+        createMockWebSocketManager(false),
+        createMockAlarmScheduler(),
+        createMockIdGenerator(),
+        shutdown,
+        { ...createTestConfig(), resumeQueuedWork }
+      );
+
+      const spawning = manager.spawnSandbox();
+      await vi.waitFor(() => expect(createSandbox).toHaveBeenCalledOnce());
+      await vi.advanceTimersByTimeAsync(DEFAULT_LIFECYCLE_CONFIG.connectingTimeout.timeoutMs + 1);
+      await expect(manager.handleAlarm()).resolves.toBe("sandbox_terminated");
+      expect(manager.mayProcessQueuedWork()).toBe(false);
+      expect(resumeQueuedWork).not.toHaveBeenCalled();
+
+      resolveCreate({
+        sandboxId: sandbox.modal_sandbox_id!,
+        providerObjectId: "provider-obj-late",
+        createdAt: Date.now(),
+        lifetime: { kind: "unknown" },
+      });
+      await spawning;
+
+      expect(resumeQueuedWork).toHaveBeenCalledOnce();
+      expect(createSandbox).toHaveBeenCalledTimes(2);
+      expect(sandbox.modal_object_id).toBe("provider-obj-replacement");
+      expect(sandbox.fenced).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("destroys a late provider result after the watchdog fences its generation", async () => {
     vi.useFakeTimers();
     try {

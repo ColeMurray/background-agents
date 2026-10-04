@@ -340,6 +340,8 @@ interface AlarmContext extends WatchdogContext {
 export interface SandboxLifecycleConfig extends AlarmPolicyConfig, SandboxLaunchConfig {
   /** Persist a user-visible lifecycle warning in the session event stream. */
   recordWarning?: (message: string, eventId: string) => void;
+  /** Pump the message queue once a deferred connect-timeout re-drive may proceed. */
+  resumeQueuedWork?: () => Promise<void>;
   circuitBreaker: CircuitBreakerConfig;
   spawn: SpawnConfig;
   controlPlaneUrl: string;
@@ -418,6 +420,12 @@ export class SandboxLifecycleManager
   private isSpawningSandbox = false;
   private isTerminatingSandbox = false;
   private providerStartupPending = false;
+  /**
+   * A connect-timed-out generation whose launch was still in flight. That
+   * launch holds startup admission, so the alarm's queue pump was refused;
+   * the launch re-drives the queue itself when it lets go.
+   */
+  private redriveAfterStartup: SandboxGeneration | null = null;
 
   /** Memoized session-scoped logger, keyed by the resolved session id. */
   private logMemo?: { sessionId: string | undefined; logger: Logger };
@@ -961,6 +969,29 @@ export class SandboxLifecycleManager
       this.isSpawningSandbox = false;
       this.providerStartupPending = false;
       this.vmStartup.finalizeForeground(generation);
+      await this.resumeDeferredRedrive(generation);
+    }
+  }
+
+  /**
+   * Deliver a re-drive the connect watchdog deferred to this launch. Runs
+   * after the startup flags are released; the queue pump re-applies the
+   * hold, supersession, and breaker checks. A launch for any other
+   * generation drops the deferral: a newer launch owns the queue.
+   */
+  private async resumeDeferredRedrive(generation: SandboxGeneration | null): Promise<void> {
+    const deferred = this.redriveAfterStartup;
+    if (!deferred) return;
+    this.redriveAfterStartup = null;
+    if (generation?.sandboxId !== deferred.sandboxId || generation.createdAt !== deferred.createdAt)
+      return;
+    try {
+      await this.config.resumeQueuedWork?.();
+    } catch (error) {
+      this.log.error("Deferred connect-timeout re-drive failed", {
+        event: "sandbox.connect_timeout_redrive_failed",
+        error: error instanceof Error ? error.message : String(error),
+      });
     }
   }
 
@@ -1244,6 +1275,7 @@ export class SandboxLifecycleManager
       this.isSpawningSandbox = false;
       this.providerStartupPending = false;
       this.vmStartup.finalizeForeground(generation);
+      await this.resumeDeferredRedrive(generation);
     }
   }
 
@@ -1383,6 +1415,7 @@ export class SandboxLifecycleManager
     } finally {
       this.isSpawningSandbox = false;
       this.providerStartupPending = false;
+      await this.resumeDeferredRedrive(generation);
     }
   }
 
@@ -1605,13 +1638,17 @@ export class SandboxLifecycleManager
         });
         return "no_action";
 
-      case "connecting_timeout":
-        return failConnectTimeout(
+      case "connecting_timeout": {
+        const result = await failConnectTimeout(
           this.watchdogEffects,
           finding.elapsedMs,
           this.config.connectingTimeout.timeoutMs,
           context
         );
+        if (result === "sandbox_terminated" && this.isSpawningSandbox)
+          this.redriveAfterStartup = alarmGeneration;
+        return result;
+      }
 
       case "heartbeat_stale":
         return terminateStaleHeartbeat(

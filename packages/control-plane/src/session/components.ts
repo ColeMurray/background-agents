@@ -511,6 +511,7 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
     backgroundTasks,
     recordWarning: (message, eventId) =>
       recordSessionWarning(eventRepository, messenger, message, eventId),
+    resumeQueuedWork: () => messageQueue.processMessageQueue(),
   });
   const executionStop: ExecutionStopCoordinator = new ExecutionStopCoordinator(
     log,
@@ -1074,6 +1075,7 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
 
 interface LifecycleManagerDeps {
   recordWarning: (message: string, eventId: string) => void;
+  resumeQueuedWork: () => Promise<void>;
   shutdown: SandboxShutdownLifecycle;
   access: SandboxAccess;
   provider: SandboxProvider;
@@ -1174,6 +1176,7 @@ function createLifecycleManager(deps: LifecycleManagerDeps): SandboxLifecycleMan
     mcpServerLookup,
     slackAgentNotifyLookup,
     recordWarning: deps.recordWarning,
+    resumeQueuedWork: deps.resumeQueuedWork,
   };
 
   // The image lookup exists only for providers that support prebuilt images,
