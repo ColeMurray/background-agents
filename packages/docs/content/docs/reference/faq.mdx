@@ -4,7 +4,7 @@ description: Short answers to the questions people ask most about OpenInspect se
 audience: user
 owner: platform
 status: published
-lastReviewed: "2026-09-28"
+lastReviewed: "2026-10-04"
 relatedCode:
   - docs/HOW_IT_WORKS.md
   - docs/AUTH.md
@@ -48,7 +48,7 @@ It queues. Prompts are processed in order, and a session may hold up to 50 unfin
 
 ### Who can see my session?
 
-Everyone in the workspace with session read access, which includes Viewers. Sessions are workspace resources, not private ones; the creator shown on a session is attribution, not an access list. Owners, Administrators, and Members can also prompt any session. See [Multiplayer and sharing](/sessions/multiplayer-and-sharing).
+It depends on the session's Team, Workspace, or Private visibility. Private sessions are for the session owner and explicit collaborators, with an audited read exception for workspace Owners. Team defaults are Team or Workspace, but you can explicitly choose Private, including for a team-owned session. Prompting requires collaboration permission and session access; team-owned prompting also requires current team membership. See [Multiplayer and sharing](/sessions/multiplayer-and-sharing) for the full rules and enforcement modes.
 
 ### My prompt failed with a message naming a boot phase. What now?
 

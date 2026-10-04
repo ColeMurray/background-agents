@@ -290,19 +290,13 @@ describe("automation team execution (integration)", () => {
     await expectLaunchedSession(row.id, TEAM, "team", MEMBER);
   });
 
-  it.each(["team", "workspace", "private"] as const)(
+  it.each(["team", "workspace"] as const)(
     "creates a manual session with the team's %s default",
     async (visibility) => {
       await env.DB.prepare("UPDATE teams SET default_visibility = ? WHERE id = ?")
         .bind(visibility, TEAM)
         .run();
       const row = await saveAutomation(`auto-session-${visibility}`);
-      if (visibility === "private") {
-        await env.DB.prepare("DELETE FROM team_memberships WHERE team_id = ? AND user_id = ?")
-          .bind(TEAM, EXECUTOR)
-          .run();
-        expect(await authorized(row.id)).toBe(false);
-      }
       await createScheduler().trigger(row.id, MEMBER);
       await expectLaunchedSession(row.id, TEAM, visibility, MEMBER);
     }
@@ -310,7 +304,7 @@ describe("automation team execution (integration)", () => {
 
   it("keeps workspace sessions workspace-owned despite archived memberships", async () => {
     await env.DB.prepare(
-      "UPDATE teams SET default_visibility = 'private', archived_at = 2 WHERE id = ?"
+      "UPDATE teams SET default_visibility = 'team', archived_at = 2 WHERE id = ?"
     )
       .bind(TEAM)
       .run();

@@ -11,6 +11,9 @@ export type TeamJoinPolicy = z.infer<typeof teamJoinPolicySchema>;
 export const sessionVisibilitySchema = z.enum(["team", "workspace", "private"]);
 export type SessionVisibility = z.infer<typeof sessionVisibilitySchema>;
 
+export const teamDefaultVisibilitySchema = z.enum(["team", "workspace"]);
+export type TeamDefaultVisibility = z.infer<typeof teamDefaultVisibilitySchema>;
+
 export const teamSettingsSchema = z.strictObject({ requireTeamOnCreate: z.boolean() });
 export type TeamSettings = z.infer<typeof teamSettingsSchema>;
 
@@ -20,7 +23,7 @@ export const teamRowSchema = z.object({
   name: z.string(),
   description: z.string().nullable(),
   join_policy: teamJoinPolicySchema,
-  default_visibility: sessionVisibilitySchema,
+  default_visibility: teamDefaultVisibilitySchema,
   default_environment_id: z.string().nullable(),
   grants_version: z.number().int(),
   archived_at: z.number().nullable(),
@@ -34,7 +37,7 @@ export interface Team {
   name: string;
   description: string | null;
   joinPolicy: TeamJoinPolicy;
-  defaultVisibility: SessionVisibility;
+  defaultVisibility: TeamDefaultVisibility;
   defaultEnvironmentId: string | null;
   grantsVersion: number;
   archivedAt: number | null;
@@ -56,6 +59,7 @@ export const createTeamRequestSchema = z.object({
   name: z.string().min(1).max(80),
   description: z.string().nullable().optional(),
   joinPolicy: teamJoinPolicySchema.default("invite_only"),
+  defaultVisibility: teamDefaultVisibilitySchema.optional(),
 });
 
 export const updateTeamRequestSchema = z.object({
@@ -63,7 +67,7 @@ export const updateTeamRequestSchema = z.object({
   name: createTeamRequestSchema.shape.name.optional(),
   description: z.string().nullable().optional(),
   joinPolicy: teamJoinPolicySchema.optional(),
-  defaultVisibility: sessionVisibilitySchema.optional(),
+  defaultVisibility: teamDefaultVisibilitySchema.optional(),
   defaultEnvironmentId: z
     .string()
     .refine(isEnvironmentId, "Invalid environment ID")
@@ -90,7 +94,7 @@ export const teamResponseSchema = z.object({
   name: z.string(),
   description: z.string().nullable(),
   joinPolicy: teamJoinPolicySchema,
-  defaultVisibility: sessionVisibilitySchema,
+  defaultVisibility: teamDefaultVisibilitySchema,
   defaultEnvironmentId: z.string().nullable(),
   grantsVersion: z.number().int(),
   archivedAt: z.number().nullable(),

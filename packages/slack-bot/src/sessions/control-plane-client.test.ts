@@ -177,6 +177,7 @@ describe("control plane client request payloads", () => {
     );
     await createSession(makeEnv(fetch), { target, model: "openai/gpt-5.4", teamId });
     expect(parseRequestBody(fetch)).toMatchObject({ teamId });
+    expect(parseRequestBody(fetch)).not.toHaveProperty("visibility");
   });
 
   it.each([

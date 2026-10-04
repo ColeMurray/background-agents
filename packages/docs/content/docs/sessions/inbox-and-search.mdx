@@ -1,11 +1,12 @@
 ---
 title: Inbox, sessions list, and search
-description: How the sidebar inbox groups your sessions, and how to find any session on the Sessions page.
+description: How the sidebar inbox groups your sessions, and how to find sessions you can access on the Sessions page.
 audience: user
 owner: web
 status: published
-lastReviewed: "2026-09-23"
+lastReviewed: "2026-10-04"
 relatedCode:
+  - docs/AUTH.md
   - packages/shared/src/types/session-inbox.ts
   - packages/control-plane/src/db/session-inbox-store.ts
   - packages/web/src/components/session-sidebar.tsx
@@ -14,7 +15,7 @@ relatedCode:
   - packages/web/src/hooks/use-mark-session-read.ts
 ---
 
-The sidebar inbox shows what needs you now; the Sessions page finds anything, including archived work.
+The sidebar inbox shows what needs you now; the Sessions page finds work you can access, including archived sessions. Both apply server-side visibility checks. See [Multiplayer and sharing](/sessions/multiplayer-and-sharing) for access rules.
 
 ![The Sessions page with search, owner, repository, environment, lifecycle, and origin filters above a list of sessions](/images/sessions/sessions-page.webp "The Sessions page: full-history search with owner, repository, environment, lifecycle, and origin filters.")
 
@@ -51,7 +52,7 @@ Sessions the agent spawned are nested under their parent, so a parent and its ch
 
 ### The owner filter
 
-The **All / Mine** toggle above the list limits the inbox to sessions you started. When Mine is empty the list reads "No sessions started by you". Mine is a convenience for finding your own work, not an access boundary: anyone with session read access can see every session in the workspace.
+The **All / Mine** toggle above the list limits the inbox to sessions you started. When Mine is empty the list reads "No sessions started by you". Mine is a convenience for finding your own work, not an access boundary: All still shows only sessions you are authorized to read.
 
 ### Row actions
 
@@ -61,7 +62,7 @@ Open a row's menu (or long-press it on a phone) for:
 - **Mark as read**: clears the unread mark without opening the session.
 - **Archive**: opens the confirmation dialog. Archiving the session you are viewing returns you to the home page.
 
-Rename and Archive require session lifecycle permission.
+Rename and Archive require session lifecycle permission and session access; team-owned sessions also require current owning-team membership.
 
 ## The Sessions page
 
@@ -109,12 +110,12 @@ All of these can be rebound under Settings › Keyboard. See [Keyboard shortcuts
 
 ## Troubleshooting
 
-| Symptom                                                   | Cause                                                                         | Fix                                                                                               |
-| --------------------------------------------------------- | ----------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------- |
-| A session stays under Needs attention after you opened it | The latest turn is read only while the tab is visible; a background tab waits | Bring the tab to the front, or use **Mark as read** from the sidebar row menu.                    |
-| A session you expect is missing from the inbox            | It is archived, or the Mine filter is on and someone else started it          | Switch the owner filter to All, or open Sessions with Lifecycle set to Archived.                  |
-| "You do not have permission to view sessions."            | Your role has no session read access                                          | Ask a workspace Owner or Administrator. See [Workspace access](/administration/workspace-access). |
-| Search finds nothing for a repository                     | Search matches title, ID, or repository text                                  | Use the Repository filter instead of typing the repository name.                                  |
+| Symptom                                                   | Cause                                                                         | Fix                                                                                                                                                             |
+| --------------------------------------------------------- | ----------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| A session stays under Needs attention after you opened it | The latest turn is read only while the tab is visible; a background tab waits | Bring the tab to the front, or use **Mark as read** from the sidebar row menu.                                                                                  |
+| A session you expect is missing from the inbox            | It is archived, filtered out, or no longer visible to you                     | Check the owner and team filters or open Sessions with Lifecycle set to Archived; if still missing, review [session access](/sessions/multiplayer-and-sharing). |
+| "You do not have permission to view sessions."            | Your role has no session read access                                          | Ask a workspace Owner or Administrator. See [Workspace access](/administration/workspace-access).                                                               |
+| Search finds nothing for a repository                     | Search matches title, ID, or repository text                                  | Use the Repository filter instead of typing the repository name.                                                                                                |
 
 ## Next steps
 

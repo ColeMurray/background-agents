@@ -4,7 +4,7 @@ description: The trust boundaries of an OpenInspect deployment, which tokens exi
 audience: admin
 owner: security
 status: published
-lastReviewed: "2026-10-01"
+lastReviewed: "2026-10-04"
 relatedCode:
   - README.md
   - docs/AUTH.md
@@ -15,6 +15,7 @@ relatedCode:
   - docs/integrations/SLACK.md
   - docs/integrations/LINEAR.md
   - packages/shared/src/rbac.ts
+  - packages/shared/src/types/session-access.ts
   - packages/control-plane/src/session/participant-service.ts
   - packages/sandbox-runtime/src/sandbox_runtime/gh-wrapper.sh
 ---
@@ -37,7 +38,7 @@ Sign-in is GitHub, Google, or both. After the provider verifies identity and ema
 
 ## Roles are product capabilities
 
-The four roles (Owner, Administrator, Member, Viewer) decide which OpenInspect features a person can use: create sessions, manage settings, view the audit log, and so on. They are not repository ACLs. A Viewer can read every session in the workspace, and a Member can prompt every session, because sessions are workspace resources rather than private ones.
+The four roles (Owner, Administrator, Member, Viewer) decide which OpenInspect features a person can use: create sessions, manage settings, view the audit log, and so on. They are not repository ACLs. Session visibility, private collaborator grants, and current owning-team membership further limit session access and actions. See [Multiplayer and sharing](/sessions/multiplayer-and-sharing) for audience rules, defaults, and enforcement modes.
 
 ## Token architecture
 

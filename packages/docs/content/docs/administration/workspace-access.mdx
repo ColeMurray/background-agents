@@ -4,10 +4,11 @@ description: How people are admitted to an OpenInspect workspace, what each role
 audience: admin
 owner: security
 status: published
-lastReviewed: "2026-09-23"
+lastReviewed: "2026-10-04"
 relatedCode:
   - docs/AUTH.md
   - packages/shared/src/rbac.ts
+  - packages/shared/src/types/session-access.ts
   - packages/web/src/components/settings/workspace-settings.tsx
   - packages/control-plane/src/db/authorization-store.ts
 ---
@@ -65,8 +66,8 @@ OpenInspect has four built-in roles.
 | Use repositories and environments in sessions     |  Yes  |      Yes      |  Yes   |   No   |
 | Manage shared settings, integrations, and secrets |  Yes  |      Yes      |   No   |   No   |
 | Create sessions                                   |  Yes  |      Yes      |  Yes   |   No   |
-| View every session                                |  Yes  |      Yes      |  Yes   |  Yes   |
-| Collaborate in and manage sessions                |  Yes  |      Yes      |  Yes   |   No   |
+| View sessions allowed by visibility               |  Yes  |      Yes      |  Yes   |  Yes   |
+| Collaborate in and manage permitted sessions      |  Yes  |      Yes      |  Yes   |   No   |
 | View automations                                  |  Yes  |      Yes      |  Yes   |  Yes   |
 | Create automations                                |  Yes  |      Yes      |  Yes   |   No   |
 | Manage and trigger own automations                |  Yes  |      Yes      |  Yes   |   No   |
@@ -79,24 +80,21 @@ OpenInspect has four built-in roles.
 | View image-build history                          |  Yes  |      Yes      |  Yes   |  Yes   |
 | Manage personal skill profiles                    |  Yes  |      Yes      |  Yes   |   No   |
 
-**Owner.** Full access to the workspace. Only Owners can grant or remove the Owner role or suspend and restore another Owner. The final active Owner cannot be suspended or demoted, so the workspace cannot lose all ownership by accident.
+**Owner.** Administers the workspace, but does not automatically collaborate in private sessions. Owners have audited break-glass read access by session ID. Only Owners can grant or remove the Owner role or suspend and restore another Owner. The final active Owner cannot be suspended or demoted, so the workspace cannot lose all ownership by accident.
 
-**Administrator.** Runs the workspace day to day: members, sessions, automations, repositories, environments, provider accounts, integrations, secrets, and the audit log. Administrators cannot transfer ownership, change who holds the Owner role, or suspend and restore an Owner.
+**Administrator.** Runs the workspace day to day: members, permitted sessions, automations, repositories, environments, provider accounts, integrations, secrets, and the audit log. Administrators need session ownership or an explicit collaborator grant to access a private session. They cannot transfer ownership, change who holds the Owner role, or suspend and restore an Owner.
 
-**Member.** Creates and uses sessions, collaborates in existing sessions, uses shared repositories and environments, and creates automations. Members manage and manually trigger the automations they own but cannot modify someone else's automation or change shared configuration. They can view [analytics](/administration/analytics).
+**Member.** Creates and uses sessions, collaborates in permitted sessions, uses shared repositories and environments, and creates automations. Members manage and manually trigger the automations they own but cannot modify someone else's automation or change shared configuration. They can view [analytics](/administration/analytics).
 
-**Viewer.** Read-only access to shared workspace resources: sessions, automations, analytics, repositories, environments, skills, and MCP servers. Viewers cannot create or prompt sessions, access sandboxes, manage personal skill profiles, trigger automations, or change shared configuration.
+**Viewer.** Read-only access to shared workspace resources: sessions visible to them, automations, analytics, repositories, environments, skills, and MCP servers. Viewers cannot create or prompt sessions, access sandboxes, manage personal skill profiles, trigger automations, or change shared configuration.
 
 ## How session access works
 
-Sessions are workspace resources, not private resources owned by their creator.
+Roles grant session permissions, not access to every session. A session's Team, Workspace, or Private visibility determines its audience separately from its owning team and user owner. See [Multiplayer and sharing](/sessions/multiplayer-and-sharing) for defaults, private collaborators, and the Owner's audited read exception.
 
-- Anyone with session read access can view every session in the workspace.
-- Anyone with collaboration access can prompt and contribute to every session.
-- Anyone with lifecycle access can stop, retry, archive, and restore every session.
-- Anyone with sandbox access can use supported sandbox tools in every session.
+Prompting, lifecycle operations, and sandbox tools require the relevant permission and session access checks. On team-owned sessions, these actions also require current owning-team membership, including for Owners and Administrators.
 
-The creator shown on a session is attribution, not an access list. Participant labels identify who contributed but grant nothing. The **Mine** filter on the Sessions page is a convenience for finding your own sessions, not a security boundary.
+Runtime participant labels identify who contributed but grant nothing. Explicit collaborators are different: they grant private-session access subject to current owning-team membership where applicable. The **Mine** filter is a convenience for finding sessions you created, not an access boundary.
 
 Creating a session also requires permission to use the selected repository or environment. A role can therefore view an existing session without being allowed to create a new one.
 
@@ -131,7 +129,7 @@ There is no action to remove a member from the workspace; suspension is the way 
 - Scheduled and event-driven automations the member owns no longer pass run authorization.
 - Existing session history and authorship remain intact.
 
-Suspension does not stop a sandbox that is already executing. An Administrator or Owner can stop or archive that session separately.
+Suspension does not stop a sandbox that is already executing. An Administrator or Owner with the required session access can stop or archive that session separately.
 
 ## Managing members
 

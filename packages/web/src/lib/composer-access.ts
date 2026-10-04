@@ -1,5 +1,9 @@
 import { z } from "zod";
-import { sessionVisibilitySchema, type SessionVisibility } from "@open-inspect/shared/types/teams";
+import {
+  sessionVisibilitySchema,
+  type SessionVisibility,
+  type TeamDefaultVisibility,
+} from "@open-inspect/shared/types/teams";
 
 export interface ComposerAccessDraft {
   contextKey: string;
@@ -28,7 +32,7 @@ export function resolveComposerAccess(
     activeTeamId: string | null;
     scope: "workspace" | "all" | undefined;
     requireTeamOnCreate: boolean;
-    teams: readonly { id: string; defaultVisibility: SessionVisibility }[];
+    teams: readonly { id: string; defaultVisibility: TeamDefaultVisibility }[];
   },
   draft: ComposerAccessDraft | null
 ): ComposerAccessDraft {

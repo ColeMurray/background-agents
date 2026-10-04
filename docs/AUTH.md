@@ -127,7 +127,8 @@ and the context does not name one, the composer selects the user's first active 
 
 ### Session Visibility
 
-Each session stores a visibility independently of its team:
+Each session stores a visibility independently of its owning team. Ownership and audience are
+different: a team-owned session can be team-visible, workspace-visible, or explicitly private.
 
 | Visibility  | Who can read the session when team enforcement is on                                                                                                                                                                                                             |
 | ----------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -184,20 +185,43 @@ visibility is reserved for the session owner or a workspace Owner. These role an
 never bypass the current-membership requirement for team-owned actions. Private-session action rules
 apply even while team enforcement is off or in shadow mode.
 
+### Team Defaults and Migration
+
+A team's `defaultVisibility` (stored as `teams.default_visibility`) accepts only `team` or
+`workspace`. It sets the audience of new sessions, not their ownership. `private` remains an
+explicit per-session choice, including for team-owned sessions with a workspace user owner. The
+owner and owning-team membership requirements for private sessions are unchanged.
+
+Migration `terraform/d1/migrations/0084_team_default_visibility.sql` changes existing private team
+defaults with `UPDATE teams SET default_visibility = 'team' WHERE default_visibility = 'private'`,
+including archived teams. It does not change existing sessions, their visibility, or collaborator
+records. The migration is data-only and leaves the existing database CHECK unchanged. Shared schemas
+validate team API requests, rows, and responses; runtime `TeamStore` insert and update validators
+enforce the allowed defaults at application write boundaries. D1 and Node SQLite use the same global
+migration series in `terraform/d1/migrations/`.
+
+**Rollout prerequisite:** apply migration `0084` to the global database before deploying application
+code with the narrowed team-default schema. Otherwise, existing private defaults can fail team row
+and response validation. Prevent older application versions from writing private team defaults
+between the migration and rollout. Explicit Private options in session creation and visibility
+controls remain available.
+
 ### Creating Sessions
 
 Session creation checks the selected repository or environment as well as the creator's workspace
 permission. Supplying a team requires active membership in that team and a grant covering **every**
-repository used by the session; archived teams cannot be selected. Without an explicit visibility,
-team sessions use the team's default and teamless sessions default to `workspace`. `team` visibility
-requires a team; `private` requires a workspace user owner. A teamless session may still be private.
+repository used by the session; archived teams cannot be selected. Without an explicit session
+visibility, normal creation, Slack and Linear launchers, and automation runs inherit the owning
+team's current default; teamless sessions default to `workspace`. The launch source does not
+override that default. `team` visibility requires a team; explicit `private` visibility requires a
+workspace user owner. A teamless session may still be private.
 
 Owners and Administrators can configure **Settings > Teams > Require a team for new sessions**
 (`requireTeamOnCreate`). It is off by default. When enabled, new sessions must select a team; it
 refuses session creation API requests without a team with `team_required`. The web app supports team
-selection; team selection in bots is a later phase, so their teamless creation API requests are also
-refused when the setting is enabled. Automation runs are exempt until automation team ownership is
-supported. The setting does not migrate or hide existing `ownerTeamId: null` workspace rows.
+selection; teamless bot creation requests are also refused when the setting is enabled. Automation
+runs remain exempt from this setting. The setting does not migrate or hide existing
+`ownerTeamId: null` workspace rows.
 
 Team leads and workspace Owners/Administrators manage repository grants in the team's Repositories
 tab or through `/teams/:id/repository-grants`. Team members and workspace Owners/Administrators can
@@ -408,6 +432,9 @@ specific integration route explicitly permits that operation.
 Some integrations also apply their own ingress rules. For example, the GitHub integration may
 require an allowed trigger user or sufficient repository collaborator access before it sends a
 request to Open-Inspect.
+
+Private sessions cannot be published to Slack, even when the acting user can read the session.
+Changing a team's default does not relax this restriction.
 
 ## Suspension
 

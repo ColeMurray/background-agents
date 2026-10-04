@@ -307,7 +307,7 @@ describe("Home team context", () => {
 
   it("uses the active team's defaults and archives the warm draft on visibility and team changes", async () => {
     const user = userEvent.setup();
-    mocks.teams = [team(), team({ id: "team-2", name: "Design", defaultVisibility: "private" })];
+    mocks.teams = [team(), team({ id: "team-2", name: "Design", defaultVisibility: "workspace" })];
     mocks.activeTeamId = "team-1";
     const view = render(<Home />);
     await user.type(screen.getByPlaceholderText("What do you want to build?"), "Ship it");
@@ -338,8 +338,8 @@ describe("Home team context", () => {
     mocks.activeTeamId = "team-2";
     view.rerender(<Home />);
     expect(
-      screen.getByRole("button", { name: "Session access: Private; team context: Design" })
-    ).toHaveTextContent("Private");
+      screen.getByRole("button", { name: "Session access: Workspace; team context: Design" })
+    ).toHaveTextContent("Workspace");
     expect(
       vi.mocked(fetch).mock.calls.filter(([url]) => String(url) === "/api/sessions")
     ).toHaveLength(2);
@@ -349,7 +349,7 @@ describe("Home team context", () => {
       expect(calls).toHaveLength(3);
       expect(JSON.parse(String(calls[2][1]?.body))).toMatchObject({
         teamId: "team-2",
-        visibility: "private",
+        visibility: "workspace",
       });
     });
     expect(

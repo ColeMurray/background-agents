@@ -4,7 +4,7 @@ description: What the web terminal, code-server, VNC desktop, and port tunnels a
 audience: team-owner
 owner: web
 status: published
-lastReviewed: "2026-09-23"
+lastReviewed: "2026-10-04"
 relatedCode:
   - packages/web/src/components/terminal-panel.tsx
   - packages/web/src/components/sidebar/code-server-section.tsx
@@ -14,6 +14,7 @@ relatedCode:
   - packages/web/src/components/settings/integrations/code-server-integration-settings.tsx
   - packages/control-plane/src/routes/session-runtime-proxy.ts
   - packages/shared/src/rbac.ts
+  - packages/shared/src/types/session-access.ts
   - docs/HOW_IT_WORKS.md
 ---
 
@@ -34,7 +35,7 @@ All four run inside the session's sandbox, so anything you do in them happens in
 
 Sandbox tools need the `sessions.sandbox_access` permission. Members, Administrators, and Owners have it; Viewers do not. Without it, the Terminal, Code server, VNC, and Tunnel URLs sections are not shown at all, and the "Open provider dashboard" link in the sandbox status popover is hidden.
 
-Access is workspace-wide: anyone with the permission can open the tools in any session, not only sessions they created. See [workspace access](/administration/workspace-access).
+The permission alone does not grant sandbox access to every session. Team-owned sessions require current owning-team membership, and private sessions require session ownership or an explicit collaborator grant. See [Multiplayer and sharing](/sessions/multiplayer-and-sharing).
 
 ## Enabling the tools
 

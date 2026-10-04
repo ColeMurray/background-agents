@@ -268,7 +268,7 @@ describe("Teams settings", () => {
     mocks.update.mockResolvedValue({
       ...team,
       joinPolicy: "open",
-      defaultVisibility: "private",
+      defaultVisibility: "team",
       capabilities,
     });
     render(<TeamDetail team={{ ...team, capabilities }} />);
@@ -276,13 +276,18 @@ describe("Teams settings", () => {
     await user.click(screen.getByRole("combobox", { name: "Join policy" }));
     await user.click(await screen.findByRole("option", { name: "Open" }));
     await user.click(screen.getByRole("combobox", { name: "Default visibility" }));
-    await user.click(await screen.findByRole("option", { name: "Private" }));
+    expect(screen.getAllByRole("option").map((option) => option.textContent)).toEqual([
+      "Workspace",
+      "Team",
+    ]);
+    expect(screen.queryByRole("option", { name: "Private" })).toBeNull();
+    await user.click(screen.getByRole("option", { name: "Team" }));
     expect(screen.getByRole("combobox", { name: "Join policy" })).toHaveTextContent("Open");
     fireEvent.click(screen.getByRole("button", { name: "Save changes" }));
     await waitFor(() =>
       expect(mocks.update).toHaveBeenCalledWith({
         joinPolicy: "open",
-        defaultVisibility: "private",
+        defaultVisibility: "team",
       })
     );
   });

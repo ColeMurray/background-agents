@@ -578,6 +578,7 @@ describe("handleAgentSessionEvent environment targets", () => {
         repoOwner: "acme",
         repoName: "backend",
       });
+      expect(createSessionBody(fetchMock)).not.toHaveProperty("visibility");
       expect(promptBody(fetchMock)).toMatchObject({ callbackContext: { linearTeamId: "team-1" } });
       expect(JSON.parse(store.get("issue:issue-1") ?? "null")).toMatchObject({
         linearTeamId: "team-1",

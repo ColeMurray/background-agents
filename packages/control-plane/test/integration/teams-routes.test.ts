@@ -175,6 +175,58 @@ describe("team routes", () => {
     }
   });
 
+  it.each(["team", "workspace"] as const)(
+    "creates and updates a team with a %s default",
+    async (defaultVisibility) => {
+      const created = await request("/teams", "POST", {
+        slug: "shared-default",
+        name: "Shared default",
+        defaultVisibility,
+      });
+      expect(created.status).toBe(201);
+      const team = (await created.json()) as Team;
+      expect(team.defaultVisibility).toBe(defaultVisibility);
+      expect((await new TeamStore(env.DB).getById(team.id))?.defaultVisibility).toBe(
+        defaultVisibility
+      );
+
+      const updatedVisibility = defaultVisibility === "team" ? "workspace" : "team";
+      const updated = await request(`/teams/${team.id}`, "PATCH", {
+        defaultVisibility: updatedVisibility,
+      });
+      expect(updated.status).toBe(200);
+      expect(await updated.json()).toMatchObject({ defaultVisibility: updatedVisibility });
+      expect((await new TeamStore(env.DB).getById(team.id))?.defaultVisibility).toBe(
+        updatedVisibility
+      );
+    }
+  );
+
+  it("rejects private defaults on create and update with the normal validation response", async () => {
+    const created = await request("/teams", "POST", {
+      slug: "private-default",
+      name: "Private default",
+      defaultVisibility: "private",
+    });
+    expect(created.status).toBe(400);
+    expect(await created.json()).toEqual({ error: expect.stringMatching(/^defaultVisibility:/) });
+    expect(await new TeamStore(env.DB).getBySlug("private-default")).toBeNull();
+
+    const team = await new TeamStore(env.DB).create({
+      slug: "unchanged-default",
+      name: "Unchanged default",
+      joinPolicy: "invite_only",
+    });
+    expect(team.defaultVisibility).toBe("team");
+    const updated = await request(`/teams/${team.id}`, "PATCH", {
+      defaultVisibility: "private",
+    });
+    expect(updated.status).toBe(400);
+    expect(await updated.json()).toEqual({ error: expect.stringMatching(/^defaultVisibility:/) });
+    expect(await new TeamStore(env.DB).getById(team.id)).toEqual(team);
+    expect(await auditEvents(team.id)).toEqual([]);
+  });
+
   it("meTeams still requires an active human user", async () => {
     const bot = await serviceFetch(`${BASE}/me/teams`, { service: "slack-bot" });
     expect(bot.status).toBe(403);

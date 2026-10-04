@@ -4,10 +4,11 @@ description: What OpenInspect does, how a session runs from prompt to pull reque
 audience: user
 owner: platform
 status: published
-lastReviewed: "2026-09-28"
+lastReviewed: "2026-10-04"
 relatedCode:
   - README.md
   - docs/HOW_IT_WORKS.md
+  - docs/AUTH.md
   - packages/shared/src/types/sessions.ts
 ---
 
@@ -83,4 +84,4 @@ From your side, each session comes down to four actions:
 
 ## Where people stay in control
 
-The built-in pull-request tool opens PRs but does not merge them. The agent can also run the GitHub CLI, including merge commands, when its credentials and repository rules permit it. GitHub PRs are authored as the prompting user when a token can be resolved, or as the App otherwise. Enforce branch protection, required reviews, and status checks in your repository. Every session is visible to the workspace, every prompt is attributed to its author, and administrators can read the audit log to see who did what.
+The built-in pull-request tool opens PRs but does not merge them. The agent can also run the GitHub CLI, including merge commands, when its credentials and repository rules permit it. GitHub PRs are authored as the prompting user when a token can be resolved, or as the App otherwise. Enforce branch protection, required reviews, and status checks in your repository. [Session visibility and sharing](/sessions/multiplayer-and-sharing) determine who can read and contribute, every prompt is attributed to its author, and administrators can read the audit log to see who did what.

@@ -1,8 +1,9 @@
 import {
   teamRowSchema,
+  teamDefaultVisibilitySchema,
   type Team,
   type TeamJoinPolicy,
-  type SessionVisibility,
+  type TeamDefaultVisibility,
 } from "@open-inspect/shared/types/teams";
 import { generateId } from "../auth/crypto";
 import { isUniqueConstraintError } from "./errors";
@@ -92,16 +93,26 @@ export class TeamStore {
       name: string;
       description?: string | null;
       joinPolicy: TeamJoinPolicy;
+      defaultVisibility?: TeamDefaultVisibility;
     },
     id: string,
     now: number
   ): SqlStatement {
     return this.db
       .prepare(
-        `INSERT INTO teams (id, slug, name, description, join_policy, created_at, updated_at)
-                 VALUES (?, ?, ?, ?, ?, ?, ?)`
+        `INSERT INTO teams (id, slug, name, description, join_policy, default_visibility, created_at, updated_at)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
       )
-      .bind(id, input.slug, input.name, input.description ?? null, input.joinPolicy, now, now);
+      .bind(
+        id,
+        input.slug,
+        input.name,
+        input.description ?? null,
+        input.joinPolicy,
+        teamDefaultVisibilitySchema.parse(input.defaultVisibility ?? "team"),
+        now,
+        now
+      );
   }
 
   async create(input: {
@@ -109,6 +120,7 @@ export class TeamStore {
     name: string;
     description?: string | null;
     joinPolicy: TeamJoinPolicy;
+    defaultVisibility?: TeamDefaultVisibility;
   }): Promise<Team> {
     const id = `team_${generateId()}`;
     try {
@@ -120,7 +132,13 @@ export class TeamStore {
   }
 
   async createWithLead(
-    input: { slug: string; name: string; description?: string | null; joinPolicy: TeamJoinPolicy },
+    input: {
+      slug: string;
+      name: string;
+      description?: string | null;
+      joinPolicy: TeamJoinPolicy;
+      defaultVisibility?: TeamDefaultVisibility;
+    },
     leadUserId: string,
     requestId: string
   ): Promise<Team> {
@@ -157,7 +175,7 @@ export class TeamStore {
       name?: string;
       description?: string | null;
       joinPolicy?: TeamJoinPolicy;
-      defaultVisibility?: SessionVisibility;
+      defaultVisibility?: TeamDefaultVisibility;
       defaultEnvironmentId?: string | null;
     },
     audit?: TeamChangeAudit
@@ -174,7 +192,10 @@ export class TeamStore {
       name: fields.name,
       description: fields.description,
       join_policy: fields.joinPolicy,
-      default_visibility: fields.defaultVisibility,
+      default_visibility:
+        fields.defaultVisibility === undefined
+          ? undefined
+          : teamDefaultVisibilitySchema.parse(fields.defaultVisibility),
       default_environment_id: fields.defaultEnvironmentId,
     };
     const entries = Object.entries(columns).filter((entry) => entry[1] !== undefined);
