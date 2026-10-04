@@ -1,3 +1,6 @@
+# Keep the workflow unfiltered so the aggregate Coverage check can be required
+# for merge without leaving unrelated pull requests pending. Each suite runs
+# only when its inputs change; skipped suites still report success.
 name: Coverage
 
 on:
@@ -14,10 +17,91 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  changes:
+    name: Detect coverage inputs
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      control-plane: ${{ steps.changes.outputs.control-plane }}
+      web: ${{ steps.changes.outputs.web }}
+      other-ts: ${{ steps.changes.outputs.other-ts }}
+      python: ${{ steps.changes.outputs.python }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Check for changes affecting each coverage suite
+        id: changes
+        env:
+          # PRs compare from the merge base; pushes compare the complete push.
+          DIFF_RANGE: ${{ github.event_name == 'pull_request' && format('{0}...{1}', github.event.pull_request.base.sha, github.event.pull_request.head.sha) || format('{0}..{1}', github.event.before, github.sha) }}
+        run: |
+          # The coverage gate itself applies to every suite.
+          gate=(
+            .github/workflows/coverage.yml
+            .nvmrc
+            scripts/check-coverage.mjs
+            scripts/coverage-baseline.json
+            scripts/coverage-policy.ts
+          )
+          # Every TypeScript suite installs the workspace and imports the built shared package.
+          typescript=(
+            package.json
+            package-lock.json
+            packages/shared
+          )
+          # Inputs outside a suite's own packages are files its tests read or import.
+          # Keep these lists in sync with those reads. Package READMEs are not inputs.
+          detect() {
+            local suite=$1
+            shift
+            # Unknown paths and unavailable comparisons run the suite. No rename
+            # detection: moving an input out of a watched directory must run it.
+            if git diff --quiet --no-renames "$DIFF_RANGE" -- "$@" ':(exclude,glob)packages/**/*.md'; then
+              echo "$suite=false" >> "$GITHUB_OUTPUT"
+              echo "No $suite coverage inputs changed: skipping." >> "$GITHUB_STEP_SUMMARY"
+            else
+              echo "$suite=true" >> "$GITHUB_OUTPUT"
+            fi
+          }
+          detect control-plane "${gate[@]}" "${typescript[@]}" \
+            packages/control-plane \
+            packages/opencomputer-infra \
+            packages/sandbox-images \
+            packages/vercel-infra \
+            packages/sandbox-runtime/src/sandbox_runtime/runtime_manifest.json \
+            terraform/d1/migrations \
+            terraform/environments/production/workers-control-plane.tf \
+            .env.example \
+            docker-compose.yml \
+            docs/CONTROL_PLANE_CONTAINER.md
+          detect web "${gate[@]}" "${typescript[@]}" \
+            packages/web \
+            packages/control-plane/src/session/batch-archive.ts \
+            packages/control-plane/src/session/contracts.ts \
+            packages/control-plane/src/session/runtime-client.ts
+          detect other-ts "${gate[@]}" "${typescript[@]}" \
+            packages/github-bot \
+            packages/linear-bot \
+            packages/slack-bot \
+            scripts/check-coverage.test.mjs \
+            docs/AVAILABLE_MODELS.md \
+            packages/docs/content/docs/models/choosing-a-model.mdx
+          detect python "${gate[@]}" \
+            packages/modal-infra \
+            packages/sandbox-runtime \
+            packages/sandbox-images \
+            packages/control-plane/src/image-builds/timeouts.ts \
+            packages/shared/src/types/integrations.ts \
+            terraform/modules/modal-app/scripts/deploy.sh
+
   # Control-plane coverage is CPU-bound on per-file Workers pool startup, so it is split across
   # runners. Shards skip the full-suite floor; the merge job below enforces it on the merged report.
   control-plane-coverage-shard:
     name: Coverage (control-plane ${{ matrix.shard }})
+    needs: changes
+    if: needs.changes.outputs.control-plane == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     strategy:
@@ -89,6 +173,8 @@ jobs:
 
   web-coverage:
     name: Coverage (web)
+    needs: changes
+    if: needs.changes.outputs.web == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -117,6 +203,8 @@ jobs:
 
   other-ts-coverage:
     name: Coverage (shared and bots)
+    needs: changes
+    if: needs.changes.outputs.other-ts == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -153,6 +241,8 @@ jobs:
 
   python-coverage:
     name: Coverage (Python)
+    needs: changes
+    if: needs.changes.outputs.python == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -190,6 +280,7 @@ jobs:
     if: ${{ always() }}
     needs:
       [
+        changes,
         control-plane-coverage-shard,
         control-plane-coverage,
         web-coverage,
@@ -201,6 +292,11 @@ jobs:
     steps:
       - name: Require successful coverage jobs
         env:
+          CHANGES_RESULT: ${{ needs.changes.result }}
+          CP_CHANGED: ${{ needs.changes.outputs.control-plane }}
+          WEB_CHANGED: ${{ needs.changes.outputs.web }}
+          TS_CHANGED: ${{ needs.changes.outputs.other-ts }}
+          PYTHON_CHANGED: ${{ needs.changes.outputs.python }}
           CP_SHARD_RESULT: ${{ needs.control-plane-coverage-shard.result }}
           CP_RESULT: ${{ needs.control-plane-coverage.result }}
           WEB_RESULT: ${{ needs.web-coverage.result }}
@@ -208,31 +304,44 @@ jobs:
           PYTHON_RESULT: ${{ needs.python-coverage.result }}
         run: |
           status=0
-          for pair in "control-plane-shards=$CP_SHARD_RESULT" "control-plane=$CP_RESULT" "web=$WEB_RESULT" "other-ts=$TS_RESULT" "python=$PYTHON_RESULT"; do
-            if [ "${pair#*=}" != success ]; then
-              echo "::error::${pair%%=*} coverage job result: ${pair#*=}"
-              status=1
+          # A job passes when it succeeded, or was skipped because none of its inputs changed.
+          require() {
+            local job=$1 result=$2 changed=$3
+            if [ "$result" = success ] || { [ "$result" = skipped ] && [ "$changed" = false ]; }; then
+              return
             fi
-          done
+            echo "::error::$job coverage job result: $result"
+            status=1
+          }
+          require changes "$CHANGES_RESULT" true
+          require control-plane-shards "$CP_SHARD_RESULT" "$CP_CHANGED"
+          require control-plane "$CP_RESULT" "$CP_CHANGED"
+          require web "$WEB_RESULT" "$WEB_CHANGED"
+          require other-ts "$TS_RESULT" "$TS_CHANGED"
+          require python "$PYTHON_RESULT" "$PYTHON_CHANGED"
           exit "$status"
-      - uses: actions/download-artifact@v4
+      - if: needs.changes.outputs.control-plane == 'true'
+        uses: actions/download-artifact@v4
         with:
           name: coverage-data-control-plane
           path: packages/control-plane/coverage/
-      - uses: actions/download-artifact@v4
+      - if: needs.changes.outputs.web == 'true'
+        uses: actions/download-artifact@v4
         with:
           name: coverage-data-web
           path: packages/web/coverage/
-      - uses: actions/download-artifact@v4
+      - if: needs.changes.outputs.other-ts == 'true'
+        uses: actions/download-artifact@v4
         with:
           name: coverage-data-ts
           path: packages/
-      - uses: actions/download-artifact@v4
+      - if: needs.changes.outputs.python == 'true'
+        uses: actions/download-artifact@v4
         with:
           name: coverage-data-python
           path: packages/
       - name: Upload coverage reports
-        if: always()
+        if: always() && contains(needs.changes.outputs.*, 'true')
         uses: actions/upload-artifact@v4
         with:
           name: production-coverage
