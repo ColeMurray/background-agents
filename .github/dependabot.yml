@@ -45,12 +45,12 @@ updates:
   # Python. sandbox-runtime and sandbox-images/locks/python-tools are excluded:
   # their uv.lock feeds hash-checked exports (locks/runtime.txt,
   # locks/python-tools.txt) that `sandbox:images lock` must regenerate, and
-  # python-tools' pyproject.toml is generated from toolchain.json.
+  # python-tools' pyproject.toml is generated from toolchain.json. e2b-infra and
+  # daytona-infra are excluded until PR CI installs and tests their locked SDKs;
+  # Terraform consumes those lockfiles during apply.
   - package-ecosystem: uv
     directories:
       - /packages/modal-infra
-      - /packages/e2b-infra
-      - /packages/daytona-infra
       - /packages/sandbox-images
     schedule:
       interval: cron
