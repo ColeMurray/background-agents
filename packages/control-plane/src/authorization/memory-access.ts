@@ -6,7 +6,7 @@ import type { TeamRepositoryGrantStore } from "../db/team-repository-grants";
 import type { TeamStore } from "../db/teams";
 import { samePartition, type MemoryPartition } from "../memory/partition";
 import { repositoryPartition } from "../memory/target";
-import type { MemoryRecord } from "../memory/types";
+import type { MemoryRecord, SessionPrincipal } from "../memory/types";
 import type { InstalledRepositoryResolver } from "../routes/shared";
 import {
   REPOSITORY_GRANT_REQUIRED,
@@ -206,12 +206,6 @@ export class MemoryManagementPolicy {
 // ---------------------------------------------------------------------------
 // Session principals
 // ---------------------------------------------------------------------------
-
-/** Who a session acts for: its owning team, or (for workspace sessions) its owner. */
-export interface SessionPrincipal {
-  userId: string | null;
-  ownerTeamId: string | null;
-}
 
 export type SessionMemoryAccessDecision =
   | { kind: "granted" }

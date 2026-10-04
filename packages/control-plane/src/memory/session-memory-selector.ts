@@ -1,11 +1,11 @@
 import type { SessionMemoryManifest } from "@open-inspect/shared/types/memories";
-import type { SessionMemoryAccessPolicy, SessionPrincipal } from "../authorization/memory-access";
+import type { SessionMemoryAccessPolicy } from "../authorization/memory-access";
 import type { MemoryPreferenceStore } from "../db/memory-preferences";
 import type { MemoryRecordStore } from "../db/memory-records";
 import type { MemoryPartition } from "./partition";
 import { buildManifest } from "./selection";
 import { repositoryPartition, targetPartitions } from "./target";
-import type { MemoryTarget } from "./types";
+import type { MemoryTarget, SessionPrincipal } from "./types";
 
 /** What a new root session (or a preview of one) targets. */
 export interface SessionMemorySelectionRequest {

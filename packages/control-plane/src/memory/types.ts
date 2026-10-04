@@ -54,14 +54,24 @@ export interface MemoryTarget {
   environmentId: string | null;
 }
 
-/** Everything sandbox memory requests need to know about their authenticated session. */
-export interface SessionMemoryContext extends MemoryTarget {
-  sessionId: string;
-  sessionUserId: string | null;
+/** Who a session acts for: its owning team, or (for workspace sessions) its owner. */
+export interface SessionPrincipal {
+  userId: string | null;
   ownerTeamId: string | null;
+}
+
+/** A session as memory operations see it: who it acts for and which memory it reaches. */
+export interface MemorySession {
+  id: string;
+  /** Who shared-partition access is evaluated for (owning team, or the workspace owner). */
+  principal: SessionPrincipal;
+  /** The partitions this session draws memory from: its targets and pinned personal owner. */
+  target: MemoryTarget;
+  /** Rendering format for this session's boot context. */
   harness: HarnessId;
-  /** Children consume their parent's pinned selection rather than resolving their own. */
+  /** Children consume their parent's pinned selection rather than their own. */
   inherited: boolean;
+  /** Only private, collaborator-free root sessions may save personal facts without review. */
   personalAutoSave: boolean;
 }
 

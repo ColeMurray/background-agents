@@ -1,5 +1,5 @@
 import type { MemoryPartition } from "./partition";
-import type { MemoryTarget, SessionMemoryContext } from "./types";
+import type { MemorySession, MemoryTarget } from "./types";
 
 /** A session repository's partition; legacy rows without a stable ID reach no memories. */
 export function repositoryPartition(repo: MemoryTarget["repositories"][number]) {
@@ -30,14 +30,13 @@ export function targetPartitions(target: MemoryTarget): MemoryPartition[] {
  * children see only personal records pinned in the selection they inherited, so a later
  * preference or new personal record never widens a delegated session's context.
  */
-export function personalReadAccess(context: SessionMemoryContext): "none" | "pinned" | "all" {
-  if (!context.personalOwnerUserId) return "none";
-  return context.inherited ? "pinned" : "all";
+export function personalReadAccess(session: MemorySession): "none" | "pinned" | "all" {
+  if (!session.target.personalOwnerUserId) return "none";
+  return session.inherited ? "pinned" : "all";
 }
 
 /** Only the personal owner's own sessions may write to their personal store. */
-export function canWritePersonal(context: SessionMemoryContext): boolean {
-  return (
-    context.personalOwnerUserId !== null && context.sessionUserId === context.personalOwnerUserId
-  );
+export function canWritePersonal(session: MemorySession): boolean {
+  const owner = session.target.personalOwnerUserId;
+  return owner !== null && session.principal.userId === owner;
 }

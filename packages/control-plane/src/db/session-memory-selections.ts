@@ -9,7 +9,7 @@ import {
 } from "@open-inspect/shared/types/memories";
 import { partitionFromColumns, type PartitionColumns } from "../memory/partition";
 import { emptyManifest } from "../memory/selection";
-import type { PinnedMemoryEntry, SessionMemoryContext } from "../memory/types";
+import type { MemorySession, PinnedMemoryEntry } from "../memory/types";
 import type { Pinned } from "../session/pinned";
 import { bulkInsertStatements } from "./bulk-insert";
 import type { SqlDatabase, SqlStatement } from "./sql-database";
@@ -225,10 +225,12 @@ export class SessionMemorySelectionStore {
   }
 
   /**
-   * Recover a session's memory context from its metadata and pinned personal owner (never the
-   * owner's current preferences). Returns null for nonexistent sessions.
+   * Load a session as memory operations see it, in one batch: its principal, harness, and
+   * targets from the session row and repositories, plus the personal owner and auto-save
+   * eligibility pinned in its manifest (never the owner's current preferences). Does not read
+   * selection items. Returns null for nonexistent sessions.
    */
-  async context(sessionId: string): Promise<SessionMemoryContext | null> {
+  async loadSession(sessionId: string): Promise<MemorySession | null> {
     const [sessions, repositories] = await this.db.batch([
       this.db
         .prepare(
@@ -265,24 +267,25 @@ export class SessionMemorySelectionStore {
       repo_id: number | null;
     }[];
     return {
-      sessionId,
-      sessionUserId: session.user_id,
-      ownerTeamId: session.owner_team_id,
+      id: sessionId,
+      principal: { userId: session.user_id, ownerTeamId: session.owner_team_id },
+      target: {
+        personalOwnerUserId:
+          session.include_personal_memories === 1 ? session.personal_owner_user_id : null,
+        environmentId: session.environment_id,
+        repositories: repos.length
+          ? repos.map((repo) => ({
+              repoOwner: repo.repo_owner,
+              repoName: repo.repo_name,
+              repoId: repo.repo_id,
+            }))
+          : session.repo_owner && session.repo_name
+            ? [{ repoOwner: session.repo_owner, repoName: session.repo_name, repoId: null }]
+            : [],
+      },
       harness: session.harness ?? DEFAULT_HARNESS,
       inherited: session.parent_session_id !== null,
       personalAutoSave: session.personal_auto_save_eligible === 1,
-      personalOwnerUserId:
-        session.include_personal_memories === 1 ? session.personal_owner_user_id : null,
-      environmentId: session.environment_id,
-      repositories: repos.length
-        ? repos.map((repo) => ({
-            repoOwner: repo.repo_owner,
-            repoName: repo.repo_name,
-            repoId: repo.repo_id,
-          }))
-        : session.repo_owner && session.repo_name
-          ? [{ repoOwner: session.repo_owner, repoName: session.repo_name, repoId: null }]
-          : [],
     };
   }
 

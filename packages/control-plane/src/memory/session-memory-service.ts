@@ -20,7 +20,7 @@ import {
   repositoryPartition,
   targetPartitions,
 } from "./target";
-import type { SessionMemoryContext } from "./types";
+import type { MemorySession } from "./types";
 
 const SCOPE_UNAVAILABLE = "Memory scope is no longer available";
 const OUTSIDE_SESSION = "Memory scope is outside this session";
@@ -31,10 +31,10 @@ const OUTSIDE_SESSION = "Memory scope is outside this session";
  */
 export interface SessionMemoryServiceDeps {
   /**
-   * What one session sees: its memory context (owner, repositories, environment, auto-save
+   * What one session sees: the session itself (principal, targets, harness, auto-save
    * eligibility), its pinned selection, and whether a record is pinned in it.
    */
-  selections: Pick<SessionMemorySelectionStore, "context" | "load" | "isPinned">;
+  selections: Pick<SessionMemorySelectionStore, "loadSession" | "load" | "isPinned">;
   /** The memory records themselves (content, revisions, lifecycle), independent of any session. */
   records: Pick<MemoryRecordStore, "get" | "create">;
   /** Lexical search over current facts in the given partitions. */
@@ -67,12 +67,12 @@ export class SessionMemoryService {
 
   /** The pinned boot context, rendered for the session's harness. */
   async installation(sessionId: string): Promise<SandboxMemoryInstallation> {
-    const context = await this.context(sessionId);
+    const session = await this.loadSession(sessionId);
     const loaded = await this.selections.load(sessionId);
     if (!loaded) throw new MemoryNotFoundError("Session not found");
     if (
       !(await this.canRead(
-        context,
+        session,
         loaded.entries.map((entry) => entry.partition)
       ))
     )
@@ -80,7 +80,7 @@ export class SessionMemoryService {
     return {
       schemaVersion: SANDBOX_MEMORY_SCHEMA_VERSION,
       manifestSha256: loaded.manifest.manifestSha256,
-      rendered: renderMemorySection(loaded.manifest, loaded.entries, context.harness),
+      rendered: renderMemorySection(loaded.manifest, loaded.entries, session.harness),
     };
   }
 
@@ -90,18 +90,18 @@ export class SessionMemoryService {
    * opted-out personal records, and unpinned personal records in children are concealed.
    */
   async read(sessionId: string, memoryId: string): Promise<SandboxMemoryReadResult> {
-    const context = await this.context(sessionId);
+    const session = await this.loadSession(sessionId);
     const [record, pinned] = await Promise.all([
       this.records.get(memoryId),
       this.selections.isPinned(sessionId, memoryId),
     ]);
     if (!record || record.status === "proposed") throw new MemoryNotFoundError();
     if (record.partition.type === "personal") {
-      const access = personalReadAccess(context);
+      const access = personalReadAccess(session);
       if (access === "none" || (access === "pinned" && !pinned)) throw new MemoryNotFoundError();
     }
     if (record.status === "archived") {
-      if (!pinned || !(await this.canRead(context, [record.partition])))
+      if (!pinned || !(await this.canRead(session, [record.partition])))
         throw new MemoryNotFoundError();
       return {
         id: record.id,
@@ -112,8 +112,10 @@ export class SessionMemoryService {
     }
     if (
       record.memoryType !== "fact" ||
-      !targetPartitions(context).some((partition) => samePartition(partition, record.partition)) ||
-      !(await this.canRead(context, [record.partition]))
+      !targetPartitions(session.target).some((partition) =>
+        samePartition(partition, record.partition)
+      ) ||
+      !(await this.canRead(session, [record.partition]))
     )
       throw new MemoryNotFoundError();
     return {
@@ -142,9 +144,9 @@ export class SessionMemoryService {
     sessionId: string,
     input: SandboxMemoryWriteInput
   ): Promise<SandboxMemoryWriteResult> {
-    const context = await this.context(sessionId);
-    const partition = this.writePartition(context, input);
-    if (!(await this.canRead(context, [partition]))) throw new MemoryAccessError(SCOPE_UNAVAILABLE);
+    const session = await this.loadSession(sessionId);
+    const partition = this.writePartition(session, input);
+    if (!(await this.canRead(session, [partition]))) throw new MemoryAccessError(SCOPE_UNAVAILABLE);
     const memory = await this.records.create(
       {
         partition,
@@ -158,10 +160,10 @@ export class SessionMemoryService {
       },
       {
         kind: "agent",
-        userId: partition.type === "personal" ? partition.userId : context.sessionUserId,
+        userId: partition.type === "personal" ? partition.userId : session.principal.userId,
         sessionId,
         requestId: this.requestId,
-        personalAutoSave: context.personalAutoSave,
+        personalAutoSave: session.personalAutoSave,
       }
     );
     return { id: memory.id, status: memory.status, revisionId: memory.currentRevisionId };
@@ -169,73 +171,67 @@ export class SessionMemoryService {
 
   /** Search current facts in the session's partitions, checking access before and after SQL. */
   async search(sessionId: string, input: MemorySearchInput): Promise<MemorySearchResponse> {
-    const context = await this.context(sessionId);
-    const partitions = this.searchPartitions(context, input);
+    const session = await this.loadSession(sessionId);
+    const partitions = this.searchPartitions(session, input);
     const all = partitions.map((entry) => entry.partition);
-    if (!(await this.canRead(context, all))) throw new MemoryAccessError(SCOPE_UNAVAILABLE);
+    if (!(await this.canRead(session, all))) throw new MemoryAccessError(SCOPE_UNAVAILABLE);
     const result = await this.factSearch.search(input, partitions);
-    if (!(await this.canRead(context, all))) throw new MemoryAccessError(SCOPE_UNAVAILABLE);
+    if (!(await this.canRead(session, all))) throw new MemoryAccessError(SCOPE_UNAVAILABLE);
     return result;
   }
 
-  private async context(sessionId: string): Promise<SessionMemoryContext> {
-    const context = await this.selections.context(sessionId);
-    if (!context) throw new MemoryNotFoundError("Session not found");
-    return context;
+  private async loadSession(sessionId: string): Promise<MemorySession> {
+    const session = await this.selections.loadSession(sessionId);
+    if (!session) throw new MemoryNotFoundError("Session not found");
+    return session;
   }
 
   private async canRead(
-    context: SessionMemoryContext,
+    session: MemorySession,
     partitions: readonly MemoryPartition[]
   ): Promise<boolean> {
-    const decision = await this.access.check(
-      { userId: context.sessionUserId, ownerTeamId: context.ownerTeamId },
-      partitions
-    );
+    const decision = await this.access.check(session.principal, partitions);
     return decision.kind === "granted";
   }
 
   /** Resolve a session-relative selector; multi-repository sessions must name the repository. */
   private selectRepositories(
-    context: SessionMemoryContext,
+    session: MemorySession,
     selector: { repoOwner?: string; repoName?: string }
   ) {
     return selector.repoOwner === undefined
-      ? context.repositories
-      : context.repositories.filter(
+      ? session.target.repositories
+      : session.target.repositories.filter(
           (repo) =>
             repo.repoOwner.toLowerCase() === selector.repoOwner &&
             repo.repoName.toLowerCase() === selector.repoName
         );
   }
 
-  private writePartition(
-    context: SessionMemoryContext,
-    input: SandboxMemoryWriteInput
-  ): MemoryPartition {
+  private writePartition(session: MemorySession, input: SandboxMemoryWriteInput): MemoryPartition {
     switch (input.scope) {
       case "repository": {
-        if (input.repoOwner === undefined && context.repositories.length > 1)
+        if (input.repoOwner === undefined && session.target.repositories.length > 1)
           throw new MemoryValidationError(
-            `This session spans multiple repositories — specify repoOwner and repoName (one of: ${context.repositories.map((repo) => `${repo.repoOwner}/${repo.repoName}`).join(", ")})`
+            `This session spans multiple repositories — specify repoOwner and repoName (one of: ${session.target.repositories.map((repo) => `${repo.repoOwner}/${repo.repoName}`).join(", ")})`
           );
-        const [repo] = this.selectRepositories(context, input);
+        const [repo] = this.selectRepositories(session, input);
         if (!repo) throw new MemoryAccessError("Repository is outside this session");
         const partition = repositoryPartition(repo);
         if (!partition) throw new MemoryAccessError(OUTSIDE_SESSION);
         return partition;
       }
       case "environment":
-        if (!context.environmentId)
+        if (!session.target.environmentId)
           throw new MemoryAccessError("This session has no associated environment");
-        return { type: "environment", environmentId: context.environmentId };
+        return { type: "environment", environmentId: session.target.environmentId };
       case "personal":
-        if (!context.personalOwnerUserId) throw new MemoryAccessError(OUTSIDE_SESSION);
+        if (!session.target.personalOwnerUserId) throw new MemoryAccessError(OUTSIDE_SESSION);
         // A collaborator-owned child consumes inherited context but cannot mutate the original
         // owner's personal store.
-        if (!canWritePersonal(context))
+        if (!canWritePersonal(session))
           throw new MemoryAccessError("Personal memory owner differs from this session owner");
-        return { type: "personal", userId: context.personalOwnerUserId };
+        return { type: "personal", userId: session.target.personalOwnerUserId };
       default: {
         const exhaustive: never = input.scope;
         throw new Error(`Unhandled memory scope: ${String(exhaustive)}`);
@@ -244,25 +240,22 @@ export class SessionMemoryService {
   }
 
   /** Session-relative searchable partitions; an explicitly requested unavailable scope fails. */
-  private searchPartitions(
-    context: SessionMemoryContext,
-    input: MemorySearchInput
-  ): SearchPartition[] {
+  private searchPartitions(session: MemorySession, input: MemorySearchInput): SearchPartition[] {
     const partitions: SearchPartition[] = [];
     const wants = (scope: NonNullable<MemorySearchInput["scope"]>) =>
       !input.scope || input.scope === scope;
     if (wants("personal")) {
-      const access = personalReadAccess(context);
-      if (access !== "none" && context.personalOwnerUserId)
+      const access = personalReadAccess(session);
+      if (access !== "none" && session.target.personalOwnerUserId)
         partitions.push({
-          partition: { type: "personal", userId: context.personalOwnerUserId },
-          ...(access === "pinned" ? { pinnedSessionId: context.sessionId } : {}),
+          partition: { type: "personal", userId: session.target.personalOwnerUserId },
+          ...(access === "pinned" ? { pinnedSessionId: session.id } : {}),
         });
       else if (input.scope)
         throw new MemoryAccessError("Personal memory is excluded from this session");
     }
     if (wants("repository")) {
-      const repositories = this.selectRepositories(context, input);
+      const repositories = this.selectRepositories(session, input);
       if (input.scope && !repositories.length)
         throw new MemoryAccessError("Repository is outside this session");
       for (const repo of repositories) {
@@ -272,9 +265,9 @@ export class SessionMemoryService {
       }
     }
     if (wants("environment")) {
-      if (context.environmentId)
+      if (session.target.environmentId)
         partitions.push({
-          partition: { type: "environment", environmentId: context.environmentId },
+          partition: { type: "environment", environmentId: session.target.environmentId },
         });
       else if (input.scope)
         throw new MemoryAccessError("This session has no associated environment");
