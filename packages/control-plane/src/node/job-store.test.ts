@@ -2,11 +2,14 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   JOB_STORE_FILE,
   openJobStore,
   parseClaimedJobRow,
+  parseJobIdRows,
+  parseNullableRunAtRow,
+  parseStatusCountRows,
   type ClaimedJob,
   type JobStore,
 } from "./job-store";
@@ -59,6 +62,56 @@ describe("openJobStore", () => {
     });
   });
 
+  describe("job row parsers", () => {
+    it("parses job id rows returned by claim recovery statements", () => {
+      expect(parseJobIdRows([{ id: "job-1" }, { id: "job-2" }])).toEqual(["job-1", "job-2"]);
+    });
+
+    it("reports malformed ids without dropping healthy recovery results", () => {
+      const report = vi.spyOn(console, "error").mockImplementation(() => {});
+      try {
+        expect(parseJobIdRows([{ id: 123 }, { id: "healthy" }])).toEqual(["healthy"]);
+        expect(report).toHaveBeenCalledWith("Malformed recovered job id row", expect.anything());
+      } finally {
+        report.mockRestore();
+      }
+    });
+
+    it("parses nullable run_at rows returned by aggregate statements", () => {
+      expect(parseNullableRunAtRow({ run_at: 1_000 }, "earliest job row")).toBe(1_000);
+      expect(parseNullableRunAtRow({ run_at: null }, "earliest job row")).toBeNull();
+    });
+
+    it("rejects malformed nullable run_at rows", () => {
+      expect(() => parseNullableRunAtRow({ run_at: "soon" }, "earliest job row")).toThrow(
+        "Malformed earliest job row"
+      );
+    });
+
+    it("parses job status count rows returned by stats statements", () => {
+      expect(
+        parseStatusCountRows([
+          { status: "pending", count: 2 },
+          { status: "running", count: 1 },
+          { status: "dead", count: 0 },
+        ])
+      ).toEqual([
+        { status: "pending", count: 2 },
+        { status: "running", count: 1 },
+        { status: "dead", count: 0 },
+      ]);
+    });
+
+    it("rejects malformed job status count rows", () => {
+      expect(() => parseStatusCountRows([{ status: "pending", count: -1 }])).toThrow(
+        "Malformed job status count rows"
+      );
+      expect(() => parseStatusCountRows([{ status: "stalled", count: 1 }])).toThrow(
+        "Malformed job status count rows"
+      );
+    });
+  });
+
   it.each([
     ["payload", "UPDATE jobs SET payload = x'0102' WHERE id = 'poison'"],
     ["attempt count", "UPDATE jobs SET attempts = 0.5 WHERE id = 'poison'"],
@@ -86,6 +139,34 @@ describe("openJobStore", () => {
       database.close();
     }
   });
+
+  it.each(["recoverAllClaims", "recoverExpiredClaims"] as const)(
+    "recovers healthy jobs despite a malformed id in %s",
+    (method) => {
+      add("poison", 1_000);
+      add("healthy", 1_000);
+      expect(claim(1_000)).toHaveLength(2);
+      const database = new DatabaseSync(join(dataDir, JOB_STORE_FILE));
+      const report = vi.spyOn(console, "error").mockImplementation(() => {});
+      try {
+        database.exec("UPDATE jobs SET id = x'0102' WHERE id = 'poison'");
+
+        const recovered =
+          method === "recoverAllClaims"
+            ? store.recoverAllClaims()
+            : store.recoverExpiredClaims(1_000 + LEASE_MS);
+
+        expect(recovered).toEqual(["healthy"]);
+        expect(report).toHaveBeenCalledWith("Malformed recovered job id row", expect.anything());
+        expect(store.stats(1_000 + LEASE_MS)).toMatchObject({ pending: 2, running: 0 });
+        expect(claim(1_000 + LEASE_MS).map((job) => job.id)).toEqual(["healthy"]);
+        expect(store.stats(1_000 + LEASE_MS)).toMatchObject({ dead: 1, running: 1 });
+      } finally {
+        report.mockRestore();
+        database.close();
+      }
+    }
+  );
 
   it("reports the soonest runnable job", () => {
     add("late", 5_000);

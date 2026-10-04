@@ -39,11 +39,11 @@ describe("route policy table", () => {
   });
 
   it("publishes the complete canonical route catalog", () => {
-    expect(routes).toHaveLength(231);
+    expect(routes).toHaveLength(232);
 
     const paths = routes.map((route) => route.path);
-    expect(new Set(paths).size).toBe(175);
-    expect(new Set(routes.map((route) => `${route.method}:${route.path}`)).size).toBe(231);
+    expect(new Set(paths).size).toBe(176);
+    expect(new Set(routes.map((route) => `${route.method}:${route.path}`)).size).toBe(232);
     expect(routeFor("POST", "/sessions/session-1/sandbox-memory/search")).toMatchObject({
       authentication: { kind: "sandbox" },
       supportedScmProviders: "all",
@@ -490,6 +490,7 @@ describe("route policy table", () => {
     ["GET", "/health", "public"],
     ["POST", "/webhooks/sentry/automation-1", "handler-authenticated"],
     ["POST", "/webhooks/automation/automation-1", "handler-authenticated"],
+    ["GET", "/webhooks/automation/automation-1/invocations/invocation-1", "handler-authenticated"],
     ["POST", "/image-builds/build-complete", "handler-authenticated"],
     ["POST", "/image-builds/build-failed", "handler-authenticated"],
     ["GET", "/api/auth/get-session", "web-service"],

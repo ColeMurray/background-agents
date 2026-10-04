@@ -109,7 +109,8 @@ Defaults are resolved when a session starts. Changing a default never moves an e
 
 <Callout type="info" title="Anthropic defaults reach only Claude Agent">
   A default Claude account applies to Claude Agent sessions, including automations configured for
-  Claude Agent. Automations can select their harness; Slack, GitHub, and Linear launches use
+  Claude Agent. Automations and the Linear integration can select their harness, so switching Linear
+  to Claude Agent lets Linear usage draw on the default account; Slack and GitHub launches use
   OpenCode, which runs Anthropic on an API key. Set **Automated authentication** for Claude to **No
   account (API key)** if you want Claude Agent automations on an API key while interactive Claude
   Agent sessions pick the account.

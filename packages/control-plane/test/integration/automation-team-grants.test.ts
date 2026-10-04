@@ -83,7 +83,7 @@ async function expectDenied(source: AutomationInvocationSource) {
         meta: {},
         body: {},
       })
-    ).toEqual({ triggered: 0, skipped: 1, steered: 0 });
+    ).toEqual({ triggered: 0, skipped: 1, steered: 0, invocationIds: [] });
   }
   expect(sessionInitialization.initializeSession).not.toHaveBeenCalled();
   expect(AutomationStore.prototype.insertInvocationGuarded).not.toHaveBeenCalled();

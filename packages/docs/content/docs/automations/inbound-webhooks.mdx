@@ -4,7 +4,7 @@ description: Trigger an automation from any system with an authenticated JSON PO
 audience: team-owner
 owner: control-plane
 status: published
-lastReviewed: "2026-10-02"
+lastReviewed: "2026-10-04"
 relatedCode:
   - docs/AUTOMATIONS.md
   - packages/shared/src/triggers/types.ts
@@ -132,7 +132,7 @@ Not supported:
 
 If your sender may retry, include a top-level `idempotencyKey` string in the body.
 
-- Deliveries that share an `idempotencyKey` are treated as the same event. Re-sending it does not create a second run; the duplicate is counted as skipped.
+- Deliveries that share an `idempotencyKey` are treated as the same event. Re-sending it does not create a second run; the duplicate is counted as skipped and returns the original delivery's `invocationId`, even while that run is still in progress.
 - The `idempotencyKey` stays in the stored body but is removed from the context block the agent sees.
 - Without an `idempotencyKey`, every delivery gets its own key, so separate deliveries to the same automation can run concurrently.
 
@@ -141,14 +141,15 @@ If your sender may retry, include a top-level `idempotencyKey` string in the bod
 A successful request returns:
 
 ```json
-{ "ok": true, "triggered": 1, "skipped": 0, "steered": 0 }
+{ "ok": true, "triggered": 1, "skipped": 0, "steered": 0, "invocationId": "3f2a…" }
 ```
 
-| Field       | Meaning                                                                                                 |
-| ----------- | ------------------------------------------------------------------------------------------------------- |
-| `triggered` | Runs started by this delivery                                                                           |
-| `skipped`   | Runs not started because of duplicate delivery, concurrency protection, or runtime authorization denial |
-| `steered`   | Replies routed into an existing session; used by Slack thread replies and 0 for webhook deliveries      |
+| Field          | Meaning                                                                                                                                                                                                    |
+| -------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `triggered`    | Runs started by this delivery                                                                                                                                                                              |
+| `skipped`      | Runs not started because of duplicate delivery, concurrency protection, or runtime authorization denial                                                                                                    |
+| `steered`      | Replies routed into an existing session; used by Slack thread replies and 0 for webhook deliveries                                                                                                         |
+| `invocationId` | The firing this delivery belongs to: new, recorded as skipped for concurrency, or the original for a duplicate `idempotencyKey`. `null` when nothing was recorded. See [Checking status](#checking-status) |
 
 A request whose conditions do not match returns `ok: true` with `triggered: 0`.
 
@@ -165,6 +166,28 @@ Runtime authorization denial returns `ok: true` with `triggered: 0` and `skipped
 | `415`  | `Content-Type` was not `application/json`                  |
 
 A paused automation accepts the request but starts nothing.
+
+## Checking status
+
+Keep the `invocationId` from the response to follow the work without signing in to the web app. Read it with the same API key:
+
+```bash
+curl "https://<your-worker-url>/webhooks/automation/<automation-id>/invocations/<invocation-id>" \
+  -H "Authorization: Bearer <api-key>"
+```
+
+```json
+{
+  "invocationId": "3f2a…",
+  "status": "running",
+  "runs": [{ "id": "9c1e…", "status": "running", "sessionId": "sess_…" }]
+}
+```
+
+- `status` is the invocation's overall status: `starting`, `running`, `completed`, `failed`, `partial_failed`, `unauthorized`, or `skipped`.
+- Each run's `sessionId` stays `null` until its session is created. Use it to link people to the session in the web app, where normal sign-in and session access rules apply.
+- The endpoint returns only status. It never returns the session conversation, the payload, or the automation's other history.
+- It returns `404` for an unknown ID, an invocation belonging to another automation, or a firing this webhook did not cause (such as a manual **Run now**).
 
 ## Security
 

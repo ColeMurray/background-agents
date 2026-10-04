@@ -351,6 +351,18 @@ const DERIVED_INVOCATION_COMPLETED_AT_SQL = `CASE
   ELSE MAX(r.completed_at)
 END`;
 
+/** Invocations with derived status/completion; callers append WHERE … GROUP BY i.id. */
+const ENRICHED_INVOCATION_SELECT_SQL = `SELECT i.*,
+  ${DERIVED_INVOCATION_STATUS_SQL} AS derived_status,
+  ${DERIVED_INVOCATION_COMPLETED_AT_SQL} AS derived_completed_at
+FROM automation_invocations i
+LEFT JOIN automation_runs r ON r.invocation_id = i.id`;
+
+/** Child runs shaped as EnrichedRunRow; callers append WHERE … ORDER BY. */
+const INVOCATION_CHILD_RUN_SELECT_SQL = `SELECT r.*, s.title AS session_title, NULL AS artifact_summary
+FROM automation_runs r
+LEFT JOIN sessions s ON r.session_id = s.id`;
+
 /**
  * TS twin of DERIVED_INVOCATION_STATUS_SQL over a sibling aggregate. Keep the
  * two in lockstep.
@@ -1373,6 +1385,48 @@ export class AutomationStore {
       .first<AutomationInvocationRow>();
   }
 
+  /** One invocation with its child runs, read from a single consistent snapshot. */
+  async getInvocation(
+    automationId: string,
+    invocationId: string
+  ): Promise<AutomationInvocation | null> {
+    const [invocationResult, childResult] = await this.db.batch([
+      this.db
+        .prepare(
+          `${ENRICHED_INVOCATION_SELECT_SQL}
+           WHERE i.id = ? AND i.automation_id = ?
+           GROUP BY i.id`
+        )
+        .bind(invocationId, automationId),
+      this.db
+        .prepare(
+          `${INVOCATION_CHILD_RUN_SELECT_SQL}
+           WHERE r.invocation_id = ?
+           ORDER BY r.created_at ASC`
+        )
+        .bind(invocationId),
+    ]);
+    const row = invocationResult.results?.[0];
+    if (!row) return null;
+    const runs = (childResult.results ?? []) as EnrichedRunRow[];
+    return toAutomationInvocation(
+      enrichedAutomationInvocationRowSchema.parse(row),
+      runs.map(toAutomationRun)
+    );
+  }
+
+  /** The firing that admitted an event (skips never hold a trigger_key). */
+  async getInvocationIdByTriggerKey(
+    automationId: string,
+    triggerKey: string
+  ): Promise<string | null> {
+    const row = await this.db
+      .prepare(`SELECT id FROM automation_invocations WHERE automation_id = ? AND trigger_key = ?`)
+      .bind(automationId, triggerKey)
+      .first<{ id: string }>();
+    return row?.id ?? null;
+  }
+
   /** Sibling-run aggregate for finalization decisions (one query, no stored status). */
   async getInvocationRunAggregate(invocationId: string): Promise<InvocationRunAggregate> {
     const row = await this.db
@@ -1432,11 +1486,7 @@ export class AutomationStore {
         .bind(automationId),
       this.db
         .prepare(
-          `SELECT i.*,
-                  ${DERIVED_INVOCATION_STATUS_SQL} AS derived_status,
-                  ${DERIVED_INVOCATION_COMPLETED_AT_SQL} AS derived_completed_at
-           FROM automation_invocations i
-           LEFT JOIN automation_runs r ON r.invocation_id = i.id
+          `${ENRICHED_INVOCATION_SELECT_SQL}
            WHERE i.automation_id = ?
            GROUP BY i.id
            ORDER BY i.created_at DESC
@@ -1454,9 +1504,7 @@ export class AutomationStore {
     const placeholders = rows.map(() => "?").join(", ");
     const childResult = await this.db
       .prepare(
-        `SELECT r.*, s.title AS session_title, NULL AS artifact_summary
-         FROM automation_runs r
-         LEFT JOIN sessions s ON r.session_id = s.id
+        `${INVOCATION_CHILD_RUN_SELECT_SQL}
          WHERE r.invocation_id IN (${placeholders})
          ORDER BY r.created_at ASC`
       )

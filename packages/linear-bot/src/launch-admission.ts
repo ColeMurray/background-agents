@@ -4,6 +4,7 @@
  * user-facing guidance.
  */
 
+import type { HarnessId } from "@open-inspect/shared/harnesses";
 import { createSessionResponseSchema } from "@open-inspect/shared/types/session-api";
 import { channelBindingResponseSchema } from "@open-inspect/shared/types/team-channel-bindings";
 import { z } from "zod";
@@ -62,6 +63,7 @@ export async function createSession(
   target: SessionTarget,
   params: {
     title: string;
+    harness: HarnessId;
     model: string;
     reasoningEffort?: string;
     actorUserId?: string;
@@ -75,6 +77,7 @@ export async function createSession(
   const body = JSON.stringify({
     ...targetRequestFields(target),
     title: params.title,
+    harness: params.harness,
     model: params.model,
     reasoningEffort: params.reasoningEffort,
     actorDisplayName: params.actorDisplayName,

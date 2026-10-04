@@ -126,7 +126,7 @@ describe("Scheduler slack event handling (integration)", () => {
     const id = await seedSlackAutomation(store);
 
     const result = await sendEvent(makeSlackEvent({ text: "good morning team" }));
-    expect(result).toEqual({ triggered: 0, skipped: 0, steered: 0 });
+    expect(result).toEqual({ triggered: 0, skipped: 0, steered: 0, invocationIds: [] });
 
     expect(await fetchRuns(id)).toHaveLength(0);
   });
@@ -144,7 +144,7 @@ describe("Scheduler slack event handling (integration)", () => {
         concurrencyKey: "slack:C2:1",
       })
     );
-    expect(result).toEqual({ triggered: 0, skipped: 0, steered: 0 });
+    expect(result).toEqual({ triggered: 0, skipped: 0, steered: 0, invocationIds: [] });
 
     expect(await fetchRuns(id)).toHaveLength(0);
   });
@@ -181,7 +181,12 @@ describe("Scheduler slack event handling (integration)", () => {
     const result = await sendEvent(
       makeSlackEvent({ text: "deploy", concurrencyKey, triggerKey: "slack:msg:C1:second" })
     );
-    expect(result).toEqual({ triggered: 0, skipped: 1, steered: 0 });
+    expect(result).toEqual({
+      triggered: 0,
+      skipped: 1,
+      steered: 0,
+      invocationIds: [expect.any(String)],
+    });
 
     // The skip is a childless invocation carrying the message coordinates.
     const invocations = await fetchInvocations(store, id);
@@ -215,7 +220,7 @@ describe("Scheduler slack event handling (integration)", () => {
         triggerKey: "slack:msg:C1:reply",
       })
     );
-    expect(followResult).toEqual({ triggered: 0, skipped: 0, steered: 1 });
+    expect(followResult).toEqual({ triggered: 0, skipped: 0, steered: 1, invocationIds: [] });
 
     // No concurrency-skip invocation recorded — the follow-up was steered.
     const invocations = await fetchInvocations(store, id);
@@ -385,7 +390,7 @@ describe("Scheduler slack event handling (integration)", () => {
             triggerKey: `slack:msg:C1:reply-${authorityState}`,
           })
         )
-      ).toEqual({ triggered: 0, skipped: 0, steered: 0 });
+      ).toEqual({ triggered: 0, skipped: 0, steered: 0, invocationIds: [] });
       expect(await fetchRuns(id)).toHaveLength(1);
       expect(await fetchInvocations(store, id)).toHaveLength(1);
     }
@@ -430,7 +435,7 @@ describe("Scheduler slack event handling (integration)", () => {
           triggerKey: "slack:msg:C1:reply-actor-only",
         })
       )
-    ).toEqual({ triggered: 0, skipped: 0, steered: 1 });
+    ).toEqual({ triggered: 0, skipped: 0, steered: 1, invocationIds: [] });
     expect(await fetchRuns(id)).toHaveLength(1);
   });
 
@@ -471,6 +476,7 @@ describe("Scheduler slack event handling (integration)", () => {
       triggered: 0,
       skipped: 0,
       steered: 1,
+      invocationIds: [],
     });
 
     // The reply created no new run and recorded no skip — it reused the

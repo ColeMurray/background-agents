@@ -5,6 +5,7 @@
 
 import type { LinearCallbackContext } from "@open-inspect/shared/types/session-api";
 import { MAX_WEB_PROMPT_CHARS } from "@open-inspect/shared/types/prompts";
+import { getHarnessLabel } from "@open-inspect/shared/harnesses";
 import { z } from "zod";
 import type { Env, AgentSessionWebhook, AgentSessionWebhookIssue } from "./types";
 import {
@@ -19,7 +20,7 @@ import type { LinearApiClient } from "./utils/linear-client";
 import { signedControlPlaneFetch } from "./internal-auth";
 import { createLogger } from "./logger";
 import { makePlan } from "./plan";
-import { extractModelFromLabels, resolveSessionModelSettings } from "./model-resolution";
+import { extractModelFromLabels, resolveSessionAgentSettings } from "./model-resolution";
 import {
   resolveSessionTarget,
   resolveStoredSessionTarget,
@@ -546,8 +547,9 @@ async function handleNewSession(
   }
 
   const labelModel = extractModelFromLabels(labels);
-  const { model, reasoningEffort } = resolveSessionModelSettings({
+  const { harness, model, reasoningEffort } = resolveSessionAgentSettings({
     envDefaultModel: env.DEFAULT_MODEL,
+    configHarness: integrationConfig.harness,
     configModel: integrationConfig.model,
     configReasoningEffort: integrationConfig.reasoningEffort,
     allowUserPreferenceOverride: integrationConfig.allowUserPreferenceOverride,
@@ -559,13 +561,15 @@ async function handleNewSession(
 
   // ─── Create session ───────────────────────────────────────────────────
 
+  const harnessLabel = getHarnessLabel(harness);
+
   await updateAgentSession(client, agentSessionId, { plan: makePlan("repo_resolved") });
   await emitAgentActivity(
     client,
     agentSessionId,
     {
       type: "thought",
-      body: `Creating coding session on ${label} (model: ${model})...`,
+      body: `Creating coding session on ${label} (agent: ${harnessLabel}, model: ${model})...`,
     },
     true
   );
@@ -575,6 +579,7 @@ async function handleNewSession(
     target,
     {
       title: `${issue.identifier}: ${issue.title}`,
+      harness,
       model,
       reasoningEffort,
       actorUserId: launchActorUserId,
@@ -671,7 +676,7 @@ async function handleNewSession(
 
   await emitAgentActivity(client, agentSessionId, {
     type: "thought",
-    body: `Working on \`${label}\` with **${model}**.\n\n${classificationReasoning ? `*${classificationReasoning}*\n\n` : ""}[View session](${env.WEB_APP_URL}/session/${session.sessionId})`,
+    body: `Working on \`${label}\` with **${model}** (${harnessLabel}).\n\n${classificationReasoning ? `*${classificationReasoning}*\n\n` : ""}[View session](${env.WEB_APP_URL}/session/${session.sessionId})`,
   });
 
   log.info("agent_session.session_created", {
@@ -680,6 +685,8 @@ async function handleNewSession(
     agent_session_id: agentSessionId,
     issue_identifier: issue.identifier,
     target: targetId(target),
+    configured_harness: integrationConfig.harness,
+    harness,
     model,
     classification_reasoning: classificationReasoning,
     duration_ms: Date.now() - startTime,
