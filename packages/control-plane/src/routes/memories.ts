@@ -16,10 +16,13 @@ import {
   type MemoryScope,
 } from "@open-inspect/shared/types/memories";
 import {
-  authorizeMemoryManagement,
-  authorizeMemoryTarget,
-  type MemoryManagementAccess,
+  type MemoryManagementGrant,
+  type MemoryManagementPolicy,
 } from "../authorization/memory-access";
+import {
+  createMemoryManagementPolicy,
+  createSharedMemoryAccess,
+} from "../authorization/memory-access-factory";
 import { EnvironmentStore } from "../db/environments";
 import { MemoryPreferenceStore } from "../db/memory-preferences";
 import { MemoryStore } from "../db/memories";
@@ -65,15 +68,14 @@ async function dto(
 /** Load a record and authorize it against its own partition; inaccessible records are concealed. */
 async function authorizedRecord(
   store: MemoryStore,
-  env: Env,
-  ctx: UserRouteContext,
+  policy: MemoryManagementPolicy,
   id: string,
   mode: "read" | "write"
-): Promise<{ record: MemoryRecord; access: MemoryManagementAccess } | Response> {
+): Promise<{ record: MemoryRecord; access: MemoryManagementGrant } | Response> {
   const record = await store.get(id);
   if (!record) return error("Memory not found", 404);
   const scope: MemoryScope = partitionScope(record.partition);
-  const access = await authorizeMemoryManagement(ctx, env, scope, mode, record);
+  const access = await policy.authorize(scope, mode, record);
   return access instanceof Response ? access : { record, access };
 }
 
@@ -89,7 +91,7 @@ async function list(request: Request, env: Env, _params: object, ctx: UserRouteC
   });
   if (!pagination.success) return error("Invalid memory pagination", 400);
   const { offset, limit } = pagination.data;
-  const access = await authorizeMemoryManagement(ctx, env, scope, "read");
+  const access = await createMemoryManagementPolicy(ctx, env).authorize(scope, "read");
   if (access instanceof Response) return access;
   const store = new MemoryStore(ctx.db);
   // One extra row tells us whether another page exists.
@@ -113,7 +115,7 @@ async function list(request: Request, env: Env, _params: object, ctx: UserRouteC
 async function create(request: Request, env: Env, _params: object, ctx: UserRouteContext) {
   const body = await parseBody(request, createMemorySchema, "Invalid memory");
   if (body instanceof Response) return body;
-  const access = await authorizeMemoryManagement(ctx, env, body.scope, "write");
+  const access = await createMemoryManagementPolicy(ctx, env).authorize(body.scope, "write");
   if (access instanceof Response) return access;
   const { scope: _scope, supersedesMemoryId, ...content } = body;
   const store = new MemoryStore(ctx.db);
@@ -130,7 +132,12 @@ async function create(request: Request, env: Env, _params: object, ctx: UserRout
 
 async function get(_request: Request, env: Env, params: { id: string }, ctx: UserRouteContext) {
   const store = new MemoryStore(ctx.db);
-  const found = await authorizedRecord(store, env, ctx, params.id, "read");
+  const found = await authorizedRecord(
+    store,
+    createMemoryManagementPolicy(ctx, env),
+    params.id,
+    "read"
+  );
   if (found instanceof Response) return found;
   return json({ memory: await dto(store, found.record, found.access.canManage) });
 }
@@ -140,7 +147,12 @@ async function revise(request: Request, env: Env, params: { id: string }, ctx: U
   const revision = expectedRevision(request);
   if (revision instanceof Response) return revision;
   const store = new MemoryStore(ctx.db);
-  const found = await authorizedRecord(store, env, ctx, params.id, "write");
+  const found = await authorizedRecord(
+    store,
+    createMemoryManagementPolicy(ctx, env),
+    params.id,
+    "write"
+  );
   if (found instanceof Response) return found;
   const content = await parseBody(request, reviseMemorySchema, "Invalid memory revision");
   if (content instanceof Response) return content;
@@ -160,7 +172,12 @@ async function revisions(
   ctx: UserRouteContext
 ) {
   const store = new MemoryStore(ctx.db);
-  const found = await authorizedRecord(store, env, ctx, params.id, "read");
+  const found = await authorizedRecord(
+    store,
+    createMemoryManagementPolicy(ctx, env),
+    params.id,
+    "read"
+  );
   if (found instanceof Response) return found;
   return json({ revisions: await store.revisions(found.record.id) });
 }
@@ -171,7 +188,12 @@ function transition(action: MemoryAction) {
     const revision = expectedRevision(request);
     if (revision instanceof Response) return revision;
     const store = new MemoryStore(ctx.db);
-    const found = await authorizedRecord(store, env, ctx, params.id, "write");
+    const found = await authorizedRecord(
+      store,
+      createMemoryManagementPolicy(ctx, env),
+      params.id,
+      "write"
+    );
     if (found instanceof Response) return found;
     const body = await parseBody(request, memoryActionSchema, "Invalid memory action");
     if (body instanceof Response) return body;
@@ -197,11 +219,10 @@ function transition(action: MemoryAction) {
 async function preview(request: Request, env: Env, _params: object, ctx: UserRouteContext) {
   const body = await parseBody(request, memoryPreviewSchema, "Invalid memory target");
   if (body instanceof Response) return body;
+  const policy = createMemoryManagementPolicy(ctx, env);
   let repositories: { repoOwner: string; repoName: string }[] = body.repositories ?? [];
   if (body.environmentId) {
-    const access = await authorizeMemoryManagement(
-      ctx,
-      env,
+    const access = await policy.authorize(
       { type: "environment", environmentId: body.environmentId },
       "read"
     );
@@ -212,17 +233,12 @@ async function preview(request: Request, env: Env, _params: object, ctx: UserRou
   }
   const resolved = [];
   for (const repo of repositories) {
-    const access = await authorizeMemoryManagement(
-      ctx,
-      env,
-      { type: "repository", ...repo },
-      "read"
-    );
+    const access = await policy.authorize({ type: "repository", ...repo }, "read");
     if (access instanceof Response) return access;
     if (access.partition.type === "repository")
       resolved.push({ ...repo, repoId: access.partition.repoId });
   }
-  const target = await authorizeMemoryTarget(ctx, {
+  const target = await createSharedMemoryAccess(ctx).authorizeTarget({
     userId: ctx.principal.userId,
     ownerTeamId: null,
     repositories: resolved,

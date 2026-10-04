@@ -7,7 +7,7 @@ import {
   type SandboxMemoryWriteInput,
   type SandboxMemoryWriteResult,
 } from "@open-inspect/shared/types/memories";
-import type { MemoryPrincipal, SharedMemoryAccess } from "../authorization/memory-access";
+import type { MemoryPrincipal, PrincipalMemoryAccess } from "../authorization/memory-access";
 import type { MemoryStore } from "../db/memories";
 import type { SearchPartition } from "../db/memory-search";
 import type { SessionMemoryStore } from "../db/session-memories";
@@ -43,7 +43,7 @@ export interface SessionMemoryServiceDeps {
     partitions: readonly SearchPartition[]
   ) => Promise<MemorySearchResponse>;
   /** The session principal's current shared-partition access, loaded fresh for every check. */
-  sharedAccess: (principal: MemoryPrincipal) => Promise<Pick<SharedMemoryAccess, "canRead">>;
+  sharedAccess: (principal: MemoryPrincipal) => Promise<PrincipalMemoryAccess>;
   /** Recorded as provenance on agent writes. */
   requestId: string;
 }

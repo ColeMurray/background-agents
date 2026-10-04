@@ -12,8 +12,9 @@ vi.mock("../memory/resolve-session-memory", () => ({
     items: [],
   })),
 }));
-vi.mock("../authorization/memory-access", () => ({
-  authorizeMemoryTarget: vi.fn(async (_ctx: unknown, target: object) => target),
+const mockAuthorizeMemoryTarget = vi.hoisted(() => vi.fn(async (target: object) => target));
+vi.mock("../authorization/memory-access-factory", () => ({
+  createSharedMemoryAccess: () => ({ authorizeTarget: mockAuthorizeMemoryTarget }),
 }));
 /**
  * Unit tests for Scheduler.
@@ -23,7 +24,6 @@ vi.mock("../authorization/memory-access", () => ({
  * test/integration/automation-invocations.test.ts.
  */
 
-import { authorizeMemoryTarget } from "../authorization/memory-access";
 import { resolveSessionMemory } from "../memory/resolve-session-memory";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { createTestBackgroundTasks } from "../background-tasks.test-support";
@@ -627,8 +627,7 @@ describe("Scheduler", () => {
       const result = await scheduler.tick();
 
       expect(result).toMatchObject({ processed: 1 });
-      expect(authorizeMemoryTarget).toHaveBeenCalledWith(
-        expect.anything(),
+      expect(mockAuthorizeMemoryTarget).toHaveBeenCalledWith(
         expect.objectContaining({ userId: sampleAutomation.user_id, ownerTeamId: null })
       );
       expect(resolveSessionMemory).toHaveBeenCalled();

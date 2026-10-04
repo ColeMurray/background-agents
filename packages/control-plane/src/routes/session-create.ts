@@ -26,7 +26,7 @@ import { resolveGitHubEnrichmentForRequest } from "../session/identity";
 import { resolveSessionScopedSettings } from "../session/integration-settings-resolution";
 import { resolveManagedSkills, SkillResolutionError } from "../session/skill-resolution";
 import { resolvedPin } from "../session/pinned";
-import { authorizeMemoryTarget } from "../authorization/memory-access";
+import { createSharedMemoryAccess } from "../authorization/memory-access-factory";
 import { resolveSessionMemory } from "../memory/resolve-session-memory";
 import type { Env } from "../types";
 import { resolveSessionProviderAuth } from "../session/provider-account-resolution";
@@ -287,7 +287,7 @@ export async function handleCreateSession(
     throw e;
   }
 
-  const memoryTarget = await authorizeMemoryTarget(ctx, {
+  const memoryTarget = await createSharedMemoryAccess(ctx).authorizeTarget({
     userId: resolvedUserId,
     ownerTeamId: teamId,
     repositories: scopeMembers,

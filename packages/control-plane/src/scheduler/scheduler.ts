@@ -86,7 +86,7 @@ import { resolveExecutionBudgetMs } from "../sandbox/execution-budget";
 import { MAX_IMAGE_BUILD_PROVIDER_SESSION_TIMEOUT_MS } from "../image-builds/timeouts";
 import { resolveManagedSkills } from "../session/skill-resolution";
 import { resolvedPin } from "../session/pinned";
-import { authorizeMemoryTarget } from "../authorization/memory-access";
+import { createSharedMemoryAccess } from "../authorization/memory-access-factory";
 import { resolveSessionMemory } from "../memory/resolve-session-memory";
 import type { EnqueuePromptRequest } from "../session/enqueue-prompt-contract";
 import { resolveAutomationRepositories } from "../automation/repository";
@@ -1763,7 +1763,7 @@ export class Scheduler {
       throw new AutomationExecutionUnauthorizedError("team_archived");
     }
 
-    const memoryTarget = await authorizeMemoryTarget(ctx, {
+    const memoryTarget = await createSharedMemoryAccess(ctx).authorizeTarget({
       userId: executionPrincipal.platformUserId,
       ownerTeamId: automation.owner_team_id,
       repositories: scopeMembers,

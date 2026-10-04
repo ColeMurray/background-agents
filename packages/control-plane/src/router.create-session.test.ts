@@ -12,8 +12,9 @@ vi.mock("./memory/resolve-session-memory", () => ({
     items: [],
   })),
 }));
-vi.mock("./authorization/memory-access", () => ({
-  authorizeMemoryTarget: vi.fn(async (_ctx: unknown, target: object) => target),
+const mockAuthorizeMemoryTarget = vi.hoisted(() => vi.fn(async (target: object) => target));
+vi.mock("./authorization/memory-access-factory", () => ({
+  createSharedMemoryAccess: () => ({ authorizeTarget: mockAuthorizeMemoryTarget }),
 }));
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { generateEncryptionKey } from "./auth/crypto";

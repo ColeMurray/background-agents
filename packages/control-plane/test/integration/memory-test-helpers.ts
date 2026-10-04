@@ -19,7 +19,7 @@ interface MemorySessionOptions {
 }
 
 /**
- * A memory target that skips `authorizeMemoryTarget`: tests seed users and grants explicitly and
+ * A memory target that skips `SharedMemoryAccess.authorizeTarget`: tests seed users and grants explicitly and
  * assert access at the read/write boundary, which rechecks grants on every request.
  */
 export function memoryTargetForTest(target: {

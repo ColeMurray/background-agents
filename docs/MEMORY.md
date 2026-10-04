@@ -46,7 +46,7 @@ a different participant cannot write to the inherited owner's personal scope.
 | ---------------- | ------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Shared contracts | `packages/shared/src/types/memories.ts`, `memory-tools.ts`                | Wire schemas (management DTOs, manifests, sandbox requests/responses), limits, scope helpers, the lifecycle transition table and the agent tool definitions. `memories.manage_own`.            |
 | Domain           | `control-plane/src/memory/`                                               | Partitions (stable scope identity), selection and budget, rendering, initial status, DTO projection, and `SessionMemoryService` for agent operations. Pure modules never touch D1.             |
-| Access policy    | `control-plane/src/authorization/memory-access.ts`                        | Human management admission, `SharedMemoryAccess` for session principals, and `authorizeMemoryTarget` for new sessions.                                                                         |
+| Access policy    | `control-plane/src/authorization/memory-access.ts`                        | `MemoryManagementPolicy` for humans and `SharedMemoryAccess` for session principals (including new-session target filtering), with stores injected; `memory-access-factory.ts` wires D1.       |
 | Stores           | `control-plane/src/db/memories.ts`, `session-memories.ts`, …              | SQL only: revisioned records and lifecycle, pinned manifests, preferences, search and the commit-time agent write guard. Queries are built with the `sql` fragment template.                   |
 | D1               | Migration `0084_memories.sql`                                             | Records partitioned by `(scope_type, scope_key)`, immutable revisions, per-user default, session manifest headers and ordered revision references.                                             |
 | Session creation | `routes/session-create.ts`, scheduler, child spawn                        | Resolve and pin the manifest in the session insert's transaction (`Pinned<T>`: resolved for roots, inherited by children). Schedulers use the execution owner's default.                       |
@@ -147,12 +147,12 @@ revoked in the milliseconds between the route check and the insert can leave a s
 _proposal_, which every later read denies and a human must approve. Repository memories are keyed by
 the stable repository ID, so a reused name never inherits them and a renamed repository keeps them.
 
-New sessions never fail because of memory: `authorizeMemoryTarget` omits repositories or an
-environment that the session principal cannot read from the selection, and session admission remains
-`authorizeSessionTarget`'s job. Audits record record/revision/status/actor/session IDs, never memory
-content or private archive-reason text. Scope identifiers are retained after target deletion to
-preserve historical manifests. There is no hard-delete endpoint. Restoring an approved memory is
-allowed only when its entire replacement family has no active record.
+New sessions never fail because of memory: `SharedMemoryAccess.authorizeTarget` omits repositories
+or an environment that the session principal cannot read from the selection, and session admission
+remains `authorizeSessionTarget`'s job. Audits record record/revision/status/actor/session IDs,
+never memory content or private archive-reason text. Scope identifiers are retained after target
+deletion to preserve historical manifests. There is no hard-delete endpoint. Restoring an approved
+memory is allowed only when its entire replacement family has no active record.
 
 ### Agent write destinations
 
