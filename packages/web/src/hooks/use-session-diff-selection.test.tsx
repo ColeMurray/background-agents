@@ -85,34 +85,35 @@ describe("useSessionDiffSelection", () => {
     expect(rowB).toHaveFocus();
   });
 
-  it("returns to whatever opened the diff when the file's row is not shown", () => {
-    const row = fileRow(FILE_A.path);
-    setRendered(row, false);
-    const link = document.createElement("a");
-    link.href = "#src/a.ts";
-    setRendered(link, true);
-    document.body.append(link);
-    const { result } = renderSelection();
-
-    link.focus();
-    act(() => result.current.openDiff(FILE_A));
-    act(() => result.current.closeDiff());
-
-    expect(link).toHaveFocus();
-  });
-
-  it("returns to a timeline file link that opened the diff even when the file's row is shown", () => {
-    fileRow(FILE_A.path);
+  it.each([
+    ["is not shown", false],
+    ["is shown", true],
+  ])("returns to the control passed to openDiff when the file's row %s", (_, rowShown) => {
+    setRendered(fileRow(FILE_A.path), rowShown);
     const link = document.createElement("button");
     setRendered(link, true);
     document.body.append(link);
     const { result } = renderSelection();
 
-    // Not focused first: Safari leaves a clicked button unfocused.
     act(() => result.current.openDiff(FILE_A, link));
+    link.blur(); // The changes panel takes focus while it is open.
     act(() => result.current.closeDiff());
 
     expect(link).toHaveFocus();
+  });
+
+  it("returns to the file's row when the control passed to openDiff is no longer shown", () => {
+    const row = fileRow(FILE_A.path);
+    const link = document.createElement("button");
+    setRendered(link, true);
+    document.body.append(link);
+    const { result } = renderSelection();
+
+    act(() => result.current.openDiff(FILE_A, link));
+    link.remove();
+    act(() => result.current.closeDiff());
+
+    expect(row).toHaveFocus();
   });
 
   it("uses the fallback when the sidebar is hidden while the diff is open", () => {

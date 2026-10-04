@@ -22,29 +22,24 @@ function findDiffRow(selection: DiffSelection): HTMLButtonElement | undefined {
 interface UseSessionDiffSelectionOptions {
   /** Runs when a diff opens, but not when the viewer moves between files inside it. */
   onOpen: () => void;
-  /** Takes focus when neither the current file's row nor the diff's opener can. */
+  /** Takes focus when neither `returnFocusTo` nor the current file's row can. */
   focusFallback: () => void;
 }
 
 /**
- * The file shown in the diff view. Closing it returns focus to the control
- * passed to `openDiff`, such as a timeline file link, else to the current file's
- * row in the details sidebar, else to whatever had focus when the diff opened,
- * else to `focusFallback`.
+ * The file shown in the diff view. Closing it returns focus to the
+ * `returnFocusTo` control passed to `openDiff`, such as a timeline file link,
+ * else to the current file's row in the details sidebar, else to
+ * `focusFallback`. Callers pass the control rather than relying on
+ * `document.activeElement` because Safari does not focus a clicked button.
  */
 export function useSessionDiffSelection({ onOpen, focusFallback }: UseSessionDiffSelectionOptions) {
   const [selectedDiff, setSelectedDiff] = useState<DiffSelection | null>(null);
-  const openerRef = useRef<{ element: HTMLElement | null; explicit: boolean } | null>(null);
+  const returnFocusRef = useRef<HTMLElement | null>(null);
 
   const openDiff = useCallback(
-    (selection: DiffSelection, opener?: HTMLElement) => {
-      // Safari does not focus a clicked button, so callers that know the control pass it.
-      openerRef.current = opener
-        ? { element: opener, explicit: true }
-        : {
-            element: document.activeElement instanceof HTMLElement ? document.activeElement : null,
-            explicit: false,
-          };
+    (selection: DiffSelection, returnFocusTo?: HTMLElement) => {
+      returnFocusRef.current = returnFocusTo ?? null;
       setSelectedDiff(selection);
       onOpen();
     },
@@ -53,15 +48,12 @@ export function useSessionDiffSelection({ onOpen, focusFallback }: UseSessionDif
 
   const closeDiff = useCallback(() => {
     const current = selectedDiff;
-    const opener = openerRef.current;
+    const returnFocusTo = returnFocusRef.current;
     setSelectedDiff(null);
     // Choose a target once the session layout is back on screen.
     requestAnimationFrame(() => {
-      const visibleOpener = canTakeFocus(opener?.element) ? opener.element : null;
       const target =
-        (opener?.explicit ? visibleOpener : null) ||
-        (current && findDiffRow(current)) ||
-        visibleOpener;
+        (canTakeFocus(returnFocusTo) ? returnFocusTo : null) ?? (current && findDiffRow(current));
       if (target) target.focus();
       else focusFallback();
     });
