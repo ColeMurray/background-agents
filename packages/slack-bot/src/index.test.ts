@@ -984,7 +984,7 @@ describe("POST /events", () => {
     slackFetch.mockRestore();
   });
 
-  it.each([404, 503, "malformed", "network"] as const)(
+  it.each([404, 503, "unbound", "malformed", "network"] as const)(
     "refuses a new request before classification when binding lookup fails: %s",
     async (failure) => {
       const slackFetch = mockSlackFetch();
@@ -992,6 +992,8 @@ describe("POST /events", () => {
       const env = makeSessionEnv();
       env.CONTROL_PLANE.fetch.mockImplementation(async () => {
         if (failure === "network") throw new Error("offline");
+        if (failure === "unbound")
+          return Response.json({ code: "channel_unbound" }, { status: 404 });
         return failure === "malformed"
           ? Response.json({ teamId: null, kind: "primary" })
           : new Response(null, { status: failure });
@@ -1025,7 +1027,7 @@ describe("POST /events", () => {
         expect.objectContaining({
           channel: "D123",
           thread_ts: "111.222",
-          text: expect.stringContaining(failure === 404 ? "bind" : "verify"),
+          text: expect.stringContaining(failure === "unbound" ? "not bound" : "couldn't verify"),
         }),
       ]);
       classify.mockRestore();
@@ -1038,9 +1040,6 @@ describe("POST /events", () => {
       ["rebound", "team-a"],
       ["unbound", "team-a"],
       ["missing", "team-a"],
-      ["malformed", "team-a"],
-      ["unavailable", "team-a"],
-      ["network", "team-a"],
       ["rebound", null],
       ["rebound", undefined],
     ] as const)(
@@ -1063,15 +1062,10 @@ describe("POST /events", () => {
           })
         );
         env.CONTROL_PLANE.fetch.mockImplementation(async () => {
-          if (failure === "network") throw new Error("offline");
-          if (failure === "missing") return new Response(null, { status: 404 });
-          if (failure === "unavailable") return new Response(null, { status: 503 });
+          if (failure === "missing")
+            return Response.json({ code: "channel_unbound" }, { status: 404 });
           return Response.json(
-            failure === "rebound"
-              ? { teamId: "team-b", kind: "source" }
-              : failure === "unbound"
-                ? { teamId: null }
-                : { teamId: "team-a" }
+            failure === "rebound" ? { teamId: "team-b", kind: "source" } : { teamId: null }
           );
         });
         const ctx = makeCtx();
@@ -1123,6 +1117,109 @@ describe("POST /events", () => {
         });
         classify.mockRestore();
         slackFetch.mockRestore();
+      }
+    );
+
+    it.each([
+      "unavailable",
+      "network",
+      "timeout",
+      "malformed",
+      "invalid-json",
+      "404-empty",
+      "404-router",
+      "404-invalid-json",
+    ] as const)(
+      "preserves the thread when binding lookup is %s, then forwards after recovery",
+      async (failure) => {
+        const channel = type === "message" ? "D123" : "C123";
+        const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+        const slackFetch = mockSlackFetch();
+        const classify = vi.spyOn(RepoClassifier.prototype, "classify");
+        const env = makeSessionEnv([], { teamId: "team-a" });
+        const session = {
+          sessionId: "team-a-session",
+          teamId: "team-a",
+          repoId: "acme/app",
+          repoFullName: "acme/app",
+          model: "anthropic/claude-haiku-4-5",
+          createdAt: 1,
+          lastPromptTs: "111.222",
+        };
+        await env.SLACK_KV.put(`thread:${channel}:111.222`, JSON.stringify(session));
+        const dispatch = env.CONTROL_PLANE.fetch.getMockImplementation()!;
+        let bindingUnavailable = true;
+        env.CONTROL_PLANE.fetch.mockImplementation(async (input, init) => {
+          const url = new URL(String(input));
+          if (url.pathname.includes("/channel-bindings/") && bindingUnavailable) {
+            if (failure === "network") throw new Error("offline");
+            if (failure === "timeout") throw new DOMException("timed out", "TimeoutError");
+            if (failure === "malformed") return Response.json({ teamId: "team-a" });
+            if (failure === "invalid-json") return new Response("{");
+            if (failure === "404-empty") return new Response(null, { status: 404 });
+            if (failure === "404-router")
+              return Response.json({ code: "not_found" }, { status: 404 });
+            if (failure === "404-invalid-json") return new Response("{", { status: 404 });
+            return new Response(null, { status: 503 });
+          }
+          return dispatch(input, init);
+        });
+        const event = {
+          type,
+          channel,
+          channel_type: type === "message" ? "im" : undefined,
+          text: "<@B123> follow up",
+          user: "U123",
+          ts: "333.444",
+          thread_ts: "111.222",
+        };
+        const ctx = makeCtx();
+        await app.fetch(slackEventRequest(event), env, ctx);
+        await flushWaitUntil(ctx);
+
+        expect(env.CONTROL_PLANE.fetch).toHaveBeenCalledOnce();
+        expect(promptFetchBodies(env.CONTROL_PLANE.fetch)).toEqual([]);
+        expect(sessionFetchBodies(env.CONTROL_PLANE.fetch)).toEqual([]);
+        expect(classify).not.toHaveBeenCalled();
+        expect(mockGetUserInfo).not.toHaveBeenCalled();
+        expect(warn).toHaveBeenCalledOnce();
+        expect(JSON.parse(warn.mock.calls[0][0])).toMatchObject({
+          msg: "channel_binding.followup_unavailable",
+          channel,
+        });
+        expect(slackApiBodies(slackFetch, "chat.postMessage")).toEqual([
+          expect.objectContaining({
+            channel,
+            thread_ts: "111.222",
+            text: "I couldn't verify this channel's binding. Please try again.",
+          }),
+        ]);
+        expect(slackFetch).toHaveBeenCalledOnce();
+        expect(
+          await env.SLACK_KV.get(`thread-closed:${channel}:111.222:team-a-session`)
+        ).toBeNull();
+        expect(await env.SLACK_KV.get(`thread:${channel}:111.222`, "json")).toEqual(session);
+        const kv = env.SLACK_KV as unknown as ReturnType<typeof createMockKV>;
+        expect(kv.put.mock.calls.filter(([key]) => key.startsWith("thread"))).toHaveLength(1);
+        expect(kv.delete).not.toHaveBeenCalled();
+
+        bindingUnavailable = false;
+        env.CONTROL_PLANE.fetch.mockClear();
+        const recoveredCtx = makeCtx();
+        await app.fetch(slackEventRequest({ ...event, ts: "444.555" }), env, recoveredCtx);
+        await flushWaitUntil(recoveredCtx);
+        expect(
+          env.CONTROL_PLANE.fetch.mock.calls.map(([url]) => new URL(String(url)).pathname)
+        ).toEqual([`/channel-bindings/slack/${channel}`, `/sessions/${session.sessionId}/prompt`]);
+        expect(promptFetchBodies(env.CONTROL_PLANE.fetch)).toHaveLength(1);
+        expect(sessionFetchBodies(env.CONTROL_PLANE.fetch)).toEqual([]);
+        expect(
+          await env.SLACK_KV.get(`thread-closed:${channel}:111.222:team-a-session`)
+        ).toBeNull();
+        expect(kv.delete).not.toHaveBeenCalled();
+        classify.mockRestore();
+        slackFetch.mockRestore();
+        warn.mockRestore();
       }
     );
   });
@@ -1242,19 +1339,32 @@ describe("POST /events", () => {
     );
     await env.SLACK_KV.put("thread-closed:C123:111.222:team-a-session", "1");
     await env.SLACK_KV.put("thread-closed:C123:111.222:team-a-session:notice", "1");
-    const ctx = makeCtx();
-    await app.fetch(
-      slackEventRequest({
-        type: "app_mention",
-        channel: "C123",
-        text: "<@B123> follow up",
-        user: "U123",
-        ts: "333.444",
+    const closedSession = await env.SLACK_KV.get("thread:C123:111.222", "json");
+    const event = {
+      type: "app_mention",
+      channel: "C123",
+      text: "<@B123> follow up",
+      user: "U123",
+      ts: "333.444",
+      thread_ts: "111.222",
+    };
+    env.CONTROL_PLANE.fetch.mockRejectedValueOnce(new Error("offline"));
+    const unavailableCtx = makeCtx();
+    await app.fetch(slackEventRequest({ ...event, ts: "222.333" }), env, unavailableCtx);
+    await flushWaitUntil(unavailableCtx);
+    expect(env.CONTROL_PLANE.fetch).toHaveBeenCalledOnce();
+    expect(promptFetchBodies(env.CONTROL_PLANE.fetch)).toEqual([]);
+    expect(await env.SLACK_KV.get("thread:C123:111.222", "json")).toEqual(closedSession);
+    expect(await env.SLACK_KV.get("thread-closed:C123:111.222:team-a-session")).toBe("1");
+    expect(await env.SLACK_KV.get("thread-closed:C123:111.222:team-a-session:notice")).toBe("1");
+    expect(slackApiBodies(slackFetch, "chat.postMessage")).toEqual([
+      expect.objectContaining({
+        text: "I couldn't verify this channel's binding. Please try again.",
         thread_ts: "111.222",
       }),
-      env,
-      ctx
-    );
+    ]);
+    const ctx = makeCtx();
+    await app.fetch(slackEventRequest(event), env, ctx);
     await flushWaitUntil(ctx);
     expect(promptFetchBodies(env.CONTROL_PLANE.fetch)).toHaveLength(1);
     expect(await env.SLACK_KV.get("thread-closed:C123:111.222:team-a-session")).toBeNull();

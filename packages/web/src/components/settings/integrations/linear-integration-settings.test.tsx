@@ -5,10 +5,9 @@ import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testi
 import userEvent from "@testing-library/user-event";
 import * as matchers from "@testing-library/jest-dom/matchers";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  DEFAULT_LINEAR_UNBOUND_CHANNELS,
-  type LinearBotSettings,
-  type LinearGlobalConfig,
+import type {
+  LinearBotSettings,
+  LinearGlobalConfig,
 } from "@open-inspect/shared/types/integrations";
 import { browserApiFetch } from "@/lib/browser-api-fetch";
 import { LinearIntegrationSettings } from "./linear-integration-settings";
@@ -64,11 +63,40 @@ beforeEach(() => {
 afterEach(cleanup);
 
 describe("LinearIntegrationSettings unbound policy", () => {
+  it("closes the open policy menu when permission is revoked without changing the value", async () => {
+    const user = userEvent.setup();
+    setupSWR({ settings: null });
+    const view = render(<LinearIntegrationSettings />);
+    const policy = screen.getByRole("combobox", { name: "Unbound Linear teams" });
+    await user.click(policy);
+    expect(screen.getByRole("listbox")).toBeInTheDocument();
+    expect(screen.getByRole("option", { name: "Reject requests until bound" })).toBeInTheDocument();
+
+    authorization.canManageGlobal = false;
+    view.rerender(<LinearIntegrationSettings />);
+    await waitFor(() => expect(screen.queryByRole("listbox")).not.toBeInTheDocument());
+    expect(screen.queryAllByRole("option")).toHaveLength(0);
+    expect(policy).toBeDisabled();
+    expect(policy).toHaveAttribute("disabled");
+    expect(policy).toHaveTextContent("Create workspace-level sessions");
+
+    authorization.canManageGlobal = true;
+    view.rerender(<LinearIntegrationSettings />);
+    expect(policy).toBeEnabled();
+    expect(policy).toHaveTextContent("Create workspace-level sessions");
+    expect(screen.getByRole("button", { name: "Save" })).toBeDisabled();
+    expect(browserApiFetch).not.toHaveBeenCalled();
+  });
+
   it.each([null, { defaults: {} }])("uses the shared default for unset policy: %j", (settings) => {
     setupSWR({ settings });
     render(<LinearIntegrationSettings />);
-    expect(screen.getByRole("combobox", { name: "Unbound Linear teams" })).toHaveValue(
-      DEFAULT_LINEAR_UNBOUND_CHANNELS
+    expect(screen.getByRole("combobox", { name: "Unbound Linear teams" })).toHaveTextContent(
+      "Create workspace-level sessions"
+    );
+    expect(screen.getByRole("combobox", { name: "Unbound Linear teams" })).toHaveAttribute(
+      "aria-describedby",
+      "linear-unbound-channels-help"
     );
     expect(screen.getByRole("button", { name: "Save" })).toBeDisabled();
   });
@@ -78,23 +106,27 @@ describe("LinearIntegrationSettings unbound policy", () => {
     const view = render(<LinearIntegrationSettings />);
     setupSWR({ settings: { defaults: { unboundChannels: "reject" } } });
     view.rerender(<LinearIntegrationSettings />);
-    expect(screen.getByRole("combobox", { name: "Unbound Linear teams" })).toHaveValue("reject");
+    expect(screen.getByRole("combobox", { name: "Unbound Linear teams" })).toHaveTextContent(
+      "Reject requests until bound"
+    );
     setupSWR({ settings: null });
     view.rerender(<LinearIntegrationSettings />);
-    expect(screen.getByRole("combobox", { name: "Unbound Linear teams" })).toHaveValue(
-      DEFAULT_LINEAR_UNBOUND_CHANNELS
+    expect(screen.getByRole("combobox", { name: "Unbound Linear teams" })).toHaveTextContent(
+      "Create workspace-level sessions"
     );
   });
 
   it("preserves dirty edits during revalidation and saves the policy in global defaults", async () => {
+    const user = userEvent.setup();
     setupSWR({ settings: null });
     const view = render(<LinearIntegrationSettings />);
     const policy = screen.getByRole("combobox", { name: "Unbound Linear teams" });
-    fireEvent.change(policy, { target: { value: "reject" } });
+    await user.click(policy);
+    await user.click(await screen.findByRole("option", { name: "Reject requests until bound" }));
     expect(screen.getByRole("button", { name: "Save" })).toBeEnabled();
     setupSWR({ settings: { defaults: { unboundChannels: "workspace" } } });
     view.rerender(<LinearIntegrationSettings />);
-    expect(policy).toHaveValue("reject");
+    expect(policy).toHaveTextContent("Reject requests until bound");
     let finish!: (response: Response) => void;
     vi.mocked(browserApiFetch).mockReturnValueOnce(
       new Promise<Response>((resolve) => {
@@ -106,6 +138,7 @@ describe("LinearIntegrationSettings unbound policy", () => {
     });
     fireEvent.click(screen.getByRole("button", { name: "Save" }));
     expect(policy).toBeDisabled();
+    expect(policy).toHaveAttribute("disabled");
     expect(screen.getByRole("textbox", { name: "Issue Session Instructions" })).toBeDisabled();
     expect(screen.getByRole("checkbox", { name: "Allow user model preferences" })).toBeDisabled();
     expect(screen.getByRole("radio", { name: /All repositories/ })).toBeDisabled();
@@ -128,7 +161,7 @@ describe("LinearIntegrationSettings unbound policy", () => {
     await act(async () => finish(Response.json({ ok: true })));
     await waitFor(() => expect(mutateMock).toHaveBeenCalledWith(globalKey, saved));
     view.rerender(<LinearIntegrationSettings />);
-    expect(policy).toHaveValue("reject");
+    expect(policy).toHaveTextContent("Reject requests until bound");
     expect(screen.getByRole("button", { name: "Save" })).toBeDisabled();
     expect(toastSuccess).toHaveBeenCalledWith("Settings saved.");
   });
@@ -141,14 +174,16 @@ describe("LinearIntegrationSettings unbound policy", () => {
       setupSWR({ settings: data.settings });
     });
     const view = render(<LinearIntegrationSettings />);
-    expect(screen.getByRole("combobox", { name: "Unbound Linear teams" })).toHaveValue("reject");
+    expect(screen.getByRole("combobox", { name: "Unbound Linear teams" })).toHaveTextContent(
+      "Reject requests until bound"
+    );
     await user.click(screen.getByRole("button", { name: "Reset to defaults" }));
     await user.click(screen.getByRole("button", { name: "Reset" }));
     await waitFor(() => expect(mutateMock).toHaveBeenCalledWith(globalKey, { settings: null }));
     view.rerender(<LinearIntegrationSettings />);
     expect(browserApiFetch).toHaveBeenCalledWith(globalKey, { method: "DELETE" });
-    expect(screen.getByRole("combobox", { name: "Unbound Linear teams" })).toHaveValue(
-      DEFAULT_LINEAR_UNBOUND_CHANNELS
+    expect(screen.getByRole("combobox", { name: "Unbound Linear teams" })).toHaveTextContent(
+      "Create workspace-level sessions"
     );
     expect(screen.getByRole("button", { name: "Save" })).toBeDisabled();
     expect(toastSuccess).toHaveBeenCalledWith("Settings reset to defaults.");
@@ -161,9 +196,8 @@ describe("LinearIntegrationSettings unbound policy", () => {
       Response.json({ error: "Forbidden" }, { status: 403 })
     );
     render(<LinearIntegrationSettings />);
-    fireEvent.change(screen.getByRole("combobox", { name: "Unbound Linear teams" }), {
-      target: { value: "reject" },
-    });
+    await user.click(screen.getByRole("combobox", { name: "Unbound Linear teams" }));
+    await user.click(await screen.findByRole("option", { name: "Reject requests until bound" }));
     if (operation === "reset") {
       await user.click(screen.getByRole("button", { name: "Reset to defaults" }));
       await user.click(screen.getByRole("button", { name: "Reset" }));
@@ -171,7 +205,9 @@ describe("LinearIntegrationSettings unbound policy", () => {
       await user.click(screen.getByRole("button", { name: "Save" }));
     }
     await waitFor(() => expect(toastError).toHaveBeenCalledWith("Forbidden"));
-    expect(screen.getByRole("combobox", { name: "Unbound Linear teams" })).toHaveValue("reject");
+    expect(screen.getByRole("combobox", { name: "Unbound Linear teams" })).toHaveTextContent(
+      "Reject requests until bound"
+    );
     expect(screen.getByRole("button", { name: "Save" })).toBeEnabled();
     expect(mutateMock).not.toHaveBeenCalled();
   });
@@ -180,14 +216,20 @@ describe("LinearIntegrationSettings unbound policy", () => {
     const user = userEvent.setup();
     setupSWR({ settings: { defaults: { unboundChannels: "reject" } } });
     const view = render(<LinearIntegrationSettings />);
-    fireEvent.change(screen.getByRole("combobox", { name: "Unbound Linear teams" }), {
-      target: { value: "workspace" },
-    });
+    await user.click(screen.getByRole("combobox", { name: "Unbound Linear teams" }));
+    await user.click(
+      await screen.findByRole("option", { name: "Create workspace-level sessions" })
+    );
     authorization.canManageGlobal = false;
     view.rerender(<LinearIntegrationSettings />);
     expect(screen.getByRole("combobox", { name: "Unbound Linear teams" })).toBeDisabled();
+    expect(screen.getByRole("combobox", { name: "Unbound Linear teams" })).toHaveAttribute(
+      "disabled"
+    );
     expect(screen.getByRole("button", { name: "Save" })).toBeDisabled();
     expect(screen.getByRole("button", { name: "Reset to defaults" })).toBeDisabled();
+    await user.click(screen.getByRole("combobox", { name: "Unbound Linear teams" }));
+    expect(screen.queryByRole("listbox")).not.toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Save" }));
     await user.click(screen.getByRole("button", { name: "Reset to defaults" }));
     expect(browserApiFetch).not.toHaveBeenCalled();

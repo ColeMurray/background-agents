@@ -358,11 +358,14 @@ export class CallbackNotificationService {
       let rejectReason: string | undefined;
       const delivery = await retryDelivery<Response | null, Response>(
         async (signal) => {
-          rejectReason = undefined;
           const denial =
-            source === "linear" ? null : await this.slackPostDenial(callbackSessionId, rawContext);
+            rejectReason ??
+            (source === "linear"
+              ? null
+              : await this.slackPostDenial(callbackSessionId, rawContext));
           // D1 reads cannot be canceled; an expired attempt must not reach the wire.
           signal.throwIfAborted();
+          // The bot can tombstone the thread even when closure delivery fails.
           rejectReason = denial ?? undefined;
           let response: Response;
           if (denial) {

@@ -1,7 +1,6 @@
 import {
   checkSessionAccess,
   sessionCapabilities,
-  type AccessDecision,
   type AccessDenialReason,
   type SessionAccessRow,
   type SessionAction,
@@ -90,10 +89,12 @@ export async function evaluateSessionAdmission(
   const row = await new SessionIndexStore(ctx.db).get(sessionId);
   if (!row) return { kind: "not_found" };
 
-  // Publication is narrower than workspace readability, including during rollback.
+  // Unbinding revokes scoped reads; publication is also narrower than workspace readability.
+  // These scope checks remain enforced during rollback and shadow modes.
   if (
-    ctx.serviceReadPurpose === "slack-post" &&
-    slackPostGate(row, ctx.serviceTeamId ? { teamId: ctx.serviceTeamId } : null)
+    (ctx.serviceTeamId === null && row.ownerTeamId !== null) ||
+    (ctx.serviceReadPurpose === "slack-post" &&
+      slackPostGate(row, ctx.serviceTeamId ? { teamId: ctx.serviceTeamId } : null))
   ) {
     const admission = {
       row: { ...row, ownerUserId: row.userId ?? null, collaboratorIds: [] },
@@ -123,10 +124,7 @@ export async function evaluateSessionAdmission(
   if (slot === "session") ctx.sessionAdmission = { row: accessRow, viewer };
   if (slot === "child") ctx.childSessionAdmission = { row: accessRow, viewer };
 
-  const read: AccessDecision =
-    ctx.serviceWorkspaceSessionsOnly && row.ownerTeamId !== null
-      ? { allowed: false, reason: "not_member" }
-      : checkSessionAccess(viewer, accessRow, "read");
+  const read = checkSessionAccess(viewer, accessRow, "read");
   if (
     !read.allowed &&
     (mode === "on" || (row.visibility === "private" && read.reason === "private"))

@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { TeamSwitcher } from "./team-switcher";
 
@@ -8,7 +9,6 @@ const state = vi.hoisted(() => ({
   teams: [] as { id: string; slug: string; name: string }[],
   activeTeamId: null as string | null,
   scope: "workspace" as string | undefined,
-  roleKey: "member",
   canListAllTeams: false,
   setActiveTeam: vi.fn(),
 }));
@@ -21,40 +21,11 @@ vi.mock("@/hooks/use-active-team", () => ({
     setActiveTeam: state.setActiveTeam,
   }),
 }));
-vi.mock("@/hooks/use-current-user-authorization", () => ({
-  useCurrentUserAuthorization: () => ({ authorization: { role: { key: state.roleKey } } }),
-}));
-vi.mock("@/components/ui/select", () => ({
-  Select: ({
-    value,
-    onValueChange,
-    children,
-  }: {
-    value: string;
-    onValueChange: (value: string) => void;
-    children: React.ReactNode;
-  }) => (
-    <select
-      aria-label="Active team"
-      value={value}
-      onChange={(event) => onValueChange(event.target.value)}
-    >
-      {children}
-    </select>
-  ),
-  SelectTrigger: () => null,
-  SelectValue: () => null,
-  SelectContent: ({ children }: { children: React.ReactNode }) => <>{children}</>,
-  SelectItem: ({ value, children }: { value: string; children: React.ReactNode }) => (
-    <option value={value}>{children}</option>
-  ),
-}));
 
 beforeEach(() => {
   state.teams = [];
   state.activeTeamId = null;
   state.scope = "workspace";
-  state.roleKey = "member";
   state.canListAllTeams = false;
   state.setActiveTeam.mockClear();
 });
@@ -65,58 +36,63 @@ describe("team switcher", () => {
     render(<TeamSwitcher />);
     expect(screen.queryByRole("combobox")).toBeNull();
   });
-  it("offers the selector with a single active membership", () => {
+  it("offers the selector with a single active membership", async () => {
     state.teams = [{ id: "team_alpha", slug: "alpha", name: "Alpha" }];
     state.scope = undefined;
+    const user = userEvent.setup();
     render(<TeamSwitcher />);
+    expect(screen.getByRole("combobox").getAttribute("aria-label")).toBe("Active team");
+    await user.click(screen.getByRole("combobox", { name: "Active team" }));
     expect(screen.getAllByRole("option").map((option) => option.textContent)).toEqual([
       "Workspace",
       "Alpha",
       "All my teams",
     ]);
-    expect(screen.getByRole("combobox").getAttribute("aria-label")).toBe("Active team");
   });
-  it("shows Workspace first, active memberships and All my teams for a two-team member", () => {
+  it("shows Workspace first, active memberships and All my teams for a two-team member", async () => {
     state.teams = [
       { id: "team_alpha", slug: "alpha", name: "Alpha" },
       { id: "team_beta", slug: "beta", name: "Beta" },
     ];
+    const user = userEvent.setup();
     render(<TeamSwitcher />);
+    await user.click(screen.getByRole("combobox", { name: "Active team" }));
     expect(screen.getAllByRole("option").map((option) => option.textContent)).toEqual([
       "Workspace",
       "Alpha",
       "Beta",
       "All my teams",
     ]);
-    fireEvent.change(screen.getByRole("combobox"), { target: { value: "team_beta" } });
+    await user.click(await screen.findByRole("option", { name: "Beta" }));
     expect(state.setActiveTeam).toHaveBeenCalledWith("team_beta");
   });
-  it.each(["owner", "administrator", "member", "viewer", "custom"])(
-    "offers All teams with a server grant regardless of role %s",
-    (roleKey) => {
-      state.teams = [
-        { id: "team_alpha", slug: "alpha", name: "Alpha" },
-        { id: "team_beta", slug: "beta", name: "Beta" },
-      ];
-      state.roleKey = roleKey;
-      state.canListAllTeams = true;
-      render(<TeamSwitcher />);
-      expect(screen.getByRole("option", { name: "All teams" })).toBeTruthy();
-    }
-  );
-
-  it("withholds All teams from an owner when the context denies the grant", () => {
-    state.teams = [{ id: "team_alpha", slug: "alpha", name: "Alpha" }];
-    state.roleKey = "owner";
-    state.canListAllTeams = false;
+  it("offers All teams with the server grant", async () => {
+    state.teams = [
+      { id: "team_alpha", slug: "alpha", name: "Alpha" },
+      { id: "team_beta", slug: "beta", name: "Beta" },
+    ];
+    state.canListAllTeams = true;
+    const user = userEvent.setup();
     render(<TeamSwitcher />);
+    await user.click(screen.getByRole("combobox", { name: "Active team" }));
+    expect(screen.getByRole("option", { name: "All teams" })).toBeTruthy();
+  });
+
+  it("withholds All teams when the context denies the grant", async () => {
+    state.teams = [{ id: "team_alpha", slug: "alpha", name: "Alpha" }];
+    state.canListAllTeams = false;
+    const user = userEvent.setup();
+    render(<TeamSwitcher />);
+    await user.click(screen.getByRole("combobox", { name: "Active team" }));
     expect(screen.queryByRole("option", { name: "All teams" })).toBeNull();
   });
 
-  it("removes All teams when a fresh server response revokes the grant", () => {
+  it("removes All teams when a fresh server response revokes the grant", async () => {
     state.teams = [{ id: "team_alpha", slug: "alpha", name: "Alpha" }];
     state.canListAllTeams = true;
+    const user = userEvent.setup();
     const { rerender } = render(<TeamSwitcher />);
+    await user.click(screen.getByRole("combobox", { name: "Active team" }));
     expect(screen.getByRole("option", { name: "All teams" })).toBeTruthy();
     state.canListAllTeams = false;
     rerender(<TeamSwitcher />);

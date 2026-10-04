@@ -312,7 +312,8 @@ describe("MessageRepository", () => {
     expect(mock.calls).toHaveLength(2);
   });
 
-  it("rejects new Autofix feedback during a sandbox safety hold", () => {
+  it("admits pending Autofix feedback with its rolling PR key", () => {
+    mock.setOne({ count: 0 });
     expect(
       repository.admitAutofixMessage({
         message: {
@@ -329,10 +330,26 @@ describe("MessageRepository", () => {
         attemptLimit: 3,
         windowStart: 1000,
         sessionClosed: false,
-        sandboxRecoveryRequired: true,
       })
-    ).toEqual({ kind: "rejected", reason: "sandbox_recovery_required" });
-    expect(mock.calls).toHaveLength(2);
+    ).toEqual({ kind: "enqueued", messageId: "msg-new" });
+    const inserted = mock.calls.find(({ query }) => query.includes("INSERT INTO messages"));
+    expect(inserted?.params).toEqual([
+      "msg-new",
+      "p-1",
+      "Fix feedback",
+      "github",
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      "github:review:held",
+      "github:99:42",
+      "{}",
+      "pending",
+      2000,
+    ]);
   });
 
   it("rejects new Autofix feedback when the session budget is exhausted", () => {
