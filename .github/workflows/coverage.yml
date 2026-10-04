@@ -27,7 +27,7 @@ jobs:
       other-ts: ${{ steps.changes.outputs.other-ts }}
       python: ${{ steps.changes.outputs.python }}
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           persist-credentials: false
           fetch-depth: 0
@@ -109,10 +109,10 @@ jobs:
       matrix:
         shard: ["1/8", "2/8", "3/8", "4/8", "5/8", "6/8", "7/8", "8/8"]
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           persist-credentials: false
-      - uses: actions/setup-node@v6
+      - uses: actions/setup-node@v7
         with:
           node-version-file: .nvmrc
           cache: npm
@@ -131,7 +131,7 @@ jobs:
           --coverage.reporter=json-summary
       - name: Upload shard report
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: control-plane-coverage-shard-${{ strategy.job-index }}
           path: packages/control-plane/.vitest-reports/
@@ -144,16 +144,16 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           persist-credentials: false
-      - uses: actions/setup-node@v6
+      - uses: actions/setup-node@v7
         with:
           node-version-file: .nvmrc
           cache: npm
       - name: Install dependencies
         run: npm ci
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           pattern: control-plane-coverage-shard-*
           path: packages/control-plane/.vitest-reports/
@@ -165,7 +165,7 @@ jobs:
           node ../../scripts/check-coverage.mjs control-plane coverage/coverage-summary.json
       - name: Upload control-plane coverage
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: coverage-data-control-plane
           path: packages/control-plane/coverage/
@@ -178,10 +178,10 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           persist-credentials: false
-      - uses: actions/setup-node@v6
+      - uses: actions/setup-node@v7
         with:
           node-version-file: .nvmrc
           cache: npm
@@ -195,7 +195,7 @@ jobs:
           node scripts/check-coverage.mjs web packages/web/coverage/coverage-summary.json
       - name: Upload web coverage
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: coverage-data-web
           path: packages/web/coverage/
@@ -208,10 +208,10 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           persist-credentials: false
-      - uses: actions/setup-node@v6
+      - uses: actions/setup-node@v7
         with:
           node-version-file: .nvmrc
           cache: npm
@@ -229,7 +229,7 @@ jobs:
           done
       - name: Upload other TypeScript coverage
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: coverage-data-ts
           path: |
@@ -246,17 +246,17 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           persist-credentials: false
-      - uses: actions/setup-node@v6
+      - uses: actions/setup-node@v7
         with:
           node-version-file: .nvmrc
           cache: npm
-      - uses: actions/setup-python@v6
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
-      - uses: astral-sh/setup-uv@v6
+      - uses: astral-sh/setup-uv@v7
         with:
           version: "0.9.7"
       - name: Enforce Python statement and branch coverage
@@ -267,7 +267,7 @@ jobs:
           done
       - name: Upload Python coverage
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: coverage-data-python
           path: |
@@ -321,28 +321,28 @@ jobs:
           require python "$PYTHON_RESULT" "$PYTHON_CHANGED"
           exit "$status"
       - if: needs.changes.outputs.control-plane == 'true'
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: coverage-data-control-plane
           path: packages/control-plane/coverage/
       - if: needs.changes.outputs.web == 'true'
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: coverage-data-web
           path: packages/web/coverage/
       - if: needs.changes.outputs.other-ts == 'true'
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: coverage-data-ts
           path: packages/
       - if: needs.changes.outputs.python == 'true'
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: coverage-data-python
           path: packages/
       - name: Upload coverage reports
         if: always() && contains(needs.changes.outputs.*, 'true')
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: production-coverage
           path: packages/*/coverage/
