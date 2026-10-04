@@ -26,6 +26,15 @@ type PendingStartupConfig = Pick<
   "sessionId" | "sandboxId" | "generationCreatedAtMs" | "timeoutSeconds"
 >;
 
+/** Whether an alarm may next look up a connected bridge's generation, and when. */
+type BridgeAlarmRetry =
+  | { generation: SandboxGeneration; kind: "armed"; atMs: number }
+  | { generation: SandboxGeneration; kind: "exhausted" };
+
+function sameGeneration(a: SandboxGeneration, b: SandboxGeneration): boolean {
+  return a.sandboxId === b.sandboxId && a.createdAt === b.createdAt;
+}
+
 export interface VmStartupReconciliationStorage {
   getSandbox(): SandboxRow | null;
   updateSandboxModalObjectId(modalObjectId: string | null): void;
@@ -87,11 +96,13 @@ export interface VmStartupReconciliationDependencies {
 export class VmStartupReconciliation {
   private bridgeResolution: SandboxGeneration | null = null;
   /**
-   * When an alarm may next repeat a connected bridge's lookup for its generation; null once a
-   * lookup for that generation failed non-retryably, which ends its alarm lookups.
+   * Armed by each alarm lookup; exhausted once any lookup for the generation, including an
+   * attach or ready lookup, fails non-retryably, which ends its alarm lookups.
    */
-  private bridgeAlarmRetry: { generation: SandboxGeneration; atMs: number | null } | null = null;
-  private bridgeRetryGeneration: SandboxGeneration | null = null;
+  private bridgeAlarmRetry: BridgeAlarmRetry | null = null;
+  /** A lookup requested while another generation's was in flight; it runs once that settles. */
+  private queuedBridgeLookup: { generation: SandboxGeneration; retryWindowMs: number } | null =
+    null;
   private bridgeStartupClaim: SandboxGeneration | null = null;
   private bridgeResolvedStartup: {
     generation: SandboxGeneration;
@@ -266,18 +277,25 @@ export class VmStartupReconciliation {
 
   /**
    * Synchronous bridge entry submits lookup-only work without holding readiness.
-   * Retryable failures repeat within `retryWindowMs`; `resumePendingBridge` continues after it.
+   * Retryable failures repeat within `retryWindowMs`, so a window of 0 makes a single attempt;
+   * `resumePendingBridge` continues after it.
    */
   resolvePendingBridge(
     generation: SandboxGeneration,
     retryWindowMs = PENDING_VM_REFERENCE_MATERIALIZE_BOUND_MS
   ): void {
     if (this.bridgeResolution) {
-      if (
-        this.bridgeResolution.sandboxId !== generation.sandboxId ||
-        this.bridgeResolution.createdAt !== generation.createdAt
-      )
-        this.bridgeRetryGeneration = generation;
+      if (!sameGeneration(this.bridgeResolution, generation)) {
+        // An alarm's single attempt joining a queued attach or ready keeps that window.
+        const queued = this.queuedBridgeLookup;
+        this.queuedBridgeLookup = {
+          generation,
+          retryWindowMs:
+            queued && sameGeneration(queued.generation, generation)
+              ? Math.max(queued.retryWindowMs, retryWindowMs)
+              : retryWindowMs,
+        };
+      }
       return;
     }
     const target = this.pendingBridgeTarget(generation);
@@ -315,11 +333,11 @@ export class VmStartupReconciliation {
                 ? Date.now() - generation.createdAt < PENDING_VM_REFERENCE_MATERIALIZE_BOUND_MS
                 : !!provider.isUnknownStartupError?.(error);
             if (!retryable) {
-              this.bridgeAlarmRetry = { generation, atMs: null };
+              this.bridgeAlarmRetry = { generation, kind: "exhausted" };
               if (detail === "not_visible") return;
               throw error;
             }
-            if (Date.now() >= retryDeadlineAtMs || this.bridgeRetryGeneration) return;
+            if (Date.now() >= retryDeadlineAtMs || this.queuedBridgeLookup) return;
             await new Promise<void>((resolve) => setTimeout(resolve, VM_RESOLVE_RETRY_MS));
           }
         }
@@ -392,9 +410,9 @@ export class VmStartupReconciliation {
         })
         .finally(() => {
           this.bridgeResolution = null;
-          const queued = this.bridgeRetryGeneration;
-          this.bridgeRetryGeneration = null;
-          if (queued) this.resolvePendingBridge(queued);
+          const queued = this.queuedBridgeLookup;
+          this.queuedBridgeLookup = null;
+          if (queued) this.resolvePendingBridge(queued.generation, queued.retryWindowMs);
         });
     if (backgroundTasks) backgroundTasks.submit(work, { name: "sandbox.vm_resolve" });
     else void work();
@@ -412,17 +430,16 @@ export class VmStartupReconciliation {
     if (!this.pendingBridgeTarget(generation)) return;
     const retry = this.bridgeAlarmRetry;
     const now = Date.now();
-    if (
-      retry?.generation.sandboxId === generation.sandboxId &&
-      retry.generation.createdAt === generation.createdAt &&
-      (retry.atMs === null || now < retry.atMs)
-    ) {
-      if (retry.atMs !== null) await this.deps.alarmScheduler.schedule(retry.atMs);
-      return;
+    if (retry && sameGeneration(retry.generation, generation)) {
+      if (retry.kind === "exhausted") return;
+      if (now < retry.atMs) {
+        await this.deps.alarmScheduler.schedule(retry.atMs);
+        return;
+      }
     }
     const atMs = now + VM_RESOLVE_ALARM_RETRY_MS;
     await this.deps.alarmScheduler.schedule(atMs);
-    this.bridgeAlarmRetry = { generation, atMs };
+    this.bridgeAlarmRetry = { generation, kind: "armed", atMs };
     // Rechecks the row after that await and leaves a lookup already in flight to finish.
     this.resolvePendingBridge(generation, 0);
   }

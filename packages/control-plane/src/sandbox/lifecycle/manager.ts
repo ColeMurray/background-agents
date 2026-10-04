@@ -56,7 +56,6 @@ import { formatBootBudgetFailure } from "./boot-failure-message";
 import { createLogger, type Logger } from "../../logger";
 import { hashToken } from "../../auth/crypto";
 import { parseStoredSandboxBootPhase, sandboxBootPhaseLogFields } from "../boot-phase";
-import { parsePendingVmReference } from "../providers/pending-vm-reference";
 import type { ImageBuildLookup } from "./image-selection";
 import {
   SandboxLaunchContext,
@@ -1888,12 +1887,8 @@ export class SandboxLifecycleManager
     // attach's disconnect check guarantees. This precedes the watchdog hold, so
     // it also serves a restore this instance still owns. A held sandbox gets no
     // lookup, including a restore that a restart left with an unknown outcome.
-    if (
-      row?.modal_object_id &&
-      parsePendingVmReference(row.modal_object_id) &&
-      !this.shutdown.isHolding() &&
-      this.wsManager.getSandboxWebSocket()
-    )
+    // The reconciliation decides whether the row still holds a pending reference.
+    if (row && this.wsManager.getSandboxWebSocket() && !this.shutdown.isHolding())
       await this.vmStartup.resumePendingBridge({
         sandboxId: row.modal_sandbox_id,
         createdAt: row.created_at,
