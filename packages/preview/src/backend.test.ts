@@ -130,6 +130,47 @@ describe("real authenticated preview backend", () => {
     }
     expect(b.failures()).toEqual([]);
   }, 30_000);
+  it("confirms a stopped held turn and dispatches the queued turn on the same bridge", async () => {
+    const b = await start();
+    b.modal.holdTurns();
+    const { sessionId } = await expectJson<{ sessionId: string }>(
+      await b.request("/sessions", {
+        method: "POST",
+        body: { repoOwner: "preview-org", repoName: "preview-app" },
+      })
+    );
+    const prompt = async (content: string) =>
+      expectJson<{ messageId: string }>(
+        await b.request(`/sessions/${sessionId}/prompt`, { method: "POST", body: { content } })
+      );
+    const stopped = await prompt("Stop this held turn.");
+    await waitFor(
+      "held turn delivery",
+      async () =>
+        b.modal.state.promptsReceived.some((m) => m.messageId === stopped.messageId) || false
+    );
+    const next = await prompt("Continue after stopping.");
+    expect(b.modal.state.promptsReceived).toHaveLength(1);
+    expect(
+      (await b.request(`/sessions/${sessionId}/stop`, { method: "POST", body: {} })).status
+    ).toBe(200);
+    await waitFor(
+      "stop confirmation releases the queue",
+      async () => b.modal.state.promptsReceived.some((m) => m.messageId === next.messageId) || false
+    );
+    b.modal.releaseTurns();
+    await waitFor("next turn completion", async () => {
+      const { messages } = await expectJson<{ messages: Array<{ id: string; status: string }> }>(
+        await b.request(`/sessions/${sessionId}/messages`)
+      );
+      expect(messages.find((m) => m.id === stopped.messageId)?.status).toBe("failed");
+      return messages.some((m) => m.id === next.messageId && m.status === "completed") || false;
+    });
+    expect(b.modal.state.createRequests).toHaveLength(1);
+    expect(b.modal.state.bridgeConnections).toBe(1);
+    expect(b.modal.state.stops).toBe(0);
+    expect(b.failures()).toEqual([]);
+  }, 30_000);
   it("creates persisted history, idles through preservation and restores for another turn", async () => {
     const b = await start("populated", 2000);
     const sessionId = b.aliases.completedSession;

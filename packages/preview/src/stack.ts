@@ -1,12 +1,13 @@
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { startPreviewBackend, unusedPort, type PreviewBackend } from "./backend";
 import { Cleanup } from "./cleanup";
+import { acquireCheckoutLock } from "./checkout-lock";
 import { PREVIEW_LIFETIME_MS, previewRequestSignal } from "./config";
 import { readLogTail, sanitizedDiagnostic } from "./diagnostics";
 import { startNext, webEnvFileKeys, webEnvironment } from "./next";
-import { isProcessAlive, waitFor } from "./process";
+import { waitFor } from "./process";
 import { PERSONAS, type Persona, type PreviewReady, type Scenario, type TeamsMode } from "./ready";
 import { startSignInLinks } from "./sign-in-links";
 
@@ -47,10 +48,10 @@ export async function startPreviewStack(options: PreviewStackOptions): Promise<P
   const workDir = join(root, ".preview");
   await mkdir(workDir, { recursive: true, mode: 0o700 });
   const lockPath = join(workDir, "lock.json");
-  await acquireCheckoutLock(lockPath);
+  const releaseCheckoutLock = acquireCheckoutLock(lockPath);
 
   const cleanup = new Cleanup();
-  cleanup.defer(() => rm(lockPath));
+  cleanup.defer(releaseCheckoutLock);
   const secrets = new Set<string>();
   const failures: unknown[] = [];
   const diagnosticPath = join(workDir, "last-failure.log");
@@ -183,7 +184,7 @@ export async function startPreviewStack(options: PreviewStackOptions): Promise<P
         reportFailure(new Error(`fixture: ${fixtureFailures.join(", ")}`));
     };
     monitor = setInterval(checkFailures, 1000);
-    // Next's exit is reported at once, not at the next tick, so no check can pass in between.
+    // Next process/log failures are reported at once, not at the next tick.
     void next.exited.then(checkFailures);
     lifetime = setTimeout(
       () => reportFailure(new Error("preview: four-hour run expired; start a new run")),
@@ -223,28 +224,5 @@ export async function startPreviewStack(options: PreviewStackOptions): Promise<P
       `${error instanceof Error ? error.message : "Preview startup failed"}; sanitized diagnostic: ${diagnosticPath}`,
       { cause }
     );
-  }
-}
-
-/** Takes the checkout for this process. A lock whose recorded process has exited is taken over. */
-async function acquireCheckoutLock(path: string): Promise<void> {
-  for (let attempt = 0; ; attempt++) {
-    try {
-      await writeFile(path, JSON.stringify({ pid: process.pid }), { flag: "wx", mode: 0o600 });
-      return;
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
-    }
-    let owner: unknown;
-    try {
-      owner = (JSON.parse(await readFile(path, "utf8")) as { pid?: unknown }).pid;
-    } catch {
-      // Unreadable or still being written: treat it as owned.
-    }
-    if (attempt > 0 || !Number.isInteger(owner) || isProcessAlive(owner as number))
-      throw new Error(
-        `preflight: checkout already owned; inspect ${path}. Stop its preview before starting another.`
-      );
-    await rm(path, { force: true }); // Left by a preview that was killed.
   }
 }

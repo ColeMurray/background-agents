@@ -1,4 +1,7 @@
-import { describe, expect, it } from "vitest";
+import { once } from "node:events";
+import { WebSocketServer, type WebSocket } from "ws";
+import { describe, expect, it, vi } from "vitest";
+import type { SandboxEvent } from "@open-inspect/shared/types/sandbox-events";
 import { generateInternalToken } from "@open-inspect/shared/auth";
 import { startFakeModalServer } from "./fake-modal-server.mjs";
 
@@ -64,6 +67,102 @@ describe("fake Modal peer", () => {
       }
       expect((await fetch(`${fake.origin}/__smoke/hold`)).status).toBe(404);
       expect(fake.state.unexpectedRequests).toEqual(["GET /__smoke/hold"]);
+    } finally {
+      await fake.close();
+    }
+  });
+
+  it.each(["held", "timed"])("cancels a %s turn and keeps the bridge reusable", async (mode) => {
+    const server = new WebSocketServer({ port: 0, host: "127.0.0.1" });
+    await once(server, "listening");
+    const address = server.address();
+    if (typeof address === "string" || !address) throw new Error("No WebSocket server address");
+    const events: SandboxEvent[] = [];
+    const connection = new Promise<WebSocket>((resolve) => {
+      server.on("connection", (socket) => {
+        socket.on("message", (raw) => events.push(JSON.parse(raw.toString())));
+        resolve(socket);
+      });
+    });
+    const chunkDelayMs = 1000;
+    const fake = await startFakeModalServer({ secret: "fixture-secret", chunkDelayMs });
+    try {
+      if (mode === "held") fake.holdTurns();
+      const response = await fetch(`${fake.origin}/api-create-sandbox`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${await generateInternalToken("fixture-secret")}` },
+        body: JSON.stringify({
+          session_id: "session-1",
+          sandbox_id: "sandbox-1",
+          control_plane_url: `http://127.0.0.1:${address.port}`,
+          sandbox_auth_token: "token",
+        }),
+      });
+      expect(response.status).toBe(200);
+      const socket = await connection;
+      socket.send(JSON.stringify({ type: "prompt", messageId: "stopped", content: "Stop me" }));
+      await vi.waitFor(() => expect(events.some((event) => event.type === "token")).toBe(true));
+      socket.send(JSON.stringify({ type: "stop" }));
+      await vi.waitFor(() =>
+        expect(events.filter((event) => event.type === "execution_complete")).toEqual([
+          expect.objectContaining({
+            messageId: "stopped",
+            success: false,
+            error: "Task was cancelled",
+          }),
+        ])
+      );
+      socket.send(JSON.stringify({ type: "stop" }));
+      fake.releaseTurns();
+      // Exercise both release and the original timer deadline after cancellation.
+      await new Promise((resolve) => setTimeout(resolve, chunkDelayMs * 2));
+      expect(
+        events.filter((event) => "messageId" in event && event.messageId === "stopped")
+      ).toHaveLength(2);
+      expect(fake.activeBridges).toBe(1);
+      socket.send(JSON.stringify({ type: "prompt", messageId: "next", content: "Continue" }));
+      await vi.waitFor(
+        () =>
+          expect(events).toContainEqual(
+            expect.objectContaining({
+              type: "execution_complete",
+              messageId: "next",
+              success: true,
+            })
+          ),
+        { timeout: 3000 }
+      );
+      expect(fake.state.errors).toEqual([]);
+    } finally {
+      await fake.close();
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
+  });
+
+  it("validates snapshot sandbox identity before recording a snapshot", async () => {
+    const fake = await startFakeModalServer({ secret: "fixture-secret" });
+    try {
+      const headers = { Authorization: `Bearer ${await generateInternalToken("fixture-secret")}` };
+      for (const sandbox_id of [undefined, null, "", 123]) {
+        const response = await fetch(`${fake.origin}/api-snapshot-sandbox`, {
+          method: "POST",
+          headers,
+          body: JSON.stringify({ sandbox_id }),
+        });
+        expect(response.status).toBe(500);
+      }
+      expect(fake.state.snapshots).toBe(0);
+      expect(fake.state.errors).toEqual(
+        Array(4).fill("/api-snapshot-sandbox: request carried no sandbox_id")
+      );
+      const response = await fetch(`${fake.origin}/api-snapshot-sandbox`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ sandbox_id: "mo-sandbox-1" }),
+      });
+      expect(response.status).toBe(200);
+      expect(await response.json()).toEqual({ success: true, data: { image_id: "smoke-image-1" } });
+      expect(fake.state.snapshots).toBe(1);
     } finally {
       await fake.close();
     }

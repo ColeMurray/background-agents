@@ -2,11 +2,12 @@ import { spawn } from "node:child_process";
 import { createWriteStream } from "node:fs";
 import { readFile, stat } from "node:fs/promises";
 import { join } from "node:path";
+import { finished } from "node:stream/promises";
 import { parse } from "dotenv";
 import { ENV_CONFIG_KEY_NAMES } from "@open-inspect/control-plane/src/node/config";
 import type { EnvConfig } from "@open-inspect/control-plane/src/types";
 import { toolEnvironment } from "./config";
-import { stopChild } from "./process";
+import { stopChildGroup } from "./process";
 
 /** The files `next dev` loads (see @next/env), parsed with the dotenv grammar Next bundles. */
 const NEXT_DEV_ENV_FILES = [".env.development.local", ".env.local", ".env.development", ".env"];
@@ -64,7 +65,7 @@ export function webEnvironment(
 interface NextServer {
   /** Why Next stopped serving, once it has exited or failed to start. */
   readonly failure: Error | undefined;
-  /** Settles when Next exits, whether or not the preview stopped it. */
+  /** Settles when Next exits or its process/log fails. */
   readonly exited: Promise<void>;
   stop(): Promise<void>;
 }
@@ -87,29 +88,48 @@ export function startNext(options: {
       "--port",
       String(options.port),
     ],
-    { cwd: join(options.root, "packages/web"), env: options.env, stdio: ["ignore", "pipe", "pipe"] }
+    {
+      cwd: join(options.root, "packages/web"),
+      env: options.env,
+      detached: true,
+      stdio: ["ignore", "pipe", "pipe"],
+    }
   );
   // Both streams share the log, so neither may end it; stop() does.
   child.stdout!.pipe(log, { end: false });
   child.stderr!.pipe(log, { end: false });
   let failure: Error | undefined;
-  child.on("error", (error) => {
-    failure ??= error;
-  });
-  const exited = new Promise<void>((resolve) =>
+  const exited = new Promise<void>((resolve) => {
+    child.on("error", (error) => {
+      failure ??= error;
+      resolve();
+    });
+    log.on("error", (error) => {
+      failure ??= new Error(`web: Next log failed: ${error.message}`, { cause: error });
+      resolve();
+    });
     child.once("exit", (code, signal) => {
       failure ??= new Error(`web: Next exited (${signal ?? code}); inspect ${options.logPath}`);
       resolve();
-    })
-  );
+    });
+  });
+  // Observe errors immediately; the failure above is reported through the stack, not an unhandled
+  // stream rejection. A failed stream may already be closed by the time cleanup starts.
+  const logClosed = finished(log).catch(() => {});
   return {
     get failure() {
       return failure;
     },
     exited,
     async stop() {
-      await stopChild(child);
-      await new Promise<void>((resolve) => log.end(resolve));
+      try {
+        await stopChildGroup(child);
+      } finally {
+        child.stdout!.unpipe(log);
+        child.stderr!.unpipe(log);
+        log.end();
+        await logClosed;
+      }
     },
   };
 }

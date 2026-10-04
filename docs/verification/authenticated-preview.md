@@ -60,8 +60,9 @@ intentionally excludes outer-session upload credentials.
   team-owned behavior.
 
 The sandbox peer emits cumulative text updates followed by completion. It does not execute the
-prompt. Ordinary inactivity uses the real preservation policy, stops the peer, and restores a new
-generation on the next prompt. Unsupported upstream requests fail visibly; there is no live
+prompt. Stopping a turn cancels its pending updates and confirms cancellation before the next queued
+turn starts. Ordinary inactivity uses the real preservation policy, stops the peer, and restores a
+new generation on the next prompt. Unsupported upstream requests fail visibly; there is no live
 GitHub/provider fallback. Model-account lists are intentionally empty.
 
 Sessions refuse OpenAI and xAI models without a credential, so both scenarios store inert
@@ -127,12 +128,13 @@ it takes roughly half a minute.
 ## Ownership, reset and errors
 
 Only one preview may own a checkout. Use separate git worktrees for concurrent tasks. The launcher
-owns its Next child, host, fixture peers, temporary SQLite files, the agent-browser session it
-opened and the sign-in link server. It never edits `.env.local`, resets tracked source or attaches
-to an existing server. Next would load `packages/web`'s development `.env` files into its server, so
-the launcher blanks every key those files name, following symbolic links as Next does, and then sets
-only the preview's own values. Runtime credentials are independently generated and expire after four
-hours; the launcher also exits at that bound. Stop and rerun to reset everything.
+owns its Next process group (CLI and server workers), host, fixture peers, temporary SQLite files,
+the agent-browser session it opened and the sign-in link server. It never edits `.env.local`, resets
+tracked source or attaches to an existing server. Next would load `packages/web`'s development
+`.env` files into its server, so the launcher blanks every key those files name, following symbolic
+links as Next does, and then sets only the preview's own values. Runtime credentials are
+independently generated and expire after four hours; the launcher also exits at that bound. Stop and
+rerun to reset everything.
 
 The run directory is private (0700) and removed when the run stops. Treat its raw logs as sensitive;
 do not commit or upload it. The CI job uploads only failure screenshots for three days, not traces,
@@ -146,7 +148,8 @@ Temporary databases and raw logs are still removed. The next failure overwrites 
 - **Preflight:** run `npm ci`, use the supported Node/browser version, or select `--browser none`.
 - **Checkout lock:** `.preview/lock.json` records the owning launcher's PID. A lock whose process
   has exited (for example after SIGKILL) is taken over automatically; one whose process still runs
-  stops the start. Stop that preview first.
+  stops the start. Stop that preview first. A persistent `.preview/lock.json.sqlite` serializes lock
+  takeover and release; do not remove it while launchers are running or starting.
 - **Next:** if another `next dev` already serves `packages/web`, Next refuses to start and the
   launcher reports its exit with the log tail. Stop the other server.
 - **Port collision:** the launcher picks free ports just before use. If another process takes one in

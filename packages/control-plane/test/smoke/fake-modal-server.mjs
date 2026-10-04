@@ -73,7 +73,7 @@ export async function startFakeModalServer({
   const bridges = new Map();
   /** @type {Set<ReturnType<typeof setTimeout>>} */
   const timers = new Set();
-  /** @type {Map<WebSocket, { finish: () => void; timer: ReturnType<typeof setTimeout> | null }>} */
+  /** @type {Map<WebSocket, { messageId: string; finish: () => void; timer: ReturnType<typeof setTimeout> | null }>} */
   const pendingTurns = new Map();
   /**
    * @param {() => void} fn
@@ -262,9 +262,21 @@ export async function startFakeModalServer({
               send({ type: "execution_complete", messageId, success: true });
             };
             pendingTurns.set(socket, {
+              messageId,
               finish,
               timer: holdTurns ? null : later(finish, chunkDelayMs),
             });
+          } else if (command.type === "stop") {
+            const turn = pendingTurns.get(socket);
+            clearTurn(socket);
+            if (turn) {
+              send({
+                type: "execution_complete",
+                messageId: turn.messageId,
+                success: false,
+                error: "Task was cancelled",
+              });
+            }
           } else if (command.type === "prepare_preservation") {
             clearTurn(socket);
             state.preservations += 1;
@@ -342,7 +354,8 @@ export async function startFakeModalServer({
   /** @type {Record<string, (body: unknown) => unknown>} */
   const ROUTES = {
     "/api-create-sandbox": handleCreateSandbox,
-    "/api-snapshot-sandbox": () => {
+    "/api-snapshot-sandbox": (body) => {
+      requiredString(body, "sandbox_id");
       state.snapshots += 1;
       return { success: true, data: { image_id: `smoke-image-${state.snapshots}` } };
     },

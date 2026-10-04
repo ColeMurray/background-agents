@@ -9,13 +9,23 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { startPreviewStack } from "./stack";
 import type * as BackendModule from "./backend";
 import type * as FsPromises from "node:fs/promises";
+import type * as Fs from "node:fs";
 import { waitFor } from "./process";
 import { PERSONAS } from "./ready";
 
-const { startBackend, removalFailure } = vi.hoisted(() => ({
+const { startBackend, removalFailure, webLog } = vi.hoisted(() => ({
   startBackend: vi.fn(),
   removalFailure: { path: "" },
+  webLog: { stream: undefined as Fs.WriteStream | undefined },
 }));
+vi.mock("node:fs", async (original) => {
+  const fs = await original<typeof Fs>();
+  return {
+    ...fs,
+    createWriteStream: (...args: Parameters<typeof fs.createWriteStream>) =>
+      (webLog.stream = fs.createWriteStream(...args)),
+  };
+});
 vi.mock("./backend", async (original) => ({
   ...(await original<typeof BackendModule>()),
   startPreviewBackend: startBackend,
@@ -46,7 +56,9 @@ afterEach(async () => {
 });
 
 /** A checkout whose `next` binary is one of this suite's stand-in web servers. */
-async function withNextStandIn(fixture: "serving-next.mjs" | "stalled-next.mjs") {
+async function withNextStandIn(
+  fixture: "serving-next.mjs" | "stalled-next.mjs" | "forking-next.mjs"
+) {
   await mkdir(join(root, "packages/web"), { recursive: true });
   await mkdir(join(root, "node_modules/next/dist/bin"), { recursive: true });
   await symlink(
@@ -227,54 +239,91 @@ it.each(["cancellation", "timeout"])(
   25_000
 );
 
-it("reports Next exiting at once, and never the intentional close", async () => {
-  // The monitor never ticks here, so only the exit report itself can settle a failure.
-  vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
-  try {
-    await withNextStandIn("serving-next.mjs");
-    const identity = { ...member, expiresAtMs: Date.now() + 60_000 };
-    startBackend.mockImplementation(async () => ({
-      origin: "http://127.0.0.1:1",
-      config: { WORKER_URL: "http://127.0.0.1:1", SERVICE_AUTH_SECRET_WEB: "private-key" },
-      identities: Object.fromEntries(PERSONAS.map((persona) => [persona, identity])),
-      aliases: {},
-      modal: { origin: "http://127.0.0.1:2" },
-      signIn: async () => {
-        throw new Error("not signed in by this test");
-      },
-      failures: () => [],
-      close: async () => {},
-    }));
-
-    const closed = await startPreviewStack({ root, scenario: "empty" });
-    let closeFailure: Error | undefined;
-    void closed.failure.then((error) => {
-      closeFailure = error;
-    });
-    await closed.close();
-    await new Promise((resolve) => setImmediate(resolve));
-    expect(closeFailure).toBeUndefined();
-
-    const crashed = await startPreviewStack({ root, scenario: "empty" });
+it.each(["process exit", "log failure"])(
+  "reports Next %s at once and cleans up its worker",
+  async (reason) => {
+    // The monitor never ticks here, so only the exit report itself can settle a failure.
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
     try {
-      const pid = await waitFor("web child PID", async () => {
-        const log = await readFile(crashed.ready.logs.web, "utf8").catch(() => "");
-        return Number(log.match(/owned-child (\d+)/)?.[1]) || false;
+      await withNextStandIn("forking-next.mjs");
+      const identity = { ...member, expiresAtMs: Date.now() + 60_000 };
+      startBackend.mockImplementation(async () => ({
+        origin: "http://127.0.0.1:1",
+        config: { WORKER_URL: "http://127.0.0.1:1", SERVICE_AUTH_SECRET_WEB: "private-key" },
+        identities: Object.fromEntries(PERSONAS.map((persona) => [persona, identity])),
+        aliases: {},
+        modal: { origin: "http://127.0.0.1:2" },
+        signIn: async () => {
+          throw new Error("not signed in by this test");
+        },
+        failures: () => [],
+        close: async () => {},
+      }));
+
+      const closed = await startPreviewStack({ root, scenario: "empty" });
+      let closeFailure: Error | undefined;
+      void closed.failure.then((error) => {
+        closeFailure = error;
       });
-      process.kill(pid, "SIGKILL");
-      let deadline: ReturnType<typeof setTimeout> | undefined;
-      const failure = await Promise.race([
-        crashed.failure,
-        new Promise<Error>((resolve) => {
-          deadline = setTimeout(() => resolve(new Error("Next's exit was never reported")), 10_000);
-        }),
-      ]);
-      clearTimeout(deadline);
-      expect(failure.message).toContain("web: Next exited (SIGKILL)");
+      await closed.close();
+      await new Promise((resolve) => setImmediate(resolve));
+      expect(closeFailure).toBeUndefined();
+
+      const crashed = await startPreviewStack({ root, scenario: "empty" });
+      try {
+        const pid = await waitFor("web child PID", async () => {
+          const log = await readFile(crashed.ready.logs.web, "utf8").catch(() => "");
+          return Number(log.match(/owned-wrapper (\d+)/)?.[1]) || false;
+        });
+        if (reason === "process exit") {
+          process.kill(pid, "SIGKILL");
+        } else {
+          webLog.stream!.destroy(new Error("ENOSPC: injected write failure"));
+        }
+        let deadline: ReturnType<typeof setTimeout> | undefined;
+        const failure = await Promise.race([
+          crashed.failure,
+          new Promise<Error>((resolve) => {
+            deadline = setTimeout(
+              () => resolve(new Error("Next's exit was never reported")),
+              10_000
+            );
+          }),
+        ]);
+        clearTimeout(deadline);
+        expect(failure.message).toContain(
+          reason === "process exit" ? "web: Next exited (SIGKILL)" : "web: Next log failed: ENOSPC"
+        );
+      } finally {
+        await crashed.close();
+      }
+      await expect(fetch(crashed.ready.webOrigin)).rejects.toThrow();
+      await expect(stat(crashed.ready.runDir)).rejects.toMatchObject({ code: "ENOENT" });
+      await expect(stat(join(root, ".preview/lock.json"))).rejects.toMatchObject({
+        code: "ENOENT",
+      });
     } finally {
-      await crashed.close();
+      vi.useRealTimers();
     }
-  } finally {
-    vi.useRealTimers();
-  }
-}, 30_000);
+  },
+  30_000
+);
+
+it("cleans up the backend and files when the Next log cannot open", async () => {
+  await withNextStandIn("serving-next.mjs");
+  let runDir = "";
+  const close = vi.fn(async () => {});
+  startBackend.mockImplementation(async (options: { runDir: string }) => {
+    runDir = options.runDir;
+    await mkdir(join(runDir, "web.log"));
+    return {
+      config: { WORKER_URL: "http://127.0.0.1:1", SERVICE_AUTH_SECRET_WEB: "private-key" },
+      identities: { member },
+      close,
+    };
+  });
+  await expect(startPreviewStack({ root })).rejects.toThrow("web: Next log failed");
+  expect(close).toHaveBeenCalledOnce();
+  await expect(stat(runDir)).rejects.toMatchObject({ code: "ENOENT" });
+  await expect(stat(join(root, ".preview/lock.json"))).rejects.toMatchObject({ code: "ENOENT" });
+});
