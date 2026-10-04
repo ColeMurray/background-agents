@@ -146,33 +146,6 @@ function RefreshDirectory() {
 }
 
 describe("TeamPage", () => {
-  it("keeps a newer detail response visible after an older refresh fails transiently", async () => {
-    renderPage("design");
-    await screen.findByText("Team session buckets");
-    let finishRefresh!: (response: Response) => void;
-    const pendingRefresh = new Promise<Response>((resolve) => {
-      finishRefresh = resolve;
-    });
-    const fetchNormally = fetchMock.getMockImplementation()!;
-    let detailReads = 0;
-    fetchMock.mockImplementation((input, init) => {
-      if (String(input) === "/api/teams/team_design" && ++detailReads === 1) return pendingRefresh;
-      return fetchNormally(input, init);
-    });
-    fireEvent.click(screen.getByRole("button", { name: "Refresh team" }));
-    await waitFor(() => expect(detailReads).toBe(1));
-    stored = { ...stored, name: "Refreshed Design" };
-    fireEvent.click(screen.getByRole("button", { name: "Refresh team" }));
-    await screen.findByRole("heading", { name: "Refreshed Design" });
-    await act(async () => {
-      finishRefresh(Response.json({ error: "Unavailable" }, { status: 503 }));
-      await pendingRefresh;
-    });
-    expect(screen.getByRole("heading", { name: "Refreshed Design" })).toBeInTheDocument();
-    expect(screen.getByText("Team session buckets")).toBeInTheDocument();
-    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
-  });
-
   it.each([false, undefined] as const)(
     "unmounts Overview when fresh canReadTeamSessions is %s despite directory grants",
     async (canReadTeamSessions) => {
@@ -188,9 +161,7 @@ describe("TeamPage", () => {
       expect(screen.getByRole("button", { name: "Automations" })).toBeInTheDocument();
       expect(screen.getByRole("button", { name: "Repositories" })).toBeInTheDocument();
       expect(screen.getByRole("button", { name: "Environments" })).toBeInTheDocument();
-      expect(cache.get(directoryKey)?.data.value.teams[0].capabilities.canReadTeamSessions).toBe(
-        true
-      );
+      expect(cache.get(directoryKey)?.data.teams[0].capabilities.canReadTeamSessions).toBe(true);
     }
   );
 
@@ -209,9 +180,7 @@ describe("TeamPage", () => {
       );
       expect(screen.queryByRole("button", { name: "Automations" })).not.toBeInTheDocument();
       expect(screen.getByRole("button", { name: "Overview" })).toBeInTheDocument();
-      expect(cache.get(directoryKey)?.data.value.teams[0].capabilities.canReadAutomations).toBe(
-        true
-      );
+      expect(cache.get(directoryKey)?.data.teams[0].capabilities.canReadAutomations).toBe(true);
     }
   );
 
@@ -235,11 +204,7 @@ describe("TeamPage", () => {
       expect(await screen.findByRole("alert")).toHaveTextContent("Unable to load team.");
       expect(screen.queryByText("Team session buckets")).not.toBeInTheDocument();
       expect(screen.queryByRole("button", { name: "Overview" })).not.toBeInTheDocument();
-      expect(cache.get(detailKey)?.data).toMatchObject({
-        kind: "denied",
-        error: expect.any(Error),
-      });
-      expect(cache.get(detailKey)?.data.value).toBeUndefined();
+      expect(cache.get(detailKey)?.error).toBeDefined();
     }
   );
 
@@ -324,7 +289,7 @@ describe("TeamPage", () => {
       expect(screen.queryByRole("button", { name: "Automations" })).not.toBeInTheDocument();
       expect(replace).not.toHaveBeenCalled();
       expect(
-        cache.get(unstable_serialize(teamCacheKey(TEAMS_KEY, "user_two")))?.data.value.teams[0]
+        cache.get(unstable_serialize(teamCacheKey(TEAMS_KEY, "user_two")))?.data.teams[0]
       ).toMatchObject({ slug: "design", capabilities: { canReadTeamSessions: false } });
 
       await act(async () => {
@@ -338,45 +303,6 @@ describe("TeamPage", () => {
       expect(screen.queryByText("Team session buckets")).not.toBeInTheDocument();
       expect(cache.get(TEAMS_KEY)).toBeUndefined();
       expect(cache.get("/api/teams/team_design")).toBeUndefined();
-    }
-  );
-
-  it.each(["directory", "detail"] as const)(
-    "does not resurrect work after terminal then transient %s failures",
-    async (source) => {
-      const { cache } = renderPage("design");
-      await screen.findByText("Team session buckets");
-      await waitFor(() => expect(cache.get(detailKey)?.data).toBeDefined());
-      const path = source === "directory" ? TEAMS_KEY : "/api/teams/team_design";
-      const button = source === "directory" ? "Refresh directory" : "Refresh team";
-      const fetchNormally = fetchMock.getMockImplementation()!;
-      for (const status of [403, 503]) {
-        fetchMock.mockImplementation((input, init) =>
-          String(input) === path
-            ? Promise.resolve(Response.json({ error: "Unavailable" }, { status }))
-            : fetchNormally(input, init)
-        );
-        fireEvent.click(screen.getByRole("button", { name: button }));
-        await waitFor(() =>
-          expect(
-            (status === 403
-              ? cache.get(source === "directory" ? directoryKey : detailKey)?.data?.error
-              : cache.get(source === "directory" ? directoryKey : detailKey)?.error
-            )?.message
-          ).toContain(String(status))
-        );
-        expect(screen.getByRole("alert")).toHaveTextContent("Unable to load team.");
-        expect(screen.queryByText("Team session buckets")).not.toBeInTheDocument();
-        expect(screen.queryByRole("button", { name: "Overview" })).not.toBeInTheDocument();
-        expect(screen.queryByRole("button", { name: "Automations" })).not.toBeInTheDocument();
-        expect(cache.get(source === "directory" ? directoryKey : detailKey)?.data.kind).toBe(
-          "denied"
-        );
-      }
-      fetchMock.mockImplementation(fetchNormally);
-      fireEvent.click(screen.getByRole("button", { name: button }));
-      await screen.findByText("Team session buckets");
-      expect(screen.queryByRole("alert")).not.toBeInTheDocument();
     }
   );
 
@@ -405,17 +331,17 @@ describe("TeamPage", () => {
       expect(screen.queryByText("Team not found.")).not.toBeInTheDocument();
       expect(screen.getByRole("textbox", { name: "Slug" })).toHaveValue("product-design");
       expect(replace).toHaveBeenCalledWith("/teams/product-design");
-      expect(cache.get(directoryKey)?.data?.value.teams).toContainEqual(stored);
-      expect(cache.get(directoryKey)?.data?.value.teams).toContainEqual(
+      expect(cache.get(directoryKey)?.data?.teams).toContainEqual(stored);
+      expect(cache.get(directoryKey)?.data?.teams).toContainEqual(
         expect.objectContaining({ id: "team_other", slug: "engineering" })
       );
-      expect(cache.get(detailKey)?.data.value).toEqual(stored);
+      expect(cache.get(detailKey)?.data).toEqual(stored);
       expect(fetchMock.mock.calls.filter(([path]) => path === "/api/teams")).toHaveLength(1);
 
       if (reuseOldSlug) {
         fireEvent.click(screen.getByRole("button", { name: "Refresh directory" }));
         await waitFor(() =>
-          expect(cache.get(directoryKey)?.data?.value.teams).toContainEqual(reusedSlugTeam)
+          expect(cache.get(directoryKey)?.data?.teams).toContainEqual(reusedSlugTeam)
         );
         expect(screen.getByRole("heading", { level: 1, name: "Design" })).toBeInTheDocument();
         expect(screen.getByRole("textbox", { name: "Slug" })).toHaveValue("product-design");
@@ -440,7 +366,7 @@ describe("TeamPage", () => {
         />
       );
 
-      expect(cache.get(directoryKey)?.data?.value.teams).toContainEqual(
+      expect(cache.get(directoryKey)?.data?.teams).toContainEqual(
         expect.objectContaining({ id: "team_design", slug: "product-design" })
       );
       expect(screen.getByRole("heading", { level: 1, name: "Design" })).toBeInTheDocument();
@@ -486,11 +412,16 @@ describe("TeamPage", () => {
         await pendingRefresh;
       });
 
-      expect(cache.get(detailKey)?.data.value).toEqual(stored);
-      expect(cache.get(directoryKey)?.data?.value.teams).toContainEqual(stored);
-      expect(screen.getByRole("heading", { level: 1, name: "Design" })).toBeInTheDocument();
-      expect(screen.getByRole("textbox", { name: "Slug" })).toHaveValue("product-design");
-      expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+      expect(cache.get(directoryKey)?.data?.teams).toContainEqual(stored);
+      expect(cache.get(detailKey)?.data).toEqual(stored);
+      if (refresh === "forbidden") {
+        expect(screen.getByRole("alert")).toHaveTextContent("Unable to load team.");
+        expect(screen.queryByRole("button", { name: "Save changes" })).not.toBeInTheDocument();
+      } else {
+        expect(screen.getByRole("heading", { level: 1, name: "Design" })).toBeInTheDocument();
+        expect(screen.getByRole("textbox", { name: "Slug" })).toHaveValue("product-design");
+        expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+      }
     }
   );
 });

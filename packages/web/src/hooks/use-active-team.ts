@@ -17,7 +17,6 @@ const ACTIVE_TEAM_STORAGE_KEY = "open-inspect-active-team";
 function useActiveTeamState() {
   const { data: session } = useAuthSession();
   const memberships = useMeTeams();
-  const { canListAllTeams } = memberships;
   const [selection, setSelection] = useState<string | null>(null);
   const [hydratedUserId, setHydratedUserId] = useState<string | null>(null);
   const userId = session?.user.id ?? null;
@@ -25,6 +24,7 @@ function useActiveTeamState() {
   const error =
     memberships.hasData && isRetryableTeamError(memberships.error) ? undefined : memberships.error;
   const teams = error ? [] : memberships.teams.filter((team) => team.archivedAt === null);
+  const canListAllTeams = error ? false : memberships.canListAllTeams;
   const loading = memberships.loading || hydratedUserId !== userId;
 
   useEffect(() => {

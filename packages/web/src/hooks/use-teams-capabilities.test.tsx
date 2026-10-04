@@ -74,36 +74,6 @@ describe("team response defaults and capabilities", () => {
     }
   );
 
-  it.each([null, { canListAllTeams: "true" }])(
-    "denies the entire membership snapshot for invalid workspace capabilities %j",
-    async (capabilities) => {
-      vi.mocked(browserApiFetch).mockResolvedValue(
-        Response.json({
-          teams: [membership],
-          requireTeamOnCreate: true,
-          capabilities: { canListAllTeams: true },
-        })
-      );
-      const { result } = renderHook(() => ({ mine: useMeTeams(), mutate: useSWRConfig().mutate }), {
-        wrapper,
-      });
-      await waitFor(() => expect(result.current.mine.canListAllTeams).toBe(true));
-      vi.mocked(browserApiFetch).mockResolvedValue(
-        Response.json({ teams: [membership], capabilities })
-      );
-      await act(async () => {
-        await result.current.mutate(meTeamsKey("user_one"));
-      });
-      expect(result.current.mine).toMatchObject({
-        teams: [],
-        hasData: false,
-        canListAllTeams: false,
-        requireTeamOnCreate: false,
-      });
-      expect(result.current.mine.error).toMatchObject({ disposition: "invalid-payload" });
-    }
-  );
-
   it.each([undefined, null, {}, { capabilities: null }, { capabilities: {} }])(
     "denies all team grants when the capability response is absent: %j",
     (team) => {

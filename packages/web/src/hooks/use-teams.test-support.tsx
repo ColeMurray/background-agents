@@ -56,7 +56,7 @@ export const member = {
 
 export const detailPath = "/api/teams/team_design";
 
-export function snapshotResponse(path: string) {
+export function teamApiResponse(path: string) {
   if (path === ME_TEAMS_API_PATH)
     return Response.json({
       teams: [readableTeam],

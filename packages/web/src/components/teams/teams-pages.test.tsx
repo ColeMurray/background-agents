@@ -208,24 +208,19 @@ describe("Teams index", () => {
 });
 
 describe("Team page tabs", () => {
-  it.each(["absent", "denied"] as const)(
-    "does not populate a %s directory snapshot when reconciling a canonical slug",
-    async (state) => {
-      const cache = new Map();
-      const key = unstable_serialize(teamCacheKey(TEAMS_KEY, "user_one"));
-      const snapshot =
-        state === "denied" ? { kind: "denied", error: new Error("Forbidden") } : undefined;
-      if (snapshot) cache.set(key, { data: snapshot });
-      mocks.currentTeam = { ...team, slug: "product-design" };
-      render(
-        <SWRConfig value={{ provider: () => cache }}>
-          <TeamPage slug="design" />
-        </SWRConfig>
-      );
-      await waitFor(() => expect(mocks.replace).toHaveBeenCalledWith("/teams/product-design"));
-      expect(cache.get(key)?.data).toBe(snapshot);
-    }
-  );
+  it("does not populate an absent directory when reconciling a canonical slug", async () => {
+    const cache = new Map();
+    mocks.currentTeam = { ...team, slug: "product-design" };
+    render(
+      <SWRConfig value={{ provider: () => cache }}>
+        <TeamPage slug="design" />
+      </SWRConfig>
+    );
+    await waitFor(() => expect(mocks.replace).toHaveBeenCalledWith("/teams/product-design"));
+    expect(
+      cache.get(unstable_serialize(teamCacheKey(TEAMS_KEY, "user_one")))?.data
+    ).toBeUndefined();
+  });
 
   it("follows navigation to a different active team", () => {
     mocks.teams = [

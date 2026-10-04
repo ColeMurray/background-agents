@@ -1,169 +1,256 @@
 // @vitest-environment jsdom
 
-import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
-import { useSWRConfig } from "swr";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { act, renderHook, waitFor } from "@testing-library/react";
+import type { ReactNode } from "react";
+import { SWRConfig, unstable_serialize, useSWRConfig } from "swr";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { useAuthSession } from "@/lib/auth-session";
 import { browserApiFetch } from "@/lib/browser-api-fetch";
 import { ME_TEAMS_API_PATH, meTeamsKey } from "@/lib/me-teams-cache";
-import { isRetryableTeamError, TeamRequestError } from "@/lib/team-snapshot";
 import { useTeamCapabilities } from "./use-team-capabilities";
 import {
   TEAMS_KEY,
+  isRetryableTeamError,
   teamCacheKey,
   useMeTeams,
   useTeam,
   useTeamMembers,
   useTeams,
 } from "./use-teams";
-import {
-  detailPath,
-  member,
-  membership,
-  readableTeam,
-  snapshotResponse,
-  viewerSession,
-  wrapper,
-} from "./use-teams.test-support";
 
 vi.mock("@/lib/auth-session", () => ({ useAuthSession: vi.fn() }));
 vi.mock("@/lib/browser-api-fetch", () => ({ browserApiFetch: vi.fn() }));
 
-function useSnapshots() {
-  return {
-    mine: useMeTeams(),
-    directory: useTeams(),
-    detail: useTeam(membership.id),
-    mutate: useSWRConfig().mutate,
-  };
-}
+const wrapper = ({ children }: { children: ReactNode }) => (
+  <SWRConfig value={{ provider: () => new Map(), dedupingInterval: 0, shouldRetryOnError: false }}>
+    {children}
+  </SWRConfig>
+);
 
-const snapshotKeys = [
-  meTeamsKey("user_one"),
-  teamCacheKey(TEAMS_KEY, "user_one"),
-  teamCacheKey(detailPath, "user_one"),
-];
+const membership = {
+  id: "team_design",
+  slug: "design",
+  name: "Design",
+  description: null,
+  joinPolicy: "invite_only",
+  defaultVisibility: "team",
+  defaultEnvironmentId: null,
+  grantsVersion: 0,
+  archivedAt: null,
+  createdAt: 1,
+  updatedAt: 1,
+  memberCount: 1,
+  role: "member",
+};
 
 beforeEach(() => {
-  vi.resetAllMocks();
-  vi.mocked(useAuthSession).mockReturnValue(viewerSession);
+  vi.clearAllMocks();
+  vi.mocked(useAuthSession).mockReturnValue({ data: null, status: "unauthenticated" });
 });
-afterEach(cleanup);
 
 describe("team hooks", () => {
-  it.each([408, 429, 503, "network"] as const)(
-    "retains successful public snapshots after transient refresh failure %s",
-    async (failure) => {
-      vi.mocked(browserApiFetch).mockImplementation(async (path) => snapshotResponse(path));
-      const { result } = renderHook(useSnapshots, { wrapper });
-      await waitFor(() => {
-        expect(result.current.mine.hasData).toBe(true);
-        expect(result.current.directory.teams).toHaveLength(1);
-        expect(result.current.detail.team).toBeDefined();
+  it.each([undefined, false, true])(
+    "loads membership responses with requireTeamOnCreate=%s without a decoder error",
+    async (requireTeamOnCreate) => {
+      vi.mocked(useAuthSession).mockReturnValue({
+        data: { user: { id: "user_one", name: "Ada", email: "ada@example.com", image: null } },
+        status: "authenticated",
       });
-      const { mine, directory, detail } = result.current;
-      vi.mocked(browserApiFetch).mockImplementation(async () => {
-        if (failure === "network") throw new TypeError("Network unavailable");
-        return Response.json({ error: "Unavailable" }, { status: failure });
-      });
-      await act(async () => {
-        await Promise.all(snapshotKeys.map((key) => result.current.mutate(key)));
-      });
-
-      expect(result.current.mine.teams).toBe(mine.teams);
-      expect(result.current.directory.teams).toBe(directory.teams);
-      expect(result.current.detail.team).toBe(detail.team);
-      expect(result.current.mine).toMatchObject({
-        hasData: true,
-        loading: false,
-        requireTeamOnCreate: true,
-        canListAllTeams: true,
-      });
-      for (const snapshot of [
-        result.current.mine,
-        result.current.directory,
-        result.current.detail,
-      ]) {
-        expect(snapshot.loading).toBe(false);
-        expect(snapshot.error).toBeInstanceOf(TeamRequestError);
-        expect(isRetryableTeamError(snapshot.error)).toBe(true);
-      }
+      vi.mocked(browserApiFetch).mockResolvedValue(
+        Response.json({
+          teams: [],
+          ...(requireTeamOnCreate === undefined ? {} : { requireTeamOnCreate }),
+        })
+      );
+      const { result } = renderHook(useMeTeams, { wrapper });
+      await waitFor(() => expect(result.current.loading).toBe(false));
+      expect(result.current.error).toBeUndefined();
+      expect(result.current.hasData).toBe(true);
+      expect(result.current.teams).toEqual([]);
+      expect(result.current.requireTeamOnCreate).toBe(requireTeamOnCreate ?? false);
     }
   );
 
-  it.each([401, 403, 404, "invalid-json", "invalid-schema"] as const)(
-    "hides denied public snapshots after %s until a decoded success",
+  it.each([503, 401, 403, "network", "invalid-json", "invalid-schema"] as const)(
+    "exposes successful cached memberships alongside refresh failure %s",
     async (failure) => {
-      vi.mocked(browserApiFetch).mockImplementation(async (path) => snapshotResponse(path));
-      const { result } = renderHook(useSnapshots, { wrapper });
-      await waitFor(() => {
-        expect(result.current.mine.hasData).toBe(true);
-        expect(result.current.directory.teams).toHaveLength(1);
-        expect(result.current.detail.team).toBeDefined();
+      vi.mocked(useAuthSession).mockReturnValue({
+        data: { user: { id: "user_one", name: "Ada" } },
+        status: "authenticated",
       });
-      vi.mocked(browserApiFetch).mockImplementation(async () => {
-        if (failure === "invalid-json") return new Response("Invalid JSON");
-        if (failure === "invalid-schema") return Response.json({ teams: null });
-        return Response.json({ error: "Denied" }, { status: failure });
-      });
-      await act(async () => {
-        await Promise.all(snapshotKeys.map((key) => result.current.mutate(key)));
-      });
-      const denials = [
-        result.current.mine.error,
-        result.current.directory.error,
-        result.current.detail.error,
-      ];
-      expect(result.current.mine).toMatchObject({
-        teams: [],
-        hasData: false,
-        loading: false,
-        requireTeamOnCreate: false,
-        canListAllTeams: false,
-      });
-      expect(result.current.directory.teams).toEqual([]);
-      expect(result.current.detail.team).toBeUndefined();
-      for (const error of denials) {
-        expect(error).toBeInstanceOf(TeamRequestError);
-        expect(error).toMatchObject({
-          disposition: typeof failure === "number" ? "authoritative-denial" : "invalid-payload",
-        });
-        expect(isRetryableTeamError(error)).toBe(false);
-      }
-
-      vi.mocked(browserApiFetch).mockResolvedValue(Response.json({}, { status: 429 }));
-      await act(async () => {
-        await Promise.all(snapshotKeys.map((key) => result.current.mutate(key)));
+      vi.mocked(browserApiFetch).mockResolvedValue(
+        Response.json({ teams: [membership], requireTeamOnCreate: true })
+      );
+      const { result } = renderHook(() => ({ mine: useMeTeams(), ...useSWRConfig() }), {
+        wrapper,
       });
       expect(result.current.mine.hasData).toBe(false);
-      expect(result.current.mine.teams).toEqual([]);
-      expect(result.current.mine.requireTeamOnCreate).toBe(false);
-      expect(result.current.mine.canListAllTeams).toBe(false);
-      expect(result.current.directory.teams).toEqual([]);
-      expect(result.current.detail.team).toBeUndefined();
-      expect(result.current.mine.error).toBe(denials[0]);
-      expect(result.current.directory.error).toBe(denials[1]);
-      expect(result.current.detail.error).toBe(denials[2]);
-
-      vi.mocked(browserApiFetch).mockImplementation(async (path) => snapshotResponse(path));
-      await act(async () => {
-        await Promise.all(snapshotKeys.map((key) => result.current.mutate(key)));
-      });
-      expect(result.current.mine).toMatchObject({
-        hasData: true,
+      await waitFor(() => expect(result.current.mine.hasData).toBe(true));
+      const cachedTeams = result.current.mine.teams;
+      const cachedData = result.current.cache.get(unstable_serialize(meTeamsKey("user_one")))?.data;
+      expect(cachedData).toEqual({
+        teams: [membership],
+        capabilities: { canListAllTeams: false },
         requireTeamOnCreate: true,
-        canListAllTeams: true,
-        error: undefined,
       });
-      expect(result.current.directory.teams[0]?.name).toBe("Design");
-      expect(result.current.detail.team?.name).toBe("Design");
-      expect(result.current.directory.error).toBeUndefined();
-      expect(result.current.detail.error).toBeUndefined();
+      expect(result.current.cache.get(ME_TEAMS_API_PATH)).toBeUndefined();
+      expect(browserApiFetch).toHaveBeenCalledWith(ME_TEAMS_API_PATH);
+
+      vi.mocked(browserApiFetch).mockImplementation(async () => {
+        if (failure === "network") throw new TypeError("Network unavailable");
+        if (failure === "invalid-json") return new Response("Invalid JSON");
+        if (failure === "invalid-schema") return Response.json({ teams: null });
+        return Response.json({ error: "Unavailable" }, { status: failure });
+      });
+      await act(async () => {
+        await result.current.mutate(meTeamsKey("user_one"));
+      });
+
+      expect(result.current.mine.error).toBeInstanceOf(Error);
+      expect(isRetryableTeamError(result.current.mine.error)).toBe(
+        failure === 503 || failure === "network"
+      );
+      expect(result.current.mine.teams).toBe(cachedTeams);
+      expect(result.current.mine.requireTeamOnCreate).toBe(true);
+      expect(result.current.mine.hasData).toBe(true);
+      expect(result.current.mine.loading).toBe(false);
+      expect(result.current.cache.get(unstable_serialize(meTeamsKey("user_one")))?.data).toBe(
+        cachedData
+      );
+    }
+  );
+
+  it.each([undefined, null, new Error("Unknown failure"), { retryable: true }])(
+    "does not classify an unrecognized error %j as retryable",
+    (error) => {
+      expect(isRetryableTeamError(error)).toBe(false);
+    }
+  );
+
+  it("isolates cached memberships and errors on account switch and signout", async () => {
+    vi.mocked(useAuthSession).mockReturnValue({
+      data: { user: { id: "user_one", name: "Ada" } },
+      status: "authenticated",
+    });
+    vi.mocked(browserApiFetch).mockResolvedValue(
+      Response.json({ teams: [membership], requireTeamOnCreate: true })
+    );
+    const { result, rerender } = renderHook(
+      () => ({ mine: useMeTeams(), mutate: useSWRConfig().mutate }),
+      {
+        wrapper: ({ children }) => (
+          <SWRConfig
+            value={{
+              provider: () => new Map(),
+              dedupingInterval: 0,
+              shouldRetryOnError: false,
+              keepPreviousData: true,
+            }}
+          >
+            {children}
+          </SWRConfig>
+        ),
+      }
+    );
+    await waitFor(() => expect(result.current.mine.hasData).toBe(true));
+    vi.mocked(browserApiFetch).mockResolvedValue(
+      Response.json({ error: "Unavailable" }, { status: 503 })
+    );
+    await act(async () => {
+      await result.current.mutate(meTeamsKey("user_one"));
+    });
+    expect(result.current.mine.error).toBeInstanceOf(Error);
+
+    let resolveMemberships: ((response: Response) => void) | undefined;
+    vi.mocked(browserApiFetch).mockReturnValue(
+      new Promise((resolve) => {
+        resolveMemberships = resolve;
+      })
+    );
+    vi.mocked(useAuthSession).mockReturnValue({
+      data: { user: { id: "user_two", name: "Grace" } },
+      status: "authenticated",
+    });
+    rerender();
+    expect(result.current.mine).toMatchObject({
+      teams: [],
+      requireTeamOnCreate: false,
+      loading: true,
+      error: undefined,
+      hasData: false,
+    });
+    await act(async () => {
+      resolveMemberships?.(
+        Response.json({ teams: [{ ...membership, id: "team_platform", name: "Platform" }] })
+      );
+    });
+    await waitFor(() => expect(result.current.mine.hasData).toBe(true));
+    expect(result.current.mine.teams.map((team) => team.id)).toEqual(["team_platform"]);
+    expect(result.current.mine.requireTeamOnCreate).toBe(false);
+
+    vi.mocked(useAuthSession).mockReturnValue({ data: null, status: "unauthenticated" });
+    rerender();
+    expect(result.current.mine).toMatchObject({
+      teams: [],
+      requireTeamOnCreate: false,
+      loading: false,
+      error: undefined,
+      hasData: false,
+    });
+    expect(browserApiFetch).toHaveBeenCalledTimes(3);
+  });
+
+  it.each(["account-switch", "signout"] as const)(
+    "does not expose an old in-flight membership response after %s",
+    async (transition) => {
+      vi.mocked(useAuthSession).mockReturnValue({
+        data: { user: { id: "user_one", name: "Ada" } },
+        status: "authenticated",
+      });
+      let resolveOldMemberships: ((response: Response) => void) | undefined;
+      vi.mocked(browserApiFetch).mockReturnValueOnce(
+        new Promise((resolve) => {
+          resolveOldMemberships = resolve;
+        })
+      );
+      vi.mocked(browserApiFetch).mockResolvedValue(Response.json({ teams: [] }));
+      const { result, rerender } = renderHook(
+        () => ({ mine: useMeTeams(), cache: useSWRConfig().cache }),
+        { wrapper }
+      );
+      expect(result.current.mine.hasData).toBe(false);
+
+      vi.mocked(useAuthSession).mockReturnValue(
+        transition === "account-switch"
+          ? { data: { user: { id: "user_two", name: "Grace" } }, status: "authenticated" }
+          : { data: null, status: "unauthenticated" }
+      );
+      rerender();
+      if (transition === "account-switch") {
+        await waitFor(() => expect(result.current.mine.hasData).toBe(true));
+      }
+      await act(async () => {
+        resolveOldMemberships?.(Response.json({ teams: [membership], requireTeamOnCreate: true }));
+      });
+      await waitFor(() =>
+        expect(result.current.cache.get(unstable_serialize(meTeamsKey("user_one")))?.data).toEqual({
+          teams: [membership],
+          capabilities: { canListAllTeams: false },
+          requireTeamOnCreate: true,
+        })
+      );
+      expect(result.current.mine).toMatchObject({
+        teams: [],
+        requireTeamOnCreate: false,
+        loading: false,
+        error: undefined,
+        hasData: transition === "account-switch",
+      });
+      expect(browserApiFetch).toHaveBeenCalledTimes(transition === "account-switch" ? 2 : 1);
     }
   );
 
   it("preserves slug_taken on create conflicts", async () => {
-    vi.mocked(useAuthSession).mockReturnValue({ data: null, status: "unauthenticated" });
     vi.mocked(browserApiFetch).mockResolvedValue(
       Response.json({ error: "Team slug already exists", code: "slug_taken" }, { status: 409 })
     );
@@ -174,19 +261,17 @@ describe("team hooks", () => {
   });
 
   it("preserves last_lead on removal conflicts", async () => {
-    vi.mocked(useAuthSession).mockReturnValue({ data: null, status: "unauthenticated" });
     vi.mocked(browserApiFetch).mockResolvedValue(
       Response.json(
         { error: "The last team lead cannot be removed", code: "last_lead" },
         { status: 409 }
       )
     );
-    const { result } = renderHook(() => useTeamMembers(membership.id), { wrapper });
+    const { result } = renderHook(() => useTeamMembers("team_design"), { wrapper });
     await expect(act(() => result.current.removeMember("user_one"))).rejects.toThrow("last_lead");
   });
 
   it("preserves a server join conflict without inferring joinability", async () => {
-    vi.mocked(useAuthSession).mockReturnValue({ data: null, status: "unauthenticated" });
     vi.mocked(browserApiFetch).mockResolvedValue(
       Response.json(
         { error: "Team join is no longer available", code: "join_unavailable" },
@@ -200,31 +285,93 @@ describe("team hooks", () => {
     expect(browserApiFetch).toHaveBeenCalledWith("/api/teams/team%2Fone/join", { method: "POST" });
   });
 
-  it("does not load disabled membership or directory hooks", () => {
-    const { result } = renderHook(() => ({ mine: useMeTeams(false), directory: useTeams(false) }), {
-      wrapper,
+  it("does not load memberships while disabled", () => {
+    vi.mocked(useAuthSession).mockReturnValue({
+      data: { user: { id: "user_one", name: "Ada", email: "ada@example.com", image: null } },
+      status: "authenticated",
     });
+    const { result } = renderHook(() => useMeTeams(false), { wrapper });
     expect(browserApiFetch).not.toHaveBeenCalled();
-    expect(result.current.mine).toMatchObject({ loading: false, hasData: false, teams: [] });
-    expect(result.current.directory.loading).toBe(false);
-    expect(result.current.directory.teams).toEqual([]);
+    expect(result.current.loading).toBe(false);
+    expect(result.current.hasData).toBe(false);
   });
 
-  it("refreshes lists and members and exposes the server's joined team", async () => {
+  it("does not load the team directory while disabled", () => {
+    vi.mocked(useAuthSession).mockReturnValue({
+      data: { user: { id: "user_one", name: "Ada", email: "ada@example.com", image: null } },
+      status: "authenticated",
+    });
+    renderHook(() => useTeams(false), { wrapper });
+    expect(browserApiFetch).not.toHaveBeenCalled();
+  });
+
+  it("loads legacy memberships without capabilities while denying privileged team controls", async () => {
+    vi.mocked(useAuthSession).mockReturnValue({
+      data: { user: { id: "user_one", name: "Ada", email: "ada@example.com", image: null } },
+      status: "authenticated",
+    });
+    vi.mocked(browserApiFetch).mockResolvedValue(
+      Response.json({
+        requireTeamOnCreate: false,
+        teams: [
+          {
+            id: "team_design",
+            slug: "design",
+            name: "Design",
+            description: null,
+            joinPolicy: "invite_only",
+            defaultVisibility: "workspace",
+            defaultEnvironmentId: null,
+            grantsVersion: 0,
+            archivedAt: null,
+            createdAt: 1,
+            updatedAt: 1,
+            memberCount: 1,
+            role: "lead",
+          },
+        ],
+      })
+    );
+    const { result } = renderHook(useMeTeams, { wrapper });
+    await waitFor(() => expect(result.current.teams).toHaveLength(1));
+    const capabilities = renderHook(() => useTeamCapabilities(result.current.teams[0]));
+    expect(capabilities.result.current).toMatchObject({
+      canEditMetadata: false,
+      canManageMembers: false,
+      canArchive: false,
+    });
+  });
+
+  it("refreshes all-team and membership lists and caches the server's joined team", async () => {
+    vi.mocked(useAuthSession).mockReturnValue({
+      data: { user: { id: "user_one", name: "Ada", email: "ada@example.com", image: null } },
+      status: "authenticated",
+    });
     let joined = false;
     const team = () => ({
-      ...readableTeam,
+      id: "team_design",
+      slug: "design",
+      name: "Design",
+      description: null,
       joinPolicy: "open",
+      defaultVisibility: "team",
+      defaultEnvironmentId: null,
+      grantsVersion: 0,
+      archivedAt: null,
+      createdAt: 1,
+      updatedAt: 1,
       memberCount: joined ? 2 : 1,
-      grantsVersion: joined ? 1 : 0,
       capabilities: {
-        ...readableTeam.capabilities,
-        canReadTeamSessions: joined,
-        canReadTeamRepositories: false,
-        canReadTeamEnvironments: joined,
-        canReadAutomations: false,
         canJoin: !joined,
         canLeave: joined,
+        canEditMetadata: false,
+        canManageMembers: false,
+        canManageRepositories: false,
+        canManageBindings: false,
+        canManageAutomations: false,
+        canManageEnvironments: false,
+        canManageSecrets: false,
+        canArchive: false,
       },
     });
     vi.mocked(browserApiFetch).mockImplementation(async (path, init) => {
@@ -232,118 +379,53 @@ describe("team hooks", () => {
         joined = true;
         return Response.json(team());
       }
-      if (path === TEAMS_KEY) return Response.json({ teams: [team()] });
-      if (path === ME_TEAMS_API_PATH) return Response.json({ teams: joined ? [team()] : [] });
-      if (path.endsWith("/members")) return Response.json({ members: joined ? [member] : [] });
+      if (path === "/api/teams") return Response.json({ teams: [team()] });
+      if (path === "/api/me/teams")
+        return Response.json({ teams: joined ? [{ ...team(), role: "member" }] : [] });
       return Response.json(team());
     });
     const { result } = renderHook(
-      () => {
-        const detail = useTeam(membership.id);
-        return {
-          all: useTeams(),
-          mine: useMeTeams(),
-          detail,
-          members: useTeamMembers(membership.id),
-          capabilities: useTeamCapabilities(detail.team),
-        };
-      },
+      () => ({ all: useTeams(), mine: useMeTeams(), detail: useTeam("team_design") }),
       { wrapper }
     );
-    await waitFor(() => {
-      expect(result.current.detail.team?.memberCount).toBe(1);
-      expect(result.current.all.teams).toHaveLength(1);
-      expect(result.current.mine.hasData).toBe(true);
-      expect(result.current.members.loading).toBe(false);
-    });
+    await waitFor(() => expect(result.current.detail.team?.memberCount).toBe(1));
     expect(result.current.mine.teams).toEqual([]);
-    await act(() => result.current.all.joinTeam(membership.id));
+    await act(() => result.current.all.joinTeam("team_design"));
     expect(result.current.all.teams[0]?.memberCount).toBe(2);
     expect(result.current.mine.teams[0]?.role).toBe("member");
-    expect(result.current.detail.team?.grantsVersion).toBe(1);
-    expect(result.current.members.members).toHaveLength(1);
-    expect(result.current.capabilities).toMatchObject({
-      canJoin: false,
-      canLeave: true,
-      canReadTeamSessions: true,
-      canReadTeamRepositories: false,
-      canReadTeamEnvironments: true,
-      canReadAutomations: false,
-    });
-  });
-
-  it("reconciles a renamed team and its grants without replacing unrelated directory entries", async () => {
-    const otherTeam = { ...readableTeam, id: "team_other", slug: "engineering" };
-    const updated = {
-      ...readableTeam,
-      slug: "product-design",
-      name: "Product Design",
-      grantsVersion: 3,
-      updatedAt: 2,
-      capabilities: {
-        ...readableTeam.capabilities,
-        canReadTeamSessions: false,
-        canReadTeamRepositories: true,
-        canEditMetadata: true,
-      },
-    };
-    let written = false;
-    vi.mocked(browserApiFetch).mockImplementation(async (path, init) => {
-      if (init?.method === "PATCH") {
-        written = true;
-        return Response.json(updated);
-      }
-      if (path === TEAMS_KEY) return Response.json({ teams: [readableTeam, otherTeam] });
-      if (path === ME_TEAMS_API_PATH)
-        return Response.json({ teams: [written ? updated : readableTeam] });
-      return Response.json(readableTeam);
-    });
-    const { result } = renderHook(useSnapshots, { wrapper });
-    await waitFor(() => {
-      expect(result.current.directory.teams).toHaveLength(2);
-      expect(result.current.detail.team).toBeDefined();
-      expect(result.current.mine.hasData).toBe(true);
-    });
-    const unrelated = result.current.directory.teams[1];
-    await act(() => result.current.detail.updateTeam({ slug: updated.slug, name: updated.name }));
-    expect(result.current.detail.team).toMatchObject({
-      slug: updated.slug,
-      name: updated.name,
-      grantsVersion: 3,
-      capabilities: updated.capabilities,
-    });
-    expect(result.current.directory.teams).toHaveLength(2);
-    expect(result.current.directory.teams.find(({ id }) => id === membership.id)).toBe(
-      result.current.detail.team
-    );
-    expect(result.current.directory.teams.find(({ id }) => id === otherTeam.id)).toBe(unrelated);
-    expect(result.current.mine.teams[0]?.name).toBe(updated.name);
-    expect(
-      vi.mocked(browserApiFetch).mock.calls.filter(([path]) => path === TEAMS_KEY)
-    ).toHaveLength(1);
+    expect(result.current.detail.team?.capabilities?.canJoin).toBe(false);
   });
 
   it("does not seed a partial directory when updating from a detail-only route", async () => {
+    vi.mocked(useAuthSession).mockReturnValue({
+      data: { user: { id: "user_one", name: "Ada" } },
+      status: "authenticated",
+    });
     const updated = { ...membership, slug: "product-design", updatedAt: 2 };
     const otherTeam = { ...membership, id: "team_other", slug: "engineering" };
     vi.mocked(browserApiFetch).mockImplementation(async (path, init) => {
       if (init?.method === "PATCH") return Response.json(updated);
-      if (path === TEAMS_KEY) return Response.json({ teams: [updated, otherTeam] });
+      if (path === "/api/teams") return Response.json({ teams: [updated, otherTeam] });
       return Response.json(membership);
     });
     const { result, rerender } = renderHook(
       ({ directoryEnabled }) => ({
         detail: useTeam(membership.id),
         directory: useTeams(directoryEnabled),
+        cache: useSWRConfig().cache,
       }),
       { initialProps: { directoryEnabled: false }, wrapper }
     );
     await waitFor(() => expect(result.current.detail.team?.id).toBe(membership.id));
-    await act(() => result.current.detail.updateTeam({ slug: updated.slug }));
-    expect(result.current.directory.teams).toEqual([]);
-    expect(result.current.detail.team?.slug).toBe(updated.slug);
+
+    await act(() => result.current.detail.updateTeam({ slug: "product-design" }));
+
     expect(
-      vi.mocked(browserApiFetch).mock.calls.filter(([path]) => path === TEAMS_KEY)
+      result.current.cache.get(unstable_serialize(teamCacheKey(TEAMS_KEY, "user_one")))?.data
+    ).toBeUndefined();
+    expect(result.current.detail.team?.slug).toBe("product-design");
+    expect(
+      vi.mocked(browserApiFetch).mock.calls.filter(([path]) => path === "/api/teams")
     ).toHaveLength(0);
 
     rerender({ directoryEnabled: true });
@@ -354,7 +436,11 @@ describe("team hooks", () => {
     ]);
   });
 
-  it("revalidates a mounted directory with no data when a PATCH commits", async () => {
+  it("revalidates a mounted directory that has no data when a PATCH commits", async () => {
+    vi.mocked(useAuthSession).mockReturnValue({
+      data: { user: { id: "user_one", name: "Ada" } },
+      status: "authenticated",
+    });
     const updated = { ...membership, slug: "product-design", updatedAt: 2 };
     const otherTeam = { ...membership, id: "team_other", slug: "engineering" };
     let finishInitialDirectory!: (response: Response) => void;
@@ -364,7 +450,7 @@ describe("team hooks", () => {
     let directoryRequests = 0;
     vi.mocked(browserApiFetch).mockImplementation(async (path, init) => {
       if (init?.method === "PATCH") return Response.json(updated);
-      if (path === TEAMS_KEY) {
+      if (path === "/api/teams") {
         directoryRequests += 1;
         return directoryRequests === 1
           ? initialDirectory
@@ -378,83 +464,41 @@ describe("team hooks", () => {
     );
     await waitFor(() => expect(result.current.detail.team?.id).toBe(membership.id));
     expect(result.current.directory.teams).toEqual([]);
-    await act(() => result.current.detail.updateTeam({ slug: updated.slug }));
+
+    await act(() => result.current.detail.updateTeam({ slug: "product-design" }));
+
     expect(directoryRequests).toBe(2);
     expect(result.current.directory.teams.map(({ id }) => id)).toEqual([
       membership.id,
       otherTeam.id,
     ]);
-    expect(result.current.directory.teams[0]?.slug).toBe(updated.slug);
+    expect(result.current.directory.teams[0]?.slug).toBe("product-design");
     await act(async () => {
       finishInitialDirectory(Response.json({ teams: [membership] }));
       await initialDirectory;
     });
     expect(result.current.directory.teams).toHaveLength(2);
-    expect(result.current.directory.teams[0]?.slug).toBe(updated.slug);
+    expect(result.current.directory.teams[0]?.slug).toBe("product-design");
   });
-
-  it.each(["absent", "pending", "denied"] as const)(
-    "does not seed a partial directory when creating while the directory is %s",
-    async (state) => {
-      const created = { ...readableTeam, id: "team_created", slug: "created" };
-      let finishInitialDirectory!: (response: Response) => void;
-      const initialDirectory = new Promise<Response>((resolve) => {
-        finishInitialDirectory = resolve;
-      });
-      let directoryRequests = 0;
-      vi.mocked(browserApiFetch).mockImplementation(async (path, init) => {
-        if (init?.method === "POST") return Response.json(created, { status: 201 });
-        if (path === TEAMS_KEY) {
-          directoryRequests += 1;
-          if (directoryRequests === 1 && state === "pending") return initialDirectory;
-          if (directoryRequests === 1 && state === "denied")
-            return Response.json({ error: "Forbidden" }, { status: 403 });
-          return Response.json({ teams: [readableTeam, created] });
-        }
-        return Response.json({ teams: [] });
-      });
-      const { result, rerender } = renderHook(({ enabled }) => useTeams(enabled), {
-        initialProps: { enabled: state !== "absent" },
-        wrapper,
-      });
-      if (state === "denied") {
-        await waitFor(() =>
-          expect(result.current.error).toMatchObject({ disposition: "authoritative-denial" })
-        );
-      } else if (state === "pending") {
-        await waitFor(() => expect(directoryRequests).toBe(1));
-        expect(result.current.loading).toBe(true);
-      }
-
-      await act(async () => {
-        await expect(
-          result.current.createTeam({ slug: created.slug, name: created.name })
-        ).resolves.toMatchObject({ id: created.id });
-      });
-      if (state === "absent") {
-        expect(directoryRequests).toBe(0);
-        rerender({ enabled: true });
-        expect(result.current.teams).toEqual([]);
-      }
-      await waitFor(() =>
-        expect(result.current.teams.map(({ id }) => id)).toEqual([readableTeam.id, created.id])
-      );
-      expect(directoryRequests).toBe(state === "absent" ? 1 : 2);
-      expect(result.current.error).toBeUndefined();
-      if (state === "pending") {
-        await act(async () => {
-          finishInitialDirectory(Response.json({ teams: [readableTeam] }));
-          await initialDirectory;
-        });
-        expect(result.current.teams.map(({ id }) => id)).toEqual([readableTeam.id, created.id]);
-      }
-    }
-  );
 
   it.each(["create", "update", "archive", "restore", "set-member", "remove-member"] as const)(
     "refreshes the user-scoped membership cache after %s",
     async (operation) => {
+      vi.mocked(useAuthSession).mockReturnValue({
+        data: { user: { id: "user_one", name: "Ada" } },
+        status: "authenticated",
+      });
       let written = false;
+      const member = {
+        teamId: membership.id,
+        userId: "user_one",
+        role: "member",
+        source: "manual",
+        createdAt: 1,
+        displayName: "Ada",
+        email: null,
+        avatarUrl: null,
+      };
       vi.mocked(browserApiFetch).mockImplementation(async (path, init) => {
         if (init?.method) {
           written = true;
@@ -462,34 +506,37 @@ describe("team hooks", () => {
           if (init.method === "PUT") return Response.json({ member });
           return Response.json(membership);
         }
-        if (path === ME_TEAMS_API_PATH)
+        if (path === ME_TEAMS_API_PATH) {
           return Response.json({
             teams: written ? [{ ...membership, name: "Refreshed" }] : [membership],
           });
-        if (path === TEAMS_KEY) return Response.json({ teams: [membership] });
+        }
+        if (path === "/api/teams") return Response.json({ teams: [membership] });
         if (path.endsWith("/members")) return Response.json({ members: [member] });
         return Response.json(membership);
       });
       const { result } = renderHook(
-        () => ({ ...useSnapshots(), members: useTeamMembers(membership.id) }),
+        () => ({
+          mine: useMeTeams(),
+          all: useTeams(),
+          detail: useTeam(membership.id),
+          members: useTeamMembers(membership.id),
+        }),
         { wrapper }
       );
-      await waitFor(() => {
-        expect(result.current.mine.teams[0]?.name).toBe("Design");
-        expect(result.current.directory.loading).toBe(false);
-        expect(result.current.detail.loading).toBe(false);
-        expect(result.current.members.loading).toBe(false);
-      });
+      await waitFor(() => expect(result.current.mine.teams[0]?.name).toBe("Design"));
       await act(async () => {
-        if (operation === "create")
-          await result.current.directory.createTeam({ slug: "design", name: "Design" });
-        else if (operation === "update")
+        if (operation === "create") {
+          await result.current.all.createTeam({ slug: "design", name: "Design" });
+        } else if (operation === "update") {
           await result.current.detail.updateTeam({ name: "Refreshed" });
-        else if (operation === "archive" || operation === "restore")
+        } else if (operation === "archive" || operation === "restore") {
           await result.current.detail.changeArchive(operation === "archive");
-        else if (operation === "set-member")
+        } else if (operation === "set-member") {
           await result.current.members.setMember("user_one", "member");
-        else await result.current.members.removeMember("user_one");
+        } else {
+          await result.current.members.removeMember("user_one");
+        }
       });
       expect(result.current.mine.teams[0]?.name).toBe("Refreshed");
       expect(result.current.mine.hasData).toBe(true);
@@ -497,114 +544,172 @@ describe("team hooks", () => {
     }
   );
 
-  it("reconciles member roles and removals while refreshing team grant versions", async () => {
-    const otherMember = { ...member, userId: "user_two", displayName: "Grace" };
-    let version = 0;
-    vi.mocked(browserApiFetch).mockImplementation(async (path, init) => {
-      if (init?.method === "PUT") {
-        version += 1;
-        return Response.json({ member: { ...member, role: "lead" } });
-      }
-      if (init?.method === "DELETE") {
-        version += 1;
-        return new Response(null, { status: 204 });
-      }
-      if (path.endsWith("/members")) return Response.json({ members: [member, otherMember] });
-      const team = { ...readableTeam, grantsVersion: version };
-      return Response.json(
-        path === TEAMS_KEY || path === ME_TEAMS_API_PATH ? { teams: [team] } : team
+  it.each([undefined, { canJoin: true }, { canEditMetadata: true }])(
+    "keeps a team visible with missing or incomplete capabilities %j but denies every action",
+    async (capabilities) => {
+      vi.mocked(useAuthSession).mockReturnValue({
+        data: { user: { id: "user_one", name: "Ada", email: "ada@example.com", image: null } },
+        status: "authenticated",
+      });
+      vi.mocked(browserApiFetch).mockResolvedValue(
+        Response.json({
+          requireTeamOnCreate: true,
+          teams: [
+            {
+              id: "team_design",
+              slug: "design",
+              name: "Design",
+              description: null,
+              joinPolicy: "invite_only",
+              defaultVisibility: "workspace",
+              defaultEnvironmentId: null,
+              grantsVersion: 0,
+              archivedAt: null,
+              createdAt: 1,
+              updatedAt: 1,
+              memberCount: 1,
+              role: "lead",
+              capabilities,
+            },
+          ],
+        })
       );
+      const { result } = renderHook(useMeTeams, { wrapper });
+      await waitFor(() => expect(result.current.teams).toHaveLength(1));
+      expect(result.current.requireTeamOnCreate).toBe(true);
+      const actions = renderHook(() => useTeamCapabilities(result.current.teams[0]));
+      expect(actions.result.current).toMatchObject({
+        canJoin: false,
+        canEditMetadata: false,
+        canManageMembers: false,
+        canArchive: false,
+      });
+    }
+  );
+
+  it("loads a lead through the single settings list endpoint", async () => {
+    vi.mocked(useAuthSession).mockReturnValue({
+      data: { user: { id: "user_one", name: "Ada", email: "ada@example.com", image: null } },
+      status: "authenticated",
     });
-    const { result } = renderHook(
-      () => ({ ...useSnapshots(), members: useTeamMembers(membership.id) }),
-      { wrapper }
+    vi.mocked(browserApiFetch).mockImplementation(async (path) =>
+      path === "/api/teams"
+        ? Response.json({
+            teams: [
+              {
+                id: "team_design",
+                slug: "design",
+                name: "Design",
+                description: null,
+                joinPolicy: "invite_only",
+                defaultVisibility: "workspace",
+                defaultEnvironmentId: null,
+                grantsVersion: 0,
+                archivedAt: null,
+                createdAt: 1,
+                updatedAt: 1,
+                memberCount: 1,
+                role: "lead",
+                capabilities: {
+                  canJoin: false,
+                  canLeave: false,
+                  canEditMetadata: true,
+                  canManageMembers: true,
+                  canManageRepositories: true,
+                  canManageBindings: true,
+                  canManageAutomations: true,
+                  canManageEnvironments: true,
+                  canManageSecrets: true,
+                  canArchive: true,
+                },
+              },
+            ],
+          })
+        : Response.json({ error: "Forbidden" }, { status: 403 })
     );
-    await waitFor(() => {
-      expect(result.current.members.members).toHaveLength(2);
-      expect(result.current.detail.team?.grantsVersion).toBe(0);
-      expect(result.current.directory.teams).toHaveLength(1);
-      expect(result.current.mine.hasData).toBe(true);
-    });
-    const unrelated = result.current.members.members[1];
-    await act(() => result.current.members.setMember("user_one", "lead"));
-    expect(result.current.members.members.find(({ userId }) => userId === "user_one")?.role).toBe(
-      "lead"
-    );
-    expect(result.current.members.members.find(({ userId }) => userId === "user_two")).toBe(
-      unrelated
-    );
-    expect(result.current.detail.team?.grantsVersion).toBe(1);
-    expect(result.current.directory.teams[0]?.grantsVersion).toBe(1);
-    expect(result.current.mine.teams[0]?.grantsVersion).toBe(1);
-    await act(() => result.current.members.removeMember("user_one"));
-    expect(result.current.members.members).toEqual([unrelated]);
-    expect(result.current.members.members[0]).toBe(unrelated);
-    expect(result.current.detail.team?.grantsVersion).toBe(2);
-    expect(result.current.directory.teams[0]?.grantsVersion).toBe(2);
-    expect(result.current.mine.teams[0]?.grantsVersion).toBe(2);
+    const { result } = renderHook(useTeams, { wrapper });
+    await waitFor(() => expect(result.current.teams[0]?.name).toBe("Design"));
+    expect(browserApiFetch).toHaveBeenCalledWith("/api/teams");
   });
 
-  it("exposes a committed creation even when membership refresh fails", async () => {
-    const existing = { ...readableTeam, id: "team_existing", slug: "existing" };
-    let written = false;
+  it("does not report a committed creation as failed when the list refresh fails", async () => {
+    vi.mocked(useAuthSession).mockReturnValue({
+      data: { user: { id: "user_one", name: "Ada", email: "ada@example.com", image: null } },
+      status: "authenticated",
+    });
+    let loaded = false;
+    const created = {
+      id: "team_design",
+      slug: "design",
+      name: "Design",
+      description: null,
+      joinPolicy: "invite_only",
+      defaultVisibility: "workspace",
+      defaultEnvironmentId: null,
+      grantsVersion: 0,
+      archivedAt: null,
+      createdAt: 1,
+      updatedAt: 1,
+      memberCount: 1,
+      capabilities: {
+        canJoin: false,
+        canLeave: false,
+        canEditMetadata: true,
+        canManageMembers: true,
+        canManageRepositories: true,
+        canManageBindings: true,
+        canManageAutomations: true,
+        canManageEnvironments: true,
+        canManageSecrets: true,
+        canArchive: true,
+      },
+    };
     vi.mocked(browserApiFetch).mockImplementation(async (path, init) => {
-      if (init?.method === "POST") {
-        written = true;
-        return Response.json(readableTeam, { status: 201 });
+      if (init?.method === "POST") return Response.json(created, { status: 201 });
+      if (path === "/api/teams" && !loaded) {
+        loaded = true;
+        return Response.json({ teams: [] });
       }
-      if (path === TEAMS_KEY) return Response.json({ teams: [existing] });
-      if (!written) return Response.json({ teams: [existing] });
-      return Response.json({}, { status: 503 });
+      return Response.json({ error: "Unavailable" }, { status: 503 });
     });
-    const { result } = renderHook(() => ({ directory: useTeams(), mine: useMeTeams() }), {
-      wrapper,
-    });
-    await waitFor(() => {
-      expect(result.current.directory.teams).toHaveLength(1);
-      expect(result.current.mine.hasData).toBe(true);
-    });
-    const unrelated = result.current.directory.teams[0];
+    const { result } = renderHook(useTeams, { wrapper });
+    await waitFor(() => expect(loaded).toBe(true));
     await expect(
-      act(() => result.current.directory.createTeam({ slug: "design", name: "Design" }))
-    ).resolves.toMatchObject({ id: membership.id });
-    expect(result.current.directory.teams.map(({ id }) => id)).toEqual([
-      existing.id,
-      membership.id,
-    ]);
-    expect(result.current.directory.teams[0]).toBe(unrelated);
-    expect(result.current.directory.error).toBeUndefined();
-    expect(result.current.mine.error).toMatchObject({ disposition: "transient" });
-    expect(result.current.mine.hasData).toBe(true);
+      act(() => result.current.createTeam({ slug: "design", name: "Design" }))
+    ).resolves.toMatchObject({ id: created.id });
+    expect(result.current.teams).toEqual([expect.objectContaining({ id: created.id })]);
   });
 
   it("does not report a committed removal as failed when access to members disappears", async () => {
-    let removed = false;
+    vi.mocked(useAuthSession).mockReturnValue({
+      data: { user: { id: "user_one", name: "Ada", email: "ada@example.com", image: null } },
+      status: "authenticated",
+    });
+    let loaded = false;
     vi.mocked(browserApiFetch).mockImplementation(async (path, init) => {
-      if (init?.method === "DELETE") {
-        removed = true;
-        return new Response(null, { status: 204 });
+      if (init?.method === "DELETE") return new Response(null, { status: 204 });
+      if (path === "/api/teams/team_design/members" && !loaded) {
+        loaded = true;
+        return Response.json({
+          members: [
+            {
+              teamId: "team_design",
+              userId: "user_one",
+              role: "member",
+              source: "manual",
+              createdAt: 1,
+              displayName: "Ada",
+              email: "ada@example.com",
+              avatarUrl: null,
+            },
+          ],
+        });
       }
-      return removed
-        ? Response.json({ error: "Not found" }, { status: 404 })
-        : snapshotResponse(path);
+      return Response.json({ error: "Not found" }, { status: 404 });
     });
-    const { result } = renderHook(
-      () => ({ ...useSnapshots(), members: useTeamMembers(membership.id) }),
-      { wrapper }
-    );
-    await waitFor(() => {
-      expect(result.current.members.members).toHaveLength(1);
-      expect(result.current.mine.hasData).toBe(true);
-      expect(result.current.directory.teams).toHaveLength(1);
-      expect(result.current.detail.team).toBeDefined();
-    });
-    await expect(
-      act(() => result.current.members.removeMember("user_one"))
-    ).resolves.toBeUndefined();
-    expect(result.current.members.members).toEqual([]);
-    expect(result.current.mine.hasData).toBe(false);
-    expect(result.current.directory.teams).toEqual([]);
-    expect(result.current.detail.team).toBeUndefined();
-    expect(result.current.mine.error).toMatchObject({ disposition: "authoritative-denial" });
+    const { result } = renderHook(() => useTeamMembers("team_design"), { wrapper });
+    await waitFor(() => expect(result.current.members).toHaveLength(1));
+    await expect(act(() => result.current.removeMember("user_one"))).resolves.toBeUndefined();
+    expect(result.current.members).toEqual([]);
   });
 });

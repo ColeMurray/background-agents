@@ -17,9 +17,6 @@ import { workspaceMemberListResponseSchema } from "@open-inspect/shared/rbac";
 import { browserApiFetch, type BrowserApiPath } from "@/lib/browser-api-fetch";
 import { useAuthSession } from "@/lib/auth-session";
 import { ME_TEAMS_API_PATH, meTeamsKey } from "@/lib/me-teams-cache";
-import { fetchTeamSnapshot, teamSnapshot, type TeamSnapshot } from "@/lib/team-snapshot";
-
-export { isRetryableTeamError, teamSnapshot, type TeamSnapshot } from "@/lib/team-snapshot";
 
 export const TEAMS_KEY = "/api/teams";
 export function teamCacheKey(path: BrowserApiPath, userId: string | undefined) {
@@ -38,35 +35,38 @@ const meTeamsSchema = meTeamsResponseSchema.extend({
 const membersSchema = z.object({ members: z.array(teamMemberSchema) });
 
 export function reconcileTeamDirectory(
-  current: TeamSnapshot<z.infer<typeof teamsSchema>> | undefined,
+  current: z.infer<typeof teamsSchema> | undefined,
   team: TeamResponse
 ) {
-  return current?.kind === "ready"
-    ? teamSnapshot({
-        teams: [...current.value.teams.filter((existing) => existing.id !== team.id), team],
-      })
+  return current
+    ? { teams: [...current.teams.filter((existing) => existing.id !== team.id), team] }
     : current;
 }
 
-async function get<T>(path: BrowserApiPath, schema: z.ZodType<T>): Promise<T> {
-  const snapshot = await fetchTeamSnapshot(path, schema);
-  if (snapshot.kind === "denied") throw snapshot.error;
-  return snapshot.value;
+class TeamRequestError extends Error {
+  constructor(
+    message: string,
+    readonly retryable: boolean
+  ) {
+    super(message);
+    this.name = "TeamRequestError";
+  }
 }
 
-function useTeamSnapshot<T>(
-  key: ReturnType<typeof teamCacheKey>,
-  path: BrowserApiPath,
-  schema: z.ZodType<T>
-) {
-  const result = useSWR<TeamSnapshot<T>>(key, () => fetchTeamSnapshot(path, schema), {
-    keepPreviousData: false,
-  });
-  return {
-    data: result.data?.kind === "ready" ? result.data.value : undefined,
-    error: result.data?.kind === "denied" ? result.data.error : result.error,
-    isLoading: result.isLoading,
-  };
+export function isRetryableTeamError(error: unknown): boolean {
+  return error instanceof TeamRequestError && error.retryable;
+}
+
+async function get<T>(path: BrowserApiPath, schema: z.ZodType<T>): Promise<T> {
+  let response: Response;
+  try {
+    response = await browserApiFetch(path);
+  } catch (cause) {
+    throw new TeamRequestError(`Failed to load teams (${String(cause)})`, true);
+  }
+  if (!response.ok)
+    throw new TeamRequestError(`Failed to load teams (${response.status})`, response.status >= 500);
+  return schema.parse(await response.json());
 }
 
 function write(path: BrowserApiPath, method: string, body?: object): Promise<void>;
@@ -103,10 +103,10 @@ async function write<T>(
 export function useMeTeams(enabled = true) {
   const { data: session } = useAuthSession();
   const userId = session?.user.id;
-  const result = useTeamSnapshot(
+  const result = useSWR(
     userId && enabled ? meTeamsKey(userId) : null,
-    ME_TEAMS_API_PATH,
-    meTeamsSchema
+    () => get(ME_TEAMS_API_PATH, meTeamsSchema),
+    { keepPreviousData: false }
   );
   return {
     teams: result.data?.teams ?? [],
@@ -123,16 +123,17 @@ export function useTeams(enabled = true) {
   const userId = session?.user.id;
   const { mutate } = useSWRConfig();
   const key = teamCacheKey(TEAMS_KEY, userId);
-  const result = useTeamSnapshot(enabled ? key : null, TEAMS_KEY, teamsSchema);
+  const result = useSWR(enabled ? key : null, () => get(TEAMS_KEY, teamsSchema), {
+    keepPreviousData: false,
+  });
 
   async function createTeam(input: z.input<typeof createTeamRequestSchema>) {
     const team = await write(TEAMS_KEY, "POST", input, teamSchema);
     await Promise.allSettled([
       mutate(
         key,
-        (current: TeamSnapshot<z.infer<typeof teamsSchema>> | undefined) =>
-          reconcileTeamDirectory(current, team),
-        { revalidate: (data) => data?.kind !== "ready" }
+        (current: z.infer<typeof teamsSchema> | undefined) => reconcileTeamDirectory(current, team),
+        { revalidate: (data) => data === undefined }
       ),
       mutate(userId ? meTeamsKey(userId) : null),
     ]);
@@ -143,7 +144,7 @@ export function useTeams(enabled = true) {
     const path = `/api/teams/${encodeURIComponent(id)}` as const;
     const team = await write(`${path}/join`, "POST", undefined, teamSchema);
     await Promise.allSettled([
-      mutate(teamCacheKey(path, userId), teamSnapshot(team), { revalidate: false }),
+      mutate(teamCacheKey(path, userId), team, { revalidate: false }),
       mutate(key),
       mutate(userId ? meTeamsKey(userId) : null),
       mutate(teamCacheKey(`${path}/members`, userId)),
@@ -166,16 +167,15 @@ export function useTeam(id: string) {
   const { mutate } = useSWRConfig();
   const path = `/api/teams/${encodeURIComponent(id)}` as const;
   const key = teamCacheKey(path, userId);
-  const result = useTeamSnapshot(key, path, teamSchema);
+  const result = useSWR(key, () => get(path, teamSchema), { keepPreviousData: false });
 
   async function updateTeam(input: z.input<typeof updateTeamRequestSchema>) {
     const team = await write(path, "PATCH", input, teamSchema);
     await Promise.allSettled([
-      mutate(key, teamSnapshot(team), { revalidate: false }),
+      mutate(key, team, { revalidate: false }),
       mutate(
         teamCacheKey(TEAMS_KEY, userId),
-        (current: TeamSnapshot<z.infer<typeof teamsSchema>> | undefined) =>
-          reconcileTeamDirectory(current, team),
+        (current: z.infer<typeof teamsSchema> | undefined) => reconcileTeamDirectory(current, team),
         { revalidate: (data) => data === undefined }
       ),
       mutate(userId ? meTeamsKey(userId) : null),
@@ -190,7 +190,7 @@ export function useTeam(id: string) {
       teamSchema
     );
     await Promise.allSettled([
-      mutate(key, teamSnapshot(team), { revalidate: false }),
+      mutate(key, team, { revalidate: false }),
       mutate(teamCacheKey(TEAMS_KEY, userId)),
       mutate(userId ? meTeamsKey(userId) : null),
     ]);

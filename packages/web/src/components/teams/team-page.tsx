@@ -6,14 +6,13 @@ import { useRouter } from "next/navigation";
 import { useSWRConfig } from "swr";
 import {
   TEAMS_KEY,
-  teamCacheKey,
-  reconcileTeamDirectory,
   isRetryableTeamError,
+  reconcileTeamDirectory,
+  teamCacheKey,
   useTeam,
   useTeamMembers,
   useTeams,
   type TeamResponse,
-  type TeamSnapshot,
 } from "@/hooks/use-teams";
 import { useTeamCapabilities } from "@/hooks/use-team-capabilities";
 import { useAuthSession } from "@/lib/auth-session";
@@ -83,16 +82,13 @@ function TeamContent({ initialTeam, slug }: { initialTeam: TeamResponse; slug: s
   const { mutate } = useSWRConfig();
   const { team: currentTeam, error } = useTeam(initialTeam.id);
   // The ID-keyed detail cache holds the PATCH response even when directory reads lag.
-  const canonicalSlug =
-    (!error || isRetryableTeamError(error)) && currentTeam?.archivedAt === null
-      ? currentTeam.slug
-      : undefined;
+  const canonicalSlug = !error && currentTeam?.archivedAt === null ? currentTeam.slug : undefined;
   useEffect(() => {
     if (!userId || !currentTeam || !canonicalSlug || canonicalSlug === slug) return;
     let cancelled = false;
     void mutate(
       teamCacheKey(TEAMS_KEY, userId),
-      (current: TeamSnapshot<{ teams: TeamResponse[] }> | undefined) =>
+      (current: { teams: TeamResponse[] } | undefined) =>
         reconcileTeamDirectory(current, currentTeam),
       { revalidate: false }
     ).then(() => {
@@ -116,8 +112,7 @@ function TeamContent({ initialTeam, slug }: { initialTeam: TeamResponse; slug: s
   if (capabilities.canEditMetadata || capabilities.canArchive) tabs.push("Settings");
   const activeTab = tabs.includes(tab) ? tab : "Members";
 
-  if (error && (!currentTeam || !isRetryableTeamError(error)))
-    return <ErrorBanner role="alert">Unable to load team.</ErrorBanner>;
+  if (error) return <ErrorBanner role="alert">Unable to load team.</ErrorBanner>;
   if (team.archivedAt !== null)
     return <p className="text-sm text-muted-foreground">Team not found.</p>;
   return (

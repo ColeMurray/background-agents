@@ -19,7 +19,7 @@ import {
   member,
   membership,
   readableTeam,
-  snapshotResponse,
+  teamApiResponse,
   viewerSession,
   wrapper,
 } from "./use-teams.test-support";
@@ -50,7 +50,7 @@ afterEach(cleanup);
 
 describe("team viewer isolation", () => {
   it("isolates cached data and errors during an account switch and signout", async () => {
-    vi.mocked(browserApiFetch).mockImplementation(async (path) => snapshotResponse(path));
+    vi.mocked(browserApiFetch).mockImplementation(async (path) => teamApiResponse(path));
     const { result, rerender } = renderHook(useViewerTeams, { wrapper });
     await waitFor(() => {
       expect(result.current.mine.hasData).toBe(true);
@@ -98,7 +98,7 @@ describe("team viewer isolation", () => {
       for (const [path, resolve] of pending) {
         if (path === ME_TEAMS_API_PATH) resolve(Response.json({ teams: [] }));
         else if (path.endsWith("/members")) resolve(Response.json({ members: [] }));
-        else resolve(snapshotResponse(path));
+        else resolve(teamApiResponse(path));
       }
     });
     await waitFor(() => {
@@ -165,7 +165,7 @@ describe("team viewer isolation", () => {
       const current = result.current;
       await act(async () => {
         for (const [path, resolve] of pending)
-          resolve(status === 200 ? snapshotResponse(path) : Response.json({}, { status }));
+          resolve(status === 200 ? teamApiResponse(path) : Response.json({}, { status }));
       });
       expect(result.current.mine.teams).toEqual([]);
       expect(result.current.mine.hasData).toBe(transition === "account-switch");
@@ -174,14 +174,14 @@ describe("team viewer isolation", () => {
       expect(result.current.directory.teams).toEqual(current.directory.teams);
       expect(result.current.detail.team).toBe(current.detail.team);
       expect(result.current.members.members).toEqual(current.members.members);
-      for (const snapshot of [
+      for (const hook of [
         result.current.mine,
         result.current.directory,
         result.current.detail,
         result.current.members,
       ]) {
-        expect(snapshot.error).toBeUndefined();
-        expect(snapshot.loading).toBe(false);
+        expect(hook.error).toBeUndefined();
+        expect(hook.loading).toBe(false);
       }
     }
   );
@@ -195,7 +195,7 @@ describe("team viewer isolation", () => {
           ? new Promise((resolve) => {
               finishWrite = resolve;
             })
-          : Promise.resolve(snapshotResponse(path))
+          : Promise.resolve(teamApiResponse(path))
       );
       const { result, rerender } = renderHook(useViewerTeams, { wrapper });
       await waitFor(() => {
@@ -253,47 +253,4 @@ describe("team viewer isolation", () => {
       expect(browserApiFetch).toHaveBeenCalledTimes(callsBeforeCompletion);
     }
   );
-
-  it("lets SWR discard superseded denials after a newer identical successful snapshot", async () => {
-    vi.mocked(browserApiFetch).mockImplementation(async (path) => snapshotResponse(path));
-    const { result } = renderHook(useViewerTeams, { wrapper });
-    await waitFor(() => {
-      expect(result.current.mine.hasData).toBe(true);
-      expect(result.current.directory.teams).toHaveLength(1);
-      expect(result.current.detail.team).toBeDefined();
-      expect(result.current.members.loading).toBe(false);
-    });
-    const keys = [
-      meTeamsKey("user_one"),
-      teamCacheKey(TEAMS_KEY, "user_one"),
-      teamCacheKey(detailPath, "user_one"),
-    ];
-    const pending = new Map<string, (response: Response) => void>();
-    vi.mocked(browserApiFetch).mockImplementation(
-      (path) => new Promise((resolve) => pending.set(path, resolve))
-    );
-    let oldRefresh!: Promise<unknown>;
-    act(() => {
-      oldRefresh = Promise.all(keys.map((key) => result.current.mutate(key)));
-    });
-    await waitFor(() => expect(pending.size).toBe(3));
-    vi.mocked(browserApiFetch).mockImplementation(async (path) => snapshotResponse(path));
-    await act(async () => {
-      await Promise.all(keys.map((key) => result.current.mutate(key)));
-    });
-    await act(async () => {
-      for (const resolve of pending.values()) resolve(Response.json({}, { status: 403 }));
-      await oldRefresh;
-    });
-    expect(result.current.mine).toMatchObject({
-      hasData: true,
-      canListAllTeams: true,
-      requireTeamOnCreate: true,
-      error: undefined,
-    });
-    expect(result.current.directory.teams[0]?.capabilities?.canReadTeamSessions).toBe(true);
-    expect(result.current.detail.team?.capabilities?.canReadAutomations).toBe(true);
-    expect(result.current.directory.error).toBeUndefined();
-    expect(result.current.detail.error).toBeUndefined();
-  });
 });

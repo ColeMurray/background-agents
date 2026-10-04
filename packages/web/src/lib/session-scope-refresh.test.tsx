@@ -8,7 +8,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { browserApiFetch } from "./browser-api-fetch";
 import { buildSessionsPageKey } from "./session-list";
 import { updateSessionScope } from "./session-scope";
-import { teamSnapshot } from "@/hooks/use-teams";
 
 vi.mock("./browser-api-fetch", () => ({ browserApiFetch: vi.fn() }));
 
@@ -24,7 +23,7 @@ afterEach(cleanup);
 describe("scope refresh with real SWR caches", () => {
   it("completes a scope write without refetching membership or unmounting the terminal", async () => {
     const sandboxAccess = { ttydUrl: "https://terminal.example", ttydToken: "token" };
-    const meTeams = teamSnapshot({ teams: [{ id: "source" }] });
+    const meTeams = { teams: [{ id: "source" }] };
     const fetchMembership = vi.fn().mockResolvedValue(meTeams);
     // An unexpected refetch must not mask a cleared sandbox-access cache.
     const fetchSandboxAccess = vi
@@ -105,11 +104,7 @@ describe("scope refresh with real SWR caches", () => {
     "invalidates inactive $key without an infinite list and refetches on remount",
     async ({ key }) => {
       let version = 1;
-      const isTeamSnapshot =
-        Array.isArray(key) && (key[0] === "/api/teams" || key[0] === "/api/teams/team_source");
-      const fetchResource = vi.fn(async () =>
-        isTeamSnapshot ? teamSnapshot({ version }) : { version }
-      );
+      const fetchResource = vi.fn(async () => ({ version }));
       vi.mocked(browserApiFetch).mockImplementation(async () => {
         version = 2;
         return new Response(null, { status: 204 });
@@ -131,21 +126,13 @@ describe("scope refresh with real SWR caches", () => {
         },
         { wrapper, initialProps: { mounted: true } }
       );
-      await waitFor(() =>
-        expect(result.current.resource.data).toEqual(
-          isTeamSnapshot ? teamSnapshot({ version: 1 }) : { version: 1 }
-        )
-      );
+      await waitFor(() => expect(result.current.resource.data).toEqual({ version: 1 }));
       rerender({ mounted: false });
       await act(() => result.current.update());
       expect(fetchResource).toHaveBeenCalledOnce();
       rerender({ mounted: true });
       expect(result.current.resource.data).toBeUndefined();
-      await waitFor(() =>
-        expect(result.current.resource.data).toEqual(
-          isTeamSnapshot ? teamSnapshot({ version: 2 }) : { version: 2 }
-        )
-      );
+      await waitFor(() => expect(result.current.resource.data).toEqual({ version: 2 }));
       expect(fetchResource).toHaveBeenCalledTimes(2);
     }
   );
@@ -217,9 +204,7 @@ describe("scope refresh with real SWR caches", () => {
         const inbox = useSWR(["/api/sessions/inbox?mine=true", "viewer"], ([path]) =>
           fetchPage(path)
         );
-        const teams = useSWR(["/api/teams", "viewer"], async ([path]) =>
-          teamSnapshot(await fetchPage(path))
-        );
+        const teams = useSWR(["/api/teams", "viewer"], ([path]) => fetchPage(path));
         const sourceBucket = useSWR(
           "/api/teams/team_source/sessions?bucket=in_progress",
           fetchPage
@@ -282,9 +267,9 @@ describe("scope refresh with real SWR caches", () => {
       expect(result.current.source.data).toHaveLength(2);
       expect(result.current.target.data).toHaveLength(2);
       expect(result.current.skills.data).toHaveLength(2);
-      expect(result.current.teams.data).toMatchObject({ kind: "ready", value: { version: 1 } });
       for (const resource of [
         result.current.inbox,
+        result.current.teams,
         result.current.sourceBucket,
         result.current.targetBucket,
         result.current.activity,
@@ -306,8 +291,6 @@ describe("scope refresh with real SWR caches", () => {
     });
     await act(() => result.current.update());
     expect(snapshot).toHaveBeenCalledOnce();
-    expect(result.current.teams.data).toMatchObject({ kind: "ready", value: { version: 2 } });
-    expect(fetchPage.mock.calls.filter(([path]) => path === "/api/teams")).toHaveLength(2);
     for (const list of [result.current.source, result.current.target]) {
       expect(list.data?.map((page) => page.version)).toEqual([2, 2]);
       expect(list.size).toBe(2);
@@ -317,6 +300,7 @@ describe("scope refresh with real SWR caches", () => {
     }
     for (const list of [
       result.current.inbox,
+      result.current.teams,
       result.current.sourceBucket,
       result.current.targetBucket,
       result.current.activity,
