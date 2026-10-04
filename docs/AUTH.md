@@ -237,9 +237,10 @@ denied. Shadow records are observation only and are written only in `shadow` mod
   request, with the hidden-row count in `metadata_json.shadowDenialCount`.
 - WebSocket reads record `session.shadow_denied` at most once per connection, session, and reason.
 
-Analytics aggregates are not observed, and audit writes are best effort. The audit log shows these
-records with a **Would deny** badge. For daily counts by path and reason, run this query against the
-D1 `authorization_audit_events` table, replacing the start date with your shadow rollout date:
+Analytics aggregates are not observed, and audit writes are best effort. In the audit log, WebSocket
+records show **Would deny**; HTTP records show **Allowed** with a `shadow_denied:*` reason. For
+daily counts by path and reason, run this query against the D1 `authorization_audit_events` table,
+replacing the start date with your shadow rollout date:
 
 ```sql
 WITH shadow AS (
@@ -346,7 +347,8 @@ workspace-owned, non-private sessions, so unbinding immediately revokes access t
 sessions. Slack never posts private sessions or posts team-owned sessions to a channel not bound to
 that team; confirmed publication denials close the thread without session content, while a follow-up
 refused for one user does not close it for others. Linear withholds completion results if the issue
-has moved to another Linear team, and its other bot reads follow `TEAMS_ENFORCEMENT`. See
+has moved to another Linear team. Its actorless reads, including completion reads, otherwise follow
+`TEAMS_ENFORCEMENT`: full Team-visibility isolation requires `on`. See
 [Slack](integrations/SLACK.md) and [Linear](integrations/LINEAR.md).
 
 ### GitHub Routing
