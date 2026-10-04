@@ -515,7 +515,8 @@ unresolved identity or ambiguity falls back to workspace ownership. Routing is n
 read the linked session and does not bypass session-creation checks or the require-team policy.
 Autofix continues in the PR's existing session. Deprecated auto-review-on-open remains
 workspace-owned; use a team-owned GitHub Event automation for team-owned reviews. See
-[GitHub](integrations/GITHUB.md).
+[GitHub](integrations/GITHUB.md), including
+[upgrade steps](integrations/GITHUB.md#upgrading-to-repository-id-routing) for existing deployments.
 
 ## Suspension
 
