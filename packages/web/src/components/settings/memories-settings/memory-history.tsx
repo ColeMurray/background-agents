@@ -13,11 +13,11 @@ function formatRevision({ memoryType, title, description, content }: MemoryConte
 export function MemoryHistory({
   record,
   busy,
-  onRestore,
+  onRevert,
 }: {
   record: MemoryDto;
   busy: boolean;
-  onRestore: (content: MemoryContent) => void;
+  onRevert: (content: MemoryContent) => void;
 }) {
   const { revisions, loading, error } = useMemoryRevisions(record.id);
   if (loading) return <p className="text-sm">Loading history…</p>;
@@ -52,9 +52,9 @@ export function MemoryHistory({
                 variant="outline"
                 size="sm"
                 disabled={busy}
-                onClick={() => onRestore(revision)}
+                onClick={() => onRevert(revision)}
               >
-                Restore as new revision
+                Revert to this revision
               </Button>
             )}
           </details>

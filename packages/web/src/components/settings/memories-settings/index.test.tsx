@@ -66,7 +66,7 @@ const record: MemoryDto = {
   authorUserId: "owner",
   authorSessionId: "session_a",
   supersedesMemoryId: null,
-  replacementMemoryIds: [],
+  supersededByMemoryIds: [],
   approvedAt: null,
   archivedAt: null,
   archiveKind: null,
@@ -203,10 +203,10 @@ describe("memory management", () => {
     mocks.revisions = [firstRevision];
     render(<MemoriesSettings />);
     fireEvent.click(screen.getByText("Revision history"));
-    fireEvent.click(screen.getByText("Restore as new revision"));
+    fireEvent.click(screen.getByText("Revert to this revision"));
     await waitFor(() => expect(mocks.reviseMemory).toHaveBeenCalledWith(record, firstRevision));
     await waitFor(() => expect(mocks.mutate).toHaveBeenCalledTimes(2));
-    expect(screen.getByText("Restore as new revision")).toBeTruthy();
+    expect(screen.getByText("Revert to this revision")).toBeTruthy();
   });
 
   it("renders only the actions and edits the server granted", () => {
@@ -223,7 +223,7 @@ describe("memory management", () => {
     render(<MemoriesSettings />);
     expect(screen.getByText("Restore")).toBeTruthy();
     expect(screen.getByText("Rejected: Wrong repository")).toBeTruthy();
-    for (const label of ["Approve", "Reject", "Archive", "Edit", "Replace", "New memory"]) {
+    for (const label of ["Approve", "Reject", "Archive", "Edit", "Supersede", "New memory"]) {
       expect(screen.queryByText(label)).toBeNull();
     }
   });

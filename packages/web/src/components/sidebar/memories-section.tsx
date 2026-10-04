@@ -37,8 +37,8 @@ export function MemoriesSection({ sessionId }: { sessionId: string }) {
             </p>
           </div>
         ))}
-        {diagnostics.truncatedCount > 0 && (
-          <p>{diagnostics.truncatedCount} memories omitted for budget.</p>
+        {diagnostics.omittedCount > 0 && (
+          <p>{diagnostics.omittedCount} memories omitted for budget.</p>
         )}
       </div>
     </CollapsibleSection>

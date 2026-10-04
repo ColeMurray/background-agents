@@ -24,7 +24,7 @@ const record: MemoryDto = {
   authorUserId: "owner",
   authorSessionId: null,
   supersedesMemoryId: null,
-  replacementMemoryIds: [],
+  supersededByMemoryIds: [],
   approvedAt: 1,
   archivedAt: null,
   archiveKind: null,

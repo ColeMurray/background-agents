@@ -149,7 +149,7 @@ export function MemoryCollection({ scope }: { scope: MemoryScope }) {
           onAction={(action: MemoryAction, archiveNote?: string) =>
             void run(() => applyMemoryAction(record, action, archiveNote))
           }
-          onRestoreRevision={(content) => void run(() => reviseMemory(record, content), panel)}
+          onRevertToRevision={(content) => void run(() => reviseMemory(record, content), panel)}
         />
       ))}
     </div>

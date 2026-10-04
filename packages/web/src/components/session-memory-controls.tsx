@@ -29,7 +29,7 @@ function previewSummary(preview: MemorySelectionSummary): string {
     const count = preview.items.filter((item) => item.memoryType === type).length;
     return `${count} ${MEMORY_TYPE_LABELS[type].plural}`;
   });
-  const omitted = preview.truncatedCount ? ` · ${preview.truncatedCount} omitted` : "";
+  const omitted = preview.omittedCount ? ` · ${preview.omittedCount} omitted` : "";
   return `${counts.join(", ")} will load · about ${preview.estimatedTokens.toLocaleString()} tokens${omitted}`;
 }
 

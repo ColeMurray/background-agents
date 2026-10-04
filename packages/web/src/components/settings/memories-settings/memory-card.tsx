@@ -25,7 +25,7 @@ export function MemoryCard({
   canCreate,
   onPanelChange,
   onAction,
-  onRestoreRevision,
+  onRevertToRevision,
 }: {
   record: MemoryDto;
   panel: MemoryPanel;
@@ -33,7 +33,8 @@ export function MemoryCard({
   canCreate: boolean;
   onPanelChange: (panel: MemoryPanel) => void;
   onAction: (action: MemoryAction, archiveNote?: string) => void;
-  onRestoreRevision: (content: MemoryContent) => void;
+  /** Revert content to an earlier revision (saved as a new revision; unrelated to un-archiving). */
+  onRevertToRevision: (content: MemoryContent) => void;
 }) {
   const archiving = panel.kind === "archive" && panel.memoryId === record.id ? panel : null;
   const historyOpen = panel.kind === "history" && panel.memoryId === record.id;
@@ -67,7 +68,7 @@ export function MemoryCard({
       )}
       {record.supersedesMemoryId && (
         <p className="text-xs text-muted-foreground">
-          Replaces{" "}
+          Supersedes{" "}
           <a
             className="underline"
             href={memorySettingsLink(record.scope, record.supersedesMemoryId)}
@@ -77,9 +78,9 @@ export function MemoryCard({
           {record.status === "proposed" ? " after approval" : ""}
         </p>
       )}
-      {record.replacementMemoryIds.map((id) => (
+      {record.supersededByMemoryIds.map((id) => (
         <p key={id} className="text-xs text-muted-foreground">
-          Replacement:{" "}
+          Superseded by{" "}
           <a className="underline" href={memorySettingsLink(record.scope, id)}>
             {id}
           </a>
@@ -105,7 +106,7 @@ export function MemoryCard({
             disabled={busy}
             onClick={() => onPanelChange({ kind: "create", supersedesMemoryId: record.id })}
           >
-            Replace
+            Supersede
           </Button>
         )}
         {record.capabilities.actions.map((action) => (
@@ -172,7 +173,7 @@ export function MemoryCard({
           key={record.currentRevisionId}
           record={record}
           busy={busy}
-          onRestore={onRestoreRevision}
+          onRevert={onRevertToRevision}
         />
       )}
     </article>
