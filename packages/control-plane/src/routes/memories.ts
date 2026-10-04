@@ -15,10 +15,7 @@ import {
   type MemoryDto,
   type MemoryScope,
 } from "@open-inspect/shared/types/memories";
-import {
-  type MemoryManagementGrant,
-  type MemoryManagementPolicy,
-} from "../authorization/memory-access";
+import { type MemoryManagementPolicy } from "../authorization/memory-access";
 import {
   createMemoryManagementPolicy,
   createSharedMemoryAccess,
@@ -34,7 +31,7 @@ import { admit, dispatch } from "../routing/admit";
 import type { ControlPlaneHonoEnv } from "../routing/hono-env";
 import type { Env } from "../types";
 import { parseBody } from "./body";
-import { expectedRevision, memoryErrorResponse } from "./memory-errors";
+import { expectedRevision, memoryDenialResponse, memoryErrorResponse } from "./memory-errors";
 import {
   activeSelf,
   error,
@@ -71,12 +68,14 @@ async function authorizedRecord(
   policy: MemoryManagementPolicy,
   id: string,
   mode: "read" | "write"
-): Promise<{ record: MemoryRecord; access: MemoryManagementGrant } | Response> {
+): Promise<{ record: MemoryRecord; canManage: boolean } | Response> {
   const record = await store.get(id);
   if (!record) return error("Memory not found", 404);
   const scope: MemoryScope = partitionScope(record.partition);
-  const access = await policy.authorize(scope, mode, record);
-  return access instanceof Response ? access : { record, access };
+  const decision = await policy.authorize(scope, mode, record);
+  return decision.kind === "denied"
+    ? memoryDenialResponse(decision.denial)
+    : { record, canManage: decision.canManage };
 }
 
 /** Authorize one catalog scope before returning a bounded management page. */
@@ -92,7 +91,7 @@ async function list(request: Request, env: Env, _params: object, ctx: UserRouteC
   if (!pagination.success) return error("Invalid memory pagination", 400);
   const { offset, limit } = pagination.data;
   const access = await createMemoryManagementPolicy(ctx, env).authorize(scope, "read");
-  if (access instanceof Response) return access;
+  if (access.kind === "denied") return memoryDenialResponse(access.denial);
   const store = new MemoryRecordStore(ctx.db);
   // One extra row tells us whether another page exists.
   const records = await store.list(access.partition, {
@@ -116,7 +115,7 @@ async function create(request: Request, env: Env, _params: object, ctx: UserRout
   const body = await parseBody(request, createMemorySchema, "Invalid memory");
   if (body instanceof Response) return body;
   const access = await createMemoryManagementPolicy(ctx, env).authorize(body.scope, "write");
-  if (access instanceof Response) return access;
+  if (access.kind === "denied") return memoryDenialResponse(access.denial);
   const { scope: _scope, supersedesMemoryId, ...content } = body;
   const store = new MemoryRecordStore(ctx.db);
   try {
@@ -139,7 +138,7 @@ async function get(_request: Request, env: Env, params: { id: string }, ctx: Use
     "read"
   );
   if (found instanceof Response) return found;
-  return json({ memory: await dto(store, found.record, found.access.canManage) });
+  return json({ memory: await dto(store, found.record, found.canManage) });
 }
 
 /** Edit against the revision the user reviewed (`If-Match`). */
@@ -226,7 +225,7 @@ async function preview(request: Request, env: Env, _params: object, ctx: UserRou
       { type: "environment", environmentId: body.environmentId },
       "read"
     );
-    if (access instanceof Response) return access;
+    if (access.kind === "denied") return memoryDenialResponse(access.denial);
     repositories = (
       await new EnvironmentStore(ctx.db).getRepositoriesForEnvironment(body.environmentId)
     ).map((repo) => ({ repoOwner: repo.repo_owner, repoName: repo.repo_name }));
@@ -234,7 +233,7 @@ async function preview(request: Request, env: Env, _params: object, ctx: UserRou
   const resolved = [];
   for (const repo of repositories) {
     const access = await policy.authorize({ type: "repository", ...repo }, "read");
-    if (access instanceof Response) return access;
+    if (access.kind === "denied") return memoryDenialResponse(access.denial);
     if (access.partition.type === "repository")
       resolved.push({ ...repo, repoId: access.partition.repoId });
   }

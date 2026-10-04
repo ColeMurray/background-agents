@@ -6,6 +6,7 @@ import type { MemoryRecord } from "../memory/types";
 import {
   MemoryManagementPolicy,
   SharedMemoryAccess,
+  type MemoryManagementDecision,
   type MemoryManagementPolicyDeps,
   type SharedMemoryAccessDeps,
 } from "./memory-access";
@@ -29,7 +30,7 @@ function authorization(
   } as EffectiveAuthorization;
 }
 
-const denied = () => new Response(null, { status: 403 });
+const ungranted = { owner: "acme", name: "api", repoId: 1 };
 
 function sharedAccess(overrides: Partial<SharedMemoryAccessDeps> = {}) {
   const deps = {
@@ -42,7 +43,9 @@ function sharedAccess(overrides: Partial<SharedMemoryAccessDeps> = {}) {
     },
     authorization: { getEffectiveAuthorization: vi.fn(async () => authorization()) },
     repositoryGrants: {
-      authorize: vi.fn<SharedMemoryAccessDeps["repositoryGrants"]["authorize"]>(async () => null),
+      ungrantedRepository: vi.fn<SharedMemoryAccessDeps["repositoryGrants"]["ungrantedRepository"]>(
+        async () => null
+      ),
     },
   };
   return { deps, access: new SharedMemoryAccess({ ...deps, ...overrides }) };
@@ -65,10 +68,10 @@ describe("SharedMemoryAccess", () => {
     const { access, deps } = sharedAccess();
     const owner = await access.forPrincipal({ userId: USER, ownerTeamId: null });
     expect(await owner.canRead([api])).toBe(true);
-    deps.repositoryGrants.authorize.mockResolvedValueOnce(denied());
+    deps.repositoryGrants.ungrantedRepository.mockResolvedValueOnce(ungranted);
     expect(await owner.canRead([api])).toBe(false);
     expect(deps.authorization.getEffectiveAuthorization).toHaveBeenCalledTimes(1);
-    expect(deps.repositoryGrants.authorize).toHaveBeenCalledWith(authorization(), [
+    expect(deps.repositoryGrants.ungrantedRepository).toHaveBeenCalledWith(authorization(), [
       { owner: "acme", name: "api", repoId: 1 },
     ]);
   });
@@ -139,28 +142,31 @@ function managementPolicy(
       })),
     },
     repositoryGrants: {
-      authorize: vi.fn<MemoryManagementPolicyDeps["repositoryGrants"]["authorize"]>(
-        async () => null
-      ),
+      ungrantedRepository: vi.fn<
+        MemoryManagementPolicyDeps["repositoryGrants"]["ungrantedRepository"]
+      >(async () => null),
     },
   };
   return { deps, policy: new MemoryManagementPolicy({ ...deps, ...overrides }) };
 }
 
 const recordIn = (partition: MemoryPartition) => ({ partition }) as MemoryRecord;
-const status = (result: unknown) => (result instanceof Response ? result.status : "granted");
+/** The denial reason, or "granted". */
+const outcome = (decision: MemoryManagementDecision) =>
+  decision.kind === "denied" ? decision.denial.reason : decision.kind;
 
 describe("MemoryManagementPolicy", () => {
   it("keeps personal memory owner-only and requires the personal permission", async () => {
     const { policy } = managementPolicy(["memories.manage_own"]);
     expect(await policy.authorize({ type: "personal" }, "write")).toEqual({
+      kind: "granted",
       partition: personal,
       canManage: true,
     });
     const other = recordIn({ type: "personal", userId: "someone-else" });
-    expect(status(await policy.authorize({ type: "personal" }, "read", other))).toBe(404);
+    expect(outcome(await policy.authorize({ type: "personal" }, "read", other))).toBe("not_found");
     const { policy: noPermission } = managementPolicy([]);
-    expect(status(await noPermission.authorize({ type: "personal" }, "read"))).toBe(403);
+    expect(outcome(await noPermission.authorize({ type: "personal" }, "read"))).toBe("forbidden");
   });
 
   it("resolves repositories to stable partitions and requires lead grants to manage", async () => {
@@ -169,25 +175,42 @@ describe("MemoryManagementPolicy", () => {
       "repositories.settings.manage",
     ]);
     const scope = { type: "repository" as const, repoOwner: "acme", repoName: "api" };
-    deps.repositoryGrants.authorize.mockImplementation(async (_auth, _repos, options) =>
-      options?.requireLead ? denied() : null
+    deps.repositoryGrants.ungrantedRepository.mockImplementation(async (_auth, _repos, options) =>
+      options?.requireLead ? ungranted : null
     );
-    expect(await policy.authorize(scope, "read")).toEqual({ partition: api, canManage: false });
-    expect(status(await policy.authorize(scope, "write"))).toBe(403);
+    expect(await policy.authorize(scope, "read")).toEqual({
+      kind: "granted",
+      partition: api,
+      canManage: false,
+    });
+    expect(await policy.authorize(scope, "write")).toEqual({
+      kind: "denied",
+      denial: { reason: "forbidden", message: "Repository memory management permission required" },
+    });
+  });
+
+  it("reports the repository that failed its grant check", async () => {
+    const { policy, deps } = managementPolicy(["repositories.read"]);
+    deps.repositoryGrants.ungrantedRepository.mockResolvedValueOnce(ungranted);
+    expect(
+      await policy.authorize({ type: "repository", repoOwner: "acme", repoName: "api" }, "read")
+    ).toEqual({
+      kind: "denied",
+      denial: {
+        reason: "forbidden",
+        message: "Repository grant required",
+        code: "repository_grant_required",
+        reasonCode: "repository_grant_required",
+        repository: "acme/api",
+      },
+    });
   });
 
   it("conceals records whose stored ID differs from the repository now using the name", async () => {
     const { policy } = managementPolicy(["repositories.read"]);
     const reused = recordIn({ ...api, repoId: 99 });
-    expect(
-      status(
-        await policy.authorize(
-          { type: "repository", repoOwner: "acme", repoName: "api" },
-          "read",
-          reused
-        )
-      )
-    ).toBe(404);
+    const scope = { type: "repository" as const, repoOwner: "acme", repoName: "api" };
+    expect(outcome(await policy.authorize(scope, "read", reused))).toBe("not_found");
   });
 
   it("returns environment admission denials unchanged", async () => {
@@ -200,7 +223,11 @@ describe("MemoryManagementPolicy", () => {
       reason: "Environment not found",
     });
     const scope = { type: "environment" as const, environmentId: "dev" };
-    expect(status(await policy.authorize(scope, "read"))).toBe(404);
-    expect(await policy.authorize(scope, "write")).toEqual({ partition: dev, canManage: true });
+    expect(outcome(await policy.authorize(scope, "read"))).toBe("not_found");
+    expect(await policy.authorize(scope, "write")).toEqual({
+      kind: "granted",
+      partition: dev,
+      canManage: true,
+    });
   });
 });

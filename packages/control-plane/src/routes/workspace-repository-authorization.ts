@@ -11,12 +11,17 @@ export interface RepositoryAuthorizationTarget {
   repoId: number | null;
 }
 
+export const REPOSITORY_GRANT_REQUIRED = {
+  message: "Repository grant required",
+  code: "repository_grant_required",
+} as const;
+
 function deniedRepository(repository: RepositoryAuthorizationTarget): Response {
   return json(
     {
-      error: "Repository grant required",
-      code: "repository_grant_required",
-      reason_code: "repository_grant_required",
+      error: REPOSITORY_GRANT_REQUIRED.message,
+      code: REPOSITORY_GRANT_REQUIRED.code,
+      reason_code: REPOSITORY_GRANT_REQUIRED.code,
       repository: `${repository.owner}/${repository.name}`,
     },
     403
@@ -52,28 +57,22 @@ export async function authorizeTeamRepositories(
   );
 }
 
-/** Unowned repositories stay workspace-level; any granting team may authorize its members. */
-export async function authorizeWorkspaceRepositories(
+/**
+ * The first repository the principal lacks a grant for, or null when all are allowed. Unowned
+ * repositories stay workspace-level; any granting team may authorize its members. Memberships
+ * are cached on `ctx` for the rest of the request.
+ */
+async function findUngrantedRepository(
   ctx: RequestContext,
-  target: {
-    repositories: readonly RepositoryAuthorizationTarget[];
-    requireLead?: boolean;
-  }
-): Promise<Response | null> {
-  if (target.repositories.length === 0) return null;
-  const authorization = ctx.authorization;
-  if (!authorization) {
-    return json({ error: "Authorization unavailable", code: "authorization_unavailable" }, 503);
-  }
-  const roleKey = authorization.role.key;
-  if (isWorkspaceAdmin(roleKey)) return null;
-
+  authorization: EffectiveAuthorization,
+  target: { repositories: readonly RepositoryAuthorizationTarget[]; requireLead?: boolean }
+): Promise<RepositoryAuthorizationTarget | null> {
+  if (isWorkspaceAdmin(authorization.role.key)) return null;
   const store = new TeamRepositoryGrantStore(ctx.db);
   const teams = new TeamStore(ctx.db);
   for (const repository of target.repositories) {
     const repoId = repository.repoId;
-    if (repoId === null || !Number.isSafeInteger(repoId) || repoId <= 0)
-      return deniedRepository(repository);
+    if (repoId === null || !Number.isSafeInteger(repoId) || repoId <= 0) return repository;
     const owners = await store.listTeamsForRepository(repoId);
     if (owners.length === 0) continue;
     const memberships = (ctx.sessionMemberships ??= await new TeamMembershipStore(
@@ -88,9 +87,26 @@ export async function authorizeWorkspaceRepositories(
         break;
       }
     }
-    if (!allowed) return deniedRepository(repository);
+    if (!allowed) return repository;
   }
   return null;
+}
+
+/** Route admission over {@link findUngrantedRepository}: a denial response, or null when allowed. */
+export async function authorizeWorkspaceRepositories(
+  ctx: RequestContext,
+  target: {
+    repositories: readonly RepositoryAuthorizationTarget[];
+    requireLead?: boolean;
+  }
+): Promise<Response | null> {
+  if (target.repositories.length === 0) return null;
+  const authorization = ctx.authorization;
+  if (!authorization) {
+    return json({ error: "Authorization unavailable", code: "authorization_unavailable" }, 503);
+  }
+  const ungranted = await findUngrantedRepository(ctx, authorization, target);
+  return ungranted ? deniedRepository(ungranted) : null;
 }
 
 /**
@@ -101,19 +117,20 @@ export async function authorizeWorkspaceRepositories(
 export class RepositoryGrantAuthorizer {
   constructor(private readonly ctx: RequestContext) {}
 
-  /** A denial response, or null when every repository is allowed. */
-  authorize(
+  /** The first repository `authorization` lacks a grant for, or null when all are allowed. */
+  ungrantedRepository(
     authorization: EffectiveAuthorization,
     repositories: readonly RepositoryAuthorizationTarget[],
     options: { requireLead?: boolean } = {}
-  ): Promise<Response | null> {
+  ): Promise<RepositoryAuthorizationTarget | null> {
     const sameUser = authorization.userId === this.ctx.authorization?.userId;
-    return authorizeWorkspaceRepositories(
+    return findUngrantedRepository(
       {
         ...this.ctx,
         authorization,
         sessionMemberships: sameUser ? this.ctx.sessionMemberships : undefined,
       },
+      authorization,
       { repositories, ...options }
     );
   }
