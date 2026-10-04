@@ -152,6 +152,13 @@ describe("SettingsNav", () => {
     expect(screen.queryByRole("button", { name: "Secrets" })).not.toBeInTheDocument();
   });
 
+  it("shows Memories to session creators without memory management permission", () => {
+    mocks.allowedPermissions = new Set(["sessions.create"]);
+    renderSettingsNav({ activeCategory: "memories" });
+
+    expect(screen.getByRole("button", { name: "Memories" })).toBeInTheDocument();
+  });
+
   it("keeps read-level sandbox and environment panels visible", () => {
     mocks.allowedPermissions = new Set(["environments.read", "integrations.read"]);
     renderSettingsNav({ activeCategory: "environments" });

@@ -17,6 +17,7 @@ const mocks = vi.hoisted(() => ({
   canCreate: true,
   nextOffset: null as number | null,
   collection: vi.fn(),
+  canManageOwn: true,
 }));
 vi.mock("next/navigation", () => ({ useSearchParams: () => mocks.params }));
 vi.mock("@/hooks/use-memories", () => ({
@@ -41,6 +42,12 @@ vi.mock("@/hooks/use-memories", () => ({
     mutate: mocks.mutate,
   }),
   useMemoryRevisions: () => ({ revisions: mocks.revisions, loading: false }),
+}));
+vi.mock("@/hooks/use-current-user-authorization", () => ({
+  useCurrentUserAuthorization: () => ({
+    hasPermission: (permission: string) =>
+      permission !== "memories.manage_own" || mocks.canManageOwn,
+  }),
 }));
 vi.mock("@/hooks/use-repos", () => ({
   useRepos: () => ({
@@ -99,6 +106,7 @@ describe("memory management", () => {
     mocks.revisions = [];
     mocks.canCreate = true;
     mocks.nextOffset = null;
+    mocks.canManageOwn = true;
     for (const mutation of [mocks.createMemory, mocks.reviseMemory, mocks.applyMemoryAction]) {
       mutation.mockResolvedValue(record);
     }
@@ -236,6 +244,16 @@ describe("memory management", () => {
       expect(mocks.setMemoryPreferences).toHaveBeenCalledWith({ includePersonalMemories: false })
     );
     expect(mocks.mutate).toHaveBeenCalledWith({ includePersonalMemories: false }, false);
+  });
+
+  it("lets a session creator without memory management save the opt-out", async () => {
+    mocks.canManageOwn = false;
+    render(<MemoriesSettings />);
+    expect(mocks.collection).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByLabelText("Include my personal memories in new sessions"));
+    await waitFor(() =>
+      expect(mocks.setMemoryPreferences).toHaveBeenCalledWith({ includePersonalMemories: false })
+    );
   });
 
   it("opens the shared scope named by a deep link", () => {

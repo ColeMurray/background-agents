@@ -8,6 +8,7 @@ import {
   type MemoryScope,
 } from "@open-inspect/shared/types/memories";
 import { setMemoryPreferences, useMemoryPreferences } from "@/hooks/use-memories";
+import { useCurrentUserAuthorization } from "@/hooks/use-current-user-authorization";
 import { useRepos } from "@/hooks/use-repos";
 import { useEnvironments } from "@/hooks/use-environments";
 import { errorMessage, PERSONAL_MEMORY_DISCLOSURE } from "@/lib/memories";
@@ -50,8 +51,8 @@ function PersonalMemoryDefault() {
         <label htmlFor={switchId}>Include my personal memories in new sessions</label>
       </div>
       <p className="text-xs text-muted-foreground">
-        Applies to all new web and integration-created sessions. Existing sessions keep their
-        original selection.
+        Applies to all new web, integration-created and scheduled sessions. Existing sessions keep
+        their original selection.
       </p>
       <p className="text-xs text-muted-foreground">{PERSONAL_MEMORY_DISCLOSURE}</p>
       {(saveError || loadError) && (
@@ -63,8 +64,12 @@ function PersonalMemoryDefault() {
   );
 }
 
-/** Combine owner-only memory management with the future-session inclusion default. */
+/**
+ * Combine owner-only memory management with the future-session inclusion default. The default is
+ * available to every session creator; only the catalog requires `memories.manage_own`.
+ */
 export function MemoriesSettings() {
+  const { hasPermission } = useCurrentUserAuthorization();
   return (
     <section className="space-y-6">
       <div>
@@ -75,7 +80,7 @@ export function MemoriesSettings() {
         </p>
       </div>
       <PersonalMemoryDefault />
-      <MemoryCollection scope={{ type: "personal" }} />
+      {hasPermission("memories.manage_own") && <MemoryCollection scope={{ type: "personal" }} />}
     </section>
   );
 }

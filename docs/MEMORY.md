@@ -6,12 +6,12 @@ facts with lexical `memory_search`, and reads relevant bodies with `memory_read`
 
 ## User experience
 
-| Surface                    | Behavior                                                                                                                                           |
-| -------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Settings → Memories        | Manage your personal facts and directives, review proposals, edit, archive, restore, supersede, revert to an earlier revision and inspect history. |
-| Settings → Shared memories | Select a repository or environment. Readers see its catalog; authorized maintainers can manage it.                                                 |
-| Personal default           | **Include my personal memories in new sessions** is initially enabled. It applies to web, integration-created and scheduled sessions.              |
-| Session sidebar → Memories | Pinned memories grouped by scope; hover for revision and estimate. Flags omitted records and subsequent edits/archives.                            |
+| Surface                    | Behavior                                                                                                                                                                                  |
+| -------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Settings → Memories        | Manage your personal facts and directives, review proposals, edit, archive, restore, supersede, revert to an earlier revision and inspect history.                                        |
+| Settings → Shared memories | Select a repository or environment. Readers see its catalog; authorized maintainers can manage it.                                                                                        |
+| Personal default           | **Include my personal memories in new sessions** is initially enabled. It applies to web, integration-created and scheduled sessions, and is available to every session creator.          |
+| Session sidebar → Memories | Pinned memories grouped by repository, environment or personal scope; hover or focus a row for its revision, inclusion and estimate. Flags omitted records and subsequent edits/archives. |
 
 Personal memories can be included in **shared sessions**. Included content may appear in responses
 and be visible to collaborators. This does not give collaborators access to the owner's personal

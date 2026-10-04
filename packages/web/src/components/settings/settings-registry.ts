@@ -77,7 +77,8 @@ export const SETTINGS_GROUPS = [
         description: "Personal knowledge and instructions",
         keywords: "memory facts directives context",
         icon: SparkleIcon,
-        visibility: anyOf("memories.manage_own"),
+        // Session creators need the inclusion preference even without catalog management.
+        visibility: anyOf("memories.manage_own", "sessions.create"),
         panel: lazyPanel(() =>
           import("./memories-settings").then((module) => module.MemoriesSettings)
         ),

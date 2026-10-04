@@ -57,6 +57,11 @@ describe("MemoriesSection", () => {
           revisedSinceSelection: true,
         }),
         item({
+          memoryId: "r2",
+          title: "Use pnpm",
+          scope: { type: "repository", repoOwner: "acme", repoName: "api" },
+        }),
+        item({
           memoryId: "e1",
           title: "Old deploy notes",
           scope: { type: "environment", environmentId: "env-1" },
@@ -65,21 +70,50 @@ describe("MemoriesSection", () => {
       ],
     } satisfies SessionMemorySelectionStatus;
     render(<MemoriesSection sessionId="session-1" />);
-    await userEvent.setup().click(screen.getByRole("button", { name: "Memories (3)" }));
+    await userEvent.setup().click(screen.getByRole("button", { name: "Memories (4)" }));
 
-    const headings = screen.getAllByText(/^(Repository|Environment|Personal) · 1$/);
+    const headings = screen.getAllByText(/ · 1$/);
     expect(headings.map((heading) => heading.textContent)).toEqual([
-      "Repository · 1",
-      "Environment · 1",
+      "acme/web · 1",
+      "acme/api · 1",
+      "Environment env-1 · 1",
       "Personal · 1",
     ]);
-    const repoRow = screen.getByRole("link", { name: "Use pnpm" }).closest("li")!;
+    const repoRow = screen.getAllByRole("link", { name: "Use pnpm" })[0].closest("li")!;
     expect(within(repoRow).getByText("revised")).toBeInTheDocument();
     expect(within(repoRow).getByLabelText("Directive")).toBeInTheDocument();
     const archivedRow = screen.getByRole("link", { name: "Old deploy notes" }).closest("li")!;
     expect(within(archivedRow).getByText("archived")).toBeInTheDocument();
     expect(screen.getByText(/~4\.2k tokens · personal included/)).toHaveTextContent(
       "2 omitted for budget"
+    );
+  });
+
+  it("reveals pinned provenance when a row is reached by keyboard", async () => {
+    memories.diagnostics = {
+      includePersonalMemories: false,
+      directiveChars: 0,
+      catalogChars: 0,
+      estimatedTokens: 100,
+      omittedCount: 0,
+      items: [
+        item({
+          title: "Use pnpm",
+          scope: { type: "repository", repoOwner: "acme", repoName: "web" },
+          memoryType: "directive",
+          inclusion: "full",
+          revisionNumber: 3,
+        }),
+      ],
+    } satisfies SessionMemorySelectionStatus;
+    render(<MemoriesSection sessionId="session-1" />);
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("button", { name: "Memories (1)" }));
+    await user.tab();
+
+    expect(screen.getByRole("link", { name: "Use pnpm" })).toHaveFocus();
+    expect(await screen.findByRole("tooltip")).toHaveTextContent(
+      "acme/web · Directive (included in full) · Revision 3 · ~100 tokens"
     );
   });
 });
