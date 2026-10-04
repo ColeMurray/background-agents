@@ -6,7 +6,7 @@ import { Scheduler } from "../../src/scheduler/scheduler";
 import { createCloudflareEnv } from "../../src/cloudflare/platform";
 import { memorySelectorForTest, seedMemorySession } from "./memory-test-helpers";
 import { SessionCollaboratorStore } from "../../src/db/session-collaborators";
-import type { MemoryScope } from "@open-inspect/shared/types/memories";
+import { memoryScopeToSearchParams, type MemoryScope } from "@open-inspect/shared/types/memories";
 import type { MemoryPartition } from "../../src/memory/partition";
 import { GitHubSourceControlProvider } from "../../src/source-control/providers/github-provider";
 import { cleanD1Tables } from "./cleanup";
@@ -149,12 +149,8 @@ describe("memory shared-scope authorization", () => {
       expect(response.status).toBe(201);
       const { id } = await response.json<{ id: string }>();
       expect(await new MemoryRecordStore(env.DB).get(id)).toMatchObject({
-        partition: {
-          type: "repository",
-          repoId: 456,
-          repoOwner: second.repoOwner,
-          repoName: second.repoName,
-        },
+        partition: { type: "repository", repoId: 456 },
+        scope: { type: "repository", repoOwner: second.repoOwner, repoName: second.repoName },
       });
       if (environmentId) {
         const environment = await write({ scopeType: "environment" });
@@ -202,11 +198,7 @@ describe("memory shared-scope authorization", () => {
     // The record still belongs to repository 123 and is managed by that identity.
     expect((await request(`/memories/${record.id}`)).status).toBe(200);
     expect((await request(`/memories/${record.id}/revisions`)).status).toBe(200);
-    const query = new URLSearchParams({
-      scopeType: "repository",
-      repoOwner: repo.repoOwner,
-      repoName: repo.repoName,
-    });
+    const query = memoryScopeToSearchParams(repoScope);
     expect(await (await request(`/memories?${query}`)).json()).toMatchObject({ memories: [] });
     const preview = await request("/memories/preview", "POST", {
       repositories: [{ repoOwner: repo.repoOwner, repoName: repo.repoName }],

@@ -159,6 +159,7 @@ describe("MemoryManagementPolicy", () => {
     expect(await policy.authorizeScope({ type: "personal" }, "write")).toEqual({
       kind: "granted",
       partition: personal,
+      scope: { type: "personal" },
       canManage: true,
     });
     const other = recordIn({ type: "personal", userId: "someone-else" });
@@ -247,6 +248,7 @@ describe("MemoryManagementPolicy", () => {
     expect(await policy.authorizeScope(scope, "write")).toEqual({
       kind: "granted",
       partition: dev,
+      scope,
       canManage: true,
     });
   });

@@ -197,13 +197,24 @@ describe("SessionMemoryService.read", () => {
   });
 
   it("returns a body-free notice only for pinned archived records", async () => {
-    const archived = record("old", { status: "archived", archivedAt: 5, archiveNote: "Outdated" });
+    const archived = record("old", {
+      status: "archived",
+      archiveKind: "manual",
+      archivedAt: 5,
+      archiveNote: "Outdated",
+    });
     await expect(setup({ records: [archived] }).service.read("session", "old")).rejects.toThrow(
       MemoryNotFoundError
     );
     await expect(
       setup({ records: [archived], pinned: ["old"] }).service.read("session", "old")
-    ).resolves.toEqual({ id: "old", status: "archived", archivedAt: 5, reason: "Outdated" });
+    ).resolves.toEqual({
+      id: "old",
+      status: "archived",
+      archiveKind: "manual",
+      archivedAt: 5,
+      archiveNote: "Outdated",
+    });
   });
 
   it("never expands directives or records outside the session's partitions", async () => {
