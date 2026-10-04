@@ -50,6 +50,12 @@
         "occurrences": ["CREATE TRIGGER"],
         "reason": "sessions_seed_legacy_provider_auth (already in 0064, re-created with a third row) covers sessions the previous worker inserts between the migration and the new worker deploy, which the new worker rejects as incomplete without an anthropic row."
       }
+    },
+    "terraform/d1/migrations/0084_team_default_visibility.sql": {
+      "create-trigger": {
+        "occurrences": ["CREATE TRIGGER", "CREATE TRIGGER"],
+        "reason": "Fence private team-default inserts and updates from the previous Worker between migration commit and deployment. New store validation cannot constrain old binaries; SQLite cannot narrow the existing CHECK in place, and rebuilding the referenced teams table risks deleting dependents. A Postgres migration would ALTER the CHECK instead."
+      }
     }
   },
   "grandfatheredMigrations": [

@@ -199,6 +199,42 @@ describe("applyMigrations", () => {
     expect(applyMigrations(db, dir)).toEqual([]);
     expect(ledger(db)).toEqual(upgradedLedger);
     expect(snapshot()).toEqual(expected);
+
+    // The old host can still write after the migration ledger records 0084.
+    for (const id of ["team_private", "team_private_archived"]) {
+      expect(() =>
+        db
+          .prepare("UPDATE teams SET default_visibility = 'private', updated_at = 999 WHERE id = ?")
+          .run(id)
+      ).toThrow("Team default visibility must be team or workspace");
+    }
+    expect(() =>
+      db
+        .prepare(
+          "INSERT INTO teams (id, slug, name, default_visibility, created_at, updated_at) VALUES ('new-private', 'new-private', 'Private', 'private', 1, 1)"
+        )
+        .run()
+    ).toThrow("Team default visibility must be team or workspace");
+    expect(snapshot()).toEqual(expected);
+
+    for (const defaultVisibility of ["workspace", "team"]) {
+      db.prepare("UPDATE teams SET default_visibility = ? WHERE id = 'team_private'").run(
+        defaultVisibility
+      );
+      expect(
+        db.prepare("SELECT default_visibility FROM teams WHERE id = 'team_private'").get()
+      ).toEqual({
+        default_visibility: defaultVisibility,
+      });
+    }
+    db.prepare(
+      "INSERT INTO sessions (id, user_id, owner_team_id, visibility, created_at, updated_at) VALUES ('new-private-session', 'owner', 'team_private', 'private', 1, 1)"
+    ).run();
+    expect(
+      db.prepare("SELECT visibility FROM sessions WHERE id = 'new-private-session'").get()
+    ).toEqual({
+      visibility: "private",
+    });
     expect(db.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
   });
 

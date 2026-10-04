@@ -195,16 +195,18 @@ owner and owning-team membership requirements for private sessions are unchanged
 Migration `terraform/d1/migrations/0084_team_default_visibility.sql` changes existing private team
 defaults with `UPDATE teams SET default_visibility = 'team' WHERE default_visibility = 'private'`,
 including archived teams. It does not change existing sessions, their visibility, or collaborator
-records. The migration is data-only and leaves the existing database CHECK unchanged. Shared schemas
-validate team API requests, rows, and responses; runtime `TeamStore` insert and update validators
-enforce the allowed defaults at application write boundaries. D1 and Node SQLite use the same global
-migration series in `terraform/d1/migrations/`.
+records. The same atomic migration installs insert and update triggers that reject private team
+defaults, including writes from the previous Worker between migration commit and deployment. These
+triggers fence the rollout without rebuilding the referenced teams table; the SQL portability
+baseline documents this exception. Shared schemas and runtime `TeamStore` validators also enforce
+the allowed defaults. D1 and Node SQLite use the same global migration series in
+`terraform/d1/migrations/`.
 
 **Rollout prerequisite:** apply migration `0084` to the global database before deploying application
 code with the narrowed team-default schema. Otherwise, existing private defaults can fail team row
-and response validation. Prevent older application versions from writing private team defaults
-between the migration and rollout. Explicit Private options in session creation and visibility
-controls remain available.
+and response validation. The database rejects private-default edits through older application
+versions during rollout; the new APIs return the normal validation response. Explicit Private
+options in session creation and visibility controls remain available.
 
 ### Creating Sessions
 

@@ -9,6 +9,11 @@ afterEach(cleanD1Tables);
 
 describe("migration 0084: team default visibility", () => {
   it("upgrades legacy defaults without changing private sessions or team dependents", async () => {
+    // Integration setup applies all migrations; remove only 0084's fences to seed legacy rows.
+    await env.DB.batch([
+      env.DB.prepare("DROP TRIGGER teams_default_visibility_insert"),
+      env.DB.prepare("DROP TRIGGER teams_default_visibility_update"),
+    ]);
     await env.DB.batch([
       env.DB.prepare(
         `INSERT INTO users (id, created_at, updated_at) VALUES
@@ -90,6 +95,40 @@ describe("migration 0084: team default visibility", () => {
       { id: "team_team", defaultVisibility: "team", archivedAt: null },
       { id: "team_workspace", defaultVisibility: "workspace", archivedAt: null },
     ]);
+
+    // These raw writes model the old Worker, which does not use the new validators.
+    for (const id of ["team_private", "team_private_archived"]) {
+      await expect(
+        env.DB.prepare(
+          "UPDATE teams SET default_visibility = 'private', updated_at = 999 WHERE id = ?"
+        )
+          .bind(id)
+          .run()
+      ).rejects.toThrow("Team default visibility must be team or workspace");
+    }
+    await expect(
+      env.DB.prepare(
+        "INSERT INTO teams (id, slug, name, default_visibility, created_at, updated_at) VALUES ('new-private', 'new-private', 'Private', 'private', 1, 1)"
+      ).run()
+    ).rejects.toThrow("Team default visibility must be team or workspace");
+    expect(await snapshot()).toEqual(expected);
+
+    for (const defaultVisibility of ["workspace", "team"] as const) {
+      await env.DB.prepare("UPDATE teams SET default_visibility = ? WHERE id = 'team_private'")
+        .bind(defaultVisibility)
+        .run();
+      expect(await new TeamStore(env.DB).getById("team_private")).toMatchObject({
+        defaultVisibility,
+      });
+    }
+    await env.DB.prepare(
+      "INSERT INTO sessions (id, user_id, owner_team_id, visibility, created_at, updated_at) VALUES ('new-private-session', 'owner', 'team_private', 'private', 1, 1)"
+    ).run();
+    expect(
+      await env.DB.prepare(
+        "SELECT visibility FROM sessions WHERE id = 'new-private-session'"
+      ).first()
+    ).toEqual({ visibility: "private" });
     expect((await env.DB.prepare("PRAGMA foreign_key_check").all()).results).toEqual([]);
   });
 
