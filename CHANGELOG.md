@@ -5,7 +5,9 @@ New features, integrations, and notable improvements to Open-Inspect — newest 
 ## October 2, 2026
 
 **Teams.** Group members into teams that own sessions, environments, automations, and secrets, with
-repository grants and Slack, Linear, and GitHub routing managed from **Settings > Teams**. Sandbox
+repository grants and Slack and Linear channel bindings managed from **Settings > Teams**. GitHub
+work routes to teams by numeric repository ID: upgrade the GitHub bot and control plane together,
+and reselect repositories on older GitHub event automations so they keep matching events. Sandbox
 GitHub tokens now cover only the session's repositories. See
 [Authentication and Authorization](docs/AUTH.md).
 
