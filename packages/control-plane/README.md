@@ -220,6 +220,21 @@ An invocation's status is **derived from its child runs, never stored**: no chil
 any child starting/running → `starting`/`running`; all terminal → `completed` (none failed),
 `failed` (none completed), `partial_failed` (a mix), or `skipped` (all skipped).
 
+#### Webhook triggers
+
+Webhook automations are called with their API key (`Authorization: Bearer <key>`) instead of a user
+session:
+
+| Endpoint                                             | Method | Description                                                                            |
+| ---------------------------------------------------- | ------ | -------------------------------------------------------------------------------------- |
+| `/webhooks/automation/:id`                           | POST   | Fire with a JSON body → `{ok, triggered, skipped, steered, invocationId}`              |
+| `/webhooks/automation/:id/invocations/:invocationId` | GET    | Status of a webhook firing → `{invocationId, status, runs: [{id, status, sessionId}]}` |
+
+`invocationId` is `null` when nothing was recorded (conditions did not match, the automation is
+paused, or execution was denied before admission). A retry with the same `idempotencyKey` returns
+the original firing's ID, even while it is still running. The status endpoint serves only
+invocations this webhook caused, and never exposes session content.
+
 ### Audit Events
 
 | Endpoint        | Method | Description                                                    |

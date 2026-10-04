@@ -318,3 +318,27 @@ export interface ListAutomationInvocationsResponse {
   /** Counts invocations (each firing is one row regardless of fan-out width). */
   total: number;
 }
+
+/** `POST /webhooks/automation/:id` response. */
+export interface WebhookTriggerResponse {
+  ok: true;
+  triggered: number;
+  skipped: number;
+  steered: number;
+  /**
+   * The invocation representing this request: newly started, recorded as
+   * skipped, or — for a retry with the same idempotency key — the original.
+   * Null when nothing was recorded (conditions did not match).
+   */
+  invocationId: string | null;
+}
+
+/**
+ * `GET /webhooks/automation/:id/invocations/:invocationId` response — readable
+ * with the webhook key, so it carries status only, never session content.
+ */
+export interface WebhookInvocationStatusResponse {
+  invocationId: string;
+  status: AutomationInvocationStatus;
+  runs: Pick<AutomationRun, "id" | "status" | "sessionId">[];
+}
