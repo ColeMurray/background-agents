@@ -102,6 +102,12 @@ describe("resolveThreadSuggestionTarget", () => {
     ],
     ["ranges without a start side", { ...singleLine, start_line: 10 }, "missing_anchor"],
     ["comments without a side", { ...singleLine, side: null }, "missing_anchor"],
+    ["unknown sides", { ...singleLine, side: "MIDDLE" }, "missing_anchor"],
+    [
+      "unknown start sides",
+      { ...singleLine, start_line: 10, start_side: "right" },
+      "missing_anchor",
+    ],
     ["comments without a commit", { ...singleLine, commit_id: undefined }, "missing_anchor"],
     [
       "commits that are not a hex SHA",
@@ -135,7 +141,7 @@ describe("buildThreadSuggestionRules", () => {
     expect(rules).toContain("replaces lines 10-12 of `src/it's.ts`");
     expect(rules).toContain("commit d34db33fd34db33fd34db33fd34db33fd34db33f");
     expect(rules).toContain(
-      `git fetch --quiet origin d34db33fd34db33fd34db33fd34db33fd34db33f && git show 'd34db33fd34db33fd34db33fd34db33fd34db33f:src/it'\\''s.ts' | sed -n '10,12p'`
+      `git fetch --quiet --depth=1 origin d34db33fd34db33fd34db33fd34db33fd34db33f && git show 'd34db33fd34db33fd34db33fd34db33fd34db33f:src/it'\\''s.ts' | sed -n '10,12p'`
     );
   });
 

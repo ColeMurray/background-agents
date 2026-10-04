@@ -553,7 +553,7 @@ describe("handlePullRequestOpened", () => {
     expect(promptBody.source).toBe("github");
     expect(promptBody).not.toHaveProperty("authorId");
     expect(promptBody.content).toContain("Pull Request #42");
-    expect(promptBody.content).toContain('commit_id: "abc123"');
+    expect(promptBody.content).toContain('commit_id: "<head commit>"');
 
     expect(log.info).toHaveBeenCalledWith(
       "session.created",
@@ -794,8 +794,8 @@ describe("handleReviewRequested", () => {
     expect(promptBody).not.toHaveProperty("authorId");
     expect(promptBody.content).toContain("Pull Request #42");
     expect(promptBody.content).toContain("acme/widgets");
-    expect(promptBody.content).toContain("gh pr diff 42");
-    expect(promptBody.content).toContain('commit_id: "abc123"');
+    expect(promptBody.content).toContain("gh pr view 42 --json baseRefOid,headRefOid");
+    expect(promptBody.content).toContain('commit_id: "<head commit>"');
 
     // Verify logging
     expect(log.info).toHaveBeenCalledWith(
@@ -1083,10 +1083,11 @@ describe("handleReviewComment", () => {
     const { content } = promptSendBody(getControlPlaneFetch(env));
     expect(content).toContain("pulls/42/comments/150/replies");
     expect(content).not.toContain("comments/200/replies");
+    expect(content).toContain("replaces lines 10-12 of `src/cache.ts`");
     expect(content).toContain(
-      "replaces lines 10-12 of `src/cache.ts` at\n  commit d34db33fd34db33fd34db33fd34db33fd34db33f"
+      "git show 'd34db33fd34db33fd34db33fd34db33fd34db33f:src/cache.ts' | sed -n '10,12p'"
     );
-    expect(content).toContain('commit_id: "abc123"');
+    expect(content).toContain('commit_id: "<head commit>"');
     // The reaction still acknowledges the comment that mentioned the bot.
     expect(postReaction).toHaveBeenCalledWith(
       "test-installation-token",

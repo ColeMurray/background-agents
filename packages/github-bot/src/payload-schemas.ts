@@ -70,7 +70,7 @@ export const issueCommentPayloadSchema = z.object({
 // GitHub sends `line: null` for outdated threads, so invalid values fall back to
 // undefined rather than null to keep the two cases distinguishable.
 const lineNumberSchema = z.number().int().positive().nullable().optional().catch(undefined);
-const diffSideSchema = z.string().nullable().optional().catch(undefined);
+const diffSideSchema = z.enum(["LEFT", "RIGHT"]).nullable().optional().catch(undefined);
 
 export const reviewCommentPayloadSchema = z.object({
   action: z.literal("created"),

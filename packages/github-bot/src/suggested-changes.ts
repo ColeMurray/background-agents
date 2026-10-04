@@ -40,11 +40,11 @@ export function resolveThreadSuggestionTarget(
   if (comment.subject_type === "file") return unavailable("file_comment");
   if (comment.line === null) return unavailable("outdated");
   if (comment.line === undefined) return unavailable("missing_anchor");
-  if (comment.side !== "RIGHT") {
-    return unavailable(comment.side === "LEFT" ? "base_side" : "missing_anchor");
-  }
-  if (comment.start_line != null && comment.start_side !== "RIGHT") {
-    return unavailable(comment.start_side === "LEFT" ? "base_side" : "missing_anchor");
+  if (comment.side == null) return unavailable("missing_anchor");
+  if (comment.side === "LEFT") return unavailable("base_side");
+  if (comment.start_line != null) {
+    if (comment.start_side == null) return unavailable("missing_anchor");
+    if (comment.start_side === "LEFT") return unavailable("base_side");
   }
   const startLine = comment.start_line ?? comment.line;
   if (!comment.commit_id || startLine > comment.line) return unavailable("missing_anchor");
@@ -57,7 +57,7 @@ export function shellQuote(value: string): string {
 }
 
 function buildReadLinesCommand(commitId: string, path: string, range: string): string {
-  return `git fetch --quiet origin ${commitId} && git show ${shellQuote(`${commitId}:${path}`)} | sed -n '${range}p'`;
+  return `git fetch --quiet --depth=1 origin ${commitId} && git show ${shellQuote(`${commitId}:${path}`)} | sed -n '${range}p'`;
 }
 
 /** Rules for writing any suggestion block, whichever comment carries it. */
