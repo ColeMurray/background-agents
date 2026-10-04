@@ -104,7 +104,9 @@ export interface NewMemory {
 }
 
 /**
- * Persist revisioned memories after the caller has authorized the target partition.
+ * The memory records themselves: current content, immutable revisions, and lifecycle status,
+ * keyed by partition. It knows nothing about which sessions use a record — that is
+ * `SessionMemoryStore`. Callers authorize the target partition first.
  *
  * Every mutation claims a fresh operation ID on the record in the first statement of an atomic
  * batch; the dependent revision, supersession, and audit statements apply only if that claim

@@ -1,5 +1,8 @@
 import { Hono } from "hono";
 import { memorySearchSchema, sandboxMemoryWriteSchema } from "@open-inspect/shared/types/memories";
+import { SharedMemoryAccess } from "../authorization/memory-access";
+import { MemoryStore } from "../db/memories";
+import { searchMemories } from "../db/memory-search";
 import { SessionMemoryStore } from "../db/session-memories";
 import { SessionMemoryService } from "../memory/session-memory-service";
 import { admit, dispatch } from "../routing/admit";
@@ -24,6 +27,17 @@ async function view(_request: Request, _env: Env, params: { id: string }, ctx: U
   return loaded ? json(loaded.diagnostics) : error("Session not found", 404);
 }
 
+/** Compose the service from D1-backed dependencies for one admitted sandbox request. */
+function sessionMemoryService(ctx: SandboxRouteContext): SessionMemoryService {
+  return new SessionMemoryService({
+    sessions: new SessionMemoryStore(ctx.db),
+    memories: new MemoryStore(ctx.db),
+    search: (input, partitions) => searchMemories(ctx.db, input, partitions),
+    sharedAccess: (principal) => SharedMemoryAccess.load(ctx, principal),
+    requestId: ctx.request_id,
+  });
+}
+
 /** Run one sandbox operation, translating expected memory failures. */
 async function sandboxCall(
   ctx: SandboxRouteContext,
@@ -31,7 +45,7 @@ async function sandboxCall(
   status = 200
 ): Promise<Response> {
   try {
-    return json(await operation(new SessionMemoryService(ctx)), status);
+    return json(await operation(sessionMemoryService(ctx)), status);
   } catch (cause) {
     return memoryErrorResponse(cause);
   }

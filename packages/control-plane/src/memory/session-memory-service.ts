@@ -7,11 +7,10 @@ import {
   type SandboxMemoryWriteInput,
   type SandboxMemoryWriteResult,
 } from "@open-inspect/shared/types/memories";
-import { SharedMemoryAccess } from "../authorization/memory-access";
-import { MemoryStore } from "../db/memories";
-import { searchMemories, type SearchPartition } from "../db/memory-search";
-import { SessionMemoryStore } from "../db/session-memories";
-import type { RequestContext } from "../http/request-context";
+import type { MemoryPrincipal, SharedMemoryAccess } from "../authorization/memory-access";
+import type { MemoryStore } from "../db/memories";
+import type { SearchPartition } from "../db/memory-search";
+import type { SessionMemoryStore } from "../db/session-memories";
 import { MemoryAccessError, MemoryNotFoundError, MemoryValidationError } from "./errors";
 import { partitionScope, samePartition, type MemoryPartition } from "./partition";
 import { renderMemorySection } from "./render";
@@ -27,17 +26,46 @@ const SCOPE_UNAVAILABLE = "Memory scope is no longer available";
 const OUTSIDE_SESSION = "Memory scope is outside this session";
 
 /**
+ * Dependencies injected into SessionMemoryService. Each is the narrowest slice the service uses,
+ * so tests can substitute fakes and the service never constructs storage itself.
+ */
+export interface SessionMemoryServiceDeps {
+  /**
+   * What one session sees: its memory context (owner, repositories, environment, auto-save
+   * eligibility), its pinned selection, and whether a record is pinned in it.
+   */
+  sessions: Pick<SessionMemoryStore, "context" | "load" | "isPinned">;
+  /** The memory records themselves (content, revisions, lifecycle), independent of any session. */
+  memories: Pick<MemoryStore, "get" | "create">;
+  /** Lexical search over current facts in the given partitions. */
+  search: (
+    input: MemorySearchInput,
+    partitions: readonly SearchPartition[]
+  ) => Promise<MemorySearchResponse>;
+  /** The session principal's current shared-partition access, loaded fresh for every check. */
+  sharedAccess: (principal: MemoryPrincipal) => Promise<Pick<SharedMemoryAccess, "canRead">>;
+  /** Recorded as provenance on agent writes. */
+  requestId: string;
+}
+
+/**
  * Agent-facing memory operations for one authenticated sandbox session. Identity and scope are
  * always derived from the session, never from request bodies; every operation rechecks the
  * session principal's current access to shared partitions. Throws `MemoryError`s.
  */
 export class SessionMemoryService {
-  private readonly sessions: SessionMemoryStore;
-  private readonly memories: MemoryStore;
+  private readonly sessions: SessionMemoryServiceDeps["sessions"];
+  private readonly memories: SessionMemoryServiceDeps["memories"];
+  private readonly searchFacts: SessionMemoryServiceDeps["search"];
+  private readonly sharedAccess: SessionMemoryServiceDeps["sharedAccess"];
+  private readonly requestId: string;
 
-  constructor(private readonly ctx: RequestContext) {
-    this.sessions = new SessionMemoryStore(ctx.db);
-    this.memories = new MemoryStore(ctx.db);
+  constructor(deps: SessionMemoryServiceDeps) {
+    this.sessions = deps.sessions;
+    this.memories = deps.memories;
+    this.searchFacts = deps.search;
+    this.sharedAccess = deps.sharedAccess;
+    this.requestId = deps.requestId;
   }
 
   /** The pinned boot context, rendered for the session's harness. */
@@ -135,7 +163,7 @@ export class SessionMemoryService {
         kind: "agent",
         userId: partition.type === "personal" ? partition.userId : context.sessionUserId,
         sessionId,
-        requestId: this.ctx.request_id,
+        requestId: this.requestId,
         personalAutoSave: context.personalAutoSave,
       }
     );
@@ -148,7 +176,7 @@ export class SessionMemoryService {
     const partitions = this.searchPartitions(context, input);
     const all = partitions.map((entry) => entry.partition);
     if (!(await this.canRead(context, all))) throw new MemoryAccessError(SCOPE_UNAVAILABLE);
-    const result = await searchMemories(this.ctx.db, input, partitions);
+    const result = await this.searchFacts(input, partitions);
     if (!(await this.canRead(context, all))) throw new MemoryAccessError(SCOPE_UNAVAILABLE);
     return result;
   }
@@ -163,7 +191,7 @@ export class SessionMemoryService {
     context: SessionMemoryContext,
     partitions: readonly MemoryPartition[]
   ): Promise<boolean> {
-    const access = await SharedMemoryAccess.load(this.ctx, {
+    const access = await this.sharedAccess({
       userId: context.sessionUserId,
       ownerTeamId: context.ownerTeamId,
     });
