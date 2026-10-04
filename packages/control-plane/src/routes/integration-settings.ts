@@ -14,6 +14,7 @@ import {
   type SandboxSettings,
   type VncSettings,
 } from "@open-inspect/shared/types/integrations";
+import { getValidHarnessOrDefault } from "@open-inspect/shared/harnesses";
 import { isValidReasoningEffort } from "@open-inspect/shared/models";
 import {
   IntegrationSettingsStore,
@@ -435,6 +436,7 @@ async function handleGetResolvedConfig(
       integrationId: id,
       repo,
       config: {
+        harness: getValidHarnessOrDefault(linearSettings.harness),
         model: linearSettings.model ?? null,
         reasoningEffort: linearReasoningEffort,
         allowUserPreferenceOverride: linearSettings.allowUserPreferenceOverride ?? true,

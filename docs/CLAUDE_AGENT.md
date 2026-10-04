@@ -18,7 +18,9 @@ sign in inside a sandbox.
 
 Every session runs on exactly one harness, chosen when the session is created and fixed for its
 lifetime (like the base branch). Child sessions inherit their parent's harness. Automations carry a
-harness for the sessions they create. Bots and integrations create OpenCode sessions.
+harness for the sessions they create. The Linear integration has a harness setting (global and per
+repository, OpenCode by default); see [Linear sessions](#linear-sessions). Slack and GitHub sessions
+run on OpenCode.
 
 | Harness          | Models                | Anthropic authentication                   | Notes                                 |
 | ---------------- | --------------------- | ------------------------------------------ | ------------------------------------- |
@@ -32,6 +34,29 @@ rejected with an error rather than silently replaced.
 An **installation default** Anthropic account only takes effect on Claude Agent sessions. OpenCode,
 bot and automation sessions on OpenCode keep using the API key, so setting a default never breaks
 sessions that cannot use it.
+
+### Linear sessions
+
+**Settings > Integrations > Linear** has an **Agent harness** setting, globally and per repository
+override; a repository override wins, and unset means OpenCode. The setting is a preference that
+follows the model: Linear resolves the model first (`model:*` label, user preference, repository or
+global default, deployment `DEFAULT_MODEL`), then runs the session on the configured harness when it
+can run that model and on OpenCode otherwise. So with Claude Agent selected, an Anthropic model runs
+on Claude Agent and a `model:gpt-*` label (or a non-Anthropic default) runs on OpenCode instead of
+failing. The Linear activity names the harness:
+`Creating coding session on <target> (agent: Claude Agent, model: …)`. To keep every Linear session
+on Claude Agent, choose an Anthropic default model and turn off **Allow user model preferences** and
+**Allow model labels**.
+
+Saving a harness and an incompatible model at the same level (for example Claude Agent with an
+OpenAI model) is rejected, and the settings form only lists models the harness can run. A repository
+override that sets only one of the two can still combine with the other level's value; the fallback
+above covers it.
+
+Linear sessions are unattended, so on Claude Agent they follow the **Automated authentication**
+policy: with a default Claude account and that policy on **Use default**, Linear usage draws on the
+connected subscription; otherwise it uses `ANTHROPIC_API_KEY`. Switching the setting affects only
+new sessions; follow-ups on an existing issue session keep the harness it was created with.
 
 ---
 
