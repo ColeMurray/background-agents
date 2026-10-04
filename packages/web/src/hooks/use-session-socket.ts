@@ -99,8 +99,7 @@ type QueuePromptResult =
 type CancelPromptResult = { ok: true; messageId: string } | CorrelatedRequestFailure;
 /** Success confirms server acceptance only; the shutdown state confirms the outcome. */
 export type ShutdownRecoveryResult =
-  | { ok: true; action: ShutdownRecoveryAction }
-  | CorrelatedRequestFailure;
+  { ok: true; action: ShutdownRecoveryAction } | CorrelatedRequestFailure;
 
 interface PendingCorrelatedRequest {
   settleSuccess: (message: ServerMessage) => boolean;

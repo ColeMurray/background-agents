@@ -10,11 +10,7 @@ import type { AutomationTriggerType } from "@open-inspect/shared/triggers";
 import type { AutomationFormValues } from "@/components/automations/automation-form";
 
 export type TemplateCategory =
-  | "popular"
-  | "code-review"
-  | "security"
-  | "incidents"
-  | "data-research";
+  "popular" | "code-review" | "security" | "incidents" | "data-research";
 
 /**
  * The create-form fields a template pre-fills. The repository selection and

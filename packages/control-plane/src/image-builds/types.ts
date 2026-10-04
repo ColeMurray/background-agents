@@ -25,8 +25,7 @@ export type TriggerImageBuildResult =
 
 /** Clone auth handed to provider-session build sandboxes (provider-policy.ts). */
 export type ImageBuildCloneAuth =
-  | { type: "credential_helper"; token: string }
-  | { type: "unavailable" };
+  { type: "credential_helper"; token: string } | { type: "unavailable" };
 
 /**
  * Provider-neutral build request resolved before adapter-specific execution.
@@ -135,9 +134,7 @@ export interface ReconcileOrphanOperationInput {
  * than losing a resource nothing else records.
  */
 export type ReconcileOrphanOperationOutcome =
-  | { type: "absent" }
-  | { type: "deleted" }
-  | { type: "pending" };
+  { type: "absent" } | { type: "deleted" } | { type: "pending" };
 
 /** Input for finding a build source whose create response was never seen. */
 export interface RecoverUnboundSourceInput {

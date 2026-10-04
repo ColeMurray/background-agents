@@ -75,8 +75,7 @@ export const sessionLaunchPlanSchema = z.object({
 export type SessionLaunchPlan = z.infer<typeof sessionLaunchPlanSchema>;
 
 export type ResolveInlinePromptOptionsResult =
-  | { ok: true; turnPlan: ResolvedTurnPlan }
-  | { ok: false; error: string };
+  { ok: true; turnPlan: ResolvedTurnPlan } | { ok: false; error: string };
 
 /** A model paired with the reasoning effort it runs at. */
 export interface ModelSelection {

@@ -28,8 +28,7 @@ export interface ParticipantServiceDeps {
 }
 
 export type PromptingAuthResolution =
-  | { auth: SourceControlAuthContext | null }
-  | { error: string; status: number };
+  { auth: SourceControlAuthContext | null } | { error: string; status: number };
 
 /**
  * Build avatar URL from SCM login.

@@ -45,7 +45,7 @@
     "husky": "^9.1.7",
     "knip": "^6.32.1",
     "lint-staged": "^17.6.0",
-    "prettier": "^3.4.2",
+    "prettier": "^3.9.9",
     "typescript": "^5.7.2",
     "typescript-eslint": "^8.21.0",
     "wrangler": "^4.103.0"

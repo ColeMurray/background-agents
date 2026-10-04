@@ -23,11 +23,7 @@ export type SandboxStartupDecision =
 
 /** Internal facts used by lifecycle queue and push policies, not a caller-assembled protocol. */
 export type SandboxWorkAdmission =
-  | "unmanaged"
-  | "ready"
-  | "restore_required"
-  | "spawn_required"
-  | "held";
+  "unmanaged" | "ready" | "restore_required" | "spawn_required" | "held";
 
 /** Only unmanaged sessions retain the legacy manual-push fallback when no socket exists. */
 export type SandboxPushAdmission = "ready" | "unmanaged" | "held" | "start_required";

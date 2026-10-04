@@ -86,13 +86,11 @@ describe("useAutomations", () => {
   });
 
   it("replaces loaded pages when the search changes", async () => {
-    const fetcher = vi.fn(
-      async (path: string): Promise<ListAutomationsResponse> => ({
-        automations: path.includes("search=Weekly") ? [secondAutomation] : [firstAutomation],
-        hasMore: false,
-        nextCursor: null,
-      })
-    );
+    const fetcher = vi.fn(async (path: string): Promise<ListAutomationsResponse> => ({
+      automations: path.includes("search=Weekly") ? [secondAutomation] : [firstAutomation],
+      hasMore: false,
+      nextCursor: null,
+    }));
     const { result, rerender } = renderHook(({ search }) => useAutomations(search), {
       initialProps: { search: "Daily" },
       wrapper: wrapper(fetcher),
@@ -201,13 +199,11 @@ describe("useAutomations", () => {
   });
 
   it("does not request another page after the final page", async () => {
-    const fetcher = vi.fn(
-      async (): Promise<ListAutomationsResponse> => ({
-        automations: [firstAutomation],
-        hasMore: false,
-        nextCursor: null,
-      })
-    );
+    const fetcher = vi.fn(async (): Promise<ListAutomationsResponse> => ({
+      automations: [firstAutomation],
+      hasMore: false,
+      nextCursor: null,
+    }));
     const { result } = renderHook(() => useAutomations(""), {
       wrapper: wrapper(fetcher),
     });

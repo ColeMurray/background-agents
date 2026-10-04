@@ -344,11 +344,7 @@ export function isAmbiguousModalVmLaunchError(error: ModalApiError): boolean {
 }
 
 export type ModalVmStartupOutcome =
-  | "unknown"
-  | "not_visible"
-  | "other_generation"
-  | "window_closed"
-  | "race_pending";
+  "unknown" | "not_visible" | "other_generation" | "window_closed" | "race_pending";
 
 export class ModalVmStartupError extends Error {
   constructor(

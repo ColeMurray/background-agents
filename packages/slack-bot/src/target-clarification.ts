@@ -193,8 +193,7 @@ export async function resolveTargetValue(
  * exactly one of the two shapes).
  */
 export type TargetClarificationOptions =
-  | { options: SlackSelectOption[] }
-  | { option_groups: SlackSelectOptionGroup[] };
+  { options: SlackSelectOption[] } | { option_groups: SlackSelectOptionGroup[] };
 
 /** Number of options in either response shape (for logging). */
 export function countClarificationOptions(response: TargetClarificationOptions): number {

@@ -32,15 +32,14 @@ export function hydrateTargets(
   initialEnvironmentIds: string[]
 ): AutomationSessionTarget[] {
   return [
-    ...initialRepositories.map(
-      (repository): AutomationSessionTarget => ({
-        kind: "repo",
-        repoFullName: repositoryKey(repository.repoOwner, repository.repoName),
-      })
-    ),
-    ...initialEnvironmentIds.map(
-      (environmentId): AutomationSessionTarget => ({ kind: "environment", environmentId })
-    ),
+    ...initialRepositories.map((repository): AutomationSessionTarget => ({
+      kind: "repo",
+      repoFullName: repositoryKey(repository.repoOwner, repository.repoName),
+    })),
+    ...initialEnvironmentIds.map((environmentId): AutomationSessionTarget => ({
+      kind: "environment",
+      environmentId,
+    })),
   ];
 }
 

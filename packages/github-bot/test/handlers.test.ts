@@ -1585,8 +1585,7 @@ describe("default environment targets", () => {
       metadata?: { defaultEnvironmentId?: string } | null;
       metadataStatus?: number;
       environment?:
-        | (Omit<typeof fullstackEnvironment, "ownerTeamId"> & { ownerTeamId?: string | null })
-        | null;
+        (Omit<typeof fullstackEnvironment, "ownerTeamId"> & { ownerTeamId?: string | null }) | null;
       teamId?: string | null;
     }
   ) {

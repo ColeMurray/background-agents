@@ -905,8 +905,7 @@ describe("Sandbox WebSocket (via SELF.fetch)", () => {
       userId: "user-replay",
     });
     const subscribed = replayMessages.find((message) => message.type === "subscribed") as
-      | { timeline: { events: Array<{ event: unknown }> } }
-      | undefined;
+      { timeline: { events: Array<{ event: unknown }> } } | undefined;
     expect(subscribed?.timeline.events.map(({ event }) => event)).toEqual([
       before,
       compacted,

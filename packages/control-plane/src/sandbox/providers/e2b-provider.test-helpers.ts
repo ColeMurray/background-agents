@@ -17,13 +17,11 @@ export function mockClient(overrides: Partial<E2BRestClient> = {}): E2BRestClien
       templateID: "tmpl",
       envdAccessToken: "envd-token",
     })),
-    getSandbox: vi.fn(
-      async (): Promise<E2BSandboxDetail> => ({
-        sandboxID: "e2b-id",
-        templateID: "tmpl",
-        state: "paused",
-      })
-    ),
+    getSandbox: vi.fn(async (): Promise<E2BSandboxDetail> => ({
+      sandboxID: "e2b-id",
+      templateID: "tmpl",
+      state: "paused",
+    })),
     pauseSandbox: vi.fn(async () => {}),
     connectSandbox: vi.fn(async () => ({
       sandboxID: "e2b-id",

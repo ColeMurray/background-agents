@@ -13,8 +13,7 @@ export interface InlinePromptOptions {
 export const EMPTY_INLINE_PROMPT_OPTIONS: InlinePromptOptions = {};
 
 export type ParseInlinePromptFlagsResult =
-  | { ok: true; text: string; options: InlinePromptOptions }
-  | { ok: false; error: string };
+  { ok: true; text: string; options: InlinePromptOptions } | { ok: false; error: string };
 
 const FLAG_NAMES = ["model", "reasoning"] as const;
 type FlagName = (typeof FLAG_NAMES)[number];

@@ -3,8 +3,7 @@
  * parent of an agent-spawned child. Exactly one applies.
  */
 export type Pinned<T> =
-  | { kind: "resolved"; value: T }
-  | { kind: "inherited"; parentSessionId: string };
+  { kind: "resolved"; value: T } | { kind: "inherited"; parentSessionId: string };
 
 export function resolvedPin<T>(value: T): Pinned<T> {
   return { kind: "resolved", value };

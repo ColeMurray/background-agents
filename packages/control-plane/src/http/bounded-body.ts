@@ -1,6 +1,5 @@
 export type BoundedBytesResult =
-  | { ok: true; bytes: Uint8Array }
-  | { ok: false; byteLength: number };
+  { ok: true; bytes: Uint8Array } | { ok: false; byteLength: number };
 
 /** Read a byte stream without retaining more than the caller's budget. */
 export async function readBoundedBytes(

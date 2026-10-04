@@ -35,8 +35,7 @@ export interface ServiceActorProfileClaims {
  * identity, or assignment is written for a request the handler would refuse.
  */
 export type ServiceActorClaimsResult =
-  | { kind: "claims"; claims: ServiceActorProfileClaims }
-  | { kind: "rejected"; response: Response };
+  { kind: "claims"; claims: ServiceActorProfileClaims } | { kind: "rejected"; response: Response };
 
 /** One permission or resource-admission requirement for an active user. */
 export type RouteAuthorizationRequirement =
