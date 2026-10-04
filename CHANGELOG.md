@@ -2,356 +2,56 @@
 
 New features, integrations, and notable improvements to Open-Inspect — newest first.
 
-## Unreleased
+## October 2, 2026
 
-### Teams: Consolidated Release Summary
+**Teams.** Group members into teams that own sessions, environments, automations, and secrets, with
+repository grants and Slack and Linear channel bindings managed from **Settings > Teams**. GitHub
+work routes to teams by numeric repository ID: upgrade the GitHub bot and control plane together,
+and reselect repositories on older GitHub event automations so they keep matching events. Sandbox
+GitHub tokens now cover only the session's repositories. See
+[Authentication and Authorization](docs/AUTH.md).
 
-Teams now provide ownership, membership, repository grants, secrets, and bot routing within one
-trusted workspace. This summary collects the operator-visible Teams changes; the dated entries below
-retain their implementation history.
-
-- **First-team setup:** create a team after bootstrapping the workspace Owner, add members/leads,
-  grant repositories, and verify a team-owned session. Existing workspace-owned resources are not
-  migrated. The creator is the first lead; the last lead cannot leave or be removed. Members can
-  leave with **Remove** on their own row. See [Getting Started](docs/GETTING_STARTED.md).
-- **Ownership and visibility:** sessions support Workspace, Team, and Private visibility and private
-  collaborators. Ownership cannot move between teams or to/from the workspace. Every team-owned
-  non-read session action requires current owning-team membership, even for administrators. Agent
-  child actions and spawns check the active prompt author's membership rather than borrowing the
-  parent owner's identity. Owners' private break-glass reads are audited and do not grant prompting
-  or sandbox access.
-- **Delete rule:** under enforcement, `sessions.delete` also requires session ownership, owning-team
-  lead status, or workspace administrative authority. Team-owned sessions apply the rule in every
-  mode, including current membership; private-session checks also remain enforced in every mode.
-- **Enforcement:** `TEAMS_ENFORCEMENT` still defaults to `shadow`, not `on`. The first-team
-  deployment instructions explicitly enable `on` for a fresh deployment. Existing deployments must
-  review `shadow_denied:*` audit activity before opting in. This documentation update does not flip
-  runtime or Terraform defaults or claim that the shadow audit rollout gate has been completed.
-- **Repository credentials:** GitHub sandbox tokens cover only persisted session repositories,
-  intersected with current grants for team-owned sessions. Include private dependencies in the
-  session target. Issued/cached tokens are not immediately revoked, and filesystem snapshots can
-  retain the credential cache. GitLab retains its deployment-wide PAT. Modal's `github-app` secret
-  is no longer required for fresh or restored sandboxes; the control plane brokers credentials.
-- **Owned resources and secrets:** environments and automations can be team-owned, with scoped
-  discovery and management. Automation creation requires both `automations.create` and
-  `sessions.create`; execution rechecks membership and grants. Team secrets layer between global and
-  target secrets. Team environment builds include them, shared repository images do not, and
-  team-secret changes invalidate affected environment images. Executors can be reassigned through
-  the API; scheduled authorization denial pauses immediately and requires **Resume** after recovery.
-- **Slack routing:** primary/source channel bindings select ownership and scope target discovery.
-  `unboundChannels` defaults to `workspace`; `reject` requires a binding. An interactive follow-up
-  receiving `404` no longer starts a replacement session in the same thread. Confirmed publication
-  denial closes the thread; actor-specific forbidden follow-ups do not close it for other users.
-  Private and mismatched bound-team session publication is refused, including queued media and
-  `slack-notify`. Slack-triggered automations enforce channel ownership.
-- **GitHub routing:** numeric repository IDs drive event automation and mention routing. Mentions
-  prefer a linked PR session's team, then an eligible sender team, then workspace fallback; creation
-  checks still apply. Event automations use their own team/executor and can record neutral
-  `unauthorized` grant denials without starting a session. Auto-review-on-open is deprecated and
-  remains workspace-owned; replace it with a team-owned review automation. Deploy the GitHub bot and
-  control plane together, and reselect legacy automation repositories with unresolved IDs.
-- **Linear routing:** external Linear teams bind through **Teams > Channels**. Its independent
-  `unboundChannels` setting defaults to `workspace`, with `reject` available. Existing target
-  mappings do not become ownership bindings. Scoped catalog/completion reads carry the Linear team
-  coordinate; completion content is withheld when the issue changes teams or the protected read
-  fails. Team-read isolation still depends on enforcement mode.
-- **Discovery and audit:** team pages include Channels alongside owned resources. Session visibility
-  autosaves with confirmation for Team changes and non-private child cascades. Explicit composer
-  team/audience choices persist per user while sidebar context matches. Team/member/grant/binding/
-  secret and session-sharing changes appear in the workspace audit log; there is no team Activity
-  feed, and directory emails are limited to workspace member administrators.
-
-### Added
-
-Team leads and workspace administrators can bind Linear teams from a team's Channels tab. Linear
-requests create sessions in the bound team with current actor membership and repository-grant
-checks, including for the installed app user used by unattended requests. Settings > Integrations >
-Linear controls whether unbound teams create workspace-level sessions (the default) or reject
-requests until bound. Catalog and completion reads carry the signed Linear team coordinate.
-Completion results post only while the issue remains in its launching Linear team; otherwise, or
-when the session can no longer be read for that team, Linear receives a notice without session
-content.
-
-The Slack and Linear classifiers can request a reasoning effort from an OpenAI classification model.
-Set `classification_reasoning_effort` (or the `CLASSIFICATION_REASONING_EFFORT` Actions variable) to
-a value such as `low`, and the classifiers send it as `reasoning_effort`. When it is blank, the
-classifiers send nothing and OpenAI uses the model's default, as before. An Anthropic classification
-model rejects the setting at plan time.
-
-### Changed
-
-**Team-aware GitHub routing.** GitHub routing uses numeric repository IDs so renames do not change
-the team destination. Each matching event automation fires once for its owning team when that team
-has a repository or installation grant, using its own executor and creating a team-owned session. An
-automation whose team has lost the repository grant records an `unauthorized` run with reason
-`repo_not_granted`, without creating a sandbox or session. Mentions use the pull request's existing
-session team first, then the sender's granted team; when several teams qualify, the sender's most
-recent session in that repository breaks the tie. Otherwise routing falls back to workspace
-ownership. Trigger-user allowlists, membership checks, and creation-time repository grant checks
-still apply. Autofix continues in the pull request's existing session. `requireTeamOnCreate` remains
-enforced: workspace fallback does not bypass the require-team creation policy.
-
-GitHub grant-version races are retried with fresh admission checks. If they do not settle, the event
-remains eligible for redelivery rather than being finalized as skipped. Forwarding retries retain
-completed bot startup/refusal progress without storing session data or repeating those effects.
-Redelivery is not scheduled automatically; partial startup failures and KV consistency still prevent
-an exactly-once guarantee. Neutral grant denials no longer hide a missed successful failure reset.
-
-GitHub automation selections with unresolved repository IDs no longer match events by name. Reselect
-and save their repositories to resolve IDs. Upgrade the GitHub bot and control plane together: event
-envelopes without a numeric repository ID are rejected rather than routed by display names.
-
-**GitHub auto-review is deprecated.** Global and repository-override **Auto-review new PRs**
-settings now point to the existing **Review new PRs** automation template. Create a team-owned
-automation from that template to replace the setting. During the deprecation window, legacy
-auto-review remains workspace-owned and subject to `requireTeamOnCreate`; it does not select a team
-automatically.
-
-Team-owned session actions now require current owning-team membership in every `TEAMS_ENFORCEMENT`
-mode, including for Owners and Administrators. Visibility still determines read access; collaborator
-self-removal requires only read access. Sessions, automations, and environments cannot move between
-teams or to/from the workspace; a team-owned session never becomes workspace-owned. Visibility and
-collaborator controls remain available to authorized users. Historical `session.moved` audit events
-remain readable.
+**Classifier reasoning effort.** Set `classification_reasoning_effort` to send a reasoning effort to
+OpenAI classification models used by the Slack and Linear bots. Leaving it blank keeps the model
+default.
 
 ## October 1, 2026
 
-### Changed
-
-GitHub App sandbox credentials now reach only the session's repositories, including workspace-owned
-sessions and members snapshotted from an environment. Team-owned sessions also intersect that set
-with their team's current repository grants; an installation grant does not widen the credential
-beyond the session's members. Sessions with no repositories or no remaining granted repositories
-receive no token. Unresolved repository IDs and scopes exceeding GitHub's repository limit are
-refused rather than falling back to installation-wide access.
-
-This breaks private submodule, repository-backed dependency, and sibling-clone setups unless those
-repositories are included in the session's environment and, for team sessions, granted to its team.
-Repository image builds receive a token for that repository alone; environment builds use only their
-member repositories, intersected with the environment team's grants. Metadata and workspace-catalog
-operations retain installation-wide access. GitLab still uses a deployment-wide PAT and does not
-enforce repository-scoped credentials.
-
-Token cache keys cover the sorted, de-duplicated repository set, the process cache is bounded, and
-overlapping refreshes share one mint per scope. Grant removal changes the next credential scope but
-does not revoke already-issued tokens; sandbox helpers cache them until shortly before expiry.
-
-**Modal snapshot restores use brokered git credentials.** Restored sandboxes now fetch git
-credentials from the control plane like fresh sessions, instead of receiving a token minted by
-Modal. The control plane now sends the VCS host and clone username with every Modal create, restore,
-and image-build request, so Modal no longer reads `SCM_PROVIDER` or needs GitHub App credentials.
-Terraform no longer provisions Modal's `github-app` secret; you can delete the existing secret from
-Modal after upgrading.
-
-### Added
-
-Team leads and workspace administrators can manage encrypted secrets from a team's Secrets tab.
-Team-owned sessions receive global secrets, then team secrets, then environment or repository
-secrets, with later scopes taking precedence. Environment image builds include the environment's
-team secrets; repository-shared images do not. Secret mutation audits contain key names only. Team
-secret changes atomically supersede affected environment images. After the database batch, detached,
-best-effort rebuild scheduling is attempted for enabled team-owned environments; enumeration or
-trigger failures may leave no rebuild request. Team-owned environment images require matching
-session ownership. Team-only legacy OAuth refresh tokens do not enable managed authentication; API
-keys remain usable. Team-secret read and decryption errors abort environment builds rather than
-falling back to other secret scopes.
-
-Team leads and administrators can manage primary and source Slack channel bindings in a team's
-Channels tab. Settings > Integrations > Slack now controls whether unbound channels create
-workspace-level sessions (the default) or reject requests until bound. Binding changes appear in the
-workspace audit log.
-
-Slack-created sessions carry the channel's team and enforce the requesting user's membership.
-Unavailable threads close instead of starting replacement sessions; a later reply reopens the thread
-once the channel's binding and the session's visibility allow posting again. Session notifications
-and the `slack-notify` tool refuse private sessions and destinations bound to another team,
-including queued completion text and media. Slack-triggered automations run only in channels
-matching their ownership.
-
-**Team-owned environments.** The environment form offers team ownership, and team pages include an
-Environments tab. Team environments are visible to their members and administrators, and controls
-use server capabilities. Environment names are unique within each team. Sessions, including
-inherited child targets, can use a team environment only when they belong to that team. Environment
-secrets, settings, and image routes also require access to the owning environment. Workspace
-environment management remains permission-based for custom roles, and existing environments retain
-their ownership. The require-team creation setting also applies to new environments. Changing
-environment secrets, settings, or images now also requires `environments.manage`, so custom roles
-holding only `environments.secrets.manage`, `environments.settings.manage`, or
-`environments.images.manage` lose those actions. Actorless bots see only workspace environments,
-both in lists and by ID.
-
-**Team-owned automations.** The automation form offers team ownership, and team pages include an
-Automations tab. Team automations are visible to their members and administrators, and controls use
-server capabilities. Automation leads can manage team work and reassign departed executors; executor
-reassignment verifies the candidate's launch permissions before writing and is audited as
-`automation.executor_changed`. Selected environments must belong to the automation's team.
-Executions require active membership, an unarchived team, and current repository grants, and their
-sessions inherit the team's default visibility. Slack follow-ups use the persisted session's
-collaboration decision, and automation history redacts inaccessible session metadata. Existing
-automations retain their ownership and visibility. The require-team creation setting also applies to
-new automations. These owned-resource checks apply in every session enforcement mode; source-control
-token narrowing remains a separate change.
-
-### Removed
-
-Removed the team Activity tab and `GET /teams/:id/activity` endpoint. Team operations continue to be
-recorded in the workspace audit log, available to viewers with `workspace.audit.read` and filterable
-by team. No audit history is deleted.
-
-### Fixed
-
-The team directory and collaborator picker now show email addresses only to viewers with
-`workspace.members.read` (Owners and Administrators in the built-in roles). Other viewers receive
-names and avatars with no email address, and unnamed users have a neutral label with a short ID
-suffix. This restriction applies in every team enforcement mode.
-
-Session navigation now defaults to **All my teams**, with the team selector available even for a
-single membership. Composer team and visibility choices stay local, including automatic team
-selection when new sessions require a team. Transient membership refresh failures retain loaded
-data, and changing draft configuration retires the old warm session without starting a replacement
-sandbox until the next prompt input or submission. Scope changes refresh lists without clearing
-terminal access or per-session caches. Visibility changes require a changed selection and confirm
-non-private child-session cascades. Workspace audit readers can filter by teams they do not belong
-to.
-
-### Added
-
-Teams now have a Repositories tab. Members can view grants; team leads and workspace administrators
-can grant all installation repositories or select named repositories, and remove grants. Team-scoped
-repository catalogs and repository-bearing writes check these grants, with explicit missing-grant
-errors and audited grant changes. Workspace-level session catalogs remain installation-wide. Grant
-changes advance the team's grant version but do not yet narrow or revoke sandbox installation
-tokens.
-
-Workspace-level skills, repository secrets, and image builds retain existing permissions on
-repositories granted to no team. Team-owned repositories additionally require membership (lead
-membership for repository secrets), or workspace Owner/Administrator access, in every enforcement
-mode. Manual team-owned environment builds require access to the owning team. Hidden and missing
-team requests now record identical denied authorization decisions without changing their 404
-responses.
-
-## September 30, 2026
-
-### Added
-
-Teams now have a searchable directory with favorites, member lists, session overviews, and
-visibility-filtered activity. Active users can browse team names and memberships; a team's work
-remains restricted to members and administrators. Workspace audit readers can filter events by team.
-Session details show the owning team and visibility, with server-authorized controls to move
-sessions, change visibility, and manage private-session collaborators, including child-session
-cascades. Archived team metadata and member lists remain visible only to team members and workspace
-administrators. Team activity shows domain operations; HTTP authorization decisions remain in the
-permission-gated workspace audit log.
-
-**Team-aware session discovery and creation.** Following the team and visibility APIs, the web app
-now supports team selection and scoped session discovery. Inbox snapshot and paged reads accept
-ownership, visibility, and workspace scope filters and return effective server capabilities for
-roots and descendants. The current user's team response includes the require-team creation setting
-without requiring settings-management permissions. Bot team selection and automation team ownership
-remain later phases; repository-backed team sessions still require existing grants, with no grant
-creation API or UI yet.
-
-### Fixed
-
-Allowed team directory, member, session, activity, and collaborator-candidate reads no longer add
-authorization-decision rows to the audit log. Capability writes and membership departures remain
-audited. Unauthorized cross-member removals are recorded as denied decisions. Live session
-subscriptions now include team memberships when computing capabilities in every enforcement mode,
-preserving team leads' move and visibility controls without adding reads to per-command
-authorization in `off` or `shadow`.
-
-## September 29, 2026
-
-### Added
-
-**Team-scoped session access.** Teams remain optional: existing sessions stay teamless workspace
-rows, and **Settings > Teams > Require a team for new sessions** is off by default. Operators can
-roll out `TEAMS_ENFORCEMENT=off|shadow|on` (`shadow` by default): `shadow` records would-be team and
-ownership denials without blocking non-private sessions, while `on` enforces them. Private
-visibility is restricted in every mode. Session item routes, lists and aggregates, live connections,
-and sandbox access use the persisted session scope; Owners' private-session break-glass reads are
-audited and do not make those sessions enumerable. Session creation and team moves check membership
-and repository grants; team and visibility change APIs have landed, with discovery UI following in
-the next entry. Visibility, scope, and collaborator mutations enforce the resolver in every mode and
-cascades refuse inaccessible descendants. The require-team setting refuses teamless session creation
-API requests; automation runs remain exempt until team ownership is supported. Repository grant
-creation is not yet available, so missing grants refuse repository-backed team sessions with
-`target_team_missing_grant`. Team grants do not yet narrow the shared source-control installation
-token in sandboxes. See [Authentication and Authorization](docs/AUTH.md).
+**Brokered credentials for Modal restores.** Restored Modal sandboxes now fetch git credentials from
+the control plane like fresh ones, so Modal no longer needs the `github-app` secret. You can delete
+it after upgrading.
 
 ## September 28, 2026
 
-### Added
-
 **Claude Sonnet 5.5.** Adds `anthropic/claude-sonnet-5-5` to the model picker and integrations, with
-adaptive thinking controls from low through max. Claude Agent SDK 0.2.161 bundles Claude Code
-2.1.284, which supports the new model.
+adaptive thinking controls from low through max.
 
-OpenCode sessions using a connected ChatGPT subscription now report estimated model costs through
-the existing session cost display and spending limit. These are API-price equivalents, not
-additional subscription charges or an OpenAI invoice; estimates remain zero if catalog pricing is
-unavailable.
-
-Workspace settings now includes Teams. Administrators can create teams, manage members and leads,
-edit team defaults, and archive or restore teams. Team leads can manage their own teams where
-permitted.
+**ChatGPT subscription cost estimates.** OpenCode sessions using a connected ChatGPT subscription
+now report API-equivalent cost estimates in the session cost display and spending limit.
 
 ## September 27, 2026
 
-### Changed
+**Trace export schema 2.** Messages, events, and usage are now exported oldest first, and
+single-session downloads include only the requested session. See the
+[trace export reference](docs/TRACE_EXPORT.md).
 
-Trace export now emits published schema 2: messages, events and usage are all oldest first, and
-session trace byte-budget errors use `trace_budget_exceeded`. Single-session downloads export only
-the requested session; `scope` on that route now returns 400. Whole runs remain available through
-the paginated bulk export.
+**Docker-capable Modal sandboxes.** Operators can select the `modal-vm` backend deployment-wide for
+Docker support; `modal` remains the default. See [Modal VM setup](docs/MODAL_DOCKER.md).
 
-### Added
-
-Operators can select `modal-vm` deployment-wide for Docker-capable Modal sandboxes, with separate
-prepared images and filesystem snapshot recovery. The existing `modal` backend remains the default;
-switching backends does not migrate existing sessions or images. See
-[Modal VM setup](docs/MODAL_DOCKER.md).
-
-The analytics dashboard now shows harness metrics, automation performance in automation and all
-scopes, complete runs, and pull-request cost per merged PR by model and harness.
-
-The analytics dashboard now lets operators select human, agent, automation or all sessions and
-compare token usage, cost by model and provider billing in the selected scope.
-
-Analytics responses now include session token totals and cache hit ratio, pull-request cost by model
-and harness, and the top 20 scoped runs in the dashboard snapshot. Run titles may be null.
-
-Session analytics API now accepts `scope=human|agent|automation|all` (default `human`) on the
-dashboard, summary, timeseries, and breakdown routes, and supports `by=model`, `by=harness`,
-`by=spawnSource`, `by=automation`, and `by=provider` breakdowns. Provider rows include the number of
-sessions billed through a matching provider account.
-
-The [trace export reference](docs/TRACE_EXPORT.md) includes a JSON Schema and instructions for
-manually downloading paginated runs through the web app.
+**Scoped analytics.** The analytics dashboard and API can filter human, agent, automation, or all
+sessions, with breakdowns by model, harness, provider, and automation, token totals, cache hit
+ratio, and cost per merged PR.
 
 ## September 26, 2026
 
-### Added
-
-Bulk session export accepts `include` as a comma-separated list of `messages`, `events`, and
-`usage`, so one session line can carry the prompt, the persisted timeline events, and per-step token
-usage. Each session's included collections are read in one storage snapshot and share one 4 MiB byte
-budget and one page cap, and any include limits the request to 5 sessions per page. Messages keep
-their existing newest-first order; events and usage are listed in timeline order.
+**Richer bulk session export.** Bulk export can now include each session's messages, timeline
+events, and per-step token usage through the `include` parameter.
 
 ## September 25, 2026
 
-### Added
-
-Bulk session export now includes run identity, harness, model provider, repository membership, pull
-request lifecycle, and projected token totals on session lines. Schema 1 consumers must ignore
-unknown fields; `source` is unchanged and also appears as `spawnSource`.
-
-### Changed
-
-Bulk session export now requires `sessions.export` instead of `sessions.read`. Owners,
-Administrators, and users granted the permission through a custom role may export; Viewers, Members,
-and bot services cannot.
+**Bulk export metadata and permission.** Exported session lines now include run identity, harness,
+model provider, repositories, pull request lifecycle, and token totals. Bulk export now requires the
+`sessions.export` permission, granted to Owners and Administrators by default.
 
 ## September 23, 2026
 

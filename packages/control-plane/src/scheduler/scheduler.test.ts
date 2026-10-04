@@ -3853,13 +3853,13 @@ describe("Scheduler", () => {
         launchableRepositories(["web-app"]);
         mockTeamGetById
           .mockResolvedValueOnce({ ...activeTeam, defaultVisibility: "workspace" })
-          .mockResolvedValue({ ...activeTeam, defaultVisibility: "private" });
+          .mockResolvedValue({ ...activeTeam, defaultVisibility: "team" });
         mockStore.getInvocationRunAggregate.mockResolvedValue(aggregate({ total: 1, active: 1 }));
 
         await createScheduler().trigger("auto-1", "manual-user");
 
         expect(mockSessionStoreCreate).toHaveBeenCalledWith(
-          expect.objectContaining({ ownerTeamId: teamId, visibility: "private" })
+          expect.objectContaining({ ownerTeamId: teamId, visibility: "team" })
         );
       });
     });

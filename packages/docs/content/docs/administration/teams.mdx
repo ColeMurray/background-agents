@@ -4,7 +4,7 @@ description: Create teams, manage membership and repository grants, and understa
 audience: team-owner
 owner: control-plane
 status: published
-lastReviewed: "2026-10-03"
+lastReviewed: "2026-10-04"
 relatedCode:
   - docs/AUTH.md
   - packages/shared/src/types/team-access.ts
@@ -39,6 +39,8 @@ Creating a team requires `workspace.members.manage`, held by workspace Owners an
 2. Enter a name and slug, then select **Create**. You become the first team lead.
 3. Open the team's details. Set its description, **Join policy**, and **Default visibility**, then select **Save changes**.
 4. Add members and grant repository access before starting repository-backed team work.
+
+A team's **Default visibility** can be **Team** or **Workspace**, never Private. Users can still explicitly choose **Private** for an individual session, including a team-owned one, subject to membership and access checks.
 
 ```mermaid
 flowchart TB

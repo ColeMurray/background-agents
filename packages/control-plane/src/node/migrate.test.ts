@@ -52,7 +52,7 @@ describe("applyMigrations", () => {
 
   it("leaves existing resources workspace-owned without creating teams or memberships", () => {
     for (const name of readdirSync(MIGRATIONS_DIR).filter(
-      (file) => file.endsWith(".sql") && !file.startsWith("0083_")
+      (file) => file.endsWith(".sql") && file < "0083"
     )) {
       copyFileSync(join(MIGRATIONS_DIR, name), join(dir, name));
     }
@@ -77,7 +77,11 @@ describe("applyMigrations", () => {
     ).run();
     db.prepare("INSERT INTO environments (id, name) VALUES ('old-env', 'Old')").run();
 
-    expect(applyMigrations(db, MIGRATIONS_DIR)).toEqual(["0083_teams.sql"]);
+    expect(applyMigrations(db, MIGRATIONS_DIR)).toEqual(
+      listMigrations(MIGRATIONS_DIR)
+        .filter((file) => file.name >= "0083")
+        .map((file) => file.name)
+    );
     for (const table of ["sessions", "automations", "environments"]) {
       expect(
         db.prepare(`SELECT COUNT(*) AS n FROM ${table} WHERE owner_team_id IS NOT NULL`).get()
@@ -130,6 +134,108 @@ describe("applyMigrations", () => {
     db.prepare(
       "INSERT INTO environments (id, name, owner_team_id) VALUES ('env-a', 'New', 'team_a'), ('env-b', 'New', 'team_b')"
     ).run();
+  });
+
+  it("upgrades legacy private team defaults without changing sessions or team dependents", () => {
+    for (const file of listMigrations(MIGRATIONS_DIR).filter((file) => file.version < "0085")) {
+      copyFileSync(file.path, join(dir, file.name));
+    }
+    applyMigrations(db, dir);
+    const legacyLedger = ledger(db);
+    expect(legacyLedger.at(-1)).toEqual({ version: "0084", name: "0084_memories.sql" });
+
+    db.exec(`
+      INSERT INTO users (id, created_at, updated_at) VALUES
+        ('owner', 1, 2), ('collaborator', 3, 4);
+      INSERT INTO teams
+        (id, slug, name, default_visibility, archived_at, created_at, updated_at)
+      VALUES
+        ('team_private', 'private', 'Active', 'private', NULL, 10, 11),
+        ('team_private_archived', 'archived', 'Archived', 'private', 50, 20, 21),
+        ('team_team', 'team', 'Team', 'team', NULL, 30, 31),
+        ('team_workspace', 'workspace', 'Workspace', 'workspace', NULL, 40, 41);
+      INSERT INTO team_memberships (team_id, user_id, role, source, created_at) VALUES
+        ('team_private', 'owner', 'lead', 'manual', 12),
+        ('team_private_archived', 'collaborator', 'member', 'github_team', 22);
+      INSERT INTO team_repository_grants
+        (id, team_id, grant_kind, repo_external_id, repo_owner, repo_name, created_at)
+      VALUES
+        ('active-grant', 'team_private', 'repository', 123, 'acme', 'repo', 14),
+        ('archived-grant', 'team_private_archived', 'installation', NULL, NULL, NULL, 24);
+      INSERT INTO sessions
+        (id, user_id, owner_team_id, visibility, created_at, updated_at)
+      VALUES
+        ('private-session', 'owner', 'team_private', 'private', 100, 110),
+        ('archived-private-session', 'owner', 'team_private_archived', 'private', 120, 130);
+      INSERT INTO session_collaborators (session_id, user_id, added_by, created_at) VALUES
+        ('private-session', 'collaborator', 'owner', 111),
+        ('archived-private-session', 'collaborator', 'owner', 131);
+    `);
+    const snapshot = () => ({
+      teams: db.prepare("SELECT * FROM teams ORDER BY id").all(),
+      sessions: db.prepare("SELECT * FROM sessions ORDER BY id").all(),
+      collaborators: db
+        .prepare("SELECT * FROM session_collaborators ORDER BY session_id, user_id")
+        .all(),
+      memberships: db.prepare("SELECT * FROM team_memberships ORDER BY team_id, user_id").all(),
+      grants: db.prepare("SELECT * FROM team_repository_grants ORDER BY id").all(),
+    });
+    const before = snapshot();
+    const expected = {
+      ...before,
+      teams: before.teams.map((team) => ({
+        ...team,
+        default_visibility:
+          team.default_visibility === "private" ? "team" : team.default_visibility,
+      })),
+    };
+
+    const migrationName = "0085_team_default_visibility.sql";
+    copyFileSync(join(MIGRATIONS_DIR, migrationName), join(dir, migrationName));
+    expect(applyMigrations(db, dir)).toEqual([migrationName]);
+    expect(snapshot()).toEqual(expected);
+    const upgradedLedger = [...legacyLedger, { version: "0085", name: migrationName }];
+    expect(ledger(db)).toEqual(upgradedLedger);
+    expect(applyMigrations(db, dir)).toEqual([]);
+    expect(ledger(db)).toEqual(upgradedLedger);
+    expect(snapshot()).toEqual(expected);
+
+    // The old host can still write after the migration ledger records 0085.
+    for (const id of ["team_private", "team_private_archived"]) {
+      expect(() =>
+        db
+          .prepare("UPDATE teams SET default_visibility = 'private', updated_at = 999 WHERE id = ?")
+          .run(id)
+      ).toThrow("Team default visibility must be team or workspace");
+    }
+    expect(() =>
+      db
+        .prepare(
+          "INSERT INTO teams (id, slug, name, default_visibility, created_at, updated_at) VALUES ('new-private', 'new-private', 'Private', 'private', 1, 1)"
+        )
+        .run()
+    ).toThrow("Team default visibility must be team or workspace");
+    expect(snapshot()).toEqual(expected);
+
+    for (const defaultVisibility of ["workspace", "team"]) {
+      db.prepare("UPDATE teams SET default_visibility = ? WHERE id = 'team_private'").run(
+        defaultVisibility
+      );
+      expect(
+        db.prepare("SELECT default_visibility FROM teams WHERE id = 'team_private'").get()
+      ).toEqual({
+        default_visibility: defaultVisibility,
+      });
+    }
+    db.prepare(
+      "INSERT INTO sessions (id, user_id, owner_team_id, visibility, created_at, updated_at) VALUES ('new-private-session', 'owner', 'team_private', 'private', 1, 1)"
+    ).run();
+    expect(
+      db.prepare("SELECT visibility FROM sessions WHERE id = 'new-private-session'").get()
+    ).toEqual({
+      visibility: "private",
+    });
+    expect(db.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
   });
 
   it("applies files in version order and skips the ones already recorded", () => {

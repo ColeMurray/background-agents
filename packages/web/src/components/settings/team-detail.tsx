@@ -203,8 +203,7 @@ export function TeamDetail({ team }: { team: TeamResponse }) {
                   ...current,
                   draft: {
                     ...current.draft,
-                    defaultVisibility:
-                      value === "team" ? "team" : value === "private" ? "private" : "workspace",
+                    defaultVisibility: value === "team" ? "team" : "workspace",
                   },
                 }))
               }
@@ -215,9 +214,12 @@ export function TeamDetail({ team }: { team: TeamResponse }) {
               <SelectContent>
                 <SelectItem value="workspace">Workspace</SelectItem>
                 <SelectItem value="team">Team</SelectItem>
-                <SelectItem value="private">Private</SelectItem>
               </SelectContent>
             </Select>
+            <p className="text-xs text-muted-foreground">
+              Applies to new sessions only. Private is available per session, including within a
+              team.
+            </p>
           </div>
         </div>
         <Button type="submit" disabled={!capabilities.canEditMetadata || saving}>

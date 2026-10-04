@@ -4,7 +4,7 @@ description: Short answers to the questions people ask most about OpenInspect se
 audience: user
 owner: platform
 status: published
-lastReviewed: "2026-10-02"
+lastReviewed: "2026-10-04"
 relatedCode:
   - packages/shared/src/types/session-access.ts
   - packages/shared/src/types/team-access.ts
@@ -54,7 +54,9 @@ It queues. Prompts are processed in order, and a session may hold up to 50 unfin
 
 It depends on visibility and your deployment's enforcement mode. Workspace-visible sessions are readable by admitted workspace users with session read permission. With Teams enforcement on, Team visibility limits reads to owning-team members and workspace Administrators or Owners. Private sessions are for the owning user and explicit collaborators, with audited break-glass read access for workspace Owners only; that exception does not grant prompting or sandbox access.
 
-The default enforcement mode is `shadow`, which does not isolate non-private Team reads. Private access and team-owned action checks apply in every mode. Every non-read action on a team-owned session requires current owning-team membership, even for administrators. Visibility can change, but ownership cannot. See [Multiplayer and sharing](/sessions/multiplayer-and-sharing), [Teams](/administration/teams), and [Deployment](/administration/deployment).
+Team defaults are **Team** or **Workspace**, never Private, but you can explicitly choose **Private** for an individual session, including a team-owned one. Prompting requires collaboration permission and session access; private collaborators on team-owned sessions must retain current team membership.
+
+The default enforcement mode is `shadow`, which does not isolate non-private Team reads. Private access and team-owned action checks apply in every mode. Except for collaborator self-removal, every non-read action on a team-owned session requires current owning-team membership, even for administrators. Visibility can change, but ownership cannot. See [Multiplayer and sharing](/sessions/multiplayer-and-sharing), [Teams](/administration/teams), and [Deployment](/administration/deployment).
 
 ### My prompt failed with a message naming a boot phase. What now?
 

@@ -719,35 +719,44 @@ describe("SlackIntegrationSettings", () => {
       expect(fetchMock).not.toHaveBeenCalled();
     });
 
-    it("blocks save and shows an error when more than the maximum rules are defined", async () => {
-      const user = userEvent.setup();
-      const tooMany = Array.from({ length: MAX_SLACK_ROUTING_RULES + 1 }, (_, i) => ({
-        keyword: `rule-${i}`,
-        target: "acme/web",
-      }));
-      setupSWR({
-        global: {
-          defaults: {
-            agentNotificationsEnabled: true,
-            mentionsPolicy: "allow",
-            routingRules: tooMany,
+    // Rendering MAX_SLACK_ROUTING_RULES + 1 rows (each with a Radix Select) is
+    // slow under coverage instrumentation on shared CI runners.
+    const OVER_LIMIT_RULES_TEST_TIMEOUT_MS = 15_000;
+
+    it(
+      "blocks save and shows an error when more than the maximum rules are defined",
+      async () => {
+        const user = userEvent.setup();
+        const tooMany = Array.from({ length: MAX_SLACK_ROUTING_RULES + 1 }, (_, i) => ({
+          keyword: `rule-${i}`,
+          target: "acme/web",
+        }));
+        setupSWR({
+          global: {
+            defaults: {
+              agentNotificationsEnabled: true,
+              mentionsPolicy: "allow",
+              routingRules: tooMany,
+            },
           },
-        },
-        availableRepos: [repo("acme/web")],
-      });
-      render(<SlackIntegrationSettings />);
+          availableRepos: [repo("acme/web")],
+        });
+        render(<SlackIntegrationSettings />);
 
-      const section = routingSection();
-      // Save is disabled until the form is dirty; edit a keyword (keeping it
-      // valid) so the only remaining problem is the over-limit count.
-      await user.type(within(section).getAllByLabelText("Routing keyword")[0], "x");
-      await user.click(within(section).getByRole("button", { name: /save routing rules/i }));
+        const section = routingSection();
+        // Save is disabled until the form is dirty; edit a keyword (keeping it
+        // valid) so the only remaining problem is the over-limit count.
+        await user.type(within(section).getAllByLabelText("Routing keyword")[0], "x");
+        // getByText avoids getByRole's accessibility-tree scan across 100+ rows.
+        await user.click(within(section).getByText("Save routing rules"));
 
-      expect(toastError).toHaveBeenCalledWith(
-        expect.stringContaining(String(MAX_SLACK_ROUTING_RULES))
-      );
-      expect(fetchMock).not.toHaveBeenCalled();
-    });
+        expect(toastError).toHaveBeenCalledWith(
+          expect.stringContaining(String(MAX_SLACK_ROUTING_RULES))
+        );
+        expect(fetchMock).not.toHaveBeenCalled();
+      },
+      OVER_LIMIT_RULES_TEST_TIMEOUT_MS
+    );
 
     it("warns when a rule targets a repository that is not accessible", () => {
       setupSWR({

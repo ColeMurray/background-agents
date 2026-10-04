@@ -4,7 +4,7 @@ description: Choose session visibility, share private sessions with collaborator
 audience: user
 owner: control-plane
 status: published
-lastReviewed: "2026-10-03"
+lastReviewed: "2026-10-04"
 relatedCode:
   - packages/shared/src/types/session-access.ts
   - packages/control-plane/src/authorization/teams-enforcement.ts
@@ -15,6 +15,10 @@ relatedCode:
   - docs/AUTH.md
   - docs/HOW_IT_WORKS.md
   - packages/shared/src/rbac.ts
+  - packages/shared/src/types/teams.ts
+  - packages/control-plane/src/db/teams.ts
+  - packages/control-plane/src/routes/session-create.ts
+  - packages/web/src/components/session-access-selector.tsx
   - packages/web/src/components/sidebar/participants-section.tsx
   - packages/web/src/components/session-actions.ts
 ---
@@ -23,13 +27,13 @@ This page explains who can see and prompt a session, how to bring a colleague in
 
 ## Ownership and visibility
 
-A session has fixed ownership and changeable visibility. It is either workspace-owned or owned by a team; making a team-owned session **Workspace** visible does not transfer ownership or let non-members act in it. The session's owning user also matters for private access and sharing controls.
+A session has fixed ownership and changeable visibility. It is either workspace-owned or owned by a team; making a team-owned session **Workspace** or **Private** visible does not transfer ownership. Non-members cannot act in a team-owned session, except to remove their own collaborator grant. The creating user is its session owner, which also matters for private access and sharing controls.
 
-| Visibility | Who can read, with session read permission                                                                                                           |
-| ---------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Workspace  | Admitted workspace users, including Viewers.                                                                                                         |
-| Team       | Members of the owning team, plus workspace Administrators and Owners, when Teams enforcement is on.                                                  |
-| Private    | The owning user and explicitly added collaborators. Workspace Owners have audited break-glass read access; Administrators do not get that exception. |
+| Visibility | Who can read, with session read permission                                                                                                                                             |
+| ---------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Workspace  | Admitted workspace users, including Viewers.                                                                                                                                           |
+| Team       | Members of the owning team, plus workspace Administrators and Owners, when Teams enforcement is on. Requires an owning team.                                                           |
+| Private    | The owning user and explicit collaborators. Collaborators on team-owned sessions must remain current members of that team. Workspace Owners also have audited break-glass read access. |
 
 <Callout type="warn" title="Check your deployment's enforcement mode">
   `TEAMS_ENFORCEMENT` defaults to `shadow`. In `shadow` or `off`, non-private Team visibility does
@@ -38,17 +42,29 @@ A session has fixed ownership and changeable visibility. It is either workspace-
   your operator to confirm `on` in [Deployment](/administration/deployment).
 </Callout>
 
-Participant labels record contributions; appearing in the timeline or Participants list does not grant access. Discovery filters such as **Started by me** are not access boundaries either. See [Teams](/administration/teams) for membership and [Inbox and search](/sessions/inbox-and-search) for discovery scopes.
+A workspace Owner can open a private session by ID using audited break-glass access. That exception does not put the session in their lists or grant prompt or sandbox access. Administrators and team leads do not gain private access just from their role.
+
+Participant labels record contributions; appearing in the timeline or Participants list does not grant access. Discovery filters such as **Mine** or **Started by me** are not access boundaries either. See [Teams](/administration/teams) for membership and [Inbox and search](/sessions/inbox-and-search) for discovery scopes.
 
 Creating a session also requires permission to use its repository or environment, so a person may be able to open an existing session without being able to start a new one on the same repository.
+
+### Defaults and explicit private sessions
+
+A team's default session visibility can be **Team** or **Workspace**, never Private. When no visibility is explicitly selected, normal session creation, Slack and Linear launchers, and automation runs use the owning team's current default, or Workspace when there is no owning team. The launch source does not override the default.
+
+You can still explicitly choose **Private** in the new-session access selector or use an existing session's **Visibility** control when authorized. Private requires a workspace user owner and is allowed for both teamless and team-owned sessions. Creating a team-owned session requires current membership in that team; making it private does not bypass membership checks.
+
+For deployments upgrading from private team defaults, migration `0085_team_default_visibility.sql` changes those defaults to Team, including archived teams, and fences older application versions from writing private team defaults during rollout. Existing sessions and collaborator lists are unchanged. Operators must apply the migration before rolling out the narrowed team-default schema.
 
 ## Sharing a session
 
 Use **Copy link** (in the More menu above the composer on desktop, or in the "Session actions" menu on phones) to copy the session URL. Sending the link does not grant access: the recipient must already pass the session's access checks.
 
-For a private session, an authorized owning user or workspace Owner can open **Collaborators** in the right sidebar, choose **Add collaborator**, and click **Add**. Use **Remove** to revoke a grant. Team-owned sessions accept only current members of the owning team as collaborators. If a collaborator leaves that team, their stored grant no longer gives access. Managing collaborators on a team-owned session also requires current membership, even for the owning user or workspace Owner.
+For a private session, an authorized owning user or workspace Owner can open **Collaborators** in the right sidebar, choose **Add collaborator**, and click **Add**. Use **Remove** to revoke a grant. Team-owned sessions accept only active current members of the owning team as collaborators. If a collaborator leaves that team, their stored grant no longer gives access. Managing collaborators on a team-owned session also requires current membership, even for the owning user or workspace Owner, except when removing your own grant. Collaborator status never grants team membership or a workspace role.
 
 Collaborators still need the appropriate workspace permissions to prompt or use sandbox tools. A workspace Owner reading through audited break-glass access does not thereby gain collaboration or sandbox access: those require being the owning user or a collaborator. Other administrative actions remain subject to their own checks.
+
+Once authorized, the other person sees the shared timeline and sandbox status. Private sessions cannot be published to Slack, and actorless bot services cannot read them, even if a user can.
 
 ## Change visibility
 
@@ -83,7 +99,7 @@ Prompts queued by PR Feedback Autofix carry a "Resumed by PR feedback" header th
 - **Hand-off.** Share the link at the end of your day. The next person sees the full history, the queued prompts, and the current sandbox state, and continues in the same branch.
 - **Teaching.** Newer team members can read sessions they have access to and see how others prompt and how the agent works through a task.
 
-Because follow-ups are queued in order, agree on who is steering before both of you send corrections at once. The queued prompt stack above the composer shows what is waiting, and anyone with lifecycle access can remove a queued prompt.
+Because follow-ups are queued in order, agree on who is steering before both of you send corrections at once. The queued prompt stack above the composer shows what is waiting, and anyone authorized for that session's lifecycle actions can remove a queued prompt.
 
 ## What not to put in a session
 
@@ -94,7 +110,7 @@ People authorized to read a session, including eligible Viewers, can see its rec
 - Screenshots and recordings.
 - The diff and the branch.
 
-Choose visibility before adding sensitive content, and remember that it can be widened later, including through a parent session's visibility change. Do not ask the agent to print secrets in the sandbox. Keep credentials in [Secrets](/configure/secrets) rather than prompts; a command that echoes an environment variable puts its value in the timeline.
+Choose visibility before adding sensitive content, and remember that it can be widened later, including through a parent session's visibility change. Do not ask the agent to print secrets in the sandbox. Keep credentials in [Secrets](/configure/secrets) rather than prompts; configured secrets are injected as environment variables, and a command that echoes one puts its value in the timeline.
 
 ## Role effects inside a session
 
@@ -106,17 +122,18 @@ Workspace roles grant feature permissions, not unconditional access to every ses
 | Member                  | Can prompt and contribute, and can stop turns, remove queued prompts, rename, archive and unarchive (`sessions.lifecycle`), retry a failed diff, and use the terminal, code-server, VNC, and tunnels (`sessions.sandbox_access`). |
 | Administrator and Owner | Member feature permissions plus workspace administration, still subject to session access checks.                                                                                                                                 |
 
-Lifecycle actions (stop, rename, archive, unarchive, remove a queued prompt, retry the diff) need `sessions.lifecycle`. Prompting needs `sessions.collaborate`. Sandbox tools need `sessions.sandbox_access`. **Every non-read action on a team-owned session requires current owning-team membership**, including for its owning user, Administrators, and Owners. Private prompting and sandbox access additionally require being the owning user or a collaborator.
+Lifecycle actions (stop, rename, archive, unarchive, remove a queued prompt, retry the diff) need `sessions.lifecycle`. Prompting needs `sessions.collaborate`. Sandbox tools need `sessions.sandbox_access`. **Except for collaborator self-removal, every non-read action on a team-owned session requires current owning-team membership**, including for its owning user, Administrators, and Owners. Private prompting and sandbox access additionally require being the owning user or a collaborator.
 
 Role changes and suspensions take effect on the next request. A browser that already has the session open is rechecked at least every five minutes, so someone whose access was removed can keep a live connection for up to five minutes.
 
 ## Troubleshooting
 
-| Symptom                                                                                   | Cause                                                                                                                                                 | Fix                                                                                                              |
-| ----------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------- |
-| The Sessions page says "You do not have permission to view sessions."                     | Your account holds no role that can read sessions. Every built-in role, Viewer included, can, so your workspace access has been removed or suspended. | Ask a workspace Owner or Administrator to check your account under Settings › Workspace access.                  |
-| A person whose access was removed or suspended still sees live updates in an open session | Live connections are rechecked at least every five minutes, not on every event.                                                                       | Wait up to five minutes; the connection closes on the next recheck. New requests are refused immediately.        |
-| A session link is unavailable, or you can read but cannot act                             | Visibility, collaborator status, team membership, or feature permissions do not allow the operation                                                   | Ask the owning user or team lead to check access. Administrator status alone does not bypass team action checks. |
+| Symptom                                                                                   | Cause                                                                                                                                                 | Fix                                                                                                                     |
+| ----------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------- |
+| The Sessions page says "You do not have permission to view sessions."                     | Your account holds no role that can read sessions. Every built-in role, Viewer included, can, so your workspace access has been removed or suspended. | Ask a workspace Owner or Administrator to check your account under Settings › Workspace access.                         |
+| A colleague cannot open a session link                                                    | The session's visibility excludes them, or their team-owned collaborator grant no longer applies.                                                     | Check the audience and their current team membership; for Private, ask the session owner to add them as a collaborator. |
+| A person whose access was removed or suspended still sees live updates in an open session | Live connections are rechecked at least every five minutes, not on every event.                                                                       | Wait up to five minutes; the connection closes on the next recheck. New requests are refused immediately.               |
+| A session link is unavailable, or you can read but cannot act                             | Visibility, collaborator status, team membership, or feature permissions do not allow the operation                                                   | Ask the owning user or team lead to check access. Administrator status alone does not bypass team action checks.        |
 
 ## Next steps
 

@@ -4,7 +4,7 @@ description: The trust boundaries of an OpenInspect deployment, which tokens exi
 audience: admin
 owner: security
 status: published
-lastReviewed: "2026-10-02"
+lastReviewed: "2026-10-04"
 relatedCode:
   - packages/sandbox-runtime/src/sandbox_runtime/credentials/git_credential_helper.py
   - packages/sandbox-images/src/sandbox_images/configuration.py
@@ -47,9 +47,9 @@ Sign-in is GitHub, Google, or both. After the provider verifies identity and ema
 
 ## Roles are product capabilities
 
-The four roles (Owner, Administrator, Member, Viewer) decide which OpenInspect features a person can use. Team membership, repository grants, resource ownership, and session visibility add checks; role permissions alone do not grant access to every session, environment, or automation.
+The four roles (Owner, Administrator, Member, Viewer) decide which OpenInspect features a person can use: create sessions, manage settings, view the audit log, and so on. They are not repository ACLs. Team membership, repository grants, resource ownership, session visibility, and private collaborator grants add checks; role permissions alone do not grant access to every session, environment, or automation.
 
-Being able to read a session does not grant sandbox or collaboration access. Prompting and sandbox access on team-owned sessions require current owning-team membership even for Owners and Administrators. Non-private team-session read isolation depends on [Teams enforcement](/administration/deployment#teams-enforcement), which defaults to `shadow`. For private-session exceptions and resource-specific rules, use the canonical [access rules](https://github.com/ColeMurray/background-agents/blob/main/docs/AUTH.md#teams-and-session-visibility); [Workspace access](/administration/workspace-access) explains the user-facing controls.
+Being able to read a session does not grant sandbox or collaboration access. Prompting and sandbox access on team-owned sessions require current owning-team membership even for Owners and Administrators. Non-private team-session read isolation depends on [Teams enforcement](/administration/deployment#teams-enforcement), which defaults to `shadow`. For private-session exceptions and resource-specific rules, use the canonical [access rules](https://github.com/ColeMurray/background-agents/blob/main/docs/AUTH.md#teams-and-session-visibility); [Workspace access](/administration/workspace-access) explains the user-facing controls. See [Multiplayer and sharing](/sessions/multiplayer-and-sharing) for audience rules, defaults, and enforcement modes.
 
 ## Token architecture
 

@@ -187,6 +187,13 @@ run; restoring it allows a later event to run, not a replay of previously skippe
 renames retain identity through the numeric ID, while run targets use the event's current owner and
 name. These checks are independent of the deprecated workspace auto-review setting.
 
+### Upgrading to Repository-ID Routing
+
+Upgrade the GitHub bot and control plane together. The control plane rejects event envelopes without
+a numeric repository ID, so an older bot's events are not routed. Automations saved before
+repository IDs were recorded no longer match events by name; open each one, reselect its
+repositories, and save to resolve their IDs.
+
 ### Models and Instructions
 
 | Setting                     | What it controls                                                          |

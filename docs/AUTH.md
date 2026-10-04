@@ -94,10 +94,10 @@ change shared configuration.
 ## Teams and Session Visibility
 
 Teams are optional. A team has members and leads, an open or invite-only join policy, and a default
-session visibility. Owners and Administrators create teams in **Settings > Teams**, and the creator
-becomes the first lead. Existing and teamless sessions stay workspace-owned (`ownerTeamId: null`);
-creating a team does not move them. Team membership does not replace the workspace role: a person
-still needs the relevant workspace permission.
+session visibility (`team` or `workspace`). Owners and Administrators create teams in **Settings >
+Teams**, and the creator becomes the first lead. Existing and teamless sessions stay workspace-owned
+(`ownerTeamId: null`); creating a team does not move them. Team membership does not replace the
+workspace role: a person still needs the relevant workspace permission.
 
 Any active workspace user can join an open team; invite-only teams require a lead or workspace
 Owner/Administrator to add members. Leads and workspace Owners/Administrators manage membership,
@@ -118,7 +118,8 @@ composer's team and visibility, by contrast, set the created session's ownership
 
 ### Session Visibility
 
-Each session stores a visibility independently of its team:
+Each session stores a visibility independently of its owning team, so a team-owned session can be
+team-visible, workspace-visible, or explicitly private.
 
 | Visibility  | Who can read the session when team enforcement is on                                           |
 | ----------- | ---------------------------------------------------------------------------------------------- |
@@ -151,13 +152,22 @@ session when enforcement is `on`, also requires session ownership, owning-team l
 workspace Owner/Administrator role. Only the session owner or a workspace Owner can change private
 visibility. Leading a team does not grant access to its private sessions.
 
+### Team Defaults and Migration
+
+A team's default visibility accepts only `team` or `workspace` and sets the audience of new
+sessions, not their ownership. `private` remains an explicit per-session choice. Migration `0085`
+changes existing private team defaults to `team` without changing existing sessions, and adds
+triggers that reject private defaults. **Apply migration `0085` before deploying the matching
+application code**; otherwise existing private defaults can fail validation.
+
 ### Creating Sessions
 
 Creating a team session requires active membership in that team and a grant covering **every**
-session repository; archived teams cannot be selected. Without an explicit visibility, team sessions
-use the team default and teamless sessions use `workspace`. `team` visibility requires a team.
-Agent-spawned children of a team-owned session require the active prompt author to still be a team
-member and fail with `not_member` otherwise; they never borrow the parent owner's membership.
+session repository; archived teams cannot be selected. Without an explicit visibility, sessions from
+any launch source (including Slack, Linear, and automations) use the owning team's current default,
+and teamless sessions use `workspace`. `team` visibility requires a team. Agent-spawned children of
+a team-owned session require the active prompt author to still be a team member and fail with
+`not_member` otherwise; they never borrow the parent owner's membership.
 
 **Settings > Teams > Require a team for new sessions** (`requireTeamOnCreate`, off by default)
 requires a team for new sessions, environments, and automations, including bot-created sessions.
@@ -345,12 +355,12 @@ rejects them (`reject`).
 
 In every enforcement mode, actorless bot reads scoped to an unbound channel or Linear team see only
 workspace-owned, non-private sessions, so unbinding immediately revokes access to that team's
-sessions. Slack never posts private sessions or posts team-owned sessions to a channel not bound to
-that team; confirmed publication denials close the thread without session content, while a follow-up
-refused for one user does not close it for others. Linear withholds completion results if the issue
-has moved to another Linear team. Its actorless reads, including completion reads, otherwise follow
-`TEAMS_ENFORCEMENT`: full Team-visibility isolation requires `on`. See
-[Slack](integrations/SLACK.md) and [Linear](integrations/LINEAR.md).
+sessions. Slack never posts private sessions, even when the acting user can read them, or posts
+team-owned sessions to a channel not bound to that team; confirmed publication denials close the
+thread without session content, while a follow-up refused for one user does not close it for others.
+Linear withholds completion results if the issue has moved to another Linear team. Its actorless
+reads, including completion reads, otherwise follow `TEAMS_ENFORCEMENT`: full Team-visibility
+isolation requires `on`. See [Slack](integrations/SLACK.md) and [Linear](integrations/LINEAR.md).
 
 ### GitHub Routing
 
@@ -360,7 +370,8 @@ linked PR session's team, then a team of the sender that holds a grant (broken b
 session when several qualify), then workspace ownership when neither resolves. Routing never
 bypasses session-creation checks or the require-team policy. Deprecated auto-review-on-open remains
 workspace-owned; use a team-owned GitHub Event automation instead. See
-[GitHub](integrations/GITHUB.md).
+[GitHub](integrations/GITHUB.md), including
+[upgrade steps](integrations/GITHUB.md#upgrading-to-repository-id-routing) for existing deployments.
 
 ## Suspension
 

@@ -4,7 +4,7 @@ description: How people are admitted to an OpenInspect workspace, what each role
 audience: admin
 owner: security
 status: published
-lastReviewed: "2026-10-03"
+lastReviewed: "2026-10-04"
 relatedCode:
   - docs/AUTH.md
   - packages/shared/src/rbac.ts
@@ -72,7 +72,7 @@ OpenInspect has four built-in roles. This table describes workspace feature perm
 | Manage shared settings, integrations, and secrets       |  Yes  |      Yes      |   No   |   No   |
 | Create sessions                                         |  Yes  |      Yes      |  Yes   |   No   |
 | Read sessions permitted by visibility rules             |  Yes  |      Yes      |  Yes   |  Yes   |
-| Collaborate in and manage sessions                      |  Yes  |      Yes      |  Yes   |   No   |
+| Collaborate in and manage permitted sessions            |  Yes  |      Yes      |  Yes   |   No   |
 | View automations                                        |  Yes  |      Yes      |  Yes   |  Yes   |
 | Create automations                                      |  Yes  |      Yes      |  Yes   |   No   |
 | Manage and trigger automations as executor or team lead |  Yes  |      Yes      |  Yes   |   No   |
@@ -85,9 +85,9 @@ OpenInspect has four built-in roles. This table describes workspace feature perm
 | View image-build history                                |  Yes  |      Yes      |  Yes   |  Yes   |
 | Manage personal skill profiles                          |  Yes  |      Yes      |  Yes   |   No   |
 
-**Owner.** All workspace feature permissions, subject to resource-specific checks. Only Owners can grant or remove the Owner role or suspend and restore another Owner. The final active Owner cannot be suspended or demoted, so the workspace cannot lose all ownership by accident.
+**Owner.** All workspace feature permissions, subject to resource-specific checks. Owners have audited break-glass read access to private sessions by session ID, but do not automatically gain collaboration or sandbox access. Only Owners can grant or remove the Owner role or suspend and restore another Owner. The final active Owner cannot be suspended or demoted, so the workspace cannot lose all ownership by accident.
 
-**Administrator.** Runs the workspace day to day: members, sessions, automations, repositories, environments, provider accounts, integrations, secrets, and the audit log. Administrators cannot transfer ownership, change who holds the Owner role, or suspend and restore an Owner.
+**Administrator.** Runs the workspace day to day: members, permitted sessions, automations, repositories, environments, provider accounts, integrations, secrets, and the audit log. Administrators need session ownership or an explicit collaborator grant to access a private session. They cannot transfer ownership, change who holds the Owner role, or suspend and restore an Owner.
 
 **Member.** Creates and uses eligible sessions, repositories, environments, and automations. Members manage and manually trigger automations for which they are the executor or an owning-team lead. Team leads also have team-specific administration capabilities; that does not grant workspace-wide configuration access. Members can view [analytics](/administration/analytics).
 
@@ -100,10 +100,10 @@ Session ownership and visibility are separate. Ownership is fixed at creation; a
 - **Workspace** visibility allows workspace users with session read permission to read the session.
 - **Team** visibility limits reads to owning-team members and workspace Administrators/Owners when Teams enforcement is `on`. Non-private read isolation is not fully enforced in `off` or the default `shadow` mode; see [Teams enforcement](/administration/deployment#teams-enforcement).
 - **Private** visibility permits the session owner and explicit collaborators. A collaborator on a team-owned session must still belong to that team. Private access is enforced in every mode.
-- Every non-read action on a team-owned session requires current owning-team membership, including for Administrators and Owners. Feature permissions and action-specific checks still apply; being able to read does not grant collaboration, lifecycle, deletion, or sandbox access.
+- Except for collaborator self-removal, every non-read action on a team-owned session requires current owning-team membership, including for Administrators and Owners. Feature permissions and action-specific checks still apply; being able to read does not grant collaboration, lifecycle, deletion, or sandbox access.
 - A workspace Owner, but not an Administrator, can read another person's private session through audited break-glass access. That read does not make the Owner a collaborator or grant sandbox access, and it does not bypass membership requirements for team-owned session actions.
 
-The recorded session owner matters for private access and sharing controls. Participant labels grant nothing. The **Mine** filter and team discovery scope help find sessions; neither is a substitute for authorization. See [Multiplayer and sharing](/sessions/multiplayer-and-sharing).
+The recorded session owner matters for private access and sharing controls. Participant labels grant nothing. The **Mine** filter and team discovery scope help find sessions; neither is a substitute for authorization. See [Multiplayer and sharing](/sessions/multiplayer-and-sharing) for defaults, private collaborators, and sharing controls.
 
 Creating a session also requires permission to use the selected repository or environment. A role can therefore view an existing session without being allowed to create a new one.
 

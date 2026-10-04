@@ -4,7 +4,7 @@ description: What an OpenInspect deployment consists of, what the operator confi
 audience: operator
 owner: platform
 status: published
-lastReviewed: "2026-10-03"
+lastReviewed: "2026-10-04"
 relatedCode:
   - README.md
   - docs/GETTING_STARTED.md
@@ -87,7 +87,7 @@ The production Terraform input `teams_enforcement` accepts exactly three values:
 | `shadow` | Default. Evaluates Teams decisions and records would-deny decisions while retaining legacy admission where the rollout applies. Non-private Team-visibility reads are not fully isolated. |
 | `on`     | Enforces the Teams session resolver, including non-private Team-visibility read isolation.                                                                                                |
 
-**Not all team restrictions are gated.** Private-session access and every non-read action on a team-owned session use the Teams resolver in all three modes. Repository grants, team-owned environment and automation access, runtime automation membership checks, scoped GitHub credentials, and require-team-on-create policy are separate controls; `off` and `shadow` do not turn them off. See [Workspace access](/administration/workspace-access) and [Teams](/administration/teams).
+**Not all team restrictions are gated.** Private-session access and team-owned non-read actions use the Teams resolver in all three modes. Except for collaborator self-removal, every non-read action on a team-owned session requires current owning-team membership. Repository grants, team-owned environment and automation access, runtime automation membership checks, scoped GitHub credentials, and require-team-on-create policy are separate controls; `off` and `shadow` do not turn them off. See [Workspace access](/administration/workspace-access) and [Teams](/administration/teams).
 
 For a direct production Terraform apply, set `teams_enforcement` in the deployment's Terraform inputs. Terraform writes it to the control-plane environment as `TEAMS_ENFORCEMENT`. In the repository's GitHub Actions Terraform workflow, both plan and apply resolve the value in this order:
 
@@ -126,7 +126,7 @@ The exact commands are in the self-hosting guide linked below.
 After Owner bootstrap, complete team setup explicitly:
 
 1. Open **Settings > Teams > Create team**, enter a name and slug, and create the first team. Its creator is automatically its first **Lead**; Owner bootstrap does not create a team.
-2. In the team's settings, choose **Join policy**: **Invite only** (the creation default) or **Open** for workspace users to join themselves. Choose the new-session **Default visibility**: **Team**, **Workspace**, or **Private**. Confirm effective `TEAMS_ENFORCEMENT=on` before relying on Team visibility as a read boundary.
+2. In the team's settings, choose **Join policy**: **Invite only** (the creation default) or **Open** for workspace users to join themselves. Choose the new-session **Default visibility**: **Team** or **Workspace**, never Private. Users can still explicitly choose **Private** for an individual session, including a team-owned one, subject to membership and access checks. Confirm effective `TEAMS_ENFORCEMENT=on` before relying on Team visibility as a read boundary.
 3. In **Teams > your team > Repositories**, grant named repositories or deliberately grant **All installation repositories**. New teams have no repository grants. Include all repositories needed by a selected environment.
 4. Have operators sign in, then add them to the team's member list, or have them use **Join team** for an open team. Assign Lead where team-management duties are needed. Workspace Owner/Administrator status does not replace membership for non-read session actions.
 5. Configure a model credential in the team's **Secrets** tab or another applicable [secret scope](/configure/secrets). Create a test session with the team, granted repository, intended visibility, and configured model selected. Verify checkout, streamed results, and another member's intended collaboration.

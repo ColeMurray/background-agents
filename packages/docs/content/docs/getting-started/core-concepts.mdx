@@ -4,7 +4,7 @@ description: The vocabulary the rest of the documentation uses, one short sectio
 audience: user
 owner: platform
 status: published
-lastReviewed: "2026-10-02"
+lastReviewed: "2026-10-04"
 relatedCode:
   - packages/shared/src/types/session-access.ts
   - packages/control-plane/src/session/session-target-secrets.ts
@@ -21,7 +21,7 @@ This page defines the terms you will meet everywhere else in these docs.
 
 ## Session
 
-A session is the unit of work: one conversation with the agent about one target. It is a durable record that holds your prompts, the event timeline, artifacts, participants, and a reference to the current sandbox. It survives your browser closing and outlives any single sandbox. Ownership, visibility, collaborators, and workspace permissions determine access; reading does not automatically permit prompting. A session can be archived and later restored by someone with lifecycle access.
+A session is the unit of work: one conversation with the agent about one target. It is a durable record that holds your prompts, the event timeline, artifacts, participants, and a reference to the current sandbox. It survives your browser closing and outlives any single sandbox. Ownership, visibility (Team, Workspace, or Private), collaborators, and workspace permissions determine access; reading does not automatically permit prompting. Prompting requires collaboration permission and session access, including current owning-team membership for team-owned sessions. A session can be archived and later restored by someone with lifecycle access.
 
 Learn more: [Session page](/sessions/session-page), [Lifecycle and statuses](/sessions/lifecycle-and-statuses), [Multiplayer and sharing](/sessions/multiplayer-and-sharing).
 

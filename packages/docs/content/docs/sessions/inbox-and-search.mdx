@@ -4,8 +4,9 @@ description: How team scope and filters shape the sidebar inbox and Sessions sea
 audience: user
 owner: web
 status: published
-lastReviewed: "2026-10-02"
+lastReviewed: "2026-10-04"
 relatedCode:
+  - docs/AUTH.md
   - packages/web/src/components/team-switcher.tsx
   - packages/web/src/hooks/use-active-team.ts
   - packages/control-plane/src/db/session-list-predicates.ts
@@ -19,7 +20,7 @@ relatedCode:
   - packages/web/src/hooks/use-mark-session-read.ts
 ---
 
-The sidebar inbox shows what needs you now; the Sessions page searches current and archived work within your access and discovery scope.
+The sidebar inbox shows what needs you now; the Sessions page searches current and archived work within your access and discovery scope. Both apply server-side visibility checks. See [Multiplayer and sharing](/sessions/multiplayer-and-sharing) for access rules.
 
 ![The Sessions page with search, owner, repository, environment, lifecycle, and origin filters above a list of sessions](/images/sessions/sessions-page.webp "The Sessions page: full-history search with owner, repository, environment, lifecycle, and origin filters.")
 
@@ -126,12 +127,12 @@ All of these can be rebound under Settings › Keyboard. See [Keyboard shortcuts
 
 ## Troubleshooting
 
-| Symptom                                                   | Cause                                                                              | Fix                                                                                                                                                                              |
-| --------------------------------------------------------- | ---------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| A session stays under Needs attention after you opened it | The latest turn is read only while the tab is visible; a background tab waits      | Bring the tab to the front, or use **Mark as read** from the sidebar row menu.                                                                                                   |
-| A session you expect is missing from the inbox            | It is archived, outside your selected team scope or filters, or no longer readable | Select **All my teams** in the team switcher, then check the other filters and try Sessions with Lifecycle set to Archived. If access changed, ask the owning user or team lead. |
-| "You do not have permission to view sessions."            | Your role has no session read access                                               | Ask a workspace Owner or Administrator. See [Workspace access](/administration/workspace-access).                                                                                |
-| Search finds nothing for a repository                     | Search matches title, ID, or repository text                                       | Use the Repository filter instead of typing the repository name.                                                                                                                 |
+| Symptom                                                   | Cause                                                                              | Fix                                                                                                                                                                                                                                            |
+| --------------------------------------------------------- | ---------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| A session stays under Needs attention after you opened it | The latest turn is read only while the tab is visible; a background tab waits      | Bring the tab to the front, or use **Mark as read** from the sidebar row menu.                                                                                                                                                                 |
+| A session you expect is missing from the inbox            | It is archived, outside your selected team scope or filters, or no longer readable | Select **All my teams** in the team switcher, then check the other filters and try Sessions with Lifecycle set to Archived. If still missing, review [session access](/sessions/multiplayer-and-sharing) and ask the owning user or team lead. |
+| "You do not have permission to view sessions."            | Your role has no session read access                                               | Ask a workspace Owner or Administrator. See [Workspace access](/administration/workspace-access).                                                                                                                                              |
+| Search finds nothing for a repository                     | Search matches title, ID, or repository text                                       | Use the Repository filter instead of typing the repository name.                                                                                                                                                                               |
 
 ## Next steps
 
