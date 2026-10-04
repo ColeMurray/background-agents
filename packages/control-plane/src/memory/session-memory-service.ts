@@ -12,7 +12,7 @@ import {
 import type { SessionMemoryAccessPolicy } from "../authorization/memory-access";
 import type { MemoryRecordStore } from "../db/memory-records";
 import type { SessionMemorySelectionStore } from "../db/session-memory-selections";
-import { MemoryAccessError, MemoryNotFoundError, MemoryValidationError } from "./errors";
+import { MemoryAccessError, MemoryNotFoundError, MemoryValidationError, unhandled } from "./errors";
 import { factSearchResponse, type FactSearchIndex, type FactSearchPartition } from "./fact-search";
 import { samePartition, type MemoryPartition } from "./partition";
 import { renderMemorySection } from "./render";
@@ -22,6 +22,9 @@ import type { MemorySession } from "./types";
 
 const SCOPE_UNAVAILABLE = "Memory scope is no longer available";
 const OUTSIDE_SESSION = "Memory scope is outside this session";
+const REPOSITORY_OUTSIDE_SESSION = "Repository is outside this session";
+const NO_ENVIRONMENT = "This session has no associated environment";
+const SESSION_NOT_FOUND = "Session not found";
 
 /**
  * Dependencies injected into SessionMemoryService. Each is the narrowest slice the service uses,
@@ -29,7 +32,7 @@ const OUTSIDE_SESSION = "Memory scope is outside this session";
  */
 export interface SessionMemoryServiceDeps {
   /**
-   * What one session sees: the session itself (principal, targets, harness, auto-save
+   * What one session sees: the session itself (principal, memory sources, harness, auto-save
    * eligibility), its pinned selection, and whether a record is pinned in it.
    */
   selections: Pick<SessionMemorySelectionStore, "loadSession" | "loadSelection" | "isPinned">;
@@ -49,25 +52,13 @@ export interface SessionMemoryServiceDeps {
  * session principal's current access to shared partitions. Throws `MemoryError`s.
  */
 export class SessionMemoryService {
-  private readonly selections: SessionMemoryServiceDeps["selections"];
-  private readonly records: SessionMemoryServiceDeps["records"];
-  private readonly factIndex: FactSearchIndex;
-  private readonly access: SessionMemoryServiceDeps["access"];
-  private readonly requestId: string;
-
-  constructor(deps: SessionMemoryServiceDeps) {
-    this.selections = deps.selections;
-    this.records = deps.records;
-    this.factIndex = deps.factIndex;
-    this.access = deps.access;
-    this.requestId = deps.requestId;
-  }
+  constructor(private readonly deps: SessionMemoryServiceDeps) {}
 
   /** The pinned boot context, rendered for the session's harness. */
   async renderedContext(sessionId: string): Promise<RenderedSessionMemory> {
     const session = await this.loadSession(sessionId);
-    const loaded = await this.selections.loadSelection(sessionId);
-    if (!loaded) throw new MemoryNotFoundError("Session not found");
+    const loaded = await this.deps.selections.loadSelection(sessionId);
+    if (!loaded) throw new MemoryNotFoundError(SESSION_NOT_FOUND);
     if (
       !(await this.mayAccessShared(
         session,
@@ -83,15 +74,15 @@ export class SessionMemoryService {
   }
 
   /**
-   * Expand an active fact in the session's target, or return a body-free notice for a pinned
+   * Expand an active fact in the session's sources, or return a body-free notice for a pinned
    * record that was archived. Directives are never expandable. Proposals, unpinned archives,
    * opted-out personal records, and unpinned personal records in children are concealed.
    */
   async read(sessionId: string, memoryId: string): Promise<SandboxMemoryReadResult> {
     const session = await this.loadSession(sessionId);
     const [record, pinned] = await Promise.all([
-      this.records.get(memoryId),
-      this.selections.isPinned(sessionId, memoryId),
+      this.deps.records.get(memoryId),
+      this.deps.selections.isPinned(sessionId, memoryId),
     ]);
     if (!record || record.status === "proposed") throw new MemoryNotFoundError();
     if (record.partition.type === "personal") {
@@ -148,7 +139,7 @@ export class SessionMemoryService {
     const { partition, scope } = this.writeTarget(session, input);
     if (!(await this.mayAccessShared(session, [partition])))
       throw new MemoryAccessError(SCOPE_UNAVAILABLE);
-    const memory = await this.records.create(
+    const memory = await this.deps.records.create(
       {
         partition,
         scope,
@@ -165,7 +156,7 @@ export class SessionMemoryService {
         // Equal to the personal owner for personal writes (`canWritePersonal` holds).
         userId: session.principal.userId,
         sessionId,
-        requestId: this.requestId,
+        requestId: this.deps.requestId,
       },
       { personalAutoSaveEligible: session.personalAutoSaveEligible }
     );
@@ -179,7 +170,7 @@ export class SessionMemoryService {
     const partitions = this.searchPartitions(session, input);
     const all = partitions.map((entry) => entry.partition);
     if (!(await this.mayAccessShared(session, all))) throw new MemoryAccessError(SCOPE_UNAVAILABLE);
-    const hits = await this.factIndex.search({
+    const hits = await this.deps.factIndex.search({
       terms: memorySearchTerms(input.query),
       partitions,
       limit: input.limit,
@@ -189,8 +180,8 @@ export class SessionMemoryService {
   }
 
   private async loadSession(sessionId: string): Promise<MemorySession> {
-    const session = await this.selections.loadSession(sessionId);
-    if (!session) throw new MemoryNotFoundError("Session not found");
+    const session = await this.deps.selections.loadSession(sessionId);
+    if (!session) throw new MemoryNotFoundError(SESSION_NOT_FOUND);
     return session;
   }
 
@@ -199,7 +190,7 @@ export class SessionMemoryService {
     session: MemorySession,
     partitions: readonly MemoryPartition[]
   ): Promise<boolean> {
-    const decision = await this.access.check(session.principal, partitions);
+    const decision = await this.deps.access.check(session.principal, partitions);
     return decision.kind === "granted";
   }
 
@@ -229,7 +220,7 @@ export class SessionMemoryService {
             `This session spans multiple repositories — specify repoOwner and repoName (one of: ${session.sources.repositories.map((repo) => `${repo.repoOwner}/${repo.repoName}`).join(", ")})`
           );
         const [repo] = this.selectRepositories(session, input);
-        if (!repo) throw new MemoryAccessError("Repository is outside this session");
+        if (!repo) throw new MemoryAccessError(REPOSITORY_OUTSIDE_SESSION);
         const partition = repositoryPartition(repo);
         if (!partition) throw new MemoryAccessError(OUTSIDE_SESSION);
         return {
@@ -239,8 +230,7 @@ export class SessionMemoryService {
       }
       case "environment": {
         const environmentId = session.sources.environmentId;
-        if (!environmentId)
-          throw new MemoryAccessError("This session has no associated environment");
+        if (!environmentId) throw new MemoryAccessError(NO_ENVIRONMENT);
         return {
           partition: { type: "environment", environmentId },
           scope: { type: "environment", environmentId },
@@ -256,10 +246,8 @@ export class SessionMemoryService {
           partition: { type: "personal", userId: session.sources.personalOwnerUserId },
           scope: { type: "personal" },
         };
-      default: {
-        const exhaustive: never = input.scopeType;
-        throw new Error(`Unhandled memory scope: ${String(exhaustive)}`);
-      }
+      default:
+        return unhandled("memory scope", input.scopeType);
     }
   }
 
@@ -284,7 +272,7 @@ export class SessionMemoryService {
     if (wants("repository")) {
       const repositories = this.selectRepositories(session, input);
       if (input.scopeType && !repositories.length)
-        throw new MemoryAccessError("Repository is outside this session");
+        throw new MemoryAccessError(REPOSITORY_OUTSIDE_SESSION);
       for (const repo of repositories) {
         const partition = repositoryPartition(repo);
         if (!partition) throw new MemoryAccessError("Repository identity is unavailable");
@@ -296,8 +284,7 @@ export class SessionMemoryService {
         partitions.push({
           partition: { type: "environment", environmentId: session.sources.environmentId },
         });
-      else if (input.scopeType)
-        throw new MemoryAccessError("This session has no associated environment");
+      else if (input.scopeType) throw new MemoryAccessError(NO_ENVIRONMENT);
     }
     return partitions;
   }

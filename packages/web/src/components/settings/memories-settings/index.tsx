@@ -10,7 +10,7 @@ import {
 import { setMemoryPreferences, useMemoryPreferences } from "@/hooks/use-memories";
 import { useRepos } from "@/hooks/use-repos";
 import { useEnvironments } from "@/hooks/use-environments";
-import { PERSONAL_MEMORY_DISCLOSURE } from "@/lib/memories";
+import { errorMessage, PERSONAL_MEMORY_DISCLOSURE } from "@/lib/memories";
 import { Switch } from "@/components/ui/switch";
 import {
   Select,
@@ -33,7 +33,7 @@ function PersonalMemoryDefault() {
     try {
       await mutate(await setMemoryPreferences({ includePersonalMemories }), false);
     } catch (cause) {
-      setSaveError(cause instanceof Error ? cause.message : "Save failed");
+      setSaveError(errorMessage(cause, "Save failed"));
     } finally {
       setSaving(false);
     }
@@ -135,7 +135,9 @@ export function SharedMemoriesSettings() {
       </Select>
       {(reposLoading || environmentsLoading) && <p className="text-sm">Loading scopes…</p>}
       {(reposError || environmentsError) && (
-        <p role="alert">Some memory scopes could not be loaded.</p>
+        <p role="alert" className="text-sm text-destructive">
+          Some memory scopes could not be loaded.
+        </p>
       )}
       {scope ? (
         <MemoryCollection key={memoryScopeDisplayKey(scope)} scope={scope} />

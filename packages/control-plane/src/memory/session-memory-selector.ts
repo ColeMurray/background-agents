@@ -1,16 +1,21 @@
-import type { SessionMemorySelection } from "./types";
 import type { SessionMemoryAccessPolicy } from "../authorization/memory-access";
 import type { MemoryPreferenceStore } from "../db/memory-preferences";
 import type { MemoryRecordStore } from "../db/memory-records";
 import type { MemoryPartition } from "./partition";
 import { selectWithinBudget } from "./selection";
 import { repositoryPartition, sourcePartitions } from "./sources";
-import type { MemorySources, SessionPrincipal } from "./types";
+import type {
+  MemorySourceRepository,
+  MemorySources,
+  SessionMemorySelection,
+  SessionPrincipal,
+} from "./types";
 
-/** What a new root session (or a preview of one) targets. */
+/** What a new root session (or a preview of one) may draw memory from. */
 export interface SessionMemorySelectionRequest {
   principal: SessionPrincipal;
-  repositories: readonly { repoOwner: string; repoName: string; repoId?: number | null }[];
+  /** `repoId` may be unresolved (absent) in previews; such repositories have no memory. */
+  repositories: readonly (Omit<MemorySourceRepository, "repoId"> & { repoId?: number | null })[];
   environmentId: string | null;
   /** Overrides the owner's saved default for this session. */
   includePersonalMemories?: boolean;
@@ -40,20 +45,20 @@ export class SessionMemorySelector {
     const include =
       request.includePersonalMemories ??
       (owner ? (await this.deps.preferences.get(owner)).includePersonalMemories : false);
-    const target: MemorySources = {
+    const sources: MemorySources = {
       personalOwnerUserId: include ? owner : null,
       repositories: await this.readableRepositories(request),
       environmentId: await this.readableEnvironment(request),
     };
     const { candidates, omittedCount } = await this.deps.records.listCandidates(
-      sourcePartitions(target)
+      sourcePartitions(sources)
     );
-    return selectWithinBudget(candidates, target, omittedCount);
+    return selectWithinBudget(candidates, sources, omittedCount);
   }
 
   /** Repositories with a stable ID whose memories the principal may read. */
   private async readableRepositories(request: SessionMemorySelectionRequest) {
-    const readable: { repoOwner: string; repoName: string; repoId: number }[] = [];
+    const readable: MemorySourceRepository[] = [];
     for (const repo of request.repositories) {
       const partition = repositoryPartition({ ...repo, repoId: repo.repoId ?? null });
       if (partition && (await this.canRead(request, partition)))

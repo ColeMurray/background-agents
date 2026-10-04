@@ -24,7 +24,7 @@ vi.mock("@/hooks/use-memories", () => ({
   reviseMemory: mocks.reviseMemory,
   applyMemoryAction: mocks.applyMemoryAction,
   setMemoryPreferences: mocks.setMemoryPreferences,
-  useMemory: () => ({ memory: mocks.focused, loading: false, mutate: mocks.mutate }),
+  useMemory: () => ({ memory: mocks.focused, mutate: mocks.mutate }),
   useMemories: (...args: unknown[]) => {
     mocks.collection(...args);
     return {
@@ -111,7 +111,7 @@ describe("memory management", () => {
     mocks.revisions = [firstRevision];
     render(<MemoriesSettings />);
     expect(screen.getByText(record.title)).toBeTruthy();
-    expect(screen.getByRole("tab", { name: "Proposed" }).getAttribute("aria-selected")).toBe(
+    expect(screen.getByRole("radio", { name: "Proposed" }).getAttribute("aria-checked")).toBe(
       "true"
     );
     expect(screen.getByText(/Revision 1 · User/)).toBeTruthy();
@@ -123,7 +123,7 @@ describe("memory management", () => {
     render(<MemoriesSettings />);
     fireEvent.click(screen.getByText("Next page"));
     expect(mocks.collection).toHaveBeenLastCalledWith({ type: "personal" }, "active", 50);
-    fireEvent.click(screen.getByRole("tab", { name: "Archived" }));
+    fireEvent.click(screen.getByRole("radio", { name: "Archived" }));
     expect(mocks.collection).toHaveBeenLastCalledWith({ type: "personal" }, "archived", 0);
   });
 

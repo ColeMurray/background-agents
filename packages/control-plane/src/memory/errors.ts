@@ -30,9 +30,16 @@ export class MemoryAccessError extends MemoryError {
   }
 }
 
+export const MEMORY_NOT_FOUND = "Memory not found";
+
 /** Missing or concealed records; inaccessible memories are indistinguishable from absent ones. */
 export class MemoryNotFoundError extends MemoryError {
-  constructor(message = "Memory not found") {
+  constructor(message = MEMORY_NOT_FOUND) {
     super(message, "not_found");
   }
+}
+
+/** Exhaustiveness guard for switches over memory scopes and partitions. */
+export function unhandled(kind: "memory scope" | "memory partition", value: never): never {
+  throw new Error(`Unhandled ${kind}: ${JSON.stringify(value)}`);
 }

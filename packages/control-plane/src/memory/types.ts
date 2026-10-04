@@ -9,6 +9,7 @@ import type {
   MemoryType,
 } from "@open-inspect/shared/types/memories";
 import type { MemoryPartition } from "./partition";
+import type { RenderableRevision } from "./render";
 
 /** A live record with its current revision; server-only (the web receives `MemoryDto`). */
 export interface MemoryRecord extends MemoryContent {
@@ -47,13 +48,20 @@ export type MemoryActor =
       requestId: string;
     };
 
+/** A session repository; memory is keyed by `repoId`, so repositories without one have none. */
+export interface MemorySourceRepository {
+  repoOwner: string;
+  repoName: string;
+  repoId: number | null;
+}
+
 /**
  * Where a session draws memory from: its environment, its repositories in session order, and the
  * pinned personal owner (null when personal memory is excluded). Priority follows that order.
  */
 export interface MemorySources {
   personalOwnerUserId: string | null;
-  repositories: readonly { repoOwner: string; repoName: string; repoId: number | null }[];
+  repositories: readonly MemorySourceRepository[];
   environmentId: string | null;
 }
 
@@ -82,15 +90,10 @@ export interface MemorySession {
 }
 
 /** One pinned revision ready to render: directives in full, facts as a summary. */
-export type PinnedMemoryEntry = {
-  memoryId: string;
-  revisionId: string;
-  /** Display scope pinned with the selection. */
-  scope: MemoryScope;
+export type PinnedMemoryEntry = RenderableRevision & {
   /** Live partition, used to recheck access before rendering boot context. */
   partition: MemoryPartition;
-  title: string;
-} & ({ inclusion: "full"; content: string } | { inclusion: "summary"; description: string });
+};
 
 /** One selected revision; omitted records are counted, never persisted as items. */
 export interface SessionMemoryItem {

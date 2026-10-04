@@ -26,6 +26,8 @@ CREATE TABLE memories (
   supersedes_memory_id TEXT REFERENCES memories(id),
   supersedes_revision_id TEXT,
   approved_at INTEGER,
+  -- Audit attribution (who approved/rejected, who archived); written and merge-repointed,
+  -- not read by the application.
   decided_by TEXT,
   archived_at INTEGER,
   archived_by TEXT,
@@ -47,7 +49,6 @@ CREATE TABLE memories (
   CHECK (author_kind = 'user' OR author_session_id IS NOT NULL)
 );
 CREATE INDEX idx_memories_partition ON memories(partition_type, partition_key, status, updated_at DESC, id);
-CREATE INDEX idx_memories_directive_selection ON memories(partition_type, partition_key, created_at, id) WHERE status = 'active' AND memory_type = 'directive';
 CREATE INDEX idx_memories_fact_selection ON memories(partition_type, partition_key, updated_at DESC, id) WHERE status = 'active' AND memory_type = 'fact';
 CREATE INDEX idx_memories_author_session ON memories(author_session_id, status);
 CREATE INDEX idx_memories_supersedes ON memories(supersedes_memory_id);
@@ -60,6 +61,7 @@ CREATE TABLE memory_revisions (
   title TEXT NOT NULL,
   description TEXT NOT NULL,
   content TEXT NOT NULL,
+  -- Fingerprint of the revision body for audit and integrity checks; not read by the application.
   content_sha256 TEXT NOT NULL,
   author_kind TEXT NOT NULL CHECK (author_kind IN ('user', 'agent')),
   author_user_id TEXT,
@@ -100,4 +102,3 @@ CREATE TABLE session_memory_items (
   UNIQUE(session_id, position),
   FOREIGN KEY(revision_id, memory_id) REFERENCES memory_revisions(id, memory_id) ON DELETE RESTRICT
 );
-CREATE INDEX idx_session_memory_items_memory ON session_memory_items(memory_id, session_id);

@@ -31,7 +31,6 @@ def materializer(path: Path, handler: object) -> MemoryMaterializer:
         "https://control.test",
         "session/a",
         "test-token",
-        max_rendered_chars=RENDERED_MEMORY_MAX_CHARS,
         transport=httpx.MockTransport(handler),
     )
     return MemoryMaterializer(client, path / "oi-memory.md", MagicMock())

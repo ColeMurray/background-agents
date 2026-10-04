@@ -1,5 +1,5 @@
 import useSWR from "swr";
-import { z } from "zod";
+import type { z } from "zod";
 import {
   MEMORY_LIST_PAGE_SIZE,
   memoryActionAcceptsNote,
@@ -21,9 +21,8 @@ import {
   type MemoryStatus,
 } from "@open-inspect/shared/types/memories";
 import { useAuthSession } from "@/lib/auth-session";
-import { browserApiFetch, type BrowserApiPath } from "@/lib/browser-api-fetch";
-
-const errorResponseSchema = z.object({ error: z.string() });
+import type { BrowserApiPath } from "@/lib/browser-api-fetch";
+import { browserApiJson } from "@/lib/browser-api-json";
 
 const MEMORIES_KEY = "/api/memories";
 const MEMORY_PREFERENCES_KEY = "/api/memory-preferences";
@@ -35,21 +34,8 @@ function memoryPath(id: string): BrowserApiPath {
   return `${MEMORIES_KEY}/${encodeURIComponent(id)}`;
 }
 
-async function apiRequest<T>(
-  path: BrowserApiPath,
-  schema: z.ZodType<T>,
-  init?: RequestInit
-): Promise<T> {
-  const response = await browserApiFetch(path, {
-    ...init,
-    headers: { "Content-Type": "application/json", ...init?.headers },
-  });
-  const data: unknown = await response.json().catch(() => ({}));
-  if (!response.ok) {
-    const parsedError = errorResponseSchema.safeParse(data);
-    throw new Error(parsedError.success ? parsedError.data.error : "Memory request failed");
-  }
-  return schema.parse(data);
+function apiRequest<T>(path: BrowserApiPath, schema: z.ZodType<T>, init?: RequestInit) {
+  return browserApiJson(path, schema, "Memory request failed", init);
 }
 
 function memoryListKey(scope: MemoryScope, status: MemoryStatus, offset: number): BrowserApiPath {
@@ -80,20 +66,24 @@ export function useMemories(scope: MemoryScope, status: MemoryStatus, offset: nu
 /** Load a focused record independently of the current catalog page. */
 export function useMemory(id: string | null) {
   const { data: session } = useAuthSession();
-  const { data, isLoading, error, mutate } = useSWR(session && id ? memoryPath(id) : null, (path) =>
+  const { data, error, mutate } = useSWR(session && id ? memoryPath(id) : null, (path) =>
     apiRequest(path, memoryResponseSchema)
   );
-  return { memory: data?.memory, loading: isLoading, error, mutate };
+  return { memory: data?.memory, error, mutate };
 }
 
 /** Fetch authorized immutable history only while a record is selected. */
-export function useMemoryRevisions(id: string | null) {
-  const { data: session } = useAuthSession();
+export function useMemoryRevisions(id: string) {
+  const { data: session, status: authStatus } = useAuthSession();
   const { data, isLoading, error } = useSWR(
-    session && id ? (`${memoryPath(id)}/revisions` as const) : null,
+    session ? (`${memoryPath(id)}/revisions` as const) : null,
     (path) => apiRequest(path, memoryRevisionsResponseSchema)
   );
-  return { revisions: data?.revisions ?? [], loading: isLoading, error };
+  return {
+    revisions: data?.revisions ?? [],
+    loading: authStatus === "loading" || isLoading,
+    error,
+  };
 }
 
 /** Load the saved default; session creation may proceed using the server default while unavailable. */
@@ -118,13 +108,13 @@ export function useSessionMemories(sessionId: string) {
 
 /** Preview without persisting a session; the whole input participates in the SWR cache key. */
 export function useMemoryPreview(input: MemoryPreviewInput | null) {
-  const { data: session } = useAuthSession();
+  const { data: session, status: authStatus } = useAuthSession();
   const { data, isLoading, error, mutate } = useSWR(
     session && input ? ([`${MEMORIES_KEY}/preview`, input] as const) : null,
     ([path, body]) =>
       apiRequest(path, memorySelectionSummarySchema, { method: "POST", body: JSON.stringify(body) })
   );
-  return { preview: data, loading: isLoading, error, mutate };
+  return { preview: data, loading: authStatus === "loading" || isLoading, error, mutate };
 }
 
 /** Send only the editable fields so callers can pass a record or revision directly. */

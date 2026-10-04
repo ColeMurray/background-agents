@@ -259,7 +259,6 @@ const FINAL_REPOINT_OPERATIONS = [
     table: "memory_preferences",
     collision: `EXISTS (SELECT 1 FROM memory_preferences WHERE user_id = ?)`,
   }),
-
   regularRepoint("providerAccountAuthorizationsRepointed", "model_provider_account_authorizations"),
   regularRepoint(
     "providerAccountAuthorizationAttemptsRepointed",

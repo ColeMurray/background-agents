@@ -206,7 +206,7 @@ export async function initializeSession(
     createdAt: now,
     updatedAt: now,
     memory: input.memory,
-    skills: input.managedSkills,
+    managedSkills: input.managedSkills,
     providerAuth: input.providerAuth,
   });
 

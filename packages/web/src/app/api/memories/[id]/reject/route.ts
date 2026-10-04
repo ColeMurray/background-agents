@@ -1,10 +1,3 @@
-import type { MemoryAction } from "@open-inspect/shared/types/memories";
-import { settingsProxy } from "@/lib/settings-proxy";
+import { memoryActionProxy } from "@/lib/memory-action-proxy";
 
-const action: MemoryAction = "reject";
-
-export const { POST } = settingsProxy(
-  ({ id }: { id: string }) => `/memories/${encodeURIComponent(id)}/${action}`,
-  "memory",
-  { POST: `${action} memory` }
-);
+export const { POST } = memoryActionProxy("reject");

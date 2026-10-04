@@ -45,14 +45,14 @@ export function toMemoryDto(
 }
 
 /** A selection as people see it: items and sizes, without the owner, hash, or timestamps. */
-export function toSelectionSummary(manifest: SessionMemorySelection): MemorySelectionSummary {
+export function toSelectionSummary(selection: SessionMemorySelection): MemorySelectionSummary {
   return {
-    includePersonalMemories: manifest.personalOwnerUserId !== null,
-    directiveChars: manifest.directiveChars,
-    catalogChars: manifest.catalogChars,
-    estimatedTokens: manifest.estimatedTokens,
-    omittedCount: manifest.omittedCount,
-    items: manifest.items.map((item) => ({
+    includePersonalMemories: selection.personalOwnerUserId !== null,
+    directiveChars: selection.directiveChars,
+    catalogChars: selection.catalogChars,
+    estimatedTokens: selection.estimatedTokens,
+    omittedCount: selection.omittedCount,
+    items: selection.items.map((item) => ({
       memoryId: item.memoryId,
       revisionNumber: item.revisionNumber,
       scope: item.scope,
@@ -66,9 +66,9 @@ export function toSelectionSummary(manifest: SessionMemorySelection): MemorySele
 
 /** A live session's selection summary with each item's drift since it was pinned. */
 export function toSelectionStatus(
-  manifest: SessionMemorySelection,
+  selection: SessionMemorySelection,
   drift: readonly PinnedItemDrift[]
 ): SessionMemorySelectionStatus {
-  const summary = toSelectionSummary(manifest);
+  const summary = toSelectionSummary(selection);
   return { ...summary, items: summary.items.map((item, index) => ({ ...item, ...drift[index] })) };
 }

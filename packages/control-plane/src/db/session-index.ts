@@ -123,7 +123,7 @@ export interface CreateSessionCommand extends SessionEntry {
   /** Memory selection to pin atomically with the session row. */
   memory?: Pinned<SessionMemorySelection>;
   /** Managed-skill manifest to pin atomically with the session row. */
-  skills?: Pinned<SessionSkillManifestInput>;
+  managedSkills?: Pinned<SessionSkillManifestInput>;
   /** Complete immutable model-provider authentication snapshot. */
   providerAuth?: SessionModelProviderAuthInput[];
   /** Copy access grants with the parent row in the creation batch. */
@@ -280,11 +280,11 @@ export class SessionIndexStore {
         )
     );
 
-    const manifestStmts = !session.skills
+    const manifestStmts = !session.managedSkills
       ? []
-      : session.skills.kind === "resolved"
-        ? this.bindManifestInserts(session.id, session.skills.value)
-        : this.bindManifestCopy(session.id, session.skills.parentSessionId);
+      : session.managedSkills.kind === "resolved"
+        ? this.bindManifestInserts(session.id, session.managedSkills.value)
+        : this.bindManifestCopy(session.id, session.managedSkills.parentSessionId);
     const providerAuthStmts = (session.providerAuth ?? []).map((auth) =>
       this.db
         .prepare(

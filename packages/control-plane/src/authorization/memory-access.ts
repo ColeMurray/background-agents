@@ -1,10 +1,10 @@
 import type { EffectiveAuthorization, PermissionId } from "@open-inspect/shared/rbac";
 import type { MemoryScope, MemoryScopeType } from "@open-inspect/shared/types/memories";
-import type { AuthorizationService } from "./service";
 import type { EnvironmentStore } from "../db/environments";
 import type { TeamRepositoryGrantStore } from "../db/team-repository-grants";
 import type { TeamStore } from "../db/teams";
 import type { MemoryPartition } from "../memory/partition";
+import { MEMORY_NOT_FOUND, unhandled } from "../memory/errors";
 import { repositoryPartition } from "../memory/sources";
 import type { MemoryRecord, SessionPrincipal } from "../memory/types";
 import type { InstalledRepositoryResolver } from "../routes/shared";
@@ -13,7 +13,7 @@ import type {
   EnvironmentAdmissionEvaluator,
   OwnedResourceAdmissionOutcome,
 } from "./owned-resource-admission";
-import { AuthorizationError } from "./service";
+import { AuthorizationError, type AuthorizationService } from "./service";
 
 /**
  * The memory access policy. Three questions, one module:
@@ -28,7 +28,6 @@ import { AuthorizationError } from "./service";
  * `memory-access-factory.ts` wires the D1-backed implementations for a request.
  */
 
-/** Workspace/team repository-grant admission evaluated as a given principal. */
 type RepositoryPartition = Extract<MemoryPartition, { type: "repository" }>;
 
 /** Grant checks over repository partitions; satisfied by `RepositoryGrantAuthorizer`. */
@@ -98,7 +97,7 @@ const denied = (denial: MemoryAccessDenial): MemoryManagementDecision => ({
 type DeniedDecision = Extract<MemoryManagementDecision, { kind: "denied" }>;
 const NOT_FOUND: DeniedDecision = {
   kind: "denied",
-  denial: { reason: "not_found", message: "Memory not found" },
+  denial: { reason: "not_found", message: MEMORY_NOT_FOUND },
 };
 const REPOSITORY_READ_REQUIRED: DeniedDecision = {
   kind: "denied",
@@ -204,10 +203,8 @@ export class MemoryManagementPolicy {
             }
           : NOT_FOUND;
       }
-      default: {
-        const exhaustive: never = scope;
-        throw new Error(`Unhandled memory scope: ${JSON.stringify(exhaustive)}`);
-      }
+      default:
+        return unhandled("memory scope", scope);
     }
   }
 
@@ -223,10 +220,8 @@ export class MemoryManagementPolicy {
         return this.environmentAccess(partition, scope);
       case "repository":
         return this.repositoryAccess(partition, scope);
-      default: {
-        const exhaustive: never = partition;
-        throw new Error(`Unhandled memory partition: ${JSON.stringify(exhaustive)}`);
-      }
+      default:
+        return unhandled("memory partition", partition);
     }
   }
 

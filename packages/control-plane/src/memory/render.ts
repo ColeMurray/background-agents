@@ -13,6 +13,9 @@ export type RenderableMemory = { memoryId: string; scope: MemoryScope; title: st
   | { inclusion: "summary"; description: string }
 );
 
+/** A renderable entry for one pinned revision. */
+export type RenderableRevision = RenderableMemory & { revisionId: string };
+
 function framing(harness: HarnessId): string {
   const search = harnessMemoryToolName(harness, "memory_search");
   const read = harnessMemoryToolName(harness, "memory_read");
@@ -55,17 +58,17 @@ export function renderMemoryEntry(entry: RenderableMemory): string {
  * A missing pinned revision throws rather than silently substituting live content.
  */
 export function renderMemorySection(
-  manifest: SessionMemorySelection,
-  entries: readonly (RenderableMemory & { revisionId: string })[],
+  selection: SessionMemorySelection,
+  entries: readonly RenderableRevision[],
   harness: HarnessId
 ): string {
-  if (manifest.items.length === 0) return "";
+  if (selection.items.length === 0) return "";
   const byRevision = new Map(entries.map((entry) => [entry.revisionId, entry]));
   const directives: string[] = [];
   const facts: string[] = [];
-  let omitted = manifest.omittedCount;
+  let omitted = selection.omittedCount;
   let renderedChars = MEMORY_SECTION_OVERHEAD_CHARS;
-  for (const item of manifest.items) {
+  for (const item of selection.items) {
     const entry = byRevision.get(item.revisionId);
     if (!entry || entry.memoryId !== item.memoryId || entry.inclusion !== item.inclusion)
       throw new Error(`Missing pinned memory revision ${item.revisionId}`);

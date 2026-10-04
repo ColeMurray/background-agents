@@ -1,5 +1,6 @@
 import type { MemoryScope, MemoryScopeType } from "@open-inspect/shared/types/memories";
 import { sql, type SqlFragment } from "../db/sql-fragment";
+import { unhandled } from "./errors";
 
 /**
  * The stable identity a memory belongs to — identity only. Requests name scopes
@@ -28,10 +29,6 @@ export interface ScopeDisplayColumns {
   repo_name: string | null;
 }
 
-function unreachable(value: never): never {
-  throw new Error(`Unhandled memory partition: ${JSON.stringify(value)}`);
-}
-
 /**
  * The single indexed key for a partition. Must match the generated `memories.partition_key`
  * column: `COALESCE(owner_user_id, CAST(repo_id AS TEXT), environment_id)`.
@@ -45,7 +42,7 @@ export function partitionKey(partition: MemoryPartition): string {
     case "environment":
       return partition.environmentId;
     default:
-      return unreachable(partition);
+      return unhandled("memory partition", partition);
   }
 }
 
@@ -67,7 +64,7 @@ export function partitionFromColumns(row: PartitionColumns): MemoryPartition {
     case "environment":
       return { type: "environment", environmentId: row.environment_id! };
     default:
-      return unreachable(row.partition_type);
+      return unhandled("memory partition", row.partition_type);
   }
 }
 
@@ -87,12 +84,17 @@ export function scopeFromColumns(row: PartitionColumns & ScopeDisplayColumns): M
     case "environment":
       return { type: "environment", environmentId: row.environment_id! };
     default:
-      return unreachable(row.partition_type);
+      return unhandled("memory partition", row.partition_type);
   }
 }
 
+/** A partition's identity as one comparable string. */
+export function partitionId(partition: MemoryPartition): string {
+  return `${partition.type}:${partitionKey(partition)}`;
+}
+
 export function samePartition(a: MemoryPartition, b: MemoryPartition): boolean {
-  return a.type === b.type && partitionKey(a) === partitionKey(b);
+  return partitionId(a) === partitionId(b);
 }
 
 /** Match rows of one partition through the indexed key; queries alias memories as `m`. */

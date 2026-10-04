@@ -18,7 +18,7 @@ class ResponseTooLargeError(RuntimeError):
     """The response body exceeded the caller's byte limit; never retried."""
 
 
-def retryable_fetch_error(error: Exception) -> bool:
+def _retryable_fetch_error(error: Exception) -> bool:
     """Timeouts, throttling, server failures, and transport errors may succeed on retry."""
     if isinstance(error, httpx.HTTPStatusError):
         return error.response.status_code in {408, 429} or error.response.status_code >= 500
@@ -55,7 +55,7 @@ async def fetch_bounded(
                     chunks.append(chunk)
                 return b"".join(chunks)
         except (httpx.HTTPError, OSError) as error:
-            if not retryable_fetch_error(error) or attempt == CONTROL_PLANE_FETCH_ATTEMPTS - 1:
+            if not _retryable_fetch_error(error) or attempt == CONTROL_PLANE_FETCH_ATTEMPTS - 1:
                 raise
             await asyncio.sleep(CONTROL_PLANE_FETCH_RETRY_BASE_SECONDS * (2**attempt))
     raise AssertionError("unreachable: the final attempt returns or raises")

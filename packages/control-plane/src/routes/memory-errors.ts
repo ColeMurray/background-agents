@@ -15,11 +15,6 @@ export function memoryErrorResponse(cause: unknown): Response {
   throw cause;
 }
 
-const DENIAL_STATUS: Record<MemoryAccessDenial["reason"], number> = {
-  not_found: 404,
-  forbidden: 403,
-};
-
 /** The HTTP form of a memory access denial. */
 export function memoryDenialResponse(denial: MemoryAccessDenial): Response {
   return json(
@@ -29,7 +24,7 @@ export function memoryDenialResponse(denial: MemoryAccessDenial): Response {
       reason_code: denial.reasonCode,
       repository: denial.repository,
     },
-    DENIAL_STATUS[denial.reason]
+    ERROR_STATUS[denial.reason]
   );
 }
 

@@ -2,6 +2,7 @@ import useSWR, { mutate as mutateSWR } from "swr";
 import { z } from "zod";
 import { useAuthSession } from "@/lib/auth-session";
 import { browserApiFetch, type BrowserApiPath } from "@/lib/browser-api-fetch";
+import { browserApiJson } from "@/lib/browser-api-json";
 import {
   listSkillProfilesResponseSchema,
   listSkillsResponseSchema,
@@ -40,7 +41,6 @@ const skillContentPreviewSchema = z.strictObject({
 type SkillContentPreview = z.infer<typeof skillContentPreviewSchema>;
 
 const okResponseSchema = z.strictObject({ ok: z.literal(true) });
-const errorResponseSchema = z.object({ error: z.string() });
 
 const SKILLS_KEY = "/api/skills";
 const SKILL_PROFILES_KEY = "/api/skill-profiles";
@@ -83,21 +83,8 @@ async function validatedFetcher<T>(path: BrowserApiPath, schema: z.ZodType<T>): 
   return schema.parse(await response.json());
 }
 
-async function apiRequest<T>(
-  path: BrowserApiPath,
-  schema: z.ZodType<T>,
-  init?: RequestInit
-): Promise<T> {
-  const response = await browserApiFetch(path, {
-    ...init,
-    headers: { "Content-Type": "application/json", ...init?.headers },
-  });
-  const data: unknown = await response.json().catch(() => ({}));
-  if (!response.ok) {
-    const parsedError = errorResponseSchema.safeParse(data);
-    throw new Error(parsedError.success ? parsedError.data.error : "Managed skills request failed");
-  }
-  return schema.parse(data);
+function apiRequest<T>(path: BrowserApiPath, schema: z.ZodType<T>, init?: RequestInit) {
+  return browserApiJson(path, schema, "Managed skills request failed", init);
 }
 
 export function useSkills() {

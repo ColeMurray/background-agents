@@ -30,7 +30,7 @@ const COLUMNS: Record<FactSearchField, SqlFragment> = {
   description: sql`lower(r.description)`,
   content: sql`lower(r.content)`,
 };
-const LIKE_ESCAPE = sql.from({ sql: LIKE_ESCAPE_CLAUSE, values: [] });
+const LIKE_ESCAPE = sql.constant(LIKE_ESCAPE_CLAUSE);
 
 const matches = (field: FactSearchField, pattern: string) =>
   sql`${COLUMNS[field]} LIKE ${pattern} ${LIKE_ESCAPE}`;

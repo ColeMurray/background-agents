@@ -1858,7 +1858,7 @@ export class Scheduler {
     ]);
     if (!authorized) throw new AutomationExecutionUnauthorizedError(executionDenialReason(team));
 
-    const memoryManifest = await createSessionMemorySelector(ctx).select({
+    const memorySelection = await createSessionMemorySelector(ctx).select({
       principal: {
         userId: executionPrincipal.platformUserId,
         ownerTeamId: automation.owner_team_id,
@@ -1868,7 +1868,7 @@ export class Scheduler {
     });
 
     const sessionInput: SessionInitInput = {
-      memory: resolvedPin(memoryManifest),
+      memory: resolvedPin(memorySelection),
       ownerTeamId: automation.owner_team_id,
       visibility: team?.defaultVisibility ?? "workspace",
       sessionId,

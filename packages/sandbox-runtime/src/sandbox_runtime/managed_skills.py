@@ -7,7 +7,6 @@ import json
 import os
 import re
 import shutil
-import uuid
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from typing import TYPE_CHECKING, Any
@@ -16,7 +15,7 @@ from urllib.parse import quote
 import httpx
 
 from .control_plane_fetch import ResponseTooLargeError, fetch_bounded
-from .durable_files import fsync_directory, fsync_file
+from .durable_files import atomic_write_private, fsync_directory
 
 if TYPE_CHECKING:
     from collections.abc import Iterable, Mapping, Sequence
@@ -455,15 +454,6 @@ class ManagedSkillsMaterializer:
         return found
 
     @staticmethod
-    def _write_journal(journal: Path) -> None:
-        journal.parent.mkdir(parents=True, exist_ok=True)
-        temporary = journal.with_name(f".{journal.name}.{uuid.uuid4().hex}.tmp")
-        temporary.write_text("", encoding="utf-8")
-        fsync_file(temporary)
-        temporary.replace(journal)
-        fsync_directory(journal.parent)
-
-    @staticmethod
     def _write_file(path: Path, file: ManagedSkillFile) -> None:
         path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
         flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
@@ -521,7 +511,7 @@ class ManagedSkillsMaterializer:
         an installed destination when present, or restores the backup otherwise.
         """
         parent = self.destination.parent
-        self._write_journal(journal)
+        atomic_write_private(journal, "")
         if self.destination.exists():
             self.destination.rename(backup)
             fsync_directory(parent)

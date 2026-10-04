@@ -51,9 +51,12 @@ sql.join = (fragments: readonly SqlFragment[], separator: string): SqlFragment =
     fragments.flatMap((part) => part.values)
   );
 
-/** Adapt an existing `{ sql, values }` predicate builder. */
-sql.from = (predicate: { sql: string; values: readonly unknown[] }): SqlFragment =>
-  fragment(predicate.sql, predicate.values);
+/**
+ * Embed constant SQL text declared in code, such as a shared clause. Only string literal types
+ * are accepted, so runtime (and therefore user-supplied) strings cannot be passed.
+ */
+sql.constant = <T extends string>(text: string extends T ? never : T): SqlFragment =>
+  fragment(text, []);
 
 /** Prepare and bind a fragment, enforcing the D1 bound-parameter limit. */
 export function prepareSql(db: SqlDatabase, query: SqlFragment): SqlStatement {

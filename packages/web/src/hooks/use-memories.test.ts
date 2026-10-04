@@ -108,7 +108,7 @@ describe("memory mutations", () => {
   it.each([
     [Response.json({ error: "Revision mismatch" }, { status: 409 }), "Revision mismatch"],
     [new Response("<html>Bad gateway</html>", { status: 502 }), "Memory request failed"],
-  ])("surfaces the server error message when present", async (response, message) => {
+  ])("surfaces the server error message, or a generic fallback", async (response, message) => {
     fetchMock.mockResolvedValue(response);
     await expect(applyMemoryAction(record, "approve")).rejects.toThrow(message);
   });

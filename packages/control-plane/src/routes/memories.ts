@@ -15,12 +15,13 @@ import {
   type MemoryDto,
   type MemoryActionBody,
 } from "@open-inspect/shared/types/memories";
-import { type MemoryManagementPolicy } from "../authorization/memory-access";
+import type { MemoryManagementPolicy } from "../authorization/memory-access";
 import { createMemoryManagementPolicy } from "../authorization/memory-access-factory";
 import { EnvironmentStore } from "../db/environments";
 import { MemoryPreferenceStore } from "../db/memory-preferences";
 import { MemoryRecordStore } from "../db/memory-records";
 import { toMemoryDto, toSelectionSummary } from "../memory/dto";
+import { MEMORY_NOT_FOUND } from "../memory/errors";
 import { createSessionMemorySelector } from "../memory/session-memory-selector-factory";
 import type { MemoryActor, MemoryRecord } from "../memory/types";
 import { admit, dispatch } from "../routing/admit";
@@ -66,7 +67,7 @@ async function authorizedRecord(
   mode: "read" | "write"
 ): Promise<{ record: MemoryRecord; canManage: boolean } | Response> {
   const record = await store.get(id);
-  if (!record) return error("Memory not found", 404);
+  if (!record) return error(MEMORY_NOT_FOUND, 404);
   const decision = await policy.authorizeRecord(record, mode);
   return decision.kind === "denied"
     ? memoryDenialResponse(decision.denial)
@@ -211,11 +212,11 @@ function transition(action: MemoryAction) {
 }
 
 /**
- * Summarize the selection a new session would pin, without persisting it. Targets get the same
- * human admission as management reads, then the same memory filtering as session creation.
+ * Summarize the selection a new session would pin, without persisting it. Requested sources get the
+ * same human admission as management reads, then the same memory filtering as session creation.
  */
 async function preview(request: Request, env: Env, _params: object, ctx: UserRouteContext) {
-  const body = await parseBody(request, memoryPreviewSchema, "Invalid memory target");
+  const body = await parseBody(request, memoryPreviewSchema, "Invalid memory preview");
   if (body instanceof Response) return body;
   const policy = createMemoryManagementPolicy(ctx, env);
   let repositories: { repoOwner: string; repoName: string }[] = body.repositories ?? [];

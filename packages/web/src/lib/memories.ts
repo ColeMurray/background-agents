@@ -110,3 +110,8 @@ export function memoryPreviewInput(
     includePersonalMemories,
   };
 }
+
+/** A mutation failure's message for display, or `fallback` for non-Error throws. */
+export function errorMessage(cause: unknown, fallback: string): string {
+  return cause instanceof Error ? cause.message : fallback;
+}

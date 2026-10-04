@@ -21,7 +21,12 @@ export function MemoryHistory({
 }) {
   const { revisions, loading, error } = useMemoryRevisions(record.id);
   if (loading) return <p className="text-sm">Loading history…</p>;
-  if (error) return <p role="alert">Unable to load memory history.</p>;
+  if (error)
+    return (
+      <p role="alert" className="text-sm text-destructive">
+        Unable to load memory history.
+      </p>
+    );
   return (
     <div className="space-y-3">
       {revisions.map((revision, index) => {

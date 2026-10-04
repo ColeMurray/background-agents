@@ -6,6 +6,7 @@ import {
   memoryContentSchema,
   type MemoryAction,
   type MemoryArchiveKind,
+  type MemoryAuditAction,
   type MemoryAuthorKind,
   type MemoryContent,
   type MemoryRevision,
@@ -39,7 +40,9 @@ import {
   personalAutoSaveGuard,
 } from "./session-memory-write-guard";
 
-export interface MemoryRow extends PartitionColumns, ScopeDisplayColumns {
+const MEMORY_CHANGED = "Memory changed; reload before editing";
+
+interface MemoryRow extends PartitionColumns, ScopeDisplayColumns {
   id: string;
   memory_type: MemoryType;
   status: MemoryStatus;
@@ -87,7 +90,7 @@ function recordFields(row: MemoryRow) {
   };
 }
 
-export function memoryFromRow(row: MemoryRow): MemoryRecord {
+function memoryFromRow(row: MemoryRow): MemoryRecord {
   return { ...recordFields(row), memoryType: row.memory_type, content: row.content ?? "" };
 }
 
@@ -97,7 +100,7 @@ function candidateFromRow(row: MemoryRow): MemoryCandidate {
     : { ...recordFields(row), memoryType: "fact", content: null };
 }
 
-export interface MemoryListOptions {
+interface MemoryListOptions {
   status: MemoryStatus;
   offset: number;
   limit: number;
@@ -106,7 +109,7 @@ export interface MemoryListOptions {
 /** Content for a new record; the partition is resolved and authorized by the caller. */
 export interface NewMemory {
   partition: MemoryPartition;
-  /** How the scope is displayed; must name the same target as `partition`. */
+  /** How the scope is displayed; must describe the same partition as `partition`. */
   scope: MemoryScope;
   content: MemoryContent;
   supersedesMemoryId?: string;
@@ -341,7 +344,7 @@ export class MemoryRecordStore {
       current.currentRevisionId !== expectedRevisionId ||
       current.status === "archived"
     )
-      throw new MemoryConflictError("Memory changed; reload before editing");
+      throw new MemoryConflictError(MEMORY_CHANGED);
     if (MEMORY_CONTENT_KEYS.every((key) => current[key] === content[key])) return current;
     const revisionId = `mrev_${generateId()}`;
     const operationId = generateId();
@@ -368,7 +371,7 @@ export class MemoryRecordStore {
       ),
       this.audit("memory.revised", id, operationId, actor, revisionId, current.status),
     ]);
-    if (!claim.meta.changes) throw new MemoryConflictError("Memory changed; reload before editing");
+    if (!claim.meta.changes) throw new MemoryConflictError(MEMORY_CHANGED);
     return (await this.get(id))!;
   }
 
@@ -459,7 +462,7 @@ export class MemoryRecordStore {
 
   /** An operation-fenced audit event with identifiers and status only, never memory text. */
   private audit(
-    action: `memory.${string}`,
+    action: MemoryAuditAction,
     id: string,
     operationId: string,
     actor: MemoryActor,

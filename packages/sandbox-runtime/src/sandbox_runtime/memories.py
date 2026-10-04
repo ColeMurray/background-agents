@@ -10,7 +10,7 @@ import httpx
 
 from .control_plane_fetch import ResponseTooLargeError, fetch_bounded
 from .durable_files import atomic_write_private, remove_abandoned_staging
-from .memory_contract import SANDBOX_MEMORY_SCHEMA_VERSION
+from .memory_contract import RENDERED_MEMORY_MAX_CHARS, SANDBOX_MEMORY_SCHEMA_VERSION
 
 MEMORY_FILENAME: Final = "oi-memory.md"
 MAX_MEMORY_RESPONSE_BYTES: Final = 2 * 1024 * 1024
@@ -44,7 +44,7 @@ class RenderedSessionMemory:
     rendered: str
 
 
-def _validate_rendered(body: bytes, max_rendered_chars: int) -> RenderedSessionMemory:
+def _validate_rendered(body: bytes) -> RenderedSessionMemory:
     """Parse an untrusted versioned rendered-memory response."""
     try:
         payload = json.loads(body)
@@ -59,7 +59,7 @@ def _validate_rendered(body: bytes, max_rendered_chars: int) -> RenderedSessionM
     if (
         not isinstance(manifest_sha256, str)
         or not isinstance(rendered, str)
-        or len(rendered) > max_rendered_chars
+        or len(rendered) > RENDERED_MEMORY_MAX_CHARS
     ):
         raise RuntimeError("Invalid rendered session memory")
     return RenderedSessionMemory(manifest_sha256, rendered)
@@ -74,14 +74,12 @@ class SessionMemoryClient:
         session_id: str,
         sandbox_token: str,
         *,
-        max_rendered_chars: int,
         transport: httpx.AsyncBaseTransport | None = None,
     ) -> None:
         self.url = (
             f"{control_plane_url.rstrip('/')}/sessions/{quote(session_id, safe='')}/sandbox-memory"
         )
         self.headers = {"Authorization": f"Bearer {sandbox_token}"}
-        self.max_rendered_chars = max_rendered_chars
         self.transport = transport
 
     async def fetch_rendered(self) -> RenderedSessionMemory:
@@ -99,7 +97,7 @@ class SessionMemoryClient:
             )
         except (ResponseTooLargeError, httpx.HTTPError, OSError) as error:
             raise RuntimeError("Session memory could not be loaded") from error
-        return _validate_rendered(body, self.max_rendered_chars)
+        return _validate_rendered(body)
 
 
 class RenderedMemorySource(Protocol):

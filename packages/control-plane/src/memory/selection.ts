@@ -3,30 +3,33 @@ import {
   MEMORY_SELECTION_BUDGET,
   MEMORY_SELECTION_VERSION,
 } from "@open-inspect/shared/types/memories";
-import type { SessionMemoryItem, SessionMemorySelection } from "./types";
 import { hashToken } from "../auth/crypto";
-import { partitionKey, type MemoryPartition } from "./partition";
+import { partitionId } from "./partition";
 import {
   MEMORY_SECTION_OVERHEAD_CHARS,
   renderMemoryEntry,
   renderMemorySection,
   type RenderableMemory,
+  type RenderableRevision,
 } from "./render";
 import { sourcePartitions } from "./sources";
-import type { MemoryCandidate, MemorySources } from "./types";
-
-const partitionId = (partition: MemoryPartition) => `${partition.type}:${partitionKey(partition)}`;
+import type {
+  MemoryCandidate,
+  MemorySources,
+  SessionMemoryItem,
+  SessionMemorySelection,
+} from "./types";
 
 /**
- * Deterministic order: target partition priority (environment, repositories, personal), then
+ * Deterministic order: source partition priority (environment, repositories, personal), then
  * directives before facts; oldest directives and most recently updated facts first; ID tie-break.
- * Inactive records and records outside the target are dropped.
+ * Inactive records and records outside the sources are dropped.
  */
-export function orderCandidates(
+function orderCandidates(
   candidates: readonly MemoryCandidate[],
-  target: MemorySources
+  sources: MemorySources
 ): MemoryCandidate[] {
-  const priority = sourcePartitions(target).map(partitionId);
+  const priority = sourcePartitions(sources).map(partitionId);
   return candidates
     .filter(
       (candidate) =>
@@ -42,6 +45,13 @@ export function orderCandidates(
         a.id.localeCompare(b.id)
       );
     });
+}
+
+/** Characters an entry charges against the budget: a directive's body, or a fact's summary. */
+function budgetChars(candidate: MemoryCandidate): number {
+  return candidate.memoryType === "directive"
+    ? candidate.content.length
+    : candidate.title.length + candidate.description.length;
 }
 
 function renderable(candidate: MemoryCandidate): RenderableMemory {
@@ -77,16 +87,15 @@ class MemoryBudget {
     return !this.closed.has(category);
   }
 
-  admit(candidate: MemoryCandidate, entryChars: number): boolean {
+  admit(candidate: MemoryCandidate, renderedLength: number): boolean {
     const rendered = this.fits(
       "rendered",
-      this.renderedChars + entryChars > MEMORY_SELECTION_BUDGET.renderedChars
+      this.renderedChars + renderedLength > MEMORY_SELECTION_BUDGET.renderedChars
     );
+    const chars = budgetChars(candidate);
     let admitted: boolean;
-    let chars: number;
     if (candidate.memoryType === "directive") {
       const partition = `directives:${partitionId(candidate.partition)}`;
-      chars = candidate.content.length;
       const partitionTotal = (this.partitionChars.get(partition) ?? 0) + chars;
       admitted = [
         this.fits(partition, partitionTotal > MEMORY_SELECTION_BUDGET.directiveCharsPerPartition),
@@ -105,7 +114,6 @@ class MemoryBudget {
         this.directiveCount++;
       }
     } else {
-      chars = candidate.title.length + candidate.description.length;
       admitted = this.fits(
         "catalog",
         this.catalogChars + chars > MEMORY_SELECTION_BUDGET.catalogChars ||
@@ -117,7 +125,7 @@ class MemoryBudget {
       }
     }
     if (!admitted || !rendered) return false;
-    this.renderedChars += entryChars;
+    this.renderedChars += renderedLength;
     return true;
   }
 }
@@ -138,25 +146,21 @@ async function hashSelection(
  */
 export async function selectWithinBudget(
   candidates: readonly MemoryCandidate[],
-  target: MemorySources,
+  sources: MemorySources,
   omittedByQuery = 0,
   resolvedAt = Date.now()
 ): Promise<SessionMemorySelection> {
   const budget = new MemoryBudget();
-  const selected: (RenderableMemory & { revisionId: string })[] = [];
+  const selected: RenderableRevision[] = [];
   const items: SessionMemoryItem[] = [];
   let omittedCount = omittedByQuery;
-  for (const candidate of orderCandidates(candidates, target)) {
+  for (const candidate of orderCandidates(candidates, sources)) {
     const entry = renderable(candidate);
     if (!budget.admit(candidate, renderMemoryEntry(entry).length + 1)) {
       omittedCount++;
       continue;
     }
     selected.push({ ...entry, revisionId: candidate.currentRevisionId });
-    const chars =
-      entry.inclusion === "full"
-        ? entry.content.length
-        : candidate.title.length + candidate.description.length;
     items.push({
       memoryId: candidate.id,
       revisionId: candidate.currentRevisionId,
@@ -165,24 +169,24 @@ export async function selectWithinBudget(
       memoryType: candidate.memoryType,
       title: candidate.title,
       inclusion: entry.inclusion,
-      estimatedTokens: Math.ceil(chars / 4),
+      estimatedTokens: Math.ceil(budgetChars(candidate) / 4),
     });
   }
-  const manifest: SessionMemorySelection = {
+  const selection: SessionMemorySelection = {
     selectionVersion: MEMORY_SELECTION_VERSION,
-    manifestSha256: await hashSelection(target.personalOwnerUserId !== null, items),
+    manifestSha256: await hashSelection(sources.personalOwnerUserId !== null, items),
     resolvedAt,
-    personalOwnerUserId: target.personalOwnerUserId,
+    personalOwnerUserId: sources.personalOwnerUserId,
     directiveChars: budget.directiveChars,
     catalogChars: budget.catalogChars,
     estimatedTokens: 0,
     omittedCount,
     items,
   };
-  manifest.estimatedTokens = Math.ceil(
-    renderMemorySection(manifest, selected, DEFAULT_HARNESS).length / 4
+  selection.estimatedTokens = Math.ceil(
+    renderMemorySection(selection, selected, DEFAULT_HARNESS).length / 4
   );
-  return manifest;
+  return selection;
 }
 
 /** The selection of a session that predates memory (or has nothing to pin). */

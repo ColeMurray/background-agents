@@ -1,3 +1,4 @@
+import { unhandled } from "../memory/errors";
 import type { MemoryPartition } from "../memory/partition";
 import type { MemoryActor } from "../memory/types";
 import { sql, type SqlFragment } from "./sql-fragment";
@@ -15,10 +16,8 @@ function sessionReaches(partition: MemoryPartition): SqlFragment {
         WHERE sr.session_id = s.id AND sr.repo_id = ${partition.repoId})`;
     case "environment":
       return sql`s.environment_id = ${partition.environmentId}`;
-    default: {
-      const exhaustive: never = partition;
-      throw new Error(`Unhandled memory partition: ${JSON.stringify(exhaustive)}`);
-    }
+    default:
+      return unhandled("memory partition", partition);
   }
 }
 

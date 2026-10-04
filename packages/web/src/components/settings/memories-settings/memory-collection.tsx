@@ -3,14 +3,14 @@
 import { useState } from "react";
 import {
   MEMORY_STATUSES,
-  type MemoryAction,
   type MemoryContent,
   type MemoryDto,
   type MemoryScope,
 } from "@open-inspect/shared/types/memories";
 import { applyMemoryAction, createMemory, reviseMemory } from "@/hooks/use-memories";
-import { MEMORY_STATUS_LABELS } from "@/lib/memories";
+import { errorMessage, MEMORY_STATUS_LABELS } from "@/lib/memories";
 import { Button } from "@/components/ui/button";
+import { SegmentedControl } from "@/components/ui/segmented-control";
 import { MemoryCard } from "./memory-card";
 import { MemoryEditor } from "./memory-editor";
 import { useMemoryCollection } from "./use-memory-collection";
@@ -27,6 +27,10 @@ export type MemoryPanel =
   | { kind: "history"; memoryId: string };
 
 const NO_PANEL: MemoryPanel = { kind: "none" };
+const STATUS_OPTIONS = MEMORY_STATUSES.map((value) => ({
+  value,
+  label: MEMORY_STATUS_LABELS[value],
+}));
 
 /** Manage a paginated scope using server capabilities and revision-fenced mutations. */
 export function MemoryCollection({ scope }: { scope: MemoryScope }) {
@@ -46,7 +50,7 @@ export function MemoryCollection({ scope }: { scope: MemoryScope }) {
       setPanel(nextPanel);
       await collection.refresh();
     } catch (cause) {
-      setMutationError(cause instanceof Error ? cause.message : "Memory request failed");
+      setMutationError(errorMessage(cause, "Memory request failed"));
     } finally {
       setBusy(false);
     }
@@ -70,24 +74,15 @@ export function MemoryCollection({ scope }: { scope: MemoryScope }) {
   return (
     <div className="space-y-4">
       <div className="flex flex-wrap justify-between gap-2">
-        <div className="flex gap-1" role="tablist" aria-label="Memory status">
-          {MEMORY_STATUSES.map((value) => (
-            <Button
-              key={value}
-              type="button"
-              role="tab"
-              aria-selected={collection.status === value}
-              variant={collection.status === value ? "primary" : "outline"}
-              size="sm"
-              onClick={() => {
-                collection.setStatus(value);
-                changePanel(NO_PANEL);
-              }}
-            >
-              {MEMORY_STATUS_LABELS[value]}
-            </Button>
-          ))}
-        </div>
+        <SegmentedControl
+          label="Memory status"
+          value={collection.status}
+          options={STATUS_OPTIONS}
+          onValueChange={(value) => {
+            collection.setStatus(value);
+            changePanel(NO_PANEL);
+          }}
+        />
         {collection.canCreate && (
           <Button type="button" size="sm" onClick={() => changePanel({ kind: "create" })}>
             New memory
@@ -146,7 +141,7 @@ export function MemoryCollection({ scope }: { scope: MemoryScope }) {
           busy={busy}
           canCreate={collection.canCreate}
           onPanelChange={changePanel}
-          onAction={(action: MemoryAction, archiveNote?: string) =>
+          onAction={(action, archiveNote) =>
             void run(() => applyMemoryAction(record, action, archiveNote))
           }
           onRevertToRevision={(content) => void run(() => reviseMemory(record, content), panel)}

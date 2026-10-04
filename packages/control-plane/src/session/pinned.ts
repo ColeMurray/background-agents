@@ -1,7 +1,6 @@
 /**
  * Session context fixed at creation: resolved for a root session, or inherited verbatim from the
- * parent of an agent-spawned child. Exactly one applies, so the union replaces paired optional
- * fields and the runtime check that only one was set.
+ * parent of an agent-spawned child. Exactly one applies.
  */
 export type Pinned<T> =
   | { kind: "resolved"; value: T }

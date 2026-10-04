@@ -1,9 +1,9 @@
 import {
   MEMORY_SEARCH_LIMITS,
+  type MemoryScope,
   type MemorySearchResponse,
   type MemorySearchResult,
 } from "@open-inspect/shared/types/memories";
-import type { MemoryScope } from "@open-inspect/shared/types/memories";
 import type { MemoryPartition } from "./partition";
 
 /** A partition to search; `pinnedIn` restricts it to records pinned in that session. */

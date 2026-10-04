@@ -1,20 +1,3 @@
-const mockSelectSessionMemory = vi.hoisted(() =>
-  vi.fn(async () => ({
-    selectionVersion: 1,
-    manifestSha256: "0".repeat(64),
-    resolvedAt: 1,
-    includePersonalMemories: false,
-    personalOwnerUserId: null,
-    directiveChars: 0,
-    catalogChars: 0,
-    estimatedTokens: 0,
-    omittedCount: 0,
-    items: [],
-  }))
-);
-vi.mock("../memory/session-memory-selector-factory", () => ({
-  createSessionMemorySelector: () => ({ select: mockSelectSessionMemory }),
-}));
 /**
  * Unit tests for Scheduler.
  *
@@ -36,6 +19,23 @@ import { verifyCallbackSignature } from "@open-inspect/shared/auth";
 import type { Team } from "@open-inspect/shared/types/teams";
 import type { EffectiveAuthorization } from "@open-inspect/shared/rbac";
 import type * as SessionAdmissionModule from "../authorization/session-admission";
+
+const mockSelectSessionMemory = vi.hoisted(() =>
+  vi.fn(async () => ({
+    selectionVersion: 1,
+    manifestSha256: "0".repeat(64),
+    resolvedAt: 1,
+    personalOwnerUserId: null,
+    directiveChars: 0,
+    catalogChars: 0,
+    estimatedTokens: 0,
+    omittedCount: 0,
+    items: [],
+  }))
+);
+vi.mock("../memory/session-memory-selector-factory", () => ({
+  createSessionMemorySelector: () => ({ select: mockSelectSessionMemory }),
+}));
 
 const mockCheckRepositoryAccess = vi.hoisted(() => vi.fn());
 const mockResolveSessionProviderAuth = vi.hoisted(() =>

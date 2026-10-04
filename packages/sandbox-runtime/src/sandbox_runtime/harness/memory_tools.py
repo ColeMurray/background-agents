@@ -1,7 +1,7 @@
 """Claude memory tools, built from the generated cross-harness specs.
 
 ``tools/_memory.js`` builds the OpenCode twins from the same specs with the
-same request and error semantics. Arguments are forwarded verbatim after
+same requests and error text (each harness reports errors its own way). Arguments are forwarded verbatim after
 dropping keys the input schema does not declare; the control plane derives
 ownership, approval state, and write eligibility from the session.
 """

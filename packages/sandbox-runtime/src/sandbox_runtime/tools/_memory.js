@@ -2,7 +2,8 @@
  * Memory tools for OpenCode, built from the generated cross-harness specs.
  *
  * Not a tool (no default tool() export). `harness/memory_tools.py` builds the
- * Claude twins from the same specs with the same request and error semantics.
+ * Claude twins from the same specs with the same requests and error text (each
+ * harness reports errors its own way).
  * Arguments are forwarded verbatim after dropping keys the input schema does
  * not declare; the control plane derives identity and write authority.
  */

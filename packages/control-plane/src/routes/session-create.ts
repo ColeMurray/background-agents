@@ -286,7 +286,7 @@ export async function handleCreateSession(
     throw e;
   }
 
-  const memoryManifest = await createSessionMemorySelector(ctx).select({
+  const memorySelection = await createSessionMemorySelector(ctx).select({
     principal: { userId: resolvedUserId, ownerTeamId: teamId },
     repositories: scopeMembers,
     environmentId,
@@ -294,7 +294,7 @@ export async function handleCreateSession(
   });
 
   const input: SessionInitInput = {
-    memory: resolvedPin(memoryManifest),
+    memory: resolvedPin(memorySelection),
     ownerTeamId: teamId,
     visibility,
     sessionId,

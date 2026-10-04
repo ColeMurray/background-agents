@@ -1,4 +1,3 @@
-import { sessionMemoryRoutes } from "./session-memories";
 import { Hono } from "hono";
 import type { ControlPlaneHonoEnv } from "../routing/hono-env";
 import { sessionCreateRoutes } from "./session-create";
@@ -6,6 +5,7 @@ import { sessionChildRoutes } from "./session-children";
 import { sessionChildSpawnRoutes } from "./session-child-spawn";
 import { sessionIndexRoutes } from "./session-index";
 import { sessionMediaRoutes } from "./session-media";
+import { sessionMemoryRoutes } from "./session-memories";
 import { sessionPromptRoutes } from "./session-prompt";
 import { sessionPullRequestRoutes } from "./session-pull-requests";
 import { sessionRuntimeProxyRoutes } from "./session-runtime-proxy";

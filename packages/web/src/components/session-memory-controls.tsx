@@ -3,6 +3,7 @@
 import { useId } from "react";
 import { MEMORY_TYPES, type MemorySelectionSummary } from "@open-inspect/shared/types/memories";
 import {
+  includePersonalMemoriesInput,
   MEMORY_TYPE_LABELS,
   PERSONAL_MEMORY_DISCLOSURE,
   type PersonalMemoryChoice,
@@ -14,14 +15,7 @@ function personalMemoryChecked(
   choice: PersonalMemoryChoice,
   savedDefault: boolean | undefined
 ): boolean | "indeterminate" {
-  switch (choice) {
-    case "default":
-      return savedDefault ?? "indeterminate";
-    case "include":
-      return true;
-    case "exclude":
-      return false;
-  }
+  return includePersonalMemoriesInput(choice) ?? savedDefault ?? "indeterminate";
 }
 
 function previewSummary(preview: MemorySelectionSummary): string {
@@ -46,7 +40,7 @@ export function SessionMemoryControls({
   previewLoading,
   error,
   onRetry,
-  disabled = false,
+  disabled,
 }: {
   choice: PersonalMemoryChoice;
   savedDefault: boolean | undefined;
@@ -55,8 +49,8 @@ export function SessionMemoryControls({
   preferencesLoading: boolean;
   previewLoading: boolean;
   error?: unknown;
-  onRetry?: () => void;
-  disabled?: boolean;
+  onRetry: () => void;
+  disabled: boolean;
 }) {
   const checkboxId = useId();
   const checked = personalMemoryChecked(choice, savedDefault);
@@ -83,11 +77,9 @@ export function SessionMemoryControls({
       ) : error ? (
         <p role="alert">
           Unable to load memory preferences or preview.{" "}
-          {onRetry && (
-            <button type="button" className="underline" onClick={onRetry}>
-              Retry
-            </button>
-          )}
+          <button type="button" className="underline" onClick={onRetry}>
+            Retry
+          </button>
         </p>
       ) : previewLoading ? (
         <p>Loading memory preview…</p>

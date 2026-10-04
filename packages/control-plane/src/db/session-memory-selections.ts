@@ -223,7 +223,7 @@ export class SessionMemorySelectionStore {
 
   /**
    * Load a session as memory operations see it, in one batch: its principal, harness, and
-   * targets from the session row and repositories, plus the personal owner and auto-save
+   * memory sources from the session row and repositories, plus the personal owner and auto-save
    * eligibility pinned in its manifest (never the owner's current preferences). Does not read
    * selection items. Returns null for nonexistent sessions.
    */

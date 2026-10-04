@@ -126,15 +126,11 @@ export class RepositoryGrantAuthorizer {
     repositories: readonly T[],
     options: { requireLead?: boolean } = {}
   ): Promise<T | null> {
-    const sameUser = authorization.userId === this.ctx.authorization?.userId;
-    return findUngrantedRepository(
-      {
-        ...this.ctx,
-        authorization,
-        sessionMemberships: sameUser ? this.ctx.sessionMemberships : undefined,
-      },
-      authorization,
-      { repositories, ...options }
-    );
+    // Share (and populate) the request's membership cache only when checking the caller.
+    const ctx =
+      authorization.userId === this.ctx.authorization?.userId
+        ? this.ctx
+        : { ...this.ctx, sessionMemberships: undefined };
+    return findUngrantedRepository(ctx, authorization, { repositories, ...options });
   }
 }

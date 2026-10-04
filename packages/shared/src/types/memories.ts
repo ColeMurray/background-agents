@@ -1,4 +1,5 @@
 import { z } from "zod";
+import type { AuditOperationAction } from "./audit-events";
 import { repositoriesInputSchema, repositoryPairInputSchema } from "./repositories";
 
 /** Per-record content limits, in JavaScript string length. */
@@ -139,6 +140,9 @@ export const MEMORY_ACTIONS = ["approve", "reject", "archive", "restore"] as con
 export const memoryActionNameSchema = z.enum(MEMORY_ACTIONS);
 export type MemoryAction = z.infer<typeof memoryActionNameSchema>;
 
+/** Audit actions memory operations record. */
+export type MemoryAuditAction = Extract<AuditOperationAction, `memory.${string}`>;
+
 /** The lifecycle facts every transition decision depends on. */
 export interface MemoryLifecycleState {
   status: MemoryStatus;
@@ -146,7 +150,7 @@ export interface MemoryLifecycleState {
 }
 export interface MemoryTransitionRule {
   from: readonly MemoryStatus[];
-  auditAction: `memory.${string}`;
+  auditAction: MemoryAuditAction;
   to(state: MemoryLifecycleState): { status: MemoryStatus; archiveKind: MemoryArchiveKind | null };
 }
 /**
@@ -269,15 +273,15 @@ const authorFields = {
   authorKind: z.enum(MEMORY_AUTHOR_KINDS),
   authorUserId: z.string().nullable(),
   authorSessionId: z.string().nullable(),
-  createdAt: z.number(),
 };
+const authoredFields = { ...authorFields, createdAt: z.number() };
 
 /** Immutable content snapshot; its author is the creator/editor of this revision. */
 export const memoryRevisionSchema = memoryContentSchema.safeExtend({
   id: z.string(),
   memoryId: z.string(),
   revisionNumber: z.number().int(),
-  ...authorFields,
+  ...authoredFields,
 });
 export type MemoryRevision = z.infer<typeof memoryRevisionSchema>;
 
@@ -293,7 +297,7 @@ export const memoryDtoSchema = memoryContentSchema.safeExtend({
   archiveNote: z.string().nullable(),
   currentRevisionId: z.string(),
   revisionNumber: z.number().int(),
-  ...authorFields,
+  ...authoredFields,
   supersedesMemoryId: z.string().nullable(),
   /** Records that supersede this one (the reverse of `supersedesMemoryId`). */
   supersededByMemoryIds: z.array(z.string()),
@@ -477,9 +481,7 @@ export const sandboxMemoryReadResultSchema = z.discriminatedUnion("status", [
       content: z.string(),
       revisionId: z.string(),
       revisionNumber: z.number().int(),
-      authorKind: z.enum(MEMORY_AUTHOR_KINDS),
-      authorUserId: z.string().nullable(),
-      authorSessionId: z.string().nullable(),
+      ...authorFields,
     })
     .strict(),
   z

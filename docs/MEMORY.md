@@ -229,7 +229,7 @@ rare/broad-query timings at 1,000 and 10,000 facts with representative and maxim
 ```bash
 MEMORY_SEARCH_BENCHMARK=1 MEMORY_SEARCH_BENCHMARK_OUTPUT=/tmp/memory-search-benchmark.json \
   npm test -w @open-inspect/control-plane -- \
-  src/db/memory-search.test.ts --maxWorkers=1
+  src/db/lexical-fact-index.test.ts --maxWorkers=1
 ```
 
 These local measurements are not deployed D1 latency or provider-canary proof. Indexed lexical
@@ -249,7 +249,8 @@ npm test -w @open-inspect/control-plane -- --maxWorkers=1
 npm run test:integration -w @open-inspect/control-plane -- \
   test/integration/memories.test.ts \
   test/integration/memories-routes.test.ts \
-  test/integration/memories-access.test.ts --maxWorkers=1
+  test/integration/memories-access.test.ts \
+  test/integration/memories-search.test.ts --maxWorkers=1
 npm test -w @open-inspect/web -- --maxWorkers=1
 npm run typecheck -w @open-inspect/control-plane -w @open-inspect/web
 npm run lint:sql-portability

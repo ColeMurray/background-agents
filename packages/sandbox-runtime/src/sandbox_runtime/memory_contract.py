@@ -31,7 +31,7 @@ class MemorySandboxContract(TypedDict):
 
 MEMORY_CONTRACT: Final = cast(
     "MemorySandboxContract",
-    json.loads(Path(__file__).with_name("memory_contract.json").read_text()),
+    json.loads(Path(__file__).with_name("memory_contract.json").read_text(encoding="utf-8")),
 )
 MEMORY_TOOL_SPECS: Final = MEMORY_CONTRACT["tools"]
 SANDBOX_MEMORY_SCHEMA_VERSION: Final = MEMORY_CONTRACT["sandboxSchemaVersion"]
