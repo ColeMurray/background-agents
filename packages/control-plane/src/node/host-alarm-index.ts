@@ -31,6 +31,7 @@
 
 import { join } from "node:path";
 import type { DatabaseSync } from "node:sqlite";
+import { z } from "zod";
 import { ensurePrivateDirectory } from "./private-paths";
 import { openPrivateSqliteFile } from "./sqlite-file";
 
@@ -38,6 +39,14 @@ interface SessionDeadline {
   sessionId: string;
   deadline: number;
 }
+
+const nullableDeadlineRowSchema = z.object({ deadline: z.number().nullable() });
+const nullableLeaseRowSchema = z.object({ lease_expires_at: z.number().nullable() });
+const claimedDeadlineRowSchema = z.object({
+  in_flight: z.number(),
+  failures: z.number().int().nonnegative(),
+});
+const armedDeadlineRowSchema = z.object({ session_id: z.string(), deadline: z.number() });
 
 export interface ClaimedDeadline {
   deadline: number;
@@ -220,8 +229,9 @@ export function openHostAlarmIndex(dataDir: string): HostAlarmIndex {
      WHERE in_flight IS NOT NULL`
   );
   const toDeadline = (row: unknown): SessionDeadline => {
-    const { session_id, deadline } = row as { session_id: string; deadline: number };
-    return { sessionId: session_id, deadline };
+    const parsed = armedDeadlineRowSchema.safeParse(row);
+    if (!parsed.success) throw new Error("Malformed armed deadline row", { cause: parsed.error });
+    return { sessionId: parsed.data.session_id, deadline: parsed.data.deadline };
   };
   // Armed rows only, soonest first, minus the sessions the caller is already
   // delivering to. The exclusion is a handful of ids at most, so it is
@@ -246,8 +256,11 @@ export function openHostAlarmIndex(dataDir: string): HostAlarmIndex {
   };
   return {
     get: (sessionId) => {
-      const row = read.get(sessionId) as { deadline: number | null } | undefined;
-      return row?.deadline ?? null;
+      const row = read.get(sessionId);
+      if (row === undefined) return null;
+      const parsed = nullableDeadlineRowSchema.safeParse(row);
+      if (!parsed.success) throw new Error("Malformed deadline row", { cause: parsed.error });
+      return parsed.data.deadline;
     },
     set: (sessionId, deadline) => {
       arm.run(sessionId, deadline);
@@ -259,15 +272,31 @@ export function openHostAlarmIndex(dataDir: string): HostAlarmIndex {
       disarm.run(sessionId);
     },
     earliest: (excluding = []) => armedRows("", [], excluding, 1)[0] ?? null,
-    earliestLease: () =>
-      (soonestLease.get() as { lease_expires_at: number | null }).lease_expires_at,
+    earliestLease: () => {
+      const parsed = nullableLeaseRowSchema.safeParse(soonestLease.get());
+      if (!parsed.success) throw new Error("Malformed lease row", { cause: parsed.error });
+      return parsed.data.lease_expires_at;
+    },
     due: (now, excluding, limit) => armedRows(" AND deadline <= ?", [now], excluding, limit),
     claim: (sessionId, leaseUntil) => {
       const token = crypto.randomUUID();
-      const row = claimRow.get(token, leaseUntil, sessionId) as
-        | { in_flight: number; failures: number }
-        | undefined;
-      return row === undefined ? null : { deadline: row.in_flight, failures: row.failures, token };
+      db.exec("SAVEPOINT claim_deadline");
+      try {
+        const row = claimRow.get(token, leaseUntil, sessionId);
+        if (row === undefined) {
+          db.exec("RELEASE claim_deadline");
+          return null;
+        }
+        const parsed = claimedDeadlineRowSchema.safeParse(row);
+        if (!parsed.success)
+          throw new Error("Malformed claimed deadline row", { cause: parsed.error });
+        db.exec("RELEASE claim_deadline");
+        return { deadline: parsed.data.in_flight, failures: parsed.data.failures, token };
+      } catch (error) {
+        db.exec("ROLLBACK TO claim_deadline");
+        db.exec("RELEASE claim_deadline");
+        throw error;
+      }
     },
     complete: (sessionId, token) => {
       // Dropping first keeps the row's CHECK true: clearing `in_flight` on a
