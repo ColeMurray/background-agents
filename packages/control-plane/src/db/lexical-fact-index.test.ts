@@ -3,15 +3,21 @@ import { writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { MEMORY_SEARCH_LIMITS, memorySearchSchema } from "@open-inspect/shared/types/memories";
+import { memorySearchTerms } from "@open-inspect/shared/types/memories";
+import type { FactQuery, FactSearchPartition } from "../memory/fact-search";
 import { createNodeSqlDatabase, type NodeSqlDatabase } from "../node/sqlite-database";
 import { applyMigrations } from "../node/migrate";
 import { seedSearchFacts } from "../../test/conformance/memory-search-fixtures";
-import { MemorySearchStore, type SearchPartition } from "./memory-search";
+import { LexicalFactIndex } from "./lexical-fact-index";
 import type { SqlDatabase } from "./sql-database";
 
 const OWNER = "owner";
-const personal: SearchPartition = { partition: { type: "personal", userId: OWNER } };
+const personal: FactSearchPartition = { partition: { type: "personal", userId: OWNER } };
+const query = (text: string, partitions: FactSearchPartition[], limit = 10): FactQuery => ({
+  terms: memorySearchTerms(text),
+  partitions,
+  limit,
+});
 let db: NodeSqlDatabase;
 beforeEach(() => {
   const sqlite = new DatabaseSync(":memory:");
@@ -23,9 +29,9 @@ beforeEach(() => {
 });
 afterEach(() => db.close());
 
-describe("portable memory search", () => {
-  it("uses real Node SQLite, preserves ranking across scopes and respects result limits", async () => {
-    const environment: SearchPartition = {
+describe("LexicalFactIndex", () => {
+  it("ranks across partitions in one statement and returns at most limit + 1 hits", async () => {
+    const environment: FactSearchPartition = {
       partition: { type: "environment", environmentId: "dev" },
     };
     await seedSearchFacts(db, OWNER, [
@@ -34,36 +40,28 @@ describe("portable memory search", () => {
       { id: "personal-title", title: "needle" },
       { id: "other-owner", title: "needle", partition: { type: "personal", userId: "other" } },
     ]);
-    expect(
-      await new MemorySearchStore(db).search(
-        memorySearchSchema.parse({ query: "needle", limit: 2 }),
-        [personal, environment]
-      )
-    ).toMatchObject({
-      results: [{ id: "environment-title" }, { id: "personal-title" }],
-      hasMore: true,
-    });
+    const hits = await new LexicalFactIndex(db).search(query("needle", [personal, environment], 2));
+    expect(hits.map((hit) => hit.id)).toEqual([
+      "environment-title",
+      "personal-title",
+      "personal-body",
+    ]);
+    expect(hits[0].partition).toEqual(environment.partition);
   });
-  it("bounds serialized summaries including escaping, without returning matched bodies", async () => {
-    await seedSearchFacts(
-      db,
-      OWNER,
-      Array.from({ length: 20 }, (_, i) => ({
-        id: `escape-${i}`,
-        title: "\u0001".repeat(200),
-        description: "\u0001".repeat(420),
-        content: "needle PRIVATE_BODY",
-      }))
-    );
-    const result = await new MemorySearchStore(db).search(
-      memorySearchSchema.parse({ query: "needle", limit: 20 }),
-      [personal]
-    );
-    expect(result.results.length).toBeGreaterThan(0);
-    expect(result.results.length).toBeLessThan(20);
-    expect(result.hasMore).toBe(true);
-    expect(JSON.stringify(result).length).toBeLessThanOrEqual(MEMORY_SEARCH_LIMITS.response);
-    expect(JSON.stringify(result)).not.toContain("PRIVATE_BODY");
+  it("requires every term, restricts pinned partitions, and never returns bodies", async () => {
+    await seedSearchFacts(db, OWNER, [
+      { id: "both", title: "billing", content: "webhook PRIVATE_BODY" },
+      { id: "one", title: "billing" },
+      { id: "unpinned", title: "billing webhook" },
+    ]);
+    const index = new LexicalFactIndex(db);
+    const hits = await index.search(query("billing webhook", [personal]));
+    expect(hits.map((hit) => hit.id)).toEqual(["unpinned", "both"]);
+    expect(JSON.stringify(hits)).not.toContain("PRIVATE_BODY");
+    // Nothing is pinned in this session, so a pinned-only partition yields no hits.
+    expect(
+      await index.search(query("billing webhook", [{ ...personal, pinnedIn: "child" }]))
+    ).toEqual([]);
   });
 });
 
@@ -104,16 +102,13 @@ describe.skipIf(!process.env.MEMORY_SEARCH_BENCHMARK)("memory search corpus meas
         },
         batch: (statements) => db.batch(statements),
       };
-      for (const query of ["billing webhook deduplication", "common"]) {
+      for (const text of ["billing webhook deduplication", "common"]) {
         const durations: number[] = [];
         for (let repeat = 0; repeat < 5; repeat++) {
           const start = performance.now();
-          const result = await new MemorySearchStore(measured).search(
-            memorySearchSchema.parse({ query }),
-            [personal]
-          );
+          const hits = await new LexicalFactIndex(measured).search(query(text, [personal]));
           durations.push(performance.now() - start);
-          expect(result.results.length).toBe(query === "common" ? 10 : 1);
+          expect(hits.length).toBe(text === "common" ? 11 : 1);
         }
         durations.sort((a, b) => a - b);
         const last = captured.at(-1)!;
@@ -124,7 +119,7 @@ describe.skipIf(!process.env.MEMORY_SEARCH_BENCHMARK)("memory search corpus meas
         const measurement = {
           count,
           bodySize,
-          query,
+          query: text,
           medianMs: durations[2],
           maxMs: durations[4],
           plan: plan.results.map((row) => row.detail),

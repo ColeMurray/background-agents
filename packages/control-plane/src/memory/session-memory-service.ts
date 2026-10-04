@@ -1,4 +1,5 @@
 import {
+  memorySearchTerms,
   SANDBOX_MEMORY_SCHEMA_VERSION,
   type MemorySearchInput,
   type MemorySearchResponse,
@@ -9,9 +10,9 @@ import {
 } from "@open-inspect/shared/types/memories";
 import type { SessionMemoryAccessPolicy } from "../authorization/memory-access";
 import type { MemoryRecordStore } from "../db/memory-records";
-import type { MemorySearchStore, SearchPartition } from "../db/memory-search";
 import type { SessionMemorySelectionStore } from "../db/session-memory-selections";
 import { MemoryAccessError, MemoryNotFoundError, MemoryValidationError } from "./errors";
+import { factSearchResponse, type FactSearchIndex, type FactSearchPartition } from "./fact-search";
 import { partitionScope, samePartition, type MemoryPartition } from "./partition";
 import { renderMemorySection } from "./render";
 import {
@@ -37,8 +38,8 @@ export interface SessionMemoryServiceDeps {
   selections: Pick<SessionMemorySelectionStore, "loadSession" | "load" | "isPinned">;
   /** The memory records themselves (content, revisions, lifecycle), independent of any session. */
   records: Pick<MemoryRecordStore, "get" | "create">;
-  /** Lexical search over current facts in the given partitions. */
-  factSearch: Pick<MemorySearchStore, "search">;
+  /** Ranked search over current active facts. */
+  factIndex: FactSearchIndex;
   /** Whether the session principal may currently read shared partitions; rechecked per operation. */
   access: Pick<SessionMemoryAccessPolicy, "check">;
   /** Recorded as provenance on agent writes. */
@@ -53,14 +54,14 @@ export interface SessionMemoryServiceDeps {
 export class SessionMemoryService {
   private readonly selections: SessionMemoryServiceDeps["selections"];
   private readonly records: SessionMemoryServiceDeps["records"];
-  private readonly factSearch: SessionMemoryServiceDeps["factSearch"];
+  private readonly factIndex: FactSearchIndex;
   private readonly access: SessionMemoryServiceDeps["access"];
   private readonly requestId: string;
 
   constructor(deps: SessionMemoryServiceDeps) {
     this.selections = deps.selections;
     this.records = deps.records;
-    this.factSearch = deps.factSearch;
+    this.factIndex = deps.factIndex;
     this.access = deps.access;
     this.requestId = deps.requestId;
   }
@@ -175,9 +176,13 @@ export class SessionMemoryService {
     const partitions = this.searchPartitions(session, input);
     const all = partitions.map((entry) => entry.partition);
     if (!(await this.canRead(session, all))) throw new MemoryAccessError(SCOPE_UNAVAILABLE);
-    const result = await this.factSearch.search(input, partitions);
+    const hits = await this.factIndex.search({
+      terms: memorySearchTerms(input.query),
+      partitions,
+      limit: input.limit,
+    });
     if (!(await this.canRead(session, all))) throw new MemoryAccessError(SCOPE_UNAVAILABLE);
-    return result;
+    return factSearchResponse(hits, input.limit);
   }
 
   private async loadSession(sessionId: string): Promise<MemorySession> {
@@ -240,8 +245,11 @@ export class SessionMemoryService {
   }
 
   /** Session-relative searchable partitions; an explicitly requested unavailable scope fails. */
-  private searchPartitions(session: MemorySession, input: MemorySearchInput): SearchPartition[] {
-    const partitions: SearchPartition[] = [];
+  private searchPartitions(
+    session: MemorySession,
+    input: MemorySearchInput
+  ): FactSearchPartition[] {
+    const partitions: FactSearchPartition[] = [];
     const wants = (scope: NonNullable<MemorySearchInput["scope"]>) =>
       !input.scope || input.scope === scope;
     if (wants("personal")) {
@@ -249,7 +257,7 @@ export class SessionMemoryService {
       if (access !== "none" && session.target.personalOwnerUserId)
         partitions.push({
           partition: { type: "personal", userId: session.target.personalOwnerUserId },
-          ...(access === "pinned" ? { pinnedSessionId: session.id } : {}),
+          ...(access === "pinned" ? { pinnedIn: session.id } : {}),
         });
       else if (input.scope)
         throw new MemoryAccessError("Personal memory is excluded from this session");

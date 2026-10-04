@@ -82,11 +82,8 @@ function setup(
         record("created", { partition: input.partition, status: "proposed" })
       ),
     },
-    factSearch: {
-      search: vi.fn<SessionMemoryServiceDeps["factSearch"]["search"]>(async () => ({
-        results: [],
-        hasMore: false,
-      })),
+    factIndex: {
+      search: vi.fn<SessionMemoryServiceDeps["factIndex"]["search"]>(async () => []),
     },
     access: {
       check: vi.fn(async () =>
@@ -215,10 +212,14 @@ describe("SessionMemoryService.search", () => {
   it("restricts a child's personal search to pinned records", async () => {
     const { service, deps } = setup({ session: memorySession({ inherited: true }) });
     await service.search("session", { query: "needle", limit: 10 });
-    expect(deps.factSearch.search).toHaveBeenCalledWith({ query: "needle", limit: 10 }, [
-      { partition: { type: "personal", userId: "owner" }, pinnedSessionId: "session" },
-      { partition: { type: "repository", ...api } },
-    ]);
+    expect(deps.factIndex.search).toHaveBeenCalledWith({
+      terms: ["needle"],
+      limit: 10,
+      partitions: [
+        { partition: { type: "personal", userId: "owner" }, pinnedIn: "session" },
+        { partition: { type: "repository", ...api } },
+      ],
+    });
   });
 
   it("discards results when access is revoked while the query runs", async () => {
@@ -226,7 +227,7 @@ describe("SessionMemoryService.search", () => {
     await expect(service.search("session", { query: "needle", limit: 10 })).rejects.toThrow(
       MemoryAccessError
     );
-    expect(deps.factSearch.search).toHaveBeenCalledTimes(1);
+    expect(deps.factIndex.search).toHaveBeenCalledTimes(1);
   });
 });
 

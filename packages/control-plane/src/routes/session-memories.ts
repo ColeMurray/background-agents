@@ -2,7 +2,7 @@ import { Hono } from "hono";
 import { memorySearchSchema, sandboxMemoryWriteSchema } from "@open-inspect/shared/types/memories";
 import { createSessionMemoryAccessPolicy } from "../authorization/memory-access-factory";
 import { MemoryRecordStore } from "../db/memory-records";
-import { MemorySearchStore } from "../db/memory-search";
+import { LexicalFactIndex } from "../db/lexical-fact-index";
 import { SessionMemorySelectionStore } from "../db/session-memory-selections";
 import { SessionMemoryService } from "../memory/session-memory-service";
 import { admit, dispatch } from "../routing/admit";
@@ -32,7 +32,7 @@ function sessionMemoryService(ctx: SandboxRouteContext): SessionMemoryService {
   return new SessionMemoryService({
     selections: new SessionMemorySelectionStore(ctx.db),
     records: new MemoryRecordStore(ctx.db),
-    factSearch: new MemorySearchStore(ctx.db),
+    factIndex: new LexicalFactIndex(ctx.db),
     access: createSessionMemoryAccessPolicy(ctx),
     requestId: ctx.request_id,
   });

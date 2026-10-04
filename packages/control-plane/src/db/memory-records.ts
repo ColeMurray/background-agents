@@ -25,6 +25,7 @@ import {
 import type { MemoryActor, MemoryCandidate, MemoryRecord } from "../memory/types";
 import { MAX_D1_QUERY_PARAMETERS } from "./query-limits";
 import type { SqlDatabase, SqlStatement } from "./sql-database";
+import { CURRENT_MEMORY, inPartitions } from "./memory-queries";
 import { prepareSql, sql, type SqlFragment } from "./sql-fragment";
 import {
   agentWriteGuard,
@@ -54,9 +55,9 @@ export interface MemoryRow extends PartitionColumns {
   updated_at: number;
 }
 
-/** Live record columns joined to the current revision; queries alias memories as `m`. */
-export const CURRENT_MEMORY_SELECT = sql`SELECT m.*, r.title, r.description, r.content, r.revision_number
-  FROM memories m JOIN memory_revisions r ON r.id = m.current_revision_id AND r.memory_id = m.id`;
+/** A live record with its full current revision. */
+const CURRENT_MEMORY_SELECT = sql`SELECT m.*, r.title, r.description, r.content, r.revision_number
+  ${CURRENT_MEMORY}`;
 
 function recordFields(row: MemoryRow) {
   return {
@@ -158,46 +159,37 @@ export class MemoryRecordStore {
   }
 
   /**
-   * Read bounded, ordered selection candidates and per-partition active counts in one consistent
-   * snapshot. Facts project their summary only. Each partition returns at most the global record
-   * budget per type; skipped rows are reported as `omittedCount`.
+   * Read bounded selection candidates and the active total in one consistent snapshot. Each
+   * partition contributes at most the global record budget per type, in selection order (oldest
+   * directives, most recently updated facts); facts project their summary only. Rows beyond those
+   * caps are reported as `omittedCount`.
    */
   async listCandidates(
     partitions: readonly MemoryPartition[]
   ): Promise<{ candidates: MemoryCandidate[]; omittedCount: number }> {
     if (!partitions.length) return { candidates: [], omittedCount: 0 };
-    const statements = partitions.flatMap((partition) => {
-      const scope = partitionPredicate(partition);
-      return [
-        prepareSql(
-          this.db,
-          sql`SELECT COUNT(*) AS total FROM memories m WHERE m.status = 'active' AND ${scope}`
-        ),
-        prepareSql(
-          this.db,
-          sql`${CURRENT_MEMORY_SELECT} WHERE m.status = 'active' AND ${scope}
-            AND m.memory_type = 'directive' ORDER BY m.created_at, m.id
-            LIMIT ${MEMORY_LIMITS.directiveRecords}`
-        ),
-        prepareSql(
-          this.db,
-          sql`SELECT m.*, r.title, r.description, NULL AS content, r.revision_number
-            FROM memories m JOIN memory_revisions r ON r.id = m.current_revision_id AND r.memory_id = m.id
-            WHERE m.status = 'active' AND ${scope} AND m.memory_type = 'fact'
-            ORDER BY m.updated_at DESC, m.id LIMIT ${MEMORY_LIMITS.catalogRecords}`
-        ),
-      ];
-    });
-    const results = await this.db.batch<MemoryRow | { total: number }>(statements);
-    let total = 0;
-    const candidates = new Map<string, MemoryCandidate>();
-    results.forEach((result, index) => {
-      if (index % 3 === 0) total += (result.results[0] as { total: number }).total;
-      else
-        for (const row of result.results as MemoryRow[])
-          candidates.set(row.id, candidateFromRow(row));
-    });
-    return { candidates: [...candidates.values()], omittedCount: total - candidates.size };
+    const active = sql`m.status = 'active' AND ${inPartitions(partitions)}`;
+    const [totals, ranked] = await this.db.batch<{ total: number } | MemoryRow>([
+      prepareSql(this.db, sql`SELECT COUNT(*) AS total FROM memories m WHERE ${active}`),
+      prepareSql(
+        this.db,
+        sql`SELECT * FROM (
+            SELECT m.*, r.title, r.description, r.revision_number,
+              CASE WHEN m.memory_type = 'directive' THEN r.content ELSE NULL END AS content,
+              ROW_NUMBER() OVER (
+                PARTITION BY m.scope_type, m.scope_key, m.memory_type
+                ORDER BY CASE WHEN m.memory_type = 'directive' THEN m.created_at ELSE -m.updated_at END,
+                  m.id
+              ) AS rank_in_partition
+            ${CURRENT_MEMORY} WHERE ${active}
+          ) ranked
+          WHERE (memory_type = 'directive' AND rank_in_partition <= ${MEMORY_LIMITS.directiveRecords})
+            OR (memory_type = 'fact' AND rank_in_partition <= ${MEMORY_LIMITS.catalogRecords})`
+      ),
+    ]);
+    const candidates = (ranked.results as MemoryRow[]).map(candidateFromRow);
+    const total = (totals.results[0] as { total: number }).total;
+    return { candidates, omittedCount: total - candidates.length };
   }
 
   /** Immutable content history, newest first; callers authorize the record. */

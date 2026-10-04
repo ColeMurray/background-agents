@@ -5,7 +5,7 @@ import { MemoryRecordStore } from "../../src/db/memory-records";
 import type { MemoryPartition } from "../../src/memory/partition";
 import { seedMemorySession } from "./memory-test-helpers";
 import { SessionMemorySelectionStore } from "../../src/db/session-memory-selections";
-import { MemorySearchStore } from "../../src/db/memory-search";
+import { LexicalFactIndex } from "../../src/db/lexical-fact-index";
 import { seedSearchFacts } from "../conformance/memory-search-fixtures";
 import { cleanD1Tables } from "./cleanup";
 import { initNamedSessionDO, routeRequest, seedActiveUser, seedSandboxAuthHash } from "./helpers";
@@ -259,9 +259,9 @@ describe("session memory discovery", () => {
         env.DB.prepare("DELETE FROM team_repository_grants WHERE team_id = 'engineering'").run();
       if (when === "before") await revoke();
       else {
-        const original = MemorySearchStore.prototype.search;
-        vi.spyOn(MemorySearchStore.prototype, "search").mockImplementationOnce(async function (
-          this: MemorySearchStore,
+        const original = LexicalFactIndex.prototype.search;
+        vi.spyOn(LexicalFactIndex.prototype, "search").mockImplementationOnce(async function (
+          this: LexicalFactIndex,
           ...args
         ) {
           const result = await original.apply(this, args);
@@ -320,9 +320,9 @@ describe("session memory discovery", () => {
       ]);
       const call = await sandbox(`changed-${change}`, { environmentId: "dev" });
       await seedTeam("other-team");
-      const original = MemorySearchStore.prototype.search;
-      vi.spyOn(MemorySearchStore.prototype, "search").mockImplementationOnce(async function (
-        this: MemorySearchStore,
+      const original = LexicalFactIndex.prototype.search;
+      vi.spyOn(LexicalFactIndex.prototype, "search").mockImplementationOnce(async function (
+        this: LexicalFactIndex,
         ...args
       ) {
         const result = await original.apply(this, args);
