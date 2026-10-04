@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { env } from "cloudflare:test";
 import type { MemoryContent } from "@open-inspect/shared/types/memories";
-import { MemoryStore, type NewMemory } from "../../src/db/memories";
+import { MemoryRecordStore, type NewMemory } from "../../src/db/memory-records";
 import type { MemoryPartition } from "../../src/memory/partition";
 import { resolveSessionMemory } from "../../src/memory/resolve-session-memory";
 import type { MemoryActor } from "../../src/memory/types";
@@ -44,7 +44,7 @@ describe("memory persistence", () => {
     });
   });
   it("bounds candidate queries, omits fact bodies, and counts every omitted record", async () => {
-    const store = new MemoryStore(env.DB);
+    const store = new MemoryRecordStore(env.DB);
     for (let i = 0; i < 230; i++)
       await store.create(memory({ title: `Fact ${i}`, content: "x".repeat(20_000) }), human);
     for (let i = 0; i < 120; i++)
@@ -69,7 +69,7 @@ describe("memory persistence", () => {
     expect(manifest.truncatedCount).toBe(50);
   });
   it("revises without replacing provenance and rejects concurrent stale edits", async () => {
-    const store = new MemoryStore(env.DB);
+    const store = new MemoryRecordStore(env.DB);
     const record = await store.create(memory(), agent);
     expect(record.status).toBe("active");
     const unchanged = await store.revise(record.id, fact, record.currentRevisionId, human);
@@ -84,7 +84,7 @@ describe("memory persistence", () => {
     expect(await store.revisions(record.id)).toHaveLength(2);
   });
   it("proposals cannot supersede active memories before approval", async () => {
-    const store = new MemoryStore(env.DB);
+    const store = new MemoryRecordStore(env.DB);
     // The stored display name differs from the session's: partitions match on the stable ID.
     const input = memory(
       {},
@@ -110,7 +110,7 @@ describe("memory persistence", () => {
     expect((await store.get(original.id))?.status).toBe("archived");
   });
   it("approves only one competing replacement and rejects stale predecessors", async () => {
-    const store = new MemoryStore(env.DB);
+    const store = new MemoryRecordStore(env.DB);
     const original = await store.create(memory({ memoryType: "directive" }), human);
     const proposals = await Promise.all(
       [1, 2].map((n) =>
@@ -131,7 +131,7 @@ describe("memory persistence", () => {
     ]);
   });
   it("enforces the total write quota even when records are archived", async () => {
-    const store = new MemoryStore(env.DB);
+    const store = new MemoryRecordStore(env.DB);
     for (let n = 0; n < 20; n++) {
       const record = await store.create(memory(), agent);
       await store.transition(record.id, "archive", record.currentRevisionId, human);
@@ -142,7 +142,7 @@ describe("memory persistence", () => {
     ).toBe(20);
   });
   it("preserves one active record across restored predecessors and multi-generation replacements", async () => {
-    const store = new MemoryStore(env.DB);
+    const store = new MemoryRecordStore(env.DB);
     const a = await store.create(memory(), human);
     const b = await store.create(memory({}, { supersedesMemoryId: a.id }), human);
     await expect(store.transition(a.id, "restore", a.currentRevisionId, human)).rejects.toThrow(
@@ -165,7 +165,7 @@ describe("memory persistence", () => {
     expect(await store.list(owner, page)).toHaveLength(1);
   });
   it("fences personal autosave after a session was shared, even when made private again", async () => {
-    const store = new MemoryStore(env.DB);
+    const store = new MemoryRecordStore(env.DB);
     await new SessionScopeStore(env.DB).updateVisibility(["session_a"], "workspace");
     await new SessionScopeStore(env.DB).updateVisibility(["session_a"], "private");
     await expect(store.create(memory(), agent)).rejects.toThrow(/session access/);
@@ -174,14 +174,14 @@ describe("memory persistence", () => {
     );
   });
   it("does not let an auto-saved fact bypass directive approval through supersession", async () => {
-    const store = new MemoryStore(env.DB);
+    const store = new MemoryRecordStore(env.DB);
     const directive = await store.create(memory({ memoryType: "directive" }), human);
     const replacement = await store.create(memory({}, { supersedesMemoryId: directive.id }), agent);
     expect(replacement.status).toBe("proposed");
     expect((await store.get(directive.id))?.status).toBe("active");
   });
   it("restores previously active records as active but rejected proposals as proposed", async () => {
-    const store = new MemoryStore(env.DB);
+    const store = new MemoryRecordStore(env.DB);
     const active = await store.create(memory(), human);
     await store.transition(active.id, "archive", active.currentRevisionId, human, "Old");
     expect(
@@ -200,7 +200,7 @@ describe("memory persistence", () => {
     ).toBe("proposed");
   });
   it("serializes the pending quota and writes no orphan revisions or success audits", async () => {
-    const store = new MemoryStore(env.DB);
+    const store = new MemoryRecordStore(env.DB);
     const outcomes = await Promise.allSettled(
       Array.from({ length: 8 }, () => store.create(memory({ memoryType: "directive" }), agent))
     );
@@ -219,7 +219,7 @@ describe("memory persistence", () => {
   it.each(["human", "proposal"])(
     "audits the predecessor revision for a %s replacement",
     async (kind) => {
-      const store = new MemoryStore(env.DB);
+      const store = new MemoryRecordStore(env.DB);
       const original = await store.create(memory(), human);
       const replacement = await store.create(
         memory({}, { supersedesMemoryId: original.id }),
@@ -244,7 +244,7 @@ describe("memory persistence", () => {
     }
   );
   it("keeps content and personal archive reasons out of workspace audit metadata", async () => {
-    const store = new MemoryStore(env.DB);
+    const store = new MemoryRecordStore(env.DB);
     const record = await store.create(memory({ content: "private-content" }), human);
     await store.transition(record.id, "archive", record.currentRevisionId, human, "private-reason");
     const audits = await env.DB.prepare(

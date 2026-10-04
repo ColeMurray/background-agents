@@ -25,7 +25,7 @@ import {
 } from "../authorization/memory-access-factory";
 import { EnvironmentStore } from "../db/environments";
 import { MemoryPreferenceStore } from "../db/memory-preferences";
-import { MemoryStore } from "../db/memories";
+import { MemoryRecordStore } from "../db/memory-records";
 import { toMemoryDto } from "../memory/dto";
 import { partitionScope } from "../memory/partition";
 import { resolveSessionMemory } from "../memory/resolve-session-memory";
@@ -57,7 +57,7 @@ const paginationSchema = z.object({
 });
 
 async function dto(
-  store: MemoryStore,
+  store: MemoryRecordStore,
   record: MemoryRecord,
   canManage: boolean
 ): Promise<MemoryDto> {
@@ -67,7 +67,7 @@ async function dto(
 
 /** Load a record and authorize it against its own partition; inaccessible records are concealed. */
 async function authorizedRecord(
-  store: MemoryStore,
+  store: MemoryRecordStore,
   policy: MemoryManagementPolicy,
   id: string,
   mode: "read" | "write"
@@ -93,7 +93,7 @@ async function list(request: Request, env: Env, _params: object, ctx: UserRouteC
   const { offset, limit } = pagination.data;
   const access = await createMemoryManagementPolicy(ctx, env).authorize(scope, "read");
   if (access instanceof Response) return access;
-  const store = new MemoryStore(ctx.db);
+  const store = new MemoryRecordStore(ctx.db);
   // One extra row tells us whether another page exists.
   const records = await store.list(access.partition, {
     status: status.data,
@@ -118,7 +118,7 @@ async function create(request: Request, env: Env, _params: object, ctx: UserRout
   const access = await createMemoryManagementPolicy(ctx, env).authorize(body.scope, "write");
   if (access instanceof Response) return access;
   const { scope: _scope, supersedesMemoryId, ...content } = body;
-  const store = new MemoryStore(ctx.db);
+  const store = new MemoryRecordStore(ctx.db);
   try {
     const record = await store.create(
       { partition: access.partition, content, supersedesMemoryId },
@@ -131,7 +131,7 @@ async function create(request: Request, env: Env, _params: object, ctx: UserRout
 }
 
 async function get(_request: Request, env: Env, params: { id: string }, ctx: UserRouteContext) {
-  const store = new MemoryStore(ctx.db);
+  const store = new MemoryRecordStore(ctx.db);
   const found = await authorizedRecord(
     store,
     createMemoryManagementPolicy(ctx, env),
@@ -146,7 +146,7 @@ async function get(_request: Request, env: Env, params: { id: string }, ctx: Use
 async function revise(request: Request, env: Env, params: { id: string }, ctx: UserRouteContext) {
   const revision = expectedRevision(request);
   if (revision instanceof Response) return revision;
-  const store = new MemoryStore(ctx.db);
+  const store = new MemoryRecordStore(ctx.db);
   const found = await authorizedRecord(
     store,
     createMemoryManagementPolicy(ctx, env),
@@ -171,7 +171,7 @@ async function revisions(
   params: { id: string },
   ctx: UserRouteContext
 ) {
-  const store = new MemoryStore(ctx.db);
+  const store = new MemoryRecordStore(ctx.db);
   const found = await authorizedRecord(
     store,
     createMemoryManagementPolicy(ctx, env),
@@ -187,7 +187,7 @@ function transition(action: MemoryAction) {
   return async (request: Request, env: Env, params: { id: string }, ctx: UserRouteContext) => {
     const revision = expectedRevision(request);
     if (revision instanceof Response) return revision;
-    const store = new MemoryStore(ctx.db);
+    const store = new MemoryRecordStore(ctx.db);
     const found = await authorizedRecord(
       store,
       createMemoryManagementPolicy(ctx, env),

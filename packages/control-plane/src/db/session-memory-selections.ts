@@ -52,9 +52,9 @@ export interface LoadedSessionMemory {
  * What each session sees of memory: the selection pinned when it was created (manifest header and
  * ordered revision references), its memory context (personal owner, repositories, environment,
  * auto-save eligibility), and pin membership. It never creates or changes memory records — that is
- * `MemoryStore` — and pinned selections stay fixed while the records they reference evolve.
+ * `MemoryRecordStore` — and pinned selections stay fixed while the records they reference evolve.
  */
-export class SessionMemoryStore {
+export class SessionMemorySelectionStore {
   constructor(private readonly db: SqlDatabase) {}
 
   /**

@@ -1,10 +1,10 @@
 import { createExecutionContext, env } from "cloudflare:test";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { memorySearchResponseSchema } from "@open-inspect/shared/types/memories";
-import { MemoryStore } from "../../src/db/memories";
+import { MemoryRecordStore } from "../../src/db/memory-records";
 import type { MemoryPartition } from "../../src/memory/partition";
 import { seedMemorySession } from "./memory-test-helpers";
-import { SessionMemoryStore } from "../../src/db/session-memories";
+import { SessionMemorySelectionStore } from "../../src/db/session-memory-selections";
 import * as searchStore from "../../src/db/memory-search";
 import { seedSearchFacts } from "../conformance/memory-search-fixtures";
 import { cleanD1Tables } from "./cleanup";
@@ -95,7 +95,7 @@ describe("session memory discovery", () => {
     ]);
     const call = await sandbox("large-corpus");
     expect(
-      (await new SessionMemoryStore(env.DB).load("large-corpus"))!.manifest.items.some(
+      (await new SessionMemorySelectionStore(env.DB).load("large-corpus"))!.manifest.items.some(
         (item) => item.memoryId === "old"
       )
     ).toBe(false);
@@ -149,7 +149,7 @@ describe("session memory discovery", () => {
       results: [],
       hasMore: false,
     });
-    const store = new MemoryStore(env.DB);
+    const store = new MemoryRecordStore(env.DB);
     await store.revise(
       "literal",
       {

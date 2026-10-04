@@ -29,7 +29,7 @@ import {
   type SessionModelProviderAuthInput,
 } from "../model-provider-accounts/provider-auth-contracts";
 import { bulkInsertStatements } from "./bulk-insert";
-import { SessionMemoryStore } from "./session-memories";
+import { SessionMemorySelectionStore } from "./session-memory-selections";
 import { SessionStatusProjectionStore } from "./session-status-projection-store";
 import { attachSessionListMetadata } from "./session-list-metadata";
 import { buildSessionListPredicates, type SessionListFilters } from "./session-list-predicates";
@@ -314,7 +314,7 @@ export class SessionIndexStore {
       ...repositoryStmts,
       ...manifestStmts,
       ...(session.memory
-        ? new SessionMemoryStore(this.db).bindPinned(session.id, session.memory)
+        ? new SessionMemorySelectionStore(this.db).bindPinned(session.id, session.memory)
         : []),
       ...providerAuthStmts,
       ...(session.collaboratorSourceSessionId

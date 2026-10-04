@@ -1,7 +1,7 @@
 import { z } from "zod";
 import type { SessionVisibility } from "@open-inspect/shared/types/teams";
 import type { SqlDatabase, SqlStatement } from "./sql-database";
-import { SessionMemoryStore } from "./session-memories";
+import { SessionMemorySelectionStore } from "./session-memory-selections";
 
 type SessionAuditStatement = { sessionId: string; statement: SqlStatement };
 
@@ -46,7 +46,7 @@ export class SessionScopeStore {
         if (visibility !== "private") {
           // Once shared, a delayed agent tool call cannot auto-save personal facts,
           // even if the audience is subsequently made private again.
-          statements.push(new SessionMemoryStore(this.db).bindRevokePersonalAutoSave(id));
+          statements.push(new SessionMemorySelectionStore(this.db).bindRevokePersonalAutoSave(id));
         }
         return statements;
       })

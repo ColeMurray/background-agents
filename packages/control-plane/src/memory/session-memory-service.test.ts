@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import type { SessionMemoryManifest } from "@open-inspect/shared/types/memories";
-import type { LoadedSessionMemory } from "../db/session-memories";
+import type { LoadedSessionMemory } from "../db/session-memory-selections";
 import { MemoryAccessError, MemoryNotFoundError, MemoryValidationError } from "./errors";
 import type { MemoryPartition } from "./partition";
 import { SessionMemoryService, type SessionMemoryServiceDeps } from "./session-memory-service";
@@ -62,14 +62,14 @@ function setup(
   const records = new Map((options.records ?? []).map((memory) => [memory.id, memory]));
   const readable = [...(options.readable ?? [])];
   const deps = {
-    sessions: {
+    selections: {
       context: vi.fn(async () => options.context ?? sessionContext()),
       load: vi.fn(async () => options.loaded ?? null),
       isPinned: vi.fn(async (_session: string, id: string) => !!options.pinned?.includes(id)),
     },
-    memories: {
+    records: {
       get: vi.fn(async (id: string) => records.get(id) ?? null),
-      create: vi.fn<SessionMemoryServiceDeps["memories"]["create"]>(async (input) =>
+      create: vi.fn<SessionMemoryServiceDeps["records"]["create"]>(async (input) =>
         record("created", { partition: input.partition, status: "proposed" })
       ),
     },
@@ -98,7 +98,7 @@ describe("SessionMemoryService.write", () => {
       status: "proposed",
       revisionId: "rev_created",
     });
-    expect(deps.memories.create).toHaveBeenCalledWith(
+    expect(deps.records.create).toHaveBeenCalledWith(
       {
         partition: { type: "repository", ...api },
         content: fact,
@@ -123,8 +123,8 @@ describe("SessionMemoryService.write", () => {
     await expect(
       service.write("session", { ...fact, scope: "repository", repoOwner: "acme", repoName: "web" })
     ).resolves.toMatchObject({ id: "created" });
-    expect(deps.memories.create).toHaveBeenCalledTimes(1);
-    expect(deps.memories.create.mock.calls[0][0].partition).toEqual({ type: "repository", ...web });
+    expect(deps.records.create).toHaveBeenCalledTimes(1);
+    expect(deps.records.create.mock.calls[0][0].partition).toEqual({ type: "repository", ...web });
   });
 
   it("keeps a collaborator-owned child out of the original owner's personal store", async () => {
@@ -134,7 +134,7 @@ describe("SessionMemoryService.write", () => {
     await expect(service.write("session", { ...fact, scope: "personal" })).rejects.toThrow(
       MemoryAccessError
     );
-    expect(deps.memories.create).not.toHaveBeenCalled();
+    expect(deps.records.create).not.toHaveBeenCalled();
   });
 
   it("denies a write when the principal can no longer read the partition", async () => {
@@ -142,7 +142,7 @@ describe("SessionMemoryService.write", () => {
     await expect(service.write("session", { ...fact, scope: "repository" })).rejects.toThrow(
       MemoryAccessError
     );
-    expect(deps.memories.create).not.toHaveBeenCalled();
+    expect(deps.records.create).not.toHaveBeenCalled();
   });
 });
 

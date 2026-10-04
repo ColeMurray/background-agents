@@ -6,10 +6,10 @@ import {
   sessionMemoryDiagnosticsSchema,
 } from "@open-inspect/shared/types/memories";
 import { MemoryPreferenceStore } from "../../src/db/memory-preferences";
-import { MemoryStore } from "../../src/db/memories";
+import { MemoryRecordStore } from "../../src/db/memory-records";
 import { mergeUsers } from "../../src/db/user-merge";
 import { memoryTargetForTest, seedMemorySession } from "./memory-test-helpers";
-import { SessionMemoryStore } from "../../src/db/session-memories";
+import { SessionMemorySelectionStore } from "../../src/db/session-memory-selections";
 import { resolveSessionMemory } from "../../src/memory/resolve-session-memory";
 import { cleanD1Tables } from "./cleanup";
 import { initNamedSessionDO, seedActiveUser, seedSandboxAuthHash, serviceFetch } from "./helpers";
@@ -109,7 +109,7 @@ describe("memory HTTP lifecycle and session boundaries", () => {
       });
       expect(response.status).toBe(201);
       const { sessionId } = await response.json<{ sessionId: string }>();
-      const manifest = (await new SessionMemoryStore(env.DB).load(sessionId))!.manifest;
+      const manifest = (await new SessionMemorySelectionStore(env.DB).load(sessionId))!.manifest;
       expect(manifest.includePersonalMemories).toBe(override ?? false);
       expect(manifest.items.map((item) => item.memoryId)).toEqual(override ? [record.id] : []);
       const view = await request(`/sessions/${sessionId}/memories`);
@@ -132,7 +132,7 @@ describe("memory HTTP lifecycle and session boundaries", () => {
       record.currentRevisionId
     );
     expect(revision.status).toBe(200);
-    const loaded = (await new SessionMemoryStore(env.DB).load("pinned"))!;
+    const loaded = (await new SessionMemorySelectionStore(env.DB).load("pinned"))!;
     expect(loaded.manifest.items[0]).not.toHaveProperty("changed");
     expect(loaded.manifest.items[0]).not.toHaveProperty("archived");
     const diagnostic = sessionMemoryDiagnosticsSchema.parse(
@@ -202,7 +202,7 @@ describe("memory HTTP lifecycle and session boundaries", () => {
     const child = await session("child-excluded", true, "excluded");
     expect((await child(`/${record.id}`)).status).toBe(404);
     expect(
-      (await new SessionMemoryStore(env.DB).load("child-excluded"))?.manifest
+      (await new SessionMemorySelectionStore(env.DB).load("child-excluded"))?.manifest
         .includePersonalMemories
     ).toBe(false);
   });
@@ -214,7 +214,7 @@ describe("memory HTTP lifecycle and session boundaries", () => {
       const record =
         action === "archive"
           ? await createMemory()
-          : await new MemoryStore(env.DB).create(
+          : await new MemoryRecordStore(env.DB).create(
               { partition: { type: "personal", userId: OWNER }, content: fields },
               {
                 kind: "agent",
@@ -266,7 +266,7 @@ describe("memory HTTP lifecycle and session boundaries", () => {
         .bind(second.currentRevisionId, "integrity", first.id)
         .run()
     ).rejects.toThrow(/foreign key/i);
-    expect((await new MemoryStore(env.DB).get(first.id))?.currentRevisionId).toBe(
+    expect((await new MemoryRecordStore(env.DB).get(first.id))?.currentRevisionId).toBe(
       first.currentRevisionId
     );
   });
@@ -274,17 +274,17 @@ describe("memory HTTP lifecycle and session boundaries", () => {
     const record = await createMemory();
     await request("/memory-preferences", "GET", undefined, OTHER);
     await session("merged-owner");
-    const before = (await new SessionMemoryStore(env.DB).load("merged-owner"))!.manifest;
+    const before = (await new SessionMemorySelectionStore(env.DB).load("merged-owner"))!.manifest;
     await request("/memory-preferences", "PUT", { includePersonalMemories: false });
     await act(record.id, "archive", record.currentRevisionId);
     await mergeUsers(env.DB, { survivorId: OTHER, loserId: OWNER });
-    const after = (await new SessionMemoryStore(env.DB).load("merged-owner"))!.manifest;
+    const after = (await new SessionMemorySelectionStore(env.DB).load("merged-owner"))!.manifest;
     expect(after.manifestSha256).toBe(before.manifestSha256);
     expect(after.personalOwnerUserId).toBe(OTHER);
     expect(await new MemoryPreferenceStore(env.DB).get(OTHER)).toEqual({
       includePersonalMemories: false,
     });
-    expect(await new MemoryStore(env.DB).get(record.id)).toMatchObject({
+    expect(await new MemoryRecordStore(env.DB).get(record.id)).toMatchObject({
       partition: { type: "personal", userId: OTHER },
       authorUserId: OTHER,
     });

@@ -8,9 +8,9 @@ import {
   type SandboxMemoryWriteResult,
 } from "@open-inspect/shared/types/memories";
 import type { MemoryPrincipal, PrincipalMemoryAccess } from "../authorization/memory-access";
-import type { MemoryStore } from "../db/memories";
+import type { MemoryRecordStore } from "../db/memory-records";
 import type { SearchPartition } from "../db/memory-search";
-import type { SessionMemoryStore } from "../db/session-memories";
+import type { SessionMemorySelectionStore } from "../db/session-memory-selections";
 import { MemoryAccessError, MemoryNotFoundError, MemoryValidationError } from "./errors";
 import { partitionScope, samePartition, type MemoryPartition } from "./partition";
 import { renderMemorySection } from "./render";
@@ -34,9 +34,9 @@ export interface SessionMemoryServiceDeps {
    * What one session sees: its memory context (owner, repositories, environment, auto-save
    * eligibility), its pinned selection, and whether a record is pinned in it.
    */
-  sessions: Pick<SessionMemoryStore, "context" | "load" | "isPinned">;
+  selections: Pick<SessionMemorySelectionStore, "context" | "load" | "isPinned">;
   /** The memory records themselves (content, revisions, lifecycle), independent of any session. */
-  memories: Pick<MemoryStore, "get" | "create">;
+  records: Pick<MemoryRecordStore, "get" | "create">;
   /** Lexical search over current facts in the given partitions. */
   search: (
     input: MemorySearchInput,
@@ -54,15 +54,15 @@ export interface SessionMemoryServiceDeps {
  * session principal's current access to shared partitions. Throws `MemoryError`s.
  */
 export class SessionMemoryService {
-  private readonly sessions: SessionMemoryServiceDeps["sessions"];
-  private readonly memories: SessionMemoryServiceDeps["memories"];
+  private readonly selections: SessionMemoryServiceDeps["selections"];
+  private readonly records: SessionMemoryServiceDeps["records"];
   private readonly searchFacts: SessionMemoryServiceDeps["search"];
   private readonly sharedAccess: SessionMemoryServiceDeps["sharedAccess"];
   private readonly requestId: string;
 
   constructor(deps: SessionMemoryServiceDeps) {
-    this.sessions = deps.sessions;
-    this.memories = deps.memories;
+    this.selections = deps.selections;
+    this.records = deps.records;
     this.searchFacts = deps.search;
     this.sharedAccess = deps.sharedAccess;
     this.requestId = deps.requestId;
@@ -71,7 +71,7 @@ export class SessionMemoryService {
   /** The pinned boot context, rendered for the session's harness. */
   async installation(sessionId: string): Promise<SandboxMemoryInstallation> {
     const context = await this.context(sessionId);
-    const loaded = await this.sessions.load(sessionId);
+    const loaded = await this.selections.load(sessionId);
     if (!loaded) throw new MemoryNotFoundError("Session not found");
     if (
       !(await this.canRead(
@@ -95,8 +95,8 @@ export class SessionMemoryService {
   async read(sessionId: string, memoryId: string): Promise<SandboxMemoryReadResult> {
     const context = await this.context(sessionId);
     const [record, pinned] = await Promise.all([
-      this.memories.get(memoryId),
-      this.sessions.isPinned(sessionId, memoryId),
+      this.records.get(memoryId),
+      this.selections.isPinned(sessionId, memoryId),
     ]);
     if (!record || record.status === "proposed") throw new MemoryNotFoundError();
     if (record.partition.type === "personal") {
@@ -148,7 +148,7 @@ export class SessionMemoryService {
     const context = await this.context(sessionId);
     const partition = this.writePartition(context, input);
     if (!(await this.canRead(context, [partition]))) throw new MemoryAccessError(SCOPE_UNAVAILABLE);
-    const memory = await this.memories.create(
+    const memory = await this.records.create(
       {
         partition,
         content: {
@@ -182,7 +182,7 @@ export class SessionMemoryService {
   }
 
   private async context(sessionId: string): Promise<SessionMemoryContext> {
-    const context = await this.sessions.context(sessionId);
+    const context = await this.selections.context(sessionId);
     if (!context) throw new MemoryNotFoundError("Session not found");
     return context;
   }

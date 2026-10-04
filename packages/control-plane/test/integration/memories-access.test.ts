@@ -1,7 +1,7 @@
 import { createExecutionContext, env } from "cloudflare:test";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { MemoryStore } from "../../src/db/memories";
-import { SessionMemoryStore } from "../../src/db/session-memories";
+import { MemoryRecordStore } from "../../src/db/memory-records";
+import { SessionMemorySelectionStore } from "../../src/db/session-memory-selections";
 import { Scheduler } from "../../src/scheduler/scheduler";
 import { createCloudflareEnv } from "../../src/cloudflare/platform";
 import { memoryTargetForTest, seedMemorySession } from "./memory-test-helpers";
@@ -37,7 +37,7 @@ const repoPartition: MemoryPartition = {
 };
 const devPartition: MemoryPartition = { type: "environment", environmentId: "dev" };
 const createRecord = (partition: MemoryPartition, extra: { supersedesMemoryId?: string } = {}) =>
-  new MemoryStore(env.DB).create({ partition, content, ...extra }, actor);
+  new MemoryRecordStore(env.DB).create({ partition, content, ...extra }, actor);
 const request = (path: string, method = "GET", body?: unknown, userId = MEMBER) =>
   ownershipRequest(path, {
     method,
@@ -111,7 +111,7 @@ describe("memory shared-scope authorization", () => {
       expect(response.status).toBe(201);
       const result = await response.json<{ id: string; status: string }>();
       expect(result.status).toBe("proposed");
-      expect(await new MemoryStore(env.DB).get(result.id)).toMatchObject({
+      expect(await new MemoryRecordStore(env.DB).get(result.id)).toMatchObject({
         partition: repoPartition,
       });
     }
@@ -144,7 +144,7 @@ describe("memory shared-scope authorization", () => {
       });
       expect(response.status).toBe(201);
       const { id } = await response.json<{ id: string }>();
-      expect(await new MemoryStore(env.DB).get(id)).toMatchObject({
+      expect(await new MemoryRecordStore(env.DB).get(id)).toMatchObject({
         partition: {
           type: "repository",
           repoId: 456,
@@ -156,7 +156,7 @@ describe("memory shared-scope authorization", () => {
         const environment = await write({ scope: "environment" });
         expect(environment.status).toBe(201);
         const { id } = await environment.json<{ id: string }>();
-        expect(await new MemoryStore(env.DB).get(id)).toMatchObject({
+        expect(await new MemoryRecordStore(env.DB).get(id)).toMatchObject({
           status: "proposed",
           partition: devPartition,
         });
@@ -231,7 +231,9 @@ describe("memory shared-scope authorization", () => {
     );
     expect(created.status).toBe(201);
     const { sessionId } = await created.json<{ sessionId: string }>();
-    expect((await new SessionMemoryStore(env.DB).load(sessionId))?.manifest.items).toEqual([]);
+    expect((await new SessionMemorySelectionStore(env.DB).load(sessionId))?.manifest.items).toEqual(
+      []
+    );
   });
 
   it("does not inject repository memories into an unauthorized workspace automation", async () => {
@@ -255,7 +257,9 @@ describe("memory shared-scope authorization", () => {
       "SELECT id FROM sessions WHERE automation_id = 'memory-auto'"
     ).first<{ id: string }>();
     expect(session).not.toBeNull();
-    expect((await new SessionMemoryStore(env.DB).load(session!.id))?.manifest.items).toEqual([]);
+    expect(
+      (await new SessionMemorySelectionStore(env.DB).load(session!.id))?.manifest.items
+    ).toEqual([]);
   });
 
   it.each([
@@ -346,9 +350,9 @@ describe("memory shared-scope authorization", () => {
     });
     const { stub } = await initNamedSessionDO(sessionId);
     await seedSandboxAuthHash(stub, { authToken: "race-token", sandboxId: "sandbox-race" });
-    const original = MemoryStore.prototype.create;
-    vi.spyOn(MemoryStore.prototype, "create").mockImplementationOnce(async function (
-      this: MemoryStore,
+    const original = MemoryRecordStore.prototype.create;
+    vi.spyOn(MemoryRecordStore.prototype, "create").mockImplementationOnce(async function (
+      this: MemoryRecordStore,
       input,
       author
     ) {
@@ -452,7 +456,7 @@ describe("memory shared-scope authorization", () => {
       ).first()
     ).toEqual({ personal_auto_save_eligible: 0 });
     await expect(
-      new MemoryStore(env.DB).create(
+      new MemoryRecordStore(env.DB).create(
         { partition: { type: "personal", userId: MEMBER }, content },
         { ...actor, kind: "agent", sessionId: "private", personalAutoSave: true }
       )

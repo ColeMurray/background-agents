@@ -1,7 +1,7 @@
 import type { SessionMemoryManifest } from "@open-inspect/shared/types/memories";
 import type { AuthorizedMemoryTarget } from "../authorization/memory-access";
 import { MemoryPreferenceStore } from "../db/memory-preferences";
-import { MemoryStore } from "../db/memories";
+import { MemoryRecordStore } from "../db/memory-records";
 import type { SqlDatabase } from "../db/sql-database";
 import { buildManifest } from "./selection";
 import { targetPartitions } from "./target";
@@ -27,7 +27,7 @@ export async function resolveSessionMemory(
     repositories: target.repositories,
     environmentId: target.environmentId,
   };
-  const { candidates, omittedCount } = await new MemoryStore(db).listCandidates(
+  const { candidates, omittedCount } = await new MemoryRecordStore(db).listCandidates(
     targetPartitions(memoryTarget)
   );
   return buildManifest(candidates, memoryTarget, omittedCount);

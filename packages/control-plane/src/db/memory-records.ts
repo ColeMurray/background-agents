@@ -106,14 +106,14 @@ export interface NewMemory {
 /**
  * The memory records themselves: current content, immutable revisions, and lifecycle status,
  * keyed by partition. It knows nothing about which sessions use a record — that is
- * `SessionMemoryStore`. Callers authorize the target partition first.
+ * `SessionMemorySelectionStore`. Callers authorize the target partition first.
  *
  * Every mutation claims a fresh operation ID on the record in the first statement of an atomic
  * batch; the dependent revision, supersession, and audit statements apply only if that claim
  * won, so a lost race leaves no side effects. Agent inserts also enforce the writing session's
  * commit-time preconditions (see `agentWriteGuard`).
  */
-export class MemoryStore {
+export class MemoryRecordStore {
   constructor(private readonly db: SqlDatabase) {}
 
   /** Load one live record; callers authorize its partition. */

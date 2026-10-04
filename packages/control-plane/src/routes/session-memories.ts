@@ -1,9 +1,9 @@
 import { Hono } from "hono";
 import { memorySearchSchema, sandboxMemoryWriteSchema } from "@open-inspect/shared/types/memories";
 import { createSharedMemoryAccess } from "../authorization/memory-access-factory";
-import { MemoryStore } from "../db/memories";
+import { MemoryRecordStore } from "../db/memory-records";
 import { searchMemories } from "../db/memory-search";
-import { SessionMemoryStore } from "../db/session-memories";
+import { SessionMemorySelectionStore } from "../db/session-memory-selections";
 import { SessionMemoryService } from "../memory/session-memory-service";
 import { admit, dispatch } from "../routing/admit";
 import type { ControlPlaneHonoEnv } from "../routing/hono-env";
@@ -23,7 +23,7 @@ import {
 
 /** Pinned selection plus live drift flags, under session-read admission. */
 async function view(_request: Request, _env: Env, params: { id: string }, ctx: UserRouteContext) {
-  const loaded = await new SessionMemoryStore(ctx.db).load(params.id);
+  const loaded = await new SessionMemorySelectionStore(ctx.db).load(params.id);
   return loaded ? json(loaded.diagnostics) : error("Session not found", 404);
 }
 
@@ -31,8 +31,8 @@ async function view(_request: Request, _env: Env, params: { id: string }, ctx: U
 function sessionMemoryService(ctx: SandboxRouteContext): SessionMemoryService {
   const sharedAccess = createSharedMemoryAccess(ctx);
   return new SessionMemoryService({
-    sessions: new SessionMemoryStore(ctx.db),
-    memories: new MemoryStore(ctx.db),
+    selections: new SessionMemorySelectionStore(ctx.db),
+    records: new MemoryRecordStore(ctx.db),
     search: (input, partitions) => searchMemories(ctx.db, input, partitions),
     sharedAccess: (principal) => sharedAccess.forPrincipal(principal),
     requestId: ctx.request_id,
