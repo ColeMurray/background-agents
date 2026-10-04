@@ -31,7 +31,11 @@ const FULL_CAPABILITIES: SessionCapabilities = {
   read: true,
   collaborate: true,
   lifecycle: true,
+  delete: false,
+  manageCollaborators: false,
+  changeVisibility: false,
   sandboxAccess: true,
+  exportTrace: true,
 };
 
 function SessionHeader({
@@ -86,6 +90,65 @@ function member(repoOwner: string, repoName: string, position: number) {
 }
 
 describe("SessionHeader", () => {
+  it("removes an open rename editor when lifecycle capability is revoked", () => {
+    const props = {
+      sessionState: createSessionState(),
+      fallbackSessionInfo: { repoOwner: "acme", repoName: "web", title: "Session 1" },
+      connected: true,
+      connecting: false,
+      isDetailsOpen: false,
+      isDesktopDetailsOpen: true,
+      detailsButtonRef: createRef<HTMLButtonElement>(),
+      actionsButtonRef: createRef<HTMLButtonElement>(),
+      onToggleDetails: vi.fn(),
+      onToggleDesktopDetails: vi.fn(),
+      onOpenMobileDetails: vi.fn(),
+      onOpenMobileMedia: vi.fn(),
+      actions,
+      renameSession: vi.fn(),
+    };
+    const { rerender } = render(<SessionHeader {...props} />);
+    fireEvent.click(screen.getByRole("button", { name: "Session 1" }));
+    expect(screen.getByRole("textbox", { name: "Session title" })).toBeInTheDocument();
+    rerender(
+      <SessionHeader {...props} capabilities={{ ...FULL_CAPABILITIES, lifecycle: false }} />
+    );
+    expect(screen.queryByRole("textbox", { name: "Session title" })).not.toBeInTheDocument();
+    expect(props.renameSession).not.toHaveBeenCalled();
+  });
+  it("gives the desktop title available header space instead of a fixed width", () => {
+    const title = "Correctness review of background agents";
+    render(
+      <SessionHeader
+        sessionState={createSessionState({ title })}
+        fallbackSessionInfo={{ repoOwner: "acme", repoName: "web", title }}
+        connected
+        connecting={false}
+        isDetailsOpen={false}
+        isDesktopDetailsOpen
+        detailsButtonRef={createRef<HTMLButtonElement>()}
+        actionsButtonRef={createRef<HTMLButtonElement>()}
+        onToggleDetails={vi.fn()}
+        onToggleDesktopDetails={vi.fn()}
+        onOpenMobileDetails={vi.fn()}
+        onOpenMobileMedia={vi.fn()}
+        actions={actions}
+        renameSession={vi.fn()}
+      />
+    );
+
+    const heading = screen.getByRole("heading", { level: 1 });
+    expect(heading).not.toHaveClass("md:max-w-40");
+    expect(heading.parentElement).not.toHaveClass("md:flex-initial");
+    expect(heading.parentElement?.parentElement).not.toHaveClass("md:flex-initial");
+    expect(screen.getByText("acme/web")).toHaveClass("truncate");
+
+    fireEvent.click(screen.getByRole("button", { name: title }));
+    const input = screen.getByRole("textbox", { name: "Session title" });
+    expect(input).toHaveClass("w-full");
+    expect(input).not.toHaveClass("md:max-w-40");
+  });
+
   it("disables lifecycle controls and connection UI for a read-only session", async () => {
     render(
       <SessionHeader
@@ -95,19 +158,23 @@ describe("SessionHeader", () => {
         connecting={false}
         isDetailsOpen={false}
         isDesktopDetailsOpen
-        showDesktopDetailsToggle
         detailsButtonRef={createRef<HTMLButtonElement>()}
         actionsButtonRef={createRef<HTMLButtonElement>()}
         onToggleDetails={vi.fn()}
         onToggleDesktopDetails={vi.fn()}
         onOpenMobileDetails={vi.fn()}
+        onOpenMobileMedia={vi.fn()}
         actions={{ ...actions, capabilities: { ...FULL_CAPABILITIES, lifecycle: false } }}
         renameSession={vi.fn()}
         capabilities={{
           read: false,
           collaborate: false,
           lifecycle: false,
+          delete: false,
+          manageCollaborators: false,
+          changeVisibility: false,
           sandboxAccess: false,
+          exportTrace: false,
         }}
       />
     );
@@ -130,12 +197,12 @@ describe("SessionHeader", () => {
         connecting={false}
         isDetailsOpen={false}
         isDesktopDetailsOpen
-        showDesktopDetailsToggle
         detailsButtonRef={createRef<HTMLButtonElement>()}
         actionsButtonRef={createRef<HTMLButtonElement>()}
         onToggleDetails={vi.fn()}
         onToggleDesktopDetails={onToggleDesktopDetails}
         onOpenMobileDetails={vi.fn()}
+        onOpenMobileMedia={vi.fn()}
         actions={actions}
         renameSession={vi.fn()}
       />
@@ -161,12 +228,12 @@ describe("SessionHeader", () => {
         connecting={false}
         isDetailsOpen={false}
         isDesktopDetailsOpen={false}
-        showDesktopDetailsToggle
         detailsButtonRef={createRef<HTMLButtonElement>()}
         actionsButtonRef={createRef<HTMLButtonElement>()}
         onToggleDetails={vi.fn()}
         onToggleDesktopDetails={onToggleDesktopDetails}
         onOpenMobileDetails={vi.fn()}
+        onOpenMobileMedia={vi.fn()}
         actions={actions}
         renameSession={vi.fn()}
       />
@@ -178,29 +245,6 @@ describe("SessionHeader", () => {
     expect(showButton.querySelector('path[fill="currentColor"]')).not.toBeInTheDocument();
   });
 
-  it("hides the desktop details toggle while changes own the right-hand surface", () => {
-    render(
-      <SessionHeader
-        sessionState={null}
-        fallbackSessionInfo={{ repoOwner: "acme", repoName: "web", title: "Review changes" }}
-        connected
-        connecting={false}
-        isDetailsOpen={false}
-        isDesktopDetailsOpen
-        showDesktopDetailsToggle={false}
-        detailsButtonRef={createRef<HTMLButtonElement>()}
-        actionsButtonRef={createRef<HTMLButtonElement>()}
-        onToggleDetails={vi.fn()}
-        onToggleDesktopDetails={vi.fn()}
-        onOpenMobileDetails={vi.fn()}
-        actions={actions}
-        renameSession={vi.fn()}
-      />
-    );
-
-    expect(screen.queryByRole("button", { name: "Hide session details" })).not.toBeInTheDocument();
-  });
-
   it("renders no-repository fallback data as loaded while socket state is absent", () => {
     render(
       <SessionHeader
@@ -210,12 +254,12 @@ describe("SessionHeader", () => {
         connecting={true}
         isDetailsOpen={false}
         isDesktopDetailsOpen
-        showDesktopDetailsToggle
         detailsButtonRef={createRef<HTMLButtonElement>()}
         actionsButtonRef={createRef<HTMLButtonElement>()}
         onToggleDetails={vi.fn()}
         onToggleDesktopDetails={vi.fn()}
         onOpenMobileDetails={vi.fn()}
+        onOpenMobileMedia={vi.fn()}
         actions={actions}
         renameSession={vi.fn()}
       />
@@ -229,6 +273,7 @@ describe("SessionHeader", () => {
   it("replaces the phone Details control with the unified actions menu", () => {
     const onToggleDetails = vi.fn();
     const onOpenMobileDetails = vi.fn();
+    const onOpenMobileMedia = vi.fn();
     render(
       <SessionHeader
         sessionState={null}
@@ -237,13 +282,16 @@ describe("SessionHeader", () => {
         connecting={false}
         isDetailsOpen={false}
         isDesktopDetailsOpen
-        showDesktopDetailsToggle
         detailsButtonRef={createRef<HTMLButtonElement>()}
         actionsButtonRef={createRef<HTMLButtonElement>()}
         onToggleDetails={onToggleDetails}
         onToggleDesktopDetails={vi.fn()}
         onOpenMobileDetails={onOpenMobileDetails}
-        actions={actions}
+        onOpenMobileMedia={onOpenMobileMedia}
+        actions={{
+          ...actions,
+          artifacts: [{ id: "shot-1", type: "screenshot", url: null, createdAt: 1 }],
+        }}
         renameSession={vi.fn()}
       />
     );
@@ -260,6 +308,11 @@ describe("SessionHeader", () => {
     fireEvent.click(screen.getByRole("menuitem", { name: "Details" }));
     expect(onOpenMobileDetails).toHaveBeenCalledOnce();
     expect(onToggleDetails).not.toHaveBeenCalled();
+
+    fireEvent.pointerDown(trigger, { button: 0, ctrlKey: false });
+    fireEvent.click(screen.getByRole("menuitem", { name: "Media (1)" }));
+    expect(onOpenMobileMedia).toHaveBeenCalledOnce();
+    expect(onOpenMobileDetails).toHaveBeenCalledOnce();
   });
 
   it("renders separate status icons and reveals the connection label on hover", async () => {
@@ -271,12 +324,12 @@ describe("SessionHeader", () => {
         connecting={false}
         isDetailsOpen={false}
         isDesktopDetailsOpen
-        showDesktopDetailsToggle
         detailsButtonRef={createRef<HTMLButtonElement>()}
         actionsButtonRef={createRef<HTMLButtonElement>()}
         onToggleDetails={vi.fn()}
         onToggleDesktopDetails={vi.fn()}
         onOpenMobileDetails={vi.fn()}
+        onOpenMobileMedia={vi.fn()}
         actions={actions}
         renameSession={vi.fn()}
       />
@@ -303,12 +356,12 @@ describe("SessionHeader", () => {
         connecting={false}
         isDetailsOpen={false}
         isDesktopDetailsOpen
-        showDesktopDetailsToggle
         detailsButtonRef={createRef<HTMLButtonElement>()}
         actionsButtonRef={createRef<HTMLButtonElement>()}
         onToggleDetails={vi.fn()}
         onToggleDesktopDetails={vi.fn()}
         onOpenMobileDetails={vi.fn()}
+        onOpenMobileMedia={vi.fn()}
         actions={actions}
         renameSession={vi.fn()}
       />
@@ -332,12 +385,12 @@ describe("SessionHeader", () => {
         connecting={false}
         isDetailsOpen={false}
         isDesktopDetailsOpen
-        showDesktopDetailsToggle
         detailsButtonRef={createRef<HTMLButtonElement>()}
         actionsButtonRef={createRef<HTMLButtonElement>()}
         onToggleDetails={vi.fn()}
         onToggleDesktopDetails={vi.fn()}
         onOpenMobileDetails={vi.fn()}
+        onOpenMobileMedia={vi.fn()}
         actions={actions}
         renameSession={vi.fn()}
       />
@@ -366,12 +419,12 @@ describe("SessionHeader", () => {
         connecting={false}
         isDetailsOpen={false}
         isDesktopDetailsOpen
-        showDesktopDetailsToggle
         detailsButtonRef={createRef<HTMLButtonElement>()}
         actionsButtonRef={createRef<HTMLButtonElement>()}
         onToggleDetails={vi.fn()}
         onToggleDesktopDetails={vi.fn()}
         onOpenMobileDetails={vi.fn()}
+        onOpenMobileMedia={vi.fn()}
         actions={actions}
         renameSession={vi.fn()}
       />
@@ -403,12 +456,12 @@ describe("SessionHeader", () => {
         connecting={false}
         isDetailsOpen={false}
         isDesktopDetailsOpen
-        showDesktopDetailsToggle
         detailsButtonRef={createRef<HTMLButtonElement>()}
         actionsButtonRef={createRef<HTMLButtonElement>()}
         onToggleDetails={vi.fn()}
         onToggleDesktopDetails={vi.fn()}
         onOpenMobileDetails={vi.fn()}
+        onOpenMobileMedia={vi.fn()}
         actions={actions}
         renameSession={vi.fn()}
       />
@@ -438,18 +491,51 @@ describe("SessionHeader", () => {
         connecting={false}
         isDetailsOpen={false}
         isDesktopDetailsOpen
-        showDesktopDetailsToggle
         detailsButtonRef={createRef<HTMLButtonElement>()}
         actionsButtonRef={createRef<HTMLButtonElement>()}
         onToggleDetails={vi.fn()}
         onToggleDesktopDetails={vi.fn()}
         onOpenMobileDetails={vi.fn()}
+        onOpenMobileMedia={vi.fn()}
         actions={actions}
         renameSession={vi.fn()}
       />
     );
 
     expect(screen.getByRole("button", { name: "Sandbox status: Ready" })).toBeInTheDocument();
+  });
+
+  it.each([
+    ["draining", "Saving..."],
+    ["prepared", "Saving..."],
+    ["capturing", "Saving..."],
+    ["retiring", "Saving..."],
+    ["running", "Ready"],
+    ["restoring", "Ready"],
+  ] as const)("reports a ready sandbox in the %s shutdown phase as %s", (phase, label) => {
+    render(
+      <SessionHeader
+        sessionState={createSessionState({
+          sandboxStatus: "ready",
+          sandboxPreservation: { phase, expiresAtMs: 2, drainAtMs: 1 },
+        })}
+        fallbackSessionInfo={{ repoOwner: "acme", repoName: "web", title: "Stopping" }}
+        connected
+        connecting={false}
+        isDetailsOpen={false}
+        isDesktopDetailsOpen
+        detailsButtonRef={createRef<HTMLButtonElement>()}
+        actionsButtonRef={createRef<HTMLButtonElement>()}
+        onToggleDetails={vi.fn()}
+        onToggleDesktopDetails={vi.fn()}
+        onOpenMobileDetails={vi.fn()}
+        onOpenMobileMedia={vi.fn()}
+        actions={actions}
+        renameSession={vi.fn()}
+      />
+    );
+
+    expect(screen.getByRole("button", { name: `Sandbox status: ${label}` })).toBeInTheDocument();
   });
 
   it("shows the failed phase metadata without a boot output region", async () => {
@@ -469,12 +555,12 @@ describe("SessionHeader", () => {
         connecting={false}
         isDetailsOpen={false}
         isDesktopDetailsOpen
-        showDesktopDetailsToggle
         detailsButtonRef={createRef<HTMLButtonElement>()}
         actionsButtonRef={createRef<HTMLButtonElement>()}
         onToggleDetails={vi.fn()}
         onToggleDesktopDetails={vi.fn()}
         onOpenMobileDetails={vi.fn()}
+        onOpenMobileMedia={vi.fn()}
         actions={actions}
         renameSession={vi.fn()}
       />
@@ -498,12 +584,12 @@ describe("SessionHeader", () => {
         connecting={false}
         isDetailsOpen={false}
         isDesktopDetailsOpen
-        showDesktopDetailsToggle
         detailsButtonRef={createRef<HTMLButtonElement>()}
         actionsButtonRef={createRef<HTMLButtonElement>()}
         onToggleDetails={vi.fn()}
         onToggleDesktopDetails={vi.fn()}
         onOpenMobileDetails={vi.fn()}
+        onOpenMobileMedia={vi.fn()}
         actions={actions}
         renameSession={vi.fn()}
       />
@@ -527,12 +613,12 @@ describe("SessionHeader", () => {
         connecting={false}
         isDetailsOpen={false}
         isDesktopDetailsOpen
-        showDesktopDetailsToggle
         detailsButtonRef={createRef<HTMLButtonElement>()}
         actionsButtonRef={createRef<HTMLButtonElement>()}
         onToggleDetails={vi.fn()}
         onToggleDesktopDetails={vi.fn()}
         onOpenMobileDetails={vi.fn()}
+        onOpenMobileMedia={vi.fn()}
         actions={actions}
         renameSession={vi.fn()}
       />
@@ -553,12 +639,12 @@ describe("SessionHeader", () => {
         connecting={false}
         isDetailsOpen={false}
         isDesktopDetailsOpen
-        showDesktopDetailsToggle
         detailsButtonRef={createRef<HTMLButtonElement>()}
         actionsButtonRef={createRef<HTMLButtonElement>()}
         onToggleDetails={vi.fn()}
         onToggleDesktopDetails={vi.fn()}
         onOpenMobileDetails={vi.fn()}
+        onOpenMobileMedia={vi.fn()}
         actions={actions}
         renameSession={vi.fn()}
       />
@@ -574,12 +660,12 @@ describe("SessionHeader", () => {
       fallbackSessionInfo: { repoOwner: "acme", repoName: "web", title: "Status icons" },
       isDetailsOpen: false,
       isDesktopDetailsOpen: true,
-      showDesktopDetailsToggle: true,
       detailsButtonRef: createRef<HTMLButtonElement>(),
       actionsButtonRef: createRef<HTMLButtonElement>(),
       onToggleDetails: vi.fn(),
       onToggleDesktopDetails: vi.fn(),
       onOpenMobileDetails: vi.fn(),
+      onOpenMobileMedia: vi.fn(),
       actions,
       renameSession: vi.fn(),
     };
@@ -601,12 +687,12 @@ describe("SessionHeader", () => {
       fallbackSessionInfo: { repoOwner: "acme", repoName: "web", title: "Status icons" },
       isDetailsOpen: false,
       isDesktopDetailsOpen: true,
-      showDesktopDetailsToggle: true,
       detailsButtonRef: createRef<HTMLButtonElement>(),
       actionsButtonRef: createRef<HTMLButtonElement>(),
       onToggleDetails: vi.fn(),
       onToggleDesktopDetails: vi.fn(),
       onOpenMobileDetails: vi.fn(),
+      onOpenMobileMedia: vi.fn(),
       actions,
       renameSession: vi.fn(),
     };
@@ -629,12 +715,12 @@ describe("SessionHeader", () => {
         connecting={false}
         isDetailsOpen={false}
         isDesktopDetailsOpen
-        showDesktopDetailsToggle
         detailsButtonRef={createRef<HTMLButtonElement>()}
         actionsButtonRef={createRef<HTMLButtonElement>()}
         onToggleDetails={vi.fn()}
         onToggleDesktopDetails={vi.fn()}
         onOpenMobileDetails={vi.fn()}
+        onOpenMobileMedia={vi.fn()}
         actions={actions}
         renameSession={vi.fn()}
       />
@@ -675,12 +761,12 @@ describe("SessionHeader mobile presentation", () => {
         {...connection}
         isDetailsOpen={false}
         isDesktopDetailsOpen={false}
-        showDesktopDetailsToggle
         detailsButtonRef={createRef<HTMLButtonElement>()}
         actionsButtonRef={createRef<HTMLButtonElement>()}
         onToggleDetails={vi.fn()}
         onToggleDesktopDetails={vi.fn()}
         onOpenMobileDetails={vi.fn()}
+        onOpenMobileMedia={vi.fn()}
         actions={actions}
         renameSession={vi.fn()}
       />
@@ -698,6 +784,19 @@ describe("SessionHeader mobile presentation", () => {
     renderMobileHeader(createSessionState({ sandboxStatus: "ready" }));
 
     expect(screen.queryByRole("button", { name: /^Show sandbox status/ })).not.toBeInTheDocument();
+  });
+
+  it("raises a strip while a ready sandbox is saving before a graceful stop", () => {
+    renderMobileHeader(
+      createSessionState({
+        sandboxStatus: "ready",
+        sandboxPreservation: { phase: "capturing", expiresAtMs: 2, drainAtMs: 1 },
+      })
+    );
+
+    expect(
+      screen.getByRole("button", { name: "Show sandbox status: Saving..." })
+    ).toBeInTheDocument();
   });
 
   it("raises a strip for a sandbox that needs attention", () => {
@@ -792,12 +891,12 @@ describe("SessionHeader mobile presentation", () => {
         connecting={false}
         isDetailsOpen={false}
         isDesktopDetailsOpen={false}
-        showDesktopDetailsToggle
         detailsButtonRef={createRef<HTMLButtonElement>()}
         actionsButtonRef={createRef<HTMLButtonElement>()}
         onToggleDetails={vi.fn()}
         onToggleDesktopDetails={vi.fn()}
         onOpenMobileDetails={vi.fn()}
+        onOpenMobileMedia={vi.fn()}
         actions={actions}
         renameSession={vi.fn()}
       />
@@ -873,7 +972,16 @@ describe("SessionHeader mobile presentation", () => {
       }),
       {},
       undefined,
-      { read: true, collaborate: false, lifecycle: false, sandboxAccess: false }
+      {
+        read: true,
+        collaborate: false,
+        lifecycle: false,
+        delete: false,
+        manageCollaborators: false,
+        changeVisibility: false,
+        sandboxAccess: false,
+        exportTrace: false,
+      }
     );
 
     fireEvent.pointerDown(screen.getByRole("button", { name: "Session actions" }), {

@@ -10,6 +10,7 @@ import {
   type LinearIssueDetails,
 } from "../types";
 import { computeHmacHex, timingSafeEqual } from "@open-inspect/shared/auth";
+import { readBodyCapped } from "@open-inspect/shared/http-body";
 import { createLogger } from "../logger";
 import {
   getClientCredentialsTokenOrThrow,
@@ -29,6 +30,14 @@ const log = createLogger("linear-client");
 
 const LINEAR_API_URL = "https://api.linear.app/graphql";
 export const LINEAR_GRAPHQL_TIMEOUT_MS = 15_000;
+/** Largest non-2xx response body read to recover Linear's error messages. */
+const LINEAR_ERROR_BODY_MAX_BYTES = 16 * 1024;
+
+const linearIssueTeamResponseSchema = z.object({
+  data: z.object({
+    issue: z.object({ id: z.string(), team: z.object({ id: z.string() }) }).nullable(),
+  }),
+});
 
 const linearCommentCreateResponseSchema = z.object({
   data: z
@@ -163,7 +172,11 @@ export async function linearGraphQL(
   }
 
   if (!res.ok) {
-    throw new Error(`Linear API error: ${res.status}`);
+    // Callers log the thrown error, so the detail reaches their log lines too.
+    const detail = await readLinearErrorDetail(res);
+    throw new Error(
+      detail ? `Linear API error: ${res.status}: ${detail}` : `Linear API error: ${res.status}`
+    );
   }
 
   const parsed = linearGraphQLResponseSchema.safeParse(await res.json());
@@ -178,6 +191,33 @@ export async function linearGraphQL(
   }
 
   return json;
+}
+
+/**
+ * Recover the GraphQL `errors[].message` list from a non-2xx response. Linear
+ * reports query validation failures (e.g. an unknown variable type) as HTTP
+ * 400 with the reason only in the body. Returns undefined when the body is
+ * oversized, unreadable, or carries no messages.
+ */
+async function readLinearErrorDetail(res: Response): Promise<string | undefined> {
+  let bytes: Uint8Array | null;
+  try {
+    bytes = await readBodyCapped(res.body, LINEAR_ERROR_BODY_MAX_BYTES);
+  } catch {
+    return undefined;
+  }
+  if (!bytes) return undefined;
+
+  let body: unknown;
+  try {
+    body = JSON.parse(new TextDecoder().decode(bytes));
+  } catch {
+    return undefined;
+  }
+  const parsed = linearGraphQLResponseSchema.safeParse(body);
+  if (!parsed.success) return undefined;
+  const messages = (parsed.data.errors ?? []).flatMap((e) => (e.message ? [e.message] : []));
+  return messages.length > 0 ? messages.join("; ") : undefined;
 }
 
 // ─── Agent Activities ────────────────────────────────────────────────────────
@@ -309,7 +349,7 @@ export async function getRepoSuggestions(
     const data = await linearGraphQL(
       client,
       `
-      query RepoSuggestions($issueId: String!, $agentSessionId: String!, $candidateRepositories: [IssueRepositorySuggestionInput!]!) {
+      query RepoSuggestions($issueId: String!, $agentSessionId: String!, $candidateRepositories: [CandidateRepository!]!) {
         issueRepositorySuggestions(
           issueId: $issueId
           agentSessionId: $agentSessionId
@@ -395,6 +435,40 @@ export async function verifyLinearWebhook(
 }
 
 // ─── Comment Posting (fallback) ──────────────────────────────────────────────
+
+/**
+ * Read an issue's current Linear team with the fallback API key. Returns null when the
+ * issue cannot be verified, so callers withhold content rather than guess the destination.
+ */
+export async function fetchIssueTeamIdWithApiKey(
+  apiKey: string,
+  issueId: string
+): Promise<string | null> {
+  try {
+    const response = await fetch(LINEAR_API_URL, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: apiKey,
+      },
+      body: JSON.stringify({
+        query: `
+          query IssueTeam($id: String!) {
+            issue(id: $id) { id team { id } }
+          }
+        `,
+        variables: { id: issueId },
+      }),
+      signal: AbortSignal.timeout(LINEAR_GRAPHQL_TIMEOUT_MS),
+    });
+    if (!response.ok) return null;
+    const result = linearIssueTeamResponseSchema.safeParse(await response.json().catch(() => null));
+    const issue = result.success ? result.data.data.issue : null;
+    return issue?.id === issueId ? issue.team.id.trim() || null : null;
+  } catch {
+    return null;
+  }
+}
 
 export async function postIssueComment(
   apiKey: string,

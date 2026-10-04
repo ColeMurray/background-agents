@@ -1,13 +1,24 @@
-import { describe, it, expect, beforeEach } from "vitest";
-import { SELF, env } from "cloudflare:test";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
+import { SELF, env, createExecutionContext } from "cloudflare:test";
 import { runInSessionDO } from "./session-do-access";
 import type { SessionDO } from "../../src/cloudflare/durable-object";
 import { SessionIndexStore } from "../../src/db/session-index";
+import { TeamMembershipStore } from "../../src/db/team-memberships";
+import { TeamRepositoryGrantStore } from "../../src/db/team-repository-grants";
+import { GitHubSourceControlProvider } from "../../src/source-control/providers/github-provider";
 import { cleanD1Tables } from "./cleanup";
-import { initNamedSessionDO, queryDO, seedMessage, seedSandboxAuth } from "./helpers";
+import {
+  initNamedSessionDO,
+  queryDO,
+  seedActiveUser,
+  seedMessage,
+  seedSandboxAuth,
+  routeRequest,
+} from "./helpers";
 
 describe("POST /sessions/:parentId/children — spawn child", () => {
   beforeEach(cleanD1Tables);
+  afterEach(() => vi.restoreAllMocks());
 
   /** Sets up a parent DO + sandbox auth + D1 row, returns everything needed for spawn tests. */
   async function setupParent(opts?: {
@@ -23,12 +34,16 @@ describe("POST /sessions/:parentId/children — spawn child", () => {
     environmentId?: string | null;
     model?: string;
     reasoningEffort?: string | null;
+    ownerTeamId?: string | null;
+    visibility?: "team" | "workspace" | "private";
   }) {
     const parentName = `parent-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
     const store = new SessionIndexStore(env.DB);
     const now = Date.now();
     await store.create({
       id: parentName,
+      ownerTeamId: opts?.ownerTeamId ?? null,
+      visibility: opts?.visibility ?? "workspace",
       title: "Parent",
       repoOwner: "acme",
       repoName: "web-app",
@@ -107,24 +122,47 @@ describe("POST /sessions/:parentId/children — spawn child", () => {
   }
 
   it("spawns a child session with sandbox auth (201)", async () => {
+    await env.DB.prepare(
+      "INSERT INTO teams (id, slug, name, created_at, updated_at) VALUES ('team_child', 'child', 'Child', 1, 1)"
+    ).run();
+    await new TeamRepositoryGrantStore(env.DB).add("team_child", {
+      kind: "repository",
+      repoExternalId: 12345,
+      owner: "acme",
+      name: "web-app",
+    });
+    vi.spyOn(GitHubSourceControlProvider.prototype, "checkRepositoryAccess").mockResolvedValue({
+      repoId: 12345,
+      repoOwner: "acme",
+      repoName: "web-app",
+      defaultBranch: "main",
+    });
+    await seedActiveUser("canonical-abc123");
+    await new TeamMembershipStore(env.DB).add("team_child", "canonical-abc123");
     const { parentName, sandboxToken, store } = await setupParent({
+      ownerTeamId: "team_child",
+      visibility: "workspace",
       repoId: 12345,
       userId: "user-1",
       canonicalUserId: "canonical-abc123",
       scmLogin: "acmedev",
     });
 
-    const res = await SELF.fetch(`https://test.local/sessions/${parentName}/children`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${sandboxToken}`,
-      },
-      body: JSON.stringify({
-        title: "Fix the tests",
-        prompt: "Please fix the failing tests in src/utils.ts",
+    const res = await routeRequest(
+      new Request(`https://test.local/sessions/${parentName}/children`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${sandboxToken}`,
+        },
+        body: JSON.stringify({
+          title: "Fix the tests",
+          prompt: "Please fix the failing tests in src/utils.ts",
+        }),
       }),
-    });
+      env,
+      createExecutionContext()
+    );
 
     expect(res.status).toBe(201);
     const body = await res.json<{ sessionId: string; status: string }>();
@@ -135,6 +173,8 @@ describe("POST /sessions/:parentId/children — spawn child", () => {
     const child = await store.get(body.sessionId);
     expect(child).not.toBeNull();
     expect(child!.parentSessionId).toBe(parentName);
+    expect(child!.ownerTeamId).toBe("team_child");
+    expect(child!.visibility).toBe("workspace");
     expect(child!.spawnSource).toBe("agent");
     expect(child!.spawnDepth).toBe(1);
     expect(child!.repoOwner).toBe("acme");
@@ -150,6 +190,205 @@ describe("POST /sessions/:parentId/children — spawn child", () => {
     expect(state.repoOwner).toBe("acme");
     // Child spawn immediately enqueues the initial prompt, which transitions session to active.
     expect(state.status).toBe("active");
+  });
+
+  it.each([
+    ["off", "removed"],
+    ["off", "unresolved"],
+    ["shadow", "removed"],
+    ["shadow", "unresolved"],
+    ["on", "removed"],
+    ["on", "unresolved"],
+  ] as const)(
+    "refuses a team-owned child (%s) when the prompt author is %s",
+    async (mode, authorState) => {
+      const ownerId = "11111111111111111111111111111111";
+      const authorId = authorState === "removed" ? "33333333333333333333333333333333" : undefined;
+      await seedActiveUser(ownerId);
+      await env.DB.prepare(
+        "INSERT INTO teams (id, slug, name, created_at, updated_at) VALUES ('team_spawn', 'spawn', 'Spawn', 1, 1)"
+      ).run();
+      const memberships = new TeamMembershipStore(env.DB);
+      await memberships.add("team_spawn", ownerId);
+      if (authorId) {
+        await seedActiveUser(authorId);
+        await memberships.add("team_spawn", authorId);
+      }
+      await new TeamRepositoryGrantStore(env.DB).add("team_spawn", {
+        kind: "repository",
+        repoExternalId: 12345,
+        owner: "acme",
+        name: "web-app",
+      });
+      const repositoryAccess = vi
+        .spyOn(GitHubSourceControlProvider.prototype, "checkRepositoryAccess")
+        .mockResolvedValue({
+          repoId: 12345,
+          repoOwner: "acme",
+          repoName: "web-app",
+          defaultBranch: "main",
+        });
+      const { parentName, sandboxToken, store } = await setupParent({
+        ownerTeamId: "team_spawn",
+        visibility: "team",
+        repoId: 12345,
+        userId: "slack:U0123",
+        canonicalUserId: authorId,
+      });
+      await env.DB.prepare("UPDATE sessions SET user_id = ? WHERE id = ?")
+        .bind(ownerId, parentName)
+        .run();
+      if (authorId) await memberships.remove("team_spawn", authorId);
+
+      const response = await routeRequest(
+        new Request(`https://test.local/sessions/${parentName}/children`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json", Authorization: `Bearer ${sandboxToken}` },
+          body: JSON.stringify({ title: "Team child", prompt: "Investigate" }),
+        }),
+        { ...env, TEAMS_ENFORCEMENT: mode },
+        createExecutionContext()
+      );
+
+      expect(response.status).toBe(403);
+      await expect(response.json()).resolves.toMatchObject({ code: "not_member" });
+      expect(await store.countTotalChildren(parentName)).toBe(0);
+      expect(
+        await env.DB.prepare("SELECT COUNT(*) AS count FROM child_admission_leases").first()
+      ).toEqual({ count: 0 });
+      expect(repositoryAccess).not.toHaveBeenCalled();
+    }
+  );
+
+  it("inherits private visibility, owner and collaborators when the prompt author is not canonical", async () => {
+    const ownerId = "11111111111111111111111111111111";
+    const collaboratorId = "22222222222222222222222222222222";
+    await seedActiveUser(ownerId);
+    await seedActiveUser(collaboratorId);
+    const { parentName, sandboxToken, store } = await setupParent({
+      visibility: "private",
+      repoId: 12345,
+      userId: "slack:U0123",
+    });
+    await env.DB.prepare("UPDATE sessions SET user_id = ? WHERE id = ?")
+      .bind(ownerId, parentName)
+      .run();
+    await env.DB.prepare(
+      "INSERT INTO session_collaborators (session_id, user_id, added_by, created_at) VALUES (?, ?, ?, ?)"
+    )
+      .bind(parentName, collaboratorId, ownerId, Date.now())
+      .run();
+
+    const response = await SELF.fetch(`https://test.local/sessions/${parentName}/children`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${sandboxToken}` },
+      body: JSON.stringify({ title: "Private child", prompt: "Investigate" }),
+    });
+    expect(response.status).toBe(201);
+    const { sessionId } = await response.json<{ sessionId: string }>();
+    expect(await store.get(sessionId)).toMatchObject({
+      visibility: "private",
+      userId: ownerId,
+      ownerTeamId: null,
+    });
+    const collaborator = await env.DB.prepare(
+      "SELECT user_id FROM session_collaborators WHERE session_id = ?"
+    )
+      .bind(sessionId)
+      .first<{ user_id: string }>();
+    expect(collaborator?.user_id).toBe(collaboratorId);
+    const audit = await env.DB.prepare(
+      "SELECT team_id, resource_id FROM authorization_audit_events WHERE action = 'session.created_private'"
+    ).first<{ team_id: string | null; resource_id: string }>();
+    expect(audit).toEqual({ team_id: null, resource_id: sessionId });
+  });
+
+  it.each([null, "22"])(
+    "does not borrow the private owner's credential identity for an unresolved author (SCM %s)",
+    async (scmUserId) => {
+      const ownerId = "11111111111111111111111111111111";
+      await seedActiveUser(ownerId);
+      const { parentName, stub, sandboxToken, store } = await setupParent({
+        visibility: "private",
+        repoId: 12345,
+        canonicalUserId: ownerId,
+      });
+      await runInSessionDO(stub, (_instance: SessionDO, state) => {
+        state.storage.sql.exec(
+          "INSERT INTO participants (id, user_id, scm_user_id, scm_login, role, joined_at) VALUES (?, ?, ?, ?, 'member', ?)",
+          "reviewer-participant",
+          "github:22",
+          scmUserId,
+          scmUserId ? "reviewer" : null,
+          Date.now()
+        );
+        state.storage.sql.exec(
+          "UPDATE messages SET author_id = ? WHERE status = 'processing'",
+          "reviewer-participant"
+        );
+      });
+      const response = await SELF.fetch(`https://test.local/sessions/${parentName}/children`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${sandboxToken}` },
+        body: JSON.stringify({ title: "Review follow-up", prompt: "Investigate the review" }),
+      });
+      expect(response.status).toBe(201);
+      const { sessionId } = await response.json<{ sessionId: string }>();
+      expect((await store.get(sessionId))?.userId).toBe(ownerId);
+      const childStub = env.SESSION.get(env.SESSION.idFromName(sessionId));
+      await markChildPromptProcessing(childStub);
+      const authorResponse = await childStub.fetch("http://internal/internal/active-prompt-author");
+      expect(authorResponse.status).toBe(200);
+      const author = await authorResponse.json<{ canonicalUserId?: string | null }>();
+      expect(author).toMatchObject({ userId: "github:22", scmUserId });
+      expect(author.canonicalUserId ?? null).toBeNull();
+    }
+  );
+
+  it("retains the private parent's owner as a child collaborator when another user authors it", async () => {
+    const ownerId = "11111111111111111111111111111111";
+    const authorId = "22222222222222222222222222222222";
+    await seedActiveUser(ownerId);
+    await seedActiveUser(authorId);
+    const { parentName, stub, sandboxToken, store } = await setupParent({
+      visibility: "private",
+      repoId: 12345,
+      userId: "slack:U1",
+      canonicalUserId: ownerId,
+    });
+    await env.DB.prepare(
+      "INSERT INTO session_collaborators (session_id, user_id, added_by, created_at) VALUES (?, ?, ?, ?)"
+    )
+      .bind(parentName, authorId, ownerId, Date.now())
+      .run();
+    await runInSessionDO(stub, (_instance: SessionDO, state) => {
+      state.storage.sql.exec(
+        `INSERT INTO participants (id, user_id, canonical_user_id, role, joined_at)
+         VALUES (?, ?, ?, 'member', ?)`,
+        "other-author",
+        "slack:U2",
+        authorId,
+        Date.now()
+      );
+      state.storage.sql.exec(
+        "UPDATE messages SET author_id = ? WHERE status = 'processing'",
+        "other-author"
+      );
+    });
+    const response = await SELF.fetch(`https://test.local/sessions/${parentName}/children`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${sandboxToken}` },
+      body: JSON.stringify({ title: "Shared private child", prompt: "Investigate" }),
+    });
+    expect(response.status).toBe(201);
+    const { sessionId } = await response.json<{ sessionId: string }>();
+    expect((await store.get(sessionId))?.userId).toBe(authorId);
+    const collaborators = await env.DB.prepare(
+      "SELECT user_id FROM session_collaborators WHERE session_id = ? ORDER BY user_id"
+    )
+      .bind(sessionId)
+      .all<{ user_id: string }>();
+    expect(collaborators.results.map((row) => row.user_id)).toEqual([ownerId, authorId]);
   });
 
   it("attributes a child to the active prompt author instead of the parent owner", async () => {
@@ -512,6 +751,8 @@ describe("POST /sessions/:parentId/children — spawn child", () => {
     for (let i = 0; i < 5; i++) {
       await store.create({
         id: `child-active-${i}-${Date.now()}`,
+        ownerTeamId: null,
+        visibility: "workspace",
         title: `Active Child ${i}`,
         repoOwner: "acme",
         repoName: "web-app",
@@ -551,6 +792,8 @@ describe("POST /sessions/:parentId/children — spawn child", () => {
     for (let i = 0; i < 15; i++) {
       await store.create({
         id: `child-total-${i}-${Date.now()}`,
+        ownerTeamId: null,
+        visibility: "workspace",
         title: `Child ${i}`,
         repoOwner: "acme",
         repoName: "web-app",
@@ -646,6 +889,8 @@ describe("POST /sessions/:parentId/children — spawn child", () => {
     // Seed some children in D1
     await store.create({
       id: "child-list-1",
+      ownerTeamId: null,
+      visibility: "workspace",
       title: "Child A",
       repoOwner: "acme",
       repoName: "web-app",
@@ -662,6 +907,8 @@ describe("POST /sessions/:parentId/children — spawn child", () => {
 
     await store.create({
       id: "child-list-2",
+      ownerTeamId: null,
+      visibility: "workspace",
       title: "Child B",
       repoOwner: "acme",
       repoName: "web-app",

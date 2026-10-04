@@ -7,7 +7,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from websockets import State
 
-from sandbox_runtime.bridge import AgentBridge, SessionTerminatedError
+from sandbox_runtime.bridge import AgentBridge
 from sandbox_runtime.git_signing import GitSigningError
 
 
@@ -41,6 +41,12 @@ class TestIsFatalConnectionError:
 
     def test_http_500_is_not_fatal(self, bridge):
         error_str = "server rejected WebSocket connection: HTTP 500"
+        assert bridge._is_fatal_connection_error(error_str) is False
+
+    def test_http_503_is_not_fatal(self, bridge):
+        # The control plane answers 503 while a save still needs this sandbox;
+        # exiting would shut the sandbox down under the save.
+        error_str = "server rejected WebSocket connection: HTTP 503"
         assert bridge._is_fatal_connection_error(error_str) is False
 
     def test_network_error_is_not_fatal(self, bridge):
@@ -305,18 +311,3 @@ class TestStalledWriteReconnect:
         assert ws.state is State.CLOSED
         assert bridge.ws is None
         assert bridge.event_forwarder._ws is None
-
-
-class TestSessionTerminatedError:
-    """Tests for SessionTerminatedError exception."""
-
-    def test_can_be_raised_and_caught(self):
-        with pytest.raises(SessionTerminatedError) as exc_info:
-            raise SessionTerminatedError("Test message")
-        assert "Test message" in str(exc_info.value)
-
-    def test_exception_chaining(self):
-        original = ValueError("original error")
-        with pytest.raises(SessionTerminatedError) as exc_info:
-            raise SessionTerminatedError("Wrapped") from original
-        assert exc_info.value.__cause__ is original

@@ -1,10 +1,11 @@
 "use client";
 
-import { useCallback, useEffect, useReducer, useRef } from "react";
+import { useCallback, useEffect, useReducer, useRef, useState } from "react";
 import { mutate } from "swr";
 import { useSessionTransport } from "@/hooks/use-session-transport";
 import { useSandboxAccess } from "@/hooks/use-sandbox-access";
-import type { SessionCapabilities } from "@/lib/session-capabilities";
+import { useCurrentUserAuthorization } from "@/hooks/use-current-user-authorization";
+import { resolveSessionCapabilities, type SessionCapabilities } from "@/lib/session-capabilities";
 import {
   ingestLiveSandboxEvent,
   pendingToTokenEvent,
@@ -13,6 +14,7 @@ import {
 } from "@/lib/session-socket/event-log";
 import {
   createSessionSocketState,
+  initialSessionSocketState,
   sessionSocketReducer,
   type SessionSocketState,
 } from "@/lib/session-socket/reducer";
@@ -54,6 +56,8 @@ interface UseSessionSocketReturn {
   presenceSynced: boolean;
   authError: string | null;
   connectionError: string | null;
+  sessionGone: boolean;
+  capabilities: SessionCapabilities;
   sessionState: SessionState | null;
   /** Why the sandbox last failed, when the control plane reported a reason. */
   sandboxError: string | null;
@@ -114,13 +118,23 @@ interface PendingCorrelatedRequest {
  */
 export function useSessionSocket(
   sessionId: string,
-  initialSnapshot: SessionSnapshot,
-  capabilities: SessionCapabilities
+  initialSnapshot: SessionSnapshot
 ): UseSessionSocketReturn {
-  const [state, dispatch] = useReducer(
+  const [cachedState, dispatch] = useReducer(
     sessionSocketReducer,
     initialSnapshot,
     createSessionSocketState
+  );
+  const [previousSnapshot, setPreviousSnapshot] = useState(initialSnapshot);
+  if (previousSnapshot !== initialSnapshot) {
+    setPreviousSnapshot(initialSnapshot);
+    // Scope writes refresh HTTP authorization without replacing the live timeline.
+    dispatch({ type: "snapshot_refreshed", session: initialSnapshot.session });
+  }
+  const { hasPermission } = useCurrentUserAuthorization();
+  const capabilities = resolveSessionCapabilities(
+    cachedState.sessionState?.capabilities,
+    hasPermission("sessions.export")
   );
   const subscribedRef = useRef(false);
   // Buffers streamed assistant text in a ref so token events (which arrive at
@@ -136,7 +150,7 @@ export function useSessionSocket(
     refresh: refreshSandboxAccess,
   } = useSandboxAccess(
     sessionId,
-    state.sessionState?.sandboxStatus === "ready",
+    cachedState.sessionState?.sandboxStatus === "ready",
     capabilities.sandboxAccess
   );
 
@@ -186,9 +200,9 @@ export function useSessionSocket(
   }, []);
 
   useEffect(() => {
-    subscribedRef.current = state.ready;
-    if (state.ready) settleSubscriptionWaiters(true);
-  }, [state.ready, settleSubscriptionWaiters]);
+    subscribedRef.current = cachedState.ready;
+    if (cachedState.ready) settleSubscriptionWaiters(true);
+  }, [cachedState.ready, settleSubscriptionWaiters]);
 
   const handleMessage = useCallback(
     (message: ServerMessage) => {
@@ -260,6 +274,14 @@ export function useSessionSocket(
     capabilities.read
   );
   const { isOpen, send, reconnect, markHealthy } = transport;
+  const state = transport.sessionGone ? initialSessionSocketState : cachedState;
+
+  useEffect(() => {
+    if (!transport.sessionGone) return;
+    pendingTextRef.current = null;
+    handleClose();
+    void clearSandboxAccess();
+  }, [clearSandboxAccess, handleClose, transport.sessionGone]);
 
   useEffect(() => {
     if (!state.ready) return;
@@ -477,6 +499,8 @@ export function useSessionSocket(
     presenceSynced: state.presenceSynced,
     authError: transport.authError,
     connectionError: transport.connectionError,
+    sessionGone: transport.sessionGone,
+    capabilities: transport.sessionGone ? resolveSessionCapabilities(undefined) : capabilities,
     sessionState,
     sandboxError: state.sandboxError,
     boot: state.boot,
@@ -485,7 +509,7 @@ export function useSessionSocket(
     participants: state.participants,
     artifacts: state.artifacts,
     currentParticipantId: state.currentParticipantId,
-    canManageBudget: state.canManageBudget,
+    canManageBudget: capabilities.lifecycle && state.canManageBudget,
     isProcessing,
     promptQueue: state.promptQueue,
     sendPrompt,

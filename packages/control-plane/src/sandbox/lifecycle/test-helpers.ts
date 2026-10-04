@@ -13,6 +13,14 @@ import {
   type SandboxShutdownLifecycle,
 } from "./manager";
 import { COMPATIBLE_RUNTIME_VERSION } from "../../image-builds/test-helpers";
+import { createLogger } from "../../logger";
+import type { BackgroundTasks } from "../../platform-ports";
+import type { ImageBuildLookup } from "./image-selection";
+import {
+  SandboxAccess,
+  type SandboxAccessDependencies,
+  type SandboxAccessStorage,
+} from "./sandbox-access";
 import { SandboxShutdownCoordinator } from "../../session/sandbox-shutdown";
 import type { ShutdownRecord } from "../../session/sandbox-shutdown-repository";
 import type {
@@ -30,6 +38,7 @@ import type {
   StopConfig,
   StopResult,
 } from "../provider";
+import { providerResumesAfterStop } from "../provider";
 import type { SandboxAccessKind, SandboxRow, SessionRow } from "../../session/types";
 import type { SandboxStatus } from "@open-inspect/shared/types/sessions";
 
@@ -97,6 +106,7 @@ export function createMockSandbox(
     boot_phase: null,
     boot_seq: null,
     fenced: 0,
+    startup_rejected: 0,
     created_at: Date.now() - 60000,
     spawn_failure_count: 0,
     last_spawn_failure: 0,
@@ -117,7 +127,7 @@ export function createMockStorage(
     | null = createMockSandbox(),
   userEnvVars: Record<string, string> | undefined = undefined,
   sessionRepositories: SessionRepositoryInfo[] = []
-): SandboxStorage & SessionContextReader & { calls: string[] } {
+): SandboxStorage & SandboxAccessStorage & SessionContextReader & { calls: string[] } {
   const calls: string[] = [];
 
   return {
@@ -162,6 +172,23 @@ export function createMockStorage(
         return true;
       }
     ),
+    rejectProviderStartup: vi.fn((generation, providerObjectId) => {
+      if (
+        !sandbox ||
+        sandbox.modal_sandbox_id !== generation.sandboxId ||
+        sandbox.created_at !== generation.createdAt
+      )
+        return "superseded";
+      sandbox.modal_object_id = providerObjectId;
+      const failed = ["spawning", "connecting", "ready"].includes(sandbox.status);
+      if (failed) sandbox.status = "failed";
+      sandbox.fenced = 1;
+      sandbox.startup_rejected = 1;
+      sandbox.auth_token_hash = "";
+      sandbox.auth_token = null;
+      sandbox.active_socket_id = "";
+      return failed ? "failed" : "retained";
+    }),
     commitProviderStartup: vi.fn((generation, providerObjectId, allowFailedSelfHeal) => {
       calls.push("commitProviderStartup");
       if (
@@ -184,6 +211,8 @@ export function createMockStorage(
       calls.push("updateSandboxForSpawn");
       if (sandbox) {
         sandbox.status = data.status;
+        sandbox.startup_rejected = 0;
+        sandbox.fenced = 0;
         sandbox.created_at = data.createdAt;
         sandbox.auth_token_hash = "";
         sandbox.auth_token = null;
@@ -211,6 +240,27 @@ export function createMockStorage(
         sandbox.status = data.status;
         sandbox.created_at = data.createdAt;
       }
+    }),
+    completeProviderResume: vi.fn(async (generation, access) => {
+      calls.push("completeProviderResume");
+      if (
+        !sandbox ||
+        sandbox.modal_sandbox_id !== generation.sandboxId ||
+        sandbox.created_at !== generation.createdAt ||
+        !["connecting", "ready"].includes(sandbox.status) ||
+        sandbox.fenced !== 0
+      ) {
+        return false;
+      }
+      sandbox.modal_object_id = access.providerObjectId;
+      sandbox.code_server_url = access.codeServer?.url ?? null;
+      sandbox.code_server_password = access.codeServer?.password ?? null;
+      sandbox.vnc_url = access.vnc?.url ?? null;
+      sandbox.vnc_password = access.vnc?.password ?? null;
+      sandbox.ttyd_url = access.ttyd?.url ?? null;
+      sandbox.ttyd_token = access.ttyd?.token ?? null;
+      sandbox.tunnel_urls = access.tunnelUrls ? JSON.stringify(access.tunnelUrls) : null;
+      return true;
     }),
     updateSandboxModalObjectId: vi.fn((id: string | null) => {
       calls.push(`updateSandboxModalObjectId:${id}`);
@@ -260,6 +310,10 @@ export function createMockStorage(
         sandbox[ACCESS_FIELDS[kind].url] = url;
         sandbox[ACCESS_FIELDS[kind].secret] = secret;
       }
+    }),
+    getSandboxAccessSecret: vi.fn(async (kind: SandboxAccessKind) => {
+      calls.push(`getSandboxAccessSecret:${kind}`);
+      return sandbox?.[ACCESS_FIELDS[kind].secret] ?? null;
     }),
     clearSandboxAccess: vi.fn((kind: SandboxAccessKind) => {
       calls.push(`clearSandboxAccess:${kind}`);
@@ -404,12 +458,57 @@ export function createTestConfig(): SandboxLifecycleConfig {
   };
 }
 
+export function createTestLifecycleManager(
+  provider: SandboxProvider,
+  storage: SandboxStorage & SandboxAccessStorage,
+  sessionContext: SessionContextReader,
+  broadcaster: SandboxBroadcaster,
+  wsManager: WebSocketManager,
+  alarmScheduler: AlarmScheduler,
+  idGenerator: IdGenerator,
+  shutdown: SandboxShutdownLifecycle,
+  config: SandboxLifecycleConfig & Pick<SandboxAccessDependencies, "sandboxDashboardUrlBuilder">,
+  imageBuildLookup?: ImageBuildLookup,
+  backgroundTasks?: BackgroundTasks
+): SandboxLifecycleManager {
+  const access = new SandboxAccess({
+    storage,
+    broadcaster,
+    sockets: wsManager,
+    canResumeAfterStop: () => providerResumesAfterStop(provider),
+    getLogger: () => {
+      const log = createLogger("lifecycle-manager");
+      const sessionId = config.getSessionId?.();
+      return sessionId ? log.child({ session_id: sessionId }) : log;
+    },
+    sandboxDashboardUrlBuilder: config.sandboxDashboardUrlBuilder,
+  });
+  return new SandboxLifecycleManager(
+    provider,
+    storage,
+    sessionContext,
+    broadcaster,
+    wsManager,
+    alarmScheduler,
+    idGenerator,
+    shutdown,
+    access,
+    config,
+    imageBuildLookup,
+    backgroundTasks
+  );
+}
+
 export function createUnmanagedShutdown() {
   return {
     reserveStartup: vi.fn((_createdAt, _policy, persist) => persist()),
     markRecoveryInvoked: vi.fn(),
+    recordPendingProviderHandle: vi.fn<SandboxShutdownLifecycle["recordPendingProviderHandle"]>(
+      async () => "registered"
+    ),
     recordProviderStartup: vi.fn<SandboxShutdownLifecycle["recordProviderStartup"]>(async () => {}),
     isHolding: vi.fn(() => false),
+    onRefusedReconnect: vi.fn(() => "exit" as const),
     requestShutdown: vi.fn<SandboxShutdownLifecycle["requestShutdown"]>(async () => "unmanaged"),
     captureCheckpoint: vi.fn<SandboxShutdownLifecycle["captureCheckpoint"]>(async () => ({
       outcome: "saved",
@@ -419,6 +518,7 @@ export function createUnmanagedShutdown() {
     startupDecision: vi.fn<SandboxShutdownLifecycle["startupDecision"]>(() => ({
       kind: "normal",
     })),
+    holdFailedRetainedBoot: vi.fn(() => false),
     holdFailedRecovery: vi.fn(),
     runtimeReady: vi.fn(),
     generationReady: vi.fn(),
@@ -470,6 +570,7 @@ export function createCheckpointShutdown(
         : Promise.resolve("unmanaged"),
     isHolding: () => coordinator.isHolding(),
     admissionDecision: () => coordinator.admissionDecision(),
+    onRefusedReconnect: () => coordinator.onRefusedReconnect(),
   };
 }
 
@@ -484,7 +585,7 @@ export function createAlarmFixture(
   const wsManager = createMockWebSocketManager(false, clientCount);
   const alarmScheduler = createMockAlarmScheduler();
   const shutdown = createCheckpointShutdown(provider, storage, broadcaster, onLifecycleChange);
-  const manager = new SandboxLifecycleManager(
+  const manager = createTestLifecycleManager(
     provider,
     storage,
     storage,

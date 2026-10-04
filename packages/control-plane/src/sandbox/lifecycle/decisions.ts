@@ -194,12 +194,12 @@ export interface SandboxState {
   /** Whether an active WebSocket connection exists */
   hasActiveWebSocket: boolean;
   /**
-   * Whether this generation's bridge has ever connected (its `last_heartbeat`
-   * is set; the reservation clears it). A connected generation is alive as
+   * This generation's last bridge heartbeat, or null if its bridge never
+   * connected (the reservation clears it). A connected generation is alive as
    * far as the provider is concerned, so age alone never justifies replacing
    * it: a dropped socket is the heartbeat alarm's to judge.
    */
-  hasConnected?: boolean;
+  lastHeartbeat: number | null;
 }
 
 /**
@@ -208,8 +208,6 @@ export interface SandboxState {
 export interface SpawnConfig {
   /** Cooldown period in ms between spawn attempts (default: 30s) */
   cooldownMs: number;
-  /** Time to wait for WebSocket after spawn (default: 60s) */
-  readyWaitMs: number;
   /**
    * Max time a sandbox may remain in "spawning"/"connecting" before it is
    * treated as dead and a fresh spawn is allowed. Defaults to
@@ -245,12 +243,17 @@ export interface SpawnConfig {
  */
 const CONNECT_WATCHDOG_MS = 240_000;
 
+/** Latest a VM launch may start after reservation; enforced by both launch endpoints. */
+export const PENDING_VM_REFERENCE_LAUNCH_WINDOW_MS = 30_000;
+
+/** Launch window + Modal api_create_sandbox/api_restore_sandbox timeout=150s + 30s margin. */
+export const PENDING_VM_REFERENCE_MATERIALIZE_BOUND_MS = 210_000;
+
 /**
  * Default spawn configuration.
  */
 export const DEFAULT_SPAWN_CONFIG: SpawnConfig = {
   cooldownMs: 30000, // 30 seconds
-  readyWaitMs: 60000, // 60 seconds
   spawningTimeoutMs: CONNECT_WATCHDOG_MS,
 };
 
@@ -284,7 +287,8 @@ export type SpawnAction =
   | { action: "resume"; providerObjectId: string }
   | { action: "restore"; snapshotImageId: string; snapshotRuntimeVersion: string }
   | { action: "skip"; reason: string }
-  | { action: "wait"; reason: string };
+  | { action: "wait"; reason: string }
+  | { action: "await_reconnect"; lastHeartbeat: number };
 
 /**
  * Evaluate what spawn action to take.
@@ -292,9 +296,9 @@ export type SpawnAction =
  * This function encapsulates the complex spawn decision logic:
  * - Restore from snapshot if available, compatible, and sandbox is
  *   stopped/stale/failed
+ * - Await reconnect if a live generation's bridge connected and dropped
  * - Skip if already spawning/connecting
  * - Skip if ready with active WebSocket
- * - Wait if ready without WebSocket but recently spawned
  * - Wait during cooldown period (unless failed/stopped)
  * - Skip if already spawning in memory
  * - Spawn if all conditions pass
@@ -314,8 +318,9 @@ export type SpawnAction =
  *     snapshotImageId: "img-123",
  *     snapshotRuntimeVersion: "v59-runtime",
  *     hasActiveWebSocket: false,
+ *     lastHeartbeat: null,
  *   },
- *   { cooldownMs: 30000, readyWaitMs: 60000 },
+ *   DEFAULT_SPAWN_CONFIG,
  *   Date.now(),
  *   false
  * );
@@ -370,17 +375,25 @@ export function evaluateSpawnDecision(
     };
   }
 
+  // A launched, live generation whose bridge connected and dropped (e.g.
+  // across a control-plane restart) is the heartbeat alarm's to terminalize
+  // (which re-drives the queue), never age's to replace, whatever its status:
+  // a replacement would run alongside a sandbox that may reconnect. "pending"
+  // has launched nothing to wait for.
+  if (
+    !state.hasActiveWebSocket &&
+    state.lastHeartbeat !== null &&
+    state.status !== "pending" &&
+    !isDeadSandboxStatus(state.status)
+  ) {
+    return { action: "await_reconnect", lastHeartbeat: state.lastHeartbeat };
+  }
+
   if (state.status === "spawning" || state.status === "connecting") {
     // A booting sandbox with its bridge attached is alive, however long its
     // boot has run; the ready event will release the queue.
     if (state.hasActiveWebSocket) {
       return { action: "skip", reason: `already ${state.status} with a live bridge` };
-    }
-    // A generation that connected and dropped is the heartbeat alarm's to
-    // terminalize (which re-drives the queue), never age's to replace: a
-    // replacement here would run alongside a sandbox that may reconnect.
-    if (state.hasConnected) {
-      return { action: "wait", reason: "bridge disconnected during boot; heartbeat check pending" };
     }
     // Don't spawn if a spawn/connect is genuinely in progress (persisted status).
     // But a spawn interrupted before the sandbox connects (provider crash,
@@ -393,18 +406,10 @@ export function evaluateSpawnDecision(
     }
   }
 
-  // Don't spawn if status is "ready" and we have an active WebSocket
-  if (state.status === "ready") {
-    if (state.hasActiveWebSocket) {
-      return { action: "skip", reason: "sandbox ready with active WebSocket" };
-    }
-    // If no WebSocket but was recently spawned, wait for reconnect
-    if (timeSinceLastSpawn < config.readyWaitMs) {
-      return {
-        action: "wait",
-        reason: `status ready but no WebSocket, last spawn was ${Math.round(timeSinceLastSpawn / 1000)}s ago`,
-      };
-    }
+  // Don't spawn if status is "ready" and we have an active WebSocket. Ready
+  // implies a connected bridge, so a dropped one awaited its reconnect above.
+  if (state.status === "ready" && state.hasActiveWebSocket) {
+    return { action: "skip", reason: "sandbox ready with active WebSocket" };
   }
 
   // Cooldown: don't spawn if last spawn was within cooldown period
@@ -602,6 +607,11 @@ export function evaluateHeartbeatHealth(
   }
 
   return { isStale: false };
+}
+
+/** The earliest time at which `evaluateHeartbeatHealth` judges `lastHeartbeat` stale. */
+export function heartbeatStaleAt(lastHeartbeat: number, config: HeartbeatConfig): number {
+  return lastHeartbeat + config.timeoutMs + 1;
 }
 
 // ==================== Connecting Timeout ====================

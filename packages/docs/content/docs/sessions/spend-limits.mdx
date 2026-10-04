@@ -1,0 +1,94 @@
+---
+title: Session spend limits
+description: Set a USD cost limit for sessions at the workspace, repository, environment, or single-session level, and know what happens when it is reached.
+audience: team-owner
+owner: control-plane
+status: published
+lastReviewed: "2026-09-23"
+relatedCode:
+  - packages/control-plane/src/session/budget-service.ts
+  - packages/control-plane/src/session/budget-authorization.ts
+  - packages/control-plane/src/session/message-queue.ts
+  - packages/shared/src/types/session-api.ts
+  - packages/web/src/components/sidebar/budget-section.tsx
+  - packages/web/src/components/settings/session-cost-settings-fields.tsx
+  - docs/CLAUDE_AGENT.md
+---
+
+A spend limit stops a session's model work once its reported cost reaches a USD amount you choose, and lets the owner raise it to continue.
+
+## Where limits are set
+
+### Workspace default
+
+Under Settings › Sandbox, the **Session Cost** section has one field, **Cost limit (USD)**. The description reads: "Stops additional model work after reported session cost reaches the limit. Leave the limit blank for unlimited sessions. Unreported model cost cannot be limited."
+
+- Blank means no limit. The placeholder reads "No limit".
+- The value must be a positive amount. Zero and negative values are rejected with "Session cost limit must be a positive USD amount."
+
+### Repository and environment overrides
+
+The same field appears in a repository's and an environment's sandbox settings. There the placeholder reads "Inherit", and leaving it blank inherits the broader setting. Enter a value to override it for sessions on that repository or environment. See [Sandbox settings](/configure/sandbox-settings) for how the levels resolve.
+
+### One session
+
+The session's right sidebar has a **Budget** section. It reads "No session cost limit" until a cost is reported or a limit is set, then "Session cost: $X" or "Session cost: $X of $Y limit".
+
+To change the limit for this session only:
+
+1. Click **Edit limit**.
+2. Enter a value under "USD limit for this session" and click **Save**, or click **No limit** to remove it.
+
+The note under the field reads "Applies only to this session." A non-positive value is refused with "Enter a positive USD amount". The API equivalent is `PATCH /sessions/:id/budget` with `maxCostUsd` set to a positive number or `null`.
+
+## Who can change it
+
+- Workspace, repository, and environment limits are edited in Settings by whoever can manage sandbox settings.
+- The per-session limit can be changed only by the session's owner, and only when that owner also has session lifecycle permission. Other participants see the Budget section but not **Edit limit**.
+
+## How cost is measured
+
+The harness running in the sandbox reports the cumulative cost of the current turn on every step and again when the turn ends. The session total grows only by the amount a report exceeds the highest one already recorded, so a resent report adds nothing and a dropped one is repaired by the next.
+
+| Harness      | What is reported                                                                                                                                                                                                              |
+| ------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| OpenCode     | The cost OpenCode reports for the turn.                                                                                                                                                                                       |
+| Claude Agent | The Claude Agent SDK's client-side estimate for the turn (running total at turn end minus the total at turn start). Under a subscription this figure is informational, but the spend limit still applies to it as configured. |
+
+The Budget section notes that "Costs and limits reflect reported model usage only." Model usage that the harness does not report cannot be limited.
+
+## What happens when the limit is reached
+
+As soon as a cost report brings the session total to the limit or above:
+
+1. The session is marked budget-exhausted.
+2. A warning is written to the timeline with the text `Session cost limit reached: $X of $Y. Execution stopped.` (or `Work paused.` when nothing was running).
+3. The running turn is stopped.
+4. Queued prompts stay queued and are not dispatched.
+5. New prompts are refused. The composer is blocked with "Session cost limit reached at $X of $Y. Raise or remove the limit to continue." for the owner, and "The session owner must raise or remove the limit to continue." for everyone else. Feedback queued by PR Feedback Autofix is rejected for the same reason.
+
+The stop is a normal execution stop, so the workspace is left as it was at that moment and follow-ups can pick up from there.
+
+### Resuming
+
+Raise the limit above the current total, or remove it, from the Budget section. Queued prompts dispatch again immediately, and a new follow-up runs as usual. If you lower a limit below the amount already spent, the session stops in the same way at once.
+
+<Callout type="warn" title="Long turns">
+  The limit is checked each time the harness reports cost, so a turn is stopped at the first report
+  at or above the limit, not at the exact dollar amount.
+</Callout>
+
+## Troubleshooting
+
+| Symptom                                          | Cause                                                       | Fix                                                                                              |
+| ------------------------------------------------ | ----------------------------------------------------------- | ------------------------------------------------------------------------------------------------ |
+| Composer says the cost limit was reached         | Reported cost hit the session's effective limit             | Owner: **Edit limit** in the Budget section, raise or remove it, then send the follow-up.        |
+| Saving `0` fails                                 | Limits must be positive; blank means unlimited              | Clear the field instead of entering zero.                                                        |
+| A repository session ignores the workspace limit | The repository or environment has its own value             | Check the repository's and environment's Session Cost fields; blank inherits, a value overrides. |
+| Budget section shows no **Edit limit** button    | You are not the session owner, or lack lifecycle permission | Ask the owner to change it, or change the scope default in Settings.                             |
+
+## Next steps
+
+- [Sandbox settings](/configure/sandbox-settings)
+- [Analytics](/administration/analytics)
+- [Session lifecycle and statuses](/sessions/lifecycle-and-statuses)

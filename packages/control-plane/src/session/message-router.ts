@@ -1,7 +1,9 @@
 import { sandboxEventSchema, type SandboxEvent } from "@open-inspect/shared/types/sandbox-events";
-import { clientRequestIdSchema } from "@open-inspect/shared/types/prompts";
+import { clientRequestIdSchema, promptValidationError } from "@open-inspect/shared/types/prompts";
+import type { ZodError } from "zod";
 import { clientMessageSchema, type ClientMessage } from "@open-inspect/shared/types/websocket";
-import type { PermissionId } from "@open-inspect/shared/rbac";
+import type { SessionAction } from "@open-inspect/shared";
+import type { AccessDenialReason } from "@open-inspect/shared";
 import { ShutdownRecoveryRejectedError } from "../sandbox/lifecycle/ports";
 import type { Logger } from "../logger";
 import type { SessionHistoryPage } from "./event-stream";
@@ -14,16 +16,23 @@ export type ClientPresence = Extract<ClientMessage, { type: "presence" }>;
 export type ClientPrompt = Extract<ClientMessage, { type: "prompt" }>;
 export type ClientSubscribe = Extract<ClientMessage, { type: "subscribe" }>;
 export type FetchHistory = Extract<ClientMessage, { type: "fetch_history" }>;
+type ValidHistoryRequest = FetchHistory & { cursor: NonNullable<FetchHistory["cursor"]> };
 export type RecoverShutdownCommand = Extract<ClientMessage, { type: "recover_preservation" }>;
 
+export type ClientCommandAuthorization =
+  | { kind: "allowed" }
+  | { kind: "denied"; reason: AccessDenialReason }
+  | { kind: "unavailable" }
+  | { kind: "revoked" };
+
 type BoundarySchema<T> = {
-  safeParse(
-    input: unknown
-  ): { success: true; data: T } | { success: false; error: { issues: unknown } };
+  safeParse(input: unknown): { success: true; data: T } | { success: false; error: ZodError };
 };
 
 // Retain valid JSON on schema failure so correlated errors do not parse the payload twice.
-type ParsedMessage<T> = { valid: true; data: T } | { valid: false; raw?: unknown };
+type ParsedMessage<T> =
+  | { valid: true; data: T }
+  | { valid: false; raw?: unknown; error?: ZodError };
 
 export interface SessionClientCommands<Connection, Client extends ConnectedClient> {
   subscribe: (connection: Connection, message: ClientSubscribe) => Promise<void>;
@@ -38,9 +47,10 @@ export interface SessionClientCommands<Connection, Client extends ConnectedClien
     limit?: number;
   }) => SessionHistoryPage;
   authorize: (
+    connection: Connection,
     client: Client,
-    permission: PermissionId
-  ) => Promise<"allowed" | "denied" | "unavailable">;
+    action: SessionAction
+  ) => Promise<ClientCommandAuthorization>;
 }
 
 export interface SessionMessageRouterDeps<Connection, Client extends ConnectedClient> {
@@ -97,11 +107,17 @@ export class SessionMessageRouter<Connection, Client extends ConnectedClient> {
       const parsed = this.parseMessage(message, "client", clientMessageSchema);
       if (!parsed.valid) {
         const invalidRequest = this.readInvalidCorrelatedRequest(parsed.raw);
+        const invalidPrompt = invalidRequest?.type === "prompt";
+        let validationMessage = "Failed to process message";
+        if (invalidPrompt) {
+          validationMessage = parsed.error
+            ? promptValidationError(parsed.error, parsed.raw).error
+            : "Invalid prompt";
+        }
         this.deps.sockets.send(connection, {
           type: "error",
-          code: invalidRequest?.type === "prompt" ? "INVALID_PROMPT" : "INVALID_MESSAGE",
-          message:
-            invalidRequest?.type === "prompt" ? "Invalid prompt" : "Failed to process message",
+          code: invalidPrompt ? "INVALID_PROMPT" : "INVALID_MESSAGE",
+          message: validationMessage,
           ...(invalidRequest?.clientRequestId
             ? { clientRequestId: invalidRequest.clientRequestId }
             : {}),
@@ -135,26 +151,19 @@ export class SessionMessageRouter<Connection, Client extends ConnectedClient> {
 
       switch (data.type) {
         case "prompt":
-          if (!(await this.authorizeCommand(connection, client, "sessions.collaborate"))) break;
+          if (!(await this.authorizeCommand(connection, client, "collaborate"))) break;
           await this.deps.clientCommands.submitPrompt(connection, client, data);
           break;
         case "cancel_prompt":
-          if (!(await this.authorizeCommand(connection, client, "sessions.lifecycle"))) break;
+          if (!(await this.authorizeCommand(connection, client, "lifecycle"))) break;
           await this.deps.clientCommands.cancelPrompt(connection, data);
           break;
         case "stop":
-          if (!(await this.authorizeCommand(connection, client, "sessions.lifecycle"))) break;
+          if (!(await this.authorizeCommand(connection, client, "lifecycle"))) break;
           await this.deps.clientCommands.stopExecution();
           break;
         case "recover_preservation":
-          if (
-            !(await this.authorizeCommand(
-              connection,
-              client,
-              "sessions.lifecycle",
-              data.clientRequestId
-            ))
-          )
+          if (!(await this.authorizeCommand(connection, client, "lifecycle", data.clientRequestId)))
             break;
           await this.deps.clientCommands.recoverShutdown(data.action);
           if (data.clientRequestId)
@@ -165,13 +174,16 @@ export class SessionMessageRouter<Connection, Client extends ConnectedClient> {
             });
           break;
         case "typing":
-          if (!(await this.authorizeCommand(connection, client, "sessions.collaborate"))) break;
+          if (!(await this.authorizeCommand(connection, client, "collaborate"))) break;
           await this.deps.clientCommands.notifyTyping();
           break;
         case "fetch_history":
+          if (!this.canFetchHistory(connection, client, data)) break;
+          if (!(await this.authorizeCommand(connection, client, "read"))) break;
           this.handleFetchHistory(connection, client, data);
           break;
         case "presence":
+          if (!(await this.authorizeCommand(connection, client, "read"))) break;
           this.deps.clientCommands.updatePresence(client, data);
           break;
         default:
@@ -200,24 +212,29 @@ export class SessionMessageRouter<Connection, Client extends ConnectedClient> {
   private async authorizeCommand(
     connection: Connection,
     client: Client,
-    permission: PermissionId,
+    action: SessionAction,
     clientRequestId?: string
   ): Promise<boolean> {
-    const result = await this.deps.clientCommands.authorize(client, permission);
-    if (result === "allowed") return true;
+    const result = await this.deps.clientCommands.authorize(connection, client, action);
+    if (result.kind === "allowed") return true;
+    if (result.kind === "revoked") return false;
     this.deps.sockets.send(connection, {
       type: "error",
-      code: result === "unavailable" ? "AUTHORIZATION_UNAVAILABLE" : "PERMISSION_REQUIRED",
+      code: result.kind === "unavailable" ? "AUTHORIZATION_UNAVAILABLE" : "PERMISSION_REQUIRED",
       message:
-        result === "unavailable"
+        result.kind === "unavailable"
           ? "Authorization is temporarily unavailable"
-          : `Permission required: ${permission}`,
+          : `Access denied: ${result.reason}`,
       ...(clientRequestId ? { clientRequestId } : {}),
     });
     return false;
   }
 
-  private handleFetchHistory(connection: Connection, client: Client, data: FetchHistory): void {
+  private canFetchHistory(
+    connection: Connection,
+    client: Client,
+    data: FetchHistory
+  ): data is ValidHistoryRequest {
     if (
       !data.cursor ||
       typeof data.cursor.timestamp !== "number" ||
@@ -230,7 +247,7 @@ export class SessionMessageRouter<Connection, Client extends ConnectedClient> {
         code: "INVALID_CURSOR",
         message: "Invalid cursor",
       });
-      return;
+      return false;
     }
 
     const now = this.deps.clock.nowMs();
@@ -243,10 +260,17 @@ export class SessionMessageRouter<Connection, Client extends ConnectedClient> {
         code: "RATE_LIMITED",
         message: "Too many requests",
       });
-      return;
+      return false;
     }
     client.lastFetchHistoryAtMs = now;
+    return true;
+  }
 
+  private handleFetchHistory(
+    connection: Connection,
+    client: Client,
+    data: ValidHistoryRequest
+  ): void {
     const page = this.deps.clientCommands.getHistoryPage({
       cursor: data.cursor,
       limit: data.limit,
@@ -277,7 +301,7 @@ export class SessionMessageRouter<Connection, Client extends ConnectedClient> {
         issues: result.error.issues,
       });
       // Keep the parsed object for clientRequestId correlation on invalid prompts.
-      return { valid: false, raw };
+      return { valid: false, raw, error: result.error };
     }
     return { valid: true, data: result.data };
   }

@@ -44,6 +44,15 @@ type ArchivedSession = SessionListSummary;
 function createArchivedSession(index: number): ArchivedSession {
   return {
     id: `session-${index}`,
+    capabilities: {
+      canRead: true,
+      canCollaborate: false,
+      canManageLifecycle: true,
+      canSandbox: false,
+      canDelete: false,
+      canManageCollaborators: false,
+      canChangeVisibility: false,
+    },
     title: `Session ${index}`,
     repoOwner: "open-inspect",
     repoName: "background-agents",
@@ -165,12 +174,33 @@ afterEach(async () => {
 describe("DataControlsSettings — unarchive flow", () => {
   it("keeps archived sessions readable without exposing unarchive to read-only roles", async () => {
     authorizationMock.permissions = new Set(["sessions.read"]);
-    installFetch({ archivedSessions: [createArchivedSession(1)] });
+    const session = createArchivedSession(1);
+    session.capabilities!.canManageLifecycle = false;
+    installFetch({ archivedSessions: [session] });
 
     renderComponent();
 
     expect(await screen.findByText("Session 1")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Unarchive" })).not.toBeInTheDocument();
+  });
+
+  it("uses response lifecycle capabilities even without browser permission grants", async () => {
+    authorizationMock.permissions = new Set();
+    installFetch({ archivedSessions: [createArchivedSession(1)] });
+    renderComponent();
+    expect(await screen.findByRole("button", { name: "Unarchive" })).toBeInTheDocument();
+  });
+
+  it("toasts the server reason_code on an unarchive denial and keeps the row", async () => {
+    installFetch({
+      archivedSessions: [createArchivedSession(1)],
+      onUnarchive: () => jsonResponse({ reason_code: "team_inactive" }, 403),
+    });
+    renderComponent();
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole("button", { name: "Unarchive" }));
+    expect(toastMock.error).toHaveBeenCalledWith("Failed to unarchive session (team_inactive)");
+    expect(screen.getByText("Session 1")).toBeInTheDocument();
   });
 
   it("removes the row when the unarchive request succeeds", async () => {

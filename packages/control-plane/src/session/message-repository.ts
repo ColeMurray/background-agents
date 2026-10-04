@@ -6,6 +6,7 @@ import {
   type MessageStatus,
 } from "@open-inspect/shared/types/sessions";
 import { MAX_UNFINISHED_PROMPTS } from "@open-inspect/shared/types/prompts";
+import { z } from "zod";
 import type { CreateEventData, EventRepository } from "./event-repository";
 import type { SessionAttachmentRepository } from "./session-attachment-repository";
 import type { SqlResult, SqlStorage, TransactionSync } from "./sql-storage";
@@ -15,6 +16,22 @@ import type { MessageListCursor } from "./message-cursor";
 type ExecutionCompleteEvent = Extract<SandboxEvent, { type: "execution_complete" }>;
 
 export const STOP_CONFIRMATION_TIMEOUT_MS = 15_000;
+
+const messageIdRowSchema = messageRowSchema.pick({ id: true });
+const messageStopConfirmationRowSchema = messageRowSchema
+  .pick({ id: true, stop_confirmation_deadline: true })
+  .extend({ stop_confirmation_deadline: z.number() });
+const messageCreatedAtRowSchema = messageRowSchema.pick({ id: true, created_at: true });
+const messageCallbackContextRowSchema = messageRowSchema.pick({
+  callback_context: true,
+  source: true,
+});
+const messageCompletionStateRowSchema = z.object({
+  status: z.unknown().optional(),
+  created_at: z.number(),
+  started_at: z.number().nullable(),
+});
+const messageProcessingAuthorRowSchema = messageRowSchema.pick({ author_id: true });
 
 export interface RecordedMessageCompletion {
   messageId: string;
@@ -117,7 +134,7 @@ export class MessageRepository {
 
   getProcessingMessage(): { id: string } | null {
     const result = this.sql.exec(`SELECT id FROM messages WHERE status = 'processing' LIMIT 1`);
-    const rows = result.toArray() as Array<{ id: string }>;
+    const rows = parseStorageRows(result.toArray(), messageIdRowSchema);
     return rows[0] ?? null;
   }
 
@@ -126,7 +143,7 @@ export class MessageRepository {
       `SELECT id, stop_confirmation_deadline FROM messages
        WHERE stop_confirmation_deadline IS NOT NULL LIMIT 1`
     );
-    const row = (result.toArray() as Array<{ id: string; stop_confirmation_deadline: number }>)[0];
+    const row = parseStorageRows(result.toArray(), messageStopConfirmationRowSchema)[0];
     return row ? { id: row.id, deadline: row.stop_confirmation_deadline } : null;
   }
 
@@ -169,7 +186,7 @@ export class MessageRepository {
     const result = this.sql.exec(
       `SELECT id, created_at FROM messages WHERE status = 'processing' LIMIT 1`
     );
-    const rows = result.toArray() as Array<{ id: string; created_at: number }>;
+    const rows = parseStorageRows(result.toArray(), messageCreatedAtRowSchema);
     return rows[0] ?? null;
   }
 
@@ -335,10 +352,7 @@ export class MessageRepository {
       `SELECT callback_context, source FROM messages WHERE id = ?`,
       messageId
     );
-    const rows = result.toArray() as Array<{
-      callback_context: string | null;
-      source: string | null;
-    }>;
+    const rows = parseStorageRows(result.toArray(), messageCallbackContextRowSchema);
     return rows[0] ?? null;
   }
 
@@ -431,13 +445,7 @@ export class MessageRepository {
         `SELECT status, created_at, started_at FROM messages WHERE id = ?`,
         event.messageId
       );
-      const message = (
-        result.toArray() as Array<{
-          status?: unknown;
-          created_at: number;
-          started_at: number | null;
-        }>
-      )[0];
+      const message = parseStorageRows(result.toArray(), messageCompletionStateRowSchema)[0];
       const messageStatus = parseMessageStatus(message?.status);
       if (!message || messageStatus !== expectedStatus) return null;
 
@@ -509,14 +517,21 @@ export class MessageRepository {
     const result = this.sql.exec(
       `SELECT author_id FROM messages WHERE status = 'processing' LIMIT 1`
     );
-    const rows = result.toArray() as Array<{ author_id: string }>;
+    const rows = parseStorageRows(result.toArray(), messageProcessingAuthorRowSchema);
     return rows[0] ?? null;
   }
 }
 
 function parseMessageRows(rows: unknown[]): MessageRow[] {
+  return parseStorageRows(rows, messageRowSchema);
+}
+
+function parseStorageRows<Schema extends z.ZodType>(
+  rows: unknown[],
+  schema: Schema
+): Array<z.infer<Schema>> {
   return rows.map((row) => {
-    const parsed = messageRowSchema.safeParse(row);
+    const parsed = schema.safeParse(row);
     if (parsed.success) return parsed.data;
     throw new SessionStorageIntegrityError("Malformed persisted message row");
   });

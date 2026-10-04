@@ -1,0 +1,125 @@
+---
+title: Sandbox environment reference
+description: What is preinstalled in an OpenInspect sandbox, how the workspace is laid out, which environment variables the runtime sets, and which helper commands are available.
+audience: team-owner
+owner: sandbox-runtime
+status: published
+lastReviewed: "2026-10-02"
+relatedCode:
+  - packages/sandbox-images/toolchain.json
+  - packages/sandbox-images/targets.json
+  - packages/modal-infra/src/sandbox/vcs_env.py
+  - packages/sandbox-images/install/os/debian.sh
+  - packages/sandbox-images/install/tools.sh
+  - packages/sandbox-images/install/filesystem.sh
+  - packages/sandbox-runtime/src/sandbox_runtime/runtime_config.py
+  - packages/sandbox-runtime/src/sandbox_runtime/constants.py
+  - packages/sandbox-runtime/src/sandbox_runtime/claude_stager.py
+  - packages/sandbox-runtime/src/sandbox_runtime/credentials/git_credential_helper.py
+  - packages/sandbox-images/src/sandbox_images/configuration.py
+  - packages/modal-infra/src/sandbox/manager.py
+  - packages/sandbox-runtime/src/sandbox_runtime/git_signer.py
+  - packages/sandbox-runtime/src/sandbox_runtime/bin/upload-media.js
+  - packages/control-plane/src/sandbox/managed-provider-env.ts
+  - packages/control-plane/src/session/session-target-secrets.ts
+  - packages/control-plane/src/source-control/session-scope.ts
+  - packages/control-plane/src/source-control/repository-scope.ts
+  - packages/control-plane/src/source-control/credential-scope.ts
+  - packages/control-plane/src/source-control/providers/gitlab-provider.ts
+  - docs/SECRETS.md
+  - docs/AUTH.md
+  - docs/HOW_IT_WORKS.md
+  - docs/CLAUDE_AGENT.md
+  - docs/GROK_MODELS.md
+  - docs/integrations/GITHUB.md
+  - README.md
+---
+
+This page describes the environment your `setup.sh`, `start.sh`, and the agent run in: the preinstalled tools, the workspace layout, the environment variables the runtime sets, and what is deliberately kept out of the sandbox.
+
+## Preinstalled software
+
+Every provider's image installs the shared toolchain with Node.js 24. The Vercel target uses Amazon Linux; the other targets use Debian. Docker is not included in the default Modal image: only the `modal-vm` backend has Docker Engine and Compose.
+
+| Area               | What is installed                                                                                                                           |
+| ------------------ | ------------------------------------------------------------------------------------------------------------------------------------------- |
+| Operating system   | Debian (Amazon Linux on Vercel) with common build and system tools, including `git`, `curl`, `jq`, `unzip`, `ffmpeg`, and `ca-certificates` |
+| Source control     | GitHub CLI (`gh`)                                                                                                                           |
+| Node.js            | Node.js 24 with `npm` and `npx`, plus `pnpm`, `bun`, and `bunx`                                                                             |
+| Python             | Python 3.12 with `uv` and `uvx`. `python` and `python3` point at the same interpreter                                                       |
+| Browser automation | The `agent-browser` CLI with a headless Chrome for Testing build at `/usr/local/bin/google-chrome`                                          |
+| Agent harnesses    | OpenCode, and the Claude Agent SDK whose wheel bundles the `claude` binary                                                                  |
+| Sandbox tools      | `code-server` (browser VS Code), `ttyd` (web terminal), and Xvfb, Fluxbox, x11vnc, and noVNC for the VNC desktop                            |
+
+Version pins live in `packages/sandbox-images/toolchain.json`. Updating the shared toolchain does not refresh existing prebuilt images; rebuild them from Settings › Images or Settings › Environments when they must pick up new tools.
+
+## Workspace layout
+
+| Path                                           | Contents                                                                                                                                                                                                                                                                                     |
+| ---------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `/workspace`                                   | The working directory. A single-repository session is cloned here.                                                                                                                                                                                                                           |
+| `/workspace/<repo-name>`                       | In multi-repository sessions each repository is cloned into its own directory named after the repository. The first repository is the primary.                                                                                                                                               |
+| `/workspace/.tunnels.env`                      | Written before `start.sh` when configured tunnel URLs resolve within the 30-second wait. `start.sh` may run without a fresh file on timeout. Plain `KEY=value` lines work with `node --env-file`, `bun --env-file`, or `docker compose --env-file` on `modal-vm`. Not written in build mode. |
+| `.opencode/skills` under the working directory | Where OpenCode discovers skills. The runtime copies its bundled skills here before launch; managed skills are installed into the workspace before the agent starts.                                                                                                                          |
+| `~/.openinspect/claude`                        | The Claude Agent harness's `CLAUDE_CONFIG_DIR`. Managed and bundled skills are staged under `~/.openinspect/claude/skills`. It is outside repositories, but not excluded from Modal filesystem snapshots.                                                                                    |
+
+Repository `.opencode/` and `.claude/` directories are read by their respective harness, the same trust boundary as `.openinspect/setup.sh`.
+
+## Environment variables
+
+| Variable                                                                   | Set when                                                      | Meaning                                                                                                                                                                                                                          |
+| -------------------------------------------------------------------------- | ------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `OPENINSPECT_BOOT_MODE`                                                    | Always, for `setup.sh` and `start.sh`                         | One of `fresh`, `repo_image`, `snapshot_restore`, or `build`. Use it to skip work that a prebuilt image or snapshot already did.                                                                                                 |
+| `TUNNEL_SANDBOX_ID`                                                        | In `/workspace/.tunnels.env` when tunnel ports are configured | The sandbox the URLs were resolved for. The runtime uses it to tell a fresh file from one inherited from a snapshot.                                                                                                             |
+| `TUNNEL_<port>`                                                            | In `/workspace/.tunnels.env`, one line per configured port    | The public URL for that port, for example `TUNNEL_3000=https://…`.                                                                                                                                                               |
+| `SANDBOX_ID`                                                               | Always                                                        | Identifies this sandbox to the control plane.                                                                                                                                                                                    |
+| `CONTROL_PLANE_URL`                                                        | Session sandboxes (not image builds)                          | Where the runtime, credential helper, and helper commands call back to.                                                                                                                                                          |
+| `SANDBOX_AUTH_TOKEN`                                                       | Session sandboxes (not image builds)                          | The sandbox's own session-scoped token for control-plane calls. Image builds use separate callback credentials.                                                                                                                  |
+| `SESSION_CONFIG`                                                           | Always                                                        | Session sandboxes receive the session ID, repositories, MCP servers, and related settings. Image builds receive only the branch and repositories, without a session ID.                                                          |
+| `REPO_OWNER`, `REPO_NAME`                                                  | Repository sessions                                           | The primary repository.                                                                                                                                                                                                          |
+| `VCS_HOST`, `VCS_CLONE_USERNAME`                                           | Always                                                        | The source-control host and HTTPS username the credential helper serves.                                                                                                                                                         |
+| `VCS_CLONE_TOKEN`                                                          | Image builds only                                             | Clone credential for builds without a session broker: repository-scoped for GitHub; the deployment PAT for GitLab. Not a single-use guarantee.                                                                                   |
+| `RESTORED_FROM_SNAPSHOT`                                                   | Snapshot restores                                             | Marks a restored sandbox.                                                                                                                                                                                                        |
+| `OPENCODE_CONFIG_CONTENT`                                                  | OpenCode sessions                                             | The generated OpenCode configuration.                                                                                                                                                                                            |
+| `PYTHONUNBUFFERED`, `PATH`, `HOME`, `USER`, `SHELL`, `TERM`, `PWD`, `LANG` | Always                                                        | Standard process environment.                                                                                                                                                                                                    |
+| `OPENAI_OAUTH_MANAGED=1`                                                   | OpenAI account mode                                           | The session is bound to a connected OpenAI provider account. `OPENAI_API_KEY` is suppressed and the runtime fetches short-lived access tokens from the control plane.                                                            |
+| `XAI_OAUTH_MANAGED=1`                                                      | xAI account mode                                              | Same for a connected SuperGrok account; `XAI_API_KEY` and legacy xAI OAuth fields are removed.                                                                                                                                   |
+| `ANTHROPIC_OAUTH_MANAGED=1`                                                | Claude Agent sessions bound to a connected Claude account     | User keys are suppressed. The harness fetches a static setup token at bridge start and passes it only to the `claude` process as `CLAUDE_CODE_OAUTH_TOKEN`. In key mode that process receives `ANTHROPIC_API_KEY` instead.       |
+| `CLAUDE_CONFIG_DIR`                                                        | Claude Agent sessions                                         | Points the `claude` binary at `~/.openinspect/claude`. A user-supplied value that points inside a repository is replaced with the default.                                                                                       |
+| Your secrets                                                               | At spawn                                                      | Global + session's owning team (if any) + target secrets; later values win. Environment targets do not inherit member-repository secrets. System variables above take precedence, and reserved names cannot be saved as secrets. |
+
+The reserved names are listed in full in [Secrets](/configure/secrets). Build-time secrets differ: repository image builds exclude team secrets, while team environment builds include their owning team's layer. See [Secrets and images](/configure/prebuilt-images#secrets-and-images).
+
+## What is deliberately absent
+
+- User-supplied provider API keys in account mode. When a session is bound to a connected OpenAI, xAI, or Claude account, the matching user key is removed from the general sandbox environment and the `*_OAUTH_MANAGED` marker remains. A deployment-wide Anthropic key may still be present on Modal or OpenComputer. The Claude harness receives its setup token only in the `claude` process.
+- Refresh tokens. OpenAI and xAI sessions fetch short-lived access tokens; refresh tokens stay in the encrypted credential store. Claude accounts instead use a static setup token with an expiry, not a rotating refresh token.
+- The commit signing private key. Sandboxes receive only the public key; each commit is signed by the control plane. The key is never delivered to a sandbox file, environment, process, or snapshot.
+- A system clone token injected by the normal session launch path. Session git credentials are requested on demand, then cached on disk; this does not exclude tokens from snapshots (next section).
+- The Claude account token outside the `claude` process. OpenCode, code-server, the terminal, and user shells never see it. Code the agent runs from Bash and hooks registered in the repository's `.claude/` settings do inherit it.
+
+## Git credentials
+
+`git` is configured system-wide with the credential helper `oi-git-credentials`. Fetch, push, `ls-remote`, and submodule operations use credentials requested from the control plane instead of a token captured at session spawn. The helper writes the successful response, including its `password` token, to `scm-creds.json` with mode `0600`. `OI_SCM_CRED_CACHE_DIR` selects the directory: packaged images set it to `$HOME/.cache/openinspect/scm`; `/run/oi` is only the helper's fallback. The cache is reused until five minutes before its reported expiry, and concurrent refreshes share a lock. A refused refresh fails the git command rather than falling back to a stale token.
+
+Modal snapshots capture the full filesystem, not just `/workspace`, without clearing this cache before capture. Cached tokens can therefore survive a snapshot and restore. See the canonical [Credential Delivery and Snapshots](https://github.com/ColeMurray/background-agents/blob/main/docs/AUTH.md#credential-delivery-and-snapshots) for the security boundary; neither this cache path nor a path outside a repository guarantees snapshot exclusion.
+
+For **GitHub**, installation tokens are short-lived and restricted to the session's persisted repository set. Team-owned sessions further intersect that set with the owning team's current repository grants. An installation-wide team grant does not expand a session token to the whole installation. Removing a grant changes subsequent credential resolution; it does not immediately revoke tokens already issued or cached.
+
+For GitHub, private submodules, Git-backed dependencies, and scripts that clone sibling repositories need those repositories included in the session target. Only team-owned sessions also intersect that set with the owning team's grants; workspace-owned sessions have no team-grant intersection. A session token cannot access dependencies absent from its target, even when the App is installed on them. An environment's repositories are copied when a session is created: editing the environment later does not expand that session's credentials. Start a new session with the required repository set. See [Lifecycle scripts](/configure/lifecycle-scripts#git-credentials-for-other-repositories).
+
+For **GitLab**, the provider returns a deployment-wide personal access token (PAT) and does not narrow it to the session repository set. The helper's periodic cache refresh does not turn that PAT into a short-lived or repository-scoped token. GitHub token restrictions also do not mean that all installation-wide metadata or catalog operations are session-scoped.
+
+## Helper commands
+
+| Command               | What it does                                                                                                                                                                                                     |
+| --------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `oi-git-credentials`  | The git credential helper described above. You do not call it directly; `git` does.                                                                                                                              |
+| `oi-git-sign`         | Signs a commit by sending the unsigned commit buffer to the control plane, which returns an SSH signature. Active only when commit signing is configured under Settings › Integrations › GitHub.                 |
+| `upload-media <file>` | Uploads a screenshot (PNG, JPEG, WebP) or MP4 recording to the session as a media artifact. MP4 files need `--artifact-type video`; `--caption` adds a caption. The file appears in the session's Media section. |
+
+## Next steps
+
+- [Lifecycle scripts](/configure/lifecycle-scripts)
+- [Sandbox tools](/sessions/sandbox-tools)
+- [Secrets](/configure/secrets)

@@ -1,10 +1,14 @@
 import { describe, it, expect } from "vitest";
-import { mintJwt } from "./jwt";
+import { isJwtUnexpired, mintJwt } from "./jwt";
 
 function decodeBase64url(value: string): string {
   const base64 = value.replace(/-/g, "+").replace(/_/g, "/");
   const padded = base64.padEnd(Math.ceil(base64.length / 4) * 4, "=");
   return atob(padded);
+}
+
+function encodeBase64url(value: unknown): string {
+  return btoa(JSON.stringify(value)).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
 }
 
 describe("mintJwt", () => {
@@ -58,5 +62,25 @@ describe("mintJwt", () => {
     const token1 = await mintJwt(payload, "secret-1");
     const token2 = await mintJwt(payload, "secret-2");
     expect(token1).not.toBe(token2);
+  });
+
+  it("recognizes unexpired tokens", async () => {
+    const token = await mintJwt({ exp: 2000 }, "secret");
+
+    expect(isJwtUnexpired(token, 1999)).toBe(true);
+    expect(isJwtUnexpired(token, 2000)).toBe(false);
+  });
+
+  it.each([null, "malformed", "e30.e30.signature"])(
+    "rejects missing, malformed, or expiration-less tokens",
+    (token) => {
+      expect(isJwtUnexpired(token, 1000)).toBe(false);
+    }
+  );
+
+  it("rejects a decoded JWT payload that is not an object", () => {
+    const token = `e30.${encodeBase64url(["not", "an", "object"])}.signature`;
+
+    expect(isJwtUnexpired(token, 1000)).toBe(false);
   });
 });

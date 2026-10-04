@@ -1,189 +1,144 @@
 "use client";
 
-import { useMemo, useState } from "react";
-import type { AnalyticsDays } from "@open-inspect/shared/types/analytics";
-import { AnalyticsPullRequestCards } from "@/components/analytics/pull-request-cards";
-import { AnalyticsPullRequestChart } from "@/components/analytics/pull-request-chart";
-import { AnalyticsPullRequestRepoTable } from "@/components/analytics/pull-request-repo-table";
-import { AnalyticsRepoBarChart } from "@/components/analytics/repo-bar-chart";
-import { AnalyticsSummaryCards } from "@/components/analytics/summary-cards";
-import { AnalyticsTimeseriesChart } from "@/components/analytics/timeseries-chart";
-import { AnalyticsUserTable } from "@/components/analytics/user-table";
-import { CollapsedSidebarControls, useSidebarContext } from "@/components/sidebar-layout";
-import { Badge } from "@/components/ui/badge";
+import { Suspense, useRef } from "react";
+import { usePathname, useSearchParams } from "next/navigation";
+import { AnalyticsCostTab } from "@/components/analytics/analytics-cost-tab";
+import { AnalyticsHeader } from "@/components/analytics/analytics-header";
+import { AnalyticsOverviewTab } from "@/components/analytics/analytics-overview-tab";
+import { AnalyticsPeopleTab } from "@/components/analytics/analytics-people-tab";
+import { AnalyticsPullRequestsTab } from "@/components/analytics/analytics-pull-requests-tab";
+import { AnalyticsUsageTab } from "@/components/analytics/analytics-usage-tab";
 import { ErrorBanner } from "@/components/ui/error-banner";
-import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useAnalyticsDashboard } from "@/hooks/use-analytics";
 import {
-  ANALYTICS_DAYS,
-  ANALYTICS_REFRESH_INTERVAL_MS,
-  ANALYTICS_RANGE_LABELS,
-  formatAnalyticsCount,
-  sortAnalyticsUserEntries,
-  type AnalyticsSortDirection,
-  type AnalyticsUserSortKey,
+  ANALYTICS_TAB_LABELS,
+  ANALYTICS_TABS,
+  buildAnalyticsSearch,
+  parseAnalyticsView,
+  type AnalyticsTab,
+  type AnalyticsView,
 } from "@/lib/analytics";
+import { cn } from "@/lib/utils";
 
 export default function AnalyticsPage() {
-  const { isOpen } = useSidebarContext();
-  const [days, setDays] = useState<AnalyticsDays>(30);
-  const [sortKey, setSortKey] = useState<AnalyticsUserSortKey>("sessions");
-  const [sortDirection, setSortDirection] = useState<AnalyticsSortDirection>("desc");
-  const { summary, timeseries, repoBreakdown, userBreakdown, pullRequests, loading, error } =
-    useAnalyticsDashboard(days);
-  const userEntries = userBreakdown?.entries;
-
-  const sortedUserEntries = useMemo(
-    () => (userEntries ? sortAnalyticsUserEntries(userEntries, sortKey, sortDirection) : undefined),
-    [sortDirection, sortKey, userEntries]
+  return (
+    <Suspense fallback={null}>
+      <AnalyticsContent />
+    </Suspense>
   );
-  const hasCachedData = Boolean(
-    summary ||
-    timeseries?.series?.length ||
-    repoBreakdown?.entries?.length ||
-    sortedUserEntries?.length ||
-    pullRequests
+}
+
+function AnalyticsContent() {
+  const pathname = usePathname();
+  const searchParams = useSearchParams();
+  const view = parseAnalyticsView(searchParams);
+  const { dashboard, loading, stale, validating, error } = useAnalyticsDashboard(
+    view.days,
+    view.scope
   );
+  // Waiting on the selected filters, versus left with the previous ones after a failure.
+  const freshness = !stale ? "current" : validating ? "loading" : "previous";
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const filterKey = `${view.days}-${view.scope}`;
 
-  function handleSort(nextKey: AnalyticsUserSortKey) {
-    if (nextKey === sortKey) {
-      setSortDirection((current) => (current === "desc" ? "asc" : "desc"));
-      return;
-    }
+  function changeView(change: Partial<AnalyticsView>) {
+    // Build on the address bar, not the last rendered params: replaceState updates it
+    // synchronously, so quick successive changes compose instead of overwriting each other.
+    // Next syncs useSearchParams with native history calls, but only when the state passed
+    // is not its own (it skips state marked as internal), so pass null as its docs do.
+    const query = buildAnalyticsSearch(new URLSearchParams(window.location.search), change);
+    window.history.replaceState(null, "", query ? `${pathname}?${query}` : pathname);
+  }
 
-    setSortKey(nextKey);
-    setSortDirection(nextKey === "user" ? "asc" : "desc");
+  function selectTab(tab: AnalyticsTab) {
+    changeView({ tab });
+    if (scrollRef.current) scrollRef.current.scrollTop = 0;
   }
 
   return (
-    <div className="relative h-full flex flex-col overflow-hidden">
-      <div className="pointer-events-none absolute -right-20 top-8 h-56 w-56 rounded-full bg-accent-muted blur-3xl" />
-      <div className="pointer-events-none absolute left-20 top-40 h-40 w-40 rounded-full bg-muted blur-3xl" />
+    <Tabs
+      value={view.tab}
+      onValueChange={(value) => {
+        const tab = ANALYTICS_TABS.find((candidate) => candidate === value);
+        if (tab) selectTab(tab);
+      }}
+      className="h-full"
+    >
+      <div ref={scrollRef} className="h-full overflow-y-auto">
+        <AnalyticsHeader
+          dashboard={dashboard}
+          days={view.days}
+          scope={view.scope}
+          onDaysChange={(days) => changeView({ days })}
+          onScopeChange={(scope) => changeView({ scope })}
+          scopeDisabled={view.tab === "pull-requests"}
+          freshness={freshness}
+          tabs={
+            <TabsList
+              aria-label="Analytics views"
+              className="-mb-px min-w-0 gap-5 overflow-x-auto border-b-0"
+            >
+              {ANALYTICS_TABS.map((tab) => (
+                <TabsTrigger
+                  key={tab}
+                  value={tab}
+                  className="min-h-0 flex-none px-0 py-2 text-sm font-normal data-[state=inactive]:hover:bg-transparent"
+                >
+                  {ANALYTICS_TAB_LABELS[tab]}
+                </TabsTrigger>
+              ))}
+            </TabsList>
+          }
+        />
 
-      {!isOpen && (
-        <header className="border-b border-border-muted flex-shrink-0">
-          <div className="px-4 py-3">
-            <CollapsedSidebarControls />
-          </div>
-        </header>
-      )}
-
-      <div className="flex-1 overflow-y-auto p-4 sm:p-6 lg:p-8">
-        <div className="relative z-10 mx-auto max-w-7xl space-y-6">
-          <div className="relative overflow-hidden rounded-xl border border-border-muted bg-card px-5 py-5 sm:px-6 sm:py-6">
-            <div className="pointer-events-none absolute inset-y-0 right-0 w-1/3 bg-[linear-gradient(135deg,var(--accent-muted),transparent)] opacity-70" />
-
-            <div className="relative flex flex-col gap-5 xl:flex-row xl:items-start xl:justify-between">
-              <div className="space-y-3">
-                <div className="inline-flex items-center gap-2 rounded-full border border-border-muted bg-background px-3 py-1 text-xs uppercase tracking-wider text-secondary-foreground">
-                  Usage analytics
-                </div>
-                <div>
-                  <h1 className="text-2xl font-semibold text-foreground sm:text-3xl">Analytics</h1>
-                  <p className="mt-2 max-w-3xl text-sm leading-6 text-muted-foreground">
-                    Usage metrics across sessions, repositories, and users. PR counts currently
-                    reflect pull requests created through the platform&apos;s built-in flow, and
-                    legacy sessions may show zero cost, PR, or duration values.
-                  </p>
-                </div>
-                <div className="flex flex-wrap gap-2">
-                  <Badge variant="info">
-                    Refreshes every {ANALYTICS_REFRESH_INTERVAL_MS / 1000}s
-                  </Badge>
-                  <Badge variant="default">Includes legacy sessions</Badge>
-                  {summary ? (
-                    <Badge variant="pr-open">
-                      {formatAnalyticsCount(summary.totalSessions)} sessions in range
-                    </Badge>
-                  ) : null}
-                </div>
-              </div>
-
-              <div className="min-w-0 xl:w-[18rem]">
-                <div className="rounded-lg border border-border-muted bg-background p-4">
-                  <div className="text-xs uppercase tracking-wider text-secondary-foreground">
-                    Time range
-                  </div>
-                  <div className="mt-3">
-                    <ToggleGroup
-                      type="single"
-                      value={String(days)}
-                      onValueChange={(value) => {
-                        if (!value) return;
-                        setDays(Number(value) as AnalyticsDays);
-                      }}
-                      variant="outline"
-                      size="sm"
-                      className="grid grid-cols-4 gap-1 rounded-md bg-card p-1"
-                    >
-                      {ANALYTICS_DAYS.map((range) => (
-                        <ToggleGroupItem
-                          key={range}
-                          value={String(range)}
-                          aria-label={ANALYTICS_RANGE_LABELS[range]}
-                        >
-                          {ANALYTICS_RANGE_LABELS[range]}
-                        </ToggleGroupItem>
-                      ))}
-                    </ToggleGroup>
-                  </div>
-                  <div className="mt-3 text-xs leading-5 text-muted-foreground">
-                    All charts and tables re-filter instantly when the selected range changes.
-                  </div>
-                </div>
-              </div>
-            </div>
-          </div>
-
+        <main className="mx-auto max-w-7xl px-4 py-6 sm:px-6 lg:px-8">
           {error ? (
-            <ErrorBanner role="alert">
-              Analytics failed to load. The page will retry automatically, or you can refresh.
+            <ErrorBanner role="alert" className="mb-4">
+              {freshness === "previous"
+                ? "Analytics for the selected range and scope failed to load. The previous selection is shown, dimmed, while the page retries."
+                : "Analytics failed to load. The page will retry automatically, or you can refresh."}
             </ErrorBanner>
           ) : null}
 
-          {!error || hasCachedData ? (
-            <>
-              <AnalyticsSummaryCards days={days} summary={summary} loading={loading} />
-
-              <div className="grid gap-6 xl:grid-cols-[minmax(0,1.6fr)_minmax(320px,1fr)]">
-                <AnalyticsTimeseriesChart series={timeseries?.series} loading={loading} />
-                <AnalyticsRepoBarChart entries={repoBreakdown?.entries} loading={loading} />
-              </div>
-
-              <AnalyticsUserTable
-                entries={sortedUserEntries}
-                loading={loading}
-                sortKey={sortKey}
-                sortDirection={sortDirection}
-                onSort={handleSort}
-              />
-
-              <div className="pt-2">
-                <h2 className="text-xl font-semibold text-foreground">Pull Requests</h2>
-                <p className="mt-1 max-w-3xl text-sm leading-6 text-muted-foreground">
-                  Outcomes for pull requests created through the platform, including
-                  automation-created ones. Rates are computed over pull requests, not sessions —
-                  sessions that don&apos;t open a PR (Q&amp;A, research, debugging) are out of scope
-                  here by design.
-                </p>
-              </div>
-
-              <AnalyticsPullRequestCards
-                days={days}
-                pullRequests={pullRequests}
-                loading={loading}
-              />
-
-              <div className="grid gap-6 xl:grid-cols-[minmax(0,1.6fr)_minmax(320px,1fr)]">
-                <AnalyticsPullRequestChart
-                  timeseries={pullRequests?.timeseries}
-                  loading={loading}
-                />
-                <AnalyticsPullRequestRepoTable entries={pullRequests?.repos} loading={loading} />
-              </div>
-            </>
+          {dashboard ? (
+            // A snapshot for other filters stays dimmed until the selected one arrives.
+            <div
+              aria-busy={freshness === "loading"}
+              className={cn("transition-opacity", stale && "opacity-60")}
+            >
+              <TabsContent value="overview">
+                <AnalyticsOverviewTab dashboard={dashboard} onSelectTab={selectTab} />
+              </TabsContent>
+              <TabsContent value="usage">
+                <AnalyticsUsageTab dashboard={dashboard} filterKey={filterKey} />
+              </TabsContent>
+              <TabsContent value="cost">
+                <AnalyticsCostTab dashboard={dashboard} />
+              </TabsContent>
+              <TabsContent value="pull-requests">
+                <AnalyticsPullRequestsTab dashboard={dashboard} />
+              </TabsContent>
+              <TabsContent value="people">
+                <AnalyticsPeopleTab dashboard={dashboard} filterKey={filterKey} />
+              </TabsContent>
+            </div>
+          ) : loading ? (
+            <AnalyticsLoading />
           ) : null}
-        </div>
+        </main>
+      </div>
+    </Tabs>
+  );
+}
+
+function AnalyticsLoading() {
+  return (
+    <div role="status" aria-label="Loading analytics" className="animate-pulse space-y-6">
+      <div className="h-28 rounded-lg bg-muted" />
+      <div className="grid gap-4 xl:grid-cols-2">
+        <div className="h-64 rounded-lg bg-muted" />
+        <div className="h-64 rounded-lg bg-muted" />
       </div>
     </div>
   );

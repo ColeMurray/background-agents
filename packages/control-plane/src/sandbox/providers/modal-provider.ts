@@ -5,28 +5,49 @@
  * enabling unit testing and future provider abstraction.
  */
 
-import { ModalApiError } from "../client";
-import type { ModalClient } from "../client";
+import { ModalApiError, ModalVmStartupError, isAmbiguousModalVmLaunchError } from "../client";
+import { formatPendingVmReference, parsePendingVmReference } from "./pending-vm-reference";
+import {
+  PENDING_VM_REFERENCE_LAUNCH_WINDOW_MS,
+  PENDING_VM_REFERENCE_MATERIALIZE_BOUND_MS,
+} from "../lifecycle/decisions";
+import type { ModalClient, ModalBackend, CreateImageBuildSandboxResponse } from "../client";
+import type { SandboxSettings } from "@open-inspect/shared/types/integrations";
 import type { CorrelationContext } from "../../logger";
 import { supportsConfigurableSandboxTimeout } from "@open-inspect/shared/types/integrations";
+import type { SourceControlProviderName } from "../../source-control";
+import { scmCloneIdentity, type ScmCloneIdentity } from "../sandbox-env";
 import {
   DEFAULT_SANDBOX_TIMEOUT_SECONDS,
   PrebuiltImageUnavailableError,
   SandboxProviderError,
+  SandboxLaunchRejectedError,
   createVncAccess,
   signalUntilDeadline,
   type ImageBuildProviderTriggerConfig,
   type SandboxProvider,
+  type PendingSandboxAllocation,
+  type SandboxLifetime,
   type SandboxProviderCapabilities,
   type CreateSandboxConfig,
   type CreateSandboxResult,
   type RestoreConfig,
   type RestoreResult,
+  type ResolveSandboxConfig,
+  type ResolveSandboxResult,
   type SnapshotConfig,
   type SnapshotResult,
   type StopConfig,
   type StopResult,
 } from "../provider";
+
+/** Preserve typed VM lookup details separately from ambiguous-launch classification. */
+export function modalVmAllocationDetail(error: unknown): string | undefined {
+  const cause = error instanceof SandboxProviderError ? error.cause : error;
+  if (cause instanceof ModalVmStartupError) return cause.outcome;
+  if (cause instanceof ModalApiError) return cause.detail;
+  return undefined;
+}
 
 interface StartModalImageBuildConfig {
   buildId: string;
@@ -35,10 +56,8 @@ interface StartModalImageBuildConfig {
   correlation?: CorrelationContext;
 }
 
-/** Modal extends the shared trigger contract with explicit SCM clone identity. */
 export interface ModalImageBuildTriggerConfig extends ImageBuildProviderTriggerConfig {
-  cloneHost?: string;
-  cloneUsername?: string;
+  resources?: Pick<SandboxSettings, "cpuCores" | "memoryMib">;
 }
 
 export interface TerminateModalImageBuildConfig {
@@ -76,7 +95,7 @@ export interface ModalImageBuildProvider {
  * @example
  * ```typescript
  * const client = createModalClient(secret, workspace, environmentWebSuffix);
- * const provider = new ModalSandboxProvider(client);
+ * const provider = new ModalSandboxProvider(client, "modal", "github");
  *
  * try {
  *   const result = await provider.createSandbox(config);
@@ -88,17 +107,105 @@ export interface ModalImageBuildProvider {
  * ```
  */
 export class ModalSandboxProvider implements SandboxProvider, ModalImageBuildProvider {
-  readonly name = "modal";
+  readonly name: ModalBackend;
 
-  readonly capabilities: SandboxProviderCapabilities = {
-    supportsSandboxTimeout: supportsConfigurableSandboxTimeout(this.name),
-    supportsSnapshots: true,
-    supportsRestore: true,
-    supportsPersistentResume: false,
-    supportsExplicitStop: true,
-  };
+  readonly capabilities: SandboxProviderCapabilities;
 
-  constructor(private readonly client: ModalClient) {}
+  pendingSandboxAllocation(
+    config: Pick<
+      CreateSandboxConfig,
+      "sessionId" | "sandboxId" | "generationCreatedAtMs" | "timeoutSeconds"
+    >
+  ): PendingSandboxAllocation | undefined {
+    if (this.name !== "modal-vm") return undefined;
+    return {
+      reference: formatPendingVmReference(config.sessionId, config.sandboxId),
+      lifetime: this.launchLifetime(config),
+    };
+  }
+
+  isUnknownStartupError(error: unknown): boolean {
+    if (this.name !== "modal-vm") return false;
+    const cause = error instanceof SandboxProviderError ? error.cause : error;
+    if (cause instanceof ModalVmStartupError)
+      return cause.outcome === "unknown" || cause.outcome === "race_pending";
+    if (cause instanceof ModalApiError)
+      return cause.detail === "race_pending" || isAmbiguousModalVmLaunchError(cause);
+    return cause instanceof TypeError || SandboxProviderError.isTransientNetworkError(cause);
+  }
+
+  async resolveSandbox(config: ResolveSandboxConfig): Promise<ResolveSandboxResult> {
+    if (this.name !== "modal-vm")
+      throw new SandboxProviderError("VM resolution requires modal-vm", "permanent");
+    try {
+      const result = await this.client.resolveVmSandbox({
+        sessionId: config.sessionId,
+        sandboxId: config.sandboxId,
+      });
+      this.confirmSessionLaunch(result);
+      if (result.sandboxId !== config.sandboxId || !result.modalObjectId)
+        throw new SandboxProviderError(
+          "Modal VM resolution returned a different generation",
+          "permanent"
+        );
+      return {
+        sandboxId: result.sandboxId,
+        providerObjectId: result.modalObjectId,
+        lifetime: this.launchLifetime(config),
+        codeServerUrl: result.codeServerUrl,
+        codeServerPassword: result.codeServerPassword,
+        vncAccess: createVncAccess(result.vncUrl, result.vncPassword),
+        ttydUrl: result.ttydUrl,
+        tunnelUrls: result.tunnelUrls,
+      };
+    } catch (error) {
+      throw this.classifyError("Failed to resolve Modal VM", error);
+    }
+  }
+
+  private launchLifetime(
+    config: Pick<CreateSandboxConfig, "generationCreatedAtMs" | "timeoutSeconds">,
+    observedAtMs?: number
+  ): Extract<SandboxLifetime, { kind: "finite" }> {
+    const startAtMs = this.name === "modal-vm" ? config.generationCreatedAtMs : observedAtMs;
+    if (startAtMs === undefined)
+      throw new SandboxProviderError("Missing Modal sandbox lifetime origin", "permanent");
+    return {
+      kind: "finite",
+      expiresAtMs: startAtMs + (config.timeoutSeconds ?? DEFAULT_SANDBOX_TIMEOUT_SECONDS) * 1000,
+      observedAtMs: startAtMs,
+      source: "conservative_start_bound",
+    };
+  }
+
+  private launchDeadlineAtMs(generationCreatedAtMs: number | undefined): number | undefined {
+    if (this.name !== "modal-vm") return undefined;
+    if (generationCreatedAtMs === undefined)
+      throw new SandboxProviderError("Missing VM generation reservation time", "permanent");
+    const deadline = generationCreatedAtMs + PENDING_VM_REFERENCE_LAUNCH_WINDOW_MS;
+    if (Date.now() >= deadline)
+      throw new SandboxProviderError("VM launch deadline expired before dispatch", "transient");
+    return deadline;
+  }
+
+  private readonly scmIdentity: ScmCloneIdentity;
+
+  constructor(
+    private readonly client: ModalClient,
+    backend: ModalBackend,
+    scmProvider: SourceControlProviderName
+  ) {
+    this.name = backend;
+    this.scmIdentity = scmCloneIdentity(scmProvider);
+    this.capabilities = {
+      supportsSandboxTimeout: supportsConfigurableSandboxTimeout(this.name),
+      supportsSnapshots: true,
+      snapshotRequiresShutdown: backend === "modal-vm",
+      supportsRestore: true,
+      supportsPersistentResume: false,
+      supportsExplicitStop: true,
+    };
+  }
 
   /**
    * Create a new sandbox via Modal API.
@@ -107,9 +214,11 @@ export class ModalSandboxProvider implements SandboxProvider, ModalImageBuildPro
     const observedAtMs = Date.now();
     const timeoutSeconds = config.timeoutSeconds ?? DEFAULT_SANDBOX_TIMEOUT_SECONDS;
     try {
+      const launchDeadlineAtMs = this.launchDeadlineAtMs(config.generationCreatedAtMs);
       const result = await this.client.createSandbox(
         {
           sessionId: config.sessionId,
+          launchDeadlineAtMs,
           sandboxId: config.sandboxId,
           repoOwner: config.repoOwner,
           repoName: config.repoName,
@@ -120,6 +229,7 @@ export class ModalSandboxProvider implements SandboxProvider, ModalImageBuildPro
           provider: config.provider,
           model: config.model,
           userEnvVars: config.userEnvVars,
+          scmIdentity: this.scmIdentity,
           prebuiltImageId: config.prebuiltImageId,
           prebuiltImageSha: config.prebuiltImageSha,
           timeoutSeconds,
@@ -129,21 +239,19 @@ export class ModalSandboxProvider implements SandboxProvider, ModalImageBuildPro
           agentSlackNotifyEnabled: config.agentSlackNotifyEnabled,
           mcpServers: config.mcpServers,
           sandboxSettings: config.sandboxSettings,
+          sandboxBackend: this.name,
+          retireSandboxId: config.retireSandboxId,
           repositories: config.repositories,
         },
         config.correlation
       );
 
+      this.confirmSessionLaunch(result);
       return {
         sandboxId: result.sandboxId,
         providerObjectId: result.modalObjectId,
         createdAt: result.createdAt,
-        lifetime: {
-          kind: "finite",
-          expiresAtMs: observedAtMs + timeoutSeconds * 1000,
-          observedAtMs,
-          source: "conservative_start_bound",
-        },
+        lifetime: this.launchLifetime(config, observedAtMs),
         codeServerUrl: result.codeServerUrl,
         codeServerPassword: result.codeServerPassword,
         vncAccess: createVncAccess(result.vncUrl, result.vncPassword),
@@ -165,9 +273,12 @@ export class ModalSandboxProvider implements SandboxProvider, ModalImageBuildPro
     const observedAtMs = Date.now();
     const timeoutSeconds = config.timeoutSeconds ?? DEFAULT_SANDBOX_TIMEOUT_SECONDS;
     try {
+      const launchDeadlineAtMs = this.launchDeadlineAtMs(config.generationCreatedAtMs);
       const result = await this.client.restoreSandbox(
         {
           snapshotImageId: config.snapshotImageId,
+          scmIdentity: this.scmIdentity,
+          launchDeadlineAtMs,
           sessionId: config.sessionId,
           sandboxId: config.sandboxId,
           sandboxAuthToken: config.sandboxAuthToken,
@@ -185,21 +296,19 @@ export class ModalSandboxProvider implements SandboxProvider, ModalImageBuildPro
           agentSlackNotifyEnabled: config.agentSlackNotifyEnabled,
           mcpServers: config.mcpServers,
           sandboxSettings: config.sandboxSettings,
+          sandboxBackend: this.name,
+          retireSandboxId: config.retireSandboxId,
           repositories: config.repositories,
         },
         config.correlation
       );
 
+      this.confirmSessionLaunch(result);
       return {
         success: true,
         sandboxId: result.sandboxId,
         providerObjectId: result.modalObjectId,
-        lifetime: {
-          kind: "finite",
-          expiresAtMs: observedAtMs + timeoutSeconds * 1000,
-          observedAtMs,
-          source: "conservative_start_bound",
-        },
+        lifetime: this.launchLifetime(config, observedAtMs),
         codeServerUrl: result.codeServerUrl,
         codeServerPassword: result.codeServerPassword,
         vncAccess: createVncAccess(result.vncUrl, result.vncPassword),
@@ -207,15 +316,6 @@ export class ModalSandboxProvider implements SandboxProvider, ModalImageBuildPro
         tunnelUrls: result.tunnelUrls,
       };
     } catch (error) {
-      if (error instanceof ModalApiError) {
-        throw this.classifyErrorWithStatus(
-          `Restore failed with HTTP ${error.status}`,
-          error.status
-        );
-      }
-      if (error instanceof SandboxProviderError) {
-        throw error;
-      }
       throw this.classifyError("Failed to restore sandbox from snapshot", error);
     }
   }
@@ -225,19 +325,46 @@ export class ModalSandboxProvider implements SandboxProvider, ModalImageBuildPro
    */
   async takeSnapshot(config: SnapshotConfig): Promise<SnapshotResult> {
     try {
-      const result = await this.client.snapshotSandbox(
-        {
-          providerObjectId: config.providerObjectId,
-          sessionId: config.sessionId,
-          signal: signalUntilDeadline(config.deadlineAtMs, config.signal),
-          deadlineAtMs: config.deadlineAtMs,
-        },
-        config.correlation
-      );
+      const request = {
+        providerObjectId: config.providerObjectId,
+        sessionId: config.sessionId,
+        sandboxBackend: this.name,
+        signal: signalUntilDeadline(config.deadlineAtMs, config.signal),
+        deadlineAtMs: config.deadlineAtMs,
+      };
+      let result;
+      try {
+        result = await this.client.snapshotSandbox(request, config.correlation);
+      } catch (error) {
+        // The VM capture endpoint leaves the source alive until the control
+        // plane commits the image. Docker preparation is idempotent, so a
+        // lost response can safely retry the capture.
+        if (
+          this.name !== "modal-vm" ||
+          request.signal?.aborted ||
+          (error instanceof ModalApiError && error.status < 500)
+        )
+          throw error;
+        result = await this.client.snapshotSandbox(request, config.correlation);
+      }
 
+      if (this.name === "modal-vm") {
+        if (result.sourceStopped !== false)
+          throw new SandboxProviderError(
+            "Modal VM capture did not confirm source retention",
+            "permanent"
+          );
+        if (!result.sourceObjectId)
+          throw new SandboxProviderError(
+            "Modal VM capture did not confirm its source ID",
+            "permanent"
+          );
+      }
       return {
         success: true,
         imageId: result.imageId,
+        sourceStopped: result.sourceStopped === true,
+        sourceObjectId: result.sourceObjectId,
       };
     } catch (error) {
       if (error instanceof ModalApiError) {
@@ -268,6 +395,24 @@ export class ModalSandboxProvider implements SandboxProvider, ModalImageBuildPro
       return { success: true };
     } catch (error) {
       if (error instanceof ModalApiError && error.status === 404) return { success: true };
+      const pendingNotVisible =
+        this.name === "modal-vm" &&
+        parsePendingVmReference(config.providerObjectId) !== null &&
+        error instanceof ModalApiError &&
+        error.status === 409 &&
+        error.detail === "pending_reference_not_visible";
+      if (
+        pendingNotVisible &&
+        config.generationCreatedAtMs !== undefined &&
+        Date.now() - config.generationCreatedAtMs >= PENDING_VM_REFERENCE_MATERIALIZE_BOUND_MS
+      )
+        return { success: true };
+      if (pendingNotVisible)
+        throw new SandboxProviderError(
+          "Pending VM allocation is not yet visible; stop cannot be confirmed",
+          "transient",
+          error
+        );
       throw this.classifyError("Failed to stop Modal sandbox", error);
     }
   }
@@ -298,17 +443,18 @@ export class ModalSandboxProvider implements SandboxProvider, ModalImageBuildPro
 
   private async createImageBuildSandbox(
     config: ModalImageBuildTriggerConfig
-  ): Promise<{ providerSessionId: string }> {
+  ): Promise<CreateImageBuildSandboxResponse> {
     try {
       return await this.client.createImageBuildSandbox(
         {
+          sandboxBackend: this.name,
+          resources: config.resources,
           scopeKind: config.scopeKind,
           scopeId: config.scopeId,
           buildId: config.buildId,
           repositories: config.repositories,
+          scmIdentity: this.scmIdentity,
           cloneToken: config.cloneToken,
-          ...(config.cloneHost ? { cloneHost: config.cloneHost } : {}),
-          ...(config.cloneUsername ? { cloneUsername: config.cloneUsername } : {}),
           callbackUrl: config.callbackUrl,
           failureCallbackUrl: config.failureCallbackUrl,
           userEnvVars: config.userEnvVars,
@@ -330,9 +476,34 @@ export class ModalSandboxProvider implements SandboxProvider, ModalImageBuildPro
     }
   }
 
+  private assertBackend(result: { sandboxBackend?: unknown }): void {
+    // Pre-backend Modal endpoints only created the standard sandbox and did not echo its backend.
+    const legacyStandard = this.name === "modal" && result.sandboxBackend === undefined;
+    if (result.sandboxBackend === this.name || legacyStandard) return;
+    throw new SandboxProviderError(
+      `Modal deployment did not confirm the ${this.name} backend; deploy compatible Modal endpoints`,
+      "permanent"
+    );
+  }
+
+  private confirmSessionLaunch(result: { modalObjectId?: string; sandboxBackend?: unknown }): void {
+    try {
+      this.assertBackend(result);
+    } catch (error) {
+      // The lifecycle must persist and fence this generation before any cleanup await.
+      throw new SandboxLaunchRejectedError(
+        error instanceof Error ? error.message : "Incompatible Modal allocation",
+        result.modalObjectId ?? null,
+        error instanceof Error ? error : undefined
+      );
+    }
+  }
+
   async triggerImageBuild(config: ModalImageBuildTriggerConfig): Promise<void> {
     const created = await this.createImageBuildSandbox(config);
+    // Persist the handle for cleanup before checking compatibility. Binding does not start work.
     await config.onProviderSessionCreated(created.providerSessionId);
+    this.assertBackend(created);
     await this.startImageBuildSandbox({
       buildId: config.buildId,
       providerSessionId: created.providerSessionId,
@@ -392,6 +563,32 @@ export class ModalSandboxProvider implements SandboxProvider, ModalImageBuildPro
    * Classify an error as transient or permanent for circuit breaker handling.
    */
   private classifyError(message: string, error: unknown): SandboxProviderError {
+    if (error instanceof SandboxProviderError) return error;
+    if (error instanceof ModalVmStartupError)
+      return new SandboxProviderError(
+        `${message}: ${error.message}`,
+        error.outcome === "other_generation" ? "permanent" : "transient",
+        error
+      );
+    if (error instanceof ModalApiError) {
+      const context = `${message} with HTTP ${error.status}`;
+      if (this.name === "modal-vm") {
+        if (
+          error.detail === "not_visible" ||
+          error.detail === "window_closed" ||
+          error.detail === "race_pending" ||
+          error.detail === "other_generation"
+        )
+          return new SandboxProviderError(
+            context,
+            error.detail === "other_generation" ? "permanent" : "transient",
+            error
+          );
+        if (isAmbiguousModalVmLaunchError(error))
+          return new SandboxProviderError(context, "transient", error);
+      }
+      return this.classifyErrorWithStatus(context, error.status, error);
+    }
     if (SandboxProviderError.isTransientNetworkError(error)) {
       return new SandboxProviderError(
         `${message}: ${error instanceof Error ? error.message : String(error)}`,
@@ -432,6 +629,10 @@ export class ModalSandboxProvider implements SandboxProvider, ModalImageBuildPro
  * @param client - ModalClient instance for API calls
  * @returns ModalSandboxProvider instance
  */
-export function createModalProvider(client: ModalClient): ModalSandboxProvider {
-  return new ModalSandboxProvider(client);
+export function createModalProvider(
+  client: ModalClient,
+  backend: ModalBackend,
+  scmProvider: SourceControlProviderName
+): ModalSandboxProvider {
+  return new ModalSandboxProvider(client, backend, scmProvider);
 }

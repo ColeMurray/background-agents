@@ -49,6 +49,9 @@ export function SessionDetailsOverlay({
   onOpenDiff,
   canManageBudget,
   capabilities,
+  activeTab,
+  onTabChange,
+  scope,
 }: SessionDetailsOverlayProps) {
   const [sheetDragY, setSheetDragY] = useState(0);
   const sheetDragYRef = useRef(0);
@@ -142,7 +145,7 @@ export function SessionDetailsOverlay({
     if (!open) return;
 
     const handleEscape = (event: KeyboardEvent) => {
-      if (event.key === "Escape") {
+      if (event.key === "Escape" && !event.defaultPrevented) {
         closeOverlay();
       }
     };
@@ -179,11 +182,18 @@ export function SessionDetailsOverlay({
       onOpenDiff={onOpenDiff}
       canManageBudget={canManageBudget}
       capabilities={capabilities}
+      activeTab={activeTab}
+      onTabChange={onTabChange}
+      scope={scope}
     />
   );
 
   return (
-    <div className={`fixed inset-0 z-50 lg:hidden ${open ? "" : "pointer-events-none"}`}>
+    <div
+      aria-hidden={!open}
+      inert={!open}
+      className={`fixed inset-0 z-50 lg:hidden ${open ? "" : "pointer-events-none"}`}
+    >
       <button
         type="button"
         aria-label="Close session details"
@@ -201,7 +211,7 @@ export function SessionDetailsOverlay({
           aria-modal="true"
           aria-label="Session details"
           tabIndex={-1}
-          className="absolute inset-x-0 bottom-0 max-h-[85vh] bg-background border-t border-border-muted shadow-xl flex flex-col"
+          className="absolute inset-x-0 bottom-0 h-[85dvh] rounded-t-2xl bg-background border-t border-border shadow-xl flex flex-col"
           onKeyDown={handleDialogKeyDown}
           style={{
             transform: open ? `translateY(${sheetDragY}px)` : "translateY(100%)",
@@ -228,7 +238,7 @@ export function SessionDetailsOverlay({
               </button>
             </div>
           </div>
-          <div className="overflow-y-auto">{sidebarContent}</div>
+          <div className="flex min-h-0 flex-1 flex-col">{sidebarContent}</div>
         </div>
       ) : (
         <div
@@ -238,7 +248,7 @@ export function SessionDetailsOverlay({
           aria-modal="true"
           aria-label="Session details"
           tabIndex={-1}
-          className="absolute inset-y-0 right-0 w-80 max-w-[85vw] bg-background border-l border-border-muted shadow-xl flex flex-col transition-transform duration-200 ease-in-out"
+          className="absolute inset-y-0 right-0 w-[360px] max-w-[85vw] bg-background border-l border-border-muted shadow-xl flex flex-col transition-transform duration-200 ease-in-out"
           onKeyDown={handleDialogKeyDown}
           style={{ transform: open ? "translateX(0)" : "translateX(100%)" }}
         >
@@ -253,7 +263,7 @@ export function SessionDetailsOverlay({
               Close
             </button>
           </div>
-          <div className="flex-1 overflow-y-auto">{sidebarContent}</div>
+          <div className="flex min-h-0 flex-1 flex-col">{sidebarContent}</div>
         </div>
       )}
     </div>

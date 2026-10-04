@@ -7,6 +7,7 @@ import {
   signedServiceRequest,
   TEST_BACKGROUND_TASK_CONTEXT,
   TEST_SERVICE_SECRETS,
+  TEST_SESSION_ROW,
 } from "./router.test-support";
 
 function routeFor(method: string, path: string) {
@@ -54,6 +55,13 @@ function createEnv(options?: { actorAuthorized?: boolean }) {
               })),
             };
             return identityStatement;
+          }
+          if (options?.actorAuthorized && sql.includes("SELECT * FROM sessions")) {
+            const sessionStatement = {
+              bind: vi.fn(() => sessionStatement),
+              first: vi.fn(async () => TEST_SESSION_ROW),
+            };
+            return sessionStatement;
           }
           if (
             options?.actorAuthorized &&

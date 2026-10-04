@@ -54,12 +54,14 @@ echo "${SECRETS_JSON}" | jq -c '.[]' | while IFS= read -r secret; do
     done < <(echo "${secret}" | jq -c '.values | to_entries | .[]')
 
     # Create or update the secret using array expansion
-    # The --force flag will update if it exists
-    if uv run --directory "${DEPLOY_PATH}" modal secret create "${secret_name}" "${args[@]}" --force; then
-        echo "Secret ${secret_name} created/updated successfully"
-    else
-        echo "Warning: Failed to create secret ${secret_name}"
+    # The --force flag will update if it exists. A failure must abort the apply:
+    # Terraform would otherwise record the new secrets hash and never retry,
+    # leaving a cleared credential in place.
+    if ! uv run --directory "${DEPLOY_PATH}" modal secret create "${secret_name}" "${args[@]}" --force; then
+        echo "Error: Failed to create secret ${secret_name}"
+        exit 1
     fi
+    echo "Secret ${secret_name} created/updated successfully"
 done
 
 echo "All Modal secrets processed successfully"

@@ -121,12 +121,37 @@ describe("repository skill preview races", () => {
     const user = userEvent.setup();
     render(<SkillImport onImported={vi.fn()} onCancel={vi.fn()} />);
 
-    await user.selectOptions(screen.getByLabelText("Repository"), "acme/skills");
+    await user.click(screen.getByLabelText("Repository"));
+    await user.click(await screen.findByRole("option", { name: "acme/skills" }));
     await user.click(screen.getByRole("button", { name: "Preview import" }));
     await user.type(screen.getByLabelText("Branch, tag, or commit (optional)"), "next");
     await act(async () => pending.resolve(preview));
 
     expect(screen.queryByText("preview:deploy-service")).not.toBeInTheDocument();
+  });
+
+  it("clears the import preview and disables previewing when the repository is reset", async () => {
+    previewSkillImportMock.mockResolvedValueOnce(preview);
+    const user = userEvent.setup();
+    render(<SkillImport onImported={vi.fn()} onCancel={vi.fn()} />);
+
+    expect(screen.getByRole("button", { name: "Preview import" })).toBeDisabled();
+    await user.click(screen.getByLabelText("Repository"));
+    await user.click(await screen.findByRole("option", { name: "acme/skills" }));
+    await user.click(screen.getByRole("button", { name: "Preview import" }));
+    expect(await screen.findByText("preview:deploy-service")).toBeInTheDocument();
+
+    await user.click(screen.getByLabelText("Repository"));
+    await user.click(await screen.findByRole("option", { name: "Select a repository" }));
+
+    expect(screen.getByLabelText("Repository")).toHaveTextContent("Select a repository");
+    expect(screen.queryByText("preview:deploy-service")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Import deploy-service" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Preview import" })).toBeDisabled();
+
+    await user.click(screen.getByLabelText("Repository"));
+    await user.click(await screen.findByRole("option", { name: "acme/skills" }));
+    expect(screen.getByRole("button", { name: "Preview import" })).toBeEnabled();
   });
 
   it("does not restore a re-import preview after the ref changes", async () => {

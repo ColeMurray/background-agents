@@ -2,7 +2,8 @@
 
 import json
 import time
-from typing import cast
+from dataclasses import dataclass
+from typing import Any, cast
 
 import modal
 
@@ -22,8 +23,18 @@ from sandbox_runtime.repo_image_callback import (
 )
 
 from ..app import app
+from ..app_config import APP_NAME
 from ..images.base import base_image
+from .launch_policy import (
+    ModalBackend,
+    _identity_digest,
+    docker_base_image,
+    docker_runtime_env,
+    launch_kwargs,
+    parse_launch,
+)
 from .manager import SNAPSHOT_FILESYSTEM_TIMEOUT_SECONDS
+from .termination import terminate_and_wait
 from .vcs_env import inject_vcs_env_vars
 
 log = get_logger("build_session")
@@ -52,6 +63,12 @@ class BuildSessionNotFoundError(LookupError):
     """The requested provider session is absent or bound to another build."""
 
 
+@dataclass(frozen=True)
+class BuildSessionLaunch:
+    provider_session_id: str
+    sandbox_backend: ModalBackend
+
+
 class ModalBuildSessionService:
     """Own the identity-bound lifecycle of one Modal image-build sandbox."""
 
@@ -64,14 +81,19 @@ class ModalBuildSessionService:
         repositories: list[dict],
         callback_url: str,
         failure_callback_url: str,
+        clone_host: str,
+        clone_username: str,
         clone_token: str = "",
-        clone_host: str | None = None,
-        clone_username: str | None = None,
         user_env_vars: dict[str, str] | None = None,
         build_execution_timeout_seconds: int = DEFAULT_BUILD_TIMEOUT_SECONDS,
         timeout_seconds: int = DEFAULT_BUILD_TIMEOUT_SECONDS,
-    ) -> str:
+        sandbox_settings: dict[str, Any] | None = None,
+        sandbox_backend: ModalBackend = "modal",
+    ) -> BuildSessionLaunch:
         start_time = time.time()
+        docker = parse_launch(sandbox_backend, sandbox_settings)
+        if sandbox_backend == "modal":
+            docker = parse_launch(sandbox_backend, None)  # Preserve standard build sizing.
         primary = repositories[0]
         env_vars = dict(user_env_vars or {})
         for name in RESERVED_USER_ENV_KEYS:
@@ -93,13 +115,14 @@ class ModalBuildSessionService:
                 BUILD_ID_ENV: build_id,
                 CALLBACK_URL_ENV: callback_url,
                 FAILURE_CALLBACK_URL_ENV: failure_callback_url,
+                **docker_runtime_env(docker),
             }
         )
         inject_vcs_env_vars(
             env_vars,
-            clone_token or None,
             clone_host=clone_host,
             clone_username=clone_username,
+            clone_token=clone_token,
         )
 
         command = ("python", "-m", "sandbox_runtime.entrypoint", MODAL_IMAGE_BUILD_START_ARGUMENT)
@@ -109,18 +132,31 @@ class ModalBuildSessionService:
             "openinspect_scope_kind": scope_kind,
             "openinspect_scope_id": scope_id,
             LAUNCH_PROTOCOL_TAG: MODAL_IMAGE_BUILD_START_PROTOCOL,
+            "openinspect_backend": sandbox_backend,
         }
 
-        sandbox = await modal.Sandbox.create.aio(
-            *command,
-            image=base_image,
-            app=app,
-            secrets=[],
-            timeout=timeout_seconds,
-            workdir="/workspace",
-            env=cast("dict[str, str | None]", env_vars),
-            tags=tags,
-        )
+        name = self._allocation_name(build_id, sandbox_backend)
+        sandbox = await self._find(build_id, sandbox_backend)
+        if sandbox is not None and await sandbox.get_tags.aio() != tags:
+            raise RuntimeError("Build allocation ownership mismatch")
+        if sandbox is None:
+            try:
+                sandbox = await modal.Sandbox.create.aio(
+                    *command,
+                    image=docker_base_image() if docker.enabled else base_image,
+                    app=app,
+                    secrets=[],
+                    timeout=timeout_seconds,
+                    workdir="/workspace",
+                    env=cast("dict[str, str | None]", env_vars),
+                    tags=tags,
+                    name=name,
+                    **launch_kwargs(docker),
+                )
+            except modal.exception.AlreadyExistsError:
+                sandbox = await self._find(build_id, sandbox_backend)
+                if sandbox is None or await sandbox.get_tags.aio() != tags:
+                    raise RuntimeError("Build allocation ownership mismatch") from None
         log.info(
             "sandbox.create_build",
             build_id=build_id,
@@ -130,7 +166,30 @@ class ModalBuildSessionService:
             duration_ms=int((time.time() - start_time) * 1000),
             outcome="success",
         )
-        return sandbox.object_id
+        return BuildSessionLaunch(
+            provider_session_id=sandbox.object_id, sandbox_backend=docker.backend
+        )
+
+    @staticmethod
+    def _allocation_name(build_id: str, backend: ModalBackend) -> str:
+        return "oi-build-" + _identity_digest(backend, build_id)[:40]
+
+    @classmethod
+    async def _find(cls, build_id: str, backend: ModalBackend) -> modal.Sandbox | None:
+        try:
+            sandbox = await modal.Sandbox.from_name.aio(
+                APP_NAME, cls._allocation_name(build_id, backend)
+            )
+        except modal.exception.NotFoundError:
+            return None
+        tags = await sandbox.get_tags.aio()
+        if (
+            tags.get("openinspect_kind") != "image-build"
+            or tags.get("openinspect_build_id") != build_id
+            or tags.get("openinspect_backend") != backend
+        ):
+            raise RuntimeError("Build allocation ownership mismatch")
+        return sandbox
 
     async def start(
         self,
@@ -162,7 +221,7 @@ class ModalBuildSessionService:
         try:
             sandbox, _tags = await self._resolve(build_id, provider_session_id)
             termination_start = time.time()
-            exit_code = await sandbox.terminate.aio(wait=True)
+            exit_code = await terminate_and_wait(sandbox)
         except BuildSessionNotFoundError:
             log.info(
                 "sandbox.terminate_build_not_found",

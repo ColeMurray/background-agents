@@ -1,5 +1,6 @@
 import { toast } from "sonner";
 import { browserApiFetch } from "@/lib/browser-api-fetch";
+import { sessionActionErrorMessage } from "./session-action-error";
 
 /**
  * Archives a session via the API.
@@ -13,7 +14,7 @@ export async function archiveSession(sessionId: string): Promise<boolean> {
       method: "POST",
     });
     if (!response.ok) {
-      toast.error("Failed to archive session");
+      toast.error(await sessionActionErrorMessage(response, "Failed to archive session"));
       return false;
     }
 

@@ -148,6 +148,8 @@ const baseAutomationEventSchema = {
 export const githubAutomationEventSchema = z.object({
   ...baseAutomationEventSchema,
   source: z.literal("github"),
+  /** Stable GitHub repository identity for routing; owner/name are display metadata. */
+  repositoryId: z.number().int().positive().max(Number.MAX_SAFE_INTEGER),
   repoOwner: z.string().min(1),
   repoName: z.string().min(1),
   /** Pull request head ref when the event is tied to a PR. */

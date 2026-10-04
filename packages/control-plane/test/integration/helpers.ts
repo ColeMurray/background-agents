@@ -58,7 +58,7 @@ export const INTEGRATION_WEBSOCKET_TIMEOUT_MS = 2000;
 const TEST_BROWSER_USER_ID = "11111111111111111111111111111111";
 const TEST_BROWSER_ACCOUNT_ID = "test-browser-account";
 const TEST_BROWSER_PROVIDER_SUBJECT = "583231";
-type InitialUserRole = Exclude<BuiltInRoleKey, "viewer">;
+type InitialUserRole = BuiltInRoleKey;
 const DEFAULT_INITIAL_USER_ROLE = "owner" as const;
 const TEST_BROWSER_SESSION_ID = "test-browser-session";
 const TEST_BROWSER_SESSION_TOKEN = "test-browser-session-token";
@@ -74,26 +74,28 @@ export const TEST_SESSION_PROVIDER_AUTH: SessionModelProviderAuthInput[] = [
   { provider: "anthropic", authMode: "api_key", selectionSource: "api_key_fallback" },
 ];
 
-/** Preserve the integration suite's deterministic identity and initial owner default. */
-async function testBrowserSessionCookie(initialRole: InitialUserRole): Promise<string> {
+/** Seed a canonical Better Auth session; `as` signs in a distinct user with its own role. */
+async function testBrowserSessionCookie(
+  initialRole: InitialUserRole,
+  as?: { userId: string; role: BuiltInRoleKey }
+): Promise<string> {
   const secret = env.BROWSER_AUTH_SECRET;
   if (!secret) throw new Error("BROWSER_AUTH_SECRET is not configured for integration tests");
   const nowMs = Date.now();
+  const email = as ? `${as.userId}@test.local` : "browser@test.local";
   const { cookieHeader } = await seedBrowserSession(
     sqlDatabase(env.DB),
+    { secret, publicWebOrigin: env.WEB_APP_URL! },
     {
-      secret,
-      publicWebOrigin: env.WEB_APP_URL!,
-    },
-    {
-      userId: TEST_BROWSER_USER_ID,
-      identityId: TEST_BROWSER_ACCOUNT_ID,
-      providerSubject: TEST_BROWSER_PROVIDER_SUBJECT,
+      userId: as?.userId ?? TEST_BROWSER_USER_ID,
+      identityId: as ? `test-browser-account-${as.userId}` : TEST_BROWSER_ACCOUNT_ID,
+      providerSubject: as?.userId ?? TEST_BROWSER_PROVIDER_SUBJECT,
       name: "Integration Browser User",
-      email: "browser@test.local",
-      role: initialRole,
-      sessionId: TEST_BROWSER_SESSION_ID,
-      token: TEST_BROWSER_SESSION_TOKEN,
+      email,
+      avatarUrl: email,
+      role: as?.role ?? initialRole,
+      sessionId: as ? `test-browser-session-${as.userId}` : TEST_BROWSER_SESSION_ID,
+      token: as ? `test-browser-token-${as.userId}` : TEST_BROWSER_SESSION_TOKEN,
       nowMs,
       expiresAtMs: nowMs + 7 * 24 * 60 * 60 * 1000,
     }
@@ -116,6 +118,7 @@ export interface ServiceRequestInit {
   service?: ServiceName;
   actor?: string;
   initialUserRole?: InitialUserRole;
+  as?: { userId: string; role: BuiltInRoleKey };
 }
 
 /**
@@ -138,7 +141,7 @@ export async function serviceRequestHeaders(
   });
   const browserCookie =
     service === "web"
-      ? await testBrowserSessionCookie(init?.initialUserRole ?? DEFAULT_INITIAL_USER_ROLE)
+      ? await testBrowserSessionCookie(init?.initialUserRole ?? DEFAULT_INITIAL_USER_ROLE, init?.as)
       : undefined;
   return {
     ...(init?.body === undefined ? {} : { "Content-Type": "application/json" }),
@@ -175,6 +178,7 @@ export async function initSession(overrides?: {
   reasoningEffort?: string;
   sandboxSettings?: SandboxSettings;
   userId?: string;
+  canonicalUserId?: string;
   scmLogin?: string;
   providerAuth?: SessionModelProviderAuthInput[];
 }) {
@@ -192,16 +196,25 @@ export async function initSession(overrides?: {
   const now = Date.now();
   await new SessionIndexStore(env.DB).create({
     id: defaults.sessionName,
+    ownerTeamId: null,
+    visibility: "workspace",
     title: defaults.title ?? null,
     repoOwner: defaults.repoOwner,
     repoName: defaults.repoName,
     model: defaults.model ?? "anthropic/claude-haiku-4-5",
     reasoningEffort: defaults.reasoningEffort ?? null,
     baseBranch: defaults.defaultBranch ?? "main",
-    repositories: defaults.repositories,
+    repositories: defaults.repositories ?? [
+      {
+        repoOwner: defaults.repoOwner,
+        repoName: defaults.repoName,
+        repoId: defaults.repoId,
+        baseBranch: defaults.defaultBranch ?? "main",
+      },
+    ],
     environmentId: defaults.environmentId ?? null,
     status: "created",
-    userId: defaults.userId,
+    userId: defaults.canonicalUserId ?? defaults.userId,
     providerAuth,
     createdAt: now,
     updatedAt: now,
@@ -314,9 +327,9 @@ export async function seedMessage(
 export async function initNamedSession(
   sessionName: string,
   overrides?: {
-    repoOwner?: string;
-    repoName?: string;
-    repoId?: number;
+    repoOwner?: string | null;
+    repoName?: string | null;
+    repoId?: number | null;
     defaultBranch?: string;
     repositories?: Array<{
       repoOwner: string;
@@ -335,7 +348,8 @@ export async function initNamedSession(
     spawnDepth?: number;
     sandboxSettings?: Record<string, unknown>;
     providerAuth?: SessionModelProviderAuthInput[];
-  }
+  },
+  beforeInit?: (stub: DurableObjectStub) => Promise<void>
 ) {
   const defaults = {
     sessionName,
@@ -346,12 +360,26 @@ export async function initNamedSession(
   const now = Date.now();
   await new SessionIndexStore(env.DB).create({
     id: sessionName,
+    ownerTeamId: null,
+    visibility: "workspace",
     title: defaults.title ?? null,
     repoOwner: defaults.repoOwner ?? null,
     repoName: defaults.repoName ?? null,
     model: defaults.model ?? "anthropic/claude-haiku-4-5",
     reasoningEffort: defaults.reasoningEffort ?? null,
     baseBranch: defaults.defaultBranch ?? "main",
+    repositories:
+      defaults.repositories ??
+      (defaults.repoOwner && defaults.repoName && defaults.repoId !== null
+        ? [
+            {
+              repoOwner: defaults.repoOwner,
+              repoName: defaults.repoName,
+              repoId: defaults.repoId,
+              baseBranch: defaults.defaultBranch ?? "main",
+            },
+          ]
+        : []),
     status: "created",
     parentSessionId: defaults.parentSessionId ?? null,
     spawnSource: defaults.spawnSource ?? "user",
@@ -362,6 +390,7 @@ export async function initNamedSession(
     updatedAt: now,
   });
 
+  await beforeInit?.(env.SESSION.get(env.SESSION.idFromName(sessionName)));
   return initNamedSessionDO(sessionName, doDefaults);
 }
 

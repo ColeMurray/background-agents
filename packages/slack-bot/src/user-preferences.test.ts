@@ -191,6 +191,16 @@ describe("resolveUserPreferences", () => {
     expect(resolved.model).toBe("anthropic/claude-haiku-4-5");
   });
 
+  it("migrates a stored Codex model without switching to the Slack default provider", () => {
+    const resolved = resolveUserPreferences(
+      { userId: "U123", model: "openai/gpt-5.3-codex", updatedAt: 1 },
+      "anthropic/claude-sonnet-4-6",
+      ["anthropic/claude-sonnet-4-6", "openai/gpt-6-sol"]
+    );
+
+    expect(resolved.model).toBe("openai/gpt-6-sol");
+  });
+
   it("uses the Slack default before the shared default for unsupported stored models", () => {
     const resolved = resolveUserPreferences(
       {

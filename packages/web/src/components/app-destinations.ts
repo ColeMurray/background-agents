@@ -1,4 +1,11 @@
-import { AutomationsIcon, DataControlsIcon, SettingsIcon } from "@/components/ui/icons";
+import {
+  AutomationsIcon,
+  DataControlsIcon,
+  SessionsIcon,
+  SettingsIcon,
+} from "@/components/ui/icons";
+import { SESSIONS_PATH } from "@/lib/session-discovery";
+import { TeamsIcon } from "@/components/teams/teams-icon";
 import type { PermissionId } from "@open-inspect/shared/rbac";
 import type { ComponentType } from "react";
 
@@ -17,7 +24,23 @@ export const SETTINGS_DESTINATION = {
   icon: SettingsIcon,
 } as const satisfies AppDestination;
 
+const SESSIONS_DESTINATION = {
+  label: "Sessions",
+  description: "Find past and current work across full history",
+  href: SESSIONS_PATH,
+  icon: SessionsIcon,
+  requiredPermission: "sessions.read",
+} as const satisfies AppDestination;
+
 export const PRIMARY_APP_DESTINATIONS = [
+  SESSIONS_DESTINATION,
+  {
+    label: "Teams",
+    description: "Browse teams, members, and shared work",
+    href: "/teams",
+    icon: TeamsIcon,
+    requiredPermission: "sessions.read",
+  },
   {
     label: "Automations",
     description: "Manage scheduled and event-triggered work",

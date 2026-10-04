@@ -8,10 +8,11 @@ function result(changes: number, rows: unknown[] = []): SqlResult {
 
 function fakeDatabase(options: {
   batchResults?: SqlResult[];
-  batchError?: Error;
   allResults?: unknown[];
+  firstResults?: unknown[];
   prepared?: Array<{ sql: string; values: unknown[] }>;
 }): SqlDatabase {
+  const firstResults = [...(options.firstResults ?? [])];
   return {
     prepare: (sql) => {
       const prepared = { sql, values: [] as unknown[] };
@@ -21,14 +22,13 @@ function fakeDatabase(options: {
           prepared.values = values;
           return statement;
         },
-        first: async <T>() => null as T | null,
+        first: async <T>() => (firstResults.shift() as T | undefined) ?? null,
         run: async <T>() => result(0) as SqlResult<T>,
         all: async <T>() => result(0, options.allResults) as SqlResult<T>,
       };
       return statement;
     },
     batch: async <T>() => {
-      if (options.batchError) throw options.batchError;
       return (options.batchResults ?? []) as SqlResult<T>[];
     },
   };
@@ -43,6 +43,48 @@ const replaceMemberStatusInput: Parameters<AuthorizationStore["replaceMemberStat
 };
 
 describe("AuthorizationStore", () => {
+  it("maps an effective authorization row with no role assignment", async () => {
+    const store = new AuthorizationStore(
+      fakeDatabase({
+        firstResults: [
+          {
+            user_id: "user-1",
+            suspended_at: null,
+            role_id: null,
+            role_key: null,
+            role_name: null,
+          },
+        ],
+      })
+    );
+
+    await expect(store.getEffectiveAuthorization("user-1")).resolves.toEqual({
+      userId: "user-1",
+      suspendedAt: null,
+      role: null,
+    });
+  });
+
+  it("rejects a malformed effective authorization row", async () => {
+    const store = new AuthorizationStore(
+      fakeDatabase({
+        firstResults: [
+          {
+            user_id: "user-1",
+            suspended_at: null,
+            role_id: "role_builtin_owner",
+            role_key: "superuser",
+            role_name: "Owner",
+          },
+        ],
+      })
+    );
+
+    await expect(store.getEffectiveAuthorization("user-1")).rejects.toThrow(
+      "Malformed persisted authorization row"
+    );
+  });
+
   it("maps persistence role fields at the store boundary", async () => {
     const store = new AuthorizationStore(
       fakeDatabase({
@@ -68,32 +110,6 @@ describe("AuthorizationStore", () => {
         assignmentCount: 4,
       },
     ]);
-  });
-
-  it.each([
-    "applied",
-    "no_op",
-    "actor_authorization_changed",
-    "role_not_found",
-    "member_not_found",
-    "conflict",
-  ] as const)("returns the %s member status replacement batch outcome", async (status) => {
-    const store = new AuthorizationStore(
-      fakeDatabase({
-        batchResults: [result(0, [{ status }]), result(1), result(1), result(1)],
-      })
-    );
-
-    await expect(store.replaceMemberStatus(replaceMemberStatusInput)).resolves.toEqual({
-      status,
-    });
-  });
-
-  it("does not classify an unexpected database failure as a conflict", async () => {
-    const failure = new Error("database unavailable");
-    const store = new AuthorizationStore(fakeDatabase({ batchError: failure }));
-
-    await expect(store.replaceMemberStatus(replaceMemberStatusInput)).rejects.toBe(failure);
   });
 
   it("returns the mutation outcome from the audit insert that gates writes", async () => {

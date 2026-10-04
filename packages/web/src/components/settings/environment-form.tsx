@@ -18,15 +18,19 @@ import { Combobox } from "@/components/ui/combobox";
 import { BranchIcon, ChevronDownIcon, RepoIcon } from "@/components/ui/icons";
 import { useBranches } from "@/hooks/use-branches";
 import { useRepos, type Repo } from "@/hooks/use-repos";
+import { useResourceTeams } from "@/hooks/use-resource-teams";
+import { ResourceTeamField } from "@/components/resource-team-field";
 import { RepositoryMultiSelect } from "@/components/repository-multi-select";
 import { repositorySelectionKey } from "@/lib/repository-selection";
 import { getRepoImageProviders, supportsRepoImages } from "@/lib/sandbox-provider";
 
 export interface EnvironmentFormValues {
+  teamId?: string | null;
   name: string;
   description: string | null;
   prebuildEnabled: boolean;
-  repositories: RepositoryInput[];
+  /** Omitted when an edit leaves the selection unchanged, so it is not revalidated as a replacement. */
+  repositories?: RepositoryInput[];
 }
 
 /**
@@ -42,14 +46,25 @@ export function EnvironmentForm({
   onSubmit,
   onCancel,
   submitting,
+  teamId: initialTeamId,
 }: {
   mode: "create" | "edit";
   initialValues?: Environment;
   onSubmit: (values: EnvironmentFormValues) => void;
   onCancel: () => void;
   submitting: boolean;
+  teamId?: string | null;
 }) {
-  const { repos, loading: loadingRepos } = useRepos();
+  const [teamId, setTeamId] = useState(initialValues?.ownerTeamId ?? initialTeamId ?? null);
+  // Owner is fixed when editing, or when creating from a team's page.
+  const ownerLocked = mode === "edit" || !!initialTeamId;
+  const scope = useResourceTeams("environment");
+  const scopeValid =
+    mode === "edit" ||
+    (!scope.loading &&
+      !scope.error &&
+      (teamId ? scope.teams.some((team) => team.id === teamId) : scope.allowWorkspace));
+  const { repos, loading: loadingRepos } = useRepos(true, teamId);
   const prebuildsSupported = supportsRepoImages();
 
   const [name, setName] = useState(initialValues?.name ?? "");
@@ -107,24 +122,38 @@ export function EnvironmentForm({
     setSelectedKeys((current) => current.filter((entry) => entry !== key));
   };
 
-  const canSubmit = name.trim().length > 0 && selectedKeys.length > 0 && !submitting;
+  const canSubmit = name.trim().length > 0 && selectedKeys.length > 0 && !submitting && scopeValid;
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (!canSubmit) return;
+    const repositories = selectedKeys.map((key) => {
+      const entry: RepositoryInput = parseRepositoryFullName(key) ?? {
+        repoOwner: "",
+        repoName: "",
+      };
+      const branch = branchByKey[key]?.trim();
+      if (branch) entry.baseBranch = branch;
+      return entry;
+    });
+    const initialRepositories = initialValues?.repositories ?? [];
+    const repositoriesUnchanged =
+      mode === "edit" &&
+      repositories.length === initialRepositories.length &&
+      repositories.every(
+        (repository, index) =>
+          selectedKeys[index] ===
+            repositorySelectionKey(
+              initialRepositories[index].repoOwner,
+              initialRepositories[index].repoName
+            ) && (repository.baseBranch ?? "") === initialRepositories[index].baseBranch
+      );
     onSubmit({
+      ...(mode === "create" ? { teamId } : {}),
       name: name.trim(),
       description: description.trim() ? description.trim() : null,
       prebuildEnabled,
-      repositories: selectedKeys.map((key) => {
-        const entry: RepositoryInput = parseRepositoryFullName(key) ?? {
-          repoOwner: "",
-          repoName: "",
-        };
-        const branch = branchByKey[key]?.trim();
-        if (branch) entry.baseBranch = branch;
-        return entry;
-      }),
+      ...(repositoriesUnchanged ? {} : { repositories }),
     });
   };
 
@@ -137,6 +166,18 @@ export function EnvironmentForm({
 
   return (
     <form onSubmit={handleSubmit} className="space-y-4">
+      <ResourceTeamField
+        {...scope}
+        teamId={teamId}
+        disabled={submitting || ownerLocked}
+        allowWorkspace={mode === "edit" || scope.allowWorkspace}
+        onChange={(nextTeamId) => {
+          if (submitting || ownerLocked) return;
+          setTeamId(nextTeamId);
+          setSelectedKeys([]);
+          setBranchByKey({});
+        }}
+      />
       <div>
         <label
           htmlFor="environment-name"

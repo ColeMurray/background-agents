@@ -100,6 +100,40 @@ details.
 If the resolved repo is outside the selected Linear scope, Linear shows an error and no session
 starts.
 
+### Team Bindings and Existing Mappings
+
+A team lead or workspace administrator binds an external Linear team ID to an Open-Inspect team in
+that team's **Channels** tab. **Primary** marks the main binding for that provider; **Source** also
+routes new sessions to the owning team. An external Linear team can be bound to only one
+Open-Inspect team, and each Open-Inspect team has at most one primary binding per provider. Enter
+the Linear team ID, not its name or issue-key prefix; this is separate from Slack channel discovery.
+
+Ownership bindings and legacy target mappings have different meanings. The KV configuration
+`config:team-repos` maps a Linear team to repositories or environments; `config:project-repos` maps
+a project to a target. Neither grants membership or repository access, nor assigns Open-Inspect team
+ownership. The teams database migration creates an empty binding table and does not translate those
+KV mappings. To adopt team ownership, explicitly create the Linear binding, add the required
+Open-Inspect members and repository grants, and retain target mappings only for target selection.
+Existing sessions are not reassigned by adding a binding.
+
+Linear's `unboundChannels` policy defaults to `workspace`, so an unbound Linear team starts
+workspace-owned sessions. `reject` instead asks for a binding and creates no session. A binding
+lookup failure also stops launch rather than falling back to workspace ownership.
+
+Repository, environment, and resolved integration-setting lookups carry the external Linear team
+scope. Actor-bearing catalogs require team membership or workspace-admin access; creating a
+team-owned session checks actual membership and target grants. Scoped lookup failures do not fall
+back to a workspace-wide catalog. A mapping cannot make an out-of-scope target accessible.
+
+Some discovery and callback reads have no human actor. Those are narrowly authorized Linear-bot
+service reads, still carrying the Linear team scope; they do not impersonate a team member or give
+the app permission to start arbitrary sessions. Automation-created delegations use the installed app
+user as the acting identity for session creation.
+
+`TEAMS_ENFORCEMENT` still defaults to `shadow`, not `on`. In particular, team-read denials can be
+audited rather than blocked in that mode. Do not treat scoped callback reads as a guarantee of full
+cross-team output isolation in shadow mode; private-session access remains enforced.
+
 ---
 
 ## What Linear Shows
@@ -114,6 +148,14 @@ starts.
 
 When a session starts, Linear receives a **View Session** link. If the agent opens a pull request,
 Linear receives a **Pull Request** link when the session finishes.
+
+Before posting completion content, the bot verifies the issue's current Linear team. If it differs
+from the recorded launch team, or cannot be verified, results are withheld. The bot reads session
+events and artifacts without a human actor, scoped to that verified Linear team. A denied or failed
+read produces a generic results-withheld error instead of session content or a PR link. Legacy
+callbacks recover the launch team from a matching issue-session mapping when possible; otherwise
+they use the verified current team for the scoped read. Enforcement of team visibility on those
+reads depends on the rollout mode described above.
 
 Open the web session for live output, logs, artifacts, and file changes. For a human-initiated
 session, Open-Inspect moves an unstarted issue to the team's lowest-position `started` workflow

@@ -120,6 +120,12 @@ describe("MessageRepository", () => {
     expect(repository.getNextPendingMessage()).toEqual(pending);
   });
 
+  it("rejects malformed persisted processing-message rows", () => {
+    mock.setData(`SELECT id FROM messages WHERE status = 'processing' LIMIT 1`, [{ id: 123 }]);
+
+    expect(() => repository.getProcessingMessage()).toThrow(SessionStorageIntegrityError);
+  });
+
   it("throws on malformed persisted message rows", () => {
     const pendingQuery = `SELECT * FROM messages WHERE status = 'pending' ORDER BY created_at ASC, rowid ASC LIMIT 1`;
     mock.setData(pendingQuery, [{ ...messageRow(), source: "unknown" }]);
@@ -151,6 +157,16 @@ describe("MessageRepository", () => {
     });
   });
 
+  it("rejects partial persisted processing-message timestamp rows", () => {
+    mock.setData(`SELECT id, created_at FROM messages WHERE status = 'processing' LIMIT 1`, [
+      { id: "msg-1" },
+    ]);
+
+    expect(() => repository.getProcessingMessageWithCreatedAt()).toThrow(
+      SessionStorageIntegrityError
+    );
+  });
+
   it("tracks stop confirmation deadlines", () => {
     const query = `SELECT id, stop_confirmation_deadline FROM messages
        WHERE stop_confirmation_deadline IS NOT NULL LIMIT 1`;
@@ -162,6 +178,16 @@ describe("MessageRepository", () => {
     });
     repository.clearMessageAwaitingStopConfirmation("msg-1");
     expect(mock.calls[2].query).toContain("stop_confirmation_deadline = NULL");
+  });
+
+  it("rejects malformed persisted stop-confirmation rows", () => {
+    const query = `SELECT id, stop_confirmation_deadline FROM messages
+       WHERE stop_confirmation_deadline IS NOT NULL LIMIT 1`;
+    mock.setData(query, [{ id: "msg-1", stop_confirmation_deadline: null }]);
+
+    expect(() => repository.getMessageAwaitingStopConfirmation()).toThrow(
+      SessionStorageIntegrityError
+    );
   });
 
   it("looks up idempotent requests and unfinished positions", () => {
@@ -284,6 +310,46 @@ describe("MessageRepository", () => {
       })
     ).toEqual({ kind: "rejected", reason: "session_closed" });
     expect(mock.calls).toHaveLength(2);
+  });
+
+  it("admits pending Autofix feedback with its rolling PR key", () => {
+    mock.setOne({ count: 0 });
+    expect(
+      repository.admitAutofixMessage({
+        message: {
+          id: "msg-new",
+          authorId: "p-1",
+          content: "Fix feedback",
+          source: "github",
+          status: "pending",
+          createdAt: 2000,
+        },
+        feedbackKey: "github:review:held",
+        pullRequestKey: "github:99:42",
+        originContext: "{}",
+        attemptLimit: 3,
+        windowStart: 1000,
+        sessionClosed: false,
+      })
+    ).toEqual({ kind: "enqueued", messageId: "msg-new" });
+    const inserted = mock.calls.find(({ query }) => query.includes("INSERT INTO messages"));
+    expect(inserted?.params).toEqual([
+      "msg-new",
+      "p-1",
+      "Fix feedback",
+      "github",
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      "github:review:held",
+      "github:99:42",
+      "{}",
+      "pending",
+      2000,
+    ]);
   });
 
   it("rejects new Autofix feedback when the session budget is exhausted", () => {
@@ -577,6 +643,27 @@ describe("MessageRepository", () => {
     expect(mock.calls[2].params[0]).toBe("execution_complete:msg-1");
   });
 
+  it("rejects malformed persisted completion state rows", () => {
+    mock.setData(`SELECT status, created_at, started_at FROM messages WHERE id = ?`, [
+      { status: "processing", created_at: "1000", started_at: 1200 },
+    ]);
+
+    expect(() =>
+      repository.recordMessageCompletion(
+        {
+          type: "execution_complete",
+          messageId: "msg-1",
+          success: true,
+          sandboxId: "sb-1",
+          timestamp: 3,
+        },
+        3000,
+        "processing"
+      )
+    ).toThrow(SessionStorageIntegrityError);
+    expect(mock.calls).toHaveLength(1);
+  });
+
   it("does not complete a message in another state", () => {
     mock.setData(`SELECT status, created_at, started_at FROM messages WHERE id = ?`, [
       { status: "completed", created_at: 1000, started_at: 1200 },
@@ -684,6 +771,35 @@ describe("MessageRepository", () => {
       source: "slack",
     });
     expect(repository.getProcessingMessageAuthor()).toEqual({ author_id: "p-1" });
+  });
+
+  it("reads nullable callback context rows", () => {
+    mock.setData(`SELECT callback_context, source FROM messages WHERE id = ?`, [
+      { callback_context: null, source: "web" },
+    ]);
+
+    expect(repository.getMessageCallbackContext("msg-1")).toEqual({
+      callback_context: null,
+      source: "web",
+    });
+  });
+
+  it("rejects malformed persisted callback context rows", () => {
+    mock.setData(`SELECT callback_context, source FROM messages WHERE id = ?`, [
+      { callback_context: 123, source: "slack" },
+    ]);
+
+    expect(() => repository.getMessageCallbackContext("msg-1")).toThrow(
+      SessionStorageIntegrityError
+    );
+  });
+
+  it("rejects malformed persisted processing author rows", () => {
+    mock.setData(`SELECT author_id FROM messages WHERE status = 'processing' LIMIT 1`, [
+      { author_id: null },
+    ]);
+
+    expect(() => repository.getProcessingMessageAuthor()).toThrow(SessionStorageIntegrityError);
   });
 
   describe("raiseReportedCost", () => {

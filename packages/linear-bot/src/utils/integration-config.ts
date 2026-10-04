@@ -3,8 +3,8 @@ import {
   parseRepositoryFullName,
 } from "@open-inspect/shared/types/repositories";
 import { z } from "zod";
-import type { Env } from "../types";
-import { signedControlPlaneFetch } from "../internal-auth";
+import type { Env, LinearChannelScope } from "../types";
+import { fetchControlPlaneJson } from "../control-plane";
 
 const resolvedLinearConfigSchema = z.object({
   model: z.string().nullable(),
@@ -32,35 +32,19 @@ const DEFAULT_CONFIG: ResolvedLinearConfig = {
   enabledRepos: null,
 };
 
-export async function getLinearConfig(env: Env, repo: string): Promise<ResolvedLinearConfig> {
-  if (!env.SERVICE_AUTH_SECRET) {
-    return DEFAULT_CONFIG;
-  }
-
+/**
+ * Read one repository's Linear settings for a Linear team. Failed reads throw rather
+ * than falling back to defaults; only an unconfigured repository uses defaults.
+ */
+export async function getLinearConfig(
+  env: Env,
+  repo: string,
+  scope: LinearChannelScope
+): Promise<ResolvedLinearConfig> {
   const repository = parseRepositoryFullName(repo);
-  if (!repository) {
-    return DEFAULT_CONFIG;
-  }
+  if (!repository) throw new Error("Invalid repository for Linear config read");
 
-  const url = `https://internal/integration-settings/linear/resolved/${encodeRepositoryPathSegments(repository)}`;
-
-  let response: Response;
-  try {
-    response = await signedControlPlaneFetch(env, { method: "GET", url });
-  } catch {
-    return DEFAULT_CONFIG;
-  }
-
-  if (!response.ok) {
-    return DEFAULT_CONFIG;
-  }
-
-  const parsed = resolvedLinearConfigResponseSchema.safeParse(
-    await response.json().catch(() => null)
-  );
-  if (!parsed.success || !parsed.data.config) {
-    return DEFAULT_CONFIG;
-  }
-
-  return parsed.data.config;
+  const path = `/integration-settings/linear/resolved/${encodeRepositoryPathSegments(repository)}`;
+  const body = await fetchControlPlaneJson(env, path, scope);
+  return resolvedLinearConfigResponseSchema.parse(body).config ?? DEFAULT_CONFIG;
 }

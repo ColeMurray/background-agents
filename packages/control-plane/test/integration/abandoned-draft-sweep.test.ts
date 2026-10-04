@@ -12,6 +12,8 @@ const HOUR_MS = 60 * 60 * 1000;
 async function seedStaleDraft(id: string): Promise<void> {
   await new SessionIndexStore(env.DB).create({
     id,
+    ownerTeamId: null,
+    visibility: "workspace",
     title: id,
     repoOwner: "acme",
     repoName: "web-app",

@@ -1,5 +1,14 @@
 import { isSessionPromptable } from "@open-inspect/shared/types/session-activity";
-import type { EffectiveAuthorization, PermissionId } from "@open-inspect/shared/rbac";
+import type { EffectiveAuthorization } from "@open-inspect/shared/rbac";
+import {
+  checkSessionAccess,
+  type AccessDenialReason,
+  type AccessDecision,
+  type SessionAction,
+  type SessionAccessRow,
+  type SessionCapabilities,
+  type SessionViewer,
+} from "@open-inspect/shared";
 import {
   redactSessionSnapshotSandboxAccess,
   type ServerMessage,
@@ -30,6 +39,13 @@ import type { SandboxRow } from "./types";
 import type { SessionWebSocketManager } from "./websocket-manager";
 import { WS_AUTHORIZATION_LEASE_MS } from "./authorization-lease";
 import { canManageSessionBudget } from "./budget-authorization";
+import {
+  legacyPermissionForAction,
+  resolverDecides,
+  type TeamsEnforcementMode,
+} from "../authorization/teams-enforcement";
+import type { ClientCommandAuthorization } from "./message-router";
+import { effectiveSessionCapabilities } from "../authorization/session-admission";
 
 /**
  * Maximum age of a WebSocket authentication token (in milliseconds).
@@ -52,18 +68,31 @@ export interface SessionConnectionAuthenticatorDeps {
   snapshotReader: SessionSnapshotReader;
   schedulePullRequestRefresh: (trigger: "open" | "manual") => void;
   scmProviderName: SourceControlProviderName;
-  /** Resolve a user's current authorization at the start of a subscription or command. */
-  resolveAuthorization: (userId: string) => Promise<AuthorizationResolution>;
-  getSessionOwnerId: () => Promise<string | null>;
+  /** Resolve the current D1 session scope and user's authorization on every gated action. */
+  resolveSessionViewer: (
+    userId: string,
+    options?: { includeMemberships?: boolean }
+  ) => Promise<SessionViewerResolution>;
+  auditPrivateBreakGlass: (userId: string, row: SessionAccessRow) => Promise<void>;
+  auditShadowDenied: (
+    userId: string,
+    row: SessionAccessRow,
+    reason: AccessDenialReason,
+    connectionId: string
+  ) => Promise<void>;
   /** The session-scoped logger; upgrade/subscribe paths also receive request-scoped children. */
   log: Logger;
 }
 
-type AuthorizationResolution =
-  | { kind: "valid"; authorization: EffectiveAuthorization }
+type SessionViewerResolution =
+  | {
+      kind: "valid";
+      mode: TeamsEnforcementMode;
+      authorization: EffectiveAuthorization;
+      viewer: SessionViewer;
+      row: SessionAccessRow;
+    }
   | { kind: "rejected" | "unavailable" };
-
-export type ClientCommandAuthorization = "allowed" | "denied" | "unavailable";
 
 interface SandboxAdmission {
   sandboxId: string | null;
@@ -100,6 +129,8 @@ export interface SessionUpgradeAdmission {
  * snapshot handoff), and post-hibernation client identity recovery.
  */
 export class SessionConnectionAuthenticator implements SessionUpgradeAdmission {
+  private readonly shadowDenials = new WeakMap<SessionWebSocket, Set<string>>();
+
   constructor(private readonly deps: SessionConnectionAuthenticatorDeps) {}
 
   /**
@@ -155,6 +186,18 @@ export class SessionConnectionAuthenticator implements SessionUpgradeAdmission {
       return reject("Unauthorized: Invalid auth token", 401);
     }
 
+    // A refused bridge exits and its sandbox shuts itself down. While a save
+    // still needs this sandbox, the bridge is told to retry instead; the save
+    // stops the sandbox once it is done with it.
+    const refusedReconnect = (): "retry" | "exit" => {
+      const current = sandboxRepository.getSandbox();
+      return current !== null &&
+        current.modal_sandbox_id === expectedSandboxId &&
+        current.created_at === sandbox.created_at
+        ? this.deps.lifecycleManager.onRefusedReconnect()
+        : "exit";
+    };
+
     // Reject connection if the session itself is closed for good. Narrower
     // than "not active": `completed` and `failed` sessions are idle, not
     // over — warm-on-typing spawns a sandbox for one before the follow-up
@@ -165,30 +208,37 @@ export class SessionConnectionAuthenticator implements SessionUpgradeAdmission {
     // request is suspended. Admission needs a fresh, synchronous read.
     const currentSession = sessionCoreRepository.getSession();
     if (currentSession && !isSessionPromptable(currentSession.status)) {
+      // An archived session's sandbox is being saved; a cancelled one is destroyed.
+      const instruction = currentSession.status === "archived" ? refusedReconnect() : "exit";
       log.warn("ws.connect", {
         event: "ws.connect",
         ws_type: "sandbox",
         outcome: "rejected",
-        reject_reason: "session_terminal",
+        reject_reason: instruction === "retry" ? "sandbox_preserving" : "session_terminal",
         session_status: currentSession.status,
         duration_ms: Date.now() - wsStartTime,
       });
-      return reject("Session is terminal", 410);
+      return instruction === "retry"
+        ? reject("Sandbox is being saved", 503)
+        : reject("Session is terminal", 410);
     }
 
     const currentSandbox = sandboxRepository.getSandbox();
     // Deliberately narrower than isDeadSandboxStatus: a "failed" sandbox may
     // still connect after a slow boot and self-heal by becoming ready.
     if (currentSandbox && isSandboxReconnectBlockedStatus(currentSandbox.status)) {
+      const instruction = refusedReconnect();
       log.warn("ws.connect", {
         event: "ws.connect",
         ws_type: "sandbox",
         outcome: "rejected",
-        reject_reason: "sandbox_stopped",
+        reject_reason: instruction === "retry" ? "sandbox_preserving" : "sandbox_stopped",
         sandbox_status: currentSandbox.status,
         duration_ms: Date.now() - wsStartTime,
       });
-      return reject("Sandbox is stopped", 410);
+      return instruction === "retry"
+        ? reject("Sandbox is being saved", 503)
+        : reject("Sandbox is stopped", 410);
     }
     if (
       !currentSandbox ||
@@ -345,23 +395,23 @@ export class SessionConnectionAuthenticator implements SessionUpgradeAdmission {
       // Authorization is intentionally sampled once at the start of this
       // subscription request. A concurrent role change takes effect when this
       // bounded lease expires, not midway through an in-flight request.
-      const authorization = await this.deps.resolveAuthorization(participant.canonical_user_id);
-      if (
-        authorization.kind !== "valid" ||
-        !authorization.authorization.permissions.includes("sessions.read")
-      ) {
+      const resolution = await this.deps.resolveSessionViewer(participant.canonical_user_id, {
+        includeMemberships: true,
+      });
+      const read = resolution.kind === "valid" ? this.decide(resolution, "read") : null;
+      if (resolution.kind !== "valid" || !read?.allowed) {
         log.warn("ws.connect", {
           event: "ws.connect",
           ws_type: "client",
           outcome: "auth_failed",
           reject_reason:
-            authorization.kind === "unavailable"
+            resolution.kind === "unavailable"
               ? "authorization_unavailable"
               : "authorization_denied",
           participant_id: participant.id,
           user_id: participant.canonical_user_id,
         });
-        if (authorization.kind === "unavailable") {
+        if (resolution.kind === "unavailable") {
           wsManager.close(ws, WS_CLOSE_INTERNAL_ERROR, "Authorization temporarily unavailable");
         } else {
           wsManager.close(ws, WS_CLOSE_AUTHORIZATION_REVOKED, WS_AUTHORIZATION_REVOKED_REASON);
@@ -387,10 +437,19 @@ export class SessionConnectionAuthenticator implements SessionUpgradeAdmission {
         return;
       }
 
-      const [enrichment, ownerUserId] = await Promise.all([
-        this.deps.snapshotReader.resolveSessionSnapshotEnrichment(),
-        this.deps.getSessionOwnerId(),
-      ]);
+      if (read.audit === "session.private_break_glass") {
+        try {
+          await this.deps.auditPrivateBreakGlass(participant.canonical_user_id, resolution.row);
+        } catch (error) {
+          log.error("WebSocket break-glass audit failed", {
+            user_id: participant.canonical_user_id,
+            error: error instanceof Error ? error : String(error),
+          });
+          wsManager.close(ws, WS_CLOSE_INTERNAL_ERROR, "Authorization temporarily unavailable");
+          return;
+        }
+      }
+      const enrichment = await this.deps.snapshotReader.resolveSessionSnapshotEnrichment();
       const clientInfo: ClientInfo = {
         participantId: participant.id,
         userId: participant.canonical_user_id ?? participant.user_id,
@@ -408,8 +467,8 @@ export class SessionConnectionAuthenticator implements SessionUpgradeAdmission {
             ws,
             clientInfo,
             enrichment,
-            authorization.authorization.permissions.includes("sessions.sandbox_access"),
-            canManageSessionBudget(ownerUserId, authorization.authorization)
+            effectiveSessionCapabilities(resolution.viewer, resolution.row, resolution.mode),
+            canManageSessionBudget(resolution.row.ownerUserId, resolution.authorization)
           )
         );
         if (!activated) {
@@ -425,6 +484,7 @@ export class SessionConnectionAuthenticator implements SessionUpgradeAdmission {
         wsManager.close(ws, WS_CLOSE_INTERNAL_ERROR, "Session activation failed");
         return;
       }
+      this.observeShadowReadDenial(ws, resolution);
       log.info("ws.connect", {
         event: "ws.connect",
         ws_type: "client",
@@ -450,20 +510,21 @@ export class SessionConnectionAuthenticator implements SessionUpgradeAdmission {
     ws: SessionWebSocket,
     client: ClientInfo,
     enrichment: Parameters<SessionSnapshotReader["readSessionSnapshot"]>[0],
-    canAccessSandbox: boolean,
+    capabilities: SessionCapabilities,
     canManageBudget: boolean
   ): boolean {
     const { wsManager, snapshotReader } = this.deps;
     const snapshot = snapshotReader.readSessionSnapshot(enrichment);
     if (!snapshot) return false;
 
-    const authorizedSnapshot = canAccessSandbox
+    const authorizedSnapshot = capabilities.canSandbox
       ? snapshot
       : redactSessionSnapshotSandboxAccess(snapshot);
     if (
       !wsManager.send(ws, {
         type: "subscribed",
         ...authorizedSnapshot,
+        session: { ...authorizedSnapshot.session, capabilities },
         participantId: client.participantId,
         participant: {
           participantId: client.participantId,
@@ -480,16 +541,82 @@ export class SessionConnectionAuthenticator implements SessionUpgradeAdmission {
     return true;
   }
 
-  /** Samples one permission before dispatching a WebSocket command. */
+  /** Samples the current D1 scope and access before dispatching a WebSocket command. */
   async authorizeClientCommand(
+    ws: SessionWebSocket,
     userId: string,
-    permission: PermissionId
+    action: SessionAction
   ): Promise<ClientCommandAuthorization> {
-    const resolution = await this.deps.resolveAuthorization(userId);
-    if (resolution.kind === "unavailable") return "unavailable";
-    if (resolution.kind === "rejected") return "denied";
-    if (resolution.kind !== "valid") return "denied";
-    return resolution.authorization.permissions.includes(permission) ? "allowed" : "denied";
+    const resolution = await this.deps.resolveSessionViewer(userId);
+    if (resolution.kind === "unavailable") return { kind: "unavailable" };
+    if (resolution.kind !== "valid" || !this.decide(resolution, "read").allowed) {
+      this.deps.wsManager.removeClient(ws);
+      this.deps.wsManager.close(
+        ws,
+        WS_CLOSE_AUTHORIZATION_REVOKED,
+        WS_AUTHORIZATION_REVOKED_REASON
+      );
+      return { kind: "revoked" };
+    }
+    this.observeShadowReadDenial(ws, resolution);
+    const decision = this.decide(resolution, action);
+    return decision.allowed ? { kind: "allowed" } : { kind: "denied", reason: decision.reason };
+  }
+
+  /** Observe only allowed reads; a hypothetical denial must never revoke the lease. */
+  private observeShadowReadDenial(
+    ws: SessionWebSocket,
+    resolution: Extract<SessionViewerResolution, { kind: "valid" }>
+  ): void {
+    if (resolution.mode !== "shadow") return;
+    try {
+      const decision = checkSessionAccess(resolution.viewer, resolution.row, "read");
+      if (decision.allowed) return;
+      const key = JSON.stringify([resolution.row.id, decision.reason]);
+      let observed = this.shadowDenials.get(ws);
+      if (observed?.has(key)) return;
+      const connection = this.deps.wsManager.classify(ws);
+      if (connection.kind !== "client" || !connection.wsId) {
+        throw new Error("Missing WebSocket ID for shadow audit");
+      }
+      const connectionId = connection.wsId;
+      if (!observed) {
+        observed = new Set();
+        this.shadowDenials.set(ws, observed);
+      }
+      // Reserve synchronously so pending or failed writes cannot cause a retry storm.
+      observed.add(key);
+      this.deps.backgroundTasks.submit(
+        () =>
+          this.deps.auditShadowDenied(
+            resolution.authorization.userId,
+            resolution.row,
+            decision.reason,
+            connectionId
+          ),
+        {
+          name: "session.shadow_denied",
+          context: { user_id: resolution.authorization.userId, session_id: resolution.row.id },
+        }
+      );
+    } catch (error) {
+      this.deps.log.error("WebSocket shadow denial audit failed", {
+        user_id: resolution.authorization.userId,
+        error: error instanceof Error ? error : String(error),
+      });
+    }
+  }
+
+  private decide(
+    resolution: Extract<SessionViewerResolution, { kind: "valid" }>,
+    action: SessionAction
+  ): AccessDecision {
+    if (resolverDecides(resolution.mode, resolution.row, action)) {
+      return checkSessionAccess(resolution.viewer, resolution.row, action);
+    }
+    return resolution.authorization.permissions.includes(legacyPermissionForAction(action))
+      ? { allowed: true }
+      : { allowed: false, reason: "missing_permission" };
   }
 
   /** Return authorized client state, recovering an unexpired lease after hibernation. */

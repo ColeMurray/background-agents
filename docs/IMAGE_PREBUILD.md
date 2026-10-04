@@ -34,9 +34,11 @@ few minutes of changes.
 ## Getting Started
 
 Pre-built images are available when the deployment uses `sandbox_provider = "modal"`,
-`sandbox_provider = "vercel"`, `sandbox_provider = "opencomputer"`, `sandbox_provider = "e2b"`, or
-`sandbox_provider = "daytona"`. The artifact is stored per provider as a Modal image, Vercel
-snapshot, OpenComputer checkpoint, or E2B/Daytona snapshot.
+`sandbox_provider = "modal-vm"`, `sandbox_provider = "vercel"`, `sandbox_provider = "opencomputer"`,
+`sandbox_provider = "e2b"`, or `sandbox_provider = "daytona"`. The artifact is stored per provider
+as a Modal image, Vercel snapshot, OpenComputer checkpoint, or E2B/Daytona snapshot. With
+`modal-vm`, the artifact is a Modal image built on the VM backend. Images built under `modal` are
+not used by `modal-vm` sessions.
 
 Daytona additionally requires an operator to open admission (`daytona_prebuilds_enabled`, default
 off) — see [Daytona prebuilds](#daytona-prebuilds) below. While admission is closed the settings
@@ -61,6 +63,13 @@ the pre-built image automatically — no changes to your workflow needed.
 2. Turn on the **prebuild** toggle
 3. Saving the environment triggers the first build immediately; you can also click the rebuild
    button on the environment row at any time
+
+Saving the prebuild toggle and scheduling its build require environment management access. Manual
+rebuilds additionally require `environments.images.manage`. For team environments, management
+requires a team lead or workspace Owner/Administrator with `environments.manage`, and manual builds
+require the active owning team's grants to cover every current repository. Another team's grants do
+not substitute. These checks are independent of the session enforcement mode; repository images
+remain workspace resources with their own grant checks.
 
 ### What You'll See in the UI
 
@@ -125,6 +134,9 @@ Builds also trigger immediately, outside the schedule, when:
 - You **change an environment's secrets** — this additionally retires the existing ready image
   before the rebuild, so rotated values can't keep serving from an old image (see
   [Secrets Management](SECRETS.md#secrets-and-prebuilt-images))
+- You **write or delete an owning team's secrets**: images for that team's environments are
+  invalidated, with best-effort rebuild scheduling for prebuild-enabled environments. Shared
+  repository images are unaffected because they never receive team secrets.
 - You click the **manual rebuild** button — next to the repository in Settings > Images, or on the
   environment row in Settings > Environments
 
@@ -139,8 +151,9 @@ The build process runs the same setup steps that a normal session would:
 1. Clones every repository in the scope at its base branch (for an environment, **concurrently**)
 2. Runs each repository's `.openinspect/setup.sh` script (if present) **sequentially, in position
    order**, so a later repository's setup can rely on an earlier one's
-3. Calls the control plane with the exact bound provider session id
-4. Lets a durable Jobs consumer save the provider image artifact and terminate the build session
+3. Refreshes OpenCode's model catalog (see [Model catalog](#model-catalog))
+4. Calls the control plane with the exact bound provider session id
+5. Lets a durable Jobs consumer save the provider image artifact and terminate the build session
 
 ```mermaid
 flowchart TD
@@ -171,13 +184,28 @@ flowchart TD
     terminal --> cleanup
 ```
 
+#### Model catalog
+
+OpenCode reads its provider and model catalog from `~/.cache/opencode/models.json` when that file
+exists, and otherwise from the catalog compiled into the pinned OpenCode binary. It downloads a
+newer catalog in the background, but only the next OpenCode process reads it. Without a file on
+disk, a fresh sandbox would never know about a model published after the pinned OpenCode release.
+
+The build runs `opencode models --refresh`, which writes the published catalog to that file, so
+every session started from the image resolves models as of the build and session boots do no extra
+work. The step is best-effort: a failure is logged and the build continues. OpenCode's own
+environment variables (`OPENCODE_MODELS_URL`, `OPENCODE_MODELS_PATH`) apply to the refresh as they
+do to sessions.
+
 The control plane publishes finalization through its `Jobs` port. Cloudflare delivers it with a
 Queue and stores build state in D1; Node delivers it with the `jobs.db` poller and stores build
 state in `global.db`. Both hosts run the same finalization handler and retry contract.
 
 A failing setup script fails the whole build, and for environment builds the error names the
-repository. Build-time secrets are exactly what the scope's sessions get: global + repository
-secrets for a repository scope, global + environment secrets for an environment scope
+repository. Repository builds receive global + repository secrets, **never team secrets**, because
+their images are shared across teams. Environment builds receive global + the environment's owning
+team (if any) + environment secrets; member-repository secrets do not flow in. Later scopes win. A
+workspace environment build has no team layer, even when a team session later launches from it
 ([session-target scoping](SECRETS.md#which-secrets-a-session-receives)).
 
 Everything your setup scripts install — dependencies, build artifacts, caches — is captured in the
@@ -202,7 +230,13 @@ the Worker until Modal's provider-session endpoints are available.
 
 A session boots from the ready image when the image's fingerprint matches the session's own
 repository snapshot (same repositories, same order, same base branches — for a single-repository
-session that means the default branch):
+session that means the default branch).
+
+Team environment images additionally require the session to have the same owning team, since setup
+scripts may have persisted that team's secrets in the image. This check does not depend on session
+visibility or the enforcement rollout mode.
+
+When an eligible image is ready:
 
 1. The sandbox starts from the saved image artifact (code + dependencies already present)
 2. A fast git sync pulls any commits pushed since the image was built (per repository)
@@ -215,8 +249,9 @@ If no matching ready image is available (disabled, first build hasn't finished, 
 succeeded, a non-default branch was selected, or the environment was edited after the session was
 created), the session falls back to the normal startup flow automatically. A **failed rebuild does
 not retire the image it was replacing**: an older ready image that still matches keeps serving
-sessions until a newer build succeeds. If the saved artifact itself fails to restore, the image is
-marked failed and the session retries from the base image. Either way, you'll never be blocked from
+sessions until a newer build succeeds, unless already invalidated (for example, by an environment or
+owning-team secret change). If the saved artifact itself fails to restore, the image is marked
+failed and the session retries from the base image. Either way, you'll never be blocked from
 starting a session.
 
 **Ad-hoc multi-repository sessions never use prebuilt images.** Picking "Multiple repositories" in
@@ -368,9 +403,11 @@ Updating the shared sandbox toolchain does not automatically refresh prepared re
 environment images. Use the refresh button below after a dependency-only update when those images
 must pick up the new tools. Existing compatible saved sessions remain usable.
 
-Pre-built images are rebuilt every 30 minutes when new commits are detected. If you just pushed code
-and want the image updated immediately, trigger a manual rebuild — the refresh button next to the
-repository in Settings > Images, or next to the environment in Settings > Environments.
+Pre-built images are rebuilt every 30 minutes when new commits are detected. The image's
+[model catalog](#model-catalog) is as old as the image, so a newly published model reaches a quiet
+repository only on its next rebuild. If you just pushed code, or want a new model available
+immediately, trigger a manual rebuild — the refresh button next to the repository in Settings >
+Images, or next to the environment in Settings > Environments.
 
 ---
 

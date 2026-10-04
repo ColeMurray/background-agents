@@ -2,6 +2,83 @@
 
 New features, integrations, and notable improvements to Open-Inspect — newest first.
 
+## October 2, 2026
+
+**Teams.** Group members into teams that own sessions, environments, automations, and secrets, with
+repository grants and Slack and Linear channel bindings managed from **Settings > Teams**. GitHub
+work routes to teams by numeric repository ID: upgrade the GitHub bot and control plane together,
+and reselect repositories on older GitHub event automations so they keep matching events. Sandbox
+GitHub tokens now cover only the session's repositories. See
+[Authentication and Authorization](docs/AUTH.md).
+
+**Classifier reasoning effort.** Set `classification_reasoning_effort` to send a reasoning effort to
+OpenAI classification models used by the Slack and Linear bots. Leaving it blank keeps the model
+default.
+
+## October 1, 2026
+
+**Brokered credentials for Modal restores.** Restored Modal sandboxes now fetch git credentials from
+the control plane like fresh ones, so Modal no longer needs the `github-app` secret. You can delete
+it after upgrading.
+
+## September 28, 2026
+
+**Claude Sonnet 5.5.** Adds `anthropic/claude-sonnet-5-5` to the model picker and integrations, with
+adaptive thinking controls from low through max.
+
+**ChatGPT subscription cost estimates.** OpenCode sessions using a connected ChatGPT subscription
+now report API-equivalent cost estimates in the session cost display and spending limit.
+
+## September 27, 2026
+
+**Trace export schema 2.** Messages, events, and usage are now exported oldest first, and
+single-session downloads include only the requested session. See the
+[trace export reference](docs/TRACE_EXPORT.md).
+
+**Docker-capable Modal sandboxes.** Operators can select the `modal-vm` backend deployment-wide for
+Docker support; `modal` remains the default. See [Modal VM setup](docs/MODAL_DOCKER.md).
+
+**Scoped analytics.** The analytics dashboard and API can filter human, agent, automation, or all
+sessions, with breakdowns by model, harness, provider, and automation, token totals, cache hit
+ratio, and cost per merged PR.
+
+## September 26, 2026
+
+**Richer bulk session export.** Bulk export can now include each session's messages, timeline
+events, and per-step token usage through the `include` parameter.
+
+## September 25, 2026
+
+**Bulk export metadata and permission.** Exported session lines now include run identity, harness,
+model provider, repositories, pull request lifecycle, and token totals. Bulk export now requires the
+`sessions.export` permission, granted to Owners and Administrators by default.
+
+## September 23, 2026
+
+**Sessions discovery across full history.** A new **Sessions** destination in the sidebar (above
+Automations) searches every session the viewer may read, including archived work and history beyond
+the command menu's recent window. Search matches titles, session-id prefixes, and any member
+repository of a multi-repository session; creator, repository, environment, lifecycle, and
+automation-origin filters compose on the server and live in the URL, so a filtered view can be
+shared or reloaded. The command menu now labels its results as recent sessions and offers **Search
+all sessions**, carrying typed text to the page; the sidebar's Archived shortcut opens the archived
+view, with archive management still under Settings → Data Controls. The Inbox is unchanged.
+
+**Open changed files from agent output.** Repository file links in a session's agent output now open
+matching files in the Changes panel, including renamed files and line references. Links to files
+outside the session diff remain inert; external links retain their existing behavior.
+
+**Clearer audit log outcomes.** Authorization decisions in the workspace audit log now show
+**Allowed** or **Denied** with the recorded HTTP response (for example, HTTP 409 Conflict) instead
+of a green **Applied** badge, because admitting a request does not prove the change took effect.
+**Applied**, **No change**, and **Rejected** are reserved for events recorded by the operation
+itself. Older rows without a recorded status show the decision with the response marked as not
+recorded; stored audit data is unchanged.
+
+**Claude Opus 5.5.** Adds `anthropic/claude-opus-5-5` to the model picker and integrations, with
+adaptive thinking controls from low through max. The Claude Agent harness now uses
+`claude-agent-sdk` 0.2.158, whose bundled Claude Code release natively supports Opus 5.5.
+
 ## September 21, 2026
 
 **Grok 4.7.** Adds `xai/grok-4.7` to the model picker and integrations, with reasoning efforts from

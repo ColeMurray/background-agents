@@ -22,6 +22,9 @@ type RouteHandler<P> = (
 
 type ProxyHandlers<P> = Record<ProxyMethod, RouteHandler<P>>;
 
+/** Per-method phrases for failure messages, e.g. `{ POST: "approve memory" }`. */
+type ProxyActions = Partial<Record<ProxyMethod, string>>;
+
 /** JSON mutation budget kept below portable web-function request limits. */
 export const SETTINGS_PROXY_MAX_BODY_BYTES = 4 * 1024 * 1024;
 
@@ -34,7 +37,7 @@ async function readMutationBody(request: NextRequest): Promise<Uint8Array | null
 async function relaySettingsResource(
   request: NextRequest,
   buildPath: () => string | Promise<string>,
-  label: string,
+  action: string,
   method: ProxyMethod
 ): Promise<NextResponse> {
   try {
@@ -66,18 +69,23 @@ async function relaySettingsResource(
     const response = await controlPlaneUserFetch(await buildPath(), init);
     return relayJsonResponse(response);
   } catch (error) {
-    console.error(`Failed to ${METHOD_VERBS[method]} ${label}:`, error);
+    console.error(`Failed to ${action}:`, error);
     return NextResponse.json(
-      { error: `Failed to ${METHOD_VERBS[method]} ${label}` },
+      { error: `Failed to ${action}` },
       { status: 500, headers: PRIVATE_NO_STORE_HEADERS }
     );
   }
 }
 
-/** Creates the requested BFF route handlers for an authenticated control-plane resource. */
+/**
+ * Creates the requested BFF route handlers for an authenticated control-plane resource.
+ * Failure messages read "Failed to <verb> <label>" unless `actions` names the operation for a
+ * method (for resources whose POST is not a create, such as lifecycle actions).
+ */
 export function settingsProxy<P>(
   buildPath: (params: P, request: NextRequest) => string,
-  label: string
+  label: string,
+  actions: ProxyActions = {}
 ): ProxyHandlers<P> {
   const handler =
     (method: ProxyMethod): RouteHandler<P> =>
@@ -85,7 +93,7 @@ export function settingsProxy<P>(
       relaySettingsResource(
         request,
         async () => buildPath(await context.params, request),
-        label,
+        actions[method] ?? `${METHOD_VERBS[method]} ${label}`,
         method
       );
 

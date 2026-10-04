@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  automationInvocationStatusSchema,
   validateAutomationTargetCounts,
   createAutomationRequestSchema,
   listAutomationsResponseSchema,
@@ -24,6 +25,8 @@ const automation = {
   consecutiveFailures: 0,
   createdBy: "user-1",
   userId: USER_ID,
+  ownerTeamId: null,
+  capabilities: { canRead: true, canManage: true, canTrigger: true },
   createdAt: 1,
   updatedAt: 2,
   deletedAt: null,
@@ -36,6 +39,16 @@ const automation = {
 };
 
 describe("listAutomationsResponseSchema", () => {
+  it("retains team ownership and server capabilities", () => {
+    const capabilities = { canRead: true, canManage: false, canTrigger: true };
+    const result = listAutomationsResponseSchema.parse({
+      automations: [{ ...automation, ownerTeamId: "team_a", capabilities }],
+      hasMore: false,
+      nextCursor: null,
+    });
+    expect(result.automations[0]).toMatchObject({ ownerTeamId: "team_a", capabilities });
+  });
+
   it("accepts a valid cursor page", () => {
     expect(
       listAutomationsResponseSchema.parse({
@@ -69,6 +82,20 @@ describe("listAutomationsResponseSchema", () => {
         nextCursor: null,
       }).success
     ).toBe(false);
+  });
+
+  it("requires viewer capabilities and explicit team ownership on every item", () => {
+    const { capabilities: _capabilities, ...withoutCapabilities } = automation;
+    const { ownerTeamId: _ownerTeamId, ...withoutOwner } = automation;
+    for (const item of [withoutCapabilities, withoutOwner]) {
+      expect(
+        listAutomationsResponseSchema.safeParse({
+          automations: [item],
+          hasMore: false,
+          nextCursor: null,
+        }).success
+      ).toBe(false);
+    }
   });
 
   it("requires a canonical owner ID when ownership is present", () => {
@@ -114,6 +141,44 @@ describe("listAutomationsResponseSchema", () => {
         nextCursor: null,
       }).success
     ).toBe(false);
+  });
+});
+
+describe("automation grant-denial statuses", () => {
+  it("adds unauthorized without changing the existing invocation statuses", () => {
+    expect(automationInvocationStatusSchema.options).toEqual([
+      "starting",
+      "running",
+      "completed",
+      "failed",
+      "partial_failed",
+      "skipped",
+      "unauthorized",
+    ]);
+  });
+
+  it("accepts unauthorized invocation status in recent execution summaries", () => {
+    const recentExecutions = [{ id: "inv-denied", status: "unauthorized", createdAt: 123 }];
+    const response = listAutomationsResponseSchema.parse({
+      automations: [{ ...automation, recentExecutions }],
+      hasMore: false,
+      nextCursor: null,
+    });
+
+    expect(automationInvocationStatusSchema.parse("unauthorized")).toBe("unauthorized");
+    expect(response.automations[0].recentExecutions).toEqual(recentExecutions);
+  });
+});
+
+describe("automation team input", () => {
+  it.each(["team_a", null])("accepts teamId=%s on create", (teamId) => {
+    expect(
+      createAutomationRequestSchema.parse({
+        name: "Daily sync",
+        instructions: "Sync",
+        teamId,
+      })
+    ).toHaveProperty("teamId", teamId);
   });
 });
 

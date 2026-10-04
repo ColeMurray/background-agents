@@ -20,6 +20,7 @@ export interface BrowserSessionSeed extends BrowserSessionRecord {
   name: string;
   email: string;
   role: BuiltInRoleKey;
+  avatarUrl?: string;
   suspendedAt?: number;
 }
 
@@ -55,10 +56,18 @@ export async function seedBrowserSession(
     database
       .prepare(
         `INSERT OR IGNORE INTO users
-      (id, display_name, email, email_verified, created_at, updated_at, suspended_at)
-      VALUES (?, ?, ?, 1, ?, ?, ?)`
+      (id, display_name, email, email_verified, avatar_url, created_at, updated_at, suspended_at)
+      VALUES (?, ?, ?, 1, ?, ?, ?, ?)`
       )
-      .bind(seed.userId, seed.name, seed.email, seed.nowMs, seed.nowMs, seed.suspendedAt ?? null),
+      .bind(
+        seed.userId,
+        seed.name,
+        seed.email,
+        seed.avatarUrl ?? null,
+        seed.nowMs,
+        seed.nowMs,
+        seed.suspendedAt ?? null
+      ),
     database
       .prepare(
         `INSERT OR IGNORE INTO user_identities

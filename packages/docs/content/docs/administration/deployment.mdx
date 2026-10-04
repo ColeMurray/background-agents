@@ -1,0 +1,171 @@
+---
+title: Deployment overview
+description: What an OpenInspect deployment consists of, what the operator configures once, and where the self-hosting, setup, and debugging guides live.
+audience: operator
+owner: platform
+status: published
+lastReviewed: "2026-10-04"
+relatedCode:
+  - README.md
+  - docs/GETTING_STARTED.md
+  - docs/AWS_BRING_UP.md
+  - docs/SETUP_GUIDE.md
+  - docs/HOW_IT_WORKS.md
+  - docs/DEBUGGING_PLAYBOOK.md
+  - terraform/environments/production/variables.tf
+  - terraform/environments/production/workers-control-plane.tf
+  - terraform/environments/aws-production/main.tf
+  - .github/workflows/terraform.yml
+  - packages/control-plane/src/authorization/teams-enforcement.ts
+  - packages/control-plane/src/authorization/session-admission.ts
+  - packages/control-plane/src/routes/teams.ts
+  - packages/control-plane/src/routes/channel-bindings.ts
+  - terraform/environments/production/modal.tf
+---
+
+This page orients an operator: the parts of a deployment, the decisions made once at setup, and where the full runbooks are. It is not a step-by-step guide; those live in the repository.
+
+## What a deployment consists of
+
+| Component             | Runs on                                                                    | Role                                                                                                                                                |
+| --------------------- | -------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Web client            | Vercel, or Cloudflare Workers via OpenNext                                 | The browser app: sign-in, sessions, settings, analytics.                                                                                            |
+| Control plane         | Cloudflare Workers with Durable Objects and D1, or an AWS-hosted container | Session state, live streaming over WebSockets, sandbox lifecycle, source-control integration, authentication and access control, encrypted secrets. |
+| Sandbox data plane    | One configured sandbox provider                                            | Isolated per-session development environments where the agent runs.                                                                                 |
+| Slack bot (optional)  | Cloudflare Worker                                                          | Starts sessions from Slack messages and posts results back.                                                                                         |
+| GitHub bot (optional) | Cloudflare Worker                                                          | Automatic PR reviews and `@mention` handling from GitHub webhooks.                                                                                  |
+| Linear bot (optional) | Cloudflare Worker                                                          | Starts sessions from Linear issue activity.                                                                                                         |
+
+Authorized clients see the same session state because state lives in the control plane, not in the client. A prompt sent from Slack or GitHub shows up on the web in real time for users who can access that session.
+
+The AWS control plane can be deployed, but its runbook does not yet provide a supported first-Owner bootstrap. Until that is available, treat AWS as an incomplete deployment path rather than a production-ready alternative.
+
+Terraform creates the infrastructure. The operator creates the accounts, gathers credentials, and supplies the required configuration and secret values for the chosen deployment; the Cloudflare/Vercel and AWS paths use different configuration.
+
+## Sandbox providers
+
+A deployment runs on exactly one sandbox provider, chosen at setup:
+
+| Provider         | Session resume model                                   |
+| ---------------- | ------------------------------------------------------ |
+| Modal (default)  | Filesystem snapshot restore                            |
+| Modal VM         | Filesystem snapshot restore                            |
+| Daytona          | Persistent sandbox stopped and started again           |
+| Vercel Sandboxes | Filesystem snapshot restore                            |
+| OpenComputer     | Persistent sandbox resume or checkpoint-backed restore |
+| E2B              | Persistent sandbox paused and resumed                  |
+
+Provider differences that users notice (which resource and timeout settings apply, how prebuilt images are stored, and the Daytona prebuild admission switch) are covered in [Sandbox providers](/configure/sandbox-providers).
+
+## What the operator configures once
+
+| Area                         | What is set                                                                                                                                                                                                                                                                         |
+| ---------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| GitHub App                   | Required for GitHub-backed deployments. Its installation scope is the set of GitHub repositories the workspace can reach; install it on selected repositories, not all. Other source-control providers use their own credentials.                                                   |
+| Sign-in providers            | GitHub OAuth, Google OAuth, or both. At least one is required; partial credential pairs are rejected.                                                                                                                                                                               |
+| Admission allowlists         | GitHub usernames, email domains, exact email addresses, or GitHub organizations. A user is admitted if they match any allowlist. Set at least one for production; open access is a separate explicit opt-in.                                                                        |
+| Sandbox provider credentials | The API credentials, and where applicable the base snapshot or template, for the chosen provider.                                                                                                                                                                                   |
+| Security secrets             | Generated once: the token encryption key, the repo-secrets encryption key, the sandbox API secret, the browser authentication secret, and the GitHub webhook secret when the GitHub bot is enabled. A provider-accounts encryption key is generated by Terraform unless overridden. |
+| Model credentials            | Optional at deploy time. An Anthropic key can be injected fleet-wide, or model credentials can be added later as global secrets in the web app. The Slack and Linear classifier needs a key for whichever provider it runs on.                                                      |
+| Optional bots                | Slack app, GitHub bot webhook, Linear OAuth app, each enabled with its own flag.                                                                                                                                                                                                    |
+| Branding: `app_name`         | Shown in the web tab title, sign-in page, landing hero, Slack and Linear messages, the pull request footer, and outbound User-Agent headers.                                                                                                                                        |
+| Branding: `app_icon_url`     | Optional. Replaces the built-in icon and favicon.                                                                                                                                                                                                                                   |
+| Execution timeout            | Optional control-plane variable `EXECUTION_TIMEOUT_MS`: the longest one prompt may run when the session's [sandbox settings](/configure/sandbox-settings) set no timeout. When unset, the limit is 2 hours.                                                                         |
+| Teams enforcement            | Terraform `teams_enforcement`, exposed to the control plane as `TEAMS_ENFORCEMENT`: `off`, `shadow` (default), or `on`. This is a session authorization rollout setting, not a switch disabling all team restrictions.                                                              |
+
+Web branding values are inlined at build time, so a rebrand needs a fresh web build; the bot and control-plane workers read the name at request time.
+
+For the Cloudflare/Vercel path, update the relevant configuration or secrets and apply Terraform. On AWS, changing an SSM secret requires `systemctl restart open-inspect` to load it into the running service; changing a `config` entry requires `terraform apply` and then that restart. `EXECUTION_TIMEOUT_MS` is set in the control plane's environment.
+
+## Teams enforcement
+
+The production Terraform input `teams_enforcement` accepts exactly three values:
+
+| Value    | Session access behavior                                                                                                                                                                   |
+| -------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `off`    | Uses legacy role-permission checks where the rollout applies, without evaluating the Teams decision for that action.                                                                      |
+| `shadow` | Default. Evaluates Teams decisions and records would-deny decisions while retaining legacy admission where the rollout applies. Non-private Team-visibility reads are not fully isolated. |
+| `on`     | Enforces the Teams session resolver, including non-private Team-visibility read isolation.                                                                                                |
+
+**Not all team restrictions are gated.** Private-session access and team-owned non-read actions use the Teams resolver in all three modes. Except for collaborator self-removal, every non-read action on a team-owned session requires current owning-team membership. Repository grants, team-owned environment and automation access, runtime automation membership checks, scoped GitHub credentials, and require-team-on-create policy are separate controls; `off` and `shadow` do not turn them off. See [Workspace access](/administration/workspace-access) and [Teams](/administration/teams).
+
+For a direct production Terraform apply, set `teams_enforcement` in the deployment's Terraform inputs. Terraform writes it to the control-plane environment as `TEAMS_ENFORCEMENT`. In the repository's GitHub Actions Terraform workflow, both plan and apply resolve the value in this order:
+
+1. Repository Actions variable `TEAMS_ENFORCEMENT`.
+2. Repository Actions secret `TEAMS_ENFORCEMENT`, if the variable is unset or empty.
+3. `shadow`, if neither is set.
+
+The workflow passes that result as `TF_VAR_teams_enforcement`; a stale repository variable therefore overrides the secret. The control plane also defaults an unset or empty runtime value to `shadow` and rejects other values. The AWS production configuration currently sets `TEAMS_ENFORCEMENT = "shadow"` explicitly in its `config` map; changing it requires the AWS configuration update and service restart described above.
+
+Do not infer production read isolation from Teams being visible in the UI or a change having merged. Confirm the deployed version and effective value before relying on Team visibility as a read boundary. `shadow` audit entries are observations of would-deny decisions, not proof that a request was blocked.
+
+For a **fresh deployment**, explicitly opt in before creating team work:
+
+```hcl
+# terraform.tfvars: explicit opt-in, not a changed default
+teams_enforcement = "on"
+```
+
+This sets the control plane's `TEAMS_ENFORCEMENT=on`. If deploying through GitHub Actions, set the corresponding Actions variable to `on` so the workflow does not fall back to `shadow`.
+
+For an **existing deployment**, review production `shadow_denied:*` authorization audit entries before opting in. Investigate unexpected would-deny decisions and correct membership, repository grants, and bot bindings before enforcing. The default-flip gate requires that production audit review; no completed review or audit evidence is established here. Runtime and Terraform defaults remain `shadow`.
+
+## Initial Owner bootstrap
+
+For the Cloudflare/D1 deployment, Owner assignment is an explicit operator action, not something sign-in grants:
+
+1. After deployment, the intended Owner signs in once. This creates their user with the default Member role.
+2. The operator runs the Owner bootstrap command against the D1 database with that person's canonical user ID, as a dry run first. The dry run reports whether it is ready. The command refuses a suspended or missing user or an existing unsuspended Owner, and there is no force option.
+3. The operator runs the command for real. It writes a `workspace.owner_bootstrapped` [audit event](/administration/audit-log) and replaces the assignment in one transaction.
+4. Verify the new Owner's assignment separately; `/health` reports control-plane liveness, not Owner bootstrap state.
+
+The exact commands are in the self-hosting guide linked below.
+
+## First team and session
+
+After Owner bootstrap, complete team setup explicitly:
+
+1. Open **Settings > Teams > Create team**, enter a name and slug, and create the first team. Its creator is automatically its first **Lead**; Owner bootstrap does not create a team.
+2. In the team's settings, choose **Join policy**: **Invite only** (the creation default) or **Open** for workspace users to join themselves. Choose the new-session **Default visibility**: **Team** or **Workspace**, never Private. Users can still explicitly choose **Private** for an individual session, including a team-owned one, subject to membership and access checks. Confirm effective `TEAMS_ENFORCEMENT=on` before relying on Team visibility as a read boundary.
+3. In **Teams > your team > Repositories**, grant named repositories or deliberately grant **All installation repositories**. New teams have no repository grants. Include all repositories needed by a selected environment.
+4. Have operators sign in, then add them to the team's member list, or have them use **Join team** for an open team. Assign Lead where team-management duties are needed. Workspace Owner/Administrator status does not replace membership for non-read session actions.
+5. Configure a model credential in the team's **Secrets** tab or another applicable [secret scope](/configure/secrets). Create a test session with the team, granted repository, intended visibility, and configured model selected. Verify checkout, streamed results, and another member's intended collaboration.
+6. Optionally enable **Require a team for new sessions** in **Settings > Teams** once members and grants are ready. This separate policy also covers new environments and automation definitions; it does not migrate existing workspace resources.
+
+## Modal secrets
+
+The legacy Modal `github-app` secret is optional and not required for Git credentials in fresh or restored sandboxes. Sandboxes request scoped credentials from the control plane on demand; keep the App private key in the control plane, not in sandbox secrets. The optional GitHub bot Worker still needs its own App credential bindings. Terraform supplies those separately when enabled.
+
+Modal still requires `internal-api` (`MODAL_API_SECRET` and `ALLOWED_CONTROL_PLANE_HOSTS`) and the `llm-api-keys` secret object. A fleet-wide model key can be empty when sessions use credentials from the control-plane secret store. Terraform provisions these required Modal secrets.
+
+## Bot team routing
+
+Bind Slack channels and external Linear teams in **Teams > your team > Channels**. In **Settings > Integrations > Slack**, save **Unbound channels**; in **Settings > Integrations > Linear**, save **Unbound Linear teams**. Each integration stores its own workspace-wide `unboundChannels` policy: `workspace` (default, create workspace-level sessions) or `reject` (reject until bound). These are integration UI settings, not environment variables or Terraform inputs.
+
+Workspace fallback does not bypass `requireTeamOnCreate` or other creation checks. Slack DMs bypass unbound-channel rejection as personal conversations, but still undergo session creation checks. Test a bound channel or Linear team and confirm the resulting session's owning team and repository. See [Slack](/integrations/slack) and [Linear](/integrations/linear) for the integration details.
+
+## Keeping a deployment current
+
+On the Cloudflare/Vercel path, updating means pulling the latest code, rebuilding the shared package if it changed, and applying Terraform again; it only changes what differs. If the web app is on Vercel it is redeployed separately; on Cloudflare, Terraform rebuilds it. The self-hosting guide also documents an optional GitHub Actions workflow for applying deployments from CI. For the AWS control plane, follow the [AWS bring-up guide](https://github.com/ColeMurray/background-agents/blob/main/docs/AWS_BRING_UP.md).
+
+## Where the runbooks are
+
+| Guide                                                                                                      | Use it for                                                                                                                                     |
+| ---------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
+| [Self-hosting guide](https://github.com/ColeMurray/background-agents/blob/main/docs/GETTING_STARTED.md)    | The Cloudflare/Vercel deployment walkthrough: accounts, credentials, GitHub App, Terraform phases, bots, Owner bootstrap, verification, CI/CD. |
+| [AWS bring-up guide](https://github.com/ColeMurray/background-agents/blob/main/docs/AWS_BRING_UP.md)       | AWS-hosted control plane deployment and verification.                                                                                          |
+| [Setup guide](https://github.com/ColeMurray/background-agents/blob/main/docs/SETUP_GUIDE.md)               | Running the web app locally against an existing backend, contributing code, or the fastest path to a full stack.                               |
+| [Debugging playbook](https://github.com/ColeMurray/background-agents/blob/main/docs/DEBUGGING_PLAYBOOK.md) | Querying the structured JSON logs every service emits, and the correlation fields (trace, session, message IDs) that join them.                |
+| [How it works](https://github.com/ColeMurray/background-agents/blob/main/docs/HOW_IT_WORKS.md)             | Architecture, sandbox lifecycle, snapshots, and the security model in depth.                                                                   |
+
+<Callout type="warn" title="Keep configuration out of source control">
+  Terraform variable files and deployment secret stores can hold credentials. Never commit
+  credentials; use your CI's secret store for automated applies and rotate secrets through the
+  chosen deployment's configuration.
+</Callout>
+
+## Next steps
+
+- [Security and trust model](/administration/security)
+- [Workspace access and roles](/administration/workspace-access)
+- [Sandbox providers](/configure/sandbox-providers)

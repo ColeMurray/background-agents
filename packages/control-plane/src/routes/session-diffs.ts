@@ -14,7 +14,7 @@ import {
   error,
   SCM_AGNOSTIC_SANDBOX_FALLBACK_ROUTE,
   SCM_AGNOSTIC_USER_OR_SERVICE_ROUTE,
-  requirePermission,
+  requireSession,
 } from "./shared";
 import { type SessionRouteContext, dispatchSession } from "./session-route";
 import type { Env } from "../types";
@@ -172,11 +172,11 @@ export const sessionDiffRoutes = new Hono<ControlPlaneHonoEnv>();
 
 const DIFF_READ = admit({
   ...SCM_AGNOSTIC_USER_OR_SERVICE_ROUTE,
-  authorization: requirePermission("sessions.read"),
+  authorization: requireSession("read"),
 });
 const DIFF_WRITE = admit({
   ...SCM_AGNOSTIC_SANDBOX_FALLBACK_ROUTE,
-  authorization: requirePermission("sessions.collaborate"),
+  authorization: requireSession("collaborate"),
 });
 
 sessionDiffRoutes.get("/sessions/:id/diff", DIFF_READ, (c) => dispatchSession(c, handleDiffState));
@@ -193,7 +193,7 @@ sessionDiffRoutes.post(
   "/sessions/:id/diff/retry",
   admit({
     ...SCM_AGNOSTIC_USER_OR_SERVICE_ROUTE,
-    authorization: requirePermission("sessions.lifecycle"),
+    authorization: requireSession("lifecycle"),
   }),
   (c) => dispatchSession(c, handleDiffRetry)
 );

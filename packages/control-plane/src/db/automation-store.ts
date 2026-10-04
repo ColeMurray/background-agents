@@ -5,6 +5,7 @@
  * snake_case rows in the database, camelCase types at the API boundary.
  */
 
+import { isWorkspaceAdmin, WORKSPACE_ADMIN_ROLE_KEYS } from "@open-inspect/shared/rbac";
 import {
   DEFAULT_HARNESS,
   getValidHarnessOrDefault,
@@ -32,9 +33,18 @@ import {
   type AutomationModelProviderAuthRow,
 } from "./automation-model-provider-auth";
 import type { SqlDatabase, SqlStatement } from "./sql-database";
+import { MAX_D1_QUERY_PARAMETERS } from "./query-limits";
 import type { CreatedAtCursor } from "../created-at-cursor";
 import { z } from "zod";
 import { UserStore } from "./user-store";
+import { rolePermissionPredicate } from "../authorization/permission-sql";
+import { automationExecutionPredicate } from "../automation/authorization-guard";
+import type { SessionViewer } from "@open-inspect/shared";
+
+/** Legacy rows predate canonical executors; their GitHub creator may now map to a user. */
+function needsCanonicalOwner(row: AutomationRow): boolean {
+  return !row.user_id && !!row.created_by && row.created_by !== "anonymous";
+}
 
 function escapeLikePattern(value: string): string {
   return value.replace(/[\\%_]/g, "\\$&");
@@ -80,12 +90,22 @@ export interface AutomationRow {
   consecutive_failures: number;
   created_by: string;
   user_id: string | null;
+  owner_team_id: string | null;
   created_at: number;
   updated_at: number;
   deleted_at: number | null;
   event_type: string | null;
   trigger_config: string | null; // JSON-serialized TriggerConfig
   trigger_auth_data: string | null;
+}
+
+const automationOwnerRowSchema = z.object({ owner_team_id: z.string().nullable() });
+
+export function withValidatedOwnerTeam(row: AutomationRow): AutomationRow {
+  return {
+    ...row,
+    owner_team_id: automationOwnerRowSchema.parse(row).owner_team_id,
+  };
 }
 
 type AutomationListResult = { automations: AutomationRow[] } & (
@@ -266,6 +286,7 @@ export function toAutomation(
     consecutiveFailures: row.consecutive_failures,
     createdBy: row.created_by,
     userId: row.user_id,
+    ownerTeamId: row.owner_team_id,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
     deletedAt: row.deleted_at,
@@ -306,7 +327,7 @@ export function toAutomationRun(row: EnrichedRunRow): AutomationRun {
 // order: childless ⇒ skipped (new skips are childless; the app enforces
 // skip_reason on them); any active child ⇒ starting until any child has left
 // 'starting', then running; all-terminal: all skipped ⇒ skipped (legacy
-// backfilled skip rows), no failure ⇒ completed, no success ⇒ failed,
+// backfilled skip rows), any denied child ⇒ unauthorized, no failure ⇒ completed, no success ⇒ failed,
 // otherwise partial_failed.
 
 const DERIVED_INVOCATION_STATUS_SQL = `CASE
@@ -317,6 +338,7 @@ const DERIVED_INVOCATION_STATUS_SQL = `CASE
       ELSE 'running'
     END
   WHEN SUM(CASE WHEN r.status = 'skipped' THEN 1 ELSE 0 END) = COUNT(r.id) THEN 'skipped'
+  WHEN SUM(CASE WHEN r.status = 'unauthorized' THEN 1 ELSE 0 END) > 0 THEN 'unauthorized'
   WHEN SUM(CASE WHEN r.status = 'failed' THEN 1 ELSE 0 END) = 0 THEN 'completed'
   WHEN SUM(CASE WHEN r.status = 'completed' THEN 1 ELSE 0 END) = 0 THEN 'failed'
   ELSE 'partial_failed'
@@ -333,12 +355,18 @@ END`;
  * TS twin of DERIVED_INVOCATION_STATUS_SQL over a sibling aggregate. Keep the
  * two in lockstep.
  */
+/** True when a firing produced children and every one was denied authorization. */
+export function allRunsUnauthorized(runs: readonly Pick<AutomationRunRow, "status">[]): boolean {
+  return runs.length > 0 && runs.every((run) => run.status === "unauthorized");
+}
+
 export function deriveInvocationStatus(counts: {
   total: number;
   active: number;
   failed: number;
   completed: number;
   skipped: number;
+  unauthorized: number;
   // Required: distinguishes "starting" from "running". InvocationRunAggregate
   // folds both into `active` and has no `starting`, so it must not be passed here.
   starting: number;
@@ -348,6 +376,7 @@ export function deriveInvocationStatus(counts: {
     return counts.starting === counts.total ? "starting" : "running";
   }
   if (counts.skipped === counts.total) return "skipped";
+  if (counts.unauthorized > 0) return "unauthorized";
   if (counts.failed === 0) return "completed";
   if (counts.completed === 0) return "failed";
   return "partial_failed";
@@ -391,8 +420,8 @@ export class AutomationStore {
          (id, name, instructions,
           trigger_type, schedule_cron, schedule_tz, harness, model, reasoning_effort, enabled, next_run_at,
           consecutive_failures, created_by, user_id, created_at, updated_at, deleted_at,
-          event_type, trigger_config, trigger_auth_data)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+           event_type, trigger_config, trigger_auth_data, owner_team_id)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
       )
       .bind(
         row.id,
@@ -414,7 +443,8 @@ export class AutomationStore {
         row.deleted_at,
         row.event_type,
         row.trigger_config,
-        row.trigger_auth_data
+        row.trigger_auth_data,
+        row.owner_team_id
       );
   }
 
@@ -423,10 +453,11 @@ export class AutomationStore {
   }
 
   async getById(id: string): Promise<AutomationRow | null> {
-    return this.db
+    const row = await this.db
       .prepare("SELECT * FROM automations WHERE id = ? AND deleted_at IS NULL")
       .bind(id)
       .first<AutomationRow>();
+    return row ? withValidatedOwnerTeam(row) : null;
   }
 
   /**
@@ -435,9 +466,7 @@ export class AutomationStore {
    * a storage invariant rather than a side effect of starting an invocation.
    */
   async resolveCanonicalOwner(automation: AutomationRow): Promise<AutomationRow> {
-    if (automation.user_id || !automation.created_by || automation.created_by === "anonymous") {
-      return automation;
-    }
+    if (!needsCanonicalOwner(automation)) return automation;
 
     const identity = await new UserStore(this.db).getIdentity("github", automation.created_by);
     if (!identity) return automation;
@@ -452,15 +481,67 @@ export class AutomationStore {
     return (await this.getById(automation.id)) ?? automation;
   }
 
+  /**
+   * Project the canonical owner that {@link resolveCanonicalOwner} would repair, for a page of
+   * rows in one bounded lookup, so collection capabilities agree with item admission.
+   */
+  async projectCanonicalOwners(rows: readonly AutomationRow[]): Promise<AutomationRow[]> {
+    const legacyCreators = [
+      ...new Set(rows.filter(needsCanonicalOwner).map((row) => row.created_by)),
+    ];
+    const owners = new Map<string, string>();
+    for (let offset = 0; offset < legacyCreators.length; offset += MAX_D1_QUERY_PARAMETERS) {
+      const chunk = legacyCreators.slice(offset, offset + MAX_D1_QUERY_PARAMETERS);
+      const result = await this.db
+        .prepare(
+          `SELECT provider_user_id, user_id FROM user_identities
+           WHERE provider = 'github' AND provider_user_id IN (${chunk.map(() => "?").join(", ")})`
+        )
+        .bind(...chunk)
+        .all<{ provider_user_id: string; user_id: string }>();
+      for (const identity of result.results ?? []) {
+        owners.set(identity.provider_user_id, identity.user_id);
+      }
+    }
+    return rows.map((row) => {
+      const owner = needsCanonicalOwner(row) ? owners.get(row.created_by) : undefined;
+      return owner ? { ...row, user_id: owner } : row;
+    });
+  }
+
   async list(options: {
     limit: number;
     cursor?: CreatedAtCursor | null;
     nameSearch?: string;
     repoOwner?: string;
     repoName?: string;
+    viewer?: SessionViewer;
+    teamId?: string | null;
   }): Promise<AutomationListResult> {
     const conditions: string[] = ["deleted_at IS NULL"];
     const params: unknown[] = [];
+
+    const viewer = options.viewer;
+    if (viewer?.kind === "user") {
+      if (viewer.suspended || !viewer.permissions.includes("automations.read")) {
+        conditions.push("0 = 1");
+      } else if (!isWorkspaceAdmin(viewer.roleKey)) {
+        // One bound parameter regardless of how many teams the viewer belongs to.
+        conditions.push(
+          `(owner_team_id IS NULL OR EXISTS (
+             SELECT 1 FROM team_memberships m
+             WHERE m.team_id = automations.owner_team_id AND m.user_id = ?))`
+        );
+        params.push(viewer.userId);
+      }
+    } else if (viewer?.kind === "service" && viewer.teamId !== null) {
+      conditions.push("(owner_team_id IS NULL OR owner_team_id = ?)");
+      params.push(viewer.teamId);
+    }
+    if (options.teamId !== undefined) {
+      conditions.push("owner_team_id IS ?");
+      params.push(options.teamId);
+    }
 
     if (options.nameSearch) {
       conditions.push("name LIKE ? ESCAPE '\\' COLLATE NOCASE");
@@ -481,7 +562,7 @@ export class AutomationStore {
       .bind(...params, options.limit + 1)
       .all<AutomationRow>();
 
-    const rows = result.results || [];
+    const rows = (result.results || []).map(withValidatedOwnerTeam);
     const hasMore = rows.length > options.limit;
     const automations = hasMore ? rows.slice(0, options.limit) : rows;
     if (!hasMore) return { automations, hasMore: false, nextCursor: null };
@@ -596,6 +677,51 @@ export class AutomationStore {
     const statement = this.bindAutomationUpdate(id, fields);
     if (statement) await statement.run();
     return this.getById(id);
+  }
+
+  /**
+   * Reassign the executor only if, at write time, the caller still holds reassignment authority
+   * and the candidate can still launch the automation's current targets.
+   */
+  bindExecutorChange(automation: AutomationRow, userId: string, actorUserId: string): SqlStatement {
+    const manageOwn = rolePermissionPredicate("automations.manage.own");
+    const manageAny = rolePermissionPredicate("automations.manage.any");
+    const execution = automationExecutionPredicate({
+      automationId: automation.id,
+      executionUserId: userId,
+      requiresRepositoryUse: "stored",
+      requiresEnvironmentUse: "stored",
+    });
+    return this.db
+      .prepare(
+        `UPDATE automations SET user_id = ?, updated_at = ?
+         WHERE id = ? AND deleted_at IS NULL AND user_id IS ? AND owner_team_id IS ?
+           AND user_id IS NOT ?
+           AND EXISTS (
+             SELECT 1 FROM users actor
+             JOIN user_role_assignments actor_role ON actor_role.user_id = actor.id
+             JOIN roles r ON r.id = actor_role.role_id
+             WHERE actor.id = ? AND actor.suspended_at IS NULL
+               AND (${manageOwn.sql} OR ${manageAny.sql})
+               AND (r.key IN (${WORKSPACE_ADMIN_ROLE_KEYS.map(() => "?").join(", ")}) OR EXISTS (
+                 SELECT 1 FROM team_memberships lead_membership
+                 WHERE lead_membership.team_id = automations.owner_team_id
+                   AND lead_membership.user_id = actor.id AND lead_membership.role = 'lead')))
+           AND ${execution.sql}`
+      )
+      .bind(
+        userId,
+        Date.now(),
+        automation.id,
+        automation.user_id,
+        automation.owner_team_id,
+        userId,
+        actorUserId,
+        ...manageOwn.values,
+        ...manageAny.values,
+        ...WORKSPACE_ADMIN_ROLE_KEYS,
+        ...execution.values
+      );
   }
 
   /** Build a soft-delete statement for composition in an atomic batch. */
@@ -839,7 +965,7 @@ export class AutomationStore {
       )
       .bind(now, limit)
       .all<AutomationRow>();
-    return result.results || [];
+    return (result.results || []).map(withValidatedOwnerTeam);
   }
 
   // --- Run management ---
@@ -1048,9 +1174,18 @@ export class AutomationStore {
     children: AutomationRunRow[];
     overlapScope: InvocationOverlapScope;
     advanceSchedule?: ScheduleAdvance;
+    /** Team grants version the targets were authorized against; a change refuses admission. */
+    teamGrantsVersion?: { teamId: string; version: number };
   }): Promise<{ inserted: boolean }> {
     const invocation = params.invocation;
     const overlap = this.overlapPredicate(invocation.automation_id, params.overlapScope);
+    const grants = params.teamGrantsVersion;
+    const grantsGuard = grants
+      ? {
+          sql: "AND EXISTS (SELECT 1 FROM teams WHERE id = ? AND grants_version = ?)",
+          params: [grants.teamId, grants.version],
+        }
+      : { sql: "", params: [] };
     const statements: SqlStatement[] = [];
     statements.push(
       this.db
@@ -1059,7 +1194,7 @@ export class AutomationStore {
            (id, automation_id, source, scheduled_at, trigger_key, concurrency_key,
             trigger_metadata, skip_reason, failure_counted_at, created_at, updated_at)
            SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
-           WHERE NOT EXISTS (${overlap.sql})`
+           WHERE NOT EXISTS (${overlap.sql}) ${grantsGuard.sql}`
         )
         .bind(
           invocation.id,
@@ -1073,7 +1208,8 @@ export class AutomationStore {
           invocation.failure_counted_at,
           invocation.created_at,
           invocation.updated_at,
-          ...overlap.params
+          ...overlap.params,
+          ...grantsGuard.params
         )
     );
 
@@ -1114,14 +1250,16 @@ export class AutomationStore {
       statements.push(
         this.db
           .prepare(
+            // A grants change leaves the slot due, so the next tick re-authorizes it.
             `UPDATE automations SET next_run_at = ?, updated_at = ?
-             WHERE id = ? AND deleted_at IS NULL AND next_run_at = ?`
+             WHERE id = ? AND deleted_at IS NULL AND next_run_at = ? ${grantsGuard.sql}`
           )
           .bind(
             params.advanceSchedule.nextRunAt,
             Date.now(),
             invocation.automation_id,
-            params.advanceSchedule.fromSlot
+            params.advanceSchedule.fromSlot,
+            ...grantsGuard.params
           )
       );
     }
@@ -1374,7 +1512,7 @@ export class AutomationStore {
 
   /**
    * Automations still carrying consecutive_failures whose LATEST recent
-   * non-skip invocation may be a fully-completed one (missed reset). The
+   * accounting-relevant invocation may be a fully-completed one (missed reset). The
    * caller verifies completeness via the sibling aggregate before resetting —
    * a newer failed invocation naturally disqualifies its automation here.
    */
@@ -1387,6 +1525,10 @@ export class AutomationStore {
         `SELECT a.id AS automation_id,
                 (SELECT i.id FROM automation_invocations i
                  WHERE i.automation_id = a.id AND i.skip_reason IS NULL AND i.created_at >= ?
+                   AND EXISTS (
+                     SELECT 1 FROM automation_runs r
+                     WHERE r.invocation_id = i.id
+                       AND r.status IN ('starting', 'running', 'completed', 'failed'))
                  ORDER BY i.created_at DESC LIMIT 1) AS invocation_id
          FROM automations a
          WHERE a.consecutive_failures > 0 AND a.deleted_at IS NULL
@@ -1418,7 +1560,7 @@ export class AutomationStore {
       )
       .bind(repoOwner.toLowerCase(), repoName.toLowerCase(), triggerType, eventType)
       .all<AutomationRow>();
-    return result.results || [];
+    return (result.results || []).map(withValidatedOwnerTeam);
   }
 
   async getActiveRunForKey(

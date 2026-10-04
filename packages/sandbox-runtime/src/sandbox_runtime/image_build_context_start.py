@@ -32,7 +32,7 @@ import sys
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Protocol
 
-from .constants import IMAGE_BUILD_EXECUTION_TIMEOUT_ENV_VAR
+from .constants import DOCKER_ENABLED_ENV_VAR, IMAGE_BUILD_EXECUTION_TIMEOUT_ENV_VAR
 from .log_config import StructuredLogger, get_logger
 from .repo_image_callback import (
     BUILD_ID_ENV,
@@ -101,6 +101,8 @@ RESERVED_CONTEXT_ENV_KEYS: frozenset[str] = frozenset(
         "VCS_HOST",
         "VCS_CLONE_USERNAME",
         VCS_CLONE_TOKEN_ENV,
+        # Trusted runtime signal (provider-owned).
+        DOCKER_ENABLED_ENV_VAR,
     }
 )
 
@@ -279,9 +281,9 @@ async def run_deferred_start() -> int:
     return 0
 
 
-async def run_image_build_context_start(
-    build_supervisor: Callable[[asyncio.Event], ImageBuildContextSupervisor],
-    install_signal_handlers: Callable[[ImageBuildContextSupervisor], None],
+async def run_image_build_context_start[SupervisorT: ImageBuildContextSupervisor](
+    build_supervisor: Callable[[asyncio.Event], SupervisorT],
+    install_signal_handlers: Callable[[SupervisorT], None],
 ) -> int:
     """Read one launch context, compose the build environment, run the build.
 

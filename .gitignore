@@ -47,6 +47,9 @@ yarn-error.log*
 playwright-report/
 test-results/
 coverage/
+.vitest-reports/
+.coverage
+.coverage.*
 .nyc_output/
 
 # Cloudflare

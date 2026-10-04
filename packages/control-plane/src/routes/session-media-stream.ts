@@ -13,7 +13,7 @@ import {
   createStoredObjectResponse,
 } from "./responses/stored-object-response";
 import { getSessionArtifactFromRuntime } from "./session-media-artifacts";
-import { error, GITHUB_USER_OR_SERVICE_ROUTE, requirePermission } from "./shared";
+import { error, GITHUB_USER_OR_SERVICE_ROUTE, requireSession } from "./shared";
 import { type SessionRouteContext, dispatchSession } from "./session-route";
 const logger = createLogger("router:session-media");
 
@@ -144,7 +144,7 @@ sessionMediaStreamRoutes.get(
   "/sessions/:id/media/:artifactId",
   admit({
     ...GITHUB_USER_OR_SERVICE_ROUTE,
-    authorization: requirePermission("sessions.read", {
+    authorization: requireSession("read", {
       actorlessGrants: [{ service: "slack-bot" }],
     }),
   }),

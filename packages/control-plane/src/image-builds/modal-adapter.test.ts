@@ -27,8 +27,6 @@ function createPlan(): ImageBuildPlan {
     callbackToken: "modal-callback-token",
     cloneAuth: {
       type: "credential_helper",
-      host: "gitlab.com",
-      username: "oauth2",
       token: "clone-token",
     },
     buildTimeoutMs: 1_800_000,
@@ -41,6 +39,10 @@ function createPlan(): ImageBuildPlan {
 }
 
 describe("ModalImageBuildAdapter", () => {
+  it("does not advertise unbound source recovery", () => {
+    expect("recoverUnboundSource" in new ModalImageBuildAdapter(createProvider())).toBe(false);
+  });
+
   it("delegates build startup to the Modal provider", async () => {
     const provider = createProvider();
     const adapter = new ModalImageBuildAdapter(provider);
@@ -55,8 +57,6 @@ describe("ModalImageBuildAdapter", () => {
       buildId: "build-1",
       repositories: [{ repoOwner: "acme", repoName: "repo", baseBranch: "develop" }],
       cloneToken: "clone-token",
-      cloneHost: "gitlab.com",
-      cloneUsername: "oauth2",
       buildExecutionTimeoutSeconds: 1800,
       providerSessionTimeoutSeconds: 2400,
       userEnvVars: { FOO: "bar" },

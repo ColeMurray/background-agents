@@ -17,8 +17,8 @@ import {
 } from "@/lib/session-list";
 import { formatRelativeTime } from "@/lib/time";
 import { browserApiFetch } from "@/lib/browser-api-fetch";
-import { useCurrentUserAuthorization } from "@/hooks/use-current-user-authorization";
-import { canUseSettingsCapability } from "./settings-registry";
+import { sessionActionErrorMessage } from "@/lib/session-action-error";
+import { resolveSessionCapabilities } from "@/lib/session-capabilities";
 
 const PAGE_SIZE = 20;
 const ARCHIVED_SESSIONS_KEY = buildSessionsPageKey({
@@ -28,12 +28,6 @@ const ARCHIVED_SESSIONS_KEY = buildSessionsPageKey({
 });
 
 export function DataControlsSettings() {
-  const { hasPermission } = useCurrentUserAuthorization();
-  const canUnarchive = canUseSettingsCapability(
-    "data-controls",
-    "unarchiveSessions",
-    hasPermission
-  );
   const [extraSessions, setExtraSessions] = useState<SessionListItem[]>([]);
   const [loadingMore, setLoadingMore] = useState(false);
   const [hasMore, setHasMore] = useState(false);
@@ -80,7 +74,7 @@ export function DataControlsSettings() {
         method: "POST",
       });
       if (!res.ok) {
-        toast.error("Failed to unarchive session");
+        toast.error(await sessionActionErrorMessage(res, "Failed to unarchive session"));
         return;
       }
       toast.success("Session unarchived");
@@ -134,7 +128,7 @@ export function DataControlsSettings() {
               <ArchivedSessionRow
                 key={session.id}
                 session={session}
-                canUnarchive={canUnarchive}
+                canUnarchive={resolveSessionCapabilities(session.capabilities).lifecycle}
                 onUnarchive={handleUnarchive}
               />
             ))}
