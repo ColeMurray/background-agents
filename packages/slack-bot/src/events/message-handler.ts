@@ -62,8 +62,10 @@ import {
   EMPTY_INLINE_PROMPT_OPTIONS,
   hasInlinePromptOptions,
   parseInlinePromptFlags,
-  resolveInlinePromptOptions,
   type InlinePromptOptions,
+} from "@open-inspect/shared/inline-prompt-flags";
+import {
+  resolveInlinePromptOptions,
   type ResolvedTurnPlan,
   type SessionLaunchPlan,
 } from "../inline-flags";

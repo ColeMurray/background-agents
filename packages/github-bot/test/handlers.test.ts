@@ -68,6 +68,11 @@ function createMockEnv(): Env {
         new Response(JSON.stringify({ repo: "acme/widgets", metadata: null }), { status: 200 })
       );
     }
+    if (url === "https://internal/model-preferences?strict=true") {
+      return Promise.resolve(
+        Response.json({ enabledModels: ["anthropic/claude-haiku-4-5", "openai/gpt-5.6-sol"] })
+      );
+    }
     if (url === "https://internal/sessions") {
       return Promise.resolve(
         new Response(JSON.stringify({ sessionId: "session-123", status: "created" }), {
@@ -512,6 +517,170 @@ describe("session refusal details", () => {
     );
     expect(cpFetch.mock.calls.some(([url]) => String(url).endsWith("/prompt"))).toBe(false);
     expect(JSON.parse(githubFetch.mock.calls[0][1].body).body).toMatch(/team is archived/i);
+  });
+});
+
+describe.each([
+  {
+    name: "issue comment",
+    run: (env: Env, log: Logger, body: string) =>
+      handleIssueComment(
+        env,
+        log,
+        { ...issueCommentPayload, comment: { ...issueCommentPayload.comment, body } },
+        "trace-flags"
+      ),
+  },
+  {
+    name: "review comment",
+    run: (env: Env, log: Logger, body: string) =>
+      handleReviewComment(
+        env,
+        log,
+        { ...reviewCommentPayload, comment: { ...reviewCommentPayload.comment, body } },
+        "trace-flags"
+      ),
+  },
+])("inline model flags: $name", ({ run }) => {
+  function modelPreferencesFetched(env: Env): boolean {
+    return getControlPlaneFetch(env).mock.calls.some(([url]) =>
+      String(url).startsWith("https://internal/model-preferences")
+    );
+  }
+
+  it("starts the session on the flagged model and strips the flags from the prompt", async () => {
+    const env = createMockEnv();
+    const log = createMockLogger();
+
+    const result = await run(
+      env,
+      log,
+      "@test-bot[bot] !model openai/gpt-5.6-sol !reasoning:xhigh fix the flaky test"
+    );
+
+    expect(result).toMatchObject({ outcome: "processed" });
+    const cpFetch = getControlPlaneFetch(env);
+    const modelPreferencesCall = cpFetch.mock.calls.find(([url]) =>
+      String(url).startsWith("https://internal/model-preferences")
+    )!;
+    expect(new Headers(modelPreferencesCall[1].headers).has("X-OpenInspect-Actor")).toBe(false);
+    expect(sessionCreateBody(cpFetch)).toMatchObject({
+      model: "openai/gpt-5.6-sol",
+      reasoningEffort: "xhigh",
+    });
+    const prompt = promptSendBody(cpFetch).content;
+    expect(prompt).toContain("fix the flaky test");
+    expect(prompt).not.toContain("!model");
+    expect(prompt).not.toContain("!reasoning");
+    expect(log.info).toHaveBeenCalledWith(
+      "session.created",
+      expect.objectContaining({ model: "openai/gpt-5.6-sol", inline_model_override: true })
+    );
+  });
+
+  it("applies a reasoning-only flag to the configured model without loading enabled models", async () => {
+    const env = createMockEnv();
+
+    await run(env, createMockLogger(), "@test-bot[bot] !reasoning high fix it");
+
+    expect(modelPreferencesFetched(env)).toBe(false);
+    expect(sessionCreateBody(getControlPlaneFetch(env))).toMatchObject({
+      model: "anthropic/claude-haiku-4-5",
+      reasoningEffort: "high",
+    });
+  });
+
+  it("treats flags after the request text as prompt content", async () => {
+    const env = createMockEnv();
+
+    await run(
+      env,
+      createMockLogger(),
+      "@test-bot[bot] explain what !model openai/gpt-5.6-sol does"
+    );
+
+    expect(modelPreferencesFetched(env)).toBe(false);
+    const cpFetch = getControlPlaneFetch(env);
+    expect(sessionCreateBody(cpFetch).model).toBe("anthropic/claude-haiku-4-5");
+    expect(promptSendBody(cpFetch).content).toContain("!model openai/gpt-5.6-sol");
+  });
+
+  it.each([
+    {
+      name: "a disabled model",
+      body: "@test-bot[bot] !model anthropic/claude-sonnet-4-6 fix it",
+      reason: "invalid_inline_flags",
+      message: "I couldn't start a session. Model `anthropic/claude-sonnet-4-6` is not enabled.",
+    },
+    {
+      name: "unsupported reasoning",
+      body: "@test-bot[bot] !reasoning low fix it",
+      reason: "invalid_inline_flags",
+      message: "Reasoning effort `low` is not valid for `anthropic/claude-haiku-4-5`.",
+    },
+    {
+      name: "a duplicate flag",
+      body: "@test-bot[bot] !model gpt-5.6-sol !model gpt-5.6-sol fix it",
+      reason: "invalid_inline_flags",
+      message: "The !model flag can only be specified once.",
+    },
+  ])("comments and skips the session for $name", async ({ body, reason, message }) => {
+    const env = createMockEnv();
+    const githubFetch = vi.fn().mockResolvedValue(new Response("", { status: 201 }));
+    vi.stubGlobal("fetch", githubFetch);
+
+    expect(await run(env, createMockLogger(), body)).toEqual({
+      outcome: "skipped",
+      skip_reason: reason,
+    });
+
+    const cpFetch = getControlPlaneFetch(env);
+    expect(cpFetch.mock.calls.some(([url]) => url === "https://internal/sessions")).toBe(false);
+    expect(postReaction).not.toHaveBeenCalled();
+    expect(githubFetch).toHaveBeenCalledWith(
+      "https://api.github.com/repos/acme/widgets/issues/42/comments",
+      expect.objectContaining({ method: "POST" })
+    );
+    expect(JSON.parse(githubFetch.mock.calls[0][1].body).body).toContain(message);
+  });
+
+  it("comments and skips when enabled models cannot be loaded", async () => {
+    const env = createMockEnv();
+    mockControlPlaneResponse(env, /\/model-preferences/, () =>
+      Response.json({ error: "unavailable" }, { status: 503 })
+    );
+    const githubFetch = vi.fn().mockResolvedValue(new Response("", { status: 201 }));
+    vi.stubGlobal("fetch", githubFetch);
+
+    expect(
+      await run(env, createMockLogger(), "@test-bot[bot] !model openai/gpt-5.6-sol fix it")
+    ).toEqual({ outcome: "skipped", skip_reason: "model_preferences_unavailable" });
+    expect(
+      getControlPlaneFetch(env).mock.calls.some(([url]) => url === "https://internal/sessions")
+    ).toBe(false);
+    expect(JSON.parse(githubFetch.mock.calls[0][1].body).body).toMatch(/try again/);
+  });
+
+  it("checks sender gating before reacting to flags", async () => {
+    vi.mocked(getGitHubConfig).mockResolvedValue({ ...defaultConfig, allowedTriggerUsers: [] });
+    const env = createMockEnv();
+    const githubFetch = vi.fn();
+    vi.stubGlobal("fetch", githubFetch);
+
+    expect(await run(env, createMockLogger(), "@test-bot[bot] !model nope fix it")).toEqual({
+      outcome: "skipped",
+      skip_reason: "sender_not_allowed",
+    });
+    expect(githubFetch).not.toHaveBeenCalled();
+  });
+
+  it("throws so delivery can retry when the rejection comment fails", async () => {
+    const env = createMockEnv();
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response("", { status: 500 })));
+
+    await expect(run(env, createMockLogger(), "@test-bot[bot] !model nope fix it")).rejects.toThrow(
+      "Session refusal comment failed: invalid_inline_flags"
+    );
   });
 });
 

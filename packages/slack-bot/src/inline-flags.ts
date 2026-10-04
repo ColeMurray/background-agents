@@ -9,15 +9,9 @@ import {
   type ReasoningEffort,
   type ValidModel,
 } from "@open-inspect/shared/models";
+import type { InlinePromptOptions } from "@open-inspect/shared/inline-prompt-flags";
 import { escapeMrkdwnText } from "@open-inspect/shared/slack";
 import { z } from "zod";
-
-export interface InlinePromptOptions {
-  model?: string;
-  reasoningEffort?: string;
-}
-
-export const EMPTY_INLINE_PROMPT_OPTIONS: InlinePromptOptions = {};
 
 const validModelSchema = z.custom<ValidModel>(
   (value) => typeof value === "string" && isValidModel(value) && normalizeModelId(value) === value
@@ -80,66 +74,9 @@ export const sessionLaunchPlanSchema = z.object({
 
 export type SessionLaunchPlan = z.infer<typeof sessionLaunchPlanSchema>;
 
-export type ParseInlinePromptFlagsResult =
-  | { ok: true; text: string; options: InlinePromptOptions }
-  | { ok: false; error: string };
-
 export type ResolveInlinePromptOptionsResult =
   | { ok: true; turnPlan: ResolvedTurnPlan }
   | { ok: false; error: string };
-
-const FLAG_NAMES = ["model", "reasoning"] as const;
-type FlagName = (typeof FLAG_NAMES)[number];
-
-function readFlag(text: string): { name: FlagName; value: string; length: number } | null {
-  for (const name of FLAG_NAMES) {
-    const colonPrefix = `!${name}:`;
-    if (text.startsWith(colonPrefix)) {
-      const value = text.slice(colonPrefix.length).match(/^\S*/)?.[0] ?? "";
-      return { name, value, length: colonPrefix.length + value.length };
-    }
-
-    const spacePrefix = `!${name}`;
-    if (text === spacePrefix || text.startsWith(`${spacePrefix} `)) {
-      const afterName = text.slice(spacePrefix.length);
-      const whitespaceLength = afterName.match(/^\s*/)?.[0].length ?? 0;
-      const value = afterName.slice(whitespaceLength).match(/^\S*/)?.[0] ?? "";
-      return {
-        name,
-        value,
-        length: spacePrefix.length + whitespaceLength + value.length,
-      };
-    }
-  }
-  return null;
-}
-
-/** Parse a contiguous prefix of Slack-only model and reasoning controls. */
-export function parseInlinePromptFlags(text: string): ParseInlinePromptFlagsResult {
-  let remaining = text.trimStart();
-  const options: InlinePromptOptions = {};
-
-  while (remaining) {
-    const flag = readFlag(remaining);
-    if (!flag) break;
-    if (!flag.value || flag.value.startsWith("!")) {
-      return { ok: false, error: `The !${flag.name} flag requires a value.` };
-    }
-
-    const field = flag.name === "model" ? "model" : "reasoningEffort";
-    if (options[field]) {
-      return { ok: false, error: `The !${flag.name} flag can only be specified once.` };
-    }
-    options[field] = flag.value;
-    remaining = remaining.slice(flag.length).trimStart();
-  }
-
-  return { ok: true, text: remaining.trim(), options };
-}
-
-export function hasInlinePromptOptions(options: InlinePromptOptions): boolean {
-  return options.model !== undefined || options.reasoningEffort !== undefined;
-}
 
 /** A model paired with the reasoning effort it runs at. */
 export interface ModelSelection {

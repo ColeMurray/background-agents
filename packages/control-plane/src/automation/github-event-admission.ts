@@ -14,7 +14,8 @@ import { GitHubAutomationStore } from "../db/github-automation-store";
 import { TeamRepositoryGrantStore } from "../db/team-repository-grants";
 import type { SqlDatabase } from "../db/sql-database";
 import type { Logger } from "../logger";
-import type { SchedulerEventResult, StartInvocationResult } from "../scheduler/scheduler";
+import type { SchedulerEventResult } from "../scheduler/scheduler";
+import { firingInvocationId, type StartInvocationResult } from "../scheduler/invocation-outcome";
 
 export const MAX_GITHUB_ADMISSION_ATTEMPTS = 3;
 
@@ -42,6 +43,7 @@ export async function admitGitHubEvent(
   const candidates = await github.getGitHubAutomationsForEvent(event.repositoryId, event.eventType);
   let triggered = 0;
   let skipped = 0;
+  const invocationIds: string[] = [];
   let retryFailure: GitHubAdmissionRetryError | undefined;
 
   candidateLoop: for (const candidate of candidates) {
@@ -97,6 +99,8 @@ export async function admitGitHubEvent(
         // Coverage returned before the conditional denial; retry fresh admission.
         continue;
       }
+      const invocationId = firingInvocationId(result);
+      if (invocationId) invocationIds.push(invocationId);
       switch (result.outcome) {
         case "started":
           if (result.launched > 0) triggered++;
@@ -132,5 +136,5 @@ export async function admitGitHubEvent(
     steered: 0,
     candidates: candidates.length,
   });
-  return { triggered, skipped, steered: 0 };
+  return { triggered, skipped, steered: 0, invocationIds };
 }

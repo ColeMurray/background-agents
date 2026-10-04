@@ -162,13 +162,14 @@ OpenInspect does not change labels, assignee, priority, or project; pull request
 
 | Setting                                    | What it controls                                                                                                                                         |
 | ------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Default model and Default reasoning effort | Model and reasoning depth for Linear-started sessions                                                                                                    |
+| Agent harness                              | **OpenCode** (default) or **Claude Agent** for new Linear-started sessions                                                                               |
+| Default model and Default reasoning effort | Model and reasoning depth for Linear-started sessions; the list shows only models the selected harness can run                                           |
 | Repository Scope                           | **All repositories** (Linear events can run against every accessible repository) or **Selected repositories** (only the allowlist)                       |
 | Issue Session Instructions                 | Custom instructions appended to agent prompts for all Linear issue sessions (coding standards, preferred tools, PR conventions); up to 10,000 characters |
 | Allow user model preferences               | Whether admin-managed user preferences can override the model                                                                                            |
 | Allow model labels (model:\*)              | Whether a `model:*` issue label can choose the model                                                                                                     |
 | Emit tool progress activities              | Whether Linear shows intermediate file and command activity                                                                                              |
-| Repository Overrides                       | Per-repository model, effort, tool updates, user preference override, and label model override                                                           |
+| Repository Overrides                       | Per-repository harness, model, effort, tool updates, user preference override, and label model override                                                  |
 
 With no settings configured, all accessible repositories are in scope, user preferences and model labels are allowed, and tool progress is on.
 
@@ -178,6 +179,10 @@ Model selection uses this priority, highest first:
 2. The Linear user's preference, when allowed. These preferences are admin or API managed, not set from a Linear screen.
 3. The repository override, then the global Linear default.
 4. The deployment default model.
+
+The session runs on the selected **Agent harness** when it can run that model, and on OpenCode otherwise. Claude Agent runs Anthropic models only, so with Claude Agent selected a `model:gpt-*` label still works and runs on OpenCode. The "Creating coding session" activity in Linear names the harness. To keep every Linear session on Claude Agent, choose an Anthropic default model, keep any repository override's model Anthropic, and turn off user preferences and model labels.
+
+Claude Agent sessions started from Linear are automated sessions: they use the default Claude account when its **Automated authentication** allows it, otherwise `ANTHROPIC_API_KEY`. See [Provider accounts](/models/provider-accounts). A harness change applies to new sessions; follow-ups keep the session's harness.
 
 ## Admin and safety notes
 
@@ -225,7 +230,8 @@ Model selection uses this priority, highest first:
 </Accordion>
   <Accordion title="The wrong model was used">
     Repository overrides, user preferences, and `model:*` labels all affect selection, in the
-    priority order above. Changes apply to new Linear-started sessions.
+    priority order above. A model Claude Agent cannot run falls back to OpenCode. Changes apply to
+    new Linear-started sessions.
 
 </Accordion>
   <Accordion title="The wrong repository was used">

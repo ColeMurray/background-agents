@@ -32,7 +32,8 @@ import { resolveTargetValue, targetSelectedText } from "../target-clarification"
 import { targetId, type SlackSessionTarget } from "../targets";
 import type { BackgroundTaskScheduler, Env } from "../types";
 import { resolveSlackActorIdentity } from "../user-identity";
-import { hasInlinePromptOptions, resolveInlinePromptOptions } from "../inline-flags";
+import { hasInlinePromptOptions } from "@open-inspect/shared/inline-prompt-flags";
+import { resolveInlinePromptOptions } from "../inline-flags";
 
 const log = createLogger("target-selection");
 
