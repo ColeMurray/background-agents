@@ -45,8 +45,8 @@ can run that model and on OpenCode otherwise. So with Claude Agent selected, an 
 on Claude Agent and a `model:gpt-*` label (or a non-Anthropic default) runs on OpenCode instead of
 failing. The Linear activity names the harness:
 `Creating coding session on <target> (agent: Claude Agent, model: …)`. To keep every Linear session
-on Claude Agent, choose an Anthropic default model and turn off **Allow user model preferences** and
-**Allow model labels**.
+on Claude Agent, choose an Anthropic default model, keep any repository override's model Anthropic,
+and turn off **Allow user model preferences** and **Allow model labels**.
 
 Saving a harness and an incompatible model at the same level (for example Claude Agent with an
 OpenAI model) is rejected, and the settings form only lists models the harness can run. A repository

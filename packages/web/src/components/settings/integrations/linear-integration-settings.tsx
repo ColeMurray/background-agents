@@ -848,8 +848,7 @@ function RepoOverrideRow({
 
       {mismatch && (
         <p className="text-xs text-warning">
-          {mismatch.message} Sessions for this repo will run on OpenCode until the harness and model
-          are compatible.
+          {mismatch.message} Sessions using this default model will fall back to OpenCode.
         </p>
       )}
     </div>

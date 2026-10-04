@@ -339,8 +339,7 @@ describe("LinearIntegrationSettings harness", () => {
     expect(body.settings).toMatchObject({ harness: "opencode", model: "openai/gpt-6-sol" });
   });
 
-  const fallbackNotice =
-    "Sessions for this repo will run on OpenCode until the harness and model are compatible.";
+  const fallbackNotice = "Sessions using this default model will fall back to OpenCode.";
 
   it("warns when a repository harness clashes with the inherited global model", () => {
     setupSWR({
@@ -362,6 +361,6 @@ describe("LinearIntegrationSettings harness", () => {
     });
     render(<LinearIntegrationSettings />);
 
-    expect(screen.queryByText(/until the harness and model are compatible/)).toBeNull();
+    expect(screen.queryByText(/will fall back to OpenCode/)).toBeNull();
   });
 });

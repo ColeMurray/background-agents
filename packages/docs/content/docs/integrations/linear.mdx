@@ -180,7 +180,7 @@ Model selection uses this priority, highest first:
 3. The repository override, then the global Linear default.
 4. The deployment default model.
 
-The session runs on the selected **Agent harness** when it can run that model, and on OpenCode otherwise. Claude Agent runs Anthropic models only, so with Claude Agent selected a `model:gpt-*` label still works and runs on OpenCode. The "Creating coding session" activity in Linear names the harness. To keep every Linear session on Claude Agent, choose an Anthropic default model and turn off user preferences and model labels.
+The session runs on the selected **Agent harness** when it can run that model, and on OpenCode otherwise. Claude Agent runs Anthropic models only, so with Claude Agent selected a `model:gpt-*` label still works and runs on OpenCode. The "Creating coding session" activity in Linear names the harness. To keep every Linear session on Claude Agent, choose an Anthropic default model, keep any repository override's model Anthropic, and turn off user preferences and model labels.
 
 Claude Agent sessions started from Linear are automated sessions: they use the default Claude account when its **Automated authentication** allows it, otherwise `ANTHROPIC_API_KEY`. See [Provider accounts](/models/provider-accounts). A harness change applies to new sessions; follow-ups keep the session's harness.
 
