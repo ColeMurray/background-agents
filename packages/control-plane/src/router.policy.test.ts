@@ -283,7 +283,7 @@ describe("route policy table", () => {
       ],
     ],
     ["GET", "/integration-settings/slack/watched-channels", [{ service: "slack-bot" }]],
-    ["GET", "/model-preferences", [{ service: "slack-bot" }]],
+    ["GET", "/model-preferences", [{ service: "slack-bot" }, { service: "github-bot" }]],
     ["GET", "/automations", [{ service: "slack-bot" }]],
     ["GET", "/automations/auto-1", [{ service: "slack-bot" }]],
     ["GET", "/automations/auto-1/invocations", [{ service: "slack-bot" }]],
@@ -374,7 +374,10 @@ describe("route policy table", () => {
     });
     expect(routeFor("GET", "/model-preferences")?.authorization).toMatchObject({
       kind: "active-global",
-      service: { kind: "actor", actorlessGrants: [{ service: "slack-bot" }] },
+      service: {
+        kind: "actor",
+        actorlessGrants: [{ service: "slack-bot" }, { service: "github-bot" }],
+      },
     });
     expect(routeFor("GET", "/sessions")?.authorization).toMatchObject({
       kind: "active-user",

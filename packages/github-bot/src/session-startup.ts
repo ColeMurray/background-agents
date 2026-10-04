@@ -13,6 +13,8 @@ import {
 import { resolveSessionTarget } from "./session-target";
 import { createSession, sendPrompt } from "./session-client";
 import { getGitHubConfig, type ResolvedGitHubConfig } from "./utils/integration-config";
+import { resolveModelSelection } from "./model-selection";
+import type { ParseInlinePromptFlagsResult } from "@open-inspect/shared/inline-prompt-flags";
 
 export type HandlerResult =
   | { outcome: "processed"; session_id: string; message_id: string; handler_action: string }
@@ -146,6 +148,8 @@ export async function startSession(
     title: string;
     action: "review" | "auto_review" | "comment" | "review_comment";
     reactionPath: string;
+    /** `!model` / `!reasoning` flags parsed from the triggering comment, if any. */
+    inlineFlags?: ParseInlinePromptFlagsResult;
     buildPrompt: (config: ResolvedGitHubConfig) => string;
   }
 ): Promise<HandlerResult> {
@@ -180,6 +184,29 @@ export async function startSession(
   const userAgent = resolveAppName(env);
   const meta = { trace_id: traceId, repo: repoFullName, pull_number: pullNumber };
 
+  const modelSelection = await resolveModelSelection(
+    env,
+    log,
+    traceId,
+    { model: config.model, reasoningEffort: config.reasoningEffort },
+    params.inlineFlags
+  );
+  if (!modelSelection.ok) {
+    const posted = await postIssueComment(
+      ghToken,
+      `https://api.github.com/repos/${repositoryPath}/issues/${pullNumber}/comments`,
+      modelSelection.message,
+      userAgent
+    );
+    if (!posted) {
+      log.warn("session.refusal_comment_failed", { ...meta, code: modelSelection.reason });
+      throw new Error(`Session refusal comment failed: ${modelSelection.reason}`);
+    }
+    log.info("handler.inline_flags_rejected", { ...meta, reason: modelSelection.reason });
+    return { outcome: "skipped", skip_reason: modelSelection.reason };
+  }
+  const { selection } = modelSelection;
+
   return withReaction(
     log,
     ghToken,
@@ -212,8 +239,8 @@ export async function startSession(
         target,
         teamId,
         title: params.title,
-        model: config.model,
-        reasoningEffort: config.reasoningEffort,
+        model: selection.model,
+        reasoningEffort: selection.reasoningEffort,
         scmLogin: sender.login,
         scmUserId: String(sender.id),
         scmAvatarUrl: sender.avatar_url,
@@ -252,7 +279,14 @@ export async function startSession(
         throw new Error(`Session creation failed: ${status} ${body}`);
       }
       const { sessionId } = creation;
-      log.info("session.created", { ...meta, session_id: sessionId, action });
+      log.info("session.created", {
+        ...meta,
+        session_id: sessionId,
+        action,
+        model: selection.model,
+        reasoning_effort: selection.reasoningEffort,
+        inline_model_override: modelSelection.overridden,
+      });
 
       const prompt = params.buildPrompt(config);
       const messageId = await sendPrompt(env, traceId, sessionId, {

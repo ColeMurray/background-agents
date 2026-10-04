@@ -160,6 +160,15 @@ app.post("/webhooks/github", async (c) => {
   return c.json({ ok: true });
 });
 
+/** Skips that already posted a PR comment explaining why no session started. */
+const COMMENTED_SKIP_REASONS: ReadonlySet<string> = new Set([
+  "not_member",
+  "target_team_missing_grant",
+  "team_archived",
+  "invalid_inline_flags",
+  "model_preferences_unavailable",
+]);
+
 async function handleWebhook(
   env: Env,
   log: Logger,
@@ -200,10 +209,7 @@ async function handleWebhook(
       result = await dispatchHandler(env, log, event, p, payload, traceId);
       if (
         dispatchKey &&
-        (result.outcome === "processed" ||
-          result.skip_reason === "not_member" ||
-          result.skip_reason === "target_team_missing_grant" ||
-          result.skip_reason === "team_archived")
+        (result.outcome === "processed" || COMMENTED_SKIP_REASONS.has(result.skip_reason))
       ) {
         // Checkpoint completed external effects; preflight skips must be reevaluated.
         await cacheStore.put(dispatchKey, DELIVERY_STATUS_PROCESSED, {

@@ -769,6 +769,59 @@ describe("POST /webhooks/github", () => {
     }
   );
 
+  it("checkpoints an inline flag rejection so redelivery does not comment twice", async () => {
+    const commentsBefore = vi.mocked(postIssueComment).mock.calls.length;
+    const body = JSON.stringify({
+      action: "created",
+      issue: {
+        number: 42,
+        title: "Inline flags",
+        pull_request: { url: "https://api.github.com/repos/test/repo/pulls/42" },
+      },
+      comment: {
+        id: 123,
+        body: "@test-bot[bot] !reasoning bogus fix this",
+        user: { login: "alice" },
+      },
+      repository: { id: 99, owner: { login: "test" }, name: "repo", private: false },
+      sender: { login: "alice", id: 1001, avatar_url: "https://example.com/alice.png" },
+    });
+    const signature = await sign(SECRET, body);
+    const ctx = makeCtx();
+    const env = makeEnv();
+    const cpFetch = vi.mocked(env.CONTROL_PLANE.fetch);
+    cpFetch.mockImplementation(async (url) =>
+      String(url).includes("/integration-settings/github/resolved/")
+        ? Response.json({ config: null })
+        : new Response(null, { status: 204 })
+    );
+
+    const res = await app.fetch(
+      new Request("http://localhost/webhooks/github", {
+        method: "POST",
+        body,
+        headers: {
+          "X-Hub-Signature-256": signature,
+          "X-GitHub-Event": "issue_comment",
+          "X-GitHub-Delivery": "delivery-inline-flags",
+        },
+      }),
+      env,
+      ctx
+    );
+    expect(await res.json()).toEqual({ ok: true });
+    await flushWaitUntil(ctx, 0);
+
+    expect(postIssueComment).toHaveBeenCalledTimes(commentsBefore + 1);
+    expect(vi.mocked(postIssueComment).mock.calls.at(-1)?.[2]).toContain(
+      "Reasoning effort `bogus` is not valid"
+    );
+    expect(cpFetch.mock.calls.some(([url]) => String(url) === "https://internal/sessions")).toBe(
+      false
+    );
+    expect(await env.GITHUB_KV.get("delivery-dispatch:delivery-inline-flags")).toBe("processed");
+  });
+
   describe.each([
     "terminal skip",
     "success",

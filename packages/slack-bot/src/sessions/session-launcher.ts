@@ -17,8 +17,8 @@ import { createSession } from "./control-plane-client";
 import { getSlackSettings, type SlackSettings } from "../slack-settings";
 import { deliverPrompt } from "./prompt-delivery";
 import { buildThreadSession, storeThreadSession } from "./thread-session-store";
+import { EMPTY_INLINE_PROMPT_OPTIONS } from "@open-inspect/shared/inline-prompt-flags";
 import {
-  EMPTY_INLINE_PROMPT_OPTIONS,
   normalizeModelSelection,
   resolveInlinePromptOptions,
   sameModelSelection,

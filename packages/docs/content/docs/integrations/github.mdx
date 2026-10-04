@@ -86,6 +86,14 @@ flowchart TB
 @my-app[bot] can you explain why this retry path is failing?
 ```
 
+**Model and reasoning overrides.** Start the request with `!model` or `!reasoning` to override the configured model or reasoning effort for the session that comment starts:
+
+```text
+@my-app[bot] !model openai/gpt-5.6-sol !reasoning high investigate the flaky test
+```
+
+The flags work like Slack's: each accepts a space or a colon before the value (`!model:anthropic/claude-sonnet-4-6`, `!reasoning:max`), and all flags must appear together at the start of the request, right after the mention. Models must be enabled under Settings › Models, and the reasoning value must be supported by the model. A model flag without `!reasoning` keeps the configured effort when the new model supports it. If a flag is invalid, the bot replies on the PR and does not start a session. Auto-reviews and review requests always use the configured model.
+
 **Inline review threads.** When you mention the bot in a review thread, the prompt includes that thread's file path and diff context. The agent can reply in the thread and can also post a summary comment on the PR.
 
 **Branch and session behavior.** Comment-triggered sessions start from the repository's default branch, not the PR head branch, so use them for answers and discussion rather than asking the agent to push to the PR branch. Each accepted webhook starts a new session; GitHub comments do not continue an existing session the way Slack replies do, though the agent reads the current PR conversation when it needs context. Mentions on ordinary issues are ignored, and so are the bot's own comments.
@@ -142,7 +150,7 @@ Event automations match the numeric repository ID and retain their saved owning 
 
 ### Repository Overrides
 
-Add an override for a repository to replace the global defaults for that repository. Each field can be left on **Use global default** or switched to **Override for this repo**: default model and effort, Auto-review new PRs, PR Feedback Autofix, Allowed Trigger Users, Code Review Instructions, and Comment Action Instructions. If neither an override nor a global default sets a model, sessions use the deployment default model.
+Add an override for a repository to replace the global defaults for that repository. Each field can be left on **Use global default** or switched to **Override for this repo**: default model and effort, Auto-review new PRs, PR Feedback Autofix, Allowed Trigger Users, Code Review Instructions, and Comment Action Instructions. If neither an override nor a global default sets a model, sessions use the deployment default model. A [`!model` or `!reasoning` flag](#mention-actions) at the start of a mention overrides both for that one session.
 
 ## PR Feedback Autofix
 
@@ -280,7 +288,8 @@ Setup, rotation, and limitations are covered in [Source control](/configure/sour
 
 </Accordion>
   <Accordion title="The wrong model or instructions were used">
-    Repository overrides beat global defaults. Changes apply to new GitHub-triggered sessions only.
+    Repository overrides beat global defaults, and a `!model` or `!reasoning` flag at the start of
+    a mention beats both for that session. Changes apply to new GitHub-triggered sessions only.
 
 </Accordion>
   <Accordion title="The bot is active in too many repositories">

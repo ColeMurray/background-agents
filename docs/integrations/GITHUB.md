@@ -88,6 +88,26 @@ a GitHub reply:
 Open-Inspect strips the bot mention before sending the request to the agent. The rest of the comment
 becomes the prompt.
 
+### Model and Reasoning Overrides
+
+Start the request with `!model` or `!reasoning` to override the configured model or reasoning effort
+for the session that comment starts:
+
+```text
+@my-app[bot] !model openai/gpt-5.6-sol !reasoning high investigate the flaky test
+```
+
+The flags use the same syntax as Slack: each accepts a space or colon before its value (such as
+`!model:anthropic/claude-sonnet-4-6` or `!reasoning:max`), and any flags must appear together at the
+start of the request, right after the bot mention. Flags later in the comment are treated as part of
+the request. Models must be enabled under **Settings > Models**, and the reasoning value must be
+supported by the selected model. A model flag without `!reasoning` keeps the configured reasoning
+effort when the new model supports it, and otherwise uses the model's default.
+
+If a flag is invalid, the bot replies with a PR comment explaining why and does not start a session.
+Flags work in PR conversation comments and inline review threads. Auto-reviews and review requests
+always use the configured model.
+
 ### Inline Review Threads
 
 When you mention the bot in a PR review thread, Open-Inspect includes the file path and diff context
@@ -204,7 +224,9 @@ repositories, and save to resolve their IDs.
 | Repository Overrides        | Per-repository overrides for model, reasoning, instructions, and behavior |
 
 Repository overrides take priority over global defaults for the repository they apply to. If neither
-a repository override nor global default sets a model, sessions use the deployment default model.
+a repository override nor global default sets a model, sessions use the deployment default model. A
+[`!model` or `!reasoning` flag](#model-and-reasoning-overrides) at the start of a mention overrides
+both for that one session.
 
 ### Commit Signing
 
@@ -338,7 +360,8 @@ after the request was accepted. Open the Open-Inspect web app to inspect the ses
 ### The wrong model or instructions were used
 
 Check **Settings > Integrations > GitHub**. Repository overrides take priority over global defaults.
-Changes apply to new GitHub-triggered sessions.
+Changes apply to new GitHub-triggered sessions. A `!model` or `!reasoning` flag at the start of the
+mention overrides both for that session.
 
 ### The bot is active in too many repositories
 
