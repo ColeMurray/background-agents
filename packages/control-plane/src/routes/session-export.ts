@@ -35,8 +35,8 @@ import {
   type SessionExportRow,
 } from "../db/session-export-store";
 import { createLogger, type Logger } from "../logger";
-import { teamsEnforcementMode, viewerFromContext } from "../authorization/session-admission";
-import { TeamMembershipStore } from "../db/team-memberships";
+import { teamsEnforcementMode } from "../authorization/session-admission";
+import { resourceViewer } from "../authorization/resource-viewer";
 import { readBoundedBytes } from "../http/bounded-body";
 import { admit } from "../routing/admit";
 import type { ControlPlaneHonoEnv } from "../routing/hono-env";
@@ -306,12 +306,7 @@ async function handleExport(
 
   const store = new SessionExportStore(ctx.db);
   const mode = teamsEnforcementMode(ctx, env);
-  const memberships = ctx.authorization
-    ? (ctx.sessionMemberships ??= await new TeamMembershipStore(ctx.db).listForUser(
-        ctx.authorization.userId
-      ))
-    : new Map();
-  const viewer = viewerFromContext(ctx, memberships);
+  const viewer = await resourceViewer(ctx);
   const { createdAfter, createdBefore } = query;
   async function* records(): AsyncGenerator<ExportRecord> {
     const page = await store.list({

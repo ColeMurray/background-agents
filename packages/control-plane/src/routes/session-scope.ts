@@ -1,12 +1,12 @@
 import { Hono } from "hono";
 import { z } from "zod";
-import { checkSessionAccess, type SessionAction } from "@open-inspect/shared";
+import { checkSessionAccess } from "@open-inspect/shared";
 import { sessionVisibilitySchema } from "@open-inspect/shared/types/teams";
 import { SessionAuditStore } from "../db/session-audit";
 import { SessionCollaboratorStore } from "../db/session-collaborators";
 import { SessionIndexStore } from "../db/session-index";
 import { SessionScopeStore } from "../db/session-scope-store";
-import { evaluateSessionAdmission } from "../authorization/session-admission";
+import { evaluateSessionAdmissions } from "../authorization/session-admission";
 import { UserStore } from "../db/user-store";
 import { admit, dispatch } from "../routing/admit";
 import type { ControlPlaneHonoEnv } from "../routing/hono-env";
@@ -32,15 +32,13 @@ function denied(reason: string): Response {
 async function admitDescendants(
   ctx: RequestContext,
   env: Env,
-  ids: readonly string[],
-  action: SessionAction
+  ids: readonly string[]
 ): Promise<Response | null> {
-  for (const id of ids.slice(1)) {
-    const result = await evaluateSessionAdmission(ctx, env, id, action, null, true);
-    if (result.kind === "not_found") return error("Session not found", 404);
-    if (result.kind === "action_denied") return denied(result.reason);
-  }
-  return null;
+  const result = await evaluateSessionAdmissions(ctx, env, ids, "changeVisibility", true);
+  if (result.kind === "allowed") return null;
+  return result.outcome.kind === "not_found"
+    ? error("Session not found", 404)
+    : denied(result.outcome.reason);
 }
 
 async function changeVisibility(
@@ -56,15 +54,17 @@ async function changeVisibility(
   const actorUserId = admission.viewer.userId;
   if (body.visibility === "team" && !admission.row.ownerTeamId)
     return json({ error: "A team is required", code: "team_required" }, 400);
-  const store = new SessionIndexStore(ctx.db);
   const scope = new SessionScopeStore(ctx.db);
   const ids = [
     params.id,
     ...(body.includeChildren ? await scope.listDescendantIds(params.id) : []),
   ];
-  const descendantDenial = await admitDescendants(ctx, env, ids, "changeVisibility");
+  const descendantIds = ids.slice(1);
+  const descendantDenial = await admitDescendants(ctx, env, descendantIds);
   if (descendantDenial) return descendantDenial;
-  const rows = [admission.row, ...(await Promise.all(ids.slice(1).map((id) => store.get(id))))];
+  // Refresh descendants after admission so mutation audits observe concurrent scope changes.
+  const descendants = await new SessionIndexStore(ctx.db).getByIds(descendantIds);
+  const rows = [admission.row, ...descendantIds.map((id) => descendants.get(id) ?? null)];
   if (body.visibility === "private" && rows.some((row) => !row?.userId))
     return json({ error: "Session owner required", code: "owner_required" }, 400);
   if (body.visibility === "team" && rows.some((row) => !row?.ownerTeamId))
