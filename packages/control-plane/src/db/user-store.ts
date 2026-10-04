@@ -1,4 +1,9 @@
+import { z } from "zod";
 import { getSignInProviderIssuer } from "@open-inspect/shared/sign-in-provider";
+import {
+  sessionCollaboratorCandidatesResponseSchema,
+  type SessionCollaboratorCandidate,
+} from "@open-inspect/shared/types/sessions";
 import { generateId } from "../auth/crypto";
 import { normalizeEmail } from "./email";
 import { isUniqueConstraintError } from "./errors";
@@ -133,10 +138,65 @@ function toUserIdentity(row: UserIdentityRow): UserIdentity {
   };
 }
 
+export type CollaboratorEligibility = "eligible" | "not_found" | "inactive" | "not_team_member";
+
+const collaboratorEligibilityRowSchema = z.object({
+  suspended_at: z.number().nullable(),
+  role_id: z.string().nullable(),
+  team_member: z.number(),
+});
+
 // ── UserStore ───────────────────────────────────────────────────────
 
 export class UserStore {
   constructor(private readonly db: SqlDatabase) {}
+
+  /** Lists active users; a team ID restricts candidates to that team's members. */
+  async listCollaboratorCandidates({
+    includeEmail,
+    teamId = null,
+  }: {
+    includeEmail: boolean;
+    teamId?: string | null;
+  }): Promise<SessionCollaboratorCandidate[]> {
+    const { results } = await this.db
+      .prepare(
+        `SELECT users.id AS userId, users.display_name AS displayName,
+                ${includeEmail ? "users.email" : "NULL AS email"}, users.avatar_url AS avatarUrl
+         FROM users
+         JOIN user_role_assignments assignment ON assignment.user_id = users.id
+         ${teamId === null ? "" : "JOIN team_memberships m ON m.user_id = users.id AND m.team_id = ?"}
+         WHERE users.suspended_at IS NULL AND assignment.role_id IS NOT NULL
+         ORDER BY LOWER(COALESCE(users.display_name, ${includeEmail ? "users.email" : "NULL"}, users.id)), users.id`
+      )
+      .bind(...(teamId === null ? [] : [teamId]))
+      .all();
+    return sessionCollaboratorCandidatesResponseSchema.parse(results);
+  }
+
+  /** Applies the candidate-list rules to one user; a team ID also requires membership in that team. */
+  async getCollaboratorEligibility(
+    userId: string,
+    teamId: string | null
+  ): Promise<CollaboratorEligibility> {
+    const row = collaboratorEligibilityRowSchema.nullable().parse(
+      await this.db
+        .prepare(
+          `SELECT users.suspended_at, assignment.role_id,
+                  EXISTS (SELECT 1 FROM team_memberships m
+                          WHERE m.team_id = ? AND m.user_id = users.id) AS team_member
+           FROM users
+           LEFT JOIN user_role_assignments assignment ON assignment.user_id = users.id
+           WHERE users.id = ?`
+        )
+        .bind(teamId, userId)
+        .first()
+    );
+    if (!row) return "not_found";
+    if (row.suspended_at !== null || row.role_id === null) return "inactive";
+    if (teamId !== null && !row.team_member) return "not_team_member";
+    return "eligible";
+  }
 
   async getUsersByIds(userIds: readonly string[]): Promise<User[]> {
     const uniqueIds = [...new Set(userIds)];

@@ -90,6 +90,33 @@ describe("GitHubAutofixFeedbackCard", () => {
     );
   });
 
+  it("keeps an expanded thread attached to its comment when comments reorder", async () => {
+    const user = userEvent.setup();
+    const otherComment = {
+      ...review.comments[0],
+      url: "https://github.com/acme/widgets/pull/42#discussion_r2",
+      path: "src/other.ts",
+      line: 20,
+      startLine: null,
+      body: "Other feedback",
+      diffHunk: "@@ -20 +20 @@\n-old other\n+new other",
+    };
+    const feedback = { ...review, comments: [...review.comments, otherComment] };
+    const { rerender } = render(<FeedbackCard feedback={feedback} />);
+
+    await user.click(
+      screen.getByRole("button", { name: "Expand review comment on src/widget.ts L10-L12" })
+    );
+    rerender(
+      <FeedbackCard feedback={{ ...feedback, comments: [...feedback.comments].reverse() }} />
+    );
+
+    expect(
+      screen.getByRole("region", { name: "Diff context for src/widget.ts" })
+    ).toBeInTheDocument();
+    expect(screen.queryByRole("region", { name: "Diff context for src/other.ts" })).toBeNull();
+  });
+
   it("offers disclosure for a long review body", async () => {
     const user = userEvent.setup();
     render(

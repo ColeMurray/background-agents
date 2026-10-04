@@ -38,6 +38,7 @@ import {
   resolveTargetValue,
   targetPickerBlockId,
   targetQuickPickBlockId,
+  targetSelectedText,
 } from "./target-clarification";
 
 const REQUEST_ID = "00000000-0000-4000-8000-000000000001";
@@ -101,23 +102,6 @@ describe("filterReposByQuery", () => {
 });
 
 describe("buildTargetQuickPickButtons", () => {
-  it("maps alternatives to quick-pick buttons carrying the repo id", () => {
-    expect(buildTargetQuickPickButtons([repoTarget("acme/web"), repoTarget("acme/api")])).toEqual([
-      {
-        type: "button",
-        action_id: quickPickActionId(0),
-        text: { type: "plain_text", text: "web" },
-        value: "acme/web",
-      },
-      {
-        type: "button",
-        action_id: quickPickActionId(1),
-        text: { type: "plain_text", text: "api" },
-        value: "acme/api",
-      },
-    ]);
-  });
-
   it("maps an environment alternative to a button carrying the env: value", () => {
     expect(buildTargetQuickPickButtons([environmentTarget("env_abc123", "full-stack")])).toEqual([
       {
@@ -197,15 +181,18 @@ describe("resolveTargetValue", () => {
   });
 
   it("resolves a repository value against the live repo list", async () => {
-    expect(await resolveTargetValue(env, "acme/web")).toEqual(target);
+    expect(await resolveTargetValue(env, "acme/web", "trace", "C1", "U123")).toEqual(target);
+    expect(mockGetAvailableRepos).toHaveBeenCalledWith(env, "trace", "C1", "U123");
   });
 
   it("resolves an env: value against the live environments", async () => {
     mockGetEnvironmentById.mockResolvedValue(
       envTarget.kind === "environment" ? envTarget.environment : null
     );
-    expect(await resolveTargetValue(env, "env:env_abc123")).toEqual(envTarget);
-    expect(mockGetEnvironmentById).toHaveBeenCalledWith(env, "env_abc123", undefined);
+    expect(await resolveTargetValue(env, "env:env_abc123", "trace", "C1", "U123")).toEqual(
+      envTarget
+    );
+    expect(mockGetEnvironmentById).toHaveBeenCalledWith(env, "env_abc123", "trace", "C1", "U123");
   });
 
   it("returns null for a repository or environment that no longer exists", async () => {
@@ -263,8 +250,10 @@ describe("getTargetClarificationOptions", () => {
     mockGetAvailableEnvironments.mockResolvedValue([]);
   });
 
-  it("returns flat options while the workspace is repository-only", async () => {
-    const response = await getTargetClarificationOptions(env, undefined);
+  it("returns flat options while the channel catalog is repository-only", async () => {
+    const response = await getTargetClarificationOptions(env, undefined, "trace", "C1", "U123");
+    expect(mockGetAvailableRepos).toHaveBeenCalledWith(env, "trace", "C1", "U123");
+    expect(mockGetAvailableEnvironments).toHaveBeenCalledWith(env, "trace", "C1", "U123");
     expect(response).toEqual({
       options: [
         {
@@ -454,8 +443,18 @@ describe("buildTargetClarificationBlocks", () => {
         type: "actions",
         block_id: targetQuickPickBlockId(REQUEST_ID),
         elements: [
-          { type: "button", action_id: quickPickActionId(0), value: "acme/web" },
-          { type: "button", action_id: quickPickActionId(1), value: "acme/api" },
+          {
+            type: "button",
+            action_id: quickPickActionId(0),
+            text: { type: "plain_text", text: "web" },
+            value: "acme/web",
+          },
+          {
+            type: "button",
+            action_id: quickPickActionId(1),
+            text: { type: "plain_text", text: "api" },
+            value: "acme/api",
+          },
         ],
       },
       {
@@ -528,5 +527,21 @@ describe("buildTargetClarificationBlocks", () => {
     expect(blocks[0]).toMatchObject({
       text: { text: expect.stringContaining("if you expected other targets") },
     });
+  });
+});
+
+describe("targetSelectedText", () => {
+  it("names the chosen repository", () => {
+    expect(targetSelectedText(repoTarget("acme/web"))).toBe("Using *acme/web*");
+  });
+
+  it("names the no-repository choice", () => {
+    expect(targetSelectedText(noRepositoryTarget)).toBe("Using *No repository*");
+  });
+
+  it("escapes an environment name so it cannot render as a mention", () => {
+    expect(targetSelectedText(environmentTarget("env_1", "<!channel> staging"))).toBe(
+      "Using *&lt;!channel&gt; staging*"
+    );
   });
 });

@@ -1,16 +1,24 @@
 import type { HarnessId } from "@open-inspect/shared/harnesses";
+import type { SessionMemorySelection } from "../memory/types";
 import type { Env } from "../types";
 import type { RequestContext } from "../routes/shared";
 import type { SpawnSource } from "@open-inspect/shared/types/sessions";
+import type { SessionVisibility } from "@open-inspect/shared/types/teams";
 import type { RepositoryRef } from "@open-inspect/shared/types/repositories";
-import type { SandboxSettings } from "@open-inspect/shared/types/integrations";
+import {
+  omitUnsupportedSandboxSettings,
+  unsupportedSandboxSettings,
+  type SandboxSettings,
+} from "@open-inspect/shared/types/integrations";
 import { SessionIndexStore } from "../db/session-index";
 import { SessionInternalPaths } from "./contracts";
 import { createSessionRuntimeClient } from "./runtime-client";
 import { createLogger } from "../logger";
+import type { Pinned } from "./pinned";
 import type { SessionSkillManifestInput } from "./skill-resolution";
 import type { SessionModelProviderAuthInput } from "../model-provider-accounts/provider-auth-contracts";
 import { DEFAULT_BASE_BRANCH } from "../repos/default-branch";
+import { resolveSandboxBackendName } from "../sandbox/provider-name";
 
 const logger = createLogger("session-init");
 
@@ -57,8 +65,13 @@ export interface SessionInitInput {
   // Identity
   /** Participant identity for the session creator — becomes the owner participant's user_id in the DO. */
   participantUserId: string;
-  /** Canonical platform user ID for D1 analytics attribution. Null when unresolved. */
+  /** Canonical session owner for D1 access control and attribution. Null when unresolved. */
   platformUserId: string | null;
+  /** Creator credential identity, when different from inherited session ownership. */
+  participantCanonicalUserId: string | null;
+  ownerTeamId: string | null;
+  visibility: SessionVisibility;
+  collaboratorSourceSessionId?: string;
 
   // SCM identity
   scmLogin?: string | null;
@@ -72,8 +85,10 @@ export interface SessionInitInput {
   spawnDepth?: number;
   automationId?: string | null;
   automationRunId?: string | null;
-  managedSkillsManifest?: SessionSkillManifestInput;
-  managedSkillsSourceSessionId?: string;
+  /** Memory selection, resolved for a root session or copied from the parent. */
+  memory: Pinned<SessionMemorySelection>;
+  /** Managed skills, resolved for a root session or copied from the parent. */
+  managedSkills: Pinned<SessionSkillManifestInput>;
   /** Complete, immutable provider routing snapshot resolved by the caller. */
   providerAuth: SessionModelProviderAuthInput[];
 }
@@ -91,11 +106,8 @@ export async function initializeSession(
   input: SessionInitInput,
   ctx: RequestContext
 ): Promise<{ sessionId: string; status: string }> {
-  if (
-    (input.managedSkillsManifest === undefined) ===
-    (input.managedSkillsSourceSessionId === undefined)
-  ) {
-    throw new Error("Session must resolve or inherit exactly one managed skills manifest");
+  if (input.participantCanonicalUserId === undefined) {
+    throw new Error("Participant canonical identity must be explicit");
   }
   const hasRepoOwner = input.repoOwner !== null;
   const hasRepoName = input.repoName !== null;
@@ -139,9 +151,29 @@ export async function initializeSession(
           },
         ]
       : [];
+  const sandboxProvider = resolveSandboxBackendName(env.SANDBOX_PROVIDER);
+  const unsupportedSettings = unsupportedSandboxSettings(
+    input.sandboxSettings ?? {},
+    sandboxProvider
+  );
+  const sandboxSettings = input.sandboxSettings
+    ? omitUnsupportedSandboxSettings(input.sandboxSettings, sandboxProvider)
+    : undefined;
+  if (unsupportedSettings.length > 0) {
+    logger.warn("Ignoring sandbox settings unsupported by the configured provider", {
+      event: "sandbox.settings_unsupported",
+      provider: sandboxProvider,
+      settings: unsupportedSettings,
+      session_id: input.sessionId,
+      trace_id: ctx.trace_id,
+    });
+  }
 
   // Step 1: D1 index (must succeed before DO init starts sandbox warming)
   const sessionStore = new SessionIndexStore(ctx.db);
+  if (input.visibility === "private" && !input.platformUserId) {
+    throw new Error("Private sessions require a canonical owner");
+  }
   await sessionStore.create({
     id: input.sessionId,
     title: input.title || null,
@@ -161,10 +193,20 @@ export async function initializeSession(
     automationRunId: input.automationRunId,
     scmLogin: input.scmLogin || null,
     userId: input.platformUserId,
+    ownerTeamId: input.ownerTeamId,
+    visibility: input.visibility,
+    collaboratorSourceSessionId: input.collaboratorSourceSessionId,
+    privateCreationActor:
+      input.visibility === "private" && input.platformUserId
+        ? {
+            requestId: ctx.request_id,
+            actorUserId: input.platformUserId,
+          }
+        : undefined,
     createdAt: now,
     updatedAt: now,
-    skillManifest: input.managedSkillsManifest,
-    skillManifestSourceSessionId: input.managedSkillsSourceSessionId,
+    memory: input.memory,
+    managedSkills: input.managedSkills,
     providerAuth: input.providerAuth,
   });
 
@@ -191,14 +233,14 @@ export async function initializeSession(
           model: input.model,
           reasoningEffort: input.reasoningEffort,
           userId: input.participantUserId,
-          canonicalUserId: input.platformUserId,
+          canonicalUserId: input.participantCanonicalUserId,
           scmLogin: input.scmLogin,
           scmName: input.scmName,
           scmEmail: input.scmEmail,
           scmUserId: input.scmUserId,
           codeServerEnabled: input.codeServerEnabled,
           vncEnabled: input.vncEnabled,
-          sandboxSettings: input.sandboxSettings,
+          sandboxSettings,
           parentSessionId: input.parentSessionId,
           spawnSource: input.spawnSource,
           spawnDepth: input.spawnDepth,

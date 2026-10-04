@@ -74,3 +74,9 @@ variable "fetch_app_info" {
   type        = bool
   default     = false
 }
+
+variable "build_vm_image" {
+  description = "Build and verify the VM image required by the selected Modal backend."
+  type        = bool
+  default     = false
+}

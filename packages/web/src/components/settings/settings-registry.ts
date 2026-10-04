@@ -18,7 +18,10 @@ import { matchesSearchTerms } from "@/lib/search";
 import { lazy, type ComponentType, type LazyExoticComponent } from "react";
 
 type SettingsPermissionPredicate = PermissionId | { allOf: readonly PermissionId[] };
-type SettingsVisibility = { public: true } | { anyOf: readonly SettingsPermissionPredicate[] };
+type SettingsVisibilityPredicate =
+  | SettingsPermissionPredicate
+  | { teamCapability: "canEditMetadata" };
+type SettingsVisibility = { public: true } | { anyOf: readonly SettingsVisibilityPredicate[] };
 export type SettingsCapability = "unarchiveSessions";
 
 interface SettingsItemDefinition {
@@ -44,7 +47,7 @@ function allOf(...permissions: PermissionId[]): SettingsPermissionPredicate {
   return { allOf: permissions };
 }
 
-function anyOf(...predicates: SettingsPermissionPredicate[]): SettingsVisibility {
+function anyOf(...predicates: SettingsVisibilityPredicate[]): SettingsVisibility {
   return { anyOf: predicates };
 }
 
@@ -66,6 +69,18 @@ export const SETTINGS_GROUPS = [
         visibility: publicSettings,
         panel: lazyPanel(() =>
           import("./appearance-settings").then(({ AppearanceSettings }) => AppearanceSettings)
+        ),
+      },
+      {
+        id: "memories",
+        label: "Memories",
+        description: "Personal knowledge and instructions",
+        keywords: "memory facts directives context",
+        icon: SparkleIcon,
+        // Session creators need the inclusion preference even without catalog management.
+        visibility: anyOf("memories.manage_own", "sessions.create"),
+        panel: lazyPanel(() =>
+          import("./memories-settings").then((module) => module.MemoriesSettings)
         ),
       },
       {
@@ -111,6 +126,17 @@ export const SETTINGS_GROUPS = [
         ),
       },
       {
+        id: "shared-memories",
+        label: "Shared memories",
+        description: "Repository and environment knowledge",
+        keywords: "memory facts directives proposals",
+        icon: SparkleIcon,
+        visibility: anyOf("repositories.read", "environments.read"),
+        panel: lazyPanel(() =>
+          import("./memories-settings").then((module) => module.SharedMemoriesSettings)
+        ),
+      },
+      {
         id: "skills",
         label: "Skills",
         description: "Manage shared skills and profiles",
@@ -135,6 +161,17 @@ export const SETTINGS_GROUPS = [
         visibility: anyOf("workspace.members.read", "workspace.roles.read"),
         panel: lazyPanel(() =>
           import("./workspace-settings").then(({ WorkspaceSettings }) => WorkspaceSettings)
+        ),
+      },
+      {
+        id: "teams",
+        label: "Teams",
+        description: "Manage team membership and defaults",
+        keywords: "teams members leads visibility",
+        icon: DataControlsIcon,
+        visibility: anyOf("workspace.members.manage", { teamCapability: "canEditMetadata" }),
+        panel: lazyPanel(() =>
+          import("./teams-settings").then(({ TeamsSettings }) => TeamsSettings)
         ),
       },
       {
@@ -261,7 +298,8 @@ const DEFAULT_SETTINGS_QUERY = "";
 /** Returns whether the user's effective permissions make a settings category visible. */
 export function canViewSettingsCategory(
   category: SettingsCategory,
-  hasPermission: (permission: PermissionId) => boolean
+  hasPermission: (permission: PermissionId) => boolean,
+  canEditTeam = false
 ): boolean {
   const visibility = getSettingsItem(category).visibility;
   return (
@@ -269,7 +307,9 @@ export function canViewSettingsCategory(
     visibility.anyOf.some((predicate) =>
       typeof predicate === "string"
         ? hasPermission(predicate)
-        : predicate.allOf.every(hasPermission)
+        : "allOf" in predicate
+          ? predicate.allOf.every(hasPermission)
+          : canEditTeam
     )
   );
 }
@@ -293,22 +333,23 @@ export function canUseSettingsCapability(
 export function resolveSettingsCategory(
   requested: string | null,
   repoImagesEnabled: boolean,
-  hasPermission: (permission: PermissionId) => boolean
+  hasPermission: (permission: PermissionId) => boolean,
+  canEditTeam = false
 ): SettingsCategory {
   if (
     isSettingsCategory(requested, repoImagesEnabled) &&
-    canViewSettingsCategory(requested, hasPermission)
+    canViewSettingsCategory(requested, hasPermission, canEditTeam)
   ) {
     return requested;
   }
-  if (canViewSettingsCategory(DEFAULT_SETTINGS_CATEGORY, hasPermission)) {
+  if (canViewSettingsCategory(DEFAULT_SETTINGS_CATEGORY, hasPermission, canEditTeam)) {
     return DEFAULT_SETTINGS_CATEGORY;
   }
   for (const group of SETTINGS_GROUPS) {
     for (const item of group.items) {
       if (
         isSettingsItemAvailable(item, repoImagesEnabled) &&
-        canViewSettingsCategory(item.id, hasPermission)
+        canViewSettingsCategory(item.id, hasPermission, canEditTeam)
       ) {
         return item.id;
       }
@@ -326,16 +367,18 @@ export function getSettingsGroups({
   query = DEFAULT_SETTINGS_QUERY,
   repoImagesEnabled = supportsRepoImages(),
   hasPermission,
+  canEditTeam = false,
 }: {
   query?: string;
   repoImagesEnabled?: boolean;
   hasPermission: (permission: PermissionId) => boolean;
+  canEditTeam?: boolean;
 }) {
   return SETTINGS_GROUPS.map((group) => ({
     ...group,
     items: group.items.filter((item) => {
       if (!isSettingsItemAvailable(item, repoImagesEnabled)) return false;
-      if (!canViewSettingsCategory(item.id, hasPermission)) return false;
+      if (!canViewSettingsCategory(item.id, hasPermission, canEditTeam)) return false;
       return matchesSearchTerms(`${item.label} ${item.description} ${item.keywords}`, query);
     }),
   })).filter((group) => group.items.length > 0);

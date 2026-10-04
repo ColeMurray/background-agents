@@ -75,6 +75,12 @@ vi.mock("../db/environments", () => ({
   }),
 }));
 
+vi.mock("../db/team-settings", () => ({
+  TeamSettingsStore: vi.fn().mockImplementation(function () {
+    return { get: vi.fn(async () => ({ requireTeamOnCreate: false })) };
+  }),
+}));
+
 vi.mock("../auth/model-provider-account-default-adapters", () => ({
   modelProviderAccountAdapterRegistry: {
     get: (...args: unknown[]) => mockProviderAdapterGet(...args),
@@ -96,6 +102,7 @@ vi.mock("../auth/crypto", () => ({
 }));
 
 const mockSlackChannelStore = {
+  hasCompatibleBindings: vi.fn(async () => true),
   bindChannelStatements: vi.fn(),
   getWatchedSlackChannels: vi.fn(),
 };
@@ -142,6 +149,23 @@ describe("automation create route", () => {
       scheduleTz: "UTC",
       instructions: "Run tests",
     };
+
+    it("denies repository targets before SCM lookup or persistence", async () => {
+      const res = await callRoute("POST", "/automations", {
+        body: validBody,
+        permissions: PERMISSION_IDS.filter((permission) => permission !== "repositories.use"),
+      });
+
+      expect(res.status).toBe(403);
+      await expect(res.json()).resolves.toEqual({
+        error: "Forbidden",
+        code: "permission_required",
+        permission: "repositories.use",
+      });
+      expect(resolveRepoOrError).not.toHaveBeenCalled();
+      expect(mockStore.bindAutomationInsert).not.toHaveBeenCalled();
+      expect(mockBatch).not.toHaveBeenCalled();
+    });
 
     it("rejects a Slack channel condition with the wrong operator", async () => {
       const res = await callRoute("POST", "/automations", {

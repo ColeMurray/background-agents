@@ -16,7 +16,7 @@ import {
   requireClassificationProviderKey,
   resolveClassificationProvider,
 } from "@open-inspect/shared/classification";
-import { getAvailableRepos, buildRepoDescriptions } from "./repos";
+import { buildRepoDescriptions } from "./repos";
 import { createLogger } from "../logger";
 
 const log = createLogger("classifier");
@@ -84,18 +84,17 @@ const classifyRepoStrictJsonSchema = {
 /**
  * Build classification prompt from Linear issue context.
  */
-async function buildClassificationPrompt(
-  env: Env,
+function buildClassificationPrompt(
+  repos: RepoConfig[],
   issueTitle: string,
   issueDescription: string | null | undefined,
   labels: string[],
   projectName: string | null | undefined,
   teamName: string | null | undefined,
   teamKey: string | null | undefined,
-  triggerComment: string | null | undefined,
-  traceId?: string
-): Promise<string> {
-  const repoDescriptions = await buildRepoDescriptions(env, traceId);
+  triggerComment: string | null | undefined
+): string {
+  const repoDescriptions = buildRepoDescriptions(repos);
 
   const escapeUntrusted = (s: string) =>
     s
@@ -194,12 +193,19 @@ async function callAnthropic(
 async function callOpenAI(
   apiKey: string,
   prompt: string,
-  model: string
+  model: string,
+  reasoningEffort?: string
 ): Promise<ClassifyToolInput> {
-  const parsed = await callOpenAIStructured(apiKey, model, prompt, {
-    name: CLASSIFY_REPO_TOOL_NAME,
-    schema: classifyRepoStrictJsonSchema,
-  });
+  const parsed = await callOpenAIStructured(
+    apiKey,
+    model,
+    prompt,
+    {
+      name: CLASSIFY_REPO_TOOL_NAME,
+      schema: classifyRepoStrictJsonSchema,
+    },
+    reasoningEffort
+  );
 
   const input = classifyToolInputSchema.safeParse(parsed);
   if (!input.success) throw new Error("Malformed OpenAI tool input");
@@ -208,10 +214,12 @@ async function callOpenAI(
 }
 
 /**
- * Classify which repository a Linear issue belongs to.
+ * Classify which repository a Linear issue belongs to, using the caller's catalog
+ * snapshot so matching, alternatives, and the prompt all see the same repositories.
  */
 export async function classifyRepo(
   env: Env,
+  repos: RepoConfig[],
   issueTitle: string,
   issueDescription: string | null | undefined,
   labels: string[],
@@ -221,8 +229,6 @@ export async function classifyRepo(
   triggerComment: string | null | undefined,
   traceId?: string
 ): Promise<ClassificationResult> {
-  const repos = await getAvailableRepos(env, traceId);
-
   if (repos.length === 0) {
     return {
       repo: null,
@@ -241,19 +247,18 @@ export async function classifyRepo(
     };
   }
 
-  try {
-    const prompt = await buildClassificationPrompt(
-      env,
-      issueTitle,
-      issueDescription,
-      labels,
-      projectName,
-      teamName,
-      teamKey,
-      triggerComment,
-      traceId
-    );
+  const prompt = buildClassificationPrompt(
+    repos,
+    issueTitle,
+    issueDescription,
+    labels,
+    projectName,
+    teamName,
+    teamKey,
+    triggerComment
+  );
 
+  try {
     const modelId = env.CLASSIFICATION_MODEL || DEFAULT_CLASSIFICATION_MODEL;
     const { provider, model } = resolveClassificationProvider(modelId);
 
@@ -267,7 +272,8 @@ export async function classifyRepo(
         : await callOpenAI(
             requireClassificationProviderKey(env.OPENAI_API_KEY, "OPENAI_API_KEY", modelId),
             prompt,
-            model
+            model,
+            env.CLASSIFICATION_REASONING_EFFORT
           );
 
     let matchedRepo: RepoConfig | null = null;

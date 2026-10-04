@@ -8,6 +8,8 @@ import {
   PROVIDER_SESSION_CLEANUP_SQL,
   RECOVERABLE_IMAGE_FINALIZATIONS_SQL,
   SUPERSEDED_IMAGES_SQL,
+  UNBOUND_SOURCE_INTENTS_SQL,
+  UNRESOLVED_PROVIDER_OPERATIONS_SQL,
 } from "../../src/db/image-builds";
 import { ImageBuildFinalizer } from "../../src/image-builds/finalizer";
 import { cleanD1Tables } from "./cleanup";
@@ -391,6 +393,8 @@ describe("ImageBuildStore finalization state", () => {
       failedHistoryDelete: await explain(DELETE_OLD_FAILED_BUILDS_SQL, [100]),
       staleRecovery: await explain(MARK_STALE_IMAGE_BUILDS_SQL, ["timed out", 100]),
       finalizationRecovery: await explain(RECOVERABLE_IMAGE_FINALIZATIONS_SQL, [200]),
+      sourceIntents: await explain(UNBOUND_SOURCE_INTENTS_SQL, []),
+      unresolvedOperations: await explain(UNRESOLVED_PROVIDER_OPERATIONS_SQL, []),
     };
 
     expect(plans.cleanup).toContain("idx_image_builds_session_cleanup");
@@ -399,6 +403,8 @@ describe("ImageBuildStore finalization state", () => {
     expect(plans.failedHistoryDelete).toContain("idx_image_builds_failed_history_cleanup");
     expect(plans.staleRecovery).toContain("idx_image_builds_stale_recovery");
     expect(plans.finalizationRecovery).toContain("idx_image_builds_finalization_recovery");
+    expect(plans.sourceIntents).toContain("idx_image_builds_unbound_source_intents");
+    expect(plans.unresolvedOperations).toContain("idx_image_builds_unresolved_operations");
     for (const plan of Object.values(plans)) {
       expect(plan).not.toContain("USE TEMP B-TREE");
     }
@@ -553,5 +559,316 @@ describe("ImageBuildStore finalization state", () => {
         expiresAt: 300,
       })
     ).toBe(true);
+  });
+});
+
+describe("ImageBuildStore asynchronous provider operations", () => {
+  // The columns are provider-neutral: any adapter whose provider finishes an
+  // artifact operation after accepting it uses them. Daytona is the first.
+
+  beforeEach(cleanD1Tables);
+
+  /** A building row with an accepted completion and a held lease. */
+  async function leasedBuild(options: { completionHash?: string } = {}) {
+    const environmentId = await seedEnvironment();
+    const store = new ImageBuildStore(env.DB);
+    const completionHash = options.completionHash ?? "completion-hash";
+    await store.registerBuild({
+      id: "build-1",
+      scope: environmentScope(environmentId),
+      provider: "modal",
+      repositoriesFingerprint: "fingerprint-1",
+      callbackTokenHash: "token-hash",
+      callbackTokenExpiresAt: Date.now() + 60_000,
+    });
+    await store.bindProviderSession("build-1", "modal", "session-1");
+    await store.finalization.acceptSuccessfulCompletion({
+      buildId: "build-1",
+      provider: "modal",
+      providerSessionId: "session-1",
+      tokenHash: "token-hash",
+      completionHash,
+      repositoryShas: [{ repoOwner: "acme", repoName: "web", baseSha: "abc123" }],
+      runtimeVersion: "v53-runtime",
+      buildDurationSeconds: 12.5,
+      now: Date.now(),
+    });
+    await store.finalization.claimLease({
+      buildId: "build-1",
+      completionHash,
+      leaseToken: "lease-1",
+      now: Date.now(),
+      expiresAt: Date.now() + 60_000,
+    });
+    return { store, completionHash };
+  }
+
+  const reservation = (overrides: Record<string, unknown> = {}) => ({
+    buildId: "build-1",
+    provider: "modal" as const,
+    providerSessionId: "session-1",
+    completionHash: "completion-hash",
+    leaseToken: "lease-1",
+    ref: "oi-image-abc",
+    deadlineAt: 900_000,
+    ...overrides,
+  });
+
+  it("reserves an operation once, under the lease that holds the build", async () => {
+    const { store } = await leasedBuild();
+
+    expect(await store.finalization.reserveProviderOperation(reservation())).toBe(true);
+
+    const row = await getRow("build-1");
+    expect(row?.provider_operation_ref).toBe("oi-image-abc");
+    expect(row?.provider_operation_deadline_at).toBe(900_000);
+    // A second delivery cannot take the reservation, so it cannot submit a
+    // second capture either.
+    expect(
+      await store.finalization.reserveProviderOperation(reservation({ ref: "oi-image-other" }))
+    ).toBe(false);
+    expect((await getRow("build-1"))?.provider_operation_ref).toBe("oi-image-abc");
+  });
+
+  it.each([
+    ["a stale lease", { leaseToken: "lease-2" }],
+    ["a stale completion", { completionHash: "other-hash" }],
+    ["another provider session", { providerSessionId: "session-2" }],
+    ["another provider", { provider: "vercel" as const }],
+  ])("refuses a reservation from %s", async (_name, overrides) => {
+    const { store } = await leasedBuild();
+
+    expect(await store.finalization.reserveProviderOperation(reservation(overrides))).toBe(false);
+    expect((await getRow("build-1"))?.provider_operation_ref).toBeNull();
+  });
+
+  it("refuses a reservation once the build is terminal", async () => {
+    const { store } = await leasedBuild();
+    await store.finalization.markFailed({
+      buildId: "build-1",
+      leaseToken: "lease-1",
+      error: "failed",
+    });
+
+    expect(await store.finalization.reserveProviderOperation(reservation())).toBe(false);
+  });
+
+  it("retires the reservation when the artifact it produced is fenced", async () => {
+    const { store, completionHash } = await leasedBuild();
+    await store.finalization.reserveProviderOperation(reservation());
+
+    expect(
+      await store.finalization.recordArtifact({
+        buildId: "build-1",
+        provider: "modal",
+        providerSessionId: "session-1",
+        completionHash,
+        leaseToken: "lease-1",
+        providerImageId: "snapshot-1",
+      })
+    ).toBe(true);
+
+    const row = await getRow("build-1");
+    expect(row?.provider_image_id).toBe("snapshot-1");
+    expect(row?.provider_operation_ref).toBeNull();
+    expect(row?.provider_operation_deadline_at).toBeNull();
+  });
+
+  it("keeps the source id while an operation is still unresolved", async () => {
+    const { store } = await leasedBuild();
+    await store.finalization.reserveProviderOperation(reservation());
+    await store.finalization.markFailed({
+      buildId: "build-1",
+      leaseToken: "lease-1",
+      error: "capture deadline exhausted",
+    });
+
+    expect(
+      await store.finalization.clearSessionCleanup({
+        buildId: "build-1",
+        provider: "modal",
+        providerSessionId: "session-1",
+      })
+    ).toBe(true);
+
+    // The reserved name is only ours if the snapshot under it names this
+    // sandbox as its source, so the id has to survive the teardown.
+    const row = await getRow("build-1");
+    expect(row?.provider_session_id).toBe("session-1");
+    expect(row?.provider_session_cleanup_pending).toBe(0);
+  });
+
+  it("holds an unresolved operation's row out of the failed-history sweep", async () => {
+    const { store } = await leasedBuild();
+    await store.finalization.reserveProviderOperation(reservation());
+    await store.finalization.markFailed({
+      buildId: "build-1",
+      leaseToken: "lease-1",
+      error: "capture deadline exhausted",
+    });
+    await store.finalization.clearSessionCleanup({
+      buildId: "build-1",
+      provider: "modal",
+      providerSessionId: "session-1",
+    });
+    await env.DB.prepare("UPDATE image_builds SET created_at = 1 WHERE id = ?")
+      .bind("build-1")
+      .run();
+
+    expect(await store.deleteOldFailedBuilds(1000)).toBe(0);
+    expect(await store.listUnresolvedOperations()).toEqual([
+      expect.objectContaining({ id: "build-1", provider_operation_ref: "oi-image-abc" }),
+    ]);
+
+    expect(await store.clearProviderOperation("build-1", "oi-image-abc")).toBe(true);
+    expect(await store.deleteOldFailedBuilds(1000)).toBe(1);
+  });
+
+  it("holds an unbound create intent's row out of every deletion path", async () => {
+    const environmentId = await seedEnvironment();
+    const store = new ImageBuildStore(env.DB);
+    await store.registerBuild({
+      id: "build-1",
+      scope: environmentScope(environmentId),
+      provider: "modal",
+      repositoriesFingerprint: "fingerprint-1",
+    });
+
+    expect(await store.markSourceCreateIntent("build-1", "modal")).toBe(true);
+    await store.markBuildFailed("build-1", "modal", "create timed out");
+    await env.DB.prepare("UPDATE image_builds SET created_at = 1 WHERE id = ?")
+      .bind("build-1")
+      .run();
+
+    // A null session id no longer means "nothing was created".
+    expect(await store.deleteOldFailedBuilds(1000)).toBe(0);
+    expect(await store.listUnboundSourceIntents()).toEqual([
+      expect.objectContaining({ id: "build-1", provider: "modal" }),
+    ]);
+
+    expect(await store.attachRecoveredProviderSession("build-1", "modal", "session-9")).toBe(true);
+    expect(await store.listUnboundSourceIntents()).toEqual([]);
+    expect(await store.listSessionCleanup()).toEqual([
+      expect.objectContaining({ id: "build-1", provider_session_id: "session-9" }),
+    ]);
+  });
+
+  it("keeps the teardown obligation when a recovered source races the intent's settlement", async () => {
+    const environmentId = await seedEnvironment();
+    const store = new ImageBuildStore(env.DB);
+    await store.registerBuild({
+      id: "build-1",
+      scope: environmentScope(environmentId),
+      provider: "modal",
+      repositoriesFingerprint: "fingerprint-1",
+    });
+    await store.markSourceCreateIntent("build-1", "modal");
+    await store.markBuildFailed("build-1", "modal", "create timed out");
+    await env.DB.prepare("UPDATE image_builds SET created_at = 1 WHERE id = ?")
+      .bind("build-1")
+      .run();
+
+    // One maintenance pass settles the intent on a stale absence while
+    // another, which already found the source under its reserved name,
+    // attaches it afterwards.
+    expect(await store.clearUnboundSourceIntent("build-1")).toBe(true);
+    expect(await store.attachRecoveredProviderSession("build-1", "modal", "session-9")).toBe(true);
+
+    const row = await getRow("build-1");
+    expect(row?.provider_session_id).toBe("session-9");
+    expect(row?.provider_session_cleanup_pending).toBe(1);
+    // A bound source the sweep never reads and a row free to be deleted is
+    // exactly how a live sandbox loses the only record naming it.
+    expect(await store.listSessionCleanup()).toEqual([
+      expect.objectContaining({ id: "build-1", provider_session_id: "session-9" }),
+    ]);
+    expect(await store.deleteOldFailedBuilds(1000)).toBe(0);
+  });
+
+  it("refuses to settle an intent whose source has already been attached", async () => {
+    const environmentId = await seedEnvironment();
+    const store = new ImageBuildStore(env.DB);
+    await store.registerBuild({
+      id: "build-1",
+      scope: environmentScope(environmentId),
+      provider: "modal",
+      repositoriesFingerprint: "fingerprint-1",
+    });
+    await store.markSourceCreateIntent("build-1", "modal");
+    await store.markBuildFailed("build-1", "modal", "create timed out");
+    await env.DB.prepare("UPDATE image_builds SET created_at = 1 WHERE id = ?")
+      .bind("build-1")
+      .run();
+
+    expect(await store.attachRecoveredProviderSession("build-1", "modal", "session-9")).toBe(true);
+    // The settle requires an unbound row, so the other interleaving cannot
+    // drop the obligation the attach just recorded.
+    expect(await store.clearUnboundSourceIntent("build-1")).toBe(false);
+
+    const row = await getRow("build-1");
+    expect(row?.provider_session_id).toBe("session-9");
+    expect(row?.provider_session_cleanup_pending).toBe(1);
+    expect(await store.deleteOldFailedBuilds(1000)).toBe(0);
+  });
+
+  it("never lets a recovered source revive a build or authorize a callback", async () => {
+    const environmentId = await seedEnvironment();
+    const store = new ImageBuildStore(env.DB);
+    await store.registerBuild({
+      id: "build-1",
+      scope: environmentScope(environmentId),
+      provider: "modal",
+      repositoriesFingerprint: "fingerprint-1",
+    });
+    await store.markSourceCreateIntent("build-1", "modal");
+
+    // Still building: recovery is for terminal rows only, so the normal
+    // bind-before-launch path stays the only way to bind a live build.
+    expect(await store.attachRecoveredProviderSession("build-1", "modal", "session-9")).toBe(false);
+
+    await store.markBuildFailed("build-1", "modal", "create timed out");
+    await store.attachRecoveredProviderSession("build-1", "modal", "session-9");
+
+    const row = await getRow("build-1");
+    expect(row?.status).toBe("failed");
+    expect(
+      await store.finalization.authorizeCompletionCallback({
+        buildId: "build-1",
+        providerSessionId: "session-9",
+        tokenHash: "token-hash",
+        now: Date.now(),
+      })
+    ).toBeNull();
+  });
+
+  it("settles an intent whose source was never created", async () => {
+    const environmentId = await seedEnvironment();
+    const store = new ImageBuildStore(env.DB);
+    await store.registerBuild({
+      id: "build-1",
+      scope: environmentScope(environmentId),
+      provider: "modal",
+      repositoriesFingerprint: "fingerprint-1",
+    });
+    await store.markSourceCreateIntent("build-1", "modal");
+    await store.markBuildFailed("build-1", "modal", "create rejected");
+
+    expect(await store.clearUnboundSourceIntent("build-1")).toBe(true);
+    expect(await store.listUnboundSourceIntents()).toEqual([]);
+    expect((await getRow("build-1"))?.provider_session_cleanup_pending).toBe(0);
+  });
+
+  it("refuses a create intent once the row is no longer a fresh building row", async () => {
+    const environmentId = await seedEnvironment();
+    const store = new ImageBuildStore(env.DB);
+    await store.registerBuild({
+      id: "build-1",
+      scope: environmentScope(environmentId),
+      provider: "modal",
+      repositoriesFingerprint: "fingerprint-1",
+    });
+    await store.bindProviderSession("build-1", "modal", "session-1");
+
+    expect(await store.markSourceCreateIntent("build-1", "modal")).toBe(false);
   });
 });

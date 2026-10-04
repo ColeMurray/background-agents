@@ -2,6 +2,9 @@ import { env } from "cloudflare:test";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { AutomationStore, type AutomationRow } from "../../src/db/automation-store";
 import { UserStore } from "../../src/db/user-store";
+import { EnvironmentStore } from "../../src/db/environments";
+import { TeamStore } from "../../src/db/teams";
+import { TeamRepositoryGrantStore } from "../../src/db/team-repository-grants";
 import { cleanD1Tables } from "./cleanup";
 import { serviceFetch, sqlDatabase } from "./helpers";
 
@@ -10,6 +13,7 @@ const BROWSER_USER_ID = "11111111111111111111111111111111";
 function automation(id: string, userId: string): AutomationRow {
   return {
     id,
+    owner_team_id: null,
     name: id,
     instructions: "Run tests",
     trigger_type: "schedule",
@@ -90,8 +94,8 @@ describe("automation router authorization", () => {
     expect(own.status).toBe(200);
     expect(denied.status).toBe(403);
     await expect(denied.json()).resolves.toMatchObject({
-      code: "permission_required",
-      permission: "automations.manage.own",
+      code: "automation_action_denied",
+      reason_code: "not_owner_or_lead",
     });
     expect((await store.getById("other-automation"))?.name).toBe("other-automation");
   });
@@ -131,8 +135,8 @@ describe("automation router authorization", () => {
 
     expect(response.status).toBe(403);
     await expect(response.json()).resolves.toMatchObject({
-      code: "permission_required",
-      permission: "automations.manage.own",
+      code: "automation_action_denied",
+      reason_code: "missing_permission",
     });
   });
 
@@ -165,6 +169,65 @@ describe("automation router authorization", () => {
       code: "permission_required",
       permission: "repositories.use",
     });
+  });
+
+  it("rejects a later environment containing an ungranted repository without changing the automation", async () => {
+    await seedBrowser("owner");
+    const team = await new TeamStore(env.DB).create({
+      slug: "automation-targets",
+      name: "Automation targets",
+      joinPolicy: "invite_only",
+    });
+    const environments = new EnvironmentStore(env.DB);
+    const grants = new TeamRepositoryGrantStore(env.DB);
+    for (const [id, name, repoId] of [
+      ["env_original", "original", 1],
+      ["env_allowed", "web", 2],
+      ["env_denied", "api", 3],
+    ] as const) {
+      await environments.create(
+        {
+          id,
+          name: id,
+          owner_team_id: team.id,
+          description: null,
+          prebuild_enabled: 0,
+          channel_associations: null,
+          created_at: 1,
+          updated_at: 1,
+        },
+        [{ position: 0, repo_owner: "acme", repo_name: name, repo_id: repoId, base_branch: "main" }]
+      );
+      if (repoId !== 3)
+        await grants.add(team.id, {
+          kind: "repository",
+          repoExternalId: repoId,
+          owner: "acme",
+          name,
+        });
+    }
+    const store = new AutomationStore(env.DB);
+    const row = {
+      ...automation("team-environment-targets", BROWSER_USER_ID),
+      owner_team_id: team.id,
+    };
+    await store.create(row);
+    await sqlDatabase(env.DB).batch(store.bindEnvironmentInserts(row.id, ["env_original"], 1));
+
+    const response = await serviceFetch(`https://cp.test/automations/${row.id}`, {
+      method: "PUT",
+      body: JSON.stringify({ name: "Updated", environmentIds: ["env_allowed", "env_denied"] }),
+    });
+
+    expect(response.status).toBe(409);
+    await expect(response.json()).resolves.toMatchObject({
+      code: "target_team_missing_grant",
+      repository: "acme/api",
+    });
+    expect(await store.getById(row.id)).toEqual(row);
+    expect(
+      (await store.getEnvironmentsForAutomation(row.id)).map((member) => member.environment_id)
+    ).toEqual(["env_original"]);
   });
 
   it("denies bot services before handler dispatch", async () => {

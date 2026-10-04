@@ -28,7 +28,7 @@ if TYPE_CHECKING:
 
     from .repo_config import RepoEntry
 
-BootPhaseName = Literal["starting", "sync", "setup", "start", "skills", "harness"]
+BootPhaseName = Literal["starting", "sync", "setup", "start", "skills", "memory", "harness"]
 BootPhaseStatus = Literal["started", "completed", "failed"]
 
 # Bound on a phase's free-text ``detail``, matching the cap the fatal report

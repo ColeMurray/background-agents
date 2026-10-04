@@ -5,11 +5,12 @@
 import {
   DEFAULT_MAX_CONCURRENT_CHILD_SESSIONS,
   DEFAULT_MAX_TOTAL_CHILD_SESSIONS,
+  DEFAULT_LINEAR_UNBOUND_CHANNELS,
+  linearBotGlobalSettingsSchema,
   type CodeServerSettings,
   type EnvironmentSettingsIntegrationId,
   type GitHubBotSettings,
   type IntegrationId,
-  type LinearBotSettings,
   type SandboxSettings,
   type VncSettings,
 } from "@open-inspect/shared/types/integrations";
@@ -34,6 +35,9 @@ import {
   json,
   error,
   requirePermission,
+  requireAll,
+  permissionRequirement,
+  environmentRequirement,
 } from "./shared";
 import { parseJsonBody } from "./body";
 
@@ -419,7 +423,7 @@ async function handleGetResolvedConfig(
   }
 
   if (id === "linear") {
-    const linearSettings = settings as LinearBotSettings;
+    const linearSettings = linearBotGlobalSettingsSchema.parse(settings);
     const linearReasoningEffort =
       linearSettings.model &&
       linearSettings.reasoningEffort &&
@@ -437,6 +441,7 @@ async function handleGetResolvedConfig(
         allowLabelModelOverride: linearSettings.allowLabelModelOverride ?? true,
         emitToolProgressActivities: linearSettings.emitToolProgressActivities ?? true,
         issueSessionInstructions: linearSettings.issueSessionInstructions ?? null,
+        unboundChannels: linearSettings.unboundChannels ?? DEFAULT_LINEAR_UNBOUND_CHANNELS,
         enabledRepos,
       },
     });
@@ -482,6 +487,7 @@ async function handleGetResolvedConfig(
         cpuCores: sandboxSettings.cpuCores ?? null,
         memoryMib: sandboxSettings.memoryMib ?? null,
         sandboxTimeoutMs: sandboxSettings.sandboxTimeoutMs ?? null,
+        finalSnapshotBufferMs: sandboxSettings.finalSnapshotBufferMs ?? null,
         enabledRepos,
       },
     });
@@ -504,7 +510,10 @@ const REPO_SETTINGS_MANAGE = admit({
 });
 const ENVIRONMENT_SETTINGS_MANAGE = admit({
   ...GITHUB_USER_OR_SERVICE_ROUTE,
-  authorization: requirePermission("environments.settings.manage"),
+  authorization: requireAll(
+    permissionRequirement("environments.settings.manage"),
+    environmentRequirement("manage", "environmentId")
+  ),
 });
 
 export const integrationSettingsRoutes = new Hono<ControlPlaneHonoEnv>();
@@ -515,7 +524,10 @@ integrationSettingsRoutes.get(
   admit({
     ...GITHUB_USER_OR_SERVICE_ROUTE,
     authorization: requirePermission("integrations.read", {
-      actorlessGrants: [{ service: "slack-bot", pathParams: { id: "slack" } }],
+      actorlessGrants: [
+        { service: "slack-bot", pathParams: { id: "slack" } },
+        { service: "linear-bot", pathParams: { id: "linear" } },
+      ],
     }),
   }),
   (c) => dispatch(c, handleGetIntegrationSettings)
@@ -549,7 +561,13 @@ integrationSettingsRoutes.delete(
 // code-server, and VNC only)
 integrationSettingsRoutes.get(
   "/integration-settings/:id/environments/:environmentId",
-  INTEGRATIONS_READ,
+  admit({
+    ...GITHUB_USER_OR_SERVICE_ROUTE,
+    authorization: requireAll(
+      permissionRequirement("integrations.read"),
+      environmentRequirement("read", "environmentId")
+    ),
+  }),
   (c) => dispatch(c, handleGetEnvironmentSettings)
 );
 integrationSettingsRoutes.put(

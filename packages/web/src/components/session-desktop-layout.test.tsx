@@ -2,53 +2,27 @@
 import "@testing-library/jest-dom/vitest";
 import { cleanup, render, screen } from "@testing-library/react";
 import { useEffect } from "react";
-import type * as ResizablePanels from "react-resizable-panels";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { SessionDesktopLayout } from "./session-desktop-layout";
 
-vi.mock("react-resizable-panels", async (importOriginal) => {
-  const actual = await importOriginal<typeof ResizablePanels>();
-  return {
-    ...actual,
-    Panel: ({ defaultSize, ...props }: React.ComponentProps<typeof actual.Panel>) => (
-      <actual.Panel {...props} defaultSize={defaultSize} data-default-size={defaultSize} />
-    ),
-  };
-});
-
-import { SESSION_CHANGES_LAYOUT_ID, SessionDesktopLayout } from "./session-desktop-layout";
-
-beforeEach(() => {
-  vi.stubGlobal(
-    "ResizeObserver",
-    class {
-      observe() {}
-      unobserve() {}
-      disconnect() {}
-    }
-  );
-});
-
-afterEach(() => {
-  cleanup();
-  vi.unstubAllGlobals();
-});
+afterEach(cleanup);
 
 describe("SessionDesktopLayout", () => {
-  it("gives the changes panel most of the workspace when it opens", () => {
+  it("shows an open diff in the main column and keeps the details sidebar beside it", () => {
     render(
       <SessionDesktopLayout
         workspace={<main>timeline and terminal</main>}
         sidebar={<aside>details</aside>}
-        changes={<aside>changes</aside>}
+        changes={<section>changes</section>}
       />
     );
 
-    expect(screen.getByTestId("session-main")).toHaveAttribute("data-default-size", "45%");
-    expect(screen.getByTestId("session-changes")).toHaveAttribute("data-default-size", "55%");
-    expect(screen.getByText("details")).toBeInTheDocument();
+    expect(screen.getByText("changes")).toBeVisible();
+    expect(screen.getByText("details")).toBeVisible();
+    expect(screen.getByText("timeline and terminal")).not.toBeVisible();
   });
 
-  it("clips overflow on the real panel group and nested content wrapper", () => {
+  it("shows the session workspace when no diff is open", () => {
     render(
       <SessionDesktopLayout
         workspace={<main>timeline and terminal</main>}
@@ -57,15 +31,11 @@ describe("SessionDesktopLayout", () => {
       />
     );
 
-    expect(screen.getByTestId(SESSION_CHANGES_LAYOUT_ID)).toHaveStyle({ overflow: "clip" });
-    expect(screen.getByTestId("session-main").firstElementChild).toHaveStyle({
-      minWidth: "0",
-      minHeight: "0",
-      overflow: "clip",
-    });
+    expect(screen.getByText("timeline and terminal")).toBeVisible();
+    expect(screen.getByText("details")).toBeVisible();
   });
 
-  it("keeps the session workspace mounted when the changes panel opens and closes", () => {
+  it("keeps the session workspace and sidebar mounted when a diff opens and closes", () => {
     const mounted = vi.fn();
     const unmounted = vi.fn();
     const sidebarMounted = vi.fn();
@@ -95,12 +65,14 @@ describe("SessionDesktopLayout", () => {
       <SessionDesktopLayout
         workspace={<Workspace />}
         sidebar={<Sidebar />}
-        changes={<aside>changes</aside>}
+        changes={<section>changes</section>}
       />
     );
+    expect(screen.getByText("timeline and terminal")).not.toBeVisible();
     rerender(
       <SessionDesktopLayout workspace={<Workspace />} sidebar={<Sidebar />} changes={null} />
     );
+    expect(screen.getByText("timeline and terminal")).toBeVisible();
 
     expect(mounted).toHaveBeenCalledTimes(1);
     expect(unmounted).not.toHaveBeenCalled();

@@ -5,6 +5,7 @@ import { act, renderHook, waitFor } from "@testing-library/react";
 import { SWRConfig } from "swr";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { AutomationListItem, ListAutomationsResponse } from "@open-inspect/shared";
+import { SwrFetchError } from "@/lib/swr-fetch-error";
 import { useAutomations } from "./use-automations";
 
 vi.mock("@/lib/auth-session", () => ({
@@ -35,7 +36,9 @@ function automation(id: string, name: string): AutomationListItem {
     repositories: [],
     environmentIds: [],
     providerSelections: {},
+    ownerTeamId: null,
     recentExecutions: [],
+    capabilities: { canRead: true, canManage: true, canTrigger: true },
   };
 }
 
@@ -100,6 +103,35 @@ describe("useAutomations", () => {
 
     await waitFor(() => expect(result.current.automations).toEqual([secondAutomation]));
     expect(result.current.automations).not.toContain(firstAutomation);
+  });
+
+  it("scopes every cursor page and replaces pages when the team changes", async () => {
+    const scoped = {
+      ...firstAutomation,
+      ownerTeamId: "team/one",
+      capabilities: { canRead: true, canManage: false, canTrigger: true },
+    };
+    const fetcher = vi.fn(async (path: string): Promise<ListAutomationsResponse> => {
+      if (path.includes("teamId=team-2")) {
+        return { automations: [secondAutomation], hasMore: false, nextCursor: null };
+      }
+      if (path.includes("cursor=")) {
+        return { automations: [secondAutomation], hasMore: false, nextCursor: null };
+      }
+      return { automations: [scoped], hasMore: true, nextCursor: "next" };
+    });
+    const { result, rerender } = renderHook(({ teamId }) => useAutomations("Daily", teamId), {
+      initialProps: { teamId: "team/one" },
+      wrapper: wrapper(fetcher),
+    });
+    await waitFor(() => expect(result.current.automations).toEqual([scoped]));
+    await act(() => result.current.loadMore());
+    await waitFor(() => expect(result.current.automations).toEqual([scoped, secondAutomation]));
+    expect(fetcher).toHaveBeenCalledWith(
+      "/api/automations?limit=25&search=Daily&teamId=team%2Fone&cursor=next"
+    );
+    rerender({ teamId: "team-2" });
+    await waitFor(() => expect(result.current.automations).toEqual([secondAutomation]));
   });
 
   it("rebuilds later cursor pages when the first page changes", async () => {
@@ -204,5 +236,29 @@ describe("useAutomations", () => {
     expect(
       fetcher.mock.calls.filter(([path]) => String(path).includes("cursor=")).map(([path]) => path)
     ).toEqual(["/api/automations?limit=25&cursor=next"]);
+  });
+
+  it.each([
+    [403, []],
+    [404, []],
+    [500, [firstAutomation]],
+  ])("after a %i refetch shows %j for a loaded list", async (status, expected) => {
+    let failure: SwrFetchError | null = null;
+    const fetcher = vi.fn(async (): Promise<ListAutomationsResponse> => {
+      if (failure) throw failure;
+      return { automations: [firstAutomation], hasMore: false, nextCursor: null };
+    });
+    const { result } = renderHook(() => useAutomations("", "team-1"), {
+      wrapper: wrapper(fetcher),
+    });
+    await waitFor(() => expect(result.current.automations).toEqual([firstAutomation]));
+
+    failure = new SwrFetchError(status);
+    await act(async () => {
+      await result.current.mutate();
+    });
+
+    await waitFor(() => expect(result.current.error).toBe(failure));
+    expect(result.current.automations).toEqual(expected);
   });
 });

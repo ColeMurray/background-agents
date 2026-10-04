@@ -2,8 +2,11 @@ import { describe, it, expect, beforeEach, vi } from "vitest";
 import { env } from "cloudflare:test";
 import { seedActiveUser, sqlDatabase } from "./helpers";
 import { AutomationStore, type AutomationRow } from "../../src/db/automation-store";
+import { GitHubAutomationStore } from "../../src/db/github-automation-store";
 import type { AutomationRunStatus } from "@open-inspect/shared/types/automations";
+import type { GitHubAutomationEvent } from "@open-inspect/shared/triggers";
 import { cleanD1Tables } from "./cleanup";
+import { seedTeam } from "./ownership-test-helpers";
 import { makeRunRow, seedRun, fetchRuns } from "./run-helpers";
 import {
   AutomationExecutionUnauthorizedError,
@@ -23,6 +26,7 @@ function makeAutomation(overrides?: Partial<AutomationRow>): AutomationRow {
   const now = Date.now();
   return {
     id: `auto-${Math.random().toString(36).slice(2, 8)}`,
+    owner_team_id: null,
     name: "Test Automation",
     instructions: "Run tests",
     trigger_type: "schedule",
@@ -1040,6 +1044,164 @@ describe("Scheduler (integration)", () => {
 
       const automation = await store.getById("auto-f2r");
       expect(automation!.consecutive_failures).toBe(0);
+    });
+
+    describe("neutral-denial recovery", () => {
+      const automationId = "auto-neutral-recovery";
+      const deniedEvent: GitHubAutomationEvent = {
+        source: "github",
+        eventType: "pull_request.opened",
+        repositoryId: 101,
+        repoOwner: "acme",
+        repoName: "app",
+        triggerKey: "github:101:pr:7:opened",
+        concurrencyKey: "github:101:pr:7",
+        contextBlock: "Pull request #7 opened.",
+        meta: {},
+      };
+
+      beforeEach(async () => {
+        await seedTeam("team-neutral-recovery");
+        await new AutomationStore(env.DB).create(
+          makeAutomation({
+            id: automationId,
+            owner_team_id: "team-neutral-recovery",
+            consecutive_failures: 2,
+          })
+        );
+      });
+
+      it("recovers a missed success reset through a newer conditional GitHub denial", async () => {
+        const store = new AutomationStore(env.DB);
+        const now = Date.now();
+        const success = makeRunRow(automationId, {
+          status: "completed",
+          created_at: now - 60_000,
+          completed_at: now - 59_000,
+        });
+        await seedRun(success);
+        expect(
+          await new GitHubAutomationStore(env.DB).recordGitHubGrantDenied(automationId, deniedEvent)
+        ).toBe(true);
+        const history = await store.listInvocations(automationId, { limit: 10, offset: 0 });
+        const denied = history.invocations[0];
+        expect(denied).toMatchObject({
+          status: "unauthorized",
+          skipReason: null,
+          runs: [
+            expect.objectContaining({ status: "unauthorized", failureReason: "repo_not_granted" }),
+          ],
+        });
+        expect(denied.createdAt).toBeGreaterThan(success.created_at);
+        expect(await store.getInvocationById(denied.id)).toMatchObject({
+          skip_reason: null,
+          failure_counted_at: null,
+        });
+        expect(await store.getInvocationRunAggregate(denied.id)).toMatchObject({
+          total: 1,
+          active: 0,
+          failed: 0,
+          completed: 0,
+          skipped: 0,
+        });
+        expect(await store.getStaleFailureResetCandidates(now - 120_000, 10)).toEqual([
+          { automation_id: automationId, invocation_id: success.invocation_id },
+        ]);
+
+        expect(await createScheduler().tick()).toEqual({ processed: 0, skipped: 0, failed: 0 });
+
+        expect(await store.getById(automationId)).toMatchObject({
+          enabled: 1,
+          consecutive_failures: 0,
+        });
+        expect(await store.listInvocations(automationId, { limit: 10, offset: 0 })).toEqual(
+          history
+        );
+        expect(await store.getInvocationById(denied.id)).toMatchObject({
+          failure_counted_at: null,
+        });
+      });
+
+      it("does not reset a streak with only unauthorized and skipped history", async () => {
+        const store = new AutomationStore(env.DB);
+        const now = Date.now();
+        await seedRun(
+          makeRunRow(automationId, {
+            status: "skipped",
+            skip_reason: "concurrent_run_active",
+            created_at: now - 60_000,
+            completed_at: now - 59_000,
+          })
+        );
+        expect(
+          await new GitHubAutomationStore(env.DB).recordGitHubGrantDenied(automationId, deniedEvent)
+        ).toBe(true);
+
+        expect(await store.getStaleFailureResetCandidates(now - 120_000, 10)).toEqual([]);
+        expect(await createScheduler().tick()).toEqual({ processed: 0, skipped: 0, failed: 0 });
+        expect(await store.getById(automationId)).toMatchObject({
+          enabled: 1,
+          consecutive_failures: 2,
+        });
+      });
+
+      it.each([
+        ["starting", false],
+        ["starting", true],
+        ["running", false],
+        ["running", true],
+        ["failed", false],
+        ["failed", true],
+      ] as const)(
+        "keeps a newer %s invocation as a reset barrier (unauthorized sibling: %s)",
+        async (status, unauthorizedSibling) => {
+          const store = new AutomationStore(env.DB);
+          const now = Date.now();
+          await seedRun(
+            makeRunRow(automationId, {
+              status: "completed",
+              created_at: now - 60_000,
+              completed_at: now - 59_000,
+            })
+          );
+          const barrier = makeRunRow(automationId, {
+            status,
+            created_at: now - 30_000,
+            started_at: status === "running" ? now - 30_000 : null,
+            execution_deadline_at: status === "running" ? now + 60_000 : null,
+            completed_at: status === "failed" ? now - 29_000 : null,
+            failure_reason: status === "failed" ? "seeded failure" : null,
+          });
+          await seedRun(barrier);
+          if (unauthorizedSibling) {
+            await seedRun(
+              makeRunRow(automationId, {
+                invocation_id: barrier.invocation_id,
+                status: "unauthorized",
+                failure_reason: "repo_not_granted",
+                created_at: now - 30_000,
+                completed_at: now - 29_000,
+              })
+            );
+          }
+          expect(
+            await new GitHubAutomationStore(env.DB).recordGitHubGrantDenied(
+              automationId,
+              deniedEvent
+            )
+          ).toBe(true);
+
+          expect(await store.getStaleFailureResetCandidates(now - 120_000, 10)).toEqual([
+            { automation_id: automationId, invocation_id: barrier.invocation_id },
+          ]);
+          expect(await createScheduler().tick()).toEqual({ processed: 0, skipped: 0, failed: 0 });
+          expect(await store.getById(automationId)).toMatchObject({
+            consecutive_failures: status === "failed" ? 3 : 2,
+            enabled: status === "failed" ? 0 : 1,
+          });
+          expect(await store.getRunById(automationId, barrier.id)).toMatchObject({ status });
+        }
+      );
     });
   });
 });

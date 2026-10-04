@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, expectTypeOf, it } from "vitest";
 import {
   DEFAULT_BUILD_TIMEOUT_SECONDS,
   INTERNAL_TTYD_PORT,
@@ -12,14 +12,118 @@ import {
   mcpServerCredentialMapSchema,
   mcpServerTypeSchema,
   normalizeRoutingRules,
+  omitUnsupportedSandboxSettings,
   resolveBuildTimeoutSeconds,
+  supportsConfigurableSandboxResources,
+  supportsConfigurableSandboxTimeout,
   scmGlobalConfigSchema,
   scmSettingsSchema,
+  DEFAULT_SLACK_UNBOUND_CHANNELS,
+  DEFAULT_LINEAR_UNBOUND_CHANNELS,
+  linearBotGlobalSettingsSchema,
+  linearBotSettingsSchema,
+  slackGlobalSettingsSchema,
+  slackRepoSettingsSchema,
   integrationSettingsSchemas,
   slackIntegrationSettingsRoutingResponseSchema,
   validateSandboxChildSessionLimits,
+  type LinearBotGlobalSettings,
+  type LinearGlobalConfig,
   type SlackRoutingRule,
 } from "./integrations";
+
+describe("Slack unbound channel policy", () => {
+  it("defaults to workspace ownership without changing stored optional settings", () => {
+    expect(DEFAULT_SLACK_UNBOUND_CHANNELS).toBe("workspace");
+    expect(slackGlobalSettingsSchema.parse({})).toEqual({});
+  });
+
+  it.each(["workspace", "reject"])("accepts %s only at the global level", (unboundChannels) => {
+    expect(slackGlobalSettingsSchema.parse({ unboundChannels })).toEqual({ unboundChannels });
+    expect(slackRepoSettingsSchema.safeParse({ unboundChannels }).success).toBe(false);
+  });
+
+  it.each([null, "team"])("rejects invalid policy %j", (unboundChannels) => {
+    expect(slackGlobalSettingsSchema.safeParse({ unboundChannels }).success).toBe(false);
+  });
+});
+
+describe("Linear unbound channel policy", () => {
+  it("uses the global-only settings type for Linear global defaults", () => {
+    expectTypeOf<LinearGlobalConfig["defaults"]>().toEqualTypeOf<
+      LinearBotGlobalSettings | undefined
+    >();
+  });
+
+  it("defaults to workspace ownership without changing stored optional settings", () => {
+    expect(DEFAULT_LINEAR_UNBOUND_CHANNELS).toBe(DEFAULT_SLACK_UNBOUND_CHANNELS);
+    expect(linearBotGlobalSettingsSchema.parse({})).toEqual({});
+    expect(integrationSettingsSchemas.linear.global.parse({ defaults: {} })).toEqual({
+      defaults: {},
+    });
+  });
+
+  it.each(["workspace", "reject"])("accepts %s only at the global level", (unboundChannels) => {
+    const defaults = { model: "anthropic/claude-sonnet-4-6", unboundChannels };
+    expect(linearBotGlobalSettingsSchema.parse(defaults)).toEqual(defaults);
+    expect(integrationSettingsSchemas.linear.global.parse({ defaults })).toEqual({ defaults });
+    expect(linearBotSettingsSchema.safeParse({ unboundChannels }).success).toBe(false);
+    expect(integrationSettingsSchemas.linear.repo.safeParse({ unboundChannels }).success).toBe(
+      false
+    );
+  });
+
+  it.each([null, "team", true, 1])("rejects invalid policy %j", (unboundChannels) => {
+    expect(linearBotGlobalSettingsSchema.safeParse({ unboundChannels }).success).toBe(false);
+    expect(
+      integrationSettingsSchemas.linear.global.safeParse({ defaults: { unboundChannels } }).success
+    ).toBe(false);
+  });
+
+  it("does not accept Slack publication settings", () => {
+    for (const settings of [{ mentionsPolicy: "allow" }, { agentNotificationsEnabled: true }]) {
+      expect(linearBotGlobalSettingsSchema.safeParse(settings).success).toBe(false);
+    }
+  });
+});
+
+describe("sandbox provider settings capabilities", () => {
+  it.each(["modal", "vercel"])("allows resource overrides for %s", (provider) => {
+    expect(supportsConfigurableSandboxResources(provider)).toBe(true);
+  });
+
+  it.each(["daytona", "opencomputer", "e2b"])(
+    "does not expose resource overrides for %s",
+    (provider) => {
+      expect(supportsConfigurableSandboxResources(provider)).toBe(false);
+    }
+  );
+
+  it("does not expose session timeout overrides for Daytona", () => {
+    expect(supportsConfigurableSandboxTimeout("daytona")).toBe(false);
+    expect(supportsConfigurableSandboxTimeout("modal")).toBe(true);
+  });
+
+  it("uses the explicit permissive fallback for unvalidated provider names", () => {
+    expect(supportsConfigurableSandboxResources("test-provider")).toBe(true);
+    expect(supportsConfigurableSandboxTimeout("test-provider")).toBe(true);
+  });
+
+  it("drops unsupported Daytona settings while preserving supported settings", () => {
+    expect(
+      omitUnsupportedSandboxSettings(
+        {
+          cpuCores: 2,
+          memoryMib: 4096,
+          sandboxTimeoutMs: 14_400_000,
+          buildTimeoutSeconds: 2400,
+          terminalEnabled: true,
+        },
+        "daytona"
+      )
+    ).toEqual({ buildTimeoutSeconds: 2400, terminalEnabled: true });
+  });
+});
 
 describe("findSandboxPortConflict", () => {
   it.each([INTERNAL_TTYD_PORT, INTERNAL_VNC_PORT])("rejects reserved internal port %i", (port) => {

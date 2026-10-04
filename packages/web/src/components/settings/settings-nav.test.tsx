@@ -16,6 +16,7 @@ const mocks = vi.hoisted(() => ({
   isMobile: false,
   repoImagesEnabled: true,
   allowedPermissions: null as Set<string> | null,
+  canEditTeam: false,
 }));
 
 vi.mock("@/lib/sandbox-provider", () => ({
@@ -28,12 +29,19 @@ vi.mock("@/hooks/use-current-user-authorization", () => ({
       mocks.allowedPermissions === null || mocks.allowedPermissions.has(permission),
   }),
 }));
+vi.mock("@/hooks/use-teams", () => ({
+  useMeTeams: () => ({
+    teams: mocks.canEditTeam ? [{ capabilities: { canEditMetadata: true } }] : [],
+    loading: false,
+  }),
+}));
 
 afterEach(() => {
   cleanup();
   mocks.isMobile = false;
   mocks.repoImagesEnabled = true;
   mocks.allowedPermissions = null;
+  mocks.canEditTeam = false;
 });
 
 function renderSettingsNav(
@@ -120,6 +128,13 @@ describe("SettingsNav", () => {
     expect(screen.queryByRole("button", { name: "Workspace access" })).not.toBeInTheDocument();
   });
 
+  it("shows Teams for a team lead without workspace management permission", () => {
+    mocks.allowedPermissions = new Set();
+    mocks.canEditTeam = true;
+    renderSettingsNav({ activeCategory: "teams" });
+    expect(screen.getByRole("button", { name: "Teams" })).toBeInTheDocument();
+  });
+
   it.each([
     ["global secret management", ["global_secrets.manage"]],
     ["repository read and secret management", ["repositories.read", "repositories.secrets.manage"]],
@@ -135,6 +150,13 @@ describe("SettingsNav", () => {
     renderSettingsNav({ activeCategory: "appearance" });
 
     expect(screen.queryByRole("button", { name: "Secrets" })).not.toBeInTheDocument();
+  });
+
+  it("shows Memories to session creators without memory management permission", () => {
+    mocks.allowedPermissions = new Set(["sessions.create"]);
+    renderSettingsNav({ activeCategory: "memories" });
+
+    expect(screen.getByRole("button", { name: "Memories" })).toBeInTheDocument();
   });
 
   it("keeps read-level sandbox and environment panels visible", () => {

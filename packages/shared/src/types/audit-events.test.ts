@@ -1,69 +1,71 @@
 import { describe, expect, it } from "vitest";
 import {
-  MAX_AUDIT_EVENT_TIMESTAMP_MS,
-  auditEventListResponseSchema,
-  auditEventSchema,
+  AUDIT_OBSERVATION_ACTIONS,
+  AUDIT_OPERATION_ACTIONS,
+  AUTHORIZATION_DECISION_ACTIONS,
+  AUTHORIZATION_DECISION_METADATA_SCHEMA,
+  auditOperationResultSchema,
+  interpretAuditEvent,
 } from "./audit-events";
 
-const event = {
-  id: "event-1",
-  occurredAt: 123,
-  requestId: "request-1",
-  principalKind: "service",
-  actorUserIdSnapshot: null,
-  actorServiceSnapshot: "github-bot",
-  action: "workspace.member_role_updated",
-  resourceType: "user",
-  resourceId: null,
-  targetUserIdSnapshot: null,
-  reasonCode: "role_replaced",
-  operationResult: "applied",
-  metadata: { schema: "future.v2", nested: { additions: [true, 1, null] } },
-} as const;
+describe("interpretAuditEvent", () => {
+  it("keeps shadow observations separate from operation actions", () => {
+    expect(AUDIT_OBSERVATION_ACTIONS).toContain("session.shadow_denied");
+    expect(AUDIT_OPERATION_ACTIONS).not.toContain("session.shadow_denied");
+  });
 
-describe("audit event contracts", () => {
-  it("accepts current principals, outcomes, nullable snapshots, and forward-compatible metadata", () => {
-    for (const principalKind of ["user", "service", "sandbox"]) {
-      for (const operationResult of ["applied", "no_op", "denied", "rejected"]) {
-        expect(auditEventSchema.parse({ ...event, principalKind, operationResult })).toMatchObject({
-          principalKind,
+  it.each(auditOperationResultSchema.options)(
+    "interprets a shadow denial as an observation regardless of stored result %s",
+    (operationResult) => {
+      expect(
+        interpretAuditEvent({
+          action: "session.shadow_denied",
           operationResult,
-          metadata: event.metadata,
-        });
-      }
+          metadata: { before: {}, requested: {}, after: {}, channel: "ws" },
+        })
+      ).toEqual({ kind: "observation", observation: "would_deny" });
+    }
+  );
+
+  it.each(["session.shadow_denied.extra", "custom.session.shadow_denied"])(
+    "does not interpret lookalike action %s as an observation",
+    (action) => {
+      expect(interpretAuditEvent({ action, operationResult: "applied", metadata: {} })).toEqual({
+        kind: "unknown",
+      });
+    }
+  );
+
+  it.each(AUDIT_OPERATION_ACTIONS)("preserves the domain outcome for %s", (action) => {
+    for (const operationResult of auditOperationResultSchema.options) {
+      expect(interpretAuditEvent({ action, operationResult, metadata: {} })).toEqual({
+        kind: "operation",
+        result: operationResult,
+      });
     }
   });
 
-  it("rejects unsupported principal and outcome values", () => {
-    expect(() => auditEventSchema.parse({ ...event, principalKind: "automation" })).toThrow();
-    expect(() => auditEventSchema.parse({ ...event, operationResult: "failed" })).toThrow();
-  });
-
-  it("rejects timestamps that cannot be paginated or rendered as dates", () => {
-    expect(auditEventSchema.parse({ ...event, occurredAt: MAX_AUDIT_EVENT_TIMESTAMP_MS })).toEqual({
-      ...event,
-      occurredAt: MAX_AUDIT_EVENT_TIMESTAMP_MS,
-    });
-    expect(() =>
-      auditEventSchema.parse({ ...event, occurredAt: MAX_AUDIT_EVENT_TIMESTAMP_MS + 1 })
-    ).toThrow();
-    expect(() =>
-      auditEventSchema.parse({ ...event, occurredAt: Number.MAX_SAFE_INTEGER })
-    ).toThrow();
-  });
-
-  it("enforces the pagination cursor invariant", () => {
-    expect(
-      auditEventListResponseSchema.parse({ events: [event], hasMore: false, nextCursor: null })
-    ).toMatchObject({ hasMore: false, nextCursor: null });
-    expect(
-      auditEventListResponseSchema.parse({ events: [event], hasMore: true, nextCursor: "opaque" })
-    ).toMatchObject({ hasMore: true, nextCursor: "opaque" });
-    expect(() =>
-      auditEventListResponseSchema.parse({ events: [], hasMore: true, nextCursor: null })
-    ).toThrow();
-    expect(() =>
-      auditEventListResponseSchema.parse({ events: [], hasMore: false, nextCursor: "unexpected" })
-    ).toThrow();
-  });
+  it.each([
+    { action: AUTHORIZATION_DECISION_ACTIONS.allowed, decision: "allowed", httpStatus: 409 },
+    { action: AUTHORIZATION_DECISION_ACTIONS.denied, decision: "denied", httpStatus: 403 },
+  ])(
+    "preserves the action-based decision and HTTP status for $action",
+    ({ action, decision, httpStatus }) => {
+      for (const operationResult of auditOperationResultSchema.options) {
+        expect(
+          interpretAuditEvent({
+            action,
+            operationResult,
+            metadata: {
+              schema: AUTHORIZATION_DECISION_METADATA_SCHEMA,
+              httpMethod: "PUT",
+              httpPath: "/workspace/members/user-2/role",
+              httpStatus,
+              requirements: [],
+            },
+          })
+        ).toEqual({ kind: "authorization_decision", decision, httpStatus });
+      }
+    }
+  );
 });

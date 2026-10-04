@@ -2,9 +2,8 @@
 Unit tests for OpenCodeClient transport seams exposed by the extraction.
 
 SSE frame parsing and end-to-end streaming stay covered by test_bridge_sse.py;
-these tests target the plain request methods (create_session / session_exists /
-post_prompt / request_stop / get_messages) and the events() context manager
-against a fake HTTP transport.
+these tests target stop/idle deadlines, HTTP pool ownership, and the events()
+context manager against a fake HTTP transport.
 """
 
 import asyncio
@@ -35,27 +34,6 @@ def make_client(http_client: AsyncMock) -> OpenCodeClient:
     )
 
 
-class TestPostPrompt:
-    async def test_posts_body_to_prompt_async_endpoint(self):
-        http_client = AsyncMock()
-        http_client.post.return_value = MockResponse(204)
-        body = {"parts": [{"type": "text", "text": "hi"}]}
-
-        await make_client(http_client).post_prompt(SESSION_ID, body)
-
-        assert http_client.post.await_count == 1
-        args, kwargs = http_client.post.await_args
-        assert args[0] == f"{BASE_URL}/session/{SESSION_ID}/prompt_async"
-        assert kwargs["json"] == body
-
-    async def test_raises_on_error_status(self):
-        http_client = AsyncMock()
-        http_client.post.return_value = MockResponse(500, text="boom")
-
-        with pytest.raises(RuntimeError, match="Async prompt failed: 500 - boom"):
-            await make_client(http_client).post_prompt(SESSION_ID, {"parts": []})
-
-
 class TestRequestStop:
     async def test_posts_abort_and_reports_success(self):
         http_client = AsyncMock()
@@ -84,23 +62,129 @@ class TestRequestStop:
         assert stopped is False
 
 
-class TestGetMessages:
-    async def test_returns_parsed_message_list(self):
-        messages = [{"info": {"id": "oc-msg-1", "role": "assistant"}, "parts": []}]
+class TestWaitUntilIdle:
+    async def test_polls_until_execution_domain_is_idle(self):
         http_client = AsyncMock()
-        http_client.get.return_value = MockResponse(200, messages)
+        http_client.get.side_effect = [
+            MockResponse(200, {SESSION_ID: {"type": "busy"}}),
+            MockResponse(200, {}),
+        ]
 
-        result = await make_client(http_client).get_messages(SESSION_ID)
+        stopped = await make_client(http_client).wait_until_idle(timeout_seconds=1)
 
-        assert result == messages
-        args, _ = http_client.get.await_args
-        assert args[0] == f"{BASE_URL}/session/{SESSION_ID}/message"
+        assert stopped is True
+        assert http_client.get.await_count == 2
 
-    async def test_returns_none_on_error_status(self):
+    @pytest.mark.parametrize(
+        "statuses",
+        [
+            {"child": {"type": "busy"}},
+            {SESSION_ID: {"type": "idle"}, "child": {"type": "busy"}},
+        ],
+    )
+    async def test_busy_child_prevents_domain_idle(self, statuses):
         http_client = AsyncMock()
-        http_client.get.return_value = MockResponse(500)
+        http_client.get.return_value = MockResponse(200, statuses)
 
-        assert await make_client(http_client).get_messages(SESSION_ID) is None
+        assert await make_client(http_client).wait_until_idle(timeout_seconds=0.01) is False
+
+    async def test_waits_until_child_is_idle(self):
+        http_client = AsyncMock()
+        http_client.get.side_effect = [
+            MockResponse(200, {SESSION_ID: {"type": "idle"}, "child": {"type": "busy"}}),
+            MockResponse(200, {SESSION_ID: {"type": "idle"}, "child": {"type": "idle"}}),
+        ]
+
+        assert await make_client(http_client).wait_until_idle(timeout_seconds=1) is True
+        assert http_client.get.await_count == 2
+
+    async def test_active_session_at_deadline_is_unconfirmed(self):
+        http_client = AsyncMock()
+        http_client.get.return_value = MockResponse(200, {SESSION_ID: {"type": "busy"}})
+
+        stopped = await make_client(http_client).wait_until_idle(timeout_seconds=0.01)
+
+        assert stopped is False
+
+    async def test_hung_status_request_cannot_outlive_deadline(self):
+        http_client = AsyncMock()
+        request_started = asyncio.Event()
+
+        async def hung_status(*_args, **_kwargs):
+            request_started.set()
+            await asyncio.Event().wait()
+
+        http_client.get.side_effect = hung_status
+
+        stopped = await asyncio.wait_for(
+            make_client(http_client).wait_until_idle(timeout_seconds=0.01),
+            timeout=0.2,
+        )
+
+        assert stopped is False
+        assert request_started.is_set()
+
+    async def test_explicit_cancellation_propagates_during_status_request(self):
+        http_client = AsyncMock()
+        request_started = asyncio.Event()
+
+        async def hung_status(*_args, **_kwargs):
+            request_started.set()
+            await asyncio.Event().wait()
+
+        http_client.get.side_effect = hung_status
+        waiting = asyncio.create_task(make_client(http_client).wait_until_idle(timeout_seconds=1))
+        await request_started.wait()
+        waiting.cancel()
+
+        with pytest.raises(asyncio.CancelledError):
+            await waiting
+
+    async def test_delayed_busy_status_uses_recalculated_sleep_budget(self, monkeypatch):
+        http_client = AsyncMock()
+        real_sleep = asyncio.sleep
+        requested_sleeps = []
+
+        async def delayed_busy(*_args, **_kwargs):
+            await real_sleep(0.1)
+            return MockResponse(200, {SESSION_ID: {"type": "busy"}})
+
+        async def record_sleep(delay):
+            requested_sleeps.append(delay)
+            await real_sleep(delay)
+
+        http_client.get.side_effect = delayed_busy
+        monkeypatch.setattr("sandbox_runtime.harness.opencode_client.asyncio.sleep", record_sleep)
+        monkeypatch.setattr(
+            "sandbox_runtime.harness.opencode_client.EXECUTION_STOP_POLL_SECONDS", 1.0
+        )
+
+        stopped = await asyncio.wait_for(
+            make_client(http_client).wait_until_idle(timeout_seconds=0.2),
+            timeout=0.5,
+        )
+
+        assert stopped is False
+        assert len(requested_sleeps) == 1
+        assert requested_sleeps[0] < 0.15
+
+    @pytest.mark.parametrize(
+        "payload",
+        [
+            [{"type": "idle"}],
+            "idle",
+            {SESSION_ID: "idle"},
+            {SESSION_ID: {"type": "idle"}, "child": {"status": "idle"}},
+            {SESSION_ID: {"type": "idle"}, "child": {"type": "unknown"}},
+        ],
+    )
+    async def test_malformed_status_payload_is_not_idle_evidence(self, payload):
+        http_client = AsyncMock()
+        http_client.get.return_value = MockResponse(200, payload)
+
+        stopped = await make_client(http_client).wait_until_idle(timeout_seconds=0.01)
+
+        assert stopped is False
 
 
 class TestPoolOwnership:
@@ -122,42 +206,6 @@ class TestPoolOwnership:
         assert client._client() is pool
         await client.aclose()
         assert pool.is_closed
-
-
-class TestCreateSession:
-    async def test_returns_created_session_id(self):
-        http_client = AsyncMock()
-        http_client.post.return_value = MockResponse(200, {"id": "oc-new-session"})
-
-        session_id = await make_client(http_client).create_session()
-
-        assert session_id == "oc-new-session"
-        args, kwargs = http_client.post.await_args
-        assert args[0] == f"{BASE_URL}/session"
-        assert kwargs["json"] == {}
-
-    async def test_raises_on_error_status(self):
-        http_client = AsyncMock()
-        http_client.post.return_value = MockResponse(500, {})
-
-        with pytest.raises(httpx.HTTPStatusError):
-            await make_client(http_client).create_session()
-
-
-class TestSessionExists:
-    async def test_true_on_200(self):
-        http_client = AsyncMock()
-        http_client.get.return_value = MockResponse(200, {"id": SESSION_ID})
-
-        assert await make_client(http_client).session_exists(SESSION_ID) is True
-        args, _ = http_client.get.await_args
-        assert args[0] == f"{BASE_URL}/session/{SESSION_ID}"
-
-    async def test_false_on_non_200(self):
-        http_client = AsyncMock()
-        http_client.get.return_value = MockResponse(404)
-
-        assert await make_client(http_client).session_exists(SESSION_ID) is False
 
 
 class MockSSEStream:

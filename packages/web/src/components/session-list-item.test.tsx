@@ -11,6 +11,7 @@ expect.extend(matchers);
 
 const mocks = vi.hoisted(() => ({
   allowedPermissions: new Set<string>(),
+  canManageLifecycle: false,
 }));
 
 vi.mock("next/link", () => ({
@@ -29,6 +30,7 @@ vi.mock("@/hooks/use-current-user-authorization", () => ({
 
 beforeEach(() => {
   mocks.allowedPermissions = new Set();
+  mocks.canManageLifecycle = false;
 });
 
 function session(unread = false): SessionItem {
@@ -44,6 +46,15 @@ function session(unread = false): SessionItem {
     environmentId: null,
     createdAt: 1,
     updatedAt: 2,
+    capabilities: {
+      canRead: true,
+      canCollaborate: false,
+      canManageLifecycle: mocks.canManageLifecycle,
+      canDelete: false,
+      canSandbox: false,
+      canManageCollaborators: false,
+      canChangeVisibility: false,
+    },
     readState: unread
       ? { latestMessageId: "message-1", version: 1, unread: true }
       : { latestMessageId: null, version: 0, unread: false },
@@ -62,14 +73,15 @@ function renderItem(unread = false) {
   );
 }
 
-it("fails closed when sessions.lifecycle is denied", () => {
+it("uses the server lifecycle denial even when the workspace permission is granted", () => {
+  mocks.allowedPermissions.add("sessions.lifecycle");
   renderItem();
 
   expect(screen.queryByRole("button", { name: "Session actions" })).not.toBeInTheDocument();
 });
 
-it("shows rename and archive actions when sessions.lifecycle is allowed", async () => {
-  mocks.allowedPermissions.add("sessions.lifecycle");
+it("shows rename and archive actions when the server allows lifecycle management", async () => {
+  mocks.canManageLifecycle = true;
   renderItem();
 
   fireEvent.pointerDown(screen.getByRole("button", { name: "Session actions" }), {

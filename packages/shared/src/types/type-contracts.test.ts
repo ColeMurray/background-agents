@@ -1,7 +1,11 @@
 import type { z } from "zod";
 import { expectTypeOf, it } from "vitest";
+import type { ANALYTICS_RUN_ORDER_BY } from ".";
 import type {
+  AnalyticsRunOrderBy,
+  AnalyticsRunsResponse,
   AutomationTriggerType,
+  GitHubAutomationEvent,
   ConditionConfigMap,
   ConditionType,
   JsonPathFilter,
@@ -12,6 +16,9 @@ import type {
 } from "..";
 import type {
   Automation,
+  AutomationRun,
+  AutomationRunStatus,
+  AutomationInvocationStatus,
   AutomationRepositoryInput,
   CreateAutomationRequest,
   CreateEnvironmentInput,
@@ -20,6 +27,7 @@ import type {
   ModelProviderSelections,
   RepositoryInput,
   ServerMessage,
+  SessionRun,
   SessionListRepository,
   SessionListResponse,
   SessionListSummary,
@@ -60,6 +68,8 @@ import type {
 } from "./session-api";
 
 it("preserves public Zod input and output relationships", () => {
+  expectTypeOf<AnalyticsRunOrderBy>().toEqualTypeOf<(typeof ANALYTICS_RUN_ORDER_BY)[number]>();
+  expectTypeOf<AnalyticsRunsResponse["runs"][number]>().toEqualTypeOf<SessionRun>();
   expectTypeOf<RepositoryInput>().toEqualTypeOf<z.input<typeof repositoryInputSchema>>();
   expectTypeOf<CreateEnvironmentInput>().toEqualTypeOf<
     z.input<typeof createEnvironmentInputSchema>
@@ -143,4 +153,15 @@ it("preserves public trigger type shapes", () => {
   expectTypeOf<Automation["triggerConfig"]>().toEqualTypeOf<TriggerConfig | null>();
 
   void config;
+});
+
+it("requires numeric GitHub event identity and adds terminal grant-denial statuses", () => {
+  expectTypeOf<GitHubAutomationEvent>().toExtend<{ repositoryId: number }>();
+  expectTypeOf<AutomationRunStatus>().toEqualTypeOf<
+    "starting" | "running" | "completed" | "failed" | "skipped" | "unauthorized"
+  >();
+  expectTypeOf<AutomationRun["status"]>().toEqualTypeOf<AutomationRunStatus>();
+  expectTypeOf<AutomationInvocationStatus>().toEqualTypeOf<
+    "starting" | "running" | "completed" | "failed" | "partial_failed" | "skipped" | "unauthorized"
+  >();
 });

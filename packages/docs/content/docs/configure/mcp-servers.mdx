@@ -1,0 +1,138 @@
+---
+title: MCP servers
+description: Give agents extra tools by registering local or remote MCP servers, scoping them to repositories, and keeping local servers fast to start.
+audience: team-owner
+owner: platform
+status: published
+lastReviewed: "2026-09-23"
+relatedCode:
+  - packages/shared/src/types/integrations.ts
+  - packages/web/src/components/settings/mcp-servers-settings.tsx
+  - packages/control-plane/src/routes/mcp-servers.ts
+  - docs/HOW_IT_WORKS.md
+  - docs/CLAUDE_AGENT.md
+---
+
+MCP servers add tools to the agent (a browser, a documentation index, an internal API) that OpenInspect starts or connects to inside each session.
+
+![Settings, MCP Servers: a remote server with a URL and a command-based server, each with a scope and an enable toggle](/images/configure/mcp-servers.webp "Settings › MCP Servers. A remote HTTP server and a command server, each scoped globally or to a repository.")
+
+## Prerequisites
+
+- The `mcp_servers.manage` permission to add, edit, enable, disable, or delete servers. Users with only `mcp_servers.read` can view the list.
+- For repository-scoped servers, at least one connected repository. The form shows "No repositories available. Connect a GitHub integration first." otherwise; see [GitHub](/integrations/github).
+
+## Adding a server
+
+<Steps>
+<Step>
+### Open the form
+
+Go to Settings › MCP Servers and click Add Server; the New MCP Server form opens.
+
+</Step>
+<Step>
+### Name and type
+
+Enter a name (for example `playwright` or `context7`) and choose Local or Remote.
+
+</Step>
+<Step>
+### Connection details
+
+For a local server, enter the command as a space-separated command and arguments, such as `npx -y @playwright/mcp`. Use quotes for arguments that contain spaces. Optionally add Environment Variables as key and value rows.
+
+For a remote server, enter the URL, such as `https://mcp.example.com/sse`. Optionally add HTTP Headers as name and value rows.
+
+</Step>
+<Step>
+### Availability and state
+
+Choose "All repositories" (available in every agent session) or "Selected repositories only" and tick the repositories. Leave Enabled on, then click Add Server.
+
+</Step>
+</Steps>
+
+## Server types
+
+| Type   | You provide                                                        | OpenInspect does                                                                    |
+| ------ | ------------------------------------------------------------------ | ----------------------------------------------------------------------------------- |
+| Local  | A command as an argument list, plus optional environment variables | Prepares the package (for `npx` commands) and starts the process inside the sandbox |
+| Remote | A URL, plus optional headers                                       | Connects the agent to the URL from inside the sandbox                               |
+
+Credentials you enter as environment variables or headers are stored encrypted on the server side. The settings page only reports whether a server has them; it never shows the values again. They are injected into the session when the server is prepared.
+
+## Scope and enablement
+
+| Control                    | Effect                                                                                                                 |
+| -------------------------- | ---------------------------------------------------------------------------------------------------------------------- |
+| All repositories           | The server is available in every agent session.                                                                        |
+| Selected repositories only | The server is available only in sessions for the chosen repositories. At least one must be selected.                   |
+| Enabled switch             | A disabled server stays configured but is not passed to any session. Toggle it from the list without opening the form. |
+
+Edit a server from the list to change any field and click Save Changes. Deleting a server cannot be undone.
+
+## How servers reach the agent
+
+- OpenCode: enabled servers in scope are written into the session's OpenCode configuration when the agent starts.
+- Claude Agent: the same servers are passed through unchanged to the harness. OpenInspect's own tools reach Claude Agent through a built-in server named `oi`, separate from the servers you register.
+
+Server commands, arguments, and credentials are passed through as configured. Changes apply to new sessions; a running session keeps the server set it started with.
+
+## Startup cost of local servers
+
+Before starting a local `npx` server, OpenInspect checks the sandbox's global npm installation. An exact package version that is already installed with intact executable links is reused, including after a snapshot restore. Only missing or mismatched packages are installed, and a failed or interrupted install is retried rather than treated as installed.
+
+To remove that install from the first session's startup, pin the same version in the command and in the repository's `.openinspect/setup.sh` (or the setup hook used by its environment), then rebuild the prebuilt image:
+
+```bash
+# .openinspect/setup.sh
+npm install --global @example/mcp-server@1.2.3
+```
+
+Configure the matching command as `npx -y @example/mcp-server@1.2.3`. MCP settings are not baked into images automatically; the setup script is what puts the package there. Changing the pinned version causes an install on every session until the image is rebuilt with the new version.
+
+<Callout type="info" title="Unversioned packages are refreshed every boot">
+  A command without a version, or with a tag such as `latest`, is refreshed once per sandbox boot.
+  The install is reused across agent restarts within that boot, but not across snapshot restores.
+  Pin a version if startup time matters.
+</Callout>
+
+Remote servers are unaffected by any of this. Unsupported `npx` option forms are left to `npx` without eager installation, so `npx` may still resolve registry metadata or populate its own cache.
+
+See [lifecycle scripts](/configure/lifecycle-scripts) and [prebuilt images](/configure/prebuilt-images) for how `setup.sh` and image builds fit together.
+
+## Troubleshooting
+
+<Accordions>
+  <Accordion title="The server's tools do not appear in a session">
+    Cause: the server is disabled, the session's repository is outside the server's scope, or the
+    session was created before the server was added. Fix: check the Enabled switch and the
+    Availability setting under Settings › MCP Servers, then start a new session.
+
+</Accordion>
+  <Accordion title="A local server is slow to start or its package could not be installed">
+    Cause: the package is installed at boot because it is not in the image, or a previous install
+    failed and is being retried. Fix: pin the version in both the command and `setup.sh`, rebuild
+    the image, and confirm the command runs in the sandbox terminal.
+
+</Accordion>
+  <Accordion title="The server is installed at every boot despite setup.sh">
+    Cause: the version in the command does not match the version installed by `setup.sh`, or the
+    image has not been rebuilt since the change. Fix: use the exact same `package@version` in both
+    places and rebuild the prebuilt image.
+
+</Accordion>
+  <Accordion title="Save fails with a validation error">
+    Cause: the name is empty, a remote server has no URL, a local server has no command, or
+    "Selected repositories only" has no repository ticked. Fix: fill in the missing field or switch
+    to "All repositories".
+
+</Accordion>
+</Accordions>
+
+## Next steps
+
+- [Lifecycle scripts](/configure/lifecycle-scripts)
+- [Prebuilt images](/configure/prebuilt-images)
+- [Sandbox tools](/sessions/sandbox-tools)

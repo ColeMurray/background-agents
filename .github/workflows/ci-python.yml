@@ -5,6 +5,7 @@ on:
     branches: [main]
     paths:
       - ".github/workflows/ci-python.yml"
+      - ".nvmrc"
       - "packages/control-plane/src/image-builds/timeouts.ts"
       - "packages/daytona-infra/**"
       - "packages/e2b-infra/**"
@@ -23,6 +24,7 @@ on:
     branches: [main]
     paths:
       - ".github/workflows/ci-python.yml"
+      - ".nvmrc"
       - "packages/control-plane/src/image-builds/timeouts.ts"
       - "packages/daytona-infra/**"
       - "packages/e2b-infra/**"
@@ -185,7 +187,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v6
         with:
-          node-version: "22"
+          node-version-file: .nvmrc
 
       - name: Install dependencies
         run: |
@@ -193,7 +195,8 @@ jobs:
           pip install -e ".[dev]"
 
       - name: Run tests
-        run: pytest tests/ -v
+        # Dump stacks and exit stalled tests before the job timeout prevents log upload.
+        run: pytest tests/ -v --durations=20 -o faulthandler_timeout=60 -o faulthandler_exit_on_timeout=true
 
       - name: Run Node.js tests
         run: node --test tests/*.test.mjs
@@ -218,16 +221,13 @@ jobs:
           python-version: "3.12"
           cache: "pip"
 
-      - name: Setup frozen image lock checker
+      - name: Setup uv
         uses: astral-sh/setup-uv@v6
         with:
           version: "0.9.7"
 
       - name: Install dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install -e ../sandbox-runtime
-          pip install -e ".[dev]"
+        run: uv sync --frozen --extra dev
 
       - name: Run tests
-        run: pytest tests/ -v
+        run: uv run --frozen --extra dev pytest tests/ -v

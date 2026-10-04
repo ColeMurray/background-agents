@@ -8,6 +8,7 @@
  * the user types, the quick-pick buttons, and the message blocks themselves.
  */
 
+import { escapeMrkdwnText } from "@open-inspect/shared/slack";
 import { getAvailableRepos, filterReposByQuery } from "./classifier/repos";
 import { getEnvironmentById } from "./classifier/environments";
 import type { Environment } from "@open-inspect/shared/types/environments";
@@ -19,6 +20,7 @@ import {
   NO_REPOSITORY_TARGET_LABEL,
   NO_REPOSITORY_TARGET_VALUE,
   parseTargetValue,
+  targetLabel,
   targetValue,
   type SlackSessionTarget,
 } from "./targets";
@@ -71,6 +73,19 @@ export function parseTargetInteractionRequestId(
   if (!blockId.startsWith(prefix)) return null;
   const requestId = blockId.slice(prefix.length);
   return REQUEST_ID_PATTERN.test(requestId) ? requestId : null;
+}
+
+/**
+ * True when a block id was minted by this module, whichever control it came
+ * from. A click on such a block must carry a parseable request id; a block id
+ * this code never produced belongs to a control posted before request ids
+ * existed, and its selection still resolves by channel and thread.
+ */
+export function isTargetInteractionBlockId(blockId: string): boolean {
+  return (
+    blockId.startsWith(TARGET_PICKER_BLOCK_ID_PREFIX) ||
+    blockId.startsWith(TARGET_QUICK_PICK_BLOCK_ID_PREFIX)
+  );
 }
 
 /** Unique per-button action_id; Slack requires action_id uniqueness within an actions block. */
@@ -149,17 +164,25 @@ function filterEnvironmentsByQuery(
 export async function resolveTargetValue(
   env: Env,
   value: string,
-  traceId?: string
+  traceId?: string,
+  channelId?: string | null,
+  userId?: string
 ): Promise<SlackSessionTarget | null> {
   const ref = parseTargetValue(value);
   if (ref.kind === "none") {
     return { kind: "none" };
   }
   if (ref.kind === "environment") {
-    const environment = await getEnvironmentById(env, ref.environmentId, traceId);
+    const environment = await getEnvironmentById(
+      env,
+      ref.environmentId,
+      traceId,
+      channelId,
+      userId
+    );
     return environment ? { kind: "environment", environment } : null;
   }
-  const repos = await getAvailableRepos(env, traceId);
+  const repos = await getAvailableRepos(env, traceId, channelId, userId);
   const repo = repos.find((r) => r.id === ref.repoId);
   return repo ? { kind: "repository", repo } : null;
 }
@@ -225,9 +248,11 @@ function buildGroupedOptions(
 export async function getTargetClarificationOptions(
   env: Env,
   query: string | undefined,
-  traceId?: string
+  traceId?: string,
+  channelId?: string | null,
+  userId?: string
 ): Promise<TargetClarificationOptions> {
-  const catalog = await loadTargetCatalog(env, traceId);
+  const catalog = await loadTargetCatalog(env, traceId, channelId, userId);
   const remainingAfterNoRepository = MAX_REPO_SUGGESTION_OPTIONS - 1;
   const matchedEnvironments = filterEnvironmentsByQuery(catalog.environments, query).slice(
     0,
@@ -385,4 +410,18 @@ export function buildTargetClarificationBlocks(
   });
 
   return blocks;
+}
+
+/**
+ * The clarification message's text once a target is picked. Slack leaves the
+ * picker and quick-pick buttons interactive forever, so a resolved
+ * clarification still reads as an open question the user can answer again;
+ * collapsing the message to a record of the choice makes the selection final.
+ *
+ * Passed to `chat.update` as `text` with no `blocks`, which is what drops the
+ * picker: Slack removes a message's existing blocks when `text` is supplied
+ * without them.
+ */
+export function targetSelectedText(target: SlackSessionTarget): string {
+  return `Using *${escapeMrkdwnText(targetLabel(target))}*`;
 }

@@ -20,7 +20,6 @@ import {
   updateAutomationRequestSchema,
 } from "@open-inspect/shared/types/automations";
 import type { ModelProviderSelections } from "@open-inspect/shared/types/provider-accounts";
-import type { PermissionId } from "@open-inspect/shared/rbac";
 import {
   checkHarnessCompatibility,
   getValidHarnessOrDefault,
@@ -34,6 +33,8 @@ import {
   type AutomationRepositoryInsert,
 } from "../db/automation-store";
 import { SlackChannelStore } from "../db/slack-channel-store";
+import { resolveCreationOwnerTeam } from "./team-ownership";
+import { resourceViewer } from "../authorization/resource-viewer";
 import {
   AutomationModelProviderAuthStore,
   toProviderSelections,
@@ -48,7 +49,6 @@ import {
   requireAdmittedCanonicalUserId,
 } from "../routing/identity-enforcement";
 import { generateWebhookApiKey, hashApiKey, encryptSentrySecret } from "../auth/webhook-key";
-import { hydrateAutomation } from "../automation/hydrate";
 import { Hono } from "hono";
 import { admit, dispatch } from "../routing/admit";
 import type { ControlPlaneHonoEnv } from "../routing/hono-env";
@@ -57,14 +57,20 @@ import {
   GITHUB_USER_OR_SERVICE_ROUTE,
   json,
   error,
-  requirePermission,
+  permissionRequirement,
+  requireAll,
 } from "./shared";
 import { parseJsonBody } from "./body";
 import type { Env } from "../types";
 import type { SqlDatabase, SqlStatement } from "../db/sql-database";
 import { ProviderAccountSelectionPolicyError } from "../model-provider-accounts/selection-policy";
 import { createLogger } from "../logger";
-import { AUTOMATIONS_READ, AUTOMATION_MANAGE, admittedAutomation } from "./automation-shared";
+import {
+  AUTOMATION_READ,
+  AUTOMATION_MANAGE,
+  admittedAutomation,
+  hydrateAutomationResponse,
+} from "./automation-shared";
 import {
   type CreateAutomationBody,
   FAR_FUTURE_THRESHOLD_MS,
@@ -75,13 +81,16 @@ import {
   getEnvironmentSelection,
   getRepositorySelection,
   getTriggerEventTypeError,
-  requireTargetPermissions,
   resolveEnvironmentSelection,
   resolveReasoningEffort,
   resolveRepositorySelection,
   validateSlackTriggerConfig,
   validateTargetCounts,
+  validateTeamExecutor,
 } from "./automation-validation";
+import { isAutomationExecutionAuthorized } from "../automation/authorization-guard";
+import { authorizeSessionTarget } from "./session-target-authorization";
+import { authorizeTeamRepositories } from "./workspace-repository-authorization";
 
 const logger = createLogger("router:automations");
 
@@ -128,6 +137,19 @@ async function handleCreateAutomation(
     );
   }
 
+  // The scheduler replays only the canonical subject admitted before RBAC.
+  const resolution = requireAdmittedCanonicalUserId(ctx, enforced);
+  if (resolution instanceof Response) return resolution;
+  const resolvedUserId = resolution;
+  const ownerTeam = await resolveCreationOwnerTeam(ctx, body.teamId ?? null);
+  if (ownerTeam instanceof Response) return ownerTeam;
+  const ownerTeamId = ownerTeam?.id ?? null;
+  if (ownerTeamId !== null) {
+    const executorError = await validateTeamExecutor(ctx.db, ownerTeamId, resolvedUserId);
+    if (executorError) return executorError;
+  }
+  const viewer = await resourceViewer(ctx);
+
   const selection = getRepositorySelection(body);
   const requestedRepositories = selection.kind === "replace" ? selection.repositories : [];
 
@@ -151,20 +173,32 @@ async function handleCreateAutomation(
       environmentSelection.kind === "replace" ? environmentSelection.environmentIds : [];
     validateTargetCounts(triggerType, requestedRepositories.length, requestedEnvironmentIds.length);
   } catch (e) {
-    if (e instanceof TargetSelectionError) return error(e.message, 400);
+    if (e instanceof TargetSelectionError) return e.response();
     throw e;
   }
-  if (ctx.principal?.kind === "user") {
-    const targetAuthorizationError = requireTargetPermissions(ctx, [
-      ...(requestedRepositories.length > 0 ? (["repositories.use"] as const) : []),
-      ...(requestedEnvironmentIds.length > 0 ? (["environments.use"] as const) : []),
-    ]);
-    if (targetAuthorizationError) return targetAuthorizationError;
-  }
+  const repositoryAuthorizationError = await authorizeSessionTarget(ctx, {
+    teamId: null,
+    repositories: requestedRepositories.map((repository) => ({
+      owner: repository.repoOwner,
+      name: repository.repoName,
+    })),
+  });
+  if (repositoryAuthorizationError) return repositoryAuthorizationError;
+  const environmentAuthorizationError = await authorizeSessionTarget(ctx, {
+    teamId: null,
+    environmentId: requestedEnvironmentIds[0],
+  });
+  if (environmentAuthorizationError) return environmentAuthorizationError;
+  let environmentRepositories;
   try {
-    await resolveEnvironmentSelection(ctx.db, requestedEnvironmentIds);
+    environmentRepositories = await resolveEnvironmentSelection(
+      ctx.db,
+      requestedEnvironmentIds,
+      ownerTeamId,
+      viewer
+    );
   } catch (e) {
-    if (e instanceof TargetSelectionError) return error(e.message, 400);
+    if (e instanceof TargetSelectionError) return e.response();
     throw e;
   }
 
@@ -206,6 +240,20 @@ async function handleCreateAutomation(
       ...body.triggerConfig!,
       conditions: normalizeSlackChannelConditions(body.triggerConfig!.conditions),
     };
+    if (
+      !(await new SlackChannelStore(ctx.db).hasCompatibleBindings(
+        extractSlackChannels(body.triggerConfig),
+        ownerTeamId
+      ))
+    ) {
+      return json(
+        {
+          error: "Slack channels must belong to the automation's team",
+          code: "channel_team_mismatch",
+        },
+        409
+      );
+    }
   }
 
   // Validate harness and model
@@ -218,7 +266,18 @@ async function handleCreateAutomation(
     return error("Invalid reasoning effort for selected model", 400);
   }
 
-  const newRepositories = await resolveRepositorySelection(env, requestedRepositories, ctx);
+  const newRepositories = await resolveRepositorySelection(
+    env,
+    requestedRepositories,
+    ctx,
+    ownerTeamId
+  );
+  if (newRepositories instanceof Response) return newRepositories;
+  const environmentGrantError = await authorizeTeamRepositories(ctx, {
+    teamId: ownerTeamId,
+    repositories: environmentRepositories,
+  });
+  if (environmentGrantError) return environmentGrantError;
 
   let providerSelections: ModelProviderSelections;
   try {
@@ -265,16 +324,11 @@ async function handleCreateAutomation(
     triggerAuthData = await encryptSentrySecret(sentrySecret, env.REPO_SECRETS_ENCRYPTION_KEY);
   }
 
-  // The scheduler replays user_id as session identity at fire time, so the
-  // handler may consume only the canonical subject admitted before RBAC.
-  const resolution = requireAdmittedCanonicalUserId(ctx, enforced);
-  if (resolution instanceof Response) return resolution;
-  const resolvedUserId = resolution;
-
   const db: SqlDatabase = ctx.db;
   const store = new AutomationStore(db);
   const providerAuthStore = new AutomationModelProviderAuthStore(db);
   const row: AutomationRow = {
+    owner_team_id: ownerTeamId,
     id,
     name: body.name.trim(),
     instructions: body.instructions,
@@ -315,7 +369,7 @@ async function handleCreateAutomation(
   }
   await ctx.db.batch(createStatements);
 
-  const automation = await hydrateAutomation(db, (await store.getById(id))!);
+  const automation = await hydrateAutomationResponse(ctx, (await store.getById(id))!, viewer);
 
   logger.info("automation.created", {
     event: "automation.created",
@@ -358,13 +412,8 @@ async function handleGetAutomation(
   params: { id: string },
   ctx: RequestContext
 ): Promise<Response> {
-  const id = params.id;
-
-  const store = new AutomationStore(ctx.db);
-  const row = await store.getById(id);
-  if (!row) return error("Automation not found", 404);
-
-  return json({ automation: await hydrateAutomation(ctx.db, row) });
+  const { automation, viewer } = admittedAutomation(ctx);
+  return json({ automation: await hydrateAutomationResponse(ctx, automation, viewer) });
 }
 
 async function handleUpdateAutomation(
@@ -510,18 +559,23 @@ async function handleUpdateAutomation(
   // it simply applies from the next invocation.
   const selection = getRepositorySelection(body);
   const environmentSelection = getEnvironmentSelection(body);
-  const requiredTargetPermissions: PermissionId[] = [
-    ...(selection.kind === "replace" && selection.repositories.length > 0
-      ? (["repositories.use"] as const)
-      : []),
-    ...(environmentSelection.kind === "replace" && environmentSelection.environmentIds.length > 0
-      ? (["environments.use"] as const)
-      : []),
-  ];
-  if (requiredTargetPermissions.length > 0) {
-    const targetAuthorizationError = requireTargetPermissions(ctx, requiredTargetPermissions);
-    if (targetAuthorizationError) return targetAuthorizationError;
-  }
+  const repositoryAuthorizationError = await authorizeSessionTarget(ctx, {
+    teamId: null,
+    repositories:
+      selection.kind === "replace"
+        ? selection.repositories.map((repository) => ({
+            owner: repository.repoOwner,
+            name: repository.repoName,
+          }))
+        : undefined,
+  });
+  if (repositoryAuthorizationError) return repositoryAuthorizationError;
+  const environmentAuthorizationError = await authorizeSessionTarget(ctx, {
+    teamId: null,
+    environmentId:
+      environmentSelection.kind === "replace" ? environmentSelection.environmentIds[0] : undefined,
+  });
+  if (environmentAuthorizationError) return environmentAuthorizationError;
 
   // The count rules span both selections, so when EITHER is replaced they are
   // validated against the automation's FINAL state (the replacement plus the
@@ -532,25 +586,69 @@ async function handleUpdateAutomation(
   const replacementEnvironmentIds: string[] | null =
     environmentSelection.kind === "replace" ? environmentSelection.environmentIds : null;
   if (selection.kind === "replace" || replacementEnvironmentIds !== null) {
+    const finalRepositories =
+      selection.kind === "replace" ? [] : await store.getRepositoriesForAutomation(id);
+    const finalEnvironmentIds =
+      replacementEnvironmentIds ??
+      (await store.getEnvironmentsForAutomation(id)).map(
+        (environment) => environment.environment_id
+      );
+    let environmentRepositories;
     try {
       const finalRepositoryCount =
-        selection.kind === "replace"
-          ? selection.repositories.length
-          : (await store.getRepositoriesForAutomation(id)).length;
-      const finalEnvironmentCount =
+        selection.kind === "replace" ? selection.repositories.length : finalRepositories.length;
+      validateTargetCounts(existingTriggerType, finalRepositoryCount, finalEnvironmentIds.length);
+      environmentRepositories = await resolveEnvironmentSelection(
+        ctx.db,
+        finalEnvironmentIds,
+        existing.owner_team_id,
+        admission.viewer,
         replacementEnvironmentIds !== null
-          ? replacementEnvironmentIds.length
-          : (await store.getEnvironmentsForAutomation(id)).length;
-      validateTargetCounts(existingTriggerType, finalRepositoryCount, finalEnvironmentCount);
-      if (replacementEnvironmentIds !== null) {
-        await resolveEnvironmentSelection(ctx.db, replacementEnvironmentIds);
-      }
+      );
     } catch (e) {
-      if (e instanceof TargetSelectionError) return error(e.message, 400);
+      if (e instanceof TargetSelectionError) return e.response();
       throw e;
     }
     if (selection.kind === "replace") {
-      replacementRepositories = await resolveRepositorySelection(env, selection.repositories, ctx);
+      const resolved = await resolveRepositorySelection(
+        env,
+        selection.repositories,
+        ctx,
+        existing.owner_team_id
+      );
+      if (resolved instanceof Response) return resolved;
+      replacementRepositories = resolved;
+    }
+    // Stored targets are revalidated too: grants may have been revoked since they were saved.
+    const grantError = await authorizeTeamRepositories(ctx, {
+      teamId: existing.owner_team_id,
+      repositories: [
+        ...finalRepositories.map((repository) => ({
+          owner: repository.repo_owner,
+          name: repository.repo_name,
+          repoId: repository.repo_id,
+        })),
+        ...environmentRepositories,
+      ],
+    });
+    if (grantError) return grantError;
+    // Target edits must leave the automation runnable by its current executor.
+    if (
+      !(await isAutomationExecutionAuthorized(ctx.db, {
+        automationId: id,
+        ...(existing.user_id ? { executionUserId: existing.user_id } : {}),
+        requiresRepositoryUse: (replacementRepositories ?? finalRepositories).length > 0,
+        requiresEnvironmentUse: finalEnvironmentIds.length > 0,
+      }))
+    ) {
+      return json(
+        {
+          error: "The automation's executor cannot launch these targets",
+          code: "automation_executor_unauthorized",
+          reason_code: "execution_authorization_denied",
+        },
+        409
+      );
     }
   }
 
@@ -592,6 +690,22 @@ async function handleUpdateAutomation(
       conditions: normalizeSlackChannelConditions(body.triggerConfig.conditions),
     };
     triggerConfigToValidate = body.triggerConfig;
+  }
+
+  if (
+    existingTriggerType === "slack_event" &&
+    !(await new SlackChannelStore(ctx.db).hasCompatibleBindings(
+      extractSlackChannels(body.triggerConfig ?? existingTriggerConfig ?? undefined),
+      existing.owner_team_id
+    ))
+  ) {
+    return json(
+      {
+        error: "Slack channels must belong to the automation's team",
+        code: "channel_team_mismatch",
+      },
+      409
+    );
   }
 
   if (triggerConfigToValidate) {
@@ -679,7 +793,7 @@ async function handleUpdateAutomation(
     trace_id: ctx.trace_id,
   });
 
-  return json({ automation: await hydrateAutomation(db, updated) });
+  return json({ automation: await hydrateAutomationResponse(ctx, updated, admission.viewer) });
 }
 
 async function handleDeleteAutomation(
@@ -711,11 +825,15 @@ automationCrudRoutes.post(
   "/automations",
   admit({
     ...GITHUB_USER_OR_SERVICE_ROUTE,
-    authorization: requirePermission("automations.create"),
+    // The creator becomes the executor, whose runs create sessions under its authority.
+    authorization: requireAll(
+      permissionRequirement("automations.create"),
+      permissionRequirement("sessions.create")
+    ),
   }),
   (c) => dispatch(c, handleCreateAutomation)
 );
-automationCrudRoutes.get("/automations/:id", AUTOMATIONS_READ, (c) =>
+automationCrudRoutes.get("/automations/:id", AUTOMATION_READ, (c) =>
   dispatch(c, handleGetAutomation)
 );
 automationCrudRoutes.put("/automations/:id", AUTOMATION_MANAGE, (c) =>

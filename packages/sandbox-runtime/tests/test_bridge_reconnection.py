@@ -1,11 +1,13 @@
 """Tests for bridge reconnection and error handling logic."""
 
 import asyncio
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from websockets import State
 
-from sandbox_runtime.bridge import AgentBridge, SessionTerminatedError
+from sandbox_runtime.bridge import AgentBridge
 from sandbox_runtime.git_signing import GitSigningError
 
 
@@ -39,6 +41,12 @@ class TestIsFatalConnectionError:
 
     def test_http_500_is_not_fatal(self, bridge):
         error_str = "server rejected WebSocket connection: HTTP 500"
+        assert bridge._is_fatal_connection_error(error_str) is False
+
+    def test_http_503_is_not_fatal(self, bridge):
+        # The control plane answers 503 while a save still needs this sandbox;
+        # exiting would shut the sandbox down under the save.
+        error_str = "server rejected WebSocket connection: HTTP 503"
         assert bridge._is_fatal_connection_error(error_str) is False
 
     def test_network_error_is_not_fatal(self, bridge):
@@ -219,16 +227,87 @@ class TestIsFatalConnectionError:
         assert fatal_path.read_text() == "Invalid commit signing configuration"
 
 
-class TestSessionTerminatedError:
-    """Tests for SessionTerminatedError exception."""
+class WedgedWs:
+    """A peer that stopped reading.
 
-    def test_can_be_raised_and_caught(self):
-        with pytest.raises(SessionTerminatedError) as exc_info:
-            raise SessionTerminatedError("Test message")
-        assert "Test message" in str(exc_info.value)
+    Sends park in flow control forever and the socket never closes itself, so
+    only aborting the transport can end the receive loop.
+    """
 
-    def test_exception_chaining(self):
-        original = ValueError("original error")
-        with pytest.raises(SessionTerminatedError) as exc_info:
-            raise SessionTerminatedError("Wrapped") from original
-        assert exc_info.value.__cause__ is original
+    def __init__(self):
+        self.state = State.OPEN
+        self.close_code = 1006
+        self.receiving = asyncio.Event()
+        self.transport = SimpleNamespace(abort=self._abort)
+        self._ended = asyncio.Event()
+
+    def _abort(self) -> None:
+        self.state = State.CLOSED
+        self._ended.set()
+
+    async def send(self, data: str) -> None:
+        await asyncio.Event().wait()
+
+    async def close(self, *_args, **_kwargs):
+        self._ended.set()
+
+    def __aiter__(self):
+        self.receiving.set()
+        return self
+
+    async def __anext__(self):
+        await self._ended.wait()
+        raise StopAsyncIteration
+
+
+class TestStalledWriteReconnect:
+    """The boundary the forwarder's retirement exists to cross.
+
+    A wedged connection stays OPEN, so the receive loop that drives reconnects
+    never ends on its own. Retiring the connection has to end it.
+    """
+
+    @pytest.fixture
+    def bridge(self):
+        return AgentBridge(
+            sandbox_id="test-sandbox",
+            session_id="test-session",
+            control_plane_url="https://example.com",
+            auth_token="test-token",
+        )
+
+    @pytest.mark.asyncio
+    async def test_a_stalled_write_ends_the_receive_loop_so_the_run_loop_reconnects(
+        self, bridge, monkeypatch
+    ):
+        class ConnectionContext:
+            def __init__(self, ws):
+                self.ws = ws
+
+            async def __aenter__(self):
+                return self.ws
+
+            async def __aexit__(self, *_args):
+                return False
+
+        ws = WedgedWs()
+        monkeypatch.setattr(
+            "sandbox_runtime.bridge.websockets.connect",
+            lambda *_args, **_kwargs: ConnectionContext(ws),
+        )
+        bridge.log = MagicMock()
+        bridge.boot_attach.on_connect = AsyncMock()
+        bridge.event_forwarder._send_timeout_seconds = 0.05
+
+        connect_task = asyncio.create_task(bridge._connect_and_run())
+        await asyncio.wait_for(ws.receiving.wait(), timeout=1)
+
+        # A heartbeat into a peer that stopped reading.
+        assert await bridge._send_event({"type": "heartbeat"}) is False
+
+        # Without retirement this never returns, and run() never reconnects.
+        await asyncio.wait_for(connect_task, timeout=1)
+
+        assert ws.state is State.CLOSED
+        assert bridge.ws is None
+        assert bridge.event_forwarder._ws is None

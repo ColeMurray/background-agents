@@ -15,7 +15,8 @@ import {
 import { callbacksRouter } from "./callbacks";
 import { createLogger } from "./logger";
 import { resolveAppName } from "@open-inspect/shared/app-name";
-import { handleAgentSessionEvent, escapeHtml } from "./webhook-handler";
+import { handleAgentSessionEvent } from "./webhook-handler";
+import { escapeHtml } from "./prompts";
 import { isDuplicateEvent } from "./kv-store";
 
 const log = createLogger("handler");

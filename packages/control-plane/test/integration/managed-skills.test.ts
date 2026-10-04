@@ -9,6 +9,7 @@ import { resolveManagedSkills } from "../../src/session/skill-resolution";
 import { buildSkillRevision, hashSessionSkillManifest } from "../../src/skills/content-addressing";
 import { cleanD1Tables } from "./cleanup";
 import { initNamedSessionDO, seedSandboxAuthHash, serviceFetch, sqlDatabase } from "./helpers";
+import { inheritedPin, resolvedPin } from "../../src/session/pinned";
 
 const content = {
   description: "Managed deployment instructions",
@@ -115,6 +116,8 @@ describe("managed skills persistence and resolution", () => {
     const sessions = new SessionIndexStore(env.DB);
     const base = {
       title: null,
+      ownerTeamId: null,
+      visibility: "workspace" as const,
       repoOwner: null,
       repoName: null,
       model: "anthropic/claude-haiku-4-5",
@@ -124,12 +127,12 @@ describe("managed skills persistence and resolution", () => {
       createdAt: Date.now(),
       updatedAt: Date.now(),
     };
-    await sessions.create({ ...base, id: "parent", skillManifest: manifest });
+    await sessions.create({ ...base, id: "parent", managedSkills: resolvedPin(manifest) });
     await sessions.create({
       ...base,
       id: "child",
       parentSessionId: "parent",
-      skillManifestSourceSessionId: "parent",
+      managedSkills: inheritedPin("parent"),
     });
 
     const store = new SessionSkillStore(env.DB);
@@ -203,6 +206,8 @@ describe("managed skills persistence and resolution", () => {
     const createdAt = Date.now();
     await new SessionIndexStore(env.DB).create({
       id: "legacy-without-skills",
+      ownerTeamId: null,
+      visibility: "workspace",
       title: null,
       repoOwner: null,
       repoName: null,
@@ -407,6 +412,8 @@ describe("managed skills persistence and resolution", () => {
     const sessions = new SessionIndexStore(env.DB);
     await sessions.create({
       id: "wide",
+      ownerTeamId: null,
+      visibility: "workspace",
       title: null,
       repoOwner: null,
       repoName: null,
@@ -416,7 +423,7 @@ describe("managed skills persistence and resolution", () => {
       status: "created" as const,
       createdAt: Date.now(),
       updatedAt: Date.now(),
-      skillManifest: manifest,
+      managedSkills: resolvedPin(manifest),
     });
 
     // The installation query is keyed by session id, so manifest width costs no
@@ -456,6 +463,8 @@ describe("managed skills persistence and resolution", () => {
     );
     await new SessionIndexStore(env.DB).create({
       id: "paged",
+      ownerTeamId: null,
+      visibility: "workspace",
       title: null,
       repoOwner: null,
       repoName: null,
@@ -465,7 +474,7 @@ describe("managed skills persistence and resolution", () => {
       status: "created" as const,
       createdAt: Date.now(),
       updatedAt: Date.now(),
-      skillManifest: manifest,
+      managedSkills: resolvedPin(manifest),
     });
     const { stub } = await initNamedSessionDO("paged");
     await seedSandboxAuthHash(stub, { authToken: "paged-token", sandboxId: "sandbox-paged" });
@@ -629,6 +638,7 @@ describe("managed skills persistence and resolution", () => {
       ids.map((id) =>
         environments.bindEnvironmentInsert({
           id,
+          owner_team_id: null,
           name: id,
           description: null,
           prebuild_enabled: 0,
@@ -697,6 +707,7 @@ describe("managed skills persistence and resolution", () => {
     await environments.create(
       {
         id: "env_skill_generation",
+        owner_team_id: null,
         name: "Before",
         description: null,
         prebuild_enabled: 0,

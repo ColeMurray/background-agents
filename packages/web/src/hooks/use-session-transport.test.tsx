@@ -115,6 +115,23 @@ describe("useSessionTransport", () => {
     expect(result.current.isOpen()).toBe(true);
   });
 
+  it("reports a synchronous send refusal after the socket starts closing", async () => {
+    const { result, socket } = await openSocket();
+    socket.readyState = FakeWebSocket.CLOSING;
+
+    expect(result.current.send({ type: "recover_preservation" })).toBe(false);
+    expect(socket.sentMessages).toHaveLength(1);
+  });
+
+  it("reports a synchronous socket send exception", async () => {
+    const { result, socket } = await openSocket();
+    vi.spyOn(socket, "send").mockImplementation(() => {
+      throw new Error("socket closed during send");
+    });
+
+    expect(result.current.send({ type: "recover_preservation" })).toBe(false);
+  });
+
   it("does not fetch a token or open a socket when transport is disabled", async () => {
     const { result } = renderHook(() =>
       useSessionTransport("session-1", { onMessage, onClose }, false)
@@ -237,6 +254,86 @@ describe("useSessionTransport", () => {
     });
     expect(FakeWebSocket.instances).toHaveLength(0);
     expect(result.current.connecting).toBe(false);
+  });
+
+  it.each(["initial", "authorization refresh"])(
+    "treats a mint 404 during %s as terminal, including manual reconnect and re-enable",
+    async (stage) => {
+      vi.useFakeTimers();
+      fetchMock.mockResolvedValue(Response.json({ error: "Not found" }, { status: 404 }));
+      if (stage === "authorization refresh") {
+        fetchMock.mockResolvedValueOnce(Response.json({ token: "original-token" }));
+      }
+      const rendered = renderHook(
+        ({ enabled }) => useSessionTransport("session-1", { onMessage, onClose }, enabled),
+        { initialProps: { enabled: true } }
+      );
+      await act(async () => vi.advanceTimersByTimeAsync(0));
+      if (stage === "authorization refresh") {
+        act(() => {
+          FakeWebSocket.instances[0].open();
+          FakeWebSocket.instances[0].serverClose(4010, true);
+        });
+        await act(async () => vi.advanceTimersByTimeAsync(0));
+      }
+
+      expect(rendered.result.current).toMatchObject({
+        sessionGone: true,
+        connected: false,
+        connecting: false,
+        reconnecting: false,
+        authError: null,
+        connectionError: null,
+      });
+      act(() => rendered.result.current.reconnect());
+      rendered.rerender({ enabled: false });
+      rendered.rerender({ enabled: true });
+      await act(async () => vi.advanceTimersByTimeAsync(300_000));
+      expect(fetchMock).toHaveBeenCalledTimes(stage === "initial" ? 1 : 2);
+      expect(FakeWebSocket.instances).toHaveLength(stage === "initial" ? 0 : 1);
+      expect(rendered.result.current.sessionGone).toBe(true);
+      rendered.unmount();
+    }
+  );
+
+  it("ignores a previous session's late mint 404 and clears gone for a different session", async () => {
+    let resolveOld!: (response: Response) => void;
+    fetchMock.mockImplementationOnce(
+      () => new Promise<Response>((resolve) => (resolveOld = resolve))
+    );
+    const rendered = renderHook(
+      ({ sessionId }) => useSessionTransport(sessionId, { onMessage, onClose }),
+      { initialProps: { sessionId: "old-session" } }
+    );
+    rendered.rerender({ sessionId: "new-session" });
+    await waitFor(() => expect(FakeWebSocket.instances).toHaveLength(1));
+    await act(async () => resolveOld(Response.json({ error: "Not found" }, { status: 404 })));
+    expect(rendered.result.current.sessionGone).toBe(false);
+    expect(rendered.result.current.authError).toBeNull();
+    act(() => FakeWebSocket.instances[0].open());
+    expect(rendered.result.current.connected).toBe(true);
+
+    fetchMock.mockResolvedValueOnce(new Response(null, { status: 404 }));
+    act(() => rendered.result.current.reconnect());
+    await waitFor(() => expect(rendered.result.current.sessionGone).toBe(true));
+    rendered.rerender({ sessionId: "third-session" });
+    await waitFor(() => expect(FakeWebSocket.instances).toHaveLength(2));
+    expect(rendered.result.current.sessionGone).toBe(false);
+    expect(FakeWebSocket.instances[1].url).toContain("/sessions/third-session/ws");
+  });
+
+  it("ignores a superseded same-session mint 404 after manual reconnect", async () => {
+    let resolveOld!: (response: Response) => void;
+    fetchMock.mockImplementationOnce(
+      () => new Promise<Response>((resolve) => (resolveOld = resolve))
+    );
+    const { result } = renderTransport();
+    act(() => result.current.reconnect());
+    await waitFor(() => expect(FakeWebSocket.instances).toHaveLength(1));
+    await act(async () => resolveOld(new Response(null, { status: 404 })));
+    expect(result.current.sessionGone).toBe(false);
+    act(() => FakeWebSocket.instances[0].open());
+    expect(result.current.connected).toBe(true);
   });
 
   it("refreshes a rejected credential once, then reports an auth error", async () => {

@@ -15,6 +15,7 @@ import httpx
 from .constants import OPENCODE_PORT
 from .git_excludes import install_runtime_git_excludes
 from .mcp_packages import McpPackageInstaller
+from .memories import memory_path
 from .process_output import iter_process_lines
 from .sandbox_bin import install_bin_scripts
 
@@ -413,6 +414,10 @@ class OpenCodeServer:
                 }
             },
         }
+
+        memory_file = memory_path(resolve_opencode_global_config_dir())
+        if memory_file.is_file() and memory_file.stat().st_size:
+            opencode_config["instructions"] = [str(memory_file)]
 
         # Inject MCP servers
         mcp_servers = self._resolve_mcp_servers()

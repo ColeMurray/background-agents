@@ -26,6 +26,9 @@ pnpm-lock.yaml
 yarn.lock
 
 # Generated files
+packages/docs/.source/
 *.d.ts
 *.min.js
 *.min.css
+packages/sandbox-runtime/src/sandbox_runtime/memory_contract.json
+packages/sandbox-runtime/src/sandbox_runtime/tools/_memory-contract.js

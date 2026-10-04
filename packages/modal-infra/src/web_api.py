@@ -12,6 +12,7 @@ The control plane must include an Authorization header with a valid token.
 """
 
 import asyncio
+import math
 import time
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
@@ -21,6 +22,7 @@ from typing import Annotated, Any, Self
 
 from fastapi import Header, HTTPException
 from modal import fastapi_endpoint
+from modal.exception import TimeoutError as ModalTimeoutError
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
 from sandbox_runtime.auth import AuthConfigurationError, verify_internal_token
@@ -29,12 +31,16 @@ from sandbox_runtime.repo_config import RepoConfigError, parse_repositories
 from .app import (
     app,
     function_image,
-    github_app_secrets,
     internal_api_secret,
     validate_control_plane_url,
 )
-from .clone_token import resolve_clone_token
 from .log_config import configure_logging, get_logger
+from .sandbox.launch_policy import (
+    DockerImageUnavailableError,
+    InvalidDockerSettingsError,
+    ModalBackend,
+)
+from .sandbox.manager import VMAllocationOutcome
 
 configure_logging()
 log = get_logger("web_api")
@@ -70,11 +76,13 @@ class CreateBuildSandboxRequest(_ModalRequestModel):
     callback_url: NonEmptyString
     failure_callback_url: NonEmptyString
     clone_token: str | None = None
-    clone_host: str | None = None
-    clone_username: str | None = None
+    clone_host: NonEmptyString
+    clone_username: NonEmptyString
     user_env_vars: dict[str, str] | None = None
     build_execution_timeout_seconds: int | None = None
     provider_session_timeout_seconds: int | None = None
+    sandbox_settings: dict[str, Any] | None = None
+    sandbox_backend: ModalBackend = "modal"
 
 
 class StartBuildSandboxRequest(_ModalRequestModel):
@@ -117,6 +125,8 @@ class CreateSandboxRequest(_RepositoryContextModel):
     sandbox_id: str | None = None
     control_plane_url: NonEmptyString
     sandbox_auth_token: NonEmptyString
+    clone_host: NonEmptyString
+    clone_username: NonEmptyString
     agent_session_id: str | None = None
     opencode_session_id: str | None = None
     harness: str | None = None
@@ -135,6 +145,9 @@ class CreateSandboxRequest(_RepositoryContextModel):
     vnc_enabled: bool | None = None
     agent_slack_notify_enabled: bool = False
     sandbox_settings: dict[str, Any] | None = None
+    sandbox_backend: ModalBackend = "modal"
+    retire_sandbox_id: str | None = None
+    launch_deadline_at_ms: int | None = Field(default=None, gt=0)
 
 
 class RestoreSessionConfigRequest(_RepositoryContextModel):
@@ -161,12 +174,24 @@ class RestoreSandboxRequest(_ModalRequestModel):
     sandbox_id: str | None = None
     control_plane_url: NonEmptyString
     sandbox_auth_token: NonEmptyString
+    clone_host: NonEmptyString
+    clone_username: NonEmptyString
     user_env_vars: dict[str, str] | None = None
     timeout_seconds: int | None = Field(default=None, gt=0)
     code_server_enabled: bool = False
     vnc_enabled: bool | None = None
     agent_slack_notify_enabled: bool = False
     sandbox_settings: dict[str, Any] | None = None
+    sandbox_backend: ModalBackend = "modal"
+    retire_sandbox_id: str | None = None
+    launch_deadline_at_ms: int | None = Field(default=None, gt=0)
+
+
+class ResolveVMSandboxRequest(_ModalRequestModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    session_id: NonEmptyString
+    sandbox_id: NonEmptyString
 
 
 @dataclass
@@ -207,6 +232,20 @@ async def _execute_endpoint(
         execution.http_status = e.status_code
         execution.outcome = "error"
         raise
+    except InvalidDockerSettingsError as e:
+        execution.http_status = 400
+        execution.outcome = "error"
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    except DockerImageUnavailableError as e:
+        # Not provisioned on this deployment: a permanent, actionable failure
+        # for the request, never a reason to launch the default sandbox.
+        execution.http_status = 501
+        execution.outcome = "error"
+        raise HTTPException(status_code=501, detail="docker_not_available") from e
+    except VMAllocationOutcome as e:
+        execution.http_status = 409
+        execution.outcome = "error"
+        raise HTTPException(status_code=execution.http_status, detail=e.detail) from e
     except Exception as e:
         execution.http_status = 500
         execution.outcome = "error"
@@ -261,6 +300,8 @@ def _parse_request[RequestModelT: BaseModel](
             }.get(error_type, "user_env_vars has an invalid value")
         elif field == "timeout_seconds":
             detail = "timeout_seconds must be a positive integer"
+        elif error_type == "extra_forbidden":
+            detail = f"{field} is not allowed"
         elif len(location) > 1:
             detail = f"{field} has an invalid value"
         else:
@@ -357,6 +398,7 @@ def _session_config_from_create_request(
 @app.function(
     image=function_image,
     secrets=[internal_api_secret],
+    timeout=150,
 )
 @fastapi_endpoint(method="POST")
 async def api_create_sandbox(
@@ -380,6 +422,8 @@ async def api_create_sandbox(
         "repo_name": "...",
         "control_plane_url": "...",
         "sandbox_auth_token": "...",
+        "clone_host": "github.com",
+        "clone_username": "x-access-token",
         "provider": "anthropic",
         "model": "claude-sonnet-4-6"
     }
@@ -417,6 +461,8 @@ async def api_create_sandbox(
             session_config=session_config,
             control_plane_url=parsed_request.control_plane_url,
             sandbox_auth_token=parsed_request.sandbox_auth_token,
+            clone_host=parsed_request.clone_host,
+            clone_username=parsed_request.clone_username,
             user_env_vars=parsed_request.user_env_vars or None,
             repo_image_id=parsed_request.repo_image_id or None,
             repo_image_sha=parsed_request.repo_image_sha or None,
@@ -428,16 +474,29 @@ async def api_create_sandbox(
             ),
             agent_slack_notify_enabled=parsed_request.agent_slack_notify_enabled,
             settings=parsed_request.sandbox_settings or None,
+            sandbox_backend=parsed_request.sandbox_backend,
             timeout_seconds=(
                 parsed_request.timeout_seconds
                 if parsed_request.timeout_seconds is not None
                 else DEFAULT_SANDBOX_TIMEOUT_SECONDS
             ),
+            retire_sandbox_id=parsed_request.retire_sandbox_id or None,
+            launch_deadline_at_ms=parsed_request.launch_deadline_at_ms,
         )
 
         try:
             handle = await manager.create_sandbox(config)
         except RepositoryImageUnavailableError as e:
+            cause = e.__cause__ or e
+            log.error(
+                "sandbox.repository_image_unavailable",
+                cause_type=type(cause).__name__,
+                cause_message=str(cause),
+                trace_id=x_trace_id,
+                request_id=x_request_id,
+                session_id=x_session_id,
+                sandbox_id=x_sandbox_id,
+            )
             raise HTTPException(status_code=410, detail="Repository image unavailable") from e
 
         return {
@@ -453,8 +512,61 @@ async def api_create_sandbox(
                 "vnc_password": handle.vnc_password,
                 "ttyd_url": handle.ttyd_url,
                 "tunnel_urls": handle.tunnel_urls,
+                "sandbox_backend": handle.sandbox_backend,
             },
         }
+
+
+@app.function(image=function_image, secrets=[internal_api_secret], timeout=150)
+@fastapi_endpoint(method="POST")
+async def api_resolve_vm_sandbox(
+    request: dict,
+    authorization: str | None = Header(None),
+    x_trace_id: str | None = Header(None),
+    x_request_id: str | None = Header(None),
+    x_session_id: str | None = Header(None),
+    x_sandbox_id: str | None = Header(None),
+) -> dict:
+    """Authenticated lookup-only VM recovery by session and generation; no create or retire.
+
+    POST body: {"session_id": "...", "sandbox_id": "..."}. No secrets or launch settings.
+    """
+    async with _execute_endpoint(
+        endpoint_name="api_resolve_vm_sandbox",
+        authorization=authorization,
+        trace_id=x_trace_id,
+        request_id=x_request_id,
+        session_id=x_session_id,
+        sandbox_id=x_sandbox_id,
+    ):
+        parsed = _parse_request(ResolveVMSandboxRequest, request)
+        from .sandbox.manager import SandboxManager
+
+        handle = await SandboxManager().resolve_vm_sandbox(parsed.session_id, parsed.sandbox_id)
+        return {
+            "success": True,
+            "data": {
+                "sandbox_id": handle.sandbox_id,
+                "modal_object_id": handle.modal_object_id,
+                "code_server_url": handle.code_server_url,
+                "code_server_password": handle.code_server_password,
+                "vnc_url": handle.vnc_url,
+                "vnc_password": handle.vnc_password,
+                "ttyd_url": handle.ttyd_url,
+                "tunnel_urls": handle.tunnel_urls,
+                "sandbox_backend": handle.sandbox_backend,
+            },
+        }
+
+
+@app.function(image=function_image)
+def deployment_vm_image() -> str | None:
+    """Private SDK-only deployment handshake; preserve capability across selector cutover."""
+    import os
+
+    from .images.base import DOCKER_IMAGE_ID_ENV
+
+    return os.environ.get(DOCKER_IMAGE_ID_ENV)
 
 
 @app.function(image=function_image)
@@ -462,6 +574,25 @@ async def api_create_sandbox(
 def api_health() -> dict:
     """Health check endpoint. Does not require authentication."""
     return {"success": True, "data": {"status": "healthy", "service": "open-inspect-modal"}}
+
+
+def _snapshot_timeout_seconds(request: dict[str, Any]) -> float:
+    """Bound a capture by the caller's deadline without extending it."""
+    from .sandbox.manager import SNAPSHOT_FILESYSTEM_TIMEOUT_SECONDS
+
+    deadline_at_ms = request.get("deadline_at_ms")
+    if deadline_at_ms is None:
+        return SNAPSHOT_FILESYSTEM_TIMEOUT_SECONDS
+    if (
+        isinstance(deadline_at_ms, bool)
+        or not isinstance(deadline_at_ms, (int, float))
+        or not math.isfinite(deadline_at_ms)
+    ):
+        raise HTTPException(status_code=400, detail="deadline_at_ms must be a number")
+    timeout_seconds = (float(deadline_at_ms) / 1000) - time.time()
+    if timeout_seconds <= 0:
+        raise HTTPException(status_code=408, detail="snapshot deadline expired")
+    return timeout_seconds
 
 
 @app.function(image=function_image, secrets=[internal_api_secret])
@@ -513,20 +644,114 @@ async def api_snapshot_sandbox(
         from .sandbox.manager import SandboxManager
 
         manager = SandboxManager()
-
-        handle = await manager.get_sandbox_by_id(sandbox_id)
-        if not handle:
-            raise HTTPException(status_code=404, detail=f"Sandbox not found: {sandbox_id}")
-
-        image_id = await manager.take_snapshot(handle)
-
+        deadline_at_ms = request.get("deadline_at_ms")
+        timeout_seconds = _snapshot_timeout_seconds(request)
+        if request.get("sandbox_backend") == "modal-vm":
+            raise HTTPException(status_code=400, detail="Use the VM snapshot endpoint")
+        try:
+            async with asyncio.timeout(timeout_seconds):
+                handle = await manager.get_sandbox_by_id(sandbox_id)
+                if not handle:
+                    raise HTTPException(status_code=404, detail=f"Sandbox not found: {sandbox_id}")
+                if handle.sandbox_backend == "modal-vm":
+                    raise HTTPException(status_code=400, detail="Use the VM snapshot endpoint")
+                if deadline_at_ms is None:
+                    image_id = await manager.take_snapshot(handle)
+                else:
+                    image_id = await manager.take_snapshot(handle, timeout_seconds=timeout_seconds)
+        except (TimeoutError, ModalTimeoutError) as exc:
+            raise HTTPException(status_code=408, detail="snapshot deadline expired") from exc
         return {
             "success": True,
             "data": {
+                "source_stopped": False,
                 "image_id": image_id,
                 "sandbox_id": sandbox_id,
             },
         }
+
+
+@app.function(image=function_image, secrets=[internal_api_secret])
+@fastapi_endpoint(method="POST")
+async def api_snapshot_vm_sandbox(
+    request: dict[str, Any],
+    authorization: str | None = Header(None),
+    x_trace_id: str | None = Header(None),
+    x_request_id: str | None = Header(None),
+    x_session_id: str | None = Header(None),
+    x_sandbox_id: str | None = Header(None),
+) -> dict[str, Any]:
+    """Capture a prepared VM without retiring it; the control plane owns retirement."""
+    async with _execute_endpoint(
+        endpoint_name="api_snapshot_vm_sandbox",
+        authorization=authorization,
+        trace_id=x_trace_id,
+        request_id=x_request_id,
+        session_id=x_session_id,
+        sandbox_id=x_sandbox_id,
+    ) as execution:
+        sandbox_id = request.get("sandbox_id")
+        execution.log_fields["sandbox_id"] = x_sandbox_id or sandbox_id
+        if not isinstance(sandbox_id, str) or not sandbox_id:
+            raise HTTPException(status_code=400, detail="sandbox_id is required")
+        if request.get("sandbox_backend") != "modal-vm":
+            raise HTTPException(status_code=400, detail="modal-vm backend confirmation is required")
+
+        from .sandbox.manager import SandboxManager
+
+        manager = SandboxManager()
+        timeout_seconds = _snapshot_timeout_seconds(request)
+        try:
+            async with asyncio.timeout(timeout_seconds):
+                handle = await manager.get_sandbox_by_id(sandbox_id)
+                if handle is None or handle.sandbox_backend != "modal-vm":
+                    raise HTTPException(status_code=400, detail="Terminal capture requires a VM")
+                source_id = handle.modal_object_id
+                if not source_id:
+                    raise HTTPException(status_code=500, detail="VM source ID is unavailable")
+                image_id = await manager.take_snapshot(handle, timeout_seconds=timeout_seconds)
+        except (TimeoutError, ModalTimeoutError) as exc:
+            raise HTTPException(status_code=408, detail="snapshot deadline expired") from exc
+        return {
+            "success": True,
+            "data": {
+                "source_stopped": False,
+                "source_id": source_id,
+                "image_id": image_id,
+                "sandbox_id": sandbox_id,
+            },
+        }
+
+
+@app.function(image=function_image, secrets=[internal_api_secret])
+@fastapi_endpoint(method="POST")
+async def api_stop_sandbox(
+    request: dict[str, Any],
+    authorization: str | None = Header(None),
+    x_trace_id: str | None = Header(None),
+    x_request_id: str | None = Header(None),
+    x_session_id: str | None = Header(None),
+    x_sandbox_id: str | None = Header(None),
+) -> dict[str, Any]:
+    """Explicitly terminate a session sandbox through the authenticated API."""
+    sandbox_id = request.get("sandbox_id")
+    async with _execute_endpoint(
+        endpoint_name="api_stop_sandbox",
+        authorization=authorization,
+        trace_id=x_trace_id,
+        request_id=x_request_id,
+        session_id=x_session_id,
+        sandbox_id=x_sandbox_id or sandbox_id,
+    ):
+        if not isinstance(sandbox_id, str) or not sandbox_id:
+            raise HTTPException(status_code=400, detail="sandbox_id is required")
+        from .sandbox.manager import PendingVMReferenceNotVisible, SandboxManager
+
+        try:
+            await SandboxManager().stop_sandbox(sandbox_id)
+        except PendingVMReferenceNotVisible as e:
+            raise HTTPException(status_code=409, detail="pending_reference_not_visible") from e
+        return {"success": True, "data": {"terminated": True}}
 
 
 @app.function(image=function_image, secrets=[internal_api_secret])
@@ -572,7 +797,7 @@ async def api_snapshot_build_sandbox(
         }
 
 
-@app.function(image=function_image, secrets=[github_app_secrets, internal_api_secret])
+@app.function(image=function_image, secrets=[internal_api_secret], timeout=150)
 @fastapi_endpoint(method="POST")
 async def api_restore_sandbox(
     request: dict,
@@ -603,7 +828,9 @@ async def api_restore_sandbox(
         },
         "sandbox_id": "...",
         "control_plane_url": "...",
-        "sandbox_auth_token": "..."
+        "sandbox_auth_token": "...",
+        "clone_host": "github.com",
+        "clone_username": "x-access-token"
     }
 
     Returns:
@@ -633,11 +860,8 @@ async def api_restore_sandbox(
         )
 
         session_config = parsed_request.session_config.model_dump(exclude_unset=True)
-        repo_owner = parsed_request.session_config.repo_owner
-        repo_name = parsed_request.session_config.repo_name
 
         manager = SandboxManager()
-        clone_token = resolve_clone_token() if repo_owner and repo_name else None
 
         # Restore sandbox from snapshot
         handle = await manager.restore_from_snapshot(
@@ -646,7 +870,8 @@ async def api_restore_sandbox(
             sandbox_id=parsed_request.sandbox_id,
             control_plane_url=parsed_request.control_plane_url,
             sandbox_auth_token=parsed_request.sandbox_auth_token,
-            clone_token=clone_token,
+            clone_host=parsed_request.clone_host,
+            clone_username=parsed_request.clone_username,
             user_env_vars=parsed_request.user_env_vars or None,
             timeout_seconds=(
                 parsed_request.timeout_seconds
@@ -661,6 +886,9 @@ async def api_restore_sandbox(
             ),
             agent_slack_notify_enabled=parsed_request.agent_slack_notify_enabled,
             settings=parsed_request.sandbox_settings or None,
+            sandbox_backend=parsed_request.sandbox_backend,
+            retire_sandbox_id=parsed_request.retire_sandbox_id or None,
+            launch_deadline_at_ms=parsed_request.launch_deadline_at_ms,
         )
 
         return {
@@ -675,6 +903,7 @@ async def api_restore_sandbox(
                 "vnc_password": handle.vnc_password,
                 "ttyd_url": handle.ttyd_url,
                 "tunnel_urls": handle.tunnel_urls,
+                "sandbox_backend": handle.sandbox_backend,
             },
         }
 
@@ -725,8 +954,6 @@ async def api_create_build_sandbox(
             ),
             max_seconds=MAX_BUILD_TIMEOUT_SECONDS + IMAGE_BUILD_FINALIZATION_GRACE_SECONDS,
         )
-        clone_host = parsed_request.clone_host or None
-        clone_username = parsed_request.clone_username or None
         callback_url = parsed_request.callback_url
         failure_callback_url = parsed_request.failure_callback_url
         if not validate_control_plane_url(callback_url) or not validate_control_plane_url(
@@ -736,24 +963,29 @@ async def api_create_build_sandbox(
                 status_code=400, detail="callback URLs must target the control plane"
             )
 
-        provider_session_id = await ModalBuildSessionService().create(
+        launch = await ModalBuildSessionService().create(
             build_id=build_id,
             scope_kind=scope_kind,
             scope_id=scope_id,
             repositories=repositories,
             callback_url=callback_url,
             failure_callback_url=failure_callback_url,
+            clone_host=parsed_request.clone_host,
+            clone_username=parsed_request.clone_username,
             clone_token=parsed_request.clone_token or "",
-            clone_host=clone_host,
-            clone_username=clone_username,
             user_env_vars=parsed_request.user_env_vars or None,
             build_execution_timeout_seconds=build_execution_timeout_seconds,
             timeout_seconds=provider_session_timeout_seconds,
+            sandbox_settings=parsed_request.sandbox_settings or None,
+            sandbox_backend=parsed_request.sandbox_backend,
         )
-        execution.log_fields["sandbox_id"] = provider_session_id
+        execution.log_fields["sandbox_id"] = launch.provider_session_id
         return {
             "success": True,
-            "data": {"provider_session_id": provider_session_id},
+            "data": {
+                "provider_session_id": launch.provider_session_id,
+                "sandbox_backend": launch.sandbox_backend,
+            },
         }
 
 

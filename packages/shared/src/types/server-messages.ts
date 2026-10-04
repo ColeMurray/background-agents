@@ -3,10 +3,15 @@ import { z } from "zod";
 import { sessionArtifactSchema } from "./artifacts";
 import { sessionRepositoryStateSchema } from "./repositories";
 import { sandboxBootPhaseSchema, sandboxEventSchema } from "./sandbox-events";
-import { sandboxStatusSchema, sessionStatusSchema } from "./sessions";
+import {
+  sandboxStatusSchema,
+  sessionCapabilitiesSchema,
+  sessionStatusSchema,
+  timelineSequenceSchema,
+} from "./sessions";
+import { sandboxShutdownSchema, shutdownRecoveryActionSchema } from "./sandbox-shutdown";
 import { clientRequestIdSchema } from "./prompts";
-
-const timelineSequenceSchema = z.number().int().nonnegative().safe();
+import { sessionVisibilitySchema } from "./teams";
 
 export const promptQueueItemSchema = z.object({
   messageId: z.string(),
@@ -17,6 +22,11 @@ export type PromptQueueItem = z.infer<typeof promptQueueItemSchema>;
 
 const sessionStateSchema = z.object({
   id: z.string(),
+  ownerUserId: z.string().nullable().optional(),
+  ownerTeamId: z.string().nullable().optional(),
+  visibility: sessionVisibilitySchema.optional(),
+  collaborators: z.array(z.string()).optional(),
+  capabilities: sessionCapabilitiesSchema.optional(),
   title: z.string().nullable(),
   repoOwner: z.string().nullable(),
   repoName: z.string().nullable(),
@@ -24,6 +34,7 @@ const sessionStateSchema = z.object({
   branchName: z.string().nullable(),
   status: sessionStatusSchema,
   sandboxStatus: sandboxStatusSchema,
+  sandboxPreservation: sandboxShutdownSchema.nullable().optional(),
   messageCount: z.number(),
   createdAt: z.number(),
   /**
@@ -188,6 +199,12 @@ const serverMessageUnionSchema = z.discriminatedUnion("type", [
     repoName: z.string().optional(),
   }),
   z.object({ type: z.literal("snapshot_saved"), imageId: z.string(), reason: z.string() }),
+  z.object({ type: z.literal("sandbox_preservation"), preservation: sandboxShutdownSchema }),
+  z.object({
+    type: z.literal("shutdown_recovery_accepted"),
+    clientRequestId: clientRequestIdSchema,
+    action: shutdownRecoveryActionSchema,
+  }),
   z.object({ type: z.literal("sandbox_restored"), message: z.string() }),
   z.object({ type: z.literal("sandbox_warning"), message: z.string() }),
   z.object({ type: z.literal("processing_status"), isProcessing: z.boolean() }),

@@ -1,4 +1,5 @@
 import { Hono } from "hono";
+import type { AccessDenialReason } from "@open-inspect/shared";
 import {
   sessionBatchArchiveRequestSchema,
   type SessionBatchArchiveResponse,
@@ -7,6 +8,7 @@ import { createLogger } from "../logger";
 import { admit } from "../routing/admit";
 import type { ControlPlaneHonoEnv } from "../routing/hono-env";
 import { archiveSessionBatch } from "../session/batch-archive";
+import { evaluateSessionAdmission, teamsEnforcementMode } from "../authorization/session-admission";
 import { parseBody } from "./body";
 import type { SessionRuntimeClient } from "../session/runtime-client";
 import { dispatchSession } from "./session-route";
@@ -16,6 +18,19 @@ import {
   SCM_AGNOSTIC_HUMAN_USER_ROUTE,
   type UserRouteContext,
 } from "./shared";
+
+/** Exhaustive so a new denial reason must choose its public batch-archive reason. */
+const SKIPPED_REASON_BY_DENIAL = {
+  not_member: "not_member",
+  suspended: "missing_permission",
+  private: "missing_permission",
+  missing_permission: "missing_permission",
+  not_owner_or_lead: "missing_permission",
+  not_collaborator: "missing_permission",
+} as const satisfies Record<
+  AccessDenialReason,
+  SessionBatchArchiveResponse["skipped"][number]["reason"]
+>;
 
 export const sessionBatchArchiveRoutes = new Hono<ControlPlaneHonoEnv>();
 
@@ -31,7 +46,7 @@ sessionBatchArchiveRoutes.post(
       c,
       async (
         request,
-        _env,
+        env,
         _params,
         ctx: UserRouteContext & { sessionRuntime: SessionRuntimeClient }
       ) => {
@@ -41,13 +56,35 @@ sessionBatchArchiveRoutes.post(
           trace_id: ctx.trace_id,
           request_id: ctx.request_id,
         });
-        const results = await archiveSessionBatch(body.sessionIds, ctx.sessionRuntime, log);
+        try {
+          teamsEnforcementMode(ctx, env);
+        } catch {
+          return json(
+            { error: "Authorization unavailable", code: "authorization_unavailable" },
+            503
+          );
+        }
+        const eligible: string[] = [];
+        const skipped: SessionBatchArchiveResponse["skipped"] = [];
+        for (const sessionId of body.sessionIds) {
+          const admission = await evaluateSessionAdmission(ctx, env, sessionId, "lifecycle", null);
+          if (admission.kind === "not_found") {
+            skipped.push({ sessionId, reason: "not_found" });
+            continue;
+          }
+          if (admission.kind === "action_denied") {
+            skipped.push({ sessionId, reason: SKIPPED_REASON_BY_DENIAL[admission.reason] });
+            continue;
+          }
+          eligible.push(sessionId);
+        }
+        const results = await archiveSessionBatch(eligible, ctx.sessionRuntime, log);
         log.info("Session batch archive completed", {
           event: "session.batch_archive",
           user_id: ctx.principal.userId,
           results,
         });
-        return json({ results } satisfies SessionBatchArchiveResponse);
+        return json({ results, skipped } satisfies SessionBatchArchiveResponse);
       }
     )
 );

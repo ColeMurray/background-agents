@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Any, NoReturn
 
 from .log_config import StructuredLogger
-from .process_output import communicate_owned_subprocess
+from .process_output import communicate_owned_subprocess, spawn_owned_subprocess
 from .repo_config import find_repo_entry, load_repo_manifest
 
 GIT_PUSH_TIMEOUT_SECONDS = 300.0
@@ -178,17 +178,19 @@ class PushOperation:
             force=request.force,
             remote_url=request.redacted_push_url,
         )
-        process = await asyncio.create_subprocess_exec(
-            "git",
-            "push",
-            *(["-f"] if request.force else []),
-            "--",
-            request.push_url,
-            request.refspec,
-            cwd=repo_dir,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-            start_new_session=True,
+        process = await spawn_owned_subprocess(
+            asyncio.create_subprocess_exec(
+                "git",
+                "push",
+                *(["-f"] if request.force else []),
+                "--",
+                request.push_url,
+                request.refspec,
+                cwd=repo_dir,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+                start_new_session=True,
+            )
         )
         try:
             _stdout, stderr = await asyncio.wait_for(

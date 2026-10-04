@@ -157,6 +157,15 @@ const vercelStartCommandResponseSchema = z.object({
   }),
 });
 
+const vercelCommandStreamLineSchema = z.object({
+  command: z
+    .object({
+      id: z.string().optional(),
+      exitCode: z.number().nullable().optional(),
+    })
+    .optional(),
+});
+
 const vercelListSnapshotsResponseSchema = z.object({
   snapshots: z.array(vercelSnapshotMetadataSchema),
 });
@@ -573,14 +582,13 @@ function parseCommandLine(line: string): { commandId?: string; exitCode?: number
   } catch {
     return null;
   }
-  if (!parsed || typeof parsed !== "object" || !("command" in parsed)) return null;
-  const command = (parsed as { command?: { id?: unknown; exitCode?: unknown } }).command;
+  const parsedLine = vercelCommandStreamLineSchema.safeParse(parsed);
+  if (!parsedLine.success) return null;
+  const command = parsedLine.data.command;
   if (!command) return null;
   const result: { commandId?: string; exitCode?: number | null } = {};
-  if (typeof command.id === "string") result.commandId = command.id;
-  if (typeof command.exitCode === "number" || command.exitCode === null) {
-    result.exitCode = command.exitCode;
-  }
+  if (command.id !== undefined) result.commandId = command.id;
+  if (command.exitCode !== undefined) result.exitCode = command.exitCode;
   return result;
 }
 

@@ -1,6 +1,7 @@
 import type { E2BSandboxProvider } from "../sandbox/providers/e2b-provider";
 import type { ImageBuildProviderImageRef } from "./model";
 import type {
+  CompletedImageBuildInput,
   DeleteImageInput,
   FailedImageBuildInput,
   FinalizeImageBuildInput,
@@ -91,7 +92,7 @@ export class E2BImageBuildAdapter implements ImageBuildAdapter {
     };
   }
 
-  async cleanupCompletedBuild(input: FinalizeImageBuildInput): Promise<void> {
+  async cleanupCompletedBuild(input: CompletedImageBuildInput): Promise<void> {
     // The snapshot taken in finalizeSuccessfulBuild is a standalone template;
     // it does not reference the build sandbox, so the box can be killed once
     // the build is done. E2B stop only pauses, so delete rather than stop.

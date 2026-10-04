@@ -15,6 +15,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from websockets import State
 
+from sandbox_runtime import boot_attach as boot_attach_module
 from sandbox_runtime import bridge as bridge_module
 from sandbox_runtime.bridge import AgentBridge
 from sandbox_runtime.git_signing import GitSigningError
@@ -23,7 +24,7 @@ from tests.conftest import ScriptedHarness
 
 
 def _events_path() -> Path:
-    return Path(bridge_module.BOOT_EVENTS_FILE_PATH)
+    return Path(boot_attach_module.BOOT_EVENTS_FILE_PATH)
 
 
 def _write_lines(*entries: dict) -> None:
@@ -149,7 +150,7 @@ def _bridge(tmp_path, monkeypatch, *, factory=None, early_connect=True) -> Agent
     bridge.repo_manifest_path = tmp_path / "manifest.json"
     bridge.repo_manifest_path.write_text(json.dumps({"repositories": []}))
     bridge.git_signing.initialize = AsyncMock()
-    bridge.log = MagicMock()
+    bridge.boot_attach.log = bridge.log = MagicMock()
     return bridge
 
 
@@ -165,11 +166,11 @@ class TestHarnessAttach:
             _phase(2, "setup", "started", repoOwner="acme", repoName="api"),
         )
 
-        await bridge._relay_boot_events_once()
+        await bridge.boot_attach._relay_boot_events_once()
 
         assert bridge.harness is None
         factory.assert_not_called()
-        assert not bridge._boot_ready.is_set()
+        assert not bridge.boot_attach._boot_ready.is_set()
         assert bridge.agent_session_id is None
 
     async def test_harness_completed_attaches_in_order_then_sends_ready(
@@ -185,11 +186,11 @@ class TestHarnessAttach:
         bridge._send_event = AsyncMock(side_effect=lambda event: calls.append(event["type"]))
         _write_lines(_phase(1, "sync", "started"), HARNESS_COMPLETED)
 
-        await bridge._relay_boot_events()
+        await bridge.boot_attach._relay_boot_events()
 
         assert calls == ["open", "resume:oc-persisted", "signing", "ready"]
         assert bridge.harness is harness
-        assert bridge._boot_ready.is_set()
+        assert bridge.boot_attach._boot_ready.is_set()
         ready = bridge._send_event.await_args.args[0]
         assert ready["opencodeSessionId"] == "oc-persisted"
         assert ready["harness"] == "opencode"
@@ -202,11 +203,11 @@ class TestHarnessAttach:
         bridge._send_event = AsyncMock()
         build.assert_not_called()
         _write_lines(_phase(1, "sync", "started"))
-        await bridge._relay_boot_events_once()
+        await bridge.boot_attach._relay_boot_events_once()
         build.assert_not_called()
 
         _write_lines(HARNESS_COMPLETED)
-        await bridge._relay_boot_events_once()
+        await bridge.boot_attach._relay_boot_events_once()
 
         build.assert_called_once()
         assert build.call_args.args[0] == bridge._harness_id
@@ -228,7 +229,7 @@ class TestHarnessAttach:
         assert ws.closed.is_set()
         assert fatal_path.read_text() == "credential denied"
         assert bridge.harness is None
-        assert not bridge._boot_ready.is_set()
+        assert not bridge.boot_attach._boot_ready.is_set()
         assert _run_complete(bridge) == ("harness_start_failed", 1)
 
     async def test_attach_failure_during_an_in_flight_handshake_ends_the_run(
@@ -282,14 +283,14 @@ class TestHarnessAttach:
         )
         bridge._send_event = AsyncMock()
         sleep = AsyncMock()
-        monkeypatch.setattr("sandbox_runtime.bridge.asyncio.sleep", sleep)
+        monkeypatch.setattr("sandbox_runtime.boot_attach.asyncio.sleep", sleep)
         _write_lines(HARNESS_COMPLETED)
 
-        await bridge._relay_boot_events()
+        await bridge.boot_attach._relay_boot_events()
 
         assert bridge.git_signing.initialize.await_count == 2
         sleep.assert_awaited_once_with(bridge.RECONNECT_BACKOFF_BASE)
-        assert bridge._boot_ready.is_set()
+        assert bridge.boot_attach._boot_ready.is_set()
 
     async def test_non_retryable_signing_failure_exits_with_the_deterministic_cause(
         self, tmp_path, monkeypatch
@@ -327,7 +328,7 @@ class TestHarnessAttach:
 
         assert exit_info.value.code == DETERMINISTIC_FAILURE_EXIT_CODE
         assert bridge.shutdown_event.is_set()
-        assert not bridge._boot_ready.is_set()
+        assert not bridge.boot_attach._boot_ready.is_set()
         assert harness.closed is True
         assert fatal_path.read_text() == "Commit signing configuration unavailable"
         assert _run_complete(bridge) == ("fatal_error", 1)
@@ -404,7 +405,7 @@ class TestConnectSnapshot:
             _phase(2, "sync", "completed"),
             _phase(3, "setup", "started", repoOwner="acme", repoName="api"),
         )
-        await bridge._relay_boot_events_once()
+        await bridge.boot_attach._relay_boot_events_once()
         bridge.event_forwarder.send = bridge.event_forwarder.__class__.send.__get__(
             bridge.event_forwarder
         )
@@ -420,7 +421,7 @@ class TestConnectSnapshot:
         bridge = _bridge(tmp_path, monkeypatch, factory=lambda: harness)
         _write_lines(HARNESS_COMPLETED)
         bridge.event_forwarder.send = AsyncMock()
-        await bridge._relay_boot_events()
+        await bridge.boot_attach._relay_boot_events()
         bridge.event_forwarder.send = bridge.event_forwarder.__class__.send.__get__(
             bridge.event_forwarder
         )
@@ -439,19 +440,19 @@ class TestConnectSnapshot:
             _phase(3, "sync", "completed", warning=True),
         )
 
-        await bridge._relay_boot_events_once()
+        await bridge.boot_attach._relay_boot_events_once()
 
         assert bridge.event_forwarder._event_buffer == []
-        assert [line["seq"] for line in bridge._held_boot_lines] == [2]
+        assert [line["seq"] for line in bridge.boot_attach._held_boot_lines] == [2]
 
-    async def test_heartbeat_reports_booting_until_attached(self, tmp_path, monkeypatch):
+    async def test_heartbeat_status_is_retained_for_compatibility(self, tmp_path, monkeypatch):
         harness = OpeningHarness([])
         bridge = _bridge(tmp_path, monkeypatch, factory=lambda: harness)
         bridge._send_event = AsyncMock()
 
         assert bridge._heartbeat_event()["status"] == "booting"
         _write_lines(HARNESS_COMPLETED)
-        await bridge._relay_boot_events()
+        await bridge.boot_attach._relay_boot_events()
 
         assert bridge._heartbeat_event()["status"] == "ready"
 
@@ -477,11 +478,10 @@ class TestCommandsWhileBooting:
         assert not prompt.done()
 
         _write_lines(HARNESS_COMPLETED)
-        await bridge._relay_boot_events()
-        await asyncio.wait_for(prompt, timeout=1)
+        await bridge.boot_attach._relay_boot_events()
+        terminal = await asyncio.wait_for(prompt, timeout=1)
 
         assert [p.message_id for p in harness.prompts] == ["msg-1"]
-        terminal = bridge._send_event.await_args.args[0]
         assert terminal["type"] == "execution_complete"
         assert terminal["messageId"] == "msg-1"
 
@@ -495,7 +495,7 @@ class TestCommandsWhileBooting:
         prompt = asyncio.create_task(bridge._handle_prompt(_agent_prompt("msg-1")))
         await asyncio.sleep(0.05)
         _write_lines(HARNESS_COMPLETED)
-        await bridge._relay_boot_events()
+        await bridge.boot_attach._relay_boot_events()
         await asyncio.wait_for(prompt, timeout=1)
 
         budget = harness.prompts[0].max_duration_seconds
@@ -541,12 +541,11 @@ class TestCommandsWhileBooting:
         bridge._send_event = AsyncMock()
         bridge.prompt_limits = replace(bridge.prompt_limits, prompt_max_duration_seconds=0.01)
 
-        await asyncio.wait_for(
+        terminal = await asyncio.wait_for(
             bridge._handle_prompt({"type": "prompt", "messageId": "msg-1", "content": "hi"}),
             timeout=1,
         )
 
-        terminal = bridge._send_event.await_args.args[0]
         assert terminal["type"] == "execution_complete"
         assert terminal["success"] is False
         assert "did not become ready" in terminal["error"]
@@ -568,11 +567,10 @@ class TestCommandsWhileBooting:
         bridge.prompt_limits = replace(bridge.prompt_limits, prompt_max_duration_seconds=0.05)
 
         started_at = time.monotonic()
-        await bridge._handle_prompt(_agent_prompt("msg-1"))
+        terminal = await bridge._handle_prompt(_agent_prompt("msg-1"))
 
         assert time.monotonic() - started_at < 0.4
         assert harness.prompts == []
-        terminal = bridge._send_event.await_args.args[0]
         assert terminal["type"] == "execution_complete"
         assert terminal["success"] is False
         assert "could not start within" in terminal["error"]
@@ -582,10 +580,19 @@ class TestCommandsWhileBooting:
         bridge._send_event = AsyncMock()
 
         await bridge._handle_command({"type": "prompt", "messageId": "msg-1", "content": "hi"})
-        task = bridge._current_prompt_task
+        task = bridge.activity.current_prompt_task
         await asyncio.sleep(0)
         await bridge._handle_command({"type": "stop"})
         await asyncio.wait_for(task, timeout=1)
+
+        async def wait_for_terminal() -> None:
+            while not any(
+                call.args[0]["type"] == "execution_complete"
+                for call in bridge._send_event.await_args_list
+            ):
+                await asyncio.sleep(0)
+
+        await asyncio.wait_for(wait_for_terminal(), timeout=1)
 
         terminals = [
             call.args[0]
@@ -665,7 +672,7 @@ class TestBridgeRestart:
             _phase(1, "sync", "started"),
             {"seq": 2, "kind": "warning", "scope": "sync", "message": "stale", "at": 2.0},
         )
-        await first._relay_boot_events_once()
+        await first.boot_attach._relay_boot_events_once()
         assert [c.args[0]["type"] for c in first.event_forwarder.send.await_args_list] == [
             "boot_progress",
             "warning",
@@ -678,7 +685,7 @@ class TestBridgeRestart:
             {"seq": 3, "kind": "warning", "scope": "setup", "message": "new", "at": 3.0},
             HARNESS_COMPLETED,
         )
-        await restarted._relay_boot_events()
+        await restarted.boot_attach._relay_boot_events()
 
         sent = [c.args[0] for c in restarted.event_forwarder.send.await_args_list]
         assert [(e["type"], e.get("message")) for e in sent] == [
@@ -706,9 +713,9 @@ class TestRelayCursor:
             {"seq": 2, "kind": "warning", "scope": "sync", "message": "stale", "at": 2.0},
         )
 
-        await first._relay_boot_events_once()
+        await first.boot_attach._relay_boot_events_once()
 
-        assert [line["seq"] for line in first._held_boot_lines] == [2]
+        assert [line["seq"] for line in first.boot_attach._held_boot_lines] == [2]
         # The phase is done with; the buffered warning holds the cursor there.
         assert self._cursor().read_text() == "1"
 
@@ -717,7 +724,7 @@ class TestRelayCursor:
         restarted.event_forwarder.send = AsyncMock(return_value=True)
         _write_lines(HARNESS_COMPLETED)
 
-        await restarted._relay_boot_events()
+        await restarted.boot_attach._relay_boot_events()
 
         sent = [call.args[0] for call in restarted.event_forwarder.send.await_args_list]
         assert ("warning", "stale") in [(e["type"], e.get("message")) for e in sent]
@@ -732,7 +739,7 @@ class TestRelayCursor:
             {"seq": 2, "kind": "warning", "scope": "sync", "message": "stale", "at": 2.0},
         )
 
-        await bridge._relay_boot_events_once()
+        await bridge.boot_attach._relay_boot_events_once()
 
         assert [event["type"] for event in ws.sent] == ["boot_progress", "warning"]
         assert self._cursor().read_text() == "2"
@@ -743,12 +750,12 @@ class TestRelayCursor:
         """The warning is still undelivered when the next line is handed off."""
         bridge = _bridge(tmp_path, monkeypatch)
         _write_lines({"seq": 1, "kind": "warning", "scope": "sync", "message": "stale", "at": 1.0})
-        await bridge._relay_boot_events_once()
+        await bridge.boot_attach._relay_boot_events_once()
 
         _write_lines(_phase(2, "sync", "completed"))
-        await bridge._relay_boot_events_once()
+        await bridge.boot_attach._relay_boot_events_once()
 
-        assert [line["seq"] for line in bridge._held_boot_lines] == [1]
+        assert [line["seq"] for line in bridge.boot_attach._held_boot_lines] == [1]
         assert not self._cursor().exists()
 
     async def test_a_held_warning_is_relayed_once_when_the_socket_returns(
@@ -758,21 +765,21 @@ class TestRelayCursor:
         first_ws = FakeWs()
         await bridge.event_forwarder.bind(first_ws)
         _write_lines({"seq": 1, "kind": "warning", "scope": "sync", "message": "first", "at": 1.0})
-        await bridge._relay_boot_events_once()
+        await bridge.boot_attach._relay_boot_events_once()
         bridge.event_forwarder.unbind()
 
         _write_lines({"seq": 2, "kind": "warning", "scope": "setup", "message": "held", "at": 2.0})
-        await bridge._relay_boot_events_once()
+        await bridge.boot_attach._relay_boot_events_once()
         assert self._cursor().read_text() == "1"
 
         second_ws = FakeWs()
         await bridge.event_forwarder.bind(second_ws)
-        await bridge._relay_boot_events_once()
-        await bridge._relay_boot_events_once()
+        await bridge.boot_attach._relay_boot_events_once()
+        await bridge.boot_attach._relay_boot_events_once()
 
         assert [event.get("message") for event in first_ws.sent] == ["first"]
         assert [event.get("message") for event in second_ws.sent] == ["held"]
-        assert bridge._held_boot_lines == []
+        assert bridge.boot_attach._held_boot_lines == []
         assert self._cursor().read_text() == "2"
 
     async def test_a_warning_held_when_boot_ends_is_buffered_for_the_next_connect(
@@ -786,13 +793,13 @@ class TestRelayCursor:
             HARNESS_COMPLETED,
         )
 
-        await bridge._relay_boot_events()
+        await bridge.boot_attach._relay_boot_events()
 
         buffered = [
             (event["type"], event.get("message")) for event in bridge.event_forwarder._event_buffer
         ]
         assert ("warning", "stale") in buffered
-        assert bridge._held_boot_lines == []
+        assert bridge.boot_attach._held_boot_lines == []
         assert not self._cursor().exists()
 
     async def test_a_dropped_phase_does_not_hold_the_cursor(self, tmp_path, monkeypatch):
@@ -800,7 +807,7 @@ class TestRelayCursor:
         bridge = _bridge(tmp_path, monkeypatch)
         _write_lines(_phase(1, "sync", "started"), _phase(2, "sync", "completed"))
 
-        await bridge._relay_boot_events_once()
+        await bridge.boot_attach._relay_boot_events_once()
 
         assert bridge.event_forwarder._event_buffer == []
         assert self._cursor().read_text() == "2"
@@ -818,7 +825,7 @@ class TestClassicMode:
             HARNESS_COMPLETED,
         )
 
-        await bridge._relay_boot_events()
+        await bridge.boot_attach._relay_boot_events()
 
         sent = [call.args[0]["type"] for call in bridge.event_forwarder.send.await_args_list]
         assert sent == ["warning"]

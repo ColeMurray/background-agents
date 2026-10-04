@@ -18,6 +18,9 @@ git config --system credential.useHttpPath true
 cp "$OI_BUNDLE/packages/sandbox-images/verify/smoke_test.py" /app/verify/smoke_test.py
 cp "$OI_BUNDLE/build-config.json" /app/openinspect-build-config.json
 cp "$OI_BUNDLE/packages/sandbox-images/toolchain.json" /app/openinspect-toolchain.json
+# Best-effort: without a cached catalog OpenCode uses the one compiled into its binary.
+HOME="$OI_RUNTIME_HOME" timeout 120 opencode models --refresh >/dev/null 2>&1 \
+  || echo "OpenCode model catalog refresh failed; keeping OpenCode's built-in catalog" >&2
 chown -R "$OI_RUNTIME_USER:$(id -gn "$OI_RUNTIME_USER")" /workspace /tmp/opencode /app/plugins \
   "$OI_RUNTIME_HOME/.local" "$OI_RUNTIME_HOME/.npm-global" "$OI_RUNTIME_HOME/.npm-cache" \
   "$OI_RUNTIME_HOME/.config" "$OI_RUNTIME_HOME/.cache" "$OI_RUNTIME_HOME/.agent-browser"

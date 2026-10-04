@@ -1,6 +1,6 @@
 locals {
   name_suffix              = var.deployment_name
-  use_modal_backend        = var.sandbox_provider == "modal"
+  use_modal_backend        = contains(["modal", "modal-vm"], var.sandbox_provider)
   use_daytona_backend      = var.sandbox_provider == "daytona"
   use_vercel_backend       = var.sandbox_provider == "vercel"
   use_opencomputer_backend = var.sandbox_provider == "opencomputer"
@@ -52,11 +52,23 @@ locals {
     startswith(var.classification_model, "gpt-")
   )
 
+  # The dedicated classifier key keeps the bots' credential out of sandboxes;
+  # existing deployments that only set anthropic_api_key keep using it.
+  classifier_anthropic_api_key = (trimspace(var.classification_anthropic_api_key) != ""
+    ? var.classification_anthropic_api_key
+    : var.anthropic_api_key
+  )
+
   # Exactly one provider binding for the classifier bots.
   classifier_secret_bindings = (local.classifier_uses_openai
     ? { OPENAI_API_KEY = { value = var.classification_openai_api_key } }
-    : { ANTHROPIC_API_KEY = { value = var.anthropic_api_key } }
+    : { ANTHROPIC_API_KEY = { value = local.classifier_anthropic_api_key } }
   )
+
+  # Bound only when set, so an unconfigured classifier keeps the model default.
+  classifier_reasoning_effort_bindings = var.classification_reasoning_effort != "" ? {
+    CLASSIFICATION_REASONING_EFFORT = { value = var.classification_reasoning_effort }
+  } : {}
 
   # Deployment-wide LLM keys injected into Modal session sandboxes. Every key stays
   # present with an empty value when unconfigured, so clearing one reconciles the
@@ -86,6 +98,16 @@ locals {
   effective_web_app_url = (
     var.web_platform == "vercel" ? module.web_app[0].production_url : local.web_app_url
   )
+
+  # Documentation site hostname, null when unset. The Terraform workflow passes
+  # an unset repository variable as "", which must not attach an empty domain.
+  docs_custom_domain = (
+    var.docs_custom_domain == null ? null :
+    trimspace(var.docs_custom_domain) == "" ? null : trimspace(var.docs_custom_domain)
+  )
+
+  # Documentation site URL, when it serves a hostname of its own
+  docs_custom_domain_url = local.docs_custom_domain != null ? "https://${local.docs_custom_domain}" : null
 
   # Worker script paths (deterministic output locations)
   control_plane_script_path = "${var.project_root}/packages/control-plane/dist/index.js"

@@ -8,6 +8,24 @@ import { ToolCallItem } from "./tool-call-item";
 afterEach(cleanup);
 
 describe("ToolCallItem", () => {
+  it("shows when tool-call arguments or output were truncated", () => {
+    const event: Extract<SandboxEvent, { type: "tool_call" }> = {
+      type: "tool_call",
+      sandboxId: "sandbox-1",
+      messageId: "message-1",
+      callId: "call-1",
+      tool: "Bash",
+      args: { command: "partial" },
+      timestamp: 1,
+      truncated: { fields: ["args.command", "output"], originalBytes: 2_000_000 },
+    };
+
+    render(<ToolCallItem event={event} isExpanded onToggle={() => {}} />);
+
+    expect(screen.getByRole("button", { name: /truncated/i })).toBeInTheDocument();
+    expect(screen.getByText(/arguments and output were truncated/i)).toBeInTheDocument();
+  });
+
   it("ellipsizes long collapsed summaries while retaining complete text", () => {
     const command = `PYTHONPATH=src uv run pytest ${"tests/very_long_directory/".repeat(4)}test_file.py`;
     const event: Extract<SandboxEvent, { type: "tool_call" }> = {
@@ -114,5 +132,25 @@ describe("ToolCallItem", () => {
       "href",
       "https://github.com/acme/web/pull/42"
     );
+  });
+
+  it("does not derive a pull request result from truncated output", () => {
+    const event: Extract<SandboxEvent, { type: "tool_call" }> = {
+      type: "tool_call",
+      sandboxId: "sandbox-1",
+      messageId: "message-1",
+      callId: "call-1",
+      tool: "create-pull-request",
+      args: {},
+      output: "Pull request created successfully!\n\nPR #42: https://github.com/acme/web/pull/42",
+      timestamp: 1,
+      truncated: { fields: ["output"], originalBytes: 2_000_000 },
+    };
+
+    render(<ToolCallItem event={event} isExpanded onToggle={() => {}} />);
+
+    expect(screen.queryByText("Opened pull request #42")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /truncated/i })).toBeInTheDocument();
+    expect(screen.getByText("Output was truncated.")).toBeInTheDocument();
   });
 });

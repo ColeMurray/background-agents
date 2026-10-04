@@ -1,9 +1,11 @@
 {
-  "runtimeVersion": "v69-discard-hook-output",
-  "generation": 69,
+  "runtimeVersion": "v74-persistent-memory",
+  "generation": 74,
   "minimumCompatibleGeneration": 62,
-  "minimumRebuildGeneration": 67,
+  "minimumPreservationGeneration": 71,
+  "minimumRebuildGeneration": 74,
   "harnessMinimumGeneration": {
-    "claude": 64
+    "claude": 74,
+    "opencode": 74
   }
 }

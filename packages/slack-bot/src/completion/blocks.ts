@@ -11,7 +11,6 @@ import type {
   SlackSectionBlock,
 } from "../slack-blocks";
 import { escapeMrkdwnText, splitIntoSlackSections } from "@open-inspect/shared/slack";
-import type { ManualPullRequestArtifactMetadata } from "@open-inspect/shared/types/artifacts";
 
 type CompletionSlackBlock = SlackSectionBlock | SlackContextBlock | SlackActionsBlock;
 
@@ -137,13 +136,11 @@ function getManualCreatePrUrl(artifacts: AgentResponse["artifacts"]): string | n
     if (!artifact.metadata || typeof artifact.metadata !== "object") {
       return false;
     }
-    const metadata = artifact.metadata as Partial<ManualPullRequestArtifactMetadata> &
-      Record<string, unknown>;
-    if (metadata.mode === "manual_pr") {
+    if (artifact.metadata.mode === "manual_pr") {
       return true;
     }
     // Backward-compatible fallback for older artifacts that may not include mode.
-    return metadata.mode == null && typeof metadata.createPrUrl === "string";
+    return artifact.metadata.mode == null && typeof artifact.metadata.createPrUrl === "string";
   });
 
   if (!manualBranchArtifact) {

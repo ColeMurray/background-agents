@@ -52,7 +52,7 @@ import {
   GITHUB_SANDBOX_FALLBACK_ROUTE,
   GITHUB_USER_OR_SERVICE_ROUTE,
   json,
-  requirePermission,
+  requireSession,
 } from "./shared";
 import { type SessionRouteContext, dispatchSession } from "./session-route";
 
@@ -243,13 +243,13 @@ sessionAttachmentRoutes.post(
   "/sessions/:id/attachments",
   admit({
     ...GITHUB_USER_OR_SERVICE_ROUTE,
-    authorization: requirePermission("sessions.collaborate"),
+    authorization: requireSession("collaborate"),
   }),
   (c) => dispatchSession(c, handleAttachmentPost)
 );
 
 sessionAttachmentRoutes.get(
   "/sessions/:id/attachments/:attachmentId",
-  admit({ ...GITHUB_SANDBOX_FALLBACK_ROUTE, authorization: requirePermission("sessions.read") }),
+  admit({ ...GITHUB_SANDBOX_FALLBACK_ROUTE, authorization: requireSession("read") }),
   (c) => dispatchSession(c, handleAttachmentGet)
 );

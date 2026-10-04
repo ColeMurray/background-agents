@@ -70,7 +70,16 @@ export const MODEL_CATALOG = [
       {
         id: "anthropic/claude-sonnet-5",
         name: "Claude Sonnet 5",
-        description: "Latest Sonnet, adaptive thinking",
+        description: "Balanced performance, adaptive thinking",
+        reasoning: {
+          efforts: ["low", "medium", "high", "xhigh", "max"],
+          default: "high",
+        },
+      },
+      {
+        id: "anthropic/claude-sonnet-5-5",
+        name: "Claude Sonnet 5.5",
+        description: "Latest Sonnet, fast and intelligent",
         reasoning: {
           efforts: ["low", "medium", "high", "xhigh", "max"],
           default: "high",
@@ -109,7 +118,16 @@ export const MODEL_CATALOG = [
       {
         id: "anthropic/claude-opus-5",
         name: "Claude Opus 5",
-        description: "Latest Opus, adaptive thinking",
+        description: "Most capable, adaptive thinking",
+        reasoning: {
+          efforts: ["low", "medium", "high", "xhigh", "max"],
+          default: "high",
+        },
+      },
+      {
+        id: "anthropic/claude-opus-5-5",
+        name: "Claude Opus 5.5",
+        description: "Latest Opus, long-running agentic coding",
         reasoning: {
           efforts: ["low", "medium", "high", "xhigh", "max"],
           default: "high",
@@ -194,16 +212,31 @@ export const MODEL_CATALOG = [
         },
       },
       {
-        id: "openai/gpt-5.3-codex",
-        name: "GPT 5.3 Codex",
-        description: "Latest codex",
-        reasoning: { efforts: ["low", "medium", "high", "xhigh"], default: "high" },
+        id: "openai/gpt-6-sol",
+        name: "GPT-6 Sol",
+        description: "Complex coding and agentic workflows",
+        reasoning: {
+          efforts: ["none", "low", "medium", "high", "xhigh", "max"],
+          default: "medium",
+        },
       },
       {
-        id: "openai/gpt-5.3-codex-spark",
-        name: "GPT 5.3 Codex Spark",
-        description: "Low-latency codex variant",
-        reasoning: { efforts: ["low", "medium", "high", "xhigh"], default: "high" },
+        id: "openai/gpt-6.1-sol",
+        name: "GPT-6.1 Sol",
+        description: "Complex coding, computer use, and professional work",
+        reasoning: {
+          efforts: ["low", "medium", "high", "xhigh", "max"],
+          default: "medium",
+        },
+      },
+      {
+        id: "openai/gpt-6-luna",
+        name: "GPT-6 Luna",
+        description: "Efficient model for focused, high-volume tasks",
+        reasoning: {
+          efforts: ["none", "low", "medium", "high", "xhigh", "max"],
+          default: "medium",
+        },
       },
     ],
   },
@@ -289,8 +322,14 @@ export const MODEL_CATALOG = [
       {
         id: "xai/grok-4.6",
         name: "Grok 4.6",
+        description: "Grok for chat, coding, and agentic tools",
+        reasoning: { efforts: ["low", "medium", "high", "xhigh"], default: "high" },
+      },
+      {
+        id: "xai/grok-4.7",
+        name: "Grok 4.7",
         description: "Latest Grok for chat, coding, and agentic tools",
-        reasoning: { efforts: ["low", "medium", "high"], default: "high" },
+        reasoning: { efforts: ["low", "medium", "high", "xhigh"], default: "high" },
       },
       {
         id: "xai/grok-build-0.1",
@@ -372,6 +411,21 @@ export const MODEL_OPTIONS: ModelCategory[] = [
   })),
 ];
 
+const MODEL_DISPLAY_NAMES = new Map<string, string>(
+  MODEL_CATALOG.flatMap((group) => group.models.map((model) => [model.id, model.name]))
+);
+
+/**
+ * Catalog display name for a model ID, falling back to the ID itself for
+ * models that are no longer in the catalog.
+ *
+ * @example
+ * getModelDisplayName("anthropic/claude-sonnet-4-5") // "Claude Sonnet 4.5"
+ */
+export function getModelDisplayName(modelId: string): string {
+  return MODEL_DISPLAY_NAMES.get(normalizeModelId(modelId)) ?? modelId;
+}
+
 /**
  * Models enabled by default when no preferences are stored.
  * Excludes opt-in providers which must be enabled via settings.
@@ -403,6 +457,14 @@ export function normalizeModelId(modelId: string): string {
  */
 export function isValidModel(model: string): model is ValidModel {
   return VALID_MODELS.includes(normalizeModelId(model) as ValidModel);
+}
+
+function retiredModelReplacement(model: string): ValidModel | undefined {
+  const normalized = normalizeModelId(model);
+  if (normalized === "openai/gpt-5.3-codex" || normalized === "openai/gpt-5.3-codex-spark") {
+    return "openai/gpt-6-sol";
+  }
+  return undefined;
 }
 
 /** Normalize a list to unique, canonical model IDs that exist in the current catalog. */
@@ -446,7 +508,7 @@ export function resolveEnabledModel(options: {
   const desired =
     options.model && isValidModel(options.model)
       ? (normalizeModelId(options.model) as ValidModel)
-      : fallback;
+      : (options.model && retiredModelReplacement(options.model)) || fallback;
   if (!options.enabledModels) return desired;
 
   const enabledModels = normalizeValidModels(options.enabledModels);
@@ -496,7 +558,7 @@ export function isValidReasoningEffort(model: string, effort: string): boolean {
  * @example
  * extractProviderAndModel("anthropic/claude-haiku-4-5") // { provider: "anthropic", model: "claude-haiku-4-5" }
  * extractProviderAndModel("claude-haiku-4-5") // { provider: "anthropic", model: "claude-haiku-4-5" }
- * extractProviderAndModel("openai/gpt-5.3-codex") // { provider: "openai", model: "gpt-5.3-codex" }
+ * extractProviderAndModel("openai/gpt-6-sol") // { provider: "openai", model: "gpt-6-sol" }
  */
 export function extractProviderAndModel(modelId: string): { provider: string; model: string } {
   const normalized = normalizeModelId(modelId);
@@ -525,12 +587,12 @@ export function getSubscriptionProviderForModel(modelId: string): SubscriptionPr
 }
 
 /**
- * Get a valid model or fall back to default.
+ * Get a valid model, migrate retired Codex selections, or fall back to default.
  * Accepts both prefixed and bare formats; always returns canonical prefixed format.
  */
 export function getValidModelOrDefault(model: string | undefined | null): ValidModel {
   if (model && isValidModel(model)) {
     return normalizeModelId(model) as ValidModel;
   }
-  return DEFAULT_MODEL;
+  return (model && retiredModelReplacement(model)) || DEFAULT_MODEL;
 }

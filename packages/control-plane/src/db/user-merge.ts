@@ -56,10 +56,22 @@ export interface UserMergeOptions {
 }
 
 const USER_MERGE_COUNT_KEYS = [
+  "memoriesOwnedRepointed",
+  "memoryAuthorsRepointed",
+  "memoryRevisionAuthorsRepointed",
+  "memoryDecidersRepointed",
+  "memoryArchiversRepointed",
+  "memoryManifestOwnersRepointed",
+  "memoryPreferencesDeduped",
+  "memoryPreferencesRepointed",
   "identitiesDeduped",
   "identitiesRepointed",
   "readStatesDeduped",
   "readStatesRepointed",
+  "teamMembershipsDeduped",
+  "teamMembershipsRepointed",
+  "sessionCollaboratorsDeduped",
+  "sessionCollaboratorsRepointed",
   "sessionsRepointed",
   "authSessionsDeleted",
   "automationsOwnedRepointed",
@@ -173,6 +185,26 @@ const BEFORE_SKILL_PROFILE_OPERATIONS = [
         AND survivor_state.session_id = session_read_states.session_id
     )`,
   }),
+  ...dedupeThenRepoint({
+    dedupeKey: "teamMembershipsDeduped",
+    repointKey: "teamMembershipsRepointed",
+    table: "team_memberships",
+    collision: `EXISTS (
+      SELECT 1 FROM team_memberships AS survivor_membership
+      WHERE survivor_membership.user_id = ?
+        AND survivor_membership.team_id = team_memberships.team_id
+    )`,
+  }),
+  ...dedupeThenRepoint({
+    dedupeKey: "sessionCollaboratorsDeduped",
+    repointKey: "sessionCollaboratorsRepointed",
+    table: "session_collaborators",
+    collision: `EXISTS (
+      SELECT 1 FROM session_collaborators AS survivor_collaborator
+      WHERE survivor_collaborator.user_id = ?
+        AND survivor_collaborator.session_id = session_collaborators.session_id
+    )`,
+  }),
   regularRepoint("sessionsRepointed", "sessions"),
   regularDelete("authSessionsDeleted", "auth_sessions", "userId"),
   regularRepoint("automationsOwnedRepointed", "automations"),
@@ -211,6 +243,22 @@ const SKILL_CATALOG_GENERATION_OPERATION: MergeOperation = {
 };
 
 const FINAL_REPOINT_OPERATIONS = [
+  regularRepoint("memoriesOwnedRepointed", "memories", "owner_user_id"),
+  regularRepoint("memoryAuthorsRepointed", "memories", "author_user_id"),
+  regularRepoint("memoryRevisionAuthorsRepointed", "memory_revisions", "author_user_id"),
+  regularRepoint("memoryDecidersRepointed", "memories", "decided_by"),
+  regularRepoint("memoryArchiversRepointed", "memories", "archived_by"),
+  regularRepoint(
+    "memoryManifestOwnersRepointed",
+    "session_memory_manifests",
+    "personal_owner_user_id"
+  ),
+  ...dedupeThenRepoint({
+    dedupeKey: "memoryPreferencesDeduped",
+    repointKey: "memoryPreferencesRepointed",
+    table: "memory_preferences",
+    collision: `EXISTS (SELECT 1 FROM memory_preferences WHERE user_id = ?)`,
+  }),
   regularRepoint("providerAccountAuthorizationsRepointed", "model_provider_account_authorizations"),
   regularRepoint(
     "providerAccountAuthorizationAttemptsRepointed",
@@ -431,7 +479,21 @@ export async function mergeUsers(
 
   // Dedup before re-pointing: drop loser rows whose target slot the survivor
   // already occupies (identities under idx_user_identities_provider; read
-  // states routinely, where both split rows read the same session).
+  // states routinely, where both split rows read the same session). Keep the
+  // stronger lead role before deleting a colliding loser membership.
+  statements.push(
+    db
+      .prepare(
+        `UPDATE team_memberships SET role = 'lead'
+         WHERE user_id = ? AND role = 'member'
+           AND EXISTS (
+             SELECT 1 FROM team_memberships AS loser_membership
+             WHERE loser_membership.team_id = team_memberships.team_id
+               AND loser_membership.user_id = ? AND loser_membership.role = 'lead'
+           )`
+      )
+      .bind(survivorId, loserId)
+  );
   addOperations(BEFORE_SKILL_PROFILE_OPERATIONS);
 
   // Profile resolution uses this generation as a consistency fence. Advance

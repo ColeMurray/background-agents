@@ -830,7 +830,7 @@ describe("boundary schemas", () => {
       ).toBe(true);
     });
 
-    it("parses a ready event (emitted on every sandbox connect)", () => {
+    it("parses a ready event emitted after harness attach", () => {
       const result = sandboxEventSchema.safeParse({
         type: "ready",
         sandboxId: "sandbox-1",
@@ -840,6 +840,16 @@ describe("boundary schemas", () => {
       });
 
       expect(result.success).toBe(true);
+    });
+
+    it("parses a heartbeat without a readiness status", () => {
+      expect(
+        sandboxEventSchema.safeParse({
+          type: "heartbeat",
+          sandboxId: "sandbox-1",
+          timestamp: 123,
+        }).success
+      ).toBe(true);
     });
 
     it("parses context compaction events with required message association", () => {
@@ -860,6 +870,33 @@ describe("boundary schemas", () => {
   });
 
   describe("clientMessageSchema", () => {
+    it("accepts only supported shutdown recovery actions", () => {
+      expect(
+        clientMessageSchema.safeParse({ type: "recover_preservation", action: "retry" }).success
+      ).toBe(true);
+      expect(
+        clientMessageSchema.safeParse({ type: "recover_preservation", action: "restore_saved" })
+          .success
+      ).toBe(true);
+      expect(
+        clientMessageSchema.safeParse({ type: "recover_preservation", action: "resume" }).success
+      ).toBe(false);
+      expect(
+        clientMessageSchema.safeParse({
+          type: "recover_preservation",
+          action: "retry",
+          clientRequestId: "recovery-1",
+        }).success
+      ).toBe(true);
+      expect(
+        clientMessageSchema.safeParse({
+          type: "recover_preservation",
+          action: "retry",
+          clientRequestId: "",
+        }).success
+      ).toBe(false);
+    });
+
     it("parses a valid prompt with attachments and request correlation", () => {
       const result = clientMessageSchema.safeParse({
         type: "prompt",

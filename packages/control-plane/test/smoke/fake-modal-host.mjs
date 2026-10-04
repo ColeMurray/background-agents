@@ -33,6 +33,7 @@ const BRIDGE_CONNECT_RETRY_MS = 300;
 const state = {
   createRequests: [],
   bridgeConnections: 0,
+  generationHandshakes: 0,
   promptsReceived: [],
   snapshots: 0,
   rejectedTokens: 0,
@@ -97,7 +98,13 @@ async function runBridge({ sessionId, sandboxId, controlPlaneUrl, authToken }) {
       socket.on("open", () => {
         state.bridgeConnections += 1;
         log("bridge.connected", { session_id: sessionId, sandbox_id: sandboxId, attempt });
-        send({ type: "ready", agentSessionId: null, harness: "opencode", runtimeVersion: "smoke" });
+        send({
+          type: "ready",
+          agentSessionId: null,
+          harness: "opencode",
+          runtimeVersion: "smoke",
+          preservationProtocolVersion: 1,
+        });
         resolve(true);
       });
 
@@ -108,7 +115,11 @@ async function runBridge({ sessionId, sandboxId, controlPlaneUrl, authToken }) {
         } catch {
           return;
         }
-        if (command.type === "prompt") {
+        if (command.type === "sandbox_generation") {
+          state.generationHandshakes += 1;
+          log("bridge.generation", { session_id: sessionId, generation: command.generation });
+          send({ type: "sandbox_generation_ready", generation: command.generation });
+        } else if (command.type === "prompt") {
           state.promptsReceived.push({ messageId: command.messageId, content: command.content });
           log("bridge.prompt", { session_id: sessionId, message_id: command.messageId });
           send({ type: "token", messageId: command.messageId, content: BRIDGE_REPLY });

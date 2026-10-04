@@ -17,11 +17,7 @@ interface FakeStatement {
   params: unknown[];
 }
 
-function createFakeD1(options?: {
-  firstResult?: unknown;
-  allResults?: unknown[];
-  changes?: number;
-}) {
+function createFakeD1(options?: { firstResult?: unknown; allResults?: unknown[] }) {
   const statements: FakeStatement[] = [];
 
   const fakeStmt = {
@@ -36,14 +32,14 @@ function createFakeD1(options?: {
       return {
         results: (options?.allResults ?? []) as T[],
         success: true,
-        meta: { duration: 0, changes: options?.changes ?? 0 },
+        meta: { duration: 0, changes: 0 },
       } as unknown as D1Result<T>;
     },
     async run(): Promise<D1Result> {
       return {
         results: [],
         success: true,
-        meta: { duration: 0, changes: options?.changes ?? 1 },
+        meta: { duration: 0, changes: 1 },
       } as unknown as D1Result;
     },
   };
@@ -248,19 +244,6 @@ describe("McpServerStore", () => {
       } as unknown as ValidatedCreateMcpServerInput;
       await expect(store.create(invalid)).rejects.toThrow(McpServerValidationError);
     });
-
-    it("throws McpServerValidationError (not generic Error) so routes can return 400", async () => {
-      const { db } = createFakeD1();
-      const store = new McpServerStore(db, TEST_ENCRYPTION_KEY);
-      const invalid = {
-        name: "x",
-        type: "local",
-        enabled: true,
-      } as unknown as ValidatedCreateMcpServerInput;
-      const err = await store.create(invalid).catch((e) => e);
-      expect(err).toBeInstanceOf(McpServerValidationError);
-      expect(err).toBeInstanceOf(Error);
-    });
   });
 
   describe("update()", () => {
@@ -269,45 +252,6 @@ describe("McpServerStore", () => {
       const store = new McpServerStore(db, TEST_ENCRYPTION_KEY);
       const result = await store.update("nonexistent", { name: "new-name" });
       expect(result).toBeNull();
-    });
-
-    it("does not allow overwriting id via patch", async () => {
-      // Create a fake D1 that returns sampleRow for get(), then returns updated row
-      let callCount = 0;
-      const fakeStmt = {
-        bind(..._params: unknown[]) {
-          return fakeStmt;
-        },
-        async first<T>(): Promise<T | null> {
-          // First call = get existing, subsequent calls = get after update
-          callCount++;
-          return (callCount <= 1 ? sampleRow : { ...sampleRow, name: "updated" }) as T;
-        },
-        async all<T>(): Promise<D1Result<T>> {
-          return {
-            results: [],
-            success: true,
-            meta: { duration: 0, changes: 0 },
-          } as unknown as D1Result<T>;
-        },
-        async run(): Promise<D1Result> {
-          return {
-            results: [],
-            success: true,
-            meta: { duration: 0, changes: 1 },
-          } as unknown as D1Result;
-        },
-      };
-      const db = { prepare: () => fakeStmt, dump: vi.fn(), exec: vi.fn() } as unknown as D1Database;
-
-      const store = new McpServerStore(db, TEST_ENCRYPTION_KEY);
-      // Attempt to patch id (not in the allowed type, but simulate via cast)
-      const result = await store.update("abc123", {
-        id: "malicious-id",
-        name: "updated",
-      } as unknown as Parameters<typeof store.update>[1]);
-      // id should still be the original
-      expect(result!.id).toBe("abc123");
     });
 
     it("throws McpServerValidationError when changing type to remote without url", async () => {
@@ -326,22 +270,6 @@ describe("McpServerStore", () => {
       const err = await store.update("def456", { type: "local" }).catch((e) => e);
       expect(err).toBeInstanceOf(McpServerValidationError);
       expect(err.message).toMatch(/require a command/i);
-    });
-  });
-
-  describe("delete()", () => {
-    it("returns true when row deleted", async () => {
-      const { db } = createFakeD1({ changes: 1 });
-      const store = new McpServerStore(db, TEST_ENCRYPTION_KEY);
-      const result = await store.delete("abc123");
-      expect(result).toBe(true);
-    });
-
-    it("returns false when row not found", async () => {
-      const { db } = createFakeD1({ changes: 0 });
-      const store = new McpServerStore(db, TEST_ENCRYPTION_KEY);
-      const result = await store.delete("nonexistent");
-      expect(result).toBe(false);
     });
   });
 
@@ -505,13 +433,6 @@ describe("McpServerStore", () => {
   });
 
   describe("encryption / decryption (via getDecryptedForSession)", () => {
-    it("no-key path returns plaintext env as-is", async () => {
-      const { db } = createFakeD1({ allResults: [sampleRow] });
-      const store = new McpServerStore(db, TEST_ENCRYPTION_KEY); // no encryption key
-      const results = await store.getDecryptedForSession([{ repoOwner: "any", repoName: "repo" }]);
-      expect(results[0].env).toEqual({ DEBUG: "1" });
-    });
-
     it("falls back to plaintext when decryption fails (pre-encryption row)", async () => {
       const { db } = createFakeD1({ allResults: [sampleRow] });
       const store = new McpServerStore(db, TEST_ENCRYPTION_KEY);

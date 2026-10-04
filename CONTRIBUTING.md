@@ -63,6 +63,27 @@ npm test
 - Run `npm run typecheck` to ensure type safety
 - Follow existing code patterns in the codebase
 
+### Test Performance
+
+Run heavyweight validation commands (lint, typecheck, and full test suites) sequentially on a shared
+development host. Each Vitest invocation sizes its own worker pool independently; running multiple
+full suites together can exhaust a test's elapsed-time budget even when its assertions are correct.
+If you intentionally overlap suites, pass an explicit `--maxWorkers` budget to each invocation,
+accounting for the other work on the host.
+
+In DOM tests, scope queries to the relevant form section or open listbox. For example,
+`within(screen.getByRole("listbox")).getByRole("option", { name })` avoids scanning unrelated
+options, including Radix's hidden native selects, while preserving accessibility checks. Prefer
+label queries when selecting labeled inputs. Investigate slow operations before increasing test
+timeouts or adding retries.
+
+For coverage commands, the recorded baseline, and test-reduction tradeoffs, see
+[Coverage-Guided Test Reduction](docs/TEST_REDUCTION.md). Control-plane coverage combines the Node
+and workerd suites; unit-only coverage is not the measure of retained integration coverage. The
+unfiltered `Coverage` workflow enforces production-only TypeScript and separate Python
+statement/branch floors. Repository administrators should require its `Coverage` check in main
+rules.
+
 ### Commit Messages
 
 Use clear, descriptive commit messages:

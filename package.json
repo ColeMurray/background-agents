@@ -16,12 +16,16 @@
     "format:check": "prettier --check .",
     "test": "npm run test --workspaces --if-present",
     "test:lint-complexity": "node --test scripts/lint-complexity-message.test.mjs",
+    "test:lint-sandbox-boundaries": "node --test scripts/lint-sandbox-boundaries.test.mjs",
     "test:lint-sql-portability": "node --test scripts/lint-sql-portability.test.mjs",
     "test:deploy-aws": "node --test scripts/deploy-aws.test.mjs",
     "test:rbac-bootstrap-owner": "node --experimental-transform-types --test scripts/bootstrap-workspace-owner.test.ts",
     "test:user-merge-cli": "node --experimental-transform-types --test scripts/merge-split-users.test.ts",
-    "test:cf-logs-cli": "node --experimental-strip-types --test scripts/cf-logs.test.ts",
+    "test:cf-logs-cli": "node --test scripts/cf-logs.test.ts",
+    "test:terraform-workflow-contract": "node --test scripts/terraform-workflow-contract.test.mjs scripts/terraform-plan-comment.test.mjs",
+    "test:node-version-workflow-contract": "node --test scripts/node-version-workflow-contract.test.mjs",
     "test:coverage": "npm run test:coverage --workspaces --if-present",
+    "test:coverage-gate": "node --test scripts/check-coverage.test.mjs",
     "test:integration": "npm run test:integration --workspaces --if-present",
     "typecheck": "npm run build -w @open-inspect/shared && npm run typecheck --workspaces --if-present",
     "knip": "knip",
@@ -32,7 +36,7 @@
   },
   "devDependencies": {
     "@eslint/js": "^9.18.0",
-    "@types/node": "^22.10.5",
+    "@types/node": "^24.0.0",
     "eslint": "^9.18.0",
     "eslint-config-prettier": "^10.0.1",
     "eslint-plugin-react": "^7.37.4",
@@ -47,11 +51,12 @@
     "wrangler": "^4.103.0"
   },
   "engines": {
-    "node": ">=22.13.0"
+    "node": ">=24.0.0"
   },
   "overrides": {
     "minimatch": "^10.2.5",
-    "undici": "^7.29.0"
+    "undici": "^7.29.0",
+    "sharp": "^0.35.4"
   },
   "lint-staged": {
     "*.{ts,tsx}": [

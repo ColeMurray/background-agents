@@ -22,7 +22,11 @@ export async function consumeSlackCompletions(
     }
 
     try {
-      await processSlackCompletion(parsed.data, env);
+      const result = await processSlackCompletion(parsed.data, env);
+      if (result?.kind === "retry") {
+        message.retry();
+        continue;
+      }
     } catch (error) {
       log.error("slack.completion.unhandled", {
         delivery_id: parsed.data.deliveryId,
@@ -31,7 +35,7 @@ export async function consumeSlackCompletions(
         error: error instanceof Error ? error : new Error(String(error)),
       });
     }
-    // Processing may already have produced Slack side effects. Retrying here can duplicate them.
+    // An unhandled failure has unknown publication state. Only an explicit safe result permits replay.
     message.ack();
   }
 }

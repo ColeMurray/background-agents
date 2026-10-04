@@ -82,6 +82,63 @@ describe("sandbox early connect (via SELF.fetch)", () => {
     ws!.close();
   });
 
+  it("cancels an attached booting sandbox and does not revive it on late readiness", async () => {
+    const name = `ws-early-connect-cancel-${Date.now()}`;
+    const { stub } = await initNamedSession(name);
+    await seedSandboxAuth(stub, {
+      authToken: SANDBOX_TOKEN,
+      sandboxId: SANDBOX_ID,
+      status: "connecting",
+    });
+    const messageId = await enqueuePrompt(stub, "Do not dispatch after cancellation");
+    const { ws: clientWs } = await openClientWs(name, { subscribe: true });
+    const { ws } = await openSandboxWs(name, { authToken: SANDBOX_TOKEN, sandboxId: SANDBOX_ID });
+    expect(ws).not.toBeNull();
+    ws!.accept();
+
+    const shutdown = collectMessages(ws!, {
+      until: (message) => message.type === "shutdown",
+    });
+    const response = await stub.fetch("http://internal/internal/cancel", { method: "POST" });
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ status: "cancelled" });
+    expect(await shutdown).toContainEqual({ type: "shutdown" });
+    await waitForSandboxStatus(stub, "stopped");
+
+    // The legacy cancellation contract leaves socket authority intact. Wait
+    // for the late event's broadcast to prove it was processed, rather than
+    // relying on a sleep before asserting that its readiness CAS was rejected.
+    const lateReady = collectMessages(clientWs, {
+      until: (message) =>
+        message.type === "sandbox_event" && (message.event as { type: string }).type === "ready",
+    });
+    ws!.send(sandboxEvent({ type: "ready", harness: "opencode" }));
+    expect(await lateReady).toContainEqual(
+      expect.objectContaining({
+        type: "sandbox_event",
+        event: expect.objectContaining({ type: "ready" }),
+      })
+    );
+    expect(await queryDO<{ status: string }>(stub, "SELECT status FROM sandbox")).toEqual([
+      { status: "stopped" },
+    ]);
+    expect(await queryDO<{ status: string }>(stub, "SELECT status FROM session")).toEqual([
+      { status: "cancelled" },
+    ]);
+    // Existing message vocabulary represents session cancellation as failed
+    // execution with a cancellation reason, not a new message status.
+    expect(
+      await queryDO<{ status: string; error_message: string }>(
+        stub,
+        "SELECT status, error_message FROM messages WHERE id = ?",
+        messageId
+      )
+    ).toEqual([{ status: "failed", error_message: "Execution was cancelled before it started" }]);
+
+    ws!.close();
+    clientWs.close();
+  });
+
   it("moves a spawning row to connecting at attach and tells clients, without publishing ready", async () => {
     const name = `ws-early-connect-attach-${Date.now()}`;
     const { stub } = await initNamedSession(name);

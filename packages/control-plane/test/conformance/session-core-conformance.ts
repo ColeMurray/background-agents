@@ -512,15 +512,10 @@ export const STORAGE_CONTRACTS: Record<
             scm_name: "Conformance User",
           });
           repository.updateParticipantWsToken("participant-conformance", "ws-hash", 200);
-          repository.updateParticipantTokens("participant-conformance", {
-            scmAccessTokenEncrypted: "access-2",
-            scmRefreshTokenEncrypted: "refresh-2",
-            scmTokenExpiresAt: 300,
-          });
           expect(repository.getParticipantByWsTokenHash("ws-hash")).toMatchObject({
-            scm_access_token_encrypted: "access-2",
-            scm_refresh_token_encrypted: "refresh-2",
-            scm_token_expires_at: 300,
+            id: "participant-conformance",
+            scm_login: "original",
+            ws_token_created_at: 200,
           });
 
           repository.createParticipant({

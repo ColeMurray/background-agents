@@ -130,17 +130,17 @@ One `image_build.*` vocabulary covers both scope kinds; events carry `scope_kind
 
 #### Session Durable Object (`component: "session-do"`)
 
-| Event                        | Level       | Key Fields                                                                                                            | Description                           |
-| ---------------------------- | ----------- | --------------------------------------------------------------------------------------------------------------------- | ------------------------------------- |
-| `do.request`                 | info        | `http_method`, `http_path`, `http_status`, `duration_ms`, `outcome`                                                   | One per DO internal route call        |
-| `ws.connect`                 | info, warn  | `ws_type` (sandbox\|client), `outcome`, `reject_reason`, `sandbox_id`, `participant_id`, `duration_ms`                | WebSocket lifecycle                   |
-| `prompt.enqueue`             | info        | `message_id`, `source`, `author_id`, `user_id`, `model`, `content_length`, `has_attachments`, `queue_position`        | Message queued                        |
-| `prompt.dispatch`            | info        | `message_id`, `outcome`, `reason`, `model`, `has_sandbox_ws`, `queue_wait_ms`                                         | Message sent to sandbox, or deferred  |
-| `prompt.complete`            | info, warn  | `message_id`, `outcome`, `total_duration_ms`, `processing_duration_ms`, `queue_duration_ms`                           | Prompt run finished                   |
-| `callback.complete_delivery` | info, error | `session_id`, `message_id`, `source`, `outcome`, `duration_ms`, `attempts`, `retries`, `http_status`, `reject_reason` | Completion callback delivery result   |
-| `callback.started_delivery`  | info, error | `session_id`, `message_id`, `outcome`, `duration_ms`, `attempts`, `retries`, `http_status`, `reject_reason`           | Linear start-callback delivery result |
-| `sandbox.boot_progress`      | info        | `boot_seq`, `phase`, `phase_status`, `repo_owner`, `repo_name`, `elapsed_ms`, `warning`                               | Boot phase reported by the runtime    |
-| `sandbox.ready`              | info        | `harness`                                                                                                             | Runtime harness up; sandbox is ready  |
+| Event                        | Level       | Key Fields                                                                                                                          | Description                           |
+| ---------------------------- | ----------- | ----------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------- |
+| `do.request`                 | info        | `http_method`, `http_path`, `http_status`, `duration_ms`, `outcome`                                                                 | One per DO internal route call        |
+| `ws.connect`                 | info, warn  | `ws_type` (sandbox\|client), `outcome`, `reject_reason`, `sandbox_id`, `participant_id`, `duration_ms`                              | WebSocket lifecycle                   |
+| `prompt.enqueue`             | info        | `message_id`, `source`, `author_id`, `user_id`, `model`, `content_length`, `has_attachments`, `queue_position`                      | Message queued                        |
+| `prompt.dispatch`            | info        | `message_id`, `outcome`, `reason`, `boot_seq`, `phase`, `phase_status`, `repo_owner`, `repo_name`, `elapsed_ms`, `warning`, `model` | Message sent to sandbox, or deferred  |
+| `prompt.complete`            | info, warn  | `message_id`, `outcome`, `total_duration_ms`, `processing_duration_ms`, `queue_duration_ms`                                         | Prompt run finished                   |
+| `callback.complete_delivery` | info, error | `session_id`, `message_id`, `source`, `outcome`, `duration_ms`, `attempts`, `retries`, `http_status`, `reject_reason`               | Completion callback delivery result   |
+| `callback.started_delivery`  | info, error | `session_id`, `message_id`, `outcome`, `duration_ms`, `attempts`, `retries`, `http_status`, `reject_reason`                         | Linear start-callback delivery result |
+| `sandbox.boot_progress`      | info        | `boot_seq`, `phase`, `phase_status`, `repo_owner`, `repo_name`, `elapsed_ms`, `warning`                                             | Boot phase reported by the runtime    |
+| `sandbox.ready`              | info        | `harness`                                                                                                                           | Runtime harness up; sandbox is ready  |
 
 `prompt.dispatch` with `outcome="deferred"` and `reason="sandbox_booting"` means a bridge is
 attached but its boot has not reached `ready`: nothing is spawned and nothing is sent, and the
@@ -162,7 +162,7 @@ outcomes, and `sandbox.restored` to `sandbox.restore` outcomes.
 | `sandbox.heartbeat_stale`      | warn        | `last_heartbeat_ms`, `threshold_ms`, `sandbox_status`                                                                   | Heartbeat missed                                                        |
 | `sandbox.timeout`              | info        | `last_activity`, `timeout_ms`                                                                                           | Inactivity timeout reached                                              |
 | `sandbox.connecting_timeout`   | warn        | `elapsed_ms`, `timeout_ms`                                                                                              | Bridge never connected within 240 s of creation                         |
-| `sandbox.boot_budget`          | warn        | `elapsed_ms`, `timeout_ms`, `boot_phase`                                                                                | Connected sandbox outlived `SANDBOX_BOOT_TIMEOUT_MS`; generation fenced |
+| `sandbox.boot_budget`          | warn        | `elapsed_ms`, `timeout_ms`, `boot_seq`, `phase`, `phase_status`, `repo_owner`, `repo_name`, `warning`                   | Connected sandbox outlived `SANDBOX_BOOT_TIMEOUT_MS`; generation fenced |
 | `sandbox.fatal_runtime_error`  | warn        | `sandbox_status`, `error`                                                                                               | Runtime reported a fatal error; sandbox failed                          |
 | `sandbox.failed_reconnected`   | info        | `sandbox_id`                                                                                                            | Watchdog-failed boot connected late; resumed as `connecting`            |
 | `sandbox.circuit_breaker_open` | warn        | `failure_count`, `wait_time_ms`                                                                                         | Spawn refused after repeated boot failures                              |
@@ -442,10 +442,11 @@ which is logged as `sandbox.failed_reconnected` and resumes as `connecting`.
 ### "Why did a sandbox spawn fail?"
 
 ```
-service="control-plane" msg="sandbox.spawn_failed" session_id="<SESSION_ID>"
+service="control-plane" event="sandbox.spawn" outcome="error" session_id="<SESSION_ID>"
 ```
 
-Check the `error_type` and `error_message`. Then look at the selected provider side. Modal example:
+Check `error_type` and `error_message` when present. If the caught value was not an `Error`, inspect
+`error`, which contains `String(error)`. Then look at the selected provider side. Modal example:
 
 ```
 service="modal-infra" msg="sandbox.create" outcome="error"
@@ -516,7 +517,7 @@ level="error" | group by error_type, service, msg | count
 ### "Slow sandbox spawns"
 
 ```
-service="control-plane" msg="sandbox.spawned" | where duration_ms > 30000
+service="control-plane" event="sandbox.spawn" | where duration_ms > 30000
 ```
 
 Or on the provider side. Modal example:

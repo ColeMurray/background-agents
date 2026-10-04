@@ -27,7 +27,7 @@ import type { MessageRepository } from "../../message-repository";
 import type { ArtifactRepository } from "../../artifact-repository";
 import type { EventRepository } from "../../event-repository";
 import type { SessionCoreRepository } from "../../session-core-repository";
-import type { SandboxRepository } from "../../sandbox-repository";
+import type { SandboxStateReader } from "../../sandbox-ports";
 import type { SessionSandboxEventProcessor } from "../../sandbox-events/processor";
 import type { SandboxRow, SessionRow } from "../../types";
 import { assertArtifactType } from "../../artifacts";
@@ -59,7 +59,7 @@ export class SandboxHandler {
     private readonly eventRepository: EventRepository,
     private readonly artifactRepository: ArtifactRepository,
     private readonly sessionCoreRepository: SessionCoreRepository,
-    private readonly sandboxRepository: SandboxRepository,
+    private readonly sandboxRepository: SandboxStateReader,
     private readonly sandboxEventProcessor: SessionSandboxEventProcessor,
     private readonly messenger: SessionMessenger,
     private readonly refreshOpenAIToken: (session: SessionRow, log: Logger) => Promise<OpenAIToken>,

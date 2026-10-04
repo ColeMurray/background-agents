@@ -1,13 +1,36 @@
 import type { GitSyncStatus, SandboxBootPhase } from "@open-inspect/shared/types/sandbox-events";
 import type { SandboxStatus } from "@open-inspect/shared/types/sessions";
-import type { SqlResult, SqlStorage } from "./sql-storage";
-import type { SandboxAccessKind, SandboxRow } from "./types";
+import { z } from "zod";
+import type { SqlStorage } from "./sql-storage";
+import {
+  sandboxRowSchema,
+  SessionStorageIntegrityError,
+  type SandboxAccessKind,
+  type SandboxRow,
+} from "./types";
 import type { Logger } from "../logger";
 import { coerceSandboxStatus } from "../sandbox/sandbox-status";
 import { encryptToken } from "../auth/crypto";
+import { decryptStoredAccessValue } from "./sandbox-access";
 
 /** A sandbox row exactly as SQLite returns it, before the status is validated. */
-type RawSandboxRow = Omit<SandboxRow, "status"> & { status: string };
+const rawSandboxRowSchema = sandboxRowSchema.extend({ status: z.unknown().optional() });
+type RawSandboxRow = z.infer<typeof rawSandboxRowSchema>;
+
+const sandboxCircuitBreakerRowSchema = z.object({
+  status: z.unknown().optional(),
+  created_at: z.number(),
+  last_heartbeat: z.number().nullable(),
+  modal_object_id: z.string().nullable(),
+  snapshot_image_id: z.string().nullable(),
+  snapshot_runtime_version: z.string().nullable(),
+  spawn_failure_count: z.number().nullable(),
+  last_spawn_failure: z.number().nullable(),
+});
+type SandboxCircuitBreakerRow = z.infer<typeof sandboxCircuitBreakerRowSchema>;
+
+const sandboxAccessSecretRowSchema = z.object({ secret: z.string().nullable() });
+const sandboxStatusReturnRowSchema = z.object({ status: z.unknown() });
 
 /** URL and secret columns backing each access artifact kind. */
 const ACCESS_ARTIFACT_COLUMNS: Record<
@@ -54,6 +77,15 @@ export interface ResumeSandboxData {
   createdAt: number;
 }
 
+/** Provider access discovered while resuming an existing sandbox. */
+export interface ProviderResumeAccessData {
+  providerObjectId: string;
+  codeServer: { url: string; password: string } | null;
+  vnc: { url: string; password: string } | null;
+  ttyd: { url: string | null; token: string } | null;
+  tunnelUrls: Record<string, string> | null;
+}
+
 /**
  * Persistence for the sandbox scoped to one session.
  *
@@ -70,10 +102,6 @@ export class SandboxRepository {
     private readonly encryptionKey: string
   ) {}
 
-  private rows<T>(result: SqlResult): T[] {
-    return result.toArray() as T[];
-  }
-
   /**
    * The session's sandbox row, with its status validated.
    *
@@ -86,8 +114,7 @@ export class SandboxRepository {
    */
   getSandbox(): SandboxRow | null {
     const result = this.sql.exec(`SELECT * FROM sandbox LIMIT 1`);
-    const rows = this.rows<RawSandboxRow>(result);
-    const row = rows[0];
+    const row = parseSandboxRow(result.toArray()[0]);
     return row ? { ...row, status: coerceSandboxStatus(row.status, this.log) } : null;
   }
 
@@ -95,8 +122,7 @@ export class SandboxRepository {
     const result = this.sql.exec(
       `SELECT status, created_at, last_heartbeat, modal_object_id, snapshot_image_id, snapshot_runtime_version, spawn_failure_count, last_spawn_failure FROM sandbox LIMIT 1`
     );
-    const rows = this.rows<Omit<SandboxCircuitBreakerState, "status"> & { status: string }>(result);
-    const row = rows[0];
+    const row = parseSandboxCircuitBreakerRow(result.toArray()[0]);
     return row ? { ...row, status: coerceSandboxStatus(row.status, this.log) } : null;
   }
 
@@ -143,6 +169,54 @@ export class SandboxRepository {
     // Consume the result before reading rowsWritten so the count is final.
     result.toArray();
     return (result.rowsWritten ?? 0) > 0;
+  }
+
+  /** Persist cleanup responsibility while permanently revoking a rejected generation. */
+  rejectProviderStartup(
+    generation: { sandboxId: string | null; createdAt: number },
+    providerObjectId: string | null
+  ): "failed" | "retained" | "superseded" {
+    const assignments = `modal_object_id = ?, fenced = 1, startup_rejected = 1,
+         auth_token_hash = '', auth_token = NULL, active_socket_id = ''`;
+    const identity = `id = (SELECT id FROM sandbox LIMIT 1)
+         AND modal_sandbox_id IS ? AND created_at = ?`;
+    const args = [providerObjectId, generation.sandboxId, generation.createdAt];
+    const failed = this.sql
+      .exec(
+        `UPDATE sandbox SET ${assignments}, status = 'failed'
+       WHERE ${identity} AND status IN ('spawning', 'connecting', 'ready')
+       RETURNING id`,
+        ...args
+      )
+      .toArray();
+    if (failed.length) return "failed";
+    const retained = this.sql
+      .exec(`UPDATE sandbox SET ${assignments} WHERE ${identity} RETURNING id`, ...args)
+      .toArray();
+    return retained.length ? "retained" : "superseded";
+  }
+
+  commitProviderStartup(
+    generation: { sandboxId: string | null; createdAt: number },
+    providerObjectId: string | null,
+    allowFailedSelfHeal: boolean
+  ): SandboxStatus | null {
+    const result = this.sql.exec(
+      `UPDATE sandbox
+       SET modal_object_id = COALESCE(?, modal_object_id),
+           status = CASE WHEN status = 'spawning' THEN 'connecting' ELSE status END
+       WHERE id = (SELECT id FROM sandbox LIMIT 1)
+         AND modal_sandbox_id IS ? AND created_at = ? AND fenced = 0
+         AND (status IN ('spawning', 'connecting', 'ready')
+              OR (? = 1 AND status = 'failed'))
+       RETURNING status`,
+      providerObjectId,
+      generation.sandboxId,
+      generation.createdAt,
+      allowFailedSelfHeal ? 1 : 0
+    );
+    const row = sandboxStatusReturnRowSchema.safeParse(result.toArray()[0]);
+    return row.success ? coerceSandboxStatus(row.data.status, this.log) : null;
   }
 
   /**
@@ -239,7 +313,7 @@ export class SandboxRepository {
          active_socket_id = '',
          boot_phase = NULL,
          boot_seq = NULL,
-         fenced = 0
+         fenced = 0, startup_rejected = 0
        WHERE id = (SELECT id FROM sandbox LIMIT 1)`,
       data.status,
       data.createdAt,
@@ -294,11 +368,58 @@ export class SandboxRepository {
          last_heartbeat = NULL,
          boot_phase = NULL,
          boot_seq = NULL,
-         fenced = 0
+         fenced = 0, startup_rejected = 0
        WHERE id = (SELECT id FROM sandbox LIMIT 1)`,
       data.status,
       data.createdAt
     );
+  }
+
+  /**
+   * Commit all provider access returned by a resume as one generation-scoped
+   * write. `ready` is allowed because the bridge can complete startup before
+   * the provider's resume request returns.
+   */
+  async completeProviderResume(
+    generation: { sandboxId: string | null; createdAt: number },
+    access: ProviderResumeAccessData,
+    expectedProviderObjectId?: string
+  ): Promise<boolean> {
+    const [codeServerPassword, vncPassword, ttydToken] = await Promise.all([
+      access.codeServer ? this.encrypt(access.codeServer.password) : null,
+      access.vnc ? this.encrypt(access.vnc.password) : null,
+      access.ttyd ? this.encrypt(access.ttyd.token) : null,
+    ]);
+    const result = this.sql.exec(
+      `UPDATE sandbox SET
+         modal_object_id = ?,
+         code_server_url = ?,
+         code_server_password = ?,
+         vnc_url = ?,
+         vnc_password = ?,
+         ttyd_url = ?,
+         ttyd_token = ?,
+         tunnel_urls = ?
+       WHERE id = (SELECT id FROM sandbox LIMIT 1)
+         AND modal_sandbox_id IS ? AND created_at = ?
+          AND (status IN ('connecting', 'ready') OR (? IS NOT NULL AND status = 'spawning'))
+          AND fenced = 0 AND (? IS NULL OR modal_object_id = ?)`,
+      access.providerObjectId,
+      access.codeServer?.url ?? null,
+      codeServerPassword,
+      access.vnc?.url ?? null,
+      vncPassword,
+      access.ttyd?.url ?? null,
+      ttydToken,
+      access.tunnelUrls ? JSON.stringify(access.tunnelUrls) : null,
+      generation.sandboxId,
+      generation.createdAt,
+      expectedProviderObjectId ?? null,
+      expectedProviderObjectId ?? null,
+      expectedProviderObjectId ?? null
+    );
+    result.toArray();
+    return (result.rowsWritten ?? 0) > 0;
   }
 
   updateSandboxModalObjectId(modalObjectId: string | null): void {
@@ -326,6 +447,24 @@ export class SandboxRepository {
       sandboxId
     );
     // Consume the result before reading rowsWritten so the count is final.
+    result.toArray();
+    return (result.rowsWritten ?? 0) > 0;
+  }
+
+  /**
+   * Stop the generation and forget its snapshot and provider handle, so the
+   * next start is a fresh spawn: no restore from the snapshot and no resume of
+   * the provider object. Applies only while the row is still that generation.
+   */
+  discardSandboxState(generation: { sandboxId: string | null; createdAt: number }): boolean {
+    const result = this.sql.exec(
+      `UPDATE sandbox SET status = 'stopped', snapshot_image_id = NULL,
+         snapshot_runtime_version = NULL, modal_object_id = NULL
+       WHERE id = (SELECT id FROM sandbox LIMIT 1)
+         AND modal_sandbox_id IS ? AND created_at = ?`,
+      generation.sandboxId,
+      generation.createdAt
+    );
     result.toArray();
     return (result.rowsWritten ?? 0) > 0;
   }
@@ -401,6 +540,17 @@ export class SandboxRepository {
     );
   }
 
+  /** Read and decrypt one access artifact's stored secret. */
+  async getSandboxAccessSecret(kind: SandboxAccessKind): Promise<string | null> {
+    const { secretColumn } = ACCESS_ARTIFACT_COLUMNS[kind];
+    const row = this.sql.exec(`SELECT ${secretColumn} AS secret FROM sandbox LIMIT 1`).toArray()[0];
+    const parsed = row === undefined ? null : sandboxAccessSecretRowSchema.safeParse(row);
+    if (parsed && !parsed.success) {
+      throw new SessionStorageIntegrityError("Malformed persisted sandbox access secret");
+    }
+    return decryptStoredAccessValue(parsed?.data.secret ?? null, this.encryptionKey, this.log);
+  }
+
   /** Clear one access artifact's URL and secret. */
   clearSandboxAccess(kind: SandboxAccessKind): void {
     const { urlColumn, secretColumn } = ACCESS_ARTIFACT_COLUMNS[kind];
@@ -449,4 +599,18 @@ export class SandboxRepository {
       timestamp
     );
   }
+}
+
+function parseSandboxRow(row: unknown): RawSandboxRow | null {
+  if (row === undefined) return null;
+  const parsed = rawSandboxRowSchema.safeParse(row);
+  if (parsed.success) return parsed.data;
+  throw new SessionStorageIntegrityError("Malformed persisted sandbox row");
+}
+
+function parseSandboxCircuitBreakerRow(row: unknown): SandboxCircuitBreakerRow | null {
+  if (row === undefined) return null;
+  const parsed = sandboxCircuitBreakerRowSchema.safeParse(row);
+  if (parsed.success) return parsed.data;
+  throw new SessionStorageIntegrityError("Malformed persisted sandbox circuit breaker row");
 }

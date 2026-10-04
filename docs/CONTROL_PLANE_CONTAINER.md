@@ -10,13 +10,12 @@ providers behave the same; only the platform adapters differ.
 
 ## What the stack contains
 
-| Service      | Image                   | Role                                                                                  |
-| ------------ | ----------------------- | ------------------------------------------------------------------------------------- |
-| `app`        | built from this repo    | The control plane: HTTP API, session WebSockets, cron jobs. Port 8787.                |
-| `minio`      | `quay.io/minio/minio`   | S3-compatible object storage for media and backups. Console on port 9001.             |
-| `minio-init` | `quay.io/minio/mc`      | Creates the `media` and `backups` buckets, then exits.                                |
-| `litestream` | `litestream/litestream` | Replicates the global store (`/data/global.db`) to the `backups` bucket every second. |
-| `caddy`      | `caddy` (profile `tls`) | Optional TLS termination for a public hostname.                                       |
+| Service        | Image                   | Role                                                                                                        |
+| -------------- | ----------------------- | ----------------------------------------------------------------------------------------------------------- |
+| `app`          | built from this repo    | The control plane: HTTP API, session WebSockets, cron jobs. Port 8787.                                      |
+| `object-store` | `chrislusf/seaweedfs`   | S3-compatible object storage for media and backups (SeaweedFS). Creates both buckets at startup. Port 9000. |
+| `litestream`   | `litestream/litestream` | Replicates the global store (`/data/global.db`) to the `backups` bucket every second.                       |
+| `caddy`        | `caddy` (profile `tls`) | Optional TLS termination for a public hostname.                                                             |
 
 The web app is not part of the stack. It stays on Vercel in production and runs with `next dev`
 locally, pointed at the container (see below).
@@ -35,9 +34,10 @@ Prerequisites: Docker with Compose v2, a GitHub App and OAuth app as in
    Every variable is documented in place, and every value a boot cannot do without either ships with
    a working default or is listed here. Generate the three encryption keys — `TOKEN_ENCRYPTION_KEY`,
    `PROVIDER_ACCOUNTS_ENCRYPTION_KEY` and `REPO_SECRETS_ENCRYPTION_KEY` — with
-   `openssl rand -base64 32` each. Generate a MinIO root password with `openssl rand -hex 16` and
-   set it as `MINIO_ROOT_PASSWORD`, `AWS_SECRET_ACCESS_KEY` and `LITESTREAM_SECRET_ACCESS_KEY`; the
-   stack refuses to start without it. The other MinIO and Litestream defaults work as they are.
+   `openssl rand -base64 32` each. Generate an object store root password with
+   `openssl rand -hex 16` and set it as `OBJECT_STORE_ROOT_PASSWORD`, `AWS_SECRET_ACCESS_KEY` and
+   `LITESTREAM_SECRET_ACCESS_KEY`; the stack refuses to start without it. The other object store and
+   Litestream defaults work as they are.
 
    The rest of the file boots as shipped. A GitHub App, an OAuth app and a sandbox provider are what
    the stack needs to do anything useful, but their variables are read at use rather than at boot,
@@ -57,12 +57,13 @@ Prerequisites: Docker with Compose v2, a GitHub App and OAuth app as in
 
    The response reports the migrations applied, the resident sessions, and the state of the cron
    loop and alarm clock. Litestream logs `snapshot written` once the first snapshot is in the
-   `backups` bucket; the MinIO console at http://127.0.0.1:9001 shows both buckets.
+   `backups` bucket. Any S3 client pointed at http://127.0.0.1:9000 with the root credentials lists
+   both buckets.
 
-The app's port and MinIO's ports are published on loopback only. `APP_BIND_ADDRESS` in `.env` moves
-the app's port to another interface where something in front of the host restricts access, such as a
-security group on AWS. Only the app reads `.env`; the sidecars receive the few variables they need
-by name, never the app's secrets.
+The app's port and the object store's S3 port are published on loopback only. `APP_BIND_ADDRESS` in
+`.env` moves the app's port to another interface where something in front of the host restricts
+access, such as a security group on AWS. Only the app reads `.env`; the sidecars receive the few
+variables they need by name, never the app's secrets.
 
 Stop with `docker compose down`. The data volume survives; `docker compose down -v` deletes it.
 Compose gives the app 40 seconds to drain before killing it, which covers the host's 30-second
@@ -209,13 +210,13 @@ docker compose -f docker-compose.yml -f docker-compose.aws.yml up -d
 It changes three things and nothing else. The app runs the image `CONTROL_PLANE_IMAGE` names — an
 ordinary `.env` entry, written from SSM like the rest, so changing the tag is a `terraform apply`
 and a restart rather than a new instance — rather than a build, because the instance has no
-checkout. MinIO does not run, because S3 is the object store and Litestream's replica target. And
-Caddy leaves the `tls` profile and starts with the rest, because TLS is not optional on a public
-address.
+checkout. The local object store does not run, because S3 is the object store and Litestream's
+replica target. And Caddy leaves the `tls` profile and starts with the rest, because TLS is not
+optional on a public address.
 
-`.env` still has to carry `MINIO_ROOT_PASSWORD`: Compose interpolates the base file before it
-applies an overlay, so that variable's `:?` guard fires whether or not MinIO is among the services
-that end up running. The AWS deployment gives it an unused value.
+`.env` still has to carry `OBJECT_STORE_ROOT_PASSWORD`: Compose interpolates the base file before it
+applies an overlay, so that variable's `:?` guard fires whether or not the local object store is
+among the services that end up running. The AWS deployment gives it an unused value.
 
 ## The smoke test
 
@@ -239,8 +240,8 @@ and plays the bridge. Nothing reaches a cloud, so the smoke needs no credentials
 To run it beside a stack already holding the default ports, move its published ones:
 
 ```bash
-SMOKE_APP_PORT=8798 SMOKE_MINIO_PORT=9010 SMOKE_MINIO_CONSOLE_PORT=9011 \
-  SMOKE_FAKE_MODAL_PORT=9910 scripts/compose-smoke.sh
+SMOKE_APP_PORT=8798 SMOKE_OBJECT_STORE_PORT=9010 SMOKE_FAKE_MODAL_PORT=9910 \
+  scripts/compose-smoke.sh
 ```
 
 ## Not yet available on the container
@@ -257,7 +258,7 @@ docker run --rm -p 127.0.0.1:8787:8787 --env-file .env -e LITESTREAM_BUCKET= \
 ```
 
 `LITESTREAM_BUCKET=` turns the restore-on-empty step off: outside the compose network there is no
-`minio` host, and the entrypoint would otherwise try to reach it before the host boots. Point
+`object-store` host, and the entrypoint would otherwise try to reach it before the host boots. Point
 `LITESTREAM_ENDPOINT` at a reachable bucket instead to keep the restore. The entrypoint refuses a
 plain-`http://` endpoint unless `OBJECT_STORE_ALLOW_HTTP=true`, the same opt-in the host applies to
 its own object store, and removes a stray `global.db-wal` or `-shm` left without its database so it

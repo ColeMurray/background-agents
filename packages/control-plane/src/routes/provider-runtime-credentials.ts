@@ -15,6 +15,7 @@
 
 import { Hono } from "hono";
 import { subscriptionProviderIdSchema } from "@open-inspect/shared/types/provider-accounts";
+import { z } from "zod";
 import { modelProviderAccountAdapterRegistry } from "../auth/model-provider-account-default-adapters";
 import { ModelProviderAccountStore } from "../db/model-provider-accounts";
 import { ProviderCredentialStore } from "../db/provider-account-credentials";
@@ -37,17 +38,16 @@ const EXPIRY_GUARD_MS = 60 * 60 * 1000;
 
 export const providerRuntimeCredentialRoutes = new Hono<ControlPlaneHonoEnv>();
 
-interface StoredCredential {
-  token: string;
-  expiresAt: number;
-}
+const storedCredentialSchema = z.object({
+  token: z.string().min(1),
+  expiresAt: z.number(),
+});
 
-function storedCredential(payload: unknown): StoredCredential | null {
-  if (!payload || typeof payload !== "object") return null;
-  const record = payload as Record<string, unknown>;
-  if (typeof record.token !== "string" || record.token.length === 0) return null;
-  if (typeof record.expiresAt !== "number") return null;
-  return { token: record.token, expiresAt: record.expiresAt };
+type StoredCredential = z.infer<typeof storedCredentialSchema>;
+
+export function parseStoredCredentialPayload(payload: unknown): StoredCredential | null {
+  const parsed = storedCredentialSchema.safeParse(payload);
+  return parsed.success ? parsed.data : null;
 }
 
 async function handleRuntimeCredential(
@@ -111,7 +111,7 @@ async function handleRuntimeCredential(
     const parsed = registry
       .require(provider)
       .parseCredential(state.payload, state.credentialSchemaVersion);
-    credential = storedCredential(parsed);
+    credential = parseStoredCredentialPayload(parsed);
   } catch {
     credential = null;
   }

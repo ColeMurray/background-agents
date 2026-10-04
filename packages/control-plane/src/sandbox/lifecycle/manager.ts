@@ -10,15 +10,13 @@
  * spawn attempts within the same request.
  */
 
-import { getValidHarnessOrDefault, type HarnessId } from "@open-inspect/shared/harnesses";
-import type { McpServerConfig, SandboxSettings } from "@open-inspect/shared/types/integrations";
-import { extractProviderAndModel } from "@open-inspect/shared/models";
 import type { ServerMessage } from "@open-inspect/shared/types/server-messages";
 import type { SandboxStatus } from "@open-inspect/shared/types/sessions";
-import {
-  sandboxBootPhaseSchema,
-  type SandboxBootPhase,
-} from "@open-inspect/shared/types/sandbox-events";
+import type { SandboxEvent } from "@open-inspect/shared/types/sandbox-events";
+import type {
+  SandboxShutdownState,
+  ShutdownRecoveryAction,
+} from "@open-inspect/shared/types/sandbox-shutdown";
 import {
   sessionHasRepository,
   type SandboxAccessKind,
@@ -28,20 +26,22 @@ import {
 import {
   PrebuiltImageUnavailableError,
   SandboxProviderError,
+  SandboxLaunchRejectedError,
+  providerResumesAfterStop,
   type SandboxProvider,
   type CreateSandboxConfig,
   type CreateSandboxResult,
-  type SessionRepositoryInfo,
+  type SandboxLifetime,
+  type StopConfig,
 } from "../provider";
 import {
   evaluateCircuitBreaker,
   evaluateSpawnDecision,
-  evaluateInactivityTimeout,
-  evaluateHeartbeatHealth,
-  evaluateConnectingTimeout,
-  evaluateBootBudget,
   evaluateWarmDecision,
+  heartbeatStaleAt,
   isDeadSandboxStatus,
+  isSnapshotRuntimeCompatible,
+  shouldStopSandboxOnSessionCancel,
   DEFAULT_CIRCUIT_BREAKER_CONFIG,
   DEFAULT_SPAWN_CONFIG,
   DEFAULT_INACTIVITY_CONFIG,
@@ -50,46 +50,113 @@ import {
   DEFAULT_BOOT_BUDGET_CONFIG,
   type CircuitBreakerConfig,
   type SpawnConfig,
-  type InactivityConfig,
-  type HeartbeatConfig,
-  type ConnectingTimeoutConfig,
-  type BootBudgetConfig,
 } from "./decisions";
+import { evaluateAlarmPolicy, type AlarmPolicyConfig } from "./alarm-policy";
+import { formatBootBudgetFailure } from "./boot-failure-message";
 import { createLogger, type Logger } from "../../logger";
 import { hashToken } from "../../auth/crypto";
-import { mintJwt } from "../../auth/jwt";
-import { repoImageBuildScope, type ImageBuildScope } from "../../image-builds/model";
-import { parsePersistedSandboxSettings } from "../settings";
+import { parseStoredSandboxBootPhase, sandboxBootPhaseLogFields } from "../boot-phase";
+import type { ImageBuildLookup } from "./image-selection";
 import {
-  evaluateImageBuildForSpawn,
-  type ImageBuildLookup,
-  type SelectedImageBuild,
-} from "./image-selection";
-import type { AlarmScheduler, SessionWebSocket } from "../../platform-ports";
+  SandboxLaunchContext,
+  resolveImageBuildScope,
+  type SandboxLaunchConfig,
+  type SandboxLaunchContextReader,
+} from "./launch-context";
+import type { AlarmScheduler, BackgroundTasks, SessionWebSocket } from "../../platform-ports";
 import { DEFAULT_SANDBOX_STATUS } from "../sandbox-status";
+import type {
+  SandboxGeneration,
+  SandboxReadiness,
+  SandboxCancellation,
+  SandboxAttachment,
+  SandboxAlarm,
+  SandboxAlarmResult,
+  SandboxCheckpointOutcome,
+  SandboxStartupDecision,
+  SandboxWorkAdmission,
+  SandboxPushAdmission,
+} from "./ports";
+import { shutdownPolicyForLaunch, type ShutdownLifecyclePolicy } from "./shutdown-policy";
+import type { SandboxAccess } from "./sandbox-access";
+import { SandboxLaunchExpiredError, SpawnSupersededError } from "./startup-errors";
+import {
+  VmStartupReconciliation,
+  type VmStartupReconciliationStorage,
+  type VmStartupReconciliationShutdown,
+} from "./vm-startup-reconciliation";
+import {
+  attemptRejectedStartupCleanup,
+  destroyLateProviderResult,
+  rearmRejectedStartupCleanupAlarm,
+  type AllocationCleanupDependencies,
+  type AllocationCleanupStorage,
+} from "./allocation-cleanup";
+import { boundedProviderStop, type ProviderStopOutcome } from "./provider-stop";
+import {
+  failConnectTimeout,
+  terminateStaleHeartbeat,
+  stopForInactivity,
+  type WatchdogContext,
+  type WatchdogEffectsDependencies,
+} from "./watchdog-effects";
+export type { SandboxGeneration, SandboxAlarmResult } from "./ports";
 
-export type { ImageBuildLookup } from "./image-selection";
 export type { AlarmScheduler } from "../../platform-ports";
 
 const log = createLogger("lifecycle-manager");
 
-/** TTL for terminal auth JWTs (24 hours, matching typical sandbox lifetime). */
-const TERMINAL_TOKEN_TTL_SECONDS = 86400;
-const PROVIDER_REPLACEMENT_STOP_TIMEOUT_MS = 10_000;
-
 // ==================== Dependency Interfaces ====================
 
-/**
- * One occupancy of the sandbox row: the logical sandbox id plus the
- * `created_at` its reservation or resume stamped. Every write an attempt
- * makes after its first await names the generation it was started for, so a
- * completion that outlives its attempt cannot land on a later one, even one
- * that reached the same status.
- */
-export interface SandboxGeneration {
-  sandboxId: string | null;
-  createdAt: number;
+/** Internal shutdown collaborator; callers outside this subsystem use the manager's policies. */
+export interface SandboxShutdownLifecycle extends VmStartupReconciliationShutdown {
+  /** Atomically reserves the sandbox row and shutdown ownership, then announces after commit. */
+  reserveStartup(
+    createdAt: number,
+    policy: ShutdownLifecyclePolicy,
+    persistSandboxRow: () => void
+  ): void;
+  /** Durably marks the provider-I/O boundary so restart recovery cannot repeat it blindly. */
+  markRecoveryInvoked(generation: SandboxGeneration, providerObjectId?: string): void;
+  /** Records the provider-confirmed handle and scheduling lifetime after startup. */
+  recordProviderStartup(generation: SandboxGeneration, lifetime: SandboxLifetime): Promise<void>;
+  /** Blocks generic destructive lifecycle work while shutdown or capture ownership is unresolved. */
+  isHolding(): boolean;
+  /** Tells a runtime refused at reconnect to retry while a capture needs its sandbox. */
+  onRefusedReconnect(): "retry" | "exit";
+  /** Owns termination; only unmanaged permits the legacy lifecycle fallback. */
+  requestShutdown(
+    reason: string,
+    mode?: "graceful" | "emergency"
+  ): Promise<"owned" | "unmanaged" | "held">;
+  /** Runs and classifies an ordinary checkpoint without exposing provider ambiguity to callers. */
+  captureCheckpoint(
+    generation: SandboxGeneration,
+    reason: string
+  ): Promise<SandboxCheckpointOutcome>;
+  /** Decides startup without exposing the coordinator's persisted receipt representation. */
+  startupDecision(): SandboxStartupDecision;
+  /** Holds a failed boot of the retained source, which deleting would lose; false for other objects. */
+  holdFailedRetainedBoot(error: string, generation: SandboxGeneration): boolean;
+  /** Converts a failed or interrupted saved-state startup into a durable safety hold. */
+  holdFailedRecovery(error: string, generation?: SandboxGeneration): void;
+  /** Records runtime protocol support; does not itself grant lifecycle command readiness. */
+  runtimeReady(version?: 1): void;
+  /** Accepts only acknowledgement of the current generation before allowing managed work. */
+  generationReady(event: Extract<SandboxEvent, { type: "sandbox_generation_ready" }>): void;
+  /** Durably records correlated execution-stop evidence before terminal capture may begin. */
+  prepared(event: Extract<SandboxEvent, { type: "preservation_prepared" }>): void;
+  /** Supplies internal admission facts; the manager applies distinct queue and live-push policies. */
+  admissionDecision(): SandboxWorkAdmission;
+  /** Advances shutdown and prevents generic watchdogs from competing with unresolved work. */
+  handleAlarm(allowCaptureRetry?: boolean): Promise<"continue" | "hold_watchdogs">;
+  /** Applies an already-authorized recovery choice; only explicit restore releases a saved pause. */
+  recover(action: ShutdownRecoveryAction): Promise<void>;
+  /** Returns the safe public projection, excluding private provider handles and recovery receipts. */
+  snapshot(): SandboxShutdownState | null;
 }
+
+export type { SandboxPushAdmission } from "./ports";
 
 /**
  * Sandbox state with circuit breaker info (subset of full SandboxRow).
@@ -111,31 +178,22 @@ interface SandboxCircuitBreakerInfo {
  * contract, these reads belong to others, and conflating them forced every
  * implementer to bridge unrelated objects.
  */
-export interface SessionContextReader {
+export interface SessionContextReader extends SandboxLaunchContextReader {
   /** Get current session */
   getSession(): SessionRow | null;
-  /**
-   * Get the session's member repositories in position order. Pre-list
-   * sessions get a one-entry list synthesized from the scalar columns
-   * (buildSessionRepositories owns the rule); empty only for repo-less
-   * sessions.
-   */
-  getSessionRepositories(): SessionRepositoryInfo[];
-  /** Get user env vars for sandbox injection */
-  getUserEnvVars(): Promise<Record<string, string> | undefined>;
 }
 
 /**
  * Storage adapter for sandbox data operations — the sandbox repository's
  * contract, satisfied by it structurally.
  */
-export interface SandboxStorage {
-  /** Get current sandbox state */
-  getSandbox(): SandboxRow | null;
+export interface SandboxStorage extends VmStartupReconciliationStorage, AllocationCleanupStorage {
   /** Get sandbox with circuit breaker state (subset of fields) */
   getSandboxWithCircuitBreaker(): SandboxCircuitBreakerInfo | null;
   /** Update sandbox status */
   updateSandboxStatus(status: SandboxStatus): void;
+  /** Atomically accept readiness only for the current, eligible, unfenced attempt. */
+  markSandboxReady(generation: SandboxGeneration): boolean;
   /**
    * Revoke the current generation's credentials and socket authority for
    * good, so the runtime cannot reconnect and the row cannot become ready.
@@ -154,6 +212,24 @@ export interface SandboxStorage {
     from: SandboxStatus,
     to: SandboxStatus
   ): boolean;
+  /**
+   * Fence a rejected generation and retain its cleanup handle without replacing
+   * a terminal status. Superseded generations cannot modify the current row.
+   */
+  rejectProviderStartup(
+    generation: SandboxGeneration,
+    providerObjectId: string | null
+  ): "failed" | "retained" | "superseded";
+  /**
+   * Atomically accept a provider startup result for the named generation,
+   * store its handle, and advance a fresh spawn to connecting. Returns the
+   * resulting status, or null when another lifecycle event owns the row.
+   */
+  commitProviderStartup(
+    generation: SandboxGeneration,
+    providerObjectId: string | null,
+    allowFailedSelfHeal: boolean
+  ): SandboxStatus | null;
   /**
    * Reserve a replacement sandbox identity (status, sandbox ID, created_at).
    * Clears every field describing the previous sandbox instance, runtime
@@ -178,8 +254,6 @@ export interface SandboxStorage {
   updateSandboxAuthTokenHash(modalSandboxId: string, authTokenHash: string): boolean;
   /** Update sandbox state for in-place resume without rotating auth/token identity */
   updateSandboxForResume(data: { status: SandboxStatus; createdAt: number }): void;
-  /** Update sandbox Modal object ID (for snapshot API) */
-  updateSandboxModalObjectId(modalObjectId: string | null): void;
   /** Set the runtime version describing the sandbox's current filesystem. */
   updateSandboxRuntimeVersion(runtimeVersion: string | null): void;
   /**
@@ -203,16 +277,8 @@ export interface SandboxStorage {
   resetCircuitBreaker(): void;
   /** Persist last spawn error */
   setLastSpawnError(error: string | null, timestamp: number | null): void;
-  /** Set one access artifact's URL and (encrypted) secret on the sandbox row */
-  updateSandboxAccess(kind: SandboxAccessKind, url: string, secret: string): void | Promise<void>;
-  /** Clear one access artifact's URL and secret (e.g. on sandbox teardown) */
-  clearSandboxAccess(kind: SandboxAccessKind): void;
-  /** Clear one access artifact's URL while preserving its stored secret */
-  clearSandboxAccessUrl?(kind: SandboxAccessKind): void;
-  /** Update tunnel URLs for extra ports on the sandbox row */
-  updateSandboxTunnelUrls(urls: Record<string, string>): void | Promise<void>;
-  /** Clear stale tunnel URLs (e.g. on sandbox teardown) */
-  clearSandboxTunnelUrls(): void;
+  /** Read and decrypt one access artifact's stored secret */
+  getSandboxAccessSecret(kind: SandboxAccessKind): Promise<string | null>;
 }
 
 /**
@@ -246,21 +312,29 @@ export interface IdGenerator {
   generateId(): string;
 }
 
+/**
+ * The generation-pinned facts an alarm effect works from.
+ *
+ * Captured once when the alarm fires, before the first await, so every effect
+ * judges and stops the sandbox the policy actually looked at — a provider call
+ * can yield long enough for a replacement spawn to install a new row, and a
+ * stop aimed at `getSandbox()` afterwards would kill the replacement instead.
+ */
+interface AlarmContext extends WatchdogContext {
+  connectedClients: number;
+}
+
 // ==================== Configuration ====================
 
 /**
  * Complete lifecycle configuration.
  */
-export interface SandboxLifecycleConfig {
+export interface SandboxLifecycleConfig extends AlarmPolicyConfig, SandboxLaunchConfig {
+  /** Persist a user-visible lifecycle warning in the session event stream. */
+  recordWarning?: (message: string, eventId: string) => void;
   circuitBreaker: CircuitBreakerConfig;
   spawn: SpawnConfig;
-  inactivity: InactivityConfig;
-  heartbeat: HeartbeatConfig;
-  connectingTimeout: ConnectingTimeoutConfig;
-  bootBudget: BootBudgetConfig;
   controlPlaneUrl: string;
-  /** Default model ID used when the session has no model override. */
-  model: string;
   /**
    * Session ID for log correlation, resolved per use. Optional — logs will
    * omit sessionId if not provided. A thunk rather than a value because the
@@ -268,12 +342,6 @@ export interface SandboxLifecycleConfig {
    * row (and its public id) exists.
    */
   getSessionId?: () => string;
-  /** MCP server lookup for injecting servers into sandboxes. */
-  mcpServerLookup?: McpServerLookup;
-  /** Resolves the spawn-time agent-slack-notify gate. */
-  slackAgentNotifyLookup?: SlackAgentNotifyLookup;
-  /** Builds a provider dashboard URL for a persisted provider object ID. */
-  sandboxDashboardUrlBuilder?: (providerObjectId: string) => string | null;
 }
 
 /**
@@ -288,85 +356,11 @@ export const DEFAULT_LIFECYCLE_CONFIG: Omit<SandboxLifecycleConfig, "controlPlan
   bootBudget: DEFAULT_BOOT_BUDGET_CONFIG,
 };
 
-/**
- * The human-readable name of a boot phase for the boot-budget failure text.
- * Names the script where there is one, since that is what the operator will
- * go and look at.
- */
-function describeBootPhase(bootPhaseJson: string | null): string {
-  let phase: SandboxBootPhase | null = null;
-  if (bootPhaseJson) {
-    try {
-      const parsed = sandboxBootPhaseSchema.safeParse(JSON.parse(bootPhaseJson));
-      phase = parsed.success ? parsed.data : null;
-    } catch {
-      phase = null;
-    }
-  }
-  if (!phase) return "booting";
-  const repo = phase.repoOwner && phase.repoName ? ` for ${phase.repoOwner}/${phase.repoName}` : "";
-  switch (phase.phase) {
-    case "starting":
-      return "starting the runtime";
-    case "sync":
-      return `cloning${repo}`;
-    case "setup":
-      return `running setup.sh${repo}`;
-    case "start":
-      return `running start.sh${repo}`;
-    case "skills":
-      return "installing managed skills";
-    case "harness":
-      return "starting the agent";
-  }
-}
-
 function buildSandboxIdForSession(session: SessionRow, now: number): string {
   const sandboxName = sessionHasRepository(session)
     ? `${session.repo_owner}-${session.repo_name}`
     : session.id;
   return `sandbox-${sandboxName}-${now}`;
-}
-
-/**
- * Multi-repo additions to a spawn/restore config. Single-repo sessions keep
- * the scalar wire form untouched (the runtime synthesizes its one-entry
- * list from repo_owner/repo_name/branch), so nothing changes for them.
- * Working-branch names stay lazily derived at PR-creation time
- * (pull-request-service) and reach the sandbox via per-repo push specs,
- * never via spawn config.
- */
-function multiRepoSpawnFields(
-  repositories: SessionRepositoryInfo[]
-): Pick<CreateSandboxConfig, "repositories"> {
-  return repositories.length > 1 || repositories.some((repository) => repository.baseSha)
-    ? { repositories }
-    : {};
-}
-
-// ==================== MCP Server Lookup ====================
-
-/**
- * Lookup interface for MCP servers applicable to a session.
- * Keeps the lifecycle manager free of direct D1Database dependencies.
- * Receives the session's member repositories (empty for repo-less sessions);
- * a scoped server applies when any member matches one of its scopes.
- */
-export interface McpServerLookup {
-  getDecryptedForSession(
-    repositories: Array<{ repoOwner: string; repoName: string }>
-  ): Promise<McpServerConfig[]>;
-}
-
-// ==================== Slack Agent-Notify Lookup ====================
-
-/**
- * Resolves the spawn-time agent-slack-notify gate for a repository or the
- * global no-repository scope.
- * False (or throwing) means do not install the tool in this sandbox.
- */
-export interface SlackAgentNotifyLookup {
-  isEnabledForRepo(repoOwner: string | null, repoName: string | null): Promise<boolean>;
 }
 
 // ==================== Manager ====================
@@ -376,8 +370,11 @@ export interface SlackAgentNotifyLookup {
  * message queue) that spawn sandboxes and record activity but don't manage
  * the rest of the sandbox lifecycle.
  */
+/** Which client-visible start a launch announces: a prompt's spawn or typing's warm-up. */
+export type SandboxStartupIntent = "spawn" | "warm";
+
 export interface SandboxLifecycle {
-  spawnSandbox(): Promise<void>;
+  spawnSandbox(intent?: SandboxStartupIntent): Promise<void>;
   updateLastActivity(timestamp: number): void;
   onPromptDispatched(): void;
   terminateUnresponsiveSandbox(trigger: UnresponsiveSandboxTrigger): Promise<void>;
@@ -392,36 +389,19 @@ export type UnresponsiveSandboxTrigger =
   | "stop_confirmation_timeout";
 
 /**
- * What the lifecycle alarm did. `boot_budget_exceeded` carries the failure
- * text because the alarm handler must fail the prompt the boot was for with
- * the same words the user sees.
- */
-export type SandboxAlarmResult =
-  | "no_action"
-  | "sandbox_failed"
-  | "sandbox_terminated"
-  | { kind: "boot_budget_exceeded"; reason: string };
-
-/**
  * Manages sandbox lifecycle operations.
  *
  * Uses dependency injection for all external interactions, enabling unit testing
  * with mocked dependencies.
  */
-/**
- * A spawn attempt discovered at hash publication that a newer reservation
- * had replaced its identity. The attempt must abandon without failure
- * writes: the sandbox row and circuit breaker now describe the newer
- * attempt, and marking them failed would clobber it.
- */
-class SpawnSupersededError extends Error {
-  constructor() {
-    super("Spawn reservation superseded before its auth hash was published");
-    this.name = "SpawnSupersededError";
-  }
-}
-
-export class SandboxLifecycleManager implements SandboxLifecycle {
+export class SandboxLifecycleManager
+  implements
+    SandboxLifecycle,
+    SandboxReadiness,
+    SandboxCancellation,
+    SandboxAttachment,
+    SandboxAlarm
+{
   /**
    * In-memory flag to prevent concurrent spawn attempts within the same request.
    * This is NOT persisted - it protects against multiple spawns in one DO method call.
@@ -433,6 +413,10 @@ export class SandboxLifecycleManager implements SandboxLifecycle {
 
   /** Memoized session-scoped logger, keyed by the resolved session id. */
   private logMemo?: { sessionId: string | undefined; logger: Logger };
+  private readonly launchContext: SandboxLaunchContext;
+  private readonly vmStartup: VmStartupReconciliation;
+  private readonly allocationCleanup: AllocationCleanupDependencies;
+  private readonly watchdogEffects: WatchdogEffectsDependencies;
 
   /**
    * Session-scoped logger. Falls back to the module-level logger if no
@@ -460,29 +444,197 @@ export class SandboxLifecycleManager implements SandboxLifecycle {
     private readonly wsManager: WebSocketManager,
     private readonly alarmScheduler: AlarmScheduler,
     private readonly idGenerator: IdGenerator,
+    private readonly shutdown: SandboxShutdownLifecycle,
+    private readonly access: SandboxAccess,
     private readonly config: SandboxLifecycleConfig,
-    private readonly imageBuildLookup?: ImageBuildLookup
-  ) {}
+    imageBuildLookup?: ImageBuildLookup,
+    backgroundTasks?: BackgroundTasks
+  ) {
+    this.launchContext = new SandboxLaunchContext({
+      sessionContext,
+      provider: {
+        name: provider.name,
+        capabilities: { supportsSandboxTimeout: provider.capabilities.supportsSandboxTimeout },
+      },
+      config: {
+        model: config.model,
+        mcpServerLookup: config.mcpServerLookup,
+        slackAgentNotifyLookup: config.slackAgentNotifyLookup,
+      },
+      imageBuildLookup,
+      getLogger: () => this.log,
+    });
+    this.vmStartup = new VmStartupReconciliation({
+      provider,
+      storage,
+      sessionContext,
+      shutdown,
+      access,
+      launchContext: this.launchContext,
+      acceptResolvedStartup: (generation, providerObjectId, lifetime) =>
+        this.claimProviderStartup(generation, providerObjectId, lifetime),
+      getLogger: () => this.log,
+      alarmScheduler,
+      backgroundTasks,
+    });
+    this.allocationCleanup = {
+      storage,
+      alarmScheduler,
+      canStop: () => this.canStopProviderSandbox(),
+      stop: (providerObjectId, signal) =>
+        this.stopProviderSandbox("startup_superseded", "destroy", signal, providerObjectId),
+      getLogger: () => this.log,
+    };
+    this.watchdogEffects = {
+      storage,
+      broadcaster,
+      sockets: wsManager,
+      shutdown,
+      access,
+      canStopProviderSandbox: () => this.canStopProviderSandbox(),
+      usesProviderManagedStop: () => this.usesProviderManagedStop(),
+      snapshotRequiresShutdown: () => !!provider.capabilities.snapshotRequiresShutdown,
+      recordSpawnFailure: (now, attemptStartedAt) => this.recordSpawnFailure(now, attemptStartedAt),
+      reportSandboxError: (reason) => this.reportSandboxError(reason),
+      triggerSnapshot: (reason) => this.triggerSnapshot(reason),
+      stopProviderSandboxSafely: (options) => this.stopProviderSandboxSafely(options),
+      getLogger: () => this.log,
+    };
+  }
 
   /**
    * Spawn a sandbox (fresh or from snapshot).
    *
    * Uses decision functions to determine the appropriate action:
-   * - Check circuit breaker
    * - Restore from snapshot if available and sandbox is stopped/stale/failed
+   * - Await the reconnect of a live generation whose bridge dropped
    * - Fresh spawn if all conditions pass
+   *
+   * Only a launch is announced to clients, as `intent`, and only a launch is
+   * subject to the circuit breaker.
    */
-  async spawnSandbox(): Promise<void> {
+  async spawnSandbox(intent: SandboxStartupIntent = "spawn"): Promise<void> {
+    const startup = this.shutdown.startupDecision();
+    if (startup.kind === "hold") return;
+    if (startup.kind === "restore_snapshot" || startup.kind === "resume_retained") {
+      if (this.isSpawningSandbox || this.isTerminatingSandbox) return;
+      if (
+        startup.kind === "restore_snapshot" &&
+        (!startup.runtimeVersion || !isSnapshotRuntimeCompatible(startup.runtimeVersion))
+      ) {
+        this.shutdown.holdFailedRecovery("The saved sandbox runtime is incompatible");
+        return;
+      }
+      if (startup.kind === "resume_retained") {
+        this.announceStartup(intent);
+        await this.resumeSandbox(startup.providerObjectId, startup.runtimeVersion, true);
+      } else if (this.provider.restoreFromSnapshot) {
+        this.announceStartup(intent);
+        await this.restoreFromSnapshot(startup.snapshotId, startup.runtimeVersion!);
+      } else this.shutdown.holdFailedRecovery("This provider cannot restore the saved snapshot");
+      return;
+    }
     const sandboxState = this.storage.getSandboxWithCircuitBreaker();
     const now = Date.now();
 
-    // Extract circuit breaker state
+    // Evaluate spawn decision
+    const spawnState = {
+      status: sandboxState?.status ?? DEFAULT_SANDBOX_STATUS,
+      createdAt: sandboxState?.created_at || 0,
+      providerObjectId: sandboxState?.modal_object_id || null,
+      snapshotImageId: sandboxState?.snapshot_image_id || null,
+      snapshotRuntimeVersion: sandboxState?.snapshot_runtime_version || null,
+      hasActiveWebSocket: this.wsManager.getSandboxWebSocket() !== null,
+      lastHeartbeat: sandboxState?.last_heartbeat ?? null,
+    };
+
+    const spawnDecision = evaluateSpawnDecision(
+      spawnState,
+      this.config.spawn,
+      now,
+      this.isSpawningSandbox || this.isTerminatingSandbox,
+      !!this.provider.capabilities.supportsPersistentResume
+    );
+
+    switch (spawnDecision.action) {
+      case "hold":
+        this.shutdown.holdFailedRecovery(spawnDecision.reason);
+        return;
+      case "skip":
+        this.log.info("Spawn decision: skip", {
+          reason: spawnDecision.reason,
+          sandbox_status: spawnState.status,
+        });
+        return;
+
+      case "wait":
+        this.log.info("Spawn decision: wait", {
+          reason: spawnDecision.reason,
+          sandbox_status: spawnState.status,
+        });
+        return;
+
+      case "await_reconnect":
+        this.log.info("Spawn decision: await reconnect", {
+          sandbox_status: spawnState.status,
+          last_heartbeat: spawnDecision.lastHeartbeat,
+        });
+        await this.armReconnectDeadline(spawnDecision.lastHeartbeat);
+        return;
+
+      case "restore":
+        if (!this.admitLaunch(sandboxState, now)) return;
+        this.log.info("Spawn decision: restore", {
+          snapshot_image_id: spawnDecision.snapshotImageId,
+          snapshot_runtime_version: spawnDecision.snapshotRuntimeVersion,
+        });
+        this.announceStartup(intent);
+        await this.restoreFromSnapshot(
+          spawnDecision.snapshotImageId,
+          spawnDecision.snapshotRuntimeVersion
+        );
+        return;
+
+      case "resume":
+        if (!this.admitLaunch(sandboxState, now)) return;
+        this.log.info("Spawn decision: resume", {
+          provider_object_id: spawnDecision.providerObjectId,
+        });
+        this.announceStartup(intent);
+        await this.resumeSandbox(
+          spawnDecision.providerObjectId,
+          this.storage.getSandbox()?.runtime_version ?? null
+        );
+        return;
+
+      case "spawn":
+        if (!this.admitLaunch(sandboxState, now)) return;
+        if (spawnDecision.reason) {
+          this.log.info("Spawn decision: spawn", {
+            event: "sandbox.snapshot_rejected",
+            reason: spawnDecision.reason,
+            snapshot_image_id: spawnState.snapshotImageId,
+          });
+        }
+        this.announceStartup(intent);
+        await this.doSpawn();
+        return;
+    }
+  }
+
+  /** Tell clients a launch is starting; nothing else may announce one. */
+  private announceStartup(intent: SandboxStartupIntent): void {
+    this.broadcaster.broadcast({
+      type: intent === "warm" ? "sandbox_warming" : "sandbox_spawning",
+    });
+  }
+
+  /** Circuit-breaker admission for decisions that launch provider work. */
+  private admitLaunch(sandboxState: SandboxCircuitBreakerInfo | null, now: number): boolean {
     const circuitBreakerState = {
       failureCount: sandboxState?.spawn_failure_count || 0,
       lastFailureTime: sandboxState?.last_spawn_failure || 0,
     };
-
-    // Check circuit breaker
     const cbDecision = evaluateCircuitBreaker(circuitBreakerState, this.config.circuitBreaker, now);
 
     if (cbDecision.shouldReset) {
@@ -499,71 +651,30 @@ export class SandboxLifecycleManager implements SandboxLifecycle {
       this.reportSandboxError(
         `Sandbox spawning temporarily disabled after ${circuitBreakerState.failureCount} failures. Try again in ${Math.ceil((cbDecision.waitTimeMs || 0) / 1000)} seconds.`
       );
-      return;
+      return false;
     }
+    return true;
+  }
 
-    // Evaluate spawn decision
-    const spawnState = {
-      status: sandboxState?.status ?? DEFAULT_SANDBOX_STATUS,
-      createdAt: sandboxState?.created_at || 0,
-      providerObjectId: sandboxState?.modal_object_id || null,
-      snapshotImageId: sandboxState?.snapshot_image_id || null,
-      snapshotRuntimeVersion: sandboxState?.snapshot_runtime_version || null,
-      hasActiveWebSocket: this.wsManager.getSandboxWebSocket() !== null,
-      hasConnected: sandboxState?.last_heartbeat != null,
-    };
-
-    const spawnDecision = evaluateSpawnDecision(
-      spawnState,
-      this.config.spawn,
-      now,
-      this.isSpawningSandbox || this.isTerminatingSandbox,
-      !!this.provider.capabilities.supportsPersistentResume
-    );
-
-    switch (spawnDecision.action) {
-      case "skip":
-        this.log.info("Spawn decision: skip", {
-          reason: spawnDecision.reason,
-          sandbox_status: spawnState.status,
-        });
-        return;
-
-      case "wait":
-        this.log.info("Spawn decision: wait", {
-          reason: spawnDecision.reason,
-          sandbox_status: spawnState.status,
-        });
-        return;
-
-      case "restore":
-        this.log.info("Spawn decision: restore", {
-          snapshot_image_id: spawnDecision.snapshotImageId,
-          snapshot_runtime_version: spawnDecision.snapshotRuntimeVersion,
-        });
-        await this.restoreFromSnapshot(
-          spawnDecision.snapshotImageId,
-          spawnDecision.snapshotRuntimeVersion
-        );
-        return;
-
-      case "resume":
-        this.log.info("Spawn decision: resume", {
-          provider_object_id: spawnDecision.providerObjectId,
-        });
-        await this.resumeSandbox(spawnDecision.providerObjectId);
-        return;
-
-      case "spawn":
-        if (spawnDecision.reason) {
-          this.log.info("Spawn decision: spawn", {
-            event: "sandbox.snapshot_rejected",
-            reason: spawnDecision.reason,
-            snapshot_image_id: spawnState.snapshotImageId,
-          });
-        }
-        await this.doSpawn();
-        return;
+  /**
+   * Arm the heartbeat deadline of a generation whose bridge dropped: the alarm
+   * already armed may be an inactivity extension minutes out, and it must not
+   * decide when a source that never returns is retired and the queue
+   * re-driven. A failure to arm is not a spawn failure — the generation is
+   * untouched and the previously armed alarm still runs — so it is logged
+   * rather than reported to clients.
+   */
+  private async armReconnectDeadline(lastHeartbeat: number): Promise<void> {
+    try {
+      await this.alarmScheduler.schedule(
+        Math.max(Date.now() + 1, heartbeatStaleAt(lastHeartbeat, this.config.heartbeat))
+      );
+    } catch (error) {
+      this.log.error("Failed to arm reconnect deadline", {
+        event: "sandbox.reconnect_deadline_unarmed",
+        last_heartbeat: lastHeartbeat,
+        error: error instanceof Error ? error.message : String(error),
+      });
     }
   }
 
@@ -578,11 +689,14 @@ export class SandboxLifecycleManager implements SandboxLifecycle {
    */
   private async reserveSpawnIdentity(
     generation: SandboxGeneration & { sandboxId: string },
-    opts: { preserveProviderObjectId: boolean }
+    opts: {
+      preserveProviderObjectId: boolean;
+      shutdownPolicy: ShutdownLifecyclePolicy;
+    }
   ): Promise<{ sandboxAuthToken: string; expectedSandboxId: string }> {
     const sandboxAuthToken = this.idGenerator.generateId();
     const { sandboxId: expectedSandboxId, createdAt } = generation;
-    await this.enterProviderStartup("spawning", createdAt, () =>
+    await this.enterProviderStartup("spawning", createdAt, opts.shutdownPolicy, () =>
       this.storage.updateSandboxForSpawn({
         status: "spawning",
         createdAt,
@@ -616,7 +730,7 @@ export class SandboxLifecycleManager implements SandboxLifecycle {
   /**
    * Execute a fresh sandbox spawn.
    */
-  private async doSpawn(): Promise<void> {
+  private async doSpawn(replacedGeneration?: SandboxGeneration): Promise<void> {
     this.isSpawningSandbox = true;
     this.providerStartupPending = true;
     const spawnStartedAt = Date.now();
@@ -630,84 +744,94 @@ export class SandboxLifecycleManager implements SandboxLifecycle {
         return;
       }
 
-      this.storage.setLastSpawnError(null, null);
-
-      const now = Date.now();
       const sessionId = session.session_name || session.id;
-      const hasRepository = sessionHasRepository(session);
+      const previous = this.storage.getSandbox();
+      const replaced =
+        replacedGeneration ??
+        (previous?.last_heartbeat != null && previous.modal_sandbox_id
+          ? { sandboxId: previous.modal_sandbox_id, createdAt: previous.created_at }
+          : undefined);
+      if (replaced) {
+        this.log.warn("Replacing a sandbox without restoring its state", {
+          event: "sandbox.state_discarded",
+        });
+        try {
+          this.config.recordWarning?.(
+            "A fresh sandbox was requested without restoring the previous state. Uncommitted changes and earlier conversation context will not be carried over.",
+            `sandbox-state-discarded:${replaced.sandboxId}:${replaced.createdAt}`
+          );
+        } catch (error) {
+          this.log.warn("Could not record sandbox continuity warning", {
+            event: "sandbox.state_discarded_notice_failed",
+            error: error instanceof Error ? error.message : String(error),
+          });
+        }
+      }
+
+      const priorSandbox = this.storage.getSandbox();
+      const priorSandboxId = priorSandbox?.modal_sandbox_id ?? null;
+      // A fenced allocation must be retired before its durable identity is replaced.
+      if (priorSandbox?.fenced) await this.stopPriorProviderSandbox(true);
+      this.storage.setLastSpawnError(null, null);
+      const now = Date.now();
       const reserved = this.spawnGeneration(session, now);
       generation = reserved;
       let { sandboxAuthToken, expectedSandboxId } = await this.reserveSpawnIdentity(reserved, {
         preserveProviderObjectId: true,
+        shutdownPolicy: shutdownPolicyForLaunch("new", null),
       });
-
       await this.stopPriorProviderSandbox();
 
-      const userEnvVars = await this.sessionContext.getUserEnvVars();
-      const { provider, model: modelId } = this.resolveProviderAndModel(session);
-      const repositories = this.sessionContext.getSessionRepositories();
-      const multiRepoFields = multiRepoSpawnFields(repositories);
-
-      // Prebuilt-image selection: an environment session matches its
-      // environment's image against the session's own repository snapshot
-      // (design §7.3); a single-repo ad-hoc session matches its repo scope's
-      // image the same way, where the one-element fingerprint reproduces the
-      // old base_branch filter (non-default-branch sessions miss to base).
-      // Environment sessions never fall back to a repo image — it bakes that
-      // repository's setup and secrets, not the environment's — and
-      // multi-repo ad-hoc sessions never use prebuilt images (a repo image
-      // bakes a single checkout), so both miss straight to the base image.
-      let selectedImage: SelectedImageBuild | null = null;
-      if (session.environment_id) {
-        selectedImage = await this.lookupImageBuildForSpawn(
-          { kind: "environment", id: session.environment_id },
-          repositories,
-          getValidHarnessOrDefault(session.harness)
-        );
-      } else if (hasRepository && repositories.length === 1) {
-        selectedImage = await this.lookupImageBuildForSpawn(
-          repoImageBuildScope(repositories[0].repoOwner, repositories[0].repoName),
-          repositories,
-          getValidHarnessOrDefault(session.harness)
-        );
-      }
+      const userEnvVars = await this.launchContext.getUserEnvVars();
+      const agent = this.launchContext.resolveAgent(session);
+      const { repositories, fields: repositoryFields } =
+        this.launchContext.resolveRepositories(session);
+      const imageScope = resolveImageBuildScope(session, repositories);
+      const selectedImage = imageScope
+        ? await this.launchContext.lookupImageBuildForSpawn(imageScope, repositories, agent.harness)
+        : null;
 
       const prebuiltImageId: string | null = selectedImage?.providerImageId ?? null;
       const prebuiltImageSha: string | null = selectedImage?.primaryBaseSha ?? null;
 
-      const mcpServers = await this.loadMcpServers(repositories);
+      const mcpServers = await this.launchContext.loadMcpServers(repositories);
 
       const codeServerEnabled = session.code_server_enabled === 1;
       const vncEnabled = session.vnc_enabled === 1;
-      const agentSlackNotifyEnabled = await this.resolveAgentSlackNotifyEnabled(session);
-      const sandboxSettings = this.parseSandboxSettings(session);
-      const timeoutSeconds = this.resolveSandboxTimeoutSeconds(sandboxSettings);
+      const agentSlackNotifyEnabled =
+        await this.launchContext.resolveAgentSlackNotifyEnabled(session);
+      const { sandboxSettings, timeoutSeconds } =
+        this.launchContext.resolveSandboxSettings(session);
       const createConfig: CreateSandboxConfig = {
         sessionId,
+        generationCreatedAtMs: generation.createdAt,
+        retireSandboxId: priorSandboxId,
         sandboxId: expectedSandboxId,
-        repoOwner: session.repo_owner,
-        repoName: session.repo_name,
         controlPlaneUrl: this.config.controlPlaneUrl,
         sandboxAuthToken,
-        harness: getValidHarnessOrDefault(session.harness),
-        provider,
-        model: modelId,
+        harness: agent.harness,
+        provider: agent.provider,
+        model: agent.model,
         userEnvVars,
         prebuiltImageId,
         prebuiltImageSha,
         timeoutSeconds,
-        branch: session.base_branch,
         codeServerEnabled,
         vncEnabled,
         agentSlackNotifyEnabled,
         mcpServers,
         sandboxSettings,
-        ...multiRepoFields,
+        ...repositoryFields,
       };
+
+      this.vmStartup.registerForegroundAuth(generation, sessionId, sandboxAuthToken);
 
       let result: CreateSandboxResult;
       try {
-        result = await this.provider.createSandbox(createConfig);
+        await this.vmStartup.recordPendingProviderReference(generation, createConfig);
+        const created = await this.vmStartup.createWithVmRecovery(createConfig, generation);
+        if (!created) return;
+        result = created;
       } catch (error) {
         if (!selectedImage) throw error;
         if (!(error instanceof PrebuiltImageUnavailableError)) {
@@ -729,7 +853,7 @@ export class SandboxLifecycleManager implements SandboxLifecycle {
           error_type: error.errorType,
           error: error.message,
         });
-        await this.markImageBuildRestoreFailed(selectedImage, error);
+        await this.launchContext.markImageBuildRestoreFailed(selectedImage, error);
         // The retry gets a fresh spawn identity: the failed attempt may have
         // actually created a sandbox provider-side (post-create errors are
         // indistinguishable here), and rotating the token hash and sandbox id
@@ -738,33 +862,40 @@ export class SandboxLifecycleManager implements SandboxLifecycle {
         const retryNow = Math.max(Date.now(), now + 1);
         const retry = this.spawnGeneration(session, retryNow);
         generation = retry;
+        this.vmStartup.beginForegroundRetry();
         ({ sandboxAuthToken, expectedSandboxId } = await this.reserveSpawnIdentity(retry, {
           preserveProviderObjectId: false,
+          shutdownPolicy: shutdownPolicyForLaunch("new", null),
         }));
-        result = await this.provider.createSandbox({
+        this.vmStartup.registerForegroundAuth(generation, sessionId, sandboxAuthToken);
+        const retryConfig: CreateSandboxConfig = {
           ...createConfig,
           sandboxId: expectedSandboxId,
+          generationCreatedAtMs: retry.createdAt,
           sandboxAuthToken,
           prebuiltImageId: null,
           prebuiltImageSha: null,
-        });
+        };
+        await this.vmStartup.recordPendingProviderReference(generation, retryConfig);
+        const created = await this.vmStartup.createWithVmRecovery(retryConfig, generation);
+        if (!created) return;
+        result = created;
       }
 
-      if (result.providerObjectId) {
-        this.storeAndBroadcastProviderObjectId(result.providerObjectId);
-      }
+      if (!(await this.claimProviderStartup(generation, result.providerObjectId, result.lifetime)))
+        return;
       if (result.codeServerUrl && result.codeServerPassword) {
-        await this.storeCodeServer(result.codeServerUrl, result.codeServerPassword);
+        await this.access.storeCodeServer(result.codeServerUrl, result.codeServerPassword);
       }
       if (result.vncAccess) {
-        await this.storeVnc(result.vncAccess.url, result.vncAccess.password);
+        await this.access.storeVnc(result.vncAccess.url, result.vncAccess.password);
       }
-      await this.storeAndBroadcastTunnelUrls(result.tunnelUrls);
+      await this.access.storeAndBroadcastTunnelUrls(result.tunnelUrls);
       if (result.ttydUrl) {
-        await this.storeTtyd(result.ttydUrl, sandboxAuthToken, sessionId, expectedSandboxId);
+        await this.access.storeTtyd(result.ttydUrl, sandboxAuthToken, sessionId, expectedSandboxId);
       }
 
-      await this.finishProviderStartup(generation);
+      this.access.broadcastProviderAccessIfConnected();
 
       this.log.info("Sandbox spawn completed", {
         event: "sandbox.spawn",
@@ -783,6 +914,7 @@ export class SandboxLifecycleManager implements SandboxLifecycle {
         });
         return;
       }
+      await this.handleRejectedStartupAllocation(error, generation);
       const errorMessage = error instanceof Error ? error.message : "Failed to spawn sandbox";
       this.log.error("Sandbox spawn completed", {
         event: "sandbox.spawn",
@@ -800,6 +932,7 @@ export class SandboxLifecycleManager implements SandboxLifecycle {
       // so it is this catch's to count.
       const ownsFailure =
         this.failAttempt(generation, "spawning", errorMessage) || generation === null;
+      if (generation === null) this.reportSandboxError(errorMessage);
       if (ownsFailure) {
         // Only permanent errors count; a transient one is the provider's
         // problem, not evidence that the next attempt will fail too.
@@ -821,117 +954,7 @@ export class SandboxLifecycleManager implements SandboxLifecycle {
     } finally {
       this.isSpawningSandbox = false;
       this.providerStartupPending = false;
-    }
-  }
-
-  /**
-   * Resolve the scope's prebuilt image for a fresh spawn. Returns null on any
-   * miss or lookup failure — the session boots from base (never blocked,
-   * design §7.3) — logging the reason either way; miss-reason counts are the
-   * numbers that justify (or kill) the prebuild fast-follows.
-   */
-  private async lookupImageBuildForSpawn(
-    scope: ImageBuildScope,
-    repositories: SessionRepositoryInfo[],
-    harness: HarnessId
-  ): Promise<SelectedImageBuild | null> {
-    if (!this.imageBuildLookup || repositories.length === 0) return null;
-    try {
-      const image = await this.imageBuildLookup.getLatestReady(scope);
-      const result = await evaluateImageBuildForSpawn(image, repositories, harness);
-      if (result.outcome === "selected") {
-        this.log.info("Using prebuilt image", {
-          event: "image_build.spawn_selected",
-          scope_kind: scope.kind,
-          scope_id: scope.id,
-          image_build_id: result.image.imageBuildId,
-          runtime_version: result.image.runtimeVersion,
-        });
-        return result.image;
-      }
-      this.log.info("Prebuilt image miss, using base image", {
-        event: "image_build.spawn_miss",
-        scope_kind: scope.kind,
-        scope_id: scope.id,
-        reason: result.reason,
-        image_build_id: result.imageBuildId,
-      });
-      return null;
-    } catch (e) {
-      this.log.warn("Failed to look up prebuilt image, using base image", {
-        event: "image_build.spawn_miss",
-        scope_kind: scope.kind,
-        scope_id: scope.id,
-        reason: "lookup_failed",
-        error: e instanceof Error ? e.message : String(e),
-      });
-      return null;
-    }
-  }
-
-  /**
-   * Best-effort: the base-image retry must proceed even when D1 is the thing
-   * that is down. An unmarked row costs one more failed image boot on the
-   * next spawn, not a broken session.
-   */
-  private async markImageBuildRestoreFailed(
-    image: SelectedImageBuild,
-    error: unknown
-  ): Promise<void> {
-    if (!this.imageBuildLookup) return;
-    try {
-      await this.imageBuildLookup.markRestoreFailed(
-        image.imageBuildId,
-        `restore failed at spawn: ${error instanceof Error ? error.message : String(error)}`
-      );
-    } catch (e) {
-      this.log.warn("Failed to mark prebuilt image restore-failed", {
-        image_build_id: image.imageBuildId,
-        error: e instanceof Error ? e.message : String(e),
-      });
-    }
-  }
-
-  private async resolveAgentSlackNotifyEnabled(session: SessionRow): Promise<boolean> {
-    if (!this.config.slackAgentNotifyLookup) return false;
-    try {
-      return await this.config.slackAgentNotifyLookup.isEnabledForRepo(
-        sessionHasRepository(session) ? session.repo_owner : null,
-        sessionHasRepository(session) ? session.repo_name : null
-      );
-    } catch (err) {
-      this.log.warn("Failed to resolve agent slack-notify gate; treating as disabled", {
-        event: "slack_notify.gate_resolve_failed",
-        error: err instanceof Error ? err.message : String(err),
-      });
-      return false;
-    }
-  }
-
-  /**
-   * Load MCP servers applicable to the current session's repository.
-   * Returns undefined if none are found or DB is not configured.
-   */
-  private async loadMcpServers(
-    repositories: SessionRepositoryInfo[]
-  ): Promise<McpServerConfig[] | undefined> {
-    try {
-      if (!this.config.mcpServerLookup) return undefined;
-      const servers = await this.config.mcpServerLookup.getDecryptedForSession(
-        repositories.map(({ repoOwner, repoName }) => ({ repoOwner, repoName }))
-      );
-      this.log.info("MCP servers loaded", {
-        event: "mcp.loaded",
-        count: servers?.length ?? 0,
-        names: servers?.map((s) => s.name) ?? [],
-      });
-      return servers?.length ? servers : undefined;
-    } catch (err) {
-      this.log.warn("Failed to load MCP servers", {
-        event: "mcp.load_failed",
-        error: String(err),
-      });
-      return undefined;
+      this.vmStartup.finalizeForeground(generation);
     }
   }
 
@@ -1037,15 +1060,14 @@ export class SandboxLifecycleManager implements SandboxLifecycle {
     snapshotRuntimeVersion: string
   ): Promise<void> {
     if (!this.provider.restoreFromSnapshot) {
-      this.log.info("Provider does not support restore, falling back to fresh spawn");
-      // Fall back to fresh spawn
-      await this.doSpawn();
+      this.shutdown.holdFailedRecovery("This provider cannot restore the saved snapshot");
       return;
     }
 
     this.isSpawningSandbox = true;
     this.providerStartupPending = true;
     const restoreStartedAt = Date.now();
+    let startupClaimed = false;
     let session: SessionRow | null = null;
     let generation: SandboxGeneration | null = null;
 
@@ -1056,13 +1078,18 @@ export class SandboxLifecycleManager implements SandboxLifecycle {
         return;
       }
 
+      const priorSandbox = this.storage.getSandbox();
+      const priorSandboxId = priorSandbox?.modal_sandbox_id ?? null;
+      // A fenced allocation must be retired before its durable identity is replaced.
+      if (priorSandbox?.fenced) await this.stopPriorProviderSandbox(true);
       this.storage.setLastSpawnError(null, null);
-
       const now = Date.now();
       const reserved = this.spawnGeneration(session, now);
       generation = reserved;
+      const shutdownPolicy = shutdownPolicyForLaunch("existing", snapshotRuntimeVersion);
       const { sandboxAuthToken, expectedSandboxId } = await this.reserveSpawnIdentity(reserved, {
         preserveProviderObjectId: true,
+        shutdownPolicy,
       });
 
       // A restored sandbox runs the snapshot's binaries whatever the provider
@@ -1073,51 +1100,66 @@ export class SandboxLifecycleManager implements SandboxLifecycle {
 
       await this.stopPriorProviderSandbox();
 
-      const userEnvVars = await this.sessionContext.getUserEnvVars();
-      const { provider, model: modelId } = this.resolveProviderAndModel(session);
+      const userEnvVars = await this.launchContext.getUserEnvVars();
+      const agent = this.launchContext.resolveAgent(session);
 
-      const repositories = this.sessionContext.getSessionRepositories();
+      const { repositories, fields: repositoryFields } =
+        this.launchContext.resolveRepositories(session);
       const codeServerEnabled = session.code_server_enabled === 1;
       const vncEnabled = session.vnc_enabled === 1;
-      const agentSlackNotifyEnabled = await this.resolveAgentSlackNotifyEnabled(session);
-      const mcpServers = await this.loadMcpServers(repositories);
-      const sandboxSettings = this.parseSandboxSettings(session);
-      const timeoutSeconds = this.resolveSandboxTimeoutSeconds(sandboxSettings);
-      const result = await this.provider.restoreFromSnapshot({
+      const agentSlackNotifyEnabled =
+        await this.launchContext.resolveAgentSlackNotifyEnabled(session);
+      const mcpServers = await this.launchContext.loadMcpServers(repositories);
+      const { sandboxSettings, timeoutSeconds } =
+        this.launchContext.resolveSandboxSettings(session);
+      const restoreConfig = {
         snapshotImageId,
+        generationCreatedAtMs: generation.createdAt,
+        retireSandboxId: priorSandboxId,
         sessionId: session.session_name || session.id,
         sandboxId: expectedSandboxId,
         sandboxAuthToken,
         controlPlaneUrl: this.config.controlPlaneUrl,
-        repoOwner: session.repo_owner,
-        repoName: session.repo_name,
-        harness: getValidHarnessOrDefault(session.harness),
-        provider,
-        model: modelId,
+        harness: agent.harness,
+        provider: agent.provider,
+        model: agent.model,
         userEnvVars,
         timeoutSeconds,
-        branch: session.base_branch,
         codeServerEnabled,
         vncEnabled,
         agentSlackNotifyEnabled,
         mcpServers,
         sandboxSettings,
-        ...multiRepoSpawnFields(repositories),
-      });
+        ...repositoryFields,
+      };
+      this.vmStartup.registerForegroundAuth(generation, restoreConfig.sessionId, sandboxAuthToken);
+      await this.vmStartup.recordPendingProviderReference(generation, restoreConfig);
+      this.shutdown.markRecoveryInvoked(generation);
+      let result;
+      try {
+        result = await this.provider.restoreFromSnapshot(restoreConfig);
+      } catch (error) {
+        if (!this.provider.isUnknownStartupError?.(error)) throw error;
+        const recovered = await this.vmStartup.resolveUnknownVmStartup(generation, restoreConfig);
+        if (!recovered) return;
+        result = { ...recovered, success: true as const };
+      }
 
       if (result.success) {
-        if (result.providerObjectId) {
-          this.storeAndBroadcastProviderObjectId(result.providerObjectId);
-        }
+        if (
+          !(await this.claimProviderStartup(generation, result.providerObjectId, result.lifetime))
+        )
+          return;
+        startupClaimed = true;
         if (result.codeServerUrl && result.codeServerPassword) {
-          await this.storeCodeServer(result.codeServerUrl, result.codeServerPassword);
+          await this.access.storeCodeServer(result.codeServerUrl, result.codeServerPassword);
         }
         if (result.vncAccess) {
-          await this.storeVnc(result.vncAccess.url, result.vncAccess.password);
+          await this.access.storeVnc(result.vncAccess.url, result.vncAccess.password);
         }
-        await this.storeAndBroadcastTunnelUrls(result.tunnelUrls);
+        await this.access.storeAndBroadcastTunnelUrls(result.tunnelUrls);
         if (result.ttydUrl) {
-          await this.storeTtyd(
+          await this.access.storeTtyd(
             result.ttydUrl,
             sandboxAuthToken,
             session.session_name || session.id,
@@ -1125,7 +1167,7 @@ export class SandboxLifecycleManager implements SandboxLifecycle {
           );
         }
 
-        await this.finishProviderStartup(generation);
+        this.access.broadcastProviderAccessIfConnected();
 
         this.broadcaster.broadcast({
           type: "sandbox_restored",
@@ -1153,14 +1195,26 @@ export class SandboxLifecycleManager implements SandboxLifecycle {
           repo_name: session.repo_name,
         });
         this.failAttempt(generation, "spawning", result.error || "Failed to restore from snapshot");
+        this.shutdown.holdFailedRecovery(
+          result.error || "Failed to restore from snapshot",
+          generation
+        );
       }
     } catch (error) {
+      if (startupClaimed) {
+        this.log.warn("Restored sandbox access/publication failed", {
+          event: "sandbox.recovery_access_failed",
+          error,
+        });
+        return;
+      }
       if (error instanceof SpawnSupersededError) {
         this.log.warn("Restore attempt superseded; abandoning", {
           event: "sandbox.spawn_superseded",
         });
         return;
       }
+      await this.handleRejectedStartupAllocation(error, generation);
       const errorMessage = error instanceof Error ? error.message : "Failed to restore sandbox";
       this.log.error("Sandbox restore completed", {
         event: "sandbox.restore",
@@ -1172,17 +1226,29 @@ export class SandboxLifecycleManager implements SandboxLifecycle {
         repo_name: session?.repo_name,
       });
       this.failAttempt(generation, "spawning", errorMessage);
+      if (generation === null) this.reportSandboxError(errorMessage);
+      if (!(error instanceof SandboxLaunchExpiredError))
+        this.shutdown.holdFailedRecovery(errorMessage, generation ?? undefined);
     } finally {
       this.isSpawningSandbox = false;
       this.providerStartupPending = false;
+      this.vmStartup.finalizeForeground(generation);
     }
   }
 
   /**
    * Resume a provider-managed sandbox in place without rotating the logical sandbox ID.
    */
-  private async resumeSandbox(providerObjectId: string): Promise<void> {
+  private async resumeSandbox(
+    providerObjectId: string,
+    sourceRuntimeVersion: string | null,
+    restoringSavedState = false
+  ): Promise<void> {
     if (!this.provider.resumeSandbox) {
+      if (restoringSavedState) {
+        this.shutdown.holdFailedRecovery("Current provider cannot resume the saved sandbox");
+        return;
+      }
       await this.doSpawn();
       return;
     }
@@ -1190,6 +1256,7 @@ export class SandboxLifecycleManager implements SandboxLifecycle {
     this.isSpawningSandbox = true;
     this.providerStartupPending = true;
     let generation: SandboxGeneration | null = null;
+    let startupClaimed = false;
 
     try {
       const session = this.sessionContext.getSession();
@@ -1200,18 +1267,25 @@ export class SandboxLifecycleManager implements SandboxLifecycle {
       }
 
       const now = Date.now();
+      const previousGeneration =
+        sandbox.last_heartbeat != null
+          ? { sandboxId: sandbox.modal_sandbox_id, createdAt: sandbox.created_at }
+          : undefined;
       generation = { sandboxId: sandbox.modal_sandbox_id, createdAt: now };
+      const shutdownPolicy = shutdownPolicyForLaunch("existing", sourceRuntimeVersion);
       this.storage.setLastSpawnError(null, null);
-      await this.enterProviderStartup("connecting", now, () =>
+      await this.enterProviderStartup("connecting", now, shutdownPolicy, () => {
         this.storage.updateSandboxForResume({
           status: "connecting",
           createdAt: now,
-        })
-      );
+        });
+        this.storage.updateSandboxRuntimeVersion(sourceRuntimeVersion);
+      });
 
-      const sandboxSettings = this.parseSandboxSettings(session);
-      const timeoutSeconds = this.resolveSandboxTimeoutSeconds(sandboxSettings);
+      const { sandboxSettings, timeoutSeconds } =
+        this.launchContext.resolveSandboxSettings(session);
 
+      if (restoringSavedState) this.shutdown.markRecoveryInvoked(generation, providerObjectId);
       const result = await this.provider.resumeSandbox({
         providerObjectId,
         sessionId: session.session_name || session.id,
@@ -1223,12 +1297,12 @@ export class SandboxLifecycleManager implements SandboxLifecycle {
       });
 
       if (!result.success) {
-        if (result.shouldSpawnFresh) {
+        if (result.shouldSpawnFresh && !restoringSavedState) {
           this.log.info("Resume fell back to fresh spawn", {
             provider_object_id: providerObjectId,
             error: result.error,
           });
-          await this.doSpawn();
+          await this.doSpawn(previousGeneration);
           return;
         }
 
@@ -1236,23 +1310,62 @@ export class SandboxLifecycleManager implements SandboxLifecycle {
       }
 
       const finalProviderObjectId = result.providerObjectId ?? providerObjectId;
-      if (result.providerObjectId && result.providerObjectId !== providerObjectId) {
-        this.storeProviderObjectId(result.providerObjectId);
+      const ttydToken = sandboxSettings.terminalEnabled
+        ? await this.storage.getSandboxAccessSecret("ttyd")
+        : null;
+      const validTtydToken = this.access.reusableTtydToken(
+        ttydToken,
+        result.ttydUrl,
+        finalProviderObjectId
+      );
+      let completed: boolean;
+      try {
+        completed = await this.storage.completeProviderResume(generation, {
+          providerObjectId: finalProviderObjectId,
+          codeServer:
+            result.codeServerUrl && result.codeServerPassword
+              ? { url: result.codeServerUrl, password: result.codeServerPassword }
+              : null,
+          vnc: result.vncAccess ?? null,
+          ttyd: validTtydToken ? { url: result.ttydUrl ?? null, token: validTtydToken } : null,
+          tunnelUrls: result.tunnelUrls ?? null,
+        });
+      } catch (error) {
+        startupClaimed = await this.claimProviderStartup(
+          generation,
+          finalProviderObjectId,
+          result.lifetime,
+          false
+        );
+        throw error;
       }
-      this.broadcastSandboxDashboardUrl(finalProviderObjectId);
+      if (!completed) {
+        await this.claimProviderStartup(generation, finalProviderObjectId, result.lifetime, false);
+        this.log.warn("Resume attempt superseded; abandoning", {
+          event: "sandbox.resume_superseded",
+        });
+        return;
+      }
 
-      if (result.codeServerUrl && result.codeServerPassword) {
-        await this.storeCodeServer(result.codeServerUrl, result.codeServerPassword);
-      }
-      if (result.vncAccess) {
-        await this.storeVnc(result.vncAccess.url, result.vncAccess.password);
-      }
+      this.providerStartupPending = false;
+      await this.shutdown.recordProviderStartup(generation, result.lifetime);
+      startupClaimed = true;
 
-      await this.storeAndBroadcastTunnelUrls(result.tunnelUrls);
-      await this.finishProviderStartup(generation);
+      if (!this.access.broadcastSandboxDashboardUrl(finalProviderObjectId)) {
+        this.broadcaster.broadcast({ type: "sandbox_access_changed" });
+      }
     } catch (error) {
+      if (startupClaimed) {
+        this.log.warn("Resumed sandbox access/publication failed", {
+          event: "sandbox.recovery_access_failed",
+          error,
+        });
+        return;
+      }
       const errorMessage = error instanceof Error ? error.message : "Failed to resume sandbox";
       this.failAttempt(generation, "connecting", errorMessage);
+      if (restoringSavedState)
+        this.shutdown.holdFailedRecovery(errorMessage, generation ?? undefined);
       this.log.error("Sandbox resume failed", {
         error: error instanceof Error ? error : String(error),
       });
@@ -1266,6 +1379,18 @@ export class SandboxLifecycleManager implements SandboxLifecycle {
    * Trigger a filesystem snapshot of the sandbox.
    */
   async triggerSnapshot(reason: string): Promise<void> {
+    if (this.shutdown.isHolding()) return;
+    // Some providers require terminal shutdown before capturing an ordinary
+    // checkpoint. The source may be retired by the provider or after the
+    // control plane commits its capture receipt.
+    if (this.provider.capabilities.snapshotRequiresShutdown) {
+      // Saving after every turn would stop the sandbox after every turn. It
+      // keeps running instead; inactivity, lifetime expiry and failures save
+      // it on the way down.
+      if (reason === "execution_complete") return;
+      const ownership = await this.shutdown.requestShutdown(reason);
+      if (ownership !== "unmanaged") return;
+    }
     if (!this.provider.takeSnapshot) {
       this.log.debug("Provider does not support snapshots");
       return;
@@ -1284,96 +1409,17 @@ export class SandboxLifecycleManager implements SandboxLifecycle {
       this.log.debug("Already snapshotting, skipping");
       return;
     }
-
-    // Everything the completion writes is decided from this read, before the
-    // provider await; the writes below are conditional on it still holding.
-    const isTerminalState = isDeadSandboxStatus(sandbox.status);
-    const previousStatus = sandbox.status;
     const generation: SandboxGeneration = {
       sandboxId: sandbox.modal_sandbox_id,
       createdAt: sandbox.created_at,
     };
-    const runtimeVersion = sandbox.runtime_version;
-
-    if (!isTerminalState) {
-      this.storage.updateSandboxStatus("snapshotting");
-      this.broadcaster.broadcast({ type: "sandbox_status", status: "snapshotting" });
-    }
-
-    try {
-      this.log.info("Taking snapshot", {
-        event: "sandbox.snapshot",
+    const result = await this.shutdown.captureCheckpoint(generation, reason);
+    if (result.outcome === "unknown")
+      this.log.error("Snapshot result is unknown", {
+        event: "sandbox.snapshot_deadline_exceeded",
         reason,
         modal_object_id: sandbox.modal_object_id,
       });
-
-      const result = await this.provider.takeSnapshot({
-        providerObjectId: sandbox.modal_object_id,
-        sessionId: session.session_name || session.id,
-        reason,
-      });
-
-      if (result.success && result.imageId) {
-        // Stamp the snapshot with the runtime that produced it: the image
-        // carries that runtime's binaries, so this is what a later restore is
-        // gated on, not whatever the session runs next. Recorded for the
-        // sandbox it was taken of; a replacement reserved during the provider
-        // call keeps its own restore image.
-        if (
-          this.storage.recordSandboxSnapshot(generation.sandboxId, result.imageId, runtimeVersion)
-        ) {
-          this.log.info("Snapshot saved", {
-            event: "sandbox.snapshot_saved",
-            image_id: result.imageId,
-            runtime_version: runtimeVersion,
-            reason,
-          });
-          this.broadcaster.broadcast({
-            type: "snapshot_saved",
-            imageId: result.imageId,
-            reason,
-          });
-        } else {
-          this.log.info("Snapshot completed for a replaced sandbox; not recorded", {
-            event: "sandbox.snapshot_superseded",
-            image_id: result.imageId,
-            sandbox_id: generation.sandboxId,
-            reason,
-          });
-        }
-      } else {
-        this.log.error("Snapshot failed", { error: result.error, reason });
-      }
-    } catch (error) {
-      this.log.error("Snapshot request failed", {
-        error: error instanceof Error ? error : String(error),
-        reason,
-        modal_object_id: sandbox.modal_object_id,
-      });
-    }
-
-    // Restore the previous status only while the row is still this sandbox's
-    // and still says `snapshotting`: a cancel, a stale heartbeat, or an
-    // unresponsive-sandbox termination during the provider call has already
-    // retired the sandbox (status written, access cleared, socket detached),
-    // and restoring `ready` over that would make the spawn decision wait for
-    // a reconnect that cannot come; a replacement that is itself snapshotting
-    // keeps its own status.
-    if (!isTerminalState && reason !== "heartbeat_timeout") {
-      if (this.storage.transitionSandboxStatus(generation, "snapshotting", previousStatus)) {
-        this.broadcaster.broadcast({ type: "sandbox_status", status: previousStatus });
-        if (previousStatus === "ready") {
-          this.broadcaster.broadcast({ type: "sandbox_access_changed" });
-        }
-      } else {
-        this.log.info("Sandbox status moved during snapshot; leaving it", {
-          event: "sandbox.snapshot_status_superseded",
-          previous_status: previousStatus,
-          sandbox_status: this.storage.getSandbox()?.status ?? null,
-          reason,
-        });
-      }
-    }
   }
 
   /**
@@ -1387,14 +1433,15 @@ export class SandboxLifecycleManager implements SandboxLifecycle {
    * Whether stopping should preserve provider-owned state for in-place resume.
    */
   private usesProviderManagedStop(): boolean {
-    return this.canStopProviderSandbox() && !!this.provider.capabilities.supportsPersistentResume;
+    return providerResumesAfterStop(this.provider);
   }
 
   /**
    * Stop a sandbox that is about to be replaced before its provider handle is cleared.
    */
-  private async stopPriorProviderSandbox(): Promise<void> {
-    const providerObjectId = this.storage.getSandbox()?.modal_object_id;
+  private async stopPriorProviderSandbox(requireConfirmation = false): Promise<void> {
+    const prior = this.storage.getSandbox();
+    const providerObjectId = prior?.modal_object_id;
     if (!providerObjectId) {
       return;
     }
@@ -1404,48 +1451,29 @@ export class SandboxLifecycleManager implements SandboxLifecycle {
       return;
     }
 
-    const controller = new AbortController();
-    let timeoutId: ReturnType<typeof setTimeout> | undefined;
     try {
-      const stopTimeoutPromise = new Promise<never>((_, reject) => {
-        timeoutId = setTimeout(() => {
-          controller.abort();
-          reject(new Error("Provider stop timed out before sandbox replacement"));
-        }, PROVIDER_REPLACEMENT_STOP_TIMEOUT_MS);
-      });
-      await Promise.race([
-        this.stopProviderSandbox("respawn", controller.signal, providerObjectId),
-        stopTimeoutPromise,
-      ]);
+      const outcome = await boundedProviderStop(
+        (signal) =>
+          this.stopProviderSandbox(
+            "respawn",
+            "destroy",
+            signal,
+            providerObjectId,
+            prior?.created_at
+          ),
+        "Provider stop timed out before sandbox replacement"
+      );
+      if (requireConfirmation && outcome !== "confirmed")
+        throw new Error("Provider stop could not be dispatched before sandbox replacement");
       this.storage.updateSandboxModalObjectId(null);
     } catch (error) {
+      if (requireConfirmation) throw error;
+      this.storage.updateSandboxModalObjectId(null);
       this.log.warn("Provider stop failed before sandbox replacement", {
         provider_object_id: providerObjectId,
         error: error instanceof Error ? error.message : String(error),
       });
-    } finally {
-      if (timeoutId !== undefined) clearTimeout(timeoutId);
     }
-  }
-
-  /**
-   * Clear preview URLs after a sandbox is no longer reachable.
-   *
-   * Persistent resumes preserve code-server and VNC passwords, so only their
-   * URLs are cleared. Snapshot restores rotate passwords, so both values are
-   * removed.
-   */
-  private clearSandboxAccessState(): void {
-    if (this.usesProviderManagedStop() && this.storage.clearSandboxAccessUrl) {
-      this.storage.clearSandboxAccessUrl("codeServer");
-      this.storage.clearSandboxAccessUrl("vnc");
-    } else {
-      this.storage.clearSandboxAccess("codeServer");
-      this.storage.clearSandboxAccess("vnc");
-    }
-    this.storage.clearSandboxTunnelUrls();
-    this.storage.clearSandboxAccess("ttyd");
-    this.broadcaster.broadcast({ type: "sandbox_access_changed" });
   }
 
   /**
@@ -1453,36 +1481,77 @@ export class SandboxLifecycleManager implements SandboxLifecycle {
    */
   private async stopProviderSandbox(
     reason: string,
+    intent: StopConfig["intent"],
     signal?: AbortSignal,
-    providerObjectId?: string
-  ): Promise<void> {
+    providerObjectId?: string,
+    generationCreatedAtMs?: number
+  ): Promise<ProviderStopOutcome> {
     if (!this.provider.stopSandbox) {
-      return;
+      return "not_stopped";
     }
 
     const sandbox = providerObjectId ? null : this.storage.getSandbox();
     const session = this.sessionContext.getSession();
     const objectId = providerObjectId ?? sandbox?.modal_object_id;
     if (!objectId || !session) {
-      return;
+      return "not_stopped";
     }
 
     const result = await this.provider.stopSandbox({
       providerObjectId: objectId,
       sessionId: session.session_name || session.id,
       reason,
+      intent,
       signal,
+      generationCreatedAtMs: generationCreatedAtMs ?? sandbox?.created_at,
     });
 
     if (!result.success) {
       throw new Error(result.error || "Failed to stop provider sandbox");
     }
+    return "confirmed";
+  }
+
+  /**
+   * Stop a provider sandbox on a path that has already decided the sandbox is
+   * gone. The row has been failed and published by the time these run, so a
+   * provider that refuses the stop leaks a container but must not derail the
+   * recovery — hence log-and-continue rather than rethrow.
+   */
+  private async stopProviderSandboxSafely(options: {
+    reason: string;
+    intent: StopConfig["intent"];
+    providerObjectId?: string;
+    generationCreatedAtMs?: number;
+    failureMessage: string;
+    level?: "warn" | "error";
+    data?: Record<string, unknown>;
+  }): Promise<void> {
+    try {
+      await this.stopProviderSandbox(
+        options.reason,
+        options.intent,
+        undefined,
+        options.providerObjectId,
+        options.generationCreatedAtMs
+      );
+    } catch (error) {
+      this.log[options.level ?? "warn"](options.failureMessage, {
+        ...options.data,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
   }
 
   /**
    * Handle alarm for inactivity and heartbeat monitoring.
+   *
+   * Splits cleanly in two: the policy names what it found, and one effect
+   * method per finding carries out the recovery. Everything generation-pinned
+   * is captured before the first await and passed down in `AlarmContext`.
    */
   async handleAlarm(): Promise<SandboxAlarmResult> {
+    if (this.shutdown.isHolding()) return "no_action";
     const sandbox = this.storage.getSandbox();
     if (!sandbox) {
       this.log.debug("Alarm fired: no sandbox found");
@@ -1490,6 +1559,23 @@ export class SandboxLifecycleManager implements SandboxLifecycle {
     }
 
     const now = Date.now();
+    const alarmGeneration: SandboxGeneration = {
+      sandboxId: sandbox.modal_sandbox_id,
+      createdAt: sandbox.created_at,
+    };
+    const context: AlarmContext = {
+      sandbox,
+      now,
+      connectedClients: this.getConnectedClientCount(),
+      providerObjectId: sandbox.modal_object_id ?? undefined,
+      isCurrentGeneration: (): boolean => {
+        const current = this.storage.getSandbox();
+        return (
+          current?.modal_sandbox_id === alarmGeneration.sandboxId &&
+          current.created_at === alarmGeneration.createdAt
+        );
+      },
+    };
 
     this.log.debug("Alarm fired", {
       sandbox_status: sandbox.status,
@@ -1497,262 +1583,105 @@ export class SandboxLifecycleManager implements SandboxLifecycle {
       last_heartbeat: sandbox.last_heartbeat,
     });
 
-    // Skip if sandbox is already in terminal state
-    if (isDeadSandboxStatus(sandbox.status)) {
-      this.log.debug("Alarm: sandbox in terminal state, skipping", {
-        sandbox_status: sandbox.status,
-      });
-      return "no_action";
-    }
-
-    // Booting means the bridge may be attached ahead of the harness; the
-    // heartbeat proves it connected. Read once so every branch below agrees.
-    const isBooting = sandbox.status === "spawning" || sandbox.status === "connecting";
-    const hasConnected = sandbox.last_heartbeat !== null;
-
-    // Check connecting timeout — the bridge never connected within allowed time
-    const connectingResult = evaluateConnectingTimeout(
-      sandbox.status,
-      sandbox.created_at,
-      this.config.connectingTimeout,
-      now,
-      hasConnected
-    );
-
-    if (connectingResult.isTimedOut) {
-      this.log.warn("Connecting timeout", {
-        event: "sandbox.connecting_timeout",
-        elapsed_ms: connectingResult.elapsedMs,
-        timeout_ms: this.config.connectingTimeout.timeoutMs,
-      });
-      this.storage.updateSandboxStatus("failed");
-      this.recordSpawnFailure(now, sandbox.created_at);
-      this.clearSandboxAccessState();
-      if (this.canStopProviderSandbox()) {
-        // Fenced before the stop: a bridge arriving while the stop is in
-        // flight is refused at the door instead of self-healing into a
-        // container being killed. Where the provider cannot be stopped the
-        // row stays unfenced, so a boot that outlives the watchdog (#1905)
-        // can still connect and serve the session.
-        this.storage.fenceSandboxGeneration();
-        try {
-          await this.stopProviderSandbox("connecting_timeout");
-        } catch (error) {
-          this.log.warn("Provider stop failed after connecting timeout", {
-            error: error instanceof Error ? error.message : String(error),
-          });
-        }
-      }
-      this.broadcaster.broadcast({ type: "sandbox_status", status: "failed" });
-      this.reportSandboxError(
-        "Sandbox failed to connect within the allowed time. It will be retried on your next message."
-      );
-      return "sandbox_failed";
-    }
-
-    // Check heartbeat health
-    const heartbeatHealth = evaluateHeartbeatHealth(
-      sandbox.last_heartbeat,
-      this.config.heartbeat,
-      now
-    );
-
-    if (heartbeatHealth.isStale) {
-      this.log.warn("Heartbeat stale", {
-        event: "sandbox.heartbeat_stale",
-        last_heartbeat_ms: heartbeatHealth.ageMs || 0,
-        threshold_ms: this.config.heartbeat.timeoutMs,
-        sandbox_status: sandbox.status,
-      });
-      this.storage.updateSandboxStatus("stale");
-      // A bridge that connected and then died mid-boot is a boot failure
-      // like any other; the termination re-drives the queue, and the breaker
-      // is what bounds a boot that dies the same way every time.
-      if (isBooting) this.recordSpawnFailure(now, sandbox.created_at);
-      this.clearSandboxAccessState();
-      this.broadcaster.broadcast({ type: "sandbox_status", status: "stale" });
-
-      if (this.usesProviderManagedStop()) {
-        try {
-          await this.stopProviderSandbox("heartbeat_timeout");
-        } catch (error) {
-          this.log.warn("Provider stop failed after heartbeat timeout", {
-            error: error instanceof Error ? error.message : String(error),
-          });
-        }
-      } else if (isBooting) {
-        // Never snapshot a half-booted filesystem: it would be recorded as
-        // the restore point, and the next spawn would boot from it and skip
-        // the setup it never finished. No shutdown either: the row is
-        // already `stale`, which the send path refuses, and a bridge that
-        // stopped heartbeating is not there to receive it.
-        if (this.canStopProviderSandbox()) {
-          try {
-            await this.stopProviderSandbox("heartbeat_timeout");
-          } catch (error) {
-            this.log.warn("Provider stop failed after heartbeat timeout", {
-              error: error instanceof Error ? error.message : String(error),
-            });
-          }
-        }
-      } else {
-        if (this.canStopProviderSandbox()) {
-          await this.triggerSnapshot("heartbeat_timeout");
-          try {
-            await this.stopProviderSandbox("heartbeat_timeout");
-          } catch (error) {
-            this.log.warn("Provider stop failed after heartbeat timeout", {
-              error: error instanceof Error ? error.message : String(error),
-            });
-          }
-        } else {
-          // Fire-and-forget snapshot so status broadcast isn't delayed.
-          this.triggerSnapshot("heartbeat_timeout").catch((e) =>
-            this.log.error("Heartbeat snapshot failed", {
-              error: e instanceof Error ? e : String(e),
-            })
-          );
-        }
-        this.wsManager.sendToSandbox({ type: "shutdown" });
-      }
-
-      this.wsManager.detachSandboxWebSocket(1000, "Heartbeat stale");
-      return "sandbox_terminated";
-    }
-
-    // Boot budget — a connected runtime that has been booting for too long.
-    const bootBudget = evaluateBootBudget(
-      sandbox.status,
-      sandbox.created_at,
-      this.config.bootBudget,
-      now
-    );
-    if (bootBudget.isExceeded) {
-      return this.failBootBudget(sandbox, bootBudget.elapsedMs, now);
-    }
-
-    // Evaluate inactivity timeout
-    const connectedClients = this.getConnectedClientCount();
-    const inactivityState = {
-      lastActivity: sandbox.last_activity,
-      status: sandbox.status,
-      connectedClientCount: connectedClients,
-    };
-
-    const inactivityDecision = evaluateInactivityTimeout(
-      inactivityState,
-      this.config.inactivity,
-      now
-    );
-
-    switch (inactivityDecision.action) {
-      case "timeout":
-        this.log.info("Inactivity timeout", {
-          event: "sandbox.timeout",
-          last_activity: sandbox.last_activity,
-          timeout_ms: this.config.inactivity.timeoutMs,
+    const finding = evaluateAlarmPolicy(sandbox, this.config, now, context.connectedClients);
+    switch (finding.outcome) {
+      case "terminal":
+        this.log.debug("Alarm: sandbox in terminal state, skipping", {
+          sandbox_status: sandbox.status,
         });
-        // Set status to stopped FIRST to block reconnection attempts
-        this.storage.updateSandboxStatus("stopped");
-        this.clearSandboxAccessState();
-        this.broadcaster.broadcast({ type: "sandbox_status", status: "stopped" });
-
-        if (this.usesProviderManagedStop()) {
-          try {
-            await this.stopProviderSandbox("inactivity_timeout");
-          } catch (error) {
-            this.log.error("Provider stop failed after inactivity timeout", {
-              error: error instanceof Error ? error.message : String(error),
-            });
-          }
-        } else {
-          await this.triggerSnapshot("inactivity_timeout");
-          this.wsManager.sendToSandbox({ type: "shutdown" });
-          if (this.canStopProviderSandbox()) {
-            try {
-              await this.stopProviderSandbox("inactivity_timeout");
-            } catch (error) {
-              this.log.error("Provider stop failed after inactivity timeout", {
-                error: error instanceof Error ? error.message : String(error),
-              });
-            }
-          }
-        }
-
-        this.wsManager.detachSandboxWebSocket(1000, "Inactivity timeout");
-        this.broadcaster.broadcast({
-          type: "sandbox_warning",
-          message: this.usesProviderManagedStop()
-            ? "Sandbox stopped due to inactivity"
-            : "Sandbox stopped due to inactivity, snapshot saved",
-        });
-        return "sandbox_terminated";
-
-      case "extend":
-        this.log.info("Inactivity extended", {
-          connected_clients: connectedClients,
-          extension_ms: inactivityDecision.extensionMs,
-        });
-        if (inactivityDecision.shouldWarn) {
-          this.broadcaster.broadcast({
-            type: "sandbox_warning",
-            message:
-              "Sandbox will stop in 5 minutes due to inactivity. Send a message to keep it alive.",
-          });
-        }
-        await this.alarmScheduler.schedule(now + inactivityDecision.extensionMs);
         return "no_action";
 
-      case "schedule":
-        this.log.debug("Scheduling next alarm", { next_check_ms: inactivityDecision.nextCheckMs });
-        await this.alarmScheduler.schedule(now + inactivityDecision.nextCheckMs);
+      case "connecting_timeout":
+        return failConnectTimeout(
+          this.watchdogEffects,
+          finding.elapsedMs,
+          this.config.connectingTimeout.timeoutMs,
+          context
+        );
+
+      case "heartbeat_stale":
+        return terminateStaleHeartbeat(
+          this.watchdogEffects,
+          finding.ageMs,
+          finding.isBooting,
+          this.config.heartbeat.timeoutMs,
+          context
+        );
+
+      case "boot_budget_exceeded":
+        return this.failBootBudget(finding.elapsedMs, context);
+
+      case "inactivity_timeout":
+        return stopForInactivity(this.watchdogEffects, this.config.inactivity.timeoutMs, context);
+
+      case "inactivity_warning":
+        this.log.info("Inactivity extended", {
+          connected_clients: context.connectedClients,
+          extension_ms: finding.extensionMs,
+        });
+        this.broadcaster.broadcast({
+          type: "sandbox_warning",
+          message:
+            "Sandbox will stop in 5 minutes due to inactivity. Send a message to keep it alive.",
+        });
+        await this.alarmScheduler.schedule(now + finding.extensionMs);
+        return "no_action";
+
+      case "healthy":
+        this.log.debug("Scheduling next alarm", { next_check_ms: finding.nextCheckMs });
+        await this.alarmScheduler.schedule(now + finding.nextCheckMs);
         return "no_action";
     }
   }
 
   /**
-   * Give up on a boot that outlived its budget. Order matters: the `shutdown`
-   * goes out first, while the socket is still adoptable (the lifecycle send
-   * path refuses a failed row); the generation is then fenced so a runtime
-   * that ignores the shutdown, or reconnects, is refused at the door and its
-   * supervisor exits — which is how a provider with no explicit stop is
-   * stopped; only then is the row failed. The failure is published and
-   * persisted before the provider stop yields, and the spawn guard is held
-   * across it, so a prompt arriving mid-stop neither waits to learn the boot
-   * died nor reserves a replacement that inherits this failure. Returns the
-   * failure text so the alarm handler can fail the pending prompt with the
-   * same words.
+   * Hold a failed boot of the retained source instead of destroying it. That
+   * sandbox is the saved workspace itself, and a fence would revoke the
+   * credential its next resume needs. Like a failed retained resume, it waits
+   * for an explicit recovery, which retires the source before resuming it
+   * again. Resolves false for any other generation.
    */
-  private async failBootBudget(
-    sandbox: SandboxRow,
-    elapsedMs: number,
-    now: number
-  ): Promise<SandboxAlarmResult> {
-    const budgetMinutes = Math.round(this.config.bootBudget.timeoutMs / 60_000);
-    const reason =
-      `Sandbox boot exceeded ${budgetMinutes} minutes while ${describeBootPhase(sandbox.boot_phase)}. ` +
-      "Raise SANDBOX_BOOT_TIMEOUT_MS if the boot legitimately needs longer, or make it return sooner.";
+  private holdFailedRetainedBoot(sandbox: SandboxRow, reason: string): boolean {
+    return this.shutdown.holdFailedRetainedBoot(reason, {
+      sandboxId: sandbox.modal_sandbox_id,
+      createdAt: sandbox.created_at,
+    });
+  }
+
+  /** Publish and detach before guarding explicit stop; leave a held retained source intact. */
+  private async failBootBudget(elapsedMs: number, ctx: AlarmContext): Promise<SandboxAlarmResult> {
+    const bootPhase = parseStoredSandboxBootPhase(ctx.sandbox.boot_phase);
+    const reason = formatBootBudgetFailure(
+      ctx.sandbox.boot_phase,
+      this.config.bootBudget.timeoutMs
+    );
     this.log.warn("Boot budget exceeded", {
       event: "sandbox.boot_budget",
+      ...sandboxBootPhaseLogFields(bootPhase),
       elapsed_ms: elapsedMs,
       timeout_ms: this.config.bootBudget.timeoutMs,
-      boot_phase: sandbox.boot_phase,
     });
-    this.wsManager.sendToSandbox({ type: "shutdown" });
-    this.storage.fenceSandboxGeneration();
+    const held = this.holdFailedRetainedBoot(ctx.sandbox, reason);
+    if (!held) {
+      this.wsManager.sendToSandbox({ type: "shutdown" });
+      this.storage.fenceSandboxGeneration();
+    }
     this.storage.updateSandboxStatus("failed");
-    this.recordSpawnFailure(now, sandbox.created_at);
-    this.clearSandboxAccessState();
+    this.recordSpawnFailure(ctx.now, ctx.sandbox.created_at);
+    this.access.clearAccess();
     this.broadcaster.broadcast({ type: "sandbox_status", status: "failed" });
     this.reportSandboxError(reason);
+    if (held) return { kind: "boot_budget_exceeded", reason };
     this.wsManager.detachSandboxWebSocket(1000, "Boot budget exceeded");
     if (this.canStopProviderSandbox()) {
       this.isTerminatingSandbox = true;
       try {
-        await this.stopProviderSandbox("boot_budget_exceeded");
-      } catch (error) {
-        this.log.warn("Provider stop failed after boot budget", {
-          error: error instanceof Error ? error.message : String(error),
+        await this.stopProviderSandboxSafely({
+          reason: "boot_budget_exceeded",
+          intent: "destroy",
+          providerObjectId: ctx.providerObjectId,
+          generationCreatedAtMs: ctx.sandbox.created_at,
+          failureMessage: "Provider stop failed after boot budget",
         });
       } finally {
         this.isTerminatingSandbox = false;
@@ -1761,16 +1690,28 @@ export class SandboxLifecycleManager implements SandboxLifecycle {
     return { kind: "boot_budget_exceeded", reason };
   }
 
+  private isCurrentSandboxState(expected: SandboxRow): boolean {
+    const current = this.storage.getSandbox();
+    return (
+      current?.modal_sandbox_id === expected.modal_sandbox_id &&
+      current?.created_at === expected.created_at &&
+      current?.status === expected.status
+    );
+  }
+
   async terminateUnresponsiveSandbox(trigger: UnresponsiveSandboxTrigger): Promise<void> {
+    if (this.shutdown.isHolding()) return;
     const sandbox = this.storage.getSandbox();
     if (!sandbox || isDeadSandboxStatus(sandbox.status)) {
       return;
     }
 
+    if ((await this.shutdown.requestShutdown(trigger, "emergency")) !== "unmanaged") return;
+    if (!this.isCurrentSandboxState(sandbox)) return;
     const canStopProvider = this.canStopProviderSandbox();
     if (!canStopProvider) this.wsManager.sendToSandbox({ type: "shutdown" });
     this.storage.updateSandboxStatus("stale");
-    this.clearSandboxAccessState();
+    this.access.clearAccess();
     this.broadcaster.broadcast({ type: "sandbox_status", status: "stale" });
     const closeReason = {
       prompt_dispatch_send_failed: "Prompt dispatch send failed",
@@ -1780,21 +1721,22 @@ export class SandboxLifecycleManager implements SandboxLifecycle {
     }[trigger];
     this.wsManager.detachSandboxWebSocket(1011, closeReason);
     if (canStopProvider) {
-      try {
-        await this.stopProviderSandbox(trigger);
-      } catch (error) {
-        this.log.warn("Provider stop failed for unresponsive sandbox", {
-          trigger,
-          error: error instanceof Error ? error.message : String(error),
-        });
-      }
+      await this.stopProviderSandboxSafely({
+        reason: trigger,
+        intent: this.usesProviderManagedStop() ? "preserve" : "destroy",
+        failureMessage: "Provider stop failed for unresponsive sandbox",
+        data: { trigger },
+      });
     }
   }
 
   /**
    * Fail the live sandbox after a fatal runtime report and stop it where the
    * provider allows. Resolves true only when this call took the sandbox down,
-   * which is the caller's cue to re-drive the queue onto a replacement. A row
+   * which is the caller's cue to re-evaluate the queue. Serving executions
+   * remain fenced by preservation until explicit recovery; only failed boots
+   * may automatically get a clean replacement, and a failed boot of the
+   * retained source is held instead. A row
    * that is already dead — including one the connect watchdog failed while
    * its boot was still running — resolves false: there is nothing to
    * terminate, and re-driving the queue for it would spawn a replacement for
@@ -1802,6 +1744,7 @@ export class SandboxLifecycleManager implements SandboxLifecycle {
    * boot that dies the same way every time stops being replaced.
    */
   async terminateFailedSandbox(reason: string): Promise<boolean> {
+    if (this.shutdown.isHolding()) return false;
     const sandbox = this.storage.getSandbox();
     if (!sandbox || isDeadSandboxStatus(sandbox.status) || this.isTerminatingSandbox) {
       return false;
@@ -1813,22 +1756,32 @@ export class SandboxLifecycleManager implements SandboxLifecycle {
       error: reason,
     });
     this.isTerminatingSandbox = true;
-    this.storage.updateSandboxStatus("failed");
-    this.recordSpawnFailure(Date.now(), sandbox.created_at);
-    this.broadcaster.broadcast({ type: "sandbox_status", status: "failed" });
-    this.reportSandboxError(reason);
-    this.clearSandboxAccessState();
-
-    const canStopProvider = this.canStopProviderSandbox();
-    if (!canStopProvider) this.wsManager.sendToSandbox({ type: "shutdown" });
-    this.wsManager.detachSandboxWebSocket(1011, "Fatal sandbox runtime error");
-
     try {
-      if (canStopProvider) await this.stopProviderSandbox("fatal_runtime_error");
+      const ownership = await this.shutdown.requestShutdown("fatal_runtime_error", "emergency");
+      if (ownership !== "unmanaged") {
+        this.recordSpawnFailure(Date.now(), sandbox.created_at);
+        this.reportSandboxError(reason);
+        return ownership === "owned";
+      }
+      if (!this.isCurrentSandboxState(sandbox)) return false;
+      const held = this.holdFailedRetainedBoot(sandbox, reason);
+      this.storage.updateSandboxStatus("failed");
+      this.recordSpawnFailure(Date.now(), sandbox.created_at);
+      this.broadcaster.broadcast({ type: "sandbox_status", status: "failed" });
+      this.reportSandboxError(reason);
+      this.access.clearAccess();
+      if (held) return false;
+
+      const canStopProvider = this.canStopProviderSandbox();
+      if (!canStopProvider) this.wsManager.sendToSandbox({ type: "shutdown" });
+      this.wsManager.detachSandboxWebSocket(1011, "Fatal sandbox runtime error");
+
+      if (canStopProvider) await this.stopProviderSandbox("fatal_runtime_error", "destroy");
     } catch (error) {
       this.log.warn("Provider stop failed after fatal runtime error", {
         error: error instanceof Error ? error.message : String(error),
       });
+      return false;
     } finally {
       this.isTerminatingSandbox = false;
     }
@@ -1859,13 +1812,134 @@ export class SandboxLifecycleManager implements SandboxLifecycle {
     }
 
     this.log.info("Warming sandbox");
-    this.broadcaster.broadcast({ type: "sandbox_warming" });
-    await this.spawnSandbox();
+    await this.spawnSandbox("warm");
   }
 
   /**
-   * Update last activity timestamp.
+   * Called synchronously for an already-authorized runtime event. Publication
+   * and activity follow the guarded commit; the event handler wakes the queue
+   * and arms inactivity afterward, preserving their existing ordering.
    */
+  onRuntimeReady(timestamp: number, harness?: string, protocolVersion?: 1): boolean {
+    this.shutdown.runtimeReady(protocolVersion);
+    if (this.shutdown.isHolding()) return false;
+    const row = this.storage.getSandbox();
+    if (!row) return false;
+    const generation = { sandboxId: row.modal_sandbox_id, createdAt: row.created_at };
+    if (!this.storage.markSandboxReady(generation)) return false;
+    this.vmStartup.resolvePendingBridge(generation);
+    this.log.info("sandbox.ready", { event: "sandbox.ready", harness: harness ?? null });
+    this.updateLastActivity(timestamp);
+    this.broadcaster.broadcast({ type: "sandbox_status", status: "ready" });
+    return true;
+  }
+
+  onShutdownGenerationReady(
+    event: Extract<SandboxEvent, { type: "sandbox_generation_ready" }>
+  ): void {
+    this.shutdown.generationReady(event);
+  }
+
+  onShutdownPrepared(event: Extract<SandboxEvent, { type: "preservation_prepared" }>): void {
+    this.shutdown.prepared(event);
+  }
+
+  mayProcessQueuedWork(): boolean {
+    if (this.providerStartupPending) return false;
+    switch (this.shutdown.admissionDecision()) {
+      case "unmanaged":
+      case "ready":
+      case "restore_required":
+      case "spawn_required":
+        return true;
+      case "held":
+        return false;
+    }
+  }
+
+  pushAdmissionDecision(): SandboxPushAdmission {
+    if (this.providerStartupPending) return "start_required";
+    switch (this.shutdown.admissionDecision()) {
+      case "ready":
+        return "ready";
+      case "unmanaged":
+        return "unmanaged";
+      case "held":
+        return "held";
+      case "restore_required":
+      case "spawn_required":
+        return "start_required";
+    }
+  }
+
+  async handleShutdownAlarm(allowCaptureRetry = true): Promise<"continue" | "hold_watchdogs"> {
+    const row = this.storage.getSandbox();
+    if (row?.startup_rejected && row.modal_object_id) {
+      await attemptRejectedStartupCleanup(
+        this.allocationCleanup,
+        { sandboxId: row.modal_sandbox_id, createdAt: row.created_at },
+        row.modal_object_id
+      );
+      return "hold_watchdogs";
+    }
+    // A connected bridge raises no new attach or ready event, so alarms resume
+    // its pending lookup; each delivery arms the next, starting from the one its
+    // attach's disconnect check guarantees. This precedes the watchdog hold, so
+    // it also serves a restore this instance still owns. A held sandbox gets no
+    // lookup, including a restore that a restart left with an unknown outcome.
+    // The reconciliation decides whether the row still holds a pending reference.
+    if (row && this.wsManager.getSandboxWebSocket() && !this.shutdown.isHolding())
+      await this.vmStartup.resumePendingBridge({
+        sandboxId: row.modal_sandbox_id,
+        createdAt: row.created_at,
+      });
+    return this.shutdown.handleAlarm(allowCaptureRetry);
+  }
+
+  recoverShutdown(action: ShutdownRecoveryAction): Promise<void> {
+    return this.shutdown.recover(action);
+  }
+
+  shutdownSnapshot(): SandboxShutdownState | null {
+    return this.shutdown.snapshot();
+  }
+
+  /**
+   * Session cancellation preserves its existing shutdown-before-status policy,
+   * then destroys the sandbox at the provider: a runtime that is not connected
+   * never receives the shutdown, and a cancelled session never resumes a
+   * preserved one.
+   */
+  async cancelSandbox(): Promise<void> {
+    const sandbox = this.storage.getSandbox();
+    if (!shouldStopSandboxOnSessionCancel(sandbox?.status)) return;
+    if (this.wsManager.getSandboxWebSocket()) {
+      this.wsManager.sendToSandbox({ type: "shutdown" });
+    }
+    this.storage.updateSandboxStatus("stopped");
+    if (sandbox?.modal_object_id && this.canStopProviderSandbox()) {
+      await this.stopProviderSandboxSafely({
+        reason: "session_cancelled",
+        intent: "destroy",
+        providerObjectId: sandbox.modal_object_id,
+        failureMessage: "Provider stop failed after session cancel",
+      });
+    }
+  }
+
+  /**
+   * An archived session's sandbox is saved and stopped now: its runtime may
+   * hold work no save covers yet, and archive refuses its reconnects.
+   */
+  async preserveForArchive(): Promise<void> {
+    await this.shutdown.requestShutdown("session_archived");
+  }
+
+  onRefusedReconnect(): "retry" | "exit" {
+    return this.shutdown.onRefusedReconnect();
+  }
+
+  /** Update last activity timestamp. */
   updateLastActivity(timestamp: number): void {
     this.storage.updateSandboxLastActivity(timestamp);
   }
@@ -1892,126 +1966,98 @@ export class SandboxLifecycleManager implements SandboxLifecycle {
   }
 
   /**
-   * Resolve the provider and model ID from the session or config default.
-   * e.g., "openai/gpt-5.3-codex" -> { provider: "openai", model: "gpt-5.3-codex" }
-   */
-  private resolveProviderAndModel(session: SessionRow): { provider: string; model: string } {
-    return extractProviderAndModel(session.model || this.config.model);
-  }
-
-  /**
    * Get the count of connected client WebSockets.
    */
   private getConnectedClientCount(): number {
     return this.wsManager.getConnectedClientCount();
   }
 
-  private storeAndBroadcastProviderObjectId(providerObjectId: string): void {
-    this.storeProviderObjectId(providerObjectId);
-    this.broadcastSandboxDashboardUrl(providerObjectId);
-  }
-
-  private storeProviderObjectId(providerObjectId: string): void {
-    this.storage.updateSandboxModalObjectId(providerObjectId);
-  }
-
-  private broadcastSandboxDashboardUrl(providerObjectId: string): void {
-    const url = this.config.sandboxDashboardUrlBuilder?.(providerObjectId);
-    if (url) {
-      this.log.debug("Broadcasting sandbox dashboard URL", {
-        provider_object_id: providerObjectId,
-      });
-      this.broadcaster.broadcast({ type: "sandbox_access_changed" });
-    }
-  }
-
-  private async storeCodeServer(url: string, password: string): Promise<void> {
-    this.log.info("Storing code-server info", { url });
-    await this.storage.updateSandboxAccess("codeServer", url, password);
-  }
-
-  private async storeVnc(url: string, password: string): Promise<void> {
-    this.log.info("Storing VNC info", { url });
-    await this.storage.updateSandboxAccess("vnc", url, password);
-  }
-
-  private parseSandboxSettings(session: SessionRow): SandboxSettings {
-    try {
-      return parsePersistedSandboxSettings(session.sandbox_settings);
-    } catch {
-      this.log.warn("Failed to parse sandbox_settings, using defaults");
-      return {};
-    }
-  }
-
-  private resolveSandboxTimeoutSeconds(sandboxSettings: SandboxSettings): number | undefined {
-    if (!this.provider.capabilities.supportsSandboxTimeout) {
-      if (sandboxSettings.sandboxTimeoutMs !== undefined) {
-        throw new SandboxProviderError(
-          `${this.provider.name} does not support configurable sandbox timeouts`,
-          "permanent"
-        );
-      }
-      return undefined;
-    }
-    const timeoutMs = sandboxSettings.sandboxTimeoutMs;
-    return timeoutMs === undefined ? undefined : timeoutMs / 1000;
-  }
-
-  private async storeAndBroadcastTunnelUrls(
-    urls: Record<string, string> | undefined
+  private async handleRejectedStartupAllocation(
+    error: unknown,
+    generation: SandboxGeneration | null
   ): Promise<void> {
-    if (!urls || Object.keys(urls).length === 0) return;
-    this.log.info("Storing and broadcasting tunnel URLs", { ports: Object.keys(urls) });
-    await this.storage.updateSandboxTunnelUrls(urls);
-    this.broadcaster.broadcast({ type: "sandbox_access_changed" });
-  }
-
-  /** Mint and persist terminal access. */
-  private async storeTtyd(
-    url: string,
-    sandboxAuthToken: string,
-    sessionId: string,
-    sandboxId: string
-  ): Promise<void> {
-    const token = await mintJwt(
-      {
-        sub: sessionId,
-        sid: sandboxId,
-        iat: Math.floor(Date.now() / 1000),
-        exp: Math.floor(Date.now() / 1000) + TERMINAL_TOKEN_TTL_SECONDS,
-      },
-      sandboxAuthToken
-    );
-
-    this.log.info("Storing ttyd info", { url });
-    await this.storage.updateSandboxAccess("ttyd", url, token);
-  }
-
-  private async finishProviderStartup(generation: SandboxGeneration): Promise<void> {
-    this.providerStartupPending = false;
-
-    if (this.wsManager.getSandboxWebSocket()) {
-      this.broadcaster.broadcast({ type: "sandbox_access_changed" });
+    if (!(error instanceof SandboxLaunchRejectedError) || !generation) return;
+    // A rejected launch may already have connected. Fence its credentials and retain
+    // its provider ID before termination so a failed stop or DO restart cannot
+    // accept the allocation or lose the cleanup obligation.
+    const rejection = this.storage.rejectProviderStartup(generation, error.providerObjectId);
+    if (rejection === "superseded") {
+      await destroyLateProviderResult(this.allocationCleanup, error.providerObjectId ?? undefined);
       return;
     }
-
-    // Only this attempt's own `spawning` advances to `connecting`. A resume
-    // entered as `connecting` already; an alarm that timed the attempt out
-    // during the provider call has written `failed`; a bridge that connected
-    // and dropped has left `ready` or `stale`; a newer reservation owns the
-    // row outright. Those stand.
-    if (this.storage.transitionSandboxStatus(generation, "spawning", "connecting")) {
-      this.broadcaster.broadcast({ type: "sandbox_status", status: "connecting" });
+    this.wsManager.detachSandboxWebSocket(1008, "Provider allocation rejected");
+    this.access.clearAccess();
+    if (rejection === "failed") {
+      this.broadcaster.broadcast({ type: "sandbox_status", status: "failed" });
+      this.reportSandboxError(error.message);
+      this.recordSpawnFailure(Date.now(), generation.createdAt);
     }
+    if (error.providerObjectId)
+      await attemptRejectedStartupCleanup(
+        this.allocationCleanup,
+        generation,
+        error.providerObjectId
+      );
+  }
+
+  rearmRejectedStartupCleanupAlarm(): Promise<void> {
+    return rearmRejectedStartupCleanupAlarm(this.allocationCleanup);
+  }
+
+  private async claimProviderStartup(
+    generation: SandboxGeneration,
+    providerObjectId: string | undefined,
+    lifetime: SandboxLifetime,
+    announce = true
+  ): Promise<boolean> {
+    this.providerStartupPending = false;
+    const row = this.storage.getSandbox();
+    if (
+      row?.modal_sandbox_id === generation.sandboxId &&
+      row.created_at === generation.createdAt &&
+      this.shutdown.isHolding()
+    ) {
+      // This result may be the only retained recovery copy. A hold is neither
+      // startup permission nor permission to destroy a late provider result.
+      this.log.warn("Provider startup completed for a held generation", {
+        provider_object_id: providerObjectId,
+      });
+      return false;
+    }
+    const status = this.storage.commitProviderStartup(
+      generation,
+      providerObjectId ?? null,
+      !this.canStopProviderSandbox()
+    );
+    if (status === null) {
+      await destroyLateProviderResult(this.allocationCleanup, providerObjectId);
+      return false;
+    }
+
+    await this.shutdown.recordProviderStartup(generation, lifetime);
+    if (announce) {
+      try {
+        if (providerObjectId) this.access.broadcastSandboxDashboardUrl(providerObjectId);
+        if (!this.wsManager.getSandboxWebSocket() && status === "connecting") {
+          this.broadcaster.broadcast({ type: "sandbox_status", status: "connecting" });
+        }
+      } catch (error) {
+        this.log.warn("Provider startup announcement failed", {
+          event: "sandbox.startup_announcement_failed",
+          error,
+        });
+      }
+    }
+    return true;
   }
 
   private async enterProviderStartup(
     status: "spawning" | "connecting",
     createdAt: number,
+    shutdownPolicy: ShutdownLifecyclePolicy,
     persist: () => void
   ): Promise<void> {
-    persist();
+    this.shutdown.reserveStartup(createdAt, shutdownPolicy, persist);
     this.broadcaster.broadcast({ type: "sandbox_status", status });
     // The bridge replaces this with its inactivity alarm when it connects.
     await this.alarmScheduler.schedule(createdAt + this.config.connectingTimeout.timeoutMs);
@@ -2048,6 +2094,7 @@ export class SandboxLifecycleManager implements SandboxLifecycle {
    * in flight, and for the user, who sees the boot begin.
    */
   onSandboxSocketAttached(generation: SandboxGeneration): void {
+    this.vmStartup.resolvePendingBridge(generation);
     if (this.storage.transitionSandboxStatus(generation, "spawning", "connecting")) {
       this.broadcaster.broadcast({ type: "sandbox_status", status: "connecting" });
       return;

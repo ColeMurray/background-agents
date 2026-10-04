@@ -9,7 +9,7 @@
  */
 
 import { SELF, env } from "cloudflare:test";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { buildServiceAuthHeaders } from "@open-inspect/shared/service-auth";
 import { createExecutionContext } from "cloudflare:test";
 import { cloudflareHost, createControlPlaneHttpHandler } from "../../src/cloudflare/http-host";
@@ -17,6 +17,10 @@ import { createControlPlaneApp } from "../../src/routing/hono-app";
 import { listRouteContracts, type RouteContract } from "../../src/routing/route-contracts";
 import { createCloudflareEnv } from "../../src/cloudflare/platform";
 import { AutomationStore, type AutomationRow } from "../../src/db/automation-store";
+import { EnvironmentStore } from "../../src/db/environments";
+import { TeamStore } from "../../src/db/teams";
+import { TeamMembershipStore } from "../../src/db/team-memberships";
+import { SessionCollaboratorStore } from "../../src/db/session-collaborators";
 import { catalog } from "../../src/routes/catalog";
 import { Hono } from "hono";
 import { admit } from "../../src/routing/admit";
@@ -49,11 +53,14 @@ interface MatrixFixtures {
   readonlySessionId: string;
   sandboxSessionId: string;
   automationId: string;
+  teamId: string;
+  environmentId: string;
 }
 
 function automation(id: string, userId: string): AutomationRow {
   return {
     id,
+    owner_team_id: null,
     name: id,
     instructions: "Run tests",
     trigger_type: "schedule",
@@ -97,6 +104,26 @@ function isAutomationRoute(route: RouteContract): boolean {
   return route.path.startsWith("/automations/:id");
 }
 
+function isTeamRoute(route: RouteContract): boolean {
+  return route.path.startsWith("/teams/:id");
+}
+
+function environmentRequirementFor(route: RouteContract) {
+  return route.authorization.kind === "active-user"
+    ? route.authorization.allOf.find((requirement) => requirement.kind === "environment")
+    : undefined;
+}
+
+function actorlessServicesFor(route: RouteContract) {
+  const authorization = route.authorization;
+  if (authorization.kind === "service") return authorization.services;
+  if (authorization.kind === "active-user" && authorization.service.kind === "actor") {
+    const grants = authorization.service.actorlessGrants;
+    if (grants?.length) return grants.map((grant) => grant.service);
+  }
+  throw new Error(`${route.method} ${route.path} has no explicit service policy`);
+}
+
 let automationSequence = 0;
 async function createAutomation(): Promise<string> {
   const id = `matrix-automation-${automationSequence++}`;
@@ -127,6 +154,8 @@ describe("route admission matrix", { timeout: MATRIX_TIMEOUT_MS }, () => {
     readonlySessionId: "",
     sandboxSessionId: "",
     automationId: "",
+    teamId: "",
+    environmentId: "",
   };
 
   beforeAll(async () => {
@@ -140,6 +169,13 @@ describe("route admission matrix", { timeout: MATRIX_TIMEOUT_MS }, () => {
     fixtures.sandboxSessionId = sessionName;
 
     fixtures.automationId = await createAutomation();
+    fixtures.teamId = (
+      await new TeamStore(env.DB).create({
+        slug: "matrix-team",
+        name: "Matrix",
+        joinPolicy: "open",
+      })
+    ).id;
   }, MATRIX_TIMEOUT_MS);
 
   afterAll(async () => {
@@ -184,13 +220,15 @@ describe("route admission matrix", { timeout: MATRIX_TIMEOUT_MS }, () => {
 
       // Mutating routes get a fresh resource so an earlier DELETE or state
       // change cannot turn later routes into handler-owned 404s.
-      const id = isAutomationRoute(route)
-        ? isMutation(route)
-          ? await createAutomation()
-          : fixtures.automationId
-        : isSessionRoute(route) && isMutation(route)
-          ? await createReadySession()
-          : fixtures.readonlySessionId;
+      const id = isTeamRoute(route)
+        ? fixtures.teamId
+        : isAutomationRoute(route)
+          ? isMutation(route)
+            ? await createAutomation()
+            : fixtures.automationId
+          : isSessionRoute(route) && isMutation(route)
+            ? await createReadySession()
+            : fixtures.readonlySessionId;
       const url = `${BASE}${materialize(route, { id })}`;
       const response = await serviceFetch(url, {
         method: route.method,
@@ -224,36 +262,41 @@ describe("route admission matrix", { timeout: MATRIX_TIMEOUT_MS }, () => {
 
     for (const route of serviceRoutes) {
       const identity = `${route.method} ${route.path}`;
-      if (route.authorization.kind !== "service") {
-        throw new Error(`${identity} declares service authentication without a service policy`);
-      }
       const url = `${BASE}${materialize(route, {})}`;
-      const services: readonly string[] = route.authorization.services;
-      const allowedService = route.authorization.services[0];
+      const allowedServices = actorlessServicesFor(route);
+      const services: readonly string[] = allowedServices;
+      const allowedService = allowedServices[0];
       const deniedService = BOT_SERVICES.find((service) => !services.includes(service));
       if (!deniedService) throw new Error(`${identity} admits every bot service`);
+      const denialCode =
+        route.authorization.kind === "service"
+          ? "service_capability_required"
+          : "service_actor_required";
 
       const admitted = await serviceFetch(url, {
         method: route.method,
         service: allowedService,
-        body: "{}",
+        ...(isMutation(route) ? { body: "{}" } : {}),
       });
       expect(PROTECTED_STATUSES.has(admitted.status), `${identity} allowed bot`).toBe(false);
 
       const wrongBot = await serviceFetch(url, {
         method: route.method,
         service: deniedService,
-        body: "{}",
+        ...(isMutation(route) ? { body: "{}" } : {}),
       });
       expect(wrongBot.status, `${identity} wrong bot`).toBe(403);
       await expect(wrongBot.json(), identity).resolves.toMatchObject({
-        code: "service_capability_required",
+        code: denialCode,
       });
 
-      const browser = await serviceFetch(url, { method: route.method, body: "{}" });
+      const browser = await serviceFetch(url, {
+        method: route.method,
+        ...(isMutation(route) ? { body: "{}" } : {}),
+      });
       expect(browser.status, `${identity} browser owner`).toBe(403);
       await expect(browser.json(), identity).resolves.toMatchObject({
-        code: "service_capability_required",
+        code: denialCode,
       });
 
       observed.push(
@@ -384,6 +427,8 @@ describe("route admission sentinel", { timeout: MATRIX_TIMEOUT_MS }, () => {
     readonlySessionId: "",
     sandboxSessionId: "",
     automationId: "",
+    teamId: "",
+    environmentId: "env_sentinel",
   };
   // Every production contract, admitted by its own policy, in front of a
   // sentinel handler.
@@ -394,6 +439,11 @@ describe("route admission sentinel", { timeout: MATRIX_TIMEOUT_MS }, () => {
     );
   }
   const handle = createControlPlaneHttpHandler([shadow]);
+  let teamSessionId = "";
+  let privateSessionId = "";
+  const OTHER_MEMBER = "33333333333333333333333333333333";
+  const TEAM_VIEWER = "44444444444444444444444444444444";
+  const COLLABORATOR = "55555555555555555555555555555555";
 
   beforeAll(async () => {
     await cleanD1Tables();
@@ -403,6 +453,45 @@ describe("route admission sentinel", { timeout: MATRIX_TIMEOUT_MS }, () => {
     await seedSandboxAuth(stub, { authToken: SANDBOX_TOKEN, sandboxId: "sb-sentinel" });
     fixtures.sandboxSessionId = sessionName;
     fixtures.automationId = await createAutomation();
+    fixtures.teamId = (
+      await new TeamStore(env.DB).create({
+        slug: "sentinel-team",
+        name: "Sentinel",
+        joinPolicy: "open",
+      })
+    ).id;
+    await new EnvironmentStore(env.DB).create(
+      {
+        id: fixtures.environmentId,
+        owner_team_id: null,
+        name: "Sentinel environment",
+        description: null,
+        prebuild_enabled: 0,
+        channel_associations: null,
+        created_at: 1,
+        updated_at: 1,
+      },
+      []
+    );
+    for (const [userId, role] of [
+      [OTHER_MEMBER, "member"],
+      [TEAM_VIEWER, "viewer"],
+      [COLLABORATOR, "member"],
+    ] as const) {
+      await serviceRequestHeaders(`${BASE}/me/authorization`, { as: { userId, role } });
+    }
+    await new TeamMembershipStore(env.DB).add(fixtures.teamId, TEAM_VIEWER);
+    teamSessionId = await createReadySession();
+    privateSessionId = await createReadySession();
+    await env.DB.batch([
+      env.DB.prepare(
+        "UPDATE sessions SET owner_team_id = ?, visibility = 'team' WHERE id = ?"
+      ).bind(fixtures.teamId, teamSessionId),
+      env.DB.prepare(
+        "UPDATE sessions SET owner_team_id = ?, visibility = 'private', user_id = ? WHERE id = ?"
+      ).bind(fixtures.teamId, OTHER_MEMBER, privateSessionId),
+    ]);
+    await new SessionCollaboratorStore(env.DB).add(privateSessionId, COLLABORATOR, OTHER_MEMBER);
   }, MATRIX_TIMEOUT_MS);
 
   afterAll(async () => {
@@ -447,7 +536,17 @@ describe("route admission sentinel", { timeout: MATRIX_TIMEOUT_MS }, () => {
           ? fixtures.sandboxSessionId
           : fixtures.readonlySessionId;
       const url = `${BASE}${materialize(route, {
-        id: isAutomationRoute(route) ? fixtures.automationId : sessionId,
+        ...(environmentRequirementFor(route)?.kind === "environment"
+          ? { [environmentRequirementFor(route)!.idParam]: fixtures.environmentId }
+          : {}),
+        id: isTeamRoute(route)
+          ? fixtures.teamId
+          : isAutomationRoute(route)
+            ? fixtures.automationId
+            : environmentRequirementFor(route)?.idParam === "id"
+              ? fixtures.environmentId
+              : sessionId,
+        childId: fixtures.sandboxSessionId,
       })}`;
       const method = route.method;
       const expectReach = async (
@@ -488,15 +587,11 @@ describe("route admission sentinel", { timeout: MATRIX_TIMEOUT_MS }, () => {
           await expectReach(wrongSandbox, "bearer", false);
           break;
         case "service": {
-          if (route.authorization.kind !== "service") throw new Error(identity);
-          const services: readonly string[] = route.authorization.services;
+          const allowedServices = actorlessServicesFor(route);
+          const services: readonly string[] = allowedServices;
           const denied = BOT_SERVICES.find((service) => !services.includes(service));
           if (!denied) throw new Error(`${identity} admits every bot service`);
-          await expectReach(
-            await botHeaders(url, method, route.authorization.services[0]),
-            "bot",
-            true
-          );
+          await expectReach(await botHeaders(url, method, allowedServices[0]), "bot", true);
           await expectReach(await botHeaders(url, method, denied), "wrong bot", false);
           await expectReach(owner, "web", false);
           await expectReach({}, "anonymous", false);
@@ -519,6 +614,7 @@ describe("route admission sentinel", { timeout: MATRIX_TIMEOUT_MS }, () => {
   });
 
   it("delivers path segments to handlers decoded exactly once", async () => {
+    await initSession({ sessionName: "abc/def", userId: BROWSER_USER_ID });
     // Every production contract, admitted by its own policy, in front of a
     // handler that echoes the parameters Hono decoded.
     const echo = new Hono<ControlPlaneHonoEnv>();
@@ -556,5 +652,215 @@ describe("route admission sentinel", { timeout: MATRIX_TIMEOUT_MS }, () => {
       expect(response.status, url).toBe(200);
       await expect(response.json(), url).resolves.toEqual({ groups });
     }
+  });
+
+  it("admits team directory reads but conceals member tabs and denies capabilities in every mode", async () => {
+    const observed: string[] = [];
+    for (const mode of ["off", "shadow", "on"] as const) {
+      for (const route of routes.filter(
+        (item) => isTeamRoute(item) && item.authorization.kind === "active-user"
+      )) {
+        if (route.authorization.kind !== "active-user") throw new Error("Missing team policy");
+        const requirement = route.authorization.allOf.find((entry) => entry.kind === "team");
+        if (!requirement || requirement.kind !== "team")
+          throw new Error("Missing team requirement");
+        const url = `${BASE}${materialize(route, { id: fixtures.teamId, userId: TEAM_VIEWER })}`;
+        const headers = await serviceRequestHeaders(url, {
+          method: route.method,
+          as: { userId: OTHER_MEMBER, role: "member" },
+        });
+        const response = await handle(
+          new Request(url, { method: route.method, headers }),
+          createCloudflareEnv({ ...env, TEAMS_ENFORCEMENT: mode }),
+          createExecutionContext()
+        );
+        const expected =
+          requirement.need === "read" || requirement.need === "canJoin"
+            ? 200
+            : requirement.need === "member" || requirement.need === "removeMember"
+              ? 404
+              : 403;
+        const identity = `${route.method} ${route.path}`;
+        observed.push(
+          `${identity} ${mode}/nonmember=${response.status} auditAllowed=${route.authorization.auditAllowed}`
+        );
+        expect(response.status, identity).toBe(expected);
+        if (expected === 403)
+          await expect(response.json()).resolves.toMatchObject({
+            reason_code: "team_capability_required",
+          });
+        if (expected === 404)
+          await expect(response.json()).resolves.toEqual({ error: "Team not found" });
+      }
+    }
+    expect(observed).toMatchSnapshot();
+  });
+
+  it("conceals all team item routes from another team before any handler or DO call", async () => {
+    const get = vi.fn(() => {
+      throw new Error("Denied route reached the Durable Object");
+    });
+    const requestEnv = createCloudflareEnv({
+      ...env,
+      TEAMS_ENFORCEMENT: "on",
+      SESSION: new Proxy(env.SESSION, {
+        get(target, property, receiver) {
+          if (property === "get") return get;
+          return Reflect.get(target, property, receiver);
+        },
+      }),
+    });
+    const observed: string[] = [];
+    for (const route of routes.filter(
+      (item) => isSessionRoute(item) && item.authorization.kind === "active-user"
+    )) {
+      const identity = `${route.method} ${route.path}`;
+      const url = `${BASE}${materialize(route, { id: teamSessionId, childId: fixtures.sandboxSessionId })}`;
+      const headers = await serviceRequestHeaders(url, {
+        method: route.method,
+        as: { userId: OTHER_MEMBER, role: "member" },
+      });
+      const response = await handle(
+        new Request(url, { method: route.method, headers }),
+        requestEnv,
+        createExecutionContext()
+      );
+      observed.push(`${identity} other-team=${response.status}`);
+      expect(response.status, identity).toBe(404);
+      await expect(response.json(), identity).resolves.toEqual({ error: "Session not found" });
+    }
+    expect(get).not.toHaveBeenCalled();
+    expect(observed).toMatchSnapshot();
+  });
+
+  it("denies cross-target member removal before the handler in every mode", async () => {
+    const memberships = new TeamMembershipStore(env.DB);
+    await memberships.add(fixtures.teamId, COLLABORATOR);
+    try {
+      const url = `${BASE}/teams/${fixtures.teamId}/members/${TEAM_VIEWER}`;
+      for (const mode of ["off", "shadow", "on"] as const) {
+        const headers = await serviceRequestHeaders(url, {
+          method: "DELETE",
+          as: { userId: COLLABORATOR, role: "member" },
+        });
+        const response = await handle(
+          new Request(url, { method: "DELETE", headers }),
+          createCloudflareEnv({ ...env, TEAMS_ENFORCEMENT: mode }),
+          createExecutionContext()
+        );
+        expect(response.status).toBe(403);
+        expect(await response.json()).toMatchObject({ reason_code: "team_capability_required" });
+      }
+    } finally {
+      await memberships.remove(fixtures.teamId, COLLABORATOR);
+    }
+  });
+
+  it("reports action denials for a same-team Viewer and admits a private collaborator", async () => {
+    const observed: string[] = [];
+    for (const route of routes.filter(
+      (item) => isSessionRoute(item) && item.authorization.kind === "active-user"
+    )) {
+      if (
+        route.path.endsWith("/export") ||
+        (route.path.endsWith("/children") && route.method === "POST")
+      )
+        continue;
+      const url = `${BASE}${materialize(route, { id: teamSessionId, childId: fixtures.sandboxSessionId, userId: TEAM_VIEWER })}`;
+      const headers = await serviceRequestHeaders(url, {
+        method: route.method,
+        as: { userId: TEAM_VIEWER, role: "viewer" },
+      });
+      const response = await handle(
+        new Request(url, { method: route.method, headers }),
+        createCloudflareEnv({ ...env, TEAMS_ENFORCEMENT: "on" }),
+        createExecutionContext()
+      );
+      const expected =
+        route.authorization.kind === "active-user" &&
+        route.authorization.allOf.every(
+          (entry) => entry.kind !== "session" || entry.action === "read"
+        )
+          ? 200
+          : 403;
+      observed.push(`${route.method} ${route.path} same-team-viewer=${response.status}`);
+      expect(response.status, `${route.method} ${route.path}`).toBe(expected);
+      if (expected === 403) {
+        const ownershipOnly =
+          route.authorization.kind === "active-user" &&
+          route.authorization.allOf.some(
+            (entry) =>
+              entry.kind === "session" &&
+              (entry.action === "changeVisibility" || entry.action === "manageCollaborators")
+          );
+        await expect(response.json()).resolves.toMatchObject({
+          reason_code: ownershipOnly ? "not_owner_or_lead" : "missing_permission",
+        });
+      }
+    }
+    expect(observed).toMatchSnapshot();
+    const url = `${BASE}/sessions/${privateSessionId}/events`;
+    const headers = await serviceRequestHeaders(url, {
+      as: { userId: COLLABORATOR, role: "member" },
+    });
+    // Team-owned collaborator grants are honored only for current team members.
+    const memberships = new TeamMembershipStore(env.DB);
+    await memberships.add(fixtures.teamId, COLLABORATOR);
+    let response: Response;
+    try {
+      response = await handle(
+        new Request(url, { headers }),
+        createCloudflareEnv({ ...env, TEAMS_ENFORCEMENT: "on" }),
+        createExecutionContext()
+      );
+    } finally {
+      await memberships.remove(fixtures.teamId, COLLABORATOR);
+    }
+    expect(response.status).toBe(200);
+    expect([`collaborator-on-private=${response.status}`]).toMatchSnapshot();
+  });
+
+  it("admits actorless reads of team and workspace sessions but not private ones", async () => {
+    const observed: string[] = [];
+    for (const id of [fixtures.readonlySessionId, teamSessionId, privateSessionId]) {
+      const url = `${BASE}/sessions/${id}/events`;
+      const response = await handle(
+        new Request(url, {
+          headers: await botHeaders(url, "GET", "slack-bot"),
+        }),
+        createCloudflareEnv({ ...env, TEAMS_ENFORCEMENT: "on" }),
+        createExecutionContext()
+      );
+      observed.push(
+        `actorless-${id === fixtures.readonlySessionId ? "workspace" : id === teamSessionId ? "team" : "private"}=${response.status}`
+      );
+      expect(response.status).toBe(id === privateSessionId ? 404 : 200);
+    }
+    expect(observed).toMatchSnapshot();
+  });
+
+  it("audits one workspace Owner break-glass admission for a private session", async () => {
+    const url = `${BASE}/sessions/${privateSessionId}`;
+    const headers = await serviceRequestHeaders(url);
+    const response = await handle(
+      new Request(url, { headers }),
+      createCloudflareEnv({ ...env, TEAMS_ENFORCEMENT: "on" }),
+      createExecutionContext()
+    );
+    expect(response.status).toBe(200);
+    const audits = await env.DB.prepare(
+      "SELECT resource_type, resource_id, team_id, actor_user_id_snapshot FROM authorization_audit_events WHERE action = 'session.private_break_glass'"
+    ).all();
+    expect(audits.results).toEqual([
+      {
+        resource_type: "session",
+        resource_id: privateSessionId,
+        team_id: fixtures.teamId,
+        actor_user_id_snapshot: BROWSER_USER_ID,
+      },
+    ]);
+    expect([
+      `owner-role-break-glass=${response.status}:${audits.results.length}`,
+    ]).toMatchSnapshot();
   });
 });

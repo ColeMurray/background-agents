@@ -340,6 +340,27 @@ describe("VercelSandboxClient", () => {
     expect(result).toEqual({ commandId: "cmd-1", exitCode: 0 });
   });
 
+  it("ignores malformed command stream lines before a valid command update", async () => {
+    fetchSpy.mockResolvedValue(
+      new Response(
+        [
+          JSON.stringify({ command: "not-an-object" }),
+          JSON.stringify({ command: { exitCode: "done" } }),
+          JSON.stringify({ command: { id: "cmd-1", exitCode: null } }),
+          "",
+        ].join("\n"),
+        { status: 200 }
+      )
+    );
+
+    const result = await createClient().runCommandAndWait({
+      sessionId: "session-1",
+      command: "bash",
+    });
+
+    expect(result).toEqual({ commandId: "cmd-1", exitCode: null });
+  });
+
   it("streams waited command output across chunk boundaries", async () => {
     fetchSpy.mockResolvedValue(
       streamResponse([

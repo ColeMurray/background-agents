@@ -75,6 +75,7 @@ function createSandbox(overrides: Partial<SandboxRow> = {}): SandboxRow {
     boot_phase: null,
     boot_seq: null,
     fenced: 0,
+    startup_rejected: 0,
     created_at: 1,
     ...overrides,
   };
@@ -121,6 +122,7 @@ function createMessage(overrides: Partial<MessageRow> = {}): MessageRow {
     status: "completed",
     error_message: null,
     stop_confirmation_deadline: null,
+    reported_cost_usd: 0,
     created_at: 1,
     started_at: 2,
     completed_at: 3,

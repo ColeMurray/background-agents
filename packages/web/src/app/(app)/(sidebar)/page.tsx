@@ -2,12 +2,15 @@
 
 import { useAuthSession } from "@/lib/auth-session";
 import { browserApiFetch } from "@/lib/browser-api-fetch";
+import { toast } from "sonner";
+import { sessionActionErrorMessage } from "@/lib/session-action-error";
 import { useRouter } from "next/navigation";
 import { mutate } from "swr";
 import { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import Link from "next/link";
 import { CollapsedSidebarControls, useSidebarContext } from "@/components/sidebar-layout";
 import { ErrorBanner } from "@/components/ui/error-banner";
+import { SessionAccessSelector } from "@/components/session-access-selector";
 import { matchesShortcut } from "@/lib/keyboard-shortcuts";
 import { useKeyboardShortcuts } from "@/hooks/use-keyboard-shortcuts";
 import { isUnarchivedSessionListKey } from "@/lib/session-list";
@@ -65,6 +68,15 @@ import { ProviderAuthControls } from "@/components/provider-auth-controls";
 import { useProviderAccounts } from "@/hooks/use-provider-accounts";
 import { useWarmDraftSession, type WarmDraftSessionRequest } from "@/hooks/use-warm-draft-session";
 import { useCurrentUserAuthorization } from "@/hooks/use-current-user-authorization";
+import { useActiveTeam } from "@/hooks/use-active-team";
+import { usePromptDraft } from "@/hooks/use-prompt-draft";
+import { NEW_SESSION_PROMPT_DRAFT_ID } from "@/lib/prompt-drafts";
+import type { SessionVisibility } from "@open-inspect/shared/types/teams";
+import {
+  parseStoredComposerAccess,
+  resolveComposerAccess,
+  type ComposerAccessDraft,
+} from "@/lib/composer-access";
 import {
   buildInteractiveProviderRoutingIdentity,
   parseStoredProviderSelections,
@@ -77,6 +89,7 @@ const LAST_SELECTED_HARNESS_STORAGE_KEY = "open-inspect-last-selected-harness";
 const LAST_SELECTED_REASONING_EFFORT_STORAGE_KEY = "open-inspect-last-selected-reasoning-effort";
 const LEGACY_PROVIDER_SELECTIONS_STORAGE_KEY = "open-inspect-last-provider-selections";
 const LAST_PROVIDER_SELECTIONS_STORAGE_KEY = "open-inspect-last-provider-selections:v1";
+const LAST_SESSION_ACCESS_STORAGE_KEY = "open-inspect-last-session-access";
 
 function skillPreviewTarget(
   fields: SessionTargetRequestFields | null
@@ -101,15 +114,72 @@ export default function Home() {
   const { hasPermission } = useCurrentUserAuthorization();
   const canCreateSession = hasPermission("sessions.create");
   const router = useRouter();
-  const picker = useSessionTargetPicker();
+  const teamContext = useActiveTeam();
+  const { teams, requireTeamOnCreate, loading: loadingTeams, error: teamError } = teamContext;
+  const [accessDraft, setAccessDraft] = useState<ComposerAccessDraft | null>(null);
+  const { contextKey, teamId, visibility } = resolveComposerAccess(teamContext, accessDraft);
+  const selectedTeam = teams.find((team) => team.id === teamId);
+  const teamCreationReady =
+    !loadingTeams && !teamError && (teamId === null ? !requireTeamOnCreate : !!selectedTeam);
+  const picker = useSessionTargetPicker({
+    teamId,
+    defaultEnvironmentId: selectedTeam?.defaultEnvironmentId,
+  });
   const { sessionTarget, buildRequestFields, isLaunchable } = picker;
+
+  const accessStorageKey = session ? `${LAST_SESSION_ACCESS_STORAGE_KEY}:${session.user.id}` : null;
+  const accessContextReady = !teamContext.loading && !teamContext.error;
+
+  // Restore the user's last composer team/audience; it only applies while its sidebar context matches.
+  useEffect(() => {
+    let stored: ComposerAccessDraft | null = null;
+    try {
+      stored = accessStorageKey
+        ? parseStoredComposerAccess(localStorage.getItem(accessStorageKey))
+        : null;
+    } catch {
+      // Storage is optional; the composer falls back to the sidebar team defaults.
+    }
+    setAccessDraft(stored);
+  }, [accessStorageKey]);
+
+  const saveAccessDraft = useCallback(
+    (draft: ComposerAccessDraft) => {
+      setAccessDraft(draft);
+      if (!accessStorageKey) return;
+      try {
+        localStorage.setItem(accessStorageKey, JSON.stringify(draft));
+      } catch {
+        // Continue with the in-memory selection when storage is unavailable.
+      }
+    },
+    [accessStorageKey]
+  );
+
+  // Composer context changes preserve the audience; sidebar changes use team defaults.
+  useEffect(() => {
+    if (teamContext.loading || teamContext.error) return;
+    setAccessDraft((draft) => (draft ? resolveComposerAccess(teamContext, draft) : null));
+  }, [teamContext]);
+
+  // Sidebar changes discard the draft, so drop the saved one too rather than reviving it on reload.
+  useEffect(() => {
+    if (!accessContextReady || !accessStorageKey) return;
+    try {
+      const stored = parseStoredComposerAccess(localStorage.getItem(accessStorageKey));
+      if (stored && stored.contextKey !== contextKey) localStorage.removeItem(accessStorageKey);
+    } catch {
+      // Storage is optional.
+    }
+  }, [accessContextReady, accessStorageKey, contextKey]);
   const [storedPreference, setStoredPreference] = useState<ModelPreference>({
     model: DEFAULT_MODEL,
     reasoningEffort: getDefaultReasoningEffort(DEFAULT_MODEL),
   });
   const [modelPreferenceDraft, setModelPreferenceDraft] = useState<ModelPreference | null>(null);
   const [harness, setHarness] = useState<HarnessId>(DEFAULT_HARNESS);
-  const [prompt, setPrompt] = useState("");
+  const { prompt, setPrompt, clearSubmittedPrompt } = usePromptDraft(NEW_SESSION_PROMPT_DRAFT_ID);
+  const [warmRequested, setWarmRequested] = useState(false);
   const [skillSelection, setSkillSelection] = useState<SessionSkillSelection>({ mode: "all" });
   const [providerSelections, setProviderSelections] = useState<ModelProviderSelections>({});
   const [providerSelectionsHydrated, setProviderSelectionsHydrated] = useState(false);
@@ -221,6 +291,7 @@ export default function Home() {
 
   const warmRequest: WarmDraftSessionRequest | null =
     canCreateSession &&
+    teamCreationReady &&
     session &&
     providerSelectionsHydrated &&
     !providerAccounts.loading &&
@@ -234,6 +305,8 @@ export default function Home() {
           reasoningEffort,
           skillSelection,
           providerSelections: availableProviderSelections,
+          teamId,
+          visibility,
         }
       : null;
   const warmRoutingIdentity = buildInteractiveProviderRoutingIdentity(
@@ -242,11 +315,19 @@ export default function Home() {
     providerAccounts.accounts
   );
   const {
+    identity: warmIdentity,
     sessionId: pendingSessionId,
     isWarming: isCreatingSession,
     warm: createSessionForWarming,
     consume: consumeWarmSession,
+    error: creationError,
   } = useWarmDraftSession(warmRequest, warmRoutingIdentity);
+
+  useEffect(() => {
+    if (!warmRequested || !warmIdentity) return;
+    setWarmRequested(false);
+    void createSessionForWarming();
+  }, [warmRequested, warmIdentity, createSessionForWarming]);
 
   const saveModelPreferenceDraft = useCallback((preference: ModelPreference) => {
     setModelPreferenceDraft(preference);
@@ -286,32 +367,12 @@ export default function Home() {
     [availableProviderSelections]
   );
 
-  const handlePromptChange = (value: string) => {
-    const wasEmpty = prompt.length === 0;
-    setPrompt(value);
-    if (
-      wasEmpty &&
-      value.length > 0 &&
-      !pendingSessionId &&
-      !isCreatingSession &&
-      !loadingEnabledModels &&
-      isLaunchable
-    ) {
-      createSessionForWarming();
-    }
-  };
-
-  const handleAddFiles = (files: Iterable<File>) => {
-    sessionAttachments.addFiles(files);
-    if (!pendingSessionId && !isCreatingSession && isLaunchable) {
-      createSessionForWarming();
-    }
-  };
-
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (
       !canCreateSession ||
+      !teamCreationReady ||
+      creationError?.terminal ||
       submitInFlightRef.current ||
       sessionAttachments.isUploading ||
       !providerSelectionsHydrated ||
@@ -372,13 +433,20 @@ export default function Home() {
 
       if (res.ok) {
         consumeWarmSession(sessionId);
+        clearSubmittedPrompt(prompt);
         sessionAttachments.clearAttachments();
         mutate(isUnarchivedSessionListKey);
         mutate(isSessionInboxKey);
         router.push(`/session/${sessionId}`);
       } else {
-        const data = await res.json();
-        setError(data.error || "Failed to send prompt");
+        if (res.status === 403) {
+          const message = await sessionActionErrorMessage(res, "Failed to send prompt");
+          toast.error(message);
+          setError(message);
+        } else {
+          const data = await res.json();
+          setError(data.error || "Failed to send prompt");
+        }
         setCreating(false);
       }
     } catch (_error) {
@@ -394,6 +462,21 @@ export default function Home() {
       isAuthenticated={!!session}
       canCreateSession={canCreateSession}
       picker={picker}
+      teamContext={teamContext}
+      teamId={teamId}
+      teamCreationReady={teamCreationReady}
+      visibility={visibility}
+      onTeamChange={(teamId) => {
+        saveAccessDraft({ contextKey, teamId, visibility });
+      }}
+      onVisibilityChange={(value) => {
+        if (teamId !== null || value !== "team")
+          saveAccessDraft({
+            contextKey,
+            teamId,
+            visibility: value,
+          });
+      }}
       selectedModel={selectedModel}
       setSelectedModel={handleModelChange}
       reasoningEffort={reasoningEffort}
@@ -401,18 +484,21 @@ export default function Home() {
       harness={harness}
       setHarness={handleHarnessChange}
       prompt={prompt}
-      handlePromptChange={handlePromptChange}
+      handlePromptChange={(value) => {
+        setPrompt(value);
+        setWarmRequested(value.length > 0);
+      }}
       attachments={{
         items: sessionAttachments.attachments,
         error: sessionAttachments.attachmentError,
         isUploading: sessionAttachments.isUploading,
-        onAdd: handleAddFiles,
+        onAdd: sessionAttachments.addFiles,
         onRemove: sessionAttachments.removeAttachment,
       }}
       creating={creating}
       isCreatingSession={isCreatingSession}
       providerSelectionsHydrated={providerSelectionsHydrated}
-      error={error}
+      error={creationError?.message ?? error}
       handleSubmit={handleSubmit}
       modelOptions={modelSelection.options}
       skillSelection={skillSelection}
@@ -432,6 +518,12 @@ function HomeContent({
   isAuthenticated,
   canCreateSession,
   picker,
+  teamContext,
+  teamId,
+  teamCreationReady,
+  visibility,
+  onTeamChange,
+  onVisibilityChange,
   selectedModel,
   setSelectedModel,
   reasoningEffort,
@@ -460,6 +552,12 @@ function HomeContent({
   isAuthenticated: boolean;
   canCreateSession: boolean;
   picker: SessionTargetSelection;
+  teamContext: ReturnType<typeof useActiveTeam>;
+  teamId: string | null;
+  teamCreationReady: boolean;
+  visibility: SessionVisibility;
+  onTeamChange: (teamId: string | null) => void;
+  onVisibilityChange: (value: SessionVisibility) => void;
   selectedModel: ValidModel;
   setSelectedModel: (value: ValidModel) => void;
   reasoningEffort: ReasoningEffort | undefined;
@@ -507,7 +605,7 @@ function HomeContent({
     handleDragOver,
     handleDragLeave,
   } = useAttachmentDropZone({ locked: attachmentsLocked, onAdd: attachments.onAdd });
-  const { sessionTarget, selectedRepo, repos, loadingRepos, isLaunchable } = picker;
+  const { sessionTarget, repos, loadingRepos, isLaunchable } = picker;
   const selectedProvider = getSubscriptionProviderForModel(selectedModel);
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
@@ -552,6 +650,17 @@ function HomeContent({
           {isAuthenticated && canCreateSession && (
             <form onSubmit={handleSubmit}>
               {error && <ErrorBanner className="mb-4">{error}</ErrorBanner>}
+              {teamContext.error ? (
+                <ErrorBanner className="mb-4">
+                  Unable to load team memberships and settings.
+                </ErrorBanner>
+              ) : !teamContext.loading &&
+                teamContext.requireTeamOnCreate &&
+                teamContext.teams.length === 0 ? (
+                <p role="status" className="mb-4 text-sm text-muted-foreground">
+                  Join a team to create a session.
+                </p>
+              ) : null}
 
               <div className="mb-3 flex flex-wrap items-center gap-2 px-4 sm:gap-4">
                 <SessionTargetPicker {...picker.pickerProps} disabled={creating} />
@@ -618,7 +727,8 @@ function HomeContent({
                         attachmentsLocked ||
                         !providerSelectionsHydrated ||
                         providerAccounts.loading ||
-                        !isLaunchable
+                        !isLaunchable ||
+                        !teamCreationReady
                       }
                       className="p-2 text-secondary-foreground hover:text-foreground disabled:opacity-30 disabled:cursor-not-allowed transition"
                       title={`Send (${labels["send-prompt"]})`}
@@ -633,7 +743,7 @@ function HomeContent({
                   </div>
                 </div>
 
-                {/* Footer row with session controls */}
+                {/* Agent configuration stays inside the composer. */}
                 <div className="flex flex-col gap-2 px-4 py-2 border-t border-border-muted sm:flex-row sm:items-center sm:gap-0">
                   <div className="flex flex-wrap items-center gap-2 sm:gap-4 min-w-0">
                     <ModelReasoningSelector
@@ -676,6 +786,17 @@ function HomeContent({
                 </div>
               </div>
 
+              <SessionAccessSelector
+                teamId={teamId}
+                teams={teamContext.teams}
+                visibility={visibility}
+                onTeamChange={onTeamChange}
+                onVisibilityChange={onVisibilityChange}
+                requireTeamOnCreate={teamContext.requireTeamOnCreate}
+                disabled={creating || teamContext.loading || !!teamContext.error}
+                visibilityDisabled={!teamCreationReady}
+              />
+
               {/* Secrets disclosure per session target (design §7.4) */}
               {sessionTarget?.kind === "environment" && (
                 <p className="mt-3 text-xs text-muted-foreground text-center">
@@ -692,17 +813,6 @@ function HomeContent({
                   </Link>
                   .
                 </p>
-              )}
-
-              {selectedRepo && (
-                <div className="mt-3 text-center">
-                  <Link
-                    href="/settings"
-                    className="text-xs text-muted-foreground hover:text-foreground transition"
-                  >
-                    Manage secrets and settings
-                  </Link>
-                </div>
               )}
 
               {repos.length === 0 && !loadingRepos && (

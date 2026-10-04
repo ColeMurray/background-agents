@@ -12,6 +12,8 @@ import {
 } from "./helpers";
 import { DEFAULT_REPLAY_LIMIT } from "../../src/session/event-stream";
 import { MAX_UNFINISHED_PROMPTS } from "@open-inspect/shared/types/prompts";
+import { DEFAULT_HEARTBEAT_CONFIG } from "../../src/sandbox/lifecycle/decisions";
+import { runInSessionDO } from "./session-do-access";
 
 describe("Client WebSocket (via SELF.fetch)", () => {
   it("rejects a nonexistent session before initializing its Durable Object", async () => {
@@ -94,6 +96,12 @@ describe("Client WebSocket (via SELF.fetch)", () => {
     const state = subscribed.session as Record<string, unknown>;
     expect(state.id).toBe(name);
     expect(state.repoOwner).toBe("acme");
+    expect(state.capabilities).toMatchObject({
+      canRead: true,
+      canCollaborate: true,
+      canManageLifecycle: true,
+      canSandbox: true,
+    });
 
     ws.close();
   });
@@ -328,7 +336,7 @@ describe("Client WebSocket (via SELF.fetch)", () => {
 
     expect((await denied).find((message) => message.type === "error")).toMatchObject({
       code: "PERMISSION_REQUIRED",
-      message: "Permission required: sessions.collaborate",
+      message: "Access denied: missing_permission",
     });
     ws.close();
   });
@@ -556,6 +564,52 @@ describe("Client WebSocket (via SELF.fetch)", () => {
     const pong = messages.find((m) => m.type === "pong");
     expect(pong).toBeDefined();
     expect(pong!.timestamp).toEqual(expect.any(Number));
+
+    ws.close();
+  });
+
+  it("typing and prompts announce no start while a connected sandbox awaits its reconnect", async () => {
+    const name = `ws-client-reconnect-wait-${Date.now()}`;
+    const { stub } = await initNamedSession(name);
+    // Let init's fire-and-forget warm attempt fail before forcing the state a
+    // control-plane restart leaves: ready, previously connected, no bridge.
+    await waitForSandboxStatus(stub, "failed");
+    const lastHeartbeat = Date.now() - 10_000;
+    // created_at stays put: the preservation record is pinned to this generation.
+    await queryDO(
+      stub,
+      `UPDATE sandbox SET status = 'ready', last_heartbeat = ?, modal_object_id = 'provider-obj-123'`,
+      lastHeartbeat
+    );
+    const [before] = await queryDO<{ modal_sandbox_id: string }>(
+      stub,
+      "SELECT modal_sandbox_id FROM sandbox"
+    );
+
+    const { ws } = await openClientWs(name, { subscribe: true });
+    const collector = collectMessages(ws, { timeoutMs: 1000 });
+    ws.send(JSON.stringify({ type: "typing" }));
+    ws.send(
+      JSON.stringify({ type: "prompt", clientRequestId: crypto.randomUUID(), content: "hello" })
+    );
+    const messages = await collector;
+
+    expect(messages.some((message) => message.type === "prompt_queued")).toBe(true);
+    expect(messages.map((message) => message.type)).not.toEqual(
+      expect.arrayContaining([expect.stringMatching(/^sandbox_(spawning|warming|status|error)$/)])
+    );
+    expect(
+      await queryDO(stub, "SELECT status, modal_sandbox_id, modal_object_id FROM sandbox")
+    ).toEqual([
+      {
+        status: "ready",
+        modal_sandbox_id: before.modal_sandbox_id,
+        modal_object_id: "provider-obj-123",
+      },
+    ]);
+    const alarm = await runInSessionDO(stub, (_instance, state) => state.storage.getAlarm());
+    expect(alarm).not.toBeNull();
+    expect(alarm!).toBeLessThanOrEqual(lastHeartbeat + DEFAULT_HEARTBEAT_CONFIG.timeoutMs + 1);
 
     ws.close();
   });

@@ -6,6 +6,7 @@
 
 import { describe, it, expect, vi } from "vitest";
 import { hashToken } from "../auth/crypto";
+import { createCloudflareBackgroundTasks } from "../cloudflare/background-tasks";
 import type { Logger } from "../logger";
 import type { BackgroundTasks } from "../platform-ports";
 import {
@@ -68,7 +69,7 @@ interface Harness {
   wsManager: {
     acceptClientSocket: ReturnType<typeof vi.fn>;
     acceptAndSetSandboxSocket: ReturnType<typeof vi.fn>;
-    getReadySandboxSocket: ReturnType<typeof vi.fn>;
+    getSandboxCommandTarget: ReturnType<typeof vi.fn>;
     enforceAuthTimeout: ReturnType<typeof vi.fn>;
     close: ReturnType<typeof vi.fn>;
   };
@@ -79,6 +80,7 @@ interface Harness {
     updateLastActivity: ReturnType<typeof vi.fn>;
     scheduleInactivityCheck: ReturnType<typeof vi.fn>;
     scheduleDisconnectCheck: ReturnType<typeof vi.fn>;
+    onRefusedReconnect: ReturnType<typeof vi.fn>;
   };
   broadcast: ReturnType<typeof vi.fn>;
   submitted: string[];
@@ -105,7 +107,7 @@ function createHarness(opts: {
   const wsManager = {
     acceptClientSocket: vi.fn(),
     acceptAndSetSandboxSocket: vi.fn(() => ({ replaced: false })),
-    getReadySandboxSocket: vi.fn(() => null as WebSocket | null),
+    getSandboxCommandTarget: vi.fn(() => ({ kind: "unavailable" })),
     enforceAuthTimeout: vi.fn(async () => undefined),
     close: vi.fn(),
   };
@@ -116,13 +118,15 @@ function createHarness(opts: {
     updateLastActivity: vi.fn(),
     scheduleInactivityCheck: vi.fn(async () => undefined),
     scheduleDisconnectCheck: vi.fn(async () => undefined),
+    onRefusedReconnect: vi.fn((): "retry" | "exit" => "exit"),
   };
   const broadcast = vi.fn();
   const submitted: string[] = [];
+  const background = createCloudflareBackgroundTasks({ waitUntil: vi.fn() }, log);
   const backgroundTasks: BackgroundTasks = {
     submit: (task, metadata) => {
       submitted.push(metadata.name);
-      void task();
+      background.submit(task, metadata);
     },
   };
   const processMessageQueue = vi.fn(async () => undefined);
@@ -214,13 +218,34 @@ describe("SessionConnectionAuthenticator.authorize", () => {
 
   it("rejects a terminal session with 410 on a read taken after authentication", async () => {
     const h = createHarness({ sandbox: await sandboxRow(), session: sessionRow("cancelled") });
+    h.lifecycleManager.onRefusedReconnect.mockReturnValue("retry");
 
     const decision = await h.authenticator.authorize(
       upgradeRequest({ sandbox: true, token: TOKEN, sandboxId: SANDBOX_ID })
     );
 
+    // A cancelled session's sandbox is destroyed, never kept for a save.
     expect(await rejection(decision)).toEqual({ status: 410, body: "Session is terminal" });
+    expect(h.lifecycleManager.onRefusedReconnect).not.toHaveBeenCalled();
   });
+
+  it.each([
+    { instruction: "retry" as const, expected: { status: 503, body: "Sandbox is being saved" } },
+    { instruction: "exit" as const, expected: { status: 410, body: "Session is terminal" } },
+  ])(
+    "answers an archived session's sandbox with $expected.status when told to $instruction",
+    async ({ instruction, expected }) => {
+      const h = createHarness({ sandbox: await sandboxRow(), session: sessionRow("archived") });
+      h.lifecycleManager.onRefusedReconnect.mockReturnValue(instruction);
+
+      const decision = await h.authenticator.authorize(
+        upgradeRequest({ sandbox: true, token: TOKEN, sandboxId: SANDBOX_ID })
+      );
+
+      expect(await rejection(decision)).toEqual(expected);
+      expect(h.lifecycleManager.onRefusedReconnect).toHaveBeenCalledOnce();
+    }
+  );
 
   it("rejects a sandbox that stopped during the token hash with 410", async () => {
     const row = await sandboxRow();
@@ -234,6 +259,34 @@ describe("SessionConnectionAuthenticator.authorize", () => {
     );
 
     expect(await rejection(decision)).toEqual({ status: 410, body: "Sandbox is stopped" });
+  });
+
+  it("tells a stale sandbox that a save still needs to retry instead of exiting", async () => {
+    const h = createHarness({ sandbox: await sandboxRow({ status: "stale" }) });
+    h.lifecycleManager.onRefusedReconnect.mockReturnValue("retry");
+
+    const decision = await h.authenticator.authorize(
+      upgradeRequest({ sandbox: true, token: TOKEN, sandboxId: SANDBOX_ID })
+    );
+
+    expect(await rejection(decision)).toEqual({ status: 503, body: "Sandbox is being saved" });
+    expect(h.lifecycleManager.onRefusedReconnect).toHaveBeenCalledOnce();
+  });
+
+  it("does not keep a superseded generation up for the current generation's save", async () => {
+    const row = await sandboxRow({ status: "stale" });
+    const h = createHarness({
+      sandbox: row,
+      duringTokenHash: () => ({ ...row, created_at: row.created_at + 1 }),
+    });
+    h.lifecycleManager.onRefusedReconnect.mockReturnValue("retry");
+
+    const decision = await h.authenticator.authorize(
+      upgradeRequest({ sandbox: true, token: TOKEN, sandboxId: SANDBOX_ID })
+    );
+
+    expect(await rejection(decision)).toEqual({ status: 410, body: "Sandbox is stopped" });
+    expect(h.lifecycleManager.onRefusedReconnect).not.toHaveBeenCalled();
   });
 
   it("rejects credentials rotated during the token hash with 403", async () => {
@@ -342,7 +395,7 @@ describe("UpgradeDecision.attach", () => {
     // being ready, so a prompt queued while the socket was down must not
     // wait for a user action. Readiness itself is still not re-published.
     const h = createHarness({ sandbox: await sandboxRow({ status: "ready" }) });
-    h.wsManager.getReadySandboxSocket.mockReturnValue(socket);
+    h.wsManager.getSandboxCommandTarget.mockReturnValue({ kind: "dispatch", socket });
 
     await (await accepted(h, sandboxUpgrade())).attach(socket);
 

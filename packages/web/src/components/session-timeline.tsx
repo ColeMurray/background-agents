@@ -34,7 +34,8 @@ import {
   TIMELINE_VIRTUALIZER_DEFAULTS,
   type TimelineVirtualRow,
 } from "@/lib/timeline-virtual-rows";
-import type { Artifact, SandboxEvent } from "@/types/session";
+import { toUiArtifactMetadata } from "@/lib/session-socket/artifact-metadata";
+import type { SandboxEvent } from "@/types/session";
 import type { SessionParticipantProfile } from "@open-inspect/shared/types/sessions";
 import { CheckIcon, CopyIcon, ErrorIcon } from "@/components/ui/icons";
 import { resolveParticipantDisplay } from "@/lib/participant-display";
@@ -592,7 +593,7 @@ function AssistantMessageEvent({ event, copied, onCopyContent }: EventRendererPr
       copyButtonClassName="p-1 text-secondary-foreground hover:text-foreground hover:bg-muted opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto focus-visible:opacity-100 focus-visible:pointer-events-auto transition-colors"
       onCopyContent={onCopyContent}
     >
-      <SafeMarkdown content={event.content} className="text-sm" />
+      <SafeMarkdown content={event.content} className="text-sm" linkRepositoryFiles />
     </MessageFrame>
   );
 }
@@ -633,7 +634,7 @@ function ArtifactEvent({ event, sessionId, onOpenMedia }: EventRendererProps) {
         sessionId={sessionId}
         artifactId={event.artifactId}
         artifactType={event.artifactType}
-        metadata={event.metadata as Artifact["metadata"] | undefined}
+        metadata={toUiArtifactMetadata(event.metadata)}
         onOpen={onOpenMedia}
       />
     </div>

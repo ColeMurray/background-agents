@@ -326,6 +326,26 @@ describe("sig1 service-credential authentication", () => {
       })
     );
 
+    const ownList = await signedFetch({
+      service: "slack-bot",
+      method: "GET",
+      url: "https://test.local/sessions?createdBy=me",
+      actor: "slack:U0001",
+    });
+    expect(ownList.status).toBe(200);
+    await expect(ownList.json()).resolves.toMatchObject({
+      sessions: [expect.objectContaining({ id: createdBody.sessionId, userId: identity!.userId })],
+    });
+
+    const otherActorList = await signedFetch({
+      service: "slack-bot",
+      method: "GET",
+      url: "https://test.local/sessions?createdBy=me",
+      actor: "slack:U0002",
+    });
+    expect(otherActorList.status).toBe(200);
+    await expect(otherActorList.json()).resolves.toMatchObject({ sessions: [] });
+
     const collaboratorList = await signedFetch({
       service: "slack-bot",
       method: "GET",
@@ -340,7 +360,7 @@ describe("sig1 service-credential authentication", () => {
     const collaborator = await signedFetch({
       service: "slack-bot",
       method: "POST",
-      url: `https://test.local/sessions/${createdBody.sessionId}/prompt`,
+      url: `https://test.local/sessions/${createdBody.sessionId}/prompt?channel=slack:C1`,
       actor: "slack:U0002",
       body: JSON.stringify({ content: "Cross-session prompt" }),
     });

@@ -3,6 +3,7 @@ import {
   redactSessionSnapshotSandboxAccess,
   serverMessageSchema,
   sessionSnapshotSchema,
+  sessionSnapshotStateSchema,
 } from "./server-messages";
 
 describe("artifact_updated server message", () => {
@@ -87,6 +88,27 @@ const snapshotState = {
 };
 
 describe("session view contracts", () => {
+  it.each(["owner-1", null])("preserves snapshot ownerUserId (%s)", (ownerUserId) => {
+    const parsed = sessionSnapshotSchema.parse({
+      session: { ...snapshotState, ownerUserId },
+      artifacts: [],
+      promptQueue: [],
+      timeline: { events: [], hasMore: false, cursor: null },
+    });
+
+    expect(parsed.session).toHaveProperty("ownerUserId", ownerUserId);
+  });
+
+  it("accepts snapshot state without ownerUserId", () => {
+    expect(sessionSnapshotStateSchema.parse(snapshotState)).not.toHaveProperty("ownerUserId");
+  });
+
+  it("rejects non-string snapshot ownerUserId", () => {
+    expect(
+      sessionSnapshotStateSchema.safeParse({ ...snapshotState, ownerUserId: 123 }).success
+    ).toBe(false);
+  });
+
   it("parses a snapshot and removes access credentials", () => {
     const parsed = sessionSnapshotSchema.parse({
       session: {
@@ -230,6 +252,23 @@ describe("session view contracts", () => {
         clientRequestId: "request-1",
       })
     ).toMatchObject({ clientRequestId: "request-1" });
+  });
+
+  it("parses correlated graceful shutdown recovery acceptance", () => {
+    expect(
+      serverMessageSchema.parse({
+        type: "shutdown_recovery_accepted",
+        clientRequestId: "recovery-1",
+        action: "restore_saved",
+      })
+    ).toMatchObject({ clientRequestId: "recovery-1", action: "restore_saved" });
+    expect(
+      serverMessageSchema.safeParse({
+        type: "shutdown_recovery_accepted",
+        clientRequestId: "recovery-1",
+        action: "resume",
+      }).success
+    ).toBe(false);
   });
 
   it("parses budget state in snapshots and subscriptions", () => {

@@ -6,6 +6,7 @@ import { serviceFetch } from "./helpers";
 import type { SqlDatabase } from "../../src/db/sql-database";
 
 const BROWSER_USER_ID = "11111111111111111111111111111111";
+const internal = { kind: "internal", reason: "session read state integration tests" } as const;
 
 async function createUser(userId: string, createdAt: number): Promise<void> {
   await env.DB.prepare(
@@ -19,6 +20,8 @@ async function createUser(userId: string, createdAt: number): Promise<void> {
 async function createSession(store: SessionIndexStore, sessionId: string, updatedAt = 1_000) {
   await store.create({
     id: sessionId,
+    ownerTeamId: null,
+    visibility: "workspace",
     title: sessionId,
     repoOwner: "acme",
     repoName: "web",
@@ -86,10 +89,9 @@ describe("session read state", () => {
       updated_at: 1_000,
     });
 
-    expect((await store.list()).sessions.map(({ id }) => id)).toEqual([
-      "newer-session",
-      "terminal-message-session",
-    ]);
+    expect(
+      (await store.list({ readScope: internal, mode: "on" })).sessions.map(({ id }) => id)
+    ).toEqual(["newer-session", "terminal-message-session"]);
   });
 
   it("rejects partial terminal-message projections and read states", async () => {
@@ -140,12 +142,18 @@ describe("session read state", () => {
       terminalMessageCompletedAt: 2_000,
     });
 
-    expect((await store.list({ viewerUserId: "user-a" })).sessions[0].readState).toEqual({
+    expect(
+      (await store.list({ viewerUserId: "user-a", readScope: internal, mode: "on" })).sessions[0]
+        .readState
+    ).toEqual({
       unread: true,
       latestMessageId: "message-a",
       version: 1_500,
     });
-    expect((await store.list({ viewerUserId: "user-b" })).sessions[0].readState).toEqual({
+    expect(
+      (await store.list({ viewerUserId: "user-b", readScope: internal, mode: "on" })).sessions[0]
+        .readState
+    ).toEqual({
       unread: true,
       latestMessageId: "message-a",
       version: 1_500,
@@ -175,12 +183,18 @@ describe("session read state", () => {
       latestMessageId: "message-a",
       version: 1_500,
     });
-    expect((await store.list({ viewerUserId: "user-a" })).sessions[0].readState).toEqual({
+    expect(
+      (await store.list({ viewerUserId: "user-a", readScope: internal, mode: "on" })).sessions[0]
+        .readState
+    ).toEqual({
       unread: false,
       latestMessageId: "message-a",
       version: 1_500,
     });
-    expect((await store.list({ viewerUserId: "user-b" })).sessions[0].readState).toEqual({
+    expect(
+      (await store.list({ viewerUserId: "user-b", readScope: internal, mode: "on" })).sessions[0]
+        .readState
+    ).toEqual({
       unread: true,
       latestMessageId: "message-a",
       version: 1_500,
@@ -234,7 +248,10 @@ describe("session read state", () => {
       terminalMessageCompletedAt: 4_999,
     });
 
-    expect((await store.list({ viewerUserId: "new-user" })).sessions[0].readState).toEqual({
+    expect(
+      (await store.list({ viewerUserId: "new-user", readScope: internal, mode: "on" })).sessions[0]
+        .readState
+    ).toEqual({
       unread: false,
       latestMessageId: "historical-message",
       version: 1_000,
@@ -246,7 +263,10 @@ describe("session read state", () => {
     await createUser("viewer", 1_000);
     await createSession(store, "lifecycle-session");
 
-    expect((await store.list({ viewerUserId: "viewer" })).sessions[0].readState).toEqual({
+    expect(
+      (await store.list({ viewerUserId: "viewer", readScope: internal, mode: "on" })).sessions[0]
+        .readState
+    ).toEqual({
       unread: false,
       latestMessageId: null,
       version: 0,
@@ -275,7 +295,10 @@ describe("session read state", () => {
     await store.updateStatus("lifecycle-session", "archived", 4_000);
     await store.updateStatus("lifecycle-session", "completed", 5_000);
 
-    expect((await store.list({ viewerUserId: "viewer" })).sessions[0].readState).toEqual({
+    expect(
+      (await store.list({ viewerUserId: "viewer", readScope: internal, mode: "on" })).sessions[0]
+        .readState
+    ).toEqual({
       unread: false,
       latestMessageId: "message-1",
       version: 2_000,
@@ -413,7 +436,11 @@ describe("session read state", () => {
         return env.DB.batch(statements);
       },
     } as SqlDatabase;
-    const result = await new SessionIndexStore(countedDb).list({ viewerUserId: "viewer" });
+    const result = await new SessionIndexStore(countedDb).list({
+      viewerUserId: "viewer",
+      readScope: internal,
+      mode: "on",
+    });
 
     expect(result.sessions).toHaveLength(50);
     expect(result.sessions.every((session) => session.readState?.unread)).toBe(true);
@@ -441,7 +468,12 @@ describe("session read state", () => {
       await createSession(store, `large-page-${index.toString().padStart(3, "0")}`, 10_000 - index);
     }
 
-    const result = await store.list({ viewerUserId: "viewer", limit: 100 });
+    const result = await store.list({
+      viewerUserId: "viewer",
+      limit: 100,
+      readScope: internal,
+      mode: "on",
+    });
 
     expect(result.sessions).toHaveLength(100);
     expect(result.sessions.every((session) => session.readState?.unread === false)).toBe(true);

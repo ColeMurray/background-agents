@@ -87,6 +87,14 @@ run "anthropic_classifier_by_default" {
 
   assert {
     condition = (
+      !contains(module.slack_bot_worker[0].plain_text_binding_names, "CLASSIFICATION_REASONING_EFFORT") &&
+      !contains(module.linear_bot_worker[0].plain_text_binding_names, "CLASSIFICATION_REASONING_EFFORT")
+    )
+    error_message = "An unset reasoning effort must not add a binding to either classifier bot."
+  }
+
+  assert {
+    condition = (
       output.slack_bot_worker_url == "https://open-inspect-slack-bot-classifier-provider-test.test-account.workers.dev" &&
       output.slack_bot_events_url == "https://open-inspect-slack-bot-classifier-provider-test.test-account.workers.dev/events" &&
       output.slack_bot_interactions_url == "https://open-inspect-slack-bot-classifier-provider-test.test-account.workers.dev/interactions"
@@ -101,6 +109,76 @@ run "anthropic_classifier_by_default" {
       one([for b in local.classifier_secret_bindings : b.value]) == var.anthropic_api_key
     )
     error_message = "An Anthropic classifier must bind the deployment-wide anthropic_api_key."
+  }
+}
+
+# A classifier-only deployment sets the dedicated key and leaves the sandbox key
+# blank: the bots keep their credential while no sandbox path receives one.
+run "dedicated_classifier_key_stays_out_of_sandboxes" {
+  command = plan
+
+  variables {
+    classification_anthropic_api_key = "test-classifier-key"
+    anthropic_api_key                = ""
+    sandbox_provider                 = "opencomputer"
+    opencomputer_api_url             = "https://api.opencomputer.example"
+    opencomputer_api_key             = "test-opencomputer-key"
+    opencomputer_template            = "test-template"
+  }
+
+  assert {
+    condition = (
+      local.classifier_secret_bindings.ANTHROPIC_API_KEY.value == "test-classifier-key" &&
+      contains(module.slack_bot_worker[0].secret_binding_names, "ANTHROPIC_API_KEY") &&
+      contains(module.linear_bot_worker[0].secret_binding_names, "ANTHROPIC_API_KEY")
+    )
+    error_message = "The classifier bots must bind the dedicated classifier key."
+  }
+
+  assert {
+    condition     = local.modal_llm_secret_values == { ANTHROPIC_API_KEY = "" }
+    error_message = "The dedicated classifier key must not reach Modal sandboxes."
+  }
+
+  assert {
+    condition = (
+      contains(module.control_plane_worker.secret_binding_names, "OPENCOMPUTER_API_KEY") &&
+      !contains(module.control_plane_worker.secret_binding_names, "ANTHROPIC_API_KEY")
+    )
+    error_message = "The dedicated classifier key must not reach OpenComputer sandboxes."
+  }
+}
+
+# With both keys configured, each stays in its own trust domain.
+run "dedicated_classifier_key_takes_precedence" {
+  command = plan
+
+  variables {
+    classification_anthropic_api_key = "test-classifier-key"
+  }
+
+  assert {
+    condition     = local.classifier_secret_bindings.ANTHROPIC_API_KEY.value == "test-classifier-key"
+    error_message = "A configured classifier key must take precedence over anthropic_api_key."
+  }
+
+  assert {
+    condition     = local.modal_llm_secret_values == { ANTHROPIC_API_KEY = "test-anthropic-key" }
+    error_message = "Sandboxes must keep receiving anthropic_api_key, not the classifier key."
+  }
+}
+
+# Whitespace is not a credential: the classifier falls back to anthropic_api_key.
+run "blank_classifier_key_falls_back" {
+  command = plan
+
+  variables {
+    classification_anthropic_api_key = "   "
+  }
+
+  assert {
+    condition     = local.classifier_secret_bindings.ANTHROPIC_API_KEY.value == var.anthropic_api_key
+    error_message = "A whitespace-only classifier key must fall back to anthropic_api_key."
   }
 }
 
@@ -133,6 +211,50 @@ run "openai_classifier_binds_openai_key" {
     )
     error_message = "An OpenAI-classifier deployment must not bind an Anthropic key it never uses."
   }
+}
+
+run "openai_classifier_binds_reasoning_effort" {
+  command = plan
+
+  variables {
+    classification_model            = "openai/gpt-6.1-sol"
+    classification_openai_api_key   = "test-openai-key"
+    classification_reasoning_effort = "low"
+  }
+
+  assert {
+    condition = (
+      local.classifier_reasoning_effort_bindings.CLASSIFICATION_REASONING_EFFORT.value == "low" &&
+      contains(module.slack_bot_worker[0].plain_text_binding_names, "CLASSIFICATION_REASONING_EFFORT") &&
+      contains(module.linear_bot_worker[0].plain_text_binding_names, "CLASSIFICATION_REASONING_EFFORT")
+    )
+    error_message = "A configured reasoning effort must reach both classifier bots."
+  }
+}
+
+# Only the OpenAI transport sends reasoning_effort, so an Anthropic classifier
+# would silently ignore the setting. Fail at plan time instead.
+run "rejects_reasoning_effort_for_anthropic_classifier" {
+  command = plan
+
+  variables {
+    classification_reasoning_effort = "low"
+  }
+
+  expect_failures = [var.classification_reasoning_effort]
+}
+
+# The value reaches OpenAI verbatim, so padding would fail every request.
+run "rejects_padded_reasoning_effort" {
+  command = plan
+
+  variables {
+    classification_model            = "openai/gpt-6.1-sol"
+    classification_openai_api_key   = "test-openai-key"
+    classification_reasoning_effort = "low "
+  }
+
+  expect_failures = [var.classification_reasoning_effort]
 }
 
 run "prefixed_openai_model_resolves_to_openai" {

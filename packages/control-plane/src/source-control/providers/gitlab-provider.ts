@@ -23,6 +23,7 @@ import type {
   GitPushSpec,
   GitPushAuthContext,
   CredentialHelperAuth,
+  CredentialScope,
   ResolvedCommit,
   RepositoryTree,
   RepositoryTreeEntry,
@@ -203,6 +204,7 @@ function parseProviderTimestamp(value: string | null | undefined): number | unde
  * Uses Personal Access Tokens for all API calls. The PAT must have
  * `read_api` scope for read operations and `api` scope for write operations
  * (creating merge requests, push).
+ * Credential scopes are ignored: the deployment-wide PAT cannot be narrowed per call.
  */
 export class GitLabSourceControlProvider implements SourceControlProvider {
   readonly name = "gitlab";
@@ -353,7 +355,10 @@ export class GitLabSourceControlProvider implements SourceControlProvider {
    * On a 404 with a known stable project id, re-resolves the project's
    * current path by id and retries once (rename/transfer tolerance).
    */
-  async getPullRequest(config: GetPullRequestConfig): Promise<PullRequestSnapshot> {
+  async getPullRequest(
+    config: GetPullRequestConfig,
+    _scope: CredentialScope
+  ): Promise<PullRequestSnapshot> {
     let owner = config.owner;
     let name = config.name;
     let response = await this.fetchMergeRequest(owner, name, config.number);
@@ -578,7 +583,10 @@ export class GitLabSourceControlProvider implements SourceControlProvider {
     }
   }
 
-  async getBranchHead(config: GetRepositoryConfig & { branch: string }): Promise<string | null> {
+  async getBranchHead(
+    config: GetRepositoryConfig & { branch: string },
+    _scope: CredentialScope
+  ): Promise<string | null> {
     const projectPath = encodeProjectPath(config.owner, config.name);
     try {
       const response = await fetchWithTimeout(
@@ -612,7 +620,8 @@ export class GitLabSourceControlProvider implements SourceControlProvider {
   }
 
   async resolveCommit(
-    config: GetRepositoryConfig & { ref: string }
+    config: GetRepositoryConfig & { ref: string },
+    _scope: CredentialScope
   ): Promise<ResolvedCommit | null> {
     const projectPath = encodeProjectPath(config.owner, config.name);
     const response = await this.patFetch(
@@ -630,7 +639,8 @@ export class GitLabSourceControlProvider implements SourceControlProvider {
   }
 
   async listTree(
-    config: GetRepositoryConfig & { commitSha: string; path?: string | null }
+    config: GetRepositoryConfig & { commitSha: string; path?: string | null },
+    _scope: CredentialScope
   ): Promise<RepositoryTree> {
     const projectPath = encodeProjectPath(config.owner, config.name);
     const entries: RepositoryTreeEntry[] = [];
@@ -674,7 +684,8 @@ export class GitLabSourceControlProvider implements SourceControlProvider {
   }
 
   async readBlob(
-    config: GetRepositoryConfig & { blobId: string; maxBytes: number }
+    config: GetRepositoryConfig & { blobId: string; maxBytes: number },
+    _scope: CredentialScope
   ): Promise<Uint8Array> {
     const projectPath = encodeProjectPath(config.owner, config.name);
     const response = await this.patFetch(
@@ -702,14 +713,14 @@ export class GitLabSourceControlProvider implements SourceControlProvider {
   /**
    * Generate authentication for git push operations using the provider PAT.
    */
-  async generatePushAuth(): Promise<GitPushAuthContext> {
+  async generatePushAuth(_scope: CredentialScope): Promise<GitPushAuthContext> {
     return {
       authType: "pat",
       token: this.accessToken,
     };
   }
 
-  async generateCredentialHelperAuth(): Promise<CredentialHelperAuth> {
+  async generateCredentialHelperAuth(_scope: CredentialScope): Promise<CredentialHelperAuth> {
     return {
       username: "oauth2",
       password: this.accessToken,

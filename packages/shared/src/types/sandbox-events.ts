@@ -34,7 +34,8 @@ const tokenUsageDetailsSchema = z
     { message: "Expected at least one token usage count" }
   );
 
-const tokenUsageSchema = z.union([z.number(), tokenUsageDetailsSchema]);
+export const tokenUsageSchema = z.union([z.number(), tokenUsageDetailsSchema]);
+export type TokenUsage = z.infer<typeof tokenUsageSchema>;
 
 /** The steps of a sandbox boot, in the order the supervisor runs them. */
 export const bootPhaseNameSchema = z.enum([
@@ -43,6 +44,7 @@ export const bootPhaseNameSchema = z.enum([
   "setup",
   "start",
   "skills",
+  "memory",
   "harness",
 ]);
 export type BootPhaseName = z.infer<typeof bootPhaseNameSchema>;
@@ -86,16 +88,21 @@ const sandboxEventBaseSchema = z.object({
 const messageSandboxEventBaseSchema = sandboxEventBaseSchema.extend({
   messageId: z.string(),
 });
+const stepIdSchema = z.string().min(1).optional();
+
+export const sandboxGenerationSchema = z.object({
+  sandboxId: z.string().min(1),
+  createdAt: z.number().int().positive(),
+});
 
 // Sandbox events from Modal or synthesized by the control plane.
 export const sandboxEventSchema = z.discriminatedUnion("type", [
   sandboxEventBaseSchema.extend({
     type: z.literal("heartbeat"),
-    status: z.string(),
   }),
   sandboxEventBaseSchema.extend({
-    // Emitted on every sandbox bridge connect (bridge readiness, not vendor
-    // readiness). Present in essentially every session's replay history.
+    // Emitted after the runtime attaches its harness. This is the readiness
+    // signal that moves the sandbox row to `ready`.
     type: z.literal("ready"),
     opencodeSessionId: z.string().nullable().optional(),
     /** Which harness the runtime booted; the session DO warns when it differs from the session's. */
@@ -103,11 +110,24 @@ export const sandboxEventSchema = z.discriminatedUnion("type", [
     // SANDBOX_VERSION of the image this sandbox booted from. Stamped onto any
     // snapshot it produces so a later restore can be gated on it.
     runtimeVersion: z.string().optional(),
+    preservationProtocolVersion: z.literal(1).optional(),
     repositories: z.array(sessionDiffBaselineRepositorySchema).optional(),
+  }),
+  sandboxEventBaseSchema.extend({
+    type: z.literal("sandbox_generation_ready"),
+    generation: sandboxGenerationSchema,
+  }),
+  sandboxEventBaseSchema.extend({
+    type: z.literal("preservation_prepared"),
+    operationId: z.string().min(1),
+    generation: sandboxGenerationSchema,
+    executionStopped: z.boolean(),
+    error: z.string().optional(),
   }),
   messageSandboxEventBaseSchema.extend({
     type: z.literal("token"),
     content: z.string(),
+    partId: z.string().min(1).optional(),
   }),
   messageSandboxEventBaseSchema.extend({
     type: z.literal("tool_call"),
@@ -116,18 +136,23 @@ export const sandboxEventSchema = z.discriminatedUnion("type", [
     callId: z.string(),
     status: z.string().optional(),
     output: z.string().optional(),
+    truncated: z
+      .object({ fields: z.array(z.string()), originalBytes: z.number().int().nonnegative() })
+      .optional(),
     isSubtask: z.boolean().optional(),
     childSessionId: z.string().optional(),
     taskCallId: z.string().optional(),
   }),
   messageSandboxEventBaseSchema.extend({
     type: z.literal("step_start"),
+    stepId: stepIdSchema,
     isSubtask: z.boolean().optional(),
     childSessionId: z.string().optional(),
     taskCallId: z.string().optional(),
   }),
   messageSandboxEventBaseSchema.extend({
     type: z.literal("step_finish"),
+    stepId: stepIdSchema,
     /** Cost of this step alone; absent when the runtime could not price it. */
     cost: z.number().nullable().optional(),
     /** Cumulative reported cost of the whole turn so far; idempotent on resend. */

@@ -1,0 +1,78 @@
+---
+title: Integrations
+description: How Slack, GitHub, Linear, and inbound automations start and continue OpenInspect sessions, and the rules they all share.
+audience: user
+owner: integrations
+status: published
+lastReviewed: "2026-10-03"
+relatedCode:
+  - docs/integrations/SLACK.md
+  - docs/integrations/GITHUB.md
+  - docs/integrations/LINEAR.md
+  - docs/HOW_IT_WORKS.md
+  - docs/AUTH.md
+  - packages/control-plane/src/routes/channel-bindings.ts
+  - packages/control-plane/src/routes/github-route.ts
+  - packages/control-plane/src/routes/team-ownership.ts
+  - packages/control-plane/src/authorization/teams-enforcement.ts
+---
+
+OpenInspect sessions can be started from Slack, from a GitHub pull request, from a Linear issue, or by an automation, and every one of them is the same kind of session you would start from the web app.
+
+![Settings, Integrations: GitHub Bot, Linear Agent, Code Server, VNC Desktop, and Slack entries](/images/integrations/integrations-list.webp "Settings › Integrations. Open an entry to configure its connection and behavior.")
+
+The **Code Server** and **VNC Desktop** entries on the same list are not chat integrations: they turn on the in-browser editor and remote desktop inside sessions. See [Sandbox tools](/sessions/sandbox-tools) for using them and [Sandbox settings](/configure/sandbox-settings) for their ports and scopes.
+
+## Choose an entry point
+
+| Integration                                                       | Start work                                                                                                              | Continue                                                                                                     | Where results appear                                                                       | Authorization                                                                                                              |
+| ----------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------- |
+| [Slack](/integrations/slack)                                      | `@mention` the bot in a channel, or send it a DM                                                                        | Authorized follow-ups in the same Slack thread (mapping lasts about 7 days)                                  | Completion in the thread when publication is allowed; full output in the web session       | Installation access plus channel bindings, scoped catalogs, team membership and grants for team-owned launches             |
+| [GitHub](/integrations/github)                                    | Open a non-draft PR (deprecated workspace auto-review), or `@mention` in a PR comment or review thread                  | Mentions create new sessions; PR Feedback Autofix can resume the session that created a PR                   | Reviews, comments, and thread replies written by the agent                                 | Installation, **Repository Scope**, **Allowed Trigger Users**, and routed-team creation checks                             |
+| [Linear](/integrations/linear)                                    | `@mention` or assign the Linear Agent on an issue                                                                       | Authorized follow-ups through the same active Linear Agent session                                           | Activities and links, subject to completion delivery checks                                | Source-control access, **Repository Scope**, Linear team bindings, and OpenInspect membership and grants for team launches |
+| [Inbound webhooks and automations](/automations/inbound-webhooks) | A schedule, an inbound webhook, a GitHub event, a matching Slack channel message, or a Sentry alert fires an automation | Slack message automations continue in the triggering thread for 7 days; other triggers start a run per event | The session in the web app; Slack message automations also post into the triggering thread | The automation's own conditions (for example a Slack User allowlist) and the same repository boundary as everything else   |
+
+There are no slash commands in Slack or GitHub, and there is no browser extension. Slack requests in channels need an `@mention`, and GitHub requests need the bot's full username including `[bot]`.
+
+## Rules every integration shares
+
+Slack channels and Linear teams can be bound to an OpenInspect team; GitHub mentions use linked-PR ownership or sender membership routing. GitHub event automations keep their saved owning team. These ownership rules do not grant access to existing sessions. `TEAMS_ENFORCEMENT` remains `shadow` by default, not `on`, so do not assume full team-read isolation. See each integration's guide for its enforced creation and publication checks.
+
+| Rule                                       | What it means                                                                                                                                                                                                                                                                                                                                                                                        | What to do                                                                                                                                              |
+| ------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Installation scope is the outer boundary   | The source-control installation limits available repositories. Team repository grants and scoped catalogs further constrain team-owned work; these are not per-user GitHub repository lists.                                                                                                                                                                                                         | Install the App only on intended repositories and configure team grants. GitHub and Linear **Repository Scope** settings add integration-level filters. |
+| Trigger gates do not grant team membership | GitHub checks repository permission or an explicit user list. Slack channel membership and Linear workspace access alone do not grant OpenInspect team membership. Team-owned session creation checks the acting identity and target grants as well as workspace permissions.                                                                                                                        | Manage trigger settings, team membership, grants, and [workspace access](/administration/workspace-access) separately.                                  |
+| External text is marked untrusted          | The text that invokes the bot is the request and the agent acts on it: the Slack message or forwarded message, the GitHub comment that mentions the bot, or the Linear issue. Surrounding context, such as earlier thread messages and PR titles and descriptions, is passed as background and wrapped as untrusted input. See [Security](/administration/security#untrusted-input-in-integrations). | Do not put secrets in issues, comments, or Slack messages: their text reaches the agent.                                                                |
+| The web session is the source of truth     | Slack, GitHub, and Linear show acknowledgements, short completion summaries, and links. Live output, tool calls, file changes, artifacts, and the option to take over live in the [session page](/sessions/session-page).                                                                                                                                                                            | Open the session in the web app to follow progress or step in.                                                                                          |
+| Harness depends on the entry point         | Slack, GitHub, and Linear sessions run on the OpenCode harness. Automations run on the harness chosen on the automation.                                                                                                                                                                                                                                                                             | To run on Claude Agent from a trigger, use an [automation](/automations) and pick the harness in its editor.                                            |
+
+## Guides
+
+<Cards>
+  <Card
+    title="Slack"
+    href="/integrations/slack"
+    description="Start from a channel or DM, pick a target, continue in the thread, and let agents post updates."
+  />
+  <Card
+    title="GitHub"
+    href="/integrations/github"
+    description="Automatic PR reviews, @mention actions, PR Feedback Autofix, and the GitHub bot settings."
+  />
+  <Card
+    title="Linear"
+    href="/integrations/linear"
+    description="Mention or assign the Linear Agent on an issue and follow progress from Linear."
+  />
+  <Card
+    title="Inbound webhooks"
+    href="/automations/inbound-webhooks"
+    description="Start sessions from any system that can send an HTTP request."
+  />
+</Cards>
+
+## Next steps
+
+- [Set up the Slack integration for your team](/integrations/slack)
+- [Configure the GitHub bot and PR Feedback Autofix](/integrations/github)
+- [Trigger sessions from GitHub events](/automations/github-events)

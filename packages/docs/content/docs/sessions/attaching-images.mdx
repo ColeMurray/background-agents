@@ -1,0 +1,89 @@
+---
+title: Attaching images to prompts
+description: Send screenshots and other images to the agent from the web composer or Slack, within the supported formats and limits.
+audience: user
+owner: web
+status: published
+lastReviewed: "2026-09-23"
+relatedCode:
+  - packages/shared/src/types/session-attachments.ts
+  - packages/web/src/hooks/use-session-attachments.ts
+  - packages/web/src/components/attachment-preview-strip.tsx
+  - packages/web/src/components/session-prompt-composer.tsx
+  - docs/integrations/SLACK.md
+---
+
+You can attach images to a prompt so the agent can see a screenshot, a design, or an error dialog instead of reading a description of it.
+
+## Limits
+
+| Rule               | Value                                  |
+| ------------------ | -------------------------------------- |
+| Formats            | PNG, JPEG, WebP, GIF                   |
+| Images per message | Up to 6                                |
+| Size per image     | 10 MiB (the UI rounds this to "10 MB") |
+
+The same limits apply to the web composer, Slack, and forwarded Slack messages.
+
+## From the web composer
+
+1. In the new-session composer or a session's prompt composer, click **Attach images**.
+2. Pick one or more files. Each accepted image appears as a thumbnail in the preview strip below the composer.
+3. Hover a thumbnail and click **Remove** to drop it before sending.
+4. Write your prompt and send it. The images are uploaded with the message and stored with the session.
+
+Files that do not pass the checks are skipped with a message next to the composer:
+
+- `<name> is not a supported image` for anything other than PNG, JPEG, WebP, or GIF
+- `<name> is too large (images must be under 10 MB)`
+- `You can attach up to 6 files per message` once the strip is full
+
+## From Slack
+
+Attach PNG, JPEG, WebP, or GIF images to:
+
+- a direct message to the bot,
+- a channel request that `@mentions` the bot,
+- an interactive thread follow-up (in a channel, the follow-up must also `@mention` the bot).
+
+You can include instructions with the images or send images alone. Forwarding (sharing) another Slack message to the bot also carries that message's images, under the same six-image and 10 MiB limits.
+
+If only some images can be read, the rest of the message still reaches the agent and the bot posts a warning in the thread. If an image-only request loses every image, no session is started.
+
+Requirements on the Slack app side:
+
+- the `files:read` bot scope, and a reinstall after the scope was added;
+- `channels:history` (public channels) or `groups:history` (private channels), so the bot can recover file details Slack omits from mention events.
+
+See [Slack](/integrations/slack) for the full setup.
+
+## How the agent uses images
+
+Images are delivered to the agent as part of the prompt, so it can read text in a screenshot, match a design, or locate the element you are pointing at. A typical use:
+
+```text
+This is a screenshot of the checkout page after clicking Pay. Fix the visible error and
+reproduce the page in the browser to confirm it is gone.
+```
+
+The agent can capture its own screenshots and upload them as session media; they appear in the timeline and under **Media** in the right sidebar, where you can compare them with what you sent. See [Reviewing changes](/sessions/reviewing-changes).
+
+## What is not supported
+
+- Non-image files (PDFs, logs, archives). Paste text content into the prompt instead, or commit the file to the repository.
+- Remote files hosted outside Slack; only files uploaded to Slack are forwarded.
+- Attachments on Slack automation triggers. A Slack Message automation starts on the message text alone; the attachment is not forwarded.
+
+## Troubleshooting
+
+| Symptom                                       | Cause                                                                                                      | Fix                                                                                                                                          |
+| --------------------------------------------- | ---------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
+| The composer rejects the file                 | Unsupported type, over 10 MiB, or the message already has 6 images                                         | Convert to PNG, JPEG, WebP, or GIF; export a smaller image; or send the rest in a follow-up.                                                 |
+| A Slack image never reached the agent         | Missing `files:read`, the app was not reinstalled after adding it, or the channel history scope is missing | Add `files:read` (and `channels:history` or `groups:history`), reinstall the app, and resend. Check the warning the bot posts in the thread. |
+| A channel follow-up with an image was ignored | Channel follow-ups with images need an `@mention`                                                          | Mention the bot in the same thread and attach the image again.                                                                               |
+
+## Next steps
+
+- [Writing prompts](/prompting/writing-prompts)
+- [Slack](/integrations/slack)
+- [Session page](/sessions/session-page)

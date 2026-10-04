@@ -2,19 +2,20 @@
 
 from __future__ import annotations
 
-import asyncio
 import hashlib
 import json
 import os
 import re
 import shutil
-import uuid
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from typing import TYPE_CHECKING, Any
 from urllib.parse import quote
 
 import httpx
+
+from .control_plane_fetch import ResponseTooLargeError, fetch_bounded
+from .durable_files import atomic_write_private, fsync_directory
 
 if TYPE_CHECKING:
     from collections.abc import Iterable, Mapping, Sequence
@@ -31,8 +32,6 @@ MAX_SKILL_PATH_DEPTH = 10
 MAX_MANAGED_SKILL_MANIFEST_BYTES = 5 * 1024 * 1024
 MAX_MANAGED_SKILL_RESPONSE_BYTES = 32 * 1024 * 1024
 MANAGED_SKILLS_FETCH_TIMEOUT_SECONDS = 15.0
-MANAGED_SKILLS_REQUEST_ATTEMPTS = 3
-MANAGED_SKILLS_RETRY_BASE_SECONDS = 0.25
 # Skills per request. Per-file JSON framing does not count against the manifest's
 # content aggregate, so a wide manifest can exceed a single response's ceiling
 # even while passing resolution. Requesting a fixed window keeps every response
@@ -120,46 +119,23 @@ class ManagedSkillsClient:
             if cursor is not None:
                 query += f"&cursor={quote(cursor, safe='')}"
             url = f"{url}?{query}"
-        last_error: Exception | None = None
-        for attempt in range(MANAGED_SKILLS_REQUEST_ATTEMPTS):
-            try:
-                async with (
-                    httpx.AsyncClient(transport=self._transport) as client,
-                    client.stream(
-                        "GET",
-                        url,
-                        headers=self._headers,
-                        timeout=MANAGED_SKILLS_FETCH_TIMEOUT_SECONDS,
-                    ) as response,
-                ):
-                    response.raise_for_status()
-                    chunks: list[bytes] = []
-                    size = 0
-                    async for chunk in response.aiter_bytes():
-                        size += len(chunk)
-                        if size > MAX_MANAGED_SKILL_RESPONSE_BYTES:
-                            raise ManagedSkillsError(
-                                "managed skills installation exceeds the size limit",
-                                code="installation_too_large",
-                            )
-                        chunks.append(chunk)
-                    return b"".join(chunks)
-            except ManagedSkillsError:
-                raise
-            except (httpx.HTTPError, OSError) as error:
-                last_error = error
-                if not _retryable_error(error) or attempt == MANAGED_SKILLS_REQUEST_ATTEMPTS - 1:
-                    break
-                await asyncio.sleep(MANAGED_SKILLS_RETRY_BASE_SECONDS * (2**attempt))
-        raise ManagedSkillsError(
-            f"failed to fetch managed skills: {last_error}", code="fetch_failed"
-        ) from last_error
-
-
-def _retryable_error(error: Exception) -> bool:
-    if isinstance(error, httpx.HTTPStatusError):
-        return error.response.status_code in {408, 429} or error.response.status_code >= 500
-    return isinstance(error, (httpx.TransportError, OSError))
+        try:
+            return await fetch_bounded(
+                url,
+                headers=self._headers,
+                max_bytes=MAX_MANAGED_SKILL_RESPONSE_BYTES,
+                timeout_seconds=MANAGED_SKILLS_FETCH_TIMEOUT_SECONDS,
+                transport=self._transport,
+            )
+        except ResponseTooLargeError as error:
+            raise ManagedSkillsError(
+                "managed skills installation exceeds the size limit",
+                code="installation_too_large",
+            ) from error
+        except (httpx.HTTPError, OSError) as error:
+            raise ManagedSkillsError(
+                f"failed to fetch managed skills: {error}", code="fetch_failed"
+            ) from error
 
 
 def _require_object(value: Any, keys: set[str], context: str) -> Mapping[str, Any]:
@@ -315,14 +291,16 @@ def validate_installation_page(
                 )
             paths.add(path)
             content = _require_string(file["content"], "skill file content", allow_empty=True)
-            content_bytes = content.encode("utf-8")
+            file_content_bytes = content.encode("utf-8")
             size_bytes = _require_int(file["sizeBytes"], "skill file size")
-            if len(content_bytes) > MAX_SKILL_FILE_BYTES or size_bytes != len(content_bytes):
+            if len(file_content_bytes) > MAX_SKILL_FILE_BYTES or size_bytes != len(
+                file_content_bytes
+            ):
                 raise ManagedSkillsError(
                     f"invalid size for skill file {path}", code="installation_invalid"
                 )
             digest = _validate_sha256(file["sha256"], "skill file SHA-256")
-            if not hashlib.sha256(content_bytes).hexdigest() == digest:
+            if not hashlib.sha256(file_content_bytes).hexdigest() == digest:
                 raise ManagedSkillsError(
                     f"SHA-256 mismatch for skill file {path}", code="hash_mismatch"
                 )
@@ -335,7 +313,7 @@ def validate_installation_page(
                 raise ManagedSkillsError(
                     f"executable skill file must be under scripts/: {path}", code="path_invalid"
                 )
-            revision_bytes += len(content_bytes)
+            revision_bytes += len(file_content_bytes)
             files.append(ManagedSkillFile(path, content, digest, size_bytes, executable))
         if "SKILL.md" not in paths:
             raise ManagedSkillsError(
@@ -420,7 +398,7 @@ class ManagedSkillsMaterializer:
             backup.rename(self.destination)
         self._remove_path(staging)
         journal.unlink(missing_ok=True)
-        self._fsync_directory(self.destination.parent)
+        fsync_directory(self.destination.parent)
 
     @staticmethod
     def _skill_names(skill_dir: Path) -> set[str]:
@@ -474,31 +452,6 @@ class ManagedSkillsMaterializer:
                 for name in self._skill_names(child) & selected:
                     found.setdefault(name, set()).add(child)
         return found
-
-    @staticmethod
-    def _write_journal(journal: Path) -> None:
-        journal.parent.mkdir(parents=True, exist_ok=True)
-        temporary = journal.with_name(f".{journal.name}.{uuid.uuid4().hex}.tmp")
-        temporary.write_text("", encoding="utf-8")
-        ManagedSkillsMaterializer._fsync_file(temporary)
-        temporary.replace(journal)
-        ManagedSkillsMaterializer._fsync_directory(journal.parent)
-
-    @staticmethod
-    def _fsync_file(path: Path) -> None:
-        descriptor = os.open(path, os.O_RDONLY)
-        try:
-            os.fsync(descriptor)
-        finally:
-            os.close(descriptor)
-
-    @staticmethod
-    def _fsync_directory(path: Path) -> None:
-        descriptor = os.open(path, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
-        try:
-            os.fsync(descriptor)
-        finally:
-            os.close(descriptor)
 
     @staticmethod
     def _write_file(path: Path, file: ManagedSkillFile) -> None:
@@ -558,15 +511,15 @@ class ManagedSkillsMaterializer:
         an installed destination when present, or restores the backup otherwise.
         """
         parent = self.destination.parent
-        self._write_journal(journal)
+        atomic_write_private(journal, "")
         if self.destination.exists():
             self.destination.rename(backup)
-            self._fsync_directory(parent)
+            fsync_directory(parent)
         staging.rename(self.destination)
-        self._fsync_directory(parent)
+        fsync_directory(parent)
         self._remove_path(backup)
         journal.unlink(missing_ok=True)
-        self._fsync_directory(parent)
+        fsync_directory(parent)
 
     def _abort_staging(self, staging: Path, backup: Path, journal: Path) -> None:
         if not self.destination.exists() and backup.exists():

@@ -1,6 +1,6 @@
 import { createKvCacheStore } from "@open-inspect/shared/cache-store";
 import { z } from "zod";
-import { resolvedTurnPlanSchema } from "../inline-flags";
+import { resolvedTurnPlanSchema, sessionLaunchPlanSchema } from "../inline-flags";
 import type { Env } from "../types";
 
 const PENDING_REQUEST_TTL_MS = 60 * 60 * 1000;
@@ -38,6 +38,7 @@ const classificationSchema = z.object({
 const pendingRequestDataSchema = z.object({
   message: z.string().min(1),
   userId: z.string().min(1),
+  teamId: z.string().min(1).nullable().optional(),
   /** Present when `message` still needs sender attribution before delivery. */
   unattributedPrompt: unattributedPromptSchema.optional(),
   previousMessages: z.array(z.string()).optional(),
@@ -50,6 +51,9 @@ const pendingRequestDataSchema = z.object({
   sourceMessage: sourceMessageSchema.optional(),
   /** Coordinates used to re-fetch prior images without persisting Slack URLs. */
   threadContextSource: threadContextSourceSchema.optional(),
+  /** Model settings the deferred launch should use, revalidated at launch. */
+  launchPlan: sessionLaunchPlanSchema.optional(),
+  /** Superseded by `launchPlan`; still read so in-flight records survive a deploy. */
   turnPlan: resolvedTurnPlanSchema.optional(),
   /** Classifier provenance retained until the user resolves clarification. */
   classification: classificationSchema.optional(),
