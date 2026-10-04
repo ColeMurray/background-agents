@@ -9,7 +9,22 @@ Slack uses, to pick the model and reasoning effort for that session. Upgrade the
 control plane together. See
 [GitHub integration](docs/integrations/GITHUB.md#model-and-reasoning-overrides).
 
+## October 3, 2026
+
+**Persistent memory.** Personal, repository, and environment memories carry facts and directives
+between sessions. Agents in both harnesses search, read, and propose memories, and writes outside a
+private session wait for approval. Manage memories under **Settings > Memories**; each session's
+sidebar lists the memories it loaded. Requires D1 migration 0084 and a sandbox image rebuild. See
+[Persistent session memory](docs/MEMORY.md).
+
 ## October 2, 2026
+
+**Analytics redesign.** The analytics page is now an overview plus Usage, Cost, Pull requests, and
+People tabs. The range, scope, and tab are kept in the URL. A new **Session origins** breakdown
+shows where sessions start and who they are attributed to.
+
+**Saved prompt drafts.** Unsent prompts survive page reloads. Each session and the new-session
+composer keep their own draft.
 
 **Teams.** Group members into teams that own sessions, environments, automations, and secrets, with
 repository grants and Slack and Linear channel bindings managed from **Settings > Teams**. GitHub
@@ -27,6 +42,10 @@ default.
 **Brokered credentials for Modal restores.** Restored Modal sandboxes now fetch git credentials from
 the control plane like fresh ones, so Modal no longer needs the `github-app` secret. You can delete
 it after upgrading.
+
+**Session page redesign.** The session sidebar is split into Info, Changes, Tasks, and Tools tabs,
+with captured media under **Artifacts** in Info. Changed files open in the main column beside the
+sidebar, which leaves room for split diffs.
 
 ## September 28, 2026
 
