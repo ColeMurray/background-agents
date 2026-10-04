@@ -84,9 +84,9 @@ describe("memory mutations", () => {
   it.each([
     [undefined, {}],
     ["   ", {}],
-    [" Outdated ", { reason: "Outdated" }],
-  ])("fences lifecycle actions and sends reason %j as %j", async (reason, expected) => {
-    await applyMemoryAction(record, "archive", reason);
+    [" Outdated ", { archiveNote: "Outdated" }],
+  ])("fences lifecycle actions and sends note %j as %j", async (note, expected) => {
+    await applyMemoryAction(record, "archive", note);
     const { path, init, body } = lastRequest();
     expect(path).toBe("/api/memories/mem%2Fa/archive");
     expect(init.headers).toEqual({ "Content-Type": "application/json", "If-Match": "rev_a" });

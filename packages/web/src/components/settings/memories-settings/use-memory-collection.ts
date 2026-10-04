@@ -2,7 +2,7 @@ import { useState } from "react";
 import { useSearchParams } from "next/navigation";
 import {
   MEMORY_LIST_PAGE_SIZE,
-  memoryScopeKey,
+  memoryScopeDisplayKey,
   type MemoryDto,
   type MemoryScope,
   type MemoryStatus,
@@ -23,7 +23,7 @@ export function useMemoryCollection(scope: MemoryScope) {
   const records: MemoryDto[] =
     focusedRecord &&
     focusedRecord.status === status &&
-    memoryScopeKey(focusedRecord.scope) === memoryScopeKey(scope) &&
+    memoryScopeDisplayKey(focusedRecord.scope) === memoryScopeDisplayKey(scope) &&
     !page.memories.some((record) => record.id === focusedRecord.id)
       ? [focusedRecord, ...page.memories]
       : page.memories;

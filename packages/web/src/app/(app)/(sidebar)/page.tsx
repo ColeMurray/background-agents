@@ -59,7 +59,7 @@ import {
 } from "@/hooks/use-managed-skills";
 import type { SessionTargetRequestFields } from "@/lib/session-target";
 import { useMemoryPreferences, useMemoryPreview } from "@/hooks/use-memories";
-import { PersonalMemoryControl } from "@/components/personal-memory-control";
+import { SessionMemoryControls } from "@/components/session-memory-controls";
 import {
   includePersonalMemoriesInput,
   memoryPreviewInput,
@@ -517,7 +517,7 @@ export default function Home() {
       skillSelection={skillSelection}
       setSkillSelection={setSkillSelection}
       memoryControls={
-        <PersonalMemoryControl
+        <SessionMemoryControls
           choice={personalMemoryChoice}
           savedDefault={memoryPreferences.preferences?.includePersonalMemories}
           disabled={creating}
@@ -525,7 +525,8 @@ export default function Home() {
             if (!submitInFlightRef.current) setPersonalMemoryChoice(choice);
           }}
           preview={memoryPreview.preview}
-          loading={memoryPreferences.loading}
+          preferencesLoading={memoryPreferences.loading}
+          previewLoading={memoryPreview.loading}
           error={memoryPreferences.error || memoryPreview.error}
           onRetry={() => {
             void memoryPreferences.mutate();

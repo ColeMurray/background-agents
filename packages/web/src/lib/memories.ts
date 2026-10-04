@@ -32,7 +32,7 @@ export const MEMORY_STATUS_LABELS: Record<MemoryStatus, string> = {
 };
 
 export const MEMORY_ARCHIVE_KIND_LABELS: Record<MemoryArchiveKind, string> = {
-  archived: "Archived",
+  manual: "Archived manually",
   rejected: "Rejected",
   superseded: "Superseded",
 };

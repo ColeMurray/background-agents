@@ -32,7 +32,7 @@ export function MemoryCard({
   busy: boolean;
   canCreate: boolean;
   onPanelChange: (panel: MemoryPanel) => void;
-  onAction: (action: MemoryAction, reason?: string) => void;
+  onAction: (action: MemoryAction, archiveNote?: string) => void;
   onRestoreRevision: (content: MemoryContent) => void;
 }) {
   const archiving = panel.kind === "archive" && panel.memoryId === record.id ? panel : null;
@@ -117,7 +117,7 @@ export function MemoryCard({
             disabled={busy}
             onClick={() =>
               action === "archive"
-                ? onPanelChange({ kind: "archive", memoryId: record.id, reason: "" })
+                ? onPanelChange({ kind: "archive", memoryId: record.id, archiveNote: "" })
                 : onAction(action)
             }
           >
@@ -138,11 +138,11 @@ export function MemoryCard({
       {archiving && (
         <div className="space-y-2">
           <label className="text-sm">
-            Archive reason (optional)
+            Archive note (optional)
             <Input
-              value={archiving.reason}
+              value={archiving.archiveNote}
               maxLength={MEMORY_LIMITS.archiveNote}
-              onChange={(event) => onPanelChange({ ...archiving, reason: event.target.value })}
+              onChange={(event) => onPanelChange({ ...archiving, archiveNote: event.target.value })}
             />
           </label>
           <p className="text-xs text-muted-foreground">
@@ -153,7 +153,7 @@ export function MemoryCard({
             type="button"
             size="sm"
             disabled={busy}
-            onClick={() => onAction("archive", archiving.reason)}
+            onClick={() => onAction("archive", archiving.archiveNote)}
           >
             Confirm archive
           </Button>

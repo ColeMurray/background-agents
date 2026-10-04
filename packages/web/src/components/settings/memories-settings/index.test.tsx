@@ -161,7 +161,7 @@ describe("memory management", () => {
     );
   });
 
-  it("asks for an archive reason in a single panel that other panels replace", async () => {
+  it("asks for an archive note in a single panel that other panels replace", async () => {
     mocks.records = [record];
     render(<MemoriesSettings />);
     fireEvent.click(screen.getByText("Archive"));
@@ -170,7 +170,7 @@ describe("memory management", () => {
     expect(screen.getByText("Edit memory")).toBeTruthy();
     fireEvent.click(screen.getByText("Archive"));
     expect(screen.queryByText("Edit memory")).toBeNull();
-    fireEvent.change(screen.getByLabelText(/Archive reason/), { target: { value: "Outdated" } });
+    fireEvent.change(screen.getByLabelText(/Archive note/), { target: { value: "Outdated" } });
     fireEvent.click(screen.getByText("Confirm archive"));
     await waitFor(() =>
       expect(mocks.applyMemoryAction).toHaveBeenCalledWith(record, "archive", "Outdated")

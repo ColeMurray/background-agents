@@ -32,8 +32,8 @@ export function MemoriesSection({ sessionId }: { sessionId: string }) {
             <p className="text-muted-foreground">
               {memoryScopeLabel(item.scope)} · {MEMORY_TYPE_LABELS[item.memoryType].label} · r
               {item.revisionNumber} · {MEMORY_INCLUSION_LABELS[item.inclusion]}
-              {item.changed ? " · revised since start" : ""}
-              {item.archived ? " · archived" : ""}
+              {item.revisedSinceSelection ? " · revised since start" : ""}
+              {item.archivedSinceSelection ? " · archived" : ""}
             </p>
           </div>
         ))}

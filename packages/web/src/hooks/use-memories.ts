@@ -2,16 +2,17 @@ import useSWR from "swr";
 import { z } from "zod";
 import {
   MEMORY_LIST_PAGE_SIZE,
+  memoryActionAcceptsNote,
   memoryListResponseSchema,
   memoryPreferencesSchema,
   memoryResponseSchema,
   memoryRevisionsResponseSchema,
   memoryScopeToSearchParams,
-  sessionMemoryDiagnosticsSchema,
-  sessionMemoryManifestSchema,
+  memorySelectionSummarySchema,
+  sessionMemorySelectionStatusSchema,
   type CreateMemoryInput,
   type MemoryAction,
-  type MemoryActionInput,
+  type MemoryActionBody,
   type MemoryContent,
   type MemoryDto,
   type MemoryPreferences,
@@ -109,7 +110,7 @@ export function useMemoryPreferences() {
 export function useSessionMemories(sessionId: string) {
   const { data, isLoading, error } = useSWR(
     `/api/sessions/${encodeURIComponent(sessionId)}/memories` as const,
-    (path) => apiRequest(path, sessionMemoryDiagnosticsSchema),
+    (path) => apiRequest(path, sessionMemorySelectionStatusSchema),
     { refreshInterval: SESSION_MEMORIES_REFRESH_INTERVAL_MS }
   );
   return { diagnostics: data, loading: isLoading, error };
@@ -121,7 +122,7 @@ export function useMemoryPreview(input: MemoryPreviewInput | null) {
   const { data, isLoading, error, mutate } = useSWR(
     session && input ? ([`${MEMORIES_KEY}/preview`, input] as const) : null,
     ([path, body]) =>
-      apiRequest(path, sessionMemoryManifestSchema, { method: "POST", body: JSON.stringify(body) })
+      apiRequest(path, memorySelectionSummarySchema, { method: "POST", body: JSON.stringify(body) })
   );
   return { preview: data, loading: isLoading, error, mutate };
 }
@@ -162,13 +163,15 @@ export async function reviseMemory(
   ).memory;
 }
 
+/** Apply a lifecycle action; an archive note is sent only with actions that archive. */
 export async function applyMemoryAction(
   record: ReviewedMemory,
   action: MemoryAction,
-  reason?: string
+  archiveNote?: string
 ): Promise<MemoryDto> {
-  const trimmedReason = reason?.trim();
-  const body: MemoryActionInput = trimmedReason ? { reason: trimmedReason } : {};
+  const note = archiveNote?.trim();
+  const body: MemoryActionBody =
+    note && memoryActionAcceptsNote(action) ? { archiveNote: note } : {};
   return (
     await apiRequest(`${memoryPath(record.id)}/${action}`, memoryResponseSchema, {
       method: "POST",

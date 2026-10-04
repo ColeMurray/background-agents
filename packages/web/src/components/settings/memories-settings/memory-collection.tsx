@@ -23,7 +23,7 @@ export type MemoryPanel =
   | { kind: "none" }
   | { kind: "create"; supersedesMemoryId?: string }
   | { kind: "edit"; record: MemoryDto }
-  | { kind: "archive"; memoryId: string; reason: string }
+  | { kind: "archive"; memoryId: string; archiveNote: string }
   | { kind: "history"; memoryId: string };
 
 const NO_PANEL: MemoryPanel = { kind: "none" };
@@ -146,8 +146,8 @@ export function MemoryCollection({ scope }: { scope: MemoryScope }) {
           busy={busy}
           canCreate={collection.canCreate}
           onPanelChange={changePanel}
-          onAction={(action: MemoryAction, reason?: string) =>
-            void run(() => applyMemoryAction(record, action, reason))
+          onAction={(action: MemoryAction, archiveNote?: string) =>
+            void run(() => applyMemoryAction(record, action, archiveNote))
           }
           onRestoreRevision={(content) => void run(() => reviseMemory(record, content), panel)}
         />

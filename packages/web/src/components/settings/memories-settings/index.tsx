@@ -4,7 +4,7 @@ import { useId, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import {
   memoryScopeFromSearchParams,
-  memoryScopeKey,
+  memoryScopeDisplayKey,
   type MemoryScope,
 } from "@open-inspect/shared/types/memories";
 import { setMemoryPreferences, useMemoryPreferences } from "@/hooks/use-memories";
@@ -112,10 +112,10 @@ export function SharedMemoriesSettings() {
         </p>
       </div>
       <Select
-        value={scope ? memoryScopeKey(scope) : ""}
+        value={scope ? memoryScopeDisplayKey(scope) : ""}
         onValueChange={(key) =>
           setSelection(
-            options.find((option) => memoryScopeKey(option.scope) === key)?.scope ?? null
+            options.find((option) => memoryScopeDisplayKey(option.scope) === key)?.scope ?? null
           )
         }
       >
@@ -124,7 +124,7 @@ export function SharedMemoriesSettings() {
         </SelectTrigger>
         <SelectContent>
           {options.map((option) => {
-            const key = memoryScopeKey(option.scope);
+            const key = memoryScopeDisplayKey(option.scope);
             return (
               <SelectItem key={key} value={key}>
                 {option.label}
@@ -138,7 +138,7 @@ export function SharedMemoriesSettings() {
         <p role="alert">Some memory scopes could not be loaded.</p>
       )}
       {scope ? (
-        <MemoryCollection key={memoryScopeKey(scope)} scope={scope} />
+        <MemoryCollection key={memoryScopeDisplayKey(scope)} scope={scope} />
       ) : (
         <p className="text-sm text-muted-foreground">Select a scope to view its memories.</p>
       )}

@@ -1,7 +1,7 @@
 "use client";
 
 import { useId } from "react";
-import { MEMORY_TYPES, type SessionMemoryManifest } from "@open-inspect/shared/types/memories";
+import { MEMORY_TYPES, type MemorySelectionSummary } from "@open-inspect/shared/types/memories";
 import {
   MEMORY_TYPE_LABELS,
   PERSONAL_MEMORY_DISCLOSURE,
@@ -24,7 +24,7 @@ function personalMemoryChecked(
   }
 }
 
-function previewSummary(preview: SessionMemoryManifest): string {
+function previewSummary(preview: MemorySelectionSummary): string {
   const counts = MEMORY_TYPES.map((type) => {
     const count = preview.items.filter((item) => item.memoryType === type).length;
     return `${count} ${MEMORY_TYPE_LABELS[type].plural}`;
@@ -33,13 +33,17 @@ function previewSummary(preview: SessionMemoryManifest): string {
   return `${counts.join(", ")} will load · about ${preview.estimatedTokens.toLocaleString()} tokens${omitted}`;
 }
 
-/** Override the saved personal-memory default for one session and preview what will load. */
-export function PersonalMemoryControl({
+/**
+ * Memory controls for a new session: override the saved personal-memory default, and preview
+ * everything that will load (directives and facts from every scope, not only personal ones).
+ */
+export function SessionMemoryControls({
   choice,
   savedDefault,
   onChange,
   preview,
-  loading,
+  preferencesLoading,
+  previewLoading,
   error,
   onRetry,
   disabled = false,
@@ -47,8 +51,9 @@ export function PersonalMemoryControl({
   choice: PersonalMemoryChoice;
   savedDefault: boolean | undefined;
   onChange: (choice: PersonalMemoryChoice) => void;
-  preview?: SessionMemoryManifest;
-  loading: boolean;
+  preview?: MemorySelectionSummary;
+  preferencesLoading: boolean;
+  previewLoading: boolean;
   error?: unknown;
   onRetry?: () => void;
   disabled?: boolean;
@@ -73,7 +78,7 @@ export function PersonalMemoryControl({
             ? PERSONAL_MEMORY_DISCLOSURE
             : "Personal memories will not be loaded or available to memory tools."}
       </p>
-      {loading ? (
+      {preferencesLoading ? (
         <p>Loading memory preferences…</p>
       ) : error ? (
         <p role="alert">
@@ -84,6 +89,8 @@ export function PersonalMemoryControl({
             </button>
           )}
         </p>
+      ) : previewLoading ? (
+        <p>Loading memory preview…</p>
       ) : preview ? (
         <p>{previewSummary(preview)}</p>
       ) : null}
