@@ -13,8 +13,9 @@ control plane together. See
 
 **Persistent memory.** Personal, repository, and environment memories carry facts and directives
 between sessions. Agents in both harnesses search, read, and propose memories, and writes outside a
-private session wait for approval. Manage memories under **Settings > Memories**; each session's
-sidebar lists the memories it loaded. Requires D1 migration 0084 and a sandbox image rebuild. See
+private session wait for approval. Manage personal memories under **Settings > Memories** and
+repository and environment memories under **Settings > Shared memories**; each session's sidebar
+lists the memories it loaded. Requires D1 migration 0084 and a sandbox image rebuild. See
 [Persistent session memory](docs/MEMORY.md).
 
 ## October 2, 2026
