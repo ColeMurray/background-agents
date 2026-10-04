@@ -10,6 +10,7 @@ import { buildCodeReviewPrompt, buildCommentActionPrompt } from "./prompts";
 import { requestedReviewerPayloadSchema } from "./payload-schemas";
 import { containsBotMention, stripBotMention } from "./github-mention";
 import { startSession, type HandlerResult } from "./session-startup";
+import { resolveThreadSuggestionTarget } from "./suggested-changes";
 
 export type { HandlerResult } from "./session-startup";
 
@@ -52,6 +53,7 @@ export async function handleReviewRequested(
         author: pr.user.login,
         base: pr.base.ref,
         head: pr.head.ref,
+        headSha: pr.head.sha,
         isPublic: !repo.private,
         codeReviewInstructions: config.codeReviewInstructions,
       }),
@@ -88,6 +90,7 @@ export async function handlePullRequestOpened(
         author: pr.user.login,
         base: pr.base.ref,
         head: pr.head.ref,
+        headSha: pr.head.sha,
         isPublic: !repo.private,
         codeReviewInstructions: config.codeReviewInstructions,
         isSelfReview: pr.user.login.toLowerCase() === env.GITHUB_BOT_USERNAME.toLowerCase(),
@@ -180,12 +183,16 @@ export async function handleReviewComment(
         title: pr.title,
         base: pr.base.ref,
         head: pr.head.ref,
+        headSha: pr.head.sha,
         commentBody: stripBotMention(comment.body, env.GITHUB_BOT_USERNAME),
         commenter: sender.login,
         isPublic: !repo.private,
-        filePath: comment.path,
-        diffHunk: comment.diff_hunk,
-        commentId: comment.id,
+        reviewThread: {
+          rootCommentId: comment.in_reply_to_id ?? comment.id,
+          path: comment.path,
+          diffHunk: comment.diff_hunk,
+          suggestionTarget: resolveThreadSuggestionTarget(comment),
+        },
         commentActionInstructions: config.commentActionInstructions,
       }),
   });
