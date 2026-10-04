@@ -19,10 +19,24 @@ function useActiveTeamState() {
   const memberships = useMeTeams();
   const [selection, setSelection] = useState<string | null>(null);
   const [hydratedUserId, setHydratedUserId] = useState<string | null>(null);
+  const [denial, setDenial] = useState<{ userId: string | null; error: unknown } | null>(null);
   const userId = session?.user.id ?? null;
+  // Retryable errors cannot restore a denied grant from SWR's retained membership data.
+  const currentDenial =
+    memberships.error && !isRetryableTeamError(memberships.error)
+      ? { userId, error: memberships.error }
+      : denial?.userId === userId && (memberships.error || !memberships.hasData)
+        ? denial
+        : null;
+  if (denial?.userId !== currentDenial?.userId || denial?.error !== currentDenial?.error) {
+    setDenial(currentDenial);
+  }
   // Only the sidebar tolerates transient refresh failures with a successful snapshot.
   const error =
-    memberships.hasData && isRetryableTeamError(memberships.error) ? undefined : memberships.error;
+    currentDenial?.error ??
+    (memberships.hasData && isRetryableTeamError(memberships.error)
+      ? undefined
+      : memberships.error);
   const teams = error ? [] : memberships.teams.filter((team) => team.archivedAt === null);
   const canListAllTeams = error ? false : memberships.canListAllTeams;
   const loading = memberships.loading || hydratedUserId !== userId;

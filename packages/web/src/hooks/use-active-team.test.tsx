@@ -11,9 +11,10 @@ import { useSidebarSessions } from "./use-sidebar-sessions";
 import { TeamSwitcher } from "@/components/team-switcher";
 
 const USER_ID = "11111111111111111111111111111111";
+let currentUserId = USER_ID;
 
 vi.mock("@/lib/auth-session", () => ({
-  useAuthSession: () => ({ data: { user: { id: USER_ID } }, status: "authenticated" }),
+  useAuthSession: () => ({ data: { user: { id: currentUserId } }, status: "authenticated" }),
 }));
 vi.mock("@/lib/browser-api-fetch", () => ({ browserApiFetch: vi.fn() }));
 
@@ -105,6 +106,7 @@ function wrapper({ children }: { children: ReactNode }) {
 
 beforeEach(() => {
   localStorage.clear();
+  currentUserId = USER_ID;
   roleKey = "member";
   canListAllTeams = false;
   vi.mocked(browserApiFetch).mockImplementation(async (path) =>
@@ -378,6 +380,66 @@ describe("active team context", () => {
       expect(localStorage.getItem("open-inspect-active-team")).toBe("all-teams");
     }
   );
+
+  it.each([401, 403])(
+    "retains HTTP %s denial through retryable errors until a successful membership response",
+    async (status) => {
+      canListAllTeams = true;
+      localStorage.setItem("open-inspect-active-team", "all-teams");
+      const { result } = renderHook(
+        () => ({ context: useActiveTeam(), mutate: useSWRConfig().mutate }),
+        { wrapper }
+      );
+      await waitFor(() => expect(result.current.context.scope).toBe("all"));
+      let denial: unknown;
+      for (const failure of [status, 503, "network"] as const) {
+        vi.mocked(browserApiFetch).mockImplementation(async () => {
+          if (failure === "network") throw new TypeError("Network unavailable");
+          return Response.json({ error: "Unavailable" }, { status: failure });
+        });
+        await act(async () => {
+          await result.current.mutate(meTeamsKey(USER_ID));
+        });
+        if (failure === status) denial = result.current.context.error;
+        expect(result.current.context.error).toBeInstanceOf(Error);
+        expect(result.current.context.error).toBe(denial);
+        expect(result.current.context.canListAllTeams).toBe(false);
+        expect(result.current.context.scope).toBeUndefined();
+        expect(result.current.context.teams).toEqual([]);
+        expect(localStorage.getItem("open-inspect-active-team")).toBe("all-teams");
+      }
+
+      vi.mocked(browserApiFetch).mockImplementation(async () => membershipsResponse());
+      await act(async () => {
+        await result.current.mutate(meTeamsKey(USER_ID));
+      });
+      expect(result.current.context.error).toBeUndefined();
+      expect(result.current.context.canListAllTeams).toBe(true);
+      expect(result.current.context.scope).toBe("all");
+    }
+  );
+
+  it("does not carry a membership denial to another signed-in user", async () => {
+    canListAllTeams = true;
+    const { result, rerender } = renderHook(
+      () => ({ context: useActiveTeam(), mutate: useSWRConfig().mutate }),
+      { wrapper }
+    );
+    await waitFor(() => expect(result.current.context.canListAllTeams).toBe(true));
+    vi.mocked(browserApiFetch).mockResolvedValue(Response.json({}, { status: 403 }));
+    await act(async () => {
+      await result.current.mutate(meTeamsKey(USER_ID));
+    });
+    expect(result.current.context.error).toBeInstanceOf(Error);
+    expect(result.current.context.canListAllTeams).toBe(false);
+
+    currentUserId = "22222222222222222222222222222222";
+    vi.mocked(browserApiFetch).mockImplementation(async () => membershipsResponse());
+    rerender();
+    expect(result.current.context.error).toBeUndefined();
+    await waitFor(() => expect(result.current.context.canListAllTeams).toBe(true));
+    expect(result.current.context.error).toBeUndefined();
+  });
 
   it("reconciles a stored team against active memberships and loads the creation setting", async () => {
     localStorage.setItem("open-inspect-active-team", "team_beta");
