@@ -189,12 +189,14 @@ Make the smallest correct change and run relevant tests.
 
 Reply concisely on the originating pull request when an outcome response is warranted, including validation results, no-change explanation, or question. Do not comment for suppressed input or add redundant status updates.
 
+Answer each review comment in its own thread, not in a summary comment: reply via `POST /repos/{owner}/{repo}/pulls/{number}/comments/{id}/replies`, taking `{id}` from the comment URL's `#discussion_r{id}` fragment. Once a comment is fully addressed, resolve its thread with the GraphQL `resolveReviewThread` mutation, finding the thread ID through the pull request's `reviewThreads`. Leave the thread unresolved if you made no change or asked a question.
+
 <github_feedback_data>
 …the review or comment, serialized…
 </github_feedback_data>
 ```
 
-The agent works on the PR's branch, pushes when it changes something, and replies on the pull request when there is something to report: validation results, an explanation of why nothing changed, or a question. It does not post status updates for their own sake.
+The agent works on the PR's branch, pushes when it changes something, and replies on the pull request when there is something to report: validation results, an explanation of why nothing changed, or a question. It does not post status updates for their own sake. Inline review comments are answered in their own threads, and each thread is resolved once its comment is addressed.
 
 ### Skip reasons
 

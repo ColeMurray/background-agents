@@ -182,6 +182,8 @@ describe("AutofixService", () => {
       "Reply concisely on the originating pull request when an outcome response is warranted"
     );
     expect(dispatch[2].body).toContain("validation results, no-change explanation, or question");
+    expect(dispatch[2].body).toContain("Answer each review comment in its own thread");
+    expect(dispatch[2].body).toContain("resolveReviewThread");
     expect(h.feedbackStore.markQueued).toHaveBeenCalledWith(
       "github:pr_comment:1234",
       "message-1",
