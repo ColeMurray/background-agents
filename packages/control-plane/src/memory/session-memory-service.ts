@@ -3,7 +3,7 @@ import {
   SANDBOX_MEMORY_SCHEMA_VERSION,
   type MemorySearchInput,
   type MemorySearchResponse,
-  type SandboxMemoryInstallation,
+  type RenderedSessionMemory,
   type SandboxMemoryReadResult,
   type SandboxMemoryWriteInput,
   type SandboxMemoryWriteResult,
@@ -15,12 +15,8 @@ import { MemoryAccessError, MemoryNotFoundError, MemoryValidationError } from ".
 import { factSearchResponse, type FactSearchIndex, type FactSearchPartition } from "./fact-search";
 import { partitionScope, samePartition, type MemoryPartition } from "./partition";
 import { renderMemorySection } from "./render";
-import {
-  canWritePersonal,
-  personalReadAccess,
-  repositoryPartition,
-  targetPartitions,
-} from "./target";
+import { canWritePersonal, personalReadAccess } from "./session-rules";
+import { repositoryPartition, sourcePartitions } from "./sources";
 import type { MemorySession } from "./types";
 
 const SCOPE_UNAVAILABLE = "Memory scope is no longer available";
@@ -67,7 +63,7 @@ export class SessionMemoryService {
   }
 
   /** The pinned boot context, rendered for the session's harness. */
-  async installation(sessionId: string): Promise<SandboxMemoryInstallation> {
+  async renderedContext(sessionId: string): Promise<RenderedSessionMemory> {
     const session = await this.loadSession(sessionId);
     const loaded = await this.selections.load(sessionId);
     if (!loaded) throw new MemoryNotFoundError("Session not found");
@@ -80,8 +76,8 @@ export class SessionMemoryService {
       throw new MemoryAccessError(SCOPE_UNAVAILABLE);
     return {
       schemaVersion: SANDBOX_MEMORY_SCHEMA_VERSION,
-      manifestSha256: loaded.manifest.manifestSha256,
-      rendered: renderMemorySection(loaded.manifest, loaded.entries, session.harness),
+      manifestSha256: loaded.selection.manifestSha256,
+      rendered: renderMemorySection(loaded.selection, loaded.entries, session.harness),
     };
   }
 
@@ -115,7 +111,7 @@ export class SessionMemoryService {
     }
     if (
       record.memoryType !== "fact" ||
-      !targetPartitions(session.target).some((partition) =>
+      !sourcePartitions(session.sources).some((partition) =>
         samePartition(partition, record.partition)
       ) ||
       !(await this.canRead(session, [record.partition]))
@@ -163,11 +159,12 @@ export class SessionMemoryService {
       },
       {
         kind: "agent",
-        userId: partition.type === "personal" ? partition.userId : session.principal.userId,
+        // Equal to the personal owner for personal writes (`canWritePersonal` holds).
+        userId: session.principal.userId,
         sessionId,
         requestId: this.requestId,
-        personalAutoSave: session.personalAutoSave,
-      }
+      },
+      { personalAutoSaveEligible: session.personalAutoSaveEligible }
     );
     return { id: memory.id, status: memory.status, revisionId: memory.currentRevisionId };
   }
@@ -207,8 +204,8 @@ export class SessionMemoryService {
     selector: { repoOwner?: string; repoName?: string }
   ) {
     return selector.repoOwner === undefined
-      ? session.target.repositories
-      : session.target.repositories.filter(
+      ? session.sources.repositories
+      : session.sources.repositories.filter(
           (repo) =>
             repo.repoOwner.toLowerCase() === selector.repoOwner &&
             repo.repoName.toLowerCase() === selector.repoName
@@ -218,9 +215,9 @@ export class SessionMemoryService {
   private writePartition(session: MemorySession, input: SandboxMemoryWriteInput): MemoryPartition {
     switch (input.scopeType) {
       case "repository": {
-        if (input.repoOwner === undefined && session.target.repositories.length > 1)
+        if (input.repoOwner === undefined && session.sources.repositories.length > 1)
           throw new MemoryValidationError(
-            `This session spans multiple repositories — specify repoOwner and repoName (one of: ${session.target.repositories.map((repo) => `${repo.repoOwner}/${repo.repoName}`).join(", ")})`
+            `This session spans multiple repositories — specify repoOwner and repoName (one of: ${session.sources.repositories.map((repo) => `${repo.repoOwner}/${repo.repoName}`).join(", ")})`
           );
         const [repo] = this.selectRepositories(session, input);
         if (!repo) throw new MemoryAccessError("Repository is outside this session");
@@ -229,16 +226,16 @@ export class SessionMemoryService {
         return partition;
       }
       case "environment":
-        if (!session.target.environmentId)
+        if (!session.sources.environmentId)
           throw new MemoryAccessError("This session has no associated environment");
-        return { type: "environment", environmentId: session.target.environmentId };
+        return { type: "environment", environmentId: session.sources.environmentId };
       case "personal":
-        if (!session.target.personalOwnerUserId) throw new MemoryAccessError(OUTSIDE_SESSION);
+        if (!session.sources.personalOwnerUserId) throw new MemoryAccessError(OUTSIDE_SESSION);
         // A collaborator-owned child consumes inherited context but cannot mutate the original
         // owner's personal store.
         if (!canWritePersonal(session))
           throw new MemoryAccessError("Personal memory owner differs from this session owner");
-        return { type: "personal", userId: session.target.personalOwnerUserId };
+        return { type: "personal", userId: session.sources.personalOwnerUserId };
       default: {
         const exhaustive: never = input.scopeType;
         throw new Error(`Unhandled memory scope: ${String(exhaustive)}`);
@@ -256,9 +253,9 @@ export class SessionMemoryService {
       !input.scopeType || input.scopeType === scopeType;
     if (wants("personal")) {
       const access = personalReadAccess(session);
-      if (access !== "none" && session.target.personalOwnerUserId)
+      if (access !== "none" && session.sources.personalOwnerUserId)
         partitions.push({
-          partition: { type: "personal", userId: session.target.personalOwnerUserId },
+          partition: { type: "personal", userId: session.sources.personalOwnerUserId },
           ...(access === "pinned" ? { pinnedIn: session.id } : {}),
         });
       else if (input.scopeType)
@@ -275,9 +272,9 @@ export class SessionMemoryService {
       }
     }
     if (wants("environment")) {
-      if (session.target.environmentId)
+      if (session.sources.environmentId)
         partitions.push({
-          partition: { type: "environment", environmentId: session.target.environmentId },
+          partition: { type: "environment", environmentId: session.sources.environmentId },
         });
       else if (input.scopeType)
         throw new MemoryAccessError("This session has no associated environment");

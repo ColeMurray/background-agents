@@ -95,7 +95,7 @@ describe("session memory discovery", () => {
     ]);
     const call = await sandbox("large-corpus");
     expect(
-      (await new SessionMemorySelectionStore(env.DB).load("large-corpus"))!.manifest.items.some(
+      (await new SessionMemorySelectionStore(env.DB).load("large-corpus"))!.selection.items.some(
         (item) => item.memoryId === "old"
       )
     ).toBe(false);

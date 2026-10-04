@@ -42,7 +42,7 @@ describe("SessionMemorySelector", () => {
     expect(manifest).toMatchObject({
       includePersonalMemories: true,
       personalOwnerUserId: "owner",
-      truncatedCount: 3,
+      omittedCount: 3,
     });
   });
 

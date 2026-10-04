@@ -54,8 +54,8 @@ async function dto(
   record: MemoryRecord,
   canManage: boolean
 ): Promise<MemoryDto> {
-  const replacements = await store.replacementIds([record.id]);
-  return toMemoryDto(record, canManage, replacements.get(record.id) ?? []);
+  const supersededBy = await store.supersededByIds([record.id]);
+  return toMemoryDto(record, canManage, supersededBy.get(record.id) ?? []);
 }
 
 /** Load a record and authorize it against its own partition; inaccessible records are concealed. */
@@ -95,17 +95,17 @@ async function list(request: Request, env: Env, _params: object, ctx: UserRouteC
     limit: limit + 1,
   });
   const page = records.slice(0, limit);
-  const replacements = await store.replacementIds(page.map((record) => record.id));
+  const supersededBy = await store.supersededByIds(page.map((record) => record.id));
   return json({
     memories: page.map((record) =>
-      toMemoryDto(record, access.canManage, replacements.get(record.id) ?? [])
+      toMemoryDto(record, access.canManage, supersededBy.get(record.id) ?? [])
     ),
     nextOffset: records.length > limit ? offset + limit : null,
     canCreate: access.canManage,
   });
 }
 
-/** Admit human creation/replacement into the authorized partition. */
+/** Admit human creation (optionally superseding an active record) into the authorized partition. */
 async function create(request: Request, env: Env, _params: object, ctx: UserRouteContext) {
   const body = await parseBody(request, createMemorySchema, "Invalid memory");
   if (body instanceof Response) return body;

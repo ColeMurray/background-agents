@@ -11,11 +11,12 @@ export function initialStatus(
   memoryType: MemoryType,
   partition: MemoryPartition,
   actor: MemoryActor,
-  predecessor: { memoryType: MemoryType } | null
+  predecessor: { memoryType: MemoryType } | null,
+  personalAutoSaveEligible: boolean
 ): MemoryStatus {
   if (actor.kind === "user") return "active";
   const autoSaves =
-    actor.personalAutoSave &&
+    personalAutoSaveEligible &&
     partition.type === "personal" &&
     memoryType === "fact" &&
     predecessor?.memoryType !== "directive";

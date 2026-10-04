@@ -1,6 +1,6 @@
 import { DEFAULT_HARNESS } from "@open-inspect/shared/harnesses";
 import { MEMORY_LIMITS, MEMORY_SELECTION_VERSION } from "@open-inspect/shared/types/memories";
-import type { SessionMemoryItem, SessionMemoryManifest } from "./types";
+import type { SessionMemoryItem, SessionMemorySelection } from "./types";
 import { hashToken } from "../auth/crypto";
 import { partitionKey, partitionScope, type MemoryPartition } from "./partition";
 import {
@@ -9,8 +9,8 @@ import {
   renderMemorySection,
   type RenderableMemory,
 } from "./render";
-import { targetPartitions } from "./target";
-import type { MemoryCandidate, MemoryTarget } from "./types";
+import { sourcePartitions } from "./sources";
+import type { MemoryCandidate, MemorySources } from "./types";
 
 const partitionId = (partition: MemoryPartition) => `${partition.type}:${partitionKey(partition)}`;
 
@@ -21,9 +21,9 @@ const partitionId = (partition: MemoryPartition) => `${partition.type}:${partiti
  */
 export function orderCandidates(
   candidates: readonly MemoryCandidate[],
-  target: MemoryTarget
+  target: MemorySources
 ): MemoryCandidate[] {
-  const priority = targetPartitions(target).map(partitionId);
+  const priority = sourcePartitions(target).map(partitionId);
   return candidates
     .filter(
       (candidate) =>
@@ -127,20 +127,20 @@ async function hashSelection(
  * Select whole records within budget; omitted records only increment an aggregate count.
  * Token counts estimate rendered text, not provider-measured consumption.
  */
-export async function buildManifest(
+export async function selectWithinBudget(
   candidates: readonly MemoryCandidate[],
-  target: MemoryTarget,
-  omittedCount = 0,
+  target: MemorySources,
+  omittedByQuery = 0,
   resolvedAt = Date.now()
-): Promise<SessionMemoryManifest> {
+): Promise<SessionMemorySelection> {
   const budget = new MemoryBudget();
   const selected: (RenderableMemory & { revisionId: string })[] = [];
   const items: SessionMemoryItem[] = [];
-  let truncatedCount = omittedCount;
+  let omittedCount = omittedByQuery;
   for (const candidate of orderCandidates(candidates, target)) {
     const entry = renderable(candidate);
     if (!budget.admit(candidate, renderMemoryEntry(entry).length + 1)) {
-      truncatedCount++;
+      omittedCount++;
       continue;
     }
     selected.push({ ...entry, revisionId: candidate.currentRevisionId });
@@ -160,7 +160,7 @@ export async function buildManifest(
     });
   }
   const includePersonalMemories = target.personalOwnerUserId !== null;
-  const manifest: SessionMemoryManifest = {
+  const manifest: SessionMemorySelection = {
     selectionVersion: MEMORY_SELECTION_VERSION,
     manifestSha256: await hashSelection(includePersonalMemories, items),
     resolvedAt,
@@ -169,7 +169,7 @@ export async function buildManifest(
     directiveChars: budget.directiveChars,
     catalogChars: budget.catalogChars,
     estimatedTokens: 0,
-    truncatedCount,
+    omittedCount,
     items,
   };
   manifest.estimatedTokens = Math.ceil(
@@ -179,8 +179,8 @@ export async function buildManifest(
 }
 
 /** The selection of a session that predates memory (or has nothing to pin). */
-export function emptyManifest(resolvedAt: number): Promise<SessionMemoryManifest> {
-  return buildManifest(
+export function emptySelection(resolvedAt: number): Promise<SessionMemorySelection> {
+  return selectWithinBudget(
     [],
     { personalOwnerUserId: null, repositories: [], environmentId: null },
     0,

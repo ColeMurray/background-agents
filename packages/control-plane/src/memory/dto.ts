@@ -6,7 +6,7 @@ import {
   type SessionMemorySelectionStatus,
 } from "@open-inspect/shared/types/memories";
 import { partitionScope } from "./partition";
-import type { MemoryRecord, PinnedItemDrift, SessionMemoryManifest } from "./types";
+import type { MemoryRecord, PinnedItemDrift, SessionMemorySelection } from "./types";
 
 /**
  * Project a record for the management UI. Capabilities combine the shared lifecycle table with
@@ -15,7 +15,7 @@ import type { MemoryRecord, PinnedItemDrift, SessionMemoryManifest } from "./typ
 export function toMemoryDto(
   record: MemoryRecord,
   canManage: boolean,
-  replacementMemoryIds: readonly string[]
+  supersededByMemoryIds: readonly string[]
 ): MemoryDto {
   return {
     id: record.id,
@@ -33,7 +33,7 @@ export function toMemoryDto(
     authorUserId: record.authorUserId,
     authorSessionId: record.authorSessionId,
     supersedesMemoryId: record.supersedesMemoryId,
-    replacementMemoryIds: [...replacementMemoryIds],
+    supersededByMemoryIds: [...supersededByMemoryIds],
     approvedAt: record.approvedAt,
     archivedAt: record.archivedAt,
     createdAt: record.createdAt,
@@ -46,13 +46,13 @@ export function toMemoryDto(
 }
 
 /** A selection as people see it: items and sizes, without the owner, hash, or timestamps. */
-export function toSelectionSummary(manifest: SessionMemoryManifest): MemorySelectionSummary {
+export function toSelectionSummary(manifest: SessionMemorySelection): MemorySelectionSummary {
   return {
     includePersonalMemories: manifest.includePersonalMemories,
     directiveChars: manifest.directiveChars,
     catalogChars: manifest.catalogChars,
     estimatedTokens: manifest.estimatedTokens,
-    truncatedCount: manifest.truncatedCount,
+    omittedCount: manifest.omittedCount,
     items: manifest.items.map((item) => ({
       memoryId: item.memoryId,
       revisionNumber: item.revisionNumber,
@@ -67,7 +67,7 @@ export function toSelectionSummary(manifest: SessionMemoryManifest): MemorySelec
 
 /** A live session's selection summary with each item's drift since it was pinned. */
 export function toSelectionStatus(
-  manifest: SessionMemoryManifest,
+  manifest: SessionMemorySelection,
   drift: readonly PinnedItemDrift[]
 ): SessionMemorySelectionStatus {
   const summary = toSelectionSummary(manifest);

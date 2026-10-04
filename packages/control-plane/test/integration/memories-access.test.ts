@@ -232,9 +232,9 @@ describe("memory shared-scope authorization", () => {
     );
     expect(created.status).toBe(201);
     const { sessionId } = await created.json<{ sessionId: string }>();
-    expect((await new SessionMemorySelectionStore(env.DB).load(sessionId))?.manifest.items).toEqual(
-      []
-    );
+    expect(
+      (await new SessionMemorySelectionStore(env.DB).load(sessionId))?.selection.items
+    ).toEqual([]);
   });
 
   it("does not inject repository memories into an unauthorized workspace automation", async () => {
@@ -259,7 +259,7 @@ describe("memory shared-scope authorization", () => {
     ).first<{ id: string }>();
     expect(session).not.toBeNull();
     expect(
-      (await new SessionMemorySelectionStore(env.DB).load(session!.id))?.manifest.items
+      (await new SessionMemorySelectionStore(env.DB).load(session!.id))?.selection.items
     ).toEqual([]);
   });
 
@@ -355,12 +355,12 @@ describe("memory shared-scope authorization", () => {
     vi.spyOn(MemoryRecordStore.prototype, "create").mockImplementationOnce(async function (
       this: MemoryRecordStore,
       input,
-      author
+      author,
+      options
     ) {
-      if (change === "personal failure")
-        expect(author.kind === "agent" && author.personalAutoSave).toBe(true);
+      if (change === "personal failure") expect(options?.personalAutoSaveEligible).toBe(true);
       await during();
-      return original.call(this, input, author);
+      return original.call(this, input, author, options);
     });
     const scope =
       change === "personal failure"
@@ -459,7 +459,8 @@ describe("memory shared-scope authorization", () => {
     await expect(
       new MemoryRecordStore(env.DB).create(
         { partition: { type: "personal", userId: MEMBER }, content },
-        { ...actor, kind: "agent", sessionId: "private", personalAutoSave: true }
+        { ...actor, kind: "agent", sessionId: "private" },
+        { personalAutoSaveEligible: true }
       )
     ).rejects.toThrow(/session access/);
   });

@@ -72,7 +72,7 @@ CREATE TABLE session_memory_manifests (
   directive_chars INTEGER NOT NULL,
   catalog_chars INTEGER NOT NULL,
   estimated_tokens INTEGER NOT NULL,
-  truncated_count INTEGER NOT NULL,
+  omitted_count INTEGER NOT NULL,
   resolved_at INTEGER NOT NULL
 );
 CREATE TABLE session_memory_items (

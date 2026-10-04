@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import type { SessionMemoryManifest } from "./types";
+import type { SessionMemorySelection } from "./types";
 import type { LoadedSessionMemory } from "../db/session-memory-selections";
 import { MemoryAccessError, MemoryNotFoundError, MemoryValidationError } from "./errors";
 import type { MemoryPartition } from "./partition";
@@ -7,7 +7,7 @@ import { SessionMemoryService, type SessionMemoryServiceDeps } from "./session-m
 import type {
   MemoryRecord,
   MemorySession,
-  MemoryTarget,
+  MemorySources,
   PinnedMemoryEntry,
   SessionPrincipal,
 } from "./types";
@@ -16,20 +16,20 @@ const api = { repoOwner: "acme", repoName: "api", repoId: 1 };
 const web = { repoOwner: "acme", repoName: "web", repoId: 2 };
 
 function memorySession(
-  overrides: Partial<Omit<MemorySession, "principal" | "target">> & {
+  overrides: Partial<Omit<MemorySession, "principal" | "sources">> & {
     principal?: Partial<SessionPrincipal>;
-    target?: Partial<MemoryTarget>;
+    sources?: Partial<MemorySources>;
   } = {}
 ): MemorySession {
-  const { principal, target, ...rest } = overrides;
+  const { principal, sources, ...rest } = overrides;
   return {
     id: "session",
     harness: "opencode",
-    inherited: false,
-    personalAutoSave: true,
+    isChildSession: false,
+    personalAutoSaveEligible: true,
     ...rest,
     principal: { userId: "owner", ownerTeamId: null, ...principal },
-    target: { personalOwnerUserId: "owner", repositories: [api], environmentId: null, ...target },
+    sources: { personalOwnerUserId: "owner", repositories: [api], environmentId: null, ...sources },
   };
 }
 
@@ -123,8 +123,8 @@ describe("SessionMemoryService.write", () => {
         userId: "owner",
         sessionId: "session",
         requestId: "request",
-        personalAutoSave: true,
-      }
+      },
+      { personalAutoSaveEligible: true }
     );
     expect(deps.access.check).toHaveBeenCalledWith({ userId: "owner", ownerTeamId: null }, [
       { type: "repository", ...api },
@@ -133,7 +133,7 @@ describe("SessionMemoryService.write", () => {
 
   it("requires a selector in multi-repository sessions and never writes on rejection", async () => {
     const { service, deps } = setup({
-      session: memorySession({ target: { repositories: [api, web] } }),
+      session: memorySession({ sources: { repositories: [api, web] } }),
     });
     await expect(service.write("session", { ...fact, scopeType: "repository" })).rejects.toThrow(
       MemoryValidationError
@@ -152,7 +152,7 @@ describe("SessionMemoryService.write", () => {
 
   it("keeps a collaborator-owned child out of the original owner's personal store", async () => {
     const { service, deps } = setup({
-      session: memorySession({ inherited: true, principal: { userId: "collaborator" } }),
+      session: memorySession({ isChildSession: true, principal: { userId: "collaborator" } }),
     });
     await expect(service.write("session", { ...fact, scopeType: "personal" })).rejects.toThrow(
       MemoryAccessError
@@ -174,15 +174,15 @@ describe("SessionMemoryService.read", () => {
     const records = [record("mine")];
     const optedOut = setup({
       records,
-      session: memorySession({ target: { personalOwnerUserId: null } }),
+      session: memorySession({ sources: { personalOwnerUserId: null } }),
     });
     await expect(optedOut.service.read("session", "mine")).rejects.toThrow(MemoryNotFoundError);
-    const child = setup({ records, session: memorySession({ inherited: true }) });
+    const child = setup({ records, session: memorySession({ isChildSession: true }) });
     await expect(child.service.read("session", "mine")).rejects.toThrow(MemoryNotFoundError);
     const pinnedChild = setup({
       records,
       pinned: ["mine"],
-      session: memorySession({ inherited: true }),
+      session: memorySession({ isChildSession: true }),
     });
     await expect(pinnedChild.service.read("session", "mine")).resolves.toMatchObject({
       status: "active",
@@ -215,7 +215,7 @@ describe("SessionMemoryService.read", () => {
 
 describe("SessionMemoryService.search", () => {
   it("restricts a child's personal search to pinned records", async () => {
-    const { service, deps } = setup({ session: memorySession({ inherited: true }) });
+    const { service, deps } = setup({ session: memorySession({ isChildSession: true }) });
     await service.search("session", { query: "needle", limit: 10 });
     expect(deps.factIndex.search).toHaveBeenCalledWith({
       terms: ["needle"],
@@ -236,8 +236,8 @@ describe("SessionMemoryService.search", () => {
   });
 });
 
-describe("SessionMemoryService.installation", () => {
-  const manifest: SessionMemoryManifest = {
+describe("SessionMemoryService.renderedContext", () => {
+  const manifest: SessionMemorySelection = {
     selectionVersion: 1,
     manifestSha256: "hash",
     resolvedAt: 1,
@@ -246,7 +246,7 @@ describe("SessionMemoryService.installation", () => {
     directiveChars: 0,
     catalogChars: 10,
     estimatedTokens: 1,
-    truncatedCount: 0,
+    omittedCount: 0,
     items: [
       {
         memoryId: "mine",
@@ -269,17 +269,17 @@ describe("SessionMemoryService.installation", () => {
     inclusion: "summary",
     description: "How to run the tests",
   };
-  const loaded = { manifest, drift: [], entries: [entry] };
+  const loaded = { selection: manifest, drift: [], entries: [entry] };
 
   it("renders the pinned selection for the session's harness", async () => {
     const { service } = setup({ loaded, session: memorySession({ harness: "claude" }) });
-    const installation = await service.installation("session");
-    expect(installation).toMatchObject({ schemaVersion: 1, manifestSha256: "hash" });
-    expect(installation.rendered).toContain("mcp__oi__memory_read");
+    const rendered = await service.renderedContext("session");
+    expect(rendered).toMatchObject({ schemaVersion: 1, manifestSha256: "hash" });
+    expect(rendered.rendered).toContain("mcp__oi__memory_read");
   });
 
   it("refuses to install when the principal lost access to a pinned partition", async () => {
     const { service } = setup({ loaded, readable: [false] });
-    await expect(service.installation("session")).rejects.toThrow(MemoryAccessError);
+    await expect(service.renderedContext("session")).rejects.toThrow(MemoryAccessError);
   });
 });

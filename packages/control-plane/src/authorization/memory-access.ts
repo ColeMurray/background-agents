@@ -5,7 +5,7 @@ import type { EnvironmentStore } from "../db/environments";
 import type { TeamRepositoryGrantStore } from "../db/team-repository-grants";
 import type { TeamStore } from "../db/teams";
 import type { MemoryPartition } from "../memory/partition";
-import { repositoryPartition } from "../memory/target";
+import { repositoryPartition } from "../memory/sources";
 import type { MemoryRecord, SessionPrincipal } from "../memory/types";
 import type { InstalledRepositoryResolver } from "../routes/shared";
 import {

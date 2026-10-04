@@ -42,15 +42,13 @@ export type MemoryActor =
       userId: string | null;
       sessionId: string;
       requestId: string;
-      /** Only private, collaborator-free root sessions may save personal facts without review. */
-      personalAutoSave: boolean;
     };
 
 /**
- * The scopes a session draws memory from, in priority order (environment, repositories,
- * personal). `personalOwnerUserId` is null when personal memory is excluded.
+ * Where a session draws memory from: its environment, its repositories in session order, and the
+ * pinned personal owner (null when personal memory is excluded). Priority follows that order.
  */
-export interface MemoryTarget {
+export interface MemorySources {
   personalOwnerUserId: string | null;
   repositories: readonly { repoOwner: string; repoName: string; repoId: number | null }[];
   environmentId: string | null;
@@ -67,14 +65,17 @@ export interface MemorySession {
   id: string;
   /** Who shared-partition access is evaluated for (owning team, or the workspace owner). */
   principal: SessionPrincipal;
-  /** The partitions this session draws memory from: its targets and pinned personal owner. */
-  target: MemoryTarget;
+  /** Where this session draws memory from. */
+  sources: MemorySources;
   /** Rendering format for this session's boot context. */
   harness: HarnessId;
-  /** Children consume their parent's pinned selection rather than their own. */
-  inherited: boolean;
-  /** Only private, collaborator-free root sessions may save personal facts without review. */
-  personalAutoSave: boolean;
+  /** Agent-spawned children consume their parent's pinned selection rather than their own. */
+  isChildSession: boolean;
+  /**
+   * Whether personal facts written by this session may skip review. Only private,
+   * collaborator-free root sessions are eligible; the store rechecks at commit time.
+   */
+  personalAutoSaveEligible: boolean;
 }
 
 /** One pinned revision ready to render: directives in full, facts as a summary. */
@@ -83,7 +84,7 @@ export type PinnedMemoryEntry = {
   revisionId: string;
   /** Display scope pinned with the selection. */
   scope: MemoryScope;
-  /** Live partition, used to recheck access before installation. */
+  /** Live partition, used to recheck access before rendering boot context. */
   partition: MemoryPartition;
   title: string;
 } & ({ inclusion: "full"; content: string } | { inclusion: "summary"; description: string });
@@ -106,7 +107,7 @@ export interface SessionMemoryItem {
  * Server-only: it carries the personal owner and selection hash, so people are shown a
  * `MemorySelectionSummary` instead. Token estimates include rendering overhead.
  */
-export interface SessionMemoryManifest {
+export interface SessionMemorySelection {
   selectionVersion: number;
   manifestSha256: string;
   resolvedAt: number;
@@ -115,7 +116,7 @@ export interface SessionMemoryManifest {
   directiveChars: number;
   catalogChars: number;
   estimatedTokens: number;
-  truncatedCount: number;
+  omittedCount: number;
   items: SessionMemoryItem[];
 }
 

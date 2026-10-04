@@ -1,11 +1,11 @@
-import type { SessionMemoryManifest } from "./types";
+import type { SessionMemorySelection } from "./types";
 import type { SessionMemoryAccessPolicy } from "../authorization/memory-access";
 import type { MemoryPreferenceStore } from "../db/memory-preferences";
 import type { MemoryRecordStore } from "../db/memory-records";
 import type { MemoryPartition } from "./partition";
-import { buildManifest } from "./selection";
-import { repositoryPartition, targetPartitions } from "./target";
-import type { MemoryTarget, SessionPrincipal } from "./types";
+import { selectWithinBudget } from "./selection";
+import { repositoryPartition, sourcePartitions } from "./sources";
+import type { MemorySources, SessionPrincipal } from "./types";
 
 /** What a new root session (or a preview of one) targets. */
 export interface SessionMemorySelectionRequest {
@@ -35,20 +35,20 @@ export interface SessionMemorySelectorDeps {
 export class SessionMemorySelector {
   constructor(private readonly deps: SessionMemorySelectorDeps) {}
 
-  async select(request: SessionMemorySelectionRequest): Promise<SessionMemoryManifest> {
+  async select(request: SessionMemorySelectionRequest): Promise<SessionMemorySelection> {
     const owner = request.principal.userId;
     const include =
       request.includePersonalMemories ??
       (owner ? (await this.deps.preferences.get(owner)).includePersonalMemories : false);
-    const target: MemoryTarget = {
+    const target: MemorySources = {
       personalOwnerUserId: include ? owner : null,
       repositories: await this.readableRepositories(request),
       environmentId: await this.readableEnvironment(request),
     };
     const { candidates, omittedCount } = await this.deps.records.listCandidates(
-      targetPartitions(target)
+      sourcePartitions(target)
     );
-    return buildManifest(candidates, target, omittedCount);
+    return selectWithinBudget(candidates, target, omittedCount);
   }
 
   /** Repositories with a stable ID whose memories the principal may read. */

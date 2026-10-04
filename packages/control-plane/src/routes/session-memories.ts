@@ -26,7 +26,7 @@ import {
 async function view(_request: Request, _env: Env, params: { id: string }, ctx: UserRouteContext) {
   const loaded = await new SessionMemorySelectionStore(ctx.db).load(params.id);
   return loaded
-    ? json(toSelectionStatus(loaded.manifest, loaded.drift))
+    ? json(toSelectionStatus(loaded.selection, loaded.drift))
     : error("Session not found", 404);
 }
 
@@ -54,13 +54,13 @@ async function sandboxCall(
   }
 }
 
-async function installation(
+async function renderedContext(
   _request: Request,
   _env: Env,
   params: { id: string },
   ctx: SandboxRouteContext
 ) {
-  return sandboxCall(ctx, (service) => service.installation(params.id));
+  return sandboxCall(ctx, (service) => service.renderedContext(params.id));
 }
 
 async function read(
@@ -109,7 +109,9 @@ sessionMemoryRoutes.get(
   }),
   (c) => dispatch(c, view)
 );
-sessionMemoryRoutes.get("/sessions/:id/sandbox-memory", sandbox, (c) => dispatch(c, installation));
+sessionMemoryRoutes.get("/sessions/:id/sandbox-memory", sandbox, (c) =>
+  dispatch(c, renderedContext)
+);
 sessionMemoryRoutes.get("/sessions/:id/sandbox-memory/:memoryId", sandbox, (c) =>
   dispatch(c, read)
 );

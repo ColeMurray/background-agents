@@ -5,7 +5,7 @@ import {
   memoryScopeDisplayKey,
   type MemoryScope,
 } from "@open-inspect/shared/types/memories";
-import type { SessionMemoryManifest } from "./types";
+import type { SessionMemorySelection } from "./types";
 
 /** The fields one rendered line needs. */
 export type RenderableMemory = { memoryId: string; scope: MemoryScope; title: string } & (
@@ -55,7 +55,7 @@ export function renderMemoryEntry(entry: RenderableMemory): string {
  * A missing pinned revision throws rather than silently substituting live content.
  */
 export function renderMemorySection(
-  manifest: SessionMemoryManifest,
+  manifest: SessionMemorySelection,
   entries: readonly (RenderableMemory & { revisionId: string })[],
   harness: HarnessId
 ): string {
@@ -63,7 +63,7 @@ export function renderMemorySection(
   const byRevision = new Map(entries.map((entry) => [entry.revisionId, entry]));
   const directives: string[] = [];
   const facts: string[] = [];
-  let omitted = manifest.truncatedCount;
+  let omitted = manifest.omittedCount;
   let renderedChars = MEMORY_SECTION_OVERHEAD_CHARS;
   for (const item of manifest.items) {
     const entry = byRevision.get(item.revisionId);

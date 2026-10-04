@@ -15,8 +15,9 @@ const agent: MemoryActor = {
   userId: "user_a",
   sessionId: "session_a",
   requestId: "tool",
-  personalAutoSave: true,
 };
+/** session_a is private and collaborator-free, so its personal facts may skip review. */
+const AUTO_SAVE = { personalAutoSaveEligible: true };
 const owner: MemoryPartition = { type: "personal", userId: "user_a" };
 const fact: MemoryContent = {
   memoryType: "fact",
@@ -66,11 +67,11 @@ describe("memory persistence", () => {
       includePersonalMemories: true,
     });
     expect(manifest.items).toHaveLength(300);
-    expect(manifest.truncatedCount).toBe(50);
+    expect(manifest.omittedCount).toBe(50);
   });
   it("revises without replacing provenance and rejects concurrent stale edits", async () => {
     const store = new MemoryRecordStore(env.DB);
-    const record = await store.create(memory(), agent);
+    const record = await store.create(memory(), agent, AUTO_SAVE);
     expect(record.status).toBe("active");
     const unchanged = await store.revise(record.id, fact, record.currentRevisionId, human);
     expect(unchanged.currentRevisionId).toBe(record.currentRevisionId);
@@ -133,10 +134,10 @@ describe("memory persistence", () => {
   it("enforces the total write quota even when records are archived", async () => {
     const store = new MemoryRecordStore(env.DB);
     for (let n = 0; n < 20; n++) {
-      const record = await store.create(memory(), agent);
+      const record = await store.create(memory(), agent, AUTO_SAVE);
       await store.transition(record.id, "archive", record.currentRevisionId, human);
     }
-    await expect(store.create(memory(), agent)).rejects.toThrow(/limit/);
+    await expect(store.create(memory(), agent, AUTO_SAVE)).rejects.toThrow(/limit/);
     expect(
       (await env.DB.prepare("SELECT COUNT(*) AS n FROM memory_revisions").first<{ n: number }>())?.n
     ).toBe(20);
@@ -168,15 +169,17 @@ describe("memory persistence", () => {
     const store = new MemoryRecordStore(env.DB);
     await new SessionScopeStore(env.DB).updateVisibility(["session_a"], "workspace");
     await new SessionScopeStore(env.DB).updateVisibility(["session_a"], "private");
-    await expect(store.create(memory(), agent)).rejects.toThrow(/session access/);
-    expect((await store.create(memory(), { ...agent, personalAutoSave: false })).status).toBe(
-      "proposed"
-    );
+    await expect(store.create(memory(), agent, AUTO_SAVE)).rejects.toThrow(/session access/);
+    expect((await store.create(memory(), agent)).status).toBe("proposed");
   });
   it("does not let an auto-saved fact bypass directive approval through supersession", async () => {
     const store = new MemoryRecordStore(env.DB);
     const directive = await store.create(memory({ memoryType: "directive" }), human);
-    const replacement = await store.create(memory({}, { supersedesMemoryId: directive.id }), agent);
+    const replacement = await store.create(
+      memory({}, { supersedesMemoryId: directive.id }),
+      agent,
+      AUTO_SAVE
+    );
     expect(replacement.status).toBe("proposed");
     expect((await store.get(directive.id))?.status).toBe("active");
   });
@@ -187,7 +190,7 @@ describe("memory persistence", () => {
     expect(
       (await store.transition(active.id, "restore", active.currentRevisionId, human)).status
     ).toBe("active");
-    const proposal = await store.create(memory({ memoryType: "directive" }), agent);
+    const proposal = await store.create(memory({ memoryType: "directive" }), agent, AUTO_SAVE);
     const rejected = await store.transition(
       proposal.id,
       "reject",
@@ -202,7 +205,9 @@ describe("memory persistence", () => {
   it("serializes the pending quota and writes no orphan revisions or success audits", async () => {
     const store = new MemoryRecordStore(env.DB);
     const outcomes = await Promise.allSettled(
-      Array.from({ length: 8 }, () => store.create(memory({ memoryType: "directive" }), agent))
+      Array.from({ length: 8 }, () =>
+        store.create(memory({ memoryType: "directive" }), agent, AUTO_SAVE)
+      )
     );
     expect(outcomes.filter((outcome) => outcome.status === "fulfilled")).toHaveLength(5);
     expect(
@@ -223,7 +228,7 @@ describe("memory persistence", () => {
       const original = await store.create(memory(), human);
       const replacement = await store.create(
         memory({}, { supersedesMemoryId: original.id }),
-        kind === "human" ? human : { ...agent, personalAutoSave: false }
+        kind === "human" ? human : agent
       );
       if (kind === "proposal")
         await store.transition(replacement.id, "approve", replacement.currentRevisionId, human);

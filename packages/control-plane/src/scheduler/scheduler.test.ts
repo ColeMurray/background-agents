@@ -8,7 +8,7 @@ const mockSelectSessionMemory = vi.hoisted(() =>
     directiveChars: 0,
     catalogChars: 0,
     estimatedTokens: 0,
-    truncatedCount: 0,
+    omittedCount: 0,
     items: [],
   }))
 );

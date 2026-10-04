@@ -1,5 +1,5 @@
 import type { HarnessId } from "@open-inspect/shared/harnesses";
-import type { SessionMemoryManifest } from "../memory/types";
+import type { SessionMemorySelection } from "../memory/types";
 import type { Env } from "../types";
 import type { RequestContext } from "../routes/shared";
 import type { SpawnSource } from "@open-inspect/shared/types/sessions";
@@ -86,7 +86,7 @@ export interface SessionInitInput {
   automationId?: string | null;
   automationRunId?: string | null;
   /** Memory selection, resolved for a root session or copied from the parent. */
-  memory: Pinned<SessionMemoryManifest>;
+  memory: Pinned<SessionMemorySelection>;
   /** Managed skills, resolved for a root session or copied from the parent. */
   managedSkills: Pinned<SessionSkillManifestInput>;
   /** Complete, immutable provider routing snapshot resolved by the caller. */

@@ -136,9 +136,9 @@ export class MemoryRecordStore {
     return result.results.map(memoryFromRow);
   }
 
-  /** Reverse replacement links (newest-created last), batched within the parameter limit. */
-  async replacementIds(ids: readonly string[]): Promise<Map<string, string[]>> {
-    const replacements = new Map<string, string[]>();
+  /** IDs of the records superseding each given record (oldest first), batched within the parameter limit. */
+  async supersededByIds(ids: readonly string[]): Promise<Map<string, string[]>> {
+    const supersededBy = new Map<string, string[]>();
     for (let offset = 0; offset < ids.length; offset += MAX_D1_QUERY_PARAMETERS) {
       const batch = ids.slice(offset, offset + MAX_D1_QUERY_PARAMETERS);
       const rows = await prepareSql(
@@ -150,12 +150,12 @@ export class MemoryRecordStore {
           )}) ORDER BY created_at, id`
       ).all<{ id: string; supersedes_memory_id: string }>();
       for (const row of rows.results)
-        replacements.set(row.supersedes_memory_id, [
-          ...(replacements.get(row.supersedes_memory_id) ?? []),
+        supersededBy.set(row.supersedes_memory_id, [
+          ...(supersededBy.get(row.supersedes_memory_id) ?? []),
           row.id,
         ]);
     }
-    return replacements;
+    return supersededBy;
   }
 
   /**
@@ -231,7 +231,14 @@ export class MemoryRecordStore {
    * the predecessor active until approval.
    * @throws MemoryConflictError if a quota, eligibility, session, or predecessor guard loses.
    */
-  async create(input: NewMemory, actor: MemoryActor): Promise<MemoryRecord> {
+  async create(
+    input: NewMemory,
+    actor: MemoryActor,
+    options: {
+      /** The writing session may auto-save personal facts; rechecked in SQL at commit. */
+      personalAutoSaveEligible?: boolean;
+    } = {}
+  ): Promise<MemoryRecord> {
     const content = parseContent(input.content);
     const predecessor = input.supersedesMemoryId ? await this.get(input.supersedesMemoryId) : null;
     if (
@@ -243,7 +250,13 @@ export class MemoryRecordStore {
       throw new MemoryConflictError(
         "Replacement must reference an active memory in the same scope"
       );
-    const status = initialStatus(content.memoryType, input.partition, actor, predecessor);
+    const status = initialStatus(
+      content.memoryType,
+      input.partition,
+      actor,
+      predecessor,
+      options.personalAutoSaveEligible ?? false
+    );
     const id = `mem_${generateId()}`;
     const revisionId = `mrev_${generateId()}`;
     const operationId = generateId();

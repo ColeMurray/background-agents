@@ -6,12 +6,12 @@ import {
   type MemoryType,
 } from "@open-inspect/shared/types/memories";
 import { partitionFromColumns, type PartitionColumns } from "../memory/partition";
-import { emptyManifest } from "../memory/selection";
+import { emptySelection } from "../memory/selection";
 import type {
   MemorySession,
   PinnedItemDrift,
   PinnedMemoryEntry,
-  SessionMemoryManifest,
+  SessionMemorySelection,
 } from "../memory/types";
 import type { Pinned } from "../session/pinned";
 import { bulkInsertStatements } from "./bulk-insert";
@@ -26,7 +26,7 @@ interface ManifestRow {
   directive_chars: number;
   catalog_chars: number;
   estimated_tokens: number;
-  truncated_count: number;
+  omitted_count: number;
 }
 interface PinnedItemRow extends PartitionColumns {
   memory_id: string;
@@ -44,7 +44,7 @@ interface PinnedItemRow extends PartitionColumns {
 }
 
 export interface LoadedSessionMemory {
-  manifest: SessionMemoryManifest;
+  selection: SessionMemorySelection;
   /** Live drift for each manifest item, in the same order; for inspection only. */
   drift: PinnedItemDrift[];
   /** Pinned revisions to render; fact bodies are never loaded. */
@@ -66,18 +66,18 @@ export class SessionMemorySelectionStore {
    * collaborator-free. Children copy the parent's owner and selection; eligibility is never
    * inherited, and a legacy parent without a manifest leaves the child with empty context.
    */
-  bindPinned(sessionId: string, pinned: Pinned<SessionMemoryManifest>): SqlStatement[] {
+  bindPinned(sessionId: string, pinned: Pinned<SessionMemorySelection>): SqlStatement[] {
     return pinned.kind === "resolved"
       ? this.bindInsert(sessionId, pinned.value)
       : this.bindCopy(sessionId, pinned.parentSessionId);
   }
 
-  private bindInsert(sessionId: string, manifest: SessionMemoryManifest): SqlStatement[] {
+  private bindInsert(sessionId: string, manifest: SessionMemorySelection): SqlStatement[] {
     return [
       this.db
         .prepare(
           `INSERT INTO session_memory_manifests
-      (session_id, selection_version, manifest_sha256, resolved_at, include_personal_memories, personal_owner_user_id, directive_chars, catalog_chars, estimated_tokens, truncated_count, personal_auto_save_eligible)
+      (session_id, selection_version, manifest_sha256, resolved_at, include_personal_memories, personal_owner_user_id, directive_chars, catalog_chars, estimated_tokens, omitted_count, personal_auto_save_eligible)
       SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CASE WHEN visibility = 'private' AND parent_session_id IS NULL
         AND NOT EXISTS (SELECT 1 FROM session_collaborators WHERE session_id = sessions.id AND user_id <> sessions.user_id)
         THEN 1 ELSE 0 END FROM sessions WHERE id = ?`
@@ -92,7 +92,7 @@ export class SessionMemorySelectionStore {
           manifest.directiveChars,
           manifest.catalogChars,
           manifest.estimatedTokens,
-          manifest.truncatedCount,
+          manifest.omittedCount,
           sessionId
         ),
       ...bulkInsertStatements(
@@ -116,8 +116,8 @@ export class SessionMemorySelectionStore {
       this.db
         .prepare(
           `INSERT INTO session_memory_manifests
-      (session_id, selection_version, manifest_sha256, resolved_at, include_personal_memories, personal_owner_user_id, directive_chars, catalog_chars, estimated_tokens, truncated_count)
-      SELECT ?, selection_version, manifest_sha256, resolved_at, include_personal_memories, personal_owner_user_id, directive_chars, catalog_chars, estimated_tokens, truncated_count FROM session_memory_manifests WHERE session_id = ?`
+      (session_id, selection_version, manifest_sha256, resolved_at, include_personal_memories, personal_owner_user_id, directive_chars, catalog_chars, estimated_tokens, omitted_count)
+      SELECT ?, selection_version, manifest_sha256, resolved_at, include_personal_memories, personal_owner_user_id, directive_chars, catalog_chars, estimated_tokens, omitted_count FROM session_memory_manifests WHERE session_id = ?`
         )
         .bind(childId, parentId),
       this.db
@@ -177,11 +177,11 @@ export class SessionMemorySelectionStore {
         .bind(sessionId)
         .first<{ created_at: number }>();
       if (!session) return null;
-      const manifest = await emptyManifest(session.created_at);
-      return { manifest, drift: [], entries: [] };
+      const manifest = await emptySelection(session.created_at);
+      return { selection: manifest, drift: [], entries: [] };
     }
     const items = rows.results as PinnedItemRow[];
-    const manifest: SessionMemoryManifest = {
+    const manifest: SessionMemorySelection = {
       selectionVersion: header.selection_version,
       manifestSha256: header.manifest_sha256,
       resolvedAt: header.resolved_at,
@@ -190,7 +190,7 @@ export class SessionMemorySelectionStore {
       directiveChars: header.directive_chars,
       catalogChars: header.catalog_chars,
       estimatedTokens: header.estimated_tokens,
-      truncatedCount: header.truncated_count,
+      omittedCount: header.omitted_count,
       items: items.map((row) => ({
         memoryId: row.memory_id,
         revisionId: row.revision_id,
@@ -203,7 +203,7 @@ export class SessionMemorySelectionStore {
       })),
     };
     return {
-      manifest,
+      selection: manifest,
       drift: items.map((row) => ({
         revisedSinceSelection: row.current_revision_id !== row.revision_id,
         archivedSinceSelection: row.status === "archived",
@@ -268,7 +268,7 @@ export class SessionMemorySelectionStore {
     return {
       id: sessionId,
       principal: { userId: session.user_id, ownerTeamId: session.owner_team_id },
-      target: {
+      sources: {
         personalOwnerUserId:
           session.include_personal_memories === 1 ? session.personal_owner_user_id : null,
         environmentId: session.environment_id,
@@ -283,8 +283,8 @@ export class SessionMemorySelectionStore {
             : [],
       },
       harness: session.harness ?? DEFAULT_HARNESS,
-      inherited: session.parent_session_id !== null,
-      personalAutoSave: session.personal_auto_save_eligible === 1,
+      isChildSession: session.parent_session_id !== null,
+      personalAutoSaveEligible: session.personal_auto_save_eligible === 1,
     };
   }
 
