@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import type { EffectiveAuthorization, PermissionId } from "@open-inspect/shared/rbac";
+import type { MemoryScope } from "@open-inspect/shared/types/memories";
 import type { EnvironmentRow } from "../db/environments";
 import type { MemoryPartition } from "../memory/partition";
 import type { MemoryRecord } from "../memory/types";
@@ -13,7 +14,8 @@ import {
 import { AuthorizationError } from "./service";
 
 const USER = "11111111111111111111111111111111";
-const api: MemoryPartition = { type: "repository", repoId: 1, repoOwner: "acme", repoName: "api" };
+const api: MemoryPartition = { type: "repository", repoId: 1 };
+const apiScope = { type: "repository" as const, repoOwner: "acme", repoName: "api" };
 const dev: MemoryPartition = { type: "environment", environmentId: "dev" };
 const personal: MemoryPartition = { type: "personal", userId: USER };
 
@@ -30,7 +32,7 @@ function authorization(
   } as EffectiveAuthorization;
 }
 
-const ungranted = { owner: "acme", name: "api", repoId: 1 };
+const ungranted = api;
 
 function sessionPolicy(overrides: Partial<SessionMemoryAccessPolicyDeps> = {}) {
   const deps = {
@@ -83,9 +85,7 @@ describe("SessionMemoryAccessPolicy", () => {
       partition: api,
     });
     expect(deps.authorization.getEffectiveAuthorization).toHaveBeenCalledTimes(1);
-    expect(deps.repositoryGrants.ungrantedRepository).toHaveBeenCalledWith(authorization(), [
-      { owner: "acme", name: "api", repoId: 1 },
-    ]);
+    expect(deps.repositoryGrants.ungrantedRepository).toHaveBeenCalledWith(authorization(), [api]);
   });
 
   it.each([
@@ -147,7 +147,8 @@ function managementPolicy(
   return { deps, policy: new MemoryManagementPolicy({ ...deps, ...overrides }) };
 }
 
-const recordIn = (partition: MemoryPartition) => ({ partition }) as MemoryRecord;
+const recordIn = (partition: MemoryPartition, scope: MemoryScope = { type: "personal" }) =>
+  ({ partition, scope }) as MemoryRecord;
 /** The denial reason, or "granted". */
 const outcome = (decision: MemoryManagementDecision) =>
   decision.kind === "denied" ? decision.denial.reason : decision.kind;
@@ -180,6 +181,7 @@ describe("MemoryManagementPolicy", () => {
     expect(await policy.authorizeScope(scope, "read")).toEqual({
       kind: "granted",
       partition: api,
+      scope: apiScope,
       canManage: false,
     });
     expect(await policy.authorizeScope(scope, "write")).toEqual({
@@ -211,15 +213,16 @@ describe("MemoryManagementPolicy", () => {
   it("authorizes records by their stored repository ID without resolving names", async () => {
     const { policy, deps } = managementPolicy(["repositories.read"]);
     // Stored display names may be stale after a rename; the stable ID is what is checked.
-    const renamed = recordIn({ ...api, repoOwner: "old-owner" });
+    const renamed = recordIn(api, { ...apiScope, repoOwner: "old-owner" });
     expect(await policy.authorizeRecord(renamed, "read")).toMatchObject({
       kind: "granted",
-      partition: renamed.partition,
+      partition: api,
+      scope: renamed.scope,
     });
     expect(deps.repositories.resolve).not.toHaveBeenCalled();
     expect(deps.repositoryGrants.ungrantedRepository).toHaveBeenCalledWith(
       authorization(["repositories.read"]),
-      [{ owner: "old-owner", name: "api", repoId: 1 }]
+      [api]
     );
   });
 

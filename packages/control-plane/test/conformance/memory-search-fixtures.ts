@@ -1,6 +1,11 @@
 import { bulkInsertStatements } from "../../src/db/bulk-insert";
 import type { SqlDatabase } from "../../src/db/sql-database";
-import { partitionColumns, type MemoryPartition } from "../../src/memory/partition";
+import type { MemoryScope } from "@open-inspect/shared/types/memories";
+import {
+  partitionColumns,
+  scopeDisplayColumns,
+  type MemoryPartition,
+} from "../../src/memory/partition";
 
 export interface SearchFactFixture {
   id: string;
@@ -9,15 +14,26 @@ export interface SearchFactFixture {
   content?: string;
   /** Defaults to the seeding owner's personal partition. */
   partition?: MemoryPartition;
+  /** Display scope; repository partitions default to `acme/repo-<id>`. */
+  scope?: MemoryScope;
   status?: "active" | "proposed" | "archived";
   memoryType?: "fact" | "directive";
   updatedAt?: number;
 }
+function fixtureScope(partition: MemoryPartition | undefined): MemoryScope {
+  if (partition?.type === "repository")
+    return { type: "repository", repoOwner: "acme", repoName: `repo-${partition.repoId}` };
+  return partition?.type === "environment"
+    ? { type: "environment", environmentId: partition.environmentId }
+    : { type: "personal" };
+}
+
 /** Seed immutable current revisions without thousands of domain API round trips in corpus tests. */
 export async function seedSearchFacts(db: SqlDatabase, owner: string, facts: SearchFactFixture[]) {
   const memories = facts.map((fact) => ({
     id: fact.id,
     ...partitionColumns(fact.partition ?? { type: "personal", userId: owner }),
+    ...scopeDisplayColumns(fact.scope ?? fixtureScope(fact.partition)),
     memory_type: fact.memoryType ?? "fact",
     status: fact.status ?? "active",
     current_revision_id: `rev_${fact.id}`,

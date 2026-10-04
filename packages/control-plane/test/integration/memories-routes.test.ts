@@ -230,7 +230,11 @@ describe("memory HTTP lifecycle and session boundaries", () => {
         action === "archive"
           ? await createMemory()
           : await new MemoryRecordStore(env.DB).create(
-              { partition: { type: "personal", userId: OWNER }, content: fields },
+              {
+                partition: { type: "personal", userId: OWNER },
+                scope: { type: "personal" },
+                content: fields,
+              },
               {
                 kind: "agent",
                 userId: OWNER,

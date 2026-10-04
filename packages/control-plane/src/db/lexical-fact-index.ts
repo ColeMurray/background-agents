@@ -9,14 +9,16 @@ import {
 import {
   partitionFromColumns,
   partitionPredicate,
+  scopeFromColumns,
   type PartitionColumns,
+  type ScopeDisplayColumns,
 } from "../memory/partition";
 import { likeContains, LIKE_ESCAPE_CLAUSE } from "./like-pattern";
 import { CURRENT_MEMORY } from "./memory-queries";
 import type { SqlDatabase } from "./sql-database";
 import { prepareSql, sql, type SqlFragment } from "./sql-fragment";
 
-interface FactHitRow extends PartitionColumns {
+interface FactHitRow extends PartitionColumns, ScopeDisplayColumns {
   id: string;
   revision_id: string;
   title: string;
@@ -69,7 +71,8 @@ export class LexicalFactIndex implements FactSearchIndex {
     const patterns = query.terms.map(likeContains);
     const rows = await prepareSql(
       this.db,
-      sql`SELECT m.id, m.partition_type, m.partition_key, m.repo_owner, m.repo_name,
+      sql`SELECT m.id, m.partition_type, m.owner_user_id, m.repo_id, m.environment_id,
+          m.repo_owner, m.repo_name,
           r.id AS revision_id, r.title, r.description
         ${CURRENT_MEMORY}
         WHERE m.status = 'active' AND m.memory_type = 'fact'
@@ -82,6 +85,7 @@ export class LexicalFactIndex implements FactSearchIndex {
       id: row.id,
       revisionId: row.revision_id,
       partition: partitionFromColumns(row),
+      scope: scopeFromColumns(row),
       title: row.title,
       description: row.description,
     }));

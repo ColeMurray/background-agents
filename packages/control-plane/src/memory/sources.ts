@@ -4,12 +4,7 @@ import type { MemorySources } from "./types";
 /** A session repository's partition; legacy rows without a stable ID reach no memories. */
 export function repositoryPartition(repo: MemorySources["repositories"][number]) {
   if (repo.repoId === null || repo.repoId <= 0) return null;
-  return {
-    type: "repository",
-    repoId: repo.repoId,
-    repoOwner: repo.repoOwner,
-    repoName: repo.repoName,
-  } satisfies MemoryPartition;
+  return { type: "repository", repoId: repo.repoId } satisfies MemoryPartition;
 }
 
 /** The partitions a session draws from, in priority order: environment, repositories, personal. */

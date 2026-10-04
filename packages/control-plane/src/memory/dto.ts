@@ -5,7 +5,6 @@ import {
   type MemorySelectionSummary,
   type SessionMemorySelectionStatus,
 } from "@open-inspect/shared/types/memories";
-import { partitionScope } from "./partition";
 import type { MemoryRecord, PinnedItemDrift, SessionMemorySelection } from "./types";
 
 /**
@@ -19,7 +18,7 @@ export function toMemoryDto(
 ): MemoryDto {
   return {
     id: record.id,
-    scope: partitionScope(record.partition),
+    scope: record.scope,
     memoryType: record.memoryType,
     title: record.title,
     description: record.description,

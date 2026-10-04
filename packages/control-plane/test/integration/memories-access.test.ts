@@ -6,6 +6,7 @@ import { Scheduler } from "../../src/scheduler/scheduler";
 import { createCloudflareEnv } from "../../src/cloudflare/platform";
 import { memorySelectorForTest, seedMemorySession } from "./memory-test-helpers";
 import { SessionCollaboratorStore } from "../../src/db/session-collaborators";
+import type { MemoryScope } from "@open-inspect/shared/types/memories";
 import type { MemoryPartition } from "../../src/memory/partition";
 import { GitHubSourceControlProvider } from "../../src/source-control/providers/github-provider";
 import { cleanD1Tables } from "./cleanup";
@@ -28,15 +29,19 @@ const content = {
   content: "Use the staging environment",
 };
 const actor = { kind: "user" as const, userId: MEMBER, requestId: "setup" };
-const repoPartition: MemoryPartition = {
+const repoPartition: MemoryPartition = { type: "repository", repoId: repo.repoId };
+const repoScope: MemoryScope = {
   type: "repository",
-  repoId: repo.repoId,
   repoOwner: repo.repoOwner,
   repoName: repo.repoName,
 };
 const devPartition: MemoryPartition = { type: "environment", environmentId: "dev" };
+const devScope: MemoryScope = { type: "environment", environmentId: "dev" };
 const createRecord = (partition: MemoryPartition, extra: { supersedesMemoryId?: string } = {}) =>
-  new MemoryRecordStore(env.DB).create({ partition, content, ...extra }, actor);
+  new MemoryRecordStore(env.DB).create(
+    { partition, scope: partition.type === "repository" ? repoScope : devScope, content, ...extra },
+    actor
+  );
 const request = (path: string, method = "GET", body?: unknown, userId = MEMBER) =>
   ownershipRequest(path, {
     method,
@@ -218,7 +223,7 @@ describe("memory shared-scope authorization", () => {
       ).items
     ).toEqual([]);
     await expect(
-      createRecord({ ...repoPartition, repoId: 456 }, { supersedesMemoryId: record.id })
+      createRecord({ type: "repository", repoId: 456 }, { supersedesMemoryId: record.id })
     ).rejects.toThrow(/same scope/);
   });
 
@@ -458,7 +463,7 @@ describe("memory shared-scope authorization", () => {
     ).toEqual({ personal_auto_save_eligible: 0 });
     await expect(
       new MemoryRecordStore(env.DB).create(
-        { partition: { type: "personal", userId: MEMBER }, content },
+        { partition: { type: "personal", userId: MEMBER }, scope: { type: "personal" }, content },
         { ...actor, kind: "agent", sessionId: "private" },
         { personalAutoSaveEligible: true }
       )

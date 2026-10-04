@@ -9,6 +9,7 @@ import {
   type MemoryAuthorKind,
   type MemoryContent,
   type MemoryRevision,
+  type MemoryScope,
   type MemoryStatus,
   type MemoryType,
 } from "@open-inspect/shared/types/memories";
@@ -22,6 +23,9 @@ import {
   samePartition,
   type MemoryPartition,
   type PartitionColumns,
+  scopeDisplayColumns,
+  scopeFromColumns,
+  type ScopeDisplayColumns,
 } from "../memory/partition";
 import type { MemoryActor, MemoryCandidate, MemoryRecord } from "../memory/types";
 import { MAX_D1_QUERY_PARAMETERS } from "./query-limits";
@@ -35,7 +39,7 @@ import {
   personalAutoSaveGuard,
 } from "./session-memory-write-guard";
 
-export interface MemoryRow extends PartitionColumns {
+export interface MemoryRow extends PartitionColumns, ScopeDisplayColumns {
   id: string;
   memory_type: MemoryType;
   status: MemoryStatus;
@@ -64,6 +68,7 @@ function recordFields(row: MemoryRow) {
   return {
     id: row.id,
     partition: partitionFromColumns(row),
+    scope: scopeFromColumns(row),
     status: row.status,
     archiveKind: row.archive_kind,
     archiveNote: row.archive_note,
@@ -101,6 +106,8 @@ export interface MemoryListOptions {
 /** Content for a new record; the partition is resolved and authorized by the caller. */
 export interface NewMemory {
   partition: MemoryPartition;
+  /** How the scope is displayed; must name the same target as `partition`. */
+  scope: MemoryScope;
   content: MemoryContent;
   supersedesMemoryId?: string;
 }
@@ -280,15 +287,18 @@ export class MemoryRecordStore {
         AND current_revision_id = ${predecessor.currentRevisionId} AND status = 'active')`);
 
     const columns = partitionColumns(input.partition);
+    const display = scopeDisplayColumns(input.scope);
     const statements = [
       prepareSql(
         this.db,
         sql`INSERT INTO memories
-          (id, partition_type, partition_key, repo_owner, repo_name, memory_type, status, current_revision_id,
-           author_kind, author_user_id, author_session_id, supersedes_memory_id, supersedes_revision_id,
-           approved_at, last_operation_id, created_at, updated_at)
-          SELECT ${id}, ${columns.partition_type}, ${columns.partition_key}, ${columns.repo_owner},
-            ${columns.repo_name}, ${content.memoryType}, ${status}, NULL, ${actor.kind},
+          (id, partition_type, owner_user_id, repo_id, environment_id, repo_owner, repo_name,
+           memory_type, status, current_revision_id, author_kind, author_user_id, author_session_id,
+           supersedes_memory_id, supersedes_revision_id, approved_at, last_operation_id, created_at,
+           updated_at)
+          SELECT ${id}, ${columns.partition_type}, ${columns.owner_user_id}, ${columns.repo_id},
+            ${columns.environment_id}, ${display.repo_owner}, ${display.repo_name},
+            ${content.memoryType}, ${status}, NULL, ${actor.kind},
             ${actor.userId}, ${actorSessionId(actor)}, ${predecessor?.id ?? null},
             ${predecessor?.currentRevisionId ?? null}, ${status === "active" ? now : null},
             ${operationId}, ${now}, ${now}

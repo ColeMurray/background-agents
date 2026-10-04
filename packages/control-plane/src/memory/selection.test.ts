@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
+import type { MemoryScope } from "@open-inspect/shared/types/memories";
 import type { SessionMemorySelection } from "./types";
 import type { MemoryPartition } from "./partition";
-import { partitionScope } from "./partition";
 import { renderMemorySection } from "./render";
 import { selectWithinBudget } from "./selection";
 import type { MemoryCandidate, MemorySources } from "./types";
@@ -13,6 +13,7 @@ function candidate(id: string, overrides: CandidateOverrides = {}): MemoryCandid
   const base = {
     id,
     partition: { type: "personal", userId: "user_a" } as MemoryPartition,
+    scope: { type: "personal" } as MemoryScope,
     status: "active" as const,
     archiveKind: null,
     archiveNote: null,
@@ -41,7 +42,7 @@ function render(manifest: SessionMemorySelection, candidates: MemoryCandidate[])
     candidates.map((record) => ({
       memoryId: record.id,
       revisionId: record.currentRevisionId,
-      scope: partitionScope(record.partition),
+      scope: record.scope,
       title: record.title,
       ...(record.memoryType === "directive"
         ? { inclusion: "full" as const, content: record.content }
@@ -51,12 +52,8 @@ function render(manifest: SessionMemorySelection, candidates: MemoryCandidate[])
   );
 }
 
-const repo = {
-  type: "repository",
-  repoOwner: "group/subgroup",
-  repoName: "api",
-  repoId: 123,
-} as const;
+const repo = { type: "repository", repoId: 123 } as const;
+const repoScope = { type: "repository", repoOwner: "group/subgroup", repoName: "api" } as const;
 const target: MemorySources = {
   personalOwnerUserId: "user_a",
   repositories: [{ repoOwner: "group/subgroup", repoName: "api", repoId: 123 }],
@@ -71,7 +68,7 @@ describe("memory selection", () => {
       candidate("theirs", { partition: { type: "personal", userId: "user_b" } }),
       candidate("proposal", { status: "proposed" }),
       // Matched by stable repository ID even when the stored display name differs.
-      candidate("repo", { partition: { ...repo, repoOwner: "renamed" } }),
+      candidate("repo", { partition: repo, scope: { ...repoScope, repoOwner: "renamed" } }),
     ];
     expect(ids(await selectWithinBudget(candidates, target))).toEqual(["repo", "mine"]);
     const optedOut = await selectWithinBudget(candidates, { ...target, personalOwnerUserId: null });
@@ -198,7 +195,8 @@ describe("memory rendering", () => {
     };
     const candidates = Array.from({ length: 20 }, (_, index) =>
       candidate(`large-label-${index}`, {
-        partition: { type: "repository", ...big },
+        partition: { type: "repository", repoId: big.repoId },
+        scope: { type: "repository", repoOwner: big.repoOwner, repoName: big.repoName },
         description: "\0".repeat(420),
       })
     );

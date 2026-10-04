@@ -242,25 +242,8 @@ const SKILL_CATALOG_GENERATION_OPERATION: MergeOperation = {
       .bind(loserId),
 };
 
-/** Personal memories are partitioned by owner: `partition_key` holds the user ID for personal rows. */
-const PERSONAL_MEMORY_OWNER_OPERATION: MergeOperation = {
-  key: "memoriesOwnedRepointed",
-  execute: (db, survivorId, loserId) =>
-    db
-      .prepare(
-        "UPDATE memories SET partition_key = ? WHERE partition_type = 'personal' AND partition_key = ?"
-      )
-      .bind(survivorId, loserId),
-  preview: (db, _survivorId, loserId) =>
-    db
-      .prepare(
-        "SELECT COUNT(*) AS count FROM memories WHERE partition_type = 'personal' AND partition_key = ?"
-      )
-      .bind(loserId),
-};
-
 const FINAL_REPOINT_OPERATIONS = [
-  PERSONAL_MEMORY_OWNER_OPERATION,
+  regularRepoint("memoriesOwnedRepointed", "memories", "owner_user_id"),
   regularRepoint("memoryAuthorsRepointed", "memories", "author_user_id"),
   regularRepoint("memoryRevisionAuthorsRepointed", "memory_revisions", "author_user_id"),
   regularRepoint("memoryDecidersRepointed", "memories", "decided_by"),

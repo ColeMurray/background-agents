@@ -115,7 +115,7 @@ async function create(request: Request, env: Env, _params: object, ctx: UserRout
   const store = new MemoryRecordStore(ctx.db);
   try {
     const record = await store.create(
-      { partition: access.partition, content, supersedesMemoryId },
+      { partition: access.partition, scope: access.scope, content, supersedesMemoryId },
       actor(ctx)
     );
     return json({ memory: await dto(store, record, true) }, 201);

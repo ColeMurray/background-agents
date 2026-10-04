@@ -1,6 +1,7 @@
 import {
   memorySearchTerms,
   SANDBOX_MEMORY_SCHEMA_VERSION,
+  type MemoryScope,
   type MemorySearchInput,
   type MemorySearchResponse,
   type RenderedSessionMemory,
@@ -13,7 +14,7 @@ import type { MemoryRecordStore } from "../db/memory-records";
 import type { SessionMemorySelectionStore } from "../db/session-memory-selections";
 import { MemoryAccessError, MemoryNotFoundError, MemoryValidationError } from "./errors";
 import { factSearchResponse, type FactSearchIndex, type FactSearchPartition } from "./fact-search";
-import { partitionScope, samePartition, type MemoryPartition } from "./partition";
+import { samePartition, type MemoryPartition } from "./partition";
 import { renderMemorySection } from "./render";
 import { canWritePersonal, personalReadAccess } from "./session-rules";
 import { repositoryPartition, sourcePartitions } from "./sources";
@@ -121,7 +122,7 @@ export class SessionMemoryService {
       id: record.id,
       status: "active",
       memoryType: "fact",
-      scope: partitionScope(record.partition),
+      scope: record.scope,
       title: record.title,
       description: record.description,
       content: record.content,
@@ -144,12 +145,13 @@ export class SessionMemoryService {
     input: SandboxMemoryWriteInput
   ): Promise<SandboxMemoryWriteResult> {
     const session = await this.loadSession(sessionId);
-    const partition = this.writePartition(session, input);
+    const { partition, scope } = this.writeTarget(session, input);
     if (!(await this.mayAccessShared(session, [partition])))
       throw new MemoryAccessError(SCOPE_UNAVAILABLE);
     const memory = await this.records.create(
       {
         partition,
+        scope,
         content: {
           memoryType: input.memoryType,
           title: input.title,
@@ -215,7 +217,11 @@ export class SessionMemoryService {
         );
   }
 
-  private writePartition(session: MemorySession, input: SandboxMemoryWriteInput): MemoryPartition {
+  /** The partition a session-relative write targets, with its display scope. */
+  private writeTarget(
+    session: MemorySession,
+    input: SandboxMemoryWriteInput
+  ): { partition: MemoryPartition; scope: MemoryScope } {
     switch (input.scopeType) {
       case "repository": {
         if (input.repoOwner === undefined && session.sources.repositories.length > 1)
@@ -226,19 +232,30 @@ export class SessionMemoryService {
         if (!repo) throw new MemoryAccessError("Repository is outside this session");
         const partition = repositoryPartition(repo);
         if (!partition) throw new MemoryAccessError(OUTSIDE_SESSION);
-        return partition;
+        return {
+          partition,
+          scope: { type: "repository", repoOwner: repo.repoOwner, repoName: repo.repoName },
+        };
       }
-      case "environment":
-        if (!session.sources.environmentId)
+      case "environment": {
+        const environmentId = session.sources.environmentId;
+        if (!environmentId)
           throw new MemoryAccessError("This session has no associated environment");
-        return { type: "environment", environmentId: session.sources.environmentId };
+        return {
+          partition: { type: "environment", environmentId },
+          scope: { type: "environment", environmentId },
+        };
+      }
       case "personal":
         if (!session.sources.personalOwnerUserId) throw new MemoryAccessError(OUTSIDE_SESSION);
         // A collaborator-owned child consumes inherited context but cannot mutate the original
         // owner's personal store.
         if (!canWritePersonal(session))
           throw new MemoryAccessError("Personal memory owner differs from this session owner");
-        return { type: "personal", userId: session.sources.personalOwnerUserId };
+        return {
+          partition: { type: "personal", userId: session.sources.personalOwnerUserId },
+          scope: { type: "personal" },
+        };
       default: {
         const exhaustive: never = input.scopeType;
         throw new Error(`Unhandled memory scope: ${String(exhaustive)}`);

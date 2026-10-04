@@ -62,11 +62,11 @@ export async function authorizeTeamRepositories(
  * repositories stay workspace-level; any granting team may authorize its members. Memberships
  * are cached on `ctx` for the rest of the request.
  */
-async function findUngrantedRepository(
+async function findUngrantedRepository<T extends { repoId: number | null }>(
   ctx: RequestContext,
   authorization: EffectiveAuthorization,
-  target: { repositories: readonly RepositoryAuthorizationTarget[]; requireLead?: boolean }
-): Promise<RepositoryAuthorizationTarget | null> {
+  target: { repositories: readonly T[]; requireLead?: boolean }
+): Promise<T | null> {
   if (isWorkspaceAdmin(authorization.role.key)) return null;
   const store = new TeamRepositoryGrantStore(ctx.db);
   const teams = new TeamStore(ctx.db);
@@ -117,12 +117,15 @@ export async function authorizeWorkspaceRepositories(
 export class RepositoryGrantAuthorizer {
   constructor(private readonly ctx: RequestContext) {}
 
-  /** The first repository `authorization` lacks a grant for, or null when all are allowed. */
-  ungrantedRepository(
+  /**
+   * The first repository `authorization` lacks a grant for, or null when all are allowed. Only
+   * the stable `repoId` is consulted, so callers may pass any repository-shaped value.
+   */
+  ungrantedRepository<T extends { repoId: number | null }>(
     authorization: EffectiveAuthorization,
-    repositories: readonly RepositoryAuthorizationTarget[],
+    repositories: readonly T[],
     options: { requireLead?: boolean } = {}
-  ): Promise<RepositoryAuthorizationTarget | null> {
+  ): Promise<T | null> {
     const sameUser = authorization.userId === this.ctx.authorization?.userId;
     return findUngrantedRepository(
       {

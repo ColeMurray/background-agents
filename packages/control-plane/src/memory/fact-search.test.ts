@@ -5,7 +5,8 @@ import { factSearchResponse, type FactHit } from "./fact-search";
 const hit = (id: string, overrides: Partial<FactHit> = {}): FactHit => ({
   id,
   revisionId: `rev_${id}`,
-  partition: { type: "repository", repoId: 1, repoOwner: "acme", repoName: "api" },
+  partition: { type: "repository", repoId: 1 },
+  scope: { type: "repository", repoOwner: "acme", repoName: "api" },
   title: "Billing",
   description: "Webhook processing",
   ...overrides,

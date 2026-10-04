@@ -5,7 +5,7 @@ import {
 } from "@open-inspect/shared/types/memories";
 import type { SessionMemoryItem, SessionMemorySelection } from "./types";
 import { hashToken } from "../auth/crypto";
-import { partitionKey, partitionScope, type MemoryPartition } from "./partition";
+import { partitionKey, type MemoryPartition } from "./partition";
 import {
   MEMORY_SECTION_OVERHEAD_CHARS,
   renderMemoryEntry,
@@ -47,7 +47,7 @@ export function orderCandidates(
 function renderable(candidate: MemoryCandidate): RenderableMemory {
   const base = {
     memoryId: candidate.id,
-    scope: partitionScope(candidate.partition),
+    scope: candidate.scope,
     title: candidate.title,
   };
   return candidate.memoryType === "directive"

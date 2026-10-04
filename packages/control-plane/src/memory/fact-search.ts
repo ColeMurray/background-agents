@@ -3,7 +3,8 @@ import {
   type MemorySearchResponse,
   type MemorySearchResult,
 } from "@open-inspect/shared/types/memories";
-import { partitionScope, type MemoryPartition } from "./partition";
+import type { MemoryScope } from "@open-inspect/shared/types/memories";
+import type { MemoryPartition } from "./partition";
 
 /** A partition to search; `pinnedIn` restricts it to records pinned in that session. */
 export interface FactSearchPartition {
@@ -25,6 +26,8 @@ export interface FactHit {
   id: string;
   revisionId: string;
   partition: MemoryPartition;
+  /** Display scope stored with the record. */
+  scope: MemoryScope;
   title: string;
   description: string;
 }
@@ -58,7 +61,7 @@ export function factSearchResponse(hits: readonly FactHit[], limit: number): Mem
     const result = {
       id: hit.id,
       revisionId: hit.revisionId,
-      scope: partitionScope(hit.partition),
+      scope: hit.scope,
       title: hit.title,
       description: hit.description,
     };

@@ -2,10 +2,16 @@
 -- after target deletion so historical manifests do not block environment cleanup.
 CREATE TABLE memories (
   id TEXT PRIMARY KEY,
-  -- Partition identity: the owner user ID (personal), stable repository ID (repository), or
-  -- environment ID (environment). Repository names are display-only and never authorize.
+  -- Partition identity: exactly one typed column is set, matching partition_type. The owner user
+  -- (personal), stable repository ID (repository), or environment (environment).
   partition_type TEXT NOT NULL CHECK (partition_type IN ('personal', 'repository', 'environment')),
-  partition_key TEXT NOT NULL,
+  owner_user_id TEXT,
+  repo_id INTEGER,
+  environment_id TEXT,
+  -- Uniform key over the typed identity, so one predicate and one set of indexes serve every
+  -- partition type.
+  partition_key TEXT GENERATED ALWAYS AS (COALESCE(owner_user_id, CAST(repo_id AS TEXT), environment_id)) STORED,
+  -- Repository display names as written; never identity and never used to authorize.
   repo_owner TEXT,
   repo_name TEXT,
   memory_type TEXT NOT NULL CHECK (memory_type IN ('fact', 'directive')),
@@ -25,8 +31,14 @@ CREATE TABLE memories (
   last_operation_id TEXT NOT NULL,
   created_at INTEGER NOT NULL,
   updated_at INTEGER NOT NULL,
-  CHECK ((partition_type = 'repository') = (repo_owner IS NOT NULL AND repo_name IS NOT NULL)),
-  CHECK (partition_type = 'repository' OR (repo_owner IS NULL AND repo_name IS NULL)),
+  CHECK (
+    (partition_type = 'personal' AND owner_user_id IS NOT NULL AND repo_id IS NULL AND environment_id IS NULL
+      AND repo_owner IS NULL AND repo_name IS NULL)
+    OR (partition_type = 'repository' AND repo_id IS NOT NULL AND owner_user_id IS NULL AND environment_id IS NULL
+      AND repo_owner IS NOT NULL AND repo_name IS NOT NULL)
+    OR (partition_type = 'environment' AND environment_id IS NOT NULL AND owner_user_id IS NULL AND repo_id IS NULL
+      AND repo_owner IS NULL AND repo_name IS NULL)
+  ),
   CHECK (
     (status = 'archived' AND archived_at IS NOT NULL AND archive_kind IS NOT NULL)
     OR (status <> 'archived' AND archived_at IS NULL AND archive_kind IS NULL AND archive_note IS NULL)

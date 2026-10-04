@@ -14,6 +14,7 @@ import type {
 
 const api = { repoOwner: "acme", repoName: "api", repoId: 1 };
 const web = { repoOwner: "acme", repoName: "web", repoId: 2 };
+const apiPartition: MemoryPartition = { type: "repository", repoId: api.repoId };
 
 function memorySession(
   overrides: Partial<Omit<MemorySession, "principal" | "sources">> & {
@@ -37,6 +38,7 @@ function record(id: string, overrides: Partial<MemoryRecord> = {}): MemoryRecord
   return {
     id,
     partition: { type: "personal", userId: "owner" },
+    scope: { type: "personal" },
     memoryType: "fact",
     title: "Test setup",
     description: "How to run the tests",
@@ -79,7 +81,7 @@ function setup(
     records: {
       get: vi.fn(async (id: string) => records.get(id) ?? null),
       create: vi.fn<SessionMemoryServiceDeps["records"]["create"]>(async (input) =>
-        record("created", { partition: input.partition, status: "proposed" })
+        record("created", { partition: input.partition, scope: input.scope, status: "proposed" })
       ),
     },
     factIndex: {
@@ -114,7 +116,8 @@ describe("SessionMemoryService.write", () => {
     });
     expect(deps.records.create).toHaveBeenCalledWith(
       {
-        partition: { type: "repository", ...api },
+        partition: apiPartition,
+        scope: { type: "repository", repoOwner: "acme", repoName: "api" },
         content: fact,
         supersedesMemoryId: undefined,
       },
@@ -127,7 +130,7 @@ describe("SessionMemoryService.write", () => {
       { personalAutoSaveEligible: true }
     );
     expect(deps.access.check).toHaveBeenCalledWith({ userId: "owner", ownerTeamId: null }, [
-      { type: "repository", ...api },
+      apiPartition,
     ]);
   });
 
@@ -147,7 +150,10 @@ describe("SessionMemoryService.write", () => {
       })
     ).resolves.toMatchObject({ id: "created" });
     expect(deps.records.create).toHaveBeenCalledTimes(1);
-    expect(deps.records.create.mock.calls[0][0].partition).toEqual({ type: "repository", ...web });
+    expect(deps.records.create.mock.calls[0][0].partition).toEqual({
+      type: "repository",
+      repoId: web.repoId,
+    });
   });
 
   it("keeps a collaborator-owned child out of the original owner's personal store", async () => {
@@ -201,7 +207,7 @@ describe("SessionMemoryService.read", () => {
   });
 
   it("never expands directives or records outside the session's partitions", async () => {
-    const other: MemoryPartition = { type: "repository", ...web };
+    const other: MemoryPartition = { type: "repository", repoId: web.repoId };
     const { service } = setup({
       records: [
         record("directive", { memoryType: "directive" }),
@@ -222,7 +228,7 @@ describe("SessionMemoryService.search", () => {
       limit: 10,
       partitions: [
         { partition: { type: "personal", userId: "owner" }, pinnedIn: "session" },
-        { partition: { type: "repository", ...api } },
+        { partition: apiPartition },
       ],
     });
   });

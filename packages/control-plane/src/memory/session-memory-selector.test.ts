@@ -36,7 +36,7 @@ describe("SessionMemorySelector", () => {
     const manifest = await subject.select(request);
     expect(deps.records.listCandidates).toHaveBeenCalledWith([
       { type: "environment", environmentId: "dev" },
-      { type: "repository", repoOwner: "acme", repoName: "api", repoId: 1 },
+      { type: "repository", repoId: 1 },
       { type: "personal", userId: "owner" },
     ]);
     expect(manifest).toMatchObject({
@@ -70,12 +70,7 @@ describe("SessionMemorySelector", () => {
         { repoOwner: "acme", repoName: "legacy", repoId: null },
       ],
     });
-    const api: MemoryPartition = {
-      type: "repository",
-      repoOwner: "acme",
-      repoName: "api",
-      repoId: 1,
-    };
+    const api: MemoryPartition = { type: "repository", repoId: 1 };
     expect(deps.records.listCandidates).toHaveBeenCalledWith([api]);
     expect(deps.access.check).toHaveBeenCalledWith(request.principal, [api]);
   });

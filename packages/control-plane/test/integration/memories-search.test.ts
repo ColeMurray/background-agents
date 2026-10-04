@@ -20,12 +20,7 @@ import {
 const OWNER = "22222222222222222222222222222222";
 const OTHER = "33333333333333333333333333333333";
 const repo = { repoOwner: "acme/group", repoName: "api", repoId: 123, baseBranch: "main" };
-const repoPartition: MemoryPartition = {
-  type: "repository",
-  repoId: repo.repoId,
-  repoOwner: repo.repoOwner,
-  repoName: repo.repoName,
-};
+const repoPartition: MemoryPartition = { type: "repository", repoId: repo.repoId };
 const devPartition: MemoryPartition = { type: "environment", environmentId: "dev" };
 
 /** Create a real indexed session and bind tools to its own sandbox credential. */
@@ -178,11 +173,21 @@ describe("session memory discovery", () => {
       { id: "personal", title: "needle" },
       { id: "other-user", title: "needle", partition: { type: "personal", userId: OTHER } },
       { id: "api", title: "needle", partition: repoPartition },
-      { id: "web", title: "needle", partition: { ...repoPartition, repoName: "web", repoId: 456 } },
+      { id: "web", title: "needle", partition: { type: "repository", repoId: 456 } },
       // Same names, different stable ID: a reused name never matches.
-      { id: "wrong-id", title: "needle", partition: { ...repoPartition, repoId: 789 } },
+      {
+        id: "wrong-id",
+        title: "needle",
+        partition: { type: "repository", repoId: 789 },
+        scope: { type: "repository", repoOwner: repo.repoOwner, repoName: repo.repoName },
+      },
       // Same stable ID, stale display name: a renamed repository keeps its memories.
-      { id: "renamed", title: "needle", partition: { ...repoPartition, repoOwner: "old-owner" } },
+      {
+        id: "renamed",
+        title: "needle",
+        partition: repoPartition,
+        scope: { type: "repository", repoOwner: "old-owner", repoName: repo.repoName },
+      },
       { id: "environment", title: "needle", partition: devPartition },
       {
         id: "other-env",

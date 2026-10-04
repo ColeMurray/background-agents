@@ -27,7 +27,12 @@ const fact: MemoryContent = {
 };
 /** A personal fact for user_a, with optional content changes and replacement link. */
 function memory(content: Partial<MemoryContent> = {}, extra: Partial<NewMemory> = {}): NewMemory {
-  return { partition: owner, content: { ...fact, ...content }, ...extra };
+  return {
+    partition: owner,
+    scope: { type: "personal" },
+    content: { ...fact, ...content },
+    ...extra,
+  };
 }
 const page = { status: "active" as const, offset: 0, limit: 50 };
 
@@ -90,7 +95,8 @@ describe("memory persistence", () => {
     const input = memory(
       {},
       {
-        partition: { type: "repository", repoId: 123, repoOwner: "old-owner", repoName: "api" },
+        partition: { type: "repository", repoId: 123 },
+        scope: { type: "repository", repoOwner: "old-owner", repoName: "api" },
       }
     );
     const original = await store.create(input, human);

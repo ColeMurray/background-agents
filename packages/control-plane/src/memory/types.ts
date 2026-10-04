@@ -13,7 +13,10 @@ import type { MemoryPartition } from "./partition";
 /** A live record with its current revision; server-only (the web receives `MemoryDto`). */
 export interface MemoryRecord extends MemoryContent {
   id: string;
+  /** Identity: what the memory belongs to. Stores, matches, and authorizes by this. */
   partition: MemoryPartition;
+  /** Display: how the scope is shown (repository names as they were when written). */
+  scope: MemoryScope;
   status: MemoryStatus;
   archiveKind: MemoryArchiveKind | null;
   archiveNote: string | null;

@@ -160,7 +160,7 @@ export class SessionMemorySelectionStore {
       this.db
         .prepare(
           `SELECT i.memory_id, i.revision_id, i.scope_json, i.inclusion, i.estimated_tokens,
-            m.partition_type, m.partition_key, m.repo_owner, m.repo_name, m.current_revision_id, m.status,
+            m.partition_type, m.owner_user_id, m.repo_id, m.environment_id, m.current_revision_id, m.status,
             r.revision_number, r.memory_type, r.title, r.description,
             CASE WHEN i.inclusion = 'full' THEN r.content ELSE NULL END AS content
           FROM session_memory_items i JOIN memories m ON m.id = i.memory_id
