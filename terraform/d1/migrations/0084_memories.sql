@@ -1,11 +1,12 @@
--- Revisioned memory and pinned session context. Scope identities are retained
--- after target deletion so historical manifests do not block environment cleanup.
+-- Revisioned memory and pinned session context. Repository and environment identities are
+-- retained after target deletion so historical manifests do not block environment cleanup;
+-- personal memories belong to a user, and user merges repoint them before the loser is deleted.
 CREATE TABLE memories (
   id TEXT PRIMARY KEY,
   -- Partition identity: exactly one typed column is set, matching partition_type. The owner user
   -- (personal), stable repository ID (repository), or environment (environment).
   partition_type TEXT NOT NULL CHECK (partition_type IN ('personal', 'repository', 'environment')),
-  owner_user_id TEXT,
+  owner_user_id TEXT REFERENCES users(id) ON DELETE RESTRICT,
   repo_id INTEGER,
   environment_id TEXT,
   -- Uniform key over the typed identity, so one predicate and one set of indexes serve every

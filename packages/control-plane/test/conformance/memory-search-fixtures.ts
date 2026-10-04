@@ -30,6 +30,19 @@ function fixtureScope(partition: MemoryPartition | undefined): MemoryScope {
 
 /** Seed immutable current revisions without thousands of domain API round trips in corpus tests. */
 export async function seedSearchFacts(db: SqlDatabase, owner: string, facts: SearchFactFixture[]) {
+  // Personal partitions reference users; create any owners the caller has not seeded.
+  const owners = new Set([owner]);
+  for (const fact of facts)
+    if (fact.partition?.type === "personal") owners.add(fact.partition.userId);
+  await db.batch(
+    [...owners].map((id) =>
+      db
+        .prepare(
+          "INSERT INTO users (id, created_at, updated_at) VALUES (?, 1, 1) ON CONFLICT (id) DO NOTHING"
+        )
+        .bind(id)
+    )
+  );
   const memories = facts.map((fact) => ({
     id: fact.id,
     ...partitionColumns(fact.partition ?? { type: "personal", userId: owner }),
