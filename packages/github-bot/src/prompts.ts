@@ -7,6 +7,8 @@ import {
 } from "./suggested-changes";
 
 const REVIEW_DIR = "/tmp/pr-review";
+const PATH_FILE_1 = `${REVIEW_DIR}/path-1.txt`;
+const PATH_FILE_N = `${REVIEW_DIR}/path-<n>.txt`;
 // Placeholders for the commits the agent pins once per request (see buildPinCommand).
 const BASE_COMMIT = "<base commit>";
 const HEAD_COMMIT = "<head commit>";
@@ -117,16 +119,21 @@ ${bodyDelimiter}
    cat > ${REVIEW_DIR}/comment-1.md <<'${bodyDelimiter}'
 <inline comment>
 ${bodyDelimiter}
+   cat > ${PATH_FILE_1} <<'${bodyDelimiter}'
+<file path>
+${bodyDelimiter}
    jq -n \\
      --rawfile summary ${REVIEW_DIR}/summary.md \\
      --rawfile c1 ${REVIEW_DIR}/comment-1.md \\
+     --rawfile p1 ${PATH_FILE_1} \\
      '{body: $summary, event: "${event}", commit_id: "${HEAD_COMMIT}", comments: [
-       {path: "<file path>", line: <line number>, side: "RIGHT", body: $c1}
+       {path: ($p1 | rtrimstr("\\n")), line: <line number>, side: "RIGHT", body: $c1}
      ]}' > ${REVIEW_DIR}/review.json
    gh api repos/${repositoryPath}/pulls/${number}/reviews --method POST --input ${REVIEW_DIR}/review.json
 
-   Write one body file and add one \`--rawfile\` per inline comment (c2, c3, ...); never hand-write
-   the JSON. \`line\` is the file's line number on the RIGHT side of the pinned diff at
+   Write one body file and one path file per inline comment, each with its own \`--rawfile\` (c2/p2,
+   c3/p3, ...); never hand-write the JSON. PR authors control file paths, so never type a path into
+   a command or the jq program; always pass it through its path file. \`line\` is the file's line number on the RIGHT side of the pinned diff at
    ${HEAD_COMMIT} and must be inside a diff hunk. For a comment on several lines, add
    \`start_line: <first line>, start_side: "RIGHT"\` to it; the whole range must be in one hunk.
 
@@ -232,7 +239,7 @@ When an inline comment proposes a concrete fix to lines in the diff, include it 
 suggested change so the author can commit it with one click instead of re-implementing it from
 prose. Keep the fix in prose when you are not sure of the exact code.
 ${buildSuggestionFormatRules()}
-${buildReviewSuggestionAnchorRules(HEAD_COMMIT)}
+${buildReviewSuggestionAnchorRules(HEAD_COMMIT, PATH_FILE_N)}
 ${buildCustomInstructionsSection(codeReviewInstructions)}
 ${buildCommentGuidelines(isPublic, bodyDelimiter)}`;
 }
@@ -264,7 +271,7 @@ A GitHub suggested change is a review comment the PR author can commit with one 
   change request with suggestions instead.
 - Do not push commits in a request where you leave suggestions: a push can make them outdated.${threadRules}
 ${buildSuggestionFormatRules()}
-${buildReviewSuggestionAnchorRules(HEAD_COMMIT)}
+${buildReviewSuggestionAnchorRules(HEAD_COMMIT, PATH_FILE_N)}
 
 To leave suggestions on ${reviewThread ? "other " : ""}lines of the diff, pin the PR as in step 1,
 then submit one review with event "COMMENT" holding one comment per suggestion, and still post the
@@ -343,8 +350,14 @@ ${buildUntrustedUserContentBlock({
 ${buildPinCommand({ repositoryPath, number, checkout: false })}
 2. Run \`gh pr view ${number} --comments\` to see prior conversation on this PR
 3. Address the request:
-   - If code changes are needed, check out the PR branch with \`gh pr checkout ${number}\`, make
-     them, and push to that branch
+   - If code changes are needed, check out the PR branch and confirm it is the PR head. The clone
+     only tracks the default branch, so widen its refspec first or \`gh pr checkout\` fails:
+
+       git remote set-branches --add origin '*' && gh pr checkout ${number}
+       test "$(git rev-parse HEAD)" = "$(gh pr view ${number} --json headRefOid --jq .headRefOid)"
+
+     If either command fails, stop and report it; never commit or push from the default branch.
+     Then make the changes and push to that branch
    - If it's a question, respond with your analysis
    - If the requester asks for suggested changes instead, leave them as described under
      "Suggested Changes" and do not push

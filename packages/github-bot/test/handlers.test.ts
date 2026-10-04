@@ -1085,7 +1085,7 @@ describe("handleReviewComment", () => {
     expect(content).not.toContain("comments/200/replies");
     expect(content).toContain("replaces lines 10-12 of `src/cache.ts`");
     expect(content).toContain(
-      "git show 'd34db33fd34db33fd34db33fd34db33fd34db33f:src/cache.ts' | sed -n '10,12p'"
+      `git show 'd34db33fd34db33fd34db33fd34db33fd34db33f:src/cache.ts' > "$f" && sed -n '10,12p' "$f"`
     );
     expect(content).toContain('commit_id: "<head commit>"');
     // The reaction still acknowledges the comment that mentioned the bot.

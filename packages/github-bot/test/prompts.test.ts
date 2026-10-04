@@ -62,7 +62,7 @@ describe("buildCodeReviewPrompt", () => {
     expect(prompt).toContain("never resolve them again");
     expect(prompt).not.toContain("gh pr diff 42");
     expect(prompt).toContain(
-      "git show '<head commit>:<file path>' | sed -n '<start_line>,<line>p'"
+      `git show "<head commit>:$(cat /tmp/pr-review/path-<n>.txt)" > "$f" && sed -n '<start_line>,<line>p' "$f"`
     );
     // Files read for context come from the pinned tree, not the default branch.
     expect(prompt.indexOf("git checkout --quiet --detach")).toBeLessThan(
@@ -112,6 +112,27 @@ describe("buildCodeReviewPrompt", () => {
     expect(prompt).not.toContain("<<'JSON'");
   });
 
+  it("passes PR-controlled paths to jq and git as data, never as command text", () => {
+    const prompt = buildCodeReviewPrompt(baseParams, fixedDeps);
+    expect(prompt).toContain(`cat > /tmp/pr-review/path-1.txt <<'${DELIMITER}'\n<file path>\n`);
+    expect(prompt).toContain("--rawfile p1 /tmp/pr-review/path-1.txt");
+    expect(prompt).toContain('path: ($p1 | rtrimstr("\\n"))');
+    expect(prompt).not.toContain('path: "<file path>"');
+    expect(prompt).not.toContain("'<head commit>:<file path>'");
+    // `<file path>` only ever appears as heredoc content, never inside a command.
+    for (const line of prompt.split("\n").filter((l) => l.includes("<file path>"))) {
+      expect(line).toBe("<file path>");
+    }
+  });
+
+  it("reads suggested ranges without a pipeline that hides a failed read", () => {
+    const prompt = buildCodeReviewPrompt(baseParams);
+    expect(prompt).not.toContain("| sed -n");
+    expect(prompt).toContain(
+      "If that command fails or prints fewer lines than the range, do not leave that suggestion."
+    );
+  });
+
   it("uses one unpredictable heredoc delimiter per prompt", () => {
     const first = buildCodeReviewPrompt(baseParams);
     const second = buildCodeReviewPrompt(baseParams);
@@ -124,7 +145,7 @@ describe("buildCodeReviewPrompt", () => {
   it("uses the injected delimiter for every heredoc and the fallback rule", () => {
     const prompt = buildCodeReviewPrompt(baseParams, fixedDeps);
     const delimiters = heredocDelimiters(prompt);
-    expect(delimiters).toHaveLength(4);
+    expect(delimiters).toHaveLength(6);
     expect(new Set(delimiters)).toEqual(new Set([DELIMITER]));
     expect(prompt).toContain(`If a body contains a line exactly equal to ${DELIMITER}`);
     expect(prompt).toContain("-F body=@<file>");
@@ -250,7 +271,22 @@ describe("buildCommentActionPrompt", () => {
     const prompt = buildCommentActionPrompt(baseParams);
     expect(prompt).toContain("the PR branch is not checked out");
     expect(prompt).not.toContain("you are on the feature/cache branch");
-    expect(prompt).toContain("check out the PR branch with `gh pr checkout 42`");
+    expect(prompt).toContain("git remote set-branches --add origin '*' && gh pr checkout 42");
+  });
+
+  it("widens the single-branch refspec and verifies the PR head before any commit or push", () => {
+    const prompt = buildCommentActionPrompt(baseParams);
+    const steps = prompt.slice(prompt.indexOf("3. Address the request:"), prompt.indexOf("4. "));
+    expect(steps.indexOf("git remote set-branches --add origin '*'")).toBeLessThan(
+      steps.indexOf("gh pr checkout 42")
+    );
+    expect(steps).toContain(
+      'test "$(git rev-parse HEAD)" = "$(gh pr view 42 --json headRefOid --jq .headRefOid)"'
+    );
+    expect(steps).toContain("never commit or push from the default branch");
+    expect(steps.indexOf("never commit or push")).toBeLessThan(
+      steps.indexOf("push to that branch")
+    );
   });
 
   it("works without title, base, or head (issue comment case)", () => {
@@ -327,8 +363,8 @@ describe("buildCommentActionPrompt", () => {
   it("shares one injected delimiter across every heredoc in the prompt", () => {
     const prompt = buildCommentActionPrompt({ ...baseParams, reviewThread }, fixedDeps);
     const delimiters = heredocDelimiters(prompt);
-    // Summary comment, thread reply, and the review's summary and comment files.
-    expect(delimiters).toHaveLength(8);
+    // Summary comment, thread reply, and the review's summary, comment, and path files.
+    expect(delimiters).toHaveLength(10);
     expect(new Set(delimiters)).toEqual(new Set([DELIMITER]));
     expect(prompt).toContain(`If a body contains a line exactly equal to ${DELIMITER}`);
     expect(prompt).not.toContain("OPEN_INSPECT_BODY'");
@@ -378,10 +414,10 @@ describe("buildCommentActionPrompt", () => {
     expect(prompt).toContain("To leave suggestions on other lines of the diff");
     expect(prompt).toContain("replaces lines 10-12 of `src/cache.ts`");
     expect(prompt).toContain(
-      "git show 'd34db33fd34db33fd34db33fd34db33fd34db33f:src/cache.ts' | sed -n '10,12p'"
+      `git show 'd34db33fd34db33fd34db33fd34db33fd34db33f:src/cache.ts' > "$f" && sed -n '10,12p' "$f"`
     );
     expect(prompt).toContain(
-      "git show '<head commit>:<file path>' | sed -n '<start_line>,<line>p'"
+      `git show "<head commit>:$(cat /tmp/pr-review/path-<n>.txt)" > "$f" && sed -n '<start_line>,<line>p' "$f"`
     );
   });
 

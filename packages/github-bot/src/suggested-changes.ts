@@ -56,9 +56,14 @@ export function shellQuote(value: string): string {
   return `'${value.replaceAll("'", `'\\''`)}'`;
 }
 
-function buildReadLinesCommand(commitId: string, path: string, range: string): string {
-  return `git fetch --quiet --depth=1 origin ${commitId} && git show ${shellQuote(`${commitId}:${path}`)} | sed -n '${range}p'`;
+// Writes the blob to a file first: in `git show | sed`, sed would succeed on empty input after a
+// failed read, and an empty "original" turns a suggestion into a deletion.
+function buildReadLinesCommand(commitId: string, objectArg: string, range: string): string {
+  return `f=$(mktemp) && git fetch --quiet --depth=1 origin ${commitId} && git show ${objectArg} > "$f" && sed -n '${range}p' "$f"`;
 }
+
+const READ_FAILURE_RULE =
+  "If that command fails or prints fewer lines than the range, do not leave that suggestion.";
 
 /** Rules for writing any suggestion block, whichever comment carries it. */
 export function buildSuggestionFormatRules(): string {
@@ -75,11 +80,15 @@ export function buildSuggestionFormatRules(): string {
   the longest run (for example \`\`\`\`suggestion).`;
 }
 
-/** How to read the lines a comment in a new review pinned to `commitId` would replace. */
-export function buildReviewSuggestionAnchorRules(commitId: string): string {
-  return `- For a comment in a review pinned to commit ${commitId}, print the exact lines its range
-  covers with:
-  ${buildReadLinesCommand(commitId, "<file path>", "<start_line>,<line>")}`;
+/**
+ * How to read the lines a comment in a new review pinned to `commitId` would replace. PR authors
+ * control paths, so the agent never types one into a command; it reads it from `pathFile`.
+ */
+export function buildReviewSuggestionAnchorRules(commitId: string, pathFile: string): string {
+  return `- For a comment in a review pinned to commit ${commitId}, write its path file (see the review
+  steps), then print the exact lines its range covers with:
+  ${buildReadLinesCommand(commitId, `"${commitId}:$(cat ${pathFile})"`, "<start_line>,<line>")}
+  ${READ_FAILURE_RULE}`;
 }
 
 /** Rules for a suggestion in a reply to the review thread that triggered the request. */
@@ -92,8 +101,8 @@ export function buildThreadSuggestionRules(path: string, target: ThreadSuggestio
   return `- A suggestion block in a reply to this review thread replaces ${range} of \`${path}\` at
   commit ${commitId}. GitHub fixes a reply's range to its thread, so you cannot change it. Print
   those exact lines with:
-  ${buildReadLinesCommand(commitId, path, `${startLine},${endLine}`)}
-  If that command fails, do not put a suggestion block in a reply to this thread.
+  ${buildReadLinesCommand(commitId, shellQuote(`${commitId}:${path}`), `${startLine},${endLine}`)}
+  ${READ_FAILURE_RULE}
 - In this thread you may also answer a question with a suggestion instead of describing the fix in
   prose, when the fix is confined to exactly those lines.`;
 }
