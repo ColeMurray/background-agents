@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { HarnessId } from "@open-inspect/shared/harnesses";
+import type { CreateSessionResponse } from "@open-inspect/shared/types/session-api";
 import { handleAgentSessionEvent } from "./webhook-handler";
 import type { AgentSessionWebhook, Env } from "./types";
 import {
@@ -83,23 +84,28 @@ async function delegate(options: {
     if (path.startsWith("/integration-settings/linear/resolved/")) {
       return Response.json({ config });
     }
-    if (path === "/sessions") return Response.json({ sessionId: "session-xyz" });
+    if (path === "/sessions") {
+      return Response.json({
+        sessionId: "session-xyz",
+        status: "created",
+      } satisfies CreateSessionResponse);
+    }
     if (path === "/sessions/session-xyz/prompt") return Response.json({ ok: true });
     throw new Error(`Unexpected control-plane fetch to ${path}`);
   });
 
   await handleAgentSessionEvent(makeWebhook(options.labels), env as Env, "trace-harness");
 
-  const createCall = fetchMock.mock.calls.find(
-    ([input]) => new URL(String(input)).pathname === "/sessions"
-  );
-  return {
-    createBody: JSON.parse(String((createCall?.[1] as RequestInit).body)),
-    activities: vi
-      .mocked(fetch)
-      .mock.calls.map(([, init]) => String(init?.body))
-      .join("\n"),
-  };
+  const paths = fetchMock.mock.calls.map(([input]) => new URL(String(input)).pathname);
+  const createCall = fetchMock.mock.calls[paths.indexOf("/sessions")];
+  const activities = vi
+    .mocked(fetch)
+    .mock.calls.map(([, init]) => String(init?.body))
+    .join("\n");
+  // Every case must reach a successful launch, not stop at a creation error.
+  expect(paths).toContain("/sessions/session-xyz/prompt");
+  expect(activities).not.toContain("Failed to create a coding session");
+  return { createBody: JSON.parse(String((createCall?.[1] as RequestInit).body)), activities };
 }
 
 describe("handleAgentSessionEvent harness selection", () => {
@@ -127,6 +133,7 @@ describe("handleAgentSessionEvent harness selection", () => {
 
     expect(createBody).toMatchObject({ harness: "opencode", model: "anthropic/claude-haiku-4-5" });
     expect(activities).toContain("agent: OpenCode, model: anthropic/claude-haiku-4-5");
+    expect(activities).toContain("with **anthropic/claude-haiku-4-5** (OpenCode).");
   });
 
   it("creates Claude Agent sessions when Claude Agent is configured", async () => {
@@ -136,6 +143,7 @@ describe("handleAgentSessionEvent harness selection", () => {
 
     expect(createBody).toMatchObject({ harness: "claude", model: "anthropic/claude-sonnet-4-6" });
     expect(activities).toContain("agent: Claude Agent, model: anthropic/claude-sonnet-4-6");
+    expect(activities).toContain("with **anthropic/claude-sonnet-4-6** (Claude Agent).");
     expect(activities).not.toContain("Claude Code");
   });
 
@@ -152,6 +160,7 @@ describe("handleAgentSessionEvent harness selection", () => {
 
       expect(createBody).toMatchObject({ harness: "opencode", model: "openai/gpt-6-sol" });
       expect(activities).toContain("agent: OpenCode, model: openai/gpt-6-sol");
+      expect(activities).toContain("with **openai/gpt-6-sol** (OpenCode).");
     }
   );
 });
