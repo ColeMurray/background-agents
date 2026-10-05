@@ -184,6 +184,16 @@ The GitHub Actions workflow (`.github/workflows/terraform.yml`) automates:
 | Pull Request  | `terraform plan` with PR comment |
 | Merge to main | `terraform apply` (auto-approve) |
 
+### Worker bundles
+
+CI builds the control-plane and bot Worker bundles once per run
+(`.github/workflows/build-workers.yml`) and hands them to plan or apply as an artifact. Those jobs
+set `build_workers_in_terraform = false`, so Terraform deploys the downloaded files instead of
+rebuilding them during apply, and `worker_bundle_sha256`, so a file that is not the one the build
+recorded fails the plan. A local `terraform apply` still builds them: the variable defaults to
+`true`. The Cloudflare web app is still built during apply, because its bundle inlines
+per-deployment `NEXT_PUBLIC_*` values.
+
 ### GitHub Actions Secrets and Variables
 
 Keep credentials in Actions **Secrets**. Non-secret configuration (account/application IDs, provider
@@ -419,6 +429,9 @@ variables.
 
 1. Build workers first: `npm run build -w @open-inspect/control-plane`
 2. Check script exists: `ls packages/control-plane/dist/index.js`
+   - A plan that fails with "does not match script_sha256" found a bundle other than the one
+     `worker_bundle_sha256` names: re-download or rebuild it, or unset the variable for a local
+     build.
 3. Verify Cloudflare API token permissions:
    - `Workers Scripts: Edit`
    - `Workers KV Storage: Edit`

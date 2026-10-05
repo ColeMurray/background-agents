@@ -16,9 +16,10 @@ resource "cloudflare_queue" "slack_completion_delivery_dlq" {
   queue_name = "open-inspect-slack-completion-dlq-${local.name_suffix}"
 }
 
-# Build slack-bot worker bundle (only runs during apply, not plan)
+# Build slack-bot worker bundle (only runs during apply, not plan).
+# Skipped when the bundle is built before plan (build_workers_in_terraform = false).
 resource "null_resource" "slack_bot_build" {
-  count = var.enable_slack_bot ? 1 : 0
+  count = var.enable_slack_bot && var.build_workers_in_terraform ? 1 : 0
 
   triggers = {
     # Rebuild when source files change - use timestamp to always check
@@ -40,6 +41,7 @@ module "slack_bot_worker" {
   worker_name      = "open-inspect-slack-bot-${local.name_suffix}"
   worker_subdomain = var.cloudflare_worker_subdomain
   script_path      = local.slack_bot_script_path
+  script_sha256    = lookup(var.worker_bundle_sha256, "slack-bot", null)
 
   kv_namespaces = {
     SLACK_KV = {

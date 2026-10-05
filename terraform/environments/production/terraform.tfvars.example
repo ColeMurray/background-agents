@@ -321,6 +321,10 @@ deployment_name = ""
 # Path to project root (relative to this directory)
 project_root = "../../../"
 
+# Build the control-plane and bot Worker bundles during apply. CI builds them
+# before plan and sets this to false; keep the default for local applies.
+# build_workers_in_terraform = true
+
 # Display name shown in the web UI, bot messages (Slack, Linear), and PR body footers.
 # Also used as the outbound HTTP User-Agent header. Defaults to "Open-Inspect".
 # app_name = "Open-Inspect"

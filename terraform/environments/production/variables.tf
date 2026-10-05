@@ -817,6 +817,26 @@ variable "project_root" {
   default     = "../../../"
 }
 
+variable "build_workers_in_terraform" {
+  description = "Run `npm run build` for the control-plane and bot Worker bundles during apply. Set false when the bundles are built before plan (as CI does), so plan and apply deploy the same files and nothing rebuilds them mid-apply."
+  type        = bool
+  default     = true
+}
+
+variable "worker_bundle_sha256" {
+  description = "Expected SHA-256 of each prebuilt Worker bundle (`packages/<package>/dist/index.js`), keyed by package directory. A listed bundle whose file does not match fails the plan instead of deploying. Empty skips the check, which is what a local build wants."
+  type        = map(string)
+  default     = {}
+
+  validation {
+    condition = alltrue([
+      for package, sha256 in var.worker_bundle_sha256 :
+      contains(["control-plane", "slack-bot", "github-bot", "linear-bot"], package) && can(regex("^[0-9a-f]{64}$", sha256))
+    ])
+    error_message = "worker_bundle_sha256 keys must be control-plane, slack-bot, github-bot or linear-bot, and each value a lowercase hex SHA-256."
+  }
+}
+
 # =============================================================================
 # R2 Storage
 # =============================================================================

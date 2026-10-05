@@ -12,8 +12,11 @@ resource "cloudflare_queue" "image_build_finalization_dlq" {
   queue_name = "open-inspect-image-build-finalization-dlq-${local.name_suffix}"
 }
 
-# Build control-plane worker bundle (only runs during apply, not plan)
+# Build control-plane worker bundle (only runs during apply, not plan).
+# Skipped when the bundle is built before plan (build_workers_in_terraform = false).
 resource "null_resource" "control_plane_build" {
+  count = var.build_workers_in_terraform ? 1 : 0
+
   triggers = {
     # Rebuild when source files change - use timestamp to always check
     # In CI, this ensures fresh builds; locally, npm handles caching
@@ -33,6 +36,7 @@ module "control_plane_worker" {
   worker_name      = "open-inspect-control-plane-${local.name_suffix}"
   worker_subdomain = var.cloudflare_worker_subdomain
   script_path      = local.control_plane_script_path
+  script_sha256    = lookup(var.worker_bundle_sha256, "control-plane", null)
 
   kv_namespaces = {
     REPOS_CACHE = {
