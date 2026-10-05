@@ -435,7 +435,36 @@ describe("handleSlackNotify", () => {
     expect(sessionFetchMock).not.toHaveBeenCalled();
   });
 
-  it("accepts null optional audit fields while parsing the request object", async () => {
+  it("normalizes optional request fields", async () => {
+    seedActiveSession();
+    integrationStoreMock.getResolvedConfig.mockResolvedValue({
+      enabledRepos: null,
+      settings: { agentNotificationsEnabled: true, mentionsPolicy: "allow" },
+    });
+    mockSlackResponse({ body: { ok: true, channel: "C1", ts: "1.2" } });
+    mockSlackResponse({ body: { ok: true, channel: "C1", permalink: "https://x.slack.com/p" } });
+    const reason = "r".repeat(600);
+
+    const res = await callHandler({
+      channel: " C1 ",
+      text: "hello",
+      thread_ts: "123.456",
+      reason,
+    });
+
+    expect(res.status).toBe(200);
+    await expect(res.json()).resolves.toMatchObject({ channelInput: "C1" });
+    const sentBody = JSON.parse(fetchMock.mock.calls[0][1].body as string) as {
+      channel: string;
+      thread_ts?: string;
+    };
+    expect(sentBody.channel).toBe("C1");
+    expect(sentBody.thread_ts).toBe("123.456");
+    const logEntry = lastLogPayload(consoleLogSpy, "Slack notification posted");
+    expect(logEntry?.request_reason).toBe("r".repeat(500));
+  });
+
+  it("ignores null and non-string optional request fields", async () => {
     seedActiveSession();
     integrationStoreMock.getResolvedConfig.mockResolvedValue({
       enabledRepos: null,
@@ -444,21 +473,28 @@ describe("handleSlackNotify", () => {
     mockSlackResponse({ body: { ok: true, channel: "C1", ts: "1.2" } });
     mockSlackResponse({ body: { ok: true, channel: "C1", permalink: "https://x.slack.com/p" } });
 
-    const res = await callHandler({
-      channel: "#ops",
-      text: "hello",
-      thread_ts: null,
-      reason: null,
-    });
+    const res = await callHandler({ channel: "C1", text: "hello", thread_ts: null, reason: 42 });
 
     expect(res.status).toBe(200);
+    const sentBody = JSON.parse(fetchMock.mock.calls[0][1].body as string) as {
+      thread_ts?: string;
+    };
+    expect(sentBody).not.toHaveProperty("thread_ts");
+    const logEntry = lastLogPayload(consoleLogSpy, "Slack notification posted");
+    expect(logEntry?.request_reason).toBeNull();
   });
 
-  it("rejects malformed parsed request bodies before side effects", async () => {
-    const res = await callHandler(null);
+  it.each([
+    [null, "Body must be a JSON object."],
+    [[], "channel must be 1..80 characters."],
+    [{ text: "hello" }, "channel must be 1..80 characters."],
+    [{ channel: 123, text: [] }, "channel must be 1..80 characters."],
+    [{ channel: "#ops", text: [] }, "text is required."],
+  ])("rejects malformed parsed request bodies before side effects: %j", async (body, message) => {
+    const res = await callHandler(body);
 
     expect(res.status).toBe(400);
-    await expect(res.json()).resolves.toMatchObject({ error: "invalid_input" });
+    await expect(res.json()).resolves.toMatchObject({ error: "invalid_input", message });
     expect(sessionStoreMock.get).not.toHaveBeenCalled();
     expect(fetchMock).not.toHaveBeenCalled();
   });
