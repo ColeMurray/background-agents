@@ -57,6 +57,13 @@ export function logPrincipal(principal: Principal, ctx: RequestContext, path: st
     case "user":
       fields.user_id = principal.userId;
       break;
+    case "access-token":
+      // A token is attributable to a person by design, so its owner and the
+      // token that acted belong in the log the same way a session's user does.
+      fields.auth_scheme = "access-token";
+      fields.user_id = principal.userId;
+      fields.token_id = principal.tokenId;
+      break;
   }
   logger.info("auth.principal", {
     event: "auth.principal",
