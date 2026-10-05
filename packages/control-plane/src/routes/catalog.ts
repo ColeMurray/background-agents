@@ -16,6 +16,7 @@ import { channelBindingRoutes } from "./channel-bindings";
 import { commitSigningRoutes } from "./commit-signing";
 import { environmentSecretsRoutes } from "./environment-secrets";
 import { environmentRoutes } from "./environments";
+import { githubReviewRoutes } from "./github-reviews";
 import { githubRoutingRoutes } from "./github-route";
 import { healthRoutes } from "./health";
 import { imageBuildRoutes } from "./image-builds";
@@ -117,6 +118,9 @@ export const catalog: readonly RouteModule[] = [
 
   // Webhooks (public routes — auth handled per-route)
   webhookRoutes,
+
+  // GitHub review-generation supersession (github-bot service auth)
+  githubReviewRoutes,
 
   // Read-only GitHub bot routing hints
   githubRoutingRoutes,

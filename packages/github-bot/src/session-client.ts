@@ -1,17 +1,22 @@
 import {
   createSessionResponseSchema,
   sendPromptResponseSchema,
+  type GitHubReviewCallbackContext,
 } from "@open-inspect/shared/types/session-api";
 import { z } from "zod";
 import { signedControlPlaneFetch } from "./internal-auth";
 import type { Env } from "./types";
 import type { SessionTargetFields } from "./session-target";
+import type { GitHubReviewFence } from "./review-start";
 
 const sessionCreationErrorSchema = z.object({ code: z.string() });
 
 export type SessionCreationResult =
   | { ok: true; sessionId: string }
   | { ok: false; status: number; code: string | undefined; body: string };
+
+/** The control plane answered a prompt with a 4xx: the prompt was definitely not accepted. */
+export class PromptRejectedError extends Error {}
 
 export async function createSession(
   env: Env,
@@ -25,6 +30,7 @@ export async function createSession(
     scmLogin: string;
     scmUserId: string;
     scmAvatarUrl: string;
+    githubReview?: GitHubReviewFence;
   }
 ): Promise<SessionCreationResult> {
   const body: Record<string, unknown> = {
@@ -34,6 +40,7 @@ export async function createSession(
     model: params.model,
     scmLogin: params.scmLogin,
     scmAvatarUrl: params.scmAvatarUrl,
+    githubReview: params.githubReview,
   };
   if (params.reasoningEffort) {
     body.reasoningEffort = params.reasoningEffort;
@@ -72,10 +79,14 @@ export async function sendPrompt(
   env: Env,
   traceId: string,
   sessionId: string,
-  params: { content: string; authorId: string }
+  params: { content: string; authorId: string; callbackContext?: GitHubReviewCallbackContext }
 ): Promise<string> {
   const url = `https://internal/sessions/${sessionId}/prompt`;
-  const bodyText = JSON.stringify({ content: params.content, source: "github" });
+  const bodyText = JSON.stringify({
+    content: params.content,
+    source: "github",
+    callbackContext: params.callbackContext,
+  });
   const response = await signedControlPlaneFetch(env, {
     method: "POST",
     url,
@@ -85,7 +96,10 @@ export async function sendPrompt(
   });
   if (!response.ok) {
     const body = await response.text();
-    throw new Error(`Prompt delivery failed: ${response.status} ${body}`);
+    const message = `Prompt delivery failed: ${response.status} ${body}`;
+    throw response.status >= 400 && response.status < 500
+      ? new PromptRejectedError(message)
+      : new Error(message);
   }
   const result = sendPromptResponseSchema.safeParse(await response.json());
   if (!result.success) {

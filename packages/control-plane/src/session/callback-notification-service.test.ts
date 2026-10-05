@@ -12,6 +12,7 @@ import type { FetchClient } from "../platform-ports";
 import type { SlackPostScope } from "../authorization/slack-post-gate";
 import { verifyCallbackSignature } from "@open-inspect/shared/auth";
 import {
+  githubReviewCompletionCallbackSchema,
   linearCompletionCallbackSchema,
   linearToolCallCallbackSchema,
   slackCallbackContextSchema,
@@ -69,6 +70,7 @@ function createTestHarness(overrides?: {
 
   const slackBot = createMockFetcher();
   const linearBot = createMockFetcher();
+  const githubBot = createMockFetcher();
   const sleep = vi.fn(async () => {});
   const slackPostScope = {
     getSession: vi.fn<SlackPostScope["getSession"]>().mockResolvedValue({
@@ -83,8 +85,10 @@ function createTestHarness(overrides?: {
   const env: CallbackServiceEnv = {
     SERVICE_AUTH_SECRET_SLACK_BOT: "test-secret",
     SERVICE_AUTH_SECRET_LINEAR_BOT: "test-secret",
+    SERVICE_AUTH_SECRET_GITHUB_BOT: "github-secret",
     SLACK_BOT: slackBot,
     LINEAR_BOT: linearBot,
+    GITHUB_BOT: githubBot,
     ...overrides?.env,
   };
 
@@ -106,10 +110,19 @@ function createTestHarness(overrides?: {
     env,
     slackBot,
     linearBot,
+    githubBot,
     sleep,
     slackPostScope,
   };
 }
+
+const GITHUB_REVIEW_CALLBACK_CONTEXT = {
+  source: "github",
+  owner: "acme",
+  repo: "widgets",
+  prNumber: 42,
+  headSha: "abc123",
+};
 
 // ---- Tests ----
 
@@ -680,6 +693,77 @@ describe("CallbackNotificationService", () => {
       expect(body.context.issueId).toBe("issue-1");
       expect(linearCompletionCallbackSchema.safeParse(body).success).toBe(true);
       expect(await verifyCallbackSignature(body, "test-secret")).toBe(true);
+    });
+
+    it("routes a github review completion to GITHUB_BOT, signed with its key", async () => {
+      vi.mocked(harness.repository.getMessageCallbackContext).mockReturnValue({
+        callback_context: JSON.stringify(GITHUB_REVIEW_CALLBACK_CONTEXT),
+        source: "github",
+      });
+      vi.mocked(harness.githubBot.fetch).mockResolvedValue(new Response("ok", { status: 200 }));
+
+      await harness.service.notifyComplete(
+        "msg-1",
+        false,
+        "Execution timed out (stuck processing)"
+      );
+
+      expect(harness.slackBot.fetch).not.toHaveBeenCalled();
+      expect(harness.githubBot.fetch).toHaveBeenCalledTimes(1);
+      const [url, init] = harness.githubBot.fetch.mock.calls[0];
+      expect(url).toBe("https://internal/callbacks/complete");
+      const body = JSON.parse(String(init?.body));
+      expect(githubReviewCompletionCallbackSchema.safeParse(body).success).toBe(true);
+      expect(body).toMatchObject({
+        sessionId: "session-123",
+        messageId: "msg-1",
+        success: false,
+        error: "Execution timed out (stuck processing)",
+        context: GITHUB_REVIEW_CALLBACK_CONTEXT,
+      });
+      expect(await verifyCallbackSignature(body, "github-secret")).toBe(true);
+    });
+
+    it("delivers github completion retries past the Slack post gate", async () => {
+      // A review's context names no Slack channel, so the Slack post gate would reject it and
+      // drop the completion its pending status depends on.
+      harness.repository.getMessageCallbackContext.mockReturnValue({
+        callback_context: JSON.stringify(GITHUB_REVIEW_CALLBACK_CONTEXT),
+        source: "github",
+      });
+      harness.githubBot.fetch
+        .mockResolvedValueOnce(new Response("unavailable", { status: 503 }))
+        .mockResolvedValueOnce(new Response("ok"));
+
+      await harness.service.notifyComplete("msg-1", true);
+
+      expect(harness.githubBot.fetch).toHaveBeenCalledTimes(2);
+      expect(harness.slackPostScope.getSession).not.toHaveBeenCalled();
+      expect(harness.slackPostScope.getChannelBinding).not.toHaveBeenCalled();
+      for (const [, init] of harness.githubBot.fetch.mock.calls) {
+        const body = JSON.parse(String(init?.body));
+        expect(githubReviewCompletionCallbackSchema.safeParse(body).success).toBe(true);
+        expect(await verifyCallbackSignature(body, "github-secret")).toBe(true);
+      }
+      expect(harness.log.info).toHaveBeenCalledWith(
+        "callback.complete_delivery",
+        expect.objectContaining({ source: "github", outcome: "success", attempts: 2 })
+      );
+    });
+
+    it("rejects a github completion whose persisted context is malformed", async () => {
+      vi.mocked(harness.repository.getMessageCallbackContext).mockReturnValue({
+        callback_context: JSON.stringify({ source: "github", owner: "acme" }),
+        source: "github",
+      });
+
+      await harness.service.notifyComplete("msg-1", true);
+
+      expect(harness.githubBot.fetch).not.toHaveBeenCalled();
+      expect(harness.log.info).toHaveBeenCalledWith(
+        "callback.complete_delivery",
+        expect.objectContaining({ outcome: "rejected", reject_reason: "invalid_payload" })
+      );
     });
 
     it("preserves signed Linear completion retries without Slack authority reads", async () => {
@@ -1281,6 +1365,26 @@ describe("CallbackNotificationService", () => {
           outcome: "skipped",
           skip_reason: "automation_no_consumer",
         })
+      );
+    });
+
+    it("skips github source because the github-bot has no tool-call consumer", async () => {
+      vi.mocked(harness.repository.getMessageCallbackContext).mockReturnValue({
+        callback_context: JSON.stringify(GITHUB_REVIEW_CALLBACK_CONTEXT),
+        source: "github",
+      });
+
+      await harness.service.notifyToolCall("msg-1", {
+        type: "tool_call",
+        tool: "glob",
+        callId: "call-1",
+      });
+
+      expect(harness.githubBot.fetch).not.toHaveBeenCalled();
+      expect(harness.slackBot.fetch).not.toHaveBeenCalled();
+      expect(harness.log.debug).toHaveBeenCalledWith(
+        "callback.tool_call",
+        expect.objectContaining({ outcome: "skipped", skip_reason: "github_no_consumer" })
       );
     });
 

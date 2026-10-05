@@ -10,6 +10,7 @@
  */
 
 import { z } from "zod";
+import { sessionStatusSchema, type SessionStatus } from "@open-inspect/shared/types/sessions";
 import { SessionInternalPaths } from "./contracts";
 import type { Logger } from "../logger";
 import type { SessionRuntimeClient } from "./runtime-client";
@@ -57,7 +58,10 @@ type DraftExpiryOutcome = z.infer<typeof draftExpiryOutcomeSchema>;
  */
 export type DraftSweepOutcome = DraftExpiryOutcome | "missing";
 
-const draftExpiryResponseSchema = z.object({ outcome: draftExpiryOutcomeSchema });
+const draftExpiryResponseSchema = z.object({
+  outcome: draftExpiryOutcomeSchema,
+  status: sessionStatusSchema.optional(),
+});
 
 /** The index access the sweep needs; `SessionIndexStore` satisfies it. */
 export interface AbandonedDraftIndex {
@@ -97,6 +101,17 @@ export class SessionDraftExpiryClient implements DraftExpiryClient {
   constructor(private readonly sessions: SessionRuntimeClient) {}
 
   async expireDraft(sessionId: string): Promise<DraftSweepOutcome> {
+    return (await this.expireDraftWithStatus(sessionId)).outcome;
+  }
+
+  /**
+   * The expiry outcome plus the status the session answered with, which is
+   * what tells a session that was prompted (`active`) from one that cannot run.
+   * No status accompanies `missing`.
+   */
+  async expireDraftWithStatus(
+    sessionId: string
+  ): Promise<{ outcome: DraftSweepOutcome; status?: SessionStatus }> {
     const response = await this.sessions.fetch(sessionId, SessionInternalPaths.expireDraft, {
       method: "POST",
       signal: AbortSignal.timeout(ABANDONED_DRAFT_EXPIRY_TIMEOUT_MS),
@@ -105,7 +120,7 @@ export class SessionDraftExpiryClient implements DraftExpiryClient {
     // Reported rather than thrown: a 404 is a definitive answer about this row,
     // so the sweep can retire it, where an error would have it retried forever.
     if (response.status === 404) {
-      return "missing";
+      return { outcome: "missing" };
     }
 
     if (!response.ok) {
@@ -117,7 +132,7 @@ export class SessionDraftExpiryClient implements DraftExpiryClient {
       throw new Error("Draft expiry returned an unrecognized outcome");
     }
 
-    return parsed.data.outcome;
+    return parsed.data;
   }
 }
 

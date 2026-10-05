@@ -1,6 +1,6 @@
 import type {
   Env,
-  PullRequestOpenedPayload,
+  PullRequestReviewTriggerPayload,
   ReviewRequestedPayload,
   IssueCommentPayload,
   ReviewCommentPayload,
@@ -11,6 +11,7 @@ import { requestedReviewerPayloadSchema } from "./payload-schemas";
 import { containsBotMention, stripBotMention } from "./github-mention";
 import { parseInlinePromptFlags } from "@open-inspect/shared/inline-prompt-flags";
 import { startSession, type HandlerResult } from "./session-startup";
+import { reviewPromptFields } from "./review-start";
 
 export type { HandlerResult } from "./session-startup";
 
@@ -43,7 +44,8 @@ export async function handleReviewRequested(
     title: `GitHub: Review PR #${pr.number}`,
     action: "review",
     reactionPath: `issues/${pr.number}`,
-    buildPrompt: (config) =>
+    review: { headSha: pr.head.sha },
+    buildPrompt: (config, review) =>
       buildCodeReviewPrompt({
         owner: repo.owner.login,
         repo: repo.name,
@@ -55,14 +57,15 @@ export async function handleReviewRequested(
         head: pr.head.ref,
         isPublic: !repo.private,
         codeReviewInstructions: config.codeReviewInstructions,
+        ...reviewPromptFields(review),
       }),
   });
 }
 
-export async function handlePullRequestOpened(
+export async function handlePullRequestReviewTrigger(
   env: Env,
   log: Logger,
-  payload: PullRequestOpenedPayload,
+  payload: PullRequestReviewTriggerPayload,
   traceId: string
 ): Promise<HandlerResult> {
   const { pull_request: pr, repository: repo, sender } = payload;
@@ -79,7 +82,8 @@ export async function handlePullRequestOpened(
     title: `GitHub: Review PR #${pr.number}`,
     action: "auto_review",
     reactionPath: `issues/${pr.number}`,
-    buildPrompt: (config) =>
+    review: { headSha: pr.head.sha, trigger: payload.action },
+    buildPrompt: (config, review) =>
       buildCodeReviewPrompt({
         owner: repo.owner.login,
         repo: repo.name,
@@ -92,6 +96,7 @@ export async function handlePullRequestOpened(
         isPublic: !repo.private,
         codeReviewInstructions: config.codeReviewInstructions,
         isSelfReview: pr.user.login.toLowerCase() === env.GITHUB_BOT_USERNAME.toLowerCase(),
+        ...reviewPromptFields(review),
       }),
   });
 }

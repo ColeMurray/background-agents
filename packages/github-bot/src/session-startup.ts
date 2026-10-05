@@ -14,6 +14,15 @@ import { resolveSessionTarget } from "./session-target";
 import { createSession, sendPrompt } from "./session-client";
 import { getGitHubConfig, type ResolvedGitHubConfig } from "./utils/integration-config";
 import { resolveModelSelection } from "./model-selection";
+import {
+  abandonReview,
+  admitReview,
+  beginReview,
+  sendReviewPrompt,
+  type AdmittedReview,
+  type ReviewContext,
+  type ReviewRequest,
+} from "./review-start";
 import type { ParseInlinePromptFlagsResult } from "@open-inspect/shared/inline-prompt-flags";
 
 export type HandlerResult =
@@ -150,7 +159,9 @@ export async function startSession(
     reactionPath: string;
     /** `!model` / `!reasoning` flags parsed from the triggering comment, if any. */
     inlineFlags?: ParseInlinePromptFlagsResult;
-    buildPrompt: (config: ResolvedGitHubConfig) => string;
+    /** A PR review, fenced against the PR's other reviews and published as its head's status. */
+    review?: ReviewRequest;
+    buildPrompt: (config: ResolvedGitHubConfig, review?: AdmittedReview) => string;
   }
 ): Promise<HandlerResult> {
   const { repository: repo, sender, pullNumber, action } = params;
@@ -183,6 +194,19 @@ export async function startSession(
   const repositoryPath = encodeRepositoryPathSegments({ repoOwner: owner, repoName });
   const userAgent = resolveAppName(env);
   const meta = { trace_id: traceId, repo: repoFullName, pull_number: pullNumber };
+  const review: ReviewContext | undefined = params.review && {
+    ...params.review,
+    env,
+    log,
+    traceId,
+    token: ghToken,
+    userAgent,
+    meta,
+    repoId: repo.id,
+    owner,
+    repo: repoName,
+    prNumber: pullNumber,
+  };
 
   const modelSelection = await resolveModelSelection(
     env,
@@ -235,6 +259,8 @@ export async function startSession(
         ghToken,
         traceId,
       });
+      const admitted = review && (await admitReview(review));
+      if (admitted && "outcome" in admitted) return admitted;
       const creation = await createSession(env, traceId, {
         target,
         teamId,
@@ -244,7 +270,15 @@ export async function startSession(
         scmLogin: sender.login,
         scmUserId: String(sender.id),
         scmAvatarUrl: sender.avatar_url,
+        githubReview: admitted?.githubReview,
+      }).catch(async (error: unknown) => {
+        if (admitted) await abandonReview(admitted);
+        throw error;
       });
+      if (!creation.ok && admitted) {
+        const superseded = await abandonReview(admitted, creation);
+        if (superseded) return superseded;
+      }
       if (!creation.ok) {
         const { status, code, body } = creation;
         if (
@@ -279,6 +313,7 @@ export async function startSession(
         throw new Error(`Session creation failed: ${status} ${body}`);
       }
       const { sessionId } = creation;
+      if (admitted) await beginReview(admitted, sessionId);
       log.info("session.created", {
         ...meta,
         session_id: sessionId,
@@ -288,11 +323,11 @@ export async function startSession(
         inline_model_override: modelSelection.overridden,
       });
 
-      const prompt = params.buildPrompt(config);
-      const messageId = await sendPrompt(env, traceId, sessionId, {
-        content: prompt,
-        authorId: `github:${sender.id}`,
-      });
+      const prompt = params.buildPrompt(config, admitted);
+      const message = { content: prompt, authorId: `github:${sender.id}` };
+      const messageId = admitted
+        ? await sendReviewPrompt(admitted, sessionId, message)
+        : await sendPrompt(env, traceId, sessionId, message);
       log.info("prompt.sent", {
         ...meta,
         session_id: sessionId,
