@@ -69,8 +69,41 @@ follow-up after a draft becomes ready, mention the bot in a PR comment.
 The agent can submit a general review comment, approve the PR, request changes, or add inline review
 comments when useful.
 
-An explicitly allowed App bot can trigger review of its own PR, but that self-review can only
-comment, not approve or request changes.
+An explicitly allowed App bot can trigger review of its own PR. By default, that self-review uses
+`COMMENT`: GitHub does not allow a PR author to approve their own PR. An optional separate reviewer
+App lets the review approve those PRs instead. Reviews of PRs authored by the reviewer App itself
+still use `COMMENT`.
+
+### Optional Separate Reviewer App
+
+Create a second GitHub App with only **Pull requests: Read & write** (GitHub also grants the
+mandatory Metadata read permission). Disable its webhooks and install it on the repositories you
+want reviewed. The main App continues to receive webhook events and handle other GitHub operations;
+the second App is only the review-submission identity.
+
+Set all four Terraform values together, or leave all four empty:
+
+- `github_reviewer_app_id`: the second App's ID
+- `github_reviewer_app_private_key`: its private key in PKCS#8 PEM format
+- `github_reviewer_app_installation_id`: its installation ID
+- `github_reviewer_username`: its exact bot login, such as `my-reviewer[bot]`
+
+The three credentials are control-plane bindings (`GITHUB_REVIEWER_APP_*`); the login is a GitHub
+bot binding (`GITHUB_REVIEWER_USERNAME`). For non-Terraform deployments, configure the same four
+values on their respective services. A login without all three credentials stops every review, while
+credentials without the login leave reviews on the main App's identity.
+
+The agent fetches a short-lived installation token from
+`GET /sessions/:id/review-token?repository=<owner>/<name>` using its sandbox token immediately
+before submitting the review, naming the repository it is about to review. The route authenticates
+the caller against that session, issues the token only to sessions the GitHub bot created (any other
+session's sandbox gets 403), and scopes it to the repository under review, which must be a member of
+the session (otherwise 403) within the owner team's repository grants. Responses carry
+`Cache-Control: no-store`. Only the review POST uses this credential; other GitHub calls retain
+their existing credential. With no reviewer App configured, the endpoint returns 404 and the prompt
+omits the token fetch. When the GitHub bot has a reviewer login, any token-fetch failure, including
+that 404 from missing or partial reviewer credentials, stops the review rather than submit it under
+another identity.
 
 ---
 
@@ -306,9 +339,9 @@ Important limitations:
 
 ### Bot Behavior
 
-- Auto-review skips draft PRs. An explicitly allowed App bot can trigger a comment-only self-review.
-  Manual `@mention` triggers still pass the repository and user gates, then team routing and
-  creation checks.
+- Auto-review skips draft PRs. An explicitly allowed App bot can trigger a self-review, which is
+  comment-only unless a separate reviewer App submits it. Manual `@mention` triggers still pass the
+  repository and user gates, then team routing and creation checks.
 - The bot ignores bot-authored comments, ordinary issue comments, and comments that do not mention
   the bot.
 - If the bot cannot load its GitHub integration settings, it fails closed and does not start direct
@@ -341,7 +374,8 @@ list.
 
 The deprecated workspace auto-review only runs for newly opened, non-draft PRs. It is skipped for
 draft PRs, disabled repositories, and users who are not allowed to trigger the bot. An App-authored
-PR needs the App bot login explicitly allowed; its self-review can only comment.
+PR needs the App bot login explicitly allowed; its self-review can only comment unless a separate
+reviewer App submits it.
 
 If a PR was converted from draft to ready for review, mention the bot in a PR comment instead.
 
