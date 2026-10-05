@@ -65,7 +65,7 @@ The **Timezone** field defaults to your browser's timezone when you create an au
 
 - Saving a change to the schedule or timezone recalculates the next run automatically.
 - **Resume** on a paused schedule automation computes the next run from the current moment rather than catching up on missed slots.
-- A schedule slot that comes due while a previous run is still active is skipped (see below) and the schedule advances to the following slot.
+- A schedule slot that comes due while the automation is at its **Concurrent runs** bound is skipped (see below) and the schedule advances to the following slot.
 - Execution authorization denial records a **Skipped** invocation and immediately pauses the automation, clearing the next run time without adding a failure strike. Restore the required executor/team/target access or [reassign the executor](/automations#reassigning-an-executor), then click **Resume**; restoring access or reassigning alone does not restart the schedule.
 
 ## Trigger Now
@@ -73,16 +73,22 @@ The **Timezone** field defaults to your browser's timezone when you create an au
 **Trigger Now** on the detail page starts a one-off run immediately across the automation's full repository and environment selection.
 
 - It does not move the next scheduled run; the cron cadence stays fixed.
-- It is rejected with "A run is already active for this automation" when a run is in progress. Nothing is recorded for the rejected attempt.
+- It is rejected with "A run is already active for this automation" when the automation is already at its **Concurrent runs** bound. Nothing is recorded for the rejected attempt.
 - It works while the automation is paused, so you can verify a fix before resuming. A successful manual run resets the consecutive-failure counter without resuming the automation; a failed one counts toward auto-pause like any other run.
 - It runs under the authority and identity of the person who clicked it, not the stored executor used by scheduled runs.
 - For a team automation, the requester must currently belong to its active owning team, including Administrators and Owners. Session-creation and target-use permissions and current team repository grants are checked at execution time. Editing or reading the automation is not enough to run it.
 
 Both scheduled and manual runs keep the automation's team ownership and use the team's default session visibility at launch. See [Ownership and execution](/automations/first-automation#ownership-and-execution) for access rules and API-only executor reassignment.
 
-## One active run at a time
+## Concurrent runs
 
-For scheduled and manual firings, only one run per automation can be active. When the schedule comes due during an active run, the firing is recorded in **Run History** as **Skipped** with the note "Skipped because a previous run is still active". Skipped firings never count toward [auto-pause](/automations#auto-pause-after-failures).
+For scheduled and manual firings, an automation admits up to its **Concurrent runs** setting at once: a field on the schedule trigger, from 1 to 10, defaulting to 1. When the schedule comes due while that many firings are in flight, the firing is recorded in **Run History** as **Skipped** with the note "Skipped because a previous run is still active". Skipped firings never count toward [auto-pause](/automations#auto-pause-after-failures).
+
+Raise the setting only for an automation whose runs cannot tread on each other's work. Two runs of one automation share whatever their instructions reach (a queue, a branch, an issue tracker), so an automation that picks "the next item" must claim that item before two runs can safely pick at once.
+
+- The bound counts firings, not sessions. A multi-repository firing starts one session per target, and those never count against each other.
+- A tick starts at most one firing per automation, so concurrency builds up one schedule interval at a time. At a bound of 3 on a `*/15` schedule, the three runs start fifteen minutes apart.
+- Lowering the setting never interrupts firings already in flight; it applies from the next firing.
 
 Event-driven triggers use per-event concurrency keys instead; see each trigger's page.
 

@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } fr
 import { env } from "cloudflare:test";
 import { verifyCallbackSignature } from "@open-inspect/shared/auth";
 import type { SessionVisibility } from "@open-inspect/shared/types/teams";
+import { DEFAULT_AUTOMATION_MAX_CONCURRENT_RUNS } from "@open-inspect/shared/types/automations";
 import type { SlackPostDenial } from "../../src/authorization/slack-post-gate";
 import { createCloudflareEnv } from "../../src/cloudflare/platform";
 import { createDurableObjectSessionPlatform } from "../../src/cloudflare/session-platform";
@@ -204,6 +205,7 @@ describe("Slack outbound post gates (real D1)", () => {
       model: "anthropic/claude-sonnet-4-6",
       reasoning_effort: null,
       enabled: 1,
+      max_concurrent_runs: DEFAULT_AUTOMATION_MAX_CONCURRENT_RUNS,
       next_run_at: null,
       consecutive_failures: 0,
       created_by: "user-1",

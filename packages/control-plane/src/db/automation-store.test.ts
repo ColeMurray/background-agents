@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { AutomationStore, type AutomationRow } from "./automation-store";
+import { DEFAULT_AUTOMATION_MAX_CONCURRENT_RUNS } from "@open-inspect/shared/types/automations";
 import { MAX_D1_QUERY_PARAMETERS } from "./query-limits";
 import type { SqlDatabase, SqlStatement } from "./sql-database";
 
@@ -39,6 +40,7 @@ const sampleRow: AutomationRow = {
   harness: "opencode",
   reasoning_effort: null,
   enabled: 1,
+  max_concurrent_runs: DEFAULT_AUTOMATION_MAX_CONCURRENT_RUNS,
   next_run_at: null,
   consecutive_failures: 0,
   created_by: "user-1",

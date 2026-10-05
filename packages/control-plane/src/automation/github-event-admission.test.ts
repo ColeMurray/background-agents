@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { GitHubAutomationEvent } from "@open-inspect/shared/triggers";
+import { DEFAULT_AUTOMATION_MAX_CONCURRENT_RUNS } from "@open-inspect/shared/types/automations";
 import type { AutomationRow, AutomationRunRow } from "../db/automation-store";
 import type * as AutomationStoreModule from "../db/automation-store";
 import type { SqlDatabase } from "../db/sql-database";
@@ -51,6 +52,7 @@ const automation: AutomationRow = {
   model: "anthropic/claude-sonnet-4-6",
   reasoning_effort: null,
   enabled: 1,
+  max_concurrent_runs: DEFAULT_AUTOMATION_MAX_CONCURRENT_RUNS,
   next_run_at: null,
   consecutive_failures: 0,
   created_at: 1,
