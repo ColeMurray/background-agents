@@ -6,7 +6,7 @@ import json
 import subprocess
 from typing import TYPE_CHECKING
 
-from .configuration import IMAGE_PACKAGE, RUNTIME_PACKAGE, read_json
+from .configuration import IMAGE_PACKAGE, read_json
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -84,28 +84,30 @@ def update_locks(root: Path, *, check: bool = False) -> None:
             )
     if not check:
         subprocess.run(["uv", "lock", "--project", str(python_tools)], check=True)
-    for project, output in (
-        (root / RUNTIME_PACKAGE, package / "locks/runtime.txt"),
-        (python_tools, package / "locks/python-tools.txt"),
-    ):
-        exported = subprocess.run(
-            [
-                "uv",
-                "export",
-                "--project",
-                str(project),
-                "--locked",
-                "--no-dev",
-                "--no-emit-project",
-                "--no-header",
-                "--no-annotate",
-            ],
-            check=True,
-            capture_output=True,
-            text=True,
-        ).stdout
-        if check:
-            if not output.exists() or output.read_text() != exported:
-                raise ValueError(f"Python image lock is stale: {output.relative_to(root)}")
-        else:
-            output.write_text(exported)
+    output = package / "locks/python-tools.txt"
+    exported = export_requirements(python_tools)
+    if check:
+        if not output.exists() or output.read_text() != exported:
+            raise ValueError(f"Python image lock is stale: {output.relative_to(root)}")
+    else:
+        output.write_text(exported)
+
+
+def export_requirements(project: Path) -> str:
+    """Export a uv project's locked, hash-pinned requirements without resolving."""
+    return subprocess.run(
+        [
+            "uv",
+            "export",
+            "--project",
+            str(project),
+            "--locked",
+            "--no-dev",
+            "--no-emit-project",
+            "--no-header",
+            "--no-annotate",
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout
