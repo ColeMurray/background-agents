@@ -1,5 +1,6 @@
 import { z } from "zod";
 import type { SqlStorage } from "./sql-storage";
+import { SessionStorageIntegrityError } from "./types";
 
 /** WS client mapping result for hibernation recovery. */
 const wsClientMappingResultSchema = z.object({
@@ -93,6 +94,9 @@ export class WsClientMappingRepository {
       `SELECT MIN(authorization_expires_at) AS expires_at FROM ws_client_mapping`
     );
     const parsed = wsClientAuthorizationExpiryRowSchema.safeParse(result.toArray()[0]);
-    return parsed.success ? parsed.data.expires_at : null;
+    if (!parsed.success) {
+      throw new SessionStorageIntegrityError("Invalid WebSocket authorization expiry row");
+    }
+    return parsed.data.expires_at;
   }
 }

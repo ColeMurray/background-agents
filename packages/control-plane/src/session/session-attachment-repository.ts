@@ -1,10 +1,14 @@
-import { sessionAttachmentRowSchema, type SessionAttachmentRow } from "./types";
+import {
+  SessionStorageIntegrityError,
+  sessionAttachmentRowSchema,
+  type SessionAttachmentRow,
+} from "./types";
 import type { SqlStorage } from "./sql-storage";
 import { z } from "zod";
 
 const attachmentTotalsRowSchema = z.object({
-  count: z.number(),
-  total_bytes: z.number(),
+  count: z.number().finite(),
+  total_bytes: z.number().finite(),
 });
 
 export interface CreateSessionAttachmentData {
@@ -46,9 +50,8 @@ export class SessionAttachmentRepository {
        FROM attachments`
     );
     const parsed = attachmentTotalsRowSchema.safeParse(result.toArray()[0]);
-    return parsed.success
-      ? { count: parsed.data.count, totalBytes: parsed.data.total_bytes }
-      : { count: 0, totalBytes: 0 };
+    if (!parsed.success) throw new SessionStorageIntegrityError("Invalid attachment totals row");
+    return { count: parsed.data.count, totalBytes: parsed.data.total_bytes };
   }
 
   getUnreferenced(attachmentIds: string[]): SessionAttachmentRow[] {

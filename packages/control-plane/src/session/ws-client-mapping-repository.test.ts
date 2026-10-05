@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import type { SqlResult, SqlStorage } from "./sql-storage";
+import { SessionStorageIntegrityError } from "./types";
 import { WsClientMappingRepository } from "./ws-client-mapping-repository";
 
 function createMockSql() {
@@ -135,7 +136,7 @@ describe("WsClientMappingRepository", () => {
     (expiresAt) => {
       mock.setRows([{ expires_at: expiresAt }]);
 
-      expect(repository.getNextAuthorizationExpiry()).toBeNull();
+      expect(() => repository.getNextAuthorizationExpiry()).toThrow(SessionStorageIntegrityError);
     }
   );
 });
