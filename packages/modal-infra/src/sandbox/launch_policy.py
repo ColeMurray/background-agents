@@ -26,6 +26,7 @@ VM_DEFAULT_CPU_LIMIT_CORES = 2
 VM_DEFAULT_MEMORY_LIMIT_MIB = 4096
 MODAL_DEFAULT_CPU_CORES = 0.125
 MODAL_DEFAULT_MEMORY_MIB = 128
+MAX_RESOURCE_UINT32 = (1 << 32) - 1
 
 
 class InvalidDockerSettingsError(ValueError):
@@ -74,15 +75,20 @@ def parse_launch(backend: ModalBackend, settings: dict[str, Any] | None) -> Moda
         if value is not None and (
             isinstance(value, bool)
             or not isinstance(value, int | float)
-            or not math.isfinite(value)
-            or value <= 0
+            or not 0 < value <= MAX_RESOURCE_UINT32 / 1000
+            or not math.isfinite(value * 1000)
+            or int(value * 1000) == 0
         ):
-            raise InvalidDockerSettingsError(f"{name} must be positive and finite")
+            raise InvalidDockerSettingsError(
+                f"{name} must serialize to a positive uint32 millicore value"
+            )
     for name, value in (("memoryMib", memory_mib), ("memoryLimitMib", memory_limit_mib)):
         if value is not None and (
-            isinstance(value, bool) or not isinstance(value, int) or value <= 0
+            isinstance(value, bool)
+            or not isinstance(value, int)
+            or not 0 < value <= MAX_RESOURCE_UINT32
         ):
-            raise InvalidDockerSettingsError(f"{name} must be a positive integer")
+            raise InvalidDockerSettingsError(f"{name} must be a positive uint32 integer")
     if backend == "modal-vm":
         if cpu_limit_cores is None:
             cpu_limit_cores = max(VM_DEFAULT_CPU_LIMIT_CORES, cpu_cores)

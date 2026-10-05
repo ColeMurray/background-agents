@@ -319,23 +319,31 @@ export const SANDBOX_PROVIDER_NAMES = [
 
 export type SandboxProviderName = (typeof SANDBOX_PROVIDER_NAMES)[number];
 
-const DEFAULT_SANDBOX_SETTING_CAPABILITIES = { resources: true, timeout: true };
+const DEFAULT_SANDBOX_SETTING_CAPABILITIES = {
+  resources: true,
+  resourceLimits: false,
+  timeout: true,
+};
 const SANDBOX_SETTING_CAPABILITIES = {
-  modal: DEFAULT_SANDBOX_SETTING_CAPABILITIES,
-  "modal-vm": DEFAULT_SANDBOX_SETTING_CAPABILITIES,
-  daytona: { resources: false, timeout: false },
+  modal: { ...DEFAULT_SANDBOX_SETTING_CAPABILITIES, resourceLimits: true },
+  "modal-vm": { ...DEFAULT_SANDBOX_SETTING_CAPABILITIES, resourceLimits: true },
+  daytona: { resources: false, resourceLimits: false, timeout: false },
   vercel: DEFAULT_SANDBOX_SETTING_CAPABILITIES,
-  opencomputer: { resources: false, timeout: true },
-  e2b: { resources: false, timeout: true },
-} satisfies Record<SandboxProviderName, { resources: boolean; timeout: boolean }>;
+  opencomputer: { resources: false, resourceLimits: false, timeout: true },
+  e2b: { resources: false, resourceLimits: false, timeout: true },
+} satisfies Record<
+  SandboxProviderName,
+  { resources: boolean; resourceLimits: boolean; timeout: boolean }
+>;
 
 export function isSandboxProviderName(provider: string): provider is SandboxProviderName {
   return (SANDBOX_PROVIDER_NAMES as readonly string[]).includes(provider);
 }
 
-/** Resolve setting support, explicitly treating unvalidated provider names as fully capable. */
+/** Unvalidated provider names support resources and timeouts, but not resource caps. */
 export function sandboxSettingCapabilities(provider: string): {
   resources: boolean;
+  resourceLimits: boolean;
   timeout: boolean;
 } {
   const normalized = provider.trim().toLowerCase();
@@ -351,8 +359,7 @@ export function supportsConfigurableSandboxResources(provider: string): boolean 
 
 /** Only Modal backends honor per-session resource caps. */
 export function supportsConfigurableSandboxResourceLimits(provider: string): boolean {
-  const normalized = provider.trim().toLowerCase();
-  return normalized === "modal" || normalized === "modal-vm";
+  return sandboxSettingCapabilities(provider).resourceLimits;
 }
 
 /** Whether the provider honors a per-session sandbox lifetime. */
@@ -365,36 +372,24 @@ export type SandboxResources = Pick<
   "cpuCores" | "memoryMib" | "cpuLimitCores" | "memoryLimitMib"
 >;
 
-/** Compare caps against provider requests, or explicit requests only when no provider is given. */
+/** Compare supported caps against explicit requests or the selected provider's defaults. */
 export function validateSandboxResourceLimits(
   settings: SandboxResources,
-  provider?: string
+  provider: SandboxProviderName
 ): string | undefined {
-  const normalizedProvider = provider?.trim().toLowerCase();
-  if (
-    normalizedProvider !== undefined &&
-    !supportsConfigurableSandboxResourceLimits(normalizedProvider)
-  ) {
+  if (!supportsConfigurableSandboxResourceLimits(provider)) {
     return undefined;
   }
   const cpuCores =
     settings.cpuCores ??
-    (normalizedProvider === "modal-vm"
-      ? DEFAULT_MODAL_VM_CPU_CORES
-      : normalizedProvider === "modal"
-        ? DEFAULT_MODAL_CPU_CORES
-        : undefined);
+    (provider === "modal-vm" ? DEFAULT_MODAL_VM_CPU_CORES : DEFAULT_MODAL_CPU_CORES);
   const memoryMib =
     settings.memoryMib ??
-    (normalizedProvider === "modal-vm"
-      ? DEFAULT_MODAL_VM_MEMORY_MIB
-      : normalizedProvider === "modal"
-        ? DEFAULT_MODAL_MEMORY_MIB
-        : undefined);
-  if (cpuCores != null && settings.cpuLimitCores != null && settings.cpuLimitCores < cpuCores) {
+    (provider === "modal-vm" ? DEFAULT_MODAL_VM_MEMORY_MIB : DEFAULT_MODAL_MEMORY_MIB);
+  if (settings.cpuLimitCores != null && settings.cpuLimitCores < cpuCores) {
     return "cpuLimitCores must be greater than or equal to cpuCores";
   }
-  if (memoryMib != null && settings.memoryLimitMib != null && settings.memoryLimitMib < memoryMib) {
+  if (settings.memoryLimitMib != null && settings.memoryLimitMib < memoryMib) {
     return "memoryLimitMib must be greater than or equal to memoryMib";
   }
   return undefined;

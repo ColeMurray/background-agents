@@ -703,6 +703,43 @@ async def test_malformed_docker_setting_fails_before_any_launch(monkeypatch):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("image_source", ["base", "snapshot"])
+@pytest.mark.parametrize(
+    "settings",
+    [
+        {"memoryLimitMib": 4294967296},
+        {"cpuLimitCores": 1e308},
+        {"cpuCores": 0.0001, "cpuLimitCores": 0.0009},
+    ],
+)
+async def test_invalid_wire_resources_neither_retire_nor_allocate(
+    monkeypatch, image_source, settings
+):
+    manager, captured, _ = _docker_manager(monkeypatch)
+    retire = AsyncMock()
+    monkeypatch.setattr("src.sandbox.launch.SandboxLauncher._retire_docker_allocation", retire)
+    if image_source == "base":
+        launch = manager.create_sandbox(
+            _docker_config(settings=settings, retire_sandbox_id="prior")
+        )
+    else:
+        launch = manager.restore_from_snapshot(
+            clone_host="github.com",
+            clone_username="x-access-token",
+            snapshot_image_id="snapshot-1",
+            session_config={"session_id": "session-1"},
+            sandbox_id="next",
+            settings=settings,
+            sandbox_backend="modal-vm",
+            retire_sandbox_id="prior",
+        )
+    with pytest.raises(InvalidDockerSettingsError):
+        await launch
+    retire.assert_not_awaited()
+    assert "kwargs" not in captured
+
+
+@pytest.mark.asyncio
 async def test_docker_launch_adopts_an_existing_owned_allocation(monkeypatch):
     manager, captured, _ = _docker_manager(monkeypatch)
     tags = docker_allocation_tags("session-1", "sandbox-acme-repo-1700000000000")

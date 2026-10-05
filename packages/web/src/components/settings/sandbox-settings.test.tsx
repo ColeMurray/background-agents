@@ -827,6 +827,7 @@ describe("SandboxSettingsPage — resource reservations editor", () => {
     expect(screen.getByLabelText("Memory request (MiB)")).toHaveValue(2048);
     expect(screen.getByLabelText("CPU limit (cores)")).toHaveValue("2");
     expect(screen.getByLabelText("Memory limit (MiB)")).toHaveValue(4096);
+    expect(screen.queryByRole("button", { name: /Inherit/ })).not.toBeInTheDocument();
     expect(screen.getByText(/Limits cap usage/)).toBeInTheDocument();
     if (provider === "modal-vm") {
       expect(
@@ -845,6 +846,73 @@ describe("SandboxSettingsPage — resource reservations editor", () => {
     }
   });
   const user = userEvent.setup();
+
+  it.each([
+    { scope: "repo", ownCaps: { cpuLimitCores: 8, memoryLimitMib: 16384 } },
+    { scope: "repo", ownCaps: { cpuLimitCores: null, memoryLimitMib: null } },
+    { scope: "environment", ownCaps: { cpuLimitCores: 8, memoryLimitMib: 16384 } },
+    { scope: "environment", ownCaps: { cpuLimitCores: null, memoryLimitMib: null } },
+  ] as const)(
+    "inherits $scope caps instead of saving provider-default resets: $ownCaps",
+    async ({ scope, ownCaps }) => {
+      vi.stubEnv("NEXT_PUBLIC_SANDBOX_PROVIDER", "modal-vm");
+      const repoSettingsKey = "/api/integration-settings/sandbox/repos/acme/app";
+      const environmentSettingsKey = "/api/integration-settings/sandbox/environments/env_1";
+      const apiUrl = scope === "repo" ? repoSettingsKey : environmentSettingsKey;
+      const fetchMock = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+        if (init?.method === "PUT") return new Response(JSON.stringify({}), { status: 200 });
+        throw new Error("unexpected fetch");
+      });
+      vi.stubGlobal("fetch", fetchMock);
+      render(
+        <SWRConfig
+          value={{
+            provider: () => new Map(),
+            fallback: {
+              [SETTINGS_KEY]: {
+                integrationId: "sandbox",
+                settings: { defaults: { cpuLimitCores: 2, memoryLimitMib: 4096 } },
+              },
+              [repoSettingsKey]: {
+                integrationId: "sandbox",
+                repo: "acme/app",
+                settings:
+                  scope === "repo" ? { ...ownCaps, terminalEnabled: true } : { cpuLimitCores: 4 },
+              },
+              [environmentSettingsKey]: {
+                integrationId: "sandbox",
+                environmentId: "env_1",
+                settings: { ...ownCaps, terminalEnabled: true },
+              },
+            },
+            dedupingInterval: Infinity,
+            revalidateOnFocus: false,
+            revalidateIfStale: false,
+            revalidateOnReconnect: false,
+          }}
+        >
+          <SandboxSettingsEditor scope={scope} owner="acme" name="app" environmentId="env_1" />
+        </SWRConfig>
+      );
+
+      await user.click(screen.getByRole("button", { name: "Inherit CPU limit" }));
+      expect(screen.getByLabelText("CPU limit (cores)")).toHaveValue(scope === "repo" ? "2" : "4");
+      expect(screen.getByText("Save Settings").closest("button")).toBeEnabled();
+      await user.click(screen.getByRole("button", { name: "Inherit memory limit" }));
+      expect(screen.getByLabelText("Memory limit (MiB)")).toHaveValue(4096);
+      await user.click(screen.getByText("Save Settings"));
+
+      await waitFor(() => {
+        expect(fetchMock).toHaveBeenCalledWith(
+          apiUrl,
+          expect.objectContaining({
+            method: "PUT",
+            body: JSON.stringify({ settings: { terminalEnabled: true } }),
+          })
+        );
+      });
+    }
+  );
 
   it("leaves resource fields blank when unset", () => {
     renderWithSWR(globalSettings([]));

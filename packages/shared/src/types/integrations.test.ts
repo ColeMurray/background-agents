@@ -18,6 +18,7 @@ import {
   normalizeRoutingRules,
   omitUnsupportedSandboxSettings,
   resolveBuildTimeoutSeconds,
+  sandboxSettingCapabilities,
   supportsConfigurableSandboxResources,
   supportsConfigurableSandboxResourceLimits,
   supportsConfigurableSandboxTimeout,
@@ -35,6 +36,8 @@ import {
   validateSandboxResourceLimits,
   type LinearBotGlobalSettings,
   type LinearGlobalConfig,
+  type SandboxProviderName,
+  type SandboxResources,
   type SlackRoutingRule,
 } from "./integrations";
 
@@ -94,17 +97,34 @@ describe("Linear unbound channel policy", () => {
 });
 
 describe("sandbox resource limit validation", () => {
-  it("compares only explicit pairs when no provider is supplied", () => {
-    expect(
-      validateSandboxResourceLimits({ cpuLimitCores: 0.01, memoryLimitMib: 1 })
-    ).toBeUndefined();
-    expect(validateSandboxResourceLimits({ cpuCores: null, cpuLimitCores: 0.01 })).toBeUndefined();
-    expect(validateSandboxResourceLimits({ cpuCores: 4, cpuLimitCores: 2 })).toContain(
+  it("requires a typed provider", () => {
+    expectTypeOf(validateSandboxResourceLimits).parameters.toEqualTypeOf<
+      [SandboxResources, SandboxProviderName]
+    >();
+  });
+
+  it.each(["modal", "modal-vm"] as const)("compares explicit requests for %s", (provider) => {
+    expect(validateSandboxResourceLimits({ cpuCores: 4, cpuLimitCores: 2 }, provider)).toContain(
       "cpuLimitCores"
     );
-    expect(validateSandboxResourceLimits({ memoryMib: 8192, memoryLimitMib: 4096 })).toContain(
-      "memoryLimitMib"
-    );
+    expect(
+      validateSandboxResourceLimits({ memoryMib: 8192, memoryLimitMib: 4096 }, provider)
+    ).toContain("memoryLimitMib");
+    expect(
+      validateSandboxResourceLimits(
+        { cpuCores: 4, cpuLimitCores: 4, memoryMib: 8192, memoryLimitMib: 8192 },
+        provider
+      )
+    ).toBeUndefined();
+    expect(
+      validateSandboxResourceLimits({ cpuCores: 4, memoryMib: 8192 }, provider)
+    ).toBeUndefined();
+    expect(
+      validateSandboxResourceLimits(
+        { cpuCores: 4, memoryMib: 8192, cpuLimitCores: null, memoryLimitMib: null },
+        provider
+      )
+    ).toBeUndefined();
   });
 
   it.each([
@@ -114,7 +134,7 @@ describe("sandbox resource limit validation", () => {
       cpuCores: DEFAULT_MODAL_VM_CPU_CORES,
       memoryMib: DEFAULT_MODAL_VM_MEMORY_MIB,
     },
-  ])(
+  ] as const)(
     "uses request defaults for absent and null $provider requests",
     ({ provider, cpuCores, memoryMib }) => {
       for (const request of [undefined, null]) {
@@ -145,7 +165,7 @@ describe("sandbox resource limit validation", () => {
     }
   );
 
-  it.each(["vercel", "daytona", "opencomputer", "e2b", "test-provider"])(
+  it.each(["vercel", "daytona", "opencomputer", "e2b"] as const)(
     "does not compare unused caps for %s",
     (provider) => {
       expect(
@@ -159,6 +179,21 @@ describe("sandbox resource limit validation", () => {
 });
 
 describe("sandbox provider settings capabilities", () => {
+  it.each([
+    { provider: "modal", resources: true, resourceLimits: true, timeout: true },
+    { provider: "modal-vm", resources: true, resourceLimits: true, timeout: true },
+    { provider: "daytona", resources: false, resourceLimits: false, timeout: false },
+    { provider: "vercel", resources: true, resourceLimits: false, timeout: true },
+    { provider: "opencomputer", resources: false, resourceLimits: false, timeout: true },
+    { provider: "e2b", resources: false, resourceLimits: false, timeout: true },
+  ])("resolves canonical capabilities for $provider", ({ provider, ...capabilities }) => {
+    expect(sandboxSettingCapabilities(provider)).toEqual(capabilities);
+    expect(sandboxSettingCapabilities(` ${provider.toUpperCase()} `)).toEqual(capabilities);
+    expect(supportsConfigurableSandboxResources(provider)).toBe(capabilities.resources);
+    expect(supportsConfigurableSandboxResourceLimits(provider)).toBe(capabilities.resourceLimits);
+    expect(supportsConfigurableSandboxTimeout(provider)).toBe(capabilities.timeout);
+  });
+
   it.each(["modal", "modal-vm"])("preserves resource caps for %s", (provider) => {
     const settings = { cpuLimitCores: 2, memoryLimitMib: null };
     expect(supportsConfigurableSandboxResourceLimits(provider)).toBe(true);
@@ -194,7 +229,13 @@ describe("sandbox provider settings capabilities", () => {
   });
 
   it("uses the explicit permissive fallback for unvalidated provider names", () => {
+    expect(sandboxSettingCapabilities("test-provider")).toEqual({
+      resources: true,
+      resourceLimits: false,
+      timeout: true,
+    });
     expect(supportsConfigurableSandboxResources("test-provider")).toBe(true);
+    expect(supportsConfigurableSandboxResourceLimits("test-provider")).toBe(false);
     expect(supportsConfigurableSandboxTimeout("test-provider")).toBe(true);
   });
 
