@@ -120,7 +120,7 @@ function repoOverrideRow(fullName: string) {
 }
 
 function autoReviewControls(row: HTMLElement) {
-  return within(row).getByText("Auto-review new PRs").parentElement!;
+  return within(row).getByText("Auto-review PR changes").parentElement!;
 }
 
 async function selectAutoReviewMode(row: HTMLElement, option: RegExp) {
@@ -195,7 +195,7 @@ describe("GitHubIntegrationSettings", () => {
 
     render(<GitHubIntegrationSettings />);
 
-    const toggle = screen.getByRole("switch", { name: /auto-review new prs/i });
+    const toggle = screen.getByRole("switch", { name: /auto-review pr changes/i });
     const label = toggle.closest("label")!;
     expect(label).toHaveAttribute("for", toggle.id);
     expect(within(label).getByText("Deprecated")).toBeInTheDocument();
@@ -422,7 +422,7 @@ describe("GitHubIntegrationSettings", () => {
       "high"
     );
 
-    await user.click(screen.getByRole("switch", { name: /auto-review new prs/i }));
+    await user.click(screen.getByRole("switch", { name: /auto-review pr changes/i }));
     await user.click(screen.getByRole("button", { name: /^save$/i }));
 
     expect(fetchMock).toHaveBeenCalledWith(
@@ -918,7 +918,7 @@ describe("GitHubIntegrationSettings", () => {
     expect(screen.getByRole("combobox", { name: "Default model" })).toHaveTextContent(
       "Choose a model"
     );
-    await user.click(screen.getByRole("switch", { name: /auto-review new prs/i }));
+    await user.click(screen.getByRole("switch", { name: /auto-review pr changes/i }));
     expect(screen.getAllByRole("button", { name: /^save$/i })[0]).toBeDisabled();
     expect(screen.queryByText(/deployment default|fall back|Sessions will run on/)).toBeNull();
   });
@@ -933,7 +933,7 @@ describe("GitHubIntegrationSettings", () => {
         availableRepos: [repo("acme/web")],
       });
       render(<GitHubIntegrationSettings />);
-      await user.click(screen.getByRole("switch", { name: /auto-review new prs/i }));
+      await user.click(screen.getByRole("switch", { name: /auto-review pr changes/i }));
       const row = repoOverrideRow("acme/web");
       await selectAutoReviewMode(row, /override for this repo/i);
       for (const save of screen.getAllByRole("button", { name: /^save$/i })) {

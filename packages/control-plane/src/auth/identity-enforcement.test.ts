@@ -226,9 +226,13 @@ describe("mayAttachCallbackContext", () => {
     expect(
       mayAttachCallbackContext(createCtx({ kind: "service", service: "linear-bot", actor: null }))
     ).toBe(true);
-    expect(mayAttachCallbackContext(createCtx(USER_PRINCIPAL))).toBe(false);
+    // The github-bot owns review completion callbacks.
     expect(
       mayAttachCallbackContext(createCtx({ kind: "service", service: "github-bot", actor: null }))
+    ).toBe(true);
+    expect(mayAttachCallbackContext(createCtx(USER_PRINCIPAL))).toBe(false);
+    expect(
+      mayAttachCallbackContext(createCtx({ kind: "service", service: "web", actor: null }))
     ).toBe(false);
     expect(mayAttachCallbackContext(createCtx(undefined))).toBe(false);
   });

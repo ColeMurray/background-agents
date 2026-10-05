@@ -27,6 +27,7 @@ export interface WorkerBindings extends EnvConfig, JobQueueBindings {
   REPOS_CACHE: KVNamespace;
   SLACK_BOT?: Fetcher;
   LINEAR_BOT?: Fetcher;
+  GITHUB_BOT?: Fetcher;
   AUTOFIX_DLQ?: Queue<unknown>;
   DB: D1Database;
   MEDIA_BUCKET: R2Bucket;
@@ -46,6 +47,7 @@ export function createCloudflareEnv(bindings: WorkerBindings): Env {
     MEDIA_BUCKET,
     SLACK_BOT,
     LINEAR_BOT,
+    GITHUB_BOT,
     AUTOFIX_QUEUE,
     AUTOFIX_DLQ,
     IMAGE_BUILD_FINALIZATION_QUEUE,
@@ -64,6 +66,7 @@ export function createCloudflareEnv(bindings: WorkerBindings): Env {
     MEDIA_BUCKET: new R2ObjectStorage(MEDIA_BUCKET),
     SLACK_BOT,
     LINEAR_BOT,
+    GITHUB_BOT,
     AUTOFIX_QUEUE,
     AUTOFIX_DLQ,
     JOBS: createQueueJobs({ IMAGE_BUILD_FINALIZATION_QUEUE, AUTOFIX_QUEUE }),
