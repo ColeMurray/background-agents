@@ -692,9 +692,13 @@ async function handleProviderAccessWork(
             : cause.code === "upstream_retry_safe"
               ? 502
               : 409;
+      // The status alone cannot separate a credential that needs reconnection
+      // from transient exchange contention: both answer 409. Sandboxes decide
+      // whether to abandon the subscription on this code, so surface it.
       return json(
         {
           error: cause.message,
+          code: cause.code,
           ...(cause.code === "exchange_busy" ? { retryable: true } : {}),
         },
         status
