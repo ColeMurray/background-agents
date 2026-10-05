@@ -254,14 +254,23 @@ export const DEFAULT_BUILD_TIMEOUT_SECONDS = 1800;
  */
 export const MAX_BUILD_TIMEOUT_SECONDS = 3600;
 
+/** Modal resource defaults; mirrored by the Python launch policy. */
+export const DEFAULT_MODAL_CPU_CORES = 0.125;
+export const DEFAULT_MODAL_MEMORY_MIB = 128;
+export const DEFAULT_MODAL_VM_CPU_CORES = 0.5;
+export const DEFAULT_MODAL_VM_MEMORY_MIB = 2048;
+export const DEFAULT_MODAL_VM_CPU_LIMIT_CORES = 2;
+export const DEFAULT_MODAL_VM_MEMORY_LIMIT_MIB = 4096;
+
 /**
  * Sandbox environment settings. Provider-agnostic: describes what the user
- * wants, not how it's done. Resource fields (`cpuCores`, `memoryMib`) are
+ * wants, not how it's done. Request fields (`cpuCores`, `memoryMib`) are
  * advisory and provider-dependent — Modal maps them directly, Vercel maps
- * them to vCPUs, and providers without resource reservations ignore them. We
- * only check they're positive; the provider enforces its own real limits. When
- * unset, the provider's own default applies. At repo scope, `null` explicitly
- * uses the provider default instead of inheriting a global resource default.
+ * them to vCPUs, and providers without resource reservations ignore them.
+ * Limits are caps supported only by Modal backends. The provider enforces its
+ * own real limits. When unset, the provider's own default applies. At repo or
+ * environment scope, `null` explicitly uses the provider default instead of
+ * inheriting a resource default.
  */
 export const sandboxSettingsSchema = z.strictObject({
   /** Extra ports to expose via tunnels (e.g., dev server ports 3000, 5173). */
@@ -282,6 +291,10 @@ export const sandboxSettingsSchema = z.strictObject({
   cpuCores: z.number().nullable().optional(),
   /** Memory to reserve for the sandbox, in MiB. */
   memoryMib: z.number().nullable().optional(),
+  /** CPU cap for Modal backends; null resets to the provider default. */
+  cpuLimitCores: z.number().nullable().optional(),
+  /** Memory cap in MiB for Modal backends; null resets to the provider default. */
+  memoryLimitMib: z.number().nullable().optional(),
   /** Requested sandbox session lifetime, in milliseconds. */
   sandboxTimeoutMs: z.number().optional(),
   /** Time reserved before provider expiry for final sandbox preservation. */
@@ -336,12 +349,58 @@ export function supportsConfigurableSandboxResources(provider: string): boolean 
   return sandboxSettingCapabilities(provider).resources;
 }
 
+/** Only Modal backends honor per-session resource caps. */
+export function supportsConfigurableSandboxResourceLimits(provider: string): boolean {
+  const normalized = provider.trim().toLowerCase();
+  return normalized === "modal" || normalized === "modal-vm";
+}
+
 /** Whether the provider honors a per-session sandbox lifetime. */
 export function supportsConfigurableSandboxTimeout(provider: string): boolean {
   return sandboxSettingCapabilities(provider).timeout;
 }
 
-export type ProviderSpecificSandboxSetting = "cpuCores" | "memoryMib" | "sandboxTimeoutMs";
+export type SandboxResources = Pick<
+  SandboxSettings,
+  "cpuCores" | "memoryMib" | "cpuLimitCores" | "memoryLimitMib"
+>;
+
+/** Compare caps against provider requests, or explicit requests only when no provider is given. */
+export function validateSandboxResourceLimits(
+  settings: SandboxResources,
+  provider?: string
+): string | undefined {
+  const normalizedProvider = provider?.trim().toLowerCase();
+  if (
+    normalizedProvider !== undefined &&
+    !supportsConfigurableSandboxResourceLimits(normalizedProvider)
+  ) {
+    return undefined;
+  }
+  const cpuCores =
+    settings.cpuCores ??
+    (normalizedProvider === "modal-vm"
+      ? DEFAULT_MODAL_VM_CPU_CORES
+      : normalizedProvider === "modal"
+        ? DEFAULT_MODAL_CPU_CORES
+        : undefined);
+  const memoryMib =
+    settings.memoryMib ??
+    (normalizedProvider === "modal-vm"
+      ? DEFAULT_MODAL_VM_MEMORY_MIB
+      : normalizedProvider === "modal"
+        ? DEFAULT_MODAL_MEMORY_MIB
+        : undefined);
+  if (cpuCores != null && settings.cpuLimitCores != null && settings.cpuLimitCores < cpuCores) {
+    return "cpuLimitCores must be greater than or equal to cpuCores";
+  }
+  if (memoryMib != null && settings.memoryLimitMib != null && settings.memoryLimitMib < memoryMib) {
+    return "memoryLimitMib must be greater than or equal to memoryMib";
+  }
+  return undefined;
+}
+
+export type ProviderSpecificSandboxSetting = keyof SandboxResources | "sandboxTimeoutMs";
 
 export function unsupportedSandboxSettings(
   settings: SandboxSettings,
@@ -351,6 +410,10 @@ export function unsupportedSandboxSettings(
   if (!supportsConfigurableSandboxResources(provider)) {
     if (settings.cpuCores !== undefined) unsupported.push("cpuCores");
     if (settings.memoryMib !== undefined) unsupported.push("memoryMib");
+  }
+  if (!supportsConfigurableSandboxResourceLimits(provider)) {
+    if (settings.cpuLimitCores !== undefined) unsupported.push("cpuLimitCores");
+    if (settings.memoryLimitMib !== undefined) unsupported.push("memoryLimitMib");
   }
   if (!supportsConfigurableSandboxTimeout(provider) && settings.sandboxTimeoutMs !== undefined) {
     unsupported.push("sandboxTimeoutMs");

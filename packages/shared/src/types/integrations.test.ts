@@ -1,6 +1,10 @@
 import { describe, expect, expectTypeOf, it } from "vitest";
 import {
   DEFAULT_BUILD_TIMEOUT_SECONDS,
+  DEFAULT_MODAL_CPU_CORES,
+  DEFAULT_MODAL_MEMORY_MIB,
+  DEFAULT_MODAL_VM_CPU_CORES,
+  DEFAULT_MODAL_VM_MEMORY_MIB,
   INTERNAL_TTYD_PORT,
   INTERNAL_VNC_PORT,
   MAX_BUILD_TIMEOUT_SECONDS,
@@ -15,6 +19,7 @@ import {
   omitUnsupportedSandboxSettings,
   resolveBuildTimeoutSeconds,
   supportsConfigurableSandboxResources,
+  supportsConfigurableSandboxResourceLimits,
   supportsConfigurableSandboxTimeout,
   scmGlobalConfigSchema,
   scmSettingsSchema,
@@ -27,6 +32,7 @@ import {
   integrationSettingsSchemas,
   slackIntegrationSettingsRoutingResponseSchema,
   validateSandboxChildSessionLimits,
+  validateSandboxResourceLimits,
   type LinearBotGlobalSettings,
   type LinearGlobalConfig,
   type SlackRoutingRule,
@@ -87,7 +93,90 @@ describe("Linear unbound channel policy", () => {
   });
 });
 
+describe("sandbox resource limit validation", () => {
+  it("compares only explicit pairs when no provider is supplied", () => {
+    expect(
+      validateSandboxResourceLimits({ cpuLimitCores: 0.01, memoryLimitMib: 1 })
+    ).toBeUndefined();
+    expect(validateSandboxResourceLimits({ cpuCores: null, cpuLimitCores: 0.01 })).toBeUndefined();
+    expect(validateSandboxResourceLimits({ cpuCores: 4, cpuLimitCores: 2 })).toContain(
+      "cpuLimitCores"
+    );
+    expect(validateSandboxResourceLimits({ memoryMib: 8192, memoryLimitMib: 4096 })).toContain(
+      "memoryLimitMib"
+    );
+  });
+
+  it.each([
+    { provider: "modal", cpuCores: DEFAULT_MODAL_CPU_CORES, memoryMib: DEFAULT_MODAL_MEMORY_MIB },
+    {
+      provider: "modal-vm",
+      cpuCores: DEFAULT_MODAL_VM_CPU_CORES,
+      memoryMib: DEFAULT_MODAL_VM_MEMORY_MIB,
+    },
+  ])(
+    "uses request defaults for absent and null $provider requests",
+    ({ provider, cpuCores, memoryMib }) => {
+      for (const request of [undefined, null]) {
+        expect(
+          validateSandboxResourceLimits(
+            { cpuCores: request, cpuLimitCores: cpuCores / 2 },
+            provider
+          )
+        ).toContain("cpuLimitCores");
+        expect(
+          validateSandboxResourceLimits(
+            { memoryMib: request, memoryLimitMib: memoryMib / 2 },
+            provider
+          )
+        ).toContain("memoryLimitMib");
+        expect(
+          validateSandboxResourceLimits(
+            {
+              cpuCores: request,
+              memoryMib: request,
+              cpuLimitCores: cpuCores,
+              memoryLimitMib: memoryMib,
+            },
+            provider
+          )
+        ).toBeUndefined();
+      }
+    }
+  );
+
+  it.each(["vercel", "daytona", "opencomputer", "e2b", "test-provider"])(
+    "does not compare unused caps for %s",
+    (provider) => {
+      expect(
+        validateSandboxResourceLimits(
+          { cpuCores: 4, cpuLimitCores: 2, memoryMib: 8192, memoryLimitMib: 4096 },
+          provider
+        )
+      ).toBeUndefined();
+    }
+  );
+});
+
 describe("sandbox provider settings capabilities", () => {
+  it.each(["modal", "modal-vm"])("preserves resource caps for %s", (provider) => {
+    const settings = { cpuLimitCores: 2, memoryLimitMib: null };
+    expect(supportsConfigurableSandboxResourceLimits(provider)).toBe(true);
+    expect(omitUnsupportedSandboxSettings(settings, provider)).toEqual(settings);
+  });
+
+  it.each(["vercel", "daytona", "opencomputer", "e2b", "test-provider"])(
+    "ignores resource caps for %s",
+    (provider) => {
+      expect(supportsConfigurableSandboxResourceLimits(provider)).toBe(false);
+      expect(
+        omitUnsupportedSandboxSettings(
+          { cpuLimitCores: 2, memoryLimitMib: null, terminalEnabled: true },
+          provider
+        )
+      ).toEqual({ terminalEnabled: true });
+    }
+  );
   it.each(["modal", "vercel"])("allows resource overrides for %s", (provider) => {
     expect(supportsConfigurableSandboxResources(provider)).toBe(true);
   });
@@ -415,7 +504,12 @@ describe("integration settings schemas", () => {
 
   it("parses nullable sandbox resource settings", () => {
     expect(
-      integrationSettingsSchemas.sandbox.repo.safeParse({ cpuCores: null, memoryMib: null }).success
+      integrationSettingsSchemas.sandbox.repo.safeParse({
+        cpuCores: null,
+        memoryMib: null,
+        cpuLimitCores: null,
+        memoryLimitMib: null,
+      }).success
     ).toBe(true);
   });
 

@@ -6,6 +6,7 @@ import { IMAGE_BUILD_PROVIDER_IDS } from "@open-inspect/shared/types/image-build
 import {
   isSandboxProviderName,
   supportsConfigurableSandboxResources as providerSupportsConfigurableSandboxResources,
+  supportsConfigurableSandboxResourceLimits as providerSupportsConfigurableSandboxResourceLimits,
   supportsConfigurableSandboxTimeout as providerSupportsConfigurableSandboxTimeout,
   type SandboxProviderName,
 } from "@open-inspect/shared/types/integrations";
@@ -39,6 +40,10 @@ export function supportsRepoImages(): boolean {
 
 export function supportsConfigurableSandboxResources(): boolean {
   return providerSupportsConfigurableSandboxResources(getPublicSandboxProvider());
+}
+
+export function supportsConfigurableSandboxResourceLimits(): boolean {
+  return providerSupportsConfigurableSandboxResourceLimits(getPublicSandboxProvider());
 }
 
 export function supportsConfigurableSandboxTimeout(): boolean {

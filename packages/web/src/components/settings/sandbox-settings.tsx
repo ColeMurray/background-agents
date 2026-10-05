@@ -11,6 +11,10 @@ import { browserApiFetch, type BrowserApiPath } from "@/lib/browser-api-fetch";
 import {
   DEFAULT_BUILD_TIMEOUT_SECONDS,
   DEFAULT_CODE_SERVER_PORT,
+  DEFAULT_MODAL_VM_CPU_CORES,
+  DEFAULT_MODAL_VM_MEMORY_MIB,
+  DEFAULT_MODAL_VM_CPU_LIMIT_CORES,
+  DEFAULT_MODAL_VM_MEMORY_LIMIT_MIB,
   DEFAULT_TERMINAL_PORT,
   DEFAULT_VNC_PORT,
   MAX_BUILD_TIMEOUT_SECONDS,
@@ -34,6 +38,7 @@ import { useCurrentUserAuthorization } from "@/hooks/use-current-user-authorizat
 import {
   getPublicSandboxProvider,
   supportsConfigurableSandboxResources,
+  supportsConfigurableSandboxResourceLimits,
   supportsConfigurableSandboxTimeout,
 } from "@/lib/sandbox-provider";
 
@@ -139,11 +144,16 @@ export function SandboxSettingsEditor({
   const { hasPermission } = useCurrentUserAuthorization();
   const sandboxProvider = getPublicSandboxProvider();
   const configurableResources = supportsConfigurableSandboxResources();
+  const configurableLimits = supportsConfigurableSandboxResourceLimits();
   const configurableTimeout = supportsConfigurableSandboxTimeout();
   const hiddenFields = new Set<keyof SandboxSettings>();
   if (!configurableResources) {
     hiddenFields.add("cpuCores");
     hiddenFields.add("memoryMib");
+  }
+  if (!configurableLimits) {
+    hiddenFields.add("cpuLimitCores");
+    hiddenFields.add("memoryLimitMib");
   }
   if (!configurableTimeout) hiddenFields.add("sandboxTimeoutMs");
   const isGlobal = scope === "global";
@@ -168,6 +178,7 @@ export function SandboxSettingsEditor({
     baseDefaults,
     draft,
     hiddenFields,
+    provider: sandboxProvider,
   });
   const rows = values.tunnelPorts;
 
@@ -431,8 +442,12 @@ export function SandboxSettingsEditor({
         <fieldset className="min-w-0">
           <legend className="block text-sm font-medium text-foreground mb-1.5">Resources</legend>
           <p className="text-xs text-muted-foreground mb-2">
-            Reserve CPU and memory for each sandbox. Leave blank to use the provider&apos;s default
-            reservation.
+            Requests reserve CPU and memory for each sandbox. Leave blank to use the provider&apos;s
+            defaults.
+            {configurableLimits &&
+              " Limits cap usage and must be at least the corresponding request."}
+            {sandboxProvider === "modal-vm" &&
+              ` VM defaults: requests of ${DEFAULT_MODAL_VM_CPU_CORES} CPU cores and ${DEFAULT_MODAL_VM_MEMORY_MIB} MiB; limits of at least ${DEFAULT_MODAL_VM_CPU_LIMIT_CORES} CPU cores and ${DEFAULT_MODAL_VM_MEMORY_LIMIT_MIB} MiB, raised to match larger requests.`}
           </p>
           <div className="grid gap-3 max-w-sm sm:grid-cols-2">
             <div>
@@ -440,7 +455,7 @@ export function SandboxSettingsEditor({
                 htmlFor="sandbox-cpu-cores"
                 className="block text-xs font-medium text-muted-foreground mb-1"
               >
-                CPU cores
+                CPU request (cores)
               </label>
               <Input
                 id="sandbox-cpu-cores"
@@ -456,7 +471,7 @@ export function SandboxSettingsEditor({
                 htmlFor="sandbox-memory-mib"
                 className="block text-xs font-medium text-muted-foreground mb-1"
               >
-                Memory (MiB)
+                Memory request (MiB)
               </label>
               <Input
                 id="sandbox-memory-mib"
@@ -468,6 +483,43 @@ export function SandboxSettingsEditor({
                 placeholder="provider default"
               />
             </div>
+            {configurableLimits && (
+              <>
+                <div>
+                  <label
+                    htmlFor="sandbox-cpu-limit-cores"
+                    className="block text-xs font-medium text-muted-foreground mb-1"
+                  >
+                    CPU limit (cores)
+                  </label>
+                  <Input
+                    id="sandbox-cpu-limit-cores"
+                    type="text"
+                    inputMode="decimal"
+                    value={values.cpuLimitCores}
+                    onChange={(e) => updateField("cpuLimitCores", e.target.value)}
+                    placeholder="provider default"
+                  />
+                </div>
+                <div>
+                  <label
+                    htmlFor="sandbox-memory-limit-mib"
+                    className="block text-xs font-medium text-muted-foreground mb-1"
+                  >
+                    Memory limit (MiB)
+                  </label>
+                  <Input
+                    id="sandbox-memory-limit-mib"
+                    type="number"
+                    min={1}
+                    inputMode="numeric"
+                    value={values.memoryLimitMib}
+                    onChange={(e) => updateField("memoryLimitMib", e.target.value)}
+                    placeholder="provider default"
+                  />
+                </div>
+              </>
+            )}
           </div>
         </fieldset>
       ) : (

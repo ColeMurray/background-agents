@@ -524,11 +524,18 @@ def _not_found(*_args, **_kwargs):
 @pytest.mark.parametrize(
     "image_source, settings, expected_cpu, expected_memory, timeout_seconds",
     [
-        ("base", None, 2, 4096, 30),
-        ("base", DOCKER_SETTINGS, 2, 4096, 4321),
-        ("base", {"cpuCores": 0.5, "memoryMib": 2048}, 0.5, 2048, 600),
-        ("repository", None, 2, 4096, 30),
-        ("snapshot", None, 2, 4096, 30),
+        ("base", None, (0.5, 2), (2048, 4096), 30),
+        ("base", DOCKER_SETTINGS, (2, 2), (4096, 4096), 4321),
+        ("base", {"cpuCores": 0.5, "memoryMib": 2048}, (0.5, 2), (2048, 4096), 600),
+        ("repository", None, (0.5, 2), (2048, 4096), 30),
+        ("snapshot", None, (0.5, 2), (2048, 4096), 30),
+        (
+            "snapshot",
+            {"cpuCores": 1, "cpuLimitCores": 4, "memoryMib": 2048, "memoryLimitMib": 8192},
+            (1, 4),
+            (2048, 8192),
+            600,
+        ),
     ],
     ids=[
         "defaults-base",
@@ -536,6 +543,7 @@ def _not_found(*_args, **_kwargs):
         "fractional-cpu-base",
         "defaults-repository",
         "defaults-snapshot",
+        "explicit-limits-snapshot",
     ],
 )
 async def test_docker_launch_selects_vm_runtime_and_named_allocation(
@@ -576,7 +584,7 @@ async def test_docker_launch_selects_vm_runtime_and_named_allocation(
     sandbox_create_request(*captured["command"], **kwargs)
     assert kwargs["image"] is (docker_image if image_source == "base" else artifact)
     assert kwargs["experimental_options"] == {"vm_runtime": True}
-    assert kwargs["cpu"] == (expected_cpu, expected_cpu)
+    assert kwargs["cpu"] == expected_cpu
     assert kwargs["memory"] == expected_memory
     assert kwargs["timeout"] == timeout_seconds
     assert kwargs["name"] == docker_allocation_name("session-1")

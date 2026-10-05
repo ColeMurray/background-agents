@@ -9,6 +9,7 @@ import {
   MIN_FINAL_SNAPSHOT_BUFFER_MS,
   findSandboxPortConflict,
   validateSandboxChildSessionLimits,
+  validateSandboxResourceLimits,
   type ConfiguredSandboxPort,
   type SandboxSettings,
 } from "@open-inspect/shared/types/integrations";
@@ -45,7 +46,8 @@ type Field<K extends keyof SandboxSettings> = {
   clearValue?: SandboxSettings[K];
 };
 
-const positiveInteger = (value: string) => /^\d+$/.test(value) && Number(value) >= 1;
+const positiveInteger = (value: string) =>
+  /^\d+$/.test(value) && Number.isInteger(Number(value)) && Number(value) >= 1;
 const validPort = (value: string) => positiveInteger(value) && Number(value) <= 65535;
 
 function normalizePorts(rows: string[]) {
@@ -134,6 +136,19 @@ const fields: FieldRegistry = {
     ...numberField(positiveInteger, "Memory must be a positive whole number of MiB."),
     clearValue: null,
   },
+  cpuLimitCores: {
+    draftKey: "cpuLimitCores",
+    ...numberField(
+      (value) => /^\d*\.?\d+$/.test(value) && Number.isFinite(Number(value)) && Number(value) > 0,
+      "CPU limit must be a positive number."
+    ),
+    clearValue: null,
+  },
+  memoryLimitMib: {
+    draftKey: "memoryLimitMib",
+    ...numberField(positiveInteger, "Memory limit must be a positive whole number of MiB."),
+    clearValue: null,
+  },
   codeServerPort: {
     draftKey: "codeServerPort",
     ...numberField(validPort, "Code server port must be a whole number between 1 and 65535."),
@@ -187,6 +202,7 @@ export function resolveSandboxSettingsDraft({
   baseDefaults,
   draft,
   hiddenFields,
+  provider,
 }: {
   isGlobal: boolean;
   ownSettings?: SandboxSettings;
@@ -194,6 +210,7 @@ export function resolveSandboxSettingsDraft({
   draft: SandboxSettingsDraft;
   /** Fields hidden by provider policy are preserved as stored intent and are not validated. */
   hiddenFields?: ReadonlySet<keyof SandboxSettings>;
+  provider?: string;
 }): {
   values: SandboxSettingsDraftValues;
   hasChanges: boolean;
@@ -233,6 +250,7 @@ export function resolveSandboxSettingsDraft({
   for (const key of Object.keys(fields) as (keyof SandboxSettings)[]) resolveField(key);
 
   error ??= validateSandboxChildSessionLimits(effective);
+  error ??= validateSandboxResourceLimits(effective, provider);
   if (
     !error &&
     effective.sandboxTimeoutMs !== undefined &&

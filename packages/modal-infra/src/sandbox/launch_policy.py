@@ -20,8 +20,12 @@ ALLOCATION_SESSION_TAG = "openinspect_session_id"
 ALLOCATION_SANDBOX_TAG = "openinspect_sandbox_id"
 ALLOCATION_BACKEND_TAG = "openinspect_backend"
 ModalBackend = Literal["modal", "modal-vm"]
-VM_DEFAULT_CPU_CORES = 2
-VM_DEFAULT_MEMORY_MIB = 4096
+VM_DEFAULT_CPU_CORES = 0.5
+VM_DEFAULT_MEMORY_MIB = 2048
+VM_DEFAULT_CPU_LIMIT_CORES = 2
+VM_DEFAULT_MEMORY_LIMIT_MIB = 4096
+MODAL_DEFAULT_CPU_CORES = 0.125
+MODAL_DEFAULT_MEMORY_MIB = 128
 
 
 class InvalidDockerSettingsError(ValueError):
@@ -37,6 +41,8 @@ class ModalLaunch:
     backend: ModalBackend
     cpu_cores: float | None = None
     memory_mib: int | None = None
+    cpu_limit_cores: float | None = None
+    memory_limit_mib: int | None = None
 
     @property
     def enabled(self) -> bool:
@@ -54,21 +60,47 @@ def parse_launch(backend: ModalBackend, settings: dict[str, Any] | None) -> Moda
         )
     cpu_cores = settings.get("cpuCores")
     memory_mib = settings.get("memoryMib")
+    cpu_limit_cores = settings.get("cpuLimitCores")
+    memory_limit_mib = settings.get("memoryLimitMib")
     if backend == "modal-vm":
         cpu_cores = VM_DEFAULT_CPU_CORES if cpu_cores is None else cpu_cores
         memory_mib = VM_DEFAULT_MEMORY_MIB if memory_mib is None else memory_mib
-    if cpu_cores is not None and (
-        isinstance(cpu_cores, bool)
-        or not isinstance(cpu_cores, int | float)
-        or not math.isfinite(cpu_cores)
-        or cpu_cores <= 0
+    else:
+        if cpu_limit_cores is not None and cpu_cores is None:
+            cpu_cores = MODAL_DEFAULT_CPU_CORES
+        if memory_limit_mib is not None and memory_mib is None:
+            memory_mib = MODAL_DEFAULT_MEMORY_MIB
+    for name, value in (("cpuCores", cpu_cores), ("cpuLimitCores", cpu_limit_cores)):
+        if value is not None and (
+            isinstance(value, bool)
+            or not isinstance(value, int | float)
+            or not math.isfinite(value)
+            or value <= 0
+        ):
+            raise InvalidDockerSettingsError(f"{name} must be positive and finite")
+    for name, value in (("memoryMib", memory_mib), ("memoryLimitMib", memory_limit_mib)):
+        if value is not None and (
+            isinstance(value, bool) or not isinstance(value, int) or value <= 0
+        ):
+            raise InvalidDockerSettingsError(f"{name} must be a positive integer")
+    if backend == "modal-vm":
+        if cpu_limit_cores is None:
+            cpu_limit_cores = max(VM_DEFAULT_CPU_LIMIT_CORES, cpu_cores)
+        if memory_limit_mib is None:
+            memory_limit_mib = max(VM_DEFAULT_MEMORY_LIMIT_MIB, memory_mib)
+    for name, request, limit in (
+        ("cpuLimitCores", cpu_cores, cpu_limit_cores),
+        ("memoryLimitMib", memory_mib, memory_limit_mib),
     ):
-        raise InvalidDockerSettingsError("cpuCores must be positive and finite")
-    if memory_mib is not None and (
-        isinstance(memory_mib, bool) or not isinstance(memory_mib, int) or memory_mib <= 0
-    ):
-        raise InvalidDockerSettingsError("memoryMib must be a positive integer")
-    return ModalLaunch(backend=backend, cpu_cores=cpu_cores, memory_mib=memory_mib)
+        if request is not None and limit is not None and limit < request:
+            raise InvalidDockerSettingsError(f"{name} must be at least its resource request")
+    return ModalLaunch(
+        backend=backend,
+        cpu_cores=cpu_cores,
+        memory_mib=memory_mib,
+        cpu_limit_cores=cpu_limit_cores,
+        memory_limit_mib=memory_limit_mib,
+    )
 
 
 def docker_base_image() -> modal.Image:
@@ -86,10 +118,17 @@ def launch_kwargs(launch: ModalLaunch) -> dict[str, Any]:
     if launch.enabled:
         result["experimental_options"] = {"vm_runtime": True}
     if launch.cpu_cores is not None:
-        # Agent-controlled VM workloads must not burst beyond their CPU request.
-        result["cpu"] = (launch.cpu_cores, launch.cpu_cores) if launch.enabled else launch.cpu_cores
+        result["cpu"] = (
+            (launch.cpu_cores, launch.cpu_limit_cores)
+            if launch.cpu_limit_cores is not None
+            else launch.cpu_cores
+        )
     if launch.memory_mib is not None:
-        result["memory"] = launch.memory_mib
+        result["memory"] = (
+            (launch.memory_mib, launch.memory_limit_mib)
+            if launch.memory_limit_mib is not None
+            else launch.memory_mib
+        )
     return result
 
 
