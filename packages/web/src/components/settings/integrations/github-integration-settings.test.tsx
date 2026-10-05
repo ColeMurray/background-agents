@@ -113,7 +113,7 @@ function repoOverrideRow(fullName: string) {
 }
 
 function autoReviewControls(row: HTMLElement) {
-  return within(row).getByText("Auto-review new PRs").parentElement!;
+  return within(row).getByText("Auto-review PR changes").parentElement!;
 }
 
 async function selectAutoReviewMode(row: HTMLElement, option: RegExp) {
@@ -155,7 +155,7 @@ describe("GitHubIntegrationSettings", () => {
 
     render(<GitHubIntegrationSettings />);
 
-    const toggle = screen.getByRole("switch", { name: /auto-review new prs/i });
+    const toggle = screen.getByRole("switch", { name: /auto-review pr changes/i });
     const label = toggle.closest("label")!;
     expect(label).toHaveAttribute("for", toggle.id);
     expect(within(label).getByText("Deprecated")).toBeInTheDocument();
@@ -357,7 +357,7 @@ describe("GitHubIntegrationSettings", () => {
       "high"
     );
 
-    await user.click(screen.getByRole("switch", { name: /auto-review new prs/i }));
+    await user.click(screen.getByRole("switch", { name: /auto-review pr changes/i }));
     await user.click(screen.getByRole("button", { name: /^save$/i }));
 
     expect(fetchMock).toHaveBeenCalledWith(

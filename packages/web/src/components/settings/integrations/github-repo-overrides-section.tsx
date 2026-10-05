@@ -330,7 +330,7 @@ function RepoOverrideRow({
 
       <div>
         <p className="text-xs font-medium text-muted-foreground mb-1">
-          Auto-review new PRs
+          Auto-review PR changes
           <span className="text-warning ml-2">Deprecated</span>
         </p>
         <div className="flex items-center gap-2 mb-1">
