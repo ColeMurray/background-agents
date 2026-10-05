@@ -827,3 +827,25 @@ describe("MessageRepository", () => {
     });
   });
 });
+
+describe("SessionAttachmentRepository", () => {
+  let mock: ReturnType<typeof createMockSql>;
+  let repository: SessionAttachmentRepository;
+
+  beforeEach(() => {
+    mock = createMockSql();
+    repository = new SessionAttachmentRepository(mock.sql);
+  });
+
+  it("parses attachment total rows", () => {
+    mock.setMatchingData(/SELECT COUNT\(\*\) as count/, [{ count: 2, total_bytes: 512 }]);
+
+    expect(repository.getTotals()).toEqual({ count: 2, totalBytes: 512 });
+  });
+
+  it("rejects malformed or partial attachment total rows", () => {
+    mock.setMatchingData(/SELECT COUNT\(\*\) as count/, [{ count: "2" }]);
+
+    expect(repository.getTotals()).toEqual({ count: 0, totalBytes: 0 });
+  });
+});

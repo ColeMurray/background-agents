@@ -17,6 +17,7 @@ import {
   type SlackWireDenialReason,
 } from "@open-inspect/shared/slack";
 import type { SlackGlobalSettings } from "@open-inspect/shared/types/integrations";
+import { z } from "zod";
 import { IntegrationSettingsStore, resolveSlackSettings } from "../db/integration-settings";
 import { SessionIndexStore } from "../db/session-index";
 import { TeamChannelBindingStore } from "../db/team-channel-bindings";
@@ -41,6 +42,13 @@ const REASON_MAX_LENGTH = 500;
 const CHANNEL_NAME_CACHE_TTL_MS = 60_000;
 const CHANNEL_NAME_CACHE_MAX_ENTRIES = 1_000;
 const channelNameCache = new Map<string, { id: string; expiresAt: number }>();
+
+const rawSlackNotifyBodySchema = z.object({
+  channel: z.unknown().optional(),
+  text: z.unknown().optional(),
+  thread_ts: z.unknown().optional(),
+  reason: z.unknown().optional(),
+});
 
 function cacheChannelName(token: string, channel: { id: string; name: string }, expiresAt: number) {
   const key = JSON.stringify([token, channel.name.toLowerCase()]);
@@ -251,7 +259,10 @@ async function parseBody(request: Request): Promise<ParsedBody | Response> {
   if (raw === null || typeof raw !== "object") {
     return failureResponse("invalid_input", "Body must be a JSON object.");
   }
-  const body = raw as Record<string, unknown>;
+
+  const parsed = rawSlackNotifyBodySchema.safeParse(raw);
+  if (!parsed.success) return failureResponse("invalid_input", "Body must be a JSON object.");
+  const body = parsed.data;
 
   const channelValue = typeof body.channel === "string" ? body.channel.trim() : "";
   if (channelValue.length === 0 || channelValue.length > CHANNEL_INPUT_MAX_LENGTH) {

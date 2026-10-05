@@ -435,6 +435,34 @@ describe("handleSlackNotify", () => {
     expect(sessionFetchMock).not.toHaveBeenCalled();
   });
 
+  it("accepts null optional audit fields while parsing the request object", async () => {
+    seedActiveSession();
+    integrationStoreMock.getResolvedConfig.mockResolvedValue({
+      enabledRepos: null,
+      settings: { agentNotificationsEnabled: true, mentionsPolicy: "allow" },
+    });
+    mockSlackResponse({ body: { ok: true, channel: "C1", ts: "1.2" } });
+    mockSlackResponse({ body: { ok: true, channel: "C1", permalink: "https://x.slack.com/p" } });
+
+    const res = await callHandler({
+      channel: "#ops",
+      text: "hello",
+      thread_ts: null,
+      reason: null,
+    });
+
+    expect(res.status).toBe(200);
+  });
+
+  it("rejects malformed parsed request bodies before side effects", async () => {
+    const res = await callHandler(null);
+
+    expect(res.status).toBe(400);
+    await expect(res.json()).resolves.toMatchObject({ error: "invalid_input" });
+    expect(sessionStoreMock.get).not.toHaveBeenCalled();
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
   it("maps Slack channel_not_found to channel_not_found_or_forbidden", async () => {
     seedActiveSession();
     integrationStoreMock.getResolvedConfig.mockResolvedValue({

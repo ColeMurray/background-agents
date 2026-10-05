@@ -1,5 +1,11 @@
 import { sessionAttachmentRowSchema, type SessionAttachmentRow } from "./types";
 import type { SqlStorage } from "./sql-storage";
+import { z } from "zod";
+
+const attachmentTotalsRowSchema = z.object({
+  count: z.number(),
+  total_bytes: z.number(),
+});
 
 export interface CreateSessionAttachmentData {
   id: string;
@@ -39,8 +45,10 @@ export class SessionAttachmentRepository {
       `SELECT COUNT(*) as count, COALESCE(SUM(size_bytes), 0) as total_bytes
        FROM attachments`
     );
-    const rows = result.toArray() as Array<{ count: number; total_bytes: number }>;
-    return { count: rows[0]?.count ?? 0, totalBytes: rows[0]?.total_bytes ?? 0 };
+    const parsed = attachmentTotalsRowSchema.safeParse(result.toArray()[0]);
+    return parsed.success
+      ? { count: parsed.data.count, totalBytes: parsed.data.total_bytes }
+      : { count: 0, totalBytes: 0 };
   }
 
   getUnreferenced(attachmentIds: string[]): SessionAttachmentRow[] {
