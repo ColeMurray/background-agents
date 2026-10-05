@@ -1,7 +1,12 @@
 /** Framework-neutral authentication and authorization for a matched route. */
 
 import { authenticate, isAuthError } from "../auth/authenticate";
-import type { Principal } from "../auth/principal";
+import {
+  canonicalUserIdOf,
+  principalMayUseMethod,
+  type AccessTokenWrites,
+  type Principal,
+} from "../auth/principal";
 import {
   evaluateOwnedResourceAdmission,
   ownedResourceAdmissionResponse,
@@ -12,6 +17,7 @@ import { serviceAllowsPermission } from "../authorization/service-permissions";
 import { parseChannelScope } from "../authorization/channel-scope";
 import { evaluateSessionAdmission } from "../authorization/session-admission";
 import { legacyPermissionForAction } from "../authorization/teams-enforcement";
+import { PersonalAccessTokenStore } from "../db/personal-access-tokens";
 import { TeamChannelBindingStore } from "../db/team-channel-bindings";
 import { SessionIndexStore } from "../db/session-index";
 import { UserStore } from "../db/user-store";
@@ -198,7 +204,9 @@ async function verifySandboxAuthSafely(
 export function enforceRoutePrincipal(
   authentication: RouteAuthentication,
   principal: Principal,
-  evidence: AuthorizationEvidence = emptyEvidence()
+  method: string,
+  evidence: AuthorizationEvidence = emptyEvidence(),
+  accessTokenWrites: AccessTokenWrites = "deny"
 ): AuthorizationFailure | null {
   if (
     authentication.kind === "web-service" &&
@@ -206,7 +214,11 @@ export function enforceRoutePrincipal(
   ) {
     return { response: error("Unauthorized", 401) };
   }
-  if (authentication.kind === "user" && principal.kind !== "user") {
+  // A route that admits token writes admits the token itself: the credential
+  // is its owner, and such a route resolves that owner exactly as it resolves
+  // a browser user. Every other route stays human-only.
+  const admitsToken = accessTokenWrites === "allow" && principal.kind === "access-token";
+  if (authentication.kind === "user" && principal.kind !== "user" && !admitsToken) {
     return authorizationDenial(
       error("Human user authentication required", 403),
       evidence,
@@ -222,6 +234,19 @@ export function enforceRoutePrincipal(
       { kind: "principal-type" },
       "principal_type_required",
       "Service authentication required"
+    );
+  }
+  // An access token is refused every mutating method on every route that has
+  // not declared `accessTokenWrites`, regardless of the route's authorization
+  // policy. This is the trust boundary between a leaked token and
+  // DELETE /sessions/:id.
+  if (!principalMayUseMethod(principal, method, accessTokenWrites)) {
+    return authorizationDenial(
+      error("This credential may only read", 403),
+      evidence,
+      { kind: "principal-type" },
+      "credential_read_only",
+      "This credential may only read"
     );
   }
   return null;
@@ -255,12 +280,11 @@ async function enforceActiveUser(
     // actor here means enrollment was skipped, so never authorize it.
     return authorizationUnavailable();
   }
-  const userId =
-    ctx.principal?.kind === "user"
-      ? ctx.principal.userId
-      : ctx.principal?.kind === "service"
-        ? ctx.principal.actor?.canonicalUserId
-        : null;
+  // `canonicalUserIdOf` rather than a local kind check: an access token acts as
+  // its owner, so it has to load that owner's authorization. Resolving the
+  // subject in one place is what keeps a new principal kind from silently
+  // skipping the suspension and permission steps below.
+  const userId = canonicalUserIdOf(ctx.principal);
   if (!userId) return null;
   const requirement = { kind: "active-user" } as const;
   try {
@@ -435,11 +459,10 @@ async function finalizeServiceActor(
 }
 
 function authorizationUserId(ctx: RequestContext): string | null {
-  if (ctx.principal?.kind === "user") return ctx.principal.userId;
   if (ctx.principal?.kind === "service") {
     return ctx.principal.actor?.canonicalUserId ?? ctx.authorization?.userId ?? null;
   }
-  return null;
+  return canonicalUserIdOf(ctx.principal);
 }
 
 function actorlessGrantMatches(
@@ -710,7 +733,13 @@ async function enforceRouteAuthorization(
     return allowed(policy, "user", evidence);
   }
 
-  const principalFailure = enforceRoutePrincipal(policy.authentication, principal, evidence);
+  const principalFailure = enforceRoutePrincipal(
+    policy.authentication,
+    principal,
+    request.method,
+    evidence,
+    policy.accessTokenWrites ?? "deny"
+  );
   if (principalFailure) return resultForFailure(principalFailure);
 
   if (
@@ -819,6 +848,25 @@ export async function admitRoute(input: {
         ctx.principal = authResult.principal;
         ctx.authentication = authResult.authentication;
         handlerRequest = authResult.request;
+        if (ctx.principal.kind === "access-token") {
+          // Deliberately not awaited: the credential's own request must not
+          // wait on this bookkeeping write. Submitted here, not inside
+          // `authenticate()`, because core authentication depends only on the
+          // narrow auth port — `executionCtx` belongs to the full admission
+          // context.
+          const accessTokenPrincipal = ctx.principal;
+          ctx.executionCtx.submit(
+            () =>
+              new PersonalAccessTokenStore(ctx.db).touchLastUsed(
+                accessTokenPrincipal.tokenId,
+                Date.now()
+              ),
+            {
+              name: "access-token.touch-last-used",
+              context: { token_id: accessTokenPrincipal.tokenId },
+            }
+          );
+        }
       }
     }
 
