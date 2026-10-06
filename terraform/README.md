@@ -460,12 +460,11 @@ To add a staging environment:
    on:
      workflow_dispatch:
 
-   # terraform-run.yml declares pull-requests: write for its plan comment, and a
-   # called workflow cannot request more than its caller grants. Omitting this
-   # fails the run outright wherever the default token is read-only.
+   # terraform-run.yml needs nothing beyond a checkout. It posts no comment, so
+   # it asks for no write token; a called workflow cannot request more than its
+   # caller grants anyway.
    permissions:
      contents: read
-     pull-requests: write
 
    jobs:
      terraform:
@@ -474,17 +473,20 @@ To add a staging environment:
        with:
          command: apply
          environment: staging
-         state_key: staging/terraform.tfstate
    ```
 
-`terraform-run.yml` binds the job to the named GitHub Environment, so every `TF_VAR_*` resolves
-against that environment's secrets. The variable list itself lives in one place and does not need to
-be restated per environment. It also carries its own concurrency group, keyed on `state_key`, so the
-caller does not need one: two applies against the same state serialize, and plans never queue behind
-an apply.
+`environment` is the only identifier. It names the GitHub Environment the job binds to, so every
+`TF_VAR_*` resolves against that environment's secrets, and it derives the state object
+(`<environment>/terraform.tfstate`). Deriving rather than accepting a second input is deliberate: an
+independent state key could disagree with the environment and evaluate one deployment's
+configuration against another's state.
 
-To run Terraform against a non-production environment locally, pass the state key at init. A
-directory already initialized against another environment needs `-reconfigure`:
+The variable list lives in one place and is not restated per environment. `terraform-run.yml` also
+carries its own concurrency group, so the caller needs none: two applies against one environment
+serialize, and plans never queue behind an apply.
+
+To run Terraform against a non-production environment locally, pass the same derived state key at
+init. A directory already initialized against another environment needs `-reconfigure`:
 
 ```bash
 cd environments/production
