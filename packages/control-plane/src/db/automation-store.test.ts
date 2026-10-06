@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { AutomationStore, type AutomationRow } from "./automation-store";
+import { AutomationStore, toAutomationRun, type AutomationRow } from "./automation-store";
 import { MAX_D1_QUERY_PARAMETERS } from "./query-limits";
 import type { SqlDatabase, SqlStatement } from "./sql-database";
 
@@ -166,11 +166,21 @@ describe("AutomationStore", () => {
     ]);
   });
 
-  it("rejects malformed invocation child run rows", async () => {
+  it("rejects malformed invocation child run rows consistently across detail and list", async () => {
     const malformedRun = { ...enrichedRunRow, status: "done" };
-    const { db } = createFakeD1({ batchResults: [[invocationRow], [malformedRun]] });
+    const detail = createFakeD1({ batchResults: [[invocationRow], [malformedRun]] });
+    const list = createFakeD1({
+      batchResults: [[{ count: 1 }], [invocationRow]],
+      allResults: [malformedRun],
+    });
 
-    await expect(new AutomationStore(db).getInvocation("auto_test1", "inv_1")).rejects.toThrow();
+    await expect(
+      new AutomationStore(detail.db).getInvocation("auto_test1", "inv_1")
+    ).rejects.toThrow();
+    await expect(
+      new AutomationStore(list.db).listInvocations("auto_test1", { limit: 25, offset: 0 })
+    ).rejects.toThrow();
+    expect(() => toAutomationRun(malformedRun)).toThrow();
   });
 
   it("rejects partial invocation child run rows", async () => {

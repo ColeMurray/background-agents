@@ -20,7 +20,10 @@ import type {
   AutomationRepository,
   AutomationRun,
 } from "@open-inspect/shared/types/automations";
-import { automationInvocationStatusSchema } from "@open-inspect/shared/types/automations";
+import {
+  automationInvocationStatusSchema,
+  automationRunStatusSchema,
+} from "@open-inspect/shared/types/automations";
 import {
   automationTriggerTypeSchema,
   triggerConfigSchema,
@@ -118,15 +121,6 @@ type AutomationListResult = { automations: AutomationRow[] } & (
  * to overturn it.
  */
 export const EXECUTION_TIMEOUT_FAILURE_REASON = "execution_timeout";
-
-const automationRunStatusSchema = z.enum([
-  "starting",
-  "running",
-  "completed",
-  "failed",
-  "skipped",
-  "unauthorized",
-]);
 
 const automationRunRowSchema = z.object({
   id: z.string(),
@@ -308,7 +302,8 @@ export function toAutomation(
   };
 }
 
-export function toAutomationRun(row: EnrichedRunRow): AutomationRun {
+export function toAutomationRun(input: unknown): AutomationRun {
+  const row = enrichedRunRowSchema.parse(input);
   return {
     id: row.id,
     automationId: row.automation_id,
@@ -1418,10 +1413,9 @@ export class AutomationStore {
     ]);
     const row = invocationResult.results?.[0];
     if (!row) return null;
-    const runs = enrichedRunRowSchema.array().parse(childResult.results ?? []);
     return toAutomationInvocation(
       enrichedAutomationInvocationRowSchema.parse(row),
-      runs.map(toAutomationRun)
+      (childResult.results ?? []).map(toAutomationRun)
     );
   }
 
