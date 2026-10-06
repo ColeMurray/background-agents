@@ -8,8 +8,8 @@ name: Terraform Run
 on:
   workflow_call:
     inputs:
-      mode:
-        description: "plan or apply"
+      command:
+        description: "Terraform command to run: plan or apply"
         required: true
         type: string
       environment:
@@ -33,7 +33,7 @@ on:
 
 jobs:
   terraform:
-    name: ${{ inputs.mode }}
+    name: ${{ inputs.command }}
     runs-on: ubuntu-latest
     timeout-minutes: ${{ inputs.timeout_minutes }}
     environment: ${{ inputs.environment }}
@@ -50,24 +50,24 @@ jobs:
     # the job for. It is inert anyway, since the caller already serializes per
     # ref.
     concurrency:
-      group: ${{ inputs.mode == 'apply' && format('terraform-apply-{0}', inputs.state_key) ||
+      group: ${{ inputs.command == 'apply' && format('terraform-apply-{0}', inputs.state_key) ||
         format('terraform-plan-{0}', github.ref) }}
       cancel-in-progress: false
     env:
       TF_WORKING_DIR: terraform/environments/production
     steps:
-      # Every step below gates on mode. Without this, a typo skips all of them
-      # and the job reports success having done nothing. state_key is checked
-      # here too because it names both a backend object and a concurrency
-      # group, and a caller is free to source it from a repository variable.
+      # Every step below gates on the command. Without this, a typo skips all of
+      # them and the job reports success having done nothing. state_key is
+      # checked here too because it names both a backend object and a
+      # concurrency group, and a caller may source it from a repository variable.
       - name: Validate inputs
         env:
-          MODE: ${{ inputs.mode }}
+          COMMAND: ${{ inputs.command }}
           STATE_KEY: ${{ inputs.state_key }}
         run: |
-          case "$MODE" in
+          case "$COMMAND" in
             plan|apply) ;;
-            *) echo "::error::mode must be 'plan' or 'apply', got '$MODE'"; exit 1 ;;
+            *) echo "::error::command must be 'plan' or 'apply', got '$COMMAND'"; exit 1 ;;
           esac
 
           case "$STATE_KEY" in
@@ -102,11 +102,11 @@ jobs:
           npm run build -w @open-inspect/linear-bot
 
       - name: Setup uv
-        if: inputs.mode == 'apply'
+        if: inputs.command == 'apply'
         uses: astral-sh/setup-uv@v8.2.0
 
       - name: Install Modal and Python dependencies
-        if: inputs.mode == 'apply'
+        if: inputs.command == 'apply'
         run: uv sync --frozen
         working-directory: packages/modal-infra
 
@@ -150,16 +150,16 @@ jobs:
           fi
         working-directory: ${{ env.TF_WORKING_DIR }}
 
-      # One step for both modes: that is what lets the TF_VAR_* block be
+      # One step for both commands: that is what lets the TF_VAR_* block be
       # written once and still stay step-scoped, out of the environment of
       # `npm ci` and the package builds.
       - name: Terraform
         id: plan
-        continue-on-error: ${{ inputs.mode == 'plan' }}
+        continue-on-error: ${{ inputs.command == 'plan' }}
         working-directory: ${{ env.TF_WORKING_DIR }}
         run: |
           set -uo pipefail
-          if [ "$MODE" = apply ]; then
+          if [ "$COMMAND" = apply ]; then
             terraform apply -auto-approve
             exit $?
           fi
@@ -179,7 +179,7 @@ jobs:
           } >> "$GITHUB_OUTPUT"
           exit "$status"
         env:
-          MODE: ${{ inputs.mode }}
+          COMMAND: ${{ inputs.command }}
           # Only the Modal CLI reads these names; Terraform gets the same
           # values as TF_VAR_modal_token_* below.
           MODAL_TOKEN_ID: ${{ secrets.MODAL_TOKEN_ID }}
@@ -268,7 +268,7 @@ jobs:
       # failure comment with an empty plan body, where before it posted
       # nothing at all and the PR showed only a red check.
       - name: Post Plan Results
-        if: always() && inputs.mode == 'plan' && github.event_name == 'pull_request'
+        if: always() && inputs.command == 'plan' && github.event_name == 'pull_request'
         uses: actions/github-script@v8
         env:
           # Bound, not interpolated. Plan text is derived from the .tf files in
@@ -317,19 +317,19 @@ jobs:
             }
 
       - name: Plan Status
-        if: inputs.mode == 'plan' && steps.plan.outcome == 'failure'
+        if: inputs.command == 'plan' && steps.plan.outcome == 'failure'
         run: exit 1
 
       - name: Post Run Results
         if: always()
         env:
-          MODE: ${{ inputs.mode }}
+          COMMAND: ${{ inputs.command }}
           STATUS: ${{ job.status }}
           ENVIRONMENT: ${{ inputs.environment }}
           STATE_KEY: ${{ inputs.state_key }}
           ACTOR: ${{ github.actor }}
         run: |
-          echo "### Terraform $MODE Results"
+          echo "### Terraform $COMMAND Results"
           echo "Status: $STATUS"
           echo "Environment: $ENVIRONMENT"
           echo "State: $STATE_KEY"

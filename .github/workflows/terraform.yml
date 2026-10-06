@@ -165,7 +165,7 @@ jobs:
     uses: ./.github/workflows/terraform-run.yml
     secrets: inherit
     with:
-      mode: plan
+      command: plan
       state_key: production/terraform.tfstate
       timeout_minutes: 15
 
@@ -176,6 +176,6 @@ jobs:
     uses: ./.github/workflows/terraform-run.yml
     secrets: inherit
     with:
-      mode: apply
+      command: apply
       environment: production
       state_key: production/terraform.tfstate

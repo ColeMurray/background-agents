@@ -438,7 +438,7 @@ To add a staging environment:
        uses: ./.github/workflows/terraform-run.yml
        secrets: inherit
        with:
-         mode: apply
+         command: apply
          environment: staging
          state_key: staging/terraform.tfstate
    ```
