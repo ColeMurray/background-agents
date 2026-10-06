@@ -18,6 +18,14 @@ import {
   repositoryShaEntrySchema,
 } from "@open-inspect/shared/types/image-builds";
 import { z } from "zod";
+import { checkEnvironmentAccess } from "@open-inspect/shared";
+import {
+  admittedEnvironment,
+  evaluateEnvironmentAdmission,
+  ownedResourceAdmissionResponse,
+} from "../authorization/owned-resource-admission";
+import { resourceViewer } from "../authorization/resource-viewer";
+import { EnvironmentStore } from "../db/environments";
 import { ImageBuildStore } from "../db/image-builds";
 import { RepoMetadataStore } from "../db/repo-metadata";
 import { createLogger } from "../logger";
@@ -28,12 +36,17 @@ import {
   repoImageBuildScope,
   type ImageBuildScope,
 } from "../image-builds/model";
-import { getImageBuildsUnsupportedMessage } from "../image-builds/provider-policy";
+import {
+  getImageBuildsUnsupportedMessage,
+  resolveImageBuildAdmission,
+} from "../image-builds/provider-policy";
 import { scheduleImageBuildOnSave } from "../image-builds/save-hooks";
 import {
   listEnabledScopes,
   listEnabledScopeUnits,
+  type EnvironmentRowFilter,
   resolveScopeTarget,
+  type ResolvedImageBuildTarget,
 } from "../image-builds/scope";
 import { createImageBuildWorkflowFromEnv } from "../image-builds/workflow";
 import type {
@@ -42,7 +55,6 @@ import type {
   ImageBuildWorkflowContext,
 } from "../image-builds/types";
 import type { Env } from "../types";
-import type { SqlDatabase } from "../db/sql-database";
 import {
   type RequestContext,
   GITHUB_USER_OR_SERVICE_ROUTE,
@@ -51,8 +63,16 @@ import {
   json,
   NO_AUTHORIZATION,
   requirePermission,
+  resolveRepoOrError,
+  requireAll,
+  permissionRequirement,
+  environmentRequirement,
 } from "./shared";
 import { parseQuery } from "./query";
+import {
+  authorizeTeamRepositories,
+  authorizeWorkspaceRepositories,
+} from "./workspace-repository-authorization";
 
 const logger = createLogger("router:image-builds");
 const MAX_CALLBACK_BODY_BYTES = 16 * 1024;
@@ -113,6 +133,7 @@ function imageBuildErrorToResponse(errorValue: unknown): Response {
       return error(errorValue.message, 409);
     case "workflow_unavailable":
     case "provider_unconfigured":
+    case "admission_closed":
       return error(errorValue.message, 503);
     case "planning_failed":
     case "trigger_failed":
@@ -242,13 +263,14 @@ async function handleBuildFailed(
 async function triggerBuildForScope(
   env: Env,
   scope: ImageBuildScope,
-  ctx: RequestContext
+  ctx: RequestContext,
+  target?: ResolvedImageBuildTarget
 ): Promise<Response> {
   try {
-    const result = await createImageBuildWorkflowFromEnv(env, ctx.db).triggerBuild(
-      scope,
-      workflowContext(ctx)
-    );
+    const workflow = createImageBuildWorkflowFromEnv(env, ctx.db);
+    const result = target
+      ? await workflow.triggerBuildWithTarget(scope, target, workflowContext(ctx))
+      : await workflow.triggerBuild(scope, workflowContext(ctx));
     if (result.type === "up_to_date") {
       // Unreachable via the trigger routes (triggerBuild is unconditional);
       // guards the union exhaustively.
@@ -278,6 +300,30 @@ async function handleTriggerEnvironmentBuild(
   if (providerError) return providerError;
 
   const environmentId = params.id;
+  // Admission already loaded the environment and required manage access to it.
+  const { environment } = admittedEnvironment(ctx);
+  if (environment.owner_team_id !== null) {
+    const repositories = await new EnvironmentStore(ctx.db).getRepositoriesForEnvironment(
+      environmentId
+    );
+    const resolved = await Promise.all(
+      repositories.map(async (repository) => {
+        const access = await resolveRepoOrError(
+          env,
+          repository.repo_owner,
+          repository.repo_name,
+          ctx,
+          logger
+        );
+        return { owner: access.repoOwner, name: access.repoName, repoId: access.repoId };
+      })
+    );
+    const denied = await authorizeTeamRepositories(ctx, {
+      teamId: environment.owner_team_id,
+      repositories: resolved,
+    });
+    if (denied) return denied;
+  }
 
   return triggerBuildForScope(env, { kind: "environment", id: environmentId }, ctx);
 }
@@ -297,8 +343,18 @@ async function handleTriggerRepoBuild(
 
   const repository = repositoryParams(params);
   if (repository instanceof Response) return repository;
-
-  return triggerBuildForScope(env, repoImageBuildScope(repository.owner, repository.name), ctx);
+  const scope = repoImageBuildScope(repository.owner, repository.name);
+  try {
+    const target = await resolveScopeTarget(env, ctx.db, scope);
+    if (target.kind !== "repo") throw new Error("Expected repository image build scope");
+    const denied = await authorizeWorkspaceRepositories(ctx, {
+      repositories: [{ owner: repository.owner, name: repository.name, repoId: target.repoId }],
+    });
+    if (denied) return denied;
+    return triggerBuildForScope(env, scope, ctx, target);
+  } catch (e) {
+    return imageBuildErrorToResponse(e);
+  }
 }
 
 /**
@@ -336,7 +392,12 @@ async function handleToggleRepoImageBuilds(
   // a repo that became unresolvable must remain disableable.
   if (body.enabled) {
     try {
-      await resolveScopeTarget(env, ctx.db, scope);
+      const target = await resolveScopeTarget(env, ctx.db, scope);
+      if (target.kind !== "repo") throw new Error("Expected repository image build scope");
+      const denied = await authorizeWorkspaceRepositories(ctx, {
+        repositories: [{ owner, name, repoId: target.repoId }],
+      });
+      if (denied) return denied;
     } catch (e) {
       return imageBuildErrorToResponse(e);
     }
@@ -395,12 +456,24 @@ function parseScopeParams(request: Request): ImageBuildScope | null | Response {
 }
 
 async function readStatusRows(
-  db: SqlDatabase,
+  ctx: RequestContext,
   scope: ImageBuildScope | null
 ): Promise<ImageBuildStatusResponse["images"]> {
-  const store = new ImageBuildStore(db);
+  const store = new ImageBuildStore(ctx.db);
   if (scope) return store.getStatus(scope);
-  return store.getStatusForEnabledScopes(await listEnabledScopes(db));
+  return store.getStatusForEnabledScopes(
+    await listEnabledScopes(ctx.db, await readableEnvironmentFilter(ctx))
+  );
+}
+
+/**
+ * Mixed-scope feeds omit environments the feature-permitted viewer cannot read, before any
+ * per-environment work is done.
+ */
+async function readableEnvironmentFilter(ctx: RequestContext): Promise<EnvironmentRowFilter> {
+  const viewer = await resourceViewer(ctx);
+  return (row) =>
+    checkEnvironmentAccess(viewer, { ownerTeamId: row.owner_team_id }, "read").allowed;
 }
 
 /**
@@ -423,9 +496,13 @@ async function handleGetStatus(
 
   const scope = parseScopeParams(request);
   if (scope instanceof Response) return scope;
+  if (scope?.kind === "environment") {
+    const admission = await evaluateEnvironmentAdmission(ctx, scope.id, "read");
+    if (admission.kind !== "allowed") return ownedResourceAdmissionResponse(admission);
+  }
 
   try {
-    const body = { images: await readStatusRows(ctx.db, scope) } satisfies ImageBuildStatusResponse;
+    const body = { images: await readStatusRows(ctx, scope) } satisfies ImageBuildStatusResponse;
     return json(body);
   } catch (e) {
     logger.error("image_build.status_error", {
@@ -452,13 +529,21 @@ async function handleGetEnabledUnits(
   if (providerError) return providerError;
 
   try {
-    const units = await listEnabledScopeUnits(env, ctx.db);
+    const units = await listEnabledScopeUnits(env, ctx.db, await readableEnvironmentFilter(ctx));
+    const admission = resolveImageBuildAdmission(env);
     return json({
       units: units.map((unit) => ({
         scopeKind: unit.scope.kind,
         scopeId: unit.scope.id,
         repositoriesFingerprint: unit.repositoriesFingerprint,
       })),
+      // Scope toggles say what an operator wants; this says whether the
+      // deployment will act on it, so the settings surfaces can stop
+      // promising builds that will be refused.
+      admission: {
+        open: admission.admitted,
+        ...(admission.reason ? { reason: admission.reason } : {}),
+      },
     });
   } catch (e) {
     logger.error("image_build.enabled_error", {
@@ -522,7 +607,10 @@ imageBuildRoutes.post(
   "/image-builds/trigger/environment/:id",
   admit({
     ...GITHUB_USER_OR_SERVICE_ROUTE,
-    authorization: requirePermission("environments.images.manage"),
+    authorization: requireAll(
+      permissionRequirement("environments.images.manage"),
+      environmentRequirement("manage")
+    ),
   }),
   (c) => dispatch(c, handleTriggerEnvironmentBuild)
 );

@@ -10,6 +10,7 @@ export type {
   SourceControlProvider,
   SourceControlProviderName,
   SourceControlAuthContext,
+  CredentialScope,
   GitPushAuthContext,
   BuildManualPullRequestUrlConfig,
   BuildGitPushSpecConfig,

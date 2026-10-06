@@ -59,8 +59,28 @@ export const imageBuildEnabledRepoViewSchema = z.object({
 
 export type ImageBuildEnabledRepoView = z.infer<typeof imageBuildEnabledRepoViewSchema>;
 
+/**
+ * Whether the deployment will act on a prebuild toggle at all. A paused
+ * deployment keeps serving status and cleanup, so the controls stay readable
+ * — they just stop promising builds that would be refused.
+ */
+const imageBuildAdmissionSchema = z.object({
+  open: z.boolean(),
+  reason: z.string().optional(),
+});
+
+type ImageBuildAdmissionView = z.infer<typeof imageBuildAdmissionSchema>;
+
+/**
+ * What admission means when the control plane reports none: a control plane
+ * that predates the control admits everything.
+ */
+export const DEFAULT_IMAGE_BUILD_ADMISSION_OPEN = true;
+
 export const imageBuildsEnabledResponseSchema = z.object({
   units: z.array(imageBuildUnitViewSchema),
+  // Optional so a web build can run against a control plane that predates it.
+  admission: imageBuildAdmissionSchema.optional(),
 });
 
 export const imageBuildsEnabledReposResponseSchema = z.object({
@@ -80,6 +100,8 @@ export interface ImageBuildsFeed {
   units: ImageBuildUnitView[];
   enabledRepos: ImageBuildEnabledRepoView[];
   images: ImageBuildRecordView[];
+  /** Absent when the control plane does not report it; treated as open. */
+  admission?: ImageBuildAdmissionView;
 }
 
 /**
@@ -89,6 +111,21 @@ export interface ImageBuildsFeed {
  */
 export function excludeSupersededBuilds(images: ImageBuildRecordView[]): ImageBuildRecordView[] {
   return images.filter((image) => image.status !== "superseded");
+}
+
+/**
+ * Drop rows built on another provider.
+ *
+ * The status feed is cross-provider history: a deployment that switched
+ * providers keeps its old ready rows so their artifacts can still be
+ * reclaimed. Showing one as this deployment's prebuild would promise a boot
+ * that spawn selection — which matches on provider — will never perform.
+ */
+export function excludeOtherProviderBuilds(
+  images: ImageBuildRecordView[],
+  provider: string
+): ImageBuildRecordView[] {
+  return images.filter((image) => image.provider === provider);
 }
 
 /** Map key for one build scope in the folded status map. */

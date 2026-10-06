@@ -9,6 +9,8 @@
   },
   "build_mode_env_var": "IMAGE_BUILD_MODE",
   "execution_timeout_env_var": "OI_IMAGE_BUILD_EXECUTION_TIMEOUT_SECONDS",
+  "deferred_start_env_var": "OI_DEFERRED_START",
+  "context_start_argument": "--image-build-context-stdin-v1",
   "reserved_only_control_plane": [
     "OI_REPO_IMAGE_CALLBACK_SECRET",
     "OI_IMAGE_BUILD_EXECUTION_TIMEOUT_SECONDS"

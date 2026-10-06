@@ -2,7 +2,10 @@
 
 import { useState } from "react";
 import { browserApiFetch } from "@/lib/browser-api-fetch";
+import { sessionActionErrorMessage } from "@/lib/session-action-error";
+import { toast } from "sonner";
 import { formatSessionCost } from "@/lib/session-cost";
+import { PropertyRow } from "./details-section";
 
 interface BudgetSectionProps {
   sessionId: string;
@@ -11,6 +14,7 @@ interface BudgetSectionProps {
   canManageBudget: boolean;
 }
 
+/** The session's cost row; render it inside a `PropertyList`. */
 export function BudgetSection({
   sessionId,
   totalCost,
@@ -36,6 +40,15 @@ export function BudgetSection({
         body: JSON.stringify({ maxCostUsd }),
       });
       if (!response.ok) {
+        if (response.status === 403) {
+          const message = await sessionActionErrorMessage(
+            response,
+            "Unable to update the session cost limit"
+          );
+          setError(message);
+          toast.error(message);
+          return;
+        }
         const body: unknown = await response.json().catch(() => null);
         const serverMessage =
           body &&
@@ -62,20 +75,21 @@ export function BudgetSection({
     void updateLimit(limit);
   };
 
+  const summary =
+    maxSessionCostUsd != null
+      ? `${formatSessionCost(totalCost)} of ${formatSessionCost(maxSessionCostUsd)} limit`
+      : totalCost > 0
+        ? formatSessionCost(totalCost)
+        : "No limit set";
+
   return (
-    <div className="space-y-2 text-sm">
-      <div className="flex items-center justify-between gap-2 text-muted-foreground">
-        <span>
-          {maxSessionCostUsd != null
-            ? `Session cost: ${formatSessionCost(totalCost)} of ${formatSessionCost(maxSessionCostUsd)} limit`
-            : totalCost > 0
-              ? `Session cost: ${formatSessionCost(totalCost)}`
-              : "No session cost limit"}
-        </span>
+    <PropertyRow label="Cost">
+      <span className="flex items-baseline justify-between gap-2">
+        <span>{summary}</span>
         {canManageBudget && !editing && (
           <button
             type="button"
-            className="shrink-0 text-xs text-accent hover:underline"
+            className="shrink-0 text-accent hover:underline"
             onClick={() => {
               setValue(maxSessionCostUsd?.toString() ?? "");
               setEditing(true);
@@ -84,11 +98,11 @@ export function BudgetSection({
             Edit limit
           </button>
         )}
-      </div>
+      </span>
 
-      {editing && (
-        <div className="space-y-2 border-l-2 border-border pl-3">
-          <label className="block text-xs text-muted-foreground" htmlFor="session-cost-limit">
+      {canManageBudget && editing && (
+        <div className="mt-2 space-y-2 border-l-2 border-border pl-3">
+          <label className="block text-muted-foreground" htmlFor="session-cost-limit">
             USD limit for this session
           </label>
           <div className="flex flex-wrap gap-2">
@@ -102,35 +116,30 @@ export function BudgetSection({
               className="min-w-0 flex-1 border border-border bg-input px-2 py-1 text-foreground"
               disabled={saving}
             />
-            <button
-              type="button"
-              className="text-xs text-accent"
-              onClick={saveValue}
-              disabled={saving}
-            >
+            <button type="button" className="text-accent" onClick={saveValue} disabled={saving}>
               Save
             </button>
             <button
               type="button"
-              className="text-xs text-muted-foreground"
+              className="text-muted-foreground"
               onClick={() => void updateLimit(null)}
               disabled={saving}
             >
               No limit
             </button>
           </div>
-          <p className="text-xs text-muted-foreground">Applies only to this session.</p>
+          <p className="text-muted-foreground">Applies only to this session.</p>
         </div>
       )}
 
-      <p className="text-xs text-muted-foreground">
+      <p className="mt-1 text-[11px] leading-relaxed text-muted-foreground">
         Costs and limits reflect reported model usage only.
       </p>
       {error && (
-        <p role="alert" className="text-xs text-destructive">
+        <p role="alert" className="mt-1 text-destructive">
           {error}
         </p>
       )}
-    </div>
+    </PropertyRow>
   );
 }

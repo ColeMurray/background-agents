@@ -10,7 +10,11 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type * as AuthenticateModule from "../auth/authenticate";
 import { createTestRequestHandler } from "../router.test-support";
-import { MAX_NAME_LENGTH } from "./automation-validation";
+import {
+  DEFAULT_AUTOMATION_LIST_PAGE_SIZE,
+  MAX_AUTOMATION_LIST_PAGE_SIZE,
+  MAX_AUTOMATION_NAME_LENGTH,
+} from "@open-inspect/shared/types/automations";
 import { automationRoutes } from "./automations";
 import {
   mocks,
@@ -96,7 +100,11 @@ describe("automation listing routes", () => {
       expect(body.automations).toHaveLength(1);
       expect(body.hasMore).toBe(false);
       expect(body.nextCursor).toBeNull();
-      expect(mockStore.list).toHaveBeenCalledWith({ limit: 25, cursor: null });
+      expect(mockStore.list).toHaveBeenCalledWith({
+        limit: DEFAULT_AUTOMATION_LIST_PAGE_SIZE,
+        cursor: null,
+        viewer: expect.objectContaining({ kind: "user", userId: "user-1" }),
+      });
       expect(mockStore.listRecentExecutionsForAutomationIds).toHaveBeenCalledWith(["auto-1"], 10);
       expect(body.automations[0]).toMatchObject({ recentExecutions: [] });
     });
@@ -104,10 +112,13 @@ describe("automation listing routes", () => {
     it.each<{ query: Record<string, string | string[]>; error: string }>([
       { query: { limit: "0" }, error: "Invalid limit" },
       { query: { limit: "abc" }, error: "Invalid limit" },
-      { query: { limit: "101" }, error: "Invalid limit" },
+      { query: { limit: String(MAX_AUTOMATION_LIST_PAGE_SIZE + 1) }, error: "Invalid limit" },
       { query: { limit: ["5", "6"] }, error: "Invalid limit" },
       { query: { cursor: "not-a-cursor" }, error: "Invalid cursor" },
-      { query: { search: "x".repeat(MAX_NAME_LENGTH + 1) }, error: "Search is too long" },
+      {
+        query: { search: "x".repeat(MAX_AUTOMATION_NAME_LENGTH + 1) },
+        error: "Search is too long",
+      },
     ])("rejects list query $query without listing", async ({ query, error }) => {
       const res = await callRoute("GET", "/automations", { query });
 
@@ -127,6 +138,7 @@ describe("automation listing routes", () => {
         nameSearch: "Daily sync",
         limit: 10,
         cursor: { createdAt: 123, id: "auto-9" },
+        viewer: expect.objectContaining({ kind: "user", userId: "user-1" }),
       });
     });
 
@@ -138,22 +150,23 @@ describe("automation listing routes", () => {
       });
 
       expect(mockStore.list).toHaveBeenCalledWith({
-        limit: 25,
+        limit: DEFAULT_AUTOMATION_LIST_PAGE_SIZE,
         cursor: null,
         repoOwner: "acme",
         repoName: "web-app",
+        viewer: expect.objectContaining({ kind: "user", userId: "user-1" }),
       });
     });
 
     it.each([
       [{ limit: "0" }, "limit"],
-      [{ limit: "101" }, "limit"],
+      [{ limit: String(MAX_AUTOMATION_LIST_PAGE_SIZE + 1) }, "limit"],
       [{ limit: "ten" }, "limit"],
       [{ limit: "1e1" }, "limit"],
       [{ limit: " 10 " }, "limit"],
       [{ limit: ["10", "20"] }, "limit"],
       [{ cursor: "not-a-cursor" }, "cursor"],
-      [{ search: "a".repeat(201) }, "Search"],
+      [{ search: "a".repeat(MAX_AUTOMATION_NAME_LENGTH + 1) }, "Search"],
     ])("rejects invalid pagination params", async (query, expectedField) => {
       const response = await callRoute("GET", "/automations", { query });
 

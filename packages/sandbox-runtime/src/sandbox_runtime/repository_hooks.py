@@ -6,16 +6,15 @@ import time
 from typing import TYPE_CHECKING, Any
 
 from .process_output import (
-    BoundedOutputCollector,
     finish_cancellation_cleanup,
     spawn_owned_subprocess,
     terminate_owned_subprocess,
     wait_for_process_exit,
 )
-from .runtime_config import BootMode
 
 if TYPE_CHECKING:
     from .repo_config import RepoEntry
+    from .runtime_config import BootMode
 
 
 class RepositoryHooks:
@@ -24,15 +23,6 @@ class RepositoryHooks:
 
     def __init__(self, log: Any) -> None:
         self.log = log
-        self._output_collectors: set[BoundedOutputCollector] = set()
-
-    def _collect_output(self, process: asyncio.subprocess.Process) -> BoundedOutputCollector:
-        if process.stdout is None:
-            raise RuntimeError("hook process output pipe was not created")
-        collector = BoundedOutputCollector(process.stdout)
-        self._output_collectors.add(collector)
-        collector.task.add_done_callback(lambda _task: self._output_collectors.discard(collector))
-        return collector
 
     async def _terminate(self, process: asyncio.subprocess.Process) -> None:
         await terminate_owned_subprocess(process, kill_process_group=os.killpg)
@@ -45,6 +35,7 @@ class RepositoryHooks:
         hook_name: str,
         relative_script_path: str,
     ) -> bool:
+        """Run one repository hook; True when it succeeded or there was no script."""
         script_path = repo.path / relative_script_path
         start_time = time.time()
         if not script_path.exists():
@@ -63,7 +54,6 @@ class RepositoryHooks:
             boot_mode=boot_mode.value,
         )
         process: asyncio.subprocess.Process | None = None
-        output: BoundedOutputCollector | None = None
         try:
             env = os.environ.copy()
             env["OPENINSPECT_BOOT_MODE"] = boot_mode.value
@@ -72,29 +62,24 @@ class RepositoryHooks:
                     "bash",
                     str(script_path),
                     cwd=repo.path,
-                    stdout=asyncio.subprocess.PIPE,
+                    stdout=asyncio.subprocess.DEVNULL,
                     stderr=asyncio.subprocess.STDOUT,
                     env=env,
                     start_new_session=True,
                 ),
                 kill_process_group=os.killpg,
             )
-            output = self._collect_output(process)
             await wait_for_process_exit(process)
-            fields = {
+            fields: dict[str, Any] = {
                 "exit_code": process.returncode,
                 "script": str(script_path),
                 "duration_ms": int((time.time() - start_time) * 1000),
                 "boot_mode": boot_mode.value,
             }
             if process.returncode == 0:
-                output.discard_tail()
                 self.log.info(f"{hook_name}.complete", **fields)
                 return True
             await self._terminate(process)
-            await output.shutdown()
-            if boot_mode is not BootMode.BUILD:
-                fields["output_tail"] = output.tail_lines()
             self.log.error(f"{hook_name}.failed", **fields)
             return False
         except asyncio.CancelledError:
@@ -102,13 +87,9 @@ class RepositoryHooks:
             async def cleanup_cancelled_hook() -> None:
                 if process is not None:
                     await self._terminate(process)
-                if output is not None:
-                    await output.shutdown()
 
             cleanup = asyncio.create_task(cleanup_cancelled_hook())
             await finish_cancellation_cleanup(cleanup)
-            if output is not None:
-                output.discard_tail()
             self.log.info(
                 f"{hook_name}.cancelled",
                 reason="outer_operation_cancelled",
@@ -120,8 +101,6 @@ class RepositoryHooks:
         except Exception as error:
             if process is not None:
                 await self._terminate(process)
-            if output is not None:
-                await output.shutdown()
             self.log.error(
                 f"{hook_name}.error",
                 exc=error,

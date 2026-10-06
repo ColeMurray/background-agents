@@ -13,6 +13,10 @@ const FULL_CAPABILITIES = {
   collaborate: true,
   lifecycle: true,
   sandboxAccess: true,
+  exportTrace: true,
+  delete: true,
+  manageCollaborators: true,
+  changeVisibility: true,
 } satisfies SessionCapabilities;
 const NO_LIFECYCLE = { ...FULL_CAPABILITIES, lifecycle: false };
 
@@ -23,6 +27,45 @@ afterEach(() => {
 });
 
 describe("ActionBar", () => {
+  it("offers copy link without ownership moves", () => {
+    render(
+      <ActionBar
+        sessionId="session-1"
+        sessionStatus="active"
+        artifacts={[]}
+        capabilities={FULL_CAPABILITIES}
+      />
+    );
+    fireEvent.pointerDown(screen.getByRole("button", { name: "More session actions" }), {
+      button: 0,
+      ctrlKey: false,
+    });
+    expect(screen.getAllByRole("menuitem").map((item) => item.textContent)).toEqual(["Copy link"]);
+  });
+
+  it("keeps details, copy link, and archive in the mobile menu without ownership moves", () => {
+    render(
+      <MobileSessionActions
+        sessionId="session-1"
+        sessionStatus="active"
+        artifacts={[]}
+        capabilities={FULL_CAPABILITIES}
+        triggerRef={{ current: null }}
+        onOpenDetails={vi.fn()}
+        onOpenMedia={vi.fn()}
+      />
+    );
+    fireEvent.pointerDown(screen.getByRole("button", { name: "Session actions" }), {
+      button: 0,
+      ctrlKey: false,
+    });
+    expect(screen.getAllByRole("menuitem").map((item) => item.textContent)).toEqual([
+      "Details",
+      "Copy link",
+      "Archive",
+    ]);
+  });
+
   it("hides lifecycle actions when the capability is denied", () => {
     render(
       <ActionBar

@@ -1,18 +1,27 @@
 import {
   DEFAULT_CODE_SERVER_PORT,
+  DEFAULT_FINAL_SNAPSHOT_BUFFER_MS,
   DEFAULT_MAX_CONCURRENT_CHILD_SESSIONS,
   DEFAULT_MAX_TOTAL_CHILD_SESSIONS,
   DEFAULT_TERMINAL_PORT,
   DEFAULT_VNC_PORT,
   MAX_BUILD_TIMEOUT_SECONDS,
+  MIN_FINAL_SNAPSHOT_BUFFER_MS,
   findSandboxPortConflict,
+  unsupportedSandboxSettings,
   validateSandboxChildSessionLimits,
+  validateSandboxResourceLimits,
   type ConfiguredSandboxPort,
   type SandboxSettings,
+  type SandboxProviderName,
 } from "@open-inspect/shared/types/integrations";
 import { sandboxTimeoutMinutesFromMs, sandboxTimeoutMsFromMinutes } from "./sandbox-timeout";
 
-type DraftKey<K> = K extends "sandboxTimeoutMs" ? "sandboxTimeoutMinutes" : K;
+type DraftKey<K> = K extends "sandboxTimeoutMs"
+  ? "sandboxTimeoutMinutes"
+  : K extends "finalSnapshotBufferMs"
+    ? "finalSnapshotBufferMinutes"
+    : K;
 
 export type SandboxSettingsDraftValues = {
   [K in keyof SandboxSettings as DraftKey<K>]-?: K extends "tunnelPorts"
@@ -22,8 +31,14 @@ export type SandboxSettingsDraftValues = {
       : string;
 };
 
-// Absent fields are unedited; blank inputs are clears, not inherited values.
-export type SandboxSettingsDraft = Partial<SandboxSettingsDraftValues>;
+export const INHERIT_SANDBOX_SETTING = Symbol("inherit");
+
+// Absent fields are unedited; blanks reset to provider defaults; inherit removes an override.
+export type SandboxSettingsDraft = Partial<{
+  [K in keyof SandboxSettingsDraftValues]: K extends "cpuLimitCores" | "memoryLimitMib"
+    ? SandboxSettingsDraftValues[K] | typeof INHERIT_SANDBOX_SETTING
+    : SandboxSettingsDraftValues[K];
+}>;
 
 type Field<K extends keyof SandboxSettings> = {
   draftKey: DraftKey<K>;
@@ -39,7 +54,8 @@ type Field<K extends keyof SandboxSettings> = {
   clearValue?: SandboxSettings[K];
 };
 
-const positiveInteger = (value: string) => /^\d+$/.test(value) && Number(value) >= 1;
+const positiveInteger = (value: string) =>
+  /^\d+$/.test(value) && Number.isInteger(Number(value)) && Number(value) >= 1;
 const validPort = (value: string) => positiveInteger(value) && Number(value) <= 65535;
 
 function normalizePorts(rows: string[]) {
@@ -128,6 +144,19 @@ const fields: FieldRegistry = {
     ...numberField(positiveInteger, "Memory must be a positive whole number of MiB."),
     clearValue: null,
   },
+  cpuLimitCores: {
+    draftKey: "cpuLimitCores",
+    ...numberField(
+      (value) => /^\d*\.?\d+$/.test(value) && Number.isFinite(Number(value)) && Number(value) > 0,
+      "CPU limit must be a positive number."
+    ),
+    clearValue: null,
+  },
+  memoryLimitMib: {
+    draftKey: "memoryLimitMib",
+    ...numberField(positiveInteger, "Memory limit must be a positive whole number of MiB."),
+    clearValue: null,
+  },
   codeServerPort: {
     draftKey: "codeServerPort",
     ...numberField(validPort, "Code server port must be a whole number between 1 and 65535."),
@@ -159,6 +188,20 @@ const fields: FieldRegistry = {
     },
     isChanged: (value, current) => value.trim() !== current,
   },
+  finalSnapshotBufferMs: {
+    draftKey: "finalSnapshotBufferMinutes",
+    format: sandboxTimeoutMinutesFromMs,
+    parse: (input) => {
+      const trimmed = input.trim();
+      const value = sandboxTimeoutMsFromMinutes(trimmed);
+      return trimmed !== "" && (value === undefined || value < MIN_FINAL_SNAPSHOT_BUFFER_MS)
+        ? {
+            error: `Final snapshot buffer must be at least ${MIN_FINAL_SNAPSHOT_BUFFER_MS / 60_000} minutes, in one-second increments.`,
+          }
+        : { value };
+    },
+    isChanged: (value, current) => value.trim() !== current,
+  },
 };
 
 export function resolveSandboxSettingsDraft({
@@ -166,11 +209,13 @@ export function resolveSandboxSettingsDraft({
   ownSettings,
   baseDefaults,
   draft,
+  provider,
 }: {
   isGlobal: boolean;
   ownSettings?: SandboxSettings;
   baseDefaults?: SandboxSettings;
   draft: SandboxSettingsDraft;
+  provider: SandboxProviderName;
 }): {
   values: SandboxSettingsDraftValues;
   hasChanges: boolean;
@@ -181,24 +226,46 @@ export function resolveSandboxSettingsDraft({
   const effective: SandboxSettings = {};
   let hasChanges = false;
   let error: string | undefined;
+  // Probe all provider-dependent fields, including ones absent from stored settings.
+  const hiddenFields = new Set<keyof SandboxSettings>(
+    unsupportedSandboxSettings(
+      { cpuCores: 0, memoryMib: 0, cpuLimitCores: 0, memoryLimitMib: 0, sandboxTimeoutMs: 0 },
+      provider
+    )
+  );
 
   function resolveField<K extends keyof SandboxSettings>(key: K) {
     const field: Field<K> = fields[key];
     const prior = ownSettings?.[key];
     // Explicit resource nulls mask inheritance, rather than falling through it.
     const current = field.format(prior !== undefined ? prior : baseDefaults?.[key]);
-    const edit = draft[field.draftKey];
-    const value = edit ?? current;
+    const edit = draft[field.draftKey] as
+      | SandboxSettingsDraftValues[DraftKey<K>]
+      | typeof INHERIT_SANDBOX_SETTING
+      | undefined;
+    const value =
+      edit === INHERIT_SANDBOX_SETTING ? field.format(baseDefaults?.[key]) : (edit ?? current);
     values[field.draftKey] = value;
+    if (hiddenFields.has(key)) {
+      if (prior !== undefined) settings[key] = prior;
+      return;
+    }
     const parsed = field.parse(value);
-    hasChanges ||=
-      edit !== undefined && (parsed.error !== undefined || field.isChanged(edit, current));
     error ??= parsed.error;
-
+    if (edit === INHERIT_SANDBOX_SETTING && !isGlobal) {
+      hasChanges ||= prior !== undefined;
+      effective[key] = baseDefaults?.[key];
+      return;
+    }
     const payload =
       isGlobal || edit !== undefined
         ? (parsed.value ?? (!isGlobal ? field.clearValue : undefined))
         : prior;
+    hasChanges ||=
+      edit !== undefined &&
+      (parsed.error !== undefined ||
+        field.isChanged(value, current) ||
+        (field.clearValue !== undefined && payload !== prior));
     if (payload !== undefined) settings[key] = payload;
     effective[key] = payload !== undefined ? payload : (parsed.value ?? baseDefaults?.[key]);
   }
@@ -206,6 +273,15 @@ export function resolveSandboxSettingsDraft({
   for (const key of Object.keys(fields) as (keyof SandboxSettings)[]) resolveField(key);
 
   error ??= validateSandboxChildSessionLimits(effective);
+  error ??= validateSandboxResourceLimits(effective, provider);
+  if (
+    !error &&
+    effective.sandboxTimeoutMs !== undefined &&
+    (effective.finalSnapshotBufferMs ?? DEFAULT_FINAL_SNAPSHOT_BUFFER_MS) >=
+      effective.sandboxTimeoutMs
+  ) {
+    error = "Final snapshot buffer must be shorter than the session timeout.";
+  }
 
   if (!error) {
     const configuredPorts: ConfiguredSandboxPort[] = [

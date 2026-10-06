@@ -33,7 +33,7 @@ def main() -> None:
         try:
             client.snapshot.get(name)
         except DaytonaNotFoundError:
-            create_base_snapshot(client, bundle, name)
+            create_base_snapshot(client, bundle, name, config.base_snapshot_memory_gib)
     finally:
         shutil.rmtree(bundle.directory)
     # Retry a retained build by restoring it and checking required services.

@@ -7,12 +7,12 @@ import {
   type SessionInboxCategory,
   type SessionInboxItem,
   type SessionInboxPage,
-  type SessionInboxSession,
   type SessionInboxSnapshot,
 } from "@open-inspect/shared/types/session-inbox";
 import type { SessionReadState } from "@open-inspect/shared/types/sessions";
 import { z } from "zod";
 import type { BrowserApiPath } from "./browser-api-fetch";
+import type { SessionListQuery } from "@open-inspect/shared/session-list-query";
 import { applySessionReadStateToItem, sessionReadStateClientSchema } from "./session-read-state";
 
 const sessionInboxSessionClientSchema = sessionInboxSessionSchema.extend({
@@ -23,21 +23,22 @@ const sessionInboxItemClientSchema = sessionInboxItemSchema.extend({
   descendantSessions: z.array(sessionInboxSessionClientSchema),
 });
 const sessionInboxPageClientSchema = z
-  .object({
+  .looseObject({
     items: z.array(sessionInboxItemClientSchema),
   })
-  .passthrough()
   .pipe(sessionInboxPageSchema);
-const sessionInboxSnapshotClientSchema = z
-  .object({
-    categories: z.record(sessionInboxCategorySchema, sessionInboxPageClientSchema),
-  })
-  .passthrough()
-  .pipe(sessionInboxSnapshotSchema);
+const sessionInboxSnapshotClientSchema = sessionInboxSnapshotSchema.extend({
+  categories: z.record(sessionInboxCategorySchema, sessionInboxPageClientSchema),
+});
 
 const SESSION_INBOX_API_PATH = "/api/sessions/inbox";
 
-interface SessionInboxQuery {
+export type SessionInboxFilters = Pick<
+  SessionListQuery,
+  "teamIds" | "scope" | "ownerFilter" | "visibility"
+>;
+
+interface SessionInboxQuery extends SessionInboxFilters {
   category: SessionInboxCategory;
   cursor?: string;
   mine?: boolean;
@@ -47,11 +48,26 @@ export function buildSessionInboxKey(query: SessionInboxQuery): BrowserApiPath {
   const params = new URLSearchParams({ category: query.category });
   if (query.cursor) params.set("cursor", query.cursor);
   if (query.mine) params.set("mine", "true");
+  appendInboxFilters(params, query);
   return `${SESSION_INBOX_API_PATH}?${params.toString()}`;
 }
 
-export function buildSessionInboxSnapshotKey(mine: boolean): BrowserApiPath {
-  return `${SESSION_INBOX_API_PATH}${mine ? "?mine=true" : ""}`;
+export function buildSessionInboxSnapshotKey(
+  mine: boolean,
+  filters: SessionInboxFilters = {}
+): BrowserApiPath {
+  const params = new URLSearchParams();
+  if (mine) params.set("mine", "true");
+  appendInboxFilters(params, filters);
+  const query = params.toString();
+  return query ? `${SESSION_INBOX_API_PATH}?${query}` : SESSION_INBOX_API_PATH;
+}
+
+function appendInboxFilters(params: URLSearchParams, filters: SessionInboxFilters) {
+  for (const teamId of filters.teamIds ?? []) params.append("teamIds[]", teamId);
+  if (filters.scope) params.set("scope", filters.scope);
+  if (filters.ownerFilter) params.set("ownerFilter", filters.ownerFilter);
+  if (filters.visibility) params.set("visibility", filters.visibility);
 }
 
 export function isSessionInboxKey(key: unknown): key is string {
@@ -71,30 +87,6 @@ export function parseSessionInboxPage(data: unknown): SessionInboxPage {
 
 export function parseSessionInboxSnapshot(data: unknown): SessionInboxSnapshot {
   return sessionInboxSnapshotClientSchema.parse(data);
-}
-
-function applyTitleToSession(
-  session: SessionInboxSession,
-  sessionId: string,
-  title: string | null
-) {
-  return session.id === sessionId ? { ...session, title } : session;
-}
-
-function applyTitleToPage(
-  page: SessionInboxPage,
-  sessionId: string,
-  title: string | null
-): SessionInboxPage {
-  return {
-    ...page,
-    items: page.items.map((item) => ({
-      rootSession: applyTitleToSession(item.rootSession, sessionId, title),
-      descendantSessions: item.descendantSessions.map((session) =>
-        applyTitleToSession(session, sessionId, title)
-      ),
-    })),
-  };
 }
 
 function applyReadStateToPage(
@@ -144,31 +136,6 @@ export function applySessionInboxItemReadState(
       applySessionReadStateToItem(session, sessionId, readState)
     ),
   };
-}
-
-/**
- * Applies a rename to a cached inbox payload. Inbox keys cache two shapes —
- * the category snapshot and a single paginated page — so the transform
- * dispatches on the presence of `categories`.
- */
-export function applySessionInboxTitleUpdate<T extends SessionInboxSnapshot | SessionInboxPage>(
-  data: T | undefined,
-  sessionId: string,
-  title: string | null
-): T | undefined {
-  if (!data) return data;
-  if ("categories" in data) {
-    return {
-      ...data,
-      categories: Object.fromEntries(
-        Object.entries(data.categories).map(([category, page]) => [
-          category,
-          applyTitleToPage(page, sessionId, title),
-        ])
-      ) as Record<SessionInboxCategory, SessionInboxPage>,
-    };
-  }
-  return applyTitleToPage(data, sessionId, title) as T;
 }
 
 export function applySessionInboxReadStateUpdate<T extends SessionInboxSnapshot | SessionInboxPage>(

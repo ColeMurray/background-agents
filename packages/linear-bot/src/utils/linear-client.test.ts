@@ -10,6 +10,8 @@ import {
 } from "./linear-client";
 import type { LinearApiClient } from "./linear-client";
 
+const VIEWER_QUERY = "query { viewer { id } }";
+
 const client: LinearApiClient = {
   accessToken: "test-token",
   organizationId: "org-1",
@@ -35,7 +37,7 @@ describe("linearGraphQL", () => {
   it("rejects a GraphQL response that is not an object", async () => {
     mockFetchResponse([]);
 
-    await expect(linearGraphQL(client, "query { viewer { id } }", {})).rejects.toThrow(
+    await expect(linearGraphQL(client, VIEWER_QUERY, {})).rejects.toThrow(
       "Linear GraphQL error: unexpected response shape"
     );
   });
@@ -43,7 +45,7 @@ describe("linearGraphQL", () => {
   it("rejects a null GraphQL response", async () => {
     mockFetchResponse(null);
 
-    await expect(linearGraphQL(client, "query { viewer { id } }", {})).rejects.toThrow(
+    await expect(linearGraphQL(client, VIEWER_QUERY, {})).rejects.toThrow(
       "Linear GraphQL error: unexpected response shape"
     );
   });
@@ -51,7 +53,7 @@ describe("linearGraphQL", () => {
   it("returns the envelope for a well-formed GraphQL response", async () => {
     mockFetchResponse({ data: { viewer: { id: "user-1" } } });
 
-    await expect(linearGraphQL(client, "query { viewer { id } }", {})).resolves.toEqual({
+    await expect(linearGraphQL(client, VIEWER_QUERY, {})).resolves.toEqual({
       data: { viewer: { id: "user-1" } },
     });
   });
@@ -67,7 +69,7 @@ describe("linearGraphQL", () => {
       })
     );
 
-    await expect(linearGraphQL(client, "query { viewer { id } }", {})).rejects.toMatchObject({
+    await expect(linearGraphQL(client, VIEWER_QUERY, {})).rejects.toMatchObject({
       name: "TimeoutError",
     });
     expect(timeoutSpy).toHaveBeenCalledWith(LINEAR_GRAPHQL_TIMEOUT_MS);
@@ -90,7 +92,7 @@ describe("linearGraphQL", () => {
     });
     vi.stubGlobal("fetch", fetchMock);
 
-    await expect(linearGraphQL(retryClient, "query { viewer { id } }", {})).rejects.toMatchObject({
+    await expect(linearGraphQL(retryClient, VIEWER_QUERY, {})).rejects.toMatchObject({
       name: "TimeoutError",
     });
     expect(renewAccessToken).toHaveBeenCalledOnce();
@@ -120,12 +122,56 @@ describe("linearGraphQL", () => {
       vi.fn(async () => new Response(null, { status: 401 }))
     );
 
-    const request = linearGraphQL(renewalClient, "query { viewer { id } }", {});
+    const request = linearGraphQL(renewalClient, VIEWER_QUERY, {});
     await started;
     deadline.abort(new DOMException("timed out", "TimeoutError"));
 
     await expect(request).rejects.toMatchObject({ name: "TimeoutError" });
     expect(renewAccessToken).toHaveBeenCalledOnce();
+  });
+
+  it("includes Linear's GraphQL error messages from a non-2xx body", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () =>
+        Response.json(
+          {
+            errors: [
+              { message: 'Unknown type "IssueRepositorySuggestionInput".' },
+              { message: "Second problem" },
+            ],
+          },
+          { status: 400 }
+        )
+      )
+    );
+
+    await expect(linearGraphQL(client, VIEWER_QUERY, {})).rejects.toThrow(
+      'Linear API error: 400: Unknown type "IssueRepositorySuggestionInput".; Second problem'
+    );
+  });
+
+  it("falls back to the bare status when the error body is not GraphQL JSON", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response("<html>Bad Gateway</html>", { status: 502 }))
+    );
+
+    await expect(linearGraphQL(client, VIEWER_QUERY, {})).rejects.toThrow(
+      /^Linear API error: 502$/
+    );
+  });
+
+  it("ignores an oversized error body", async () => {
+    const message = "x".repeat(32 * 1024);
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => Response.json({ errors: [{ message }] }, { status: 400 }))
+    );
+
+    await expect(linearGraphQL(client, VIEWER_QUERY, {})).rejects.toThrow(
+      /^Linear API error: 400$/
+    );
   });
 });
 

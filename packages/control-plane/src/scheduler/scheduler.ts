@@ -31,12 +31,14 @@ import type {
   AutomationCallbackContext,
   SlackCallbackContext,
 } from "@open-inspect/shared/types/session-api";
+import type { Team } from "@open-inspect/shared/types/teams";
 import { computeHmacHex } from "@open-inspect/shared/auth";
 import type { SandboxSettings } from "@open-inspect/shared/types/integrations";
 import { z } from "zod";
 import { callbackSigningSecret } from "../auth/service/callback-signing";
 import {
   AutomationStore,
+  allRunsUnauthorized,
   EXECUTION_TIMEOUT_FAILURE_REASON,
   parseAutomationTriggerFields,
   toAutomationRun,
@@ -53,15 +55,23 @@ import {
   toProviderSelections,
 } from "../db/automation-model-provider-auth";
 import { SlackChannelStore } from "../db/slack-channel-store";
+import { SessionIndexStore } from "../db/session-index";
+import { TeamChannelBindingStore } from "../db/team-channel-bindings";
+import { slackPostGate } from "../authorization/slack-post-gate";
 import { IntegrationSettingsStore } from "../db/integration-settings";
 import {
   buildSlackCompletionNotification,
   buildSlackSkipNotification,
   parseSlackTriggerMetadata,
   type SlackRunMetadata,
-  type SlackCompletionContext,
 } from "./slack-completion";
+import { getUserAuth } from "../auth/user/runtime";
+import { GitHubAttributionUnavailableError } from "../source-control/github-credential-authority";
 import { UserStore } from "../db/user-store";
+import { TeamStore } from "../db/teams";
+import { TeamRepositoryGrantStore } from "../db/team-repository-grants";
+import { AuthorizationService } from "../authorization/service";
+import { evaluateSessionAdmission } from "../authorization/session-admission";
 import { createRequestMetrics } from "../db/instrumented-sql-database";
 import { generateId } from "../auth/crypto";
 import { createLogger, parseLogLevel } from "../logger";
@@ -79,16 +89,32 @@ import { resolveSessionScopedSettings } from "../session/integration-settings-re
 import { resolveExecutionBudgetMs } from "../sandbox/execution-budget";
 import { MAX_IMAGE_BUILD_PROVIDER_SESSION_TIMEOUT_MS } from "../image-builds/timeouts";
 import { resolveManagedSkills } from "../session/skill-resolution";
+import { resolvedPin } from "../session/pinned";
+import { createSessionMemorySelector } from "../memory/session-memory-selector-factory";
 import type { EnqueuePromptRequest } from "../session/enqueue-prompt-contract";
 import { resolveAutomationRepositories } from "../automation/repository";
-import { resolveAutomationSessionTarget } from "../automation/session-target";
+import {
+  resolveAutomationSessionTarget,
+  type AutomationSessionTarget,
+} from "../automation/session-target";
 import {
   isAutomationExecutionAuthorized,
-  isPrincipalAuthorized,
+  type AutomationExecutionAuthorizationRequest,
 } from "../automation/authorization-guard";
+import { admitGitHubEvent } from "../automation/github-event-admission";
+import {
+  firingInvocationId,
+  type AutomationTriggerBlockedReason,
+  type StartInvocationResult,
+} from "./invocation-outcome";
 import type { RequestContext } from "../routes/shared";
-import { deliverWithRetry } from "../session/callback-delivery";
-import type { GitHubEnrichment } from "../session/identity";
+import { retryDelivery } from "../session/callback-delivery";
+import {
+  AmbiguousGitHubIdentityError,
+  resolveGitHubEnrichmentForCanonicalUser,
+  type GitHubEnrichment,
+} from "../session/identity";
+import { resolveScmProviderFromEnv } from "../source-control/config";
 
 /** Max automations to process per tick (backpressure). */
 const MAX_PER_TICK = 25;
@@ -211,10 +237,14 @@ export interface SchedulerTickResult {
   failed: number;
 }
 
+export type { AutomationTriggerBlockedReason, StartInvocationResult } from "./invocation-outcome";
+
 export interface SchedulerEventResult {
   triggered: number;
   skipped: number;
   steered: number;
+  /** Invocations representing this event's firings (see firingInvocationId). */
+  invocationIds: string[];
 }
 
 export interface SchedulerTriggerResult {
@@ -223,8 +253,12 @@ export interface SchedulerTriggerResult {
 }
 
 export class AutomationTriggerBlockedError extends Error {
-  constructor() {
-    super("An active run already exists");
+  constructor(readonly reason: AutomationTriggerBlockedReason = "concurrent_run_active") {
+    super(
+      reason === "team_grants_changed"
+        ? "Team repository grants changed during admission"
+        : "An active run already exists"
+    );
     this.name = "AutomationTriggerBlockedError";
   }
 }
@@ -232,7 +266,7 @@ export class AutomationTriggerBlockedError extends Error {
 /** Raised when an automation's execution principal lacks required authorization. */
 export class AutomationExecutionUnauthorizedError extends Error {
   /** Create an error for an unauthorized automation execution principal. */
-  constructor() {
+  constructor(readonly reason = "execution_authorization_denied") {
     super("Automation execution principal is not authorized");
     this.name = "AutomationExecutionUnauthorizedError";
   }
@@ -253,6 +287,8 @@ interface StartInvocationParams {
   triggerMetadata?: string | null;
   /** Pre-fetched repository selection (the tick passes its batched fetch). */
   repositories?: AutomationRepositoryInsert[];
+  /** GitHub event identity that repository resolution must preserve. */
+  eventRepositoryId?: number;
   /** Pre-fetched environment selection (the tick passes its batched fetch). */
   environments?: AutomationEnvironmentRow[];
   /** Complete prompt to use directly, or as the fallback for a lazy override. */
@@ -270,24 +306,12 @@ interface StartInvocationParams {
 interface ExecutionPrincipal {
   platformUserId: string;
   participantUserId: string;
-  scmEnrichment?: GitHubEnrichment;
+  scmEnrichment: GitHubEnrichment | null;
 }
-
-type StartInvocationResult =
-  /** Invocation inserted; children launched (some may have pre-failed). */
-  | { outcome: "started"; invocationId: string; runs: AutomationRunRow[]; launched: number }
-  /** Overlap — a childless skipped invocation was recorded (schedule/event). */
-  | { outcome: "skipped" }
-  /** Overlap on a manual firing — nothing recorded; the caller answers 409. */
-  | { outcome: "blocked" }
-  /** Idempotency/dedup collision — another firing owns this slot or event. */
-  | { outcome: "deduplicated" }
-  /** The execution principal cannot launch the immutable target snapshot. */
-  | { outcome: "unauthorized" };
 
 type SchedulerPromptRequest = Pick<
   EnqueuePromptRequest,
-  "content" | "authorId" | "canonicalUserId" | "source"
+  "content" | "authorId" | "canonicalUserId" | "source" | "scmEnrichment"
 > & {
   callbackContext: AutomationCallbackContext | SlackCallbackContext;
 };
@@ -320,7 +344,32 @@ export function composeAutomationPrompt(contextBlock: string, instructions: stri
   return `${instructions}\n---\n\n${contextBlock}\n\n---\n\n${AUTOMATION_CONTEXT_GUARDRAIL}`;
 }
 
+/** Reason code for an execution authorization denial, given the owning team's current state. */
+function executionDenialReason(team: Team | null): string {
+  return team?.archivedAt != null ? "team_archived" : "execution_authorization_denied";
+}
+
+/** What admission decided for a firing, re-checked as each child launches. */
+interface LaunchAdmission {
+  authorization: AutomationExecutionAuthorizationRequest;
+  /** Session target resolved at admission; required for team automations. */
+  target?: AutomationSessionTarget;
+}
+
 /** Coordinates authorized automation scheduling, dispatch, and completion handling. */
+/** A launch candidate's target as resolved at admission, or why it could not be resolved. */
+type LaunchTargetSnapshot = { target: AutomationSessionTarget } | { error: unknown };
+
+/** Repository IDs that the resolved launch targets will open. */
+function launchTargetRepoIds(snapshots: ReadonlyMap<string, LaunchTargetSnapshot>): number[] {
+  return [...snapshots.values()].flatMap((snapshot) => {
+    if (!("target" in snapshot)) return [];
+    const { target } = snapshot;
+    if (target.repositories) return target.repositories.map((repository) => repository.repoId);
+    return target.repoId === null ? [] : [target.repoId];
+  });
+}
+
 export class Scheduler {
   private readonly log: Logger;
 
@@ -397,11 +446,22 @@ export class Scheduler {
         ? {
             platformUserId: automation.user_id,
             participantUserId: automation.created_by,
+            scmEnrichment: null,
           }
         : null);
     if (!executionPrincipal) return { outcome: "unauthorized" };
     const now = Date.now();
     const concurrencyKey = params.concurrencyKey ?? null;
+    const triggerKey = params.triggerKey ?? null;
+
+    // A redelivered event (or a webhook retry with the same idempotency key)
+    // belongs to the firing that already admitted it — even while that firing
+    // is still running, which the overlap check below would otherwise record
+    // as a fresh skip.
+    if (triggerKey !== null) {
+      const ownerId = await store.getInvocationIdByTriggerKey(automation.id, triggerKey);
+      if (ownerId) return { outcome: "deduplicated", invocationId: ownerId };
+    }
 
     // Schedule/manual firings block on any active run of the automation; event
     // firings block per concurrency key (an automation-wide guard would
@@ -425,17 +485,31 @@ export class Scheduler {
       params.repositories ?? store.getRepositoriesForAutomation(automation.id),
       params.environments ?? store.getEnvironmentsForAutomation(automation.id),
     ]);
-    if (
-      !(await isAutomationExecutionAuthorized(this.db, {
-        automationId: automation.id,
-        executionUserId: executionPrincipal.platformUserId,
-        requiresRepositoryUse: selection.length > 0,
-        requiresEnvironmentUse: environmentSelection.length > 0,
-      }))
-    ) {
-      return { outcome: "unauthorized" };
+    // One snapshot of the owning team classifies denials and pins the grants version.
+    const team =
+      automation.owner_team_id === null
+        ? null
+        : await new TeamStore(this.db).getById(automation.owner_team_id);
+    const authorization: AutomationExecutionAuthorizationRequest = {
+      automationId: automation.id,
+      executionUserId: executionPrincipal.platformUserId,
+      requiresRepositoryUse: selection.length > 0,
+      requiresEnvironmentUse: environmentSelection.length > 0,
+    };
+    if (!(await isAutomationExecutionAuthorized(this.db, authorization))) {
+      return { outcome: "unauthorized", reason: executionDenialReason(team) };
     }
     const resolutions = await resolveAutomationRepositories(this.env, selection);
+    for (const resolution of resolutions) {
+      if (
+        params.eventRepositoryId !== undefined &&
+        resolution.repository !== null &&
+        resolution.repository.repoId !== params.eventRepositoryId
+      ) {
+        resolution.repository = null;
+        resolution.error = "Repository identity changed during event resolution";
+      }
+    }
 
     const invocationId = generateId();
     const scheduledAt = params.scheduledAt ?? now;
@@ -463,10 +537,9 @@ export class Scheduler {
 
     // One child per target. Repository children snapshot the resolved repo; a
     // failed resolution pre-fails its child (snapshot from the selection row)
-    // without blocking siblings. Environment children snapshot the environment
-    // id — the workspace itself resolves at launch time (design §13.3), so a
-    // deleted environment fails through the launch-failure path. No targets →
-    // one repo-less child.
+    // without blocking siblings. Environment children snapshot their id; team
+    // workspaces are resolved before grant admission below. Resolution errors
+    // remain launch failures. No targets produce one repo-less child.
     const children: AutomationRunRow[] = [
       ...resolutions.map(
         (resolution): AutomationRunRow => ({
@@ -493,6 +566,23 @@ export class Scheduler {
     }
 
     const launchCandidates = children.filter((child) => child.status === "starting");
+    let launchTargets: ReadonlyMap<string, LaunchTargetSnapshot> = new Map();
+    let teamGrantsVersion: { teamId: string; version: number } | undefined;
+    if (automation.owner_team_id !== null) {
+      if (!team) return { outcome: "unauthorized", reason: "execution_authorization_denied" };
+      // Snapshot the grants version before checking coverage; the guarded insert
+      // refuses admission if grants change in between.
+      teamGrantsVersion = { teamId: team.id, version: team.grantsVersion };
+      launchTargets = await this.resolveLaunchTargets(automation, launchCandidates);
+      if (
+        !(await new TeamRepositoryGrantStore(this.db).covers(
+          team.id,
+          launchTargetRepoIds(launchTargets)
+        ))
+      ) {
+        return { outcome: "unauthorized", reason: "target_team_missing_grant" };
+      }
+    }
     // Resolve provider routing before admission, alongside the already-built
     // target children. Together these values are the immutable launch snapshot
     // for this firing: edits made after the conditional insert cannot change which
@@ -519,7 +609,7 @@ export class Scheduler {
       automation_id: automation.id,
       source,
       scheduled_at: params.scheduledAt ?? null,
-      trigger_key: params.triggerKey ?? null,
+      trigger_key: triggerKey,
       concurrency_key: concurrencyKey,
       trigger_metadata: params.triggerMetadata ?? null,
       skip_reason: null,
@@ -534,6 +624,7 @@ export class Scheduler {
         invocation,
         children,
         overlapScope,
+        teamGrantsVersion,
         advanceSchedule:
           source === "schedule" &&
           params.scheduledAt !== undefined &&
@@ -551,16 +642,41 @@ export class Scheduler {
           // slot must not move next_run_at behind a newer tick's advance.
           await store.advanceNextRunAt(automation.id, params.advanceToNextRunAt);
         }
-        return { outcome: "deduplicated" };
+        return {
+          outcome: "deduplicated",
+          invocationId:
+            triggerKey === null
+              ? null
+              : await store.getInvocationIdByTriggerKey(automation.id, triggerKey),
+        };
       }
       throw e;
     }
 
+    if (!inserted && teamGrantsVersion) {
+      const current = await new TeamStore(this.db).getById(teamGrantsVersion.teamId);
+      if (current?.grantsVersion !== teamGrantsVersion.version) {
+        // Grants changed after coverage was checked. Nothing was recorded or
+        // advanced, so a schedule slot refires and re-authorizes on the next tick.
+        return { outcome: "blocked", reason: "team_grants_changed" };
+      }
+    }
     if (!inserted) {
       // Raced an active invocation between the pre-check and the batch. The
       // batch's schedule advance already ran (deliberately unconditional), so
       // the skip record must not advance again.
       return this.recordOverlapSkip(store, params, { advanceSchedule: false });
+    }
+
+    let attributionError: unknown;
+    if (!params.executionPrincipal && launchCandidates.length > 0) {
+      try {
+        executionPrincipal.scmEnrichment = await this.resolveScmEnrichment(
+          executionPrincipal.platformUserId
+        );
+      } catch (error) {
+        attributionError = error;
+      }
     }
 
     // Admitted. Only now is it worth paying for anything the prompt needs.
@@ -582,7 +698,10 @@ export class Scheduler {
 
     const launchChild = async (child: AutomationRunRow): Promise<void> => {
       try {
+        if (attributionError !== undefined) throw attributionError;
         if ("error" in providerAuthSnapshot) throw providerAuthSnapshot.error;
+        const targetSnapshot = launchTargets.get(child.id);
+        if (targetSnapshot && "error" in targetSnapshot) throw targetSnapshot.error;
         const sessionId = generateId();
         // Claim the generated session before initialization. Otherwise the orphan sweep can
         // terminalize an old `starting` row while initialization is still creating its session.
@@ -607,7 +726,12 @@ export class Scheduler {
           providerAuthSnapshot.providerAuth,
           sessionId,
           executionPrincipal,
-          claimedAt
+          claimedAt,
+          {
+            authorization,
+            target:
+              targetSnapshot && "target" in targetSnapshot ? targetSnapshot.target : undefined,
+          }
         );
         await this.sendPromptToSession(
           sessionId,
@@ -627,12 +751,15 @@ export class Scheduler {
           run_id: child.id,
           error: message,
         });
+        // Losing authorization is not an automation failure: the run is unauthorized, so only
+        // genuine sibling failures count a strike. The next admission re-evaluates the
+        // principal and pauses if still denied.
+        const outcome: Partial<AutomationRunRow> =
+          e instanceof AutomationExecutionUnauthorizedError
+            ? { status: "unauthorized", failure_reason: e.reason, session_id: null }
+            : { status: "failed", failure_reason: message };
         try {
-          await store.updateRun(child.id, {
-            status: "failed",
-            failure_reason: message,
-            completed_at: Date.now(),
-          });
+          await store.updateRun(child.id, { ...outcome, completed_at: Date.now() });
         } catch (updateError) {
           this.log.error("Failed to record launch failure", {
             event: "scheduler.fail_track_error",
@@ -642,8 +769,7 @@ export class Scheduler {
             error: updateError instanceof Error ? updateError.message : String(updateError),
           });
         }
-        child.status = "failed";
-        child.failure_reason = message;
+        Object.assign(child, outcome);
       }
     };
 
@@ -692,12 +818,24 @@ export class Scheduler {
     params: StartInvocationParams,
     options: { advanceSchedule: boolean }
   ): Promise<StartInvocationResult> {
-    if (params.source === "manual") return { outcome: "blocked" };
+    if (params.source === "manual") return { outcome: "blocked", reason: "concurrent_run_active" };
+
+    // A concurrent same-key delivery may have admitted this event since the
+    // pre-check; its invocation commits with its active child, so the overlap
+    // just observed may be that firing.
+    if (params.triggerKey) {
+      const ownerId = await store.getInvocationIdByTriggerKey(
+        params.automation.id,
+        params.triggerKey
+      );
+      if (ownerId) return { outcome: "deduplicated", invocationId: ownerId };
+    }
 
     const now = Date.now();
-    await store.insertSkippedInvocation(
+    const invocationId = generateId();
+    const { inserted } = await store.insertSkippedInvocation(
       {
-        id: generateId(),
+        id: invocationId,
         automation_id: params.automation.id,
         source: params.source,
         scheduled_at: params.scheduledAt ?? null,
@@ -716,7 +854,7 @@ export class Scheduler {
         ? { fromSlot: params.scheduledAt, nextRunAt: params.advanceToNextRunAt }
         : undefined
     );
-    return { outcome: "skipped" };
+    return { outcome: "skipped", invocationId: inserted ? invocationId : null };
   }
 
   // ─── Tick handler ────────────────────────────────────────────────────────
@@ -780,6 +918,8 @@ export class Scheduler {
             // reports as failed, not processed.
             if (result.launched > 0) {
               processed++;
+            } else if (allRunsUnauthorized(result.runs)) {
+              skipped++;
             } else {
               failed++;
             }
@@ -801,7 +941,7 @@ export class Scheduler {
                 trigger_key: null,
                 concurrency_key: null,
                 trigger_metadata: null,
-                skip_reason: "execution_authorization_denied",
+                skip_reason: result.reason ?? "execution_authorization_denied",
                 failure_counted_at: null,
                 created_at: deniedAt,
                 updated_at: deniedAt,
@@ -812,6 +952,7 @@ export class Scheduler {
               event: "scheduler.authorization_denied",
               automation_id: automation.id,
               scheduled_at: automation.next_run_at,
+              reason_code: result.reason ?? "execution_authorization_denied",
             });
             skipped++;
             break;
@@ -1006,6 +1147,26 @@ export class Scheduler {
   /** Match an inbound event to authorized automations and start or steer their invocations. */
   async event(event: AutomationEvent): Promise<SchedulerEventResult> {
     const store = new AutomationStore(this.db);
+    if (event.source === "github") {
+      return admitGitHubEvent(
+        this.db,
+        event,
+        (automation, repositories) =>
+          this.startInvocation(store, {
+            automation,
+            repositories,
+            source: "event",
+            triggerKey: event.triggerKey,
+            concurrencyKey: event.concurrencyKey,
+            eventRepositoryId: event.repositoryId,
+            instructionsOverride: composeAutomationPrompt(
+              event.contextBlock,
+              automation.instructions
+            ),
+          }),
+        this.log
+      );
+    }
 
     // 1. Find matching automations
     let candidates: AutomationRow[];
@@ -1027,12 +1188,11 @@ export class Scheduler {
             : [];
         break;
       }
-      case "github":
       case "linear":
         candidates = await store.getAutomationsForEvent(
           event.repoOwner,
           event.repoName,
-          event.source === "github" ? "github_event" : "linear_event",
+          "linear_event",
           event.eventType
         );
         break;
@@ -1051,8 +1211,10 @@ export class Scheduler {
       slackContextPromise ??= this.buildSlackContextWithThread(slackEvent);
       return slackContextPromise;
     };
-    let slackSteeringActorPromise: Promise<string | null> | undefined;
-    const slackSteeringActor = (slackEvent: SlackAutomationEvent): Promise<string | null> => {
+    let slackSteeringActorPromise: Promise<RequestContext | null> | undefined;
+    const slackSteeringActor = (
+      slackEvent: SlackAutomationEvent
+    ): Promise<RequestContext | null> => {
       slackSteeringActorPromise ??= (async () => {
         try {
           const identity = await new UserStore(this.db).getIdentity(
@@ -1060,9 +1222,23 @@ export class Scheduler {
             slackEvent.actorUserId
           );
           if (!identity) return null;
-          return (await isPrincipalAuthorized(this.db, identity.userId, "sessions.collaborate"))
-            ? identity.userId
-            : null;
+          const authorization = await new AuthorizationService(this.db).getEffectiveAuthorization(
+            identity.userId
+          );
+          if (
+            authorization.suspendedAt !== null ||
+            !authorization.permissions.includes("sessions.collaborate")
+          )
+            return null;
+          return {
+            db: this.db,
+            trace_id: `automation:slack-steering:${slackEvent.triggerKey}`,
+            request_id: slackEvent.triggerKey,
+            metrics: createRequestMetrics(),
+            executionCtx: this.backgroundJobs,
+            principal: { kind: "user", userId: identity.userId },
+            authorization,
+          } satisfies RequestContext;
         } catch (error) {
           this.log.warn("Failed to authorize slack actor for session steering", {
             event: "scheduler.slack_steer_authorization_failed",
@@ -1077,6 +1253,7 @@ export class Scheduler {
 
     let triggered = 0;
     let skipped = 0;
+    const invocationIds: string[] = [];
     // Follow-ups routed into an already-active thread's session (slack steering).
     let steered = 0;
     // Surface at most one concurrency-skip ephemeral per event, even when
@@ -1103,8 +1280,27 @@ export class Scheduler {
           now - SLACK_THREAD_CONTINUITY_WINDOW_MS
         );
         if (steerable?.session_id) {
-          const actorUserId = await slackSteeringActor(event);
-          if (!actorUserId) {
+          const actor = await slackSteeringActor(event);
+          let canSteer = false;
+          if (actor?.authorization) {
+            try {
+              const admission = await evaluateSessionAdmission(
+                actor,
+                this.env,
+                steerable.session_id,
+                "collaborate",
+                null
+              );
+              canSteer = admission.kind === "allowed";
+            } catch (error) {
+              this.log.warn("Failed to authorize slack actor for the thread session", {
+                event: "scheduler.slack_steer_authorization_failed",
+                session_id: steerable.session_id,
+                error: error instanceof Error ? error : new Error(String(error)),
+              });
+            }
+          }
+          if (!actor?.authorization || !canSteer) {
             this.log.warn("Blocked slack steering for unauthorized actor", {
               event: "scheduler.slack_steer_unauthorized",
               automation_id: automation.id,
@@ -1113,7 +1309,7 @@ export class Scheduler {
             });
             continue;
           }
-          if (await this.steerSession(steerable, automation, event, actorUserId)) {
+          if (await this.steerSession(steerable, automation, event, actor.authorization.userId)) {
             steered++;
             continue;
           }
@@ -1169,6 +1365,8 @@ export class Scheduler {
             }
           : {}),
       });
+      const invocationId = firingInvocationId(result);
+      if (invocationId) invocationIds.push(invocationId);
 
       switch (result.outcome) {
         case "started":
@@ -1176,6 +1374,8 @@ export class Scheduler {
           // launch failed counted as neither triggered nor skipped.
           if (result.launched > 0) {
             triggered++;
+          } else if (allRunsUnauthorized(result.runs)) {
+            skipped++;
           }
           break;
         case "skipped":
@@ -1185,6 +1385,8 @@ export class Scheduler {
           skipped++;
           break;
         case "deduplicated":
+          skipped++;
+          break;
         case "blocked":
           skipped++;
           break;
@@ -1193,6 +1395,7 @@ export class Scheduler {
             event: "scheduler.authorization_denied",
             automation_id: automation.id,
             source: event.source,
+            reason_code: result.reason ?? "execution_authorization_denied",
           });
           skipped++;
           break;
@@ -1214,7 +1417,7 @@ export class Scheduler {
       candidates: candidates.length,
     });
 
-    return { triggered, skipped, steered };
+    return { triggered, skipped, steered, invocationIds };
   }
 
   // ─── Manual trigger ──────────────────────────────────────────────────────
@@ -1223,7 +1426,7 @@ export class Scheduler {
   async trigger(
     automationId: string,
     requesterUserId: string,
-    requesterEnrichment?: GitHubEnrichment
+    requesterEnrichment: GitHubEnrichment | null = null
   ): Promise<SchedulerTriggerResult> {
     const store = new AutomationStore(this.db);
     const automation = await store.getById(automationId);
@@ -1242,24 +1445,27 @@ export class Scheduler {
     });
 
     if (result.outcome === "unauthorized") {
-      throw new AutomationExecutionUnauthorizedError();
+      throw new AutomationExecutionUnauthorizedError(result.reason);
     }
+    if (result.outcome === "blocked") throw new AutomationTriggerBlockedError(result.reason);
     if (result.outcome !== "started") {
       // Manual overlap (pre-check or lost race) records nothing.
       throw new AutomationTriggerBlockedError();
     }
 
+    if (allRunsUnauthorized(result.runs)) {
+      throw new AutomationExecutionUnauthorizedError(result.runs[0].failure_reason ?? undefined);
+    }
+
     const runs = result.runs.map((run) =>
       toAutomationRun({ ...run, session_title: null, artifact_summary: null })
     );
-    const allFailed = runs.every((run) => run.status === "failed");
-
-    if (allFailed) {
+    if (result.launched === 0) {
       this.log.error("Manual trigger failed", {
         event: "scheduler.manual_trigger_failed",
         automation_id: automationId,
         invocation_id: result.invocationId,
-        error: result.runs[0]?.failure_reason ?? "unknown",
+        error: result.runs.find((run) => run.status === "failed")?.failure_reason ?? "unknown",
       });
 
       throw new Error("Failed to trigger automation");
@@ -1364,21 +1570,9 @@ export class Scheduler {
     // Slack-triggered runs post the agent's result into the triggering message's
     // thread and clear the `eyes` reaction when they finish. The scheduler owns
     // this fan-out (not the session callback path) because the message
-    // coordinates live on the invocation. Best-effort.
-    const invocation = await store.getInvocationById(run.invocation_id);
-    const slackMeta = parseSlackTriggerMetadata(invocation?.trigger_metadata ?? null);
-    if (slackMeta) {
-      const automation = await store.getById(body.automationId);
-      await this.notifySlackCompletion(run, slackMeta, {
-        sessionId: body.sessionId,
-        messageId: body.messageId,
-        success: body.success,
-        error: body.error,
-        repoFullName: formatRunRepositoryLabel(run),
-        model: automation?.model ?? "",
-        reasoningEffort: automation?.reasoning_effort ?? undefined,
-      });
-    }
+    // coordinates live on the invocation. Only the terminal CAS winner owns
+    // publication retries; retrying runComplete itself would be ignored.
+    await this.notifySlackCompletion(store, run, body);
   }
 
   /**
@@ -1390,28 +1584,72 @@ export class Scheduler {
    * `SLACK_BOT` is unbound, or when the secret is unset — all best-effort.
    */
   private async notifySlackCompletion(
+    store: AutomationStore,
     run: AutomationRunRow,
-    meta: SlackRunMetadata,
-    ctx: SlackCompletionContext
+    completion: AutomationRunCompletion
   ): Promise<void> {
     const binding = this.env.SLACK_BOT;
     const secret = callbackSigningSecret(this.env, "slack-bot");
     if (!binding || !secret) return;
 
-    const body = buildSlackCompletionNotification(meta, ctx);
-    if (!body) return;
+    let closureReason: string | null = null;
+    await retryDelivery<void, Response>(
+      async (signal) => {
+        const invocation = await store.getInvocationById(run.invocation_id);
+        const meta = parseSlackTriggerMetadata(invocation?.trigger_metadata ?? null);
+        if (!meta?.messageTs) return { outcome: "delivered", value: undefined };
+        const automation = await store.getById(completion.automationId);
+        const [session, channelBinding] = await Promise.all([
+          new SessionIndexStore(this.db).get(completion.sessionId),
+          new TeamChannelBindingStore(this.db).get("slack", meta.channel),
+        ]);
+        // D1 reads cannot be canceled; an expired attempt must not reach the wire.
+        signal.throwIfAborted();
+        const denial = closureReason ?? slackPostGate(session, channelBinding);
+        const body = denial
+          ? {
+              kind: "slack.thread_closed",
+              sessionId: completion.sessionId,
+              timestamp: Date.now(),
+              context: { channel: meta.channel, threadTs: meta.messageTs },
+            }
+          : buildSlackCompletionNotification(meta, {
+              sessionId: completion.sessionId,
+              messageId: completion.messageId,
+              success: completion.success,
+              error: completion.error,
+              repoFullName: formatRunRepositoryLabel(run),
+              model: automation?.model ?? "",
+              reasoningEffort: automation?.reasoning_effort ?? undefined,
+            });
+        if (!body) return { outcome: "delivered", value: undefined };
 
-    const signature = await computeHmacHex(JSON.stringify(body), secret);
-    await deliverWithRetry(
-      (signal) =>
-        binding.fetch("https://internal/callbacks/automation-complete", {
+        if (denial) {
+          this.log.info("Slack completion denied by session scope", {
+            event: "scheduler.slack_complete_denied",
+            run_id: run.id,
+            session_id: completion.sessionId,
+            reason: denial,
+          });
+        }
+
+        const signature = await computeHmacHex(JSON.stringify(body), secret);
+        signal.throwIfAborted();
+        // The bot can tombstone the thread even when closure delivery fails.
+        closureReason = denial;
+        const endpoint = denial ? "thread_closed" : "automation-complete";
+        const response = await binding.fetch(`https://internal/callbacks/${endpoint}`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ ...body, signature }),
           signal,
-        }),
+        });
+        return response.ok
+          ? { outcome: "delivered", value: undefined }
+          : { outcome: "retryable_failure", failure: response };
+      },
       (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
-      ({ attempt, response, error }) => {
+      ({ attempt, failure: response, error }) => {
         this.log.warn("Slack completion callback failed", {
           event: "scheduler.slack_complete_failed",
           automation_id: run.automation_id,
@@ -1540,6 +1778,39 @@ export class Scheduler {
     return resolveExecutionBudgetMs(sandboxSettings, this.env) + EXECUTION_DEADLINE_GRACE_MS;
   }
 
+  /**
+   * Resolve each launch candidate's session target once, at admission, so grant coverage is
+   * checked against exactly what launch will open. Resolution errors become launch failures.
+   */
+  private async resolveLaunchTargets(
+    automation: AutomationRow,
+    candidates: readonly AutomationRunRow[]
+  ): Promise<ReadonlyMap<string, LaunchTargetSnapshot>> {
+    const snapshots = new Map<string, LaunchTargetSnapshot>();
+    await Promise.all(
+      candidates.map(async (child) => {
+        try {
+          const target = await resolveAutomationSessionTarget(
+            this.env,
+            child,
+            {
+              trace_id: `automation:${automation.id}`,
+              request_id: child.id,
+              metrics: createRequestMetrics(),
+              db: this.db,
+              executionCtx: this.backgroundJobs,
+            },
+            this.log
+          );
+          snapshots.set(child.id, { target });
+        } catch (error) {
+          snapshots.set(child.id, { error });
+        }
+      })
+    );
+    return snapshots;
+  }
+
   private async createSessionForAutomationRun(
     store: AutomationStore,
     automation: AutomationRow,
@@ -1548,7 +1819,8 @@ export class Scheduler {
     sessionId: string,
     executionPrincipal: ExecutionPrincipal,
     /** The instant the run claimed this session — what its deadline measures from. */
-    startedAt: number
+    startedAt: number,
+    admission: LaunchAdmission
   ): Promise<void> {
     const ctx: RequestContext = {
       trace_id: `automation:${automation.id}`,
@@ -1558,11 +1830,11 @@ export class Scheduler {
       executionCtx: this.backgroundJobs,
     };
 
-    // What the session opens — the run's repository snapshot or, for
-    // environment-bound automations, the environment's workspace. All target
-    // semantics live in resolveAutomationSessionTarget; a resolution failure
-    // throws into launchChild's failure path.
-    const target = await resolveAutomationSessionTarget(this.env, run, ctx, this.log);
+    if (automation.owner_team_id !== null && !admission.target) {
+      throw new Error("Team automation launch is missing its admitted target");
+    }
+    const target =
+      admission.target ?? (await resolveAutomationSessionTarget(this.env, run, ctx, this.log));
 
     // Session-scoped integration settings resolve from the primary member
     // (design §6.2), with environment-bound runs layering that environment's
@@ -1570,7 +1842,7 @@ export class Scheduler {
     const scopeMembers =
       target.repositories ??
       (target.repoOwner && target.repoName
-        ? [{ repoOwner: target.repoOwner, repoName: target.repoName }]
+        ? [{ repoOwner: target.repoOwner, repoName: target.repoName, repoId: target.repoId }]
         : []);
     const { codeServerEnabled, vncEnabled, sandboxSettings } = await resolveSessionScopedSettings(
       this.db,
@@ -1595,7 +1867,32 @@ export class Scheduler {
       executionPrincipal.platformUserId
     );
 
+    const scmEnrichment = executionPrincipal.scmEnrichment;
+
+    // Re-authorize with admission's requirements, and re-read the team's current policy, as the
+    // last step before creation: the principal may have left the team, been suspended, or lost a
+    // permission, and the team's default visibility may have changed since admission.
+    const [team, authorized] = await Promise.all([
+      automation.owner_team_id === null
+        ? null
+        : new TeamStore(this.db).getById(automation.owner_team_id),
+      isAutomationExecutionAuthorized(this.db, admission.authorization),
+    ]);
+    if (!authorized) throw new AutomationExecutionUnauthorizedError(executionDenialReason(team));
+
+    const memorySelection = await createSessionMemorySelector(ctx).select({
+      principal: {
+        userId: executionPrincipal.platformUserId,
+        ownerTeamId: automation.owner_team_id,
+      },
+      repositories: scopeMembers,
+      environmentId: target.environmentId,
+    });
+
     const sessionInput: SessionInitInput = {
+      memory: resolvedPin(memorySelection),
+      ownerTeamId: automation.owner_team_id,
+      visibility: team?.defaultVisibility ?? "workspace",
       sessionId,
       ...target,
       title: `[Auto] ${automation.name}`,
@@ -1604,13 +1901,11 @@ export class Scheduler {
       reasoningEffort: automation.reasoning_effort,
       participantUserId: executionPrincipal.participantUserId,
       platformUserId: executionPrincipal.platformUserId,
-      scmUserId: executionPrincipal.scmEnrichment?.scmUserId,
-      scmLogin: executionPrincipal.scmEnrichment?.scmLogin,
-      scmName: executionPrincipal.scmEnrichment?.displayName,
-      scmEmail: executionPrincipal.scmEnrichment?.email,
-      scmTokenEncrypted: executionPrincipal.scmEnrichment?.accessTokenEncrypted ?? null,
-      scmRefreshTokenEncrypted: executionPrincipal.scmEnrichment?.refreshTokenEncrypted ?? null,
-      scmTokenExpiresAt: executionPrincipal.scmEnrichment?.tokenExpiresAt,
+      participantCanonicalUserId: executionPrincipal.platformUserId,
+      scmUserId: scmEnrichment?.scmUserId,
+      scmLogin: scmEnrichment?.scmLogin,
+      scmName: scmEnrichment?.displayName,
+      scmEmail: scmEnrichment?.email,
       codeServerEnabled,
       vncEnabled,
       sandboxSettings,
@@ -1618,7 +1913,7 @@ export class Scheduler {
       spawnDepth: 0,
       automationId: automation.id,
       automationRunId: run.id,
-      managedSkillsManifest,
+      managedSkills: resolvedPin(managedSkillsManifest),
       providerAuth,
     };
 
@@ -1650,6 +1945,29 @@ export class Scheduler {
       },
       { trace_id: `automation:${automation.id}`, request_id: runId }
     );
+  }
+
+  private async resolveScmEnrichment(userId: string): Promise<GitHubEnrichment | null> {
+    if (resolveScmProviderFromEnv(this.env.SCM_PROVIDER) !== "github") return null;
+    try {
+      return await resolveGitHubEnrichmentForCanonicalUser(
+        new UserStore(this.db),
+        userId,
+        () => getUserAuth(this.env, this.db).api
+      );
+    } catch (error) {
+      if (
+        !(error instanceof AmbiguousGitHubIdentityError) &&
+        !(error instanceof GitHubAttributionUnavailableError)
+      )
+        throw error;
+      this.log.warn("GitHub attribution unavailable; continuing without it", {
+        event: "scheduler.github_enrichment_unavailable",
+        user_id: userId,
+        error,
+      });
+      return null;
+    }
   }
 
   /**
@@ -1684,6 +2002,7 @@ export class Scheduler {
       automationId: automation.id,
     };
 
+    const enrichment = await this.resolveScmEnrichment(actorUserId);
     try {
       await this.enqueueSessionPrompt(
         sessionId,
@@ -1691,6 +2010,15 @@ export class Scheduler {
           content: event.text,
           authorId: `slack:${event.actorUserId}`,
           canonicalUserId: actorUserId,
+          scmEnrichment:
+            resolveScmProviderFromEnv(this.env.SCM_PROVIDER) === "github"
+              ? {
+                  userId: enrichment?.scmUserId ?? null,
+                  login: enrichment?.scmLogin ?? null,
+                  name: enrichment?.displayName ?? null,
+                  email: enrichment?.email ?? null,
+                }
+              : undefined,
           source: "slack",
           callbackContext,
         },

@@ -9,6 +9,7 @@ import {
 } from "../auth/openssh-ed25519";
 import { CommitSigningStore } from "../db/commit-signing";
 import type { SqlDatabase } from "../db/sql-database";
+import { readBoundedBytes } from "../http/bounded-body";
 import { admit, dispatch } from "../routing/admit";
 import type { ControlPlaneHonoEnv } from "../routing/hono-env";
 import { resolveScmProviderFromEnv } from "../source-control";
@@ -43,29 +44,12 @@ function createStore(env: Env, db: SqlDatabase): CommitSigningStore | Response {
 }
 
 async function readSigningPayload(request: Request): Promise<Uint8Array | null> {
-  if (!request.body) return new Uint8Array();
-
-  const reader = request.body.getReader();
-  const chunks: Uint8Array[] = [];
-  let totalBytes = 0;
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    totalBytes += value.byteLength;
-    if (totalBytes > MAX_SIGNING_PAYLOAD_BYTES) {
-      await reader.cancel().catch(() => undefined);
-      return null;
-    }
-    chunks.push(value);
-  }
-
-  const payload = new Uint8Array(totalBytes);
-  let offset = 0;
-  for (const chunk of chunks) {
-    payload.set(chunk, offset);
-    offset += chunk.byteLength;
-  }
-  return payload;
+  const result = await readBoundedBytes(
+    request.body,
+    MAX_SIGNING_PAYLOAD_BYTES,
+    request.headers.get("content-length")
+  );
+  return result.ok ? result.bytes : null;
 }
 
 async function handleGetCommitSigning(

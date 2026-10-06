@@ -11,7 +11,11 @@ const FULL_CAPABILITIES = {
   read: true,
   collaborate: true,
   lifecycle: true,
+  delete: false,
+  manageCollaborators: false,
+  changeVisibility: false,
   sandboxAccess: true,
+  exportTrace: true,
 } satisfies SessionCapabilities;
 
 expect.extend(matchers);

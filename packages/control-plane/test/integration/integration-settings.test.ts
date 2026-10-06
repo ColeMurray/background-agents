@@ -105,6 +105,69 @@ describe("Integration settings API", () => {
       expect(body.settings.enabledRepos).toEqual(["acme/widgets"]);
     });
 
+    it("does not grandfather invalid sandbox timing across real D1 API round-trips", async () => {
+      const endpoint = "https://test.local/integration-settings/sandbox";
+      await env.DB.prepare(
+        `INSERT INTO integration_settings (integration_id, settings, created_at, updated_at)
+         VALUES (?, ?, ?, ?)`
+      )
+        .bind("sandbox", JSON.stringify({ defaults: { sandboxTimeoutMs: 300_000 } }), 1, 1)
+        .run();
+
+      const getStoredInvalid = await serviceFetch(endpoint);
+      expect(getStoredInvalid.status).toBe(200);
+      const storedBody = await getStoredInvalid.json<{
+        settings: { defaults: Record<string, unknown> };
+      }>();
+      expect(storedBody.settings.defaults).toEqual({});
+
+      const unrelatedSave = await serviceFetch(endpoint, {
+        method: "PUT",
+        body: JSON.stringify({
+          settings: { defaults: { sandboxTimeoutMs: 300_000, terminalEnabled: true } },
+        }),
+      });
+      expect(unrelatedSave.status).toBe(400);
+      const persisted = await env.DB.prepare(
+        "SELECT settings FROM integration_settings WHERE integration_id = ?"
+      )
+        .bind("sandbox")
+        .first<{ settings: string }>();
+      expect(JSON.parse(persisted!.settings)).toEqual({
+        defaults: { sandboxTimeoutMs: 300_000 },
+      });
+
+      const editedTimeout = await serviceFetch(endpoint, {
+        method: "PUT",
+        body: JSON.stringify({ settings: { defaults: { sandboxTimeoutMs: 360_000 } } }),
+      });
+      expect(editedTimeout.status).toBe(400);
+
+      await env.DB.prepare("DELETE FROM integration_settings WHERE integration_id = ?")
+        .bind("sandbox")
+        .run();
+      const newShortTimeout = await serviceFetch(endpoint, {
+        method: "PUT",
+        body: JSON.stringify({ settings: { defaults: { sandboxTimeoutMs: 300_000 } } }),
+      });
+      expect(newShortTimeout.status).toBe(400);
+
+      const explicitBuffer = await serviceFetch(endpoint, {
+        method: "PUT",
+        body: JSON.stringify({
+          settings: {
+            defaults: { sandboxTimeoutMs: 360_000, finalSnapshotBufferMs: 300_000 },
+          },
+        }),
+      });
+      expect(explicitBuffer.status).toBe(200);
+      const removedBuffer = await serviceFetch(endpoint, {
+        method: "PUT",
+        body: JSON.stringify({ settings: { defaults: { sandboxTimeoutMs: 360_000 } } }),
+      });
+      expect(removedBuffer.status).toBe(400);
+    });
+
     it.each([null, [], "invalid", 42, {}, { settings: [] }, { settings: null }])(
       "rejects invalid settings body %j without replacing stored settings",
       async (invalidBody) => {
@@ -407,6 +470,7 @@ describe("Integration settings API", () => {
               allowUserPreferenceOverride: true,
               allowLabelModelOverride: true,
               emitToolProgressActivities: true,
+              unboundChannels: "reject",
             },
           },
         }),
@@ -432,6 +496,7 @@ describe("Integration settings API", () => {
           allowUserPreferenceOverride: boolean;
           allowLabelModelOverride: boolean;
           emitToolProgressActivities: boolean;
+          unboundChannels: string;
           enabledRepos: string[] | null;
         };
       }>();
@@ -441,6 +506,7 @@ describe("Integration settings API", () => {
       expect(body.config.allowUserPreferenceOverride).toBe(false);
       expect(body.config.allowLabelModelOverride).toBe(true);
       expect(body.config.emitToolProgressActivities).toBe(true);
+      expect(body.config.unboundChannels).toBe("reject");
       expect(body.config.enabledRepos).toEqual(["acme/widgets"]);
     });
 
@@ -456,6 +522,7 @@ describe("Integration settings API", () => {
           allowUserPreferenceOverride: boolean;
           allowLabelModelOverride: boolean;
           emitToolProgressActivities: boolean;
+          unboundChannels: string;
           enabledRepos: string[] | null;
         };
       }>();
@@ -465,6 +532,7 @@ describe("Integration settings API", () => {
       expect(body.config.allowUserPreferenceOverride).toBe(true);
       expect(body.config.allowLabelModelOverride).toBe(true);
       expect(body.config.emitToolProgressActivities).toBe(true);
+      expect(body.config.unboundChannels).toBe("workspace");
       expect(body.config.enabledRepos).toBeNull();
     });
 
@@ -602,6 +670,8 @@ describe("Integration settings API", () => {
           cpuCores: number | null;
           memoryMib: number | null;
           sandboxTimeoutMs: number | null;
+          cpuLimitCores: number | null;
+          memoryLimitMib: number | null;
           enabledRepos: string[] | null;
         };
       }>();
@@ -612,6 +682,8 @@ describe("Integration settings API", () => {
       expect(body.config.cpuCores).toBeNull();
       expect(body.config.memoryMib).toBeNull();
       expect(body.config.sandboxTimeoutMs).toBeNull();
+      expect(body.config.cpuLimitCores).toBeNull();
+      expect(body.config.memoryLimitMib).toBeNull();
       expect(body.config.enabledRepos).toBeNull();
     });
 
@@ -649,12 +721,12 @@ describe("Integration settings API", () => {
       expect(body.error).toContain("sandboxTimeoutMs must be a positive whole number of seconds");
     });
 
-    it("GET /integration-settings/sandbox/resolved returns configured cpuCores and memoryMib", async () => {
+    it("GET /integration-settings/sandbox/resolved returns configured requests and caps", async () => {
       const putRes = await serviceFetch("https://test.local/integration-settings/sandbox", {
         method: "PUT",
         body: JSON.stringify({
           settings: {
-            defaults: { cpuCores: 2, memoryMib: 4096 },
+            defaults: { cpuCores: 2, memoryMib: 4096, cpuLimitCores: 4, memoryLimitMib: 8192 },
           },
         }),
       });
@@ -668,10 +740,14 @@ describe("Integration settings API", () => {
         config: {
           cpuCores: number | null;
           memoryMib: number | null;
+          cpuLimitCores: number | null;
+          memoryLimitMib: number | null;
         };
       }>();
       expect(body.config.cpuCores).toBe(2);
       expect(body.config.memoryMib).toBe(4096);
+      expect(body.config.cpuLimitCores).toBe(4);
+      expect(body.config.memoryLimitMib).toBe(8192);
     });
 
     it("GET /integration-settings/sandbox/resolved preserves null repo resource overrides", async () => {
@@ -679,7 +755,7 @@ describe("Integration settings API", () => {
         method: "PUT",
         body: JSON.stringify({
           settings: {
-            defaults: { cpuCores: 2, memoryMib: 4096 },
+            defaults: { cpuCores: 2, memoryMib: 4096, cpuLimitCores: 4, memoryLimitMib: 8192 },
           },
         }),
       });
@@ -690,7 +766,12 @@ describe("Integration settings API", () => {
         {
           method: "PUT",
           body: JSON.stringify({
-            settings: { cpuCores: null, memoryMib: null },
+            settings: {
+              cpuCores: null,
+              memoryMib: null,
+              cpuLimitCores: null,
+              memoryLimitMib: null,
+            },
           }),
         }
       );
@@ -704,10 +785,14 @@ describe("Integration settings API", () => {
         config: {
           cpuCores: number | null;
           memoryMib: number | null;
+          cpuLimitCores: number | null;
+          memoryLimitMib: number | null;
         };
       }>();
       expect(body.config.cpuCores).toBeNull();
       expect(body.config.memoryMib).toBeNull();
+      expect(body.config.cpuLimitCores).toBeNull();
+      expect(body.config.memoryLimitMib).toBeNull();
     });
   });
 
@@ -765,6 +850,7 @@ describe("Integration settings API", () => {
       await store.create(
         {
           id,
+          owner_team_id: null,
           name: `Env ${id}`,
           description: null,
           prebuild_enabled: 0,

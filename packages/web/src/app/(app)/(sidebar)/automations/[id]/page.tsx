@@ -18,9 +18,8 @@ import { BackIcon, PencilIcon } from "@/components/ui/icons";
 import { formatModelNameLower } from "@/lib/format";
 import { getHarnessLabel } from "@open-inspect/shared/harnesses";
 import { formatAutomationTargetsLabel } from "@/lib/repo-label";
-import { browserApiFetch } from "@/lib/browser-api-fetch";
-import { useCurrentUserAuthorization } from "@/hooks/use-current-user-authorization";
-import { canAccessAutomation } from "@/lib/automation-authorization";
+import { useAutomationActions } from "@/hooks/use-automation-actions";
+import { useAutomationScope } from "@/hooks/use-automation-scope";
 
 const HISTORY_PAGE_SIZE = 20;
 
@@ -28,9 +27,9 @@ export default function AutomationDetailPage({ params }: { params: Promise<{ id:
   const { id } = use(params);
   const { isOpen } = useSidebarContext();
   const router = useRouter();
-  const { automation, loading, mutate } = useAutomation(id);
-  const { authorization } = useCurrentUserAuthorization();
-  const { environments } = useEnvironments();
+  const { navigation } = useAutomationScope();
+  const { automation, loading } = useAutomation(id);
+  const { environments } = useEnvironments({ ownerTeamId: automation?.ownerTeamId });
   // "Load more" grows the fetch limit rather than paging by offset: the
   // endpoint returns newest-first, so a larger limit re-fetches the head plus
   // the next page in one request. The endpoint refuses limits past its
@@ -45,47 +44,24 @@ export default function AutomationDetailPage({ params }: { params: Promise<{ id:
     invocations,
     total: totalInvocations,
     loading: loadingInvocations,
-    mutate: mutateInvocations,
   } = useAutomationInvocations(id, historyLimit, 0);
   const [confirmDelete, setConfirmDelete] = useState(false);
-  const [actionError, setActionError] = useState<string | null>(null);
+  const { act, actionError } = useAutomationActions();
   const reasoningLabel = automation
     ? (automation.reasoningEffort ??
       (getReasoningConfig(automation.model) ? "Model default" : "Not supported"))
     : null;
 
-  const handleAction = async (action: "pause" | "resume" | "trigger") => {
-    setActionError(null);
-    try {
-      const res = await browserApiFetch(`/api/automations/${id}/${action}`, { method: "POST" });
-      if (!res.ok) {
-        setActionError(`Failed to ${action} automation`);
-        return;
-      }
-      mutate();
-      mutateInvocations();
-    } catch (error) {
-      console.error(`Failed to ${action} automation:`, error);
-      setActionError(`Failed to ${action} automation`);
-    }
-  };
-
+  // Deletion evicts the cached automation before navigation; keep the spinner up
+  // meanwhile instead of flashing "not found".
+  const [deleting, setDeleting] = useState(false);
   const handleDelete = async () => {
-    setActionError(null);
-    try {
-      const res = await browserApiFetch(`/api/automations/${id}`, { method: "DELETE" });
-      if (!res.ok) {
-        setActionError("Failed to delete automation");
-        return;
-      }
-      router.push("/automations");
-    } catch (error) {
-      console.error("Failed to delete automation:", error);
-      setActionError("Failed to delete automation");
-    }
+    setDeleting(true);
+    if (await act(id, "delete")) router.push(navigation.list);
+    else setDeleting(false);
   };
 
-  if (loading) {
+  if (loading || (deleting && !automation)) {
     return (
       <div className="h-full flex items-center justify-center">
         <div className="animate-spin rounded-full h-6 w-6 border-2 border-current border-t-transparent text-muted-foreground" />
@@ -97,7 +73,7 @@ export default function AutomationDetailPage({ params }: { params: Promise<{ id:
     return (
       <div className="h-full flex flex-col items-center justify-center gap-4">
         <p className="text-muted-foreground">Automation not found.</p>
-        <Link href="/automations">
+        <Link href={navigation.list}>
           <Button variant="outline" size="sm">
             Back to Automations
           </Button>
@@ -106,8 +82,7 @@ export default function AutomationDetailPage({ params }: { params: Promise<{ id:
     );
   }
 
-  const canManage = canAccessAutomation("automations.manage", authorization, automation);
-  const canTrigger = canAccessAutomation("automations.trigger", authorization, automation);
+  const { canManage, canTrigger } = automation.capabilities;
 
   return (
     <div className="h-full flex flex-col">
@@ -116,7 +91,7 @@ export default function AutomationDetailPage({ params }: { params: Promise<{ id:
           <div className="px-4 py-3 flex items-center gap-2">
             <CollapsedSidebarControls />
             <Link
-              href="/automations"
+              href={navigation.list}
               className="p-1.5 text-muted-foreground hover:text-foreground hover:bg-muted transition"
               aria-label="Back to automations"
             >
@@ -153,7 +128,7 @@ export default function AutomationDetailPage({ params }: { params: Promise<{ id:
             </div>
             <div className="flex w-full flex-col gap-2 sm:w-auto sm:flex-none sm:flex-row sm:flex-wrap sm:justify-end sm:gap-2">
               {canManage && (
-                <Link href={`/automations/${id}/edit`} className="w-full sm:w-auto">
+                <Link href={navigation.edit(id)} className="w-full sm:w-auto">
                   <Button variant="outline" size="sm" className="w-full sm:w-auto">
                     <span className="flex items-center gap-1.5">
                       <PencilIcon className="w-3.5 h-3.5" />
@@ -167,7 +142,7 @@ export default function AutomationDetailPage({ params }: { params: Promise<{ id:
                   variant="outline"
                   size="sm"
                   className="w-full sm:w-auto"
-                  onClick={() => handleAction("trigger")}
+                  onClick={() => void act(id, "trigger")}
                 >
                   Trigger Now
                 </Button>
@@ -178,7 +153,7 @@ export default function AutomationDetailPage({ params }: { params: Promise<{ id:
                     variant="outline"
                     size="sm"
                     className="w-full sm:w-auto"
-                    onClick={() => handleAction("pause")}
+                    onClick={() => void act(id, "pause")}
                   >
                     Pause
                   </Button>
@@ -187,7 +162,7 @@ export default function AutomationDetailPage({ params }: { params: Promise<{ id:
                     variant="outline"
                     size="sm"
                     className="w-full sm:w-auto"
-                    onClick={() => handleAction("resume")}
+                    onClick={() => void act(id, "resume")}
                   >
                     Resume
                   </Button>

@@ -33,12 +33,14 @@ export async function resolveSessionOAuthSecretScope(
 export interface SessionTargetSecretSourcesInput {
   /**
    * The session target's environment id (`session.environment_id`), or null for
-   * repo-launched/ad-hoc sessions. When set, secrets come from global +
+   * repo-launched/ad-hoc sessions. When set, secrets come from global + team +
    * environment only — the session's member repos never contribute (session-target
    * scoping, §6.4/§7.4).
    */
   environmentId: string | null;
   globalSecrets: Record<string, string>;
+  /** The session's owning team secrets, or {} for workspace-owned sessions. */
+  teamSecrets: Record<string, string>;
   /** Session member repositories in position order (index 0 = primary). */
   members: SessionRepositoryEntry[];
   /** Decrypt a member's secrets, or {} when it has no resolvable repo id. */
@@ -53,11 +55,11 @@ export interface SessionTargetSecretSourcesInput {
 
 /**
  * Build the ordered secret sources for a session target, lowest
- * precedence first (design §6.4). Global is always the base; environment-
- * launched sessions add environment secrets only (member repo secrets never
+ * precedence first. Global is the base, followed by the owning team's secrets;
+ * environment-launched sessions then add environment secrets (member repo secrets never
  * inherit — session-target scoping, §6.4/§7.4), while repo-launched and ad-hoc
  * sessions fold their member repos with the primary (position 0) merged last so
- * it wins collisions. A single-repo session degenerates to today's global+repo.
+ * it wins collisions. Workspace-owned sessions have no team layer.
  *
  * This owns the session-target sourcing policy so the DO only loads sources, merges
  * (mergeSecretSources), and audits the cap.
@@ -66,6 +68,9 @@ export async function buildSessionTargetSecretSources(
   input: SessionTargetSecretSourcesInput
 ): Promise<SecretSource[]> {
   const sources: SecretSource[] = [{ label: "global", secrets: input.globalSecrets }];
+  if (Object.keys(input.teamSecrets).length > 0) {
+    sources.push({ label: "team", secrets: input.teamSecrets });
+  }
 
   if (input.environmentId !== null) {
     const environmentSecrets = await input.loadEnvironmentSecrets(input.environmentId);

@@ -1,10 +1,3 @@
-import { encodeRepositoryPathSegments } from "@open-inspect/shared/types/repositories";
-import {
-  createSessionResponseSchema,
-  sendPromptResponseSchema,
-} from "@open-inspect/shared/types/session-api";
-import { resolveAppName } from "@open-inspect/shared/app-name";
-import { signedControlPlaneFetch } from "./internal-auth";
 import type {
   Env,
   PullRequestOpenedPayload,
@@ -13,169 +6,18 @@ import type {
   ReviewCommentPayload,
 } from "./types";
 import type { Logger } from "./logger";
-import { generateInstallationToken, postReaction, checkSenderPermission } from "./github-auth";
 import { buildCodeReviewPrompt, buildCommentActionPrompt } from "./prompts";
-import { resolveSessionTarget, type SessionTargetFields } from "./session-target";
-import { getGitHubConfig, type ResolvedGitHubConfig } from "./utils/integration-config";
 import { requestedReviewerPayloadSchema } from "./payload-schemas";
 import { containsBotMention, stripBotMention } from "./github-mention";
+import { parseInlinePromptFlags } from "@open-inspect/shared/inline-prompt-flags";
+import { startSession, type HandlerResult } from "./session-startup";
 
-export type HandlerResult =
-  | { outcome: "processed"; session_id: string; message_id: string; handler_action: string }
-  | { outcome: "skipped"; skip_reason: string };
+export type { HandlerResult } from "./session-startup";
 
 export function isReviewRequestedForBot(payload: unknown, botUsername: string): boolean {
   const parsed = requestedReviewerPayloadSchema.safeParse(payload);
   if (!parsed.success) return false;
   return parsed.data.requested_reviewer?.login === botUsername;
-}
-
-async function createSession(
-  env: Env,
-  traceId: string,
-  params: {
-    target: SessionTargetFields;
-    title: string;
-    model: string;
-    reasoningEffort?: string | null;
-    scmLogin: string;
-    scmUserId: string;
-    scmAvatarUrl: string;
-  }
-): Promise<string> {
-  const body: Record<string, unknown> = {
-    ...params.target,
-    title: params.title,
-    model: params.model,
-    scmLogin: params.scmLogin,
-    scmAvatarUrl: params.scmAvatarUrl,
-  };
-  if (params.reasoningEffort) {
-    body.reasoningEffort = params.reasoningEffort;
-  }
-  const url = "https://internal/sessions";
-  const bodyText = JSON.stringify(body);
-  const response = await signedControlPlaneFetch(env, {
-    method: "POST",
-    url,
-    body: bodyText,
-    actor: `github:${params.scmUserId}`,
-    traceId,
-  });
-  if (!response.ok) {
-    const body = await response.text();
-    throw new Error(`Session creation failed: ${response.status} ${body}`);
-  }
-  const result = createSessionResponseSchema.safeParse(await response.json());
-  if (!result.success) {
-    throw new Error("Session creation failed: invalid response");
-  }
-  return result.data.sessionId;
-}
-
-async function sendPrompt(
-  env: Env,
-  traceId: string,
-  sessionId: string,
-  params: { content: string; authorId: string }
-): Promise<string> {
-  const url = `https://internal/sessions/${sessionId}/prompt`;
-  const bodyText = JSON.stringify({ content: params.content, source: "github" });
-  const response = await signedControlPlaneFetch(env, {
-    method: "POST",
-    url,
-    body: bodyText,
-    actor: params.authorId.startsWith("github:") ? params.authorId : undefined,
-    traceId,
-  });
-  if (!response.ok) {
-    const body = await response.text();
-    throw new Error(`Prompt delivery failed: ${response.status} ${body}`);
-  }
-  const result = sendPromptResponseSchema.safeParse(await response.json());
-  if (!result.success) {
-    throw new Error("Prompt delivery failed: invalid response");
-  }
-  return result.data.messageId;
-}
-
-async function withReaction<T>(
-  log: Logger,
-  token: string,
-  url: string,
-  userAgent: string,
-  meta: Record<string, unknown>,
-  action: () => Promise<T>
-): Promise<T> {
-  const reaction = postReaction(token, url, "eyes", userAgent).then(
-    (ok) => {
-      if (ok) log.debug("acknowledgment.posted", meta);
-      else log.warn("acknowledgment.failed", meta);
-    },
-    () => log.warn("acknowledgment.failed", meta)
-  );
-  try {
-    return await action();
-  } finally {
-    await reaction;
-  }
-}
-
-type CallerGatingResult =
-  | { allowed: true; ghToken: string }
-  | {
-      allowed: false;
-      reason: "sender_not_allowed" | "sender_insufficient_permission" | "permission_check_failed";
-    };
-
-async function resolveCallerGating(
-  env: Env,
-  config: ResolvedGitHubConfig,
-  senderLogin: string,
-  owner: string,
-  repoName: string,
-  log: Logger,
-  traceId: string,
-  repoFullName: string
-): Promise<CallerGatingResult> {
-  if (config.allowedTriggerUsers !== null) {
-    if (!config.allowedTriggerUsers.some((u) => u.toLowerCase() === senderLogin.toLowerCase())) {
-      log.info("handler.sender_not_allowed", { trace_id: traceId, sender: senderLogin });
-      return { allowed: false, reason: "sender_not_allowed" };
-    }
-  }
-
-  const userAgent = resolveAppName(env);
-  const ghToken = await generateInstallationToken({
-    appId: env.GITHUB_APP_ID,
-    privateKey: env.GITHUB_APP_PRIVATE_KEY,
-    installationId: env.GITHUB_APP_INSTALLATION_ID,
-    userAgent,
-  });
-
-  if (config.allowedTriggerUsers === null) {
-    const { hasPermission, error } = await checkSenderPermission(
-      ghToken,
-      owner,
-      repoName,
-      senderLogin,
-      userAgent
-    );
-    if (!hasPermission) {
-      const reason = error ? "permission_check_failed" : "sender_insufficient_permission";
-      log.info(
-        error ? "handler.permission_check_failed" : "handler.sender_insufficient_permission",
-        {
-          trace_id: traceId,
-          sender: senderLogin,
-          repo: repoFullName,
-        }
-      );
-      return { allowed: false, reason };
-    }
-  }
-
-  return { allowed: true, ghToken };
 }
 
 export async function handleReviewRequested(
@@ -185,10 +27,6 @@ export async function handleReviewRequested(
   traceId: string
 ): Promise<HandlerResult> {
   const { pull_request: pr, repository: repo, requested_reviewer, sender } = payload;
-  const owner = repo.owner.login;
-  const repoName = repo.name;
-  const repositoryPath = encodeRepositoryPathSegments({ repoOwner: owner, repoName });
-  const repoFullName = `${owner}/${repoName}`.toLowerCase();
 
   if (requested_reviewer?.login !== env.GITHUB_BOT_USERNAME) {
     log.debug("handler.review_not_for_bot", {
@@ -198,56 +36,17 @@ export async function handleReviewRequested(
     return { outcome: "skipped", skip_reason: "review_not_for_bot" };
   }
 
-  const config = await getGitHubConfig(env, repoFullName, log);
-
-  if (config.enabledRepos !== null && !config.enabledRepos.includes(repoFullName)) {
-    log.debug("handler.repo_not_enabled", { trace_id: traceId, repo: repoFullName });
-    return { outcome: "skipped", skip_reason: "repo_not_enabled" };
-  }
-
-  const gating = await resolveCallerGating(
-    env,
-    config,
-    sender.login,
-    owner,
-    repoName,
-    log,
-    traceId,
-    repoFullName
-  );
-  if (!gating.allowed) return { outcome: "skipped", skip_reason: gating.reason };
-  const { ghToken } = gating;
-
-  const meta = { trace_id: traceId, repo: repoFullName, pull_number: pr.number };
-  return withReaction(
-    log,
-    ghToken,
-    `https://api.github.com/repos/${repositoryPath}/issues/${pr.number}/reactions`,
-    resolveAppName(env),
-    meta,
-    async () => {
-      const target = await resolveSessionTarget(env, log, {
-        owner,
-        repoName,
-        senderLogin: sender.login,
-        config,
-        ghToken,
-        traceId,
-      });
-      const sessionId = await createSession(env, traceId, {
-        target,
-        title: `GitHub: Review PR #${pr.number}`,
-        model: config.model,
-        reasoningEffort: config.reasoningEffort,
-        scmLogin: sender.login,
-        scmUserId: String(sender.id),
-        scmAvatarUrl: sender.avatar_url,
-      });
-      log.info("session.created", { ...meta, session_id: sessionId, action: "review" });
-
-      const prompt = buildCodeReviewPrompt({
-        owner,
-        repo: repoName,
+  return startSession(env, log, traceId, {
+    repository: repo,
+    sender,
+    pullNumber: pr.number,
+    title: `GitHub: Review PR #${pr.number}`,
+    action: "review",
+    reactionPath: `issues/${pr.number}`,
+    buildPrompt: (config) =>
+      buildCodeReviewPrompt({
+        owner: repo.owner.login,
+        repo: repo.name,
         number: pr.number,
         title: pr.title,
         body: pr.body,
@@ -256,28 +55,8 @@ export async function handleReviewRequested(
         head: pr.head.ref,
         isPublic: !repo.private,
         codeReviewInstructions: config.codeReviewInstructions,
-      });
-
-      const messageId = await sendPrompt(env, traceId, sessionId, {
-        content: prompt,
-        authorId: `github:${payload.sender.id}`,
-      });
-      log.info("prompt.sent", {
-        ...meta,
-        session_id: sessionId,
-        message_id: messageId,
-        source: "github",
-        content_length: prompt.length,
-      });
-
-      return {
-        outcome: "processed",
-        session_id: sessionId,
-        message_id: messageId,
-        handler_action: "review",
-      };
-    }
-  );
+      }),
+  });
 }
 
 export async function handlePullRequestOpened(
@@ -287,71 +66,23 @@ export async function handlePullRequestOpened(
   traceId: string
 ): Promise<HandlerResult> {
   const { pull_request: pr, repository: repo, sender } = payload;
-  const owner = repo.owner.login;
-  const repoName = repo.name;
-  const repositoryPath = encodeRepositoryPathSegments({ repoOwner: owner, repoName });
-  const repoFullName = `${owner}/${repoName}`.toLowerCase();
 
   if (pr.draft) {
     log.debug("handler.draft_pr_skipped", { trace_id: traceId, pull_number: pr.number });
     return { outcome: "skipped", skip_reason: "draft_pr" };
   }
 
-  const config = await getGitHubConfig(env, repoFullName, log);
-
-  if (config.enabledRepos !== null && !config.enabledRepos.includes(repoFullName)) {
-    log.debug("handler.repo_not_enabled", { trace_id: traceId, repo: repoFullName });
-    return { outcome: "skipped", skip_reason: "repo_not_enabled" };
-  }
-
-  if (!config.autoReviewOnOpen) {
-    log.debug("handler.auto_review_disabled", { trace_id: traceId, repo: repoFullName });
-    return { outcome: "skipped", skip_reason: "auto_review_disabled" };
-  }
-
-  const gating = await resolveCallerGating(
-    env,
-    config,
-    sender.login,
-    owner,
-    repoName,
-    log,
-    traceId,
-    repoFullName
-  );
-  if (!gating.allowed) return { outcome: "skipped", skip_reason: gating.reason };
-  const { ghToken } = gating;
-
-  const meta = { trace_id: traceId, repo: repoFullName, pull_number: pr.number };
-  return withReaction(
-    log,
-    ghToken,
-    `https://api.github.com/repos/${repositoryPath}/issues/${pr.number}/reactions`,
-    resolveAppName(env),
-    meta,
-    async () => {
-      const target = await resolveSessionTarget(env, log, {
-        owner,
-        repoName,
-        senderLogin: sender.login,
-        config,
-        ghToken,
-        traceId,
-      });
-      const sessionId = await createSession(env, traceId, {
-        target,
-        title: `GitHub: Review PR #${pr.number}`,
-        model: config.model,
-        reasoningEffort: config.reasoningEffort,
-        scmLogin: sender.login,
-        scmUserId: String(sender.id),
-        scmAvatarUrl: sender.avatar_url,
-      });
-      log.info("session.created", { ...meta, session_id: sessionId, action: "auto_review" });
-
-      const prompt = buildCodeReviewPrompt({
-        owner,
-        repo: repoName,
+  return startSession(env, log, traceId, {
+    repository: repo,
+    sender,
+    pullNumber: pr.number,
+    title: `GitHub: Review PR #${pr.number}`,
+    action: "auto_review",
+    reactionPath: `issues/${pr.number}`,
+    buildPrompt: (config) =>
+      buildCodeReviewPrompt({
+        owner: repo.owner.login,
+        repo: repo.name,
         number: pr.number,
         title: pr.title,
         body: pr.body,
@@ -361,28 +92,8 @@ export async function handlePullRequestOpened(
         isPublic: !repo.private,
         codeReviewInstructions: config.codeReviewInstructions,
         isSelfReview: pr.user.login.toLowerCase() === env.GITHUB_BOT_USERNAME.toLowerCase(),
-      });
-
-      const messageId = await sendPrompt(env, traceId, sessionId, {
-        content: prompt,
-        authorId: `github:${sender.id}`,
-      });
-      log.info("prompt.sent", {
-        ...meta,
-        session_id: sessionId,
-        message_id: messageId,
-        source: "github",
-        content_length: prompt.length,
-      });
-
-      return {
-        outcome: "processed",
-        session_id: sessionId,
-        message_id: messageId,
-        handler_action: "auto_review",
-      };
-    }
-  );
+      }),
+  });
 }
 
 export async function handleIssueComment(
@@ -392,10 +103,6 @@ export async function handleIssueComment(
   traceId: string
 ): Promise<HandlerResult> {
   const { issue, comment, repository: repo, sender } = payload;
-  const owner = repo.owner.login;
-  const repoName = repo.name;
-  const repositoryPath = encodeRepositoryPathSegments({ repoOwner: owner, repoName });
-  const repoFullName = `${owner}/${repoName}`.toLowerCase();
 
   if (!issue.pull_request) {
     log.debug("handler.not_a_pr", { trace_id: traceId, issue_number: issue.number });
@@ -416,86 +123,29 @@ export async function handleIssueComment(
     return { outcome: "skipped", skip_reason: "self_comment" };
   }
 
-  const config = await getGitHubConfig(env, repoFullName, log);
-
-  if (config.enabledRepos !== null && !config.enabledRepos.includes(repoFullName)) {
-    log.debug("handler.repo_not_enabled", { trace_id: traceId, repo: repoFullName });
-    return { outcome: "skipped", skip_reason: "repo_not_enabled" };
-  }
-
-  const gating = await resolveCallerGating(
-    env,
-    config,
-    sender.login,
-    owner,
-    repoName,
-    log,
-    traceId,
-    repoFullName
+  const inlineFlags = parseInlinePromptFlags(
+    stripBotMention(comment.body, env.GITHUB_BOT_USERNAME)
   );
-  if (!gating.allowed) return { outcome: "skipped", skip_reason: gating.reason };
-  const { ghToken } = gating;
-
-  const commentBody = stripBotMention(comment.body, env.GITHUB_BOT_USERNAME);
-
-  const meta = { trace_id: traceId, repo: repoFullName, pull_number: issue.number };
-  return withReaction(
-    log,
-    ghToken,
-    `https://api.github.com/repos/${repositoryPath}/issues/comments/${comment.id}/reactions`,
-    resolveAppName(env),
-    meta,
-    async () => {
-      const target = await resolveSessionTarget(env, log, {
-        owner,
-        repoName,
-        senderLogin: sender.login,
-        config,
-        ghToken,
-        traceId,
-      });
-      const sessionId = await createSession(env, traceId, {
-        target,
-        title: `GitHub: PR #${issue.number} comment`,
-        model: config.model,
-        reasoningEffort: config.reasoningEffort,
-        scmLogin: sender.login,
-        scmUserId: String(sender.id),
-        scmAvatarUrl: sender.avatar_url,
-      });
-      log.info("session.created", { ...meta, session_id: sessionId, action: "comment" });
-
-      const prompt = buildCommentActionPrompt({
-        owner,
-        repo: repoName,
+  return startSession(env, log, traceId, {
+    repository: repo,
+    sender,
+    pullNumber: issue.number,
+    title: `GitHub: PR #${issue.number} comment`,
+    action: "comment",
+    reactionPath: `issues/comments/${comment.id}`,
+    inlineFlags,
+    buildPrompt: (config) =>
+      buildCommentActionPrompt({
+        owner: repo.owner.login,
+        repo: repo.name,
         number: issue.number,
         title: issue.title,
-        commentBody,
+        commentBody: inlineFlags.ok ? inlineFlags.text : "",
         commenter: sender.login,
         isPublic: !repo.private,
         commentActionInstructions: config.commentActionInstructions,
-      });
-
-      const messageId = await sendPrompt(env, traceId, sessionId, {
-        content: prompt,
-        authorId: `github:${sender.id}`,
-      });
-      log.info("prompt.sent", {
-        ...meta,
-        session_id: sessionId,
-        message_id: messageId,
-        source: "github",
-        content_length: prompt.length,
-      });
-
-      return {
-        outcome: "processed",
-        session_id: sessionId,
-        message_id: messageId,
-        handler_action: "comment",
-      };
-    }
-  );
+      }),
+  });
 }
 
 export async function handleReviewComment(
@@ -505,10 +155,6 @@ export async function handleReviewComment(
   traceId: string
 ): Promise<HandlerResult> {
   const { pull_request: pr, comment, repository: repo, sender } = payload;
-  const owner = repo.owner.login;
-  const repoName = repo.name;
-  const repositoryPath = encodeRepositoryPathSegments({ repoOwner: owner, repoName });
-  const repoFullName = `${owner}/${repoName}`.toLowerCase();
 
   if (!containsBotMention(comment.body, env.GITHUB_BOT_USERNAME)) {
     log.debug("handler.no_mention", {
@@ -524,89 +170,32 @@ export async function handleReviewComment(
     return { outcome: "skipped", skip_reason: "self_comment" };
   }
 
-  const config = await getGitHubConfig(env, repoFullName, log);
-
-  if (config.enabledRepos !== null && !config.enabledRepos.includes(repoFullName)) {
-    log.debug("handler.repo_not_enabled", { trace_id: traceId, repo: repoFullName });
-    return { outcome: "skipped", skip_reason: "repo_not_enabled" };
-  }
-
-  const gating = await resolveCallerGating(
-    env,
-    config,
-    sender.login,
-    owner,
-    repoName,
-    log,
-    traceId,
-    repoFullName
+  const inlineFlags = parseInlinePromptFlags(
+    stripBotMention(comment.body, env.GITHUB_BOT_USERNAME)
   );
-  if (!gating.allowed) return { outcome: "skipped", skip_reason: gating.reason };
-  const { ghToken } = gating;
-
-  const commentBody = stripBotMention(comment.body, env.GITHUB_BOT_USERNAME);
-
-  const meta = { trace_id: traceId, repo: repoFullName, pull_number: pr.number };
-  return withReaction(
-    log,
-    ghToken,
-    `https://api.github.com/repos/${repositoryPath}/pulls/comments/${comment.id}/reactions`,
-    resolveAppName(env),
-    meta,
-    async () => {
-      const target = await resolveSessionTarget(env, log, {
-        owner,
-        repoName,
-        senderLogin: sender.login,
-        config,
-        ghToken,
-        traceId,
-      });
-      const sessionId = await createSession(env, traceId, {
-        target,
-        title: `GitHub: PR #${pr.number} review comment`,
-        model: config.model,
-        reasoningEffort: config.reasoningEffort,
-        scmLogin: sender.login,
-        scmUserId: String(sender.id),
-        scmAvatarUrl: sender.avatar_url,
-      });
-      log.info("session.created", { ...meta, session_id: sessionId, action: "review_comment" });
-
-      const prompt = buildCommentActionPrompt({
-        owner,
-        repo: repoName,
+  return startSession(env, log, traceId, {
+    repository: repo,
+    sender,
+    pullNumber: pr.number,
+    title: `GitHub: PR #${pr.number} review comment`,
+    action: "review_comment",
+    reactionPath: `pulls/comments/${comment.id}`,
+    inlineFlags,
+    buildPrompt: (config) =>
+      buildCommentActionPrompt({
+        owner: repo.owner.login,
+        repo: repo.name,
         number: pr.number,
         title: pr.title,
         base: pr.base.ref,
         head: pr.head.ref,
-        commentBody,
+        commentBody: inlineFlags.ok ? inlineFlags.text : "",
         commenter: sender.login,
         isPublic: !repo.private,
         filePath: comment.path,
         diffHunk: comment.diff_hunk,
         commentId: comment.id,
         commentActionInstructions: config.commentActionInstructions,
-      });
-
-      const messageId = await sendPrompt(env, traceId, sessionId, {
-        content: prompt,
-        authorId: `github:${sender.id}`,
-      });
-      log.info("prompt.sent", {
-        ...meta,
-        session_id: sessionId,
-        message_id: messageId,
-        source: "github",
-        content_length: prompt.length,
-      });
-
-      return {
-        outcome: "processed",
-        session_id: sessionId,
-        message_id: messageId,
-        handler_action: "review_comment",
-      };
-    }
-  );
+      }),
+  });
 }

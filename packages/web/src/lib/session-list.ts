@@ -78,22 +78,6 @@ export function isArchivedSessionListKey(key: unknown): key is string {
   return url.searchParams.get("status") === "archived";
 }
 
-// Extracted from session-sidebar so the cache-shape transformation can be unit
-// tested without rendering the component or going through Radix/SWR.
-export function applyTitleUpdate(
-  data: SessionListResponse | undefined,
-  sessionId: string,
-  title: string | null
-): SessionListResponse | undefined {
-  if (!data) return data;
-  return {
-    ...data,
-    sessions: data.sessions.map((session) =>
-      session.id === sessionId ? { ...session, title } : session
-    ),
-  };
-}
-
 export function removeSessionFromList(sessions: SessionListItem[], sessionId: string) {
   return sessions.filter((session) => session.id !== sessionId);
 }

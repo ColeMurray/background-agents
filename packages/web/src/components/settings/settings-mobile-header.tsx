@@ -9,6 +9,7 @@ type SettingsMobileHeaderProps = {
   title: string;
   headingRef?: RefObject<HTMLHeadingElement | null>;
   backHref?: string;
+  backLabel?: string;
   onBack?: () => void;
 };
 
@@ -16,6 +17,7 @@ export function SettingsMobileHeader({
   title,
   headingRef,
   backHref,
+  backLabel = "Back to integrations",
   onBack,
 }: SettingsMobileHeaderProps) {
   const actionClassName = "h-11 w-11 rounded-md";
@@ -37,7 +39,7 @@ export function SettingsMobileHeader({
         </Button>
       ) : backHref ? (
         <Button asChild variant="ghost" size="icon" className={actionClassName}>
-          <Link href={backHref} aria-label="Back to integrations">
+          <Link href={backHref} aria-label={backLabel}>
             <span aria-hidden="true">
               <BackIcon className="h-4 w-4" />
             </span>

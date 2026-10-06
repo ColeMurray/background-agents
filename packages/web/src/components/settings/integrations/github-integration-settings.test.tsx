@@ -13,6 +13,11 @@ import {
 } from "@open-inspect/shared/types/integrations";
 import { GitHubIntegrationSettings } from "./github-integration-settings";
 
+let search = "";
+vi.mock("next/navigation", () => ({
+  useSearchParams: () => new URLSearchParams(search),
+}));
+
 vi.mock("@/hooks/use-current-user-authorization", () => ({
   useCurrentUserAuthorization: () => ({ hasPermission: () => true }),
 }));
@@ -130,6 +135,7 @@ beforeAll(() => {
 });
 
 beforeEach(() => {
+  search = "";
   fetchMock.mockReset();
   toastSuccess.mockReset();
   toastError.mockReset();
@@ -144,6 +150,79 @@ afterEach(() => {
 });
 
 describe("GitHubIntegrationSettings", () => {
+  it("marks global auto-review deprecated with an accessible team-owned template replacement", () => {
+    setupSWR({ global: null });
+
+    render(<GitHubIntegrationSettings />);
+
+    const toggle = screen.getByRole("switch", { name: /auto-review new prs/i });
+    const label = toggle.closest("label")!;
+    expect(label).toHaveAttribute("for", toggle.id);
+    expect(within(label).getByText("Deprecated")).toBeInTheDocument();
+    expect(within(label).queryByRole("link")).not.toBeInTheDocument();
+    expect(toggle).toHaveAccessibleDescription(/team-owned automation/);
+    expect(toggle).toHaveAccessibleDescription(/workspace-owned sessions/);
+    expect(toggle).toHaveAttribute("aria-checked", "true");
+    expect(screen.getByRole("link", { name: "Review new PRs" })).toHaveAttribute(
+      "href",
+      "/automations/new?template=review-new-prs&requireTeam=true"
+    );
+  });
+
+  it("preserves the current team scope in both replacement links", () => {
+    search = "teamId=team_engineering";
+    setupSWR({
+      global: null,
+      repos: [{ repo: "acme/web", settings: {} }],
+      availableRepos: [repo("acme/web")],
+    });
+
+    render(<GitHubIntegrationSettings />);
+
+    const links = screen.getAllByRole("link", { name: "Review new PRs" });
+    expect(links).toHaveLength(2);
+    for (const link of links) {
+      expect(link).toHaveAttribute(
+        "href",
+        "/automations/new?template=review-new-prs&teamId=team_engineering&requireTeam=true"
+      );
+    }
+  });
+
+  it.each([undefined, false, true])(
+    "shows the deprecation notice and template for repo auto-review=%s without changing controls",
+    (autoReviewOnOpen) => {
+      setupSWR({
+        global: { defaults: { autoReviewOnOpen: true } },
+        repos: [{ repo: "acme/web", settings: { autoReviewOnOpen } }],
+        availableRepos: [repo("acme/web")],
+      });
+
+      render(<GitHubIntegrationSettings />);
+
+      const controls = autoReviewControls(repoOverrideRow("acme/web"));
+      expect(within(controls).getByText("Deprecated")).toBeInTheDocument();
+      expect(within(controls).getByRole("link", { name: "Review new PRs" })).toHaveAttribute(
+        "href",
+        "/automations/new?template=review-new-prs&requireTeam=true"
+      );
+      expect(within(controls).getByRole("combobox")).toHaveAccessibleDescription(
+        /team-owned automation/
+      );
+      if (autoReviewOnOpen === undefined) {
+        expect(within(controls).queryByRole("switch")).not.toBeInTheDocument();
+        expect(within(controls).getByRole("combobox")).toHaveTextContent("Use global default");
+      } else {
+        const toggle = within(controls).getByRole("switch", {
+          name: autoReviewOnOpen ? "Enabled" : "Disabled",
+        });
+        expect(toggle.closest("label")).not.toBeNull();
+        expect(toggle).toHaveAttribute("aria-checked", String(autoReviewOnOpen));
+        expect(toggle).toHaveAccessibleDescription(/workspace-owned sessions/);
+      }
+    }
+  );
+
   it("starts integration content at heading level two", () => {
     setupSWR({ global: null });
 

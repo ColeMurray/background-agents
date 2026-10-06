@@ -10,7 +10,6 @@ import {
   AutomationTriggerBlockedError,
   Scheduler,
 } from "../scheduler/scheduler";
-import { hydrateAutomation } from "../automation/hydrate";
 import { Hono } from "hono";
 import { admit, dispatch } from "../routing/admit";
 import type { ControlPlaneHonoEnv } from "../routing/hono-env";
@@ -25,7 +24,11 @@ import type { Env } from "../types";
 import { resolveGitHubCredentialAuthority } from "../source-control/github-credential-authority";
 import { resolveGitHubEnrichmentForRequest } from "../session/identity";
 import { createLogger } from "../logger";
-import { AUTOMATION_MANAGE, admittedAutomation } from "./automation-shared";
+import {
+  AUTOMATION_MANAGE,
+  admittedAutomation,
+  hydrateAutomationResponse,
+} from "./automation-shared";
 
 const logger = createLogger("router:automations");
 
@@ -51,7 +54,9 @@ async function handlePauseAutomation(
 
   const row = await store.getById(id);
   return json({
-    automation: row ? await hydrateAutomation(ctx.db, row) : null,
+    automation: row
+      ? await hydrateAutomationResponse(ctx, row, admittedAutomation(ctx).viewer)
+      : null,
   });
 }
 
@@ -92,7 +97,9 @@ async function handleResumeAutomation(
 
   const row = await store.getById(id);
   return json({
-    automation: row ? await hydrateAutomation(ctx.db, row) : null,
+    automation: row
+      ? await hydrateAutomationResponse(ctx, row, admittedAutomation(ctx).viewer)
+      : null,
   });
 }
 
@@ -107,24 +114,11 @@ async function handleTriggerAutomation(
   const requesterUserId = ctx.authorization?.userId;
   if (!requesterUserId) return error("Authorization unavailable", 503);
 
-  let requesterEnrichment;
-  try {
-    requesterEnrichment = await resolveGitHubEnrichmentForRequest(
-      env,
-      ctx.db,
-      new UserStore(ctx.db),
-      requesterUserId,
-      await resolveGitHubCredentialAuthority(ctx, request.headers)
-    );
-  } catch (enrichmentError) {
-    logger.warn("Failed to enrich manual automation trigger with GitHub identity", {
-      error:
-        enrichmentError instanceof Error ? enrichmentError : new Error(String(enrichmentError)),
-      automation_id: id,
-      request_id: ctx.request_id,
-      trace_id: ctx.trace_id,
-    });
-  }
+  const requesterEnrichment = await resolveGitHubEnrichmentForRequest(
+    new UserStore(ctx.db),
+    requesterUserId,
+    await resolveGitHubCredentialAuthority(ctx, request.headers)
+  );
 
   // The scheduler performs the authoritative D1-backed concurrency check.
   let triggerResult;
@@ -132,7 +126,7 @@ async function handleTriggerAutomation(
     triggerResult = await new Scheduler(ctx.db, env, ctx.executionCtx).trigger(
       id,
       requesterUserId,
-      requesterEnrichment ?? undefined
+      requesterEnrichment
     );
   } catch (triggerError) {
     logger.error("automation.trigger_failed", {
@@ -143,10 +137,21 @@ async function handleTriggerAutomation(
       trace_id: ctx.trace_id,
     });
     if (triggerError instanceof AutomationTriggerBlockedError) {
-      return error("A run is already active for this automation", 409);
+      return triggerError.reason === "team_grants_changed"
+        ? json(
+            {
+              error: "Team repository grants changed; retry the trigger",
+              code: "team_grants_changed",
+            },
+            409
+          )
+        : error("A run is already active for this automation", 409);
     }
     if (triggerError instanceof AutomationExecutionUnauthorizedError) {
-      return json({ error: "Execution authorization required" }, 403);
+      return json(
+        { error: "Execution authorization required", reason_code: triggerError.reason },
+        403
+      );
     }
     return error("Failed to trigger automation", 500);
   }

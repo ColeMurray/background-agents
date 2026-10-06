@@ -9,7 +9,6 @@ import asyncio
 import contextlib
 import json
 from typing import Any
-from unittest.mock import MagicMock
 
 import pytest
 
@@ -90,18 +89,18 @@ class TestHandleStop:
     @pytest.mark.asyncio
     async def test_handle_stop_cancels_current_prompt_task(self, bridge: AgentBridge):
         """When a prompt task is running, _handle_stop should cancel it."""
-        mock_task = MagicMock(spec=asyncio.Task)
-        mock_task.done.return_value = False
-        bridge._current_prompt_task = mock_task
+        task = asyncio.create_task(asyncio.Event().wait())
+        bridge.activity.track_prompt("msg-1", task)
 
         await bridge._handle_stop()
 
-        mock_task.cancel.assert_called_once()
+        with pytest.raises(asyncio.CancelledError):
+            await task
 
     @pytest.mark.asyncio
     async def test_handle_stop_with_no_running_task(self, bridge: AgentBridge):
         """When no prompt task exists, _handle_stop should not error."""
-        assert bridge._current_prompt_task is None
+        assert bridge.activity.current_prompt_task is None
 
         # Should not raise
         await bridge._handle_stop()
@@ -113,13 +112,22 @@ class TestHandleStop:
     @pytest.mark.asyncio
     async def test_handle_stop_with_completed_task(self, bridge: AgentBridge):
         """When prompt task is already done, cancel() should NOT be called."""
-        mock_task = MagicMock(spec=asyncio.Task)
-        mock_task.done.return_value = True
-        bridge._current_prompt_task = mock_task
+        task = asyncio.create_task(
+            asyncio.sleep(
+                0,
+                result={
+                    "type": "execution_complete",
+                    "messageId": "msg-1",
+                    "success": True,
+                },
+            )
+        )
+        await task
+        bridge.activity.track_prompt("msg-1", task)
 
         await bridge._handle_stop()
 
-        mock_task.cancel.assert_not_called()
+        assert not task.cancelled()
 
     @pytest.mark.asyncio
     async def test_prompt_task_cleared_on_completion(self, bridge: AgentBridge):
@@ -142,7 +150,7 @@ class TestHandleStop:
         assert result is None
 
         # But _current_prompt_task should be set
-        task = bridge._current_prompt_task
+        task = bridge.activity.current_prompt_task
         assert task is not None
 
         # Wait for task to complete
@@ -151,7 +159,7 @@ class TestHandleStop:
         # Give the done callback a chance to fire
         await asyncio.sleep(0)
 
-        assert bridge._current_prompt_task is None
+        assert bridge.activity.current_prompt_task is None
 
     @pytest.mark.asyncio
     async def test_prompt_task_set_when_created(self, bridge: AgentBridge):
@@ -176,7 +184,7 @@ class TestHandleStop:
         assert result is None
 
         # But _current_prompt_task should be set
-        task = bridge._current_prompt_task
+        task = bridge.activity.current_prompt_task
         assert task is not None
 
         # Clean up
@@ -189,7 +197,7 @@ class TestHandleStop:
         old_can_finish = asyncio.Event()
         new_can_finish = asyncio.Event()
 
-        async def fake_handle_prompt(cmd: dict[str, Any]) -> None:
+        async def fake_handle_prompt(cmd: dict[str, Any]) -> dict[str, Any]:
             message_id = cmd.get("messageId")
             if message_id == "msg-old":
                 await old_can_finish.wait()
@@ -197,6 +205,7 @@ class TestHandleStop:
                 await new_can_finish.wait()
             else:
                 raise AssertionError(f"Unexpected messageId: {message_id}")
+            return {"type": "execution_complete", "messageId": message_id, "success": True}
 
         bridge._handle_prompt = fake_handle_prompt
 
@@ -207,7 +216,7 @@ class TestHandleStop:
                 "content": "old",
             }
         )
-        old_task = bridge._current_prompt_task
+        old_task = bridge.activity.current_prompt_task
         assert old_task is not None
 
         await bridge._handle_command(
@@ -217,15 +226,15 @@ class TestHandleStop:
                 "content": "new",
             }
         )
-        new_task = bridge._current_prompt_task
+        new_task = bridge.activity.current_prompt_task
         assert new_task is not None
-        assert bridge._current_prompt_task is new_task
+        assert bridge.activity.current_prompt_task is new_task
 
         old_can_finish.set()
         await old_task
         await asyncio.sleep(0)
 
-        assert bridge._current_prompt_task is new_task
+        assert bridge.activity.current_prompt_task is new_task
 
         new_can_finish.set()
         await new_task
@@ -267,7 +276,7 @@ class TestHandleStop:
             }
         )
 
-        task = bridge._current_prompt_task
+        task = bridge.activity.current_prompt_task
         assert task is not None
 
         # Let the task start

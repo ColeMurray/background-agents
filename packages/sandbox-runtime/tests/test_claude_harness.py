@@ -10,9 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import json
-from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
-from unittest.mock import MagicMock
 
 import pytest
 from claude_agent_sdk import (
@@ -20,7 +18,6 @@ from claude_agent_sdk import (
     ConversationResetMessage,
     RateLimitEvent,
     RateLimitInfo,
-    ResultMessage,
     StreamEvent,
     SystemMessage,
     TextBlock,
@@ -29,172 +26,35 @@ from claude_agent_sdk import (
     UserMessage,
 )
 
+from sandbox_runtime.attachment_processor import (
+    MAX_SESSION_ATTACHMENTS_PER_MESSAGE,
+    AttachmentProcessor,
+)
 from sandbox_runtime.credentials.provider_credential_client import (
     RuntimeCredentialDenied,
     RuntimeCredentialUnavailable,
 )
 from sandbox_runtime.harness import AgentHarness, HarnessPrompt, HarnessStartError, PromptLimits
 from sandbox_runtime.harness.claude import (
-    AUTHENTICATION_FAILED_MESSAGE,
-    ClaudeHarness,
-    ClaudeHarnessConfig,
+    MAX_STDOUT_MESSAGE_BYTES,
     bare_model_id,
     mcp_server_options,
     reasoning_options,
 )
 from sandbox_runtime.harness.claude_env import ClaudeAuthMode
-
-if TYPE_CHECKING:
-    from collections.abc import AsyncIterator
-    from pathlib import Path
-
-LIMITS = PromptLimits(
-    inactivity_timeout_seconds=5.0,
-    prompt_max_duration_seconds=30.0,
-    prompt_cleanup_timeout_seconds=1.0,
+from sandbox_runtime.harness.claude_translate import AUTHENTICATION_FAILED_MESSAGE
+from tests.claude_fakes import (
+    FakeCredentialClient,
+    Harness,
+    Issued,
+    _result,
+    _run,
+    _stream,
+    _text_delta,
 )
 
-
-def _result(
-    total_cost: float | None,
-    *,
-    subtype: str = "success",
-    is_error: bool = False,
-    session_id: str = "sess",
-    **extra,
-):
-    return ResultMessage(
-        subtype=subtype,
-        duration_ms=10,
-        duration_api_ms=5,
-        is_error=is_error,
-        num_turns=1,
-        session_id=session_id,
-        total_cost_usd=total_cost,
-        **extra,
-    )
-
-
-def _stream(kind: str, **event: Any) -> StreamEvent:
-    return StreamEvent(uuid="u", session_id="sess", event={"type": kind, **event})
-
-
-def _text_delta(text: str) -> StreamEvent:
-    return _stream("content_block_delta", delta={"type": "text_delta", "text": text})
-
-
-@dataclass
-class FakeSdkClient:
-    """Replays scripted turns; records what the harness asked of it."""
-
-    options: Any
-    turns: list[list[Any]]
-    connected: bool = False
-    disconnected: bool = False
-    interrupts: int = 0
-    queries: list[list[dict[str, Any]]] = field(default_factory=list)
-    hang: bool = False
-    hang_connect: bool = False
-    hang_interrupt: bool = False
-    fail_connect: bool = False
-
-    async def connect(self) -> None:
-        if self.fail_connect:
-            raise RuntimeError("spawn failed")
-        if self.hang_connect:
-            await asyncio.Event().wait()
-        self.connected = True
-
-    async def disconnect(self) -> None:
-        self.disconnected = True
-
-    async def query(self, prompt: Any, session_id: str = "default") -> None:
-        messages = [message async for message in prompt]
-        self.queries.append(messages)
-
-    async def interrupt(self) -> None:
-        self.interrupts += 1
-        if self.hang_interrupt:
-            await asyncio.Event().wait()
-
-    async def receive_messages(self) -> AsyncIterator[Any]:
-        if self.hang:
-            await asyncio.Event().wait()
-        turn = self.turns.pop(0) if self.turns else []
-        for message in turn:
-            yield message
-
-
-class FakeCredentialClient:
-    def __init__(self, outcome: Any) -> None:
-        self.outcome = outcome
-        self.calls = 0
-
-    async def fetch(self, provider: str) -> Any:
-        self.calls += 1
-        if isinstance(self.outcome, Exception):
-            raise self.outcome
-        return self.outcome
-
-
-@dataclass
-class Issued:
-    secret: str = "sk-ant-oat01-secret"
-
-
-class Harness:
-    """A ClaudeHarness wired to fakes; exposes the clients it created."""
-
-    def __init__(self, tmp_path: Path, *, turns: list[list[Any]] | None = None, **overrides: Any):
-        self.clients: list[FakeSdkClient] = []
-        self.turns = turns or []
-        self.client_kwargs: dict[str, Any] = overrides.pop("client_kwargs", {})
-        oauth_managed = overrides.pop("oauth_managed", False)
-        credential_client = overrides.pop("credential_client", None)
-        environ = overrides.pop("environ", {"ANTHROPIC_API_KEY": "sk-ant-key", "PATH": "/bin"})
-        transcript_exists = overrides.pop("transcript_exists", lambda _id, _dir, _cfg: False)
-        self.config = ClaudeHarnessConfig(
-            workdir=tmp_path / "repo",
-            config_dir=tmp_path / "claude",
-            mcp_servers=overrides.pop("mcp_servers", ()),
-            default_model="claude-sonnet-4-6",
-            oauth_managed=oauth_managed,
-            system_prompt_append=overrides.pop("system_prompt_append", None),
-            tools=None,
-        )
-        binary = tmp_path / "claude-bin"
-        binary.write_text("#!/bin/sh\n")
-
-        def client_factory(options: Any) -> FakeSdkClient:
-            client = FakeSdkClient(options=options, turns=self.turns, **self.client_kwargs)
-            self.clients.append(client)
-            return client
-
-        self.harness = ClaudeHarness(
-            config=self.config,
-            log=MagicMock(),
-            limits=overrides.pop("limits", LIMITS),
-            credential_client=credential_client,
-            environ=environ,
-            client_factory=client_factory,
-            options_factory=lambda **kwargs: kwargs,
-            transcript_exists=transcript_exists,
-            binary=binary,
-        )
-
-    @property
-    def client(self) -> FakeSdkClient:
-        return self.clients[-1]
-
-
-async def _run(harness: ClaudeHarness, prompt: HarnessPrompt | None = None):
-    events: list[dict[str, Any]] = []
-
-    async def emit(event: dict[str, Any]) -> None:
-        events.append(event)
-
-    outcome = await harness.run_prompt(prompt or HarnessPrompt(message_id="m1", text="hi"), emit)
-    return events, outcome
+if TYPE_CHECKING:
+    from pathlib import Path
 
 
 class TestOpen:
@@ -314,14 +174,14 @@ class TestOptions:
             HarnessPrompt(
                 message_id="m1",
                 text="hi",
-                model="anthropic/claude-opus-4-6",
+                model="anthropic/claude-sonnet-5-5",
                 reasoning_effort="high",
             ),
         )
         options = h.client.options
         assert options["cwd"] == str(tmp_path / "repo")
         assert options["cli_path"] == str(h.harness.wrapper_path)
-        assert options["model"] == "claude-opus-4-6"
+        assert options["model"] == "claude-sonnet-5-5"
         assert options["effort"] == "high"
         assert options["permission_mode"] == "dontAsk"
         assert options["disallowed_tools"] == ["AskUserQuestion"]
@@ -333,6 +193,7 @@ class TestOptions:
         assert options["setting_sources"] == ["user", "project"]
         assert options["include_partial_messages"] is True
         assert options["forward_subagent_text"] is False
+        assert options["max_buffer_size"] == MAX_STDOUT_MESSAGE_BYTES
         assert options["system_prompt"] == {
             "type": "preset",
             "preset": "claude_code",
@@ -347,6 +208,38 @@ class TestOptions:
         assert "mcp__linear__*" in options["allowed_tools"]
         assert "mcp__local__*" in options["allowed_tools"]
         assert "Bash" in options["allowed_tools"]
+
+    async def test_stdout_ceiling_clears_the_whole_attachment_budget(self, tmp_path: Path) -> None:
+        """One NDJSON line carries every attachment the runtime accepts.
+
+        ``_user_messages`` inlines them all into a single message the CLI
+        echoes back, so a prompt at the top of the budget -- not just one
+        large image -- has to fit under the ceiling. Measure the JSON
+        envelope from the real message instead of trusting the headroom, and
+        stand small payloads in for the images so the check stays cheap.
+        """
+        h = Harness(tmp_path)
+        await h.harness.open()
+        await h.harness.create_session()
+        attachments = [
+            {"name": f"shot-{index}.png", "mimeType": "image/png", "content": "AAAA"}
+            for index in range(MAX_SESSION_ATTACHMENTS_PER_MESSAGE)
+        ]
+        messages = [
+            message
+            async for message in h.harness._user_messages(
+                HarnessPrompt(message_id="m1", text="hi", attachments=attachments)
+            )
+        ]
+        assert len(messages) == 1
+        envelope_bytes = len(json.dumps(messages[0])) - sum(
+            len(attachment["content"]) for attachment in attachments
+        )
+        # Encoded one attachment at a time, as the processor does, so the
+        # base64 padding lands once per image rather than once per batch.
+        per_attachment = ((AttachmentProcessor.MAX_IMAGE_BYTES + 2) // 3) * 4
+        base64_bytes = MAX_SESSION_ATTACHMENTS_PER_MESSAGE * per_attachment
+        assert base64_bytes + envelope_bytes < MAX_STDOUT_MESSAGE_BYTES
 
     def test_reasoning_controls_are_per_model(self) -> None:
         assert reasoning_options("claude-sonnet-4-5", "max") == {
@@ -369,6 +262,32 @@ class TestOptions:
 
 
 class TestTranslation:
+    @pytest.mark.asyncio
+    async def test_step_ids_match_each_turn_and_are_unique(self, tmp_path: Path) -> None:
+        h = Harness(
+            tmp_path,
+            turns=[
+                [_stream("message_start", message={"id": "msg_1"}), _result(0.1)],
+                [AssistantMessage(content=[], model="m", message_id="msg_2"), _result(0.2)],
+                [_result(0.3)],
+            ],
+        )
+        await h.harness.open()
+        await h.harness.create_session()
+
+        first, _ = await _run(h.harness, HarnessPrompt(message_id="m1", text="one"))
+        second, _ = await _run(h.harness, HarnessPrompt(message_id="m2", text="two"))
+        unmatched, _ = await _run(h.harness, HarnessPrompt(message_id="m3", text="three"))
+
+        first_start, first_finish = (e for e in first if e["type"] in ("step_start", "step_finish"))
+        second_start, second_finish = (
+            e for e in second if e["type"] in ("step_start", "step_finish")
+        )
+        assert first_start["stepId"] == first_finish["stepId"]
+        assert second_start["stepId"] == second_finish["stepId"]
+        assert first_start["stepId"] != second_start["stepId"]
+        assert next(e for e in unmatched if e["type"] == "step_finish")["stepId"]
+
     @pytest.mark.asyncio
     async def test_a_turn_with_text_and_a_tool_call(self, tmp_path: Path) -> None:
         turn = [

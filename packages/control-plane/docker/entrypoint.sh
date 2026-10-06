@@ -29,7 +29,7 @@ fi
 case "${LITESTREAM_ENDPOINT:-}" in
   http://*)
     if [ "${OBJECT_STORE_ALLOW_HTTP:-}" != "true" ]; then
-      echo "{\"level\":\"error\",\"event\":\"litestream.endpoint_plaintext\",\"msg\":\"LITESTREAM_ENDPOINT is plain http; set OBJECT_STORE_ALLOW_HTTP=true only for a local MinIO\"}" >&2
+      echo "{\"level\":\"error\",\"event\":\"litestream.endpoint_plaintext\",\"msg\":\"LITESTREAM_ENDPOINT is plain http; set OBJECT_STORE_ALLOW_HTTP=true only for a local object store\"}" >&2
       exit 1
     fi
     ;;

@@ -10,6 +10,8 @@ async function createIndexedSession(sessionName: string) {
   const { stub } = await initNamedSessionDO(sessionName);
   await new SessionIndexStore(env.DB).create({
     id: sessionName,
+    ownerTeamId: null,
+    visibility: "workspace",
     title: null,
     repoOwner: "acme",
     repoName: "web-app",
@@ -86,6 +88,7 @@ function makePullRequestEvent(
     concurrencyKey: "pr:7",
     contextBlock: "",
     meta: {},
+    repositoryId: 12345,
     repoOwner: "acme",
     repoName: "web-app",
     branch: `open-inspect/${sessionName}`,
@@ -228,6 +231,7 @@ describe("PR lifecycle tracking on /internal/github-event", () => {
       concurrencyKey: "issue:1",
       contextBlock: "",
       meta: {},
+      repositoryId: 12345,
       repoOwner: "acme",
       repoName: "web-app",
     });

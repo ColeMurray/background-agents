@@ -1,4 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
+import { MAX_WEB_PROMPT_CHARS } from "@open-inspect/shared/types/prompts";
+import { ShutdownRecoveryRejectedError } from "../sandbox/lifecycle/ports";
 import type { Logger } from "../logger";
 import { SessionInternalPaths } from "./contracts";
 import { SessionDisconnectHandler } from "./disconnect-handler";
@@ -54,10 +56,11 @@ function createHarness() {
     submitPrompt: vi.fn(async () => undefined),
     cancelPrompt: vi.fn(async () => undefined),
     stopExecution: vi.fn(async () => undefined),
+    recoverShutdown: vi.fn(async () => undefined),
     notifyTyping: vi.fn(async () => undefined),
     updatePresence: vi.fn(),
     getHistoryPage: vi.fn(() => ({ items: [], hasMore: false, cursor: null })),
-    authorize: vi.fn(async () => "allowed" as const),
+    authorize: vi.fn(async () => ({ kind: "allowed" as const })),
   };
   const sandbox: SandboxDisconnectMonitor = {
     getStatus: vi.fn((): "ready" => "ready"),
@@ -191,8 +194,50 @@ describe("SessionServer", () => {
     expect(sockets.send).toHaveBeenCalledWith("client", {
       type: "error",
       code: "INVALID_PROMPT",
-      message: "Invalid prompt",
+      message: "content is required",
       clientRequestId: "request-1",
+    });
+  });
+
+  it.each([
+    [
+      "oversized content",
+      { content: "x".repeat(MAX_WEB_PROMPT_CHARS + 1) },
+      `content exceeds ${MAX_WEB_PROMPT_CHARS} characters (got ${MAX_WEB_PROMPT_CHARS + 1})`,
+    ],
+    ["invalid clientRequestId", { content: "hello", clientRequestId: 123 }, "clientRequestId:"],
+  ])("reports %s over WebSocket", async (_case, payload, message) => {
+    const { server, sockets, clientCommands } = createHarness();
+    await server.onMessage(
+      "client",
+      JSON.stringify({ type: "prompt", clientRequestId: "request-1", ...payload })
+    );
+
+    expect(sockets.send).toHaveBeenCalledWith(
+      "client",
+      expect.objectContaining({
+        type: "error",
+        code: "INVALID_PROMPT",
+        message: expect.stringContaining(message),
+      })
+    );
+    expect(clientCommands.submitPrompt).not.toHaveBeenCalled();
+  });
+
+  it("preserves request correlation when a cancel prompt payload fails validation", async () => {
+    const { server, sockets, clientCommands } = createHarness();
+
+    await server.onMessage(
+      "client",
+      JSON.stringify({ type: "cancel_prompt", messageId: "", clientRequestId: "cancel-1" })
+    );
+
+    expect(clientCommands.cancelPrompt).not.toHaveBeenCalled();
+    expect(sockets.send).toHaveBeenCalledWith("client", {
+      type: "error",
+      code: "INVALID_MESSAGE",
+      message: "Failed to process message",
+      clientRequestId: "cancel-1",
     });
   });
 
@@ -229,6 +274,11 @@ describe("SessionServer", () => {
       callback: "cancelPrompt",
     },
     { type: "stop", message: { type: "stop" }, callback: "stopExecution" },
+    {
+      type: "recover_preservation",
+      message: { type: "recover_preservation", action: "retry" },
+      callback: "recoverShutdown",
+    },
     { type: "typing", message: { type: "typing" }, callback: "notifyTyping" },
     {
       type: "presence",
@@ -243,6 +293,176 @@ describe("SessionServer", () => {
     expect(clientCommands[callback as keyof typeof clientCommands]).toHaveBeenCalledOnce();
   });
 
+  it("forwards the requested shutdown recovery action", async () => {
+    const { server, sockets, clientCommands } = createHarness();
+
+    await server.onMessage(
+      "client",
+      JSON.stringify({ type: "recover_preservation", action: "restore_saved" })
+    );
+
+    expect(clientCommands.recoverShutdown).toHaveBeenCalledWith("restore_saved");
+    expect(sockets.send).not.toHaveBeenCalledWith(
+      "client",
+      expect.objectContaining({ type: "shutdown_recovery_accepted" })
+    );
+  });
+
+  it("acknowledges correlated recovery only after the authoritative command succeeds", async () => {
+    const { server, sockets, clientCommands } = createHarness();
+    let completeRecovery!: () => void;
+    vi.mocked(clientCommands.recoverShutdown).mockImplementation(
+      () => new Promise<void>((resolve) => (completeRecovery = resolve))
+    );
+
+    const routing = server.onMessage(
+      "client",
+      JSON.stringify({
+        type: "recover_preservation",
+        action: "restore_saved",
+        clientRequestId: "recovery-1",
+      })
+    );
+
+    await vi.waitFor(() => expect(clientCommands.recoverShutdown).toHaveBeenCalledOnce());
+    expect(sockets.send).not.toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ type: "shutdown_recovery_accepted" })
+    );
+    completeRecovery();
+    await routing;
+    expect(clientCommands.recoverShutdown).toHaveBeenCalledWith("restore_saved");
+    expect(sockets.send).toHaveBeenCalledWith("client", {
+      type: "shutdown_recovery_accepted",
+      clientRequestId: "recovery-1",
+      action: "restore_saved",
+    });
+    expect(sockets.send).not.toHaveBeenCalledWith(
+      "other-client",
+      expect.objectContaining({ type: "shutdown_recovery_accepted" })
+    );
+  });
+
+  it("returns correlated generic errors for failed recovery commands", async () => {
+    const { server, sockets, clientCommands } = createHarness();
+    vi.mocked(clientCommands.recoverShutdown).mockRejectedValue(new Error("provider secret"));
+
+    await server.onMessage(
+      "client",
+      JSON.stringify({
+        type: "recover_preservation",
+        action: "restore_saved",
+        clientRequestId: "recovery-1",
+      })
+    );
+
+    expect(sockets.send).toHaveBeenCalledWith("client", {
+      type: "error",
+      code: "INVALID_MESSAGE",
+      message: "Failed to process message",
+      clientRequestId: "recovery-1",
+    });
+  });
+
+  it("correlates malformed, unauthenticated, denied, and safely rejected recovery commands", async () => {
+    const malformed = createHarness();
+    await malformed.server.onMessage(
+      "client",
+      JSON.stringify({
+        type: "recover_preservation",
+        action: "resume",
+        clientRequestId: "malformed-1",
+      })
+    );
+    expect(malformed.sockets.send).toHaveBeenCalledWith(
+      "client",
+      expect.objectContaining({
+        type: "error",
+        code: "INVALID_MESSAGE",
+        clientRequestId: "malformed-1",
+      })
+    );
+
+    const unauthenticated = createHarness();
+    unauthenticated.setClient(null);
+    await unauthenticated.server.onMessage(
+      "client",
+      JSON.stringify({
+        type: "recover_preservation",
+        action: "retry",
+        clientRequestId: "auth-1",
+      })
+    );
+    expect(unauthenticated.sockets.send).toHaveBeenCalledWith(
+      "client",
+      expect.objectContaining({
+        type: "error",
+        code: "AUTHENTICATION_REQUIRED",
+        clientRequestId: "auth-1",
+      })
+    );
+
+    const denied = createHarness();
+    vi.mocked(denied.clientCommands.authorize).mockResolvedValue({
+      kind: "denied",
+      reason: "missing_permission",
+    });
+    await denied.server.onMessage(
+      "client",
+      JSON.stringify({
+        type: "recover_preservation",
+        action: "retry",
+        clientRequestId: "denied-1",
+      })
+    );
+    expect(denied.sockets.send).toHaveBeenCalledWith(
+      "client",
+      expect.objectContaining({
+        type: "error",
+        code: "PERMISSION_REQUIRED",
+        clientRequestId: "denied-1",
+      })
+    );
+
+    const unavailable = createHarness();
+    vi.mocked(unavailable.clientCommands.authorize).mockResolvedValue({ kind: "unavailable" });
+    await unavailable.server.onMessage(
+      "client",
+      JSON.stringify({
+        type: "recover_preservation",
+        action: "retry",
+        clientRequestId: "unavailable-1",
+      })
+    );
+    expect(unavailable.sockets.send).toHaveBeenCalledWith(
+      "client",
+      expect.objectContaining({
+        type: "error",
+        code: "AUTHORIZATION_UNAVAILABLE",
+        clientRequestId: "unavailable-1",
+      })
+    );
+
+    const rejected = createHarness();
+    vi.mocked(rejected.clientCommands.recoverShutdown).mockRejectedValue(
+      new ShutdownRecoveryRejectedError()
+    );
+    await rejected.server.onMessage(
+      "client",
+      JSON.stringify({
+        type: "recover_preservation",
+        action: "retry",
+        clientRequestId: "rejected-1",
+      })
+    );
+    expect(rejected.sockets.send).toHaveBeenCalledWith("client", {
+      type: "error",
+      code: "RECOVERY_UNAVAILABLE",
+      message: "Shutdown recovery is unavailable",
+      clientRequestId: "rejected-1",
+    });
+  });
+
   it("drops authenticated-only commands when no client mapping exists", async () => {
     const { server, clientCommands, setClient } = createHarness();
     setClient(null);
@@ -253,27 +473,35 @@ describe("SessionServer", () => {
   });
 
   it.each([
-    [{ type: "prompt", content: "work", clientRequestId: "request-1" }, "sessions.collaborate"],
-    [
-      { type: "cancel_prompt", messageId: "message-1", clientRequestId: "request-1" },
-      "sessions.lifecycle",
-    ],
-    [{ type: "stop" }, "sessions.lifecycle"],
-  ] as const)("rejects %s without its command permission", async (message, permission) => {
+    [{ type: "prompt", content: "work", clientRequestId: "request-1" }, "collaborate"],
+    [{ type: "cancel_prompt", messageId: "message-1", clientRequestId: "request-1" }, "lifecycle"],
+    [{ type: "stop" }, "lifecycle"],
+    [{ type: "recover_preservation", action: "restore_saved" }, "lifecycle"],
+    [{ type: "typing" }, "collaborate"],
+    [{ type: "fetch_history", cursor: { timestamp: 10, id: "event-1" } }, "read"],
+    [{ type: "presence", status: "idle" }, "read"],
+  ] as const)("rejects %s without its command action", async (message, action) => {
     const { server, sockets, clientCommands, client } = createHarness();
-    vi.mocked(clientCommands.authorize).mockResolvedValue("denied");
+    vi.mocked(clientCommands.authorize).mockResolvedValue({
+      kind: "denied",
+      reason: "missing_permission",
+    });
 
     await server.onMessage("client", JSON.stringify(message));
 
-    expect(clientCommands.authorize).toHaveBeenCalledWith(client, permission);
+    expect(clientCommands.authorize).toHaveBeenCalledWith("client", client, action);
     expect(sockets.send).toHaveBeenCalledWith("client", {
       type: "error",
       code: "PERMISSION_REQUIRED",
-      message: `Permission required: ${permission}`,
+      message: "Access denied: missing_permission",
     });
     expect(clientCommands.submitPrompt).not.toHaveBeenCalled();
     expect(clientCommands.cancelPrompt).not.toHaveBeenCalled();
     expect(clientCommands.stopExecution).not.toHaveBeenCalled();
+    expect(clientCommands.recoverShutdown).not.toHaveBeenCalled();
+    expect(clientCommands.notifyTyping).not.toHaveBeenCalled();
+    expect(clientCommands.getHistoryPage).not.toHaveBeenCalled();
+    expect(clientCommands.updatePresence).not.toHaveBeenCalled();
   });
 
   it("routes fetch_history and enforces throttling with the injected clock", async () => {
@@ -286,6 +514,11 @@ describe("SessionServer", () => {
     await server.onMessage("client", JSON.stringify({ type: "fetch_history", cursor }));
 
     expect(clientCommands.getHistoryPage).toHaveBeenCalledOnce();
+    expect(clientCommands.authorize).toHaveBeenCalledExactlyOnceWith(
+      "client",
+      expect.objectContaining({ userId: "user-1" }),
+      "read"
+    );
     expect(sockets.send).toHaveBeenCalledWith("client", {
       type: "history_page",
       items: [],
@@ -299,6 +532,70 @@ describe("SessionServer", () => {
     });
   });
 
+  it("rejects fetch_history without a cursor without consuming the throttle window", async () => {
+    const { server, sockets, clientCommands, setNow } = createHarness();
+    const cursor = { timestamp: 10, id: "event-1", sequence: 2 };
+
+    setNow(2000);
+    await server.onMessage("client", JSON.stringify({ type: "fetch_history" }));
+    await server.onMessage("client", JSON.stringify({ type: "fetch_history", cursor }));
+
+    expect(clientCommands.getHistoryPage).toHaveBeenCalledExactlyOnceWith({ cursor });
+    expect(clientCommands.authorize).toHaveBeenCalledOnce();
+    expect(sockets.send).toHaveBeenNthCalledWith(1, "client", {
+      type: "error",
+      code: "INVALID_CURSOR",
+      message: "Invalid cursor",
+    });
+    expect(sockets.send).toHaveBeenNthCalledWith(2, "client", {
+      type: "history_page",
+      items: [],
+      hasMore: false,
+      cursor: null,
+    });
+  });
+
+  it("reserves the history throttle window before authorization even when read is denied", async () => {
+    const { server, sockets, clientCommands, setNow } = createHarness();
+    const cursor = { timestamp: 10, id: "event-1" };
+    vi.mocked(clientCommands.authorize).mockResolvedValueOnce({
+      kind: "denied",
+      reason: "missing_permission",
+    });
+
+    setNow(0);
+    await server.onMessage("client", JSON.stringify({ type: "fetch_history", cursor }));
+    setNow(100);
+    await server.onMessage("client", JSON.stringify({ type: "fetch_history", cursor }));
+
+    expect(clientCommands.authorize).toHaveBeenCalledOnce();
+    expect(clientCommands.getHistoryPage).not.toHaveBeenCalled();
+    expect(sockets.send).toHaveBeenCalledWith("client", {
+      type: "error",
+      code: "RATE_LIMITED",
+      message: "Too many requests",
+    });
+  });
+
+  it("reserves one window for a simultaneous burst of history frames", async () => {
+    const { server, sockets, clientCommands, setNow } = createHarness();
+    setNow(0);
+    await Promise.all(
+      Array.from({ length: 5 }, () =>
+        server.onMessage(
+          "client",
+          JSON.stringify({ type: "fetch_history", cursor: { timestamp: 10, id: "event-1" } })
+        )
+      )
+    );
+
+    expect(clientCommands.authorize).toHaveBeenCalledOnce();
+    expect(clientCommands.getHistoryPage).toHaveBeenCalledOnce();
+    expect(
+      vi.mocked(sockets.send).mock.calls.filter(([, message]) => message.type === "error")
+    ).toHaveLength(4);
+  });
+
   it("parses and routes sandbox events without exposing a socket type", async () => {
     const { server, messageDeps, setConnectionKind } = createHarness();
     setConnectionKind("sandbox");
@@ -309,7 +606,6 @@ describe("SessionServer", () => {
         type: "heartbeat",
         sandboxId: "sandbox-1",
         timestamp: 1000,
-        status: "ready",
       })
     );
 
@@ -317,7 +613,6 @@ describe("SessionServer", () => {
       type: "heartbeat",
       sandboxId: "sandbox-1",
       timestamp: 1000,
-      status: "ready",
     });
   });
 
@@ -332,7 +627,6 @@ describe("SessionServer", () => {
         type: "heartbeat",
         sandboxId: "sandbox-1",
         timestamp: 1000,
-        status: "ready",
       })
     );
 

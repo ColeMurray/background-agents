@@ -3,6 +3,10 @@
 # Provider-selected directory for standalone runtime commands. OpenComputer uses
 # the sandbox user's bin directory; providers with writable images use /usr/local/bin.
 BIN_INSTALL_DIR_ENV_VAR = "OPENINSPECT_BIN_INSTALL_DIR"
+
+# Trusted launch signal: the provider sets it to "true" only for a sandbox it
+# launched on a Docker-capable runtime. User env vars can never set it.
+DOCKER_ENABLED_ENV_VAR = "OPENINSPECT_DOCKER_ENABLED"
 DEFAULT_BIN_INSTALL_DIR = "/usr/local/bin"
 
 # Sandbox lifetime and the env contract used to pass it to the bridge.
@@ -53,10 +57,11 @@ EXPECTED_TUNNEL_PORTS_ENV_VAR = "EXPECTED_TUNNEL_PORTS"
 # longer so deferred Queue finalization can snapshot it after this budget ends.
 IMAGE_BUILD_EXECUTION_TIMEOUT_ENV_VAR = "OI_IMAGE_BUILD_EXECUTION_TIMEOUT_SECONDS"
 
-# Boot warnings queued by the supervisor (which has no control-plane event
-# channel) and drained by the bridge as `warning` sandbox events after its
-# WebSocket handshake. JSONL: one {scope, message, repoOwner?, repoName?} per line.
-BOOT_WARNINGS_FILE_PATH = "/tmp/oi-boot-warnings.jsonl"
+# Boot events appended by the supervisor (which has no control-plane event
+# channel) and relayed by the bridge: phase lines become `boot_progress`
+# sandbox events, warning lines become `warning` events. JSONL, one object per
+# line with a per-boot monotonic `seq`; truncated by the supervisor at start.
+BOOT_EVENTS_FILE_PATH = "/tmp/oi-boot-events.jsonl"
 # Written by the bridge before it exits with DETERMINISTIC_FAILURE_EXIT_CODE;
 # the supervisor reports its contents instead of restarting the bridge.
 BRIDGE_FATAL_ERROR_FILE_PATH = "/tmp/oi-bridge-fatal-error.txt"

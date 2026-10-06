@@ -67,7 +67,7 @@ async function cacheInstallationToken(
   config: ReturnType<typeof cachedTokenConfig>
 ): Promise<void> {
   await cacheStore.put(
-    `github:installation-token:v1:${config.appId}:${config.installationId}`,
+    `github:installation-token:v2:${config.appId}:${config.installationId}:all`,
     JSON.stringify({
       token: "cached-token",
       expiresAtEpochMs:
@@ -193,7 +193,7 @@ describe("github-app utilities", () => {
       };
 
       await cacheStore.put(
-        `github:installation-token:v1:${config.appId}:${config.installationId}`,
+        `github:installation-token:v2:${config.appId}:${config.installationId}:all`,
         JSON.stringify({
           token: "token-from-kv",
           expiresAtEpochMs:
@@ -202,9 +202,11 @@ describe("github-app utilities", () => {
         })
       );
 
-      const token = await getCachedInstallationToken(config, {
-        cacheStore,
-      });
+      const token = await getCachedInstallationToken(
+        config,
+        { cacheStore },
+        { scope: { kind: "all" } }
+      );
 
       expect(token).toBe("token-from-kv");
       expect(fetchMock).not.toHaveBeenCalled();
@@ -227,7 +229,7 @@ describe("github-app utilities", () => {
         installationId: "installation-malformed-cache",
       };
       await cacheStore.put(
-        `github:installation-token:v1:${config.appId}:${config.installationId}`,
+        `github:installation-token:v2:${config.appId}:${config.installationId}:all`,
         JSON.stringify({
           token: 42,
           expiresAtEpochMs: Date.parse(expiresAt),
@@ -235,7 +237,9 @@ describe("github-app utilities", () => {
         })
       );
 
-      await expect(getCachedInstallationToken(config, { cacheStore })).resolves.toBe("fresh-token");
+      await expect(
+        getCachedInstallationToken(config, { cacheStore }, { scope: { kind: "all" } })
+      ).resolves.toBe("fresh-token");
       expect(fetchMock).toHaveBeenCalledOnce();
     });
   });
@@ -258,7 +262,7 @@ describe("github-app utilities", () => {
       const expiresAtEpochMs =
         Date.now() + INSTALLATION_TOKEN_CACHE_MAX_AGE_MS + INSTALLATION_TOKEN_MIN_REMAINING_MS;
       await cacheStore.put(
-        `github:installation-token:v1:${config.appId}:${config.installationId}`,
+        `github:installation-token:v2:${config.appId}:${config.installationId}:all`,
         JSON.stringify({
           token: "tok-with-expiry",
           expiresAtEpochMs,
@@ -266,7 +270,11 @@ describe("github-app utilities", () => {
         })
       );
 
-      const result = await getCachedInstallationTokenWithExpiry(config, { cacheStore });
+      const result = await getCachedInstallationTokenWithExpiry(
+        config,
+        { cacheStore },
+        { scope: { kind: "all" } }
+      );
 
       expect(result).toEqual({ token: "tok-with-expiry", expiresAtEpochMs });
       expect(fetchMock).not.toHaveBeenCalled();
@@ -282,7 +290,7 @@ describe("github-app utilities", () => {
       };
 
       await cacheStore.put(
-        `github:installation-token:v1:${config.appId}:${config.installationId}`,
+        `github:installation-token:v2:${config.appId}:${config.installationId}:all`,
         JSON.stringify({
           token: "shared-token",
           expiresAtEpochMs:
@@ -291,8 +299,16 @@ describe("github-app utilities", () => {
         })
       );
 
-      const plain = await getCachedInstallationToken(config, { cacheStore });
-      const withExpiry = await getCachedInstallationTokenWithExpiry(config, { cacheStore });
+      const plain = await getCachedInstallationToken(
+        config,
+        { cacheStore },
+        { scope: { kind: "all" } }
+      );
+      const withExpiry = await getCachedInstallationTokenWithExpiry(
+        config,
+        { cacheStore },
+        { scope: { kind: "all" } }
+      );
 
       expect(withExpiry.token).toBe(plain);
     });
@@ -314,7 +330,7 @@ describe("github-app utilities", () => {
           installationId: "installation-refresh-valid",
         },
         undefined,
-        { forceRefresh: true }
+        { scope: { kind: "all" }, forceRefresh: true }
       );
 
       expect(result).toEqual({ token: "fresh-token", expiresAtEpochMs: Date.parse(expiresAt) });
@@ -337,7 +353,7 @@ describe("github-app utilities", () => {
           installationId: "installation-escaped-key",
         },
         undefined,
-        { forceRefresh: true }
+        { scope: { kind: "all" }, forceRefresh: true }
       );
 
       expect(result.token).toBe("escaped-key-token");
@@ -358,7 +374,7 @@ describe("github-app utilities", () => {
             installationId: "installation-refresh-invalid",
           },
           undefined,
-          { forceRefresh: true }
+          { scope: { kind: "all" }, forceRefresh: true }
         )
       ).rejects.toThrow("Failed to get installation token: invalid response");
     });
@@ -376,7 +392,7 @@ describe("github-app utilities", () => {
             installationId: "installation-refresh-invalid-json",
           },
           undefined,
-          { forceRefresh: true }
+          { scope: { kind: "all" }, forceRefresh: true }
         )
       ).rejects.toThrow("Failed to get installation token: invalid response");
     });
@@ -398,7 +414,7 @@ describe("github-app utilities", () => {
             installationId: "installation-refresh-invalid-expiry",
           },
           undefined,
-          { forceRefresh: true }
+          { scope: { kind: "all" }, forceRefresh: true }
         )
       ).rejects.toThrow("Failed to get installation token: invalid response");
     });

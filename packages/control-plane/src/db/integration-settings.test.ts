@@ -1059,6 +1059,31 @@ describe("IntegrationSettingsStore", () => {
       ).rejects.toThrow(IntegrationSettingsValidationError);
     });
 
+    it("rejects global timeouts that do not leave room for the effective final buffer", async () => {
+      await expect(
+        store.setGlobal("sandbox", { defaults: { sandboxTimeoutMs: 300_000 } })
+      ).rejects.toThrow(IntegrationSettingsValidationError);
+    });
+
+    it("does not grandfather an unchanged stored invalid global timeout", async () => {
+      await db
+        .prepare(
+          `INSERT INTO integration_settings (integration_id, settings, created_at, updated_at)
+           VALUES (?, ?, ?, ?)`
+        )
+        .bind("sandbox", JSON.stringify({ defaults: { sandboxTimeoutMs: 300_000 } }), 1, 1)
+        .run();
+
+      const stored = await store.getGlobal("sandbox");
+      expect(stored).toEqual({ defaults: {} });
+
+      await expect(
+        store.setGlobal("sandbox", {
+          defaults: { sandboxTimeoutMs: 300_000, terminalEnabled: true },
+        })
+      ).rejects.toThrow(IntegrationSettingsValidationError);
+    });
+
     it("normalizes cross-field violations that only appear after merge", async () => {
       // Each blob is individually valid — neither write throws — because the
       // invariant (concurrent <= total) spans two fields set in different scopes.
@@ -1073,11 +1098,96 @@ describe("IntegrationSettingsStore", () => {
       expect(config.settings).toEqual({ maxTotalChildSessions: 2 });
     });
 
+    it("defers timeout-buffer validation until global and repo settings are merged", async () => {
+      await store.setGlobal("sandbox", { defaults: { finalSnapshotBufferMs: 300_000 } });
+      await store.setRepoSettings("sandbox", "acme/app", { sandboxTimeoutMs: 360_000 });
+
+      expect(await store.getRepoSettings("sandbox", "acme/app")).toEqual({
+        sandboxTimeoutMs: 360_000,
+      });
+      const config = await store.getResolvedConfig("sandbox", "acme/app");
+      expect(config.settings).toMatchObject({
+        sandboxTimeoutMs: 360_000,
+        finalSnapshotBufferMs: 300_000,
+      });
+    });
+
+    it("omits an invalid relationship introduced by an environment override", async () => {
+      await store.setGlobal("sandbox", {
+        defaults: { finalSnapshotBufferMs: 300_000, terminalEnabled: true },
+      });
+      await store.setEnvironmentSettings("sandbox", "env_1", { sandboxTimeoutMs: 300_000 });
+
+      const config = await store.getResolvedConfig("sandbox", "acme/app", "env_1");
+      expect(config.settings).toEqual({ terminalEnabled: true });
+    });
+
     it("round-trips fractional cpuCores and small memoryMib", async () => {
       await store.setRepoSettings("sandbox", "acme/app", { cpuCores: 0.5, memoryMib: 64 });
 
       const result = await store.getRepoSettings("sandbox", "acme/app");
       expect(result).toEqual({ cpuCores: 0.5, memoryMib: 64 });
+    });
+
+    it("inherits resource caps through repo and environment scopes with null resets", async () => {
+      await store.setGlobal("sandbox", {
+        defaults: { cpuCores: 0.5, memoryMib: 2048, cpuLimitCores: 2, memoryLimitMib: 4096 },
+      });
+      await store.setRepoSettings("sandbox", "acme/app", { cpuLimitCores: 3 });
+      expect((await store.getResolvedConfig("sandbox", "acme/app")).settings).toEqual({
+        cpuCores: 0.5,
+        memoryMib: 2048,
+        cpuLimitCores: 3,
+        memoryLimitMib: 4096,
+      });
+      await store.setEnvironmentSettings("sandbox", "env_1", {
+        cpuLimitCores: null,
+        memoryLimitMib: null,
+      });
+      expect(await store.getEnvironmentSettings("sandbox", "env_1")).toEqual({
+        cpuLimitCores: null,
+        memoryLimitMib: null,
+      });
+      expect((await store.getResolvedConfig("sandbox", "acme/app", "env_1")).settings).toEqual({
+        cpuCores: 0.5,
+        memoryMib: 2048,
+        cpuLimitCores: null,
+        memoryLimitMib: null,
+      });
+    });
+
+    it("preserves conflicting merged caps across repo and environment layers", async () => {
+      await store.setGlobal("sandbox", { defaults: { cpuLimitCores: 2, memoryLimitMib: 4096 } });
+      await store.setRepoSettings("sandbox", "acme/app", { cpuCores: 4 });
+      await store.setEnvironmentSettings("sandbox", "env_1", { memoryMib: 8192 });
+      expect((await store.getResolvedConfig("sandbox", "acme/app", "env_1")).settings).toEqual({
+        cpuCores: 4,
+        memoryMib: 8192,
+        cpuLimitCores: 2,
+        memoryLimitMib: 4096,
+      });
+      await store.setEnvironmentSettings("sandbox", "env_1", {
+        cpuLimitCores: 4,
+        memoryLimitMib: 8192,
+      });
+      expect((await store.getResolvedConfig("sandbox", "acme/app", "env_1")).settings).toEqual({
+        cpuCores: 4,
+        cpuLimitCores: 4,
+        memoryLimitMib: 8192,
+      });
+    });
+
+    it("preserves explicit caps below requests on provider-agnostic writes and reads", async () => {
+      const settings = { cpuCores: 4, cpuLimitCores: 2, memoryMib: 8192, memoryLimitMib: 4096 };
+      await store.setGlobal("sandbox", { defaults: settings });
+      expect((await store.getGlobal("sandbox"))?.defaults).toEqual(settings);
+      await store.setRepoSettings("sandbox", "acme/app", settings);
+      expect(await store.getRepoSettings("sandbox", "acme/app")).toEqual(settings);
+      await store.setEnvironmentSettings("sandbox", "env_1", settings);
+      expect(await store.getEnvironmentSettings("sandbox", "env_1")).toEqual(settings);
+      expect((await store.getResolvedConfig("sandbox", "acme/app", "env_1")).settings).toEqual(
+        settings
+      );
     });
 
     it("preserves null repo resource overrides over inherited global defaults", async () => {
@@ -1138,14 +1248,14 @@ describe("IntegrationSettingsStore", () => {
 
     it("round-trips linear repo settings", async () => {
       await store.setRepoSettings("linear", "acme/platform", {
-        model: "openai/gpt-5.3-codex",
+        model: "openai/gpt-6-sol",
         reasoningEffort: "high",
         allowLabelModelOverride: false,
       });
 
       const result = await store.getRepoSettings("linear", "acme/platform");
       expect(result).toEqual({
-        model: "openai/gpt-5.3-codex",
+        model: "openai/gpt-6-sol",
         reasoningEffort: "high",
         allowLabelModelOverride: false,
       });
@@ -1389,6 +1499,14 @@ describe("IntegrationSettingsStore", () => {
       await expect(
         store.setGlobal("slack", {
           defaults: { routingRules: "frontend" as unknown as [] },
+        })
+      ).rejects.toThrow(IntegrationSettingsValidationError);
+    });
+
+    it("rejects partial routing rule payloads", async () => {
+      await expect(
+        store.setGlobal("slack", {
+          defaults: { routingRules: [{ keyword: "frontend" }] as unknown as [] },
         })
       ).rejects.toThrow(IntegrationSettingsValidationError);
     });

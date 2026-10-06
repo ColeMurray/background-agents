@@ -97,10 +97,6 @@ export class PullRequestHandler {
     }
 
     const promptingParticipant = promptingParticipantResult.participant;
-    const authResolution = await this.participants.resolveAuthForPR(promptingParticipant);
-    if ("error" in authResolution) {
-      return Response.json({ error: authResolution.error }, { status: authResolution.status });
-    }
 
     // Base-branch defaulting happens in the service (requested > target
     // repo's base branch > repo default), so the raw request value passes
@@ -114,7 +110,7 @@ export class PullRequestHandler {
         repoOwner: target.repoOwner,
         repoName: target.repoName,
         promptingUserId: promptingParticipant.user_id,
-        promptingAuth: authResolution.auth,
+        resolvePromptingAuth: () => this.participants.resolveAuthForPR(promptingParticipant),
         sessionUrl: this.getSessionUrl(session),
         draft: body.draft,
       },

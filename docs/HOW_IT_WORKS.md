@@ -69,9 +69,10 @@ Slack sessions can target an environment three ways: a routing rule (Settings �
 Slack) launches it from a keyword; a channel association (`channelAssociations` on the environments
 API, like repository metadata) routes messages in that channel to it automatically; and the LLM
 classifier considers environments alongside repositories, using their names and descriptions as
-signals — its clarification picker lists both kinds when it has to ask. Linear sessions can target
-an environment through the team and project mappings (`{"environmentId": "env_…"}` entries alongside
-repository entries).
+signals. The classifier can also select no repository when the task does not require a codebase. Its
+clarification picker always includes **No repository** alongside accessible repositories and
+environments. Linear sessions can target an environment through the team and project mappings
+(`{"environmentId": "env_…"}` entries alongside repository entries).
 
 ### Session Lifecycle
 
@@ -106,14 +107,24 @@ high performance even with hundreds of concurrent sessions.
 An **environment** is a named, reusable set of repositories — the thing you reach for when the same
 multi-repository workspace comes up again and again (a frontend + its API, a service + its shared
 library). Environments are managed under **Settings > Environments** and appear at the top of the
-new-session picker.
+new-session picker when accessible. They can be workspace-owned or team-owned, with names unique
+within that ownership scope. Ownership is immutable. Team pages also list their own environments.
+
+Team environments require membership in the owning team or a workspace Owner/Administrator role,
+plus the appropriate environment permission. Managing one requires a lead or workspace
+Owner/Administrator and `environments.manage`; secrets, settings, and image mutations also require
+their respective feature permissions. A team environment can launch only into a session owned by
+that team. A team's session catalog can include eligible workspace environments too, provided its
+repository grants cover their members. Unbound bot catalogs do not expose team environments.
+`requireTeamOnCreate`, when enabled, also requires a team for new environment definitions. See
+[Authentication and Authorization](AUTH.md#environment-access).
 
 An environment defines:
 
 - **An ordered repository list** (up to 10) with a base branch per repository; the first repository
   is the primary
-- **Environment secrets** — sessions launched from the environment receive global secrets plus the
-  environment's secrets (repository secrets do not flow in; see
+- **Environment secrets** — sessions receive global secrets, then their owning team's secrets (if
+  any), then the environment's secrets; later scopes win. Repository secrets do not flow in (see
   [Secrets Management](./SECRETS.md#which-secrets-a-session-receives))
 - **Optional prebuilt images** — the whole environment (all clones + all setup scripts) is built
   ahead of time so sessions boot in seconds (see [Pre-Built Images](./IMAGE_PREBUILD.md))
@@ -199,7 +210,7 @@ development environment.
 **What's in a sandbox:**
 
 - Debian Linux with common dev tools
-- Node.js 22, Python 3.12, git, curl
+- Node.js 24, Python 3.12, git, curl
 - Package managers: npm, pnpm, pip, uv
 - agent-browser CLI + headless Chrome (for browser automation)
 - OpenCode and the Claude Agent SDK (the coding agent harnesses)
@@ -247,43 +258,101 @@ cloud.
 When you create a session for a repo without an existing snapshot:
 
 ```
-┌─────────┐    ┌──────────┐    ┌─────────────┐    ┌─────────────┐    ┌─────────────┐    ┌───────┐
-│ Sandbox │───▶│ Git Sync │───▶│ Setup Script│───▶│ Start Script│───▶│ Agent Start │───▶│ Ready │
-│ Created │    │ (clone)  │    │ (optional)  │    │ (optional)  │    │ (OpenCode)  │    │       │
-└─────────┘    └──────────┘    └─────────────┘    └─────────────┘    └─────────────┘    └───────┘
-                                     │                    │
-                                     ▼                    ▼
-                            .openinspect/setup.sh   .openinspect/start.sh
+┌─────────┐   ┌──────────┐   ┌──────────┐   ┌──────────────┐   ┌──────────────┐
+│ Sandbox │──▶│  Bridge  │──▶│ Git Sync │──▶│ Setup Script │──▶│ Start Script │──┐
+│ Created │   │  Starts  │   │ (clone)  │   │  (optional)  │   │  (optional)  │  │
+└─────────┘   └──────────┘   └──────────┘   └──────────────┘   └──────────────┘  │
+               "starting"      "sync"           "setup"            "start"        │
+                                          .openinspect/setup.sh  .openinspect/start.sh
+  ┌───────────────────────────────────────────────────────────────────────────────┘
+  │   ┌────────────────┐   ┌─────────────┐   ┌───────┐
+  └──▶│ Managed Skills │──▶│ Agent Start │──▶│ Ready │
+      └────────────────┘   └─────────────┘   └───────┘
+            "skills"          "harness"
 ```
 
 1. **Sandbox created**: The selected backend creates a fresh sandbox from its base runtime
-2. **Git sync**: Clones your repository using brokered SCM credentials from the git credential
-   helper
-3. **Setup script**: Runs `.openinspect/setup.sh` for provisioning (if present)
-4. **Start script**: Runs `.openinspect/start.sh` for runtime startup (if present)
-5. **Agent start**: OpenCode server starts and connects back to the control plane
-6. **Ready**: Sandbox accepts prompts
+2. **Bridge starts**: The runtime starts its bridge process ahead of the repository boot, and the
+   bridge opens its WebSocket to the control plane and reports the `starting` phase. The supervisor
+   does not wait for that handshake, so the first boot steps can begin a moment before the socket is
+   up; in practice it connects a second or two into the boot. Once connected the sandbox is
+   `connecting`: it sends a heartbeat every 30 seconds and reports every later phase as it starts
+   and completes, so the control plane can tell a long boot from a dead one. A prompt sent during
+   boot waits here.
+3. **Git sync** (`sync`): Clones your repository using brokered SCM credentials from the git
+   credential helper
+4. **Setup script** (`setup`): Runs `.openinspect/setup.sh` for provisioning (if present). A
+   non-zero exit is reported as a warning and the boot continues
+5. **Start script** (`start`): Runs `.openinspect/start.sh` for runtime startup (if present)
+6. **Managed skills** (`skills`): Installs the session's managed skills into the workspace
+7. **Agent start** (`harness`): The agent harness starts (the OpenCode server, or the Claude Agent
+   staging). The bridge attaches to it and sends `ready`
+8. **Ready**: The runtime's `ready` event, not the connection, marks the sandbox ready. Prompts that
+   were waiting dispatch now
 
-For multi-repository sessions, steps 2–4 run per repository in position order: every repository is
-cloned into its own `/workspace` directory and each repository's setup and start scripts run in
-sequence.
+For multi-repository sessions the three steps have different shapes. Git sync is a single phase
+covering the whole set — the repositories are cloned concurrently into `/workspace/<repo-name>` — so
+it names no individual repository. Setup then runs for every repository in position order, and start
+runs as a second pass in the same order. Each `setup` and `start` phase names the repository it is
+running for.
+
+#### Watching a boot
+
+The session header names the phase while it runs: "Cloning repository", "Running setup.sh",
+"Starting services", "Installing skills", "Starting agent". Multi-repository sessions add the
+repository, as in "Running setup.sh for acme/api". Between phases, its status popover can say what
+just finished, but it does not display a list of completed phases or their durations. When a script
+fails, the header's status popover says which phase failed and names its repository when available.
+Failure reports retain phase, repository, and error or warning metadata, but hook stdout and stderr
+are discarded rather than collected or shown. A fatal `start.sh` failure in the session's first
+repository ends the boot. A `setup.sh` failure, and a `start.sh` failure in a later repository, are
+tolerated instead: the boot continues and the phase completes carrying a warning.
+
+#### How long a boot may take
+
+There is no fixed limit on `setup.sh` or `start.sh`. Two bounds apply instead:
+
+- **Connect watchdog (4 minutes)**: measured from sandbox creation until the bridge first connects.
+  It covers the provider launching the container, not your scripts.
+- **Boot budget (30 minutes by default)**: measured from sandbox creation until `ready`. Set
+  `SANDBOX_BOOT_TIMEOUT_MS` to change it (see [Getting Started](./GETTING_STARTED.md)). When the
+  budget runs out the sandbox is failed and its credentials are revoked, the prompt that was waiting
+  fails with the phase that was running, and the next prompt starts a new sandbox.
+
+A bridge that stops sending heartbeats for 90 seconds during boot is treated as dead the same way.
+No snapshot is taken in any of these cases, so a half-provisioned workspace never becomes the
+restore point. The sandbox itself is stopped only on providers that can stop one explicitly; on the
+others the row is marked stale and its socket detached, and the sandbox ages out on the provider's
+own timeout.
 
 ### Restore (From Snapshot)
 
 When restoring from a previous snapshot:
 
 ```
-┌─────────────┐    ┌────────────┐    ┌─────────────┐    ┌───────┐
-│  Restore    │───▶│ Quick Sync │───▶│ Start Script│───▶│ Ready │
-│  Snapshot   │    │ (git pull) │    │ (optional)  │    │       │
-└─────────────┘    └────────────┘    └─────────────┘    └───────┘
+┌─────────────┐   ┌──────────┐   ┌────────────┐   ┌──────────────┐   ┌─────────────┐   ┌───────┐
+│  Restore    │──▶│  Bridge  │──▶│ Quick Sync │──▶│ Start Script │──▶│ Agent Start │──▶│ Ready │
+│  Snapshot   │   │  Starts  │   │(git fetch) │   │  (optional)  │   │             │   │       │
+└─────────────┘   └──────────┘   └────────────┘   └──────────────┘   └─────────────┘   └───────┘
 ```
 
 1. **Restore snapshot**: The selected snapshot-capable provider restores the filesystem from a saved
    snapshot or checkpoint
-2. **Quick sync**: Pulls latest changes (usually just a few commits)
-3. **Start script**: Runs `.openinspect/start.sh` for runtime startup (if present)
-4. **Ready**: Sandbox is ready almost instantly
+2. **Bridge connects**: As in a fresh start, the bridge connects first and reports each phase
+3. **Quick sync**: Fetches the session's branch from origin. The restored checkout is left as it is,
+   so the snapshot's commit and any uncommitted work survive the restore
+4. **Start script**: Runs `.openinspect/start.sh` for runtime startup (if present)
+5. **Agent start**: Managed skills are installed and the agent harness starts
+6. **Ready**: Sandbox is ready almost instantly
+
+A restore reports the same phases as a fresh start minus `setup`, so the header shows the same
+labels.
+
+A snapshot taken by an older runtime still restores: the control plane accepts any runtime from
+generation 62 up, and connecting before the boot arrived in generation 68. A session restored from a
+generation 62–67 snapshot therefore boots the old way — its bridge connects only once the repository
+boot has finished — so it reports no phases while it boots and the whole boot still has to fit
+inside the four-minute connect watchdog.
 
 Snapshots include installed dependencies, built artifacts, and workspace state. This is why
 follow-up prompts in an existing session are much faster than the first prompt.
@@ -293,11 +362,15 @@ follow-up prompts in an existing session are much faster than the first prompt.
 When starting from a pre-built image (built for the session's repository or, for sessions launched
 from a prebuild-enabled environment, the environment's whole repository set):
 
-1. **Incremental git sync**: Fast fetch + hard reset to latest branch head (per repository for
+1. **Bridge connects**: As in a fresh start, the bridge connects first and reports each phase
+2. **Incremental git sync**: Fast fetch + hard reset to latest branch head (per repository for
    multi-repository sets)
-2. **Setup skipped**: `.openinspect/setup.sh` already ran when the image was built
-3. **Start script runs**: `.openinspect/start.sh` executes for per-session runtime startup
-4. **Ready**: Agent starts once runtime hook succeeds
+3. **Setup skipped**: `.openinspect/setup.sh` already ran when the image was built, so no `setup`
+   phase is reported
+4. **Start script runs**: `.openinspect/start.sh` executes for per-session runtime startup
+5. **Managed skills** (`skills`): The session's managed skills are installed
+6. **Agent start** (`harness`): The agent harness starts and the bridge attaches to it
+7. **Ready**: The runtime sends `ready` once the harness is up
 
 If `start.sh` exists and fails, startup fails fast instead of continuing with a broken runtime.
 
@@ -336,6 +409,10 @@ particularly with explicit `--package` commands.
 - **After successful prompt completion**: Preserves the workspace state
 - **Before sandbox timeout**: Saves state before the sandbox shuts down due to inactivity
 - **On explicit save**: Can be triggered by the control plane
+- **Not on a failed boot**: None of the automatic boot-failure paths — connect watchdog, boot
+  budget, stale heartbeat, fatal runtime error — takes a snapshot, so a half-provisioned workspace
+  does not become the restore point that way. The runtime also refuses a `snapshot` command while it
+  is still booting
 
 ### Sandbox Warming
 
@@ -518,14 +595,14 @@ Sessions stream events to all connected clients via WebSocket.
 
 ### Event Types
 
-| Event              | Description                                   |
-| ------------------ | --------------------------------------------- |
-| `sandbox_spawning` | Sandbox is being created                      |
-| `sandbox_ready`    | Sandbox is ready to accept prompts            |
-| `sandbox_event`    | Tool call, token stream, or other agent event |
-| `artifact_created` | PR created, screenshot captured               |
-| `presence_update`  | User joined or left the session               |
-| `session_status`   | Session state changed                         |
+| Event              | Description                                                                                                                     |
+| ------------------ | ------------------------------------------------------------------------------------------------------------------------------- |
+| `sandbox_spawning` | Sandbox is being created                                                                                                        |
+| `sandbox_status`   | Sandbox moved between `pending`, `spawning`, `connecting`, `warming`, `ready`, `snapshotting`, `stale`, `stopped`, and `failed` |
+| `sandbox_event`    | Tool call, token stream, boot phase (`boot_progress`), or other agent event                                                     |
+| `artifact_created` | PR created, screenshot captured                                                                                                 |
+| `presence_update`  | User joined or left the session                                                                                                 |
+| `session_status`   | Session state changed                                                                                                           |
 
 ### Multiplayer
 
@@ -553,7 +630,9 @@ Without optimization, starting a session would require:
 3. Installing dependencies (~30s-5min)
 4. Starting the agent (~5s)
 
-That's potentially minutes before the agent can start working.
+That's potentially minutes before the agent can start working. Because the runtime connects before
+it clones, you watch those steps happen phase by phase instead of waiting on a silent "Connecting"
+indicator.
 
 ### How Snapshots Solve This
 
@@ -599,10 +678,11 @@ same organization.
 
 ### Why Single-Tenant?
 
-The system uses a shared GitHub App installation for all git operations. This means:
+GitHub git operations use a shared GitHub App installation. This means:
 
-- Any user can access any repository the GitHub App is installed on
-- There's no per-user repository access validation
+- The installation defines the workspace's maximum repository reach; workspace permissions and team
+  repository grants further constrain access
+- Open-Inspect does not compare a user's personal GitHub repository permissions with that scope
 - The trust boundary is your organization, not individual users
 
 This follows
@@ -611,32 +691,30 @@ was built for internal use where all employees have access to company repositori
 
 ### Token Architecture
 
-| Token              | Purpose                                    | Scope                            |
-| ------------------ | ------------------------------------------ | -------------------------------- |
-| GitHub App Token   | Mint brokered git credentials              | All repos where App is installed |
-| User OAuth Token   | Create PRs, identify users                 | Repos the user has access to     |
-| Sandbox Auth Token | Authenticate sandbox → control plane calls | Single session                   |
-| WebSocket Token    | Authenticate client connections            | Single session                   |
-| Managed LLM Token  | Short-lived OpenAI or xAI model access     | Pinned session provider account  |
+Session sandboxes fetch git credentials through the control plane and cache them on disk. GitHub
+credentials cover the persisted session repositories, intersected with current owning-team grants
+only for team-owned sessions. GitLab returns the deployment PAT without per-session narrowing. Modal
+filesystem snapshots can retain the helper cache; brokerage is not a token-free snapshot guarantee,
+and grant removal does not immediately revoke issued credentials.
 
-Fresh and prebuilt-image sandboxes fetch git credentials on demand through the control plane instead
-of relying on a token embedded in the environment or remote URL. Snapshot restores may still receive
-env-token fallbacks so legacy snapshots can boot through the credential-helper migration. The helper
-authorizes HTTPS requests for the configured SCM host, preserving existing setup/start hooks that
-clone other private repositories available to the installation. This primarily protects continuously
-running sessions and Daytona persistent resumes from expired embedded credentials; Modal snapshot
-restores still mint a fresh fallback token on restore.
+Image builds receive `VCS_CLONE_TOKEN` because they have no session broker. For GitHub it is scoped
+to the build repositories, with current owning-team grants applied for team-owned environment
+builds. For GitLab it is the deployment PAT, not a repository-scoped or single-use credential. See
+the canonical [access and credential boundaries](AUTH.md#repository-and-credential-boundaries) for
+dependency access, cache behavior, and provider limitations.
 
 ### Secrets
 
-You can configure environment variables (API keys, credentials) at global, per-repository, or
-per-environment scope. A session receives global secrets plus its **session target's** secrets:
+You can configure environment variables (API keys, credentials) at global, team, repository, or
+environment scope. Precedence is global, then owning team when present, then the **session
+target's** secrets; later layers win collisions:
 
 - **Global secrets** apply to all sessions (e.g., `ANTHROPIC_API_KEY`, `DEEPSEEK_API_KEY`,
-  `ZHIPU_API_KEY`)
-- **Repository secrets** apply to sessions launched from that repo (including all bot-created
-  sessions) and override global secrets with the same key; ad-hoc multi-repository sessions receive
-  each selected repository's secrets, with the primary winning collisions
+  `ZHIPU_API_KEY`, `OPENCODE_API_KEY`)
+- **Team secrets** apply to sessions owned by that team, overriding global values
+- **Repository secrets** apply to repository-targeted sessions and override global and team secrets
+  with the same key; ad-hoc multi-repository sessions receive each selected repository's secrets,
+  with the primary winning collisions
 - **Environment secrets** apply to sessions launched from that environment — its repositories'
   repository secrets do not flow in
 - Stored encrypted (AES-256-GCM) in D1 database
@@ -680,10 +758,11 @@ operators may remove legacy keys after legacy-bound sessions are no longer neede
 > into Modal session sandboxes and OpenComputer sandboxes; a global secret of the same name takes
 > precedence over it, and the other providers read only the secret store.
 >
-> **Opt-in model providers**: DeepSeek models require `DEEPSEEK_API_KEY`, and Z.AI Coding Plan
-> models require `ZHIPU_API_KEY`, as a global secret with any sandbox provider. SuperGrok models
-> require an xAI provider account or `XAI_API_KEY` mode and must be enabled under **Settings >
-> Models**.
+> **Opt-in model providers**: DeepSeek models require `DEEPSEEK_API_KEY`, Z.AI Coding Plan models
+> require `ZHIPU_API_KEY`, and OpenCode Zen and OpenCode Go models require `OPENCODE_API_KEY` (Go
+> also needs an active Go subscription on that key), as a global secret with any sandbox provider.
+> SuperGrok models require an xAI provider account or `XAI_API_KEY` mode and must be enabled under
+> **Settings > Models**.
 
 See [Secrets Management](./SECRETS.md) for setup instructions.
 

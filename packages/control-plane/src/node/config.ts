@@ -17,6 +17,7 @@
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { EnvConfig } from "../types";
+import { parseTeamsEnforcementMode } from "../authorization/teams-enforcement";
 
 /** A source of configuration values, `process.env` in production. */
 export type ConfigSource = Record<string, string | undefined>;
@@ -71,6 +72,8 @@ const ENV_CONFIG_KEYS = {
   DAYTONA_AUTO_STOP_INTERVAL_MINUTES: true,
   DAYTONA_AUTO_ARCHIVE_INTERVAL_MINUTES: true,
   DAYTONA_TARGET: true,
+  DAYTONA_TOOLBOX_API_URL: true,
+  DAYTONA_PREBUILDS_ENABLED: true,
   OPENCOMPUTER_API_URL: true,
   OPENCOMPUTER_TEMPLATE: true,
   VERCEL_PROJECT_ID: true,
@@ -86,8 +89,10 @@ const ENV_CONFIG_KEYS = {
   E2B_SANDBOX_TIMEOUT_SECONDS: true,
   E2B_AUTO_PAUSE: true,
   SANDBOX_INACTIVITY_TIMEOUT_MS: true,
+  SANDBOX_BOOT_TIMEOUT_MS: true,
   EXECUTION_TIMEOUT_MS: true,
   SECRETS_CAP_ENFORCEMENT: true,
+  TEAMS_ENFORCEMENT: true,
   LOG_LEVEL: true,
 } as const satisfies Record<keyof EnvConfig, true>;
 
@@ -152,6 +157,7 @@ export function readEnvConfig(source: ConfigSource): EnvConfig {
   if (missing.length > 0) {
     throw new Error(`Missing required configuration: ${missing.join(", ")}`);
   }
+  parseTeamsEnforcementMode(config.TEAMS_ENFORCEMENT);
   return config as EnvConfig;
 }
 

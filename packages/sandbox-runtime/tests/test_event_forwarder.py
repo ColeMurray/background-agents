@@ -5,6 +5,9 @@ Covers the reconnect-safe delivery state machine through its public surface:
 buffering while no connection is bound, bind-time backlog recovery (without
 double-sends), the ACK lifecycle, stale-send recovery after a rebind, and
 bounded-buffer overflow eviction.
+
+Retiring a connection whose write stalled lives in
+``test_event_forwarder_retirement.py``.
 """
 
 import asyncio
@@ -14,43 +17,15 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from websockets import State
 
-from sandbox_runtime.event_forwarder import SEND_TIMEOUT_SECONDS, BufferedEventForwarder
-
-
-def make_forwarder(
-    max_buffer_size: int = 1000,
-    send_timeout_seconds: float = SEND_TIMEOUT_SECONDS,
-) -> BufferedEventForwarder:
-    return BufferedEventForwarder(
-        sandbox_id="test-sandbox",
-        log=MagicMock(),
-        max_buffer_size=max_buffer_size,
-        send_timeout_seconds=send_timeout_seconds,
-    )
-
-
-def open_ws() -> MagicMock:
-    ws = MagicMock()
-    ws.state = State.OPEN
-    ws.send = AsyncMock()
-    return ws
-
-
-def sent_events(ws: MagicMock) -> list[dict]:
-    return [json.loads(call.args[0]) for call in ws.send.await_args_list]
-
-
-def wedged_ws(fail_signal: asyncio.Event) -> MagicMock:
-    """A connection whose sends hang until signalled, then fail."""
-    ws = MagicMock()
-    ws.state = State.OPEN
-
-    async def wedged_send(data: str) -> None:
-        await fail_signal.wait()
-        raise ConnectionError("stale connection flap")
-
-    ws.send = wedged_send
-    return ws
+from sandbox_runtime.event_size import MAX_EVENT_BYTES, event_size_bytes
+from tests.event_forwarder_fakes import (
+    hung_ws,
+    make_forwarder,
+    open_ws,
+    sent_events,
+    settle,
+    wedged_ws,
+)
 
 
 class GatedWs:
@@ -79,85 +54,56 @@ class GatedWs:
         return [call.get("messageId") for call in self.calls]
 
 
-async def settle() -> None:
-    """Let every runnable coroutine advance to its next suspension point."""
-    for _ in range(5):
-        await asyncio.sleep(0)
-
-
-class TestBufferWhileDisconnected:
-    @pytest.mark.asyncio
-    async def test_send_buffers_when_never_bound(self):
-        forwarder = make_forwarder()
-
-        await forwarder.send({"type": "token", "content": "hello"})
-
-        assert len(forwarder._event_buffer) == 1
-        buffered = forwarder._event_buffer[0]
-        assert buffered["type"] == "token"
-        # Sandbox identity and timestamp are stamped even while buffering
-        assert buffered["sandboxId"] == "test-sandbox"
-        assert "timestamp" in buffered
-
-    @pytest.mark.asyncio
-    async def test_send_buffers_after_unbind(self):
-        forwarder = make_forwarder()
-        await forwarder.bind(open_ws())
-        forwarder.unbind()
-
-        await forwarder.send({"type": "token", "content": "hello"})
-
-        assert len(forwarder._event_buffer) == 1
-
-    @pytest.mark.asyncio
-    async def test_send_buffers_when_bound_ws_not_open(self):
-        forwarder = make_forwarder()
-        ws = open_ws()
-        ws.state = State.CLOSED
-        await forwarder.bind(ws)
-
-        await forwarder.send({"type": "token", "content": "hello"})
-
-        ws.send.assert_not_awaited()
-        assert len(forwarder._event_buffer) == 1
-
-    @pytest.mark.asyncio
-    async def test_send_failure_buffers_and_does_not_track_pending(self):
-        forwarder = make_forwarder()
-        ws = open_ws()
-        ws.send = AsyncMock(side_effect=ConnectionError("broken pipe"))
-        await forwarder.bind(ws)
-
-        await forwarder.send({"type": "execution_complete", "messageId": "msg-1"})
-
-        assert len(forwarder._event_buffer) == 1
-        assert len(forwarder._pending_acks) == 0
-
-
 class TestSendWhileConnected:
     @pytest.mark.asyncio
-    async def test_critical_event_gets_ack_id_and_pends(self):
+    @pytest.mark.parametrize("finish", ["success", "failure", "cancellation"])
+    async def test_early_ack_during_direct_send_is_not_reintroduced(self, finish):
         forwarder = make_forwarder()
-        ws = open_ws()
+        ws = GatedWs()
         await forwarder.bind(ws)
+        send_task = asyncio.create_task(
+            forwarder.send({"type": "execution_complete", "messageId": "msg-early-ack"})
+        )
+        await settle()
 
-        await forwarder.send({"type": "execution_complete", "messageId": "msg-1"})
+        assert forwarder.acknowledge("execution_complete:msg-early-ack") is True
+        if finish == "success":
+            ws.release(0)
+            assert await send_task is True
+        elif finish == "failure":
+            ws.release(0, ConnectionError("failed after delivery"))
+            assert await send_task is False
+        else:
+            send_task.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await send_task
 
-        [event] = sent_events(ws)
-        assert event["ackId"] == "execution_complete:msg-1"
-        assert forwarder._pending_acks["execution_complete:msg-1"]["type"] == "execution_complete"
+        assert forwarder._event_buffer == []
+        assert forwarder._pending_acks == {}
+        replacement = open_ws()
+        await forwarder.bind(replacement)
+        assert sent_events(replacement) == []
 
     @pytest.mark.asyncio
-    async def test_non_critical_event_has_no_ack_id(self):
-        forwarder = make_forwarder()
-        ws = open_ws()
-        await forwarder.bind(ws)
+    async def test_hung_direct_send_times_out_then_replays_critical_once(self):
+        forwarder = make_forwarder(send_timeout_seconds=0.01)
+        await forwarder.bind(hung_ws())
 
-        await forwarder.send({"type": "token", "content": "hello"})
+        delivered = await asyncio.wait_for(
+            forwarder.send({"type": "execution_complete", "messageId": "msg-timeout"}),
+            timeout=0.2,
+        )
 
-        [event] = sent_events(ws)
-        assert "ackId" not in event
-        assert len(forwarder._pending_acks) == 0
+        assert delivered is False
+        assert [event["messageId"] for event in forwarder._event_buffer] == ["msg-timeout"]
+
+        replacement = open_ws()
+        await forwarder.bind(replacement)
+        assert [event["ackId"] for event in sent_events(replacement)] == [
+            "execution_complete:msg-timeout"
+        ]
+        assert forwarder._event_buffer == []
+        assert forwarder.acknowledge("execution_complete:msg-timeout") is True
 
     @pytest.mark.asyncio
     async def test_ack_id_is_random_and_unique_without_message_id(self):
@@ -190,108 +136,54 @@ class TestSendWhileConnected:
         assert event["ackId"] == "custom:id"
         assert forwarder.acknowledge("custom:id") is True
 
-    @pytest.mark.asyncio
-    async def test_acknowledge_clears_pending(self):
-        forwarder = make_forwarder()
-        await forwarder.bind(open_ws())
-        await forwarder.send({"type": "execution_complete", "messageId": "msg-1"})
-
-        assert forwarder.acknowledge("execution_complete:msg-1") is True
-        assert len(forwarder._pending_acks) == 0
-        # Unknown ackIds report not-found
-        assert forwarder.acknowledge("execution_complete:msg-1") is False
-
 
 class TestBindRecovery:
     @pytest.mark.asyncio
-    async def test_bind_flushes_buffered_events_in_order(self):
+    @pytest.mark.parametrize("finish", ["success", "failure", "cancellation"])
+    async def test_early_ack_during_buffer_flush_is_not_reintroduced(self, finish):
         forwarder = make_forwarder()
-        await forwarder.send({"type": "token", "content": "a"})
-        await forwarder.send({"type": "execution_complete", "messageId": "msg-1"})
+        await forwarder.send({"type": "execution_complete", "messageId": "msg-flush-early-ack"})
+        ws = GatedWs()
+        bind_task = asyncio.create_task(forwarder.bind(ws))
+        await settle()
 
-        ws = open_ws()
-        await forwarder.bind(ws)
+        assert forwarder.acknowledge("execution_complete:msg-flush-early-ack") is True
+        if finish == "success":
+            ws.release(0)
+            await bind_task
+        elif finish == "failure":
+            ws.release(0, ConnectionError("failed after delivery"))
+            await bind_task
+        else:
+            bind_task.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await bind_task
 
-        assert len(forwarder._event_buffer) == 0
-        assert [event["type"] for event in sent_events(ws)] == ["token", "execution_complete"]
-        # The critical event starts pending on flush, awaiting its ACK
-        assert forwarder.acknowledge("execution_complete:msg-1") is True
+        assert forwarder._event_buffer == []
+        assert forwarder._pending_acks == {}
+        replacement = open_ws()
+        await forwarder.bind(replacement)
+        assert sent_events(replacement) == []
 
     @pytest.mark.asyncio
-    async def test_bind_with_no_backlog_sends_nothing(self):
+    async def test_unacknowledged_cancelled_flush_keeps_one_replayable_copy(self):
         forwarder = make_forwarder()
+        await forwarder.send({"type": "execution_complete", "messageId": "msg-cancelled-flush"})
+        ws = GatedWs()
+        bind_task = asyncio.create_task(forwarder.bind(ws))
+        await settle()
 
-        ws = open_ws()
-        await forwarder.bind(ws)
+        bind_task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await bind_task
 
-        ws.send.assert_not_awaited()
-
-    @pytest.mark.asyncio
-    async def test_bind_flush_stops_on_send_failure_and_keeps_remainder(self):
-        forwarder = make_forwarder()
-        await forwarder.send({"type": "token", "content": "a"})
-        await forwarder.send({"type": "token", "content": "b"})
-
-        ws = open_ws()
-        ws.send = AsyncMock(side_effect=[None, ConnectionError("broken")])
-        await forwarder.bind(ws)
-
-        assert len(forwarder._event_buffer) == 1
-        assert forwarder._event_buffer[0]["content"] == "b"
-
-    @pytest.mark.asyncio
-    async def test_bind_does_not_double_send_buffered_criticals(self):
-        """A critical event flushed from the buffer must not also be re-sent
-        by the pending-ack recovery on the same bind."""
-        forwarder = make_forwarder()
-        # msg-1 was sent on a previous connection and never acknowledged
-        await forwarder.bind(open_ws())
-        await forwarder.send({"type": "execution_complete", "messageId": "msg-1"})
-        forwarder.unbind()
-        # msg-2 completed while disconnected, so it sits in the buffer
-        await forwarder.send({"type": "execution_complete", "messageId": "msg-2"})
-
-        ws = open_ws()
-        await forwarder.bind(ws)
-
-        # msg-2 once from the buffer, msg-1 once from pending acks — no dupes
-        assert [event["ackId"] for event in sent_events(ws)] == [
-            "execution_complete:msg-2",
-            "execution_complete:msg-1",
+        assert [event["messageId"] for event in forwarder._event_buffer] == ["msg-cancelled-flush"]
+        assert forwarder._pending_acks == {}
+        replacement = open_ws()
+        await forwarder.bind(replacement)
+        assert [event["ackId"] for event in sent_events(replacement)] == [
+            "execution_complete:msg-cancelled-flush"
         ]
-        assert set(forwarder._pending_acks) == {
-            "execution_complete:msg-1",
-            "execution_complete:msg-2",
-        }
-
-    @pytest.mark.asyncio
-    async def test_bind_resends_all_unacknowledged_criticals(self):
-        forwarder = make_forwarder()
-        await forwarder.bind(open_ws())
-        await forwarder.send({"type": "execution_complete", "messageId": "msg-1"})
-        await forwarder.send({"type": "error", "messageId": "msg-2"})
-        forwarder.unbind()
-
-        ws = open_ws()
-        await forwarder.bind(ws)
-
-        assert ws.send.await_count == 2
-        # Both stay pending until an ACK command clears them
-        assert forwarder.acknowledge("execution_complete:msg-1") is True
-        assert forwarder.acknowledge("error:msg-2") is True
-
-    @pytest.mark.asyncio
-    async def test_bind_does_not_resend_acknowledged_events(self):
-        forwarder = make_forwarder()
-        await forwarder.bind(open_ws())
-        await forwarder.send({"type": "execution_complete", "messageId": "msg-1"})
-        assert forwarder.acknowledge("execution_complete:msg-1") is True
-        forwarder.unbind()
-
-        ws = open_ws()
-        await forwarder.bind(ws)
-
-        ws.send.assert_not_awaited()
 
 
 class TestStaleSendRecovery:
@@ -347,9 +239,107 @@ class TestStaleSendRecovery:
         assert ws.send.await_count == 1
         assert len(forwarder._event_buffer) == 1
 
+    @pytest.mark.asyncio
+    async def test_rebound_recovery_lock_wait_is_bounded(self):
+        forwarder = make_forwarder(send_timeout_seconds=0.01)
+        release_failure = asyncio.Event()
+        old_ws = wedged_ws(release_failure)
+        await forwarder.bind(old_ws)
+        send_task = asyncio.create_task(
+            forwarder.send({"type": "execution_complete", "messageId": "msg-lock"})
+        )
+        await settle()
+
+        await forwarder._recovery_lock.acquire()
+        replacement = open_ws()
+        bind_task = asyncio.create_task(forwarder.bind(replacement))
+        await settle()  # bind publishes replacement before waiting for the lock
+        release_failure.set()
+
+        try:
+            assert await asyncio.wait_for(send_task, timeout=0.2) is False
+            assert [event["messageId"] for event in forwarder._event_buffer] == ["msg-lock"]
+        finally:
+            forwarder._recovery_lock.release()
+
+        await bind_task
+        assert [event["ackId"] for event in sent_events(replacement)] == [
+            "execution_complete:msg-lock"
+        ]
+        assert forwarder.acknowledge("execution_complete:msg-lock") is True
+
+    @pytest.mark.asyncio
+    async def test_rebound_recovery_flush_timeout_keeps_one_buffered_copy(self):
+        forwarder = make_forwarder(send_timeout_seconds=0.01)
+        release_failure = asyncio.Event()
+        old_ws = wedged_ws(release_failure)
+        await forwarder.bind(old_ws)
+        send_task = asyncio.create_task(
+            forwarder.send({"type": "execution_complete", "messageId": "msg-flush"})
+        )
+        await settle()
+
+        forwarder.unbind()
+        await forwarder.bind(hung_ws())
+        release_failure.set()
+
+        assert await asyncio.wait_for(send_task, timeout=0.2) is False
+        assert [event["messageId"] for event in forwarder._event_buffer] == ["msg-flush"]
+
+        replacement = open_ws()
+        await forwarder.bind(replacement)
+        assert [event["ackId"] for event in sent_events(replacement)] == [
+            "execution_complete:msg-flush"
+        ]
+        assert forwarder.acknowledge("execution_complete:msg-flush") is True
+
 
 class TestConcurrentRecovery:
     """Races between bind() recovery, stale-send drains, sends, and eviction."""
+
+    @pytest.mark.asyncio
+    async def test_bind_does_not_resend_critical_flushed_by_lock_owner(self) -> None:
+        forwarder = make_forwarder()
+        original = GatedWs()
+        await forwarder.bind(original)
+
+        send_pending = asyncio.create_task(
+            forwarder.send({"type": "execution_complete", "messageId": "msg-pending"})
+        )
+        await settle()
+        original.release(0)
+        await send_pending
+
+        send_w = asyncio.create_task(forwarder.send({"type": "token", "content": "W"}))
+        await settle()
+
+        forwarder.unbind()
+        intermediate = GatedWs()
+        bind_intermediate = asyncio.create_task(forwarder.bind(intermediate))
+        await settle()
+        intermediate.release(0)
+        await bind_intermediate
+
+        original.release(1, ConnectionError("original connection failed"))
+        await settle()
+        assert [event.get("content") for event in intermediate.calls] == [None, "W"]
+
+        forwarder.unbind()
+        await forwarder.send({"type": "execution_complete", "messageId": "msg-X"})
+        replacement = open_ws()
+        bind_replacement = asyncio.create_task(forwarder.bind(replacement))
+        await settle()
+
+        intermediate.release(1)
+        await send_w
+        await bind_replacement
+
+        assert [event["ackId"] for event in sent_events(replacement)] == [
+            "execution_complete:msg-X",
+            "execution_complete:msg-pending",
+        ]
+        assert forwarder.acknowledge("execution_complete:msg-X") is True
+        assert forwarder.acknowledge("execution_complete:msg-pending") is True
 
     @pytest.mark.asyncio
     async def test_drain_waits_for_bind_flush_no_loss_or_duplicates(self):
@@ -525,15 +515,7 @@ class TestConcurrentRecovery:
         forwarder = make_forwarder(send_timeout_seconds=0.05)
         await forwarder.send({"type": "execution_complete", "messageId": "msg-1"})
 
-        hung_ws = MagicMock()
-        hung_ws.state = State.OPEN
-
-        async def never_completes(data: str) -> None:
-            await asyncio.Event().wait()
-
-        hung_ws.send = never_completes
-
-        await forwarder.bind(hung_ws)  # returns: the timeout breaks the flush
+        await forwarder.bind(hung_ws())  # returns: the timeout breaks the flush
 
         assert len(forwarder._event_buffer) == 1
 
@@ -542,6 +524,112 @@ class TestConcurrentRecovery:
         assert [event["ackId"] for event in sent_events(replacement)] == [
             "execution_complete:msg-1"
         ]
+
+
+class TestUnbufferedSends:
+    """``buffered=False`` means at most once: every failure path drops."""
+
+    @pytest.mark.asyncio
+    async def test_unbound_unbuffered_send_is_dropped_and_reports_undelivered(self):
+        forwarder = make_forwarder()
+
+        delivered = await forwarder.send({"type": "boot_progress", "bootSeq": 1}, buffered=False)
+
+        assert delivered is False
+        assert forwarder._event_buffer == []
+
+    @pytest.mark.asyncio
+    async def test_delivered_send_reports_delivered(self):
+        forwarder = make_forwarder()
+        ws = open_ws()
+        await forwarder.bind(ws)
+
+        assert await forwarder.send({"type": "boot_progress", "bootSeq": 1}) is True
+        assert await forwarder.send({"type": "warning", "scope": "sync"}) is True
+
+    @pytest.mark.asyncio
+    async def test_failed_unbuffered_send_is_dropped_not_replayed(self):
+        forwarder = make_forwarder()
+        ws = open_ws()
+        ws.send = AsyncMock(side_effect=ConnectionError("broken pipe"))
+        await forwarder.bind(ws)
+
+        delivered = await forwarder.send({"type": "boot_progress", "bootSeq": 3}, buffered=False)
+
+        assert delivered is False
+        assert forwarder._event_buffer == []
+        # A later connection must not receive the stale phase.
+        replacement = open_ws()
+        await forwarder.bind(replacement)
+        assert sent_events(replacement) == []
+
+    @pytest.mark.asyncio
+    async def test_hung_unbuffered_send_times_out_without_replay(self):
+        forwarder = make_forwarder(send_timeout_seconds=0.01)
+        await forwarder.bind(hung_ws())
+
+        delivered = await asyncio.wait_for(
+            forwarder.send({"type": "boot_progress", "bootSeq": 3}, buffered=False),
+            timeout=0.2,
+        )
+
+        assert delivered is False
+        assert forwarder._event_buffer == []
+        replacement = open_ws()
+        await forwarder.bind(replacement)
+        assert sent_events(replacement) == []
+
+    @pytest.mark.asyncio
+    async def test_failed_unbuffered_send_does_not_drain_for_the_dropped_event(self):
+        """Nothing was stranded, so the rebind drain has nothing to do here."""
+        forwarder = make_forwarder()
+        release_failure = asyncio.Event()
+        old_ws = MagicMock()
+        old_ws.state = State.OPEN
+
+        async def wedged_send(data):
+            await release_failure.wait()
+            raise ConnectionError("connection timed out")
+
+        old_ws.send = wedged_send
+        await forwarder.bind(old_ws)
+        send_task = asyncio.create_task(
+            forwarder.send({"type": "boot_progress", "bootSeq": 4}, buffered=False)
+        )
+        await asyncio.sleep(0)
+
+        forwarder.unbind()
+        new_ws = open_ws()
+        await forwarder.bind(new_ws)
+        release_failure.set()
+
+        assert await send_task is False
+        assert sent_events(new_ws) == []
+        assert forwarder._event_buffer == []
+
+    @pytest.mark.asyncio
+    async def test_cancelled_unbuffered_send_is_dropped_not_rebuffered(self):
+        forwarder = make_forwarder()
+        started = asyncio.Event()
+        ws = MagicMock()
+        ws.state = State.OPEN
+
+        async def hanging_send(data: str) -> None:
+            started.set()
+            await asyncio.Event().wait()
+
+        ws.send = hanging_send
+        await forwarder.bind(ws)
+
+        send_task = asyncio.create_task(
+            forwarder.send({"type": "boot_progress", "bootSeq": 5}, buffered=False)
+        )
+        await started.wait()
+        send_task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await send_task
+
+        assert forwarder._event_buffer == []
 
 
 class TestOverflowEviction:
@@ -567,6 +655,151 @@ class TestOverflowEviction:
 
         types = [event["type"] for event in forwarder._event_buffer]
         assert types == ["error", "push_complete"]
+
+
+class TestOversizedEvents:
+    @pytest.mark.asyncio
+    async def test_sends_truncated_tool_call_instead_of_losing_it(self):
+        forwarder = make_forwarder()
+        ws = open_ws()
+        await forwarder.bind(ws)
+
+        delivered = await forwarder.send(
+            {
+                "type": "tool_call",
+                "tool": "Read",
+                "callId": "call-1",
+                "messageId": "msg-1",
+                "status": "completed",
+                "args": {"filePath": "/tmp/report"},
+                "output": "x" * (MAX_EVENT_BYTES + 1),
+            }
+        )
+
+        assert delivered is True
+        [event] = sent_events(ws)
+        assert event["truncated"]["fields"] == ["output"]
+        assert event["truncated"]["originalBytes"] > MAX_EVENT_BYTES
+        assert event["args"]["filePath"] == "/tmp/report"
+        assert len(ws.send.await_args.args[0].encode("utf-8")) <= MAX_EVENT_BYTES
+        forwarder._log.warn.assert_called_once_with(
+            "bridge.event_oversized",
+            event_type="tool_call",
+            size_bytes=event["truncated"]["originalBytes"],
+        )
+
+    @pytest.mark.asyncio
+    async def test_buffered_tool_call_is_truncated_before_reconnect(self):
+        forwarder = make_forwarder()
+        await forwarder.send(
+            {
+                "type": "tool_call",
+                "tool": "Write",
+                "callId": "call-1",
+                "messageId": "msg-1",
+                "args": {"path": "/tmp/report", "content": "x" * MAX_EVENT_BYTES},
+            }
+        )
+
+        assert forwarder._event_buffer[0]["truncated"]["fields"] == ["args.content"]
+        ws = open_ws()
+        await forwarder.bind(ws)
+        assert len(sent_events(ws)) == 1
+        assert len(ws.send.await_args.args[0].encode("utf-8")) <= MAX_EVENT_BYTES
+        forwarder._log.warn.assert_called_once_with(
+            "bridge.event_oversized",
+            event_type="tool_call",
+            size_bytes=sent_events(ws)[0]["truncated"]["originalBytes"],
+        )
+
+    @pytest.mark.asyncio
+    async def test_oversized_non_tool_event_warns_once_and_does_not_close_socket(self):
+        forwarder = make_forwarder()
+        ws = open_ws()
+        await forwarder.bind(ws)
+
+        event = {"type": "token", "content": "x" * MAX_EVENT_BYTES}
+        delivered = await forwarder.send(event)
+
+        assert delivered is False
+        ws.send.assert_not_awaited()
+        forwarder._log.warn.assert_called_once_with(
+            "bridge.event_oversized",
+            event_type="token",
+            size_bytes=event_size_bytes(event),
+        )
+        assert forwarder._event_buffer == []
+
+        assert await forwarder.send({"type": "heartbeat"}) is True
+        assert len(sent_events(ws)) == 1
+
+    @pytest.mark.asyncio
+    async def test_unshrinkable_tool_call_warns_instead_of_sending_oversized_frame(self):
+        forwarder = make_forwarder()
+        ws = open_ws()
+        await forwarder.bind(ws)
+
+        event = {
+            "type": "tool_call",
+            "tool": "Read",
+            "callId": "call-1",
+            "messageId": "msg-1",
+            "args": {"filePath": "p" * MAX_EVENT_BYTES},
+        }
+        delivered = await forwarder.send(event)
+
+        assert delivered is False
+        ws.send.assert_not_awaited()
+        forwarder._log.warn.assert_called_once_with(
+            "bridge.event_oversized",
+            event_type="tool_call",
+            size_bytes=event_size_bytes(event),
+        )
+
+    @pytest.mark.asyncio
+    async def test_oversized_execution_complete_keeps_terminal_identity_and_ack(self):
+        forwarder = make_forwarder()
+        ws = open_ws()
+        await forwarder.bind(ws)
+        event = {
+            "type": "execution_complete",
+            "messageId": "msg-1",
+            "success": False,
+            "messageCostUsd": 0.5,
+            "error": "x" * MAX_EVENT_BYTES,
+        }
+
+        assert await forwarder.send(event) is True
+
+        [sent] = sent_events(ws)
+        assert sent["messageId"] == "msg-1"
+        assert sent["success"] is False
+        assert sent["messageCostUsd"] == 0.5
+        assert sent["ackId"] == "execution_complete:msg-1"
+        assert sent["error"] and len(sent["error"]) < len(event["error"])
+        assert len(ws.send.await_args.args[0].encode("utf-8")) <= MAX_EVENT_BYTES
+        assert forwarder.acknowledge(sent["ackId"]) is True
+        forwarder._log.warn.assert_called_once_with(
+            "bridge.event_oversized",
+            event_type="execution_complete",
+            size_bytes=event_size_bytes(event),
+        )
+
+    @pytest.mark.asyncio
+    async def test_oversized_error_is_buffered_and_replayed_on_reconnect(self):
+        forwarder = make_forwarder()
+        await forwarder.send(
+            {"type": "error", "messageId": "msg-1", "error": "x" * MAX_EVENT_BYTES}
+        )
+
+        assert len(forwarder._event_buffer) == 1
+        ws = open_ws()
+        await forwarder.bind(ws)
+        [sent] = sent_events(ws)
+        assert sent["ackId"] == "error:msg-1"
+        assert sent["error"]
+        assert len(ws.send.await_args.args[0].encode("utf-8")) <= MAX_EVENT_BYTES
+        assert forwarder.acknowledge(sent["ackId"]) is True
 
 
 if __name__ == "__main__":

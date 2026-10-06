@@ -63,7 +63,6 @@ type CloseDirective =
   | { action: "refresh_credential" }
   | { action: "refresh_authorization" }
   | { action: "session_expired" }
-  | { action: "authorization_revoked"; delayMs?: number }
   | { action: "retry"; delayMs: number }
   | { action: "await_user"; message: string }
   | { action: "give_up" }
@@ -129,10 +128,12 @@ export interface UseSessionTransportReturn {
   reconnecting: boolean;
   authError: string | null;
   connectionError: string | null;
+  /** A token mint returned 404; terminal for this session, even on manual reconnect. */
+  sessionGone: boolean;
   /** Whether the socket is currently open. */
   isOpen: () => boolean;
-  /** Send a JSON payload; drops it silently when the socket is not open. */
-  send: (payload: Record<string, unknown>) => void;
+  /** Send a JSON payload, returning whether an open socket queued it without throwing. */
+  send: (payload: Record<string, unknown>) => boolean;
   /** Drop the connection and token, then connect fresh. */
   reconnect: () => void;
   /** Mark synchronization complete so future network retries start fresh. */
@@ -153,6 +154,7 @@ export function useSessionTransport(
   const wsRef = useRef<WebSocket | null>(null);
   const mountedRef = useRef(true);
   const wsTokenRef = useRef<string | null>(null);
+  const goneSessionIdRef = useRef<string | null>(null);
   const reconnectTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const reconnectAttempts = useRef(0);
   // Automatic credential reissues spent since the last healthy connection.
@@ -185,35 +187,56 @@ export function useSessionTransport(
   const reconnecting = phase === "reconnecting";
   const [authError, setAuthError] = useState<string | null>(null);
   const [connectionError, setConnectionError] = useState<string | null>(null);
+  const [goneSessionId, setGoneSessionId] = useState<string | null>(null);
+  const sessionGone = goneSessionId === sessionId;
 
-  const fetchWsToken = useCallback(async (): Promise<string | null> => {
-    try {
-      const response = await browserApiFetch(`/api/sessions/${sessionId}/ws-token`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-      });
+  const fetchWsToken = useCallback(
+    async (epoch: number): Promise<string | null> => {
+      try {
+        const response = await browserApiFetch(`/api/sessions/${sessionId}/ws-token`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+        });
 
-      if (!response.ok) {
-        if (response.status === 401) {
-          setAuthError("Please sign in to connect");
+        if (epoch !== connectEpochRef.current || !mountedRef.current) return null;
+
+        if (!response.ok) {
+          if (response.status === 404) {
+            goneSessionIdRef.current = sessionId;
+            setGoneSessionId(sessionId);
+            wsTokenRef.current = null;
+            if (reconnectTimeoutRef.current) {
+              clearTimeout(reconnectTimeoutRef.current);
+              reconnectTimeoutRef.current = null;
+            }
+            setAuthError(null);
+            setConnectionError(null);
+            return null;
+          }
+          if (response.status === 401) {
+            setAuthError("Please sign in to connect");
+            return null;
+          }
+          const error = await response.text();
+          if (epoch !== connectEpochRef.current || !mountedRef.current) return null;
+          console.error("Failed to fetch WS token:", error);
+          setAuthError("Failed to authenticate");
           return null;
         }
-        const error = await response.text();
+
+        const data = await response.json();
+        return data.token;
+      } catch (error) {
+        if (epoch !== connectEpochRef.current || !mountedRef.current) return null;
         console.error("Failed to fetch WS token:", error);
         setAuthError("Failed to authenticate");
         return null;
       }
-
-      const data = await response.json();
-      return data.token;
-    } catch (error) {
-      console.error("Failed to fetch WS token:", error);
-      setAuthError("Failed to authenticate");
-      return null;
-    }
-  }, [sessionId]);
+    },
+    [sessionId]
+  );
 
   /**
    * Make sure `wsTokenRef` holds an auth token, fetching one if needed.
@@ -227,7 +250,7 @@ export function useSessionTransport(
       if (wsTokenRef.current) {
         return true;
       }
-      const token = await fetchWsToken();
+      const token = await fetchWsToken(epoch);
       if (epoch !== connectEpochRef.current || !token) {
         return false;
       }
@@ -338,17 +361,6 @@ export function useSessionTransport(
           wsTokenRef.current = null;
           return;
 
-        case "authorization_revoked":
-          wsTokenRef.current = null;
-          if (!mountedRef.current) return;
-          if (directive.delayMs === undefined) {
-            setConnectionError("Authorization could not be refreshed. Please try reconnecting.");
-            return;
-          }
-          reconnectAttempts.current++;
-          scheduleReconnect(directive.delayMs, retry);
-          return;
-
         case "retry":
           if (!mountedRef.current) return;
           reconnectAttempts.current++;
@@ -376,6 +388,7 @@ export function useSessionTransport(
   );
 
   const connect = useCallback(async () => {
+    if (!mountedRef.current || goneSessionIdRef.current === sessionId) return;
     // Use refs to avoid race conditions with React StrictMode
     if (wsRef.current?.readyState === WebSocket.OPEN) {
       console.log("WebSocket already open");
@@ -434,13 +447,19 @@ export function useSessionTransport(
 
   const send = useCallback((payload: Record<string, unknown>) => {
     if (wsRef.current?.readyState !== WebSocket.OPEN) {
-      return;
+      return false;
     }
-    wsRef.current.send(JSON.stringify(payload));
+    try {
+      wsRef.current.send(JSON.stringify(payload));
+      return true;
+    } catch (error) {
+      console.error("WebSocket send failed:", error);
+      return false;
+    }
   }, []);
 
   const reconnect = useCallback(() => {
-    if (!enabled) return;
+    if (!enabled || goneSessionIdRef.current === sessionId) return;
     // A connect() still awaiting its token must not open a second socket
     // alongside the one this call creates.
     invalidateInFlightConnect();
@@ -463,7 +482,7 @@ export function useSessionTransport(
     setAuthError(null);
     setConnectionError(null);
     connect();
-  }, [connect, enabled, invalidateInFlightConnect]);
+  }, [connect, enabled, invalidateInFlightConnect, sessionId]);
 
   const markHealthy = useCallback(() => {
     reconnectAttempts.current = 0;
@@ -524,6 +543,7 @@ export function useSessionTransport(
     reconnecting,
     authError,
     connectionError,
+    sessionGone,
     isOpen,
     send,
     reconnect,

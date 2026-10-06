@@ -46,8 +46,11 @@ brew install terraform
 # Modal CLI (for Modal deployments)
 pip install modal
 
-# Node.js >= 22 (for building workers)
-brew install node@22
+# Node.js >= 24 (for building workers). node@24 is keg-only, so put it on PATH
+# (add the export to your shell profile to keep it across sessions).
+brew install node@24
+export PATH="$(brew --prefix node@24)/bin:$PATH"
+node --version  # must print v24 or newer
 ```
 
 ### 2. Cloudflare Setup
@@ -187,10 +190,11 @@ Keep credentials in Actions **Secrets**. Non-secret configuration (account/appli
 settings, feature flags, allowlists, and branding) can use Actions **Variables** instead. The
 workflows prefer a non-empty variable, then the same-named secret, then the existing default where
 one exists. Existing secret-only deployments continue to work; an empty variable falls back to the
-secret rather than clearing it. `CLASSIFICATION_MODEL` remains variable-only.
+secret rather than clearing it. `CLASSIFICATION_MODEL` and `CLASSIFICATION_REASONING_EFFORT` remain
+variable-only.
 
-See [the CI/CD setup guide](../docs/GETTING_STARTED.md#step-10-set-up-cicd-optional) for the
-complete variable list and bulk upload examples using `gh variable set` and `gh secret set`.
+See [the CI/CD setup guide](../docs/GETTING_STARTED.md#set-up-cicd-optional) for the complete
+variable list and bulk upload examples using `gh variable set` and `gh secret set`.
 
 Add these secrets to your repository settings:
 
@@ -204,12 +208,18 @@ CLOUDFLARE_ACCOUNT_ID
 CLOUDFLARE_WORKER_SUBDOMAIN
 R2_ACCESS_KEY_ID
 R2_SECRET_ACCESS_KEY
+R2_MEDIA_LOCATION # Optional; defaults to ENAM
+R2_MEDIA_BUCKET_NAME # Optional; set when the media bucket is pre-created out-of-band
 WEB_PLATFORM # Optional; defaults to vercel
 
 # Vercel web app (only if WEB_PLATFORM=vercel)
 VERCEL_API_TOKEN
 VERCEL_TEAM_ID
 VERCEL_PROJECT_ID
+
+# Documentation site (packages/docs)
+DOCS_SITE_ENABLED # Optional; defaults to false, which destroys a provisioned docs project
+DOCS_CUSTOM_DOMAIN # Optional; empty serves the vercel.app URL only
 
 # Modal
 MODAL_TOKEN_ID
@@ -221,11 +231,14 @@ MODAL_API_SECRET
 
 # Sandbox provider
 SANDBOX_PROVIDER
+SANDBOX_INACTIVITY_TIMEOUT_MS # Optional; defaults to 600000
+SANDBOX_BOOT_TIMEOUT_MS       # Optional; defaults to 1800000, must exceed 240000
 
 # Daytona (only if SANDBOX_PROVIDER=daytona)
 DAYTONA_API_URL
 DAYTONA_API_KEY
-DAYTONA_BASE_SNAPSHOT
+DAYTONA_BASE_SNAPSHOT            # Prefix for the Terraform-managed base snapshot
+DAYTONA_BASE_SNAPSHOT_MEMORY_GIB # Optional; defaults to 2
 DAYTONA_TARGET # Optional
 
 # Vercel Sandboxes (only if SANDBOX_PROVIDER=vercel)
@@ -265,9 +278,11 @@ ENABLE_LINEAR_BOT # Optional; defaults to false
 LINEAR_CLIENT_ID
 LINEAR_CLIENT_SECRET
 LINEAR_WEBHOOK_SECRET
+LINEAR_API_KEY # Optional; fallback comment posting
 
 # API Keys
-ANTHROPIC_API_KEY # Optional; required only when classification_model is an Anthropic model and the Slack or Linear bot is enabled
+ANTHROPIC_API_KEY # Optional; injected into Modal/OpenComputer sandboxes and used by an Anthropic classifier when CLASSIFICATION_ANTHROPIC_API_KEY is unset
+CLASSIFICATION_ANTHROPIC_API_KEY # Optional; classifier-only Anthropic key that never reaches sandboxes
 CLASSIFICATION_OPENAI_API_KEY # Required when classification_model is an OpenAI model and the Slack or Linear bot is enabled
 
 # Security Secrets
@@ -279,7 +294,11 @@ NEXTAUTH_SECRET # Browser-auth secret; legacy Actions secret name
 # Access control
 ALLOWED_USERS
 ALLOWED_EMAIL_DOMAINS
+UNSAFE_ALLOW_ALL_USERS # Optional; defaults to false
+
+# Two-phase first deployment (see "Durable Objects" below)
 ENABLE_DURABLE_OBJECT_BINDINGS # Optional; defaults to true
+ENABLE_SERVICE_BINDINGS # Optional; defaults to true
 
 # Branding
 APP_NAME # Optional; defaults to Open-Inspect
@@ -338,6 +357,15 @@ Since Modal has no Terraform provider, the module uses `null_resource` with `loc
 
 - Changes are detected via source file hashing
 - Manual intervention may be needed for complex updates
+
+Terraform replaces every Modal secret with its configured values whenever any secret changes, so do
+not add keys to Terraform-managed Modal secrets by hand. A failed replacement fails the apply.
+
+Clearing `anthropic_api_key` (for example, after moving the classifier to
+`classification_anthropic_api_key`) keeps `ANTHROPIC_API_KEY=""` in Modal's `llm-api-keys` secret,
+so the next apply overwrites the old value, and drops the OpenComputer control-plane binding. New
+and restored sandboxes stop receiving the key, but sandboxes that are already running keep it until
+they terminate. Rotate the key if it must be revoked immediately.
 
 ## Verification
 

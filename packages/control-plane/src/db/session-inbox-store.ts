@@ -1,19 +1,23 @@
 import {
   SESSION_INBOX_CATEGORIES,
   type SessionInboxCategory,
-  type SessionInboxItem,
   type SessionInboxSession,
 } from "@open-inspect/shared/types/session-inbox";
+import type { SessionVisibility } from "@open-inspect/shared/types/teams";
 import type { SessionStatus, SpawnSource } from "@open-inspect/shared/types/sessions";
+import { buildSessionListPredicates, type SessionListFilters } from "./session-list-predicates";
 import { attachSessionListMetadata } from "./session-list-metadata";
 import type { SessionInboxCursor } from "./session-inbox-cursor";
 import { readStateFromRow, unreadSql, type ViewerReadStateRow } from "./session-read-state";
+import { assertD1QueryParameterLimit } from "./query-limits";
 import type { SqlDatabase, SqlStatement } from "./sql-database";
 
 /** Viewer, filtering, and pagination inputs for an inbox query. */
-export interface ListSessionInboxOptions {
+export interface ListSessionInboxOptions extends Pick<
+  SessionListFilters,
+  "createdByUserIds" | "teamIds" | "ownerFilter" | "visibility" | "scope" | "readScope" | "mode"
+> {
   category: SessionInboxCategory;
-  createdByUserIds?: readonly string[];
   excludeAutomatedSessions?: boolean;
   viewerUserId: string;
   limit: number;
@@ -21,15 +25,28 @@ export interface ListSessionInboxOptions {
 }
 
 export interface ListSessionInboxResult {
-  items: SessionInboxItem[];
+  items: Array<{
+    rootSession: ScopedInboxSession;
+    descendantSessions: ScopedInboxSession[];
+  }>;
   hasMore: boolean;
   nextCursor: SessionInboxCursor | null;
 }
+
+/** Persisted ownership is used for server capabilities, then stripped from the wire projection. */
+export type ScopedInboxSession = SessionInboxSession & {
+  userId: string | null;
+  ownerTeamId: string | null;
+  visibility: SessionVisibility;
+};
 
 export type ListSessionInboxSnapshotResult = Record<SessionInboxCategory, ListSessionInboxResult>;
 
 interface InboxSessionRow extends ViewerReadStateRow {
   id: string;
+  user_id: string | null;
+  owner_team_id: string | null;
+  visibility: SessionVisibility;
   title: string | null;
   repo_owner: string | null;
   repo_name: string | null;
@@ -52,9 +69,12 @@ interface InboxPageData {
   nextCursor: SessionInboxCursor | null;
 }
 
-function toListItem(row: InboxSessionRow): SessionInboxSession {
+function toListItem(row: InboxSessionRow): ScopedInboxSession {
   return {
     id: row.id,
+    userId: row.user_id,
+    ownerTeamId: row.owner_team_id,
+    visibility: row.visibility,
     title: row.title,
     repoOwner: row.repo_owner,
     repoName: row.repo_name,
@@ -115,6 +135,19 @@ export class SessionInboxStore {
   /** Select one ordered category page plus one extra root for cursor metadata. */
   private bindInboxQuery(options: ListSessionInboxOptions): SqlStatement {
     const { sql, params } = this.inboxCtes(options);
+    const binds = [
+      ...params,
+      options.category,
+      ...(options.cursor
+        ? [
+            options.cursor.latestUpdatedAt,
+            options.cursor.latestUpdatedAt,
+            options.cursor.rootSessionId,
+          ]
+        : []),
+      options.limit + 1,
+    ];
+    assertD1QueryParameterLimit(binds.length);
     const cursorCondition = options.cursor
       ? `AND (latest_updated_at < ? OR (latest_updated_at = ? AND effective_root_session_id < ?))`
       : "";
@@ -139,18 +172,7 @@ export class SessionInboxStore {
                   effective_sessions.updated_at DESC,
                   effective_sessions.id DESC`
       )
-      .bind(
-        ...params,
-        options.category,
-        ...(options.cursor
-          ? [
-              options.cursor.latestUpdatedAt,
-              options.cursor.latestUpdatedAt,
-              options.cursor.rootSessionId,
-            ]
-          : []),
-        options.limit + 1
-      );
+      .bind(...binds);
   }
 
   /** Select the first page of every category through one shared recursive traversal. */
@@ -158,6 +180,7 @@ export class SessionInboxStore {
     options: Omit<ListSessionInboxOptions, "category" | "cursor">
   ): SqlStatement {
     const { sql, params } = this.inboxCtes(options);
+    assertD1QueryParameterLimit(params.length + 1);
     return this.db
       .prepare(
         `${sql},
@@ -193,19 +216,33 @@ export class SessionInboxStore {
   private inboxCtes(
     options: Pick<
       ListSessionInboxOptions,
-      "createdByUserIds" | "excludeAutomatedSessions" | "viewerUserId"
+      | "createdByUserIds"
+      | "excludeAutomatedSessions"
+      | "teamIds"
+      | "ownerFilter"
+      | "visibility"
+      | "scope"
+      | "readScope"
+      | "mode"
+      | "viewerUserId"
     >
   ): { sql: string; params: unknown[] } {
-    const { conditions, params } = this.eligibility(options);
+    const { where, params } = buildSessionListPredicates(options);
     return {
       sql: `WITH RECURSIVE eligible_sessions AS (
               SELECT sessions.*, ${unreadSql("sessions")} AS unread
-              FROM sessions
+              -- Filter before viewer joins to keep shared predicates' columns unambiguous.
+              FROM (
+                SELECT * FROM sessions
+                ${where}
+              ) sessions
               LEFT JOIN users viewer ON viewer.id = ?
               LEFT JOIN session_read_states read_state
                 ON read_state.session_id = sessions.id
                AND read_state.user_id = viewer.id
-              WHERE ${conditions.join(" AND ")}
+              WHERE sessions.status != 'archived'
+                AND sessions.root_session_id IS NOT NULL
+                ${options.excludeAutomatedSessions ? "AND sessions.spawn_source NOT IN ('automation', 'github-bot')" : ""}
             ),
             -- Filtering can hide an ancestor. Re-root each resulting visible subtree
             -- while retaining the persisted root for uninterrupted lineages.
@@ -245,25 +282,8 @@ export class SessionInboxStore {
               FROM effective_sessions
               GROUP BY effective_root_session_id
             )`,
-      params: [options.viewerUserId, ...params],
+      params: [...params, options.viewerUserId],
     };
-  }
-
-  private eligibility(
-    options: Pick<ListSessionInboxOptions, "createdByUserIds" | "excludeAutomatedSessions">
-  ): { conditions: string[]; params: unknown[] } {
-    const conditions = ["sessions.status != 'archived'", "sessions.root_session_id IS NOT NULL"];
-    const params: unknown[] = [];
-    if (options.excludeAutomatedSessions) {
-      conditions.push("sessions.spawn_source NOT IN ('automation', 'github-bot')");
-    }
-    if (options.createdByUserIds?.length) {
-      conditions.push(
-        `sessions.user_id IN (${options.createdByUserIds.map(() => "?").join(", ")})`
-      );
-      params.push(...options.createdByUserIds);
-    }
-    return { conditions, params };
   }
 
   /** Group ordered SQL rows into complete lineages and derive cursor metadata. */
@@ -294,7 +314,7 @@ export class SessionInboxStore {
   /** Replace selected D1 rows with their metadata-enriched list items. */
   private assemblePage(
     page: InboxPageData,
-    sessionsById: Map<string, SessionInboxSession>
+    sessionsById: Map<string, ScopedInboxSession>
   ): ListSessionInboxResult {
     const items = page.roots.map(([rootId, lineage]) => {
       const rootRow = lineage.find(({ id }) => id === rootId) ?? lineage[0];

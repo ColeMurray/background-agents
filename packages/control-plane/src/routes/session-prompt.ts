@@ -6,6 +6,7 @@ import {
   sendPromptRequestSchema,
   type CallbackContext,
 } from "@open-inspect/shared/types/session-api";
+import { promptValidationError } from "@open-inspect/shared/types/prompts";
 import {
   MAX_SESSION_ATTACHMENTS_PER_MESSAGE,
   sessionAttachmentReferencesSchema,
@@ -27,7 +28,7 @@ import {
   type GitHubEnrichment,
 } from "../session/identity";
 import type { Env } from "../types";
-import { error, GITHUB_USER_OR_SERVICE_ROUTE, requirePermission } from "./shared";
+import { error, json, GITHUB_USER_OR_SERVICE_ROUTE, requireSession } from "./shared";
 import { parseJsonBody } from "./body";
 import { type SessionRouteContext, dispatchSession } from "./session-route";
 
@@ -64,7 +65,7 @@ export async function handleSessionPrompt(
 
   const bodyResult = sendPromptRequestSchema.safeParse(rawBody);
   if (!bodyResult.success) {
-    return error("content is required");
+    return json(promptValidationError(bodyResult.error, rawBody), 400);
   }
   const body = bodyResult.data;
 
@@ -97,31 +98,29 @@ export async function handleSessionPrompt(
   let enrichment: GitHubEnrichment | undefined;
   const parsed = parseAuthorId(authorId);
   if (authorId !== "anonymous") {
+    const userStore = new UserStore(ctx.db);
+    let userId: string | undefined;
     try {
-      const userStore = new UserStore(ctx.db);
-      let userId: string | undefined;
       if (parsed) {
         const identity = await userStore.getIdentity(parsed.provider, parsed.providerUserId);
         userId = identity?.userId;
       } else {
         userId = (await userStore.getUserById(authorId))?.id;
       }
-      if (userId) {
-        canonicalUserId = userId;
-        enrichment =
-          (await resolveGitHubEnrichmentForRequest(
-            env,
-            ctx.db,
-            userStore,
-            userId,
-            await resolveGitHubCredentialAuthority(ctx, request.headers)
-          )) ?? undefined;
-      }
     } catch (e) {
-      logger.warn("Failed to enrich prompt with GitHub identity", {
+      logger.warn("Failed to resolve prompt author identity", {
         error: e instanceof Error ? e : String(e),
         authorId,
       });
+    }
+    if (userId) {
+      canonicalUserId = userId;
+      enrichment =
+        (await resolveGitHubEnrichmentForRequest(
+          userStore,
+          userId,
+          await resolveGitHubCredentialAuthority(ctx, request.headers)
+        )) ?? undefined;
     }
   }
 
@@ -140,9 +139,6 @@ export async function handleSessionPrompt(
           login: enrichment.scmLogin ?? null,
           name: enrichment.displayName ?? null,
           email: enrichment.email ?? null,
-          accessTokenEncrypted: enrichment.accessTokenEncrypted ?? null,
-          refreshTokenEncrypted: enrichment.refreshTokenEncrypted ?? null,
-          tokenExpiresAt: enrichment.tokenExpiresAt ?? null,
         }
       : undefined,
   } satisfies EnqueuePromptRequest;
@@ -179,7 +175,7 @@ sessionPromptRoutes.post(
   "/sessions/:id/prompt",
   admit({
     ...GITHUB_USER_OR_SERVICE_ROUTE,
-    authorization: requirePermission("sessions.collaborate"),
+    authorization: requireSession("collaborate"),
   }),
   (c) => dispatchSession(c, handleSessionPrompt)
 );

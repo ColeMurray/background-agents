@@ -4,7 +4,7 @@ import type { MessageRepository } from "../../message-repository";
 import type { ArtifactRepository } from "../../artifact-repository";
 import type { EventRepository } from "../../event-repository";
 import type { SessionCoreRepository } from "../../session-core-repository";
-import type { SandboxRepository } from "../../sandbox-repository";
+import type { SandboxStateReader } from "../../sandbox-ports";
 import { resolvePublicSessionId } from "../../public-session-id";
 import {
   RECENT_EVENT_FETCH_LIMIT,
@@ -25,7 +25,7 @@ import {
 export class ChildSummaryHandler {
   constructor(
     private readonly sessionCoreRepository: SessionCoreRepository,
-    private readonly sandboxRepository: SandboxRepository,
+    private readonly sandboxRepository: SandboxStateReader,
     private readonly messageRepository: MessageRepository,
     private readonly eventRepository: EventRepository,
     private readonly artifactRepository: ArtifactRepository,

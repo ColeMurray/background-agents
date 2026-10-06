@@ -6,6 +6,7 @@ import * as matchers from "@testing-library/jest-dom/matchers";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SessionListItem } from "@/lib/session-list";
+import type { SessionDiscoveryQuery } from "@/lib/session-discovery";
 import { GlobalCommandMenu } from "./global-command-menu";
 
 expect.extend(matchers);
@@ -53,7 +54,10 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-function renderMenu(sessions: SessionListItem[] = []) {
+function renderMenu(
+  sessions: SessionListItem[] = [],
+  teamContext?: Pick<SessionDiscoveryQuery, "teamIds" | "scope">
+) {
   const onOpenChange = vi.fn();
   const onNavigate = vi.fn();
   const props = {
@@ -61,6 +65,7 @@ function renderMenu(sessions: SessionListItem[] = []) {
     onNavigate,
     onNewSession: vi.fn(),
     sessions,
+    teamContext,
   };
   const view = render(<GlobalCommandMenu open {...props} />);
   return { ...view, onNavigate, onOpenChange, props };
@@ -79,6 +84,39 @@ describe("GlobalCommandMenu", () => {
     expect(
       screen.getByText("View usage across sessions, repositories, and users")
     ).toBeInTheDocument();
+  });
+
+  it("uses a readable neutral highlight and visible ring for pointer and keyboard selection", async () => {
+    const user = userEvent.setup();
+    renderMenu();
+    const newSession = screen.getByRole("option", { name: /New session/ });
+    const home = screen.getByRole("option", { name: /Home/ });
+
+    await user.hover(home);
+
+    expect(home).toHaveAttribute("aria-selected", "true");
+    expect(home).toHaveClass(
+      "data-[selected=true]:bg-muted",
+      "data-[selected=true]:text-foreground",
+      "data-[selected=true]:ring-2",
+      "data-[selected=true]:ring-inset",
+      "data-[selected=true]:ring-ring"
+    );
+    expect(home).not.toHaveClass("data-[selected=true]:bg-accent");
+
+    await user.keyboard("{ArrowUp}");
+
+    expect(newSession).toHaveAttribute("aria-selected", "true");
+    expect(home).toHaveAttribute("aria-selected", "false");
+    expect(newSession).toHaveClass(
+      "data-[selected=true]:bg-muted",
+      "data-[selected=true]:text-foreground",
+      "data-[selected=true]:ring-2",
+      "data-[selected=true]:ring-inset",
+      "data-[selected=true]:ring-ring"
+    );
+    expect(screen.getByText("Start a coding session")).toHaveClass("text-muted-foreground");
+    expect(screen.getByText("Cmd/Ctrl+Shift+O")).toHaveClass("text-muted-foreground");
   });
 
   it("omits session creation destinations without session creation permission", () => {
@@ -122,6 +160,8 @@ describe("GlobalCommandMenu", () => {
     });
     const count = screen.getByRole("status");
 
+    // The "Search all sessions" handoff is an ordinary counted result.
+    expect(screen.getByRole("option", { name: /Search all sessions/ })).toBeVisible();
     expect(count).toHaveTextContent(`${screen.getAllByRole("option").length} results`);
     expect(screen.getByText("Navigate")).toBeInTheDocument();
     expect(screen.getByText("Select")).toBeInTheDocument();
@@ -129,8 +169,46 @@ describe("GlobalCommandMenu", () => {
 
     await user.type(input, "no matching command destination");
 
-    await waitFor(() => expect(count).toHaveTextContent("0 results"));
-    expect(screen.getByText("No results found.")).toBeInTheDocument();
+    // Nothing recent matches, so the handoff is the one honest result: it is
+    // counted, the empty state does not contradict it, and it is selected.
+    await waitFor(() => expect(count).toHaveTextContent("1 result"));
+    expect(screen.queryByText("No results found.")).not.toBeInTheDocument();
+    expect(screen.getAllByRole("option")).toHaveLength(1);
+    expect(screen.getByRole("option", { name: /Search all sessions/ })).toHaveAttribute(
+      "aria-selected",
+      "true"
+    );
+  });
+
+  it("reaches the exhaustive search from the keyboard when nothing recent matches", async () => {
+    const user = userEvent.setup();
+    const { onNavigate, onOpenChange } = renderMenu();
+    const input = screen.getByRole("combobox", {
+      name: "Search commands, settings, and sessions",
+    });
+
+    await user.type(input, "old archived work{Enter}");
+
+    expect(onOpenChange).toHaveBeenCalledWith(false);
+    expect(onNavigate).toHaveBeenCalledWith("/sessions?q=old+archived+work&lifecycle=all");
+  });
+
+  it("keeps genuine matches ahead of the handoff in keyboard order", async () => {
+    const user = userEvent.setup();
+    const { onNavigate } = renderMenu();
+    const input = screen.getByRole("combobox", {
+      name: "Search commands, settings, and sessions",
+    });
+
+    await user.type(input, "sessions");
+
+    const options = screen.getAllByRole("option");
+    expect(options[0]).toHaveTextContent("Sessions");
+    expect(options[0]).toHaveAttribute("aria-selected", "true");
+    expect(options.at(-1)).toHaveTextContent("Search all sessions");
+
+    await user.keyboard("{End}{Enter}");
+    expect(onNavigate).toHaveBeenCalledWith("/sessions?q=sessions&lifecycle=all");
   });
 
   it("navigates directly to a settings destination", async () => {
@@ -148,7 +226,7 @@ describe("GlobalCommandMenu", () => {
     renderMenu();
 
     await user.type(
-      screen.getByPlaceholderText("Search sessions, settings, and commands..."),
+      screen.getByPlaceholderText("Quick search · recent sessions, settings, and commands"),
       "request source"
     );
 
@@ -161,7 +239,7 @@ describe("GlobalCommandMenu", () => {
     renderMenu();
 
     await user.type(
-      screen.getByPlaceholderText("Search sessions, settings, and commands..."),
+      screen.getByPlaceholderText("Quick search · recent sessions, settings, and commands"),
       "theme"
     );
 
@@ -174,7 +252,7 @@ describe("GlobalCommandMenu", () => {
     const user = userEvent.setup();
     const { props, rerender } = renderMenu();
     await user.type(
-      screen.getByPlaceholderText("Search sessions, settings, and commands..."),
+      screen.getByPlaceholderText("Quick search · recent sessions, settings, and commands"),
       "theme"
     );
     expect(screen.queryByText("Source control")).not.toBeInTheDocument();
@@ -244,10 +322,120 @@ describe("GlobalCommandMenu", () => {
     ]);
 
     await user.type(
-      screen.getByPlaceholderText("Search sessions, settings, and commands..."),
+      screen.getByPlaceholderText("Quick search · recent sessions, settings, and commands"),
       "background investigate"
     );
 
     await waitFor(() => expect(screen.getByText("Investigate command search")).toBeInTheDocument());
+  });
+});
+
+describe("GlobalCommandMenu search-all handoff", () => {
+  it("updates the rendered handoff on scope-only changes while preserving the search", async () => {
+    const user = userEvent.setup();
+    const { onNavigate, props, rerender } = renderMenu([], {
+      teamIds: undefined,
+      scope: "workspace",
+    });
+    const input = screen.getByRole("combobox", { name: "Search commands, settings, and sessions" });
+    await user.type(input, "old work");
+
+    for (const scope of ["workspace", undefined, "all", "workspace"] as const) {
+      rerender(<GlobalCommandMenu open {...props} teamContext={{ teamIds: undefined, scope }} />);
+      expect(input).toHaveValue("old work");
+      await user.click(screen.getByRole("option", { name: /Search all sessions/ }));
+      expect(onNavigate).toHaveBeenLastCalledWith(
+        `/sessions?q=old+work&lifecycle=all${scope ? `&scope=${scope}` : ""}`
+      );
+    }
+  });
+
+  it.each([
+    [{ teamIds: ["team_alpha"], scope: undefined }, "teamIds%5B%5D=team_alpha"],
+    [{ teamIds: undefined, scope: "workspace" }, "scope=workspace"],
+    [{ teamIds: undefined, scope: "all" }, "scope=all"],
+  ] as const)(
+    "carries the active team predicate %j into exhaustive search",
+    async (teamContext, suffix) => {
+      const user = userEvent.setup();
+      const { onNavigate } = renderMenu([], {
+        ...teamContext,
+        teamIds: teamContext.teamIds ? [...teamContext.teamIds] : undefined,
+      });
+      await user.type(
+        screen.getByRole("combobox", { name: "Search commands, settings, and sessions" }),
+        "old work{Enter}"
+      );
+      expect(onNavigate).toHaveBeenCalledWith(`/sessions?q=old+work&lifecycle=all&${suffix}`);
+    }
+  );
+
+  it("labels the fetched set as recent and carries typed text to the Sessions page", async () => {
+    const user = userEvent.setup();
+    const { onNavigate, onOpenChange } = renderMenu([
+      {
+        id: "session-1",
+        title: "Investigate command search",
+        repoOwner: "open-inspect",
+        repoName: "background-agents",
+        harness: "opencode",
+        model: "anthropic/claude-sonnet-4-6",
+        reasoningEffort: null,
+        baseBranch: "main",
+        status: "active",
+        parentSessionId: null,
+        spawnSource: "user",
+        spawnDepth: 0,
+        automationId: null,
+        automationRunId: null,
+        scmLogin: null,
+        userId: null,
+        totalCost: 0,
+        activeDurationMs: 0,
+        messageCount: 0,
+        prCount: 0,
+        environmentId: null,
+        createdAt: 1,
+        updatedAt: 2,
+      },
+    ]);
+
+    expect(screen.getByText("Recent sessions")).toBeInTheDocument();
+    expect(screen.getByText("Find past and current work across full history")).toBeInTheDocument();
+
+    const input = screen.getByRole("combobox", {
+      name: "Search commands, settings, and sessions",
+    });
+    await user.type(input, "old archived work");
+
+    // The handoff survives a search that matches no recent session.
+    await waitFor(() =>
+      expect(screen.getByText('Search full history for "old archived work"')).toBeVisible()
+    );
+    expect(screen.getByText("Search all sessions")).toBeVisible();
+    expect(screen.queryByText("Investigate command search")).not.toBeInTheDocument();
+
+    await user.click(screen.getByText("Search all sessions"));
+
+    expect(onOpenChange).toHaveBeenCalledWith(false);
+    expect(onNavigate).toHaveBeenCalledWith("/sessions?q=old+archived+work&lifecycle=all");
+  });
+
+  it("opens every lifecycle, archived included, when selected without search text", async () => {
+    const user = userEvent.setup();
+    const { onNavigate } = renderMenu();
+
+    await user.click(screen.getByText("Archived and older sessions, with filters"));
+
+    expect(onNavigate).toHaveBeenCalledWith("/sessions?lifecycle=all");
+  });
+
+  it("omits the search-all handoff and Sessions destination without session read permission", () => {
+    mocks.allowedPermissions = new Set(["sessions.create"]);
+
+    renderMenu();
+
+    expect(screen.queryByText("Search all sessions")).not.toBeInTheDocument();
+    expect(screen.queryByText("Sessions")).not.toBeInTheDocument();
   });
 });

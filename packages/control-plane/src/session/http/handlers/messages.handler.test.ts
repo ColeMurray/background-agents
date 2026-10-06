@@ -1,7 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
 import type { Logger } from "../../../logger";
 import { MessagesHandler } from "./messages.handler";
+import { SandboxPromptBlockedError } from "../../message-queue";
 import type { MessageService } from "../../services/message.service";
+import { MAX_WEB_PROMPT_CHARS } from "@open-inspect/shared/types/prompts";
 
 function createHandler() {
   const messageService = {
@@ -11,6 +13,7 @@ function createHandler() {
     listArtifacts: vi.fn(),
     getArtifact: vi.fn(),
     listMessages: vi.fn(),
+    exportTrace: vi.fn(),
   } as unknown as MessageService;
 
   const log = {
@@ -29,6 +32,26 @@ function createHandler() {
 }
 
 describe("MessagesHandler", () => {
+  it("returns a recoverable 409 when sandbox safety blocks prompt admission", async () => {
+    const { handler, messageService, log } = createHandler();
+    vi.mocked(messageService.enqueuePrompt).mockRejectedValue(
+      new SandboxPromptBlockedError("Start a new session to continue.")
+    );
+
+    const response = await handler.enqueuePrompt(
+      new Request("http://internal/internal/prompt", {
+        method: "POST",
+        body: JSON.stringify({ content: "Continue", authorId: "user-1", source: "web" }),
+      }),
+      log
+    );
+
+    expect(response.status).toBe(409);
+    await expect(response.json()).resolves.toEqual({
+      code: "SANDBOX_RECOVERY_REQUIRED",
+      error: "Start a new session to continue.",
+    });
+  });
   it("enqueues prompt and returns queued response", async () => {
     const { handler, messageService, log } = createHandler();
     vi.mocked(messageService.enqueuePrompt).mockResolvedValue({
@@ -78,9 +101,6 @@ describe("MessagesHandler", () => {
         login: "octocat",
         name: null,
         email: null,
-        accessTokenEncrypted: "encrypted-token",
-        refreshTokenEncrypted: null,
-        tokenExpiresAt: null,
       },
     };
 
@@ -110,7 +130,39 @@ describe("MessagesHandler", () => {
     );
 
     expect(response.status).toBe(400);
-    expect(await response.json()).toEqual({ error: "Invalid prompt body" });
+    expect(((await response.json()) as { error: string }).error).toContain("source");
+    expect(messageService.enqueuePrompt).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    [
+      "oversized content",
+      { content: "x".repeat(MAX_WEB_PROMPT_CHARS + 1), authorId: "user-1", source: "web" },
+      {
+        error: `content exceeds ${MAX_WEB_PROMPT_CHARS} characters (got ${MAX_WEB_PROMPT_CHARS + 1})`,
+        code: "prompt_too_long",
+      },
+    ],
+    [
+      "blank content",
+      { content: "  \n", authorId: "user-1", source: "web" },
+      { error: "content is required" },
+    ],
+    ["invalid source", { content: "hello", authorId: "user-1", source: "unknown" }, null],
+  ])("reports %s at the internal boundary", async (_case, body, expected) => {
+    const { handler, messageService, log } = createHandler();
+    const response = await handler.enqueuePrompt(
+      new Request("http://internal/internal/prompt", {
+        method: "POST",
+        body: JSON.stringify(body),
+      }),
+      log
+    );
+
+    expect(response.status).toBe(400);
+    const result = (await response.json()) as { error: string };
+    if (expected) expect(result).toEqual(expected);
+    else expect(result.error).toContain("source");
     expect(messageService.enqueuePrompt).not.toHaveBeenCalled();
   });
 
@@ -184,7 +236,7 @@ describe("MessagesHandler", () => {
           createdAt: 1000,
         },
       ],
-      cursor: "1000",
+      cursor: "1000:m1",
       hasMore: false,
     });
 
@@ -192,7 +244,7 @@ describe("MessagesHandler", () => {
     expect(response.status).toBe(200);
     expect(await response.json()).toEqual({
       events: [{ id: "e1", type: "token", data: { x: 1 }, messageId: "m1", createdAt: 1000 }],
-      cursor: "1000",
+      cursor: "1000:m1",
       hasMore: false,
     });
     expect(messageService.listEvents).toHaveBeenCalledWith({
@@ -202,6 +254,55 @@ describe("MessagesHandler", () => {
       messageId: null,
     });
   });
+
+  it("parses composite and legacy message cursors at the HTTP boundary", () => {
+    const { handler, messageService } = createHandler();
+    vi.mocked(messageService.listMessages).mockReturnValue({
+      messages: [],
+      hasMore: false,
+    });
+
+    handler.listMessages(new URL("http://internal/internal/messages?cursor=1000%3Am1"));
+    expect(messageService.listMessages).toHaveBeenLastCalledWith({
+      cursor: { createdAt: 1000, id: "m1" },
+      limit: 50,
+      status: null,
+    });
+
+    handler.listMessages(new URL("http://internal/internal/messages?cursor=1000"));
+    expect(messageService.listMessages).toHaveBeenLastCalledWith({
+      cursor: { createdAt: 1000 },
+      limit: 50,
+      status: null,
+    });
+  });
+
+  it("rejects malformed message cursors", async () => {
+    const { handler, messageService } = createHandler();
+
+    const response = handler.listMessages(
+      new URL("http://internal/internal/messages?cursor=not-a-cursor")
+    );
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toEqual({ error: "Invalid cursor" });
+    expect(messageService.listMessages).not.toHaveBeenCalled();
+  });
+
+  it.each(["0", "-1", "1.5", "10junk", "101"])(
+    "rejects invalid message limit %s",
+    async (limit) => {
+      const { handler, messageService } = createHandler();
+
+      const response = handler.listMessages(
+        new URL(`http://internal/internal/messages?limit=${limit}`)
+      );
+
+      expect(response.status).toBe(400);
+      await expect(response.json()).resolves.toEqual({ error: "Invalid limit" });
+      expect(messageService.listMessages).not.toHaveBeenCalled();
+    }
+  );
 
   it("parses composite event cursors before delegating to the service", async () => {
     const { handler, messageService } = createHandler();
@@ -319,7 +420,7 @@ describe("MessagesHandler", () => {
           completedAt: 1200,
         },
       ],
-      cursor: "1000",
+      cursor: "1000:m1",
       hasMore: false,
     });
 
@@ -345,7 +446,7 @@ describe("MessagesHandler", () => {
           completedAt: 1200,
         },
       ],
-      cursor: "1000",
+      cursor: "1000:m1",
       hasMore: false,
     });
   });
@@ -366,7 +467,7 @@ describe("MessagesHandler", () => {
           completedAt: null,
         },
       ],
-      cursor: "1000",
+      cursor: "1000:m1",
       hasMore: false,
     });
 
@@ -376,6 +477,54 @@ describe("MessagesHandler", () => {
       messages: [{ attachments: null }],
     });
   });
+
+  it("exports the requested trace collections in canonical order", async () => {
+    const { handler, messageService } = createHandler();
+    vi.mocked(messageService.exportTrace).mockReturnValue({ ok: true, trace: { usage: [] } });
+
+    const response = handler.exportTrace(
+      new URL("http://internal/internal/trace-export?include=usage,messages,events")
+    );
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual({ ok: true, trace: { usage: [] } });
+    expect(messageService.exportTrace).toHaveBeenCalledWith(
+      ["messages", "events", "usage"],
+      "full"
+    );
+  });
+
+  it("passes compact format to the service and rejects invalid formats", async () => {
+    const { handler, messageService } = createHandler();
+    vi.mocked(messageService.exportTrace).mockReturnValue({ ok: true, trace: { events: [] } });
+    const compact = handler.exportTrace(
+      new URL("http://internal/internal/trace-export?include=events&format=compact")
+    );
+    expect(compact.status).toBe(200);
+    expect(messageService.exportTrace).toHaveBeenCalledWith(["events"], "compact");
+    const invalid = handler.exportTrace(
+      new URL("http://internal/internal/trace-export?include=events&format=unknown")
+    );
+    expect(invalid.status).toBe(400);
+    expect(messageService.exportTrace).toHaveBeenCalledTimes(1);
+  });
+
+  it.each(["", "?include=", "?include=prompts", "?include=messages,"])(
+    "rejects trace include %s",
+    async (search) => {
+      const { handler, messageService } = createHandler();
+
+      const response = handler.exportTrace(
+        new URL(`http://internal/internal/trace-export${search}`)
+      );
+
+      expect(response.status).toBe(400);
+      await expect(response.json()).resolves.toEqual({
+        error: "include must be a comma-separated list of messages, events, usage",
+      });
+      expect(messageService.exportTrace).not.toHaveBeenCalled();
+    }
+  );
 
   it("returns stopping status for stop endpoint", async () => {
     const { handler, messageService } = createHandler();

@@ -1,0 +1,67 @@
+version: 2
+
+# Scheduled version updates. Security updates are enabled separately in the
+# repository settings and still cover every ecosystem, including the ones
+# excluded here.
+#
+# Terraform providers and Docker base images are intentionally not scheduled:
+# Dependabot PRs cannot run `terraform plan` (no production secrets) and merges
+# to main auto-apply. Bump them manually from a regular branch.
+
+updates:
+  # npm — the root lockfile covers every packages/* workspace. The
+  # sandbox-images/locks/* npm closures are pinned via toolchain.json and
+  # intentionally excluded.
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      # Roughly every two weeks; Dependabot has no biweekly interval.
+      interval: cron
+      cronjob: "0 9 1,15 * *"
+    cooldown:
+      default-days: 7
+    open-pull-requests-limit: 5
+    groups:
+      # One PR for all minor/patch bumps; majors still get their own.
+      npm-minor-patch:
+        patterns:
+          - "*"
+        update-types:
+          - minor
+          - patch
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: cron
+      cronjob: "0 9 1,15 * *"
+    cooldown:
+      default-days: 7
+    groups:
+      actions:
+        patterns:
+          - "*"
+
+  # Python. sandbox-runtime and sandbox-images/locks/python-tools are excluded:
+  # their uv.lock feeds hash-checked exports (locks/runtime.txt,
+  # locks/python-tools.txt) that `sandbox:images lock` must regenerate, and
+  # python-tools' pyproject.toml is generated from toolchain.json. e2b-infra and
+  # daytona-infra are excluded until PR CI installs and tests their locked SDKs;
+  # Terraform consumes those lockfiles during apply.
+  - package-ecosystem: uv
+    directories:
+      - /packages/modal-infra
+      - /packages/sandbox-images
+    schedule:
+      interval: cron
+      cronjob: "0 9 1,15 * *"
+    cooldown:
+      default-days: 7
+    open-pull-requests-limit: 5
+    groups:
+      python-minor-patch:
+        patterns:
+          - "*"
+        update-types:
+          - minor
+          - patch

@@ -1,4 +1,5 @@
 import type { z } from "zod";
+import { readBoundedBytes } from "../http/bounded-body";
 import { PROVIDER_TOKEN_REFRESH_TIMEOUT_MS } from "./provider-token-timeouts";
 
 const PROVIDER_RESPONSE_MAX_BYTES = 64 * 1024;
@@ -22,31 +23,13 @@ export async function readBoundedProviderBody(
   response: Response,
   oversizedError: () => Error
 ): Promise<string> {
-  const declaredLength = Number(response.headers.get("content-length"));
-  if (Number.isFinite(declaredLength) && declaredLength > PROVIDER_RESPONSE_MAX_BYTES) {
-    throw oversizedError();
-  }
-  const reader = response.body?.getReader();
-  if (!reader) return response.text();
-  const chunks: Uint8Array[] = [];
-  let size = 0;
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    size += value.byteLength;
-    if (size > PROVIDER_RESPONSE_MAX_BYTES) {
-      await reader.cancel();
-      throw oversizedError();
-    }
-    chunks.push(value);
-  }
-  const body = new Uint8Array(size);
-  let offset = 0;
-  for (const chunk of chunks) {
-    body.set(chunk, offset);
-    offset += chunk.byteLength;
-  }
-  return new TextDecoder().decode(body);
+  const result = await readBoundedBytes(
+    response.body,
+    PROVIDER_RESPONSE_MAX_BYTES,
+    response.headers.get("content-length")
+  );
+  if (!result.ok) throw oversizedError();
+  return new TextDecoder().decode(result.bytes);
 }
 
 export async function parseProviderResponse<T>(

@@ -6,13 +6,20 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import * as matchers from "@testing-library/jest-dom/matchers";
 import { MetadataSection as MetadataSectionComponent } from "./metadata-section";
+import { toast } from "sonner";
+
+vi.mock("sonner", () => ({ toast: { error: vi.fn() } }));
 
 expect.extend(matchers);
 
 // This suite renders into a shared document.body without vitest globals/auto-
 // cleanup, so unmount between cases to keep queries (e.g. PR state badges) from
 // matching leftover DOM from earlier renders.
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  vi.unstubAllGlobals();
+  vi.clearAllMocks();
+});
 
 function MetadataSection({
   canManageLifecycle = true,
@@ -32,6 +39,85 @@ vi.mock("next/link", () => ({
 }));
 
 describe("MetadataSection", () => {
+  it("labels run information and keeps full repository and branch names", () => {
+    const repoOwner = "northstar-engineering/developer-platform/documentation";
+    const repoName = "internal-developer-portal";
+    const branchName = "feature/improve-session-observability-and-investigation";
+    render(
+      <MetadataSection
+        createdAt={Date.now()}
+        model="anthropic/claude-opus-4-6"
+        baseBranch="main"
+        branchName={branchName}
+        repoOwner={repoOwner}
+        repoName={repoName}
+      />
+    );
+
+    expect(screen.getByRole("heading", { name: "Run information" })).toBeVisible();
+    expect(screen.getByText("Started")).toBeVisible();
+    expect(screen.getByText("Model")).toBeVisible();
+    expect(screen.getByText("Base", { exact: true })).toBeVisible();
+    expect(screen.getByText("Branch", { exact: true })).toBeVisible();
+    expect(screen.getByTitle(`${repoOwner}/${repoName}`)).toHaveTextContent(
+      `${repoOwner}/${repoName}`
+    );
+    expect(screen.getByRole("link", { name: branchName })).toHaveAttribute("title", branchName);
+    expect(screen.getByRole("button", { name: "Copy branch name" })).toBeVisible();
+  });
+
+  it("shows the reasoning effort beside the model", () => {
+    render(
+      <MetadataSection
+        createdAt={Date.now()}
+        model="anthropic/claude-opus-4-6"
+        reasoningEffort="high"
+        baseBranch="main"
+      />
+    );
+
+    expect(screen.getByText("Model").nextElementSibling).toHaveTextContent(
+      "Claude Opus 4.6 · high"
+    );
+  });
+
+  it("keeps full member branch names in multi-repository sessions", () => {
+    const branchName = "feature/shared-component-rollout-across-repositories";
+    render(
+      <MetadataSection
+        createdAt={Date.now()}
+        baseBranch="main"
+        repoOwner="acme"
+        repoName="web"
+        repositories={[
+          { ...member("acme", "web", 0), branchName },
+          { ...member("acme", "api", 1), branchName },
+        ]}
+      />
+    );
+
+    expect(screen.getAllByRole("link", { name: branchName })).toHaveLength(2);
+  });
+
+  it("toasts the server reason_code when PR sync is denied", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => Response.json({ reason_code: "session_read_only" }, { status: 403 }))
+    );
+    render(
+      <MetadataSection
+        sessionId="session-1"
+        createdAt={1}
+        baseBranch={null}
+        artifacts={[{ id: "pr-1", type: "pr", url: "https://example.com/pr", createdAt: 1 }]}
+      />
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Sync PR status" }));
+    await waitFor(() =>
+      expect(toast.error).toHaveBeenCalledWith("Failed to sync PR status (session_read_only)")
+    );
+  });
+
   it("renders PR badge data from artifact metadata keys", () => {
     render(
       <MetadataSection
@@ -317,7 +403,7 @@ describe("PR sync button", () => {
     });
   });
 
-  it("moves to a Pull requests header covering every row when several PRs exist", () => {
+  it("puts one sync action in the Repository heading when several PRs exist", () => {
     render(
       <MetadataSection
         sessionId="session-1"
@@ -339,8 +425,9 @@ describe("PR sync button", () => {
     // One button for the whole section, not one pinned to the first row.
     const buttons = screen.getAllByRole("button", { name: "Sync PR status" });
     expect(buttons).toHaveLength(1);
-    const header = screen.getByText("Pull requests");
-    expect(header.parentElement).toContainElement(buttons[0]);
+    const heading = screen.getByRole("heading", { name: "Repository" });
+    expect(heading.parentElement).toContainElement(buttons[0]);
+    expect(screen.getByText("Pull requests")).toBeInTheDocument();
     // Rows carry their head branch so several PRs stay distinguishable.
     expect(screen.getByText("feat/second")).toBeInTheDocument();
   });

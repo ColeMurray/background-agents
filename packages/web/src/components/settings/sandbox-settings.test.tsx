@@ -12,6 +12,12 @@ import {
   DEFAULT_VNC_PORT,
   MAX_TUNNEL_PORTS,
 } from "@open-inspect/shared/types/integrations";
+import {
+  parseSandboxGlobalSettingsResponse,
+  sandboxEnvironmentSettingsResponseSchema,
+  sandboxGlobalSettingsResponseSchema,
+  sandboxRepoSettingsResponseSchema,
+} from "./sandbox-settings-schema";
 import { SandboxSettingsEditor, SandboxSettingsPage } from "./sandbox-settings";
 
 vi.mock("@/hooks/use-current-user-authorization", () => ({
@@ -80,8 +86,60 @@ function renderWithSWR(fallbackData: unknown) {
 afterEach(() => {
   cleanup();
   vi.restoreAllMocks();
+  vi.unstubAllEnvs();
   reposMock.repos = [];
   reposMock.loading = false;
+});
+
+describe("sandbox settings response schemas", () => {
+  it("parses valid global responses including nullable fields", () => {
+    const parsed = sandboxGlobalSettingsResponseSchema.safeParse({
+      integrationId: "sandbox",
+      settings: { defaults: { tunnelPorts: [3000] }, enabledRepos: null },
+    });
+
+    expect(parsed.success).toBe(true);
+    expect(parsed.success ? parsed.data.settings?.enabledRepos : undefined).toBeNull();
+    expect(
+      parseSandboxGlobalSettingsResponse({ integrationId: "sandbox", settings: null })
+    ).toEqual({
+      integrationId: "sandbox",
+      settings: null,
+    });
+  });
+
+  it("rejects malformed global responses", () => {
+    expect(
+      sandboxGlobalSettingsResponseSchema.safeParse({
+        integrationId: "sandbox",
+        settings: { defaults: { tunnelPorts: ["3000"] } },
+      }).success
+    ).toBe(false);
+    expect(parseSandboxGlobalSettingsResponse({ integrationId: "github", settings: null })).toBe(
+      undefined
+    );
+  });
+
+  it("parses valid scoped responses and rejects partial scoped responses", () => {
+    expect(
+      sandboxRepoSettingsResponseSchema.safeParse({
+        integrationId: "sandbox",
+        repo: "acme/app",
+        settings: null,
+      }).success
+    ).toBe(true);
+    expect(
+      sandboxEnvironmentSettingsResponseSchema.safeParse({
+        integrationId: "sandbox",
+        environmentId: "env_123",
+        settings: { sandboxTimeoutMs: 7_200_000 },
+      }).success
+    ).toBe(true);
+    expect(
+      sandboxRepoSettingsResponseSchema.safeParse({ integrationId: "sandbox", settings: null })
+        .success
+    ).toBe(false);
+  });
 });
 
 describe("SandboxSettingsPage — tunnel ports editor", () => {
@@ -104,6 +162,76 @@ describe("SandboxSettingsPage — tunnel ports editor", () => {
     for (const name of ["Service Ports", "Tunnel Ports", "Child Sessions", "Resources"]) {
       expect(screen.getByRole("group", { name })).toBeInTheDocument();
     }
+  });
+
+  it("hides unsupported Daytona controls and preserves stored intent when saving", async () => {
+    vi.stubEnv("NEXT_PUBLIC_SANDBOX_PROVIDER", "daytona");
+    const fetchMock = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      if (init?.method === "PUT") return new Response(JSON.stringify({}), { status: 200 });
+      throw new Error("unexpected fetch");
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    render(
+      <SWRConfig
+        value={{
+          provider: () => new Map(),
+          fallback: {
+            [SETTINGS_KEY]: {
+              integrationId: "sandbox",
+              settings: {
+                defaults: {
+                  cpuCores: 2,
+                  memoryMib: 4096,
+                  cpuLimitCores: 4,
+                  memoryLimitMib: null,
+                  sandboxTimeoutMs: 7_200_000,
+                  finalSnapshotBufferMs: 900_000,
+                  buildTimeoutSeconds: 2400,
+                },
+              },
+            },
+          },
+          dedupingInterval: Infinity,
+          revalidateOnFocus: false,
+          revalidateIfStale: false,
+          revalidateOnReconnect: false,
+        }}
+      >
+        <SandboxSettingsPage />
+      </SWRConfig>
+    );
+
+    expect(screen.queryByLabelText("CPU request (cores)")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("Memory request (MiB)")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("CPU limit (cores)")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("Memory limit (MiB)")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("Session Timeout (minutes)")).not.toBeInTheDocument();
+    const finalSnapshotBuffer = screen.getByLabelText("Final snapshot buffer (minutes)");
+    expect(finalSnapshotBuffer).toHaveValue(15);
+    expect(screen.getByLabelText("Image Build Timeout")).toHaveValue(2400);
+    expect(
+      screen.getByText(/Per-session CPU and memory overrides are unavailable for daytona/)
+    ).toBeInTheDocument();
+
+    await user.clear(finalSnapshotBuffer);
+    await user.type(finalSnapshotBuffer, "20");
+    await user.click(screen.getByLabelText("Web Terminal"));
+    await user.click(screen.getByText("Save Settings"));
+
+    await waitFor(() => {
+      const request = fetchMock.mock.calls.find(([, init]) => init?.method === "PUT")?.[1];
+      const body = JSON.parse(String(request?.body));
+      expect(body.settings.defaults).toMatchObject({
+        terminalEnabled: true,
+        buildTimeoutSeconds: 2400,
+        cpuCores: 2,
+        memoryMib: 4096,
+        cpuLimitCores: 4,
+        memoryLimitMib: null,
+        sandboxTimeoutMs: 7_200_000,
+        finalSnapshotBufferMs: 1_200_000,
+      });
+    });
   });
 
   it("displays session timeout in minutes and saves milliseconds", async () => {
@@ -687,12 +815,120 @@ describe("SandboxSettingsPage — tunnel ports editor", () => {
 });
 
 describe("SandboxSettingsPage — resource reservations editor", () => {
+  it.each(["modal", "modal-vm"])("shows requests and caps for %s", (provider) => {
+    vi.stubEnv("NEXT_PUBLIC_SANDBOX_PROVIDER", provider);
+    renderWithSWR({
+      integrationId: "sandbox",
+      settings: {
+        defaults: { cpuCores: 0.5, memoryMib: 2048, cpuLimitCores: 2, memoryLimitMib: 4096 },
+      },
+    });
+    expect(screen.getByLabelText("CPU request (cores)")).toHaveValue("0.5");
+    expect(screen.getByLabelText("Memory request (MiB)")).toHaveValue(2048);
+    expect(screen.getByLabelText("CPU limit (cores)")).toHaveValue("2");
+    expect(screen.getByLabelText("Memory limit (MiB)")).toHaveValue(4096);
+    expect(screen.queryByRole("button", { name: /Inherit/ })).not.toBeInTheDocument();
+    expect(screen.getByText(/Limits cap usage/)).toBeInTheDocument();
+    if (provider === "modal-vm") {
+      expect(
+        screen.getByText(/VM defaults: requests of 0.5 CPU cores and 2048 MiB/)
+      ).toBeInTheDocument();
+    }
+  });
+
+  it.each(["vercel", "daytona", "opencomputer", "e2b"])("hides caps for %s", (provider) => {
+    vi.stubEnv("NEXT_PUBLIC_SANDBOX_PROVIDER", provider);
+    renderWithSWR(globalSettings([]));
+    expect(screen.queryByLabelText("CPU limit (cores)")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("Memory limit (MiB)")).not.toBeInTheDocument();
+    if (provider === "vercel") {
+      expect(screen.getByLabelText("CPU request (cores)")).toBeInTheDocument();
+    }
+  });
   const user = userEvent.setup();
+
+  it.each([
+    { scope: "repo", ownCaps: { cpuLimitCores: 8, memoryLimitMib: 16384 } },
+    { scope: "repo", ownCaps: { cpuLimitCores: null, memoryLimitMib: null } },
+    { scope: "environment", ownCaps: { cpuLimitCores: 8, memoryLimitMib: 16384 } },
+    { scope: "environment", ownCaps: { cpuLimitCores: null, memoryLimitMib: null } },
+  ] as const)(
+    "inherits $scope caps instead of saving provider-default resets: $ownCaps",
+    async ({ scope, ownCaps }) => {
+      vi.stubEnv("NEXT_PUBLIC_SANDBOX_PROVIDER", "modal-vm");
+      const repoSettingsKey = "/api/integration-settings/sandbox/repos/acme/app";
+      const environmentSettingsKey = "/api/integration-settings/sandbox/environments/env_1";
+      const apiUrl = scope === "repo" ? repoSettingsKey : environmentSettingsKey;
+      const fetchMock = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+        if (init?.method === "PUT") return new Response(JSON.stringify({}), { status: 200 });
+        throw new Error("unexpected fetch");
+      });
+      vi.stubGlobal("fetch", fetchMock);
+      render(
+        <SWRConfig
+          value={{
+            provider: () => new Map(),
+            fallback: {
+              [SETTINGS_KEY]: {
+                integrationId: "sandbox",
+                settings: { defaults: { cpuLimitCores: 2, memoryLimitMib: 4096 } },
+              },
+              [repoSettingsKey]: {
+                integrationId: "sandbox",
+                repo: "acme/app",
+                settings:
+                  scope === "repo" ? { ...ownCaps, terminalEnabled: true } : { cpuLimitCores: 4 },
+              },
+              [environmentSettingsKey]: {
+                integrationId: "sandbox",
+                environmentId: "env_1",
+                settings: { ...ownCaps, terminalEnabled: true },
+              },
+            },
+            dedupingInterval: Infinity,
+            revalidateOnFocus: false,
+            revalidateIfStale: false,
+            revalidateOnReconnect: false,
+          }}
+        >
+          <SandboxSettingsEditor scope={scope} owner="acme" name="app" environmentId="env_1" />
+        </SWRConfig>
+      );
+
+      await user.click(screen.getByRole("button", { name: "Inherit CPU limit" }));
+      expect(screen.getByLabelText("CPU limit (cores)")).toHaveValue(scope === "repo" ? "2" : "4");
+      expect(screen.getByText("Save Settings").closest("button")).toBeEnabled();
+      await user.click(screen.getByRole("button", { name: "Inherit memory limit" }));
+      expect(screen.getByLabelText("Memory limit (MiB)")).toHaveValue(4096);
+      await user.click(screen.getByText("Save Settings"));
+
+      await waitFor(() => {
+        expect(fetchMock).toHaveBeenCalledWith(
+          apiUrl,
+          expect.objectContaining({
+            method: "PUT",
+            body: JSON.stringify({ settings: { terminalEnabled: true } }),
+          })
+        );
+      });
+    }
+  );
 
   it("leaves resource fields blank when unset", () => {
     renderWithSWR(globalSettings([]));
-    expect(screen.getByLabelText("CPU cores")).toHaveValue("");
-    expect(screen.getByLabelText("Memory (MiB)")).toHaveValue(null);
+    expect(screen.getByLabelText("CPU request (cores)")).toHaveValue("");
+    expect(screen.getByLabelText("Memory request (MiB)")).toHaveValue(null);
+  });
+
+  it("validates cap-only edits against the selected VM provider defaults", async () => {
+    vi.stubEnv("NEXT_PUBLIC_SANDBOX_PROVIDER", "modal-vm");
+    const { fetchMock } = renderWithSWR(globalSettings([]));
+    await user.type(screen.getByLabelText("CPU limit (cores)"), "0.25");
+    await user.click(screen.getByText("Save Settings"));
+    expect(
+      screen.getByText("cpuLimitCores must be greater than or equal to cpuCores")
+    ).toBeInTheDocument();
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 
   it("renders configured cpu and memory reservations", () => {
@@ -700,8 +936,8 @@ describe("SandboxSettingsPage — resource reservations editor", () => {
       integrationId: "sandbox",
       settings: { defaults: { tunnelPorts: [], cpuCores: 2, memoryMib: 4096 } },
     });
-    expect(screen.getByLabelText("CPU cores")).toHaveValue("2");
-    expect(screen.getByLabelText("Memory (MiB)")).toHaveValue(4096);
+    expect(screen.getByLabelText("CPU request (cores)")).toHaveValue("2");
+    expect(screen.getByLabelText("Memory request (MiB)")).toHaveValue(4096);
   });
 
   it("sends cpu and memory reservations in the global payload", async () => {
@@ -728,8 +964,8 @@ describe("SandboxSettingsPage — resource reservations editor", () => {
       </SWRConfig>
     );
 
-    await user.type(screen.getByLabelText("CPU cores"), "2");
-    await user.type(screen.getByLabelText("Memory (MiB)"), "4096");
+    await user.type(screen.getByLabelText("CPU request (cores)"), "2");
+    await user.type(screen.getByLabelText("Memory request (MiB)"), "4096");
     await user.click(screen.getByText("Save Settings"));
 
     await waitFor(() => {
@@ -758,7 +994,7 @@ describe("SandboxSettingsPage — resource reservations editor", () => {
   it("blocks non-positive memory", async () => {
     const { fetchMock } = renderWithSWR(globalSettings([]));
 
-    await user.type(screen.getByLabelText("Memory (MiB)"), "0");
+    await user.type(screen.getByLabelText("Memory request (MiB)"), "0");
     await user.click(screen.getByText("Save Settings"));
 
     expect(screen.getByText(/Memory must be a positive whole number of MiB/)).toBeInTheDocument();
@@ -771,7 +1007,7 @@ describe("SandboxSettingsPage — resource reservations editor", () => {
   it("blocks non-positive cpu", async () => {
     const { fetchMock } = renderWithSWR(globalSettings([]));
 
-    await user.type(screen.getByLabelText("CPU cores"), "0");
+    await user.type(screen.getByLabelText("CPU request (cores)"), "0");
     await user.click(screen.getByText("Save Settings"));
 
     expect(screen.getByText(/CPU cores must be a positive number/)).toBeInTheDocument();
@@ -828,8 +1064,8 @@ describe("SandboxSettingsPage — resource reservations editor", () => {
     await user.click(screen.getByRole("option", { name: /app/ }));
 
     // Inherited global resources are displayed for the repo...
-    expect(screen.getByLabelText("CPU cores")).toHaveValue("2");
-    expect(screen.getByLabelText("Memory (MiB)")).toHaveValue(4096);
+    expect(screen.getByLabelText("CPU request (cores)")).toHaveValue("2");
+    expect(screen.getByLabelText("Memory request (MiB)")).toHaveValue(4096);
 
     // ...but saving an unrelated change must not pin them as repo overrides.
     await user.click(screen.getByText("Add port"));
@@ -896,8 +1132,8 @@ describe("SandboxSettingsPage — resource reservations editor", () => {
     await user.click(screen.getByRole("option", { name: /app/ }));
 
     // Override only CPU; memory stays inherited and must not be persisted.
-    await user.clear(screen.getByLabelText("CPU cores"));
-    await user.type(screen.getByLabelText("CPU cores"), "4");
+    await user.clear(screen.getByLabelText("CPU request (cores)"));
+    await user.type(screen.getByLabelText("CPU request (cores)"), "4");
     await user.click(screen.getByText("Save Settings"));
 
     await waitFor(() => {
@@ -959,8 +1195,8 @@ describe("SandboxSettingsPage — resource reservations editor", () => {
     await user.click(screen.getByText("All Repositories (Global)"));
     await user.click(screen.getByRole("option", { name: /app/ }));
 
-    await user.clear(screen.getByLabelText("CPU cores"));
-    await user.clear(screen.getByLabelText("Memory (MiB)"));
+    await user.clear(screen.getByLabelText("CPU request (cores)"));
+    await user.clear(screen.getByLabelText("Memory request (MiB)"));
     await user.click(screen.getByText("Save Settings"));
 
     await waitFor(() => {
@@ -1029,8 +1265,8 @@ describe("SandboxSettingsPage — resource reservations editor", () => {
     await user.click(screen.getByText("All Repositories (Global)"));
     await user.click(screen.getByRole("option", { name: /app/ }));
 
-    expect(screen.getByLabelText("CPU cores")).toHaveValue("");
-    expect(screen.getByLabelText("Memory (MiB)")).toHaveValue(null);
+    expect(screen.getByLabelText("CPU request (cores)")).toHaveValue("");
+    expect(screen.getByLabelText("Memory request (MiB)")).toHaveValue(null);
 
     await user.click(screen.getByText("Add port"));
     await user.type(screen.getByPlaceholderText("e.g. 3000"), "3000");
@@ -1106,8 +1342,8 @@ describe("SandboxSettingsEditor — environment scope", () => {
 
     // The inherited layer is global + primary-repo merged: cpu from the repo
     // override, memory from the global default.
-    expect(screen.getByLabelText("CPU cores")).toHaveValue("4");
-    expect(screen.getByLabelText("Memory (MiB)")).toHaveValue(4096);
+    expect(screen.getByLabelText("CPU request (cores)")).toHaveValue("4");
+    expect(screen.getByLabelText("Memory request (MiB)")).toHaveValue(4096);
   });
 
   it("shows the environment's own override above the inherited layers", () => {
@@ -1128,7 +1364,7 @@ describe("SandboxSettingsEditor — environment scope", () => {
       },
     });
 
-    expect(screen.getByLabelText("CPU cores")).toHaveValue("8");
+    expect(screen.getByLabelText("CPU request (cores)")).toHaveValue("8");
   });
 
   it("saves only edited fields to the environment endpoint", async () => {
@@ -1200,7 +1436,7 @@ describe("SandboxSettingsEditor — environment scope", () => {
 
     // …and saving an unrelated edit writes only that edit, never the
     // inherited ports/toggle/timeout.
-    await user.type(screen.getByLabelText("CPU cores"), "2");
+    await user.type(screen.getByLabelText("CPU request (cores)"), "2");
     await user.click(screen.getByText("Save Settings"));
 
     await waitFor(() => {

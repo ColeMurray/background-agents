@@ -1,0 +1,854 @@
+import { env } from "cloudflare:test";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import type { SessionViewer } from "@open-inspect/shared";
+import { SessionExportStore, type RunsPage } from "../../src/db/session-export-store";
+import type { RunsExportCursor } from "../../src/db/session-export-cursor";
+import type { SqlDatabase, SqlStatement } from "../../src/db/sql-database";
+import { cleanD1Tables } from "./cleanup";
+import { sqlDatabase } from "./helpers";
+
+const serviceViewer: SessionViewer = { kind: "service", teamId: null };
+
+async function setVisibility(id: string, visibility: "workspace" | "private") {
+  await env.DB.prepare("UPDATE sessions SET visibility = ? WHERE id = ?")
+    .bind(visibility, id)
+    .run();
+}
+
+function insertSession(id: string, createdAt: number) {
+  return env.DB.prepare("INSERT INTO sessions (id, created_at, updated_at) VALUES (?, ?, ?)")
+    .bind(id, createdAt, createdAt)
+    .run();
+}
+
+async function insertDescendant(
+  id: string,
+  parentId: string,
+  rootId: string,
+  createdAt: number,
+  depth: number
+) {
+  await insertSession(id, createdAt);
+  await env.DB.prepare(
+    "UPDATE sessions SET parent_session_id = ?, root_session_id = ?, spawn_depth = ? WHERE id = ?"
+  )
+    .bind(parentId, rootId, depth, id)
+    .run();
+}
+
+describe("SessionExportStore integration", () => {
+  beforeEach(cleanD1Tables);
+  afterEach(cleanD1Tables);
+
+  it("filters sessions before paging and never fetches a hidden trace or metadata", async () => {
+    await insertSession("visible-old", 100);
+    await insertSession("hidden", 200);
+    await insertSession("visible-new", 300);
+    await setVisibility("hidden", "private");
+    const store = new SessionExportStore(sqlDatabase(env.DB));
+
+    const first = await store.list({
+      cursor: null,
+      limit: 1,
+      readScope: serviceViewer,
+      mode: "on",
+    });
+    expect(first.sessions.map(({ id }) => id)).toEqual(["visible-new"]);
+    expect(first.hasMore).toBe(true);
+    const second = await store.list({
+      cursor: first.nextCursor,
+      limit: 1,
+      readScope: serviceViewer,
+      mode: "on",
+    });
+    expect(second.sessions.map(({ id }) => id)).toEqual(["visible-old"]);
+    expect(second.nextCursor).toBeNull();
+  });
+
+  it("filters run roots and descendants independently, including for an unbound service", async () => {
+    await insertSession("private-root", 500);
+    await insertDescendant("public-child-of-private", "private-root", "private-root", 501, 1);
+    await setVisibility("private-root", "private");
+    await insertSession("public-root", 400);
+    await insertDescendant("private-child", "public-root", "public-root", 401, 1);
+    await setVisibility("private-child", "private");
+    await insertDescendant("public-child", "public-root", "public-root", 402, 1);
+    const store = new SessionExportStore(sqlDatabase(env.DB));
+
+    const first = await store.list({
+      scope: "runs",
+      cursor: null,
+      limit: 1,
+      readScope: serviceViewer,
+      mode: "on",
+    });
+    expect(first.sessions.map(({ id }) => id)).toEqual(["public-root"]);
+    const second = await store.list({
+      scope: "runs",
+      cursor: first.nextCursor,
+      limit: 1,
+      readScope: serviceViewer,
+      mode: "on",
+    });
+    expect(second.sessions.map(({ id }) => id)).toEqual(["public-child"]);
+    expect(second.nextCursor).toBeNull();
+  });
+
+  it("omits visibility predicates for explicitly internal session and run exports", async () => {
+    await insertSession("private-root", 200);
+    await setVisibility("private-root", "private");
+    await insertDescendant("private-child", "private-root", "private-root", 210, 1);
+    await setVisibility("private-child", "private");
+    await insertSession("workspace", 100);
+
+    const raw = sqlDatabase(env.DB);
+    const pageQueries: string[] = [];
+    const db: SqlDatabase = {
+      prepare(sql) {
+        if (sql.startsWith("SELECT sessions.*") || sql.startsWith("SELECT s.*")) {
+          pageQueries.push(sql);
+        }
+        return raw.prepare(sql);
+      },
+      batch(statements) {
+        return raw.batch(statements);
+      },
+    };
+    const store = new SessionExportStore(db);
+    const options = {
+      readScope: { kind: "internal" as const, reason: "data export" },
+      mode: "on" as const,
+      cursor: null,
+      limit: 10,
+    };
+    expect((await store.list(options)).sessions.map(({ id }) => id)).toEqual([
+      "private-child",
+      "private-root",
+      "workspace",
+    ]);
+    expect((await store.list({ ...options, scope: "runs" })).sessions.map(({ id }) => id)).toEqual([
+      "private-root",
+      "private-child",
+      "workspace",
+    ]);
+    expect(pageQueries).toHaveLength(2);
+    for (const sql of pageQueries) {
+      expect(sql.slice(sql.indexOf(" WHERE "))).not.toMatch(/\b(?:sessions|root|s)\.visibility\b/);
+      expect(sql).not.toContain("team_memberships");
+    }
+  });
+
+  it("honors enforcement mode for users but never exposes private rows to services", async () => {
+    await insertSession("workspace", 100);
+    await insertSession("private", 200);
+    await setVisibility("private", "private");
+    await env.DB.prepare(
+      "INSERT INTO teams (id, slug, name, created_at, updated_at) VALUES (?, ?, ?, ?, ?)"
+    )
+      .bind("team-1", "team-1", "Team 1", 100, 100)
+      .run();
+    await insertSession("team", 300);
+    await env.DB.prepare("UPDATE sessions SET owner_team_id = ?, visibility = 'team' WHERE id = ?")
+      .bind("team-1", "team")
+      .run();
+    const viewer: SessionViewer = {
+      kind: "user",
+      userId: "viewer",
+      roleKey: null,
+      permissions: ["sessions.read"],
+      suspended: false,
+      memberships: new Map(),
+    };
+    const store = new SessionExportStore(sqlDatabase(env.DB));
+
+    const on = await store.list({ cursor: null, limit: 10, readScope: viewer, mode: "on" });
+    expect(on.sessions.map(({ id }) => id)).toEqual(["workspace"]);
+    const shadow = await store.list({ cursor: null, limit: 10, readScope: viewer, mode: "shadow" });
+    expect(shadow.sessions.map(({ id }) => id)).toEqual(["team", "workspace"]);
+    const off = await store.list({ cursor: null, limit: 10, readScope: viewer, mode: "off" });
+    expect(off.sessions.map(({ id }) => id)).toEqual(["team", "workspace"]);
+    const service = await store.list({
+      cursor: null,
+      limit: 10,
+      readScope: serviceViewer,
+      mode: "off",
+    });
+    expect(service.sessions.map(({ id }) => id)).toEqual(["team", "workspace"]);
+  });
+
+  it("looks up exactly one export row", async () => {
+    await insertSession("other", 100);
+    await insertSession("root", 200);
+    await insertDescendant("child", "root", "root", 300, 1);
+    await insertDescendant("grandchild", "child", "root", 400, 2);
+    const store = new SessionExportStore(sqlDatabase(env.DB));
+
+    expect((await store.get("child"))?.rootSessionId).toBe("root");
+    expect(await store.get("child")).not.toHaveProperty("ownerTeamId");
+    expect(await store.get("child")).not.toHaveProperty("visibility");
+    expect(await store.get("missing")).toBeNull();
+  });
+
+  it("paginates timestamp ties without gaps or newly-created sessions", async () => {
+    await insertSession("session-a", 200);
+    await insertSession("session-b", 200);
+    await insertSession("session-c", 200);
+    await insertSession("session-newest", 300);
+    const store = new SessionExportStore(sqlDatabase(env.DB));
+
+    const first = await store.list({
+      cursor: null,
+      limit: 2,
+      readScope: serviceViewer,
+      mode: "on",
+    });
+    expect(first.sessions.map(({ id }) => id)).toEqual(["session-newest", "session-c"]);
+    expect(first.nextCursor).toEqual({
+      createdAt: 200,
+      id: "session-c",
+      snapshotMaxRowId: expect.any(Number),
+    });
+
+    await insertSession("session-created-during-export", 400);
+    await insertSession("session-bb-created-during-export", 200);
+    const second = await store.list({
+      cursor: first.nextCursor,
+      limit: 2,
+      readScope: serviceViewer,
+      mode: "on",
+    });
+    expect(second.sessions.map(({ id }) => id)).toEqual(["session-b", "session-a"]);
+    expect(second).toMatchObject({ hasMore: false, nextCursor: null });
+  });
+
+  it("applies inclusive created-at filters", async () => {
+    await insertSession("session-old", 100);
+    await insertSession("session-start", 200);
+    await insertSession("session-end", 300);
+    await insertSession("session-new", 400);
+
+    const result = await new SessionExportStore(sqlDatabase(env.DB)).list({
+      cursor: null,
+      limit: 10,
+      readScope: serviceViewer,
+      mode: "on",
+      createdAfter: 200,
+      createdBefore: 300,
+    });
+
+    expect(result.sessions.map(({ id }) => id)).toEqual(["session-end", "session-start"]);
+  });
+
+  it("windows by root and exports descendants outside createdBefore in depth order", async () => {
+    await insertSession("older-root", 100);
+    await insertSession("root", 200);
+    await insertDescendant("child-later", "root", "root", 500, 1);
+    await insertDescendant("child-earlier", "root", "root", 400, 1);
+    await insertDescendant("grandchild", "child-earlier", "root", 600, 2);
+    await insertDescendant("older-root-child", "older-root", "older-root", 250, 1);
+
+    const result = await new SessionExportStore(sqlDatabase(env.DB)).list({
+      scope: "runs",
+      cursor: null,
+      limit: 10,
+      readScope: serviceViewer,
+      mode: "on",
+      createdAfter: 200,
+      createdBefore: 300,
+    });
+
+    expect(result.sessions.map(({ id, rootSessionId }) => [id, rootSessionId])).toEqual([
+      ["root", "root"],
+      ["child-earlier", "root"],
+      ["child-later", "root"],
+      ["grandchild", "root"],
+    ]);
+    expect(result).toMatchObject({ hasMore: false, nextCursor: null });
+  });
+
+  it("paginates a seven-session family across three pages without gaps or interleaving", async () => {
+    await insertSession("new-root", 300);
+    await insertSession("root", 200);
+    for (let index = 1; index <= 6; index++) {
+      await insertDescendant(`child-${index}`, "root", "root", 200 + index, 1);
+    }
+    await insertSession("old-root", 100);
+    const store = new SessionExportStore(sqlDatabase(env.DB));
+    const ids: string[] = [];
+    const pages: string[][] = [];
+    let cursor: RunsExportCursor | null = null;
+    do {
+      const page: RunsPage = await store.list({
+        scope: "runs",
+        cursor,
+        limit: 3,
+        readScope: serviceViewer,
+        mode: "on",
+      });
+      const pageIds = page.sessions.map(({ id }) => id);
+      pages.push(pageIds);
+      ids.push(...pageIds);
+      cursor = page.nextCursor;
+    } while (cursor);
+
+    expect(pages).toEqual([
+      ["new-root", "root", "child-1"],
+      ["child-2", "child-3", "child-4"],
+      ["child-5", "child-6", "old-root"],
+    ]);
+    expect(new Set(ids).size).toBe(ids.length);
+  });
+
+  it("keeps tied root timestamps in root id order across page boundaries", async () => {
+    await insertSession("root-b", 200);
+    await insertDescendant("child-b", "root-b", "root-b", 250, 1);
+    await insertSession("root-a", 200);
+    await insertDescendant("child-a", "root-a", "root-a", 240, 1);
+    const store = new SessionExportStore(sqlDatabase(env.DB));
+    const first = await store.list({
+      scope: "runs",
+      cursor: null,
+      limit: 1,
+      readScope: serviceViewer,
+      mode: "on",
+    });
+    const second = await store.list({
+      scope: "runs",
+      cursor: first.nextCursor,
+      limit: 1,
+      readScope: serviceViewer,
+      mode: "on",
+    });
+    const third = await store.list({
+      scope: "runs",
+      cursor: second.nextCursor,
+      limit: 1,
+      readScope: serviceViewer,
+      mode: "on",
+    });
+    const fourth = await store.list({
+      scope: "runs",
+      cursor: third.nextCursor,
+      limit: 1,
+      readScope: serviceViewer,
+      mode: "on",
+    });
+
+    expect(
+      [first, second, third, fourth].flatMap((page) => page.sessions.map(({ id }) => id))
+    ).toEqual(["root-a", "child-a", "root-b", "child-b"]);
+    expect(first.nextCursor).toMatchObject({
+      rootCreatedAt: 200,
+      rootSessionId: "root-a",
+      spawnDepth: 0,
+    });
+    expect(fourth.nextCursor).toBeNull();
+  });
+
+  it("scans roots and members by index without sorting the full history", async () => {
+    await insertSession("root", 200);
+    await insertDescendant("child", "root", "root", 210, 1);
+    await env.DB.exec("ANALYZE sessions");
+    const raw = sqlDatabase(env.DB);
+    let pageSql: string | undefined;
+    const db: SqlDatabase = {
+      prepare(sql) {
+        if (sql.startsWith("SELECT s.*")) pageSql = sql;
+        return raw.prepare(sql);
+      },
+      batch(statements) {
+        return raw.batch(statements);
+      },
+    };
+    const store = new SessionExportStore(db);
+    const first = await store.list({
+      scope: "runs",
+      cursor: null,
+      limit: 1,
+      readScope: serviceViewer,
+      mode: "on",
+    });
+    if (!pageSql) throw new Error("Run page query was not prepared");
+
+    const plan = await env.DB.prepare(`EXPLAIN QUERY PLAN ${pageSql}`)
+      .bind(2)
+      .all<{ detail: string }>();
+    const details = plan.results.map(({ detail }) => detail);
+    expect(details).toEqual(
+      expect.arrayContaining([
+        expect.stringContaining("idx_sessions_export_roots"),
+        expect.stringContaining("idx_sessions_export_members"),
+      ])
+    );
+    expect(details).not.toContain("USE TEMP B-TREE FOR ORDER BY");
+
+    const cursor = first.nextCursor;
+    if (!cursor) throw new Error("Expected a second run export page");
+    await store.list({ scope: "runs", cursor, limit: 1, readScope: serviceViewer, mode: "on" });
+    if (!pageSql) throw new Error("Continuation query was not prepared");
+    const continuation = await env.DB.prepare(`EXPLAIN QUERY PLAN ${pageSql}`)
+      .bind(
+        cursor.snapshotMaxRowId,
+        cursor.snapshotMaxRowId,
+        cursor.rootCreatedAt,
+        cursor.rootCreatedAt,
+        cursor.rootCreatedAt,
+        cursor.rootSessionId,
+        cursor.rootSessionId,
+        cursor.spawnDepth,
+        cursor.spawnDepth,
+        cursor.createdAt,
+        cursor.createdAt,
+        cursor.id,
+        2
+      )
+      .all<{ detail: string }>();
+    expect(continuation.results.map(({ detail }) => detail)).toEqual(
+      expect.arrayContaining([
+        expect.stringMatching(/SEARCH root USING (?:COVERING )?INDEX idx_sessions_export_roots/),
+      ])
+    );
+  });
+
+  it("uses depth, creation time and id to resume within a run", async () => {
+    await insertSession("root", 200);
+    await insertDescendant("z-child", "root", "root", 210, 1);
+    await insertDescendant("a-child", "root", "root", 210, 1);
+    await insertDescendant("grandchild", "a-child", "root", 205, 2);
+    const store = new SessionExportStore(sqlDatabase(env.DB));
+    const ids: string[] = [];
+    let cursor: RunsExportCursor | null = null;
+    do {
+      const page: RunsPage = await store.list({
+        scope: "runs",
+        cursor,
+        limit: 1,
+        readScope: serviceViewer,
+        mode: "on",
+      });
+      ids.push(...page.sessions.map(({ id }) => id));
+      cursor = page.nextCursor;
+    } while (cursor);
+
+    expect(ids).toEqual(["root", "a-child", "z-child", "grandchild"]);
+  });
+
+  it("excludes a child inserted after the first page's snapshot fence", async () => {
+    await insertSession("root", 200);
+    await insertDescendant("child-1", "root", "root", 210, 1);
+    await insertDescendant("child-2", "root", "root", 230, 1);
+    const store = new SessionExportStore(sqlDatabase(env.DB));
+    const first = await store.list({
+      scope: "runs",
+      cursor: null,
+      limit: 1,
+      readScope: serviceViewer,
+      mode: "on",
+    });
+    await insertDescendant("late-child", "root", "root", 220, 1);
+    const second = await store.list({
+      scope: "runs",
+      cursor: first.nextCursor,
+      limit: 1,
+      readScope: serviceViewer,
+      mode: "on",
+    });
+    const third = await store.list({
+      scope: "runs",
+      cursor: second.nextCursor,
+      limit: 1,
+      readScope: serviceViewer,
+      mode: "on",
+    });
+
+    expect([first, second, third].flatMap((page) => page.sessions.map(({ id }) => id))).toEqual([
+      "root",
+      "child-1",
+      "child-2",
+    ]);
+    expect(third.nextCursor).toBeNull();
+  });
+
+  it("can include a late descendant when deletion reuses the fenced rowid", async () => {
+    await insertSession("root", 200);
+    await insertDescendant("child-1", "root", "root", 210, 1);
+    await insertDescendant("child-2", "root", "root", 230, 1);
+    const store = new SessionExportStore(sqlDatabase(env.DB));
+    const first = await store.list({
+      scope: "runs",
+      cursor: null,
+      limit: 1,
+      readScope: serviceViewer,
+      mode: "on",
+    });
+    const deleted = await env.DB.prepare("SELECT rowid FROM sessions WHERE id = ?")
+      .bind("child-2")
+      .first();
+    await env.DB.prepare("DELETE FROM sessions WHERE id = ?").bind("child-2").run();
+    await insertDescendant("late-child", "root", "root", 220, 1);
+    const inserted = await env.DB.prepare("SELECT rowid FROM sessions WHERE id = ?")
+      .bind("late-child")
+      .first();
+    expect(inserted).toEqual(deleted);
+    const second = await store.list({
+      scope: "runs",
+      cursor: first.nextCursor,
+      limit: 1,
+      readScope: serviceViewer,
+      mode: "on",
+    });
+    const third = await store.list({
+      scope: "runs",
+      cursor: second.nextCursor,
+      limit: 1,
+      readScope: serviceViewer,
+      mode: "on",
+    });
+
+    expect([first, second, third].flatMap((page) => page.sessions.map(({ id }) => id))).toEqual([
+      "root",
+      "child-1",
+      "late-child",
+    ]);
+    expect(third.nextCursor).toBeNull();
+  });
+
+  it("re-exports a re-rooted child in its current window after a root is deleted between pages", async () => {
+    await insertSession("old-root", 100);
+    await insertSession("root", 200);
+    await insertDescendant("child", "root", "root", 210, 1);
+    const store = new SessionExportStore(sqlDatabase(env.DB));
+    const window = { scope: "runs" as const, limit: 1, createdAfter: 100, createdBefore: 220 };
+    const first = await store.list({
+      ...window,
+      cursor: null,
+      readScope: serviceViewer,
+      mode: "on",
+    });
+    expect(first.sessions.map(({ id }) => id)).toEqual(["root"]);
+
+    await env.DB.prepare("DELETE FROM sessions WHERE id = ?").bind("root").run();
+    const second = await store.list({
+      ...window,
+      cursor: first.nextCursor,
+      readScope: serviceViewer,
+      mode: "on",
+    });
+    expect(second.sessions.map(({ id }) => id)).toEqual(["old-root"]);
+    expect(second.nextCursor).toBeNull();
+
+    const fresh = await store.list({
+      ...window,
+      cursor: null,
+      limit: 10,
+      readScope: serviceViewer,
+      mode: "on",
+    });
+    expect(fresh.sessions.map(({ id, rootSessionId }) => [id, rootSessionId])).toEqual([
+      ["child", "child"],
+      ["old-root", "old-root"],
+    ]);
+  });
+
+  it("excludes orphans whose root row no longer exists", async () => {
+    await insertSession("root", 200);
+    await insertDescendant("orphan", "root", "root", 210, 1);
+    await env.DB.prepare("DELETE FROM sessions WHERE id = ?").bind("root").run();
+    // Simulate a persisted dangling root despite the legacy delete trigger's re-rooting.
+    await env.DB.prepare("UPDATE sessions SET root_session_id = ? WHERE id = ?")
+      .bind("root", "orphan")
+      .run();
+
+    const result = await new SessionExportStore(sqlDatabase(env.DB)).list({
+      scope: "runs",
+      cursor: null,
+      limit: 10,
+      readScope: serviceViewer,
+      mode: "on",
+    });
+    expect(result.sessions).toEqual([]);
+  });
+
+  it("exports child identity, ordered repositories, merged PRs, and projected token totals", async () => {
+    await insertSession("root", 100);
+    await insertSession("child", 200);
+    await env.DB.prepare(
+      `UPDATE sessions SET title = ?, status = ?, spawn_source = ?, parent_session_id = ?,
+       root_session_id = ?, spawn_depth = ?, harness = ?, model = ?, reasoning_effort = ?,
+       scm_login = ?, automation_run_id = ?, environment_id = ?, repo_owner = ?, repo_name = ?,
+       base_branch = ?, pr_count = ?, input_tokens = ?, output_tokens = ?, reasoning_tokens = ?,
+       cache_read_tokens = ?, cache_write_tokens = ? WHERE id = ?`
+    )
+      .bind(
+        "Child run",
+        "completed",
+        "agent",
+        "root",
+        "root",
+        1,
+        "claude",
+        "openai/gpt-5.4",
+        "high",
+        "agent-user",
+        "run-1",
+        "env-1",
+        "acme",
+        "web",
+        "main",
+        1,
+        120,
+        30,
+        8,
+        55,
+        4,
+        "child"
+      )
+      .run();
+    await env.DB.prepare(
+      `INSERT INTO session_repositories (session_id, position, repo_owner, repo_name, repo_id, base_branch)
+       VALUES (?, ?, ?, ?, ?, ?), (?, ?, ?, ?, ?, ?)`
+    )
+      .bind("child", 1, "acme", "api", 202, "develop", "child", 0, "acme", "web", 101, "main")
+      .run();
+    await env.DB.prepare(
+      `INSERT INTO session_pull_requests
+       (artifact_id, session_id, repo_owner, repo_name, pr_number, url, lifecycle_state,
+        is_draft, head_branch, base_branch, head_sha, created_at, updated_at,
+        provider_created_at, merged_at, closed_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    )
+      .bind(
+        "pr-1",
+        "child",
+        "acme",
+        "api",
+        42,
+        "https://example.com/acme/api/pull/42",
+        "merged",
+        0,
+        "feature/child",
+        "develop",
+        "abc123",
+        210,
+        300,
+        210,
+        300,
+        300
+      )
+      .run();
+
+    const result = await new SessionExportStore(sqlDatabase(env.DB)).list({
+      cursor: null,
+      limit: 1,
+      readScope: serviceViewer,
+      mode: "on",
+    });
+
+    expect(result.sessions).toMatchObject([
+      {
+        id: "child",
+        source: "agent",
+        spawnSource: "agent",
+        parentSessionId: "root",
+        rootSessionId: "root",
+        spawnDepth: 1,
+        harness: "claude",
+        model: "openai/gpt-5.4",
+        provider: "openai",
+        reasoningEffort: "high",
+        scmLogin: "agent-user",
+        automationRunId: "run-1",
+        environmentId: "env-1",
+        baseBranch: "main",
+        prCount: 1,
+        inputTokens: 120,
+        outputTokens: 30,
+        reasoningTokens: 8,
+        cacheReadTokens: 55,
+        cacheWriteTokens: 4,
+        repositories: [
+          { repoOwner: "acme", repoName: "web", repoId: 101, baseBranch: "main" },
+          { repoOwner: "acme", repoName: "api", repoId: 202, baseBranch: "develop" },
+        ],
+        pullRequests: [
+          {
+            repoOwner: "acme",
+            repoName: "api",
+            prNumber: 42,
+            url: "https://example.com/acme/api/pull/42",
+            lifecycleState: "merged",
+            isDraft: false,
+            headBranch: "feature/child",
+            baseBranch: "develop",
+            headSha: "abc123",
+            providerCreatedAt: 210,
+            mergedAt: 300,
+            closedAt: 300,
+          },
+        ],
+      },
+    ]);
+    expect(result.hasMore).toBe(true);
+  });
+
+  it("synthesizes a scalar-era repository and derives the provider for a bare Claude model", async () => {
+    await insertSession("legacy", 100);
+    await env.DB.prepare(
+      "UPDATE sessions SET repo_owner = ?, repo_name = ?, base_branch = ?, model = ? WHERE id = ?"
+    )
+      .bind("group/subgroup", "repo", "release", "claude-haiku-4-5", "legacy")
+      .run();
+
+    const result = await new SessionExportStore(sqlDatabase(env.DB)).list({
+      cursor: null,
+      limit: 10,
+      readScope: serviceViewer,
+      mode: "on",
+    });
+
+    expect(result.sessions).toMatchObject([
+      {
+        id: "legacy",
+        model: "claude-haiku-4-5",
+        provider: "anthropic",
+        repositories: [
+          { repoOwner: "group/subgroup", repoName: "repo", repoId: null, baseBranch: "release" },
+        ],
+        pullRequests: [],
+      },
+    ]);
+  });
+
+  it("exports no synthesized repository for a repository-less session", async () => {
+    await insertSession("no-repo", 100);
+
+    const result = await new SessionExportStore(sqlDatabase(env.DB)).list({
+      cursor: null,
+      limit: 10,
+      readScope: serviceViewer,
+      mode: "on",
+    });
+
+    expect(result.sessions[0].repositories).toEqual([]);
+    expect(result.sessions[0].pullRequests).toEqual([]);
+  });
+
+  it("loads repository membership across the D1 parameter boundary", async () => {
+    await env.DB.batch(
+      Array.from({ length: 101 }, (_, index) =>
+        env.DB.prepare("INSERT INTO sessions (id, created_at, updated_at) VALUES (?, ?, ?)").bind(
+          `session-${index}`,
+          index,
+          index
+        )
+      )
+    );
+    await env.DB.prepare(
+      `INSERT INTO session_repositories
+       (session_id, position, repo_owner, repo_name, base_branch) VALUES (?, ?, ?, ?, ?)`
+    )
+      .bind("session-0", 0, "acme", "oldest", "main")
+      .run();
+    await env.DB.prepare(
+      `INSERT INTO session_repositories
+       (session_id, position, repo_owner, repo_name, base_branch) VALUES (?, ?, ?, ?, ?)`
+    )
+      .bind("session-100", 0, "acme", "newest", "main")
+      .run();
+
+    const result = await new SessionExportStore(sqlDatabase(env.DB)).list({
+      cursor: null,
+      limit: 101,
+      readScope: serviceViewer,
+      mode: "on",
+    });
+
+    expect(result.sessions).toHaveLength(101);
+    expect(result.sessions[0].repositories).toEqual([
+      { repoOwner: "acme", repoName: "newest", repoId: null, baseBranch: "main" },
+    ]);
+    expect(result.sessions[100].repositories).toEqual([
+      { repoOwner: "acme", repoName: "oldest", repoId: null, baseBranch: "main" },
+    ]);
+  });
+
+  it("keeps metrics and PRs on one snapshot when a write interleaves with the read", async () => {
+    await insertSession("interleaved", 100);
+    const rawDb = sqlDatabase(env.DB);
+    const unwrapped = new WeakMap<SqlStatement, SqlStatement>();
+    let wrote = false;
+    const write = async () => {
+      if (wrote) return;
+      wrote = true;
+      await env.DB.prepare("UPDATE sessions SET pr_count = 1 WHERE id = ?")
+        .bind("interleaved")
+        .run();
+      await env.DB.prepare(
+        `INSERT INTO session_pull_requests
+         (artifact_id, session_id, repo_owner, repo_name, pr_number, url, lifecycle_state,
+          is_draft, head_branch, base_branch, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      )
+        .bind(
+          "pr-interleaved",
+          "interleaved",
+          "acme",
+          "repo",
+          1,
+          "https://example.com/pr/1",
+          "open",
+          0,
+          "feature",
+          "main",
+          100,
+          100
+        )
+        .run();
+    };
+    const db: SqlDatabase = {
+      prepare(sql) {
+        const statement = rawDb.prepare(sql);
+        if (!sql.includes("FROM sessions")) return statement;
+        const wrap = (inner: SqlStatement): SqlStatement => {
+          const wrapped: SqlStatement = {
+            bind(...values) {
+              return wrap(inner.bind(...values));
+            },
+            first<T = Record<string, unknown>>() {
+              return inner.first<T>();
+            },
+            run<T = Record<string, unknown>>() {
+              return inner.run<T>();
+            },
+            async all<T = Record<string, unknown>>() {
+              const result = await inner.all<T>();
+              await write();
+              return result;
+            },
+          };
+          unwrapped.set(wrapped, inner);
+          return wrapped;
+        };
+        return wrap(statement);
+      },
+      async batch<T = unknown>(statements: SqlStatement[]) {
+        const result = await rawDb.batch<T>(statements.map((stmt) => unwrapped.get(stmt) ?? stmt));
+        await write();
+        return result;
+      },
+    };
+
+    const result = await new SessionExportStore(db).list({
+      cursor: null,
+      limit: 10,
+      readScope: serviceViewer,
+      mode: "on",
+    });
+
+    expect(wrote).toBe(true);
+    expect(result.sessions[0].prCount).toBe(result.sessions[0].pullRequests.length);
+    expect(
+      await env.DB.prepare("SELECT pr_count FROM sessions WHERE id = ?").bind("interleaved").first()
+    ).toMatchObject({ pr_count: 1 });
+  });
+});

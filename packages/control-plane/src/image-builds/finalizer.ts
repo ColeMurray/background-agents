@@ -17,17 +17,35 @@ const IMAGE_BUILD_FINALIZATION_LEASE_MS = 6 * 60 * 1000;
 /** Hard deadline for one provider snapshot or checkpoint attempt. */
 export const IMAGE_BUILD_PROVIDER_ATTEMPT_MS = 5 * 60 * 1000;
 export const IMAGE_BUILD_FINALIZATION_RETRY_DELAY_MS = 15_000;
+/**
+ * Cadence for polling an artifact operation the provider has accepted but not
+ * finished. Longer than the lease-contention retry: nothing here is contended,
+ * the work is the provider's, and the operation's own fixed deadline — not the
+ * number of polls — is what ends it.
+ */
+export const IMAGE_BUILD_PENDING_OPERATION_RETRY_DELAY_MS = 30_000;
 const LEASE_EXPIRY_HEADROOM_MS = 5_000;
 
-/** Job disposition returned after processing one finalization command. */
+/**
+ * Job disposition returned after processing one finalization command.
+ *
+ * `pending_operation` distinguishes waiting on the provider from waiting on a
+ * lease: the host may exhaust a job's delivery budget long before a capture
+ * settles, so that retry is the one worth republishing with a fresh budget.
+ */
 export type ImageBuildFinalizationResult =
   | { type: "completed" }
-  | { type: "retry"; delayMs: number };
+  | { type: "retry"; delayMs: number; reason?: "pending_operation" };
 
 const completed = (): ImageBuildFinalizationResult => ({ type: "completed" });
 const retrySoon = (): ImageBuildFinalizationResult => ({
   type: "retry",
   delayMs: IMAGE_BUILD_FINALIZATION_RETRY_DELAY_MS,
+});
+const retryPendingOperation = (): ImageBuildFinalizationResult => ({
+  type: "retry",
+  delayMs: IMAGE_BUILD_PENDING_OPERATION_RETRY_DELAY_MS,
+  reason: "pending_operation",
 });
 
 /**
@@ -101,7 +119,15 @@ export class ImageBuildFinalizer {
       return retrySoon();
     }
 
-    if (expiredAttemptWithoutArtifact && !build.provider_image_id) {
+    // An attempt that died holding the lease is only unknowable when it left
+    // no operation behind. A recorded one is reconcilable by name, so the
+    // conservative terminalization would fail a build whose artifact may
+    // already exist — and leak it.
+    if (
+      expiredAttemptWithoutArtifact &&
+      !build.provider_image_id &&
+      !build.provider_operation_ref
+    ) {
       return this.failAndCleanup(
         {
           buildId: build.id,
@@ -116,12 +142,11 @@ export class ImageBuildFinalizer {
     let providerImageId = build.provider_image_id;
     if (!providerImageId) {
       try {
-        const image = await this.finalizeWithDeadline(
-          adapter,
-          build.id,
-          build.provider_session_id,
-          correlation
-        );
+        const image = await this.finalizeWithDeadline(adapter, build, leaseToken, {
+          completionHash: job.completionHash,
+          providerSessionId: build.provider_session_id,
+          correlation,
+        });
         providerImageId = image.providerImageId;
       } catch (error) {
         if (
@@ -130,6 +155,20 @@ export class ImageBuildFinalizer {
         ) {
           await this.store.finalization.clearLease(build.id, leaseToken);
           return retrySoon();
+        }
+        if (error instanceof ImageBuildFinalizationAttemptError && error.outcome === "pending") {
+          // The operation is the provider's to finish; release the lease so the
+          // next delivery reconciles it instead of racing this one.
+          //
+          // Only a reserved operation earns the fresh delivery budget that
+          // `pending_operation` asks for: the reservation's fixed deadline is
+          // what ends that wait. An attempt that reported pending before
+          // reserving anything — a source that has not finished stopping —
+          // has no such bound, so it spends the host's ordinary budget and
+          // dead-letters if it never settles.
+          const current = await this.store.finalization.getBuild(build.id);
+          await this.store.finalization.clearLease(build.id, leaseToken);
+          return current?.provider_operation_ref ? retryPendingOperation() : retrySoon();
         }
         const message =
           error instanceof ImageBuildFinalizationAttemptError && error.outcome === "ambiguous"
@@ -255,26 +294,62 @@ export class ImageBuildFinalizer {
     }
   }
 
+  /**
+   * Runs one bounded provider attempt, handing the adapter the operation a
+   * previous delivery reserved and a lease-fenced way to reserve one.
+   *
+   * A timed-out attempt is ambiguous only while no operation is recorded: once
+   * one is — whether by an earlier delivery or by this attempt, moments before
+   * the request went out — the outcome is reconcilable by name, and reporting
+   * it as pending is what stops a duplicate capture and a failed build.
+   */
   private async finalizeWithDeadline(
     adapter: ImageBuildAdapter,
-    buildId: string,
-    providerSessionId: string,
-    correlation: CorrelationContext
+    build: ImageBuildFinalizationRow,
+    leaseToken: string,
+    context: {
+      completionHash: string;
+      providerSessionId: string;
+      correlation: CorrelationContext;
+    }
   ) {
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), IMAGE_BUILD_PROVIDER_ATTEMPT_MS);
+    let reconcilable = Boolean(build.provider_operation_ref);
     try {
       return await adapter.finalizeSuccessfulBuild({
-        buildId,
-        providerSessionId,
-        correlation,
+        buildId: build.id,
+        providerSessionId: context.providerSessionId,
+        correlation: context.correlation,
         signal: controller.signal,
+        operation: build.provider_operation_ref
+          ? {
+              ref: build.provider_operation_ref,
+              // Written with the reference in one statement. A reference
+              // without one is treated as already exhausted rather than as an
+              // unlimited budget.
+              deadlineAt: build.provider_operation_deadline_at ?? 0,
+            }
+          : null,
+        reserveOperation: async (ref, deadlineAt) => {
+          const reserved = await this.store.finalization.reserveProviderOperation({
+            buildId: build.id,
+            provider: build.provider,
+            providerSessionId: context.providerSessionId,
+            completionHash: context.completionHash,
+            leaseToken,
+            ref,
+            deadlineAt,
+          });
+          if (reserved) reconcilable = true;
+          return reserved;
+        },
       });
     } catch (error) {
       if (controller.signal.aborted) {
         throw new ImageBuildFinalizationAttemptError(
           "Image build provider finalization attempt timed out",
-          "ambiguous",
+          reconcilable ? "pending" : "ambiguous",
           { cause: error }
         );
       }

@@ -56,7 +56,10 @@ export async function POST(request: NextRequest) {
       environmentId: body.environmentId,
       repositories: body.repositories,
       skillSelection: body.skillSelection,
+      includePersonalMemories: body.includePersonalMemories,
       providerSelections: body.providerSelections,
+      teamId: body.teamId,
+      visibility: body.visibility,
     };
 
     const response = await controlPlaneUserFetch("/sessions", {

@@ -44,6 +44,9 @@ yarn-error.log*
 
 # Test
 coverage/
+.vitest-reports/
+.coverage
+.coverage.*
 .nyc_output/
 
 # Cloudflare

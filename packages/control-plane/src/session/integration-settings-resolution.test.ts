@@ -39,7 +39,7 @@ describe("resolveSessionScopedSettings", () => {
     mockState.resolved["vnc"] = { enabledRepos: null, settings: { enabled: true } };
     mockState.resolved["sandbox"] = {
       enabledRepos: null,
-      settings: { tunnelPorts: [8080], cpuCores: null },
+      settings: { tunnelPorts: [8080], cpuCores: null, cpuLimitCores: 2, memoryLimitMib: null },
     };
 
     const result = await resolveSessionScopedSettings(DB, [
@@ -50,7 +50,12 @@ describe("resolveSessionScopedSettings", () => {
     expect(result).toEqual({
       codeServerEnabled: true,
       vncEnabled: true,
-      sandboxSettings: { tunnelPorts: [8080], cpuCores: null },
+      sandboxSettings: {
+        tunnelPorts: [8080],
+        cpuCores: null,
+        cpuLimitCores: 2,
+        memoryLimitMib: null,
+      },
     });
     // Every resolution targets the primary member; the secondary is never asked about.
     expect(mockState.resolvedCalls.map((c) => c.repo)).toEqual([
@@ -101,6 +106,54 @@ describe("resolveSessionScopedSettings", () => {
     // No per-repo resolution happens without a primary member.
     expect(mockState.resolvedCalls).toEqual([]);
     expect(mockState.globalCalls).toContain("sandbox");
+  });
+
+  it("disables all primary-scoped settings when the primary repo is outside the allowlist", async () => {
+    mockState.resolved["code-server"] = {
+      enabledRepos: ["acme/backend"],
+      settings: { enabled: true },
+    };
+    mockState.resolved["vnc"] = { enabledRepos: ["acme/backend"], settings: { enabled: true } };
+    mockState.resolved["sandbox"] = {
+      enabledRepos: ["acme/backend"],
+      settings: { tunnelPorts: [8080], cpuCores: 2 },
+    };
+
+    const result = await resolveSessionScopedSettings(DB, [
+      { repoOwner: "acme", repoName: "web" },
+      { repoOwner: "acme", repoName: "backend" },
+    ]);
+
+    expect(result).toEqual({
+      codeServerEnabled: false,
+      vncEnabled: false,
+      sandboxSettings: {},
+    });
+  });
+
+  it("matches enabled repo allowlists case-insensitively, including nested owners", async () => {
+    mockState.resolved["code-server"] = {
+      enabledRepos: ["group/subgroup/web"],
+      settings: { enabled: true },
+    };
+    mockState.resolved["vnc"] = {
+      enabledRepos: ["group/subgroup/web"],
+      settings: { enabled: true },
+    };
+    mockState.resolved["sandbox"] = {
+      enabledRepos: ["group/subgroup/web"],
+      settings: { buildTimeoutSeconds: 1200 },
+    };
+
+    const result = await resolveSessionScopedSettings(DB, [
+      { repoOwner: "Group/SubGroup", repoName: "Web" },
+    ]);
+
+    expect(result).toEqual({
+      codeServerEnabled: true,
+      vncEnabled: true,
+      sandboxSettings: { buildTimeoutSeconds: 1200 },
+    });
   });
 
   it("rejects malformed persisted settings and falls back to disabled/defaults", async () => {

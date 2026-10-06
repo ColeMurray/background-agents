@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { createLogger } from "./logger";
 import type { Env } from "./types";
+import { isThreadSessionClosed, lookupThreadSession } from "./sessions/thread-session-store";
 
 const SLACK_SET_STATUS_URL = "https://slack.com/api/assistant.threads.setStatus";
 const DEFAULT_STATUS_PART_MAX_LENGTH = 80;
@@ -249,6 +250,10 @@ export async function setAssistantThreadStatusBestEffort(
   };
 
   try {
+    const closed = meta.sessionId
+      ? await isThreadSessionClosed(env, channel, threadTs, meta.sessionId)
+      : (await lookupThreadSession(env, channel, threadTs))?.closed;
+    if (closed) return;
     const statusText = meta.event === "tool_call" ? ASSISTANT_WORKING_STATUS : status;
     const requestStatusLength = prepareStatusText(statusText).length;
     const requestLoadingMessageLengths = [status].map(

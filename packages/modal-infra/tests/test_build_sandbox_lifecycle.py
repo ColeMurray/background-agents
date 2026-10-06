@@ -7,8 +7,12 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from modal.exception import SandboxTimeoutError
 
-from sandbox_runtime.constants import IMAGE_BUILD_EXECUTION_TIMEOUT_ENV_VAR
+from sandbox_runtime.constants import (
+    DOCKER_ENABLED_ENV_VAR,
+    IMAGE_BUILD_EXECUTION_TIMEOUT_ENV_VAR,
+)
 from sandbox_runtime.modal_image_build_start import MODAL_SANDBOX_ID_ENV
 from sandbox_runtime.repo_image_callback import (
     BUILD_ID_ENV,
@@ -26,6 +30,17 @@ from src.sandbox.build_session import (
 )
 from src.sandbox.manager import SNAPSHOT_FILESYSTEM_TIMEOUT_SECONDS
 from src.web_api import IMAGE_BUILD_FINALIZATION_GRACE_SECONDS
+from tests.modal_sdk_contract import sandbox_create_request, snapshot_filesystem_request
+
+
+@pytest.fixture(autouse=True)
+def no_remote_named_lookup(monkeypatch):
+    from modal.exception import NotFoundError
+
+    monkeypatch.setattr("src.sandbox.build_session.modal.Sandbox.from_name", _async_method())
+    from src.sandbox.build_session import modal
+
+    modal.Sandbox.from_name.aio.side_effect = NotFoundError("not found")
 
 
 def _async_method(return_value=None):
@@ -157,12 +172,18 @@ def test_reserved_user_env_scrub_matches_manifest():
 
 
 @pytest.mark.asyncio
-async def test_create_build_sandbox_runs_gated_entrypoint_and_scrubs_callback_env(monkeypatch):
+@pytest.mark.parametrize(
+    "execution_timeout_seconds, provider_timeout_seconds",
+    [(1200, 1800), (1800, 2400), (3600, 4200)],
+)
+async def test_create_build_sandbox_runs_gated_entrypoint_and_scrubs_callback_env(
+    monkeypatch, execution_timeout_seconds, provider_timeout_seconds
+):
     sandbox = SimpleNamespace(object_id="modal-session-1")
     create = _async_method(sandbox)
     monkeypatch.setattr("src.sandbox.build_session.modal.Sandbox.create", create)
 
-    provider_session_id = await ModalBuildSessionService().create(
+    launch = await ModalBuildSessionService().create(
         build_id="build-1",
         scope_kind="repo",
         scope_id="acme/repo",
@@ -181,13 +202,15 @@ async def test_create_build_sandbox_runs_gated_entrypoint_and_scrubs_callback_en
             "MODAL_SANDBOX_ID": "attacker-sandbox",
             "OI_IMAGE_BUILD_EXECUTION_TIMEOUT_SECONDS": "99999",
         },
-        build_execution_timeout_seconds=1200,
-        timeout_seconds=1800,
+        build_execution_timeout_seconds=execution_timeout_seconds,
+        timeout_seconds=provider_timeout_seconds,
     )
 
-    assert provider_session_id == "modal-session-1"
+    assert launch.provider_session_id == "modal-session-1"
+    assert launch.sandbox_backend == "modal"
     args = create.aio.await_args.args
     kwargs = create.aio.await_args.kwargs
+    sandbox_create_request(*args, **kwargs)
     assert args == (
         "python",
         "-m",
@@ -195,6 +218,7 @@ async def test_create_build_sandbox_runs_gated_entrypoint_and_scrubs_callback_en
         "--await-modal-image-build-token-stdin-v1",
     )
     assert kwargs["tags"] == {
+        "openinspect_backend": "modal",
         "openinspect_kind": "image-build",
         "openinspect_build_id": "build-1",
         "openinspect_scope_kind": "repo",
@@ -213,7 +237,9 @@ async def test_create_build_sandbox_runs_gated_entrypoint_and_scrubs_callback_en
         kwargs["env"]["OI_REPO_IMAGE_FAILURE_CALLBACK_URL"]
         == "https://cp.test/image-builds/build-failed"
     )
-    assert kwargs["env"]["OI_IMAGE_BUILD_EXECUTION_TIMEOUT_SECONDS"] == "1200"
+    assert kwargs["env"]["OI_IMAGE_BUILD_EXECUTION_TIMEOUT_SECONDS"] == str(
+        execution_timeout_seconds
+    )
     assert kwargs["env"]["VCS_HOST"] == "gitlab.com"
     assert kwargs["env"]["VCS_CLONE_USERNAME"] == "oauth2"
     assert kwargs["env"]["VCS_CLONE_TOKEN"] == "clone-token"
@@ -222,7 +248,7 @@ async def test_create_build_sandbox_runs_gated_entrypoint_and_scrubs_callback_en
         "repositories": [{"repo_owner": "acme", "repo_name": "repo", "branch": "main"}],
     }
     assert kwargs["secrets"] == []
-    assert kwargs["timeout"] == 1800
+    assert kwargs["timeout"] == provider_timeout_seconds
     assert kwargs["workdir"] == "/workspace"
 
 
@@ -327,6 +353,7 @@ async def test_snapshot_build_awaits_async_snapshot_operation(monkeypatch):
 
     assert image_id == "im-snapshot-1"
     snapshot_filesystem.assert_not_called()
+    snapshot_filesystem_request(**snapshot_filesystem.aio.await_args.kwargs)
     snapshot_filesystem.aio.assert_awaited_once_with(timeout=SNAPSHOT_FILESYSTEM_TIMEOUT_SECONDS)
 
 
@@ -353,6 +380,31 @@ async def test_terminate_build_sandbox_verifies_tags(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_terminate_build_sandbox_logs_exit_code_when_timed_out(monkeypatch):
+    terminate = _async_method()
+    terminate.aio.side_effect = SandboxTimeoutError()
+    sandbox = SimpleNamespace(
+        returncode=124,
+        get_tags=_async_method(
+            {"openinspect_kind": "image-build", "openinspect_build_id": "build-1"}
+        ),
+        terminate=terminate,
+    )
+    _mock_sandbox_lookup(monkeypatch, sandbox)
+    info = MagicMock()
+    monkeypatch.setattr("src.sandbox.build_session.log.info", info)
+
+    await ModalBuildSessionService().terminate(
+        build_id="build-1", provider_session_id="modal-session-1", reason="image_build_complete"
+    )
+
+    terminate.aio.assert_awaited_once_with(wait=True)
+    info.assert_called_once()
+    assert info.call_args.args == ("sandbox.terminate_build",)
+    assert info.call_args.kwargs["exit_code"] == 124
+
+
+@pytest.mark.asyncio
 async def test_terminate_build_sandbox_treats_provider_not_found_as_success(monkeypatch):
     from modal.exception import NotFoundError
 
@@ -370,3 +422,107 @@ async def test_terminate_build_sandbox_treats_provider_not_found_as_success(monk
     )
 
     sandbox.terminate.aio.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("docker_enabled", [False, True])
+@pytest.mark.parametrize(
+    "settings, expected_cpu, expected_memory",
+    [
+        (None, (0.5, 2), (2048, 4096)),
+        ({"cpuCores": 2, "memoryMib": 4096}, (2, 2), (4096, 4096)),
+        ({"cpuCores": 0.5, "memoryMib": 2048}, (0.5, 2), (2048, 4096)),
+        (
+            {"cpuCores": 1, "cpuLimitCores": 4, "memoryMib": 2048, "memoryLimitMib": 8192},
+            (1, 4),
+            (2048, 8192),
+        ),
+    ],
+    ids=["defaults", "integer-cpu", "fractional-cpu", "explicit-limits"],
+)
+async def test_create_build_sandbox_selects_the_variant_from_frozen_settings(
+    monkeypatch, docker_enabled, settings, expected_cpu, expected_memory
+):
+    sandbox = SimpleNamespace(object_id="modal-session-1")
+    create = _async_method(sandbox)
+    monkeypatch.setattr("src.sandbox.build_session.modal.Sandbox.create", create)
+    default_image = object()
+    docker_image = object()
+    monkeypatch.setattr("src.sandbox.build_session.base_image", default_image)
+    monkeypatch.setattr("src.images.base.docker_image", docker_image)
+
+    launch = await ModalBuildSessionService().create(
+        clone_host="github.com",
+        clone_username="x-access-token",
+        build_id="build-1",
+        scope_kind="repo",
+        scope_id="acme/repo",
+        repositories=[{"repo_owner": "acme", "repo_name": "repo", "branch": "main"}],
+        callback_url="https://cp.test/image-builds/build-complete",
+        failure_callback_url="https://cp.test/image-builds/build-failed",
+        user_env_vars={DOCKER_ENABLED_ENV_VAR: "true"},
+        sandbox_backend="modal-vm" if docker_enabled else "modal",
+        sandbox_settings=settings,
+    )
+
+    assert launch.provider_session_id == "modal-session-1"
+    assert launch.sandbox_backend == ("modal-vm" if docker_enabled else "modal")
+    kwargs = create.aio.await_args.kwargs
+    sandbox_create_request(*create.aio.await_args.args, **kwargs)
+    assert kwargs["env"][DOCKER_ENABLED_ENV_VAR] == ("true" if docker_enabled else "false")
+    if docker_enabled:
+        assert kwargs["image"] is docker_image
+        assert kwargs["experimental_options"] == {"vm_runtime": True}
+        assert (kwargs["cpu"], kwargs["memory"]) == (expected_cpu, expected_memory)
+    else:
+        assert kwargs["image"] is default_image
+        assert "experimental_options" not in kwargs
+        assert "cpu" not in kwargs
+        assert "memory" not in kwargs
+
+
+@pytest.mark.asyncio
+async def test_build_create_retry_adopts_only_owned_backend_allocation(monkeypatch):
+    from src.sandbox.build_session import ModalBuildSessionService
+
+    tags = {
+        "openinspect_kind": "image-build",
+        "openinspect_build_id": "build-1",
+        "openinspect_scope_kind": "repo",
+        "openinspect_scope_id": "acme/repo",
+        "openinspect_launch_protocol": "stdin-token-v1",
+        "openinspect_backend": "modal-vm",
+    }
+    sandbox = SimpleNamespace(object_id="sb-existing", get_tags=_async_method(tags))
+    lookup = _async_method(sandbox)
+    create = _async_method()
+    monkeypatch.setattr("src.sandbox.build_session.modal.Sandbox.from_name", lookup)
+    monkeypatch.setattr("src.sandbox.build_session.modal.Sandbox.create", create)
+    service = ModalBuildSessionService()
+    launch = await service.create(
+        clone_host="github.com",
+        clone_username="x-access-token",
+        build_id="build-1",
+        sandbox_backend="modal-vm",
+        scope_kind="repo",
+        scope_id="acme/repo",
+        repositories=[{"repo_owner": "acme", "repo_name": "repo", "branch": "main"}],
+        callback_url="https://cp.test/complete",
+        failure_callback_url="https://cp.test/failed",
+    )
+    assert launch.provider_session_id == "sb-existing"
+    create.aio.assert_not_awaited()
+    tags["openinspect_backend"] = "modal"
+    with pytest.raises(RuntimeError, match="ownership"):
+        await service.create(
+            clone_host="github.com",
+            clone_username="x-access-token",
+            build_id="build-1",
+            sandbox_backend="modal-vm",
+            scope_kind="repo",
+            scope_id="acme/repo",
+            repositories=[{"repo_owner": "acme", "repo_name": "repo", "branch": "main"}],
+            callback_url="https://cp.test/complete",
+            failure_callback_url="https://cp.test/failed",
+        )
+    create.aio.assert_not_awaited()

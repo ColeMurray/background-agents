@@ -6,7 +6,7 @@ import {
   type EventTimelineCursor,
 } from "./event-cursor";
 import type { SqlStorage, TransactionSync } from "./sql-storage";
-import type { EventRow } from "./types";
+import { eventRowSchema, SessionStorageIntegrityError, type EventRow } from "./types";
 
 type TokenEvent = Extract<SandboxEvent, { type: "token" }>;
 type ToolCallEvent = Extract<SandboxEvent, { type: "tool_call" }>;
@@ -69,6 +69,21 @@ export class EventRepository {
     );
   }
 
+  /** Idempotent event recording for a lifecycle decision retried after reconstruction. */
+  createEventIfAbsent(data: CreateEventData): boolean {
+    const result = this.sql.exec(
+      `INSERT INTO events (id, type, data, message_id, created_at, timeline_sequence)
+       VALUES (?, ?, ?, ?, ?, ${NEXT_TIMELINE_SEQUENCE_SQL}) ON CONFLICT(id) DO NOTHING`,
+      data.id,
+      data.type,
+      data.data,
+      data.messageId,
+      data.createdAt
+    );
+    result.toArray();
+    return (result.rowsWritten ?? 0) > 0;
+  }
+
   createContextCompactionEvent(data: CreateEventData & { messageId: string }): void {
     this.transactionSync(() => {
       this.sql.exec(
@@ -84,16 +99,17 @@ export class EventRepository {
     type: TType,
     messageId: string,
     event: Extract<SandboxEvent, { type: TType }>,
-    createdAt: number
+    createdAt: number,
+    id = `${type}:${messageId}`,
+    preserveCreatedAt = false
   ): void {
-    const id = `${type}:${messageId}`;
     this.sql.exec(
       `INSERT INTO events (id, type, data, message_id, created_at, timeline_sequence)
        VALUES (?, ?, ?, ?, ?, ${NEXT_TIMELINE_SEQUENCE_SQL})
        ON CONFLICT(id) DO UPDATE SET
          data = excluded.data,
          message_id = excluded.message_id,
-         created_at = excluded.created_at`,
+         created_at = ${preserveCreatedAt ? "events.created_at" : "excluded.created_at"}`,
       id,
       type,
       JSON.stringify(event),
@@ -103,7 +119,10 @@ export class EventRepository {
   }
 
   upsertTokenEvent(messageId: string, event: TokenEvent, createdAt: number): void {
-    this.upsertEventByMessageId("token", messageId, event, createdAt);
+    const id = event.partId
+      ? `token-part:${JSON.stringify([messageId, event.partId])}`
+      : `token:${messageId}`;
+    this.upsertEventByMessageId("token", messageId, event, createdAt, id, Boolean(event.partId));
   }
 
   upsertToolCallEvent(messageId: string, event: ToolCallEvent, createdAt: number): void {
@@ -178,10 +197,19 @@ export class EventRepository {
     query += ` ORDER BY created_at DESC, ${tieBreaker} DESC LIMIT ?`;
     params.push(options.limit + 1);
 
-    const rows = this.sql.exec(query, ...params).toArray() as EventRow[];
+    const rows = this.sql
+      .exec(query, ...params)
+      .toArray()
+      .map(parseEventRow);
     const hasMore = rows.length > options.limit;
     const events = hasMore ? rows.slice(0, options.limit) : rows;
     const nextCursor = events.length ? eventTimelineCursorFromRow(events[events.length - 1]) : null;
     return { events, hasMore, nextCursor };
   }
+}
+
+function parseEventRow(row: unknown): EventRow {
+  const parsed = eventRowSchema.safeParse(row);
+  if (parsed.success) return parsed.data;
+  throw new SessionStorageIntegrityError("Malformed persisted event row");
 }

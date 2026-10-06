@@ -26,6 +26,7 @@ from .opencode_client import (
     SSEInactivityTimeoutError,
     SSEStreamDisconnectedError,
 )
+from .opencode_step_ids import StepIdTracker
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
@@ -72,6 +73,7 @@ class _PromptState:
     # Priced step costs keyed by OpenCode part id. Last write wins, so a part
     # OpenCode re-emits with a corrected cost replaces its earlier value.
     step_costs: dict[str, float] = field(default_factory=dict)
+    step_ids: StepIdTracker = field(default_factory=StepIdTracker)
     # Set when a parent context-overflow announcement was swallowed; cleared by
     # session.compacted. If still set at idle with no error emitted, the
     # promised compaction never happened and the prompt must fail.
@@ -174,6 +176,7 @@ class OpenCodePromptStream:
         model: str | None = None,
         reasoning_effort: str | None = None,
         attachments: list[HydratedSessionAttachment] | None = None,
+        max_duration_seconds: float | None = None,
     ) -> AsyncIterator[dict[str, Any]]:
         """Stream response from OpenCode using Server-Sent Events.
 
@@ -181,6 +184,9 @@ class OpenCodePromptStream:
         OpenCode stamps the assistant messages it generates for this prompt
         with `parentID` pointing at it. The ID's ordering carries no meaning —
         see OpenCodeIdentifier on why these IDs must never be compared.
+
+        ``max_duration_seconds`` bounds this turn instead of the configured
+        maximum, for a caller that already spent part of the prompt's budget.
         """
         opencode_message_id = OpenCodeIdentifier.ascending("message")
         request_body = self._build_prompt_request_body(
@@ -194,7 +200,12 @@ class OpenCodePromptStream:
             start_time=time.time(),
         )
         loop = asyncio.get_running_loop()
-        prompt_deadline = loop.time() + self._prompt_max_duration_seconds
+        max_duration = (
+            self._prompt_max_duration_seconds
+            if max_duration_seconds is None
+            else max_duration_seconds
+        )
+        prompt_deadline = loop.time() + max_duration
         try:
             async with AsyncExitStack() as stack:
                 try:
@@ -242,7 +253,7 @@ class OpenCodePromptStream:
             elapsed = time.time() - state.start_time
             self._log.error(
                 "bridge.prompt_max_duration_timeout",
-                timeout_ms=int(self._prompt_max_duration_seconds * 1000),
+                timeout_ms=int(max_duration * 1000),
                 elapsed_ms=int(elapsed * 1000),
                 message_id=message_id,
             )
@@ -265,9 +276,7 @@ class OpenCodePromptStream:
                 )
             for final_event in final_events:
                 yield final_event
-            raise RuntimeError(
-                f"Prompt exceeded max duration of {self._prompt_max_duration_seconds:.0f}s."
-            )
+            raise RuntimeError(f"Prompt exceeded max duration of {max_duration:.0f}s.")
 
         except SSEInactivityTimeoutError:
             elapsed = time.time() - state.start_time
@@ -626,6 +635,7 @@ class OpenCodePromptStream:
                         "type": "token",
                         "content": state.cumulative_text[part_id],
                         "messageId": state.message_id,
+                        **({"partId": part_id} if isinstance(part_id, str) and part_id else {}),
                     }
                 )
 
@@ -648,24 +658,36 @@ class OpenCodePromptStream:
                     events.append(tool_event)
 
         elif part_type == "step-start":
+            message_id = part.get("messageID") or part.get("sessionID") or ""
+            step_id = state.step_ids.start(
+                message_id, part_id if isinstance(part_id, str) else None
+            )
             events.append(
                 {
                     "type": "step_start",
                     "messageId": state.message_id,
+                    "stepId": step_id,
                 }
             )
 
         elif part_type == "step-finish":
+            message_id = part.get("messageID") or part.get("sessionID") or ""
+            step_id = state.step_ids.finish(
+                message_id, part_id if isinstance(part_id, str) else None
+            )
             cost = part.get("cost")
             if isinstance(cost, int | float) and not isinstance(cost, bool):
                 state.step_costs[str(part.get("id", ""))] = float(cost)
             finish_event = {
                 "type": "step_finish",
-                "tokens": part.get("tokens"),
-                "reason": part.get("reason"),
                 "messageId": state.message_id,
+                "stepId": step_id,
                 "messageCostUsd": state.message_cost_usd(),
             }
+            if part.get("tokens") is not None:
+                finish_event["tokens"] = part["tokens"]
+            if part.get("reason") is not None:
+                finish_event["reason"] = part["reason"]
             if cost is not None:
                 finish_event["cost"] = cost
             events.append(finish_event)
@@ -962,12 +984,8 @@ class OpenCodePromptStream:
                                 prev_len=len(previously_sent),
                                 new_len=len(text),
                             )
-                            state.cumulative_text[part_id] = text
-                            yield {
-                                "type": "token",
-                                "content": text,
-                                "messageId": state.message_id,
-                            }
+                            for event in self._handle_part(state, part, None):
+                                yield event
 
         except Exception as e:
             self._log.error("bridge.final_state_error", exc=e)

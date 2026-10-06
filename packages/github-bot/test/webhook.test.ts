@@ -1,14 +1,16 @@
 import { describe, it, expect, vi } from "vitest";
+import type { ExecutionContext as HonoExecutionContext } from "hono";
 import type { Env } from "../src/types";
 
 vi.mock("../src/github-auth", () => ({
   generateInstallationToken: vi.fn().mockResolvedValue("installation-token"),
   postReaction: vi.fn().mockResolvedValue(true),
+  postIssueComment: vi.fn().mockResolvedValue(true),
   checkSenderPermission: vi.fn().mockResolvedValue({ hasPermission: true }),
 }));
 
 import app from "../src/index";
-import { postReaction } from "../src/github-auth";
+import { postReaction, postIssueComment, checkSenderPermission } from "../src/github-auth";
 
 /** Generate a valid GitHub webhook signature for a given secret and body. */
 async function sign(secret: string, body: string): Promise<string> {
@@ -64,9 +66,9 @@ function makeEnv() {
 function makeCtx() {
   return {
     props: {},
-    waitUntil: vi.fn(),
-    passThroughOnException: vi.fn(),
-  } as any;
+    waitUntil: vi.fn<HonoExecutionContext["waitUntil"]>(),
+    passThroughOnException: vi.fn<HonoExecutionContext["passThroughOnException"]>(),
+  } satisfies HonoExecutionContext;
 }
 
 async function flushWaitUntil(ctx: ReturnType<typeof makeCtx>, callIndex = 0): Promise<void> {
@@ -317,7 +319,7 @@ describe("POST /webhooks/github", () => {
     const signature = await sign(SECRET, body);
     const env = makeEnv();
     const ctx = makeCtx();
-    env.AUTOFIX_QUEUE.send.mockRejectedValueOnce(new Error("queue unavailable"));
+    vi.mocked(env.AUTOFIX_QUEUE.send).mockRejectedValueOnce(new Error("queue unavailable"));
 
     const res = await app.fetch(
       new Request("http://localhost/webhooks/github", {
@@ -378,7 +380,7 @@ describe("POST /webhooks/github", () => {
   it("returns 200 and calls waitUntil for valid webhook", async () => {
     const body = JSON.stringify({
       action: "review_requested",
-      repository: { owner: { login: "test" }, name: "repo" },
+      repository: { id: 99, owner: { login: "test" }, name: "repo" },
     });
     const signature = await sign(SECRET, body);
     const ctx = makeCtx();
@@ -421,7 +423,7 @@ describe("POST /webhooks/github", () => {
         base: { ref: "main" },
       },
       requested_reviewer: { login: "test-bot[bot]" },
-      repository: { owner: { login: "test" }, name: "repo", private: false },
+      repository: { id: 99, owner: { login: "test" }, name: "repo", private: false },
       sender: {
         login: "alice",
         id: 1001,
@@ -436,6 +438,9 @@ describe("POST /webhooks/github", () => {
       const requestUrl = String(url);
       if (requestUrl.includes("/integration-settings/github/resolved/")) {
         return new Response(JSON.stringify({ config: null }));
+      }
+      if (requestUrl.startsWith("https://internal/github/route?")) {
+        return Response.json({ teamId: null, via: "workspace" });
       }
       if (requestUrl.endsWith("/metadata")) {
         return new Response(JSON.stringify({ repo: "test/repo", metadata: null }));
@@ -486,7 +491,7 @@ describe("POST /webhooks/github", () => {
   it("deduplicates repeated deliveries by X-GitHub-Delivery", async () => {
     const body = JSON.stringify({
       action: "review_requested",
-      repository: { owner: { login: "test" }, name: "repo" },
+      repository: { id: 99, owner: { login: "test" }, name: "repo" },
     });
     const signature = await sign(SECRET, body);
     const ctx = makeCtx();
@@ -517,8 +522,464 @@ describe("POST /webhooks/github", () => {
       get: ReturnType<typeof vi.fn>;
       put: ReturnType<typeof vi.fn>;
     };
-    expect(githubKv.get).toHaveBeenCalledTimes(2);
+    expect(githubKv.get).toHaveBeenCalledTimes(3);
     expect(githubKv.put).toHaveBeenCalledTimes(2);
+  });
+
+  it.each([undefined, "99", 0, -1, 1.5, Number.MAX_SAFE_INTEGER + 1])(
+    "rejects a session-triggering webhook with repository id %s before dispatch",
+    async (repositoryId) => {
+      const body = JSON.stringify({
+        action: "review_requested",
+        pull_request: {
+          number: 42,
+          title: "Requires stable repository identity",
+          body: null,
+          user: { login: "alice" },
+          head: { ref: "feature/test", sha: "abc123" },
+          base: { ref: "main" },
+        },
+        requested_reviewer: { login: "test-bot[bot]" },
+        repository: { id: repositoryId, owner: { login: "test" }, name: "repo", private: false },
+        sender: { login: "alice", id: 1001 },
+      });
+      const signature = await sign(SECRET, body);
+      const ctx = makeCtx();
+      const env = makeEnv();
+      const request = () =>
+        new Request("http://localhost/webhooks/github", {
+          method: "POST",
+          body,
+          headers: {
+            "X-Hub-Signature-256": signature,
+            "X-GitHub-Event": "pull_request",
+            "X-GitHub-Delivery": "delivery-invalid-repository-id",
+          },
+        });
+
+      expect((await app.fetch(request(), env, ctx)).status).toBe(200);
+      await flushWaitUntil(ctx);
+      const cpFetch = vi.mocked(env.CONTROL_PLANE.fetch);
+      expect(
+        cpFetch.mock.calls.some(([url]) => String(url).startsWith("https://internal/github/route?"))
+      ).toBe(false);
+      expect(cpFetch.mock.calls.some(([url]) => String(url) === "https://internal/sessions")).toBe(
+        false
+      );
+      expect(await env.GITHUB_KV.get("delivery:delivery-invalid-repository-id")).toBeNull();
+      expect(env.GITHUB_KV.delete).toHaveBeenCalledOnce();
+    }
+  );
+
+  it.each([
+    { status: 403, code: "not_member" },
+    { status: 409, code: "target_team_missing_grant" },
+    { status: 409, code: "team_archived" },
+  ])(
+    "allows redelivery after a failed $code refusal comment clears the marker",
+    async ({ status, code }) => {
+      vi.mocked(postIssueComment).mockResolvedValueOnce(false);
+      const body = JSON.stringify({
+        action: "review_requested",
+        pull_request: {
+          number: 42,
+          title: "Refused session",
+          body: null,
+          user: { login: "alice" },
+          head: { ref: "feature/test", sha: "abc123" },
+          base: { ref: "main" },
+        },
+        requested_reviewer: { login: "test-bot[bot]" },
+        repository: { id: 99, owner: { login: "test" }, name: "repo", private: false },
+        sender: { login: "alice", id: 1001, avatar_url: "https://example.com/alice.png" },
+      });
+      const signature = await sign(SECRET, body);
+      const ctx = makeCtx();
+      const env = makeEnv();
+      const cpFetch = vi.mocked(env.CONTROL_PLANE.fetch);
+      cpFetch.mockImplementation(async (url) => {
+        const requestUrl = String(url);
+        if (requestUrl.includes("/integration-settings/github/resolved/")) {
+          return Response.json({ config: null });
+        }
+        if (requestUrl.startsWith("https://internal/github/route?")) {
+          return Response.json({ teamId: "team_pr", via: "pull_request_session" });
+        }
+        if (requestUrl.endsWith("/metadata")) {
+          return Response.json({ repo: "test/repo", metadata: null });
+        }
+        if (requestUrl === "https://internal/sessions") {
+          return Response.json({ code, repository: "test/secondary" }, { status });
+        }
+        return new Response(null, { status: 204 });
+      });
+      const request = () =>
+        new Request("http://localhost/webhooks/github", {
+          method: "POST",
+          body,
+          headers: {
+            "X-Hub-Signature-256": signature,
+            "X-GitHub-Event": "pull_request",
+            "X-GitHub-Delivery": "delivery-refusal-comment",
+          },
+        });
+
+      const firstRes = await app.fetch(request(), env, ctx);
+      expect(await firstRes.json()).toEqual({ ok: true });
+      await flushWaitUntil(ctx, 0);
+
+      expect(await env.GITHUB_KV.get("delivery:delivery-refusal-comment")).toBeNull();
+      expect(await env.GITHUB_KV.get("delivery-dispatch:delivery-refusal-comment")).toBeNull();
+      expect(env.GITHUB_KV.delete).toHaveBeenCalledTimes(1);
+      expect(
+        cpFetch.mock.calls.filter(([url]) => String(url) === "https://internal/sessions")
+      ).toHaveLength(1);
+      expect(cpFetch.mock.calls.some(([url]) => String(url).endsWith("/prompt"))).toBe(false);
+
+      const secondRes = await app.fetch(request(), env, ctx);
+      expect(await secondRes.json()).toEqual({ ok: true });
+      await flushWaitUntil(ctx, 1);
+
+      expect(ctx.waitUntil).toHaveBeenCalledTimes(2);
+      expect(
+        cpFetch.mock.calls.filter(([url]) => String(url) === "https://internal/sessions")
+      ).toHaveLength(2);
+      expect(cpFetch.mock.calls.some(([url]) => String(url).endsWith("/prompt"))).toBe(false);
+      expect(await env.GITHUB_KV.get("delivery:delivery-refusal-comment")).toBe("processed");
+      expect(await env.GITHUB_KV.get("delivery-dispatch:delivery-refusal-comment")).toBe(
+        "processed"
+      );
+
+      const duplicateRes = await app.fetch(request(), env, ctx);
+      expect(await duplicateRes.json()).toEqual({ ok: true, duplicate: true });
+      expect(ctx.waitUntil).toHaveBeenCalledTimes(2);
+    }
+  );
+
+  it.each([
+    { name: "network failure", respond: () => Promise.reject(new Error("unavailable")) },
+    { name: "HTTP outage", respond: () => new Response("unavailable", { status: 503 }) },
+    { name: "invalid JSON", respond: () => new Response("truncated JSON") },
+    { name: "invalid contract", respond: () => Response.json({ teamId: null }) },
+    { name: "missing team", respond: () => Response.json({ via: "workspace" }) },
+    {
+      name: "invalid team",
+      respond: () => Response.json({ teamId: 123, via: "sender_membership" }),
+    },
+    {
+      name: "empty PR team",
+      respond: () => Response.json({ teamId: "", via: "pull_request_session" }),
+    },
+    {
+      name: "null sender team",
+      respond: () => Response.json({ teamId: null, via: "sender_membership" }),
+    },
+    {
+      name: "empty sender team",
+      respond: () => Response.json({ teamId: "", via: "sender_membership" }),
+    },
+    {
+      name: "non-null workspace team",
+      respond: () => Response.json({ teamId: "team_pr", via: "workspace" }),
+    },
+    { name: "invalid via", respond: () => Response.json({ teamId: null, via: "unknown" }) },
+  ])(
+    "permits redelivery after a routing $name even when forwarding also fails",
+    async ({ respond }) => {
+      const body = JSON.stringify({
+        action: "created",
+        issue: {
+          number: 42,
+          title: "Retry routing",
+          pull_request: { url: "https://api.github.com/repos/test/repo/pulls/42" },
+        },
+        comment: { id: 123, body: "@test-bot[bot] fix this", user: { login: "alice" } },
+        repository: { id: 99, owner: { login: "test" }, name: "repo", private: false },
+        sender: { login: "alice", id: 1001, avatar_url: "https://example.com/alice.png" },
+      });
+      const signature = await sign(SECRET, body);
+      const ctx = makeCtx();
+      const env = makeEnv();
+      const cpFetch = vi.mocked(env.CONTROL_PLANE.fetch);
+      let routingFailed = false;
+      let forwardingFailed = false;
+      cpFetch.mockImplementation(async (url) => {
+        const requestUrl = String(url);
+        if (requestUrl.includes("/integration-settings/github/resolved/")) {
+          return Response.json({ config: null });
+        }
+        if (requestUrl.startsWith("https://internal/github/route?")) {
+          if (!routingFailed) {
+            routingFailed = true;
+            return respond();
+          }
+          return Response.json({ teamId: "team_pr", via: "pull_request_session" });
+        }
+        if (requestUrl.endsWith("/metadata")) {
+          return Response.json({ repo: "test/repo", metadata: null });
+        }
+        if (requestUrl === "https://internal/sessions") {
+          return Response.json({ sessionId: "session-123", status: "created" });
+        }
+        if (requestUrl.endsWith("/prompt")) return Response.json({ messageId: "message-123" });
+        if (requestUrl.endsWith("/github-event") && !forwardingFailed) {
+          forwardingFailed = true;
+          return new Response("admission exhausted", { status: 502 });
+        }
+        return new Response(null, { status: 204 });
+      });
+      const request = () =>
+        new Request("http://localhost/webhooks/github", {
+          method: "POST",
+          body,
+          headers: {
+            "X-Hub-Signature-256": signature,
+            "X-GitHub-Event": "issue_comment",
+            "X-GitHub-Delivery": "delivery-routing-retry",
+          },
+        });
+
+      expect(await (await app.fetch(request(), env, ctx)).json()).toEqual({ ok: true });
+      await flushWaitUntil(ctx, 0);
+      expect(await env.GITHUB_KV.get("delivery:delivery-routing-retry")).toBeNull();
+      expect(await env.GITHUB_KV.get("delivery-dispatch:delivery-routing-retry")).toBeNull();
+      expect(env.GITHUB_KV.delete).toHaveBeenCalledOnce();
+      expect(
+        cpFetch.mock.calls.filter(([url]) => String(url).endsWith("/github-event"))
+      ).toHaveLength(1);
+      expect(cpFetch.mock.calls.some(([url]) => String(url) === "https://internal/sessions")).toBe(
+        false
+      );
+
+      expect(await (await app.fetch(request(), env, ctx)).json()).toEqual({ ok: true });
+      await flushWaitUntil(ctx, 1);
+      expect(await env.GITHUB_KV.get("delivery:delivery-routing-retry")).toBe("processed");
+      expect(
+        cpFetch.mock.calls.filter(([url]) => String(url) === "https://internal/sessions")
+      ).toHaveLength(1);
+      expect(cpFetch.mock.calls.filter(([url]) => String(url).endsWith("/prompt"))).toHaveLength(1);
+      expect(
+        cpFetch.mock.calls.filter(([url]) => String(url).endsWith("/github-event"))
+      ).toHaveLength(2);
+      expect(await (await app.fetch(request(), env, ctx)).json()).toEqual({
+        ok: true,
+        duplicate: true,
+      });
+      expect(ctx.waitUntil).toHaveBeenCalledTimes(2);
+    }
+  );
+
+  it("checkpoints an inline flag rejection so redelivery does not comment twice", async () => {
+    const commentsBefore = vi.mocked(postIssueComment).mock.calls.length;
+    const body = JSON.stringify({
+      action: "created",
+      issue: {
+        number: 42,
+        title: "Inline flags",
+        pull_request: { url: "https://api.github.com/repos/test/repo/pulls/42" },
+      },
+      comment: {
+        id: 123,
+        body: "@test-bot[bot] !reasoning bogus fix this",
+        user: { login: "alice" },
+      },
+      repository: { id: 99, owner: { login: "test" }, name: "repo", private: false },
+      sender: { login: "alice", id: 1001, avatar_url: "https://example.com/alice.png" },
+    });
+    const signature = await sign(SECRET, body);
+    const ctx = makeCtx();
+    const env = makeEnv();
+    const cpFetch = vi.mocked(env.CONTROL_PLANE.fetch);
+    cpFetch.mockImplementation(async (url) =>
+      String(url).includes("/integration-settings/github/resolved/")
+        ? Response.json({ config: null })
+        : new Response(null, { status: 204 })
+    );
+
+    const res = await app.fetch(
+      new Request("http://localhost/webhooks/github", {
+        method: "POST",
+        body,
+        headers: {
+          "X-Hub-Signature-256": signature,
+          "X-GitHub-Event": "issue_comment",
+          "X-GitHub-Delivery": "delivery-inline-flags",
+        },
+      }),
+      env,
+      ctx
+    );
+    expect(await res.json()).toEqual({ ok: true });
+    await flushWaitUntil(ctx, 0);
+
+    expect(postIssueComment).toHaveBeenCalledTimes(commentsBefore + 1);
+    expect(vi.mocked(postIssueComment).mock.calls.at(-1)?.[2]).toContain(
+      "Reasoning effort `bogus` is not valid"
+    );
+    expect(cpFetch.mock.calls.some(([url]) => String(url) === "https://internal/sessions")).toBe(
+      false
+    );
+    expect(await env.GITHUB_KV.get("delivery-dispatch:delivery-inline-flags")).toBe("processed");
+  });
+
+  describe.each([
+    "terminal skip",
+    "success",
+    "not_member",
+    "target_team_missing_grant",
+    "team_archived",
+    "config failure",
+    "permission API error",
+  ])("forwarding after builtin %s", (builtin) => {
+    it.each([
+      { name: "network failure", respond: () => Promise.reject(new Error("unavailable")) },
+      {
+        name: "admission exhaustion 502",
+        respond: () => new Response("exhausted", { status: 502 }),
+      },
+      { name: "HTTP outage 503", respond: () => new Response("unavailable", { status: 503 }) },
+    ])("retries $name without repeating completed external effects", async ({ respond }) => {
+      const isRefusal =
+        builtin === "not_member" ||
+        builtin === "target_team_missing_grant" ||
+        builtin === "team_archived";
+      const checkpointed = builtin === "success" || isRefusal;
+      const recovers = builtin === "config failure" || builtin === "permission API error";
+      const refusalCommentsBefore = vi.mocked(postIssueComment).mock.calls.length;
+      if (builtin === "permission API error") {
+        vi.mocked(checkSenderPermission).mockResolvedValueOnce({
+          hasPermission: false,
+          error: true,
+        });
+      }
+      const body = JSON.stringify({
+        action: "created",
+        issue: {
+          number: 42,
+          title: "Retry forwarding",
+          pull_request: { url: "https://api.github.com/repos/test/repo/pulls/42" },
+        },
+        comment: { id: 123, body: "@test-bot[bot] fix this", user: { login: "alice" } },
+        repository: { id: 99, owner: { login: "test" }, name: "repo", private: false },
+        sender: { login: "alice", id: 1001, avatar_url: "https://example.com/alice.png" },
+      });
+      const signature = await sign(SECRET, body);
+      const ctx = makeCtx();
+      const env = makeEnv();
+      const cpFetch = vi.mocked(env.CONTROL_PLANE.fetch);
+      let forwardFailed = false;
+      cpFetch.mockImplementation(async (url) => {
+        const requestUrl = String(url);
+        if (requestUrl.includes("/integration-settings/github/resolved/")) {
+          if (builtin === "config failure" && !forwardFailed) {
+            return new Response("config unavailable", { status: 503 });
+          }
+          if (builtin === "terminal skip") {
+            return Response.json({
+              config: {
+                model: null,
+                reasoningEffort: null,
+                autoReviewOnOpen: true,
+                enabledRepos: [],
+                allowedTriggerUsers: null,
+                codeReviewInstructions: null,
+                commentActionInstructions: null,
+              },
+            });
+          }
+          return Response.json({ config: null });
+        }
+        if (requestUrl.startsWith("https://internal/github/route?")) {
+          return Response.json({ teamId: "team_pr", via: "pull_request_session" });
+        }
+        if (requestUrl.endsWith("/metadata")) return Response.json({ metadata: null });
+        if (requestUrl === "https://internal/sessions") {
+          if (isRefusal) {
+            return Response.json(
+              { code: builtin },
+              { status: builtin === "not_member" ? 403 : 409 }
+            );
+          }
+          return Response.json({ sessionId: "session-123", status: "created" });
+        }
+        if (requestUrl.endsWith("/prompt")) return Response.json({ messageId: "message-123" });
+        if (requestUrl.endsWith("/github-event") && !forwardFailed) {
+          forwardFailed = true;
+          return respond();
+        }
+        return new Response(null, { status: 204 });
+      });
+      const request = () =>
+        new Request("http://localhost/webhooks/github", {
+          method: "POST",
+          body,
+          headers: {
+            "X-Hub-Signature-256": signature,
+            "X-GitHub-Event": "issue_comment",
+            "X-GitHub-Delivery": "delivery-forward-retry",
+          },
+        });
+
+      expect(await (await app.fetch(request(), env, ctx)).json()).toEqual({ ok: true });
+      await flushWaitUntil(ctx, 0);
+      expect(await env.GITHUB_KV.get("delivery:delivery-forward-retry")).toBeNull();
+      expect(await env.GITHUB_KV.get("delivery-dispatch:delivery-forward-retry")).toBe(
+        checkpointed ? "processed" : null
+      );
+      if (checkpointed) {
+        expect(env.GITHUB_KV.put).toHaveBeenCalledWith(
+          "delivery-dispatch:delivery-forward-retry",
+          "processed",
+          { expirationTtl: 604800 }
+        );
+      } else {
+        expect(env.GITHUB_KV.put).not.toHaveBeenCalledWith(
+          "delivery-dispatch:delivery-forward-retry",
+          expect.anything(),
+          expect.anything()
+        );
+      }
+      expect(
+        cpFetch.mock.calls.filter(([url]) => String(url) === "https://internal/sessions")
+      ).toHaveLength(checkpointed ? 1 : 0);
+      expect(cpFetch.mock.calls.filter(([url]) => String(url).endsWith("/prompt"))).toHaveLength(
+        builtin === "success" ? 1 : 0
+      );
+      expect(env.GITHUB_KV.delete).toHaveBeenCalledWith("delivery:delivery-forward-retry");
+
+      expect(await (await app.fetch(request(), env, ctx)).json()).toEqual({ ok: true });
+      await flushWaitUntil(ctx, 1);
+      expect(cpFetch.mock.calls.filter(([url]) => String(url).includes("/resolved/"))).toHaveLength(
+        checkpointed ? 1 : 2
+      );
+      expect(
+        cpFetch.mock.calls.filter(([url]) => String(url) === "https://internal/sessions")
+      ).toHaveLength(builtin === "terminal skip" ? 0 : 1);
+      expect(cpFetch.mock.calls.filter(([url]) => String(url).endsWith("/prompt"))).toHaveLength(
+        builtin === "success" || recovers ? 1 : 0
+      );
+      expect(postIssueComment).toHaveBeenCalledTimes(refusalCommentsBefore + (isRefusal ? 1 : 0));
+      expect(await env.GITHUB_KV.get("delivery-dispatch:delivery-forward-retry")).toBe(
+        builtin === "terminal skip" ? null : "processed"
+      );
+      expect(
+        cpFetch.mock.calls.filter(([url]) => String(url).endsWith("/github-event"))
+      ).toHaveLength(2);
+      expect(await env.GITHUB_KV.get("delivery:delivery-forward-retry")).toBe("processed");
+      expect(env.GITHUB_KV.put).toHaveBeenCalledWith(
+        "delivery:delivery-forward-retry",
+        "processed",
+        { expirationTtl: 604800 }
+      );
+      expect(await (await app.fetch(request(), env, ctx)).json()).toEqual({
+        ok: true,
+        duplicate: true,
+      });
+      expect(ctx.waitUntil).toHaveBeenCalledTimes(2);
+      expect(
+        cpFetch.mock.calls.filter(([url]) => String(url).endsWith("/github-event"))
+      ).toHaveLength(2);
+    });
   });
 
   it("allows redelivery after async processing failure clears the marker", async () => {
@@ -533,7 +994,7 @@ describe("POST /webhooks/github", () => {
         base: { ref: "main" },
         draft: false,
       },
-      repository: { owner: { login: "test" }, name: "repo" },
+      repository: { id: 99, owner: { login: "test" }, name: "repo" },
       sender: { login: "alice" },
     });
     const signature = await sign(SECRET, body);
@@ -608,7 +1069,7 @@ describe("POST /webhooks/github", () => {
   it("forwards closed pull request lifecycle fields to the control plane", async () => {
     const body = JSON.stringify({
       action: "closed",
-      repository: { owner: { login: "test" }, name: "repo" },
+      repository: { id: 99, owner: { login: "test" }, name: "repo" },
       sender: { login: "alice" },
       pull_request: {
         number: 42,
@@ -682,7 +1143,7 @@ describe("POST /webhooks/github", () => {
   it("forwards a completed workflow run", async () => {
     const body = JSON.stringify({
       action: "completed",
-      repository: { owner: { login: "acme-org" }, name: "my-app" },
+      repository: { id: 99, owner: { login: "acme-org" }, name: "my-app" },
       sender: { login: "github-actions[bot]" },
       workflow_run: {
         id: 123456789,

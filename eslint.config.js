@@ -5,6 +5,54 @@ import reactHooksPlugin from "eslint-plugin-react-hooks";
 import eslintConfigPrettier from "eslint-config-prettier";
 import globals from "globals";
 
+const sandboxImplementationImports = [
+  {
+    regex: "(?:^|/)sandbox-repository(?:\\.[cm]?[jt]sx?)?$",
+    message:
+      "Only session composition constructs SandboxRepository. Consumers use sandbox-ports; lifecycle effects use their storage port.",
+  },
+  {
+    regex: "(?:^|/)lifecycle/manager(?:\\.[cm]?[jt]sx?)?$",
+    importNames: ["SandboxLifecycleManager"],
+    message:
+      "Only session composition constructs the lifecycle manager. Consumers depend on focused lifecycle ports.",
+  },
+  {
+    regex: "(?:^|/)lifecycle/launch-context(?:\\.[cm]?[jt]sx?)?$",
+    message: "Launch inputs are internal to lifecycle composition. Consumers use lifecycle ports.",
+  },
+  {
+    regex: "(?:^|/)lifecycle/sandbox-access(?:\\.[cm]?[jt]sx?)?$",
+    message:
+      "Access mechanics are internal to lifecycle composition. Consumers use lifecycle ports and session access readers.",
+  },
+  {
+    regex: "(?:^|/)lifecycle/vm-startup-reconciliation(?:\\.[cm]?[jt]sx?)?$",
+    message:
+      "VM startup reconciliation is internal to the lifecycle manager. Consumers use lifecycle ports.",
+  },
+  {
+    regex: "(?:^|/)lifecycle/allocation-cleanup(?:\\.[cm]?[jt]sx?)?$",
+    message:
+      "Allocation cleanup is internal to the lifecycle manager. Consumers use lifecycle ports.",
+  },
+  {
+    regex: "(?:^|/)lifecycle/provider-stop(?:\\.[cm]?[jt]sx?)?$",
+    message:
+      "Bounded provider-stop mechanics are internal to lifecycle. Consumers use lifecycle ports.",
+  },
+  {
+    regex: "(?:^|/)lifecycle/startup-errors(?:\\.[cm]?[jt]sx?)?$",
+    message:
+      "Startup abandonment errors are internal to lifecycle. Consumers use lifecycle outcomes.",
+  },
+  {
+    regex: "(?:^|/)lifecycle/watchdog-effects(?:\\.[cm]?[jt]sx?)?$",
+    message:
+      "Watchdog effects are internal to the lifecycle manager. Consumers use lifecycle ports.",
+  },
+];
+
 export default tseslint.config(
   // Global ignores
   {
@@ -12,6 +60,7 @@ export default tseslint.config(
       "**/node_modules/**",
       "**/dist/**",
       "**/.next/**",
+      "**/.source/**",
       "**/build/**",
       "**/.wrangler/**",
       "**/coverage/**",
@@ -227,6 +276,7 @@ export default tseslint.config(
         "error",
         {
           patterns: [
+            ...sandboxImplementationImports,
             {
               // Last-segment match: covers any relative depth (./, ../, ../../)
               // and extension-bearing specifiers. The basename is unique in
@@ -265,6 +315,7 @@ export default tseslint.config(
         "error",
         {
           patterns: [
+            ...sandboxImplementationImports,
             {
               regex: "(?:^|/)components(?:\\.[cm]?[jt]sx?)?$",
               message:
@@ -287,6 +338,7 @@ export default tseslint.config(
         "error",
         {
           patterns: [
+            ...sandboxImplementationImports,
             {
               regex: "(?:^|/)durable-object(?:\\.[cm]?[jt]sx?)?$",
               message:
@@ -306,6 +358,7 @@ export default tseslint.config(
         "error",
         {
           patterns: [
+            ...sandboxImplementationImports,
             {
               // Last-segment match: covers any relative depth (./, ../, ../../)
               // and extension-bearing specifiers. The basename is unique in
@@ -328,9 +381,15 @@ export default tseslint.config(
     },
   },
 
-  // React-specific configuration for web package
+  // The Cloudflare host composes the session runtime, not individual implementations.
   {
-    files: ["packages/web/**/*.{ts,tsx}"],
+    files: ["packages/control-plane/src/cloudflare/durable-object.ts"],
+    rules: { "no-restricted-imports": ["error", { patterns: sandboxImplementationImports }] },
+  },
+
+  // React-specific configuration for browser packages
+  {
+    files: ["packages/{docs,web}/**/*.{ts,tsx}"],
     plugins: {
       react: reactPlugin,
       "react-hooks": reactHooksPlugin,
@@ -396,6 +455,19 @@ export default tseslint.config(
         {
           name: "fetch",
           message: "Use an app-owned HTTP transport instead of raw fetch.",
+        },
+      ],
+    },
+  },
+  {
+    files: ["packages/web/src/**/*.tsx"],
+    rules: {
+      "no-restricted-syntax": [
+        "error",
+        {
+          selector: 'JSXOpeningElement[name.name="select"]',
+          message:
+            "Use Select / SelectTrigger / SelectContent / SelectItem from @/components/ui/select instead of a native <select>.",
         },
       ],
     },

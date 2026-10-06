@@ -66,6 +66,15 @@ def _sync_result(
     )
 
 
+def _first_warning(path) -> dict:
+    """The first warning line of a boot-events file (phase lines share it)."""
+    return next(
+        line
+        for line in (json.loads(raw) for raw in path.read_text().splitlines())
+        if line["kind"] == "warning"
+    )
+
+
 def _mock_repository_boot(sup: RepositoryBoot) -> None:
     sup._write_repo_manifest = MagicMock()
     sup.synchronizer.ensure_credentials_configured = AsyncMock()
@@ -169,7 +178,7 @@ class TestParseRepositories:
 
         with (
             patch(
-                "sandbox_runtime.boot_warnings.BOOT_WARNINGS_FILE_PATH",
+                "sandbox_runtime.boot_events.BOOT_EVENTS_FILE_PATH",
                 str(tmp_path / "warnings.jsonl"),
             ),
             pytest.raises(RuntimeError, match="invalid repository config"),
@@ -217,7 +226,7 @@ class TestSyncRepositories:
         with (
             patch.dict(os.environ, {}, clear=False),
             patch(
-                "sandbox_runtime.boot_warnings.BOOT_WARNINGS_FILE_PATH",
+                "sandbox_runtime.boot_events.BOOT_EVENTS_FILE_PATH",
                 str(tmp_path / "warnings.jsonl"),
             ),
             pytest.raises(RuntimeError, match="acme/backend"),
@@ -238,12 +247,12 @@ class TestSyncRepositories:
         with (
             patch.dict(os.environ, {"RESTORED_FROM_SNAPSHOT": "true"}, clear=False),
             patch(
-                "sandbox_runtime.boot_warnings.BOOT_WARNINGS_FILE_PATH",
+                "sandbox_runtime.boot_events.BOOT_EVENTS_FILE_PATH",
                 str(tmp_path / "warnings.jsonl"),
             ),
         ):
             await sup.boot(BootMode.SNAPSHOT_RESTORE, [])
-        warning = json.loads((tmp_path / "warnings.jsonl").read_text().splitlines()[0])
+        warning = _first_warning(tmp_path / "warnings.jsonl")
         assert warning["scope"] == "sync"
         assert warning["repoName"] == "backend"
 
@@ -275,12 +284,12 @@ class TestSyncRepositories:
         )
 
         with patch(
-            "sandbox_runtime.boot_warnings.BOOT_WARNINGS_FILE_PATH",
+            "sandbox_runtime.boot_events.BOOT_EVENTS_FILE_PATH",
             str(tmp_path / "warnings.jsonl"),
         ):
             await sup.boot(boot_mode, [])
 
-        warning = json.loads((tmp_path / "warnings.jsonl").read_text().splitlines()[0])
+        warning = _first_warning(tmp_path / "warnings.jsonl")
         assert warning["repoName"] == "backend"
         assert warning["message"].startswith("Timed out updating acme/backend")
 
@@ -295,14 +304,14 @@ class TestHookOrchestration:
         with (
             patch.dict(os.environ, {}, clear=False),
             patch(
-                "sandbox_runtime.boot_warnings.BOOT_WARNINGS_FILE_PATH",
+                "sandbox_runtime.boot_events.BOOT_EVENTS_FILE_PATH",
                 str(tmp_path / "warnings.jsonl"),
             ),
         ):
             await sup.boot(BootMode.FRESH, [])
 
         assert [c.args[0] for c in sup.hooks.run_setup.await_args_list] == sup.repositories
-        warning = json.loads((tmp_path / "warnings.jsonl").read_text().splitlines()[0])
+        warning = _first_warning(tmp_path / "warnings.jsonl")
         assert warning["scope"] == "setup"
         assert warning["repoName"] == "frontend"
 
@@ -315,7 +324,7 @@ class TestHookOrchestration:
         with (
             patch.dict(os.environ, {"IMAGE_BUILD_MODE": "true"}, clear=False),
             patch(
-                "sandbox_runtime.boot_warnings.BOOT_WARNINGS_FILE_PATH",
+                "sandbox_runtime.boot_events.BOOT_EVENTS_FILE_PATH",
                 str(tmp_path / "warnings.jsonl"),
             ),
             pytest.raises(RuntimeError, match="acme/backend"),
@@ -331,7 +340,7 @@ class TestHookOrchestration:
         with (
             patch.dict(os.environ, {}, clear=False),
             patch(
-                "sandbox_runtime.boot_warnings.BOOT_WARNINGS_FILE_PATH",
+                "sandbox_runtime.boot_events.BOOT_EVENTS_FILE_PATH",
                 str(tmp_path / "warnings.jsonl"),
             ),
             pytest.raises(RuntimeError, match="acme/frontend"),
@@ -347,12 +356,12 @@ class TestHookOrchestration:
         with (
             patch.dict(os.environ, {}, clear=False),
             patch(
-                "sandbox_runtime.boot_warnings.BOOT_WARNINGS_FILE_PATH",
+                "sandbox_runtime.boot_events.BOOT_EVENTS_FILE_PATH",
                 str(tmp_path / "warnings.jsonl"),
             ),
         ):
             await sup.boot(BootMode.FRESH, [])
-        warning = json.loads((tmp_path / "warnings.jsonl").read_text().splitlines()[0])
+        warning = _first_warning(tmp_path / "warnings.jsonl")
         assert warning["scope"] == "start"
         assert warning["repoName"] == "backend"
 
@@ -439,7 +448,7 @@ class TestOpencodeAssembly:
         (tmp_path / "backend" / ".opencode" / "tool" / "db.js").write_text("tool")
 
         with patch(
-            "sandbox_runtime.boot_warnings.BOOT_WARNINGS_FILE_PATH",
+            "sandbox_runtime.boot_events.BOOT_EVENTS_FILE_PATH",
             str(tmp_path / "warnings.jsonl"),
         ):
             sup._assemble_workspace_opencode(sup._test_repositories)
@@ -447,7 +456,7 @@ class TestOpencodeAssembly:
         merged = tmp_path / ".opencode"
         assert (merged / "command" / "deploy.md").read_text() == "from-backend"
         assert (merged / "tool" / "db.js").read_text() == "tool"
-        warning = json.loads((tmp_path / "warnings.jsonl").read_text().splitlines()[0])
+        warning = _first_warning(tmp_path / "warnings.jsonl")
         assert warning["scope"] == "assembly"
         assert warning["repoName"] == "backend"
         assert "acme/frontend" in warning["message"]
@@ -544,7 +553,7 @@ class TestBootWarningRecorder:
         sup.warnings.log = MagicMock()
 
         with patch(
-            "sandbox_runtime.boot_warnings.BOOT_WARNINGS_FILE_PATH",
+            "sandbox_runtime.boot_events.BOOT_EVENTS_FILE_PATH",
             str(tmp_path / "warnings.jsonl"),
         ):
             sup.warnings.record("setup", "m1", sup.repositories[0])
@@ -554,12 +563,21 @@ class TestBootWarningRecorder:
             json.loads(line) for line in (tmp_path / "warnings.jsonl").read_text().splitlines()
         ]
         assert lines[0] == {
+            "seq": 1,
+            "kind": "warning",
             "scope": "setup",
             "message": "m1",
             "repoOwner": "acme",
             "repoName": "frontend",
+            "at": ANY,
         }
-        assert lines[1] == {"scope": "sync", "message": "m2"}
+        assert lines[1] == {
+            "seq": 2,
+            "kind": "warning",
+            "scope": "sync",
+            "message": "m2",
+            "at": ANY,
+        }
         sup.warnings.log.warn.assert_any_call(
             "supervisor.boot_warning",
             scope="setup",

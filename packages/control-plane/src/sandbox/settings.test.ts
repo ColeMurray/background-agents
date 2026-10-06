@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  DEFAULT_FINAL_SNAPSHOT_BUFFER_MS,
   DEFAULT_CODE_SERVER_PORT,
   DEFAULT_TERMINAL_PORT,
   DEFAULT_VNC_PORT,
@@ -24,12 +25,56 @@ describe("parsePersistedSandboxSettings", () => {
     ).toEqual({ sandboxTimeoutMs: 14_400_000, tunnelPorts: [3000] });
   });
 
+  it("omits a persisted timeout that cannot accommodate the default final buffer", () => {
+    expect(
+      parsePersistedSandboxSettings('{"sandboxTimeoutMs":300000,"terminalEnabled":true}')
+    ).toEqual({ terminalEnabled: true });
+  });
+
   it.each(["", "not-json"])("throws when persisted blob %j is not valid JSON", (settingsJson) => {
     expect(() => parsePersistedSandboxSettings(settingsJson)).toThrow(SyntaxError);
   });
 });
 
 describe("normalizeSandboxSettings", () => {
+  it.each([
+    { cpuLimitCores: 0 },
+    { cpuLimitCores: -1 },
+    { cpuLimitCores: Infinity },
+    { cpuLimitCores: NaN },
+    { memoryLimitMib: 0 },
+    { memoryLimitMib: -1 },
+    { memoryLimitMib: 2048.5 },
+    { memoryLimitMib: Infinity },
+  ])("rejects invalid resource limits %j", (settings) => {
+    expect(() => normalizeSandboxSettings(settings)).toThrow(SandboxSettingsValidationError);
+    expect(normalizeSandboxSettings(settings, { invalid: "omit" })).toEqual({});
+  });
+
+  it("preserves fractional CPU caps, integer memory caps, and null resets", () => {
+    const settings = { cpuLimitCores: 0.5, memoryLimitMib: 64 };
+    expect(normalizeSandboxSettings(settings)).toEqual(settings);
+    expect(normalizeSandboxSettings({ cpuLimitCores: null, memoryLimitMib: null })).toEqual({
+      cpuLimitCores: null,
+      memoryLimitMib: null,
+    });
+  });
+
+  it.each([false, true])("preserves explicit request/cap pairs with partial=%s", (partial) => {
+    const conflicting = { cpuCores: 2, cpuLimitCores: 1, memoryMib: 4096, memoryLimitMib: 2048 };
+    expect(normalizeSandboxSettings(conflicting, { partial })).toEqual(conflicting);
+    const settings = { cpuCores: 0.5, cpuLimitCores: 0.5, memoryMib: null, memoryLimitMib: 64 };
+    expect(normalizeSandboxSettings(settings, { partial })).toEqual(settings);
+    expect(normalizeSandboxSettings({ cpuLimitCores: 0.25 }, { partial })).toEqual({
+      cpuLimitCores: 0.25,
+    });
+  });
+
+  it("preserves conflicting persisted caps for provider-aware launch validation", () => {
+    const settings = { cpuCores: 4, cpuLimitCores: 2, memoryMib: 8192, memoryLimitMib: 4096 };
+    expect(normalizeSandboxSettings(settings, { invalid: "omit" })).toEqual(settings);
+    expect(parsePersistedSandboxSettings(JSON.stringify(settings))).toEqual(settings);
+  });
   it("throws for invalid settings by default", () => {
     expect(() => normalizeSandboxSettings({ cpuCores: 0 })).toThrow(SandboxSettingsValidationError);
     expect(() => normalizeSandboxSettings({ memoryMib: 256.5 })).toThrow(
@@ -115,7 +160,7 @@ describe("normalizeSandboxSettings", () => {
         SandboxSettingsValidationError
       );
     }
-    expect(normalizeSandboxSettings({ sandboxTimeoutMs: 1000 })).toEqual({
+    expect(normalizeSandboxSettings({ sandboxTimeoutMs: 1000 }, { partial: true })).toEqual({
       sandboxTimeoutMs: 1000,
     });
   });
@@ -123,6 +168,70 @@ describe("normalizeSandboxSettings", () => {
   it("omits an invalid sandboxTimeoutMs while preserving valid fields", () => {
     expect(
       normalizeSandboxSettings({ sandboxTimeoutMs: -1, terminalEnabled: true }, { invalid: "omit" })
+    ).toEqual({ terminalEnabled: true });
+  });
+
+  it("validates final snapshot buffers and their effective default against timeout", () => {
+    expect(
+      normalizeSandboxSettings({
+        sandboxTimeoutMs: 1_200_000,
+        finalSnapshotBufferMs: 300_000,
+      })
+    ).toEqual({ sandboxTimeoutMs: 1_200_000, finalSnapshotBufferMs: 300_000 });
+    expect(() => normalizeSandboxSettings({ sandboxTimeoutMs: 300_000 })).toThrow(
+      SandboxSettingsValidationError
+    );
+    expect(() =>
+      normalizeSandboxSettings({
+        sandboxTimeoutMs: DEFAULT_FINAL_SNAPSHOT_BUFFER_MS,
+      })
+    ).toThrow(SandboxSettingsValidationError);
+    expect(() =>
+      normalizeSandboxSettings({
+        sandboxTimeoutMs: 1_200_000,
+        finalSnapshotBufferMs: 1_200_000,
+      })
+    ).toThrow(SandboxSettingsValidationError);
+  });
+
+  it.each([299_000, 300_001, Number.MAX_SAFE_INTEGER + 1, Number.NaN, Number.POSITIVE_INFINITY])(
+    "rejects malformed final snapshot buffer %s",
+    (finalSnapshotBufferMs) => {
+      expect(() => normalizeSandboxSettings({ finalSnapshotBufferMs })).toThrow(
+        SandboxSettingsValidationError
+      );
+    }
+  );
+
+  it("preserves partial override fields until merge validation", () => {
+    expect(
+      normalizeSandboxSettings(
+        { sandboxTimeoutMs: 360_000, finalSnapshotBufferMs: 600_000 },
+        { partial: true }
+      )
+    ).toEqual({ sandboxTimeoutMs: 360_000, finalSnapshotBufferMs: 600_000 });
+  });
+
+  it("omits unsafe effective relationships while preserving unrelated settings", () => {
+    expect(
+      normalizeSandboxSettings(
+        {
+          sandboxTimeoutMs: 1_200_000,
+          finalSnapshotBufferMs: 1_200_000,
+          terminalEnabled: true,
+        },
+        { invalid: "omit" }
+      )
+    ).toEqual({ sandboxTimeoutMs: 1_200_000, terminalEnabled: true });
+    expect(
+      normalizeSandboxSettings(
+        {
+          sandboxTimeoutMs: 300_000,
+          finalSnapshotBufferMs: 300_000,
+          terminalEnabled: true,
+        },
+        { invalid: "omit" }
+      )
     ).toEqual({ terminalEnabled: true });
   });
 

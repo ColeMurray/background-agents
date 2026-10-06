@@ -1,7 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
 import { MAX_CHILD_FOLLOW_UP_PROMPT_CHARS } from "@open-inspect/shared/types/session-api";
 import { ChildSessionsHandler } from "./child-sessions.handler";
-import { PromptQueueFullError, SessionNotPromptableError } from "../../message-queue";
+import {
+  PromptQueueFullError,
+  SandboxPromptBlockedError,
+  SessionNotPromptableError,
+} from "../../message-queue";
 import type { ParticipantRow, SessionRow } from "../../types";
 import type { ParticipantRepository } from "../../participant-repository";
 import type { MessageRepository } from "../../message-repository";
@@ -145,9 +149,6 @@ describe("ChildSessionsHandler", () => {
           login: null,
           name: null,
           email: null,
-          accessTokenEncrypted: null,
-          refreshTokenEncrypted: null,
-          tokenExpiresAt: null,
         },
       });
     });
@@ -237,6 +238,23 @@ describe("ChildSessionsHandler", () => {
         error: "Cannot prompt a archived session",
       });
     });
+
+    it("maps a sandbox safety hold to 409", async () => {
+      const { handler, getSession, repository, enqueuePrompt } = createHandler();
+      getSession.mockReturnValue(createSession({ parent_session_id: "parent-1" }));
+      repository.listParticipants.mockReturnValue([createParticipant()]);
+      enqueuePrompt.mockRejectedValue(new SandboxPromptBlockedError("Start a new session."));
+
+      const response = await handler.parentPrompt(
+        request({ parentSessionId: "parent-1", content: "Continue" })
+      );
+
+      expect(response.status).toBe(409);
+      await expect(response.json()).resolves.toEqual({
+        error: "Start a new session.",
+        code: "SANDBOX_RECOVERY_REQUIRED",
+      });
+    });
   });
 
   it("returns 404 when session is missing for spawn context", async () => {
@@ -299,15 +317,16 @@ describe("ChildSessionsHandler", () => {
     const response = handler.getSpawnContext();
 
     expect(response.status).toBe(200);
-    await expect(response.json()).resolves.toMatchObject({
+    const body = await response.json<{ promptAuthor: Record<string, unknown> }>();
+    expect(body).toMatchObject({
       promptAuthor: {
         userId: "slack:U2",
         canonicalUserId: "canonical-2",
         scmUserId: "222",
         scmLogin: "second-user",
-        scmAccessTokenEncrypted: "second-access",
       },
     });
+    expect(body.promptAuthor).not.toHaveProperty("scmAccessTokenEncrypted");
   });
 
   it("returns a narrow active prompt author without encrypted credentials", async () => {
@@ -379,9 +398,6 @@ describe("ChildSessionsHandler", () => {
         scmLogin: "octocat",
         scmName: "The Octocat",
         scmEmail: "octocat@example.com",
-        scmAccessTokenEncrypted: "enc-access",
-        scmRefreshTokenEncrypted: "enc-refresh",
-        scmTokenExpiresAt: 1234,
       },
     });
   });

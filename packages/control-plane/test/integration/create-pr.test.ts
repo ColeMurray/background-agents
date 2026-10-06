@@ -1,11 +1,29 @@
-import { describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { env } from "cloudflare:test";
-import type { SourceControlProvider } from "../../src/source-control";
+import { symmetricEncrypt } from "better-auth/crypto";
+import type { SourceControlAuthContext, SourceControlProvider } from "../../src/source-control";
 import type { SessionDO } from "../../src/cloudflare/durable-object";
 import { componentsOf, runInSessionDO } from "./session-do-access";
-import { initNamedSession, initSession, queryDO, seedMessage, serviceFetch } from "./helpers";
+import {
+  initNamedSession,
+  initSession,
+  queryDO,
+  seedMessage,
+  serviceFetch,
+  waitForSandboxStatus,
+} from "./helpers";
 
 describe("POST /internal/create-pr", () => {
+  async function modelLegacyManualPushSession(stub: DurableObjectStub) {
+    // These PR tests exercise the legacy/manual-push fallback, not a managed
+    // sandbox push. Let the integration provider's warm spawn settle before
+    // removing the shutdown record so it cannot race this fixture reset.
+    await waitForSandboxStatus(stub, "failed");
+    await runInSessionDO(stub, (_instance: SessionDO, state) => {
+      state.storage.sql.exec("DELETE FROM sandbox_preservation");
+    });
+  }
+
   it("returns 404 when session is not initialized", async () => {
     const id = env.SESSION.newUniqueId();
     const stub = env.SESSION.get(id);
@@ -89,8 +107,9 @@ describe("POST /internal/create-pr", () => {
     const body = await res.json<{ error: string }>();
     expect(body.error).toBe("User not found. Please re-authenticate.");
   });
-  it("falls back to app auth when expired OAuth token cannot be refreshed", async () => {
+  it("ignores copied credentials when the author has no canonical Better Auth identity", async () => {
     const { stub } = await initSession({ userId: "user-1" });
+    await modelLegacyManualPushSession(stub);
 
     const participants = await queryDO<{ id: string }>(
       stub,
@@ -179,6 +198,7 @@ describe("POST /internal/create-pr", () => {
 
   it("creates PR with app auth when prompting user has no OAuth token", async () => {
     const { stub } = await initSession({ userId: "user-1" });
+    await modelLegacyManualPushSession(stub);
 
     const participants = await queryDO<{ id: string }>(
       stub,
@@ -288,7 +308,10 @@ describe("POST /internal/create-pr", () => {
     });
   }
 
-  async function installSingleRepoMockProvider(stub: DurableObjectStub) {
+  async function installSingleRepoMockProvider(
+    stub: DurableObjectStub,
+    onCreatePullRequest: (auth: SourceControlAuthContext) => void = () => undefined
+  ) {
     await runInSessionDO(stub, (instance: SessionDO) => {
       const mockProvider = {
         name: "github",
@@ -301,15 +324,18 @@ describe("POST /internal/create-pr", () => {
           isPrivate: true,
           providerRepoId: 12345,
         }),
-        createPullRequest: async () => ({
-          id: 42,
-          webUrl: "https://github.com/acme/web-app/pull/42",
-          apiUrl: "https://api.github.com/repos/acme/web-app/pulls/42",
-          lifecycleState: "open" as const,
-          isDraft: false,
-          sourceBranch: "open-inspect/test-session",
-          targetBranch: "main",
-        }),
+        createPullRequest: async (auth: SourceControlAuthContext) => {
+          onCreatePullRequest(auth);
+          return {
+            id: 42,
+            webUrl: "https://github.com/acme/web-app/pull/42",
+            apiUrl: "https://api.github.com/repos/acme/web-app/pulls/42",
+            lifecycleState: "open" as const,
+            isDraft: false,
+            sourceBranch: "open-inspect/test-session",
+            targetBranch: "main",
+          };
+        },
         getPullRequest: async (config: { owner: string; name: string; number: number }) => ({
           number: config.number,
           url: `https://github.com/${config.owner}/${config.name}/pull/${config.number}`,
@@ -333,8 +359,109 @@ describe("POST /internal/create-pr", () => {
     });
   }
 
+  describe("current browser PR credentials", () => {
+    let fetchSpy: { mockRestore(): void };
+    beforeAll(() => {
+      const originalFetch = globalThis.fetch.bind(globalThis);
+      fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
+        const url = input instanceof Request ? input.url : String(input);
+        if (url === "https://api.github.com/user") {
+          return Response.json({ id: 583231, login: "octocat", name: "The Octocat" });
+        }
+        if (url.startsWith("https://api.github.com/user/emails")) {
+          return Response.json([
+            { email: "browser@test.local", primary: true, verified: true, visibility: null },
+          ]);
+        }
+        return originalFetch(input, init);
+      });
+    });
+    afterAll(() => fetchSpy.mockRestore());
+    it.each([
+      { label: "without cached credentials", access: null, refresh: null, expiresAt: null },
+      {
+        label: "with expired copied credentials",
+        access: "invalid-access",
+        refresh: "invalid-refresh",
+        expiresAt: 1,
+      },
+      {
+        label: "with copied refresh only",
+        access: null,
+        refresh: "invalid-refresh",
+        expiresAt: null,
+      },
+      {
+        label: "with unexpired copied credentials",
+        access: "invalid-access",
+        refresh: null,
+        expiresAt: null,
+      },
+    ])("uses current browser OAuth when continuing a Linear session $label", async (legacy) => {
+      const browserUserId = "11111111111111111111111111111111";
+      const sessionName = `linear-browser-pr-${crypto.randomUUID()}`;
+      const { stub } = await initNamedSession(sessionName, {
+        userId: "linear:creator",
+        canonicalUserId: browserUserId,
+      });
+      await modelLegacyManualPushSession(stub);
+      const tokenResponse = await serviceFetch(
+        `https://test.local/sessions/${sessionName}/ws-token`,
+        {
+          method: "POST",
+          body: "{}",
+        }
+      );
+      expect(tokenResponse.status).toBe(200);
+      const { participantId } = await tokenResponse.json<{ participantId: string }>();
+      // Persisted metadata must not choose credentials or block canonical lookup.
+      await runInSessionDO(stub, (_instance: SessionDO, state) => {
+        state.storage.sql.exec(
+          "UPDATE participants SET scm_user_id = NULL, scm_access_token_encrypted = ?, scm_refresh_token_encrypted = ?, scm_token_expires_at = ? WHERE id = ?",
+          legacy.access,
+          legacy.refresh,
+          legacy.expiresAt,
+          participantId
+        );
+      });
+      const accessToken = await symmetricEncrypt({
+        key: env.BROWSER_AUTH_SECRET!,
+        data: "browser-access-token",
+      });
+      await env.DB.prepare(
+        "UPDATE user_identities SET access_token = ?, access_token_expires_at = ? WHERE user_id = ? AND provider = 'github'"
+      )
+        .bind(accessToken, Date.now() + 3_600_000, browserUserId)
+        .run();
+      // Model the browser prompt now being processed, not the Linear creator's prompt.
+      await seedMessage(stub, {
+        id: "browser-create-pr",
+        authorId: participantId,
+        content: "Open the PR",
+        source: "web",
+        status: "processing",
+        createdAt: Date.now(),
+        startedAt: Date.now(),
+      });
+      let prAuth: SourceControlAuthContext | undefined;
+      await installSingleRepoMockProvider(stub, (auth) => {
+        prAuth = auth;
+      });
+
+      const response = await stub.fetch("http://internal/internal/create-pr", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ title: "Browser PR", body: "Continuation of the Linear task" }),
+      });
+
+      expect(response.status).toBe(200);
+      expect(prAuth).toEqual({ authType: "oauth", token: "browser-access-token" });
+    });
+  });
+
   it("reuses an existing open PR recorded for the session branch", async () => {
     const { stub } = await initSession({ userId: "user-1" });
+    await modelLegacyManualPushSession(stub);
     await seedProcessingMessageForOwner(stub, "msg-processing-2");
 
     await runInSessionDO(stub, (instance: SessionDO, state) => {
@@ -404,6 +531,82 @@ describe("POST /internal/create-pr", () => {
       "A pull request has already been created for acme/web-app in this session."
     );
   });
+
+  it.each([
+    {
+      phase: "draining",
+      expectedError: "Sandbox graceful shutdown is in progress; push is held",
+    },
+    {
+      phase: "saved",
+      expectedError: "Sandbox must be started before pushing; retry once ready",
+    },
+  ])(
+    "refuses PR creation while sandbox graceful shutdown is $phase before creating a provider PR",
+    async ({ phase, expectedError }) => {
+      const { stub } = await initSession({ userId: "user-1" });
+      await waitForSandboxStatus(stub, "failed");
+      await seedProcessingMessageForOwner(stub, `msg-processing-${phase}`);
+
+      const now = Date.now();
+      await runInSessionDO(stub, (_instance: SessionDO, state) => {
+        const sandbox = state.storage.sql
+          .exec("SELECT modal_sandbox_id, created_at FROM sandbox")
+          .toArray()[0] as { modal_sandbox_id: string; created_at: number };
+        const shutdown = {
+          phase,
+          generation: {
+            sandboxId: sandbox.modal_sandbox_id,
+            createdAt: sandbox.created_at,
+          },
+          provider: "modal",
+          providerObjectId: null,
+          sourceRetired: phase === "saved",
+          lifetimeKind: "unknown",
+          expiresAtMs: null,
+          drainAtMs: null,
+          generationReady: false,
+          lifecyclePolicy: "confirmed",
+          ...(phase === "draining"
+            ? {
+                operationId: "test-shutdown-operation",
+                stopByMs: now + 60_000,
+                captureByMs: now + 120_000,
+                retireByMs: now + 180_000,
+              }
+            : {
+                receipt: {
+                  kind: "snapshot",
+                  artifactId: "snapshot-test",
+                  provider: "modal",
+                  savedAtMs: now,
+                  runtimeVersion: null,
+                },
+              }),
+        };
+        state.storage.sql.exec(
+          `INSERT INTO sandbox_preservation (singleton, state) VALUES (1, ?)
+           ON CONFLICT(singleton) DO UPDATE SET state = excluded.state`,
+          JSON.stringify(shutdown)
+        );
+      });
+
+      let providerCreateCalls = 0;
+      await installSingleRepoMockProvider(stub, () => {
+        providerCreateCalls += 1;
+      });
+
+      const res = await stub.fetch("http://internal/internal/create-pr", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ title: "Test PR", body: "Body from integration test" }),
+      });
+
+      expect(res.status).toBe(500);
+      expect(await res.json<{ error: string }>()).toEqual({ error: expectedError });
+      expect(providerCreateCalls).toBe(0);
+    }
+  );
 
   describe("multi-repo sessions", () => {
     const multiRepoInit = {
@@ -509,6 +712,7 @@ describe("POST /internal/create-pr", () => {
 
     it("creates one PR per member repo with repo metadata on each artifact", async () => {
       const { stub } = await initSession({ userId: "user-1", ...multiRepoInit });
+      await modelLegacyManualPushSession(stub);
       await seedProcessingMessage(stub, "msg-multi-1");
       await installMockProvider(stub);
 
@@ -561,6 +765,7 @@ describe("POST /internal/create-pr", () => {
 
     it("reuses a member's open PR and still creates fresh PRs for other members", async () => {
       const { stub } = await initSession({ userId: "user-1", ...multiRepoInit });
+      await modelLegacyManualPushSession(stub);
       await seedProcessingMessage(stub, "msg-multi-2");
       await installMockProvider(stub);
 

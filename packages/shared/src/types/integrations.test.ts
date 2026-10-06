@@ -1,6 +1,10 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, expectTypeOf, it } from "vitest";
 import {
   DEFAULT_BUILD_TIMEOUT_SECONDS,
+  DEFAULT_MODAL_CPU_CORES,
+  DEFAULT_MODAL_MEMORY_MIB,
+  DEFAULT_MODAL_VM_CPU_CORES,
+  DEFAULT_MODAL_VM_MEMORY_MIB,
   INTERNAL_TTYD_PORT,
   INTERNAL_VNC_PORT,
   MAX_BUILD_TIMEOUT_SECONDS,
@@ -12,14 +16,244 @@ import {
   mcpServerCredentialMapSchema,
   mcpServerTypeSchema,
   normalizeRoutingRules,
+  omitUnsupportedSandboxSettings,
   resolveBuildTimeoutSeconds,
+  sandboxSettingCapabilities,
+  supportsConfigurableSandboxResources,
+  supportsConfigurableSandboxResourceLimits,
+  supportsConfigurableSandboxTimeout,
   scmGlobalConfigSchema,
   scmSettingsSchema,
+  DEFAULT_SLACK_UNBOUND_CHANNELS,
+  DEFAULT_LINEAR_UNBOUND_CHANNELS,
+  linearBotGlobalSettingsSchema,
+  linearBotSettingsSchema,
+  slackGlobalSettingsSchema,
+  slackRepoSettingsSchema,
   integrationSettingsSchemas,
   slackIntegrationSettingsRoutingResponseSchema,
   validateSandboxChildSessionLimits,
+  validateSandboxResourceLimits,
+  type LinearBotGlobalSettings,
+  type LinearGlobalConfig,
+  type SandboxProviderName,
+  type SandboxResources,
   type SlackRoutingRule,
 } from "./integrations";
+
+describe("Slack unbound channel policy", () => {
+  it("defaults to workspace ownership without changing stored optional settings", () => {
+    expect(DEFAULT_SLACK_UNBOUND_CHANNELS).toBe("workspace");
+    expect(slackGlobalSettingsSchema.parse({})).toEqual({});
+  });
+
+  it.each(["workspace", "reject"])("accepts %s only at the global level", (unboundChannels) => {
+    expect(slackGlobalSettingsSchema.parse({ unboundChannels })).toEqual({ unboundChannels });
+    expect(slackRepoSettingsSchema.safeParse({ unboundChannels }).success).toBe(false);
+  });
+
+  it.each([null, "team"])("rejects invalid policy %j", (unboundChannels) => {
+    expect(slackGlobalSettingsSchema.safeParse({ unboundChannels }).success).toBe(false);
+  });
+});
+
+describe("Linear unbound channel policy", () => {
+  it("uses the global-only settings type for Linear global defaults", () => {
+    expectTypeOf<LinearGlobalConfig["defaults"]>().toEqualTypeOf<
+      LinearBotGlobalSettings | undefined
+    >();
+  });
+
+  it("defaults to workspace ownership without changing stored optional settings", () => {
+    expect(DEFAULT_LINEAR_UNBOUND_CHANNELS).toBe(DEFAULT_SLACK_UNBOUND_CHANNELS);
+    expect(linearBotGlobalSettingsSchema.parse({})).toEqual({});
+    expect(integrationSettingsSchemas.linear.global.parse({ defaults: {} })).toEqual({
+      defaults: {},
+    });
+  });
+
+  it.each(["workspace", "reject"])("accepts %s only at the global level", (unboundChannels) => {
+    const defaults = { model: "anthropic/claude-sonnet-4-6", unboundChannels };
+    expect(linearBotGlobalSettingsSchema.parse(defaults)).toEqual(defaults);
+    expect(integrationSettingsSchemas.linear.global.parse({ defaults })).toEqual({ defaults });
+    expect(linearBotSettingsSchema.safeParse({ unboundChannels }).success).toBe(false);
+    expect(integrationSettingsSchemas.linear.repo.safeParse({ unboundChannels }).success).toBe(
+      false
+    );
+  });
+
+  it.each([null, "team", true, 1])("rejects invalid policy %j", (unboundChannels) => {
+    expect(linearBotGlobalSettingsSchema.safeParse({ unboundChannels }).success).toBe(false);
+    expect(
+      integrationSettingsSchemas.linear.global.safeParse({ defaults: { unboundChannels } }).success
+    ).toBe(false);
+  });
+
+  it("does not accept Slack publication settings", () => {
+    for (const settings of [{ mentionsPolicy: "allow" }, { agentNotificationsEnabled: true }]) {
+      expect(linearBotGlobalSettingsSchema.safeParse(settings).success).toBe(false);
+    }
+  });
+});
+
+describe("sandbox resource limit validation", () => {
+  it("requires a typed provider", () => {
+    expectTypeOf(validateSandboxResourceLimits).parameters.toEqualTypeOf<
+      [SandboxResources, SandboxProviderName]
+    >();
+  });
+
+  it.each(["modal", "modal-vm"] as const)("compares explicit requests for %s", (provider) => {
+    expect(validateSandboxResourceLimits({ cpuCores: 4, cpuLimitCores: 2 }, provider)).toContain(
+      "cpuLimitCores"
+    );
+    expect(
+      validateSandboxResourceLimits({ memoryMib: 8192, memoryLimitMib: 4096 }, provider)
+    ).toContain("memoryLimitMib");
+    expect(
+      validateSandboxResourceLimits(
+        { cpuCores: 4, cpuLimitCores: 4, memoryMib: 8192, memoryLimitMib: 8192 },
+        provider
+      )
+    ).toBeUndefined();
+    expect(
+      validateSandboxResourceLimits({ cpuCores: 4, memoryMib: 8192 }, provider)
+    ).toBeUndefined();
+    expect(
+      validateSandboxResourceLimits(
+        { cpuCores: 4, memoryMib: 8192, cpuLimitCores: null, memoryLimitMib: null },
+        provider
+      )
+    ).toBeUndefined();
+  });
+
+  it.each([
+    { provider: "modal", cpuCores: DEFAULT_MODAL_CPU_CORES, memoryMib: DEFAULT_MODAL_MEMORY_MIB },
+    {
+      provider: "modal-vm",
+      cpuCores: DEFAULT_MODAL_VM_CPU_CORES,
+      memoryMib: DEFAULT_MODAL_VM_MEMORY_MIB,
+    },
+  ] as const)(
+    "uses request defaults for absent and null $provider requests",
+    ({ provider, cpuCores, memoryMib }) => {
+      for (const request of [undefined, null]) {
+        expect(
+          validateSandboxResourceLimits(
+            { cpuCores: request, cpuLimitCores: cpuCores / 2 },
+            provider
+          )
+        ).toContain("cpuLimitCores");
+        expect(
+          validateSandboxResourceLimits(
+            { memoryMib: request, memoryLimitMib: memoryMib / 2 },
+            provider
+          )
+        ).toContain("memoryLimitMib");
+        expect(
+          validateSandboxResourceLimits(
+            {
+              cpuCores: request,
+              memoryMib: request,
+              cpuLimitCores: cpuCores,
+              memoryLimitMib: memoryMib,
+            },
+            provider
+          )
+        ).toBeUndefined();
+      }
+    }
+  );
+
+  it.each(["vercel", "daytona", "opencomputer", "e2b"] as const)(
+    "does not compare unused caps for %s",
+    (provider) => {
+      expect(
+        validateSandboxResourceLimits(
+          { cpuCores: 4, cpuLimitCores: 2, memoryMib: 8192, memoryLimitMib: 4096 },
+          provider
+        )
+      ).toBeUndefined();
+    }
+  );
+});
+
+describe("sandbox provider settings capabilities", () => {
+  it.each([
+    { provider: "modal", resources: true, resourceLimits: true, timeout: true },
+    { provider: "modal-vm", resources: true, resourceLimits: true, timeout: true },
+    { provider: "daytona", resources: false, resourceLimits: false, timeout: false },
+    { provider: "vercel", resources: true, resourceLimits: false, timeout: true },
+    { provider: "opencomputer", resources: false, resourceLimits: false, timeout: true },
+    { provider: "e2b", resources: false, resourceLimits: false, timeout: true },
+  ])("resolves canonical capabilities for $provider", ({ provider, ...capabilities }) => {
+    expect(sandboxSettingCapabilities(provider)).toEqual(capabilities);
+    expect(sandboxSettingCapabilities(` ${provider.toUpperCase()} `)).toEqual(capabilities);
+    expect(supportsConfigurableSandboxResources(provider)).toBe(capabilities.resources);
+    expect(supportsConfigurableSandboxResourceLimits(provider)).toBe(capabilities.resourceLimits);
+    expect(supportsConfigurableSandboxTimeout(provider)).toBe(capabilities.timeout);
+  });
+
+  it.each(["modal", "modal-vm"])("preserves resource caps for %s", (provider) => {
+    const settings = { cpuLimitCores: 2, memoryLimitMib: null };
+    expect(supportsConfigurableSandboxResourceLimits(provider)).toBe(true);
+    expect(omitUnsupportedSandboxSettings(settings, provider)).toEqual(settings);
+  });
+
+  it.each(["vercel", "daytona", "opencomputer", "e2b", "test-provider"])(
+    "ignores resource caps for %s",
+    (provider) => {
+      expect(supportsConfigurableSandboxResourceLimits(provider)).toBe(false);
+      expect(
+        omitUnsupportedSandboxSettings(
+          { cpuLimitCores: 2, memoryLimitMib: null, terminalEnabled: true },
+          provider
+        )
+      ).toEqual({ terminalEnabled: true });
+    }
+  );
+  it.each(["modal", "vercel"])("allows resource overrides for %s", (provider) => {
+    expect(supportsConfigurableSandboxResources(provider)).toBe(true);
+  });
+
+  it.each(["daytona", "opencomputer", "e2b"])(
+    "does not expose resource overrides for %s",
+    (provider) => {
+      expect(supportsConfigurableSandboxResources(provider)).toBe(false);
+    }
+  );
+
+  it("does not expose session timeout overrides for Daytona", () => {
+    expect(supportsConfigurableSandboxTimeout("daytona")).toBe(false);
+    expect(supportsConfigurableSandboxTimeout("modal")).toBe(true);
+  });
+
+  it("uses the explicit permissive fallback for unvalidated provider names", () => {
+    expect(sandboxSettingCapabilities("test-provider")).toEqual({
+      resources: true,
+      resourceLimits: false,
+      timeout: true,
+    });
+    expect(supportsConfigurableSandboxResources("test-provider")).toBe(true);
+    expect(supportsConfigurableSandboxResourceLimits("test-provider")).toBe(false);
+    expect(supportsConfigurableSandboxTimeout("test-provider")).toBe(true);
+  });
+
+  it("drops unsupported Daytona settings while preserving supported settings", () => {
+    expect(
+      omitUnsupportedSandboxSettings(
+        {
+          cpuCores: 2,
+          memoryMib: 4096,
+          sandboxTimeoutMs: 14_400_000,
+          buildTimeoutSeconds: 2400,
+          terminalEnabled: true,
+        },
+        "daytona"
+      )
+    ).toEqual({ buildTimeoutSeconds: 2400, terminalEnabled: true });
+  });
+});
 
 describe("findSandboxPortConflict", () => {
   it.each([INTERNAL_TTYD_PORT, INTERNAL_VNC_PORT])("rejects reserved internal port %i", (port) => {
@@ -311,7 +545,12 @@ describe("integration settings schemas", () => {
 
   it("parses nullable sandbox resource settings", () => {
     expect(
-      integrationSettingsSchemas.sandbox.repo.safeParse({ cpuCores: null, memoryMib: null }).success
+      integrationSettingsSchemas.sandbox.repo.safeParse({
+        cpuCores: null,
+        memoryMib: null,
+        cpuLimitCores: null,
+        memoryLimitMib: null,
+      }).success
     ).toBe(true);
   });
 

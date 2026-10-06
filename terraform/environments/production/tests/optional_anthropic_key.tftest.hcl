@@ -161,7 +161,7 @@ run "an_anthropic_classifier_still_requires_the_key" {
     anthropic_api_key    = ""
   }
 
-  expect_failures = [var.anthropic_api_key]
+  expect_failures = [var.classification_anthropic_api_key]
 }
 
 # ... but only when it is the classifier's provider.

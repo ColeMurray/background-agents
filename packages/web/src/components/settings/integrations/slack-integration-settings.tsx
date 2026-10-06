@@ -14,6 +14,7 @@ import type {
   ListEnvironmentsResponse,
 } from "@open-inspect/shared/types/environments";
 import {
+  DEFAULT_SLACK_UNBOUND_CHANNELS,
   MAX_SESSION_INSTRUCTIONS_LENGTH,
   MAX_SLACK_ROUTING_RULES,
   type SlackGlobalConfig,
@@ -162,7 +163,7 @@ export function SlackIntegrationSettings() {
       </SettingsCardSection>
 
       <fieldset disabled={!canManageGlobal} className="min-w-0">
-        <GlobalSettingsSection settings={settings} />
+        <GlobalSettingsSection settings={settings} canManageGlobal={canManageGlobal} />
       </fieldset>
 
       <fieldset disabled={!canManageGlobal} className="min-w-0">
@@ -187,7 +188,13 @@ export function SlackIntegrationSettings() {
   );
 }
 
-function GlobalSettingsSection({ settings }: { settings: SlackGlobalConfig | null | undefined }) {
+function GlobalSettingsSection({
+  settings,
+  canManageGlobal,
+}: {
+  settings: SlackGlobalConfig | null | undefined;
+  canManageGlobal: boolean;
+}) {
   const { enabledModels, enabledModelOptions, loading: modelsLoading } = useEnabledModels();
   const [agentNotificationsEnabled, setAgentNotificationsEnabled] = useState(
     settings?.defaults?.agentNotificationsEnabled ?? false
@@ -199,6 +206,9 @@ function GlobalSettingsSection({ settings }: { settings: SlackGlobalConfig | nul
   const [sessionInstructions, setSessionInstructions] = useState(
     settings?.defaults?.sessionInstructions ?? ""
   );
+  const [unboundChannels, setUnboundChannels] = useState<"workspace" | "reject">(
+    settings?.defaults?.unboundChannels ?? DEFAULT_SLACK_UNBOUND_CHANNELS
+  );
   const [saving, setSaving] = useState(false);
   const [dirty, setDirty] = useState(false);
   const [showResetDialog, setShowResetDialog] = useState(false);
@@ -209,6 +219,7 @@ function GlobalSettingsSection({ settings }: { settings: SlackGlobalConfig | nul
     setModel(settings?.defaults?.model ?? "");
     setMentionsPolicy(settings?.defaults?.mentionsPolicy ?? DEFAULT_MENTIONS_POLICY);
     setSessionInstructions(settings?.defaults?.sessionInstructions ?? "");
+    setUnboundChannels(settings?.defaults?.unboundChannels ?? DEFAULT_SLACK_UNBOUND_CHANNELS);
   }, [settings, dirty, saving]);
 
   const selectedModelEnabled = model ? enabledModels.includes(model) : true;
@@ -221,7 +232,7 @@ function GlobalSettingsSection({ settings }: { settings: SlackGlobalConfig | nul
   const handleConfirmReset = async () => {
     setSaving(true);
     try {
-      // Reset only the notification/mention defaults. If routing rules exist,
+      // Reset the defaults edited in this section. If routing rules exist,
       // preserve them by writing a blob that keeps just the rules (rather than
       // deleting the whole row); otherwise clear the row entirely.
       const existingRules = settings?.defaults?.routingRules;
@@ -243,6 +254,7 @@ function GlobalSettingsSection({ settings }: { settings: SlackGlobalConfig | nul
         setModel("");
         setMentionsPolicy(DEFAULT_MENTIONS_POLICY);
         setSessionInstructions("");
+        setUnboundChannels(DEFAULT_SLACK_UNBOUND_CHANNELS);
         setDirty(false);
         toast.success("Settings reset to defaults.");
       } else {
@@ -264,6 +276,7 @@ function GlobalSettingsSection({ settings }: { settings: SlackGlobalConfig | nul
         model: model || undefined,
         mentionsPolicy,
         sessionInstructions: sessionInstructions || undefined,
+        unboundChannels,
       }),
     };
 
@@ -294,7 +307,7 @@ function GlobalSettingsSection({ settings }: { settings: SlackGlobalConfig | nul
   return (
     <SettingsCardSection
       title="Defaults"
-      description="Workspace-wide settings for agent-initiated Slack posts."
+      description="Workspace-wide settings for Slack-created sessions and agent-initiated posts."
     >
       <label
         htmlFor="slack-master-switch"
@@ -315,6 +328,39 @@ function GlobalSettingsSection({ settings }: { settings: SlackGlobalConfig | nul
           }}
         />
       </label>
+
+      <div className="mb-4">
+        <label
+          htmlFor="slack-unbound-channels"
+          className="block text-sm font-medium text-foreground mb-2"
+        >
+          Unbound channels
+        </label>
+        <p id="slack-unbound-channels-help" className="text-xs text-muted-foreground mb-2">
+          Choose what happens when a request comes from a Slack channel without a team binding.
+          Manage bindings in a team&apos;s Channels tab.
+        </p>
+        <Select
+          value={unboundChannels}
+          disabled={!canManageGlobal}
+          onValueChange={(value) => {
+            setUnboundChannels(value as "workspace" | "reject");
+            setDirty(true);
+          }}
+        >
+          <SelectTrigger
+            id="slack-unbound-channels"
+            aria-describedby="slack-unbound-channels-help"
+            className="w-full sm:w-96"
+          >
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="workspace">Create workspace-level sessions</SelectItem>
+            <SelectItem value="reject">Reject requests until the channel is bound</SelectItem>
+          </SelectContent>
+        </Select>
+      </div>
 
       <div className="mb-4">
         <p className="text-sm font-medium text-foreground mb-2">Default model</p>
@@ -432,8 +478,8 @@ function GlobalSettingsSection({ settings }: { settings: SlackGlobalConfig | nul
             <AlertDialogDescription>
               Reset Slack defaults? The master switch will turn off, the default model will use the
               system default, mentions policy will return to <strong>allow</strong>, and session
-              instructions will be cleared. Per-repository overrides and routing rules are not
-              affected.
+              instructions will be cleared. Unbound channels will create workspace-level sessions.
+              Per-repository overrides and routing rules are not affected.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>

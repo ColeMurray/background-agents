@@ -104,6 +104,7 @@ class OpencodeHarness:
             model=prompt.model,
             reasoning_effort=prompt.reasoning_effort,
             attachments=list(prompt.attachments),
+            max_duration_seconds=prompt.max_duration_seconds,
         )
 
     async def run_prompt(self, prompt: HarnessPrompt, emit: EventSink) -> TurnOutcome:
@@ -129,3 +130,15 @@ class OpencodeHarness:
         if not self.session_id:
             return False
         return await self.client.request_stop(self.session_id, reason="command")
+
+    async def stop_execution(self, timeout_seconds: float) -> bool:
+        """Abort, then require the server's independent idle observation."""
+        deadline = asyncio.get_running_loop().time() + max(timeout_seconds, 0.0)
+        try:
+            async with asyncio.timeout_at(deadline):
+                await self.client.request_stop(self.session_id, reason="preservation")
+                return await self.client.wait_until_idle(
+                    timeout_seconds=max(deadline - asyncio.get_running_loop().time(), 0.0),
+                )
+        except TimeoutError:
+            return False

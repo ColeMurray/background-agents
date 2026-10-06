@@ -5,6 +5,15 @@ import { controlPlaneUserFetch } from "@/lib/control-plane";
 const RELAYED_RESPONSE_HEADERS = ["etag", "retry-after", "x-request-id"] as const;
 export const PRIVATE_NO_STORE_HEADERS = { "Cache-Control": "private, no-store" } as const;
 
+/**
+ * Relays a control-plane response as JSON, keeping its status.
+ *
+ * A body that is not JSON (a plain-text 401 or an HTML 502 from a layer in
+ * front of the control plane) is replaced by a JSON error rather than parsed:
+ * a parse failure would otherwise surface as a 500 and lose the status the
+ * caller needs to act on. A success status is not relayed with such a body,
+ * because the browser could not read it; that becomes a 502.
+ */
 export async function relayJsonResponse(response: Response): Promise<NextResponse> {
   const text = await response.text();
   const headers = new Headers(PRIVATE_NO_STORE_HEADERS);
@@ -12,8 +21,17 @@ export async function relayJsonResponse(response: Response): Promise<NextRespons
     const value = response.headers.get(name);
     if (value) headers.set(name, value);
   }
-  const init = { status: response.status, headers };
-  return text ? NextResponse.json(JSON.parse(text), init) : new NextResponse(null, init);
+  if (!text) return new NextResponse(null, { status: response.status, headers });
+  let body: unknown;
+  try {
+    body = JSON.parse(text);
+  } catch {
+    return NextResponse.json(
+      { error: "Unexpected response from control plane" },
+      { status: response.status >= 400 ? response.status : 502, headers }
+    );
+  }
+  return NextResponse.json(body, { status: response.status, headers });
 }
 
 /** Creates a GET handler for an ordinary authenticated JSON/no-content resource. */

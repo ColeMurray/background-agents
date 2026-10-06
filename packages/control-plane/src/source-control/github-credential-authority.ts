@@ -1,4 +1,7 @@
 import { z } from "zod";
+import { APIError } from "better-auth/api";
+import { OAuthProviderError } from "../auth/user/providers/types";
+import { AdmissionDeniedError } from "../auth/user/admission-policy";
 import type { AuthenticationContext, Principal } from "../auth/principal";
 
 const providerAccountSchema = z.object({
@@ -7,11 +10,52 @@ const providerAccountSchema = z.object({
   userId: z.string().min(1),
 });
 
-export interface GitHubAccountSelection {
-  readonly subject: string;
+const providerAccessTokenSchema = z.object({
+  accessToken: z.string(),
+});
+
+/** Retrieval failures may omit optional attribution; integrity errors must not. */
+export class GitHubAttributionUnavailableError extends Error {
+  constructor(cause: unknown) {
+    super("GitHub attribution is unavailable", { cause });
+    this.name = "GitHubAttributionUnavailableError";
+  }
 }
 
-interface ProviderAccountSelection {
+async function retrieveAttribution<T>(retrieve: () => Promise<T>): Promise<T> {
+  try {
+    return await retrieve();
+  } catch (cause) {
+    if (
+      (cause instanceof OAuthProviderError &&
+        cause.failure !== "provider_unavailable" &&
+        cause.failure !== "provider_rejected") ||
+      cause instanceof AdmissionDeniedError ||
+      (cause instanceof APIError && cause.body?.code === "AMBIGUOUS_ACCOUNT")
+    )
+      throw cause;
+    throw new GitHubAttributionUnavailableError(cause);
+  }
+}
+
+export async function resolveGitHubAccountProfile(
+  accountClient: ProviderAccountClient,
+  selection: ProviderAccountSelection
+): Promise<unknown | null> {
+  const response = await retrieveAttribution(() =>
+    accountClient.getAccessToken({ body: selection })
+  );
+  const token = providerAccessTokenSchema.parse(response);
+  if (token.accessToken === "") return null;
+  return retrieveAttribution(() => accountClient.accountInfo({ query: selection }));
+}
+
+export interface GitHubAccountSelection {
+  readonly subject: string;
+  readonly resolveProfile: () => Promise<unknown | null>;
+}
+
+export interface ProviderAccountSelection {
   readonly providerId: "github";
   readonly accountId: string;
   readonly userId: string;
@@ -20,17 +64,17 @@ interface ProviderAccountSelection {
 export interface ProviderAccountClient {
   listUserAccounts(input: { readonly headers: Headers }): Promise<unknown>;
   getAccessToken(input: { readonly body: ProviderAccountSelection }): Promise<unknown>;
+  refreshToken(input: { readonly body: ProviderAccountSelection }): Promise<unknown>;
   accountInfo(input: { readonly query: ProviderAccountSelection }): Promise<unknown>;
 }
 
 export type GitHubCredentialAuthority =
   | {
       readonly kind: "browser_session";
-      readonly accountClient: ProviderAccountClient;
       readonly githubAccount: GitHubAccountSelection | null;
     }
   | {
-      readonly kind: "legacy";
+      readonly kind: "service_principal";
     };
 
 export interface GitHubCredentialAuthorityContext {
@@ -40,13 +84,13 @@ export interface GitHubCredentialAuthorityContext {
 }
 
 /**
- * Select the credential store associated with the verified principal.
+ * Select the credential authority associated with the verified principal.
  *
- * A browser user must never silently fall back to the legacy token store when
- * its authentication provenance is missing. Linked GitHub accounts are
- * enumerated here, only when an SCM workflow requests them; they are not part
- * of browser-session authentication. Service actors are the only transitional
- * callers that retain the legacy authority.
+ * A browser user must prove account ownership through browser-session
+ * provenance. Linked GitHub accounts are enumerated only when an SCM workflow
+ * requests them; they are not part of browser-session authentication. Service
+ * actors use Better Auth's trusted server API, scoped later to the canonical
+ * user admitted for the request.
  */
 export async function resolveGitHubCredentialAuthority(
   context: GitHubCredentialAuthorityContext,
@@ -67,7 +111,7 @@ export async function resolveGitHubCredentialAuthority(
     const accountClient = context.getUserAuth().api;
     const parsedAccounts = z
       .array(providerAccountSchema)
-      .safeParse(await accountClient.listUserAccounts({ headers }));
+      .safeParse(await retrieveAttribution(() => accountClient.listUserAccounts({ headers })));
     if (
       !parsedAccounts.success ||
       parsedAccounts.data.some((account) => account.userId !== userId)
@@ -78,15 +122,30 @@ export async function resolveGitHubCredentialAuthority(
     if (githubAccounts.length > 1) {
       throw new Error("User resolves to multiple GitHub provider accounts");
     }
+    const githubAccount = githubAccounts[0];
     return {
       kind: "browser_session",
-      accountClient,
-      githubAccount: githubAccounts[0] ? { subject: githubAccounts[0].accountId } : null,
+      githubAccount: githubAccount
+        ? {
+            subject: githubAccount.accountId,
+            resolveProfile: async () => {
+              const selection: ProviderAccountSelection = {
+                providerId: "github",
+                accountId: githubAccount.accountId,
+                userId,
+              };
+              return resolveGitHubAccountProfile(accountClient, selection);
+            },
+          }
+        : null,
     };
   }
 
   if (context.authentication) {
     throw new Error("Non-user principal cannot carry browser-session provenance");
   }
-  return { kind: "legacy" };
+  if (context.principal.kind !== "service") {
+    throw new Error("Principal cannot authorize GitHub user credentials");
+  }
+  return { kind: "service_principal" };
 }

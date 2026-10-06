@@ -15,7 +15,14 @@ import { modelProviderSelectionsSchema } from "./provider-accounts";
 import { isEnvironmentId } from "./environments";
 import { isCanonicalUserId } from "../user-id";
 
-export type AutomationRunStatus = "starting" | "running" | "completed" | "failed" | "skipped";
+/** `unauthorized` is a terminal, sessionless GitHub repository grant denial. */
+export type AutomationRunStatus =
+  | "starting"
+  | "running"
+  | "completed"
+  | "failed"
+  | "skipped"
+  | "unauthorized";
 
 export type AutomationInvocationSource = "schedule" | "manual" | "event";
 
@@ -31,6 +38,7 @@ export const automationInvocationStatusSchema = z.enum([
   "failed",
   "partial_failed",
   "skipped",
+  "unauthorized",
 ]);
 
 export type AutomationInvocationStatus = z.infer<typeof automationInvocationStatusSchema>;
@@ -40,6 +48,15 @@ export const MAX_AUTOMATION_REPOSITORIES = MAX_TARGET_REPOSITORIES;
 
 /** Maximum length of an automation's instruction prompt. */
 export const MAX_AUTOMATION_INSTRUCTIONS_LENGTH = 15_000;
+
+/** Maximum length of an automation's name. */
+export const MAX_AUTOMATION_NAME_LENGTH = 200;
+
+/** Largest page `GET /automations` serves; larger limits are refused. */
+export const MAX_AUTOMATION_LIST_PAGE_SIZE = 100;
+
+/** Page size `GET /automations` serves when the client sends no limit. */
+export const DEFAULT_AUTOMATION_LIST_PAGE_SIZE = 25;
 
 /**
  * Validate target-count rules shared by automation clients and the API.
@@ -118,6 +135,7 @@ const automationSchema = z.object({
   consecutiveFailures: z.number(),
   createdBy: z.string(),
   userId: z.string().refine(isCanonicalUserId, "Invalid canonical user ID").nullable(),
+  ownerTeamId: z.string().nullable(),
   createdAt: z.number(),
   updatedAt: z.number(),
   deletedAt: z.number().nullable(),
@@ -130,6 +148,22 @@ const automationSchema = z.object({
 
 export type Automation = z.infer<typeof automationSchema>;
 
+const automationCapabilitiesSchema = z.object({
+  canRead: z.boolean(),
+  canManage: z.boolean(),
+  canTrigger: z.boolean(),
+});
+
+/** What one viewer may do with an automation. */
+export type AutomationCapabilities = z.infer<typeof automationCapabilitiesSchema>;
+
+/** An automation as returned to a viewer, with that viewer's capabilities. */
+const automationViewSchema = automationSchema.extend({
+  capabilities: automationCapabilitiesSchema,
+});
+
+export type AutomationView = z.infer<typeof automationViewSchema>;
+
 const automationExecutionSummarySchema = z.object({
   id: z.string(),
   status: automationInvocationStatusSchema,
@@ -138,7 +172,7 @@ const automationExecutionSummarySchema = z.object({
 
 export type AutomationExecutionSummary = z.infer<typeof automationExecutionSummarySchema>;
 
-const automationListItemSchema = automationSchema.extend({
+const automationListItemSchema = automationViewSchema.extend({
   recentExecutions: z.array(automationExecutionSummarySchema),
 });
 
@@ -170,6 +204,11 @@ export const sentryClientSecretSchema = z.string().refine((secret) => secret.tri
 });
 
 export const createAutomationRequestSchema = z.object({
+  teamId: z
+    .string()
+    .regex(/^team_[A-Za-z0-9_-]+$/)
+    .nullable()
+    .optional(),
   name: z.string(),
   instructions: z.string(),
   triggerType: automationTriggerTypeSchema.optional(),
@@ -278,4 +317,28 @@ export interface ListAutomationInvocationsResponse {
   invocations: AutomationInvocation[];
   /** Counts invocations (each firing is one row regardless of fan-out width). */
   total: number;
+}
+
+/** `POST /webhooks/automation/:id` response. */
+export interface WebhookTriggerResponse {
+  ok: true;
+  triggered: number;
+  skipped: number;
+  steered: number;
+  /**
+   * The invocation representing this request: newly started, recorded as
+   * skipped, or — for a retry with the same idempotency key — the original.
+   * Null when nothing was recorded (conditions did not match).
+   */
+  invocationId: string | null;
+}
+
+/**
+ * `GET /webhooks/automation/:id/invocations/:invocationId` response — readable
+ * with the webhook key, so it carries status only, never session content.
+ */
+export interface WebhookInvocationStatusResponse {
+  invocationId: string;
+  status: AutomationInvocationStatus;
+  runs: Pick<AutomationRun, "id" | "status" | "sessionId">[];
 }

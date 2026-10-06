@@ -1,8 +1,16 @@
-import { isValidSandboxTimeoutMs } from "@open-inspect/shared/types/integrations";
+import {
+  isValidSandboxTimeoutMs,
+  MIN_FINAL_SNAPSHOT_BUFFER_MS,
+} from "@open-inspect/shared/types/integrations";
 import { harnessIdSchema } from "@open-inspect/shared/harnesses";
 import { z } from "zod";
 
 const sandboxTimeoutMsSchema = z.number().refine(isValidSandboxTimeoutMs);
+const finalSnapshotBufferMsSchema = z
+  .number()
+  .int()
+  .min(MIN_FINAL_SNAPSHOT_BUFFER_MS)
+  .refine((value) => value % 1000 === 0);
 
 /**
  * Returned by the parent Durable Object's GET /internal/spawn-context.
@@ -20,9 +28,6 @@ const promptAuthorSchema = z.object({
   scmLogin: z.string().nullable(),
   scmName: z.string().nullable(),
   scmEmail: z.string().nullable(),
-  scmAccessTokenEncrypted: z.string().nullable(),
-  scmRefreshTokenEncrypted: z.string().nullable(),
-  scmTokenExpiresAt: z.number().nullable(),
 });
 
 export const spawnContextSchema = z.object({
@@ -35,6 +40,7 @@ export const spawnContextSchema = z.object({
   reasoningEffort: z.string().nullable(),
   baseBranch: z.string().nullable(),
   sandboxTimeoutMs: sandboxTimeoutMsSchema.optional(),
+  finalSnapshotBufferMs: finalSnapshotBufferMsSchema.optional(),
   promptAuthor: promptAuthorSchema,
 });
 

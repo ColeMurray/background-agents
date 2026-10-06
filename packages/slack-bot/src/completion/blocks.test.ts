@@ -153,6 +153,34 @@ describe("buildCompletionBlocks", () => {
     expect(createPrButton).toBeUndefined();
   });
 
+  it("does not add Create PR button for wrong-type manual PR metadata", () => {
+    const response: AgentResponse = {
+      ...BASE_RESPONSE,
+      artifacts: [
+        {
+          type: "branch",
+          url: "https://github.com/octocat/hello-world/tree/feature-branch",
+          label: "Branch: feature-branch",
+          metadata: {
+            mode: null,
+            createPrUrl: 42,
+          },
+        },
+      ],
+    };
+
+    const blocks = buildCompletionBlocks(
+      "session-123",
+      response,
+      BASE_CONTEXT,
+      "https://app.openinspect.dev"
+    );
+    const actionElements = getActionElements(blocks);
+    const createPrButton = actionElements.find((element) => element.action_id === "create_pr");
+
+    expect(createPrButton).toBeUndefined();
+  });
+
   it("falls back to branch artifact URL when createPrUrl is missing", () => {
     const fallbackUrl = "https://github.com/octocat/hello-world/pull/new/main...feature-branch";
     const response: AgentResponse = {

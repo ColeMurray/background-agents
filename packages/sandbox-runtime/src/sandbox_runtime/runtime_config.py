@@ -11,6 +11,7 @@ from types import MappingProxyType
 from typing import Any
 from urllib.parse import urlsplit
 
+from .constants import DOCKER_ENABLED_ENV_VAR
 from .harness.base import HarnessId, parse_harness_id
 
 
@@ -110,6 +111,9 @@ class RuntimeConfig:
     session_config: Mapping[str, Any]
     workspace_path: Path
     repo_path: Path
+    # Set by the provider, never by user configuration: this sandbox runs on a
+    # Docker-capable runtime and must own a daemon before repository hooks.
+    docker_enabled: bool = False
 
     @classmethod
     def from_env(
@@ -137,6 +141,7 @@ class RuntimeConfig:
             session_config=session_config,
             workspace_path=workspace_path,
             repo_path=repo_path,
+            docker_enabled=environment.get(DOCKER_ENABLED_ENV_VAR) == "true",
         )
 
     @property
@@ -155,6 +160,16 @@ class RuntimeConfig:
     def harness(self) -> HarnessId:
         """Which agent runs this session; absent means the built-in OpenCode harness."""
         return parse_harness_id(self.session_config.get("harness"))
+
+    @property
+    def bridge_early_connect(self) -> bool:
+        """The control plane asked for the bridge to connect ahead of the repository boot.
+
+        Only a boolean ``true`` opts in: a control plane that does not know
+        the field leaves it absent, and the runtime then boots in the
+        classic order (bridge last), which every control plane understands.
+        """
+        return self.session_config.get("bridge_early_connect") is True
 
     def repository_config(self) -> RepositoryConfig:
         raw_repositories = self.session_config.get("repositories")

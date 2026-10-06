@@ -217,9 +217,8 @@ export function parseDimensions(
     throw new Error(`${opts.name} must be an object`);
   }
 
-  const candidate = parsed as { width?: unknown; height?: unknown };
-  const width = coerceDimension(candidate.width, opts.mode);
-  const height = coerceDimension(candidate.height, opts.mode);
+  const width = coerceDimension("width" in parsed ? parsed.width : undefined, opts.mode);
+  const height = coerceDimension("height" in parsed ? parsed.height : undefined, opts.mode);
   if (width === null || height === null) {
     const detail =
       opts.mode === "integer" ? "positive integer width and height" : "positive width and height";

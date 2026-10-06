@@ -1,15 +1,37 @@
 import type { SandboxEvent } from "@open-inspect/shared/types/sandbox-events";
 import type { PromptQueueItem } from "@open-inspect/shared/types/server-messages";
-import type { MessageSource, MessageStatus } from "@open-inspect/shared/types/sessions";
+import {
+  messageStatusSchema,
+  type MessageSource,
+  type MessageStatus,
+} from "@open-inspect/shared/types/sessions";
 import { MAX_UNFINISHED_PROMPTS } from "@open-inspect/shared/types/prompts";
+import { z } from "zod";
 import type { CreateEventData, EventRepository } from "./event-repository";
 import type { SessionAttachmentRepository } from "./session-attachment-repository";
 import type { SqlResult, SqlStorage, TransactionSync } from "./sql-storage";
-import type { MessageRow } from "./types";
+import { messageRowSchema, SessionStorageIntegrityError, type MessageRow } from "./types";
+import type { MessageListCursor } from "./message-cursor";
 
 type ExecutionCompleteEvent = Extract<SandboxEvent, { type: "execution_complete" }>;
 
 export const STOP_CONFIRMATION_TIMEOUT_MS = 15_000;
+
+const messageIdRowSchema = messageRowSchema.pick({ id: true });
+const messageStopConfirmationRowSchema = messageRowSchema
+  .pick({ id: true, stop_confirmation_deadline: true })
+  .extend({ stop_confirmation_deadline: z.number() });
+const messageCreatedAtRowSchema = messageRowSchema.pick({ id: true, created_at: true });
+const messageCallbackContextRowSchema = messageRowSchema.pick({
+  callback_context: true,
+  source: true,
+});
+const messageCompletionStateRowSchema = z.object({
+  status: z.unknown().optional(),
+  created_at: z.number(),
+  started_at: z.number().nullable(),
+});
+const messageProcessingAuthorRowSchema = messageRowSchema.pick({ author_id: true });
 
 export interface RecordedMessageCompletion {
   messageId: string;
@@ -32,12 +54,8 @@ function readRequiredNumberColumn(result: SqlResult, column: string): number {
 }
 
 function parseMessageStatus(value: unknown): MessageStatus | null {
-  return value === "pending" ||
-    value === "processing" ||
-    value === "completed" ||
-    value === "failed"
-    ? value
-    : null;
+  const parsed = messageStatusSchema.safeParse(value);
+  return parsed.success ? parsed.data : null;
 }
 
 /** Data for creating a message. */
@@ -79,7 +97,7 @@ export type AutofixMessageAdmission =
 
 /** Options for listing messages. */
 export interface ListMessagesOptions {
-  cursor?: string | null;
+  cursor?: MessageListCursor | null;
   limit: number;
   status?: string | null;
 }
@@ -92,10 +110,6 @@ export class MessageRepository {
     private readonly attachments: SessionAttachmentRepository,
     private readonly eventRepository: EventRepository
   ) {}
-
-  private rows<T>(result: SqlResult): T[] {
-    return result.toArray() as T[];
-  }
 
   getActiveDurationMs(): number {
     const result = this.sql.exec(
@@ -120,7 +134,7 @@ export class MessageRepository {
 
   getProcessingMessage(): { id: string } | null {
     const result = this.sql.exec(`SELECT id FROM messages WHERE status = 'processing' LIMIT 1`);
-    const rows = result.toArray() as Array<{ id: string }>;
+    const rows = parseStorageRows(result.toArray(), messageIdRowSchema);
     return rows[0] ?? null;
   }
 
@@ -129,7 +143,7 @@ export class MessageRepository {
       `SELECT id, stop_confirmation_deadline FROM messages
        WHERE stop_confirmation_deadline IS NOT NULL LIMIT 1`
     );
-    const row = (result.toArray() as Array<{ id: string; stop_confirmation_deadline: number }>)[0];
+    const row = parseStorageRows(result.toArray(), messageStopConfirmationRowSchema)[0];
     return row ? { id: row.id, deadline: row.stop_confirmation_deadline } : null;
   }
 
@@ -172,7 +186,7 @@ export class MessageRepository {
     const result = this.sql.exec(
       `SELECT id, created_at FROM messages WHERE status = 'processing' LIMIT 1`
     );
-    const rows = result.toArray() as Array<{ id: string; created_at: number }>;
+    const rows = parseStorageRows(result.toArray(), messageCreatedAtRowSchema);
     return rows[0] ?? null;
   }
 
@@ -188,8 +202,13 @@ export class MessageRepository {
     const result = this.sql.exec(
       `SELECT * FROM messages WHERE status = 'pending' ORDER BY created_at ASC, rowid ASC LIMIT 1`
     );
-    const rows = this.rows<MessageRow>(result);
+    const rows = parseMessageRows(result.toArray());
     return rows[0] ?? null;
+  }
+
+  getMessageById(messageId: string): MessageRow | null {
+    const result = this.sql.exec(`SELECT * FROM messages WHERE id = ? LIMIT 1`, messageId);
+    return parseMessageRows(result.toArray())[0] ?? null;
   }
 
   getMessageByClientRequestId(clientRequestId: string): MessageRow | null {
@@ -197,7 +216,7 @@ export class MessageRepository {
       `SELECT * FROM messages WHERE client_request_id = ? LIMIT 1`,
       clientRequestId
     );
-    return this.rows<MessageRow>(result)[0] ?? null;
+    return parseMessageRows(result.toArray())[0] ?? null;
   }
 
   getAutofixMessageId(feedbackKey: string): string | null {
@@ -281,7 +300,7 @@ export class MessageRepository {
       `SELECT * FROM messages WHERE status IN ('pending', 'processing')
        ORDER BY CASE status WHEN 'processing' THEN 0 ELSE 1 END, created_at ASC, rowid ASC`
     );
-    return this.rows<MessageRow>(result);
+    return parseMessageRows(result.toArray());
   }
 
   listPromptQueue(): PromptQueueItem[] {
@@ -333,10 +352,7 @@ export class MessageRepository {
       `SELECT callback_context, source FROM messages WHERE id = ?`,
       messageId
     );
-    const rows = result.toArray() as Array<{
-      callback_context: string | null;
-      source: string | null;
-    }>;
+    const rows = parseStorageRows(result.toArray(), messageCallbackContextRowSchema);
     return rows[0] ?? null;
   }
 
@@ -429,13 +445,7 @@ export class MessageRepository {
         `SELECT status, created_at, started_at FROM messages WHERE id = ?`,
         event.messageId
       );
-      const message = (
-        result.toArray() as Array<{
-          status?: unknown;
-          created_at: number;
-          started_at: number | null;
-        }>
-      )[0];
+      const message = parseStorageRows(result.toArray(), messageCompletionStateRowSchema)[0];
       const messageStatus = parseMessageStatus(message?.status);
       if (!message || messageStatus !== expectedStatus) return null;
 
@@ -476,15 +486,20 @@ export class MessageRepository {
     }
 
     if (options.cursor) {
-      query += ` AND created_at < ?`;
-      params.push(parseInt(options.cursor));
+      if (options.cursor.id === undefined) {
+        query += ` AND created_at < ?`;
+        params.push(options.cursor.createdAt);
+      } else {
+        query += ` AND ((created_at < ?) OR (created_at = ? AND id < ?))`;
+        params.push(options.cursor.createdAt, options.cursor.createdAt, options.cursor.id);
+      }
     }
 
-    query += ` ORDER BY created_at DESC LIMIT ?`;
+    query += ` ORDER BY created_at DESC, id DESC LIMIT ?`;
     params.push(options.limit + 1);
 
     const result = this.sql.exec(query, ...params);
-    return this.rows<MessageRow>(result);
+    return parseMessageRows(result.toArray());
   }
 
   getLatestTerminalMessage(): MessageRow | null {
@@ -494,7 +509,7 @@ export class MessageRepository {
        ORDER BY COALESCE(completed_at, started_at, created_at) DESC, created_at DESC, id DESC
        LIMIT 1`
     );
-    const rows = this.rows<MessageRow>(result);
+    const rows = parseMessageRows(result.toArray());
     return rows[0] ?? null;
   }
 
@@ -502,7 +517,22 @@ export class MessageRepository {
     const result = this.sql.exec(
       `SELECT author_id FROM messages WHERE status = 'processing' LIMIT 1`
     );
-    const rows = result.toArray() as Array<{ author_id: string }>;
+    const rows = parseStorageRows(result.toArray(), messageProcessingAuthorRowSchema);
     return rows[0] ?? null;
   }
+}
+
+function parseMessageRows(rows: unknown[]): MessageRow[] {
+  return parseStorageRows(rows, messageRowSchema);
+}
+
+function parseStorageRows<Schema extends z.ZodType>(
+  rows: unknown[],
+  schema: Schema
+): Array<z.infer<Schema>> {
+  return rows.map((row) => {
+    const parsed = schema.safeParse(row);
+    if (parsed.success) return parsed.data;
+    throw new SessionStorageIntegrityError("Malformed persisted message row");
+  });
 }

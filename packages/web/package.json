@@ -27,6 +27,7 @@
     "@radix-ui/react-select": "^2.2.6",
     "@radix-ui/react-slot": "^1.2.4",
     "@radix-ui/react-switch": "^1.2.6",
+    "@radix-ui/react-tabs": "^1.1.21",
     "@radix-ui/react-toggle-group": "^1.1.11",
     "@radix-ui/react-tooltip": "^1.2.8",
     "@tailwindcss/typography": "^0.5.19",
@@ -34,7 +35,7 @@
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
     "cmdk": "^1.1.1",
-    "next": "^16.3.5",
+    "next": "^16.3.8",
     "next-themes": "^0.4.6",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
@@ -53,10 +54,10 @@
   },
   "devDependencies": {
     "@opennextjs/cloudflare": "1.19.11",
-    "@testing-library/jest-dom": "^6.9.1",
+    "@testing-library/jest-dom": "^7.0.1",
     "@testing-library/react": "^16.3.2",
     "@testing-library/user-event": "^14.6.1",
-    "@types/node": "^22.10.5",
+    "@types/node": "^24.0.0",
     "@types/react": "^19.0.6",
     "@types/react-dom": "^19.0.3",
     "@vitest/coverage-v8": "^4.1.11",
@@ -67,5 +68,8 @@
     "typescript": "^5.7.2",
     "vitest": "^4.1.11",
     "wrangler": "^4.103.0"
+  },
+  "engines": {
+    "node": ">=24.0.0"
   }
 }

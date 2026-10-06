@@ -1,27 +1,27 @@
 import type { Logger } from "../../../logger";
 import { eventTypeSchema } from "@open-inspect/shared/types/sandbox-events";
+import { messageStatusSchema } from "@open-inspect/shared/types/sessions";
+import { promptValidationError } from "@open-inspect/shared/types/prompts";
 import {
   enqueuePromptRequestSchema,
   type EnqueuePromptRequest,
 } from "../../enqueue-prompt-contract";
 import type { MessageService } from "../../services/message.service";
 import { parseEventListCursor } from "../../event-cursor";
+import { parseMessageListCursor } from "../../message-cursor";
 import { SessionAttachmentError } from "../../session-attachment-resolver";
+import { sessionTraceFormatSchema, sessionTraceIncludeSchema } from "../../contracts";
 import {
   BudgetExhaustedError,
   PromptQueueFullError,
   HarnessModelIncompatibleError,
   PromptRequestConflictError,
   SessionNotPromptableError,
+  SandboxPromptBlockedError,
 } from "../../message-queue";
 
 /**
- * Valid message statuses for filtering.
- */
-const VALID_MESSAGE_STATUSES = ["pending", "processing", "completed", "failed"] as const;
-
-/**
- * HTTP boundary for the prompt/event/artifact/message endpoints: parses
+ * HTTP boundary for the prompt/event/artifact/message/trace endpoints: parses
  * requests, delegates to the message service, and maps thrown domain errors
  * to statuses.
  */
@@ -33,7 +33,7 @@ export class MessagesHandler {
       const raw = await request.json();
       const result = enqueuePromptRequestSchema.safeParse(raw);
       if (!result.success) {
-        return Response.json({ error: "Invalid prompt body" }, { status: 400 });
+        return Response.json(promptValidationError(result.error, raw), { status: 400 });
       }
 
       const body: EnqueuePromptRequest = result.data;
@@ -44,6 +44,12 @@ export class MessagesHandler {
       }
       if (error instanceof SessionNotPromptableError) {
         return Response.json({ error: error.message }, { status: 409 });
+      }
+      if (error instanceof SandboxPromptBlockedError) {
+        return Response.json(
+          { error: error.message, code: "SANDBOX_RECOVERY_REQUIRED" },
+          { status: 409 }
+        );
       }
       if (error instanceof BudgetExhaustedError) {
         return Response.json({ error: error.message, code: "BUDGET_EXHAUSTED" }, { status: 409 });
@@ -108,19 +114,55 @@ export class MessagesHandler {
   }
 
   listMessages(url: URL): Response {
-    const cursor = url.searchParams.get("cursor");
-    const limit = Math.min(parseInt(url.searchParams.get("limit") ?? "50"), 100);
+    const cursorResult = parseMessageListCursor(url.searchParams.get("cursor"));
+    const limit = parsePageLimit(url.searchParams.get("limit"), 50, 100);
+    if (limit === null) {
+      return Response.json({ error: "Invalid limit" }, { status: 400 });
+    }
     const status = url.searchParams.get("status");
 
-    if (
-      status &&
-      !VALID_MESSAGE_STATUSES.includes(status as (typeof VALID_MESSAGE_STATUSES)[number])
-    ) {
+    if (status && !messageStatusSchema.safeParse(status).success) {
       return Response.json({ error: `Invalid message status: ${status}` }, { status: 400 });
     }
 
-    const result = this.messageService.listMessages({ cursor, limit, status });
+    if (!cursorResult.ok) {
+      return Response.json({ error: cursorResult.error }, { status: 400 });
+    }
+
+    const result = this.messageService.listMessages({ cursor: cursorResult.cursor, limit, status });
 
     return Response.json(result);
   }
+
+  exportTrace(url: URL): Response {
+    const include = sessionTraceIncludeSchema.safeParse(url.searchParams.get("include") ?? "");
+    if (!include.success) {
+      return Response.json(
+        { error: include.error.issues[0]?.message ?? "Invalid include" },
+        { status: 400 }
+      );
+    }
+
+    const format = sessionTraceFormatSchema.safeParse(url.searchParams.get("format") ?? "full");
+    if (!format.success) {
+      return Response.json(
+        { error: format.error.issues[0]?.message ?? "Invalid format" },
+        { status: 400 }
+      );
+    }
+
+    return Response.json(this.messageService.exportTrace(include.data, format.data));
+  }
+}
+
+/** A positive integer page size up to `maxLimit`, or null when the query value is malformed. */
+function parsePageLimit(
+  rawLimit: string | null,
+  defaultLimit: number,
+  maxLimit: number
+): number | null {
+  const value = rawLimit ?? String(defaultLimit);
+  if (!/^[1-9]\d*$/.test(value)) return null;
+  const limit = Number(value);
+  return Number.isSafeInteger(limit) && limit <= maxLimit ? limit : null;
 }

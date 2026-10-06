@@ -97,6 +97,59 @@ export type {
 } from "./sessions";
 
 export {
+  teamRoleSchema,
+  teamJoinPolicySchema,
+  sessionVisibilitySchema,
+  teamRowSchema,
+  teamMembershipSchema,
+} from "./teams";
+export type { Team, TeamRole, TeamJoinPolicy, SessionVisibility, TeamMembership } from "./teams";
+export { teamIdSchema } from "./team-id";
+
+export {
+  teamChannelBindingProviderSchema,
+  teamChannelBindingKindSchema,
+  teamChannelBindingSchema,
+  putTeamChannelBindingRequestSchema,
+  teamChannelBindingResponseSchema,
+  teamChannelBindingsResponseSchema,
+  channelBindingResponseSchema,
+} from "./team-channel-bindings";
+export type {
+  TeamChannelBindingProvider,
+  TeamChannelBindingKind,
+  TeamChannelBinding,
+  PutTeamChannelBindingRequest,
+  TeamChannelBindingResponse,
+  TeamChannelBindingsResponse,
+  ChannelBindingResponse,
+} from "./team-channel-bindings";
+
+export {
+  SESSION_ACTIONS,
+  AUTOMATION_ACTIONS,
+  ENVIRONMENT_ACTIONS,
+  checkSessionAccess,
+  sessionCapabilities,
+  checkAutomationAccess,
+  checkAutomationExecutorReassignment,
+  automationCapabilities,
+  checkEnvironmentAccess,
+  environmentCapabilities,
+} from "./session-access";
+export type {
+  SessionAction,
+  AutomationAction,
+  EnvironmentAction,
+  SessionViewer,
+  SessionAccessRow,
+  SessionCapabilities,
+  AccessDenialReason,
+  AuditObligation,
+  AccessDecision,
+} from "./session-access";
+
+export {
   SESSION_INBOX_CATEGORIES,
   sessionInboxCategorySchema,
   sessionInboxSessionSchema,
@@ -136,6 +189,13 @@ export {
   sessionSnapshotStateSchema,
   sessionTimelineEventSchema,
 } from "./server-messages";
+
+export { sandboxShutdownSchema } from "./sandbox-shutdown";
+export type { SandboxShutdownState } from "./sandbox-shutdown";
+export { tokenUsageSchema } from "./sandbox-events";
+export type { TokenUsage } from "./sandbox-events";
+export { normalizeTokenUsage, stepUsageSchema } from "./usage";
+export type { NormalizedTokenUsage, StepUsage } from "./usage";
 export type {
   ParticipantPresence,
   PromptQueueItem,
@@ -225,8 +285,18 @@ export {
   auditEventMetadataSchema,
   auditEventSchema,
   auditEventListResponseSchema,
+  AUTHORIZATION_DECISION_ACTIONS,
+  AUDIT_OBSERVATION_ACTIONS,
+  AUDIT_OPERATION_ACTIONS,
+  AUTHORIZATION_DECISION_METADATA_SCHEMA,
+  authorizationDecisionMetadataV1Schema,
+  interpretAuditEvent,
 } from "./audit-events";
 export type {
+  AuditEventInterpretation,
+  AuditObservationAction,
+  AuditOperationAction,
+  AuthorizationDecisionMetadataV1,
   AuditOperationResult,
   AuditPrincipalKind,
   AuditEventMetadata,
@@ -238,6 +308,9 @@ export {
   MAX_AUTOMATION_INSTRUCTIONS_LENGTH,
   MAX_AUTOMATION_REPOSITORIES,
   MAX_AUTOMATION_INVOCATION_LIST_LIMIT,
+  MAX_AUTOMATION_NAME_LENGTH,
+  MAX_AUTOMATION_LIST_PAGE_SIZE,
+  DEFAULT_AUTOMATION_LIST_PAGE_SIZE,
   toRepositoryRef,
   automationRepositoryInputSchema,
   automationRepositoriesInputSchema,
@@ -252,6 +325,8 @@ export type {
   AutomationRepository,
   AutomationRepositoryInput,
   Automation,
+  AutomationCapabilities,
+  AutomationView,
   AutomationExecutionSummary,
   AutomationListItem,
   CreateAutomationRequest,
@@ -260,6 +335,8 @@ export type {
   ListAutomationsResponse,
   AutomationInvocation,
   ListAutomationInvocationsResponse,
+  WebhookTriggerResponse,
+  WebhookInvocationStatusResponse,
 } from "./automations";
 
 export {
@@ -334,20 +411,37 @@ export type {
 } from "./image-builds";
 export { repositoryShaEntrySchema, repositoryShasSchema } from "./image-builds";
 
-export { ANALYTICS_DAYS, ANALYTICS_BREAKDOWN_BY } from "./analytics";
+export {
+  ANALYTICS_DAYS,
+  ANALYTICS_BREAKDOWN_BY,
+  ANALYTICS_SCOPES,
+  DEFAULT_ANALYTICS_DAYS,
+  DEFAULT_ANALYTICS_SCOPE,
+  ANALYTICS_SPAWN_SOURCE_SCOPE,
+  ANALYTICS_SCOPE_SPAWN_SOURCES,
+  ANALYTICS_RUN_ORDER_BY,
+  getCacheHitRatio,
+} from "./analytics";
 export type {
   AnalyticsDays,
+  AnalyticsScope,
   AnalyticsBreakdownBy,
+  AnalyticsRunOrderBy,
   AnalyticsStatusBreakdown,
+  AnalyticsTokenTotals,
   AnalyticsSummaryResponse,
   AnalyticsTimeseriesPoint,
   AnalyticsTimeseriesResponse,
   AnalyticsBreakdownEntry,
   AnalyticsBreakdownResponse,
+  AnalyticsSessionOriginEntry,
+  SessionRun,
+  AnalyticsRunsResponse,
   AnalyticsPullRequestFunnel,
   AnalyticsPullRequestTimeseriesPoint,
   AnalyticsPullRequestRepoEntry,
   AnalyticsPullRequestSourceEntry,
+  AnalyticsPullRequestDimensionEntry,
   AnalyticsPullRequestsResponse,
   AnalyticsDashboardResponse,
 } from "./analytics";

@@ -44,8 +44,11 @@ function formatDuration(startedAt: number | null, completedAt: number | null): s
   return `${hours}h ${remainingMinutes}m`;
 }
 
-function formatSkipReason(reason: string): string {
+function formatRunReason(reason: string): string {
   if (reason === "concurrent_run_active") return "Skipped because a previous run is still active";
+  if (reason === "repo_not_granted") {
+    return "Repository is not granted to the automation's team. No sandbox or session was created.";
+  }
   return reason;
 }
 
@@ -55,6 +58,7 @@ function formatRunCounts(runs: AutomationRun[]): string {
   const active = count("starting") + count("running");
   const parts = [`${count("completed")} completed`];
   if (count("failed") > 0) parts.push(`${count("failed")} failed`);
+  if (count("unauthorized") > 0) parts.push(`${count("unauthorized")} unauthorized`);
   if (count("skipped") > 0) parts.push(`${count("skipped")} skipped`);
   if (active > 0) parts.push(`${active} running`);
   return parts.join(", ");
@@ -83,7 +87,7 @@ function SkippedInvocationRow({ invocation }: { invocation: AutomationInvocation
         </span>
       </div>
       {invocation.skipReason && (
-        <p className="mt-1 text-xs text-warning">{formatSkipReason(invocation.skipReason)}</p>
+        <p className="mt-1 text-xs text-warning">{formatRunReason(invocation.skipReason)}</p>
       )}
     </div>
   );
@@ -118,9 +122,11 @@ function SingleRunRow({ invocation }: { invocation: AutomationInvocation }) {
           )}
         </div>
       </div>
-      {run.failureReason && <p className="mt-1 text-xs text-destructive">{run.failureReason}</p>}
+      {run.failureReason && (
+        <p className="mt-1 text-xs text-destructive">{formatRunReason(run.failureReason)}</p>
+      )}
       {!run.failureReason && run.skipReason && (
-        <p className="mt-1 text-xs text-warning">{formatSkipReason(run.skipReason)}</p>
+        <p className="mt-1 text-xs text-warning">{formatRunReason(run.skipReason)}</p>
       )}
     </div>
   );
@@ -155,9 +161,11 @@ function TargetRunRow({
         {run.artifactSummary && (
           <p className="mt-1 text-xs text-muted-foreground">{run.artifactSummary}</p>
         )}
-        {run.failureReason && <p className="mt-1 text-xs text-destructive">{run.failureReason}</p>}
+        {run.failureReason && (
+          <p className="mt-1 text-xs text-destructive">{formatRunReason(run.failureReason)}</p>
+        )}
         {!run.failureReason && run.skipReason && (
-          <p className="mt-1 text-xs text-warning">{formatSkipReason(run.skipReason)}</p>
+          <p className="mt-1 text-xs text-warning">{formatRunReason(run.skipReason)}</p>
         )}
       </div>
       {run.sessionId && (

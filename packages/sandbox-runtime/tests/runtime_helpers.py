@@ -4,7 +4,7 @@ from collections.abc import Mapping
 from pathlib import Path
 
 from sandbox_runtime.agent_bridge_process import AgentBridgeProcess
-from sandbox_runtime.boot_warnings import BootWarningSink
+from sandbox_runtime.boot_events import BootEventLog
 from sandbox_runtime.browser_desktop import BrowserDesktop
 from sandbox_runtime.code_server import CodeServer
 from sandbox_runtime.constants import VNC_PASSWORD_ENV_VAR
@@ -38,7 +38,7 @@ def make_repository_boot(
     return RepositoryBoot(
         config.repository_config(),
         log,
-        BootWarningSink(log),
+        BootEventLog(log),
         TunnelEnvironment(config.sandbox_id, log),
         RepositoryHooks(log),
         RepositorySynchronizer(config.vcs_host, log),
@@ -73,7 +73,7 @@ def make_supervisor(
     config = make_runtime_config(environment, workspace_path=workspace_path)
     shutdown_event = asyncio.Event()
     log = get_logger("supervisor")
-    warnings = BootWarningSink(log)
+    warnings = BootEventLog(log)
     repository = RepositoryBoot(
         config.repository_config(),
         log,
@@ -98,6 +98,7 @@ def make_supervisor(
         None,
         shutdown_event,
         log,
+        boot_events=warnings,
     )
     supervisor._repository_boot_result = RepositoryBootResult(
         git_sync_success=True,

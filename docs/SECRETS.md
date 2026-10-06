@@ -9,12 +9,9 @@ control plane instead of being injected into sandboxes.
 
 ## Quick Start
 
-1. Open your Open-Inspect web app and go to **Settings**
-2. Navigate to the scope you want:
-   - **Global or repository secrets**: the **Secrets** tab (selected by default) — use the scope
-     dropdown at the top to choose **All Repositories (Global)** or a specific repository
-   - **Environment secrets**: the **Environments** tab — open the environment and switch to its
-     **Secrets** tab
+1. Open your Open-Inspect web app.
+2. Open **Settings > Secrets** for global/repository secrets, an environment's **Secrets** tab under
+   **Settings > Environments**, or a team's **Secrets** tab for team secrets.
 3. Click **Add secret**, enter a key and value, then click **Save**
 
 That's it — the next sandbox you launch from that scope will have the secret available as an
@@ -27,30 +24,36 @@ environment variable.
 | Scope           | Applies to                              | Use case                                                               |
 | --------------- | --------------------------------------- | ---------------------------------------------------------------------- |
 | **Global**      | All sessions                            | API keys shared across projects (`ANTHROPIC_API_KEY`, `ZHIPU_API_KEY`) |
+| **Team**        | Sessions owned by that team             | Credentials shared within the owning team                              |
 | **Repository**  | Sessions launched from that repo        | Repo-specific credentials (`STRIPE_SECRET_KEY`, `AWS_ACCESS_KEY_ID`)   |
 | **Environment** | Sessions launched from that environment | Credentials curated for a multi-repository environment (see below)     |
 
 Global and repository secrets are managed under **Settings > Secrets**; environment secrets are
-managed on the **Secrets** tab of each environment under **Settings > Environments**.
+managed on the **Secrets** tab of each environment under **Settings > Environments**. Team secrets
+are managed on the team's **Secrets** tab by team leads and workspace Owners/Administrators. The
+team-secret list/write/delete routes require a human user; bots and sandbox credentials cannot
+manage them. Secret values are not returned, even to managers.
 
-**Precedence**: Repository (or environment) secrets override global secrets with the same key. When
-viewing a repository's secrets, inherited global keys are shown in a read-only section with a
-"Global" badge. If you override a global key at the repo or environment level, the global entry
-shows which scope overrode it.
+**Precedence**: global, then owning team, then repository or environment; later scopes override the
+same key. Workspace-owned sessions have no team layer. When viewing a repository's secrets,
+inherited global keys are shown in a read-only section with a "Global" badge. If you override a
+global key at the repo or environment level, the global entry shows which scope overrode it.
 
 ### Which secrets a session receives
 
-A session receives **global secrets plus its session target's secrets** — the session target is
-whatever you picked when creating the session:
+A session receives **global secrets + owning-team secrets (if any) + session-target secrets**, in
+that order. Team membership alone does not select secrets: the session's owning team does. The
+session target is whatever you picked when creating the session:
 
-- **Single repository** (web picker, Slack, GitHub, Linear): global + that repository's secrets.
-- **Environment**: global + that **environment's** secrets only. The repositories inside the
-  environment do **not** contribute their repository secrets — environments are curated, so a key
-  added to a repository never silently lands in every environment containing it. To reuse a
-  repository secret, import it (below) or move it to global scope.
-- **Ad-hoc multi-repository session** ("Multiple repositories" in the picker): global + each
-  selected repository's secrets. On key collisions the **primary repository** (first in the list)
-  wins.
+- **Single repository**: global + owning team (if any) + that repository's secrets.
+- **Environment**: global + owning team (if any) + that **environment's** secrets. Its repositories
+  do **not** contribute their repository secrets: environments are curated, so a key added to a
+  repository never silently lands in every environment containing it. To reuse a repository secret,
+  import it (below) or move it to global scope.
+- **Ad-hoc multi-repository session** ("Multiple repositories" in the picker): global + owning team
+  (if any) + each selected repository's secrets. On key collisions the **primary repository** (first
+  in the list) wins.
+- **No repository**: global + owning team (if any).
 
 The new-session picker states this disclosure for environment and multi-repository selections.
 
@@ -60,6 +63,12 @@ On an environment's **Secrets** tab you can import secrets from any repository t
 environment: pick the source repository, select the keys, and the values are copied
 control-plane-side (never displayed). Imports are **copies** — if you later rotate the value on the
 repository, re-import it or update the environment secret directly.
+
+Imports require destination environment management access and `environments.secrets.manage`. The
+source repository must pass the workspace repository-grant check (a lead in an active granting team,
+or a workspace Owner/Administrator, when the repository has grants). A team-owned destination also
+requires its owning team's grant to cover the source repository; access through another team does
+not substitute for that grant. Repository secrets remain workspace resources, not team-owned ones.
 
 ### When to use global secrets
 
@@ -71,6 +80,7 @@ The most common example:
 | `ANTHROPIC_API_KEY` | Required for Claude models, unless the deployment configured a fleet-wide key (see below) |
 | `DEEPSEEK_API_KEY`  | Required for DeepSeek models with any sandbox provider                                    |
 | `ZHIPU_API_KEY`     | Required for Z.AI Coding Plan GLM models with any sandbox provider                        |
+| `OPENCODE_API_KEY`  | Required for OpenCode Zen and OpenCode Go models with any sandbox provider                |
 
 > **Claude models**: add `ANTHROPIC_API_KEY` as a global secret after deploying. A deployment can
 > instead set `anthropic_api_key` in Terraform to inject one fleet-wide key into Modal session
@@ -116,14 +126,14 @@ Click the delete button next to any secret row and confirm.
 
 ## Limits
 
-| Constraint                       | Limit                                                   |
-| -------------------------------- | ------------------------------------------------------- |
-| Max secrets per scope            | 50                                                      |
-| Max key length                   | 256 characters                                          |
-| Max value size                   | 16 KB                                                   |
-| Max total value size (per scope) | 64 KB                                                   |
-| Max combined size per session    | 128 KB (global + session target, after merging)         |
-| Key format                       | `[A-Za-z_][A-Za-z0-9_]*` (letters, digits, underscores) |
+| Constraint                       | Limit                                                         |
+| -------------------------------- | ------------------------------------------------------------- |
+| Max secrets per scope            | 50                                                            |
+| Max key length                   | 256 characters                                                |
+| Max value size                   | 16 KB                                                         |
+| Max total value size (per scope) | 64 KB                                                         |
+| Max combined size per session    | 128 KB (global + owning team + session target, after merging) |
+| Key format                       | `[A-Za-z_][A-Za-z0-9_]*` (letters, digits, underscores)       |
 
 If the merged payload for a session (or an image build) exceeds the combined cap, the spawn fails
 with an error that attributes bytes per contributing scope so you know what to trim. This mostly
@@ -145,6 +155,21 @@ If you try to save a reserved key, the UI will show a validation error.
 
 ## Security
 
+### GitHub App credentials are not session secrets
+
+Fresh and restored sandboxes obtain scoped Git credentials on demand from the control plane. Keep
+the GitHub App private key in the control plane; do not add it as a global, team, repository, or
+environment secret. The optional GitHub bot Worker still needs its own App credential bindings.
+
+The legacy Modal `github-app` secret is optional and is no longer required for sandbox Git
+credentials. This does not remove the required Modal `internal-api` secret (`MODAL_API_SECRET` and
+`ALLOWED_CONTROL_PLANE_HOSTS`) or the `llm-api-keys` secret object. The latter may contain an empty
+model key when sessions receive their model credentials from the control-plane secret store.
+Terraform provisions these required Modal secrets. See
+[Modal setup](../packages/modal-infra/README.md#prerequisites).
+
+### Stored secret protection
+
 - Secrets are encrypted with **AES-256-GCM** before being stored in the database
 - Values are **never returned by the API** after saving — only key names are visible
 - Secrets are decrypted at sandbox creation time and injected as environment variables
@@ -158,7 +183,7 @@ and requests short-lived access through `POST /sessions/:id/provider-auth/:provi
 
 Provider-account mode removes that provider's canonical API key from the sandbox environment so the
 runtime cannot bypass the selected subscription. API-key mode continues to use ordinary global,
-repository, or environment secrets.
+team, repository, or environment secrets.
 
 ### Legacy managed OAuth coexistence
 
@@ -176,38 +201,63 @@ XAI_OAUTH_ACCESS_TOKEN
 XAI_OAUTH_ACCESS_TOKEN_EXPIRES_AT
 ```
 
+Team secrets are **not** a legacy OAuth broker source. The broker reads global and target scopes
+(the primary repository or environment), not the team layer; putting a refresh token in team secrets
+does not configure legacy subscription authentication.
+
 Do not reuse the same rotating refresh token in both systems. Operators may remove legacy keys once
 the legacy-bound sessions that depend on them are no longer needed.
 
 ### Secrets and prebuilt images
 
-Image builds (repository images and environment images) run your `.openinspect/setup.sh` with the
-same secrets a session would get. Anything the script **persists to disk** — an `.npmrc`, a `.env`
-file, a downloaded credential — is captured in the image and re-served to every session that boots
-from it, even after you rotate the secret. Two guidelines:
+Image builds run your `.openinspect/setup.sh` with secrets selected for the build scope:
+
+- **Repository images**: global + repository secrets, **never team secrets**, because these images
+  are shared across teams.
+- **Environment images**: global + the environment's owning team (if any) + environment secrets;
+  member-repository secrets do not flow in. A team environment's image is selected only for sessions
+  owned by the same team. A workspace environment build has no team layer, even if a team session
+  later uses it.
+
+Anything the script **persists to disk**, such as an `.npmrc`, a `.env` file, or a downloaded
+credential, is captured in the image and re-served to every session that boots from it, even after
+you rotate the secret. Two guidelines:
 
 - **Avoid writing long-lived secrets to disk in `setup.sh`.** Read them from the environment at
   runtime (they are re-injected fresh on every session) instead of baking them into files.
-- **Environment-secret changes invalidate prebuilt images automatically**: saving an environment's
-  secrets supersedes its existing ready image and triggers a rebuild, so a revoked value cannot keep
-  serving from an old image. Rotating **repository or global** secrets does _not_ invalidate images
-  — stale on-disk material persists until the next commit-triggered rebuild, which is another reason
-  to keep secrets out of the image filesystem.
+- **Environment-secret changes invalidate that environment's images automatically. Team-secret
+  writes/deletes invalidate images of environments owned by that team**, with best-effort rebuild
+  scheduling for prebuild-enabled environments. Invalidated images are not used for new boots; this
+  does not erase files from already-running sandboxes or their snapshots. Rotating **repository or
+  global** secrets does _not_ invalidate images; stale on-disk material persists until the next
+  commit-triggered rebuild, which is another reason to keep secrets out of the image filesystem.
+
+Where the trust boundary sits: Open-Inspect's own build plumbing never persists a credential into an
+image. The build's callback token stays in process memory, and the clone token and scope secrets
+reach only the build process and the setup scripts it starts — never the provider's container
+configuration, never a file the image captures. What a setup script does with those values in its
+environment is the script's own decision: Open-Inspect keeps no copy of its own, but a value the
+script writes to disk is captured in the image exactly as described above. Treat a scope's prebuilt
+image as no less sensitive than the scope's secrets.
 
 ---
 
 ## Common Examples
 
-| Key                 | Scope  | Purpose                                               |
-| ------------------- | ------ | ----------------------------------------------------- |
-| `ANTHROPIC_API_KEY` | Global | Claude API access                                     |
-| `OPENAI_API_KEY`    | Global | OpenAI API access when a session selects API-key mode |
-| `XAI_API_KEY`       | Global | xAI API access when a session selects API-key mode    |
-| `DEEPSEEK_API_KEY`  | Global | DeepSeek API access                                   |
-| `ZHIPU_API_KEY`     | Global | Z.AI Coding Plan GLM access                           |
-| `DATABASE_URL`      | Repo   | Database connection string                            |
-| `AWS_ACCESS_KEY_ID` | Repo   | AWS credentials for a specific project                |
-| `STRIPE_SECRET_KEY` | Repo   | Stripe API key for a specific project                 |
+| Key                          | Scope                   | Purpose                                                                        |
+| ---------------------------- | ----------------------- | ------------------------------------------------------------------------------ |
+| `ANTHROPIC_API_KEY`          | Global                  | Claude API access                                                              |
+| `OPENAI_API_KEY`             | Global                  | OpenAI API access when a session selects API-key mode                          |
+| `XAI_API_KEY`                | Global                  | xAI API access when a session selects API-key mode                             |
+| `DEEPSEEK_API_KEY`           | Global                  | DeepSeek API access                                                            |
+| `ZHIPU_API_KEY`              | Global                  | Z.AI Coding Plan GLM access                                                    |
+| `OPENCODE_API_KEY`           | Global                  | OpenCode Zen and OpenCode Go access                                            |
+| `OPENAI_OAUTH_REFRESH_TOKEN` | Global/repo/environment | Legacy OpenAI Codex via ChatGPT subscription ([setup guide](OPENAI_MODELS.md)) |
+| `OPENAI_OAUTH_ACCOUNT_ID`    | Global/repo/environment | Legacy OpenAI Codex via ChatGPT subscription ([setup guide](OPENAI_MODELS.md)) |
+| `XAI_OAUTH_REFRESH_TOKEN`    | Global/repo/environment | Legacy SuperGrok access ([setup guide](GROK_MODELS.md))                        |
+| `DATABASE_URL`               | Repo                    | Database connection string                                                     |
+| `AWS_ACCESS_KEY_ID`          | Repo                    | AWS credentials for a specific project                                         |
+| `STRIPE_SECRET_KEY`          | Repo                    | Stripe API key for a specific project                                          |
 
 ---
 
@@ -218,14 +268,16 @@ from it, even after you rotate the secret. Two guidelines:
 If you see "Model not found" errors, verify the selected provider authentication mode first. For
 provider-account mode, verify the account and model entitlement. For API-key mode, add the required
 key to the session's secret scope. OpenAI uses `OPENAI_API_KEY`; xAI uses `XAI_API_KEY`; Claude uses
-`ANTHROPIC_API_KEY`; DeepSeek uses `DEEPSEEK_API_KEY`; Z.AI Coding Plan uses `ZHIPU_API_KEY`. For
-subscription authentication, follow the provider-account setup guidance in
-[OpenAI models](OPENAI_MODELS.md) or [Grok models](GROK_MODELS.md).
+`ANTHROPIC_API_KEY`; DeepSeek uses `DEEPSEEK_API_KEY`; Z.AI Coding Plan uses `ZHIPU_API_KEY`;
+OpenCode Zen and OpenCode Go both use `OPENCODE_API_KEY`, and an `opencode-go/*` model additionally
+needs an active Go subscription on that key. For subscription authentication, follow the
+provider-account setup guidance in [OpenAI models](OPENAI_MODELS.md) or
+[Grok models](GROK_MODELS.md).
 
 ### Secret not appearing in sandbox
 
-1. Verify the secret is saved under the correct scope (global, the specific repo, or the
-   environment)
+1. Verify the secret is saved under the correct scope (global, the owning team, the specific repo,
+   or the environment)
 2. Check that the key isn't in the reserved keys list above
 3. New secrets only apply to **new** sandboxes — restart your session to pick up changes
 4. For sessions launched from an **environment**: repository secrets do not flow in. Add the key to

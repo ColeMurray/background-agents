@@ -1,26 +1,19 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { computeHmacHex } from "@open-inspect/shared/auth";
 import { deriveVncPassword } from "../sandbox-env";
-import { E2BSandboxProvider, E2B_SANDBOX_VERSION, type E2BProviderConfig } from "./e2b-provider";
+import { E2BSandboxProvider, E2B_SANDBOX_VERSION } from "./e2b-provider";
+import {
+  baseCreateConfig,
+  createEnv,
+  mockClient,
+  providerConfig,
+} from "./e2b-provider.test-helpers";
 import {
   MIN_COMPATIBLE_RUNTIME_VERSION,
   parseRuntimeVersionNumber,
 } from "../../image-builds/model";
-import { SandboxProviderError } from "../provider";
-import {
-  E2BNotFoundError,
-  E2BConflictError,
-  E2BApiError,
-  type E2BRestClient,
-  type E2BSandboxDetail,
-} from "../e2b-rest-client";
-
-const providerConfig: E2BProviderConfig = {
-  scmProvider: "github",
-  sandboxAccessPasswordSecret: "secret",
-  sandboxTimeoutSeconds: 1800,
-  autoPause: true,
-};
+import { PrebuiltImageUnavailableError, SandboxProviderError } from "../provider";
+import { E2BNotFoundError, E2BApiError } from "../e2b-rest-client";
 
 /**
  * The one start command, shared by every boot path (base template, prebuilt
@@ -29,58 +22,6 @@ const providerConfig: E2BProviderConfig = {
  */
 const ENTRYPOINT_COMMAND =
   "nohup /opt/openinspect/python/bin/python -m sandbox_runtime.entrypoint >/tmp/oi-supervisor.log 2>&1 &";
-
-function mockClient(overrides: Partial<E2BRestClient> = {}): E2BRestClient {
-  return {
-    config: { apiUrl: "https://api.e2b.app", apiKey: "secret", templateId: "tmpl" },
-    createSandbox: vi.fn(async () => ({
-      sandboxID: "e2b-id",
-      templateID: "tmpl",
-      envdAccessToken: "envd-token",
-    })),
-    getSandbox: vi.fn(
-      async (): Promise<E2BSandboxDetail> => ({
-        sandboxID: "e2b-id",
-        templateID: "tmpl",
-        state: "paused",
-      })
-    ),
-    pauseSandbox: vi.fn(async () => {}),
-    // Connect answers with the create-style shape, fresh envd token included.
-    connectSandbox: vi.fn(async () => ({
-      sandboxID: "e2b-id",
-      templateID: "tmpl",
-      envdAccessToken: "fresh-envd-token",
-    })),
-    startProcess: vi.fn(async () => {}),
-    killSandbox: vi.fn(async () => {}),
-    setSandboxTimeout: vi.fn(async () => {}),
-    createSnapshot: vi.fn(async () => ({ snapshotID: "snap-abc:default", names: ["oi/snap"] })),
-    deleteTemplate: vi.fn(async () => {}),
-    getHostnameForPort: vi.fn((id: string, port: number) => `https://${port}-${id}.e2b.app`),
-    ...overrides,
-  } as unknown as E2BRestClient;
-}
-
-/** Env map passed to POST /sandboxes — the sole delivery channel for session env. */
-function createEnv(client: E2BRestClient): Record<string, string> {
-  const [params] = vi.mocked(client.createSandbox).mock.calls[0];
-  expect(params.envVars).toBeDefined();
-  return params.envVars!;
-}
-
-const baseCreateConfig = {
-  sessionId: "sess-1",
-  sandboxId: "sandbox-logical",
-  repoOwner: "o",
-  repoName: "r",
-  controlPlaneUrl: "https://cp.test",
-  sandboxAuthToken: "tok",
-  harness: "opencode" as const,
-  provider: "anthropic",
-  model: "claude",
-  codeServerEnabled: true,
-};
 
 const baseBuildConfig = {
   buildId: "build-1",
@@ -100,13 +41,25 @@ describe("E2BSandboxProvider", () => {
   beforeEach(() => vi.clearAllMocks());
 
   it("createSandbox returns running status and tunnel urls", async () => {
-    const client = mockClient();
+    const client = mockClient({
+      getSandbox: vi.fn(async () => ({
+        sandboxID: "e2b-id",
+        templateID: "tmpl",
+        state: "running",
+        endAt: "2030-01-02T03:04:05.000Z",
+      })),
+    });
     const provider = new E2BSandboxProvider(client, providerConfig);
     const result = await provider.createSandbox(baseCreateConfig);
     expect(result.providerObjectId).toBe("e2b-id");
     expect(result.codeServerUrl).toBe("https://8080-e2b-id.e2b.app");
     const expected = (await computeHmacHex("code-server:sandbox-logical", "secret")).slice(0, 32);
     expect(result.codeServerPassword).toBe(expected);
+    expect(result.lifetime).toMatchObject({
+      kind: "finite",
+      expiresAtMs: Date.parse("2030-01-02T03:04:05.000Z"),
+      source: "provider",
+    });
   });
 
   it("injects and returns VNC access without including its port in generic tunnels", async () => {
@@ -266,63 +219,21 @@ describe("E2BSandboxProvider", () => {
     expect(result.shouldSpawnFresh).toBe(true);
   });
 
-  it("stopSandbox pauses (resumable), not kills, and treats 404/409 as success", async () => {
-    const client = mockClient();
-    const res = await new E2BSandboxProvider(client, providerConfig).stopSandbox({
-      providerObjectId: "x",
-      sessionId: "s",
-      reason: "idle",
-    });
-    expect(res.success).toBe(true);
-    expect(client.pauseSandbox).toHaveBeenCalledWith("x");
-    expect(client.killSandbox).not.toHaveBeenCalled();
-
-    for (const err of [new E2BNotFoundError("gone"), new E2BConflictError("already paused")]) {
-      const c = mockClient({
-        pauseSandbox: vi.fn(async () => {
-          throw err;
-        }),
-      });
-      expect(
-        (
-          await new E2BSandboxProvider(c, providerConfig).stopSandbox({
-            providerObjectId: "x",
-            sessionId: "s",
-            reason: "idle",
-          })
-        ).success
-      ).toBe(true);
-    }
-  });
-
-  it.each(["connecting_timeout", "respawn"])(
-    "stopSandbox KILLS on terminal reason %s",
+  it.each(["connecting_timeout", "respawn", "inactivity_timeout"])(
+    "stopSandbox kills on destroy intent regardless of reason %s",
     async (reason) => {
       const client = mockClient();
       const res = await new E2BSandboxProvider(client, providerConfig).stopSandbox({
         providerObjectId: "x",
         sessionId: "s",
         reason,
+        intent: "destroy",
       });
       expect(res.success).toBe(true);
       expect(client.killSandbox).toHaveBeenCalledWith("x");
       expect(client.pauseSandbox).not.toHaveBeenCalled();
     }
   );
-
-  it("forwards the caller signal when killing a replaced sandbox", async () => {
-    const client = mockClient();
-    const signal = AbortSignal.timeout(1_000);
-
-    await new E2BSandboxProvider(client, providerConfig).stopSandbox({
-      providerObjectId: "x",
-      sessionId: "s",
-      reason: "respawn",
-      signal,
-    });
-
-    expect(client.killSandbox).toHaveBeenCalledWith("x", signal);
-  });
 
   it("resumeSandbox: 404 during connect (post-GET race) returns shouldSpawnFresh", async () => {
     const client = mockClient({
@@ -570,6 +481,21 @@ describe("E2BSandboxProvider prebuilt images / snapshots", () => {
       ENTRYPOINT_COMMAND,
       expect.objectContaining({ envdAccessToken: "envd-token" })
     );
+  });
+
+  it("reports a missing prebuilt template explicitly", async () => {
+    const client = mockClient({
+      createSandbox: vi.fn(async () => {
+        throw new E2BNotFoundError("template not found");
+      }),
+    });
+
+    await expect(
+      new E2BSandboxProvider(client, providerConfig).createSandbox({
+        ...baseCreateConfig,
+        prebuiltImageId: "snap-missing:default",
+      })
+    ).rejects.toBeInstanceOf(PrebuiltImageUnavailableError);
   });
 
   it("kills the sandbox and fails the create when the entrypoint cannot start on a prebuilt boot", async () => {

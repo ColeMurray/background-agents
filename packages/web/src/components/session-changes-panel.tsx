@@ -23,14 +23,14 @@ import { cn } from "@/lib/utils";
 import type { SessionCapabilities } from "@/lib/session-capabilities";
 import { DiffRetryNotice } from "@/components/diff-retry-notice";
 import { FilesChangedSection } from "@/components/sidebar/files-changed-section";
-import { SidebarIcon } from "@/components/ui/icons";
+import { BackIcon, ChevronRightIcon, FileIcon, SidebarIcon } from "@/components/ui/icons";
 
 const PierreDiffRenderer = dynamic(() => import("./pierre-diff-renderer"), {
   ssr: false,
   loading: () => <PanelMessage>Loading diff renderer…</PanelMessage>,
 });
 
-const SPLIT_DIFF_MIN_PANEL_WIDTH = 720;
+const SPLIT_DIFF_MIN_CODE_WIDTH = 640;
 
 type ReadyDiffSelection = Extract<ResolvedDiffSelection, { status: "ready" }>;
 
@@ -59,8 +59,12 @@ async function fetchPatch(url: BrowserApiPath): Promise<string> {
 
 function PanelMessage({ children }: { children: React.ReactNode }) {
   return (
-    <div className="flex min-h-40 items-center justify-center p-6 text-center text-sm text-muted-foreground">
-      {children}
+    <div
+      role="status"
+      className="flex min-h-60 flex-col items-center justify-center gap-3 p-8 text-center text-sm leading-relaxed text-muted-foreground"
+    >
+      <FileIcon className="h-6 w-6 opacity-50" />
+      <div className="max-w-xs">{children}</div>
     </div>
   );
 }
@@ -85,122 +89,120 @@ function fileMessage(file: SessionDiffFile): string {
   }
 }
 
-function ChangesPanelHeader({
+function SelectedFileHeader({
   selected,
   selectedIndex,
   fileCount,
-  isFileListOpen,
-  fileListId,
-  onToggleFileList,
   onMoveSelection,
-  onClose,
 }: {
   selected: ReadyDiffSelection | null;
   selectedIndex: number;
   fileCount: number;
-  isFileListOpen: boolean;
-  fileListId: string;
-  onToggleFileList: () => void;
   onMoveSelection: (offset: number) => void;
-  onClose: () => void;
 }) {
   return (
-    <div className="flex min-h-14 items-center gap-2 border-b border-border-muted px-3">
+    <div className="flex min-h-20 items-center gap-3 border-b border-border-muted px-4 py-3">
       <div className="min-w-0 flex-1">
-        <p className="truncate text-xs font-medium text-muted-foreground">
+        <p
+          className="mb-1 truncate text-[11px] text-muted-foreground"
+          title={selected ? formatRepositoryFullName(selected.repository) : undefined}
+        >
           {selected ? formatRepositoryFullName(selected.repository) : "Changes"}
         </p>
-        <h2 className="truncate text-sm font-medium" title={selected?.file.path}>
+        <h2
+          className="truncate font-mono text-xs font-semibold"
+          title={
+            selected?.file.oldPath
+              ? `${selected.file.oldPath} → ${selected.file.path}`
+              : selected?.file.path
+          }
+        >
           {selected?.file.path ?? "File no longer changed"}
         </h2>
         {selected && (
-          <p className="truncate text-[11px] text-muted-foreground">
+          <p
+            role="group"
+            aria-label="File change summary"
+            className="mt-1.5 flex gap-2 text-[11px] text-muted-foreground"
+          >
             {selected.file.status.replace("_", " ")}
-            {selected.file.additions !== null && selected.file.deletions !== null
-              ? ` · +${selected.file.additions} -${selected.file.deletions}`
-              : ""}
+            {selected.file.additions !== null && selected.file.deletions !== null ? (
+              <>
+                <span className="font-mono text-success">+{selected.file.additions}</span>
+                <span className="font-mono text-destructive">-{selected.file.deletions}</span>
+              </>
+            ) : (
+              <span>{selected.file.renderState.replace("_", " ")}</span>
+            )}
           </p>
         )}
       </div>
-      <button
-        type="button"
-        onClick={onToggleFileList}
-        aria-label={isFileListOpen ? "Hide file list" : "Show file list"}
-        aria-controls={fileListId}
-        aria-expanded={isFileListOpen}
-        className="rounded p-1.5 text-muted-foreground hover:bg-muted hover:text-foreground"
-      >
-        <SidebarIcon className="h-4 w-4" />
-      </button>
-      <button
-        type="button"
-        onClick={() => onMoveSelection(-1)}
-        disabled={selectedIndex <= 0}
-        aria-label="Previous changed file"
-        className="rounded p-1.5 text-muted-foreground hover:bg-muted hover:text-foreground disabled:opacity-30"
-      >
-        ↑
-      </button>
-      <button
-        type="button"
-        onClick={() => onMoveSelection(1)}
-        disabled={selectedIndex < 0 || selectedIndex >= fileCount - 1}
-        aria-label="Next changed file"
-        className="rounded p-1.5 text-muted-foreground hover:bg-muted hover:text-foreground disabled:opacity-30"
-      >
-        ↓
-      </button>
-      <button
-        type="button"
-        onClick={onClose}
-        aria-label="Close changes"
-        className="rounded p-1.5 text-lg text-muted-foreground hover:bg-muted hover:text-foreground"
-      >
-        ×
-      </button>
+      <div className="flex shrink-0 items-center gap-1">
+        <button
+          type="button"
+          onClick={() => onMoveSelection(-1)}
+          disabled={selectedIndex <= 0}
+          aria-label="Previous changed file"
+          title="Previous changed file"
+          className="rounded p-2 text-muted-foreground hover:bg-muted hover:text-foreground disabled:opacity-30"
+        >
+          <ChevronRightIcon className="h-4 w-4 rotate-180" />
+        </button>
+        <span
+          role="status"
+          className="whitespace-nowrap font-mono text-[11px] tabular-nums text-muted-foreground"
+          aria-label="File position"
+        >
+          {selectedIndex < 0 ? "—" : selectedIndex + 1} / {fileCount}
+        </span>
+        <button
+          type="button"
+          onClick={() => onMoveSelection(1)}
+          disabled={selectedIndex < 0 || selectedIndex >= fileCount - 1}
+          aria-label="Next changed file"
+          title="Next changed file"
+          className="rounded p-2 text-muted-foreground hover:bg-muted hover:text-foreground disabled:opacity-30"
+        >
+          <ChevronRightIcon className="h-4 w-4" />
+        </button>
+      </div>
     </div>
   );
 }
 
 function ChangesPanelToolbar({
-  selected,
-  availableDiffStyles,
+  allowSplit,
   activeDiffStyle,
   onDiffStyleChange,
   wrap,
   onWrapChange,
 }: {
-  selected: ReadyDiffSelection | null;
-  availableDiffStyles: readonly DiffStyle[];
+  allowSplit: boolean;
   activeDiffStyle: DiffStyle;
   onDiffStyleChange: (style: DiffStyle) => void;
   wrap: boolean;
   onWrapChange: (wrap: boolean) => void;
 }) {
   return (
-    <div className="flex flex-wrap items-center gap-2 border-b border-border-muted px-3 py-2">
-      {selected && (
-        <details className="text-xs text-muted-foreground">
-          <summary className="cursor-pointer">Compared with session start</summary>
-          <p className="mt-1 font-mono text-[10px]">
-            {selected.repository.baseSha.slice(0, 12)} → {selected.repository.headSha.slice(0, 12)}
-          </p>
-        </details>
-      )}
-      <div
-        role="group"
-        className="inline-flex rounded-md border border-border-muted p-0.5"
-        aria-label="Diff layout"
-      >
-        {availableDiffStyles.map((style) => (
+    <div className="flex flex-wrap items-center gap-2 border-b border-border-muted px-4 py-2">
+      <div role="group" className="inline-flex gap-1" aria-label="Diff layout">
+        {(["unified", "split"] as const).map((style) => (
           <button
             key={style}
             type="button"
             aria-pressed={activeDiffStyle === style}
+            disabled={style === "split" && !allowSplit}
+            title={
+              style === "split" && !allowSplit
+                ? "Split needs more code space. On desktop, widen the pane or hide the file list."
+                : undefined
+            }
             onClick={() => onDiffStyleChange(style)}
             className={cn(
-              "rounded px-2 py-1 text-xs capitalize",
-              activeDiffStyle === style ? "bg-muted text-foreground" : "text-muted-foreground"
+              "rounded-sm px-2.5 py-1 text-xs disabled:cursor-not-allowed disabled:opacity-40",
+              activeDiffStyle === style
+                ? "bg-accent-muted text-foreground"
+                : "text-muted-foreground hover:bg-muted"
             )}
           >
             {style === "unified" ? "Unified" : "Split"}
@@ -210,6 +212,7 @@ function ChangesPanelToolbar({
       <label className="ml-auto flex items-center gap-1.5 text-xs text-muted-foreground">
         <input
           type="checkbox"
+          className="accent-accent"
           checked={wrap}
           onChange={(event) => onWrapChange(event.target.checked)}
         />
@@ -226,6 +229,7 @@ export function SessionChangesPanel({
   onClose,
   onSelect,
   mobile = false,
+  sidebarShowsFileList = false,
   capabilities,
 }: {
   sessionId: string;
@@ -234,12 +238,18 @@ export function SessionChangesPanel({
   onClose: () => void;
   onSelect: (selection: DiffSelection) => void;
   mobile?: boolean;
+  /** The session sidebar already lists the changed files beside this panel. */
+  sidebarShowsFileList?: boolean;
   capabilities: SessionCapabilities;
 }) {
   const panelRef = useRef<HTMLElement>(null);
+  const codeColumnRef = useRef<HTMLDivElement>(null);
+  const codeScrollRef = useRef<HTMLDivElement>(null);
   const fileListId = useId();
-  const [isFileListOpen, setIsFileListOpen] = useState(true);
-  const panelWidth = usePanelWidth(panelRef, { enabled: !mobile });
+  // Until the viewer toggles it, the file list opens only when nothing else lists the files.
+  const [fileListChoice, setFileListChoice] = useState<boolean | null>(null);
+  const isFileListOpen = fileListChoice ?? (!mobile && !sidebarShowsFileList);
+  const codeWidth = usePanelWidth(codeColumnRef, { enabled: !mobile });
   const { resolvedTheme } = useTheme();
   const { diffStyle, setDiffStyle, wrap, setWrap } = useSessionDiffPreferences();
   const selected = resolved.status === "ready" ? resolved : null;
@@ -264,9 +274,14 @@ export function SessionChangesPanel({
   });
   const stale =
     patchError instanceof DiffPatchError && patchError.code === SESSION_DIFF_REVISION_STALE_CODE;
-  const allowSplit = !mobile && panelWidth >= SPLIT_DIFF_MIN_PANEL_WIDTH;
+  const allowSplit = !mobile && codeWidth >= SPLIT_DIFF_MIN_CODE_WIDTH;
   const effectiveDiffStyle = allowSplit ? diffStyle : "unified";
-  const availableDiffStyles: readonly DiffStyle[] = allowSplit ? ["unified", "split"] : ["unified"];
+  const selectedPath = selected?.file.path;
+  const selectedRepositoryPosition = selected?.repository.position;
+
+  useEffect(() => {
+    if (codeScrollRef.current) codeScrollRef.current.scrollTop = 0;
+  }, [selectedPath, selectedRepositoryPosition]);
 
   useEffect(() => {
     panelRef.current?.focus();
@@ -288,27 +303,39 @@ export function SessionChangesPanel({
           onClose();
         }
       }}
-      className="flex h-full min-w-0 flex-col bg-background outline-none"
+      className="flex h-full min-h-0 min-w-0 flex-col bg-background outline-none"
     >
-      <ChangesPanelHeader
-        selected={selected}
-        selectedIndex={selectedIndex}
-        fileCount={files.length}
-        isFileListOpen={isFileListOpen}
-        fileListId={fileListId}
-        onToggleFileList={() => setIsFileListOpen((open) => !open)}
-        onMoveSelection={moveSelection}
-        onClose={onClose}
-      />
-
-      <ChangesPanelToolbar
-        selected={selected}
-        availableDiffStyles={availableDiffStyles}
-        activeDiffStyle={effectiveDiffStyle}
-        onDiffStyleChange={setDiffStyle}
-        wrap={wrap}
-        onWrapChange={setWrap}
-      />
+      <div className="flex min-h-12 shrink-0 items-center gap-3 border-b border-border px-3">
+        <button
+          type="button"
+          onClick={onClose}
+          aria-label="Back to session"
+          className="flex items-center gap-1.5 rounded-sm py-2 pr-3 text-xs text-muted-foreground hover:text-foreground"
+        >
+          <BackIcon className="h-4 w-4" /> Session
+        </button>
+        <div className="flex min-w-0 items-baseline gap-2 border-l border-border pl-3">
+          <span className="text-sm font-semibold">Changes</span>
+          <span className="text-xs tabular-nums text-muted-foreground">
+            {files.length} {files.length === 1 ? "file" : "files"}
+          </span>
+        </div>
+        <button
+          type="button"
+          onClick={() => setFileListChoice(!isFileListOpen)}
+          aria-label={isFileListOpen ? "Hide file list" : "Show file list"}
+          aria-controls={fileListId}
+          aria-expanded={isFileListOpen}
+          className={cn(
+            "ml-auto flex items-center gap-2 rounded-sm px-2 py-1.5 text-xs",
+            isFileListOpen
+              ? "bg-accent-muted text-foreground"
+              : "text-muted-foreground hover:bg-muted"
+          )}
+        >
+          <SidebarIcon className="h-4 w-4" /> File list
+        </button>
+      </div>
 
       {state.lastError && (
         <DiffRetryNotice
@@ -325,40 +352,71 @@ export function SessionChangesPanel({
           aria-label="Changed files"
           hidden={!isFileListOpen}
           className={cn(
-            "shrink-0 overflow-auto",
+            "shrink-0 overflow-auto p-3",
             mobile
-              ? "max-h-48 border-b border-border-muted p-3"
-              : "w-44 border-r border-border-muted p-2"
+              ? "max-h-[40dvh] border-b border-border-muted"
+              : "w-56 max-w-[40%] border-r border-border-muted"
           )}
         >
           <FilesChangedSection
             repositories={state.current?.repositories ?? []}
             selected={selection}
-            onSelect={(repository, file) =>
-              onSelect({ repositoryPosition: repository.position, path: file.path })
-            }
+            onSelect={(repository, file) => {
+              onSelect({ repositoryPosition: repository.position, path: file.path });
+              if (mobile) {
+                setFileListChoice(false);
+                panelRef.current?.focus();
+              }
+            }}
           />
         </aside>
-        <div className="min-h-0 min-w-0 flex-1 overflow-auto bg-muted/20">
-          {resolved.status === "missing" ? (
-            <PanelMessage>This file is no longer part of the latest changes.</PanelMessage>
-          ) : resolved.file.renderState !== "renderable" ? (
-            <PanelMessage>{fileMessage(resolved.file)}</PanelMessage>
-          ) : isLoading ? (
-            <PanelMessage>Loading patch…</PanelMessage>
-          ) : stale ? (
-            <PanelMessage>Refreshing the latest revision…</PanelMessage>
-          ) : patchError ? (
-            <PanelMessage>Unable to load this patch.</PanelMessage>
-          ) : patch ? (
-            <PierreDiffRenderer
-              patch={patch}
-              diffStyle={effectiveDiffStyle}
-              wrap={wrap}
-              themeType={resolvedTheme === "dark" ? "dark" : "light"}
-            />
-          ) : (
-            <PanelMessage>This patch is empty.</PanelMessage>
+        <div ref={codeColumnRef} className="flex min-h-0 min-w-0 flex-1 flex-col">
+          <SelectedFileHeader
+            selected={selected}
+            selectedIndex={selectedIndex}
+            fileCount={files.length}
+            onMoveSelection={moveSelection}
+          />
+          <ChangesPanelToolbar
+            allowSplit={allowSplit}
+            activeDiffStyle={effectiveDiffStyle}
+            onDiffStyleChange={setDiffStyle}
+            wrap={wrap}
+            onWrapChange={setWrap}
+          />
+          <div ref={codeScrollRef} className="min-h-0 min-w-0 flex-1 overflow-auto">
+            {resolved.status === "missing" ? (
+              <PanelMessage>This file is no longer part of the latest changes.</PanelMessage>
+            ) : resolved.file.renderState !== "renderable" ? (
+              <PanelMessage>{fileMessage(resolved.file)}</PanelMessage>
+            ) : isLoading ? (
+              <PanelMessage>Loading patch…</PanelMessage>
+            ) : stale ? (
+              <PanelMessage>Refreshing the latest revision…</PanelMessage>
+            ) : patchError ? (
+              <PanelMessage>Unable to load this patch.</PanelMessage>
+            ) : patch ? (
+              <PierreDiffRenderer
+                patch={patch}
+                diffStyle={effectiveDiffStyle}
+                wrap={wrap}
+                themeType={resolvedTheme === "dark" ? "dark" : "light"}
+              />
+            ) : (
+              <PanelMessage>This patch is empty.</PanelMessage>
+            )}
+          </div>
+          {selected && (
+            <details className="shrink-0 border-t border-border-muted px-4 py-2 text-[11px] text-muted-foreground">
+              <summary className="cursor-pointer">Compared with session start</summary>
+              <p
+                className="mt-2 break-all font-mono text-[10px]"
+                title={`${selected.repository.baseSha} → ${selected.repository.headSha}`}
+              >
+                {selected.repository.baseSha.slice(0, 12)} →{" "}
+                {selected.repository.headSha.slice(0, 12)}
+              </p>
+            </details>
           )}
         </div>
       </div>

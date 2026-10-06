@@ -47,6 +47,26 @@ describe("createSandboxProviderFromEnv", () => {
     );
   });
 
+  it("needs a base snapshot to create Daytona sandboxes", () => {
+    const env = createEnv({
+      DAYTONA_API_URL: "https://daytona.test",
+      DAYTONA_API_KEY: "daytona-key",
+    });
+
+    expect(() => createSandboxProviderFromEnv(env, "daytona")).toThrow(
+      "DAYTONA_BASE_SNAPSHOT is required to create Daytona sandboxes"
+    );
+  });
+
+  it("still requires Daytona credentials", () => {
+    expect(() =>
+      createSandboxProviderFromEnv(
+        createEnv({ DAYTONA_API_URL: "https://daytona.test" }),
+        "daytona"
+      )
+    ).toThrow("DAYTONA_API_URL and DAYTONA_API_KEY are required");
+  });
+
   it("rejects malformed E2B auto-pause configuration", () => {
     const env = createEnv({
       E2B_API_KEY: "e2b-key",

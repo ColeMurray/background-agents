@@ -894,7 +894,7 @@ class TestSSEStreaming:
             create_sse_event("session.idle", {"sessionID": "oc-session-123"}),
         ]
 
-        await bridge._handle_prompt(
+        complete = await bridge._handle_prompt(
             {
                 "messageId": "cp-msg-1",
                 "content": "Test prompt",
@@ -903,8 +903,6 @@ class TestSSEStreaming:
             }
         )
 
-        sent_events = [call.args[0] for call in bridge._send_event.await_args_list]
-        complete = sent_events[-1]
         assert complete["type"] == "execution_complete"
         assert complete["messageId"] == "cp-msg-1"
         assert complete["success"] is False
@@ -1045,6 +1043,43 @@ class TestFetchFinalMessageState:
         # Should have one event with full text
         assert len(events) == 1
         assert events[0]["content"] == "Hello world!"
+        assert events[0]["partId"] == "part-1"
+
+    @pytest.mark.asyncio
+    async def test_final_state_uses_the_streamed_part_ids(
+        self, bridge_with_mock_client: AgentBridge
+    ):
+        bridge = bridge_with_mock_client
+        stream = bridge.harness.prompt_stream
+        state = make_prompt_state("cp-msg-1", "msg_0001aaaaaa")
+        streamed = stream._handle_part(
+            state, {"id": "part-1", "type": "text", "text": "Before"}, None
+        )[0]
+        bridge.http_client.get = AsyncMock(
+            return_value=MockResponse(
+                200,
+                [
+                    {
+                        "info": {
+                            "id": "oc-msg-1",
+                            "role": "assistant",
+                            "parentID": "msg_0001aaaaaa",
+                        },
+                        "parts": [
+                            {"id": "part-1", "type": "text", "text": "Before tools"},
+                            {"id": "part-2", "type": "text", "text": "After tools"},
+                        ],
+                    }
+                ],
+            )
+        )
+
+        events = [event async for event in stream._fetch_final_message_state(state)]
+        assert streamed["partId"] == "part-1"
+        assert [(event["partId"], event["content"]) for event in events] == [
+            ("part-1", "Before tools"),
+            ("part-2", "After tools"),
+        ]
 
     @pytest.mark.asyncio
     async def test_skips_user_messages(self, bridge_with_mock_client: AgentBridge):
@@ -1693,6 +1728,31 @@ class TestPromptMaxDuration:
 
         assert time.monotonic() - started_at < PROMPT_TIMEOUT_TEST_BUDGET_SECONDS
         assert any(url.endswith("/abort") for url in http_client.post_urls)
+
+    @pytest.mark.asyncio
+    async def test_a_prompts_own_budget_overrides_the_configured_maximum(self):
+        bridge = AgentBridge(
+            sandbox_id="test-sandbox",
+            session_id="test-session",
+            control_plane_url="http://localhost:8787",
+            auth_token="test-token",
+        )
+        bridge.harness.session_id = "oc-session-123"
+        set_prompt_limits(bridge, prompt_max_duration_seconds=30.0)
+
+        sse_response = DelayedMockSSEResponse([(create_sse_event("server.heartbeat", {}), 1.0)])
+        http_client = DelayedMockHttpClient(sse_response)
+        http_client.get_responses = [MockResponse(200, [])]
+        wire_opencode_transport(bridge, http_client)
+
+        started_at = time.monotonic()
+        with pytest.raises(RuntimeError, match=r"Prompt exceeded max duration of 0s\."):
+            async for _event in stream_opencode_events(
+                bridge, "msg-1", "test", max_duration_seconds=0.1
+            ):
+                pass
+
+        assert time.monotonic() - started_at < PROMPT_TIMEOUT_TEST_BUDGET_SECONDS
 
     @pytest.mark.asyncio
     async def test_prompt_timeout_does_not_wait_for_next_sse_event(self):
@@ -2741,7 +2801,7 @@ class TestCompactionHandling:
             create_sse_event("session.idle", {"sessionID": "oc-session-123"}),
         ]
 
-        await bridge._handle_prompt(
+        complete = await bridge._handle_prompt(
             {
                 "messageId": "cp-msg-1",
                 "content": "Test prompt",
@@ -2761,10 +2821,10 @@ class TestCompactionHandling:
             "token",
             "context_compacted",
             "token",
-            "execution_complete",
         ]
+        assert complete["type"] == "execution_complete"
         assert [event for event in events if event["type"] == "error"] == []
-        assert events[-1] == {
+        assert complete == {
             "type": "execution_complete",
             "messageId": "cp-msg-1",
             "success": True,
@@ -2830,7 +2890,7 @@ class TestCompactionHandling:
             create_sse_event("session.idle", {"sessionID": "oc-session-123"}),
         ]
 
-        await bridge._handle_prompt(
+        complete = await bridge._handle_prompt(
             {
                 "messageId": "cp-msg-1",
                 "content": "Test prompt",
@@ -2839,13 +2899,14 @@ class TestCompactionHandling:
         )
 
         events = [call.args[0] for call in bridge._send_event.await_args_list]
-        assert [event["type"] for event in events] == ["token", "error", "execution_complete"]
+        assert [event["type"] for event in events] == ["token", "error"]
+        assert complete["type"] == "execution_complete"
         assert events[1] == {
             "type": "error",
             "error": "Session too large to compact",
             "messageId": "cp-msg-1",
         }
-        assert events[-1] == {
+        assert complete == {
             "type": "execution_complete",
             "messageId": "cp-msg-1",
             "success": False,

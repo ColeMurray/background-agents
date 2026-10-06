@@ -88,6 +88,12 @@ describe("resolveSandboxDashboardUrl", () => {
     );
   });
 
+  it("does not link a pending VM reference to the Modal dashboard", () => {
+    const vm = { ...modal, sandboxProvider: "modal-vm" };
+    expect(resolveSandboxDashboardUrl(vm, 'modal-vm-session:["session","sandbox"]')).toBeNull();
+    expect(resolveSandboxDashboardUrl(vm, "sb-123")).toContain("sandboxId=sb-123");
+  });
+
   it("returns null for every non-Modal backend", () => {
     expect(resolveSandboxDashboardUrl({ ...modal, sandboxProvider: "e2b" }, "sb-123")).toBeNull();
     expect(

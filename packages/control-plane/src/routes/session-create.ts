@@ -18,16 +18,20 @@ import { resolveEnvironmentTarget, resolveSessionRepositories } from "../repos/r
 import { resolveScmProviderFromEnv } from "../source-control";
 import { EnvironmentStore } from "../db/environments";
 import { UserStore } from "../db/user-store";
+import { TeamMembershipStore } from "../db/team-memberships";
 import { createLogger } from "../logger";
 import { parseCreateSessionInput } from "../session/create-session-input";
 import { initializeSession, type SessionInitInput } from "../session/initialize";
 import { resolveGitHubEnrichmentForRequest } from "../session/identity";
 import { resolveSessionScopedSettings } from "../session/integration-settings-resolution";
 import { resolveManagedSkills, SkillResolutionError } from "../session/skill-resolution";
+import { resolvedPin } from "../session/pinned";
+import { createSessionMemorySelector } from "../memory/session-memory-selector-factory";
 import type { Env } from "../types";
 import { resolveSessionProviderAuth } from "../session/provider-account-resolution";
 import { ProviderAccountSelectionPolicyError } from "../model-provider-accounts/selection-policy";
-import { authorizeSessionTarget } from "./session-target-authorization";
+import { authorizeEnvironmentTarget, authorizeSessionTarget } from "./session-target-authorization";
+import { resolveCreationOwnerTeam, teamRequiredResponse } from "./team-ownership";
 import {
   normalizeOptionalRepositoryPair,
   RepositoryPairValidationError,
@@ -97,11 +101,21 @@ export async function handleCreateSession(
     throw e;
   }
 
-  const targetAuthorizationError = authorizeSessionTarget(ctx, {
+  const targetAuthorizationError = await authorizeSessionTarget(ctx, {
+    teamId: null,
     environmentId: body.environmentId,
-    hasRepository: Boolean(repositoryContext || body.repositories),
+    repositories: (body.repositories ?? (repositoryContext ? [repositoryContext] : [])).map(
+      (repository) => ({ owner: repository.repoOwner, name: repository.repoName })
+    ),
   });
   if (targetAuthorizationError) return targetAuthorizationError;
+  if (body.environmentId) {
+    const environmentError = await authorizeEnvironmentTarget(ctx, {
+      environmentId: body.environmentId,
+      ownerTeamId: body.teamId ?? null,
+    });
+    if (environmentError) return environmentError;
+  }
 
   // Validate branch names if provided (defense in depth)
   if (body.branch && !BRANCH_NAME_PATTERN.test(body.branch)) {
@@ -162,44 +176,56 @@ export async function handleCreateSession(
   const resolution = requireAdmittedCanonicalUserId(ctx, enforced);
   if (resolution instanceof Response) return resolution;
   const resolvedUserId = resolution;
+  const teamId = body.teamId ?? null;
+  const team = await resolveCreationOwnerTeam(ctx, teamId);
+  if (team instanceof Response) return team;
+  if (teamId) {
+    if (
+      !resolvedUserId ||
+      !(await new TeamMembershipStore(ctx.db).listForUser(resolvedUserId)).has(teamId)
+    ) {
+      return json({ error: "Not a team member", code: "not_member" }, 403);
+    }
+  }
+  const resolvedTargetAuthorizationError = await authorizeSessionTarget(ctx, {
+    teamId,
+    environmentId,
+    repositories: (
+      repositories ?? (repoOwner && repoName ? [{ repoOwner, repoName, repoId }] : [])
+    ).map((repository) => ({
+      owner: repository.repoOwner,
+      name: repository.repoName,
+      repoId: repository.repoId,
+    })),
+  });
+  if (resolvedTargetAuthorizationError) return resolvedTargetAuthorizationError;
+  const visibility = body.visibility ?? team?.defaultVisibility ?? "workspace";
+  if (visibility === "team" && !teamId) return teamRequiredResponse();
+  if (visibility === "private" && !resolvedUserId)
+    return json({ error: "Session owner required", code: "owner_required" }, 400);
 
   const githubDeployment = resolveScmProviderFromEnv(env.SCM_PROVIDER) === "github";
   let scmLogin = body.scmLogin;
   let scmName = body.scmName;
   let scmEmail = body.scmEmail;
-  // SCM credentials never arrive in the body; enrichment below fills them
-  // from the token store via the canonical user.
-  let scmTokenExpiresAt: number | undefined;
+  // SCM credentials never arrive in the body; enrichment below resolves them
+  // through Better Auth using the canonical user.
   let scmUserId: string | undefined;
-  let scmTokenEncrypted: string | null = null;
-  let scmRefreshTokenEncrypted: string | null = null;
 
-  // Browser sessions resolve a linked GitHub identity/token through Better
-  // Auth only when SCM enrichment is needed. Transitional callers retain the
-  // legacy D1 lookup. A user without a linked GitHub account uses the GitHub
-  // App bot fallback; account linking is intentionally deferred.
+  // Resolve linked GitHub identity and credentials through Better Auth only
+  // when SCM enrichment is needed. A user without a linked GitHub account uses
+  // the GitHub App fallback; account linking is intentionally deferred.
   if (githubDeployment) {
-    try {
-      const enrichment = await resolveGitHubEnrichmentForRequest(
-        env,
-        ctx.db,
-        userStore,
-        resolvedUserId,
-        await resolveGitHubCredentialAuthority(ctx, request.headers)
-      );
-      if (enrichment) {
-        scmUserId = enrichment.scmUserId;
-        scmLogin ??= enrichment.scmLogin;
-        scmName ??= enrichment.displayName;
-        scmEmail ??= enrichment.email;
-        scmTokenEncrypted = enrichment.accessTokenEncrypted ?? null;
-        scmRefreshTokenEncrypted = enrichment.refreshTokenEncrypted ?? null;
-        scmTokenExpiresAt = enrichment.tokenExpiresAt;
-      }
-    } catch (e) {
-      logger.warn("Failed to enrich session with GitHub identity", {
-        error: e instanceof Error ? e : String(e),
-      });
+    const enrichment = await resolveGitHubEnrichmentForRequest(
+      userStore,
+      resolvedUserId,
+      await resolveGitHubCredentialAuthority(ctx, request.headers)
+    );
+    if (enrichment) {
+      scmUserId = enrichment.scmUserId;
+      scmLogin ??= enrichment.scmLogin;
+      scmName ??= enrichment.displayName;
+      scmEmail ??= enrichment.email;
     }
   }
 
@@ -217,7 +243,8 @@ export async function handleCreateSession(
   // §6.2). In list mode that is repositories[0]; otherwise the scalar pair — the
   // two are the same repo by the row-0-mirrors-scalars invariant. Launching
   // from a saved environment layers its overrides on top (design §13.5).
-  const scopeMembers = repositories ?? (repoOwner && repoName ? [{ repoOwner, repoName }] : []);
+  const scopeMembers =
+    repositories ?? (repoOwner && repoName ? [{ repoOwner, repoName, repoId }] : []);
   const { codeServerEnabled, vncEnabled, sandboxSettings } = await resolveSessionScopedSettings(
     ctx.db,
     scopeMembers,
@@ -259,7 +286,17 @@ export async function handleCreateSession(
     throw e;
   }
 
+  const memorySelection = await createSessionMemorySelector(ctx).select({
+    principal: { userId: resolvedUserId, ownerTeamId: teamId },
+    repositories: scopeMembers,
+    environmentId,
+    includePersonalMemories: body.includePersonalMemories,
+  });
+
   const input: SessionInitInput = {
+    memory: resolvedPin(memorySelection),
+    ownerTeamId: teamId,
+    visibility,
     sessionId,
     repoOwner,
     repoName,
@@ -274,18 +311,16 @@ export async function handleCreateSession(
     reasoningEffort,
     participantUserId,
     platformUserId: resolvedUserId,
+    participantCanonicalUserId: resolvedUserId,
     scmLogin,
     scmName,
     scmEmail,
     scmUserId,
-    scmTokenEncrypted,
-    scmRefreshTokenEncrypted,
-    scmTokenExpiresAt,
     codeServerEnabled,
     vncEnabled,
     sandboxSettings,
     spawnSource,
-    managedSkillsManifest,
+    managedSkills: resolvedPin(managedSkillsManifest),
     providerAuth,
   };
 

@@ -32,7 +32,7 @@ jobs:
     timeout-minutes: 15
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           persist-credentials: false
           fetch-depth: 0
@@ -110,18 +110,18 @@ jobs:
 
       - name: Setup Node.js
         if: steps.changes.outputs.run == 'true'
-        uses: actions/setup-node@v6
+        uses: actions/setup-node@v7
         with:
-          node-version: "22"
+          node-version-file: .nvmrc
           cache: "npm"
 
       - name: Install dependencies
         if: steps.changes.outputs.run == 'true'
         run: npm ci
 
-      - name: Test smoke change detection
+      - name: Test smoke tooling
         if: steps.changes.outputs.run == 'true'
-        run: node --test scripts/compose-smoke-paths.test.mjs
+        run: node --test scripts/compose-smoke-paths.test.mjs scripts/compose-smoke.test.mjs
 
       - name: Build shared package
         if: steps.changes.outputs.run == 'true'
@@ -133,7 +133,7 @@ jobs:
 
       - name: Upload container logs
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: compose-smoke-logs
           path: smoke-logs/

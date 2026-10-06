@@ -1,7 +1,10 @@
 import { harnessIdSchema, type HarnessId } from "../harnesses";
 import { z } from "zod";
-import type { ResolvedSessionAttachment } from "./session-attachments";
+import { resolvedSessionAttachmentsSchema } from "./session-attachments";
+import { eventResponseSchema } from "./sandbox-events";
 import { sessionListRepositorySchema, type SessionListRepository } from "./repositories";
+import type { PullRequestLifecycleState } from "./artifacts";
+import type { SessionCapabilities } from "./session-access";
 
 /**
  * A session's conversation lifecycle: durable, user-visible, and independent
@@ -46,7 +49,8 @@ export const sandboxStatusSchema = z.enum([
 ]);
 export type SandboxStatus = z.infer<typeof sandboxStatusSchema>;
 
-export type MessageStatus = "pending" | "processing" | "completed" | "failed";
+export const messageStatusSchema = z.enum(["pending", "processing", "completed", "failed"]);
+export type MessageStatus = z.infer<typeof messageStatusSchema>;
 
 export const messageSourceSchema = z.enum([
   "web",
@@ -85,6 +89,22 @@ export const pullRequestSummarySchema = z.object({
 });
 export type PullRequestSummary = z.infer<typeof pullRequestSummarySchema>;
 
+/** PR lifecycle and repository identity on a session export line. Timestamps are epoch ms. */
+export interface ExportPullRequest {
+  repoOwner: string;
+  repoName: string;
+  prNumber: number;
+  url: string;
+  lifecycleState: PullRequestLifecycleState;
+  isDraft: boolean;
+  headBranch: string;
+  baseBranch: string;
+  headSha: string | null;
+  providerCreatedAt: number | null;
+  mergedAt: number | null;
+  closedAt: number | null;
+}
+
 export const INITIAL_SESSION_READ_STATE_VERSION = 0;
 
 /**
@@ -112,6 +132,8 @@ export type SessionReadState = z.infer<typeof sessionReadStateSchema>;
 
 /** Fields shared only by the list, inbox, and direct-child response projections. */
 export const sessionSummaryBaseSchema = z.object({
+  ownerTeamId: z.string().nullable().optional(),
+  visibility: z.enum(["team", "workspace", "private"]).optional(),
   id: z.string(),
   title: z.string().nullable(),
   repoOwner: z.string().nullable(),
@@ -151,7 +173,18 @@ export const childSessionListResponseSchema = z.object({
 export type ChildSessionListResponse = z.infer<typeof childSessionListResponseSchema>;
 
 /** Flat session-list item. Read state is absent for callers without a viewer identity. */
+export const sessionCapabilitiesSchema = z.object({
+  canRead: z.boolean(),
+  canCollaborate: z.boolean(),
+  canManageLifecycle: z.boolean(),
+  canDelete: z.boolean(),
+  canSandbox: z.boolean(),
+  canManageCollaborators: z.boolean(),
+  canChangeVisibility: z.boolean(),
+});
+
 export const sessionListSummarySchema = childSessionSummarySchema.extend({
+  capabilities: sessionCapabilitiesSchema.optional(),
   readState: sessionReadStateSchema.optional(),
 });
 export type SessionListSummary = z.infer<typeof sessionListSummarySchema>;
@@ -196,6 +229,10 @@ export type SessionReadResult = z.infer<typeof sessionReadResultSchema>;
 
 export interface Session {
   id: string;
+  ownerTeamId?: string | null;
+  visibility?: "team" | "workspace" | "private";
+  collaborators?: string[];
+  capabilities?: SessionCapabilities;
   title: string | null;
   repoOwner: string | null;
   repoName: string | null;
@@ -235,17 +272,27 @@ export interface Session {
   readState?: SessionReadState;
 }
 
-export interface SessionMessage {
-  id: string;
-  authorId: string;
-  content: string;
-  source: MessageSource;
-  attachments: ResolvedSessionAttachment[] | null;
-  status: MessageStatus;
-  createdAt: number;
-  startedAt: number | null;
-  completedAt: number | null;
-}
+export const sessionMessageSchema = z.object({
+  id: z.string(),
+  authorId: z.string(),
+  content: z.string(),
+  source: messageSourceSchema,
+  attachments: resolvedSessionAttachmentsSchema.nullable(),
+  status: messageStatusSchema,
+  createdAt: z.number(),
+  startedAt: z.number().nullable(),
+  completedAt: z.number().nullable(),
+});
+export type SessionMessage = z.infer<typeof sessionMessageSchema>;
+
+/** A persisted event's timeline position; it orders events that share a timestamp. */
+export const timelineSequenceSchema = z.number().int().safe().nonnegative();
+
+/** A persisted timeline event as the session trace export lists it. */
+export const sessionEventSchema = eventResponseSchema.extend({
+  timelineSequence: timelineSequenceSchema,
+});
+export type SessionEvent = z.infer<typeof sessionEventSchema>;
 
 export const sessionParticipantProfileSchema = z.object({
   userId: z.string(),
@@ -262,3 +309,15 @@ export const sessionParticipantProfilesResponseSchema = z.object({
 export type SessionParticipantProfilesResponse = z.infer<
   typeof sessionParticipantProfilesResponseSchema
 >;
+
+export const sessionCollaboratorCandidateSchema = z.object({
+  userId: z.string(),
+  displayName: z.string().nullable(),
+  email: z.string().nullable(),
+  avatarUrl: z.string().nullable(),
+});
+export type SessionCollaboratorCandidate = z.infer<typeof sessionCollaboratorCandidateSchema>;
+
+export const sessionCollaboratorCandidatesResponseSchema = z.array(
+  sessionCollaboratorCandidateSchema
+);

@@ -252,15 +252,26 @@ describe("RepoClassifier", () => {
 
   describe("routing rules", () => {
     it("routes deterministically when a keyword matches, without calling the LLM", async () => {
-      mockGetRoutingRules.mockResolvedValue([{ keyword: "frontend", target: "acme/web" }]);
+      mockGetAvailableRepos.mockResolvedValue([TEST_REPOS[1]]);
+      mockGetRoutingRules.mockResolvedValue([
+        { keyword: "frontend", target: "acme/prod" },
+        { keyword: "frontend", target: "acme/web" },
+      ]);
 
       const classifier = new RepoClassifier(TEST_ENV);
-      const result = await classifier.classify("please fix the frontend nav bug", undefined, "t");
+      const result = await classifier.classify(
+        "please fix the frontend nav bug",
+        { teamId: "team-a", channelId: "C1", userId: "U123" },
+        "t"
+      );
 
       expect(classifiedRepoFullName(result)).toBe("acme/web");
       expect(result.confidence).toBe("high");
       expect(result.needsClarification).toBe(false);
       expect(result.reasoning).toContain("routing rule");
+      expect(mockGetAvailableRepos).toHaveBeenCalledWith(TEST_ENV, "t", "C1", "U123");
+      expect(mockGetAvailableEnvironments).toHaveBeenCalledWith(TEST_ENV, "t", "C1", "U123");
+      expect(mockGetRoutingRules).toHaveBeenCalledWith(TEST_ENV, "t");
       expect(mockMessagesCreate).not.toHaveBeenCalled();
     });
 
@@ -391,14 +402,20 @@ describe("RepoClassifier", () => {
       expect(result.reasoning).not.toContain("<!channel>");
     });
 
-    it("loads the target catalog exactly once per classification", async () => {
+    it("loads the channel catalog exactly once even without a team binding", async () => {
       mockGetRoutingRules.mockResolvedValue([{ keyword: "frontend", target: "acme/web" }]);
 
       const classifier = new RepoClassifier(TEST_ENV);
-      await classifier.classify("frontend tweak");
+      await classifier.classify(
+        "frontend tweak",
+        { teamId: null, channelId: "C123", userId: "U123" },
+        "t"
+      );
 
       expect(mockGetAvailableRepos).toHaveBeenCalledOnce();
       expect(mockGetAvailableEnvironments).toHaveBeenCalledOnce();
+      expect(mockGetAvailableRepos).toHaveBeenCalledWith(TEST_ENV, "t", "C123", "U123");
+      expect(mockGetAvailableEnvironments).toHaveBeenCalledWith(TEST_ENV, "t", "C123", "U123");
     });
 
     it("routes an environment rule even when only one repository is available", async () => {
@@ -569,7 +586,14 @@ describe("RepoClassifier", () => {
   describe("LLM environment candidates", () => {
     function llmResponse(input: Record<string, unknown>) {
       return {
-        content: [{ type: "tool_use", id: "toolu_llm", name: "classify_target", input }],
+        content: [
+          {
+            type: "tool_use",
+            id: "toolu_llm",
+            name: "classify_target",
+            input,
+          },
+        ],
       };
     }
 
@@ -650,15 +674,22 @@ describe("RepoClassifier", () => {
       expect(mockMessagesCreate).toHaveBeenCalledOnce();
     });
 
-    it("keeps the single-repo shortcut when no environments exist", async () => {
+    it("classifies when only one repository is available", async () => {
       mockGetAvailableRepos.mockResolvedValue([TEST_REPOS[0]]);
+      mockMessagesCreate.mockResolvedValue(
+        llmResponse({
+          targetId: "acme/prod",
+          confidence: "high",
+          reasoning: "The task applies to the available repository.",
+          alternatives: [],
+        })
+      );
 
       const classifier = new RepoClassifier(TEST_ENV);
       const result = await classifier.classify("anything at all");
 
       expect(classifiedRepoFullName(result)).toBe("acme/prod");
-      expect(result.reasoning).toBe("Only one repository is available.");
-      expect(mockMessagesCreate).not.toHaveBeenCalled();
+      expect(mockMessagesCreate).toHaveBeenCalledOnce();
     });
 
     it("resolves mixed alternatives, deduplicated and excluding the match", async () => {
@@ -700,17 +731,6 @@ describe("RepoClassifier", () => {
       const result = await classifier.classify("work on full-stack");
 
       expect(result.target).toEqual({ kind: "environment", environment: TEST_ENVIRONMENT });
-    });
-
-    it("asks for clarification when neither repos nor environments exist", async () => {
-      mockGetAvailableRepos.mockResolvedValue([]);
-
-      const classifier = new RepoClassifier(TEST_ENV);
-      const result = await classifier.classify("anything");
-
-      expect(result.target).toBeNull();
-      expect(result.reasoning).toBe("No repositories or environments are currently available.");
-      expect(mockMessagesCreate).not.toHaveBeenCalled();
     });
 
     it("escapes the LLM reasoning for mrkdwn rendering", async () => {
@@ -784,6 +804,7 @@ describe("RepoClassifier", () => {
       // gpt-5-family models accept only the default temperature and reject an
       // explicit value with HTTP 400 `unsupported_value`.
       expect(body).not.toHaveProperty("temperature");
+      expect(body).not.toHaveProperty("reasoning_effort");
       expect(body.max_completion_tokens).toBe(OPENAI_CLASSIFICATION_MAX_COMPLETION_TOKENS);
       // gpt-5.x rejects `max_tokens` outright ("Unsupported parameter").
       expect(body).not.toHaveProperty("max_tokens");
@@ -799,6 +820,24 @@ describe("RepoClassifier", () => {
         "alternatives",
       ]);
       expect(jsonSchema.schema.properties.targetId.type).toEqual(["string", "null"]);
+    });
+
+    it("sends CLASSIFICATION_REASONING_EFFORT as reasoning_effort", async () => {
+      const fetchMock = vi.fn().mockResolvedValue(
+        openAiFetchResponse({
+          targetId: "acme/prod",
+          confidence: "high",
+          reasoning: "Mentions prod.",
+          alternatives: [],
+        })
+      );
+      vi.stubGlobal("fetch", fetchMock);
+
+      const classifier = new RepoClassifier(openAiEnv({ CLASSIFICATION_REASONING_EFFORT: "low" }));
+      await classifier.classify("please fix prod slack alerts");
+
+      const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+      expect(JSON.parse(init.body as string).reasoning_effort).toBe("low");
     });
 
     it("degrades to the picker on a non-2xx OpenAI response", async () => {

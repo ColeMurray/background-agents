@@ -5,6 +5,8 @@ import {
   type SendPromptResponse,
 } from "@open-inspect/shared/types/session-api";
 import type { SessionAttachmentReference } from "@open-inspect/shared/types/session-attachments";
+import { listArtifactsResponseSchema } from "@open-inspect/shared/types/artifacts";
+import { ProtectedReadError } from "@open-inspect/shared/completion/extractor";
 import { signedControlPlaneFetch, type ControlPlaneEnv } from "../internal-auth";
 import { createLogger } from "../logger";
 import { buildSessionTargetRequestFields, targetId, type SlackSessionTarget } from "../targets";
@@ -15,6 +17,7 @@ const log = createLogger("handler");
 
 interface CreateSessionOptions {
   target: SlackSessionTarget;
+  teamId?: string | null;
   model: string;
   reasoningEffort?: string;
   branch?: string;
@@ -26,14 +29,58 @@ interface CreateSessionOptions {
 
 export type SendPromptResult =
   | { ok: true; data: SendPromptResponse }
-  | { ok: false; reason: "stale" | "transient" };
+  | { ok: false; reason: "stale" | "forbidden" | "transient" | "channel_scope_denied" };
+
+export interface CreateSessionFailure {
+  error: { status: number; code?: string; reasonCode?: string; repository?: string };
+}
+
+export async function checkPublicationAccess(
+  env: ControlPlaneEnv,
+  sessionId: string,
+  channel: string,
+  traceId?: string
+): Promise<"allowed" | "denied" | "unavailable"> {
+  const url = new URL(`https://internal/sessions/${encodeURIComponent(sessionId)}/artifacts`);
+  url.searchParams.set("channel", `slack:${channel}`);
+  url.searchParams.set("purpose", "slack-post");
+  try {
+    const response = await signedControlPlaneFetch(
+      env,
+      { method: "GET", url: url.toString(), traceId },
+      { signal: AbortSignal.timeout(OUTBOUND_REQUEST_TIMEOUT_MS) }
+    );
+    if (response.status === 403 || response.status === 404) return "denied";
+    if (!response.ok) return "unavailable";
+    return listArtifactsResponseSchema.safeParse(await response.json()).success
+      ? "allowed"
+      : "unavailable";
+  } catch {
+    return "unavailable";
+  }
+}
+
+export async function requirePublicationAccess(
+  env: ControlPlaneEnv,
+  sessionId: string,
+  channel: string,
+  traceId?: string
+): Promise<void> {
+  const access = await checkPublicationAccess(env, sessionId, channel, traceId);
+  if (access !== "allowed")
+    throw new ProtectedReadError(
+      `Control plane publication access ${access}`,
+      access === "denied" ? 403 : undefined
+    );
+}
 
 export async function createSession(
   env: ControlPlaneEnv,
   options: CreateSessionOptions
-): Promise<CreateSessionResponse | null> {
+): Promise<CreateSessionResponse | CreateSessionFailure | null> {
   const {
     target,
+    teamId,
     model,
     reasoningEffort,
     branch,
@@ -55,6 +102,7 @@ export async function createSession(
     const url = "https://internal/sessions";
     const body = JSON.stringify({
       ...buildSessionTargetRequestFields(target, branch),
+      teamId,
       model,
       reasoningEffort,
       actorDisplayName,
@@ -78,7 +126,17 @@ export async function createSession(
         http_status: response.status,
         duration_ms: Date.now() - startTime,
       });
-      return null;
+      const details: unknown = await response.json().catch(() => null);
+      const body =
+        details && typeof details === "object" ? (details as Record<string, unknown>) : {};
+      return {
+        error: {
+          status: response.status,
+          code: typeof body.code === "string" ? body.code : undefined,
+          reasonCode: typeof body.reason_code === "string" ? body.reason_code : undefined,
+          repository: typeof body.repository === "string" ? body.repository : undefined,
+        },
+      };
     }
     const result = createSessionResponseSchema.safeParse(await response.json());
     if (!result.success) {
@@ -111,8 +169,11 @@ export async function createSession(
 
 export interface SendPromptOptions {
   sessionId: string;
+  channel: string;
   content: string;
   authorId: string;
+  model?: string;
+  reasoningEffort?: string;
   callbackContext?: CallbackContext;
   attachments?: SessionAttachmentReference[];
   traceId?: string;
@@ -122,14 +183,27 @@ export async function sendPrompt(
   env: ControlPlaneEnv,
   options: SendPromptOptions
 ): Promise<SendPromptResult> {
-  const { sessionId, content, authorId, callbackContext, attachments, traceId } = options;
+  const {
+    sessionId,
+    channel,
+    content,
+    authorId,
+    model,
+    reasoningEffort,
+    callbackContext,
+    attachments,
+    traceId,
+  } = options;
   const startTime = Date.now();
   const base = { trace_id: traceId, session_id: sessionId, source: "slack" };
   try {
-    const url = `https://internal/sessions/${sessionId}/prompt`;
+    const url = new URL(`https://internal/sessions/${sessionId}/prompt`);
+    url.searchParams.set("channel", `slack:${channel}`);
     const body = JSON.stringify({
       content,
       source: "slack",
+      model,
+      reasoningEffort,
       callbackContext,
       ...(attachments?.length ? { attachments } : {}),
     });
@@ -137,7 +211,7 @@ export async function sendPrompt(
       env,
       {
         method: "POST",
-        url,
+        url: url.toString(),
         body,
         actor: authorId.startsWith("slack:") ? authorId : undefined,
         traceId,
@@ -151,7 +225,21 @@ export async function sendPrompt(
         http_status: response.status,
         duration_ms: Date.now() - startTime,
       });
-      return { ok: false, reason: response.status === 404 ? "stale" : "transient" };
+      const details = await response.json().catch(() => null);
+      return {
+        ok: false,
+        reason:
+          details !== null &&
+          typeof details === "object" &&
+          "code" in details &&
+          details.code === "slack_channel_scope_denied"
+            ? "channel_scope_denied"
+            : response.status === 404
+              ? "stale"
+              : response.status === 403
+                ? "forbidden"
+                : "transient",
+      };
     }
     const result = sendPromptResponseSchema.safeParse(await response.json());
     if (!result.success) {

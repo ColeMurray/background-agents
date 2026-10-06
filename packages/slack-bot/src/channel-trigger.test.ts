@@ -1,5 +1,6 @@
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import type * as SlackModule from "@open-inspect/shared/slack";
+import { makeExecutionContext as makeCtx } from "./test-helpers";
 import type { Env } from "./types";
 
 const {
@@ -107,14 +108,6 @@ function makeEnv(
     SLACK_SIGNING_SECRET: "secret",
     SERVICE_AUTH_SECRET: "internal-secret",
   } as unknown as Env;
-}
-
-function makeCtx() {
-  return {
-    props: {},
-    waitUntil: vi.fn(),
-    passThroughOnException: vi.fn(),
-  } as unknown as ExecutionContext & { waitUntil: ReturnType<typeof vi.fn> };
 }
 
 async function flushWaitUntil(ctx: ReturnType<typeof makeCtx>, callIndex = 0): Promise<void> {

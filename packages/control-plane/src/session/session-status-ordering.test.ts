@@ -7,6 +7,7 @@ import { SessionCoreRepository } from "./session-core-repository";
 import { SessionIndexStore } from "../db/session-index";
 import { SessionStatusProjectionStore } from "../db/session-status-projection-store";
 import { SessionStatusService } from "./session-status-service";
+import { UsageRepository } from "./usage-repository";
 
 it("a delayed archive projection cannot overwrite a successful equal-timestamp unarchive", async () => {
   const sqlite = new DatabaseSync(":memory:");
@@ -42,6 +43,7 @@ it("a delayed archive projection cannot overwrite a successful equal-timestamp u
       repository,
       { getMessageCount: () => 0, getActiveDurationMs: () => 0 } as never,
       { listArtifacts: () => [] } as never,
+      new UsageRepository(storage.sql, storage.transactionSync),
       { broadcast: () => {} } as never,
       store,
       {

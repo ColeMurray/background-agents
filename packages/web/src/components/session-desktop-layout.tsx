@@ -1,57 +1,27 @@
 "use client";
 
 import type { ReactNode } from "react";
-import {
-  Group as PanelGroup,
-  Panel,
-  Separator as PanelResizeHandle,
-  type Layout,
-} from "react-resizable-panels";
 
 interface SessionDesktopLayoutProps {
   workspace: ReactNode;
   sidebar: ReactNode;
   changes: ReactNode | null;
-  defaultLayout?: Layout;
-  onLayoutChanged?: (layout: Layout) => void;
 }
 
-export const SESSION_CHANGES_LAYOUT_ID = "session-changes-layout-v2";
-
-/** Keeps the timeline/terminal subtree stable while swapping the right-side surface. */
-export function SessionDesktopLayout({
-  workspace,
-  sidebar,
-  changes,
-  defaultLayout,
-  onLayoutChanged,
-}: SessionDesktopLayoutProps) {
+/**
+ * An open diff takes over the main column beside the details sidebar. The
+ * timeline/terminal subtree stays mounted underneath, so scroll position and the
+ * composer draft survive opening and closing it.
+ */
+export function SessionDesktopLayout({ workspace, sidebar, changes }: SessionDesktopLayoutProps) {
   return (
     <>
-      <PanelGroup
-        orientation="horizontal"
-        id={SESSION_CHANGES_LAYOUT_ID}
-        defaultLayout={defaultLayout}
-        onLayoutChanged={onLayoutChanged}
-        style={{ overflow: "clip" }}
-      >
-        <Panel
-          id="session-main"
-          defaultSize={changes ? "45%" : "100%"}
-          minSize="25%"
-          style={{ minWidth: 0, minHeight: 0, overflow: "clip" }}
-        >
+      <div className="flex min-h-0 min-w-0 flex-1 overflow-clip">
+        <div hidden={Boolean(changes)} className="h-full min-h-0 min-w-0 flex-1 overflow-clip">
           {workspace}
-        </Panel>
-        {changes && (
-          <>
-            <PanelResizeHandle className="w-1.5 cursor-col-resize border-x border-border-muted bg-muted/40 transition-colors hover:bg-accent" />
-            <Panel id="session-changes" defaultSize="55%" minSize="520px" maxSize="75%">
-              {changes}
-            </Panel>
-          </>
-        )}
-      </PanelGroup>
+        </div>
+        {changes && <div className="h-full min-h-0 min-w-0 flex-1">{changes}</div>}
+      </div>
       {sidebar}
     </>
   );

@@ -29,6 +29,7 @@ export const mockStore = {
   list: vi.fn(),
   getById: vi.fn(),
   resolveCanonicalOwner: vi.fn(async (automation: unknown) => automation),
+  projectCanonicalOwners: vi.fn(async (rows: unknown) => rows),
   update: vi.fn(),
   softDelete: vi.fn(),
   pause: vi.fn(),
@@ -69,6 +70,7 @@ export const mockUserStore = {
 
 export const mockEnvironmentStore = {
   getById: vi.fn(),
+  getRepositoriesForEnvironment: vi.fn(),
 };
 
 /** Shared D1 batch spy — createEnv wires it as env.DB.batch. */
@@ -169,6 +171,7 @@ export const sampleRow = {
   consecutive_failures: 0,
   created_by: "user-1",
   user_id: "user-1",
+  owner_team_id: null,
   created_at: now,
   updated_at: now,
   deleted_at: null,
@@ -208,7 +211,12 @@ export function applyMockDefaults(): void {
     invocationId: "inv-1",
     runs: [{ id: "run-1" }],
   });
-  mockEnvironmentStore.getById.mockResolvedValue({ id: "env_1", name: "Fullstack" });
+  mockEnvironmentStore.getById.mockResolvedValue({
+    id: "env_1",
+    name: "Fullstack",
+    owner_team_id: null,
+  });
+  mockEnvironmentStore.getRepositoriesForEnvironment.mockResolvedValue([]);
   mockProviderAccountStore.getById.mockResolvedValue({
     id: "0123456789abcdef0123456789abcdef",
     provider: "openai",
@@ -216,6 +224,13 @@ export function applyMockDefaults(): void {
     archivedAt: null,
   });
   mockProviderAdapterGet.mockReturnValue({});
-  mockResolveGitHubCredentialAuthority.mockResolvedValue({ kind: "legacy" });
+  mockResolveGitHubCredentialAuthority.mockResolvedValue({
+    kind: "service_principal",
+    accountClient: {
+      listUserAccounts: vi.fn(async () => []),
+      getAccessToken: vi.fn(async () => null),
+      accountInfo: vi.fn(async () => null),
+    },
+  });
   mockResolveGitHubEnrichmentForRequest.mockResolvedValue(null);
 }

@@ -15,9 +15,19 @@ variable "target" {
   default     = ""
 }
 
-variable "snapshot_name" {
-  description = "Name of the Daytona snapshot to create/update"
+variable "snapshot_name_prefix" {
+  description = "Prefix for the immutable Daytona snapshot name"
   type        = string
+}
+
+variable "memory_gib" {
+  description = "Memory in GiB reserved by sandboxes created from the snapshot"
+  type        = number
+
+  validation {
+    condition     = var.memory_gib >= 1 && var.memory_gib == floor(var.memory_gib)
+    error_message = "memory_gib must be a positive integer."
+  }
 }
 
 variable "deploy_path" {

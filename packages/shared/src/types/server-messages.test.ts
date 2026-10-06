@@ -3,6 +3,7 @@ import {
   redactSessionSnapshotSandboxAccess,
   serverMessageSchema,
   sessionSnapshotSchema,
+  sessionSnapshotStateSchema,
 } from "./server-messages";
 
 describe("artifact_updated server message", () => {
@@ -87,6 +88,27 @@ const snapshotState = {
 };
 
 describe("session view contracts", () => {
+  it.each(["owner-1", null])("preserves snapshot ownerUserId (%s)", (ownerUserId) => {
+    const parsed = sessionSnapshotSchema.parse({
+      session: { ...snapshotState, ownerUserId },
+      artifacts: [],
+      promptQueue: [],
+      timeline: { events: [], hasMore: false, cursor: null },
+    });
+
+    expect(parsed.session).toHaveProperty("ownerUserId", ownerUserId);
+  });
+
+  it("accepts snapshot state without ownerUserId", () => {
+    expect(sessionSnapshotStateSchema.parse(snapshotState)).not.toHaveProperty("ownerUserId");
+  });
+
+  it("rejects non-string snapshot ownerUserId", () => {
+    expect(
+      sessionSnapshotStateSchema.safeParse({ ...snapshotState, ownerUserId: 123 }).success
+    ).toBe(false);
+  });
+
   it("parses a snapshot and removes access credentials", () => {
     const parsed = sessionSnapshotSchema.parse({
       session: {
@@ -232,6 +254,23 @@ describe("session view contracts", () => {
     ).toMatchObject({ clientRequestId: "request-1" });
   });
 
+  it("parses correlated graceful shutdown recovery acceptance", () => {
+    expect(
+      serverMessageSchema.parse({
+        type: "shutdown_recovery_accepted",
+        clientRequestId: "recovery-1",
+        action: "restore_saved",
+      })
+    ).toMatchObject({ clientRequestId: "recovery-1", action: "restore_saved" });
+    expect(
+      serverMessageSchema.safeParse({
+        type: "shutdown_recovery_accepted",
+        clientRequestId: "recovery-1",
+        action: "resume",
+      }).success
+    ).toBe(false);
+  });
+
   it("parses budget state in snapshots and subscriptions", () => {
     const parsed = serverMessageSchema.parse({
       type: "subscribed",
@@ -272,5 +311,102 @@ describe("session view contracts", () => {
       maxSessionCostUsd: 10,
       budgetExhausted: true,
     });
+  });
+});
+
+describe("sandbox boot phase in the subscribe snapshot", () => {
+  it("carries phase metadata while stripping a legacy persisted output tail", () => {
+    const parsed = serverMessageSchema.parse({
+      type: "subscribed",
+      participantId: "participant-1",
+      session: {
+        id: "session-1",
+        title: null,
+        repoOwner: "acme",
+        repoName: "api",
+        baseBranch: "main",
+        branchName: null,
+        status: "active",
+        sandboxStatus: "connecting",
+        messageCount: 0,
+        createdAt: 1,
+        harness: "opencode",
+        model: "anthropic/claude-sonnet-4-5",
+        isProcessing: false,
+        parentSessionId: null,
+        totalCost: 0,
+        maxSessionCostUsd: null,
+        budgetExhausted: false,
+        codeServerUrl: null,
+        vncUrl: null,
+        tunnelUrls: null,
+        ttydUrl: null,
+        sandboxDashboardUrl: null,
+        repositories: [],
+        environmentId: null,
+        environmentName: null,
+      },
+      artifacts: [],
+      timeline: { events: [], hasMore: false, cursor: null },
+      promptQueue: [],
+      bootPhase: {
+        phase: "setup",
+        status: "started",
+        repoOwner: "acme",
+        repoName: "api",
+        outputTail: ["legacy secret output"],
+      },
+    });
+    expect(parsed.type).toBe("subscribed");
+    if (parsed.type === "subscribed") {
+      expect(parsed.bootPhase).toEqual({
+        phase: "setup",
+        status: "started",
+        repoOwner: "acme",
+        repoName: "api",
+      });
+    }
+  });
+
+  it("strips legacy output tails from live and historical phase events", () => {
+    const event = {
+      type: "boot_progress",
+      bootSeq: 3,
+      phase: "setup",
+      status: "failed",
+      detail: "setup hook failed",
+      outputTail: ["legacy secret output"],
+      sandboxId: "sandbox-1",
+      timestamp: 123,
+    };
+    const expectedEvent = {
+      type: "boot_progress",
+      bootSeq: 3,
+      phase: "setup",
+      status: "failed",
+      detail: "setup hook failed",
+      sandboxId: "sandbox-1",
+      timestamp: 123,
+    };
+
+    const live = serverMessageSchema.parse({ type: "sandbox_event", event });
+    expect(live).toEqual({ type: "sandbox_event", event: expectedEvent });
+
+    const history = serverMessageSchema.parse({
+      type: "history_page",
+      items: [{ eventId: "event-1", timelineSequence: 1, event }],
+      hasMore: false,
+      cursor: null,
+    });
+    expect(history).toEqual({
+      type: "history_page",
+      items: [{ eventId: "event-1", timelineSequence: 1, event: expectedEvent }],
+      hasMore: false,
+      cursor: null,
+    });
+  });
+
+  it("no longer accepts the never-emitted sandbox_ready message", () => {
+    expect(serverMessageSchema.safeParse({ type: "sandbox_ready" }).success).toBe(false);
   });
 });

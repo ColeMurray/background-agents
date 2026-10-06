@@ -40,6 +40,28 @@ export function isSandboxReconnectBlockedStatus(status: SandboxStatus): boolean 
   return status === "stopped" || status === "stale";
 }
 
+export type SandboxCommandAvailability = "dispatch" | "booting" | "unavailable";
+
+/** Classify a known sandbox after transport has resolved its authoritative socket. */
+export function evaluateSandboxCommandAvailability(
+  status: SandboxStatus
+): SandboxCommandAvailability {
+  if (isDeadSandboxStatus(status)) {
+    return "unavailable";
+  }
+  return status === "ready" || status === "snapshotting" ? "dispatch" : "booting";
+}
+
+/** Access and ordinary command eligibility intentionally differ during snapshots in C1. */
+export function isSandboxAccessAvailable(status: SandboxStatus | undefined): boolean {
+  return status === "ready";
+}
+
+/** Preserve cancellation's distinct policy: stale becomes stopped, failed stays failed. */
+export function shouldStopSandboxOnSessionCancel(status: SandboxStatus | undefined): boolean {
+  return status !== undefined && status !== "stopped" && status !== "failed";
+}
+
 // ==================== Circuit Breaker ====================
 
 /**
@@ -171,6 +193,13 @@ export interface SandboxState {
   snapshotRuntimeVersion: string | null;
   /** Whether an active WebSocket connection exists */
   hasActiveWebSocket: boolean;
+  /**
+   * This generation's last bridge heartbeat, or null if its bridge never
+   * connected (the reservation clears it). A connected generation is alive as
+   * far as the provider is concerned, so age alone never justifies replacing
+   * it: a dropped socket is the heartbeat alarm's to judge.
+   */
+  lastHeartbeat: number | null;
 }
 
 /**
@@ -179,8 +208,6 @@ export interface SandboxState {
 export interface SpawnConfig {
   /** Cooldown period in ms between spawn attempts (default: 30s) */
   cooldownMs: number;
-  /** Time to wait for WebSocket after spawn (default: 60s) */
-  readyWaitMs: number;
   /**
    * Max time a sandbox may remain in "spawning"/"connecting" before it is
    * treated as dead and a fresh spawn is allowed. Defaults to
@@ -196,7 +223,8 @@ export interface SpawnConfig {
 }
 
 /**
- * How long a sandbox may sit in "spawning"/"connecting" before it is treated as dead.
+ * How long a sandbox may sit in "spawning"/"connecting" without its bridge ever having connected
+ * before it is treated as dead.
  *
  * Single source of truth for two decisions that must agree: the initial-connect watchdog
  * (DEFAULT_CONNECTING_TIMEOUT_CONFIG) that fails the sandbox, and the staleness bound
@@ -205,25 +233,27 @@ export interface SpawnConfig {
  * healthy sandbox still inside the watchdog window is judged dead and a second sandbox is spawned
  * alongside it.
  *
- * The boot sequence (git clone → setup.sh → start.sh → opencode → bridge connect) typically takes
- * 30–90 seconds, but large repos with real setup scripts run far longer, and overrunning the
- * watchdog is not a soft failure: `clearSandboxAccessState` locks out the sandbox that does
- * eventually come up, the queued prompt is never re-driven, and the documented recovery ("it will
- * be retried on your next message") cannot fire for bot-triggered sessions, which only ever send
- * one prompt. Boots that overran by a few seconds were stranding their sessions permanently, so
- * the bound sits well clear of the observed boot spread rather than at its edge.
- *
- * Widening it is a mitigation, not the fix — see ColeMurray/background-agents#1363 for the
- * underlying recovery gap.
+ * The bridge connects within seconds of the runtime process starting, ahead of the repository
+ * clone and the setup/start hooks, so this bounds only the provider's launch: from the reservation
+ * to the first socket. Once a generation has connected, neither decision applies to it any more —
+ * its liveness is the heartbeat's to judge and its boot length the boot budget's
+ * (DEFAULT_BOOT_BUDGET_CONFIG). Runtimes that predate early connect still boot in full before
+ * connecting, which is why the value keeps its earlier margin rather than shrinking to a launch
+ * bound. See ColeMurray/background-agents#1363 for the pending-prompt recovery gap on this path.
  */
 const CONNECT_WATCHDOG_MS = 240_000;
+
+/** Latest a VM launch may start after reservation; enforced by both launch endpoints. */
+export const PENDING_VM_REFERENCE_LAUNCH_WINDOW_MS = 30_000;
+
+/** Launch window + Modal api_create_sandbox/api_restore_sandbox timeout=150s + 30s margin. */
+export const PENDING_VM_REFERENCE_MATERIALIZE_BOUND_MS = 210_000;
 
 /**
  * Default spawn configuration.
  */
 export const DEFAULT_SPAWN_CONFIG: SpawnConfig = {
   cooldownMs: 30000, // 30 seconds
-  readyWaitMs: 60000, // 60 seconds
   spawningTimeoutMs: CONNECT_WATCHDOG_MS,
 };
 
@@ -239,9 +269,8 @@ export const DEFAULT_SPAWN_CONFIG: SpawnConfig = {
  *
  * Fails closed, matching image selection: a snapshot whose runtime version was
  * never recorded (taken before this column existed) or does not parse is
- * treated as below the floor. The cost is one fresh spawn — the sandbox's
- * uncommitted filesystem state — after which the next snapshot records its
- * version and restores resume as normal.
+ * treated as below the floor. Incompatibility blocks execution, not retention:
+ * keep the snapshot for operator recovery instead of substituting a clean tree.
  */
 export function isSnapshotRuntimeCompatible(snapshotRuntimeVersion: string | null): boolean {
   if (!snapshotRuntimeVersion) return false;
@@ -254,10 +283,12 @@ export function isSnapshotRuntimeCompatible(snapshotRuntimeVersion: string | nul
  */
 export type SpawnAction =
   | { action: "spawn"; reason?: string }
+  | { action: "hold"; reason: string }
   | { action: "resume"; providerObjectId: string }
   | { action: "restore"; snapshotImageId: string; snapshotRuntimeVersion: string }
   | { action: "skip"; reason: string }
-  | { action: "wait"; reason: string };
+  | { action: "wait"; reason: string }
+  | { action: "await_reconnect"; lastHeartbeat: number };
 
 /**
  * Evaluate what spawn action to take.
@@ -265,9 +296,9 @@ export type SpawnAction =
  * This function encapsulates the complex spawn decision logic:
  * - Restore from snapshot if available, compatible, and sandbox is
  *   stopped/stale/failed
+ * - Await reconnect if a live generation's bridge connected and dropped
  * - Skip if already spawning/connecting
  * - Skip if ready with active WebSocket
- * - Wait if ready without WebSocket but recently spawned
  * - Wait during cooldown period (unless failed/stopped)
  * - Skip if already spawning in memory
  * - Spawn if all conditions pass
@@ -287,8 +318,9 @@ export type SpawnAction =
  *     snapshotImageId: "img-123",
  *     snapshotRuntimeVersion: "v59-runtime",
  *     hasActiveWebSocket: false,
+ *     lastHeartbeat: null,
  *   },
- *   { cooldownMs: 30000, readyWaitMs: 60000 },
+ *   DEFAULT_SPAWN_CONFIG,
  *   Date.now(),
  *   false
  * );
@@ -336,38 +368,48 @@ export function evaluateSpawnDecision(
         snapshotRuntimeVersion: state.snapshotRuntimeVersion as string,
       };
     }
-    // Fall through to a fresh spawn rather than booting a retired runtime.
+    // Never substitute a clean filesystem for retained user state.
     return {
-      action: "spawn",
+      action: "hold",
       reason: `snapshot runtime ${state.snapshotRuntimeVersion ?? "unknown"} is below the v${MIN_COMPATIBLE_RUNTIME_VERSION} floor`,
     };
   }
 
-  // Don't spawn if a spawn/connect is genuinely in progress (persisted status).
-  // But a spawn interrupted before the sandbox connects (provider crash,
-  // redeploy, cancelled provider call) can pin the status at "spawning"/
-  // "connecting" forever — the connecting-timeout alarm may never have been
-  // scheduled. Treat a stale spawn/connect as dead so a fresh spawn can recover
-  // the session, instead of skipping indefinitely.
+  // A launched, live generation whose bridge connected and dropped (e.g.
+  // across a control-plane restart) is the heartbeat alarm's to terminalize
+  // (which re-drives the queue), never age's to replace, whatever its status:
+  // a replacement would run alongside a sandbox that may reconnect. "pending"
+  // has launched nothing to wait for.
   if (
-    (state.status === "spawning" || state.status === "connecting") &&
-    timeSinceLastSpawn < config.spawningTimeoutMs
+    !state.hasActiveWebSocket &&
+    state.lastHeartbeat !== null &&
+    state.status !== "pending" &&
+    !isDeadSandboxStatus(state.status)
   ) {
-    return { action: "skip", reason: `already ${state.status}` };
+    return { action: "await_reconnect", lastHeartbeat: state.lastHeartbeat };
   }
 
-  // Don't spawn if status is "ready" and we have an active WebSocket
-  if (state.status === "ready") {
+  if (state.status === "spawning" || state.status === "connecting") {
+    // A booting sandbox with its bridge attached is alive, however long its
+    // boot has run; the ready event will release the queue.
     if (state.hasActiveWebSocket) {
-      return { action: "skip", reason: "sandbox ready with active WebSocket" };
+      return { action: "skip", reason: `already ${state.status} with a live bridge` };
     }
-    // If no WebSocket but was recently spawned, wait for reconnect
-    if (timeSinceLastSpawn < config.readyWaitMs) {
-      return {
-        action: "wait",
-        reason: `status ready but no WebSocket, last spawn was ${Math.round(timeSinceLastSpawn / 1000)}s ago`,
-      };
+    // Don't spawn if a spawn/connect is genuinely in progress (persisted status).
+    // But a spawn interrupted before the sandbox connects (provider crash,
+    // redeploy, cancelled provider call) can pin the status at "spawning"/
+    // "connecting" forever — the connecting-timeout alarm may never have been
+    // scheduled. Treat a stale spawn/connect as dead so a fresh spawn can recover
+    // the session, instead of skipping indefinitely.
+    if (timeSinceLastSpawn < config.spawningTimeoutMs) {
+      return { action: "skip", reason: `already ${state.status}` };
     }
+  }
+
+  // Don't spawn if status is "ready" and we have an active WebSocket. Ready
+  // implies a connected bridge, so a dropped one awaited its reconnect above.
+  if (state.status === "ready" && state.hasActiveWebSocket) {
+    return { action: "skip", reason: "sandbox ready with active WebSocket" };
   }
 
   // Cooldown: don't spawn if last spawn was within cooldown period
@@ -426,8 +468,8 @@ export const DEFAULT_INACTIVITY_CONFIG: InactivityConfig = {
  * Possible inactivity actions.
  */
 export type InactivityAction =
-  | { action: "timeout"; shouldSnapshot: boolean }
-  | { action: "extend"; extensionMs: number; shouldWarn: boolean }
+  | { action: "timeout" }
+  | { action: "extend"; extensionMs: number }
   | { action: "schedule"; nextCheckMs: number };
 
 /**
@@ -486,12 +528,11 @@ export function evaluateInactivityTimeout(
       return {
         action: "extend",
         extensionMs: config.extensionMs,
-        shouldWarn: true,
       };
     }
 
-    // No clients connected - timeout and snapshot
-    return { action: "timeout", shouldSnapshot: true };
+    // No clients connected - end the idle sandbox.
+    return { action: "timeout" };
   }
 
   // Not yet timed out - schedule next check at remaining time (minimum interval)
@@ -519,12 +560,7 @@ export const DEFAULT_HEARTBEAT_CONFIG: HeartbeatConfig = {
 /**
  * Heartbeat health result.
  */
-export interface HeartbeatHealth {
-  /** Whether the sandbox is considered stale (missed heartbeats) */
-  isStale: boolean;
-  /** Time since last heartbeat in ms (only set if stale) */
-  ageMs?: number;
-}
+export type HeartbeatHealth = { isStale: false } | { isStale: true; ageMs: number };
 
 /**
  * Evaluate heartbeat health.
@@ -573,6 +609,11 @@ export function evaluateHeartbeatHealth(
   return { isStale: false };
 }
 
+/** The earliest time at which `evaluateHeartbeatHealth` judges `lastHeartbeat` stale. */
+export function heartbeatStaleAt(lastHeartbeat: number, config: HeartbeatConfig): number {
+  return lastHeartbeat + config.timeoutMs + 1;
+}
+
 // ==================== Connecting Timeout ====================
 
 /**
@@ -604,14 +645,19 @@ export interface ConnectingTimeoutResult {
 /**
  * Evaluate whether a sandbox has been stuck in "connecting" too long.
  *
- * After a sandbox is spawned, it must establish a WebSocket connection to the
- * control plane within the configured timeout. If the bridge never connects
- * (crash, network failure, etc.), this function detects the timeout so the
- * alarm handler can fail the sandbox.
+ * After a sandbox is spawned, its bridge must open a WebSocket to the control
+ * plane within the configured timeout. If it never connects (the provider
+ * never started the process, the runtime crashed before its bridge), this
+ * detects the timeout so the alarm handler can fail the sandbox.
  *
  * Covers both "connecting" and "spawning": a spawn that is interrupted before
  * the provider call returns leaves the status at "spawning" (the transition to
  * "connecting" never happens), so the timeout must apply there too.
+ *
+ * A generation whose bridge has connected (`hasConnected`) is never timed out
+ * here, whatever its age: the bridge attaches ahead of the repository boot,
+ * so the row stays booting for as long as that boot takes, bounded by the
+ * boot budget and watched by the heartbeat alarm.
  *
  * Pure function: no side effects. Safe to call for any status — returns
  * `isTimedOut: false` for sandboxes that are not spawning/connecting.
@@ -620,15 +666,17 @@ export interface ConnectingTimeoutResult {
  * @param createdAt - Timestamp (ms) when the sandbox was spawned
  * @param config - Connecting timeout configuration
  * @param now - Current timestamp (ms)
+ * @param hasConnected - Whether this generation's bridge has connected at least once
  * @returns Whether the sandbox has timed out and how long it's been spawning/connecting
  */
 export function evaluateConnectingTimeout(
   status: SandboxStatus,
   createdAt: number,
   config: ConnectingTimeoutConfig,
-  now: number
+  now: number,
+  hasConnected = false
 ): ConnectingTimeoutResult {
-  if (status !== "connecting" && status !== "spawning") {
+  if ((status !== "connecting" && status !== "spawning") || hasConnected) {
     return { isTimedOut: false, elapsedMs: 0 };
   }
 
@@ -637,6 +685,90 @@ export function evaluateConnectingTimeout(
     isTimedOut: elapsedMs >= config.timeoutMs,
     elapsedMs,
   };
+}
+
+// ==================== Boot Budget ====================
+
+/**
+ * Configuration for the boot budget: the longest a connected generation may
+ * stay booting before the control plane gives up on it.
+ */
+export interface BootBudgetConfig {
+  /** Maximum time in ms from the reservation to `ready` */
+  timeoutMs: number;
+}
+
+/**
+ * Default boot budget. Must exceed CONNECT_WATCHDOG_MS: both are measured
+ * from the reservation, and the budget only takes over once the watchdog has
+ * stood down for a connected generation. Overridable per deployment through
+ * SANDBOX_BOOT_TIMEOUT_MS.
+ */
+export const DEFAULT_BOOT_BUDGET_CONFIG: BootBudgetConfig = {
+  timeoutMs: 30 * 60 * 1000, // 30 minutes
+};
+
+/**
+ * Result of boot budget evaluation.
+ */
+export interface BootBudgetResult {
+  /** Whether the boot has run past the budget */
+  isExceeded: boolean;
+  /** Time elapsed since the reservation (ms) */
+  elapsedMs: number;
+}
+
+/**
+ * Evaluate whether a booting sandbox has exhausted its boot budget.
+ *
+ * Applies to the booting statuses only. Unlike the connect watchdog it does
+ * not stand down for a connected generation: it exists for exactly that case,
+ * a runtime that connected and then hung in `setup.sh` on an unattended
+ * session with nobody to press Stop. Named after the phase the runtime last
+ * reported by the caller, which also chooses the recovery.
+ *
+ * Pure function: no side effects.
+ */
+export function evaluateBootBudget(
+  status: SandboxStatus,
+  createdAt: number,
+  config: BootBudgetConfig,
+  now: number
+): BootBudgetResult {
+  if (status !== "connecting" && status !== "spawning") {
+    return { isExceeded: false, elapsedMs: 0 };
+  }
+
+  const elapsedMs = now - createdAt;
+  return {
+    isExceeded: elapsedMs >= config.timeoutMs,
+    elapsedMs,
+  };
+}
+
+/**
+ * Resolve the boot budget from its deployment knob. The value must be a whole
+ * positive integer of milliseconds above the connect watchdog: both are
+ * measured from the reservation, and a budget at or below the watchdog would
+ * fail a generation that has not yet had its chance to connect. Anything else
+ * (including `parseInt`-tolerant forms like `1000junk` or `1.5`) resolves to
+ * the default and is reported through `rejectedValue`, so a typo weakens
+ * nothing silently. An unset knob is not a rejection.
+ *
+ * Pure function: no side effects.
+ */
+export function resolveBootBudgetTimeoutMs(
+  raw: string | undefined,
+  bounds: { connectingTimeoutMs: number; defaultTimeoutMs: number }
+): { timeoutMs: number; rejectedValue: string | null } {
+  if (raw === undefined || raw === "") {
+    return { timeoutMs: bounds.defaultTimeoutMs, rejectedValue: null };
+  }
+  const parsed = /^[1-9]\d*$/.test(raw) ? Number(raw) : Number.NaN;
+  if (Number.isSafeInteger(parsed) && parsed > bounds.connectingTimeoutMs) {
+    return { timeoutMs: parsed, rejectedValue: null };
+  }
+  return { timeoutMs: bounds.defaultTimeoutMs, rejectedValue: raw };
 }
 
 // ==================== Warm Decision ====================

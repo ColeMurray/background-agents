@@ -1,6 +1,15 @@
-import { describe, it, expect, beforeEach } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { env } from "cloudflare:test";
-import { seedActiveUser, sqlDatabase } from "./helpers";
+import {
+  collectMessages,
+  initNamedSession,
+  openSandboxWs,
+  seedSandboxAuth,
+  waitForSandboxStatus,
+  seedActiveUser,
+  sqlDatabase,
+} from "./helpers";
+import { getUserAuth } from "../../src/auth/user/runtime";
 import { AutomationStore, type AutomationRow } from "../../src/db/automation-store";
 import { SlackChannelStore } from "../../src/db/slack-channel-store";
 import type { SlackAutomationEvent } from "@open-inspect/shared/triggers";
@@ -13,6 +22,7 @@ function makeAutomation(overrides?: Partial<AutomationRow>): AutomationRow {
   const now = Date.now();
   return {
     id: `auto-${Math.random().toString(36).slice(2, 8)}`,
+    owner_team_id: null,
     name: "Slack triage",
     instructions: "Investigate and fix",
     trigger_type: "slack_event",
@@ -116,7 +126,7 @@ describe("Scheduler slack event handling (integration)", () => {
     const id = await seedSlackAutomation(store);
 
     const result = await sendEvent(makeSlackEvent({ text: "good morning team" }));
-    expect(result).toEqual({ triggered: 0, skipped: 0, steered: 0 });
+    expect(result).toEqual({ triggered: 0, skipped: 0, steered: 0, invocationIds: [] });
 
     expect(await fetchRuns(id)).toHaveLength(0);
   });
@@ -134,7 +144,7 @@ describe("Scheduler slack event handling (integration)", () => {
         concurrencyKey: "slack:C2:1",
       })
     );
-    expect(result).toEqual({ triggered: 0, skipped: 0, steered: 0 });
+    expect(result).toEqual({ triggered: 0, skipped: 0, steered: 0, invocationIds: [] });
 
     expect(await fetchRuns(id)).toHaveLength(0);
   });
@@ -171,7 +181,12 @@ describe("Scheduler slack event handling (integration)", () => {
     const result = await sendEvent(
       makeSlackEvent({ text: "deploy", concurrencyKey, triggerKey: "slack:msg:C1:second" })
     );
-    expect(result).toEqual({ triggered: 0, skipped: 1, steered: 0 });
+    expect(result).toEqual({
+      triggered: 0,
+      skipped: 1,
+      steered: 0,
+      invocationIds: [expect.any(String)],
+    });
 
     // The skip is a childless invocation carrying the message coordinates.
     const invocations = await fetchInvocations(store, id);
@@ -205,7 +220,7 @@ describe("Scheduler slack event handling (integration)", () => {
         triggerKey: "slack:msg:C1:reply",
       })
     );
-    expect(followResult).toEqual({ triggered: 0, skipped: 0, steered: 1 });
+    expect(followResult).toEqual({ triggered: 0, skipped: 0, steered: 1, invocationIds: [] });
 
     // No concurrency-skip invocation recorded — the follow-up was steered.
     const invocations = await fetchInvocations(store, id);
@@ -213,6 +228,104 @@ describe("Scheduler slack event handling (integration)", () => {
       invocations.find((invocation) => invocation.skipReason === "concurrent_run_active")
     ).toBeUndefined();
   });
+
+  afterEach(() => vi.restoreAllMocks());
+
+  it.each(["unlinked", "ambiguous", "unavailable", "missing-login"])(
+    "clears attribution on successive Slack follow-ups when current GitHub attribution is %s",
+    async (scenario) => {
+      const store = new AutomationStore(env.DB);
+      const automationId = await seedSlackAutomation(store);
+      await env.DB.prepare(
+        `INSERT INTO user_identities
+      (id, user_id, provider, provider_user_id, provider_login, provider_issuer, created_at, updated_at)
+      VALUES ('actor-github', 'slack-actor-1', 'github', '42', 'reviewer', 'https://github.com', 1, 1)`
+      ).run();
+      const name = `slack-attribution-${crypto.randomUUID()}`;
+      const { stub } = await initNamedSession(name, {
+        repoOwner: null,
+        repoName: null,
+        repoId: null,
+        userId: "user-1",
+        canonicalUserId: "user-1",
+      });
+      const concurrencyKey = `slack:C1:${name}`;
+      await seedRun(makeRunRow(automationId, { session_id: name, status: "running" }), {
+        concurrencyKey,
+      });
+      await seedSandboxAuth(stub, { authToken: "slack-sandbox-token", sandboxId: name });
+      const { ws: sandbox } = await openSandboxWs(name, {
+        authToken: "slack-sandbox-token",
+        sandboxId: name,
+      });
+      expect(sandbox).not.toBeNull();
+      sandbox!.accept();
+      try {
+        sandbox!.send(
+          JSON.stringify({ type: "ready", sandboxId: name, timestamp: Date.now() / 1000 })
+        );
+        await waitForSandboxStatus(stub, "ready");
+        const firstCommands = collectMessages(sandbox!, {
+          until: (message) => message.type === "prompt",
+        });
+        expect(
+          await sendEvent(
+            makeSlackEvent({ text: "first follow-up", concurrencyKey, threadTs: name })
+          )
+        ).toMatchObject({ steered: 1, triggered: 0 });
+        const first = (await firstCommands).find((message) => message.type === "prompt");
+        expect(first?.author).toEqual({
+          userId: "slack:U1",
+          gitIdentity: {
+            mode: "attributed-user",
+            name: "Integration User",
+            email: "42+reviewer@users.noreply.github.com",
+          },
+        });
+        if (scenario === "unlinked") {
+          await env.DB.prepare("DELETE FROM user_identities WHERE id = 'actor-github'").run();
+        } else if (scenario === "ambiguous") {
+          await env.DB.prepare(
+            `INSERT INTO user_identities
+          (id, user_id, provider, provider_user_id, provider_login, provider_issuer, created_at, updated_at)
+          VALUES ('actor-github-other', 'slack-actor-1', 'github', '43', 'other', 'https://github.com', 1, 1)`
+          ).run();
+        } else {
+          await env.DB.prepare(
+            "UPDATE user_identities SET provider_login = NULL WHERE id = 'actor-github'"
+          ).run();
+          if (scenario === "unavailable") {
+            vi.spyOn(
+              getUserAuth(createCloudflareEnv(env), env.DB).api,
+              "getAccessToken"
+            ).mockRejectedValue(new Error("Grant temporarily unavailable"));
+          }
+        }
+        const secondCommands = collectMessages(sandbox!, {
+          until: (message) => message.type === "prompt",
+        });
+        expect(
+          await sendEvent(
+            makeSlackEvent({ text: "second follow-up", concurrencyKey, threadTs: name })
+          )
+        ).toMatchObject({ steered: 1, triggered: 0 });
+        sandbox!.send(
+          JSON.stringify({
+            type: "execution_complete",
+            messageId: first!.messageId,
+            success: true,
+            sandboxId: name,
+            timestamp: Date.now() / 1000,
+          })
+        );
+        const second = (await secondCommands).find((message) => message.type === "prompt");
+        expect(second?.author).toEqual({ userId: "slack:U1", gitIdentity: { mode: "agent-only" } });
+        expect(await fetchRuns(automationId)).toHaveLength(1);
+      } finally {
+        sandbox!.close();
+      }
+    }
+  );
 
   it.each([
     [
@@ -277,7 +390,7 @@ describe("Scheduler slack event handling (integration)", () => {
             triggerKey: `slack:msg:C1:reply-${authorityState}`,
           })
         )
-      ).toEqual({ triggered: 0, skipped: 0, steered: 0 });
+      ).toEqual({ triggered: 0, skipped: 0, steered: 0, invocationIds: [] });
       expect(await fetchRuns(id)).toHaveLength(1);
       expect(await fetchInvocations(store, id)).toHaveLength(1);
     }
@@ -322,7 +435,7 @@ describe("Scheduler slack event handling (integration)", () => {
           triggerKey: "slack:msg:C1:reply-actor-only",
         })
       )
-    ).toEqual({ triggered: 0, skipped: 0, steered: 1 });
+    ).toEqual({ triggered: 0, skipped: 0, steered: 1, invocationIds: [] });
     expect(await fetchRuns(id)).toHaveLength(1);
   });
 
@@ -363,6 +476,7 @@ describe("Scheduler slack event handling (integration)", () => {
       triggered: 0,
       skipped: 0,
       steered: 1,
+      invocationIds: [],
     });
 
     // The reply created no new run and recorded no skip — it reused the

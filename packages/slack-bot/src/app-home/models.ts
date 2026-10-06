@@ -2,6 +2,7 @@ import {
   DEFAULT_ENABLED_MODELS,
   MODEL_OPTIONS,
   normalizeValidModels,
+  type ValidModel,
 } from "@open-inspect/shared/models";
 import type { Env } from "../types";
 import { signedControlPlaneFetch } from "../internal-auth";
@@ -15,6 +16,9 @@ const ALL_MODELS = MODEL_OPTIONS.flatMap((group) =>
   }))
 );
 
+export const MODEL_PREFERENCES_UNAVAILABLE_MESSAGE =
+  "Model preferences are temporarily unavailable. Please try again.";
+
 function isObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
@@ -25,30 +29,45 @@ function getDefaultModelOptions(): ModelOption[] {
   return defaultOptions.length > 0 ? defaultOptions : ALL_MODELS;
 }
 
-export async function getAvailableModels(env: Env, traceId?: string): Promise<ModelOption[]> {
+async function fetchEnabledModels(
+  env: Env,
+  url: string,
+  traceId?: string
+): Promise<ValidModel[] | null> {
   try {
-    const url = "https://internal/model-preferences";
     const response = await signedControlPlaneFetch(env, { method: "GET", url, traceId });
-
-    if (response.ok) {
-      const data = await response.json();
-      if (
-        isObject(data) &&
-        Array.isArray(data.enabledModels) &&
-        data.enabledModels.every((id): id is string => typeof id === "string")
-      ) {
-        const enabledSet = new Set(normalizeValidModels(data.enabledModels));
-        const enabledModels = ALL_MODELS.filter((model) => enabledSet.has(model.value));
-        if (enabledModels.length > 0) {
-          return enabledModels;
-        }
-      }
+    if (!response.ok) return null;
+    const data = await response.json();
+    if (
+      !isObject(data) ||
+      !Array.isArray(data.enabledModels) ||
+      !data.enabledModels.every((id): id is string => typeof id === "string")
+    ) {
+      return null;
     }
+    const enabledModels = normalizeValidModels(data.enabledModels);
+    return enabledModels.length > 0 ? enabledModels : null;
   } catch {
-    // Fall through to defaults
+    return null;
   }
+}
 
-  return getDefaultModelOptions();
+export async function getAvailableModels(env: Env, traceId?: string): Promise<ModelOption[]> {
+  const enabledModels = await fetchEnabledModels(
+    env,
+    "https://internal/model-preferences",
+    traceId
+  );
+  if (!enabledModels) return getDefaultModelOptions();
+  const enabledSet = new Set<ValidModel>(enabledModels);
+  return ALL_MODELS.filter((model) => enabledSet.has(model.value));
+}
+
+export async function getAuthoritativeModels(
+  env: Env,
+  traceId?: string
+): Promise<ValidModel[] | null> {
+  return fetchEnabledModels(env, "https://internal/model-preferences?strict=true", traceId);
 }
 
 export async function getSlackDefaultModel(

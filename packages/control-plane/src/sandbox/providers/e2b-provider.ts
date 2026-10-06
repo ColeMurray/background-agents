@@ -26,7 +26,10 @@
  * Modal repo images reboot their entrypoint on each spawn.
  */
 
-import type { SandboxSettings } from "@open-inspect/shared/types/integrations";
+import {
+  supportsConfigurableSandboxTimeout,
+  type SandboxSettings,
+} from "@open-inspect/shared/types/integrations";
 import { createLogger } from "../../logger";
 import {
   buildImageBuildCallbackEnv,
@@ -46,7 +49,9 @@ import type { E2BRestClient, E2BSandboxCreated, E2BSandboxDetail } from "../e2b-
 import { E2BApiError, E2BConflictError, E2BNotFoundError } from "../e2b-rest-client";
 import {
   DEFAULT_SANDBOX_TIMEOUT_SECONDS,
+  PrebuiltImageUnavailableError,
   SandboxProviderError,
+  signalUntilDeadline,
   createVncAccess,
   type CreateSandboxConfig,
   type CreateSandboxResult,
@@ -170,8 +175,6 @@ export class E2BSandboxProvider implements SandboxProvider {
    * Stop reasons after which the provider object cannot be resumed, including
    * replacement by a newly-created sandbox.
    */
-  private static readonly TERMINAL_STOP_REASONS = new Set(["connecting_timeout", "respawn"]);
-
   /**
    * Session continuity on E2B is provider-managed: stop pauses the sandbox and
    * resume reconnects to it, so there is no session snapshot/restore pair here.
@@ -188,7 +191,7 @@ export class E2BSandboxProvider implements SandboxProvider {
    * image id as the templateID, and are baked by takePrebuiltImageSnapshot.
    */
   readonly capabilities: SandboxProviderCapabilities = {
-    supportsSandboxTimeout: true,
+    supportsSandboxTimeout: supportsConfigurableSandboxTimeout(this.name),
     supportsSnapshots: false,
     supportsRestore: false,
     // Stop is a resumable pause; the manager treats it as provider-managed state.
@@ -218,21 +221,29 @@ export class E2BSandboxProvider implements SandboxProvider {
         extraEnv
       );
 
-      const sandbox = await this.client.createSandbox({
-        templateID: config.prebuiltImageId || this.client.config.templateId,
-        envVars,
-        metadata: this.buildMetadata(config),
-        timeoutSeconds,
-        autoPause: this.providerConfig.autoPause,
-        // Require secure envd access: the entrypoint exec must not be possible
-        // anonymously over the public sandbox host, so envd must reject calls
-        // lacking the returned access token.
-        secure: true,
-        // Deliberately NOT auto-resume: resume is control-plane-driven (resumeSandbox →
-        // connectSandbox). Provider-side auto-resume would wake a paused sandbox from
-        // stray inbound traffic, outside the DO state machine.
-        autoResume: false,
-      });
+      let sandbox: E2BSandboxCreated;
+      try {
+        sandbox = await this.client.createSandbox({
+          templateID: config.prebuiltImageId || this.client.config.templateId,
+          envVars,
+          metadata: this.buildMetadata(config),
+          timeoutSeconds,
+          autoPause: this.providerConfig.autoPause,
+          // Require secure envd access: the entrypoint exec must not be possible
+          // anonymously over the public sandbox host, so envd must reject calls
+          // lacking the returned access token.
+          secure: true,
+          // Deliberately NOT auto-resume: resume is control-plane-driven (resumeSandbox →
+          // connectSandbox). Provider-side auto-resume would wake a paused sandbox from
+          // stray inbound traffic, outside the DO state machine.
+          autoResume: false,
+        });
+      } catch (error) {
+        if (config.prebuiltImageId && error instanceof E2BNotFoundError) {
+          throw new PrebuiltImageUnavailableError("E2B prebuilt template is unavailable", error);
+        }
+        throw error;
+      }
 
       try {
         await this.startEntrypoint(sandbox);
@@ -242,6 +253,7 @@ export class E2BSandboxProvider implements SandboxProvider {
         await this.cleanupSandbox(sandbox.sandboxID, "e2b.cleanup_kill_failed");
         throw error;
       }
+      const lifetime = await this.readLifetime(sandbox.sandboxID, "create");
 
       const { codeServerUrl, vncUrl, tunnelUrls } = this.buildTunnelUrls(
         sandbox.sandboxID,
@@ -255,6 +267,7 @@ export class E2BSandboxProvider implements SandboxProvider {
         sandboxId: config.sandboxId,
         providerObjectId: sandbox.sandboxID,
         createdAt: Date.now(),
+        lifetime,
         codeServerUrl,
         codeServerPassword,
         vncAccess: createVncAccess(vncUrl, vncPassword),
@@ -427,6 +440,7 @@ export class E2BSandboxProvider implements SandboxProvider {
       return {
         success: true,
         providerObjectId: sandbox.sandboxID,
+        lifetime: await this.readLifetime(config.providerObjectId, "resume"),
         codeServerUrl,
         codeServerPassword,
         vncAccess: createVncAccess(vncUrl, vncPassword),
@@ -445,21 +459,53 @@ export class E2BSandboxProvider implements SandboxProvider {
    * sandbox E2B retains indefinitely.
    */
   async stopSandbox(config: StopConfig): Promise<StopResult> {
-    const terminal = E2BSandboxProvider.TERMINAL_STOP_REASONS.has(config.reason);
+    const signal = signalUntilDeadline(config.deadlineAtMs, config.signal);
+    const terminal = config.intent === "destroy";
     try {
       try {
         if (terminal) {
-          await this.client.killSandbox(
-            config.providerObjectId,
-            ...(config.signal ? [config.signal] : [])
-          );
+          await this.client.killSandbox(config.providerObjectId, ...(signal ? [signal] : []));
         } else {
-          await this.client.pauseSandbox(config.providerObjectId);
+          if (signal) {
+            await this.client.pauseSandbox(config.providerObjectId, undefined, signal);
+          } else {
+            await this.client.pauseSandbox(config.providerObjectId);
+          }
+          if (config.intent === "preserve") {
+            const paused = await this.client.getSandbox(config.providerObjectId, signal);
+            if (paused.state !== "paused") {
+              return { success: false, error: `Sandbox state was ${paused.state} after pause` };
+            }
+          }
         }
       } catch (error) {
-        // Already gone or already paused — nothing to do.
-        if (error instanceof E2BNotFoundError || error instanceof E2BConflictError) {
+        if (error instanceof E2BNotFoundError) {
+          if (config.intent === "preserve") {
+            return {
+              success: false,
+              error: "Sandbox disappeared before graceful shutdown was verified",
+            };
+          }
           return { success: true };
+        }
+        if (error instanceof E2BConflictError) {
+          if (config.intent !== "preserve") return { success: true };
+          try {
+            const paused = await this.client.getSandbox(config.providerObjectId, signal);
+            if (paused.state === "paused") return { success: true };
+            return {
+              success: false,
+              error: `Sandbox state was ${paused.state} after pause conflict`,
+            };
+          } catch (verificationError) {
+            if (verificationError instanceof E2BNotFoundError) {
+              return {
+                success: false,
+                error: "Sandbox disappeared before graceful shutdown was verified",
+              };
+            }
+            throw verificationError;
+          }
         }
         throw error;
       }
@@ -470,6 +516,31 @@ export class E2BSandboxProvider implements SandboxProvider {
         error,
         "stop"
       );
+    }
+  }
+
+  private lifetimeFromDetail(detail: E2BSandboxDetail) {
+    const observedAtMs = Date.now();
+    const expiresAtMs = detail.endAt ? Date.parse(detail.endAt) : Number.NaN;
+    return Number.isFinite(expiresAtMs)
+      ? ({ kind: "finite", expiresAtMs, observedAtMs, source: "provider" } as const)
+      : ({ kind: "unknown", observedAtMs, reason: "E2B detail omitted a valid endAt" } as const);
+  }
+
+  private async readLifetime(providerObjectId: string, operation: "create" | "resume") {
+    try {
+      return this.lifetimeFromDetail(await this.client.getSandbox(providerObjectId));
+    } catch (error) {
+      log.warn("e2b.lifetime_read_failed", {
+        sandbox_id: providerObjectId,
+        operation,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return {
+        kind: "unknown",
+        observedAtMs: Date.now(),
+        reason: `Failed to read E2B lifetime after successful ${operation}`,
+      } as const;
     }
   }
 

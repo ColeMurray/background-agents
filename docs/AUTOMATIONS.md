@@ -24,7 +24,21 @@ new Sentry issues, and recurring report generation.
 
 Navigate to **Automations** in the sidebar, then click **Create Automation**.
 
+Creation requires both `automations.create` and `sessions.create`, plus permission to use the
+selected targets. The creator becomes the initial executor. The web creation and template entry
+points also require both permissions; automation creation permission alone is insufficient.
+
 Start by choosing a **Trigger Type**. The rest of the form adjusts based on that choice.
+
+Choose workspace ownership or an owning team; team pages also expose an **Automations** tab. The
+creator must belong to the selected active team, and that team's grants must cover the selected
+repositories, including repositories resolved from environment targets. Newly created teams have no
+repository grants. When `requireTeamOnCreate` is enabled, new automation definitions must have a
+team. Existing workspace automations are not migrated or blocked from running by that setting alone.
+
+Ownership is fixed at creation: an automation cannot move between teams or between a team and the
+workspace. Its **executor**, initially the creator, is a separate user identity that can be
+reassigned without changing ownership.
 
 ### Required Fields
 
@@ -195,13 +209,19 @@ means separate deliveries for the same automation can run at the same time.
 Successful requests return JSON in this shape:
 
 ```json
-{ "ok": true, "triggered": 1, "skipped": 0 }
+{ "ok": true, "triggered": 1, "skipped": 0, "steered": 0, "invocationId": "3f2a…" }
 ```
 
-`triggered` is the number of automation runs started.
+`triggered` is the number of automation runs started. `invocationId` identifies the firing this
+request belongs to (for a repeated `idempotencyKey`, the original firing), or is `null` when nothing
+was recorded. Read its status with the same API key at
+`GET /webhooks/automation/<automation-id>/invocations/<invocation-id>`, which returns
+`{ invocationId, status, runs: [{ id, status, sessionId }] }` and never session content.
 
-`skipped` is the number of matching runs that were ignored because of duplicate delivery or
-concurrency protection.
+`skipped` includes runs not started because of duplicate delivery, concurrency protection, or
+runtime authorization denial. Authorization denial does not pause an event-driven automation or
+record a run-history invocation; restore the required executor/team/target access before sending
+another delivery.
 
 ### Error Responses
 
@@ -220,8 +240,8 @@ concurrency protection.
 A **GitHub Event** automation starts a session when a supported webhook event arrives for its
 repository. Pick one repository and one event type. The GitHub App must subscribe to that event and
 have its required repository permission. Set `enable_github_bot = true`, then complete the
-[GitHub bot setup](GETTING_STARTED.md#step-7c-complete-github-bot-setup-if-using-github-bot) to
-deploy the webhook worker and configure event delivery.
+[GitHub bot setup](GETTING_STARTED.md#github-bot-optional) to deploy the webhook worker and
+configure event delivery.
 
 **Workflow Run Completed** handles completed GitHub Actions workflow runs. It requires the GitHub
 App's read-only Actions permission and the **Workflow runs** event subscription. Use these
@@ -359,6 +379,36 @@ Examples:
 
 ## Managing Automations
 
+Workspace automations are readable with `automations.read`; team automations additionally require
+owning-team membership or a workspace Owner/Administrator role. Executors and owning-team leads can
+manage and trigger eligible automations with the corresponding `own` permissions; `any` permissions
+allow those actions across eligible automations. Built-in Owners and Administrators have the latter;
+Viewers cannot manage or trigger. These resource checks apply even in `off` or `shadow` session
+enforcement mode.
+
+Scheduled and event runs use the executor's authority. Each run checks that the execution user is
+active, can create sessions and use its targets, and, for team automations, is a current member of
+the active owning team. Current team grants must cover all repositories being launched. Generated
+sessions inherit the automation's owning team and that team's default visibility; workspace runs
+remain workspace-owned and workspace-visible. Environment targets must have the same ownership as
+the automation; unlike the team session picker, a team automation cannot select a workspace-owned
+environment.
+
+If a scheduled run is denied execution authorization, it is recorded as **Skipped** and the
+automation is paused immediately, clearing its next run time without adding a failure strike.
+Restore the required access or reassign the executor, then click **Resume**. Restoring access or
+reassigning alone does not resume the schedule. Event-driven authorization denials skip the event
+without pausing the automation.
+
+### Executor Reassignment
+
+A team lead or workspace Owner/Administrator with automation management access can use
+`PATCH /automations/:id` with `{"userId":"<canonical-user-id>"}` to change the executor. Being the
+executor alone does not permit reassignment. The replacement must be active, able to launch the
+stored targets, and a member of the active owning team for a team automation. The change is audited
+as `automation.executor_changed`. Reassignment allows recovery when the old executor loses access
+without recreating the definition; it does not move ownership or rewrite existing sessions.
+
 ### Pause and Resume
 
 **Pausing** an automation stops it from firing. Scheduled automations will not run on their cron,
@@ -376,6 +426,11 @@ selection. For scheduled automations, this does not affect the next scheduled ru
 triggers follow the same concurrency rules as all other runs: if a run is already active, the
 trigger is rejected. Trigger Now also works while the automation is paused, so you can verify a fix
 before resuming.
+
+Manual runs use the requester's authority and linked source-control credentials, not the stored
+executor's. In addition to trigger permission, the requester must pass runtime session/target checks
+and be a current member of the active owning team for a team automation, even if they are a
+workspace Owner or Administrator.
 
 ### Edit
 
@@ -396,8 +451,17 @@ any sessions it created are preserved.
 
 ## Run History
 
-Each automation's detail page shows a chronological list of runs — one row per firing — with status,
-duration, and links to the underlying sessions.
+Each automation's detail page shows a chronological list of runs — one row per recorded invocation —
+with status, duration, and links to the underlying sessions. Generic event execution-authorization
+denials do not create invocation records and do not appear in this history.
+
+GitHub repository-grant denials are an exception. Matching events without an owning-team grant for
+the repository can record a sessionless **Unauthorized** invocation with reason `repo_not_granted`
+before executor authorization, including when the executor cannot be resolved. A missing executor
+alone does not create that record. These denials increment the event response's `skipped` count, do
+not pause the automation, and neither add a failure strike nor reset existing failures. See
+`packages/control-plane/src/automation/github-event-admission.ts` and
+`packages/control-plane/src/db/github-automation-store.ts` for this pre-admission path.
 
 A single-repository firing renders as a flat row, exactly as before. A multi-repository firing
 renders as one expandable row summarizing its repositories (for example "10 repositories — 8
@@ -406,16 +470,20 @@ reason, and session link.
 
 ### Run Statuses
 
-| Status              | Meaning                                                                                                |
-| ------------------- | ------------------------------------------------------------------------------------------------------ |
-| **Starting**        | A session is being created for this run.                                                               |
-| **Running**         | At least one session is actively executing.                                                            |
-| **Completed**       | Every session finished successfully.                                                                   |
-| **Failed**          | Every session encountered an error. The failure reason is shown on the run.                            |
-| **Partial failure** | A multi-repository run where some repositories completed and some failed.                              |
-| **Skipped**         | The run was skipped because a previous run was still active (see [Concurrent Runs](#concurrent-runs)). |
+| Status              | Meaning                                                                                                             |
+| ------------------- | ------------------------------------------------------------------------------------------------------------------- |
+| **Starting**        | A session is being created for this run.                                                                            |
+| **Running**         | At least one session is actively executing.                                                                         |
+| **Completed**       | Every session finished successfully.                                                                                |
+| **Failed**          | Every session encountered an error. The failure reason is shown on the run.                                         |
+| **Partial failure** | A multi-repository run where some repositories completed and some failed.                                           |
+| **Skipped**         | A previous run was still active, or a scheduled firing was denied execution authorization.                          |
+| **Unauthorized**    | GitHub event admission found no owning-team grant for the repository (`repo_not_granted`); no session was launched. |
 
-Click **View session** on any run to jump to the full session with its output and artifacts.
+When authorized, click **View session** to open the session with its output and artifacts.
+Automation read access is not session read access: history redacts session IDs, titles, and artifact
+summaries for sessions the viewer cannot read. Lists do not expose private sessions solely through
+an Owner's break-glass privilege; a qualifying single-run read audits that access.
 
 ---
 
@@ -423,11 +491,11 @@ Click **View session** on any run to jump to the full session with its output an
 
 Automations display one of three statuses:
 
-| Status       | Meaning                                                                               |
-| ------------ | ------------------------------------------------------------------------------------- |
-| **Enabled**  | Running normally and ready to respond to its trigger.                                 |
-| **Degraded** | Enabled but has recent consecutive failures. The failure count is shown on the badge. |
-| **Paused**   | Not firing. Either manually paused or auto-paused after repeated failures.            |
+| Status       | Meaning                                                                                                                                 |
+| ------------ | --------------------------------------------------------------------------------------------------------------------------------------- |
+| **Enabled**  | Running normally and ready to respond to its trigger.                                                                                   |
+| **Degraded** | Enabled but has recent consecutive failures. The failure count is shown on the badge.                                                   |
+| **Paused**   | Not firing. Manually paused, auto-paused after repeated failures, or immediately paused after scheduled execution authorization denial. |
 
 ---
 

@@ -1,9 +1,11 @@
 import { ImageBuildStore } from "../db/image-builds";
 import { createLogger, type CorrelationContext } from "../logger";
+import { readCachedInstallationRepositories } from "../repos/cache";
 import { createSourceControlProviderFromEnv, type SourceControlProvider } from "../source-control";
 import { errorMessage } from "./errors";
 import { imageBuildFinalizationJob } from "./finalization-job";
 import type { ImageBuildProvider } from "./model";
+import { resolveImageBuildTokenScope } from "./credential-scope";
 import { createImageBuildAdapterFactory, type ImageBuildAdapterFactory } from "./provider-factory";
 import { DEFAULT_ARTIFACT_CLEANUP_MAX_AGE_MS, DEFAULT_STALE_BUILD_MAX_AGE_MS } from "./maintenance";
 import { evaluateImageBuildRebuildPolicy } from "./rebuild-policy";
@@ -11,7 +13,7 @@ import { ImageBuildReaper } from "./reaper";
 import { listEnabledScopes, resolveScopeTarget } from "./scope";
 import { ImageBuildSessionCleanup } from "./session-cleanup";
 import { createImageBuildWorkflowFromEnv, type ImageBuildWorkflow } from "./workflow";
-import { resolveImageBuildProvider } from "./provider-policy";
+import { resolveImageBuildAdmission, resolveImageBuildProvider } from "./provider-policy";
 import { runMaintenanceTasks } from "./concurrency";
 import { repositoryIdentityKey } from "./provenance";
 import type { Env } from "../types";
@@ -22,11 +24,22 @@ const logger = createLogger("image-builds:scheduler");
 export const IMAGE_BUILD_SCHEDULER_CRON = "7,37 * * * *";
 
 export interface ImageBuildSchedulerStats {
+  /**
+   * Whether this deployment admits new builds. Everything else in this tick
+   * runs either way: finalization, cleanup and reconciliation of what already
+   * exists are not gated on admission.
+   */
+  admissionOpen: boolean;
   finalizationsRepublished: number;
   staleMarked: number;
   cleanupAttempted: number;
   cleanupSucceeded: number;
   cleanupFailed: number;
+  sourceIntentsRecovered: number;
+  sourceIntentsCleared: number;
+  sourceIntentsRetained: number;
+  operationsReconciled: number;
+  operationsRetained: number;
   scopesScanned: number;
   branchLookups: number;
   branchMatched: number;
@@ -60,12 +73,19 @@ export class ImageBuildScheduler {
 
   async run(correlation: CorrelationContext): Promise<ImageBuildSchedulerStats> {
     const startedAt = Date.now();
+    const admission = resolveImageBuildAdmission(this.env);
     const stats: ImageBuildSchedulerStats = {
+      admissionOpen: admission.admitted,
       finalizationsRepublished: 0,
       staleMarked: 0,
       cleanupAttempted: 0,
       cleanupSucceeded: 0,
       cleanupFailed: 0,
+      sourceIntentsRecovered: 0,
+      sourceIntentsCleared: 0,
+      sourceIntentsRetained: 0,
+      operationsReconciled: 0,
+      operationsRetained: 0,
       scopesScanned: 0,
       branchLookups: 0,
       branchMatched: 0,
@@ -92,6 +112,20 @@ export class ImageBuildScheduler {
       logger.warn("image_build.scheduler_stale_failed", { error: errorMessage(error) });
     }
 
+    // Before the session sweep, so a source recovered by name is torn down on
+    // this tick rather than the next one: recovery gives the row the id the
+    // sweep needs.
+    try {
+      const recovery = await this.reaper.recoverUnboundSources(correlation);
+      stats.sourceIntentsRecovered = recovery.recovered;
+      stats.sourceIntentsCleared = recovery.cleared;
+      stats.sourceIntentsRetained = recovery.retained;
+    } catch (error) {
+      logger.warn("image_build.scheduler_source_recovery_phase_failed", {
+        error: errorMessage(error),
+      });
+    }
+
     try {
       await this.cleanupProviderSessions(stats, correlation);
     } catch (error) {
@@ -99,7 +133,7 @@ export class ImageBuildScheduler {
         error: errorMessage(error),
       });
     }
-    if (this.provider && this.sourceControl) {
+    if (this.provider && this.sourceControl && admission.admitted) {
       try {
         await this.reconcileScopes(stats, correlation);
       } catch (error) {
@@ -107,6 +141,25 @@ export class ImageBuildScheduler {
           error: errorMessage(error),
         });
       }
+    } else if (this.provider && !admission.admitted) {
+      logger.info("image_build.scheduler_admission_closed", {
+        provider: this.provider,
+        reason: admission.reason,
+        request_id: correlation.request_id,
+        trace_id: correlation.trace_id,
+      });
+    }
+
+    // Before the artifact sweep: an operation that resolves here frees its row
+    // for the age-based deletion the sweep performs.
+    try {
+      const operations = await this.reaper.reconcileUnresolvedOperations(correlation);
+      stats.operationsReconciled = operations.reconciled;
+      stats.operationsRetained = operations.retained;
+    } catch (error) {
+      logger.warn("image_build.scheduler_operation_reconciliation_failed", {
+        error: errorMessage(error),
+      });
     }
 
     try {
@@ -203,15 +256,21 @@ export class ImageBuildScheduler {
 
         let rebuild = decision.type === "rebuild";
         if (decision.type === "check_branches") {
+          const tokenScope = await resolveImageBuildTokenScope(this.db, scope, target, () =>
+            readCachedInstallationRepositories(this.env)
+          );
           const heads: Array<string | null> = [];
           for (const repository of target.repositories) {
             stats.branchLookups += 1;
             try {
-              const head = await sourceControl.getBranchHead({
-                owner: repository.repoOwner,
-                name: repository.repoName,
-                branch: repository.baseBranch,
-              });
+              const head = await sourceControl.getBranchHead(
+                {
+                  owner: repository.repoOwner,
+                  name: repository.repoName,
+                  branch: repository.baseBranch,
+                },
+                tokenScope
+              );
               heads.push(head);
               if (head === null) {
                 stats.branchMissing += 1;

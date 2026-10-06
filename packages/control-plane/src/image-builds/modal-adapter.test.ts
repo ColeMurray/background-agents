@@ -5,6 +5,7 @@ import { SandboxProviderError } from "../sandbox/provider";
 import { ModalImageBuildAdapter } from "./modal-adapter";
 import type { ImageBuildPlan } from "./types";
 import type { ImageBuildFinalizationAttemptError } from "./finalization-error";
+import { immediateFinalizationInput } from "./test-helpers";
 
 function createProvider(): ModalImageBuildProvider {
   return {
@@ -26,8 +27,6 @@ function createPlan(): ImageBuildPlan {
     callbackToken: "modal-callback-token",
     cloneAuth: {
       type: "credential_helper",
-      host: "gitlab.com",
-      username: "oauth2",
       token: "clone-token",
     },
     buildTimeoutMs: 1_800_000,
@@ -40,10 +39,15 @@ function createPlan(): ImageBuildPlan {
 }
 
 describe("ModalImageBuildAdapter", () => {
+  it("does not advertise unbound source recovery", () => {
+    expect("recoverUnboundSource" in new ModalImageBuildAdapter(createProvider())).toBe(false);
+  });
+
   it("delegates build startup to the Modal provider", async () => {
     const provider = createProvider();
     const adapter = new ModalImageBuildAdapter(provider);
     const plan = createPlan();
+    plan.resources = { cpuCores: 0.5, memoryMib: 2048, cpuLimitCores: 2, memoryLimitMib: null };
     const bindProviderSession = vi.fn(async () => undefined);
 
     await adapter.startBuild(plan, { bindProviderSession });
@@ -51,11 +55,10 @@ describe("ModalImageBuildAdapter", () => {
     expect(provider.triggerImageBuild).toHaveBeenCalledWith({
       scopeKind: "repo",
       scopeId: "acme/repo",
+      resources: plan.resources,
       buildId: "build-1",
       repositories: [{ repoOwner: "acme", repoName: "repo", baseBranch: "develop" }],
       cloneToken: "clone-token",
-      cloneHost: "gitlab.com",
-      cloneUsername: "oauth2",
       buildExecutionTimeoutSeconds: 1800,
       providerSessionTimeoutSeconds: 2400,
       userEnvVars: { FOO: "bar" },
@@ -92,11 +95,13 @@ describe("ModalImageBuildAdapter", () => {
     const correlation = { request_id: "request-1", trace_id: "trace-1" };
 
     expect(
-      await adapter.finalizeSuccessfulBuild?.({
-        buildId: "build-1",
-        providerSessionId: "modal-session-1",
-        correlation,
-      })
+      await adapter.finalizeSuccessfulBuild?.(
+        immediateFinalizationInput({
+          buildId: "build-1",
+          providerSessionId: "modal-session-1",
+          correlation,
+        })
+      )
     ).toEqual({
       providerImageId: "modal-image-1",
       providerSessionId: "modal-session-1",
@@ -148,11 +153,13 @@ describe("ModalImageBuildAdapter", () => {
     );
 
     await expect(
-      new ModalImageBuildAdapter(provider).finalizeSuccessfulBuild({
-        buildId: "build-1",
-        providerSessionId: "modal-session-1",
-        correlation: { request_id: "request-1", trace_id: "trace-1" },
-      })
+      new ModalImageBuildAdapter(provider).finalizeSuccessfulBuild(
+        immediateFinalizationInput({
+          buildId: "build-1",
+          providerSessionId: "modal-session-1",
+          correlation: { request_id: "request-1", trace_id: "trace-1" },
+        })
+      )
     ).rejects.toMatchObject({
       outcome: "definitely_not_created",
     } satisfies Partial<ImageBuildFinalizationAttemptError>);
@@ -166,11 +173,13 @@ describe("ModalImageBuildAdapter", () => {
     });
 
     await expect(
-      new ModalImageBuildAdapter(provider).finalizeSuccessfulBuild({
-        buildId: "build-1",
-        providerSessionId: "modal-session-1",
-        correlation: { request_id: "request-1", trace_id: "trace-1" },
-      })
+      new ModalImageBuildAdapter(provider).finalizeSuccessfulBuild(
+        immediateFinalizationInput({
+          buildId: "build-1",
+          providerSessionId: "modal-session-1",
+          correlation: { request_id: "request-1", trace_id: "trace-1" },
+        })
+      )
     ).rejects.toThrow("snapshot failed after dispatch");
   });
 });

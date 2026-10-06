@@ -9,7 +9,6 @@ function runLogs(response: unknown, ...args: string[]) {
   return spawnSync(
     process.execPath,
     [
-      "--experimental-strip-types",
       "--import",
       `data:text/javascript,${encodeURIComponent(preload)}`,
       fileURLToPath(new URL("./cf-logs.ts", import.meta.url)),

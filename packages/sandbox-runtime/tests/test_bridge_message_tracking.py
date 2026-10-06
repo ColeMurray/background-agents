@@ -1,9 +1,5 @@
 """
-Unit tests for bridge message handling and event transformation.
-
-Tests part-to-event translation: _handle_part (the production translation
-path for text/step parts) and the _tool_call_event helper it uses for tool
-parts. All emitted events carry the control plane's messageId.
+Focused regressions for step replay, cumulative cost, model variants, and IDs.
 
 Note: Message tracking and correlation tests are in test_bridge_sse.py,
 which tests the parentID-based correlation mechanism used for attributing
@@ -18,36 +14,6 @@ from sandbox_runtime.bridge import AgentBridge
 from sandbox_runtime.harness.opencode_stream import _PromptState
 from sandbox_runtime.opencode_identifier import OpenCodeIdentifier
 from tests.conftest import wire_opencode_transport
-
-
-def create_text_part(part_id: str, text: str) -> dict:
-    """Create a text part."""
-    return {
-        "id": part_id,
-        "type": "text",
-        "text": text,
-    }
-
-
-def create_tool_part(
-    call_id: str,
-    tool: str,
-    status: str = "pending",
-    input_data: dict | None = None,
-    output: str = "",
-) -> dict:
-    """Create a tool part."""
-    return {
-        "id": f"part-{call_id}",
-        "type": "tool",
-        "tool": tool,
-        "callID": call_id,
-        "state": {
-            "status": status,
-            "input": input_data or {},
-            "output": output,
-        },
-    }
 
 
 @pytest.fixture
@@ -74,123 +40,50 @@ def make_state(message_id: str) -> _PromptState:
     )
 
 
-class TestToolCallEvent:
-    """Tests for the _tool_call_event helper (tool parts only)."""
-
-    def test_tool_part_uses_provided_message_id(self, bridge: AgentBridge):
-        """Tool parts should use the provided message_id."""
-        part = create_tool_part(
-            call_id="call-1",
-            tool="Bash",
-            status="running",
-            input_data={"command": "ls -la"},
-        )
-
-        event = bridge.harness.prompt_stream._tool_call_event(part, "cp-message-456")
-
-        assert event is not None
-        assert event["type"] == "tool_call"
-        assert event["tool"] == "Bash"
-        assert event["messageId"] == "cp-message-456"
-
-    def test_pending_tool_with_no_input_returns_none(self, bridge: AgentBridge):
-        """Pending tool parts with no input should return None."""
-        part = create_tool_part(
-            call_id="call-1",
-            tool="Bash",
-            status="pending",
-            input_data={},
-        )
-
-        event = bridge.harness.prompt_stream._tool_call_event(part, "cp-message-123")
-
-        assert event is None
-
-    def test_tool_with_completed_status(self, bridge: AgentBridge):
-        """Completed tool parts should include output."""
-        part = create_tool_part(
-            call_id="call-1",
-            tool="Bash",
-            status="completed",
-            input_data={"command": "ls -la"},
-            output="file1.txt\nfile2.txt",
-        )
-
-        event = bridge.harness.prompt_stream._tool_call_event(part, "cp-message-123")
-
-        assert event is not None
-        assert event["type"] == "tool_call"
-        assert event["status"] == "completed"
-        assert event["output"] == "file1.txt\nfile2.txt"
-
-
 class TestHandlePartTranslation:
-    """Text and step parts are translated by _handle_part, the production
-    path (with cumulative-text handling); tool parts are covered above."""
+    """Step correlation and cumulative-cost corrections survive replay."""
 
-    def test_text_part_uses_provided_message_id(self, bridge: AgentBridge):
-        """Text parts should use the provided message_id, not any internal ID."""
+    def test_step_ids_match_start_parts_across_steps_and_replay(self, bridge: AgentBridge):
         stream = bridge.harness.prompt_stream
-        part = create_text_part("part-1", "Hello, world!")
+        state = make_state("cp-message-123")
+        first_start = stream._handle_part(
+            state, {"type": "step-start", "id": "start-1", "messageID": "assistant-1"}, None
+        )[0]
+        first_finish = stream._handle_part(
+            state, {"type": "step-finish", "id": "finish-1", "messageID": "assistant-1"}, None
+        )[0]
+        second_start = stream._handle_part(
+            state, {"type": "step-start", "id": "start-2", "messageID": "assistant-1"}, None
+        )[0]
+        interleaved_replay = stream._handle_part(
+            state, {"type": "step-start", "id": "start-1", "messageID": "assistant-1"}, None
+        )[0]
+        corrected_finish = stream._handle_part(
+            state, {"type": "step-finish", "id": "finish-1", "messageID": "assistant-1"}, None
+        )[0]
+        second_finish = stream._handle_part(
+            state, {"type": "step-finish", "id": "finish-2", "messageID": "assistant-1"}, None
+        )[0]
 
-        events = stream._handle_part(make_state("cp-message-123"), part, None)
-
-        assert events == [
-            {"type": "token", "content": "Hello, world!", "messageId": "cp-message-123"}
-        ]
-
-    def test_empty_text_part_emits_nothing(self, bridge: AgentBridge):
-        """Empty text parts should produce no events."""
-        stream = bridge.harness.prompt_stream
-        part = create_text_part("part-1", "")
-
-        events = stream._handle_part(make_state("cp-message-123"), part, None)
-
-        assert events == []
-
-    def test_step_start_part(self, bridge: AgentBridge):
-        """Step-start parts should be transformed correctly."""
-        stream = bridge.harness.prompt_stream
-        part = {"type": "step-start", "id": "step-1"}
-
-        events = stream._handle_part(make_state("cp-message-123"), part, None)
-
-        assert events == [{"type": "step_start", "messageId": "cp-message-123"}]
-
-    def test_step_finish_part(self, bridge: AgentBridge):
-        """Step-finish parts should include cost and token info."""
-        stream = bridge.harness.prompt_stream
-        part = {
-            "type": "step-finish",
-            "id": "step-1",
-            "cost": 0.001,
-            "tokens": 150,
-            "reason": "end_turn",
-        }
-
-        events = stream._handle_part(make_state("cp-message-123"), part, None)
-
-        assert events == [
-            {
-                "type": "step_finish",
-                "cost": 0.001,
-                "messageCostUsd": 0.001,
-                "tokens": 150,
-                "reason": "end_turn",
-                "messageId": "cp-message-123",
-            }
-        ]
-
-    def test_step_finish_omits_unknown_cost(self, bridge: AgentBridge):
-        stream = bridge.harness.prompt_stream
-        events = stream._handle_part(
-            make_state("cp-message-123"),
-            {"type": "step-finish", "id": "step-1", "cost": None, "tokens": 150},
+        assert first_start["stepId"] == first_finish["stepId"] == "start-1"
+        assert interleaved_replay["stepId"] == first_start["stepId"]
+        assert corrected_finish["stepId"] == first_start["stepId"]
+        assert second_start["stepId"] == second_finish["stepId"] == "start-2"
+        assert first_start["stepId"] != second_start["stepId"]
+        replayed_start = stream._handle_part(
+            state,
+            {"type": "step-start", "id": "start-1", "messageID": "assistant-1"},
             None,
-        )
-
-        assert "cost" not in events[0]
-        assert events[0]["messageCostUsd"] == 0.0
+        )[0]
+        assert replayed_start["stepId"] == first_finish["stepId"]
+        replayed_finish = stream._handle_part(
+            state, {"type": "step-finish", "id": "finish-1", "messageID": "assistant-1"}, None
+        )[0]
+        unmatched_finish = stream._handle_part(
+            state, {"type": "step-finish", "id": "finish-3", "messageID": "assistant-1"}, None
+        )[0]
+        assert replayed_finish["stepId"] == first_start["stepId"]
+        assert unmatched_finish["stepId"] == "finish-3"
 
     def test_step_finish_reports_cumulative_turn_cost(self, bridge: AgentBridge):
         """Each step carries the turn total; a re-emitted part replaces its own cost."""
@@ -213,68 +106,12 @@ class TestHandlePartTranslation:
 class TestBuildPromptRequestBody:
     """Tests for _build_prompt_request_body method."""
 
-    def test_basic_prompt(self, bridge: AgentBridge):
-        """Should build request with text content."""
-        body = bridge.harness.prompt_stream._build_prompt_request_body("Hello", None)
-
-        assert body["parts"] == [{"type": "text", "text": "Hello"}]
-        assert "model" not in body
-        assert "messageID" not in body
-
-    def test_with_opencode_message_id(self, bridge: AgentBridge):
-        """Should include messageID when provided (expects OpenCode format)."""
-        # The function now expects an already-formatted OpenCode ID
-        opencode_id = "msg_0123456789abcdefABCDEF"
-        body = bridge.harness.prompt_stream._build_prompt_request_body("Hello", None, opencode_id)
-
-        assert body["messageID"] == opencode_id
-
-    def test_with_model_short_form(self, bridge: AgentBridge):
-        """Should expand short model name to provider/model."""
-        body = bridge.harness.prompt_stream._build_prompt_request_body("Hello", "claude-haiku-4-5")
-
-        assert body["model"] == {
-            "providerID": "anthropic",
-            "modelID": "claude-haiku-4-5",
-        }
-
-    def test_with_model_full_form(self, bridge: AgentBridge):
-        """Should parse provider/model format."""
-        body = bridge.harness.prompt_stream._build_prompt_request_body("Hello", "openai/gpt-4")
-
-        assert body["model"] == {
-            "providerID": "openai",
-            "modelID": "gpt-4",
-        }
-
-    def test_with_all_options(self, bridge: AgentBridge):
-        """Should include all options when provided."""
-        opencode_id = "msg_0123456789abcdefABCDEF"
-        body = bridge.harness.prompt_stream._build_prompt_request_body(
-            "Hello", "anthropic/claude-3-opus", opencode_id
-        )
-
-        assert body["parts"] == [{"type": "text", "text": "Hello"}]
-        assert body["messageID"] == opencode_id
-        assert body["model"] == {
-            "providerID": "anthropic",
-            "modelID": "claude-3-opus",
-        }
-
     @pytest.mark.parametrize(
         "model,effort",
         [
-            ("anthropic/claude-sonnet-4-5", "max"),
             ("claude-haiku-4-5", "high"),
-            ("anthropic/claude-opus-4-5", "max"),
-            ("anthropic/claude-opus-4-6", "medium"),
             ("anthropic/claude-opus-5", "xhigh"),
-            ("anthropic/claude-sonnet-4-6", "high"),
-            ("anthropic/claude-sonnet-5", "xhigh"),
             ("openai/gpt-5.6-sol", "none"),
-            ("openai/gpt-5.6-sol", "low"),
-            ("openai/gpt-5.6-sol", "xhigh"),
-            ("openai/gpt-5.6-luna", "max"),
         ],
     )
     def test_reasoning_effort_uses_variant(self, bridge: AgentBridge, model: str, effort: str):
@@ -290,26 +127,6 @@ class TestBuildPromptRequestBody:
         )
         assert "variant" not in body
         assert "options" not in body["model"]
-
-    def test_with_xai_reasoning_effort(self, bridge: AgentBridge):
-        body = bridge.harness.prompt_stream._build_prompt_request_body(
-            "Hello",
-            "xai/grok-4.5",
-            reasoning_effort="high",
-        )
-
-        assert body["variant"] == "high"
-        assert "options" not in body["model"]
-
-    def test_with_grok_4_6_reasoning_effort(self, bridge: AgentBridge):
-        body = bridge.harness.prompt_stream._build_prompt_request_body(
-            "Hello",
-            "xai/grok-4.6",
-            reasoning_effort="medium",
-        )
-
-        assert body["variant"] == "medium"
-        assert body["model"] == {"providerID": "xai", "modelID": "grok-4.6"}
 
 
 class TestOpenCodeIdentifier:

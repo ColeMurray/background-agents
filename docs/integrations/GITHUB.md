@@ -7,7 +7,7 @@ threads.
 This guide is for people using the GitHub integration day to day. If you are installing the GitHub
 App or deploying the bot worker, start with
 [Create GitHub App](../GETTING_STARTED.md#step-3-create-github-app) and
-[Complete GitHub Bot Setup](../GETTING_STARTED.md#step-7c-complete-github-bot-setup-if-using-github-bot).
+[Complete GitHub Bot Setup](../GETTING_STARTED.md#github-bot-optional).
 
 ---
 
@@ -42,6 +42,10 @@ App bot through the PR reviewer picker. Use auto-review or `@mention` comments i
 
 ## Automatic PR Reviews
 
+**Auto-review new PRs** is the deprecated, workspace-owned review-on-open path. It still works and
+does not use mention team routing. For team-owned event-driven reviews, use a GitHub Event
+automation owned by the intended team instead. Deprecation does not disable the existing setting.
+
 ### When It Runs
 
 When **Auto-review new PRs** is enabled, Open-Inspect starts a review session for newly opened,
@@ -52,7 +56,7 @@ non-draft PRs in enabled repositories. The agent inspects the PR diff and posts 
 Auto-review is skipped when:
 
 - The PR is a draft
-- The PR was opened by the GitHub App bot itself
+- The PR was opened by the GitHub App bot itself without its login explicitly allowed as a trigger
 - The repository is outside the configured GitHub Bot scope
 - The PR opener is not allowed to trigger the bot
 - Auto-review is disabled globally or for that repository
@@ -64,6 +68,9 @@ follow-up after a draft becomes ready, mention the bot in a PR comment.
 
 The agent can submit a general review comment, approve the PR, request changes, or add inline review
 comments when useful.
+
+An explicitly allowed App bot can trigger review of its own PR, but that self-review can only
+comment, not approve or request changes.
 
 ---
 
@@ -80,6 +87,26 @@ a GitHub reply:
 
 Open-Inspect strips the bot mention before sending the request to the agent. The rest of the comment
 becomes the prompt.
+
+### Model and Reasoning Overrides
+
+Start the request with `!model` or `!reasoning` to override the configured model or reasoning effort
+for the session that comment starts:
+
+```text
+@my-app[bot] !model openai/gpt-5.6-sol !reasoning high investigate the flaky test
+```
+
+The flags use the same syntax as Slack: each accepts a space or colon before its value (such as
+`!model:anthropic/claude-sonnet-4-6` or `!reasoning:max`), and any flags must appear together at the
+start of the request, right after the bot mention. Flags later in the comment are treated as part of
+the request. Models must be enabled under **Settings > Models**, and the reasoning value must be
+supported by the selected model. A model flag without `!reasoning` keeps the configured reasoning
+effort when the new model supports it, and otherwise uses the model's default.
+
+If a flag is invalid, the bot replies with a PR comment explaining why and does not start a session.
+Flags work in PR conversation comments and inline review threads. Auto-reviews and review requests
+always use the configured model.
 
 ### Inline Review Threads
 
@@ -99,6 +126,30 @@ when it needs context.
 
 Comment-triggered actions only run on pull requests. Mentions on ordinary GitHub issues are ignored.
 Comments from the bot itself are also ignored so the bot does not respond to its own output.
+
+### Team Routing for Mentions
+
+Before creating a mention session, the bot asks the control plane for ownership using the numeric
+GitHub repository ID and PR number. Routing follows this order:
+
+1. If the PR is linked to an existing Open-Inspect session, use that session's owning team (or
+   workspace ownership). This is only a routing hint: it neither resumes nor grants access to that
+   session, including a private one.
+2. Otherwise, resolve the sender's linked GitHub identity and current teams with a repository or
+   installation grant covering the triggering repository. Exactly one eligible team wins.
+3. If multiple teams qualify, use the sender's most recent session on that repository in a still
+   eligible team. If none resolves the ambiguity, use workspace ownership. Missing identity or no
+   eligible team also falls back to workspace ownership.
+
+A route lookup failure stops the request rather than guessing workspace ownership. GitHub trigger
+gates still run, and session creation separately checks membership, team state, and repository
+grants. A configured default environment is used only when ownership is compatible, it includes the
+trigger repository, and the sender passes its repository checks; otherwise the target falls back to
+the triggering repository. Workspace fallback can still be refused if the workspace requires team
+ownership for new sessions.
+
+The runtime default for `TEAMS_ENFORCEMENT` remains `shadow`, not `on`; routing a session to a team
+does not imply full team-read isolation in that mode.
 
 ---
 
@@ -149,6 +200,20 @@ empty, no one can trigger direct bot workflows for that scope.
 These settings do not gate GitHub event automations. Automations are matched separately by their
 repository, event type, enabled state, and trigger conditions.
 
+Event automations match the numeric GitHub repository ID, not just `owner/name`, and retain the
+automation's saved owning team rather than using the mention sender's team. A team-owned automation
+needs a current grant covering that repository at admission and launch. Losing the grant prevents a
+run; restoring it allows a later event to run, not a replay of previously skipped events. Repository
+renames retain identity through the numeric ID, while run targets use the event's current owner and
+name. These checks are independent of the deprecated workspace auto-review setting.
+
+### Upgrading to Repository-ID Routing
+
+Upgrade the GitHub bot and control plane together. The control plane rejects event envelopes without
+a numeric repository ID, so an older bot's events are not routed. Automations saved before
+repository IDs were recorded no longer match events by name; open each one, reselect its
+repositories, and save to resolve their IDs.
+
 ### Models and Instructions
 
 | Setting                     | What it controls                                                          |
@@ -159,7 +224,9 @@ repository, event type, enabled state, and trigger conditions.
 | Repository Overrides        | Per-repository overrides for model, reasoning, instructions, and behavior |
 
 Repository overrides take priority over global defaults for the repository they apply to. If neither
-a repository override nor global default sets a model, sessions use the deployment default model.
+a repository override nor global default sets a model, sessions use the deployment default model. A
+[`!model` or `!reasoning` flag](#model-and-reasoning-overrides) at the start of a mention overrides
+both for that one session.
 
 ### Commit Signing
 
@@ -239,8 +306,9 @@ Important limitations:
 
 ### Bot Behavior
 
-- Auto-review skips draft PRs and PRs opened by the GitHub App bot. Manual `@mention` triggers are
-  still evaluated through the normal repository and user gates.
+- Auto-review skips draft PRs. An explicitly allowed App bot can trigger a comment-only self-review.
+  Manual `@mention` triggers still pass the repository and user gates, then team routing and
+  creation checks.
 - The bot ignores bot-authored comments, ordinary issue comments, and comments that do not mention
   the bot.
 - If the bot cannot load its GitHub integration settings, it fails closed and does not start direct
@@ -263,7 +331,7 @@ Important limitations:
 
 Check that the GitHub App is installed on the repository and that the GitHub Bot worker is enabled.
 Then confirm the webhook URL, webhook secret, subscribed events, and `github_bot_username` in
-[Complete GitHub Bot Setup](../GETTING_STARTED.md#step-7c-complete-github-bot-setup-if-using-github-bot).
+[Complete GitHub Bot Setup](../GETTING_STARTED.md#github-bot-optional).
 
 Also check **Settings > Integrations > GitHub**. For direct GitHub Bot workflows, the repository may
 be outside the selected repository scope, or the triggering user may be outside the allowed user
@@ -271,8 +339,9 @@ list.
 
 ### Auto-review did not run
 
-Auto-review only runs for newly opened, non-draft PRs. It is skipped for draft PRs, bot-authored
-PRs, disabled repositories, and users who are not allowed to trigger the bot.
+The deprecated workspace auto-review only runs for newly opened, non-draft PRs. It is skipped for
+draft PRs, disabled repositories, and users who are not allowed to trigger the bot. An App-authored
+PR needs the App bot login explicitly allowed; its self-review can only comment.
 
 If a PR was converted from draft to ready for review, mention the bot in a PR comment instead.
 
@@ -291,7 +360,8 @@ after the request was accepted. Open the Open-Inspect web app to inspect the ses
 ### The wrong model or instructions were used
 
 Check **Settings > Integrations > GitHub**. Repository overrides take priority over global defaults.
-Changes apply to new GitHub-triggered sessions.
+Changes apply to new GitHub-triggered sessions. A `!model` or `!reasoning` flag at the start of the
+mention overrides both for that session.
 
 ### The bot is active in too many repositories
 

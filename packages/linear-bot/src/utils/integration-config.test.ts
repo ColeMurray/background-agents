@@ -1,113 +1,108 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { sha256Hex, verifyServiceSignature } from "@open-inspect/shared/service-auth";
 import type { Env } from "../types";
 import { getLinearConfig } from "./integration-config";
 
 describe("getLinearConfig", () => {
-  function envForFetchResponse(response: Response): Env {
-    const fetch = vi.fn().mockResolvedValue(response);
-    return {
-      SERVICE_AUTH_SECRET: "test-secret",
-      CONTROL_PLANE: { fetch },
-    } as unknown as Env;
-  }
+  beforeEach(() => {
+    vi.spyOn(Date, "now").mockReturnValue(1_700_000_000_000);
+  });
 
-  function envForResponse(body: unknown): Env {
-    return envForFetchResponse(
-      new Response(JSON.stringify(body), {
-        status: 200,
-        headers: { "content-type": "application/json" },
-      })
-    );
-  }
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
 
-  it("encodes nested repository owners as one route segment", async () => {
-    const fetch = vi.fn().mockResolvedValue(
-      new Response(JSON.stringify({ config: null }), {
-        status: 200,
-        headers: { "content-type": "application/json" },
-      })
-    );
+  it.each([undefined, "user-1"])(
+    "signs a scoped config read and optional actor: %s",
+    async (actorUserId) => {
+      const fetch = vi.fn(async (_input: string | URL | Request, _init?: RequestInit) =>
+        Response.json({ config: null })
+      );
+      const env = {
+        SERVICE_AUTH_SECRET: "test-secret",
+        CONTROL_PLANE: { fetch },
+      } as unknown as Env;
+
+      const config = await getLinearConfig(env, "group/subgroup/web", {
+        linearTeamId: "external-team-1",
+        actorUserId,
+      });
+
+      expect(config.model).toBeNull();
+      const [input, init] = fetch.mock.calls[0];
+      const url = new URL(String(input));
+      const headers = new Headers(init?.headers);
+      expect(url.pathname).toBe("/integration-settings/linear/resolved/group%2Fsubgroup/web");
+      expect(url.searchParams.get("channel")).toBe("linear:external-team-1");
+      expect(headers.get("X-OpenInspect-Actor")).toBe(actorUserId ? `linear:${actorUserId}` : null);
+      expect(
+        await verifyServiceSignature({
+          signatureHeader: headers.get("X-OpenInspect-Service-Signature")!,
+          service: "linear-bot",
+          secret: env.SERVICE_AUTH_SECRET!,
+          method: "GET",
+          url: url.toString(),
+          bodySha256Hex: await sha256Hex(""),
+          actor: headers.get("X-OpenInspect-Actor") ?? "",
+        })
+      ).toMatchObject({ ok: true });
+    }
+  );
+
+  it.each([
+    [{ harness: "claude" }, "claude"],
+    [{}, "opencode"],
+  ])("reads the resolved harness %j, defaulting when absent", async (harnessField, expected) => {
+    const config = {
+      model: null,
+      reasoningEffort: null,
+      allowUserPreferenceOverride: true,
+      allowLabelModelOverride: true,
+      emitToolProgressActivities: true,
+      issueSessionInstructions: null,
+      enabledRepos: null,
+      ...harnessField,
+    };
     const env = {
       SERVICE_AUTH_SECRET: "test-secret",
-      CONTROL_PLANE: { fetch },
+      CONTROL_PLANE: { fetch: vi.fn(async () => Response.json({ config })) },
     } as unknown as Env;
 
-    await getLinearConfig(env, "group/subgroup/web");
-
-    expect(fetch).toHaveBeenCalledWith(
-      "https://internal/integration-settings/linear/resolved/group%2Fsubgroup/web",
-      expect.any(Object)
-    );
+    const resolved = await getLinearConfig(env, "acme/backend", { linearTeamId: "team-1" });
+    expect(resolved.harness).toBe(expected);
   });
 
-  it("returns a parsed resolved config", async () => {
-    await expect(
-      getLinearConfig(
-        envForResponse({
-          config: {
-            model: "openai/gpt-5.4",
-            reasoningEffort: null,
-            allowUserPreferenceOverride: false,
-            allowLabelModelOverride: true,
-            emitToolProgressActivities: false,
-            issueSessionInstructions: "Use small commits.",
-            enabledRepos: ["acme/backend"],
-          },
-        }),
-        "acme/backend"
-      )
-    ).resolves.toEqual({
-      model: "openai/gpt-5.4",
-      reasoningEffort: null,
-      allowUserPreferenceOverride: false,
-      allowLabelModelOverride: true,
-      emitToolProgressActivities: false,
-      issueSessionInstructions: "Use small commits.",
-      enabledRepos: ["acme/backend"],
-    });
-  });
+  it.each(["denied", "not-found", "unavailable", "network", "malformed", "invalid-json"])(
+    "throws on a scoped %s config read instead of using defaults",
+    async (failure) => {
+      const fetch = vi.fn(async () => {
+        if (failure === "network") throw new Error("Control plane unavailable");
+        if (failure === "invalid-json") return new Response("{not-json");
+        if (failure === "malformed") return Response.json({ config: { model: "openai/gpt-5.4" } });
+        return new Response(null, {
+          status: failure === "denied" ? 403 : failure === "not-found" ? 404 : 503,
+        });
+      });
+      const env = {
+        SERVICE_AUTH_SECRET: "test-secret",
+        CONTROL_PLANE: { fetch },
+      } as unknown as Env;
 
-  it("falls back when the response shape is malformed", async () => {
-    await expect(
-      getLinearConfig(
-        envForResponse({
-          config: {
-            model: "openai/gpt-5.4",
-            allowUserPreferenceOverride: "yes",
-          },
-        }),
-        "acme/backend"
-      )
-    ).resolves.toEqual({
-      model: null,
-      reasoningEffort: null,
-      allowUserPreferenceOverride: true,
-      allowLabelModelOverride: true,
-      emitToolProgressActivities: true,
-      issueSessionInstructions: null,
-      enabledRepos: null,
-    });
-  });
+      await expect(
+        getLinearConfig(env, "acme/backend", { linearTeamId: "external-team-1" })
+      ).rejects.toThrow();
+    }
+  );
 
-  it("falls back when the response is invalid JSON", async () => {
+  it("rejects reads with missing signing credentials or an invalid repository", async () => {
+    const fetch = vi.fn();
+    const env = { CONTROL_PLANE: { fetch } } as unknown as Env;
+    const scope = { linearTeamId: "external-team-1" };
+
+    await expect(getLinearConfig(env, "acme/backend", scope)).rejects.toThrow();
     await expect(
-      getLinearConfig(
-        envForFetchResponse(
-          new Response("{not-json", {
-            status: 200,
-            headers: { "content-type": "application/json" },
-          })
-        ),
-        "acme/backend"
-      )
-    ).resolves.toEqual({
-      model: null,
-      reasoningEffort: null,
-      allowUserPreferenceOverride: true,
-      allowLabelModelOverride: true,
-      emitToolProgressActivities: true,
-      issueSessionInstructions: null,
-      enabledRepos: null,
-    });
+      getLinearConfig({ ...env, SERVICE_AUTH_SECRET: "test-secret" }, "invalid", scope)
+    ).rejects.toThrow();
+    expect(fetch).not.toHaveBeenCalled();
   });
 });

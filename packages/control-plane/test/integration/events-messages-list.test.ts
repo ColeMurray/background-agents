@@ -1,6 +1,25 @@
 import { beforeEach, describe, it, expect } from "vitest";
+import { sessionTraceExportSchema } from "../../src/session/contracts";
 import { cleanD1Tables } from "./cleanup";
-import { initSession, seedEvents } from "./helpers";
+import { initSession, queryDO, seedEvents, seedMessage } from "./helpers";
+
+async function seedStepUsage(
+  stub: DurableObjectStub,
+  rows: Array<{ id: string; createdAt: number }>
+): Promise<void> {
+  for (const row of rows) {
+    await queryDO(
+      stub,
+      `INSERT INTO step_usage (id, message_id, input_tokens, total_tokens, is_subtask, created_at)
+       VALUES (?, ?, ?, ?, 0, ?)`,
+      row.id,
+      "msg-usage",
+      10,
+      10,
+      row.createdAt
+    );
+  }
+}
 
 describe("GET /internal/events", () => {
   beforeEach(cleanD1Tables);
@@ -220,6 +239,46 @@ describe("GET /internal/events", () => {
     expect(body.events[0]?.type).toBe("warning");
   });
 
+  it("strips legacy output tails from raw boot progress events", async () => {
+    const { stub } = await initSession();
+    await seedEvents(stub, [
+      {
+        id: "evt-legacy-boot-progress",
+        type: "boot_progress",
+        data: JSON.stringify({
+          type: "boot_progress",
+          bootSeq: 3,
+          phase: "setup",
+          status: "failed",
+          detail: "setup hook failed",
+          outputTail: ["legacy secret output"],
+          sandboxId: "sandbox-1",
+          timestamp: 123,
+        }),
+        createdAt: Date.now(),
+      },
+    ]);
+
+    const res = await stub.fetch("http://internal/internal/events?type=boot_progress");
+
+    expect(res.status).toBe(200);
+    const body = await res.json<{ events: Array<{ id: string; data: Record<string, unknown> }> }>();
+    expect(body.events).toEqual([
+      expect.objectContaining({
+        id: "evt-legacy-boot-progress",
+        data: {
+          type: "boot_progress",
+          bootSeq: 3,
+          phase: "setup",
+          status: "failed",
+          detail: "setup hook failed",
+          sandboxId: "sandbox-1",
+          timestamp: 123,
+        },
+      }),
+    ]);
+  });
+
   it("filters context compaction events", async () => {
     const { stub } = await initSession();
     const createdAt = Date.now();
@@ -293,5 +352,107 @@ describe("GET /internal/messages", () => {
     const ids = body.messages.map((m) => m.id);
     expect(ids).toContain(msgId1);
     expect(ids).toContain(msgId2);
+  });
+});
+
+describe("GET /internal/trace-export", () => {
+  beforeEach(cleanD1Tables);
+
+  it("returns the requested collections in the export contract, each in its export order", async () => {
+    const { stub } = await initSession();
+    const [owner] = await queryDO<{ id: string }>(
+      stub,
+      "SELECT id FROM participants WHERE role = 'owner'"
+    );
+    const createdAt = Date.now();
+    for (const [id, offset] of [
+      ["msg-1", 0],
+      ["msg-2", 10],
+    ] as const) {
+      await seedMessage(stub, {
+        id,
+        authorId: owner.id,
+        content: `prompt ${id}`,
+        source: "web",
+        status: "completed",
+        createdAt: createdAt + offset,
+      });
+    }
+    await seedEvents(stub, [
+      {
+        id: "tool_call:call-1",
+        type: "tool_call",
+        data: JSON.stringify({
+          type: "tool_call",
+          messageId: "msg-1",
+          tool: "bash",
+          args: { command: "npm test" },
+          callId: "call-1",
+          status: "completed",
+          output: "1 passed",
+        }),
+        messageId: "msg-1",
+        createdAt: createdAt + 1,
+      },
+      {
+        id: "execution_complete:msg-1",
+        type: "execution_complete",
+        data: JSON.stringify({ type: "execution_complete", messageId: "msg-1", success: true }),
+        messageId: "msg-1",
+        createdAt: createdAt + 1,
+      },
+    ]);
+    await seedStepUsage(stub, [
+      { id: "step:2", createdAt: createdAt + 2 },
+      { id: "step:1", createdAt: createdAt + 1 },
+    ]);
+
+    const res = await stub.fetch(
+      "http://internal/internal/trace-export?include=usage,events,messages"
+    );
+
+    expect(res.status).toBe(200);
+    const body = sessionTraceExportSchema.parse(await res.json());
+    expect(body).toMatchObject({
+      ok: true,
+      trace: {
+        messages: [
+          { id: "msg-1", content: "prompt msg-1" },
+          { id: "msg-2", content: "prompt msg-2" },
+        ],
+        events: [
+          { id: "tool_call:call-1", type: "tool_call", data: { output: "1 passed" } },
+          { id: "execution_complete:msg-1", type: "execution_complete" },
+        ],
+        usage: [{ id: "step:1" }, { id: "step:2" }],
+      },
+    });
+    // The two events share a timestamp; their timeline sequence is the tie-breaker.
+    const [first, second] = (body.ok && body.trace.events) || [];
+    expect(first.timelineSequence).toBeLessThan(second.timelineSequence);
+  });
+
+  it("returns only the requested collections", async () => {
+    const { stub } = await initSession();
+    await seedStepUsage(stub, [{ id: "step:1", createdAt: Date.now() }]);
+
+    const res = await stub.fetch("http://internal/internal/trace-export?include=usage");
+
+    expect(res.status).toBe(200);
+    expect(sessionTraceExportSchema.parse(await res.json())).toEqual({
+      ok: true,
+      trace: { usage: [expect.objectContaining({ id: "step:1" })] },
+    });
+  });
+
+  it.each(["", "?include=prompts"])("rejects include %s", async (search) => {
+    const { stub } = await initSession();
+
+    const res = await stub.fetch(`http://internal/internal/trace-export${search}`);
+
+    expect(res.status).toBe(400);
+    await expect(res.json()).resolves.toEqual({
+      error: "include must be a comma-separated list of messages, events, usage",
+    });
   });
 });

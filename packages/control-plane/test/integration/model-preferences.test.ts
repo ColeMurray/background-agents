@@ -58,6 +58,15 @@ describe("Model preferences API", () => {
     expect(await response.json()).toEqual({ enabledModels: DEFAULT_ENABLED_MODELS, revision: 0 });
   });
 
+  it("returns an authoritative snapshot for strict reads", async () => {
+    await seedPreferences(["openai/gpt-5.4"]);
+
+    const response = await serviceFetch("https://test.local/model-preferences?strict=true");
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ enabledModels: ["openai/gpt-5.4"], revision: 1 });
+  });
+
   it("filters removed models without changing the stored row", async () => {
     const stored = ["openai/gpt-5.2", "openai/gpt-5.4", "anthropic/claude-sonnet-4-6"];
     await seedPreferences(stored);

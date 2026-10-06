@@ -10,15 +10,23 @@ import signal
 from typing import TYPE_CHECKING, Any
 
 from .agent_bridge_process import AgentBridgeProcess
-from .boot_warnings import BootWarningSink
+from .boot_events import BootEventLog
 from .browser_desktop import BrowserDesktop
 from .claude_stager import ClaudeStager, isolated_claude_config_dir, resolve_claude_config_dir
 from .code_server import CodeServer
 from .constants import VNC_DISPLAY, VNC_PASSWORD_ENV_VAR
+from .docker_service import DockerService
 from .harness.base import HarnessId, HarnessProcessOwner
+from .image_build_context_start import (
+    IMAGE_BUILD_CONTEXT_START_ARGUMENT,
+    deferred_start_requested,
+    run_deferred_start,
+    run_image_build_context_start,
+)
 from .image_environment import apply_image_environment
 from .log_config import configure_logging, get_logger
 from .managed_skills import ManagedSkillsClient, ManagedSkillsMaterializer
+from .memories import MemoryMaterializer, SessionMemoryClient, memory_path
 from .modal_image_build_start import MODAL_IMAGE_BUILD_START_ARGUMENT, run_modal_image_build
 from .opencode_server import OpenCodeServer, resolve_opencode_global_config_dir
 from .repository_boot import RepositoryBoot
@@ -42,7 +50,7 @@ def build_harness_process(
     config: RuntimeConfig,
     shutdown_event: asyncio.Event,
     log: Any,
-    warnings: BootWarningSink,
+    warnings: BootEventLog,
     claude_config_dir: Path | None,
 ) -> HarnessProcessOwner:
     """The supervisor-half registry: pick the process owner for the session's harness."""
@@ -64,8 +72,8 @@ def claude_config_dir_for(
 ) -> Path | None:
     """Where Claude keeps its state, decided once before anything is written there.
 
-    Managed skills are materialized before the stager runs, so both take the
-    directory from here rather than deciding separately.
+    Managed skills and memory are materialized before the stager runs, so all
+    take the directory from here rather than deciding separately.
     """
     if config.harness is not HarnessId.CLAUDE:
         return None
@@ -74,16 +82,39 @@ def claude_config_dir_for(
     )
 
 
-def managed_skills_destination(harness: HarnessId, claude_config_dir: Path | None) -> Path:
-    """Where managed skills land: each harness discovers skills from its own tree."""
+def harness_config_dir(harness: HarnessId, claude_config_dir: Path | None) -> Path:
+    """The harness's own config tree, where boot installs skills and memory."""
     match harness:
         case HarnessId.OPENCODE:
-            return resolve_opencode_global_config_dir() / "skills"
+            return resolve_opencode_global_config_dir()
         case HarnessId.CLAUDE:
             if claude_config_dir is None:
                 raise ValueError("Claude sessions need a config dir decided")
-            return claude_config_dir / "skills"
+            return claude_config_dir
     raise ValueError(f"Unsupported harness: {harness}")
+
+
+def managed_skills_destination(harness: HarnessId, claude_config_dir: Path | None) -> Path:
+    """Where managed skills land: each harness discovers skills from its own tree."""
+    return harness_config_dir(harness, claude_config_dir) / "skills"
+
+
+def _build_memory(
+    config: RuntimeConfig, claude_config_dir: Path | None, log: Any
+) -> MemoryMaterializer | None:
+    """Session memory needs the control plane; without one the harness starts with none."""
+    if not (config.control_plane_url and config.session_id):
+        log.info("memory.disabled", reason="no_control_plane_session")
+        return None
+    return MemoryMaterializer(
+        SessionMemoryClient(
+            config.control_plane_url,
+            config.session_id,
+            config.sandbox_token,
+        ),
+        memory_path(harness_config_dir(config.harness, claude_config_dir)),
+        log,
+    )
 
 
 def build_supervisor(shutdown_event: asyncio.Event) -> SandboxSupervisor:
@@ -99,7 +130,7 @@ def build_supervisor(shutdown_event: asyncio.Event) -> SandboxSupervisor:
         sandbox_id=config.sandbox_id,
         session_id=str(config.session_config.get("session_id", "")),
     )
-    warnings = BootWarningSink(log)
+    warnings = BootEventLog(log)
     repository_boot = RepositoryBoot(
         config.repository_config(),
         log,
@@ -139,6 +170,9 @@ def build_supervisor(shutdown_event: asyncio.Event) -> SandboxSupervisor:
         managed_skills,
         shutdown_event,
         log,
+        memory=_build_memory(config, claude_config_dir, log),
+        boot_events=warnings,
+        docker_service=DockerService(log) if config.docker_enabled else None,
     )
 
 
@@ -156,7 +190,21 @@ async def main(argv: list[str] | None = None) -> int:
         dest="await_modal_image_build_token",
         action="store_true",
     )
+    parser.add_argument(
+        IMAGE_BUILD_CONTEXT_START_ARGUMENT,
+        dest="await_image_build_context",
+        action="store_true",
+    )
     args = parser.parse_args(argv)
+
+    # Both image-build launch protocols decide the process environment before
+    # anything reads it, so they branch ahead of build_supervisor(). The
+    # stdin-context launcher composes that environment itself and ignores the
+    # deferred marker; an unlaunched deferred sandbox composes nothing at all.
+    if args.await_image_build_context:
+        return await run_image_build_context_start(build_supervisor, install_signal_handlers)
+    if deferred_start_requested(os.environ):
+        return await run_deferred_start()
 
     supervisor = build_supervisor(asyncio.Event())
     install_signal_handlers(supervisor)

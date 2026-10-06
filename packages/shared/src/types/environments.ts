@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { sessionRepositoriesInputSchema } from "./repositories";
+import { teamIdSchema } from "./team-id";
 
 /** Maximum characters in an environment's display name. */
 export const MAX_ENVIRONMENT_NAME_LENGTH = 200;
@@ -39,6 +40,8 @@ const environmentChannelAssociationsSchema = z
   .max(MAX_ENVIRONMENT_CHANNEL_ASSOCIATIONS);
 
 export const createEnvironmentInputSchema = z.object({
+  /** Owner team; null or absent means the workspace owns the environment. */
+  teamId: teamIdSchema.nullable().optional(),
   name: z.string().trim().min(1).max(MAX_ENVIRONMENT_NAME_LENGTH),
   description: z.string().trim().max(MAX_ENVIRONMENT_DESCRIPTION_LENGTH).nullish(),
   prebuildEnabled: z.boolean().optional(),
@@ -74,6 +77,14 @@ export type EnvironmentRepository = z.infer<typeof environmentRepositorySchema>;
 /** An environment: a named, prebuildable repository set (design §7.1). */
 export const environmentSchema = z.object({
   id: z.string(),
+  ownerTeamId: z.string().nullable().optional(),
+  capabilities: z
+    .object({
+      canRead: z.boolean(),
+      canManage: z.boolean(),
+      canUse: z.boolean(),
+    })
+    .optional(),
   name: z.string(),
   description: z.string().nullable(),
   prebuildEnabled: z.boolean(),

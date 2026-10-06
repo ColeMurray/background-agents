@@ -2,7 +2,6 @@ import type { SessionTimelineItem } from "./timeline-items";
 
 export type TimelineVirtualRow =
   | { type: "item"; id: string; item: SessionTimelineItem }
-  | { type: "loading"; id: string }
   | { type: "thinking"; id: string };
 
 export const TIMELINE_ROW_SIZE_ESTIMATES = {
@@ -27,24 +26,19 @@ export const TIMELINE_VIRTUALIZER_DEFAULTS = {
 
 export function buildTimelineVirtualRows({
   items,
-  loadingHistory,
   isProcessing,
 }: {
   items: SessionTimelineItem[];
-  loadingHistory: boolean;
   isProcessing: boolean;
 }): TimelineVirtualRow[] {
   const rows: TimelineVirtualRow[] = [];
-  if (loadingHistory) rows.push({ type: "loading", id: "history-loading" });
   for (const item of items) rows.push({ type: "item", id: `item:${item.id}`, item });
   if (isProcessing) rows.push({ type: "thinking", id: "thinking" });
   return rows;
 }
 
 export function estimateTimelineRowSize(row: TimelineVirtualRow): number {
-  if (row.type === "loading" || row.type === "thinking") {
-    return TIMELINE_ROW_SIZE_ESTIMATES.status;
-  }
+  if (row.type === "thinking") return TIMELINE_ROW_SIZE_ESTIMATES.status;
   if (row.item.type !== "single") return TIMELINE_ROW_SIZE_ESTIMATES.group;
 
   switch (row.item.event.type) {

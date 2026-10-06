@@ -2,7 +2,7 @@
 /// <reference types="@testing-library/jest-dom" />
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import * as matchers from "@testing-library/jest-dom/matchers";
 import { SessionSidebar } from "./session-sidebar";
 
@@ -14,6 +14,15 @@ const { mockHook, authorization } = vi.hoisted(() => ({
 }));
 
 vi.mock("@/hooks/use-sidebar-sessions", () => ({ useSidebarSessions: mockHook }));
+vi.mock("@/hooks/use-active-team", () => ({
+  useActiveTeam: () => ({
+    activeTeamId: null,
+    scope: undefined,
+    canListAllTeams: false,
+    teams: [],
+    setActiveTeam: vi.fn(),
+  }),
+}));
 vi.mock("@/lib/auth-session", () => ({
   useAuthSession: () => ({ data: { user: { name: "Test User", email: "test@example.com" } } }),
   signOut: vi.fn(),
@@ -54,6 +63,15 @@ function session(id: string, title: string, parentSessionId: string | null = nul
     prCount: 0,
     environmentId: null,
     readState: { latestMessageId: null, version: 0, unread: false } as const,
+    capabilities: {
+      canRead: true,
+      canCollaborate: true,
+      canManageLifecycle: true,
+      canDelete: true,
+      canSandbox: true,
+      canManageCollaborators: true,
+      canChangeVisibility: true,
+    },
     createdAt: 1,
     updatedAt: 2,
   };
@@ -67,6 +85,13 @@ const noPagination = {
 };
 
 beforeEach(() => {
+  const values: Record<string, string> = {};
+  vi.stubGlobal("localStorage", {
+    getItem: (key: string) => values[key] ?? null,
+    setItem: (key: string, value: string) => {
+      values[key] = value;
+    },
+  });
   authorization.permissions = null;
   const attention = session("attention", "Needs review");
   const running = session("running", "Implementing inbox");
@@ -95,6 +120,7 @@ beforeEach(() => {
 afterEach(() => {
   cleanup();
   vi.clearAllMocks();
+  vi.unstubAllGlobals();
 });
 
 describe("SessionSidebar", () => {
@@ -129,6 +155,66 @@ describe("SessionSidebar", () => {
     expect(screen.getByRole("button", { name: "Signed in as Test User" })).toBeInTheDocument();
   });
 
+  it("toggles groups independently with accessible controls and matching chevrons", () => {
+    render(<SessionSidebar />);
+
+    const attentionToggle = screen.getByRole("button", { name: "Needs attention" });
+    const progressToggle = screen.getByRole("button", { name: "In progress" });
+    const recentToggle = screen.getByRole("button", { name: "Recent" });
+
+    expect(attentionToggle).toHaveAttribute("aria-expanded", "true");
+    expect(attentionToggle).toHaveAttribute(
+      "aria-controls",
+      "session-group-needs-attention-content"
+    );
+    expect(attentionToggle.querySelector('path[d="M19 9l-7 7-7-7"]')).toBeInTheDocument();
+    expect(attentionToggle.querySelector("[aria-hidden='true']")).toBeInTheDocument();
+
+    fireEvent.click(attentionToggle);
+
+    expect(attentionToggle).toHaveAttribute("aria-expanded", "false");
+    expect(attentionToggle.querySelector('path[d="M9 5l7 7-7 7"]')).toBeInTheDocument();
+    expect(screen.queryByText("Needs review")).not.toBeInTheDocument();
+    expect(screen.getByText("Implementing inbox")).toBeInTheDocument();
+    expect(recentToggle).toHaveAttribute("aria-expanded", "true");
+    expect(localStorage.getItem("open-inspect-session-sidebar-expanded:needs-attention")).toBe(
+      "false"
+    );
+    expect(localStorage.getItem("open-inspect-session-sidebar-expanded:in-progress")).toBeNull();
+    expect(localStorage.getItem("open-inspect-session-sidebar-expanded:recent")).toBeNull();
+
+    fireEvent.click(progressToggle);
+
+    expect(attentionToggle).toHaveAttribute("aria-expanded", "false");
+    expect(progressToggle).toHaveAttribute("aria-expanded", "false");
+    expect(recentToggle).toHaveAttribute("aria-expanded", "true");
+    expect(screen.queryByText("Implementing inbox")).not.toBeInTheDocument();
+    expect(screen.getByText("Finished work")).toBeInTheDocument();
+    expect(localStorage.getItem("open-inspect-session-sidebar-expanded:in-progress")).toBe("false");
+    expect(localStorage.getItem("open-inspect-session-sidebar-expanded:recent")).toBeNull();
+  });
+
+  it("restores collapsed groups after remounting", async () => {
+    const view = render(<SessionSidebar />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Recent" }));
+    await waitFor(() =>
+      expect(localStorage.getItem("open-inspect-session-sidebar-expanded:recent")).toBe("false")
+    );
+
+    view.unmount();
+    render(<SessionSidebar />);
+
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: "Recent" })).toHaveAttribute(
+        "aria-expanded",
+        "false"
+      )
+    );
+    expect(screen.queryByText("Finished work")).not.toBeInTheDocument();
+    expect(screen.getByText("Needs review")).toBeInTheDocument();
+  });
+
   it("loads more only in the requested section", () => {
     const value = mockHook();
     const loadMoreRunning = vi.fn();
@@ -145,12 +231,27 @@ describe("SessionSidebar", () => {
     expect(loadMoreRunning).toHaveBeenCalledOnce();
   });
 
-  it("keeps archived sessions accessible", () => {
+  it("routes the archived shortcut to the archived Sessions view", () => {
     render(<SessionSidebar />);
     expect(screen.getByRole("link", { name: /Archived/ })).toHaveAttribute(
       "href",
-      "/settings?tab=data-controls"
+      "/sessions?lifecycle=archived"
     );
+  });
+
+  it("lists Sessions above Automations and gates it on session read permission", () => {
+    const { unmount } = render(<SessionSidebar />);
+    const links = screen.getAllByRole("link").map((link) => link.getAttribute("href"));
+    expect(links.indexOf("/sessions")).toBeGreaterThanOrEqual(0);
+    expect(links.indexOf("/sessions")).toBeLessThan(links.indexOf("/automations"));
+    unmount();
+
+    authorization.permissions = new Set(["automations.read"]);
+    render(<SessionSidebar />);
+    expect(screen.queryByRole("link", { name: "Sessions" })).not.toBeInTheDocument();
+    // Every entry point to discovery sits behind the same permission.
+    expect(screen.queryByRole("link", { name: /Archived/ })).not.toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Automations" })).toBeInTheDocument();
   });
 
   it("shows a retry action when one category fails", () => {

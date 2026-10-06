@@ -23,6 +23,10 @@ const DENIAL_COPY: Record<SlackDenialReason, { headline: string; hint?: string }
   feature_disabled: {
     headline: "Slack notifications are disabled for this repository.",
   },
+  session_scope_denied: {
+    headline: "This session is not allowed to post to the requested Slack channel.",
+    hint: "Its visibility or the channel's team binding prevents this post.",
+  },
   empty_message_after_sanitization: {
     headline: "Message was empty after sanitization, so nothing was posted.",
   },
