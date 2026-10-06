@@ -20,6 +20,7 @@ import { createMemoryManagementPolicy } from "../authorization/memory-access-fac
 import { EnvironmentStore } from "../db/environments";
 import { MemoryPreferenceStore } from "../db/memory-preferences";
 import { MemoryRecordStore } from "../db/memory-records";
+import { TeamMembershipStore } from "../db/team-memberships";
 import { toMemoryDto, toSelectionSummary } from "../memory/dto";
 import { MEMORY_NOT_FOUND } from "../memory/errors";
 import { createSessionMemorySelector } from "../memory/session-memory-selector-factory";
@@ -37,6 +38,7 @@ import {
   SCM_AGNOSTIC_HUMAN_USER_ROUTE,
   type UserRouteContext,
 } from "./shared";
+import { resolveActiveTeam } from "./team-ownership";
 
 /** Bind human provenance to the admitted canonical principal, not editable request fields. */
 const actor = (ctx: UserRouteContext): MemoryActor => ({
@@ -213,11 +215,19 @@ function transition(action: MemoryAction) {
 
 /**
  * Summarize the selection a new session would pin, without persisting it. Requested sources get the
- * same human admission as management reads, then the same memory filtering as session creation.
+ * same human admission as management reads, then the same memory filtering as session creation,
+ * evaluated as the team that would own the session when `teamId` names one.
  */
 async function preview(request: Request, env: Env, _params: object, ctx: UserRouteContext) {
   const body = await parseBody(request, memoryPreviewSchema, "Invalid memory preview");
   if (body instanceof Response) return body;
+  const ownerTeamId = body.teamId ?? null;
+  if (ownerTeamId) {
+    const team = await resolveActiveTeam(ctx, ownerTeamId);
+    if (team instanceof Response) return team;
+    if (!(await new TeamMembershipStore(ctx.db).listForUser(ctx.principal.userId)).has(ownerTeamId))
+      return json({ error: "Not a team member", code: "not_member" }, 403);
+  }
   const policy = createMemoryManagementPolicy(ctx, env);
   let repositories: { repoOwner: string; repoName: string }[] = body.repositories ?? [];
   if (body.environmentId) {
@@ -238,7 +248,7 @@ async function preview(request: Request, env: Env, _params: object, ctx: UserRou
       resolved.push({ ...repo, repoId: access.partition.repoId });
   }
   const selection = await createSessionMemorySelector(ctx).select({
-    principal: { userId: ctx.principal.userId, ownerTeamId: null },
+    principal: { userId: ctx.principal.userId, ownerTeamId },
     repositories: resolved,
     environmentId: body.environmentId ?? null,
     includePersonalMemories: body.includePersonalMemories,
