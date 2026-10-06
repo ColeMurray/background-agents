@@ -554,8 +554,6 @@ describe("GitHubIntegrationSettings", () => {
     render(<GitHubIntegrationSettings />);
 
     const row = repoOverrideRow("acme/web");
-    await user.click(within(row).getByRole("combobox", { name: "Agent harness scope" }));
-    await user.click(await screen.findByRole("option", { name: "Override harness" }));
     await user.click(within(row).getByRole("combobox", { name: "Agent harness" }));
     await user.click(await screen.findByRole("option", { name: "Claude Agent" }));
     await user.click(within(row).getByRole("button", { name: /^save$/i }));
@@ -569,11 +567,11 @@ describe("GitHubIntegrationSettings", () => {
     );
   });
 
-  it("preserves a harness draft across scope round-trips", async () => {
+  it("returns a repo harness override to the global harness", async () => {
     const user = userEvent.setup();
     setupSWR({
       global: { defaults: { autoReviewOnOpen: true } },
-      repos: [{ repo: "acme/web", settings: {} }],
+      repos: [{ repo: "acme/web", settings: { harness: "claude" } }],
       availableRepos: [repo("acme/web")],
     });
     fetchMock.mockResolvedValue(okJson({}));
@@ -581,27 +579,20 @@ describe("GitHubIntegrationSettings", () => {
     render(<GitHubIntegrationSettings />);
 
     const row = repoOverrideRow("acme/web");
-    const selectScope = async (name: RegExp) => {
-      await user.click(within(row).getByRole("combobox", { name: "Agent harness scope" }));
-      await user.click(await screen.findByRole("option", { name }));
-    };
-    await selectScope(/override harness/i);
-    await user.click(within(row).getByRole("combobox", { name: "Agent harness" }));
-    await user.click(await screen.findByRole("option", { name: "Claude Agent" }));
-    await selectScope(/use global harness/i);
-    await selectScope(/override harness/i);
-
-    // The draft belongs to the user now: still Claude Agent, not reset to OpenCode.
+    // The single harness selector holds the override; inheriting clears it.
     expect(within(row).getByRole("combobox", { name: "Agent harness" })).toHaveTextContent(
       "Claude Agent"
     );
+    await user.click(within(row).getByRole("combobox", { name: "Agent harness" }));
+    await user.click(await screen.findByRole("option", { name: "Use global harness" }));
     await user.click(within(row).getByRole("button", { name: /^save$/i }));
 
+    // Sparse save: no harness key means the repo inherits the global one.
     expect(fetchMock).toHaveBeenCalledWith(
       "/api/integration-settings/github/repos/acme/web",
       expect.objectContaining({
         method: "PUT",
-        body: JSON.stringify({ settings: { harness: "claude" } }),
+        body: JSON.stringify({ settings: {} }),
       })
     );
   }, 20000);

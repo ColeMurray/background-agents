@@ -12,6 +12,11 @@ import {
   normalizeValidModels,
   type ValidModel,
 } from "@open-inspect/shared/models";
+import {
+  DEFAULT_HARNESS,
+  resolveHarnessForModel,
+  type HarnessId,
+} from "@open-inspect/shared/harnesses";
 import { z } from "zod";
 import { signedControlPlaneFetch } from "./internal-auth";
 import type { Logger } from "./logger";
@@ -19,6 +24,7 @@ import type { Env } from "./types";
 
 export interface ModelSelection {
   model: string;
+  harness: HarnessId;
   reasoningEffort: string | null;
 }
 
@@ -124,8 +130,29 @@ export function applyInlineModelOverrides(
 }
 
 /**
+ * Resolve the harness for a canonical model, warning when the configured
+ * harness cannot run it and the built-in default takes over. Cross-level
+ * pairs (global harness + repo model) can disagree, as can an inline model
+ * override — a trigger must never fail silently on a mismatch the saves
+ * could not see.
+ */
+function resolveHarness(configured: HarnessId, model: string, log: Logger): HarnessId {
+  const harness = resolveHarnessForModel(configured, model);
+  if (harness !== configured) {
+    log.warn("config.harness_model_mismatch", {
+      harness: configured,
+      model,
+      fallback: DEFAULT_HARNESS,
+    });
+  }
+  return harness;
+}
+
+/**
  * Resolve the model settings for a new session from the configured defaults
- * and any flags that lead the triggering comment.
+ * and any flags that lead the triggering comment. The model is canonicalized
+ * once; the harness and the effort are resolved against that same model, and
+ * all three travel together to session creation.
  */
 export async function resolveModelSelection(
   env: Env,
@@ -135,7 +162,16 @@ export async function resolveModelSelection(
   flags: ParseInlinePromptFlagsResult | undefined
 ): Promise<ModelSelectionResult> {
   if (!flags || (flags.ok && !hasInlinePromptOptions(flags.options))) {
-    return { ok: true, selection: defaults, overridden: false };
+    const model = getValidModelOrDefault(defaults.model);
+    const reasoningEffort =
+      defaults.reasoningEffort && isValidReasoningEffort(model, defaults.reasoningEffort)
+        ? defaults.reasoningEffort
+        : null;
+    return {
+      ok: true,
+      selection: { model, harness: resolveHarness(defaults.harness, model, log), reasoningEffort },
+      overridden: false,
+    };
   }
   if (!flags.ok) {
     return { ok: false, reason: "invalid_inline_flags", message: invalidFlagsMessage(flags.error) };
@@ -164,5 +200,14 @@ export async function resolveModelSelection(
       message: invalidFlagsMessage(applied.message),
     };
   }
-  return { ok: true, selection: applied.selection, overridden: true };
+  const selection = applied.selection;
+  return {
+    ok: true,
+    selection: {
+      model: selection.model,
+      harness: resolveHarness(defaults.harness, selection.model, log),
+      reasoningEffort: selection.reasoningEffort,
+    },
+    overridden: true,
+  };
 }

@@ -7,17 +7,15 @@ import { signedControlPlaneFetch } from "../internal-auth";
 import type { Logger } from "../logger";
 import { z } from "zod";
 import {
-  checkHarnessCompatibility,
   DEFAULT_HARNESS,
   getValidHarnessOrDefault,
   harnessIdSchema,
   type HarnessId,
 } from "@open-inspect/shared/harnesses";
-import { getValidModelOrDefault } from "@open-inspect/shared/models";
 
 export interface ResolvedGitHubConfig {
   model: string;
-  harness: HarnessId | null;
+  harness: HarnessId;
   reasoningEffort: string | null;
   autoReviewOnOpen: boolean;
   enabledRepos: string[] | null;
@@ -30,10 +28,8 @@ const resolvedGitHubConfigResponseSchema = z.object({
   config: z
     .object({
       model: z.string().nullable(),
-      // Optional (not just nullable): an older control plane predating the
-      // harness setting answers without this key, and the whole config must
-      // not fall back to fail-closed over one missing field.
-      harness: harnessIdSchema.nullable().optional(),
+      // Control planes that predate the harness setting omit it.
+      harness: harnessIdSchema.default(DEFAULT_HARNESS),
       reasoningEffort: z.string().nullable(),
       autoReviewOnOpen: z.boolean(),
       enabledRepos: z.array(z.string()).nullable(),
@@ -112,7 +108,7 @@ export async function getGitHubConfig(
   if (!data.config) {
     return {
       model: env.DEFAULT_MODEL,
-      harness: null,
+      harness: DEFAULT_HARNESS,
       reasoningEffort: null,
       autoReviewOnOpen: true,
       enabledRepos: null,
@@ -124,7 +120,7 @@ export async function getGitHubConfig(
 
   return {
     model: data.config.model ?? env.DEFAULT_MODEL,
-    harness: data.config.harness ?? null,
+    harness: getValidHarnessOrDefault(data.config.harness),
     reasoningEffort: data.config.reasoningEffort,
     autoReviewOnOpen: data.config.autoReviewOnOpen,
     enabledRepos: data.config.enabledRepos,
@@ -132,33 +128,4 @@ export async function getGitHubConfig(
     codeReviewInstructions: data.config.codeReviewInstructions,
     commentActionInstructions: data.config.commentActionInstructions,
   };
-}
-
-/**
- * Resolve the harness to send for a new GitHub-triggered session, or null to
- * omit it (the server then resolves the built-in default, exactly as today).
- * Compatibility is evaluated against the canonical model session creation
- * will actually run (`getValidModelOrDefault`), not the raw configured value:
- * a stale or out-of-catalog model falls back to the default model server-side,
- * so judging the raw string would omit a harness the resolved session honors.
- * A resolved pair the harness cannot run — possible when global and repo
- * levels set harness and model separately — is omitted with a warning, so a
- * trigger never fails silently on a mismatch the saves could not see.
- */
-export function resolveGitHubSessionHarness(
-  config: Pick<ResolvedGitHubConfig, "harness" | "model">,
-  log?: Logger
-): HarnessId | null {
-  if (config.harness === null) return null;
-  const harness = getValidHarnessOrDefault(config.harness);
-  const incompatibility = checkHarnessCompatibility(harness, getValidModelOrDefault(config.model));
-  if (incompatibility) {
-    log?.warn("config.harness_model_mismatch", {
-      harness,
-      model: config.model,
-      fallback: DEFAULT_HARNESS,
-    });
-    return null;
-  }
-  return harness;
 }

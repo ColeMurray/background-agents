@@ -12,11 +12,7 @@ import {
 } from "./github-auth";
 import { resolveSessionTarget } from "./session-target";
 import { createSession, sendPrompt } from "./session-client";
-import {
-  getGitHubConfig,
-  resolveGitHubSessionHarness,
-  type ResolvedGitHubConfig,
-} from "./utils/integration-config";
+import { getGitHubConfig, type ResolvedGitHubConfig } from "./utils/integration-config";
 import { resolveModelSelection } from "./model-selection";
 import type { ParseInlinePromptFlagsResult } from "@open-inspect/shared/inline-prompt-flags";
 
@@ -192,7 +188,7 @@ export async function startSession(
     env,
     log,
     traceId,
-    { model: config.model, reasoningEffort: config.reasoningEffort },
+    { model: config.model, harness: config.harness, reasoningEffort: config.reasoningEffort },
     params.inlineFlags
   );
   if (!modelSelection.ok) {
@@ -244,10 +240,7 @@ export async function startSession(
         teamId,
         title: params.title,
         model: selection.model,
-        harness: resolveGitHubSessionHarness(
-          { harness: config.harness, model: selection.model },
-          log
-        ),
+        harness: selection.harness,
         reasoningEffort: selection.reasoningEffort,
         scmLogin: sender.login,
         scmUserId: String(sender.id),

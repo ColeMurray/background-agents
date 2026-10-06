@@ -24,7 +24,7 @@ vi.mock("../src/utils/integration-config", async (importOriginal) => {
     ...actual,
     getGitHubConfig: vi.fn().mockResolvedValue({
       model: "anthropic/claude-haiku-4-5",
-      harness: null,
+      harness: "opencode",
       reasoningEffort: null,
       autoReviewOnOpen: true,
       enabledRepos: null,
@@ -37,7 +37,7 @@ vi.mock("../src/utils/integration-config", async (importOriginal) => {
 
 const defaultConfig: ResolvedGitHubConfig = {
   model: "anthropic/claude-haiku-4-5",
-  harness: null,
+  harness: "opencode",
   reasoningEffort: null,
   autoReviewOnOpen: true,
   enabledRepos: null,
@@ -1321,14 +1321,14 @@ describe("integration config", () => {
     expect(sessionBody.reasoningEffort).toBe("low");
   });
 
-  it("omits harness from session creation when unconfigured", async () => {
+  it("always sends a harness, defaulting to the built-in one when unconfigured", async () => {
     const env = createMockEnv();
     const log = createMockLogger();
 
     await handleReviewRequested(env, log, reviewRequestedPayload, "trace-no-harness");
 
     const sessionBody = sessionCreateBody(getControlPlaneFetch(env));
-    expect(sessionBody).not.toHaveProperty("harness");
+    expect(sessionBody.harness).toBe("opencode");
   });
 
   it("sends the configured harness for every session-creating trigger", async () => {
@@ -1372,8 +1372,8 @@ describe("integration config", () => {
 
     await handleReviewRequested(env, log, reviewRequestedPayload, "trace-mismatch");
 
-    // Omitted, so the server resolves its built-in default (OpenCode).
-    expect(sessionCreateBody(getControlPlaneFetch(env))).not.toHaveProperty("harness");
+    // Sent as the built-in default the session actually runs on.
+    expect(sessionCreateBody(getControlPlaneFetch(env)).harness).toBe("opencode");
     expect(log.warn).toHaveBeenCalledWith(
       "config.harness_model_mismatch",
       expect.objectContaining({ harness: "claude", model: "openai/gpt-5.4" })
@@ -1652,7 +1652,8 @@ describe("default environment targets", () => {
       metadata?: { defaultEnvironmentId?: string } | null;
       metadataStatus?: number;
       environment?:
-        (Omit<typeof fullstackEnvironment, "ownerTeamId"> & { ownerTeamId?: string | null }) | null;
+        | (Omit<typeof fullstackEnvironment, "ownerTeamId"> & { ownerTeamId?: string | null })
+        | null;
       teamId?: string | null;
     }
   ) {

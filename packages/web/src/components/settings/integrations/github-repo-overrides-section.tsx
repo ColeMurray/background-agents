@@ -18,14 +18,12 @@ import {
   type ValidModel,
 } from "@open-inspect/shared/models";
 import {
-  HARNESS_IDS,
+  DEFAULT_HARNESS,
   checkHarnessCompatibility,
-  getHarnessLabel,
-  harnessSupportsModel,
-  isValidHarness,
   type HarnessId,
 } from "@open-inspect/shared/harnesses";
-import { filterModelOptionsForHarness } from "@/lib/session-harness";
+import { filterModelOptionsForHarness, shouldClearModelForHarness } from "@/lib/session-harness";
+import { HarnessSelect } from "./harness-select";
 import { browserApiFetch } from "@/lib/browser-api-fetch";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -164,10 +162,7 @@ function RepoOverrideRow({
   const autoReviewNoticeId = useId();
   const [model, setModel] = useState(entry.settings.model ?? "");
   const [effort, setEffort] = useState(entry.settings.reasoningEffort ?? "");
-  const [harnessMode, setHarnessMode] = useState<"global" | "override">(
-    entry.settings.harness !== undefined ? "override" : "global"
-  );
-  const [harness, setHarness] = useState<HarnessId>(entry.settings.harness ?? "opencode");
+  const [harness, setHarness] = useState<HarnessId | undefined>(entry.settings.harness);
   const [triggerUserMode, setTriggerUserMode] = useState<"global" | "override">(
     entry.settings.allowedTriggerUsers !== undefined ? "override" : "global"
   );
@@ -209,11 +204,11 @@ function RepoOverrideRow({
   const reasoningConfig = model ? MODEL_REASONING_CONFIG[model as ValidModel] : undefined;
 
   // The model picker only offers models the *effective* harness can run: the
-  // override when set, else the inherited global harness (OpenCode when unset).
-  // A local/global pair the harness cannot run is still saveable as a sparse
-  // override — the bot falls back to OpenCode at runtime — but the picker can
+  // override when set, else the inherited global harness (built-in default
+  // when unset). A local/global pair the harness cannot run is still saveable
+  // as a sparse override — the bot falls back at runtime — but the picker can
   // no longer silently produce it, and the mismatch is spelled out below.
-  const effectiveHarness = harnessMode === "override" ? harness : (defaultHarness ?? "opencode");
+  const effectiveHarness: HarnessId = harness ?? defaultHarness ?? DEFAULT_HARNESS;
   const effectiveModel = model || defaultModel;
   const harnessMismatch = effectiveModel
     ? checkHarnessCompatibility(effectiveHarness, effectiveModel)
@@ -229,18 +224,9 @@ function RepoOverrideRow({
     }
   };
 
-  const handleHarnessModeChange = (newMode: "global" | "override") => {
-    // The harness draft is initialized once from the persisted settings and
-    // then belongs to the user: switching scope back and forth must never
-    // clobber the current choice with the original stored value.
-    setHarnessMode(newMode);
-    setDirty(true);
-  };
-
-  const handleHarnessChange = (next: string) => {
-    if (!isValidHarness(next)) return;
+  const handleHarnessChange = (next: HarnessId | undefined) => {
     setHarness(next);
-    if (model && !harnessSupportsModel(next, model)) {
+    if (shouldClearModelForHarness(next ?? effectiveHarness, model)) {
       setModel("");
       setEffort("");
     }
@@ -262,7 +248,7 @@ function RepoOverrideRow({
     const settings: GitHubBotSettings = {};
     if (model) settings.model = model;
     if (effort) settings.reasoningEffort = effort;
-    if (harnessMode === "override") settings.harness = harness;
+    if (harness) settings.harness = harness;
     if (triggerUserMode === "override") settings.allowedTriggerUsers = allowedTriggerUsers;
     if (codeReviewMode === "override") settings.codeReviewInstructions = codeReviewInstructions;
     if (commentActionMode === "override")
@@ -374,30 +360,13 @@ function RepoOverrideRow({
           </Select>
         )}
 
-        <Select value={harnessMode} onValueChange={handleHarnessModeChange}>
-          <SelectTrigger density="compact" className="w-44" aria-label="Agent harness scope">
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value="global">Use global harness</SelectItem>
-            <SelectItem value="override">Override harness</SelectItem>
-          </SelectContent>
-        </Select>
-
-        {harnessMode === "override" && (
-          <Select value={harness} onValueChange={handleHarnessChange}>
-            <SelectTrigger density="compact" className="w-44" aria-label="Agent harness">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              {HARNESS_IDS.map((id) => (
-                <SelectItem key={id} value={id}>
-                  {getHarnessLabel(id)}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-        )}
+        <HarnessSelect
+          value={harness}
+          onChange={handleHarnessChange}
+          inheritLabel="Use global harness"
+          density="compact"
+          className="w-44"
+        />
 
         <Button size="sm" onClick={handleSave} disabled={saving || !dirty}>
           {saving ? "..." : "Save"}

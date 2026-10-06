@@ -456,17 +456,6 @@ export class IntegrationSettingsStore {
   private validateAndNormalizeGitHubSettings(settings: GitHubBotSettings): GitHubBotSettings {
     this.validateAgentSelection(settings);
 
-    // Same rule as automation save: a harness/model pair saved together must
-    // be compatible. Cross-level pairs (global harness + repo model) can still
-    // combine into a mismatch; the bot resolves those deterministically at
-    // runtime by falling back to OpenCode.
-    if (settings.harness !== undefined && settings.model !== undefined) {
-      const incompatibility = checkHarnessCompatibility(settings.harness, settings.model);
-      if (incompatibility) {
-        throw new IntegrationSettingsValidationError(incompatibility.message);
-      }
-    }
-
     if (
       settings.codeReviewInstructions !== undefined &&
       typeof settings.codeReviewInstructions !== "string"

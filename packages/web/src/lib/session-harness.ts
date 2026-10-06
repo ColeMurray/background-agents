@@ -1,4 +1,5 @@
 import {
+  DEFAULT_HARNESS,
   filterModelsForHarness,
   getHarnessLabel,
   harnessSupportsModel,
@@ -20,8 +21,21 @@ export function filterModelOptionsForHarness(
     .filter((group) => group.models.length > 0);
 }
 
+/**
+ * Whether picking a harness must clear the current model (+effort): a set
+ * model the new effective harness cannot run. Shared by the GitHub and Linear
+ * settings (global + repo rows) so the picker can never silently produce a
+ * pair the harness cannot run — mirroring the composer behavior. An unset
+ * harness means the built-in default.
+ */
+export function shouldClearModelForHarness(harness: HarnessId | undefined, model: string): boolean {
+  return model !== "" && !harnessSupportsModel(harness ?? DEFAULT_HARNESS, model);
+}
+
 export type HarnessModelAvailability =
-  { status: "loading" } | { status: "available" } | { status: "unavailable"; message: string };
+  | { status: "loading" }
+  | { status: "available" }
+  | { status: "unavailable"; message: string };
 
 export interface HarnessModelSelection {
   /** Whether `model` may be submitted; anything else holds submission. */

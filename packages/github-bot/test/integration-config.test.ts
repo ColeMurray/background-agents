@@ -2,8 +2,8 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import type { Env } from "../src/types";
 import type { Logger } from "../src/logger";
 
-import { getGitHubConfig, resolveGitHubSessionHarness } from "../src/utils/integration-config";
-import { checkHarnessCompatibility } from "@open-inspect/shared/harnesses";
+import { getGitHubConfig } from "../src/utils/integration-config";
+import { resolveModelSelection } from "../src/model-selection";
 
 function createMockLogger(): Logger {
   return {
@@ -54,7 +54,7 @@ describe("getGitHubConfig", () => {
 
     expect(result).toEqual({
       model: "anthropic/claude-opus-4-6",
-      harness: null,
+      harness: "opencode",
       reasoningEffort: "high",
       autoReviewOnOpen: true,
       enabledRepos: null,
@@ -91,7 +91,7 @@ describe("getGitHubConfig", () => {
     expect(result.harness).toBe("claude");
   });
 
-  it("treats a response without a harness key as unset (older control plane)", async () => {
+  it("treats a response without a harness key as the built-in default (older control plane)", async () => {
     const env = createMockEnv(() =>
       Promise.resolve(
         new Response(
@@ -114,7 +114,7 @@ describe("getGitHubConfig", () => {
 
     const result = await getGitHubConfig(env, "acme/widgets", log);
 
-    expect(result.harness).toBeNull();
+    expect(result.harness).toBe("opencode");
     expect(log.warn).not.toHaveBeenCalled();
   });
 
@@ -142,7 +142,7 @@ describe("getGitHubConfig", () => {
 
     expect(result).toEqual({
       model: "anthropic/claude-haiku-4-5",
-      harness: null,
+      harness: "opencode",
       reasoningEffort: null,
       autoReviewOnOpen: false,
       enabledRepos: ["acme/widgets"],
@@ -278,7 +278,7 @@ describe("getGitHubConfig", () => {
 
     expect(result).toEqual({
       model: "anthropic/claude-haiku-4-5",
-      harness: null,
+      harness: "opencode",
       reasoningEffort: null,
       autoReviewOnOpen: true,
       enabledRepos: null,
@@ -290,40 +290,58 @@ describe("getGitHubConfig", () => {
   });
 });
 
-describe("resolveGitHubSessionHarness", () => {
-  it("returns null when unset, so the field is omitted", () => {
-    expect(resolveGitHubSessionHarness({ harness: null, model: "openai/gpt-5" })).toBeNull();
-  });
+describe("resolveModelSelection harness", () => {
+  const env = {} as unknown as Env;
 
-  it("keeps a compatible configured harness", () => {
-    expect(
-      resolveGitHubSessionHarness({ harness: "claude", model: "anthropic/claude-opus-4-6" })
-    ).toBe("claude");
-  });
-
-  it("omits with a warning on a cross-level mismatch", () => {
+  it("sends the built-in harness with the canonical model when unconfigured", async () => {
     const log = createMockLogger();
-    expect(
-      resolveGitHubSessionHarness({ harness: "claude", model: "openai/gpt-5.4" }, log)
-    ).toBeNull();
+    const result = await resolveModelSelection(
+      env,
+      log,
+      "trace-default-harness",
+      { model: "openai/gpt-5", harness: "opencode", reasoningEffort: null },
+      undefined
+    );
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    // Stale model canonicalizes; the default harness runs the canonical one.
+    expect(result.selection.model).toBe("anthropic/claude-sonnet-4-6");
+    expect(result.selection.harness).toBe("opencode");
+    expect(log.warn).not.toHaveBeenCalled();
+  });
+
+  it("keeps a compatible configured harness", async () => {
+    const log = createMockLogger();
+    const result = await resolveModelSelection(
+      env,
+      log,
+      "trace-keep-harness",
+      { model: "anthropic/claude-opus-4-6", harness: "claude", reasoningEffort: null },
+      undefined
+    );
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.selection.harness).toBe("claude");
+  });
+
+  it("falls back to the built-in harness with a warning on a mismatch", async () => {
+    const log = createMockLogger();
+    const result = await resolveModelSelection(
+      env,
+      log,
+      "trace-mismatch",
+      { model: "openai/gpt-5.4", harness: "claude", reasoningEffort: null },
+      undefined
+    );
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.selection.harness).toBe("opencode");
     expect(log.warn).toHaveBeenCalledWith(
       "config.harness_model_mismatch",
       expect.objectContaining({ harness: "claude", model: "openai/gpt-5.4", fallback: "opencode" })
-    );
-    // Lock the user-facing reason: gpt-5.4 is a catalog model the harness
-    // cannot run, so this test exercises the compatibility check itself.
-    expect(checkHarnessCompatibility("claude", "openai/gpt-5.4")?.message).toContain(
-      'Model "openai/gpt-5.4" cannot run on the Claude Agent harness.'
-    );
-  });
-
-  it("keeps the harness when a stale model canonicalizes to a compatible one", () => {
-    // openai/gpt-5 is absent from the catalog, so session creation resolves it
-    // to the default model (Claude Sonnet). The check must judge that
-    // canonical model — not the raw string — or it would drop a harness the
-    // created session would have honored.
-    expect(resolveGitHubSessionHarness({ harness: "claude", model: "openai/gpt-5" })).toBe(
-      "claude"
     );
   });
 });
