@@ -3,7 +3,7 @@ import { AutomationStore, type AutomationRow } from "./automation-store";
 import { MAX_D1_QUERY_PARAMETERS } from "./query-limits";
 import type { SqlDatabase, SqlStatement } from "./sql-database";
 
-function createFakeD1(options?: { allResults?: unknown[] }) {
+function createFakeD1(options?: { allResults?: unknown[]; batchResults?: unknown[][] }) {
   const statements: { sql: string; params: unknown[] }[] = [];
   const db: SqlDatabase = {
     prepare(sql) {
@@ -23,7 +23,11 @@ function createFakeD1(options?: { allResults?: unknown[] }) {
       };
       return statement;
     },
-    batch: async () => [],
+    batch: async <T>() =>
+      (options?.batchResults ?? []).map((results) => ({
+        results: results as T[],
+        meta: { changes: 0 },
+      })),
   };
   return { db, statements };
 }
@@ -50,6 +54,39 @@ const sampleRow: AutomationRow = {
   event_type: null,
   trigger_config: null,
   trigger_auth_data: null,
+};
+
+const invocationRow = {
+  id: "inv_1",
+  automation_id: "auto_test1",
+  source: "manual",
+  scheduled_at: null,
+  skip_reason: null,
+  created_at: 1000,
+  derived_status: "completed",
+  derived_completed_at: 1200,
+};
+
+const enrichedRunRow = {
+  id: "run_1",
+  automation_id: "auto_test1",
+  invocation_id: "inv_1",
+  session_id: null,
+  status: "completed",
+  skip_reason: null,
+  failure_reason: null,
+  scheduled_at: 1000,
+  started_at: null,
+  completed_at: 1200,
+  execution_deadline_at: null,
+  created_at: 1000,
+  repo_owner: null,
+  repo_name: null,
+  repo_id: null,
+  base_branch: null,
+  environment_id: null,
+  session_title: null,
+  artifact_summary: null,
 };
 
 describe("AutomationStore", () => {
@@ -98,5 +135,48 @@ describe("AutomationStore", () => {
     expect(sql.match(/\?/g)).toHaveLength(params.length);
     expect(params).toContain("user-1");
     expect(params).not.toContain("team_1");
+  });
+
+  it("parses invocation child run rows and preserves nullable fields", async () => {
+    const { db } = createFakeD1({ batchResults: [[invocationRow], [enrichedRunRow]] });
+
+    const invocation = await new AutomationStore(db).getInvocation("auto_test1", "inv_1");
+
+    expect(invocation?.runs).toEqual([
+      {
+        id: "run_1",
+        automationId: "auto_test1",
+        invocationId: "inv_1",
+        sessionId: null,
+        status: "completed",
+        skipReason: null,
+        failureReason: null,
+        scheduledAt: 1000,
+        startedAt: null,
+        completedAt: 1200,
+        createdAt: 1000,
+        sessionTitle: null,
+        artifactSummary: null,
+        repoOwner: null,
+        repoName: null,
+        repoId: null,
+        baseBranch: null,
+        environmentId: null,
+      },
+    ]);
+  });
+
+  it("rejects malformed invocation child run rows", async () => {
+    const malformedRun = { ...enrichedRunRow, status: "done" };
+    const { db } = createFakeD1({ batchResults: [[invocationRow], [malformedRun]] });
+
+    await expect(new AutomationStore(db).getInvocation("auto_test1", "inv_1")).rejects.toThrow();
+  });
+
+  it("rejects partial invocation child run rows", async () => {
+    const partialRun = { ...enrichedRunRow, id: undefined };
+    const { db } = createFakeD1({ batchResults: [[invocationRow], [partialRun]] });
+
+    await expect(new AutomationStore(db).getInvocation("auto_test1", "inv_1")).rejects.toThrow();
   });
 });

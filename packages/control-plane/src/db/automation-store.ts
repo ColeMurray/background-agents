@@ -19,7 +19,6 @@ import type {
   AutomationInvocationStatus,
   AutomationRepository,
   AutomationRun,
-  AutomationRunStatus,
 } from "@open-inspect/shared/types/automations";
 import { automationInvocationStatusSchema } from "@open-inspect/shared/types/automations";
 import {
@@ -120,38 +119,51 @@ type AutomationListResult = { automations: AutomationRow[] } & (
  */
 export const EXECUTION_TIMEOUT_FAILURE_REASON = "execution_timeout";
 
-export interface AutomationRunRow {
-  id: string;
-  automation_id: string;
+const automationRunStatusSchema = z.enum([
+  "starting",
+  "running",
+  "completed",
+  "failed",
+  "skipped",
+  "unauthorized",
+]);
+
+const automationRunRowSchema = z.object({
+  id: z.string(),
+  automation_id: z.string(),
   /** Owning invocation. */
-  invocation_id: string;
-  session_id: string | null;
-  status: AutomationRunStatus;
-  skip_reason: string | null;
-  failure_reason: string | null;
-  scheduled_at: number;
-  started_at: number | null;
-  completed_at: number | null;
+  invocation_id: z.string(),
+  session_id: z.string().nullable(),
+  status: automationRunStatusSchema,
+  skip_reason: z.string().nullable(),
+  failure_reason: z.string().nullable(),
+  scheduled_at: z.number(),
+  started_at: z.number().nullable(),
+  completed_at: z.number().nullable(),
   /**
    * When the recovery sweep may declare this run lost, stamped at launch from
    * the execution budget its session was created with. Null until the run
    * claims a session, and on rows that predate the column.
    */
-  execution_deadline_at: number | null;
-  created_at: number;
+  execution_deadline_at: z.number().nullable(),
+  created_at: z.number(),
   /** Repository snapshot taken at firing time (null for repo-less runs). */
-  repo_owner: string | null;
-  repo_name: string | null;
-  repo_id: number | null;
-  base_branch: string | null;
+  repo_owner: z.string().nullable(),
+  repo_name: z.string().nullable(),
+  repo_id: z.number().nullable(),
+  base_branch: z.string().nullable(),
   /** Environment snapshot taken at firing time (null for repository/repo-less runs). */
-  environment_id: string | null;
-}
+  environment_id: z.string().nullable(),
+});
 
-export interface EnrichedRunRow extends AutomationRunRow {
-  session_title: string | null;
-  artifact_summary: string | null;
-}
+export type AutomationRunRow = z.infer<typeof automationRunRowSchema>;
+
+const enrichedRunRowSchema = automationRunRowSchema.extend({
+  session_title: z.string().nullable(),
+  artifact_summary: z.string().nullable(),
+});
+
+export type EnrichedRunRow = z.infer<typeof enrichedRunRowSchema>;
 
 export interface AutomationRepositoryRow {
   automation_id: string;
@@ -1406,7 +1418,7 @@ export class AutomationStore {
     ]);
     const row = invocationResult.results?.[0];
     if (!row) return null;
-    const runs = (childResult.results ?? []) as EnrichedRunRow[];
+    const runs = enrichedRunRowSchema.array().parse(childResult.results ?? []);
     return toAutomationInvocation(
       enrichedAutomationInvocationRowSchema.parse(row),
       runs.map(toAutomationRun)
