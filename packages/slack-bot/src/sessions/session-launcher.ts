@@ -1,6 +1,7 @@
 import { escapeMrkdwnText, postMessage } from "@open-inspect/shared/slack";
 import type { CallbackContext } from "@open-inspect/shared/types/session-api";
 import { normalizeValidModels, type ValidModel } from "@open-inspect/shared/models";
+import { resolveHarnessForModel, type HarnessId } from "@open-inspect/shared/harnesses";
 import { getAuthoritativeModels, getAvailableModels } from "../app-home/models";
 import {
   notifyDroppedAttachments,
@@ -106,6 +107,10 @@ export interface StartSessionResult {
   sessionDefaults: ModelSelection;
   /** True when those are not the user's App Home preferences. */
   differsFromUserDefaults: boolean;
+  /** The workspace's Slack harness setting. */
+  configuredHarness: HarnessId;
+  /** The harness the session runs on: the configured one unless it cannot run the model. */
+  harness: HarnessId;
 }
 
 export async function startSessionAndSendPrompt(
@@ -186,6 +191,8 @@ export async function startSessionAndSendPrompt(
     await postMessage(env.SLACK_BOT_TOKEN, channel, firstPrompt.error, { thread_ts: threadTs });
     return null;
   }
+  const configuredHarness = slackConfig.harness;
+  const harness = resolveHarnessForModel(configuredHarness, model);
   const preferenceRepo = branchPreferenceRepo(target);
   let branch: string | undefined;
   if (preferenceRepo) {
@@ -196,6 +203,8 @@ export async function startSessionAndSendPrompt(
   const session = await createSession(env, {
     target,
     teamId,
+    configuredHarness,
+    harness,
     model,
     reasoningEffort,
     branch,
@@ -270,5 +279,11 @@ export async function startSessionAndSendPrompt(
     threadTs,
     buildThreadSession(session.sessionId, target, model, reasoningEffort, messageTs, teamId)
   );
-  return { sessionId: session.sessionId, sessionDefaults, differsFromUserDefaults };
+  return {
+    sessionId: session.sessionId,
+    sessionDefaults,
+    differsFromUserDefaults,
+    configuredHarness,
+    harness,
+  };
 }

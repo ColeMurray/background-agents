@@ -7,6 +7,7 @@ import userEvent from "@testing-library/user-event";
 import * as matchers from "@testing-library/jest-dom/matchers";
 import type { EnrichedRepository } from "@open-inspect/shared/types/repository-catalog";
 import type { Environment } from "@open-inspect/shared/types/environments";
+import { HARNESS_IDS, getHarnessLabel } from "@open-inspect/shared/harnesses";
 import {
   MAX_SLACK_ROUTING_RULES,
   type SlackGlobalConfig,
@@ -881,5 +882,89 @@ describe("SlackIntegrationSettings", () => {
       // Both conflicting rows are flagged.
       expect(within(section).getAllByText(/used by more than one rule/i)).toHaveLength(2);
     });
+  });
+});
+
+describe("SlackIntegrationSettings harness", () => {
+  async function optionNames(user: ReturnType<typeof userEvent.setup>, trigger: HTMLElement) {
+    await user.click(trigger);
+    const names = within(screen.getByRole("listbox"))
+      .getAllByRole("option")
+      .map((option) => option.textContent);
+    await user.keyboard("{Escape}");
+    return names;
+  }
+
+  async function savedDefaults(user: ReturnType<typeof userEvent.setup>) {
+    await user.click(screen.getByRole("button", { name: /^save$/i }));
+    const [, init] = fetchMock.mock.calls[0];
+    return (JSON.parse(init.body as string) as { settings: SlackGlobalConfig }).settings.defaults;
+  }
+
+  it("offers every harness and filters the default models to those it can run", async () => {
+    const user = userEvent.setup();
+    setupSWR({ global: null });
+    render(<SlackIntegrationSettings />);
+    const harness = screen.getByRole("combobox", { name: "Agent harness" });
+    const model = screen.getByRole("combobox", { name: "Default model" });
+
+    expect(harness).toHaveTextContent("OpenCode");
+    expect(harness).toHaveAttribute("aria-describedby", "slack-harness-help");
+    expect(await optionNames(user, harness)).toEqual(HARNESS_IDS.map(getHarnessLabel));
+    expect(await optionNames(user, model)).toEqual(["Claude Sonnet 4.6", "GPT 5.4"]);
+
+    await user.click(harness);
+    await user.click(
+      await within(await screen.findByRole("listbox")).findByRole("option", {
+        name: "Claude Agent",
+      })
+    );
+
+    expect(await optionNames(user, model)).toEqual(["Claude Sonnet 4.6"]);
+  });
+
+  it("clears a default model the selected harness cannot run and saves the harness", async () => {
+    const user = userEvent.setup();
+    setupSWR({ global: { defaults: { model: "openai/gpt-5.4", mentionsPolicy: "strip" } } });
+    fetchMock.mockResolvedValue(okJson({}));
+    render(<SlackIntegrationSettings />);
+    const harness = screen.getByRole("combobox", { name: "Agent harness" });
+
+    await user.click(harness);
+    await user.click(
+      await within(await screen.findByRole("listbox")).findByRole("option", {
+        name: "Claude Agent",
+      })
+    );
+
+    expect(screen.getByRole("combobox", { name: "Default model" })).toHaveTextContent(
+      "Use system default"
+    );
+    expect(await savedDefaults(user)).toEqual({
+      agentNotificationsEnabled: false,
+      harness: "claude",
+      mentionsPolicy: "strip",
+      unboundChannels: "workspace",
+    });
+  });
+
+  it("omits the harness when saving the default harness", async () => {
+    const user = userEvent.setup();
+    setupSWR({
+      global: { defaults: { harness: "claude", model: "anthropic/claude-sonnet-4-6" } },
+    });
+    fetchMock.mockResolvedValue(okJson({}));
+    render(<SlackIntegrationSettings />);
+    const harness = screen.getByRole("combobox", { name: "Agent harness" });
+    expect(harness).toHaveTextContent("Claude Agent");
+
+    await user.click(harness);
+    await user.click(
+      await within(await screen.findByRole("listbox")).findByRole("option", { name: "OpenCode" })
+    );
+
+    const defaults = await savedDefaults(user);
+    expect(defaults).not.toHaveProperty("harness");
+    expect(defaults).toMatchObject({ model: "anthropic/claude-sonnet-4-6" });
   });
 });

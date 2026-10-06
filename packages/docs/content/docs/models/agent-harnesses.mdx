@@ -4,10 +4,12 @@ description: Compare the two agent harnesses, choose one when you create a sessi
 audience: team-owner
 owner: platform
 status: published
-lastReviewed: "2026-09-23"
+lastReviewed: "2026-10-06"
 relatedCode:
   - packages/shared/src/harnesses.ts
   - docs/CLAUDE_AGENT.md
+  - packages/slack-bot/src/sessions/session-launcher.ts
+  - packages/github-bot/src/model-selection.ts
   - docs/HOW_IT_WORKS.md
   - packages/web/src/components/model-reasoning-selector.tsx
   - packages/web/src/components/provider-auth-controls.tsx
@@ -22,7 +24,8 @@ The agent harness is the coding agent that runs inside the sandbox. Every sessio
 - Child sessions inherit their parent's harness.
 - An automation carries a harness for the sessions it creates.
 - Sessions started by Linear run on the harness chosen in Settings › Integrations › Linear (OpenCode by default). A model the chosen harness cannot run, such as one from a `model:gpt-*` label, runs on OpenCode.
-- Sessions started by Slack and GitHub run on OpenCode.
+- Sessions started by Slack run on the harness chosen in Settings › Integrations › Slack (OpenCode by default). A model the chosen harness cannot run, such as one from `!model openai/gpt-5.4` or an App Home preference, runs on OpenCode. A Slack thread keeps its session's harness.
+- Sessions started by GitHub run on the harness chosen in Settings › Integrations › GitHub, globally or per repository (OpenCode by default). A model the chosen harness cannot run runs on OpenCode.
 - OpenCode is the default harness.
 
 Both harnesses emit the same session events (tokens, tool calls, steps, warnings), so the session page, timeline, and diff work the same way on either one.
@@ -41,9 +44,9 @@ Both harnesses emit the same session events (tokens, tool calls, steps, warnings
 
 <Callout type="info" title="Installation default Anthropic account">
   A default Claude account set under Settings › Accounts (provider accounts) takes effect only on
-  Claude Agent sessions, including automations and Linear sessions configured for Claude Agent.
-  OpenCode sessions, and the bot and integration sessions that run on OpenCode, keep using
-  `ANTHROPIC_API_KEY`, so setting a default never breaks a session that cannot use it.
+  Claude Agent sessions, including automations and Linear, Slack, and GitHub sessions configured for
+  Claude Agent. OpenCode sessions, and the bot and integration sessions that run on OpenCode, keep
+  using `ANTHROPIC_API_KEY`, so setting a default never breaks a session that cannot use it.
 </Callout>
 
 ## Choose a harness in the composer

@@ -1,3 +1,4 @@
+import { DEFAULT_HARNESS, getHarnessLabel, type HarnessId } from "@open-inspect/shared/harnesses";
 import { getModelDisplayName } from "@open-inspect/shared/models";
 import { setAssistantThreadStatusBestEffort } from "../activity-status";
 import type { ModelSelection } from "../inline-flags";
@@ -22,17 +23,29 @@ export function scheduleStartingStatus(
 
 /**
  * Describe a session's model and reasoning when they are not the user's App
- * Home defaults. Returns undefined for the common case so the acknowledgement
- * stays bare unless there is something to report.
+ * Home defaults, and its harness whenever the workspace chose a non-default
+ * one, since the session may have fallen back to the default. Returns
+ * undefined for the common case so the acknowledgement stays bare unless
+ * there is something to report.
  */
 export function formatSessionDefaultsNotice(launch: {
   sessionDefaults: ModelSelection;
   differsFromUserDefaults: boolean;
+  configuredHarness: HarnessId;
+  harness: HarnessId;
 }): string | undefined {
-  if (!launch.differsFromUserDefaults) return undefined;
+  const namesHarness = launch.configuredHarness !== DEFAULT_HARNESS;
+  if (!launch.differsFromUserDefaults && !namesHarness) return undefined;
   const parts = [getModelDisplayName(launch.sessionDefaults.model)];
   const { reasoningEffort } = launch.sessionDefaults;
   if (reasoningEffort) parts.push(`${reasoningEffort} reasoning`);
+  if (namesHarness) {
+    parts.push(
+      launch.harness === launch.configuredHarness
+        ? getHarnessLabel(launch.harness)
+        : `${getHarnessLabel(launch.harness)} (${getHarnessLabel(launch.configuredHarness)} can't run this model)`
+    );
+  }
   return `Session defaults: ${parts.join(" · ")}`;
 }
 

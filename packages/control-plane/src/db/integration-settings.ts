@@ -604,6 +604,7 @@ export class IntegrationSettingsStore {
       level === "global"
         ? new Set([
             "agentNotificationsEnabled",
+            "harness",
             "model",
             "mentionsPolicy",
             "unboundChannels",

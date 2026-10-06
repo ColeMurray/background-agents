@@ -209,12 +209,20 @@ function makeSessionEnv(
     publicationStatus?: number;
     teamId?: string | null;
     modelPreferencesStatus?: number;
+    slackDefaults?: Record<string, unknown>;
+    enabledModels?: string[];
   } = {}
 ): ReturnType<typeof makeEnv> {
   const env = makeEnv();
   let promptResponseIndex = 0;
   env.CONTROL_PLANE.fetch.mockImplementation(async (input: RequestInfo | URL) => {
     const url = typeof input === "string" ? input : input.toString();
+    if (responses.slackDefaults && url.endsWith("/integration-settings/slack")) {
+      return Response.json({
+        integrationId: "slack",
+        settings: { defaults: responses.slackDefaults },
+      });
+    }
     if (url.includes("/channel-bindings/slack/"))
       return Response.json(
         responses.teamId ? { teamId: responses.teamId, kind: "primary" } : { teamId: null }
@@ -278,10 +286,13 @@ function makeSessionEnv(
       });
     }
 
-    return new Response(JSON.stringify({ enabledModels: ["anthropic/claude-haiku-4-5"] }), {
-      status: responses.modelPreferencesStatus ?? DEFAULT_MODEL_PREFERENCES_STATUS,
-      headers: { "Content-Type": "application/json" },
-    });
+    return new Response(
+      JSON.stringify({ enabledModels: responses.enabledModels ?? ["anthropic/claude-haiku-4-5"] }),
+      {
+        status: responses.modelPreferencesStatus ?? DEFAULT_MODEL_PREFERENCES_STATUS,
+        headers: { "Content-Type": "application/json" },
+      }
+    );
   });
   return env;
 }
@@ -1708,6 +1719,187 @@ describe("POST /events", () => {
     slackFetch.mockRestore();
   });
 
+  describe("agent harness", () => {
+    const anthropicModel = "anthropic/claude-haiku-4-5";
+    const openAIModel = "openai/gpt-5.4";
+    const harnessRefusal = {
+      prompt: {
+        error: 'Model "openai/gpt-5.4" cannot run on the Claude Agent harness.',
+        code: "HARNESS_MODEL_INCOMPATIBLE",
+      },
+      promptStatus: 400,
+    };
+
+    async function deliver(env: ReturnType<typeof makeEnv>, event: Record<string, unknown>) {
+      const ctx = makeCtx();
+      const response = await app.fetch(
+        slackEventRequest({ type: "app_mention", user: "U123", channel: "C123", ...event }),
+        env,
+        ctx
+      );
+      expect(response.status).toBe(200);
+      for (let index = 0; index < ctx.waitUntil.mock.calls.length; index++) {
+        await flushWaitUntil(ctx, index);
+      }
+    }
+
+    function sessionDefaultsNotices(slackFetch: ReturnType<typeof mockSlackFetch>) {
+      return slackApiBodies(slackFetch, "chat.update").flatMap((body) =>
+        ((body.blocks ?? []) as Array<{ type: string; elements?: Array<{ text: string }> }>)
+          .filter((block) => block.type === "context")
+          .map((block) => block.elements?.[0]?.text)
+      );
+    }
+
+    function postedTexts(slackFetch: ReturnType<typeof mockSlackFetch>) {
+      return slackApiBodies(slackFetch, "chat.postMessage").map((body) => body.text);
+    }
+
+    function slackSettingsFetches(env: ReturnType<typeof makeEnv>) {
+      return env.CONTROL_PLANE.fetch.mock.calls.filter(([input]) =>
+        String(input).endsWith("/integration-settings/slack")
+      );
+    }
+
+    async function seedThread(env: ReturnType<typeof makeEnv>, model: string) {
+      const kv = env.SLACK_KV as unknown as { put: (k: string, v: string) => Promise<void> };
+      await kv.put(
+        "thread:C123:111.222",
+        JSON.stringify({
+          sessionId: "session-1",
+          repoId: "acme/app",
+          repoFullName: "acme/app",
+          model,
+          createdAt: Date.now(),
+        })
+      );
+    }
+
+    it("names Claude Agent in the acknowledgement", async () => {
+      const slackFetch = mockSlackFetch();
+      const env = makeSessionEnv([], { slackDefaults: { harness: "claude" } });
+
+      await deliver(env, { text: "<@B123> fix the auth tests", ts: "111.222" });
+
+      expect(sessionFetchBodies(env.CONTROL_PLANE.fetch)).toEqual([
+        expect.objectContaining({ harness: "claude", model: anthropicModel }),
+      ]);
+      expect(sessionDefaultsNotices(slackFetch)).toEqual([
+        "Session defaults: Claude Haiku 4.5 · max reasoning · Claude Agent",
+      ]);
+
+      slackFetch.mockRestore();
+    });
+
+    it.each([
+      ["unset", undefined, []],
+      [
+        "Claude Agent",
+        "claude",
+        ["Session defaults: GPT 5.4 · OpenCode (Claude Agent can't run this model)"],
+      ],
+    ] as const)(
+      "acknowledges an OpenAI App Home preference with the harness %s",
+      async (_case, harness, notices) => {
+        const slackFetch = mockSlackFetch();
+        const env = makeSessionEnv([], {
+          slackDefaults: harness ? { harness } : {},
+          enabledModels: [anthropicModel, openAIModel],
+        });
+        await (env.SLACK_KV as unknown as { put: (k: string, v: string) => Promise<void> }).put(
+          "user_prefs:U123",
+          JSON.stringify({ userId: "U123", model: openAIModel, updatedAt: 1 })
+        );
+
+        await deliver(env, { text: "<@B123> fix the auth tests", ts: "111.222" });
+
+        expect(sessionFetchBodies(env.CONTROL_PLANE.fetch)).toEqual([
+          expect.objectContaining({ harness: "opencode", model: openAIModel }),
+        ]);
+        expect(sessionDefaultsNotices(slackFetch)).toEqual(notices);
+
+        slackFetch.mockRestore();
+      }
+    );
+
+    it("relays the control plane's refusal of a !model the thread's harness cannot run", async () => {
+      const slackFetch = mockSlackFetch();
+      const env = makeSessionEnv([], {
+        enabledModels: [anthropicModel, openAIModel],
+        ...harnessRefusal,
+      });
+      await seedThread(env, anthropicModel);
+
+      await deliver(env, {
+        text: `<@B123> !model ${openAIModel} add coverage`,
+        ts: "333.444",
+        thread_ts: "111.222",
+      });
+
+      expect(promptFetchBodies(env.CONTROL_PLANE.fetch)).toEqual([
+        expect.objectContaining({ model: openAIModel }),
+      ]);
+      expect(postedTexts(slackFetch)).toEqual([
+        'Model "openai/gpt-5.4" cannot run on the Claude Agent harness. Reply without `!model`, or start a new thread to use it.',
+      ]);
+
+      slackFetch.mockRestore();
+    });
+
+    it.each([
+      ["an Anthropic thread", "opencode", "anthropic/claude-sonnet-4-6", anthropicModel],
+      ["an Anthropic thread", "claude", "anthropic/claude-sonnet-4-6", anthropicModel],
+      ["a GPT thread", "claude", "openai/gpt-5.5", openAIModel],
+    ] as const)(
+      "replaces the disabled model of %s on a !reasoning follow-up with the %s harness configured",
+      async (_case, harness, sessionModel, model) => {
+        const slackFetch = mockSlackFetch();
+        const env = makeSessionEnv([], {
+          slackDefaults: { harness },
+          enabledModels: [openAIModel, anthropicModel],
+        });
+        await seedThread(env, sessionModel);
+
+        await deliver(env, {
+          text: "<@B123> !reasoning high add coverage",
+          ts: "333.444",
+          thread_ts: "111.222",
+        });
+
+        expect(promptFetchBodies(env.CONTROL_PLANE.fetch)).toEqual([
+          expect.objectContaining({ model, reasoningEffort: "high" }),
+        ]);
+        expect(slackSettingsFetches(env)).toEqual([]);
+
+        slackFetch.mockRestore();
+      }
+    );
+
+    it("tells the user the thread's model is no longer enabled when the harness refuses its fallback", async () => {
+      const slackFetch = mockSlackFetch();
+      const env = makeSessionEnv([], {
+        enabledModels: [openAIModel, "openai/gpt-5.5"],
+        ...harnessRefusal,
+      });
+      await seedThread(env, "anthropic/claude-sonnet-4-6");
+
+      await deliver(env, {
+        text: "<@B123> !reasoning high add coverage",
+        ts: "333.444",
+        thread_ts: "111.222",
+      });
+
+      expect(promptFetchBodies(env.CONTROL_PLANE.fetch)).toEqual([
+        expect.objectContaining({ model: openAIModel, reasoningEffort: "high" }),
+      ]);
+      expect(postedTexts(slackFetch)).toEqual([
+        'This thread\'s model is no longer enabled. Model "openai/gpt-5.4" cannot run on the Claude Agent harness. Reply without `!reasoning`, ask an admin to enable a model this thread can run, or start a new thread.',
+      ]);
+
+      slackFetch.mockRestore();
+    });
+  });
+
   it("preserves an existing session mapping after a transient prompt failure", async () => {
     const order: string[] = [];
     const slackFetch = mockSlackFetch(order);
@@ -2641,6 +2833,53 @@ describe("POST /interactions", () => {
         ]),
       }),
     ]);
+
+    slackFetch.mockRestore();
+  });
+
+  it("names Claude Agent in the acknowledgement of a target-picker launch", async () => {
+    const slackFetch = mockSlackFetch();
+    const env = makeSessionEnv([], { slackDefaults: { harness: "claude" } });
+    await (env.SLACK_KV as unknown as { put: (k: string, v: string) => Promise<void> }).put(
+      "pending:C123:111.222",
+      JSON.stringify({ message: "Please handle this", userId: "U123" })
+    );
+    const ctx = makeCtx();
+
+    const response = await app.fetch(
+      slackInteractionRequest({
+        type: "block_actions",
+        user: { id: "U123" },
+        channel: { id: "C123" },
+        message: { ts: "111.222" },
+        actions: [{ action_id: "select_repo", selected_option: { value: "acme/app" } }],
+      }),
+      env,
+      ctx
+    );
+
+    expect(response.status).toBe(200);
+    await flushWaitUntil(ctx);
+    await flushWaitUntil(ctx, 1);
+    expect(sessionFetchBodies(env.CONTROL_PLANE.fetch)).toEqual([
+      expect.objectContaining({ harness: "claude", model: "anthropic/claude-haiku-4-5" }),
+    ]);
+    expect(slackApiBodies(slackFetch, "chat.update")).toContainEqual(
+      expect.objectContaining({
+        ts: "222.333",
+        blocks: expect.arrayContaining([
+          {
+            type: "context",
+            elements: [
+              {
+                type: "mrkdwn",
+                text: "Session defaults: Claude Haiku 4.5 · max reasoning · Claude Agent",
+              },
+            ],
+          },
+        ]),
+      })
+    );
 
     slackFetch.mockRestore();
   });

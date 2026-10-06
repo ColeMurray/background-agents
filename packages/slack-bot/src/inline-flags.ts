@@ -9,6 +9,7 @@ import {
   type ReasoningEffort,
   type ValidModel,
 } from "@open-inspect/shared/models";
+import { HARNESS_IDS, harnessSupportsModel } from "@open-inspect/shared/harnesses";
 import type { InlinePromptOptions } from "@open-inspect/shared/inline-prompt-flags";
 import { escapeMrkdwnText } from "@open-inspect/shared/slack";
 import { z } from "zod";
@@ -104,11 +105,33 @@ export function sameModelSelection(a: ModelSelection, b: ModelSelection): boolea
   return a.model === b.model && a.reasoningEffort === b.reasoningEffort;
 }
 
-/** Resolve one-turn overrides against the session defaults and enabled model list. */
+/** Enabled models a thread can fall back to when its session model is no longer enabled. */
+export function threadFallbackModels(
+  sessionModel: string,
+  enabledModels: readonly ValidModel[]
+): readonly ValidModel[] {
+  // The thread's harness was chosen to run this exact stored model, so a model
+  // every such harness can run is safe on the thread, even after the stored
+  // model leaves the catalog.
+  const candidateHarnesses = HARNESS_IDS.filter((harness) =>
+    harnessSupportsModel(harness, sessionModel)
+  );
+  const safeModels = enabledModels.filter((enabledModel) =>
+    candidateHarnesses.every((harness) => harnessSupportsModel(harness, enabledModel))
+  );
+  return safeModels.length > 0 ? safeModels : enabledModels;
+}
+
+/**
+ * Resolve one-turn overrides against the session defaults and enabled model
+ * list. When the session model is no longer enabled and no `!model` was given,
+ * its replacement comes from `fallbackModels`.
+ */
 export function resolveInlinePromptOptions(
   options: InlinePromptOptions,
   defaults: { model: string; reasoningEffort?: string },
-  enabledModels: readonly ValidModel[]
+  enabledModels: readonly ValidModel[],
+  fallbackModels: readonly ValidModel[] = enabledModels
 ): ResolveInlinePromptOptionsResult {
   const { model: sessionModel, reasoningEffort: sessionReasoningEffort } =
     normalizeModelSelection(defaults);
@@ -121,8 +144,11 @@ export function resolveInlinePromptOptions(
     if (!enabledModels.includes(modelOverride)) {
       return { ok: false, error: `Model "${modelOverride}" is not enabled.` };
     }
-  } else {
-    const enabledSessionModel = resolveEnabledModel({ model: sessionModel, enabledModels });
+  } else if (!enabledModels.includes(sessionModel)) {
+    const enabledSessionModel = resolveEnabledModel({
+      model: sessionModel,
+      enabledModels: fallbackModels,
+    });
     if (enabledSessionModel !== sessionModel) modelOverride = enabledSessionModel;
   }
 

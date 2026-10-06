@@ -7,6 +7,7 @@ import {
 import type { SessionAttachmentReference } from "@open-inspect/shared/types/session-attachments";
 import { listArtifactsResponseSchema } from "@open-inspect/shared/types/artifacts";
 import { ProtectedReadError } from "@open-inspect/shared/completion/extractor";
+import type { HarnessId } from "@open-inspect/shared/harnesses";
 import { signedControlPlaneFetch, type ControlPlaneEnv } from "../internal-auth";
 import { createLogger } from "../logger";
 import { buildSessionTargetRequestFields, targetId, type SlackSessionTarget } from "../targets";
@@ -15,9 +16,14 @@ import { OUTBOUND_REQUEST_TIMEOUT_MS } from "../request-options";
 
 const log = createLogger("handler");
 
+const HARNESS_MODEL_INCOMPATIBLE_FALLBACK = "This thread's harness can't run that model.";
+
 interface CreateSessionOptions {
   target: SlackSessionTarget;
   teamId?: string | null;
+  /** The workspace's Slack harness setting, logged beside the harness the session runs on. */
+  configuredHarness: HarnessId;
+  harness: HarnessId;
   model: string;
   reasoningEffort?: string;
   branch?: string;
@@ -29,7 +35,9 @@ interface CreateSessionOptions {
 
 export type SendPromptResult =
   | { ok: true; data: SendPromptResponse }
-  | { ok: false; reason: "stale" | "forbidden" | "transient" | "channel_scope_denied" };
+  | { ok: false; reason: "stale" | "forbidden" | "transient" | "channel_scope_denied" }
+  /** The session's harness cannot run the prompt's model; `message` is the reply to post. */
+  | { ok: false; reason: "harness_model_incompatible"; message: string };
 
 export interface CreateSessionFailure {
   error: { status: number; code?: string; reasonCode?: string; repository?: string };
@@ -81,6 +89,8 @@ export async function createSession(
   const {
     target,
     teamId,
+    configuredHarness,
+    harness,
     model,
     reasoningEffort,
     branch,
@@ -93,6 +103,8 @@ export async function createSession(
   const base = {
     trace_id: traceId,
     target_id: targetId(target),
+    configured_harness: configuredHarness,
+    harness,
     model,
     reasoning_effort: reasoningEffort,
     branch,
@@ -103,6 +115,7 @@ export async function createSession(
     const body = JSON.stringify({
       ...buildSessionTargetRequestFields(target, branch),
       teamId,
+      harness,
       model,
       reasoningEffort,
       actorDisplayName,
@@ -225,20 +238,24 @@ export async function sendPrompt(
         http_status: response.status,
         duration_ms: Date.now() - startTime,
       });
-      const details = await response.json().catch(() => null);
+      const details: unknown = await response.json().catch(() => null);
+      const body =
+        details && typeof details === "object" ? (details as Record<string, unknown>) : {};
+      if (body.code === "slack_channel_scope_denied") {
+        return { ok: false, reason: "channel_scope_denied" };
+      }
+      if (response.status === 400 && body.code === "HARNESS_MODEL_INCOMPATIBLE") {
+        return {
+          ok: false,
+          reason: "harness_model_incompatible",
+          message:
+            typeof body.error === "string" ? body.error : HARNESS_MODEL_INCOMPATIBLE_FALLBACK,
+        };
+      }
       return {
         ok: false,
         reason:
-          details !== null &&
-          typeof details === "object" &&
-          "code" in details &&
-          details.code === "slack_channel_scope_denied"
-            ? "channel_scope_denied"
-            : response.status === 404
-              ? "stale"
-              : response.status === 403
-                ? "forbidden"
-                : "transient",
+          response.status === 404 ? "stale" : response.status === 403 ? "forbidden" : "transient",
       };
     }
     const result = sendPromptResponseSchema.safeParse(await response.json());

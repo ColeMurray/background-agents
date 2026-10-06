@@ -23,10 +23,10 @@ export function filterModelOptionsForHarness(
 
 /**
  * Whether picking a harness must clear the current model (+effort): a set
- * model the new effective harness cannot run. Shared by the GitHub and Linear
- * settings (global + repo rows) so the picker can never silently produce a
- * pair the harness cannot run — mirroring the composer behavior. An unset
- * harness means the built-in default.
+ * model the new effective harness cannot run. Shared by the integration
+ * settings forms (GitHub and Linear global and repo rows, Slack global) so the
+ * picker can never silently produce a pair the harness cannot run — mirroring
+ * the composer behavior. An unset harness means the built-in default.
  */
 export function shouldClearModelForHarness(harness: HarnessId | undefined, model: string): boolean {
   return model !== "" && !harnessSupportsModel(harness ?? DEFAULT_HARNESS, model);

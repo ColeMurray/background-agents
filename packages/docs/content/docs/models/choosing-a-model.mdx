@@ -4,10 +4,14 @@ description: Enable models for your workspace, pick a model and effort in the co
 audience: team-owner
 owner: platform
 status: published
-lastReviewed: "2026-09-28"
+lastReviewed: "2026-10-06"
 relatedCode:
   - packages/shared/src/models.ts
   - packages/shared/src/harnesses.ts
+  - packages/web/src/components/settings/integrations/slack-integration-settings.tsx
+  - packages/slack-bot/src/sessions/session-launcher.ts
+  - packages/web/src/components/settings/integrations/github-global-settings-section.tsx
+  - packages/github-bot/src/model-selection.ts
   - packages/web/src/components/model-reasoning-selector.tsx
   - packages/web/src/components/settings/models-settings.tsx
   - docs/AVAILABLE_MODELS.md
@@ -183,13 +187,13 @@ Some models appear more than once because they are reachable through more than o
 
 ## Defaults for integrations and automations
 
-Sessions started by Slack and GitHub always run on the OpenCode harness. Automations run on the harness chosen in the automation editor, and Linear sessions on the **Agent harness** chosen in its settings (OpenCode by default; a model that harness cannot run falls back to OpenCode). Each surface picks its model from these settings:
+Automations run on the harness chosen in the automation editor. GitHub, Linear, and Slack sessions run on the **Agent harness** chosen in each integration's settings (OpenCode by default; a model that harness cannot run falls back to OpenCode). GitHub and Linear also accept a harness per repository. Each surface picks its model from these settings:
 
 | Surface     | Where the default lives                                                                                                                                                                                                                                                                  |
 | ----------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | GitHub      | Settings › Integrations › GitHub: **Default model** and **Default reasoning effort**, plus per-repository **Repository Overrides**. Falls back to the deployment default model. An `@mention` can start with `!model` and `!reasoning` flags to override them for the session it starts. |
 | Linear      | Settings › Integrations › Linear: **Default model and effort** and **Repository Overrides**. A `model:*` issue label wins when **Allow model labels** is on, then a Linear user preference (when allowed), then the repository override or global default, then the deployment default.  |
-| Slack       | Each Slack user sets **Model** and **Reasoning effort** in the app's **Home** tab. A request can start with `!model` and `!reasoning` flags to override them; on a request that starts a session the flags become that session's defaults.                                               |
+| Slack       | Settings › Integrations › Slack: **Default model**. A user's **Model** and **Reasoning effort** in the app's **Home** tab win over it, and `!model` and `!reasoning` flags win over both for the session they start. Falls back to the deployment default model.                         |
 | Automations | The automation editor picks a model and effort per automation. The list is limited to enabled models the automation's harness can run.                                                                                                                                                   |
 
 All of these selectors show only models enabled in Settings › Models. Reasoning values must be ones the selected model supports.

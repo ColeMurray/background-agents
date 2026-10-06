@@ -63,7 +63,7 @@ const actor: SlackActorIdentity = {
 };
 const launchSettings: SlackLaunchSettings = {
   enabledModels: ["openai/gpt-5.4"],
-  slackConfig: {},
+  slackConfig: { harness: "opencode" },
   userPreferences: {
     model: "openai/gpt-5.4",
     reasoningEffort: "high",
@@ -165,4 +165,65 @@ describe("startSessionAndSendPrompt team boundaries", () => {
       );
     }
   );
+});
+
+describe("startSessionAndSendPrompt harness", () => {
+  const anthropicModel = "anthropic/claude-haiku-4-5";
+  const openAIModel = "openai/gpt-5.4";
+
+  function settings(
+    harness: SlackLaunchSettings["slackConfig"]["harness"],
+    preferredModel: string
+  ): SlackLaunchSettings {
+    return {
+      enabledModels: [anthropicModel, openAIModel],
+      slackConfig: { harness },
+      userPreferences: { model: preferredModel, reasoningEffort: undefined, branch: undefined },
+    };
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(getUserRepoBranchPreference).mockResolvedValue(undefined);
+    vi.mocked(createSession).mockResolvedValue({ sessionId: "session-1", status: "created" });
+    vi.mocked(deliverPrompt).mockResolvedValue({ ok: true, data: { messageId: "message-1" } });
+  });
+
+  it.each([
+    ["an unset harness", "opencode", anthropicModel, "opencode"],
+    ["Claude Agent with an Anthropic model", "claude", anthropicModel, "claude"],
+    ["Claude Agent with an OpenAI App Home preference", "claude", openAIModel, "opencode"],
+  ] as const)("creates %s on %s", async (_case, configuredHarness, model, harness) => {
+    const env = makeEnv();
+
+    expect(
+      await startSessionAndSendPrompt(env, {
+        ...options,
+        launchSettings: settings(configuredHarness, model),
+      })
+    ).toEqual(expect.objectContaining({ configuredHarness, harness }));
+    expect(createSession).toHaveBeenCalledWith(
+      env,
+      expect.objectContaining({ configuredHarness, harness, model })
+    );
+  });
+
+  it("falls back from a stale planned model as any launch does and runs it on a harness that can", async () => {
+    const env = makeEnv();
+
+    expect(
+      await startSessionAndSendPrompt(env, {
+        ...options,
+        launchSettings: {
+          ...settings("claude", openAIModel),
+          enabledModels: [openAIModel, anthropicModel],
+        },
+        launchPlan: { sessionDefaults: { model: "anthropic/claude-sonnet-4-6" } },
+      })
+    ).toEqual(expect.objectContaining({ configuredHarness: "claude", harness: "opencode" }));
+    expect(createSession).toHaveBeenCalledWith(
+      env,
+      expect.objectContaining({ harness: "opencode", model: openAIModel })
+    );
+  });
 });
