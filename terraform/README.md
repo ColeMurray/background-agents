@@ -409,13 +409,19 @@ To add a staging environment:
 
 1. Create a GitHub Environment named `staging`.
 
-   **`DEPLOYMENT_NAME` is mandatory on every environment.** It feeds `name_suffix` in
-   `environments/production/locals.tf`, which names every Worker, D1 database and R2 bucket. An
-   environment that does not set it falls back to the repository-level value, so a fresh
-   `staging/terraform.tfstate` would plan to create resources under production's exact names.
+   **Set every value below on the environment.** Anything left unset falls back to the
+   repository-level value, and each of these is a name two deployments would then share. A fresh
+   `staging/terraform.tfstate` does not know production owns the name already; it plans to create or
+   adopt the resource.
 
-   Beyond that, set only the secrets that differ. Anything left unset falls back to the
-   repository-level value.
+   | Setting                        | Why it has to differ                                                                                                                                                                                                                                                                              |
+   | ------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+   | `DEPLOYMENT_NAME`              | Feeds `name_suffix` in `locals.tf`, which names every Worker, D1 database and R2 bucket.                                                                                                                                                                                                          |
+   | `MODAL_ENVIRONMENT`            | The Modal app name is the constant `"open-inspect"` (`modal.tf`), so `DEPLOYMENT_NAME` does not separate it. The Modal environment is the only separator, and sharing it overwrites production's app and its `llm-api-keys` and `github-app` secrets. Required when `sandbox_provider = "modal"`. |
+   | `MODAL_ENVIRONMENT_WEB_SUFFIX` | Modal web endpoint URLs are built from the workspace slug and that constant app name, not the environment, so without a distinct suffix both deployments resolve to the same URLs.                                                                                                                |
+   | `CLOUDFLARE_CUSTOM_DOMAIN`     | The hostname carries no suffix, so two states would each manage a `cloudflare_workers_custom_domain` for it. Leave unset on all but one environment.                                                                                                                                              |
+
+   Beyond those, set only the secrets that differ.
 
 2. Add a caller workflow that runs `terraform-run.yml` against it:
 
