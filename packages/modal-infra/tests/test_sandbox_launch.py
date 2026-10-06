@@ -524,11 +524,18 @@ def _not_found(*_args, **_kwargs):
 @pytest.mark.parametrize(
     "image_source, settings, expected_cpu, expected_memory, timeout_seconds",
     [
-        ("base", None, 2, 4096, 30),
-        ("base", DOCKER_SETTINGS, 2, 4096, 4321),
-        ("base", {"cpuCores": 0.5, "memoryMib": 2048}, 0.5, 2048, 600),
-        ("repository", None, 2, 4096, 30),
-        ("snapshot", None, 2, 4096, 30),
+        ("base", None, (0.5, 2), (2048, 4096), 30),
+        ("base", DOCKER_SETTINGS, (2, 2), (4096, 4096), 4321),
+        ("base", {"cpuCores": 0.5, "memoryMib": 2048}, (0.5, 2), (2048, 4096), 600),
+        ("repository", None, (0.5, 2), (2048, 4096), 30),
+        ("snapshot", None, (0.5, 2), (2048, 4096), 30),
+        (
+            "snapshot",
+            {"cpuCores": 1, "cpuLimitCores": 4, "memoryMib": 2048, "memoryLimitMib": 8192},
+            (1, 4),
+            (2048, 8192),
+            600,
+        ),
     ],
     ids=[
         "defaults-base",
@@ -536,6 +543,7 @@ def _not_found(*_args, **_kwargs):
         "fractional-cpu-base",
         "defaults-repository",
         "defaults-snapshot",
+        "explicit-limits-snapshot",
     ],
 )
 async def test_docker_launch_selects_vm_runtime_and_named_allocation(
@@ -576,7 +584,7 @@ async def test_docker_launch_selects_vm_runtime_and_named_allocation(
     sandbox_create_request(*captured["command"], **kwargs)
     assert kwargs["image"] is (docker_image if image_source == "base" else artifact)
     assert kwargs["experimental_options"] == {"vm_runtime": True}
-    assert kwargs["cpu"] == (expected_cpu, expected_cpu)
+    assert kwargs["cpu"] == expected_cpu
     assert kwargs["memory"] == expected_memory
     assert kwargs["timeout"] == timeout_seconds
     assert kwargs["name"] == docker_allocation_name("session-1")
@@ -691,6 +699,43 @@ async def test_malformed_docker_setting_fails_before_any_launch(monkeypatch):
     with pytest.raises(InvalidDockerSettingsError):
         await manager.create_sandbox(_docker_config(settings={"dockerEnabled": "true"}))
 
+    assert "kwargs" not in captured
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("image_source", ["base", "snapshot"])
+@pytest.mark.parametrize(
+    "settings",
+    [
+        {"memoryLimitMib": 4294967296},
+        {"cpuLimitCores": 1e308},
+        {"cpuCores": 0.0001, "cpuLimitCores": 0.0009},
+    ],
+)
+async def test_invalid_wire_resources_neither_retire_nor_allocate(
+    monkeypatch, image_source, settings
+):
+    manager, captured, _ = _docker_manager(monkeypatch)
+    retire = AsyncMock()
+    monkeypatch.setattr("src.sandbox.launch.SandboxLauncher._retire_docker_allocation", retire)
+    if image_source == "base":
+        launch = manager.create_sandbox(
+            _docker_config(settings=settings, retire_sandbox_id="prior")
+        )
+    else:
+        launch = manager.restore_from_snapshot(
+            clone_host="github.com",
+            clone_username="x-access-token",
+            snapshot_image_id="snapshot-1",
+            session_config={"session_id": "session-1"},
+            sandbox_id="next",
+            settings=settings,
+            sandbox_backend="modal-vm",
+            retire_sandbox_id="prior",
+        )
+    with pytest.raises(InvalidDockerSettingsError):
+        await launch
+    retire.assert_not_awaited()
     assert "kwargs" not in captured
 
 
