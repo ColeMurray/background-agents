@@ -413,6 +413,22 @@ describe("VercelSandboxProvider", () => {
     expect(vi.mocked(client.createSandbox).mock.calls[0][0].resources).toEqual({ vcpus: 4 });
   });
 
+  it("ignores caps on create and restore without changing Vercel requests", async () => {
+    const client = createMockClient();
+    const provider = new VercelSandboxProvider(client, providerConfig);
+    const sandboxSettings = {
+      cpuCores: 2,
+      memoryMib: 4096,
+      cpuLimitCores: 16,
+      memoryLimitMib: 32768,
+    };
+    await provider.createSandbox({ ...baseCreateConfig, sandboxSettings });
+    await provider.restoreFromSnapshot({ ...baseRestoreConfig, sandboxSettings });
+    for (const [request] of vi.mocked(client.createSandbox).mock.calls) {
+      expect(request.resources).toEqual({ vcpus: 2 });
+    }
+  });
+
   it("omits Vercel resources when sandbox CPU and memory settings use provider defaults", async () => {
     const client = createMockClient();
     const provider = new VercelSandboxProvider(client, providerConfig);

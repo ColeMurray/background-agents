@@ -100,7 +100,12 @@ export class ImageBuildPlanner implements ImageBuildPlannerPort {
       callbackUrl: params.callbackUrl,
       failureCallbackUrl: params.failureCallbackUrl,
       buildTimeoutMs: resolveBuildTimeoutSeconds(sandboxSettings) * MS_PER_SECOND,
-      resources: { cpuCores: sandboxSettings.cpuCores, memoryMib: sandboxSettings.memoryMib },
+      resources: {
+        cpuCores: sandboxSettings.cpuCores,
+        memoryMib: sandboxSettings.memoryMib,
+        cpuLimitCores: sandboxSettings.cpuLimitCores,
+        memoryLimitMib: sandboxSettings.memoryLimitMib,
+      },
       userEnvVars: userEnvVars
         ? prepareLegacyManagedProviderEnv({
             exposedSecrets: userEnvVars,

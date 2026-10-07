@@ -429,11 +429,16 @@ async def test_terminate_build_sandbox_treats_provider_not_found_as_success(monk
 @pytest.mark.parametrize(
     "settings, expected_cpu, expected_memory",
     [
-        (None, 2, 4096),
-        ({"cpuCores": 2, "memoryMib": 4096}, 2, 4096),
-        ({"cpuCores": 0.5, "memoryMib": 2048}, 0.5, 2048),
+        (None, (0.5, 2), (2048, 4096)),
+        ({"cpuCores": 2, "memoryMib": 4096}, (2, 2), (4096, 4096)),
+        ({"cpuCores": 0.5, "memoryMib": 2048}, (0.5, 2), (2048, 4096)),
+        (
+            {"cpuCores": 1, "cpuLimitCores": 4, "memoryMib": 2048, "memoryLimitMib": 8192},
+            (1, 4),
+            (2048, 8192),
+        ),
     ],
-    ids=["defaults", "integer-cpu", "fractional-cpu"],
+    ids=["defaults", "integer-cpu", "fractional-cpu", "explicit-limits"],
 )
 async def test_create_build_sandbox_selects_the_variant_from_frozen_settings(
     monkeypatch, docker_enabled, settings, expected_cpu, expected_memory
@@ -468,7 +473,7 @@ async def test_create_build_sandbox_selects_the_variant_from_frozen_settings(
     if docker_enabled:
         assert kwargs["image"] is docker_image
         assert kwargs["experimental_options"] == {"vm_runtime": True}
-        assert (kwargs["cpu"], kwargs["memory"]) == ((expected_cpu, expected_cpu), expected_memory)
+        assert (kwargs["cpu"], kwargs["memory"]) == (expected_cpu, expected_memory)
     else:
         assert kwargs["image"] is default_image
         assert "experimental_options" not in kwargs

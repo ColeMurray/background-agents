@@ -1145,6 +1145,67 @@ describe("IntegrationSettingsStore", () => {
       expect(result).toEqual({ cpuCores: 0.5, memoryMib: 64 });
     });
 
+    it("inherits resource caps through repo and environment scopes with null resets", async () => {
+      await store.setGlobal("sandbox", {
+        defaults: { cpuCores: 0.5, memoryMib: 2048, cpuLimitCores: 2, memoryLimitMib: 4096 },
+      });
+      await store.setRepoSettings("sandbox", "acme/app", { cpuLimitCores: 3 });
+      expect((await store.getResolvedConfig("sandbox", "acme/app")).settings).toEqual({
+        cpuCores: 0.5,
+        memoryMib: 2048,
+        cpuLimitCores: 3,
+        memoryLimitMib: 4096,
+      });
+      await store.setEnvironmentSettings("sandbox", "env_1", {
+        cpuLimitCores: null,
+        memoryLimitMib: null,
+      });
+      expect(await store.getEnvironmentSettings("sandbox", "env_1")).toEqual({
+        cpuLimitCores: null,
+        memoryLimitMib: null,
+      });
+      expect((await store.getResolvedConfig("sandbox", "acme/app", "env_1")).settings).toEqual({
+        cpuCores: 0.5,
+        memoryMib: 2048,
+        cpuLimitCores: null,
+        memoryLimitMib: null,
+      });
+    });
+
+    it("preserves conflicting merged caps across repo and environment layers", async () => {
+      await store.setGlobal("sandbox", { defaults: { cpuLimitCores: 2, memoryLimitMib: 4096 } });
+      await store.setRepoSettings("sandbox", "acme/app", { cpuCores: 4 });
+      await store.setEnvironmentSettings("sandbox", "env_1", { memoryMib: 8192 });
+      expect((await store.getResolvedConfig("sandbox", "acme/app", "env_1")).settings).toEqual({
+        cpuCores: 4,
+        memoryMib: 8192,
+        cpuLimitCores: 2,
+        memoryLimitMib: 4096,
+      });
+      await store.setEnvironmentSettings("sandbox", "env_1", {
+        cpuLimitCores: 4,
+        memoryLimitMib: 8192,
+      });
+      expect((await store.getResolvedConfig("sandbox", "acme/app", "env_1")).settings).toEqual({
+        cpuCores: 4,
+        cpuLimitCores: 4,
+        memoryLimitMib: 8192,
+      });
+    });
+
+    it("preserves explicit caps below requests on provider-agnostic writes and reads", async () => {
+      const settings = { cpuCores: 4, cpuLimitCores: 2, memoryMib: 8192, memoryLimitMib: 4096 };
+      await store.setGlobal("sandbox", { defaults: settings });
+      expect((await store.getGlobal("sandbox"))?.defaults).toEqual(settings);
+      await store.setRepoSettings("sandbox", "acme/app", settings);
+      expect(await store.getRepoSettings("sandbox", "acme/app")).toEqual(settings);
+      await store.setEnvironmentSettings("sandbox", "env_1", settings);
+      expect(await store.getEnvironmentSettings("sandbox", "env_1")).toEqual(settings);
+      expect((await store.getResolvedConfig("sandbox", "acme/app", "env_1")).settings).toEqual(
+        settings
+      );
+    });
+
     it("preserves null repo resource overrides over inherited global defaults", async () => {
       await store.setGlobal("sandbox", { defaults: { cpuCores: 2, memoryMib: 4096 } });
       await store.setRepoSettings("sandbox", "acme/app", { cpuCores: null, memoryMib: null });

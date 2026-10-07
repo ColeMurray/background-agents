@@ -39,7 +39,7 @@ describe("resolveSessionScopedSettings", () => {
     mockState.resolved["vnc"] = { enabledRepos: null, settings: { enabled: true } };
     mockState.resolved["sandbox"] = {
       enabledRepos: null,
-      settings: { tunnelPorts: [8080], cpuCores: null },
+      settings: { tunnelPorts: [8080], cpuCores: null, cpuLimitCores: 2, memoryLimitMib: null },
     };
 
     const result = await resolveSessionScopedSettings(DB, [
@@ -50,7 +50,12 @@ describe("resolveSessionScopedSettings", () => {
     expect(result).toEqual({
       codeServerEnabled: true,
       vncEnabled: true,
-      sandboxSettings: { tunnelPorts: [8080], cpuCores: null },
+      sandboxSettings: {
+        tunnelPorts: [8080],
+        cpuCores: null,
+        cpuLimitCores: 2,
+        memoryLimitMib: null,
+      },
     });
     // Every resolution targets the primary member; the secondary is never asked about.
     expect(mockState.resolvedCalls.map((c) => c.repo)).toEqual([
