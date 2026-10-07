@@ -10,6 +10,10 @@ import {
   type ResolvedGitHubAutofixSettings,
 } from "@open-inspect/shared";
 import type { ModelCategory } from "@open-inspect/shared/models";
+import { DEFAULT_HARNESS, type HarnessId } from "@open-inspect/shared/harnesses";
+import { filterModelOptionsForHarness, shouldClearModelForHarness } from "@/lib/session-harness";
+import { HarnessSelect } from "./harness-select";
+import { GitHubHarnessWarning } from "./github-harness-warning";
 import { browserApiFetch } from "@/lib/browser-api-fetch";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -48,6 +52,7 @@ export function GlobalSettingsSection({
 }) {
   const [model, setModel] = useState(settings?.defaults?.model ?? "");
   const [effort, setEffort] = useState(settings?.defaults?.reasoningEffort ?? "");
+  const [harness, setHarness] = useState<HarnessId>(settings?.defaults?.harness ?? DEFAULT_HARNESS);
   const [autoReviewOnOpen, setAutoReviewOnOpen] = useState(
     settings?.defaults?.autoReviewOnOpen ?? true
   );
@@ -84,6 +89,7 @@ export function GlobalSettingsSection({
       if (settings) {
         setModel(settings.defaults?.model ?? "");
         setEffort(settings.defaults?.reasoningEffort ?? "");
+        setHarness(settings.defaults?.harness ?? DEFAULT_HARNESS);
         setAutoReviewOnOpen(settings.defaults?.autoReviewOnOpen ?? true);
         setEnabledRepos(settings.enabledRepos ?? []);
         setRepoScopeMode(settings.enabledRepos === undefined ? "all" : "selected");
@@ -103,6 +109,21 @@ export function GlobalSettingsSection({
   }, [settings, initialized]);
 
   const isConfigured = settings !== null && settings !== undefined;
+
+  // The model picker only offers models the selected harness can run. A model
+  // the new harness cannot run is cleared, mirroring the composer behavior.
+  const visibleModelOptions = filterModelOptionsForHarness(harness, enabledModelOptions);
+
+  const handleHarnessChange = (next: HarnessId | undefined) => {
+    const value = next ?? DEFAULT_HARNESS;
+    setHarness(value);
+    if (shouldClearModelForHarness(value, model)) {
+      setModel("");
+      setEffort("");
+    }
+    setDirty(true);
+    setError("");
+  };
   const handleReset = () => {
     setShowResetDialog(true);
   };
@@ -118,6 +139,7 @@ export function GlobalSettingsSection({
         mutate(GLOBAL_SETTINGS_KEY);
         setModel("");
         setEffort("");
+        setHarness(DEFAULT_HARNESS);
         setAutoReviewOnOpen(true);
         setEnabledRepos([]);
         setRepoScopeMode("all");
@@ -149,6 +171,7 @@ export function GlobalSettingsSection({
       defaults: {
         autoReviewOnOpen,
         ...(model ? { model } : {}),
+        ...(harness !== DEFAULT_HARNESS ? { harness } : {}),
         ...(effort ? { reasoningEffort: effort } : {}),
         ...(triggerUserMode === "specific" ? { allowedTriggerUsers } : {}),
         ...(codeReviewInstructions ? { codeReviewInstructions } : {}),
@@ -212,7 +235,7 @@ export function GlobalSettingsSection({
       <ModelReasoningDefaultsFields
         model={model}
         reasoningEffort={effort}
-        modelOptions={enabledModelOptions}
+        modelOptions={visibleModelOptions}
         onChange={(nextModel, nextEffort) => {
           setModel(nextModel);
           setEffort(nextEffort);
@@ -245,6 +268,22 @@ export function GlobalSettingsSection({
           />
         </label>
         <GitHubAutoReviewDeprecationNotice id="auto-review-deprecation" />
+      </div>
+
+      <div className="mb-4">
+        <label htmlFor="github-harness" className="block text-sm font-medium text-foreground mb-1">
+          Agent harness
+        </label>
+        <HarnessSelect
+          id="github-harness"
+          className="w-full"
+          value={harness}
+          onChange={handleHarnessChange}
+        />
+        <p className="text-xs text-muted-foreground mt-1">
+          Harness that runs GitHub-triggered sessions. It decides which models are available above.
+        </p>
+        <GitHubHarnessWarning harness={harness} model={model} />
       </div>
 
       <div className="mb-4">

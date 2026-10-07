@@ -20,6 +20,7 @@ vi.mock("../src/github-auth", async (importOriginal) => ({
 vi.mock("../src/utils/integration-config", () => ({
   getGitHubConfig: vi.fn().mockResolvedValue({
     model: "anthropic/claude-haiku-4-5",
+    harness: "opencode",
     reasoningEffort: null,
     autoReviewOnOpen: true,
     enabledRepos: null,
@@ -31,6 +32,7 @@ vi.mock("../src/utils/integration-config", () => ({
 
 const defaultConfig: ResolvedGitHubConfig = {
   model: "anthropic/claude-haiku-4-5",
+  harness: "opencode",
   reasoningEffort: null,
   autoReviewOnOpen: true,
   enabledRepos: null,
@@ -1314,11 +1316,71 @@ describe("integration config", () => {
     expect(sessionBody.reasoningEffort).toBe("low");
   });
 
+  it("always sends a harness, defaulting to the built-in one when unconfigured", async () => {
+    const env = createMockEnv();
+    const log = createMockLogger();
+
+    await handleReviewRequested(env, log, reviewRequestedPayload, "trace-no-harness");
+
+    const sessionBody = sessionCreateBody(getControlPlaneFetch(env));
+    expect(sessionBody.harness).toBe("opencode");
+  });
+
+  it("sends the configured harness for every session-creating trigger", async () => {
+    vi.mocked(getGitHubConfig).mockResolvedValue({
+      ...defaultConfig,
+      model: "anthropic/claude-opus-4-6",
+      harness: "claude",
+    });
+    const env = createMockEnv();
+    const log = createMockLogger();
+
+    await handleReviewRequested(env, log, reviewRequestedPayload, "trace-harness-1");
+    expect(sessionCreateBody(getControlPlaneFetch(env)).harness).toBe("claude");
+
+    const env2 = createMockEnv();
+    await handlePullRequestOpened(
+      env2,
+      createMockLogger(),
+      pullRequestOpenedPayload,
+      "trace-harness-2"
+    );
+    expect(sessionCreateBody(getControlPlaneFetch(env2)).harness).toBe("claude");
+
+    const env3 = createMockEnv();
+    await handleIssueComment(env3, createMockLogger(), issueCommentPayload, "trace-harness-3");
+    expect(sessionCreateBody(getControlPlaneFetch(env3)).harness).toBe("claude");
+
+    const env4 = createMockEnv();
+    await handleReviewComment(env4, createMockLogger(), reviewCommentPayload, "trace-harness-4");
+    expect(sessionCreateBody(getControlPlaneFetch(env4)).harness).toBe("claude");
+  });
+
+  it("falls back to OpenCode on a harness/model mismatch", async () => {
+    vi.mocked(getGitHubConfig).mockResolvedValue({
+      ...defaultConfig,
+      model: "openai/gpt-5.4",
+      harness: "claude",
+    });
+    const env = createMockEnv();
+    const log = createMockLogger();
+
+    await handleReviewRequested(env, log, reviewRequestedPayload, "trace-mismatch");
+
+    // Sent as the built-in default the session actually runs on.
+    expect(sessionCreateBody(getControlPlaneFetch(env)).harness).toBe("opencode");
+    expect(log.warn).toHaveBeenCalledWith(
+      "config.harness_model_mismatch",
+      expect.objectContaining({ harness: "claude", model: "openai/gpt-5.4" })
+    );
+  });
+
   it("fail-closed config skips webhook (empty enabledRepos)", async () => {
     // Fail-closed defaults (enabledRepos: [], autoReviewOnOpen: false) cause the
     // handler to return early — no session created, no webhook processed.
     vi.mocked(getGitHubConfig).mockResolvedValue({
       model: "anthropic/claude-haiku-4-5",
+      harness: "opencode",
       reasoningEffort: null,
       autoReviewOnOpen: false,
       enabledRepos: [],

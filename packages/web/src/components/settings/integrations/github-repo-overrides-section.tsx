@@ -17,6 +17,10 @@ import {
   type ModelCategory,
   type ValidModel,
 } from "@open-inspect/shared/models";
+import { DEFAULT_HARNESS, type HarnessId } from "@open-inspect/shared/harnesses";
+import { filterModelOptionsForHarness, shouldClearModelForHarness } from "@/lib/session-harness";
+import { HarnessSelect } from "./harness-select";
+import { GitHubHarnessWarning } from "./github-harness-warning";
 import { browserApiFetch } from "@/lib/browser-api-fetch";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -47,12 +51,17 @@ export function RepoOverridesSection({
   enabledModelOptions,
   defaultAutoReviewOnOpen,
   defaultAutofix,
+  defaultHarness,
+  defaultModel,
 }: {
   overrides: RepoSettingsEntry[];
   availableRepos: EnrichedRepository[];
   enabledModelOptions: ModelCategory[];
   defaultAutoReviewOnOpen: boolean;
   defaultAutofix: ResolvedGitHubAutofixSettings;
+  /** Inherited global harness/model: rows filter and warn on the effective pair. */
+  defaultHarness: HarnessId | null;
+  defaultModel: string;
 }) {
   const [addingRepo, setAddingRepo] = useState("");
 
@@ -100,6 +109,8 @@ export function RepoOverridesSection({
               enabledModelOptions={enabledModelOptions}
               defaultAutoReviewOnOpen={defaultAutoReviewOnOpen}
               defaultAutofix={defaultAutofix}
+              defaultHarness={defaultHarness}
+              defaultModel={defaultModel}
             />
           ))}
         </div>
@@ -135,15 +146,20 @@ function RepoOverrideRow({
   enabledModelOptions,
   defaultAutoReviewOnOpen,
   defaultAutofix,
+  defaultHarness,
+  defaultModel,
 }: {
   entry: RepoSettingsEntry;
   enabledModelOptions: ModelCategory[];
   defaultAutoReviewOnOpen: boolean;
   defaultAutofix: ResolvedGitHubAutofixSettings;
+  defaultHarness: HarnessId | null;
+  defaultModel: string;
 }) {
   const autoReviewNoticeId = useId();
   const [model, setModel] = useState(entry.settings.model ?? "");
   const [effort, setEffort] = useState(entry.settings.reasoningEffort ?? "");
+  const [harness, setHarness] = useState<HarnessId | undefined>(entry.settings.harness);
   const [triggerUserMode, setTriggerUserMode] = useState<"global" | "override">(
     entry.settings.allowedTriggerUsers !== undefined ? "override" : "global"
   );
@@ -184,6 +200,15 @@ function RepoOverrideRow({
 
   const reasoningConfig = model ? MODEL_REASONING_CONFIG[model as ValidModel] : undefined;
 
+  // The model picker only offers models the *effective* harness can run: the
+  // override when set, else the inherited global harness (built-in default
+  // when unset). A local/global pair the harness cannot run is still saveable
+  // as a sparse override — the bot falls back at runtime — but the picker can
+  // no longer silently produce it, and the mismatch is spelled out below.
+  const effectiveHarness: HarnessId = harness ?? defaultHarness ?? DEFAULT_HARNESS;
+  const effectiveModel = model || defaultModel;
+  const visibleModelOptions = filterModelOptionsForHarness(effectiveHarness, enabledModelOptions);
+
   const handleModelChange = (newModel: string) => {
     setModel(newModel);
     setDirty(true);
@@ -191,6 +216,15 @@ function RepoOverrideRow({
     if (effort && newModel && !isValidReasoningEffort(newModel, effort)) {
       setEffort("");
     }
+  };
+
+  const handleHarnessChange = (next: HarnessId | undefined) => {
+    setHarness(next);
+    if (shouldClearModelForHarness(next ?? defaultHarness ?? DEFAULT_HARNESS, model)) {
+      setModel("");
+      setEffort("");
+    }
+    setDirty(true);
   };
 
   const handleAutoReviewModeChange = (newMode: "global" | "override") => {
@@ -208,6 +242,7 @@ function RepoOverrideRow({
     const settings: GitHubBotSettings = {};
     if (model) settings.model = model;
     if (effort) settings.reasoningEffort = effort;
+    if (harness) settings.harness = harness;
     if (triggerUserMode === "override") settings.allowedTriggerUsers = allowedTriggerUsers;
     if (codeReviewMode === "override") settings.codeReviewInstructions = codeReviewInstructions;
     if (commentActionMode === "override")
@@ -281,11 +316,11 @@ function RepoOverrideRow({
         </span>
 
         <Select value={model} onValueChange={handleModelChange}>
-          <SelectTrigger density="compact" className="flex-1 min-w-[180px]">
+          <SelectTrigger density="compact" className="flex-1 min-w-[180px]" aria-label="Model">
             <SelectValue placeholder="Default model" />
           </SelectTrigger>
           <SelectContent>
-            {enabledModelOptions.map((group) => (
+            {visibleModelOptions.map((group) => (
               <SelectGroup key={group.category}>
                 <SelectLabel>{group.category}</SelectLabel>
                 {group.models.map((m) => (
@@ -319,6 +354,14 @@ function RepoOverrideRow({
           </Select>
         )}
 
+        <HarnessSelect
+          value={harness}
+          onChange={handleHarnessChange}
+          inheritLabel="Use global harness"
+          density="compact"
+          className="w-44"
+        />
+
         <Button size="sm" onClick={handleSave} disabled={saving || !dirty}>
           {saving ? "..." : "Save"}
         </Button>
@@ -327,6 +370,8 @@ function RepoOverrideRow({
           Remove
         </Button>
       </div>
+
+      <GitHubHarnessWarning harness={effectiveHarness} model={effectiveModel} />
 
       <div>
         <p className="text-xs font-medium text-muted-foreground mb-1">

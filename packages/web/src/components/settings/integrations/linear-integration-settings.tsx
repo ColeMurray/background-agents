@@ -26,11 +26,10 @@ import {
   checkHarnessCompatibility,
   getHarnessLabel,
   getValidHarnessOrDefault,
-  harnessSupportsModel,
   type HarnessId,
 } from "@open-inspect/shared/harnesses";
 import { useEnabledModels } from "@/hooks/use-enabled-models";
-import { filterModelOptionsForHarness } from "@/lib/session-harness";
+import { filterModelOptionsForHarness, shouldClearModelForHarness } from "@/lib/session-harness";
 import { browserApiFetch } from "@/lib/browser-api-fetch";
 import { IntegrationSettingsSkeleton } from "./integration-settings-skeleton";
 import { SettingsCardSection } from "../settings-card-section";
@@ -366,7 +365,7 @@ function GlobalSettingsSection({
             value={harness}
             onChange={(nextHarness = DEFAULT_HARNESS) => {
               setHarness(nextHarness);
-              if (model && !harnessSupportsModel(nextHarness, model)) {
+              if (shouldClearModelForHarness(nextHarness, model)) {
                 setModel("");
                 setEffort("");
               }
@@ -674,7 +673,7 @@ function RepoOverrideRow({
     setHarness(newHarness);
     setDirty(true);
 
-    if (model && !harnessSupportsModel(newHarness ?? inheritedHarness, model)) {
+    if (shouldClearModelForHarness(newHarness ?? inheritedHarness, model)) {
       setModel("");
       setEffort("");
     }

@@ -1,8 +1,10 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import type { Env } from "../src/types";
 import type { Logger } from "../src/logger";
+import { parseInlinePromptFlags } from "@open-inspect/shared/inline-prompt-flags";
 
 import { getGitHubConfig } from "../src/utils/integration-config";
+import { resolveModelSelection } from "../src/model-selection";
 
 function createMockLogger(): Logger {
   return {
@@ -53,6 +55,7 @@ describe("getGitHubConfig", () => {
 
     expect(result).toEqual({
       model: "anthropic/claude-opus-4-6",
+      harness: "opencode",
       reasoningEffort: "high",
       autoReviewOnOpen: true,
       enabledRepos: null,
@@ -60,6 +63,59 @@ describe("getGitHubConfig", () => {
       codeReviewInstructions: "Be thorough",
       commentActionInstructions: null,
     });
+    expect(log.warn).not.toHaveBeenCalled();
+  });
+
+  it("parses the harness from a successful response", async () => {
+    const env = createMockEnv(() =>
+      Promise.resolve(
+        new Response(
+          JSON.stringify({
+            config: {
+              model: "anthropic/claude-opus-4-6",
+              harness: "claude",
+              reasoningEffort: null,
+              autoReviewOnOpen: true,
+              enabledRepos: null,
+              allowedTriggerUsers: null,
+              codeReviewInstructions: null,
+              commentActionInstructions: null,
+            },
+          }),
+          { status: 200 }
+        )
+      )
+    );
+
+    const result = await getGitHubConfig(env, "acme/widgets", createMockLogger());
+
+    expect(result.harness).toBe("claude");
+  });
+
+  it("treats a response without a harness key as the built-in default (older control plane)", async () => {
+    const env = createMockEnv(() =>
+      Promise.resolve(
+        new Response(
+          JSON.stringify({
+            config: {
+              model: "anthropic/claude-opus-4-6",
+              reasoningEffort: null,
+              autoReviewOnOpen: true,
+              enabledRepos: null,
+              allowedTriggerUsers: null,
+              codeReviewInstructions: null,
+              commentActionInstructions: null,
+            },
+          }),
+          { status: 200 }
+        )
+      )
+    );
+    const log = createMockLogger();
+
+    const result = await getGitHubConfig(env, "acme/widgets", log);
+
+    expect(result.harness).toBe("opencode");
     expect(log.warn).not.toHaveBeenCalled();
   });
 
@@ -83,10 +139,11 @@ describe("getGitHubConfig", () => {
       )
     );
 
-    const result = await getGitHubConfig(env, "acme/widgets");
+    const result = await getGitHubConfig(env, "acme/widgets", createMockLogger());
 
     expect(result).toEqual({
       model: "anthropic/claude-haiku-4-5",
+      harness: "opencode",
       reasoningEffort: null,
       autoReviewOnOpen: false,
       enabledRepos: ["acme/widgets"],
@@ -106,6 +163,7 @@ describe("getGitHubConfig", () => {
 
     expect(result).toEqual({
       model: "anthropic/claude-haiku-4-5",
+      harness: "opencode",
       reasoningEffort: null,
       autoReviewOnOpen: false,
       enabledRepos: [],
@@ -127,6 +185,7 @@ describe("getGitHubConfig", () => {
 
     expect(result).toEqual({
       model: "anthropic/claude-haiku-4-5",
+      harness: "opencode",
       reasoningEffort: null,
       autoReviewOnOpen: false,
       enabledRepos: [],
@@ -148,6 +207,7 @@ describe("getGitHubConfig", () => {
 
     expect(result).toEqual({
       model: "anthropic/claude-haiku-4-5",
+      harness: "opencode",
       reasoningEffort: null,
       autoReviewOnOpen: false,
       enabledRepos: [],
@@ -174,6 +234,7 @@ describe("getGitHubConfig", () => {
 
     expect(result).toEqual({
       model: "anthropic/claude-haiku-4-5",
+      harness: "opencode",
       reasoningEffort: null,
       autoReviewOnOpen: false,
       enabledRepos: [],
@@ -194,10 +255,11 @@ describe("getGitHubConfig", () => {
   it("works without a logger (no logging on error)", async () => {
     const env = createMockEnv(() => Promise.reject(new Error("timeout")));
 
-    const result = await getGitHubConfig(env, "acme/widgets");
+    const result = await getGitHubConfig(env, "acme/widgets", createMockLogger());
 
     expect(result).toEqual({
       model: "anthropic/claude-haiku-4-5",
+      harness: "opencode",
       reasoningEffort: null,
       autoReviewOnOpen: false,
       enabledRepos: [],
@@ -217,6 +279,7 @@ describe("getGitHubConfig", () => {
 
     expect(result).toEqual({
       model: "anthropic/claude-haiku-4-5",
+      harness: "opencode",
       reasoningEffort: null,
       autoReviewOnOpen: true,
       enabledRepos: null,
@@ -225,5 +288,108 @@ describe("getGitHubConfig", () => {
       commentActionInstructions: null,
     });
     expect(log.warn).not.toHaveBeenCalled();
+  });
+});
+
+describe("resolveModelSelection harness", () => {
+  const env = {} as unknown as Env;
+
+  it("sends the built-in harness with the canonical model when unconfigured", async () => {
+    const log = createMockLogger();
+    const result = await resolveModelSelection(
+      env,
+      log,
+      "trace-default-harness",
+      { model: "openai/gpt-5", harness: "opencode", reasoningEffort: null },
+      undefined
+    );
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    // Stale model canonicalizes; the default harness runs the canonical one.
+    expect(result.selection.model).toBe("anthropic/claude-sonnet-4-6");
+    expect(result.selection.harness).toBe("opencode");
+    expect(log.warn).not.toHaveBeenCalled();
+  });
+
+  it("keeps a compatible configured harness", async () => {
+    const log = createMockLogger();
+    const result = await resolveModelSelection(
+      env,
+      log,
+      "trace-keep-harness",
+      { model: "anthropic/claude-opus-4-6", harness: "claude", reasoningEffort: null },
+      undefined
+    );
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.selection.harness).toBe("claude");
+  });
+
+  it("falls back to the built-in harness with a warning on a mismatch", async () => {
+    const log = createMockLogger();
+    const result = await resolveModelSelection(
+      env,
+      log,
+      "trace-mismatch",
+      { model: "openai/gpt-5.4", harness: "claude", reasoningEffort: null },
+      undefined
+    );
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.selection.harness).toBe("opencode");
+    expect(log.warn).toHaveBeenCalledWith(
+      "config.harness_model_mismatch",
+      expect.objectContaining({ harness: "claude", model: "openai/gpt-5.4", fallback: "opencode" })
+    );
+  });
+  it("keeps Claude after canonicalizing a stale deployment model", async () => {
+    const log = createMockLogger();
+    const result = await resolveModelSelection(
+      env,
+      log,
+      "trace-stale-claude",
+      { model: "openai/gpt-5", harness: "claude", reasoningEffort: "xhigh" },
+      undefined
+    );
+    expect(result).toMatchObject({
+      ok: true,
+      selection: { model: "anthropic/claude-sonnet-4-6", harness: "claude", reasoningEffort: null },
+    });
+    expect(log.warn).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["openai/gpt-5.4", "opencode", true],
+    ["claude-opus-4-6", "claude", false],
+  ])("resolves the harness against inline model override %s", async (model, harness, warned) => {
+    const log = createMockLogger();
+    const inlineEnv = createMockEnv(() =>
+      Promise.resolve(
+        Response.json({
+          enabledModels: ["openai/gpt-5.4", "anthropic/claude-opus-4-6"],
+        })
+      )
+    );
+    const result = await resolveModelSelection(
+      inlineEnv,
+      log,
+      "trace-inline-harness",
+      { model: "anthropic/claude-sonnet-4-6", harness: "claude", reasoningEffort: "low" },
+      parseInlinePromptFlags(`!model:${model} Review this`)
+    );
+    expect(result).toMatchObject({
+      ok: true,
+      overridden: true,
+      selection: { harness, reasoningEffort: "low" },
+    });
+    if (warned)
+      expect(log.warn).toHaveBeenCalledWith(
+        "config.harness_model_mismatch",
+        expect.objectContaining({ model })
+      );
+    else expect(log.warn).not.toHaveBeenCalled();
   });
 });

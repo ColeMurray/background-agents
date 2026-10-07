@@ -18,9 +18,10 @@ sign in inside a sandbox.
 
 Every session runs on exactly one harness, chosen when the session is created and fixed for its
 lifetime (like the base branch). Child sessions inherit their parent's harness. Automations carry a
-harness for the sessions they create. The Linear integration has a harness setting (global and per
-repository, OpenCode by default); see [Linear sessions](#linear-sessions). Slack and GitHub sessions
-run on OpenCode.
+harness for the sessions they create. The Linear and GitHub integrations have a harness setting
+(global and per repository, OpenCode by default); see [Linear sessions](#linear-sessions). Slack
+sessions run on OpenCode. A harness/model pair the harness cannot run falls back to OpenCode and
+logs a warning.
 
 | Harness          | Models                | Anthropic authentication                   | Notes                                 |
 | ---------------- | --------------------- | ------------------------------------------ | ------------------------------------- |

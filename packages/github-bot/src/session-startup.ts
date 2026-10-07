@@ -188,7 +188,7 @@ export async function startSession(
     env,
     log,
     traceId,
-    { model: config.model, reasoningEffort: config.reasoningEffort },
+    { model: config.model, harness: config.harness, reasoningEffort: config.reasoningEffort },
     params.inlineFlags
   );
   if (!modelSelection.ok) {
@@ -240,6 +240,7 @@ export async function startSession(
         teamId,
         title: params.title,
         model: selection.model,
+        harness: selection.harness,
         reasoningEffort: selection.reasoningEffort,
         scmLogin: sender.login,
         scmUserId: String(sender.id),
