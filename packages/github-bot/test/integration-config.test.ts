@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import type { Env } from "../src/types";
 import type { Logger } from "../src/logger";
+import { parseInlinePromptFlags } from "@open-inspect/shared/inline-prompt-flags";
 
 import { getGitHubConfig } from "../src/utils/integration-config";
 import { resolveModelSelection } from "../src/model-selection";
@@ -86,7 +87,7 @@ describe("getGitHubConfig", () => {
       )
     );
 
-    const result = await getGitHubConfig(env, "acme/widgets");
+    const result = await getGitHubConfig(env, "acme/widgets", createMockLogger());
 
     expect(result.harness).toBe("claude");
   });
@@ -138,7 +139,7 @@ describe("getGitHubConfig", () => {
       )
     );
 
-    const result = await getGitHubConfig(env, "acme/widgets");
+    const result = await getGitHubConfig(env, "acme/widgets", createMockLogger());
 
     expect(result).toEqual({
       model: "anthropic/claude-haiku-4-5",
@@ -254,7 +255,7 @@ describe("getGitHubConfig", () => {
   it("works without a logger (no logging on error)", async () => {
     const env = createMockEnv(() => Promise.reject(new Error("timeout")));
 
-    const result = await getGitHubConfig(env, "acme/widgets");
+    const result = await getGitHubConfig(env, "acme/widgets", createMockLogger());
 
     expect(result).toEqual({
       model: "anthropic/claude-haiku-4-5",
@@ -343,5 +344,52 @@ describe("resolveModelSelection harness", () => {
       "config.harness_model_mismatch",
       expect.objectContaining({ harness: "claude", model: "openai/gpt-5.4", fallback: "opencode" })
     );
+  });
+  it("keeps Claude after canonicalizing a stale deployment model", async () => {
+    const log = createMockLogger();
+    const result = await resolveModelSelection(
+      env,
+      log,
+      "trace-stale-claude",
+      { model: "openai/gpt-5", harness: "claude", reasoningEffort: "xhigh" },
+      undefined
+    );
+    expect(result).toMatchObject({
+      ok: true,
+      selection: { model: "anthropic/claude-sonnet-4-6", harness: "claude", reasoningEffort: null },
+    });
+    expect(log.warn).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["openai/gpt-5.4", "opencode", true],
+    ["claude-opus-4-6", "claude", false],
+  ])("resolves the harness against inline model override %s", async (model, harness, warned) => {
+    const log = createMockLogger();
+    const inlineEnv = createMockEnv(() =>
+      Promise.resolve(
+        Response.json({
+          enabledModels: ["openai/gpt-5.4", "anthropic/claude-opus-4-6"],
+        })
+      )
+    );
+    const result = await resolveModelSelection(
+      inlineEnv,
+      log,
+      "trace-inline-harness",
+      { model: "anthropic/claude-sonnet-4-6", harness: "claude", reasoningEffort: "low" },
+      parseInlinePromptFlags(`!model:${model} Review this`)
+    );
+    expect(result).toMatchObject({
+      ok: true,
+      overridden: true,
+      selection: { harness, reasoningEffort: "low" },
+    });
+    if (warned)
+      expect(log.warn).toHaveBeenCalledWith(
+        "config.harness_model_mismatch",
+        expect.objectContaining({ model })
+      );
+    else expect(log.warn).not.toHaveBeenCalled();
   });
 });

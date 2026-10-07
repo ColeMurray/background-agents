@@ -615,12 +615,7 @@ describe("GitHubIntegrationSettings", () => {
     render(<GitHubIntegrationSettings />);
 
     const row = repoOverrideRow("acme/web");
-    // The row model picker is unlabeled (placeholder only): find its trigger by content.
-    const modelTrigger = within(row)
-      .getAllByRole("combobox")
-      .find((el) => el.textContent?.includes("Default model"));
-    expect(modelTrigger).toBeDefined();
-    await user.click(modelTrigger!);
+    await user.click(within(row).getByRole("combobox", { name: "Model" }));
     await screen.findByRole("option", { name: "Claude Sonnet 4.6" });
     // Global harness is Claude Agent: GPT models are not offered for this repo.
     expect(screen.queryByRole("option", { name: "GPT 5.4" })).toBeNull();
@@ -655,4 +650,40 @@ describe("GitHubIntegrationSettings", () => {
       })
     );
   }, 20000);
+  it("clears incompatible model and effort when inheriting the global Claude harness", async () => {
+    const user = userEvent.setup();
+    setupSWR({
+      global: { defaults: { harness: "claude", model: "anthropic/claude-sonnet-4-6" } },
+      repos: [
+        {
+          repo: "acme/web",
+          settings: { harness: "opencode", model: "openai/gpt-5.4", reasoningEffort: "high" },
+        },
+      ],
+      availableRepos: [repo("acme/web")],
+    });
+    fetchMock.mockResolvedValue(okJson({}));
+    render(<GitHubIntegrationSettings />);
+    const row = repoOverrideRow("acme/web");
+    await user.click(within(row).getByRole("combobox", { name: "Agent harness" }));
+    await user.click(await screen.findByRole("option", { name: "Use global harness" }));
+    await user.click(within(row).getByRole("button", { name: /^save$/i }));
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/integration-settings/github/repos/acme/web",
+      expect.objectContaining({ method: "PUT", body: JSON.stringify({ settings: {} }) })
+    );
+    expect(
+      within(row).queryByText(/cannot run on the Claude Agent harness/)
+    ).not.toBeInTheDocument();
+  });
+
+  it("explains deployment-default model fallback for global and inherited Claude harnesses", () => {
+    setupSWR({
+      global: { defaults: { harness: "claude" } },
+      repos: [{ repo: "acme/web", settings: {} }],
+      availableRepos: [repo("acme/web")],
+    });
+    render(<GitHubIntegrationSettings />);
+    expect(screen.getAllByText(/deployment default model/)).toHaveLength(2);
+  });
 });

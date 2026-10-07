@@ -91,9 +91,9 @@ async function getEnabledModels(
  */
 export function applyInlineModelOverrides(
   options: InlinePromptOptions,
-  defaults: ModelSelection,
+  defaults: Omit<ModelSelection, "harness">,
   enabledModels: readonly ValidModel[]
-): { ok: true; selection: ModelSelection } | { ok: false; message: string } {
+): { ok: true; selection: Omit<ModelSelection, "harness"> } | { ok: false; message: string } {
   let model = getValidModelOrDefault(defaults.model);
   if (options.model) {
     if (!isValidModel(options.model)) {

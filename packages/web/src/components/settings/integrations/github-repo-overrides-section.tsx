@@ -17,13 +17,10 @@ import {
   type ModelCategory,
   type ValidModel,
 } from "@open-inspect/shared/models";
-import {
-  DEFAULT_HARNESS,
-  checkHarnessCompatibility,
-  type HarnessId,
-} from "@open-inspect/shared/harnesses";
+import { DEFAULT_HARNESS, type HarnessId } from "@open-inspect/shared/harnesses";
 import { filterModelOptionsForHarness, shouldClearModelForHarness } from "@/lib/session-harness";
 import { HarnessSelect } from "./harness-select";
+import { GitHubHarnessWarning } from "./github-harness-warning";
 import { browserApiFetch } from "@/lib/browser-api-fetch";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -210,9 +207,6 @@ function RepoOverrideRow({
   // no longer silently produce it, and the mismatch is spelled out below.
   const effectiveHarness: HarnessId = harness ?? defaultHarness ?? DEFAULT_HARNESS;
   const effectiveModel = model || defaultModel;
-  const harnessMismatch = effectiveModel
-    ? checkHarnessCompatibility(effectiveHarness, effectiveModel)
-    : null;
   const visibleModelOptions = filterModelOptionsForHarness(effectiveHarness, enabledModelOptions);
 
   const handleModelChange = (newModel: string) => {
@@ -226,7 +220,7 @@ function RepoOverrideRow({
 
   const handleHarnessChange = (next: HarnessId | undefined) => {
     setHarness(next);
-    if (shouldClearModelForHarness(next ?? effectiveHarness, model)) {
+    if (shouldClearModelForHarness(next ?? defaultHarness ?? DEFAULT_HARNESS, model)) {
       setModel("");
       setEffort("");
     }
@@ -322,7 +316,7 @@ function RepoOverrideRow({
         </span>
 
         <Select value={model} onValueChange={handleModelChange}>
-          <SelectTrigger density="compact" className="flex-1 min-w-[180px]">
+          <SelectTrigger density="compact" className="flex-1 min-w-[180px]" aria-label="Model">
             <SelectValue placeholder="Default model" />
           </SelectTrigger>
           <SelectContent>
@@ -377,12 +371,7 @@ function RepoOverrideRow({
         </Button>
       </div>
 
-      {harnessMismatch && (
-        <p className="text-xs text-warning">
-          {harnessMismatch.message} Sessions for this repo will run on OpenCode until the harness
-          and model are compatible.
-        </p>
-      )}
+      <GitHubHarnessWarning harness={effectiveHarness} model={effectiveModel} />
 
       <div>
         <p className="text-xs font-medium text-muted-foreground mb-1">

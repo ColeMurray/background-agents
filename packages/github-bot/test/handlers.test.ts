@@ -9,7 +9,6 @@ import type {
 import type { Logger } from "../src/logger";
 import type { ResolvedGitHubConfig } from "../src/utils/integration-config";
 import type * as GitHubAuth from "../src/github-auth";
-import type * as IntegrationConfigModule from "../src/utils/integration-config";
 
 vi.mock("../src/github-auth", async (importOriginal) => ({
   ...(await importOriginal<typeof GitHubAuth>()),
@@ -18,22 +17,18 @@ vi.mock("../src/github-auth", async (importOriginal) => ({
   checkSenderPermission: vi.fn().mockResolvedValue({ hasPermission: true }),
 }));
 
-vi.mock("../src/utils/integration-config", async (importOriginal) => {
-  const actual = await importOriginal<IntegrationConfigModule>();
-  return {
-    ...actual,
-    getGitHubConfig: vi.fn().mockResolvedValue({
-      model: "anthropic/claude-haiku-4-5",
-      harness: "opencode",
-      reasoningEffort: null,
-      autoReviewOnOpen: true,
-      enabledRepos: null,
-      allowedTriggerUsers: null,
-      codeReviewInstructions: null,
-      commentActionInstructions: null,
-    }),
-  };
-});
+vi.mock("../src/utils/integration-config", () => ({
+  getGitHubConfig: vi.fn().mockResolvedValue({
+    model: "anthropic/claude-haiku-4-5",
+    harness: "opencode",
+    reasoningEffort: null,
+    autoReviewOnOpen: true,
+    enabledRepos: null,
+    allowedTriggerUsers: null,
+    codeReviewInstructions: null,
+    commentActionInstructions: null,
+  }),
+}));
 
 const defaultConfig: ResolvedGitHubConfig = {
   model: "anthropic/claude-haiku-4-5",
@@ -1652,8 +1647,7 @@ describe("default environment targets", () => {
       metadata?: { defaultEnvironmentId?: string } | null;
       metadataStatus?: number;
       environment?:
-        | (Omit<typeof fullstackEnvironment, "ownerTeamId"> & { ownerTeamId?: string | null })
-        | null;
+        (Omit<typeof fullstackEnvironment, "ownerTeamId"> & { ownerTeamId?: string | null }) | null;
       teamId?: string | null;
     }
   ) {
