@@ -5,6 +5,7 @@ import {
   resolveHarnessForModel,
   type HarnessId,
 } from "@open-inspect/shared/harnesses";
+import { getValidModelOrDefault } from "@open-inspect/shared/models";
 
 /** Explain harness fallback, including when the deployment model is unknown to the UI. */
 export function GitHubHarnessWarning({ harness, model }: { harness: HarnessId; model: string }) {
@@ -19,11 +20,12 @@ export function GitHubHarnessWarning({ harness, model }: { harness: HarnessId; m
     );
   }
 
-  const resolvedHarness = resolveHarnessForModel(harness, model);
+  const canonicalModel = getValidModelOrDefault(model);
+  const resolvedHarness = resolveHarnessForModel(harness, canonicalModel);
   if (resolvedHarness === harness) return null;
   return (
     <p className="text-xs text-warning">
-      {checkHarnessCompatibility(harness, model)?.message} Sessions will run on{" "}
+      {checkHarnessCompatibility(harness, canonicalModel)?.message} Sessions will run on{" "}
       {getHarnessLabel(resolvedHarness)} until the harness and model are compatible.
     </p>
   );

@@ -686,4 +686,14 @@ describe("GitHubIntegrationSettings", () => {
     render(<GitHubIntegrationSettings />);
     expect(screen.getAllByText(/deployment default model/)).toHaveLength(2);
   });
+
+  it("predicts the harness using the canonical model for retired stored settings", () => {
+    setupSWR({
+      global: { defaults: { harness: "claude", model: "openai/gpt-5" } },
+      repos: [{ repo: "acme/web", settings: {} }],
+      availableRepos: [repo("acme/web")],
+    });
+    render(<GitHubIntegrationSettings />);
+    expect(screen.queryAllByText(/cannot run on the Claude Agent harness/)).toHaveLength(0);
+  });
 });
