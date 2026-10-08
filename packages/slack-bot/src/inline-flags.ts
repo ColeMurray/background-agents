@@ -101,7 +101,8 @@ export function sameModelSelection(a: ModelSelection, b: ModelSelection): boolea
 /**
  * Resolve one-turn overrides against the session defaults and enabled model
  * list. Only an explicit `!model` must be enabled; the session defaults are
- * kept as given, so a launch reconciles them with the enabled models first.
+ * kept as given. New-session launches separately refuse disabled models;
+ * existing-thread follow-ups keep their session model unless explicitly overridden.
  */
 export function resolveInlinePromptOptions(
   options: InlinePromptOptions,

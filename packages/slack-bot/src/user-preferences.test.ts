@@ -134,7 +134,6 @@ describe("updateUserPreferences", () => {
       { branch: "feature/test" },
       {
         defaultModel: "openai/gpt-5.4",
-        enabledModels: ["openai/gpt-5.4"],
       }
     );
 
@@ -153,13 +152,31 @@ describe("updateUserPreferences", () => {
       { reasoningEffort: "none" },
       {
         defaultModel: "openai/gpt-5.4",
-        enabledModels: ["openai/gpt-5.4"],
       }
     );
 
     const prefs = await getUserPreferences(env, "U123");
     expect(prefs?.model).toBeUndefined();
     expect(prefs?.reasoningEffort).toBe("none");
+  });
+
+  it("preserves reasoning for the stored model on unrelated preference updates", async () => {
+    const env = makeEnv();
+    await env.SLACK_KV.put(
+      "user_prefs:U123",
+      JSON.stringify({
+        userId: "U123",
+        model: "openai/gpt-5.4",
+        reasoningEffort: "none",
+        updatedAt: 1,
+      })
+    );
+
+    await updateUserPreferences(env, "U123", { branch: "feature/test", harness: "claude" });
+
+    expect(await getUserPreferences(env, "U123")).toEqual(
+      expect.objectContaining({ model: "openai/gpt-5.4", reasoningEffort: "none" })
+    );
   });
 });
 
@@ -170,8 +187,7 @@ describe("resolveUserPreferences", () => {
         userId: "U123",
         updatedAt: 1,
       },
-      "anthropic/claude-sonnet-4-6",
-      ["anthropic/claude-sonnet-4-6"]
+      "anthropic/claude-sonnet-4-6"
     );
 
     expect(resolved.model).toBe("anthropic/claude-sonnet-4-6");
@@ -184,8 +200,7 @@ describe("resolveUserPreferences", () => {
         model: "anthropic/claude-haiku-4-5",
         updatedAt: 1,
       },
-      "anthropic/claude-sonnet-4-6",
-      ["anthropic/claude-haiku-4-5", "anthropic/claude-sonnet-4-6"]
+      "anthropic/claude-sonnet-4-6"
     );
 
     expect(resolved.model).toBe("anthropic/claude-haiku-4-5");
@@ -194,8 +209,7 @@ describe("resolveUserPreferences", () => {
   it("migrates a stored Codex model without switching to the Slack default provider", () => {
     const resolved = resolveUserPreferences(
       { userId: "U123", model: "openai/gpt-5.3-codex", updatedAt: 1 },
-      "anthropic/claude-sonnet-4-6",
-      ["anthropic/claude-sonnet-4-6", "openai/gpt-6-sol"]
+      "anthropic/claude-sonnet-4-6"
     );
 
     expect(resolved.model).toBe("openai/gpt-6-sol");
@@ -208,50 +222,35 @@ describe("resolveUserPreferences", () => {
         model: "openai/gpt-5.2",
         updatedAt: 1,
       },
-      "openai/gpt-5.4",
-      ["anthropic/claude-sonnet-4-6", "openai/gpt-5.4"]
+      "openai/gpt-5.4"
     );
 
     expect(resolved.model).toBe("openai/gpt-5.4");
   });
 
-  it("falls back when the App Home model is no longer enabled", () => {
+  it("preserves the App Home model and its reasoning for launch-time validation", () => {
     const resolved = resolveUserPreferences(
       {
         userId: "U123",
         model: "anthropic/claude-haiku-4-5",
+        reasoningEffort: "max",
         updatedAt: 1,
       },
-      "anthropic/claude-sonnet-4-6",
-      ["openai/gpt-5.4", "anthropic/claude-sonnet-4-6"]
+      "anthropic/claude-sonnet-4-6"
     );
 
-    expect(resolved.model).toBe("anthropic/claude-sonnet-4-6");
+    expect(resolved.model).toBe("anthropic/claude-haiku-4-5");
+    expect(resolved.reasoningEffort).toBe("max");
   });
 
-  it("uses the first enabled model when neither preferred nor default is enabled", () => {
+  it("canonicalizes a bare App Home model without changing the selection", () => {
     const resolved = resolveUserPreferences(
       {
         userId: "U123",
-        model: "anthropic/claude-haiku-4-5",
+        model: "gpt-5.4",
         updatedAt: 1,
       },
-      "anthropic/claude-sonnet-4-6",
-      ["openai/gpt-5.4"]
-    );
-
-    expect(resolved.model).toBe("openai/gpt-5.4");
-  });
-
-  it("ignores removed models when choosing the first enabled model", () => {
-    const resolved = resolveUserPreferences(
-      {
-        userId: "U123",
-        model: "anthropic/claude-haiku-4-5",
-        updatedAt: 1,
-      },
-      "anthropic/claude-sonnet-4-6",
-      ["openai/gpt-5.2", "gpt-5.4"]
+      "anthropic/claude-sonnet-4-6"
     );
 
     expect(resolved.model).toBe("openai/gpt-5.4");
@@ -264,8 +263,7 @@ describe("resolveUserPreferences", () => {
         reasoningEffort: "none",
         updatedAt: 1,
       },
-      "openai/gpt-5.4",
-      ["openai/gpt-5.4"]
+      "openai/gpt-5.4"
     );
 
     expect(resolved.model).toBe("openai/gpt-5.4");

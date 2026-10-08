@@ -58,22 +58,18 @@ function normalizeResolvedPreferences(
     branch?: string;
     harness: HarnessId;
   },
-  defaultModel: string | undefined,
-  options: { validateBranch?: boolean; enabledModels?: string[] } = {}
+  defaultModel: string | undefined
 ): ResolvedUserPreferences {
+  // Preserve disabled preferences; only new-session launches check enablement.
   const model = resolveEnabledModel({
     model: preferences.model,
     fallbackModel: defaultModel,
-    enabledModels: options.enabledModels,
   });
   const reasoningEffort =
     preferences.reasoningEffort && isValidReasoningEffort(model, preferences.reasoningEffort)
       ? preferences.reasoningEffort
       : getDefaultReasoningEffort(model);
-  const branch =
-    options.validateBranch === false
-      ? normalizeBranchPreference(preferences.branch)
-      : getValidatedBranch(preferences.branch);
+  const branch = getValidatedBranch(preferences.branch);
 
   return {
     model,
@@ -121,7 +117,6 @@ function mergeUserPreferencesPatch(
   const resolvedModel = resolveEnabledModel({
     model,
     fallbackModel: options.defaultModel ?? DEFAULT_MODEL,
-    enabledModels: options.enabledModels,
   });
   if (reasoningEffort && !isValidReasoningEffort(resolvedModel, reasoningEffort)) {
     reasoningEffort = undefined;
@@ -138,7 +133,6 @@ function mergeUserPreferencesPatch(
 export function resolveUserPreferences(
   prefs: UserPreferences | null | undefined,
   defaultModel: string | undefined,
-  enabledModels?: string[],
   defaultHarness: HarnessId = DEFAULT_HARNESS
 ): ResolvedUserPreferences {
   return normalizeResolvedPreferences(
@@ -148,14 +142,12 @@ export function resolveUserPreferences(
       branch: prefs?.branch,
       harness: prefs?.harness ?? defaultHarness,
     },
-    defaultModel,
-    { enabledModels }
+    defaultModel
   );
 }
 
 export interface UserPreferenceResolutionOptions {
   defaultModel?: string;
-  enabledModels?: string[];
   /** The workspace's Slack harness, used when the user has not chosen one. */
   defaultHarness?: HarnessId;
 }
@@ -188,7 +180,6 @@ export async function getResolvedUserPreferences(
   return resolveUserPreferences(
     prefs,
     options.defaultModel ?? env.DEFAULT_MODEL,
-    options.enabledModels,
     options.defaultHarness
   );
 }
@@ -213,7 +204,6 @@ async function saveUserPreferences(
     const resolvedModel = resolveEnabledModel({
       model,
       fallbackModel: options.defaultModel ?? env.DEFAULT_MODEL,
-      enabledModels: options.enabledModels,
     });
     if (reasoningEffort && !isValidReasoningEffort(resolvedModel, reasoningEffort)) {
       reasoningEffort = undefined;
@@ -250,7 +240,6 @@ export async function updateUserPreferences(
   const resolvedCurrent = resolveUserPreferences(
     current,
     options.defaultModel ?? env.DEFAULT_MODEL,
-    options.enabledModels,
     options.defaultHarness
   );
   const patch =
@@ -261,7 +250,6 @@ export async function updateUserPreferences(
 
   const merged = mergeUserPreferencesPatch(userId, current, patch, {
     defaultModel: options.defaultModel ?? env.DEFAULT_MODEL,
-    enabledModels: options.enabledModels,
   });
   return merged ? saveUserPreferences(env, userId, merged, options) : false;
 }

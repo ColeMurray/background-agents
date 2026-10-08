@@ -176,6 +176,10 @@ They show accessible repositories and environments plus **No repository**, which
 empty sandbox. Open-Inspect keeps the original request for one hour; after a target is selected, the
 session starts with that original request and thread context.
 
+The planned model is rechecked before launch. If it was disabled while the request was pending, the
+bot refuses to start a session rather than substituting another model. Send a new request with an
+enabled model.
+
 In shared channels, only the original requester can choose the target. If the dropdown has expired,
 send the request again and name the repository, environment, or that no repository is needed.
 
@@ -234,8 +238,13 @@ priority, highest to lowest:
 3. The Slack **Default model**.
 4. Deployment default model (`DEFAULT_MODEL`).
 
-The model must be enabled under **Settings > Models**. If the Slack **Default model** is disabled
-there, the bot uses the first enabled model until an administrator saves a different default.
+The effective model must be enabled under **Settings > Models**. If the App Home model, Slack
+**Default model**, or deployment/system default used by the request is disabled, the bot refuses to
+start a new session. It never substitutes a lower-priority default or the first enabled model.
+Re-enable the model or update the applicable preference or default. An enabled App Home model or
+leading `!model` override still works when a lower-priority default is disabled, provided the
+session's harness can run it. Existing-thread follow-ups without `!model` keep the session's model,
+even if it has since been disabled.
 
 If the session's harness cannot run the resolved model, the bot starts no session. Claude Agent runs
 Anthropic models only, so an OpenAI App Home model or `!model openai/gpt-5.4` is refused on Claude
@@ -336,9 +345,10 @@ Slack sessions.
 
 The selector normally uses models enabled in **Settings > Models** in the web app. If Slack cannot
 load that list, it falls back to the default enabled models. It lists only models your agent harness
-can run. If your current model cannot run on it, the selector shows "Choose a model" with no
-selection and a note that new requests are refused until you choose a model. The "Currently using"
-summary names your model and agent harness.
+can run. If your current model is disabled or cannot run on it, the selector shows "Choose a model"
+with no selection and a note explaining why new requests are refused until you choose a model. The
+"Currently using" summary names your model and agent harness, or marks the model as needing
+replacement.
 
 Branch preference priority is:
 

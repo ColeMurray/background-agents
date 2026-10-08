@@ -40,7 +40,6 @@ import {
   type UserPreferenceResolutionOptions,
 } from "../user-preferences";
 import { getSlackSettings } from "../slack-settings";
-import { getAvailableModels } from "./models";
 
 const log = createLogger("app-home");
 
@@ -113,13 +112,9 @@ async function getPreferenceResolutionOptions(
   env: Env,
   traceId: string | undefined
 ): Promise<UserPreferenceResolutionOptions> {
-  const [availableModels, slackConfig] = await Promise.all([
-    getAvailableModels(env, traceId),
-    getSlackSettings(env, traceId),
-  ]);
+  const slackConfig = await getSlackSettings(env, traceId);
   return {
     defaultModel: slackConfig.defaultModel ?? env.DEFAULT_MODEL,
-    enabledModels: availableModels.map((model) => model.value),
     defaultHarness: slackConfig.harness,
   };
 }
