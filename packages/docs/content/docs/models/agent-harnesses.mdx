@@ -30,6 +30,8 @@ The agent harness is the coding agent that runs inside the sandbox. Every sessio
 
 All three integrations preserve the selected harness rather than falling back to OpenCode. For GitHub and Linear, explicitly selecting a restricted harness such as Claude Agent requires a compatible default model at the same settings level (global or repository). Omitted repository harness and model fields inherit individually. Save validation checks each explicit level, not the merged global/repository pair; cross-level mismatches are refused at launch. See [GitHub settings](/integrations/github#repository-overrides) and [Linear settings](/integrations/linear).
 
+Existing GitHub and Linear settings that select Claude Agent without a default model are not automatically migrated. They remain readable, and rejected saves leave them unchanged. Before saving any edits, including unrelated settings, an administrator must open **Settings > Integrations > GitHub** or **Linear** and choose a compatible Anthropic default model at every global or repository level that explicitly selects Claude Agent. A global model alone does not repair an explicit repository harness override. Alternatively, switch that level to OpenCode, or remove the repository harness override to inherit global settings.
+
 Both harnesses emit the same session events (tokens, tool calls, steps, warnings), so the session page, timeline, and diff work the same way on either one.
 
 ## Comparison

@@ -58,6 +58,14 @@ the same level is rejected. Omitted repository harness and model fields still in
 from the global settings. Save validation checks each explicit level, not the merged result;
 cross-level mismatches are refused at launch rather than switched to OpenCode.
 
+Existing GitHub and Linear settings that select Claude Agent without a default model are not
+automatically migrated. They remain readable, and a rejected save leaves the stored settings
+unchanged. Before saving any edits, including unrelated settings, an administrator must open
+**Settings > Integrations > GitHub** or **Linear** and choose a compatible Anthropic default model
+at every global or repository level that explicitly selects Claude Agent. Setting only a global
+model does not repair a repository's explicit Claude Agent selection. Alternatively, switch that
+level to OpenCode, or remove the repository harness override to inherit the global settings.
+
 Linear sessions are unattended, so on Claude Agent they follow the **Automated authentication**
 policy: with a default Claude account and that policy on **Use default**, Linear usage draws on the
 connected subscription; otherwise it uses `ANTHROPIC_API_KEY`. Switching the setting affects only

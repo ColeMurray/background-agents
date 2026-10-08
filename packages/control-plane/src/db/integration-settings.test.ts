@@ -919,6 +919,54 @@ describe("IntegrationSettingsStore", () => {
         expect(await store.getRepoSettings(integrationId, "acme/widgets")).toBeNull();
       });
 
+      it("preserves legacy global settings until an administrator selects a compatible model", async () => {
+        const legacy = { defaults: { harness: "claude" as const }, enabledRepos: ["acme/widgets"] };
+        await db
+          .prepare(
+            "INSERT INTO integration_settings (integration_id, settings, created_at, updated_at) VALUES (?, ?, ?, ?)"
+          )
+          .bind(integrationId, JSON.stringify(legacy), 1, 1)
+          .run();
+
+        expect(await store.getGlobal(integrationId)).toEqual(legacy);
+        const edited = { ...legacy, enabledRepos: [] };
+        await expect(store.setGlobal(integrationId, edited)).rejects.toThrow(
+          "Choose a default model Claude Agent can run."
+        );
+        expect(await store.getGlobal(integrationId)).toEqual(legacy);
+
+        const repaired = {
+          ...edited,
+          defaults: { ...legacy.defaults, model: "anthropic/claude-sonnet-4-6" },
+        };
+        await store.setGlobal(integrationId, repaired);
+        expect(await store.getGlobal(integrationId)).toEqual(repaired);
+      });
+
+      it("preserves legacy repository settings until an administrator selects a local model", async () => {
+        const legacy = { harness: "claude" as const };
+        await db
+          .prepare(
+            "INSERT INTO integration_repo_settings (integration_id, repo, settings, created_at, updated_at) VALUES (?, ?, ?, ?, ?)"
+          )
+          .bind(integrationId, "acme/widgets", JSON.stringify(legacy), 1, 1)
+          .run();
+        await store.setGlobal(integrationId, {
+          defaults: { model: "anthropic/claude-sonnet-4-6" },
+        });
+
+        expect(await store.getRepoSettings(integrationId, "acme/widgets")).toEqual(legacy);
+        const edited = { ...legacy, reasoningEffort: "high" };
+        await expect(store.setRepoSettings(integrationId, "acme/widgets", edited)).rejects.toThrow(
+          "Choose a default model Claude Agent can run."
+        );
+        expect(await store.getRepoSettings(integrationId, "acme/widgets")).toEqual(legacy);
+
+        const repaired = { ...edited, model: "anthropic/claude-sonnet-4-6" };
+        await store.setRepoSettings(integrationId, "acme/widgets", repaired);
+        expect(await store.getRepoSettings(integrationId, "acme/widgets")).toEqual(repaired);
+      });
+
       it("allows OpenCode without a model at either level", async () => {
         await store.setGlobal(integrationId, { defaults: { harness: "opencode" } });
         await store.setRepoSettings(integrationId, "acme/widgets", { harness: "opencode" });
