@@ -596,6 +596,85 @@ describe("checkpoint intent", () => {
   });
 });
 
+describe("idle queue redrive", () => {
+  function redriveHarness(
+    sandbox: Partial<Parameters<typeof createMockSandbox>[0]>,
+    admission: ReturnType<SandboxShutdownLifecycle["admissionDecision"]> = "ready"
+  ) {
+    const now = Date.now();
+    const storage = createMockStorage(
+      createMockSession(),
+      createMockSandbox({ status: "ready", last_heartbeat: now, last_activity: now, ...sandbox })
+    );
+    const resumeQueuedWork = vi.fn(async () => undefined);
+    const manager = createTestLifecycleManager(
+      createMockProvider(),
+      storage,
+      storage,
+      createMockBroadcaster(),
+      createMockWebSocketManager(),
+      createMockAlarmScheduler(),
+      createMockIdGenerator(),
+      {
+        ...createUnmanagedShutdown(),
+        admissionDecision: vi.fn<SandboxShutdownLifecycle["admissionDecision"]>(() => admission),
+      },
+      { ...createTestConfig(), resumeQueuedWork }
+    );
+    return { manager, resumeQueuedWork, now };
+  }
+
+  it("wakes queued work for a ready runtime the watchdog finds healthy", async () => {
+    const { manager, resumeQueuedWork } = redriveHarness({});
+
+    await manager.redriveIdleQueue();
+    await manager.redriveIdleQueue();
+
+    // Level-triggered: each pass may kick; the queue's claim makes repeats no-ops.
+    expect(resumeQueuedWork).toHaveBeenCalledTimes(2);
+  });
+
+  it.each([
+    ["a stale heartbeat", { last_heartbeat: Date.now() - 10 * 60_000 }, "ready"],
+    [
+      "an inactivity stop that is already due",
+      { last_activity: Date.now() - DEFAULT_LIFECYCLE_CONFIG.inactivity.timeoutMs - 1_000 },
+      "ready",
+    ],
+    ["a booting runtime", { status: "connecting" as const }, "ready"],
+    ["held admission", {}, "held"],
+    ["admission that would start a sandbox", {}, "spawn_required"],
+  ] as const)("does not wake queued work for %s", async (_name, sandbox, admission) => {
+    const { manager, resumeQueuedWork } = redriveHarness(sandbox, admission);
+
+    await manager.redriveIdleQueue();
+
+    expect(resumeQueuedWork).not.toHaveBeenCalled();
+  });
+});
+
+describe("fatal runtime report during a checkpoint hold", () => {
+  it("records the failure instead of dropping it", async () => {
+    const storage = createMockStorage(createMockSession(), createMockSandbox({ status: "ready" }));
+    const shutdown = { ...createUnmanagedShutdown(), isHolding: vi.fn(() => true) };
+    const manager = createTestLifecycleManager(
+      createMockProvider(),
+      storage,
+      storage,
+      createMockBroadcaster(),
+      createMockWebSocketManager(),
+      createMockAlarmScheduler(),
+      createMockIdGenerator(),
+      shutdown,
+      createTestConfig()
+    );
+
+    await expect(manager.terminateFailedSandbox("runtime crashed")).resolves.toBe(false);
+
+    expect(shutdown.recordRuntimeFailure).toHaveBeenCalledOnce();
+  });
+});
+
 describe("spawn admission race (#1589)", () => {
   // `await hashToken` is a non-storage await, so the DO input gate admits
   // other events while it runs. Whatever the sandbox row says at that moment

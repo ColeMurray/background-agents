@@ -526,7 +526,7 @@ export function createUnmanagedShutdown() {
     admissionDecision: vi.fn(() => "unmanaged" as const),
     handleAlarm: vi.fn(async () => "continue" as const),
     rearmCaptureSettlement: vi.fn(async () => undefined),
-    redriveIfIdle: vi.fn(),
+    recordRuntimeFailure: vi.fn(),
     recover: vi.fn(async () => undefined),
     snapshot: vi.fn(() => null),
   } satisfies SandboxShutdownLifecycle;

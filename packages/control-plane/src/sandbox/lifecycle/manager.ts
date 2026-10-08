@@ -137,10 +137,10 @@ export interface SandboxShutdownLifecycle extends VmStartupReconciliationShutdow
     reason: string,
     after: SandboxCheckpointFollowUp
   ): Promise<SandboxCheckpointOutcome>;
-  /** Restores a checkpoint's settle alarm on start-up, then wakes any queued work a restart stranded. */
+  /** Restores a checkpoint's settle alarm on start-up. */
   rearmCaptureSettlement(): Promise<void>;
-  /** Wakes queued work for a ready, live runtime when nothing else will. */
-  redriveIfIdle(): void;
+  /** Keeps a fatal runtime report from being lost while a checkpoint holds teardown. */
+  recordRuntimeFailure(): void;
   /** Decides startup without exposing the coordinator's persisted receipt representation. */
   startupDecision(): SandboxStartupDecision;
   /** Holds a failed boot of the retained source, which deleting would lose; false for other objects. */
@@ -1803,7 +1803,11 @@ export class SandboxLifecycleManager
    * boot that dies the same way every time stops being replaced.
    */
   async terminateFailedSandbox(reason: string): Promise<boolean> {
-    if (this.shutdown.isHolding()) return false;
+    if (this.shutdown.isHolding()) {
+      // Teardown waits for the hold, but a held checkpoint must not hand this runtime back.
+      this.shutdown.recordRuntimeFailure();
+      return false;
+    }
     const sandbox = this.storage.getSandbox();
     if (!sandbox || isDeadSandboxStatus(sandbox.status) || this.isTerminatingSandbox) {
       return false;
@@ -2067,10 +2071,34 @@ export class SandboxLifecycleManager
     return this.shutdown.rearmCaptureSettlement();
   }
 
-  /** Runs last in an alarm delivery, after the watchdogs have acted on fresh state. */
-  redriveIdleQueue(): void {
+  /**
+   * Wakes queued work that nothing else will. A released checkpoint wakes the
+   * queue, but a restart before the queue claims a message loses that kick.
+   * This re-checks state at start-up and at the end of every alarm delivery,
+   * so a lost kick is repeated and a redundant one claims nothing. Only a
+   * ready runtime that the watchdog policy finds healthy qualifies, so work
+   * never reaches a runtime about to be fenced or stopped for inactivity, and
+   * no runtime is started.
+   */
+  async redriveIdleQueue(): Promise<void> {
     if (this.providerStartupPending) return;
-    this.shutdown.redriveIfIdle();
+    const sandbox = this.storage.getSandbox();
+    if (sandbox?.status !== "ready" || this.shutdown.admissionDecision() !== "ready") return;
+    const finding = evaluateAlarmPolicy(
+      sandbox,
+      this.config,
+      Date.now(),
+      this.getConnectedClientCount()
+    );
+    if (finding.outcome !== "healthy" && finding.outcome !== "inactivity_warning") return;
+    try {
+      await this.config.resumeQueuedWork?.();
+    } catch (error) {
+      this.log.error("Idle queue re-drive failed", {
+        event: "sandbox.queue_redrive_failed",
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
   }
 
   private async claimProviderStartup(

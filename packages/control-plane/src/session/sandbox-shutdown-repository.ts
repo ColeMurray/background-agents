@@ -33,6 +33,8 @@ const captureOpSchema = z.object({
   uncertainAtMs: z.number().optional(),
   /** Set once when settlement waits for a stale runtime heartbeat to recover. */
   deferredUntilMs: z.number().optional(),
+  /** The runtime reported a fatal error while the checkpoint held exclusion. */
+  runtimeFailedAtMs: z.number().optional(),
 });
 
 const stateSchema = sandboxShutdownSchema

@@ -1065,6 +1065,7 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
             await alarmScheduler.rehydrate();
             await lifecycleManager.rearmRejectedStartupCleanupAlarm();
             await lifecycleManager.rearmCaptureSettlement();
+            await lifecycleManager.redriveIdleQueue();
             await terminalMessageProjection.rearm();
           },
           {

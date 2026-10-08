@@ -1657,6 +1657,30 @@ describe("unconfirmed checkpoint across a Durable Object reset", () => {
     expect(woken).toBeGreaterThan(0);
   });
 
+  it("keeps holding a runtime that reported a fatal error during the hold", async () => {
+    const { restored } = await seedLostCheckpoint(`checkpoint-fatal-${Date.now()}`, 60_000);
+    await runInSessionDO(restored, async (instance: SessionDO, durableState) => {
+      await expect(
+        componentsOf(instance).lifecycleManager.terminateFailedSandbox("runtime crashed")
+      ).resolves.toBe(false);
+      // Its settle time arrives while the heartbeat is still recent.
+      const store = new SandboxShutdownRepository(durableState.storage.sql);
+      const record = store.read()!;
+      store.write({
+        ...record,
+        captureOp: { ...record.captureOp!, settleAtMs: Date.now() - 1_000 },
+      });
+      await durableState.storage.setAlarm(Date.now() + 60_000);
+    });
+
+    await expect(runDurableObjectAlarm(restored)).resolves.toBe(true);
+
+    expect(await readShutdown(restored)).toMatchObject({ phase: "unknown" });
+    expect(await queryDO<{ status: string }>(restored, "SELECT status FROM sandbox")).not.toEqual([
+      { status: "ready" },
+    ]);
+  });
+
   it("does not wake queued work for a runtime whose heartbeat the watchdog finds stale", async () => {
     const name = `checkpoint-stale-redrive-${Date.now()}`;
     const { stub } = await initNamedSession(name);

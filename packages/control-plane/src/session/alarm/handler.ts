@@ -19,7 +19,7 @@ export interface AlarmHandlerDeps {
   terminalMessageProjection: Pick<SessionTerminalMessageProjection, "flushPending">;
   alarmScheduler: AlarmScheduler;
   /** Wakes queued work for a live runtime that nothing else will; idempotent. */
-  redriveIdleQueue?: () => void;
+  redriveIdleQueue?: () => Promise<void>;
   /** Resolved per use so it honors settings persisted after construction. */
   getExecutionTimeoutMs: () => number;
   now: () => number;
@@ -105,7 +105,7 @@ export function createAlarmHandler(deps: AlarmHandlerDeps): AlarmHandler {
       }
       // Last, so the watchdogs have already fenced any runtime they found
       // stale: a lost queue kick is repeated only for a live runtime.
-      if (lifecycleResult === "no_action") deps.redriveIdleQueue?.();
+      if (lifecycleResult === "no_action") await deps.redriveIdleQueue?.();
       if (projectionFailure) throw projectionFailure.error;
     },
   };
