@@ -1,6 +1,7 @@
 /**
  * Repository classifier for the Linear bot.
- * Uses raw Anthropic API (no SDK) to classify which repo an issue belongs to.
+ * Calls the Messages API (Anthropic or Claude in Amazon Bedrock) or OpenAI to
+ * classify which repo an issue belongs to.
  */
 
 import type {
@@ -11,10 +12,11 @@ import type { Env } from "../types";
 import { z } from "zod";
 import {
   CLASSIFICATION_REQUEST_TIMEOUT_MS,
-  DEFAULT_CLASSIFICATION_MODEL,
   callOpenAIStructured,
-  requireClassificationProviderKey,
-  resolveClassificationProvider,
+  resolveClassificationTarget,
+  type AnthropicMessagesTarget,
+  type ClassificationTarget,
+  type OpenAIChatTarget,
 } from "@open-inspect/shared/classification";
 import { buildRepoDescriptions } from "./repos";
 import { createLogger } from "../logger";
@@ -135,26 +137,26 @@ Return your decision with the fields repoId, confidence, reasoning, and alternat
 }
 
 /**
- * Call Anthropic API directly (no SDK — Workers can't use CJS imports).
+ * Call the Messages API (Anthropic or Claude in Amazon Bedrock) with raw
+ * `fetch`, since the Linear bot has no Anthropic SDK dependency.
  *
  * Claude Opus 4.7 and later reject a non-default `temperature`, and Opus 5.5
  * rejects a forced tool call, each with HTTP 400, so the system prompt asks
  * for the call instead and a text reply falls back to clarification.
  */
 async function callAnthropic(
-  apiKey: string,
-  prompt: string,
-  model: string
+  target: AnthropicMessagesTarget,
+  prompt: string
 ): Promise<ClassifyToolInput> {
-  const response = await fetch("https://api.anthropic.com/v1/messages", {
+  const response = await fetch(`${target.baseUrl}/v1/messages`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
-      "x-api-key": apiKey,
+      "x-api-key": target.apiKey,
       "anthropic-version": "2023-06-01",
     },
     body: JSON.stringify({
-      model,
+      model: target.model,
       max_tokens: 500,
       system: CLASSIFY_REPO_SYSTEM_PROMPT,
       tools: [
@@ -172,20 +174,20 @@ async function callAnthropic(
 
   if (!response.ok) {
     const errText = await response.text();
-    throw new Error(`Anthropic API error ${response.status}: ${errText}`);
+    throw new Error(`Messages API error ${response.status}: ${errText}`);
   }
 
   const data = anthropicMessagesResponseSchema.safeParse(await response.json());
-  if (!data.success) throw new Error("Malformed Anthropic response");
+  if (!data.success) throw new Error("Malformed Messages API response");
 
   const toolBlock = data.data.content.find(
     (b) => b.type === "tool_use" && b.name === CLASSIFY_REPO_TOOL_NAME
   );
 
-  if (!toolBlock) throw new Error("No tool_use block in Anthropic response");
+  if (!toolBlock) throw new Error("No tool_use block in Messages API response");
 
   const input = classifyToolInputSchema.safeParse(toolBlock.input);
-  if (!input.success) throw new Error("Malformed Anthropic tool input");
+  if (!input.success) throw new Error("Malformed Messages API tool input");
 
   return input.data;
 }
@@ -196,14 +198,13 @@ async function callAnthropic(
  * Anthropic tool call produces.
  */
 async function callOpenAI(
-  apiKey: string,
+  target: OpenAIChatTarget,
   prompt: string,
-  model: string,
   reasoningEffort?: string
 ): Promise<ClassifyToolInput> {
   const parsed = await callOpenAIStructured(
-    apiKey,
-    model,
+    target.apiKey,
+    target.model,
     prompt,
     {
       name: CLASSIFY_REPO_TOOL_NAME,
@@ -263,23 +264,39 @@ export async function classifyRepo(
     triggerComment
   );
 
-  try {
-    const modelId = env.CLASSIFICATION_MODEL || DEFAULT_CLASSIFICATION_MODEL;
-    const { provider, model } = resolveClassificationProvider(modelId);
+  const askForRepo = (
+    e: unknown,
+    provider?: ClassificationTarget["provider"]
+  ): ClassificationResult => {
+    log.error("classifier.classify", {
+      trace_id: traceId,
+      provider,
+      outcome: "error",
+      error: e instanceof Error ? e : new Error(String(e)),
+    });
 
+    return {
+      repo: null,
+      confidence: "low",
+      reasoning:
+        "Could not classify repository automatically. Please reply with the repository name (e.g., `owner/repo`).",
+      alternatives: repos.slice(0, 5),
+      needsClarification: true,
+    };
+  };
+
+  let target: ClassificationTarget;
+  try {
+    target = resolveClassificationTarget(env);
+  } catch (e) {
+    return askForRepo(e);
+  }
+
+  try {
     const result: ClassifyToolInput =
-      provider === "anthropic"
-        ? await callAnthropic(
-            requireClassificationProviderKey(env.ANTHROPIC_API_KEY, "ANTHROPIC_API_KEY", modelId),
-            prompt,
-            model
-          )
-        : await callOpenAI(
-            requireClassificationProviderKey(env.OPENAI_API_KEY, "OPENAI_API_KEY", modelId),
-            prompt,
-            model,
-            env.CLASSIFICATION_REASONING_EFFORT
-          );
+      target.protocol === "anthropic-messages"
+        ? await callAnthropic(target, prompt)
+        : await callOpenAI(target, prompt, env.CLASSIFICATION_REASONING_EFFORT);
 
     let matchedRepo: RepoConfig | null = null;
     if (result.repoId) {
@@ -312,19 +329,6 @@ export async function classifyRepo(
         (result.confidence === "medium" && alternatives.length > 0),
     };
   } catch (e) {
-    log.error("classifier.classify", {
-      trace_id: traceId,
-      outcome: "error",
-      error: e instanceof Error ? e : new Error(String(e)),
-    });
-
-    return {
-      repo: null,
-      confidence: "low",
-      reasoning:
-        "Could not classify repository automatically. Please reply with the repository name (e.g., `owner/repo`).",
-      alternatives: repos.slice(0, 5),
-      needsClarification: true,
-    };
+    return askForRepo(e, target.provider);
   }
 }

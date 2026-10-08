@@ -1,36 +1,118 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   CLASSIFICATION_REQUEST_TIMEOUT_MS,
-  DEFAULT_CLASSIFICATION_MODEL,
   OPENAI_CLASSIFICATION_MAX_COMPLETION_TOKENS,
   callOpenAIStructured,
   openAiChatCompletionEnvelopeSchema,
-  resolveClassificationProvider,
+  parseClassificationModel,
+  resolveClassificationTarget,
 } from "./classification";
+import { z } from "zod";
+import modelIdFixtures from "../test-fixtures/classification-model-ids.json";
 
 const SCHEMA = {
   name: "classify",
   schema: { type: "object", properties: {}, required: [], additionalProperties: false },
 };
 
-describe("resolveClassificationProvider", () => {
+// Terraform's classifier_provider.tftest.hcl reads the same file, so both
+// grammars must agree on every id in it.
+const MODEL_ID_FIXTURES = z
+  .array(
+    z.strictObject({
+      id: z.string(),
+      parsed: z
+        .discriminatedUnion("provider", [
+          z.strictObject({ provider: z.literal("anthropic"), model: z.string() }),
+          z.strictObject({ provider: z.literal("openai"), model: z.string() }),
+          z.strictObject({ provider: z.literal("bedrock"), region: z.string(), model: z.string() }),
+        ])
+        .nullable(),
+    })
+  )
+  .parse(modelIdFixtures);
+
+describe("parseClassificationModel", () => {
+  it.each(MODEL_ID_FIXTURES.filter((f) => f.parsed))("parses $id", ({ id, parsed }) => {
+    expect(parseClassificationModel(id)).toEqual(parsed);
+  });
+
+  it.each(MODEL_ID_FIXTURES.filter((f) => !f.parsed))("rejects $id", ({ id }) => {
+    expect(() => parseClassificationModel(id)).toThrow(`Unrecognized classification model: ${id}`);
+  });
+});
+
+describe("resolveClassificationTarget", () => {
+  const KEYS = {
+    ANTHROPIC_API_KEY: "anthropic-key",
+    OPENAI_API_KEY: "openai-key",
+    BEDROCK_API_KEY: "bedrock-key",
+  };
+
+  it("targets the Anthropic API with the Anthropic key by default", () => {
+    expect(resolveClassificationTarget(KEYS)).toEqual({
+      protocol: "anthropic-messages",
+      provider: "anthropic",
+      baseUrl: "https://api.anthropic.com",
+      apiKey: "anthropic-key",
+      model: "claude-haiku-4-5",
+    });
+  });
+
+  it("targets Claude in Amazon Bedrock in the model's region with the Bedrock key", () => {
+    expect(
+      resolveClassificationTarget({
+        ...KEYS,
+        CLASSIFICATION_MODEL: "bedrock/eu-west-1/eu.anthropic.claude-haiku-4-5-20251001-v1:0",
+      })
+    ).toEqual({
+      protocol: "anthropic-messages",
+      provider: "bedrock",
+      baseUrl: "https://bedrock-runtime.eu-west-1.amazonaws.com/anthropic",
+      apiKey: "bedrock-key",
+      model: "eu.anthropic.claude-haiku-4-5-20251001-v1:0",
+    });
+  });
+
+  it("targets OpenAI chat completions with the OpenAI key", () => {
+    expect(
+      resolveClassificationTarget({ ...KEYS, CLASSIFICATION_MODEL: "openai/gpt-5.4-mini" })
+    ).toEqual({
+      protocol: "openai-chat",
+      provider: "openai",
+      apiKey: "openai-key",
+      model: "gpt-5.4-mini",
+    });
+  });
+
   it.each([
-    ["anthropic/claude-haiku-4-5", "anthropic", "claude-haiku-4-5"],
-    ["claude-haiku-4-5", "anthropic", "claude-haiku-4-5"],
-    ["openai/gpt-5.4-mini", "openai", "gpt-5.4-mini"],
-    ["gpt-5.4-mini", "openai", "gpt-5.4-mini"],
-  ])("routes %s to %s and strips the prefix", (modelId, provider, model) => {
-    expect(resolveClassificationProvider(modelId)).toEqual({ provider, model });
-  });
+    { model: "claude-haiku-4-5", binding: "ANTHROPIC_API_KEY" },
+    { model: "gpt-5.4-mini", binding: "OPENAI_API_KEY" },
+    {
+      model: "bedrock/us-east-1/us.anthropic.claude-haiku-4-5-20251001-v1:0",
+      binding: "BEDROCK_API_KEY",
+    },
+  ])("throws naming $binding when $model is selected without it", ({ model, binding }) => {
+    const env = { ...KEYS, CLASSIFICATION_MODEL: model, [binding]: undefined };
 
-  it("routes the default model to Anthropic", () => {
-    expect(resolveClassificationProvider(DEFAULT_CLASSIFICATION_MODEL).provider).toBe("anthropic");
-  });
-
-  it("throws on an unrecognised id rather than silently defaulting to Anthropic", () => {
-    expect(() => resolveClassificationProvider("mistral/mistral-large")).toThrow(
-      /Unrecognized classification model/
+    expect(() => resolveClassificationTarget(env)).toThrow(
+      `Classification model "${model}" requires ${binding} to be set`
     );
+  });
+
+  it("does not serve a Bedrock model with the Anthropic key", () => {
+    expect(() =>
+      resolveClassificationTarget({
+        CLASSIFICATION_MODEL: "bedrock/us-east-1/us.anthropic.claude-haiku-4-5-20251001-v1:0",
+        ANTHROPIC_API_KEY: "anthropic-key",
+      })
+    ).toThrow(/requires BEDROCK_API_KEY/);
+  });
+
+  it("throws on an unrecognized model rather than defaulting to Anthropic", () => {
+    expect(() =>
+      resolveClassificationTarget({ ...KEYS, CLASSIFICATION_MODEL: "mistral/mistral-large" })
+    ).toThrow(/Unrecognized classification model/);
   });
 });
 

@@ -47,6 +47,7 @@ vi.mock("./environments", async (importOriginal) => ({
   getEnvironmentById: vi.fn(),
 }));
 
+import Anthropic from "@anthropic-ai/sdk";
 import { RepoClassifier } from "./index";
 
 const TEST_REPOS: RepoConfig[] = [
@@ -903,6 +904,40 @@ describe("RepoClassifier", () => {
       expect(options?.signal).toBe(timeoutSpy.mock.results[0]?.value);
     });
 
+    it("configures the Messages client for Claude in Amazon Bedrock with the Bedrock key", async () => {
+      mockMessagesCreate.mockResolvedValue({
+        content: [
+          {
+            type: "tool_use",
+            id: "toolu_bedrock",
+            name: "classify_target",
+            input: {
+              targetId: "acme/prod",
+              confidence: "high",
+              reasoning: "Mentions prod.",
+              alternatives: [],
+            },
+          },
+        ],
+      });
+
+      const classifier = new RepoClassifier({
+        ...TEST_ENV,
+        CLASSIFICATION_MODEL: "bedrock/us-east-1/us.anthropic.claude-haiku-4-5-20251001-v1:0",
+        BEDROCK_API_KEY: "test-bedrock-key",
+      } as Env);
+      const result = await classifier.classify("please fix prod slack alerts");
+
+      expect(classifiedRepoFullName(result)).toBe("acme/prod");
+      expect(Anthropic).toHaveBeenCalledExactlyOnceWith({
+        apiKey: "test-bedrock-key",
+        baseURL: "https://bedrock-runtime.us-east-1.amazonaws.com/anthropic",
+      });
+      expect(mockMessagesCreate.mock.calls[0][0].model).toBe(
+        "us.anthropic.claude-haiku-4-5-20251001-v1:0"
+      );
+    });
+
     it("degrades to the picker for an unrecognized model prefix without calling either provider", async () => {
       const fetchMock = vi.fn();
       vi.stubGlobal("fetch", fetchMock);
@@ -930,6 +965,11 @@ describe("RepoClassifier", () => {
         binding: "ANTHROPIC_API_KEY",
         model: "claude-haiku-4-5",
         overrides: { ANTHROPIC_API_KEY: undefined },
+      },
+      {
+        binding: "BEDROCK_API_KEY",
+        model: "bedrock/us-east-1/us.anthropic.claude-haiku-4-5-20251001-v1:0",
+        overrides: { BEDROCK_API_KEY: undefined, ANTHROPIC_API_KEY: "anthropic-key" },
       },
     ])(
       "degrades to the picker without calling out when $model is selected but $binding is unbound",

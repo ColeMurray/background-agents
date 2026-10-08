@@ -69,7 +69,10 @@ linear_webhook_secret = "your-webhook-signing-secret"
 The worker also requires these secrets (set via `wrangler secret put` or Terraform):
 
 - Exactly one classifier credential selected by `CLASSIFICATION_MODEL`: **`ANTHROPIC_API_KEY`** for
-  an Anthropic model (the default), or **`OPENAI_API_KEY`** for an OpenAI model
+  an Anthropic model (the default), **`OPENAI_API_KEY`** for an OpenAI model, or
+  **`BEDROCK_API_KEY`** for a `bedrock/<aws-region>/<inference-profile-id>` model on Claude in
+  Amazon Bedrock (see
+  [Classify on Amazon Bedrock (Optional)](../../docs/GETTING_STARTED.md#classify-on-amazon-bedrock-optional))
 - **`SERVICE_AUTH_SECRET`** — per-service sig1 signing secret; also verifies CP callbacks
 
 Then `terraform apply`.

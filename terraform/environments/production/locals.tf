@@ -42,15 +42,24 @@ locals {
     local.web_custom_domain_zone_id != ""
   )
 
-  # The bots derive their classifier's provider from the model id, so the
-  # deployment binds exactly one provider credential to them: an Anthropic model
-  # gets ANTHROPIC_API_KEY, an OpenAI model gets OPENAI_API_KEY. This is scoped
-  # to the classifier — var.anthropic_api_key is still what Claude coding
-  # sessions and the opencomputer control-plane path use.
-  classifier_uses_openai = (
-    startswith(var.classification_model, "openai/") ||
-    startswith(var.classification_model, "gpt-")
-  )
+  # The bots derive their classifier's provider from the model id alone, so the
+  # deployment binds exactly one provider credential to them. This is scoped to
+  # the classifier — var.anthropic_api_key is still what Claude coding sessions
+  # and the opencomputer control-plane path use.
+  #
+  # Same regex source as MODEL_ID_PATTERNS in packages/shared/src/classification.ts.
+  # Go and JavaScript regex engines still differ on \r, \v, and non-ASCII
+  # whitespace, so plan can accept an id containing them that the bots reject.
+  classifier_model_patterns = {
+    anthropic = "^(?:anthropic/(?<model>\\s*\\S.*)|claude-\\s*\\S.*)$"
+    openai    = "^(?:openai/(?<model>\\s*\\S.*)|gpt-\\s*\\S.*)$"
+    bedrock   = "^bedrock/(?<region>[a-z]{2}(?:-[a-z]+)+-[0-9]+)/(?<model>(?:[a-z]+(?:-[a-z]+)?\\.)?anthropic\\.claude-[a-z0-9-]+(?::[0-9]+)?)$"
+  }
+
+  classifier_provider = one([
+    for provider, pattern in local.classifier_model_patterns : provider
+    if can(regex(pattern, var.classification_model))
+  ])
 
   # The dedicated classifier key keeps the bots' credential out of sandboxes;
   # existing deployments that only set anthropic_api_key keep using it.
@@ -59,11 +68,11 @@ locals {
     : var.anthropic_api_key
   )
 
-  # Exactly one provider binding for the classifier bots.
-  classifier_secret_bindings = (local.classifier_uses_openai
-    ? { OPENAI_API_KEY = { value = var.classification_openai_api_key } }
-    : { ANTHROPIC_API_KEY = { value = local.classifier_anthropic_api_key } }
-  )
+  classifier_secret_bindings = local.classifier_provider == null ? {} : {
+    anthropic = { ANTHROPIC_API_KEY = { value = local.classifier_anthropic_api_key } }
+    openai    = { OPENAI_API_KEY = { value = var.classification_openai_api_key } }
+    bedrock   = { BEDROCK_API_KEY = { value = var.classification_bedrock_api_key } }
+  }[local.classifier_provider]
 
   # Bound only when set, so an unconfigured classifier keeps the model default.
   classifier_reasoning_effort_bindings = var.classification_reasoning_effort != "" ? {

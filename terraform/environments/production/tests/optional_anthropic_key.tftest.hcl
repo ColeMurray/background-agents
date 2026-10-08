@@ -185,3 +185,24 @@ run "an_openai_classifier_needs_no_anthropic_key" {
     error_message = "An OpenAI classifier must not demand an Anthropic key."
   }
 }
+
+run "a_bedrock_classifier_needs_no_anthropic_key" {
+  command = plan
+
+  variables {
+    enable_slack_bot               = true
+    slack_bot_token                = "xoxb-test"
+    slack_signing_secret           = "test-signing-secret"
+    classification_model           = "bedrock/us-east-1/us.anthropic.claude-haiku-4-5-20251001-v1:0"
+    classification_bedrock_api_key = "test-bedrock-key"
+    anthropic_api_key              = ""
+  }
+
+  assert {
+    condition = (
+      contains(module.slack_bot_worker[0].secret_binding_names, "BEDROCK_API_KEY") &&
+      !contains(module.slack_bot_worker[0].secret_binding_names, "ANTHROPIC_API_KEY")
+    )
+    error_message = "A Bedrock classifier must not demand an Anthropic key."
+  }
+}

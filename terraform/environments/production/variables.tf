@@ -365,8 +365,7 @@ variable "classification_anthropic_api_key" {
   validation {
     condition = (
       (var.enable_slack_bot == false && var.enable_linear_bot == false) ||
-      startswith(var.classification_model, "openai/") ||
-      startswith(var.classification_model, "gpt-") ||
+      local.classifier_provider != "anthropic" ||
       trimspace(var.classification_anthropic_api_key) != "" ||
       trimspace(var.anthropic_api_key) != ""
     )
@@ -375,21 +374,20 @@ variable "classification_anthropic_api_key" {
 }
 
 variable "classification_model" {
-  description = "Model backing the Slack and Linear bots' target classifiers. An \"anthropic/\"-prefixed or bare \"claude-\" id is served by classification_anthropic_api_key (falling back to anthropic_api_key); an \"openai/\"-prefixed or bare \"gpt-\" id is served by classification_openai_api_key."
+  description = "Model backing the Slack and Linear bots' target classifiers. An \"anthropic/\"-prefixed or bare \"claude-\" id is served by classification_anthropic_api_key (falling back to anthropic_api_key); an \"openai/\"-prefixed or bare \"gpt-\" id by classification_openai_api_key; a \"bedrock/<aws-region>/<inference-profile-id>\" id by classification_bedrock_api_key, through Claude in Amazon Bedrock in that Region."
   type        = string
   default     = "claude-haiku-4-5"
   nullable    = false
 
-  # Each prefix must be followed by an actual model id: a bare "claude-" or
-  # "openai/" satisfies startswith but names no model, and would reach the bots
-  # as a value their resolver accepts and then sends to the provider verbatim.
+  # Reads the constant pattern table, not local.classifier_provider: a
+  # variable's validation that references a local derived from the same
+  # variable is a dependency cycle.
   validation {
     condition = anytrue([
-      for prefix in ["anthropic/", "claude-", "openai/", "gpt-"] :
-      startswith(var.classification_model, prefix) &&
-      trimspace(substr(var.classification_model, length(prefix), -1)) != ""
+      for pattern in values(local.classifier_model_patterns) :
+      can(regex(pattern, var.classification_model))
     ])
-    error_message = "classification_model must be an Anthropic id (\"anthropic/...\" or \"claude-...\") or an OpenAI id (\"openai/...\" or \"gpt-...\"), naming a model after the prefix."
+    error_message = "classification_model must be an Anthropic id (\"anthropic/...\" or \"claude-...\") or an OpenAI id (\"openai/...\" or \"gpt-...\") naming a model after the prefix, or a Bedrock id (\"bedrock/<aws-region>/<inference-profile-id>\", such as \"bedrock/us-east-1/us.anthropic.claude-haiku-4-5-20251001-v1:0\")."
   }
 }
 
@@ -406,10 +404,30 @@ variable "classification_openai_api_key" {
   validation {
     condition = (
       (var.enable_slack_bot == false && var.enable_linear_bot == false) ||
-      !(startswith(var.classification_model, "openai/") || startswith(var.classification_model, "gpt-")) ||
+      local.classifier_provider != "openai" ||
       trimspace(var.classification_openai_api_key) != ""
     )
     error_message = "classification_openai_api_key must be non-blank when the Slack or Linear bot is enabled and classification_model is an OpenAI model."
+  }
+}
+
+variable "classification_bedrock_api_key" {
+  description = "Amazon Bedrock API key used by the Slack and Linear bot classifiers when classification_model is a \"bedrock/<aws-region>/<inference-profile-id>\" id; never injected into sandboxes. For the key type and IAM permissions it needs, see \"Classify on Amazon Bedrock (Optional)\" in docs/GETTING_STARTED.md."
+  type        = string
+  sensitive   = true
+  default     = ""
+  nullable    = false
+
+  # Fail closed once a deployed classifier is pointed at Bedrock: CI renders an
+  # unset secret as an empty string, which would otherwise deploy a
+  # credential-less classifier that rejects every message.
+  validation {
+    condition = (
+      (var.enable_slack_bot == false && var.enable_linear_bot == false) ||
+      local.classifier_provider != "bedrock" ||
+      trimspace(var.classification_bedrock_api_key) != ""
+    )
+    error_message = "classification_bedrock_api_key must be non-blank when the Slack or Linear bot is enabled and classification_model is a Bedrock model."
   }
 }
 
@@ -419,15 +437,14 @@ variable "classification_reasoning_effort" {
   default     = ""
   nullable    = false
 
-  # Only the OpenAI transport sends reasoning_effort; an Anthropic classifier
-  # would silently ignore the setting.
+  # Only the OpenAI transport sends reasoning_effort; an Anthropic or Bedrock
+  # classifier would silently ignore the setting.
   validation {
     condition = (
       var.classification_reasoning_effort == "" ||
-      startswith(var.classification_model, "openai/") ||
-      startswith(var.classification_model, "gpt-")
+      local.classifier_provider == "openai"
     )
-    error_message = "classification_reasoning_effort applies only to an OpenAI classification_model. Leave it blank for an Anthropic model."
+    error_message = "classification_reasoning_effort applies only to an OpenAI classification_model. Leave it blank for an Anthropic or Bedrock model."
   }
 
   # Supported efforts differ by model, so OpenAI validates the value itself. A
