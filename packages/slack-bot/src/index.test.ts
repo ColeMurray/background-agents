@@ -2750,6 +2750,44 @@ describe("POST /interactions", () => {
     mockGetUserInfo.mockResolvedValue({ ok: false, error: "user_not_found" });
   });
 
+  it("saves and clears the App Home harness choice", async () => {
+    mockPublishView.mockResolvedValue({ ok: true });
+    const slackFetch = mockSlackFetch();
+    const env = makeSessionEnv([], { slackDefaults: { harness: "claude" } });
+    const kv = env.SLACK_KV as unknown as {
+      get: (key: string, type: string) => Promise<unknown>;
+    };
+
+    async function selectHarness(value: string) {
+      const ctx = makeCtx();
+      const response = await app.fetch(
+        slackInteractionRequest({
+          type: "block_actions",
+          user: { id: "U123" },
+          actions: [{ action_id: "select_harness", selected_option: { value } }],
+        }),
+        env,
+        ctx
+      );
+      expect(response.status).toBe(200);
+      await flushWaitUntil(ctx);
+    }
+
+    await selectHarness("opencode");
+    expect(await kv.get("user_prefs:U123", "json")).toEqual(
+      expect.objectContaining({ harness: "opencode" })
+    );
+    expect(mockPublishView).toHaveBeenCalledOnce();
+
+    await selectHarness("__workspace__");
+    expect(await kv.get("user_prefs:U123", "json")).not.toHaveProperty("harness");
+
+    await selectHarness("not-a-harness");
+    expect(mockPublishView).toHaveBeenCalledTimes(2);
+
+    slackFetch.mockRestore();
+  });
+
   it("sets Starting status for repo-selection starts before session creation", async () => {
     const order: string[] = [];
     const slackFetch = mockSlackFetch(order);

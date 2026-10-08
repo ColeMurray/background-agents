@@ -1,3 +1,4 @@
+import { isValidHarness } from "@open-inspect/shared/harnesses";
 import { isValidModel, isValidReasoningEffort } from "@open-inspect/shared/models";
 import {
   BRANCH_INPUT_BLOCK_ID,
@@ -18,8 +19,10 @@ import {
   CLEAR_BRANCH_PREFERENCE_ACTION_ID,
   MAX_REPO_SUGGESTION_OPTIONS,
   OPEN_BRANCH_MODAL_ACTION_ID,
+  SELECT_HARNESS_ACTION_ID,
   SELECT_MODEL_ACTION_ID,
   SELECT_REASONING_EFFORT_ACTION_ID,
+  WORKSPACE_HARNESS_OPTION_VALUE,
 } from "./constants";
 import { decodeRepoBranchModalMetadata } from "./metadata";
 import { openBranchPreferenceModal, openRepoBranchPreferenceModal } from "./modals";
@@ -36,7 +39,8 @@ import {
   updateUserPreferences,
   type UserPreferenceResolutionOptions,
 } from "../user-preferences";
-import { getAvailableModels, getSlackDefaultModel } from "./models";
+import { getSlackSettings } from "../slack-settings";
+import { getAvailableModels } from "./models";
 
 const log = createLogger("app-home");
 
@@ -64,6 +68,7 @@ export interface AppHomeInteractionRouteResult {
 }
 
 const APP_HOME_BLOCK_ACTIONS: Record<string, AppHomeBlockActionHandler> = {
+  [SELECT_HARNESS_ACTION_ID]: { handle: handleSelectHarness },
   [SELECT_MODEL_ACTION_ID]: { handle: handleSelectModel },
   [SELECT_REASONING_EFFORT_ACTION_ID]: { handle: handleSelectReasoningEffort },
   [OPEN_BRANCH_MODAL_ACTION_ID]: { runInline: true, handle: handleOpenBranchModal },
@@ -108,13 +113,14 @@ async function getPreferenceResolutionOptions(
   env: Env,
   traceId: string | undefined
 ): Promise<UserPreferenceResolutionOptions> {
-  const [availableModels, slackDefaultModel] = await Promise.all([
+  const [availableModels, slackConfig] = await Promise.all([
     getAvailableModels(env, traceId),
-    getSlackDefaultModel(env, traceId),
+    getSlackSettings(env, traceId),
   ]);
   return {
-    defaultModel: slackDefaultModel ?? env.DEFAULT_MODEL,
+    defaultModel: slackConfig.defaultModel ?? env.DEFAULT_MODEL,
     enabledModels: availableModels.map((model) => model.value),
+    defaultHarness: slackConfig.harness,
   };
 }
 
@@ -300,6 +306,24 @@ function getRepoIdFromSubmission(
   }
 
   return decoded.metadata.repoId;
+}
+
+async function handleSelectHarness({
+  action,
+  env,
+  userId,
+}: AppHomeBlockActionContext): Promise<void> {
+  const selected = action.selected_option?.value;
+  if (!userId || (selected !== WORKSPACE_HARNESS_OPTION_VALUE && !isValidHarness(selected))) {
+    return;
+  }
+
+  // The model is kept even when the new harness cannot run it: App Home then
+  // asks for a compatible model, and launches refuse until one is chosen.
+  await updateUserPreferences(env, userId, {
+    harness: selected === WORKSPACE_HARNESS_OPTION_VALUE ? undefined : selected,
+  });
+  await publishAppHome(env, userId);
 }
 
 async function handleSelectModel({
