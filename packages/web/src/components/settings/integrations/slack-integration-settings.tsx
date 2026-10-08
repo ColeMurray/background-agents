@@ -393,6 +393,7 @@ function GlobalSettingsSection({
         <HarnessSelect
           id="slack-harness"
           describedBy="slack-harness-help"
+          disabled={!canManageGlobal}
           className="w-full sm:w-96"
           value={harness}
           onChange={(nextHarness = DEFAULT_HARNESS) => {

@@ -212,6 +212,29 @@ describe("SlackIntegrationSettings", () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
+  it("closes the open harness menu when permission is revoked without changing the draft", async () => {
+    const user = userEvent.setup();
+    setupSWR({ global: { defaults: { model: "openai/gpt-5.4" } } });
+    const { rerender } = render(<SlackIntegrationSettings />);
+    const harness = screen.getByRole("combobox", { name: "Agent harness" });
+    const model = screen.getByRole("combobox", { name: "Default model" });
+    await user.click(harness);
+    expect(screen.getByRole("option", { name: "Claude Agent" })).toBeInTheDocument();
+
+    authorization.canManageGlobal = false;
+    rerender(<SlackIntegrationSettings />);
+    await waitFor(() => expect(screen.queryByRole("listbox")).not.toBeInTheDocument());
+    expect(screen.queryAllByRole("option")).toHaveLength(0);
+    expect(harness).toBeDisabled();
+
+    authorization.canManageGlobal = true;
+    rerender(<SlackIntegrationSettings />);
+    expect(harness).toHaveTextContent("OpenCode");
+    expect(model).toHaveTextContent("GPT 5.4");
+    expect(screen.getByRole("button", { name: /^save$/i })).toBeDisabled();
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
   it("disables the unbound policy without global integration-management permission", async () => {
     const user = userEvent.setup();
     authorization.canManageGlobal = false;
