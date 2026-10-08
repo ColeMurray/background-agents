@@ -17,6 +17,29 @@ describe("normalizeWebhookEvent", () => {
     expect(event.concurrencyKey).toBe("webhook:idem:my-key");
   });
 
+  it("scopes concurrency to the sessionKey and keeps dedup on the idempotencyKey", () => {
+    const event = normalizeWebhookEvent("auto-1", { test: true }, "my-key", "card-42");
+    expect(event.triggerKey).toBe("webhook:idem:my-key");
+    expect(event.concurrencyKey).toBe("webhook:session:card-42");
+    expect(event.sessionKey).toBe("card-42");
+  });
+
+  it("leaves sessionKey unset without one", () => {
+    expect(normalizeWebhookEvent("auto-1", { test: true }).sessionKey).toBeUndefined();
+  });
+
+  it("strips sessionKey from body in context but keeps it in body", () => {
+    const event = normalizeWebhookEvent(
+      "auto-1",
+      { sessionKey: "card-42", data: "value" },
+      undefined,
+      "card-42"
+    );
+    expect(event.body).toEqual({ sessionKey: "card-42", data: "value" });
+    expect(event.contextBlock).not.toContain("sessionKey");
+    expect(event.contextBlock).toContain("value");
+  });
+
   it("strips idempotencyKey from body in context but keeps it in body", () => {
     const event = normalizeWebhookEvent(
       "auto-1",

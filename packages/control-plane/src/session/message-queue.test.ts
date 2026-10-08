@@ -2314,6 +2314,48 @@ describe("SessionMessageQueue", () => {
   });
 
   describe("enqueuePromptFromApi", () => {
+    it("returns the prompt it already queued for a client request id it has seen", async () => {
+      const h = buildQueue();
+      h.repository.getMessageByClientRequestId.mockReturnValue(
+        createMessage({
+          id: "msg-existing",
+          client_request_id: "webhook:abc",
+          request_fingerprint: await fingerprintWebPrompt("part-1", { content: "same" }),
+        })
+      );
+
+      const queued = await h.queue.enqueuePromptFromApi({
+        content: "same",
+        authorId: "user-1",
+        source: "automation",
+        clientRequestId: "webhook:abc",
+      });
+
+      expect(queued.messageId).toBe("msg-existing");
+      expect(h.repository.createMessageWithAttachments).not.toHaveBeenCalled();
+    });
+
+    it("rejects a client request id reused for a different prompt", async () => {
+      const h = buildQueue();
+      h.repository.getMessageByClientRequestId.mockReturnValue(
+        createMessage({
+          id: "msg-existing",
+          client_request_id: "webhook:abc",
+          request_fingerprint: "different",
+        })
+      );
+
+      await expect(
+        h.queue.enqueuePromptFromApi({
+          content: "changed",
+          authorId: "user-1",
+          source: "automation",
+          clientRequestId: "webhook:abc",
+        })
+      ).rejects.toMatchObject({ name: "PromptRequestConflictError" });
+      expect(h.repository.createMessageWithAttachments).not.toHaveBeenCalled();
+    });
+
     it("rejects exhaustion before capacity checks or participant mutations", async () => {
       const h = buildQueue();
       h.repository.getSession.mockReturnValue(createSession({ budget_exhausted: 1 }));
