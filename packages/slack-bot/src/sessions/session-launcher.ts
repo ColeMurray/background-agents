@@ -20,12 +20,12 @@ import { createLogger } from "../logger";
 import type { Env } from "../types";
 import type { SlackActorIdentity } from "../user-identity";
 import {
-  getUserPreferences,
+  getAuthoritativeUserPreferences,
   resolveUserPreferences,
   type ResolvedUserPreferences,
 } from "../user-preferences";
 import { createSession } from "./control-plane-client";
-import { getSlackSettings, type SlackSettings } from "../slack-settings";
+import { getAuthoritativeSlackSettings, type SlackSettings } from "../slack-settings";
 import { deliverPrompt } from "./prompt-delivery";
 import { buildThreadSession, storeThreadSession } from "./thread-session-store";
 import {
@@ -44,36 +44,37 @@ export interface SlackLaunchSettings {
   modelSource: Exclude<LaunchModelSource, "request">;
 }
 
-async function resolveSlackLaunchSettings(
-  env: Env,
-  userId: string,
-  enabledModels: ValidModel[],
-  slackConfig: SlackSettings
-): Promise<SlackLaunchSettings> {
-  const prefs = await getUserPreferences(env, userId);
-  const userPreferences = resolveUserPreferences(
-    prefs,
-    slackConfig.defaultModel ?? env.DEFAULT_MODEL,
-    slackConfig.harness
-  );
-  const modelSource = prefs?.model
-    ? "app-home"
-    : slackConfig.defaultModel
-      ? "slack-default"
-      : "system-default";
-  return { enabledModels, slackConfig, userPreferences, modelSource };
-}
-
 export async function loadAuthoritativeSlackLaunchSettings(
   env: Env,
   userId: string,
   traceId?: string
 ): Promise<SlackLaunchSettings | null> {
-  const [enabledModels, slackConfig] = await Promise.all([
-    getAuthoritativeModels(env, traceId),
-    getSlackSettings(env, traceId),
-  ]);
-  return enabledModels ? resolveSlackLaunchSettings(env, userId, enabledModels, slackConfig) : null;
+  try {
+    const [enabledModels, slackConfig, prefs] = await Promise.all([
+      getAuthoritativeModels(env, traceId),
+      getAuthoritativeSlackSettings(env, traceId),
+      getAuthoritativeUserPreferences(env, userId),
+    ]);
+    if (!enabledModels || !slackConfig) return null;
+    const userPreferences = resolveUserPreferences(
+      prefs,
+      slackConfig.defaultModel ?? env.DEFAULT_MODEL,
+      slackConfig.harness
+    );
+    const modelSource = prefs?.model
+      ? "app-home"
+      : slackConfig.defaultModel
+        ? "slack-default"
+        : "system-default";
+    return { enabledModels, slackConfig, userPreferences, modelSource };
+  } catch (error) {
+    log.warn("slack.launch_settings.unavailable", {
+      trace_id: traceId,
+      user_id: userId,
+      error: error instanceof Error ? error : new Error(String(error)),
+    });
+    return null;
+  }
 }
 
 export interface StartSessionOptions {

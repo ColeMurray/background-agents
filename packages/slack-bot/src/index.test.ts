@@ -94,6 +94,7 @@ function makeEnv() {
   const controlPlaneFetch = vi.fn<ControlPlaneFetcher["fetch"]>();
   controlPlaneFetch.mockImplementation(async (input) => {
     const url = typeof input === "string" ? input : input.toString();
+    if (url.endsWith("/integration-settings/slack")) return Response.json({ settings: null });
     if (url.includes("/channel-bindings/slack/")) return Response.json({ teamId: null });
     if (url.includes("/environments")) return Response.json({ environments: [], total: 0 });
     if (url.includes("/repos")) {
@@ -169,6 +170,7 @@ function mockReposFetch(
 ) {
   env.CONTROL_PLANE.fetch.mockImplementation(async (input: RequestInfo | URL) => {
     const url = typeof input === "string" ? input : input.toString();
+    if (url.endsWith("/integration-settings/slack")) return Response.json({ settings: null });
     if (url.includes("/channel-bindings/slack/"))
       return Response.json(teamId ? { teamId, kind: "primary" } : { teamId: null });
     if (url.includes("/environments")) return Response.json({ environments: [], total: 0 });
@@ -217,10 +219,10 @@ function makeSessionEnv(
   let promptResponseIndex = 0;
   env.CONTROL_PLANE.fetch.mockImplementation(async (input: RequestInfo | URL) => {
     const url = typeof input === "string" ? input : input.toString();
-    if (responses.slackDefaults && url.endsWith("/integration-settings/slack")) {
+    if (url.endsWith("/integration-settings/slack")) {
       return Response.json({
         integrationId: "slack",
-        settings: { defaults: responses.slackDefaults },
+        settings: responses.slackDefaults ? { defaults: responses.slackDefaults } : null,
       });
     }
     if (url.includes("/channel-bindings/slack/"))
@@ -1944,6 +1946,75 @@ describe("POST /events", () => {
       slackFetch.mockRestore();
     });
 
+    it.each(["KV error", "malformed record"])(
+      "refuses a new launch when the App Home preference cannot be read: %s",
+      async (failure) => {
+        const slackFetch = mockSlackFetch();
+        const env = makeSessionEnv([], {
+          enabledModels: [anthropicModel],
+          slackDefaults: { model: anthropicModel },
+        });
+        await env.SLACK_KV.put(
+          "user_prefs:U123",
+          JSON.stringify({
+            userId: "U123",
+            model: openAIModel,
+            updatedAt: failure === "malformed record" ? "invalid" : 1,
+          })
+        );
+        if (failure === "KV error") {
+          const kv = env.SLACK_KV as unknown as ReturnType<typeof createMockKV>;
+          const get = kv.get.getMockImplementation()!;
+          kv.get.mockImplementation(async (key, type) => {
+            if (key === "user_prefs:U123") throw new Error("KV unavailable");
+            return get(key, type);
+          });
+        }
+
+        await deliver(env, { text: "<@B123> fix the auth tests", ts: "111.222" });
+
+        expect(sessionFetchBodies(env.CONTROL_PLANE.fetch)).toEqual([]);
+        expect(promptFetchBodies(env.CONTROL_PLANE.fetch)).toEqual([]);
+        expect(await env.SLACK_KV.get("thread:C123:111.222")).toBeNull();
+        expect(postedTexts(slackFetch)).toContain(
+          "Model preferences are temporarily unavailable. Please try again."
+        );
+        slackFetch.mockRestore();
+      }
+    );
+
+    it.each(["HTTP error", "malformed response", "invalid JSON", "fetch error"])(
+      "refuses a new launch when Slack defaults cannot be read: %s",
+      async (failure) => {
+        const slackFetch = mockSlackFetch();
+        const env = makeSessionEnv([], {
+          enabledModels: [anthropicModel],
+          slackDefaults: { model: openAIModel },
+        });
+        const fetch = env.CONTROL_PLANE.fetch.getMockImplementation()!;
+        env.CONTROL_PLANE.fetch.mockImplementation(async (input, init) => {
+          if (String(input).endsWith("/integration-settings/slack")) {
+            if (failure === "fetch error") throw new Error("Slack settings unavailable");
+            if (failure === "invalid JSON") return new Response("invalid");
+            if (failure === "malformed response")
+              return Response.json({ settings: { defaults: { model: 123 } } });
+            return new Response("unavailable", { status: 503 });
+          }
+          return fetch(input, init);
+        });
+
+        await deliver(env, { text: "<@B123> fix the auth tests", ts: "111.222" });
+
+        expect(sessionFetchBodies(env.CONTROL_PLANE.fetch)).toEqual([]);
+        expect(promptFetchBodies(env.CONTROL_PLANE.fetch)).toEqual([]);
+        expect(await env.SLACK_KV.get("thread:C123:111.222")).toBeNull();
+        expect(postedTexts(slackFetch)).toContain(
+          "Model preferences are temporarily unavailable. Please try again."
+        );
+        slackFetch.mockRestore();
+      }
+    );
+
     it("runs on the harness chosen in App Home over the workspace harness", async () => {
       const slackFetch = mockSlackFetch();
       const env = makeSessionEnv([], { enabledModels: [anthropicModel, openAIModel] });
@@ -3475,6 +3546,7 @@ describe("POST /interactions", () => {
 
     env.CONTROL_PLANE.fetch.mockImplementation(async (input: RequestInfo | URL) => {
       const url = typeof input === "string" ? input : input.toString();
+      if (url.endsWith("/integration-settings/slack")) return Response.json({ settings: null });
       if (url.includes("/channel-bindings/slack/")) return Response.json({ teamId: null });
       if (url.includes("/repos")) {
         return new Response(
@@ -3571,6 +3643,7 @@ describe("POST /interactions", () => {
 
     env.CONTROL_PLANE.fetch.mockImplementation(async (input: RequestInfo | URL) => {
       const url = typeof input === "string" ? input : input.toString();
+      if (url.endsWith("/integration-settings/slack")) return Response.json({ settings: null });
       if (url.includes("/channel-bindings/slack/")) return Response.json({ teamId: null });
       if (url.includes("/repos")) {
         return new Response(

@@ -152,15 +152,21 @@ export interface UserPreferenceResolutionOptions {
   defaultHarness?: HarnessId;
 }
 
+/** Missing preferences are null; failed reads and malformed records reject. */
+export async function getAuthoritativeUserPreferences(
+  env: Env,
+  userId: string
+): Promise<UserPreferences | null> {
+  const data = await createKvCacheStore(env.SLACK_KV).get(getUserPreferencesKey(userId), "json");
+  return data === null ? null : slackUserPreferencesSchema.parse(data);
+}
+
 export async function getUserPreferences(
   env: Env,
   userId: string
 ): Promise<UserPreferences | null> {
   try {
-    const key = getUserPreferencesKey(userId);
-    const data = await createKvCacheStore(env.SLACK_KV).get(key, "json");
-    const parsed = slackUserPreferencesSchema.safeParse(data);
-    return parsed.success ? parsed.data : null;
+    return await getAuthoritativeUserPreferences(env, userId);
   } catch (e) {
     log.error("kv.get", {
       key_prefix: "user_prefs",

@@ -2,6 +2,7 @@ import { getDefaultReasoningEffort } from "@open-inspect/shared/models";
 import { describe, expect, it, vi } from "vitest";
 import type { Env } from "./types";
 import {
+  getAuthoritativeUserPreferences,
   getUserPreferences,
   resolveUserPreferences,
   updateUserPreferences,
@@ -32,6 +33,15 @@ function makeEnv(): Env {
 }
 
 describe("getUserPreferences", () => {
+  it("distinguishes missing preferences from failed authoritative reads", async () => {
+    const env = makeEnv();
+    await expect(getAuthoritativeUserPreferences(env, "U123")).resolves.toBeNull();
+
+    const error = new Error("KV unavailable");
+    vi.mocked(env.SLACK_KV.get).mockRejectedValueOnce(error);
+    await expect(getAuthoritativeUserPreferences(env, "U123")).rejects.toThrow(error);
+  });
+
   it("returns null for malformed stored preferences", async () => {
     const env = makeEnv();
     await env.SLACK_KV.put(
@@ -39,6 +49,7 @@ describe("getUserPreferences", () => {
       JSON.stringify({ userId: "U123", updatedAt: "yesterday" })
     );
 
+    await expect(getAuthoritativeUserPreferences(env, "U123")).rejects.toThrow();
     await expect(getUserPreferences(env, "U123")).resolves.toBeNull();
   });
 });
