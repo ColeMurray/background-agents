@@ -41,28 +41,19 @@ describe("resolveInlinePromptOptions", () => {
     });
   });
 
-  it("falls back from a disabled session model before applying a reasoning override", () => {
+  it("keeps a disabled session model when applying a reasoning override", () => {
     expect(
       resolveInlinePromptOptions(
-        { reasoningEffort: "max" },
+        { reasoningEffort: "high" },
         { model: "openai/gpt-5.6-sol", reasoningEffort: "xhigh" },
         ["anthropic/claude-sonnet-4-6"]
       )
     ).toEqual({
       ok: true,
       turnPlan: {
-        sessionDefaults: {
-          model: "openai/gpt-5.6-sol",
-          reasoningEffort: "xhigh",
-        },
-        promptOverrides: {
-          model: "anthropic/claude-sonnet-4-6",
-          reasoningEffort: "max",
-        },
-        effective: {
-          model: "anthropic/claude-sonnet-4-6",
-          reasoningEffort: "max",
-        },
+        sessionDefaults: { model: "openai/gpt-5.6-sol", reasoningEffort: "xhigh" },
+        promptOverrides: { reasoningEffort: "high" },
+        effective: { model: "openai/gpt-5.6-sol", reasoningEffort: "high" },
       },
     });
   });
@@ -106,47 +97,5 @@ describe("resolveInlinePromptOptions", () => {
       error:
         'Reasoning effort "&lt;@U123&gt;" is not valid for "anthropic/claude-sonnet-4-6". Supported values: low, medium, high, max.',
     });
-  });
-});
-
-describe("resolveInlinePromptOptions disabled session model policy", () => {
-  const sessionDefaults = { model: "anthropic/claude-sonnet-4-6", reasoningEffort: "high" };
-  const enabledModels = ["openai/gpt-5.4", "anthropic/claude-haiku-4-5"] satisfies ValidModel[];
-
-  it("replaces a disabled session model by default", () => {
-    expect(
-      resolveInlinePromptOptions({ reasoningEffort: "high" }, sessionDefaults, enabledModels)
-    ).toEqual({
-      ok: true,
-      turnPlan: {
-        sessionDefaults,
-        promptOverrides: { model: "openai/gpt-5.4", reasoningEffort: "high" },
-        effective: { model: "openai/gpt-5.4", reasoningEffort: "high" },
-      },
-    });
-  });
-
-  it("keeps a disabled session model when asked to", () => {
-    expect(
-      resolveInlinePromptOptions({ reasoningEffort: "max" }, sessionDefaults, enabledModels, "keep")
-    ).toEqual({
-      ok: true,
-      turnPlan: {
-        sessionDefaults,
-        promptOverrides: { reasoningEffort: "max" },
-        effective: { model: "anthropic/claude-sonnet-4-6", reasoningEffort: "max" },
-      },
-    });
-  });
-
-  it("still rejects a disabled !model when keeping the session model", () => {
-    expect(
-      resolveInlinePromptOptions(
-        { model: "openai/gpt-5.5" },
-        sessionDefaults,
-        enabledModels,
-        "keep"
-      )
-    ).toEqual({ ok: false, error: 'Model "openai/gpt-5.5" is not enabled.' });
   });
 });

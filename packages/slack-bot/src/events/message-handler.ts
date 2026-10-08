@@ -221,8 +221,7 @@ async function handleIncomingMessage(params: IncomingMessageParams): Promise<voi
           model: existingSession.model,
           reasoningEffort: existingSession.reasoningEffort,
         },
-        enabledModels,
-        "keep"
+        enabledModels
       );
       if (!resolvedTurn.ok) {
         await postMessage(env.SLACK_BOT_TOKEN, channel, resolvedTurn.error, {

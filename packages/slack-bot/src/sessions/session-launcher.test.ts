@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { getDefaultReasoningEffort } from "@open-inspect/shared/models";
 import { postMessage } from "@open-inspect/shared/slack";
 import type * as SlackModule from "@open-inspect/shared/slack";
 import type { Env } from "../types";
@@ -225,6 +226,47 @@ describe("startSessionAndSendPrompt harness", () => {
     expect(createSession).toHaveBeenCalledWith(
       env,
       expect.objectContaining({ harness: "opencode", model: openAIModel })
+    );
+  });
+
+  it("falls back from a disabled planned model before applying its opening reasoning override", async () => {
+    const env = makeEnv();
+
+    await startSessionAndSendPrompt(env, {
+      ...options,
+      launchSettings: { ...settings("opencode", anthropicModel), enabledModels: [anthropicModel] },
+      launchPlan: {
+        sessionDefaults: { model: "openai/gpt-5.6-sol", reasoningEffort: "xhigh" },
+        promptOverrides: { reasoningEffort: "max" },
+      },
+    });
+
+    // "xhigh" is not a Claude Haiku effort, so the session takes Haiku's default.
+    expect(createSession).toHaveBeenCalledWith(
+      env,
+      expect.objectContaining({
+        model: anthropicModel,
+        reasoningEffort: getDefaultReasoningEffort(anthropicModel),
+      })
+    );
+    expect(deliverPrompt).toHaveBeenCalledWith(
+      env,
+      expect.objectContaining({ reasoningEffort: "max" })
+    );
+  });
+
+  it("carries the planned reasoning effort to a replacement model that supports it", async () => {
+    const env = makeEnv();
+
+    await startSessionAndSendPrompt(env, {
+      ...options,
+      launchSettings: { ...settings("opencode", anthropicModel), enabledModels: [anthropicModel] },
+      launchPlan: { sessionDefaults: { model: "openai/gpt-5.6-sol", reasoningEffort: "high" } },
+    });
+
+    expect(createSession).toHaveBeenCalledWith(
+      env,
+      expect.objectContaining({ model: anthropicModel, reasoningEffort: "high" })
     );
   });
 

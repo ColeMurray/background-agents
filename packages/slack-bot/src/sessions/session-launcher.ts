@@ -1,6 +1,10 @@
 import { escapeMrkdwnText, postMessage } from "@open-inspect/shared/slack";
 import type { CallbackContext } from "@open-inspect/shared/types/session-api";
-import { normalizeValidModels, type ValidModel } from "@open-inspect/shared/models";
+import {
+  normalizeValidModels,
+  resolveEnabledModel,
+  type ValidModel,
+} from "@open-inspect/shared/models";
 import {
   DEFAULT_HARNESS,
   harnessSupportsModel,
@@ -172,18 +176,13 @@ export async function startSessionAndSendPrompt(
   // Whatever the caller asked for is only intent: a plan can be minutes or
   // hours old by the time a deferred target selection reaches this point, so
   // the enabled-model set is applied here, against the list just loaded.
-  const requestedDefaults = resolveInlinePromptOptions(
-    EMPTY_INLINE_PROMPT_OPTIONS,
-    launchPlan?.sessionDefaults ?? userPrefs,
-    enabledModels
-  );
-  if (!requestedDefaults.ok) {
-    await postMessage(env.SLACK_BOT_TOKEN, channel, requestedDefaults.error, {
-      thread_ts: threadTs,
-    });
-    return null;
-  }
-  const sessionDefaults = requestedDefaults.turnPlan.effective;
+  // Normalizing again carries the requested reasoning effort over to a
+  // replacement model that supports it, else uses the replacement's default.
+  const requestedDefaults = normalizeModelSelection(launchPlan?.sessionDefaults ?? userPrefs);
+  const sessionDefaults = normalizeModelSelection({
+    model: resolveEnabledModel({ model: requestedDefaults.model, enabledModels }),
+    reasoningEffort: requestedDefaults.reasoningEffort,
+  });
   const { model, reasoningEffort } = sessionDefaults;
   const differsFromUserDefaults = !sameModelSelection(
     sessionDefaults,

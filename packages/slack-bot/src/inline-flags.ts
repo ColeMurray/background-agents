@@ -5,7 +5,6 @@ import {
   isValidModel,
   isValidReasoningEffort,
   normalizeModelId,
-  resolveEnabledModel,
   type ReasoningEffort,
   type ValidModel,
 } from "@open-inspect/shared/models";
@@ -105,20 +104,14 @@ export function sameModelSelection(a: ModelSelection, b: ModelSelection): boolea
 }
 
 /**
- * What happens to a session model that is no longer enabled when no `!model`
- * is given. A launch replaces it with an enabled model, and its harness is
- * resolved against the replacement. A follow-up keeps it: the thread's
- * session was created on a harness that runs it, and a follow-up without
- * flags keeps running it too.
+ * Resolve one-turn overrides against the session defaults and enabled model
+ * list. Only an explicit `!model` must be enabled; the session defaults are
+ * kept as given, so a launch reconciles them with the enabled models first.
  */
-export type DisabledSessionModelPolicy = "replace" | "keep";
-
-/** Resolve one-turn overrides against the session defaults and enabled model list. */
 export function resolveInlinePromptOptions(
   options: InlinePromptOptions,
   defaults: { model: string; reasoningEffort?: string },
-  enabledModels: readonly ValidModel[],
-  disabledSessionModel: DisabledSessionModelPolicy = "replace"
+  enabledModels: readonly ValidModel[]
 ): ResolveInlinePromptOptionsResult {
   const { model: sessionModel, reasoningEffort: sessionReasoningEffort } =
     normalizeModelSelection(defaults);
@@ -131,9 +124,6 @@ export function resolveInlinePromptOptions(
     if (!enabledModels.includes(modelOverride)) {
       return { ok: false, error: `Model "${modelOverride}" is not enabled.` };
     }
-  } else if (disabledSessionModel === "replace") {
-    const enabledSessionModel = resolveEnabledModel({ model: sessionModel, enabledModels });
-    if (enabledSessionModel !== sessionModel) modelOverride = enabledSessionModel;
   }
 
   const effectiveModel = modelOverride ?? sessionModel;
