@@ -292,11 +292,12 @@ describe("handleTargetSelection", () => {
     });
     const launchSettings = {
       enabledModels: ["openai/gpt-5.6-sol" as const],
-      slackConfig: {},
+      slackConfig: { harness: "opencode" as const },
       userPreferences: {
         model: "anthropic/claude-sonnet-4-6",
         reasoningEffort: "max",
         branch: undefined,
+        harness: "opencode" as const,
       },
     };
     vi.mocked(loadAuthoritativeSlackLaunchSettings).mockResolvedValue(launchSettings);

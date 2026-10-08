@@ -24,11 +24,20 @@ import {
   type SlackRoutingRule,
 } from "@open-inspect/shared/types/integrations";
 import { MODEL_OPTIONS } from "@open-inspect/shared/models";
+import {
+  DEFAULT_HARNESS,
+  getHarnessCapabilities,
+  getHarnessLabel,
+  getValidHarnessOrDefault,
+  type HarnessId,
+} from "@open-inspect/shared/harnesses";
 import { browserApiFetch } from "@/lib/browser-api-fetch";
 import { useEnabledModels } from "@/hooks/use-enabled-models";
 import { ENVIRONMENTS_KEY } from "@/hooks/use-environments";
+import { filterModelOptionsForHarness, shouldClearModelForHarness } from "@/lib/session-harness";
 import { environmentOptionValue, parseEnvironmentOptionValue } from "@/lib/session-target";
 import { IntegrationSettingsSkeleton } from "./integration-settings-skeleton";
+import { HarnessSelect } from "./harness-select";
 import { SettingsCardSection } from "../settings-card-section";
 import { Button } from "@/components/ui/button";
 import { APP_NAME } from "@/lib/site-config";
@@ -58,6 +67,8 @@ import { useCurrentUserAuthorization } from "@/hooks/use-current-user-authorizat
 
 const GLOBAL_SETTINGS_KEY = "/api/integration-settings/slack";
 const REPO_SETTINGS_KEY = "/api/integration-settings/slack/repos";
+const DEFAULT_HARNESS_LABEL = getHarnessLabel(DEFAULT_HARNESS);
+const CLAUDE_HARNESS_LABEL = getHarnessLabel("claude");
 
 const MENTIONS_POLICY_OPTIONS: {
   value: SlackMentionsPolicy;
@@ -199,7 +210,13 @@ function GlobalSettingsSection({
   const [agentNotificationsEnabled, setAgentNotificationsEnabled] = useState(
     settings?.defaults?.agentNotificationsEnabled ?? false
   );
+  const [harness, setHarness] = useState<HarnessId>(
+    getValidHarnessOrDefault(settings?.defaults?.harness)
+  );
   const [model, setModel] = useState(settings?.defaults?.model ?? "");
+  // The system default model is not visible here, so a harness limited to
+  // some models needs an explicit default model it can run.
+  const harnessNeedsModel = getHarnessCapabilities(harness).modelFamilies !== "any";
   const [mentionsPolicy, setMentionsPolicy] = useState<SlackMentionsPolicy>(
     settings?.defaults?.mentionsPolicy ?? DEFAULT_MENTIONS_POLICY
   );
@@ -216,6 +233,7 @@ function GlobalSettingsSection({
   useEffect(() => {
     if (settings === undefined || dirty || saving) return;
     setAgentNotificationsEnabled(settings?.defaults?.agentNotificationsEnabled ?? false);
+    setHarness(getValidHarnessOrDefault(settings?.defaults?.harness));
     setModel(settings?.defaults?.model ?? "");
     setMentionsPolicy(settings?.defaults?.mentionsPolicy ?? DEFAULT_MENTIONS_POLICY);
     setSessionInstructions(settings?.defaults?.sessionInstructions ?? "");
@@ -251,6 +269,7 @@ function GlobalSettingsSection({
         // handleSave for why).
         mutate(GLOBAL_SETTINGS_KEY, { settings: resetBody });
         setAgentNotificationsEnabled(false);
+        setHarness(DEFAULT_HARNESS);
         setModel("");
         setMentionsPolicy(DEFAULT_MENTIONS_POLICY);
         setSessionInstructions("");
@@ -273,6 +292,7 @@ function GlobalSettingsSection({
     const body: SlackGlobalConfig = {
       defaults: mergedGlobalDefaults(settings, {
         agentNotificationsEnabled,
+        harness: harness === DEFAULT_HARNESS ? undefined : harness,
         model: model || undefined,
         mentionsPolicy,
         sessionInstructions: sessionInstructions || undefined,
@@ -363,6 +383,31 @@ function GlobalSettingsSection({
       </div>
 
       <div className="mb-4">
+        <label htmlFor="slack-harness" className="block text-sm font-medium text-foreground mb-2">
+          Agent harness
+        </label>
+        <p id="slack-harness-help" className="text-xs text-muted-foreground mb-2">
+          Default harness for new Slack sessions; users can choose their own in Slack App Home, and
+          existing threads keep theirs. Slack refuses a request whose model its harness cannot run.
+          Slack sessions run unattended, so {CLAUDE_HARNESS_LABEL} uses the default Claude account
+          only when its Automated authentication in Provider Accounts allows it, and the Anthropic
+          API key otherwise.
+        </p>
+        <HarnessSelect
+          id="slack-harness"
+          describedBy="slack-harness-help"
+          disabled={!canManageGlobal}
+          className="w-full sm:w-96"
+          value={harness}
+          onChange={(nextHarness = DEFAULT_HARNESS) => {
+            setHarness(nextHarness);
+            if (shouldClearModelForHarness(nextHarness, model)) setModel("");
+            setDirty(true);
+          }}
+        />
+      </div>
+
+      <div className="mb-4">
         <p className="text-sm font-medium text-foreground mb-2">Default model</p>
         <p className="text-xs text-muted-foreground mb-2">
           Used for Slack-created sessions until a user chooses their own model in Slack App Home.
@@ -375,11 +420,13 @@ function GlobalSettingsSection({
           }}
           disabled={modelsLoading}
         >
-          <SelectTrigger className="w-full sm:w-96">
-            <SelectValue placeholder="Use system default" />
+          <SelectTrigger className="w-full sm:w-96" aria-label="Default model">
+            <SelectValue
+              placeholder={harnessNeedsModel ? "Choose a model" : "Use system default"}
+            />
           </SelectTrigger>
           <SelectContent>
-            {enabledModelOptions.map((group) =>
+            {filterModelOptionsForHarness(harness, enabledModelOptions).map((group) =>
               group.models.map((option) => (
                 <SelectItem key={option.id} value={option.id}>
                   {option.name}
@@ -388,7 +435,7 @@ function GlobalSettingsSection({
             )}
           </SelectContent>
         </Select>
-        {model && (
+        {model && !harnessNeedsModel && (
           <Button
             type="button"
             variant="ghost"
@@ -400,6 +447,12 @@ function GlobalSettingsSection({
           >
             Use system default
           </Button>
+        )}
+        {harnessNeedsModel && !model && (
+          <p className="text-xs text-destructive mt-2">
+            Choose a default model {getHarnessLabel(harness)} can run. The system default model may
+            be one it cannot run, and Slack refuses those requests.
+          </p>
         )}
         {!selectedModelEnabled && selectedModelLabel && (
           <p className="text-xs text-destructive mt-2">
@@ -460,7 +513,7 @@ function GlobalSettingsSection({
       </div>
 
       <div className="flex items-center gap-2">
-        <Button onClick={handleSave} disabled={saving || !dirty}>
+        <Button onClick={handleSave} disabled={saving || !dirty || (harnessNeedsModel && !model)}>
           {saving ? "Saving..." : "Save"}
         </Button>
 
@@ -476,10 +529,11 @@ function GlobalSettingsSection({
           <AlertDialogHeader>
             <AlertDialogTitle>Reset to defaults</AlertDialogTitle>
             <AlertDialogDescription>
-              Reset Slack defaults? The master switch will turn off, the default model will use the
-              system default, mentions policy will return to <strong>allow</strong>, and session
-              instructions will be cleared. Unbound channels will create workspace-level sessions.
-              Per-repository overrides and routing rules are not affected.
+              Reset Slack defaults? New sessions will run on {DEFAULT_HARNESS_LABEL}, the master
+              switch will turn off, the default model will use the system default, mentions policy
+              will return to <strong>allow</strong>, and session instructions will be cleared.
+              Unbound channels will create workspace-level sessions. Per-repository overrides and
+              routing rules are not affected.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>

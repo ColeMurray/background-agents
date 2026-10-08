@@ -28,6 +28,7 @@ export function HarnessSelect({
   density,
   className,
   describedBy,
+  disabled,
 }: {
   id?: string;
   value: HarnessId | undefined;
@@ -36,9 +37,12 @@ export function HarnessSelect({
   density?: "compact";
   className?: string;
   describedBy?: string;
+  /** Passed to the root so an open menu closes and its options stop responding. */
+  disabled?: boolean;
 }) {
   return (
     <Select
+      disabled={disabled}
       value={value ?? INHERIT_VALUE}
       onValueChange={(next) => onChange(isValidHarness(next) ? next : undefined)}
     >

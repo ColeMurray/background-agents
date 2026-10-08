@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { ValidModel } from "@open-inspect/shared/models";
-import { resolveInlinePromptOptions } from "./inline-flags";
+import { resolveInlinePromptOptions, sessionLaunchPlanSchema } from "./inline-flags";
 
 describe("resolveInlinePromptOptions", () => {
   const defaults = { model: "anthropic/claude-sonnet-4-6", reasoningEffort: "high" };
@@ -41,28 +41,19 @@ describe("resolveInlinePromptOptions", () => {
     });
   });
 
-  it("falls back from a disabled session model before applying a reasoning override", () => {
+  it("keeps a disabled session model when applying a reasoning override", () => {
     expect(
       resolveInlinePromptOptions(
-        { reasoningEffort: "max" },
+        { reasoningEffort: "high" },
         { model: "openai/gpt-5.6-sol", reasoningEffort: "xhigh" },
         ["anthropic/claude-sonnet-4-6"]
       )
     ).toEqual({
       ok: true,
       turnPlan: {
-        sessionDefaults: {
-          model: "openai/gpt-5.6-sol",
-          reasoningEffort: "xhigh",
-        },
-        promptOverrides: {
-          model: "anthropic/claude-sonnet-4-6",
-          reasoningEffort: "max",
-        },
-        effective: {
-          model: "anthropic/claude-sonnet-4-6",
-          reasoningEffort: "max",
-        },
+        sessionDefaults: { model: "openai/gpt-5.6-sol", reasoningEffort: "xhigh" },
+        promptOverrides: { reasoningEffort: "high" },
+        effective: { model: "openai/gpt-5.6-sol", reasoningEffort: "high" },
       },
     });
   });
@@ -105,6 +96,19 @@ describe("resolveInlinePromptOptions", () => {
       ok: false,
       error:
         'Reasoning effort "&lt;@U123&gt;" is not valid for "anthropic/claude-sonnet-4-6". Supported values: low, medium, high, max.',
+    });
+  });
+});
+
+describe("sessionLaunchPlanSchema", () => {
+  it("drops an opening-prompt override saved before overrides were removed", () => {
+    expect(
+      sessionLaunchPlanSchema.parse({
+        sessionDefaults: { model: "anthropic/claude-sonnet-4-6", reasoningEffort: "high" },
+        promptOverrides: { model: "openai/gpt-5.4" },
+      })
+    ).toEqual({
+      sessionDefaults: { model: "anthropic/claude-sonnet-4-6", reasoningEffort: "high" },
     });
   });
 });

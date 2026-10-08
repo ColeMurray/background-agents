@@ -5,7 +5,6 @@ import {
   isValidModel,
   isValidReasoningEffort,
   normalizeModelId,
-  resolveEnabledModel,
   type ReasoningEffort,
   type ValidModel,
 } from "@open-inspect/shared/models";
@@ -56,20 +55,15 @@ export const resolvedTurnPlanSchema = z
 export type ResolvedTurnPlan = z.infer<typeof resolvedTurnPlanSchema>;
 
 /**
- * What a session launch does with model settings, which is not the same
- * question a single turn answers: `sessionDefaults` is persisted and inherited
- * by every later follow-up, while `promptOverrides` applies to the opening
- * prompt alone. Callers express intent here; the launcher is the authority
- * that checks it against the models enabled at launch time.
+ * The model settings a session launch asked for. `sessionDefaults` is
+ * persisted and inherited by every later follow-up; the opening prompt runs
+ * on it too. Callers express intent here; the launcher is the authority that
+ * checks it against the models enabled at launch time. Records saved before
+ * opening-prompt overrides were removed may still carry `promptOverrides`;
+ * parsing drops it.
  */
 export const sessionLaunchPlanSchema = z.object({
   sessionDefaults: modelSelectionSchema,
-  promptOverrides: z
-    .object({
-      model: validModelSchema.optional(),
-      reasoningEffort: reasoningEffortSchema.optional(),
-    })
-    .optional(),
 });
 
 export type SessionLaunchPlan = z.infer<typeof sessionLaunchPlanSchema>;
@@ -104,7 +98,11 @@ export function sameModelSelection(a: ModelSelection, b: ModelSelection): boolea
   return a.model === b.model && a.reasoningEffort === b.reasoningEffort;
 }
 
-/** Resolve one-turn overrides against the session defaults and enabled model list. */
+/**
+ * Resolve one-turn overrides against the session defaults and enabled model
+ * list. Only an explicit `!model` must be enabled; the session defaults are
+ * kept as given, so a launch reconciles them with the enabled models first.
+ */
 export function resolveInlinePromptOptions(
   options: InlinePromptOptions,
   defaults: { model: string; reasoningEffort?: string },
@@ -121,9 +119,6 @@ export function resolveInlinePromptOptions(
     if (!enabledModels.includes(modelOverride)) {
       return { ok: false, error: `Model "${modelOverride}" is not enabled.` };
     }
-  } else {
-    const enabledSessionModel = resolveEnabledModel({ model: sessionModel, enabledModels });
-    if (enabledSessionModel !== sessionModel) modelOverride = enabledSessionModel;
   }
 
   const effectiveModel = modelOverride ?? sessionModel;

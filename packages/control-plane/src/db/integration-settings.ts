@@ -24,7 +24,12 @@ import {
   type SlackMentionsPolicy,
   type SlackRoutingRule,
 } from "@open-inspect/shared/types/integrations";
-import { checkHarnessCompatibility, type HarnessId } from "@open-inspect/shared/harnesses";
+import {
+  checkHarnessCompatibility,
+  getHarnessCapabilities,
+  getHarnessLabel,
+  type HarnessId,
+} from "@open-inspect/shared/harnesses";
 import { isValidModel, isValidReasoningEffort } from "@open-inspect/shared/models";
 import { normalizeSandboxSettings } from "../sandbox/settings";
 import type { SqlDatabase } from "./sql-database";
@@ -604,6 +609,7 @@ export class IntegrationSettingsStore {
       level === "global"
         ? new Set([
             "agentNotificationsEnabled",
+            "harness",
             "model",
             "mentionsPolicy",
             "unboundChannels",
@@ -626,6 +632,18 @@ export class IntegrationSettingsStore {
     }
 
     this.validateAgentSelection(settings);
+    // Slack refuses a model the harness cannot run. The bot's deployment
+    // default model is not visible here or in the settings form, so a harness
+    // limited to some models needs an explicit default model it can run.
+    if (
+      settings.harness !== undefined &&
+      settings.model === undefined &&
+      getHarnessCapabilities(settings.harness).modelFamilies !== "any"
+    ) {
+      throw new IntegrationSettingsValidationError(
+        `Choose a default model ${getHarnessLabel(settings.harness)} can run.`
+      );
+    }
 
     if (
       settings.mentionsPolicy !== undefined &&

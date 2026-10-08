@@ -1337,6 +1337,43 @@ describe("IntegrationSettingsStore", () => {
       ).rejects.toThrow(IntegrationSettingsValidationError);
     });
 
+    it("round-trips a global slack harness with a model it can run", async () => {
+      await store.setGlobal("slack", {
+        defaults: { harness: "claude", model: "anthropic/claude-haiku-4-5" },
+      });
+
+      const result = await store.getGlobal("slack");
+      expect(result?.defaults).toEqual({ harness: "claude", model: "anthropic/claude-haiku-4-5" });
+    });
+
+    it("rejects a global slack harness saved with a model it cannot run", async () => {
+      await expect(
+        store.setGlobal("slack", {
+          defaults: { harness: "claude", model: "openai/gpt-5.4" },
+        })
+      ).rejects.toThrow('Model "openai/gpt-5.4" cannot run on the Claude Agent harness.');
+    });
+
+    it("requires a default model for a global slack harness limited to some models", async () => {
+      await expect(store.setGlobal("slack", { defaults: { harness: "claude" } })).rejects.toThrow(
+        "Choose a default model Claude Agent can run."
+      );
+    });
+
+    it("allows the default slack harness without a default model", async () => {
+      await store.setGlobal("slack", { defaults: { harness: "opencode" } });
+
+      expect((await store.getGlobal("slack"))?.defaults).toEqual({ harness: "opencode" });
+    });
+
+    it("rejects harness at per-repo level (global-only field)", async () => {
+      await expect(
+        store.setRepoSettings("slack", "acme/widgets", {
+          harness: "claude",
+        } as unknown as { agentNotificationsEnabled?: boolean })
+      ).rejects.toThrow(IntegrationSettingsValidationError);
+    });
+
     it("accepts every valid mentionsPolicy value at global level", async () => {
       for (const policy of ["allow", "escape", "strip"] as const) {
         await store.setGlobal("slack", { defaults: { mentionsPolicy: policy } });

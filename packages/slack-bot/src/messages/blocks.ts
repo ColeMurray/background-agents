@@ -1,4 +1,6 @@
+import { getHarnessLabel, type HarnessId } from "@open-inspect/shared/harnesses";
 import { getModelDisplayName } from "@open-inspect/shared/models";
+import { escapeMrkdwnText } from "@open-inspect/shared/slack";
 import { setAssistantThreadStatusBestEffort } from "../activity-status";
 import type { ModelSelection } from "../inline-flags";
 import type { BackgroundTaskScheduler, Env } from "../types";
@@ -34,6 +36,20 @@ export function formatSessionDefaultsNotice(launch: {
   const { reasoningEffort } = launch.sessionDefaults;
   if (reasoningEffort) parts.push(`${reasoningEffort} reasoning`);
   return `Session defaults: ${parts.join(" · ")}`;
+}
+
+/** Reply to a request whose model the user's harness cannot run; no session was created. */
+export function formatHarnessLaunchRefusal(
+  compatibilityMessage: string,
+  harness: HarnessId
+): string {
+  const label = getHarnessLabel(harness);
+  return `${escapeMrkdwnText(compatibilityMessage)} Start your request with \`!model\` and a model ${label} can run, or change your model or agent harness in the Slack app's Home tab.`;
+}
+
+/** Reply to a follow-up whose `!model` the thread's harness cannot run. */
+export function formatHarnessModelRefusal(controlPlaneMessage: string): string {
+  return `${escapeMrkdwnText(controlPlaneMessage)} A thread keeps the harness its session started on. Reply without \`!model\`, or start a new thread to use that model.`;
 }
 
 export interface WorkingMessage {
