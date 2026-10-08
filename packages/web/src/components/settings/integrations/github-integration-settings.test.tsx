@@ -681,11 +681,12 @@ describe("GitHubIntegrationSettings", () => {
   }, 20000);
 
   it.each([
-    { globalModel: "anthropic/claude-sonnet-4-6", repoModel: undefined },
-    { globalModel: undefined, repoModel: undefined },
-    { globalModel: "openai/gpt-5.4", repoModel: undefined },
-    { globalModel: "anthropic/claude-sonnet-4-6", repoModel: "openai/gpt-5.4" },
-  ])("preserves sparse inheritance without merged save validation: %j", async (selection) => {
+    { globalModel: "anthropic/claude-sonnet-4-6", repoModel: undefined, warns: false },
+    { globalModel: undefined, repoModel: undefined, warns: false },
+    { globalModel: "openai/gpt-5", repoModel: undefined, warns: false },
+    { globalModel: "openai/gpt-5.4", repoModel: undefined, warns: true },
+    { globalModel: "anthropic/claude-sonnet-4-6", repoModel: "openai/gpt-5.4", warns: true },
+  ])("warns without blocking sparse saves: %j", async (selection) => {
     const user = userEvent.setup();
     setupSWR({
       global: { defaults: { harness: "claude", model: selection.globalModel } },
@@ -697,6 +698,12 @@ describe("GitHubIntegrationSettings", () => {
     const row = repoOverrideRow("acme/web");
     expect(within(row).queryByText(/requires a model at the same level/)).not.toBeInTheDocument();
     expect(within(row).queryByText(/fall back|deployment default/)).not.toBeInTheDocument();
+    const warning = within(row).queryByText(/Sessions using this default model will be refused/);
+    if (selection.warns) {
+      expect(warning).toHaveTextContent("cannot run on the Claude Agent harness");
+    } else {
+      expect(warning).not.toBeInTheDocument();
+    }
     await selectAutoReviewMode(row, /override for this repo/i);
     expect(within(row).getByRole("button", { name: /^save$/i })).toBeEnabled();
     await user.click(within(row).getByRole("button", { name: /^save$/i }));
@@ -709,6 +716,31 @@ describe("GitHubIntegrationSettings", () => {
         }),
       })
     );
+  });
+
+  it("updates the non-blocking warning when the global harness changes", async () => {
+    setupSWR({
+      global: { defaults: { model: "anthropic/claude-sonnet-4-6" } },
+      repos: [{ repo: "acme/web", settings: { model: "openai/gpt-5.4" } }],
+    });
+    const { rerender } = render(<GitHubIntegrationSettings />);
+    expect(screen.queryByText(/Sessions using this default model will be refused/)).toBeNull();
+
+    setupSWR({
+      global: { defaults: { harness: "claude", model: "anthropic/claude-sonnet-4-6" } },
+      repos: [{ repo: "acme/web", settings: { model: "openai/gpt-5.4" } }],
+    });
+    rerender(<GitHubIntegrationSettings />);
+    const row = repoOverrideRow("acme/web");
+    expect(
+      within(row).getByText(/Sessions using this default model will be refused/)
+    ).toBeInTheDocument();
+
+    const user = userEvent.setup();
+    await user.click(within(row).getByRole("combobox", { name: "Agent harness" }));
+    await user.click(await screen.findByRole("option", { name: "OpenCode" }));
+    expect(within(row).queryByText(/Sessions using this default model will be refused/)).toBeNull();
+    expect(within(row).getByRole("button", { name: /^save$/i })).toBeEnabled();
   });
 
   it("clears incompatible model and effort when inheriting the global Claude harness", async () => {

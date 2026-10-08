@@ -13,6 +13,7 @@ import {
 } from "@open-inspect/shared";
 import {
   MODEL_REASONING_CONFIG,
+  getValidModelOrDefault,
   isValidModel,
   isValidReasoningEffort,
   type ModelCategory,
@@ -20,6 +21,7 @@ import {
 } from "@open-inspect/shared/models";
 import {
   DEFAULT_HARNESS,
+  checkHarnessCompatibility,
   getHarnessCapabilities,
   getHarnessLabel,
   type HarnessId,
@@ -58,6 +60,7 @@ export function RepoOverridesSection({
   defaultAutoReviewOnOpen,
   defaultAutofix,
   defaultHarness,
+  defaultModel,
 }: {
   overrides: RepoSettingsEntry[];
   availableRepos: EnrichedRepository[];
@@ -66,6 +69,7 @@ export function RepoOverridesSection({
   defaultAutofix: ResolvedGitHubAutofixSettings;
   /** The inherited global harness filters the model picker. */
   defaultHarness: HarnessId | null;
+  defaultModel: string | undefined;
 }) {
   const [addingRepo, setAddingRepo] = useState("");
 
@@ -114,6 +118,7 @@ export function RepoOverridesSection({
               defaultAutoReviewOnOpen={defaultAutoReviewOnOpen}
               defaultAutofix={defaultAutofix}
               defaultHarness={defaultHarness}
+              defaultModel={defaultModel}
             />
           ))}
         </div>
@@ -150,12 +155,14 @@ function RepoOverrideRow({
   defaultAutoReviewOnOpen,
   defaultAutofix,
   defaultHarness,
+  defaultModel,
 }: {
   entry: RepoSettingsEntry;
   enabledModelOptions: ModelCategory[];
   defaultAutoReviewOnOpen: boolean;
   defaultAutofix: ResolvedGitHubAutofixSettings;
   defaultHarness: HarnessId | null;
+  defaultModel: string | undefined;
 }) {
   const autoReviewNoticeId = useId();
   const [model, setModel] = useState(entry.settings.model ?? "");
@@ -212,6 +219,10 @@ function RepoOverrideRow({
     (model !== "" &&
       (!isValidModel(model) ||
         (harness !== undefined && shouldClearModelForHarness(harness, model))));
+  const effectiveModel = model || defaultModel;
+  const mismatch = effectiveModel
+    ? checkHarnessCompatibility(effectiveHarness, getValidModelOrDefault(effectiveModel))
+    : null;
 
   const handleModelChange = (newModel: string) => {
     const value = newModel === INHERIT_MODEL_VALUE ? "" : newModel;
@@ -388,6 +399,12 @@ function RepoOverrideRow({
           Choose a default model {getHarnessLabel(effectiveHarness)} can run for this repository.
           {harnessNeedsModel &&
             " An explicit restricted harness requires a model at the same level."}
+        </p>
+      )}
+      {!invalidModelSelection && mismatch && (
+        <p className="text-xs text-warning">
+          {mismatch.message} Sessions using this default model will be refused. Choose a compatible
+          model or change the integration harness.
         </p>
       )}
 

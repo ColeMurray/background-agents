@@ -389,11 +389,12 @@ describe("LinearIntegrationSettings harness", () => {
   );
 
   it.each([
-    { globalModel: "anthropic/claude-sonnet-4-6", repoModel: undefined },
-    { globalModel: undefined, repoModel: undefined },
-    { globalModel: "openai/gpt-6-sol", repoModel: undefined },
-    { globalModel: "anthropic/claude-sonnet-4-6", repoModel: "openai/gpt-6-sol" },
-  ])("preserves sparse inheritance without merged save validation: %j", async (selection) => {
+    { globalModel: "anthropic/claude-sonnet-4-6", repoModel: undefined, warns: false },
+    { globalModel: undefined, repoModel: undefined, warns: false },
+    { globalModel: "openai/gpt-5", repoModel: undefined, warns: false },
+    { globalModel: "openai/gpt-6-sol", repoModel: undefined, warns: true },
+    { globalModel: "anthropic/claude-sonnet-4-6", repoModel: "openai/gpt-6-sol", warns: true },
+  ])("warns without blocking sparse saves: %j", async (selection) => {
     setupSWR({
       settings: { defaults: { harness: "claude", model: selection.globalModel } },
       overrides: [{ repo: "acme/web", settings: { model: selection.repoModel } }],
@@ -403,6 +404,12 @@ describe("LinearIntegrationSettings harness", () => {
     const row = screen.getByText("acme/web").parentElement!;
     expect(within(row).queryByText(/requires a model at the same level/)).not.toBeInTheDocument();
     expect(within(row).queryByText(/will fall back to OpenCode/)).not.toBeInTheDocument();
+    const warning = within(row).queryByText(/Sessions using this default model will be refused/);
+    if (selection.warns) {
+      expect(warning).toHaveTextContent("cannot run on the Claude Agent harness");
+    } else {
+      expect(warning).not.toBeInTheDocument();
+    }
     fireEvent.click(within(row).getByRole("checkbox", { name: "Tool updates" }));
     expect(within(row).getByRole("button", { name: "Save" })).toBeEnabled();
     fireEvent.click(within(row).getByRole("button", { name: "Save" }));
@@ -414,6 +421,31 @@ describe("LinearIntegrationSettings harness", () => {
       emitToolProgressActivities: false,
       ...(selection.repoModel ? { model: selection.repoModel } : {}),
     });
+  });
+
+  it("updates the non-blocking warning when the global harness changes", async () => {
+    setupSWR({
+      settings: { defaults: { model: "anthropic/claude-sonnet-4-6" } },
+      overrides: [{ repo: "acme/web", settings: { model: "openai/gpt-6-sol" } }],
+    });
+    const { rerender } = render(<LinearIntegrationSettings />);
+    expect(screen.queryByText(/Sessions using this default model will be refused/)).toBeNull();
+
+    setupSWR({
+      settings: { defaults: { harness: "claude", model: "anthropic/claude-sonnet-4-6" } },
+      overrides: [{ repo: "acme/web", settings: { model: "openai/gpt-6-sol" } }],
+    });
+    rerender(<LinearIntegrationSettings />);
+    const row = screen.getByText("acme/web").parentElement!;
+    expect(
+      within(row).getByText(/Sessions using this default model will be refused/)
+    ).toBeInTheDocument();
+
+    const user = userEvent.setup();
+    await user.click(within(row).getByRole("combobox", { name: "Agent harness" }));
+    await user.click(await screen.findByRole("option", { name: "OpenCode" }));
+    expect(within(row).queryByText(/Sessions using this default model will be refused/)).toBeNull();
+    expect(within(row).getByRole("button", { name: "Save" })).toBeEnabled();
   });
 
   it("requires a model for saved global Claude settings and describes launch refusal, not fallback", () => {
