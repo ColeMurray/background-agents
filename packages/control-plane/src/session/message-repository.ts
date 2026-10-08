@@ -10,7 +10,12 @@ import { z } from "zod";
 import type { CreateEventData, EventRepository } from "./event-repository";
 import type { SessionAttachmentRepository } from "./session-attachment-repository";
 import type { SqlResult, SqlStorage, TransactionSync } from "./sql-storage";
-import { messageRowSchema, SessionStorageIntegrityError, type MessageRow } from "./types";
+import {
+  messageRowSchema,
+  sessionRowSchema,
+  SessionStorageIntegrityError,
+  type MessageRow,
+} from "./types";
 import type { MessageListCursor } from "./message-cursor";
 
 type ExecutionCompleteEvent = Extract<SandboxEvent, { type: "execution_complete" }>;
@@ -27,10 +32,10 @@ const messageCallbackContextRowSchema = messageRowSchema.pick({
   callback_context: true,
   source: true,
 });
-const messageCancellationRowSchema = z.object({
-  status: z.unknown().optional(),
-  source: z.string(),
-  callback_context: z.string().nullable(),
+const messageCancellationRowSchema = messageRowSchema.pick({
+  status: true,
+  source: true,
+  callback_context: true,
 });
 const messageCompletionStateRowSchema = z.object({
   status: z.unknown().optional(),
@@ -38,7 +43,7 @@ const messageCompletionStateRowSchema = z.object({
   started_at: z.number().nullable(),
 });
 const messageProcessingAuthorRowSchema = messageRowSchema.pick({ author_id: true });
-const sessionBudgetExhaustedRowSchema = z.object({ budget_exhausted: z.number() });
+const sessionBudgetExhaustedRowSchema = sessionRowSchema.pick({ budget_exhausted: true });
 
 export interface RecordedMessageCompletion {
   messageId: string;
@@ -328,11 +333,10 @@ export class MessageRepository {
       );
       const rawMessage = result.toArray()[0];
       const parsedMessage = messageCancellationRowSchema.safeParse(rawMessage);
-      const message = parsedMessage.success ? parsedMessage.data : null;
-      const status = parseMessageStatus(message?.status);
+      if (!parsedMessage.success) return false;
+      const message = parsedMessage.data;
       if (
-        !message ||
-        status !== "pending" ||
+        message.status !== "pending" ||
         message.source !== "web" ||
         message.callback_context !== null
       ) {
