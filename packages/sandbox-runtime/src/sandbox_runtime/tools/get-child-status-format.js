@@ -85,6 +85,22 @@ function formatArtifacts(artifacts = []) {
   return lines;
 }
 
+function formatStoredFiles(files = [], indent = "  ") {
+  if (!files.length) return [];
+  const lines = ["", `${indent}Stored outputs:`];
+  for (const file of files) {
+    const metadata = file.type === "file" && file.available ? file.metadata : null;
+    const filename = metadata?.filename ?? file.filename;
+    const caption = metadata?.caption ?? file.caption;
+    const unavailable = file.available === false ? " (unavailable)" : "";
+    lines.push(
+      `${indent}  - ${file.type} id=${file.id}${filename ? `: ${filename}` : ""}${unavailable}`
+    );
+    if (caption) lines.push(indentBlock(caption, `${indent}    `));
+  }
+  return lines;
+}
+
 export function formatFinalResponse(finalResponse, includeResponse, hasUnfinishedPrompt = false) {
   if (!finalResponse) {
     return includeResponse ? ["", "  Final response: not available yet"] : [];
@@ -111,6 +127,9 @@ export function formatFinalResponse(finalResponse, includeResponse, hasUnfinishe
     }
   }
 
+  lines.push(
+    ...formatStoredFiles(finalResponse.fileArtifacts ?? finalResponse.mediaArtifacts ?? [], "    ")
+  );
   return lines;
 }
 
@@ -171,6 +190,7 @@ export function formatChildDetail(detail, childId, options = {}) {
   }
 
   lines.push(...formatArtifacts(detail.artifacts));
+  lines.push(...formatStoredFiles(detail.fileArtifacts));
   const hasUnfinishedPrompt = detail.hasUnfinishedPrompt === true;
   lines.push(
     ...formatFinalResponse(

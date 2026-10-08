@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { artifactTypeSchema } from "./artifacts";
 import { harnessIdSchema } from "../harnesses";
 import { sessionDiffBaselineRepositorySchema } from "./session-diffs";
 import { resolvedSessionAttachmentsSchema } from "./session-attachments";
@@ -95,8 +96,7 @@ export const sandboxGenerationSchema = z.object({
   createdAt: z.number().int().positive(),
 });
 
-// Sandbox events from Modal or synthesized by the control plane.
-export const sandboxEventSchema = z.discriminatedUnion("type", [
+const nonArtifactSandboxEventSchemas = [
   sandboxEventBaseSchema.extend({
     type: z.literal("heartbeat"),
   }),
@@ -191,14 +191,6 @@ export const sandboxEventSchema = z.discriminatedUnion("type", [
   messageSandboxEventBaseSchema.extend({
     type: z.literal("context_compacted"),
   }),
-  sandboxEventBaseSchema.extend({
-    type: z.literal("artifact"),
-    artifactType: z.string(),
-    artifactId: z.string().optional(),
-    url: z.string(),
-    metadata: recordSchema.optional(),
-    messageId: z.string().optional(),
-  }),
   // Push events: repoOwner/repoName identify the repository in a multi-repo
   // session (absent means the session's sole repo). branchName is optional
   // because legacy runtimes emit a key-less push_error on the
@@ -286,6 +278,29 @@ export const sandboxEventSchema = z.discriminatedUnion("type", [
     attachments: resolvedSessionAttachmentsSchema.optional(),
     origin: githubAutofixOriginSchema.optional(),
   }),
+] as const;
+
+const sandboxArtifactEventSchema = sandboxEventBaseSchema.extend({
+  type: z.literal("artifact"),
+  artifactType: artifactTypeSchema,
+  artifactId: z.string().optional(),
+  url: z.string(),
+  metadata: recordSchema.optional(),
+  messageId: z.string().optional(),
+});
+
+/** Files are registered by the server after upload validation. */
+export const sandboxAdmissibleArtifactTypeSchema = artifactTypeSchema.exclude(["file"]);
+export const sandboxIngressEventSchema = z.discriminatedUnion("type", [
+  ...nonArtifactSandboxEventSchemas,
+  sandboxArtifactEventSchema.extend({ artifactType: sandboxAdmissibleArtifactTypeSchema }),
+]);
+export type SandboxIngressEvent = z.infer<typeof sandboxIngressEventSchema>;
+
+// Includes server-registered artifacts for broadcasts and snapshots.
+export const sandboxEventSchema = z.discriminatedUnion("type", [
+  ...nonArtifactSandboxEventSchemas,
+  sandboxArtifactEventSchema,
 ]);
 
 export type SandboxEvent = z.infer<typeof sandboxEventSchema>;

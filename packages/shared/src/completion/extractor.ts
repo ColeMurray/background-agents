@@ -11,9 +11,15 @@ import type {
   ToolCallSummary,
   ArtifactInfo,
   MediaArtifactInfo,
+  StoredFileArtifactInfo,
   ArtifactType,
 } from "../types/artifacts";
-import { listArtifactsResponseSchema } from "../types/artifacts";
+import {
+  artifactTypeSchema,
+  generatedFileArtifactMetadataSchema,
+  isStoredFileArtifactType,
+  listArtifactsResponseSchema,
+} from "../types/artifacts";
 import type { EventResponse } from "../types/sandbox-events";
 import { listEventsResponseSchema } from "../types/sandbox-events";
 import type { Logger } from "../logger";
@@ -149,6 +155,7 @@ export async function extractAgentResponse(
           toolCalls: [],
           artifacts: [],
           mediaArtifacts: [],
+          fileArtifacts: [],
           success: false,
         };
       }
@@ -167,6 +174,7 @@ export async function extractAgentResponse(
           toolCalls: [],
           artifacts: [],
           mediaArtifacts: [],
+          fileArtifacts: [],
           success: false,
         };
       }
@@ -211,7 +219,14 @@ export async function extractAgentResponse(
         : new ProtectedReadError("Control plane events read unavailable", undefined, {
             cause: error,
           });
-    return { textContent: "", toolCalls: [], artifacts: [], mediaArtifacts: [], success: false };
+    return {
+      textContent: "",
+      toolCalls: [],
+      artifacts: [],
+      mediaArtifacts: [],
+      fileArtifacts: [],
+      success: false,
+    };
   }
 }
 
@@ -246,14 +261,27 @@ export function buildAgentResponseFromEvents(
     .map((event) => toEventArtifactInfo(event.data))
     .filter((artifact: ArtifactInfo | null): artifact is ArtifactInfo => artifact !== null);
 
-  const mediaArtifacts: MediaArtifactInfo[] = [];
-  const mediaArtifactIds = new Set<string>();
+  const fileArtifacts: StoredFileArtifactInfo[] = [];
+  const fileArtifactIndexes = new Map<string, number>();
   for (const event of chronologicalEvents) {
     if (event.type !== "artifact") continue;
-    const mediaArtifact = toEventMediaArtifactInfo(event.data);
-    if (!mediaArtifact || mediaArtifactIds.has(mediaArtifact.id)) continue;
-    mediaArtifactIds.add(mediaArtifact.id);
-    mediaArtifacts.push(mediaArtifact);
+    const fileArtifact = toEventFileArtifactInfo(event.data, event.messageId);
+    if (!fileArtifact) continue;
+    const existingIndex = fileArtifactIndexes.get(fileArtifact.id);
+    if (existingIndex !== undefined) {
+      const existing = fileArtifacts[existingIndex];
+      if (
+        existing.type === "file" &&
+        !existing.available &&
+        fileArtifact.type === "file" &&
+        fileArtifact.available
+      ) {
+        fileArtifacts[existingIndex] = fileArtifact;
+      }
+      continue;
+    }
+    fileArtifactIndexes.set(fileArtifact.id, fileArtifacts.length);
+    fileArtifacts.push(fileArtifact);
   }
 
   const completionEvent = findLastEvent(chronologicalEvents, "execution_complete");
@@ -269,8 +297,14 @@ export function buildAgentResponseFromEvents(
   return {
     textContent,
     toolCalls,
-    artifacts: eventArtifacts.length > 0 ? eventArtifacts : artifacts,
-    mediaArtifacts,
+    artifacts:
+      eventArtifacts.length > 0
+        ? eventArtifacts
+        : artifacts.filter((artifact) => !isStoredFileArtifactType(artifact.type)),
+    fileArtifacts,
+    mediaArtifacts: fileArtifacts.filter(
+      (artifact): artifact is MediaArtifactInfo => artifact.type !== "file"
+    ),
     success,
     error: errorMessage,
   };
@@ -343,7 +377,7 @@ async function fetchSessionArtifacts(
     }
     const data = parsed.data;
     return data.artifacts
-      .filter((artifact) => artifact.type !== "screenshot" && artifact.type !== "video")
+      .filter((artifact) => !isStoredFileArtifactType(artifact.type))
       .filter((artifact) => isArtifactInEventRange(artifact.createdAt, eventRange))
       .map((artifact) => ({
         type: artifact.type,
@@ -453,7 +487,7 @@ export function getArtifactLabelFromArtifact(
  */
 export function toEventArtifactInfo(data: Record<string, unknown>): ArtifactInfo | null {
   const type = toArtifactType(data.artifactType);
-  if (!type || type === "screenshot" || type === "video") return null;
+  if (!type || isStoredFileArtifactType(type)) return null;
 
   return {
     type,
@@ -489,15 +523,31 @@ export function toEventMediaArtifactInfo(data: Record<string, unknown>): MediaAr
   };
 }
 
+/** Validated general files and legacy media share one chronological delivery collection. */
+export function toEventFileArtifactInfo(
+  data: Record<string, unknown>,
+  messageId: string | null
+): StoredFileArtifactInfo | null {
+  if (data.artifactType !== "file") return toEventMediaArtifactInfo(data);
+
+  const id = typeof data.artifactId === "string" ? data.artifactId.trim() : "";
+  if (!id) return null;
+  const parsed = generatedFileArtifactMetadataSchema.safeParse(data.metadata);
+  if (
+    !parsed.success ||
+    data.url !== parsed.data.objectKey ||
+    !parsed.data.objectKey.endsWith(`/files/${id}`) ||
+    parsed.data.messageId !== messageId
+  ) {
+    return { id, type: "file", available: false };
+  }
+  return { id, type: "file", available: true, metadata: parsed.data };
+}
+
 /**
  * Narrow an unknown value to a known ArtifactType or return null.
  */
 export function toArtifactType(value: unknown): ArtifactType | null {
-  return value === "pr" ||
-    value === "screenshot" ||
-    value === "video" ||
-    value === "preview" ||
-    value === "branch"
-    ? value
-    : null;
+  const parsed = artifactTypeSchema.safeParse(value);
+  return parsed.success ? parsed.data : null;
 }

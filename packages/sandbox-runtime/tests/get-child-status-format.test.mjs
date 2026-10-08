@@ -140,3 +140,66 @@ test("formatRecentEvents summarizes message-like payloads", () => {
 test("summarizeEvent falls back to common data fields", () => {
   assert.equal(summarizeEvent({ type: "progress", data: { state: "running" } }), "running");
 });
+
+const protectedFiles = [
+  { id: "shot-1", type: "screenshot", caption: "Dashboard" },
+  { id: "video-1", type: "video", caption: "Walkthrough" },
+  {
+    id: "csv-1",
+    type: "file",
+    available: true,
+    metadata: {
+      filename: "report.csv",
+      caption: "Revenue",
+      objectKey: "sessions/private/files/csv-1",
+    },
+  },
+  { id: "missing-1", type: "file", available: false },
+];
+
+for (const collection of ["fileArtifacts", "mediaArtifacts"]) {
+  test(`child formatter renders completion ${collection} without storage keys`, () => {
+    const output = formatChildDetail(
+      { finalResponse: { success: true, [collection]: protectedFiles } },
+      "c1",
+      { includeResponse: true }
+    );
+    for (const text of [
+      "shot-1",
+      "screenshot",
+      "Dashboard",
+      "video-1",
+      "Walkthrough",
+      "csv-1",
+      "report.csv",
+      "Revenue",
+      "missing-1",
+      "unavailable",
+    ]) {
+      assert.ok(output.includes(text), text);
+    }
+    assert.ok(!output.includes("sessions/private"));
+  });
+}
+
+test("canonical empty collection suppresses legacy completion references", () => {
+  const output = formatChildDetail(
+    { finalResponse: { fileArtifacts: [], mediaArtifacts: protectedFiles } },
+    "c1"
+  );
+  assert.ok(!output.includes("shot-1"));
+});
+
+test("ordinary child status renders safe output summaries without a final response", () => {
+  const output = formatChildDetail(
+    {
+      fileArtifacts: [
+        { id: "shot-1", type: "screenshot", caption: "Dashboard" },
+        { id: "csv-1", type: "file", filename: "report.csv", available: true },
+      ],
+    },
+    "c1"
+  );
+  for (const text of ["shot-1", "screenshot", "Dashboard", "csv-1", "report.csv"])
+    assert.ok(output.includes(text));
+});

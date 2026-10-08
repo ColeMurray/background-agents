@@ -92,6 +92,49 @@ function createHandler() {
 }
 
 describe("SandboxHandler", () => {
+  it.each(["file", "unknown", "", null, 42])(
+    "rejects raw %s artifact events before processing",
+    async (artifactType) => {
+      const { handler, processSandboxEvent } = createHandler();
+      const response = await handler.sandboxEvent(
+        new Request("http://internal/internal/sandbox/event", {
+          method: "POST",
+          body: JSON.stringify({
+            type: "artifact",
+            artifactType,
+            artifactId: "f1",
+            url: "sessions/s1/files/f1",
+            sandboxId: "sandbox-1",
+            timestamp: 123,
+          }),
+        })
+      );
+      expect(response.status).toBe(400);
+      expect(processSandboxEvent).not.toHaveBeenCalled();
+    }
+  );
+
+  it.each(["file", "pr", "unknown"])(
+    "rejects %s through legacy media registration",
+    async (artifactType) => {
+      const { handler, artifactRepository, repository, broadcast } = createHandler();
+      const response = await handler.createMediaArtifact(
+        new Request("http://internal/internal/create-media-artifact", {
+          method: "POST",
+          body: JSON.stringify({
+            artifactType,
+            artifactId: "f1",
+            objectKey: "sessions/s1/files/f1",
+          }),
+        })
+      );
+      expect(response.status).toBe(400);
+      expect(artifactRepository.createArtifact).not.toHaveBeenCalled();
+      expect(repository.createEvent).not.toHaveBeenCalled();
+      expect(broadcast).not.toHaveBeenCalled();
+    }
+  );
+
   it("processes sandbox event and returns ok response", async () => {
     const { handler, processSandboxEvent } = createHandler();
     const event = {

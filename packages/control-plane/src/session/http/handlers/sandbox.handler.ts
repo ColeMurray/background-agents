@@ -6,7 +6,7 @@ import {
 import type { SessionArtifact } from "@open-inspect/shared/types/artifacts";
 import {
   bootPhaseNameSchema,
-  sandboxEventSchema,
+  sandboxIngressEventSchema,
   type SandboxEvent,
 } from "@open-inspect/shared/types/sandbox-events";
 import {
@@ -30,7 +30,6 @@ import type { SessionCoreRepository } from "../../session-core-repository";
 import type { SandboxStateReader } from "../../sandbox-ports";
 import type { SessionSandboxEventProcessor } from "../../sandbox-events/processor";
 import type { SandboxRow, SessionRow } from "../../types";
-import { assertArtifactType } from "../../artifacts";
 import { parseTunnelUrls } from "../../tunnel-urls";
 import { z } from "zod";
 
@@ -85,12 +84,12 @@ export class SandboxHandler {
       return Response.json({ error: "Invalid request body" }, { status: 400 });
     }
 
-    const result = sandboxEventSchema.safeParse(raw);
+    const result = sandboxIngressEventSchema.safeParse(raw);
     if (!result.success) {
       return Response.json({ error: "Invalid sandbox event" }, { status: 400 });
     }
 
-    const event: SandboxEvent = result.data;
+    const event = result.data;
     await this.sandboxEventProcessor.processSandboxEvent(event);
     return Response.json({ status: "ok" });
   }
@@ -202,7 +201,7 @@ export class SandboxHandler {
       return Response.json({ error: "No active prompt" }, { status: 409 });
     }
 
-    const artifactType = assertArtifactType(body.artifactType);
+    const artifactType = body.artifactType;
     const now = this.now();
     const timestampSeconds = now / 1000;
     const artifact: SessionArtifact = {

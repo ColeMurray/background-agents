@@ -356,3 +356,68 @@ def test_build_tool_server_registers_the_gated_tools(tmp_path: Path) -> None:
     minimal = names(has_repository=False, slack_notify_enabled=False)
     assert "create-pull-request" not in minimal
     assert "slack-notify" not in minimal
+
+
+@pytest.mark.parametrize("collection", ["fileArtifacts", "mediaArtifacts"])
+def test_child_formatter_renders_protected_completion_references(collection):
+    files = [
+        {"id": "shot-1", "type": "screenshot", "caption": "Dashboard"},
+        {"id": "video-1", "type": "video", "caption": "Walkthrough"},
+        {
+            "id": "csv-1",
+            "type": "file",
+            "available": True,
+            "metadata": {
+                "filename": "report.csv",
+                "caption": "Revenue",
+                "objectKey": "sessions/private/files/csv-1",
+            },
+        },
+        {"id": "missing-1", "type": "file", "available": False},
+    ]
+    output = OpenInspectTools._format_child_detail(
+        {"finalResponse": {"success": True, collection: files}}, "c1", {"includeResponse": True}
+    )
+    for text in [
+        "shot-1",
+        "screenshot",
+        "Dashboard",
+        "video-1",
+        "Walkthrough",
+        "csv-1",
+        "report.csv",
+        "Revenue",
+        "missing-1",
+        "unavailable",
+    ]:
+        assert text in output
+    assert "sessions/private" not in output
+
+
+def test_child_formatter_prefers_empty_canonical_collection():
+    output = OpenInspectTools._format_child_detail(
+        {
+            "finalResponse": {
+                "fileArtifacts": [],
+                "mediaArtifacts": [{"id": "shot-1", "type": "screenshot"}],
+            }
+        },
+        "c1",
+        {"includeResponse": True},
+    )
+    assert "shot-1" not in output
+
+
+def test_child_formatter_renders_ordinary_output_summary():
+    output = OpenInspectTools._format_child_detail(
+        {
+            "fileArtifacts": [
+                {"id": "shot-1", "type": "screenshot", "caption": "Dashboard"},
+                {"id": "csv-1", "type": "file", "filename": "report.csv", "available": True},
+            ]
+        },
+        "c1",
+        {},
+    )
+    for text in ["shot-1", "screenshot", "Dashboard", "csv-1", "report.csv"]:
+        assert text in output
