@@ -4,7 +4,11 @@ import {
   harnessSupportsModel,
   type HarnessId,
 } from "@open-inspect/shared/harnesses";
-import { getDefaultReasoningEffort, getReasoningConfig } from "@open-inspect/shared/models";
+import {
+  getDefaultReasoningEffort,
+  getModelDisplayName,
+  getReasoningConfig,
+} from "@open-inspect/shared/models";
 import type { RepoConfig } from "@open-inspect/shared/types/repository-catalog";
 import { CLEAR_REPO_BRANCH_ACTION_ID, REPO_BRANCH_SELECTOR_ACTION_ID } from "../branch-preferences";
 import {
@@ -22,7 +26,8 @@ import { plainTextOption } from "../slack-options";
 
 export interface AppHomeViewState {
   appName: string;
-  availableModels: ModelOption[];
+  /** Null means the authoritative enabled-model list is unavailable. */
+  availableModels: ModelOption[] | null;
   /** The harness the user chose; undefined follows the workspace harness. */
   userHarness: HarnessId | undefined;
   workspaceHarness: HarnessId;
@@ -107,10 +112,21 @@ function buildModelBlocks(
   harness: HarnessId,
   currentModel: string,
   currentModelInfo: ModelOption | undefined,
-  modelOptions: ModelOption[],
+  modelOptions: ModelOption[] | null,
   modelDisabled: boolean
 ): AppHomeBlock[] {
   const harnessLabel = getHarnessLabel(harness);
+  if (!modelOptions) {
+    return [
+      {
+        type: "section",
+        text: {
+          type: "mrkdwn",
+          text: `*Model*\nModel preferences are temporarily unavailable. Your model \`${currentModel}\` has not been changed. New sessions cannot start until model preferences are available. Please try again.`,
+        },
+      },
+    ];
+  }
   if (modelOptions.length === 0) {
     return [
       {
@@ -390,11 +406,13 @@ export function buildAppHomeView({
   repoBranchPreferences,
 }: AppHomeViewState): AppHomeView {
   const harness = userHarness ?? workspaceHarness;
-  const modelOptions = availableModels.filter((model) =>
-    harnessSupportsModel(harness, model.value)
-  );
-  const modelDisabled = !availableModels.some((model) => model.value === currentModel);
-  const currentModelInfo = modelOptions.find((model) => model.value === currentModel);
+  const modelOptions =
+    availableModels?.filter((model) => harnessSupportsModel(harness, model.value)) ?? null;
+  const modelDisabled =
+    availableModels !== null && !availableModels.some((model) => model.value === currentModel);
+  const currentModelInfo = modelOptions
+    ? modelOptions.find((model) => model.value === currentModel)
+    : { label: getModelDisplayName(currentModel), value: currentModel };
   const effectiveEffort = currentEffort ?? getDefaultReasoningEffort(currentModel);
 
   return {

@@ -1881,7 +1881,9 @@ describe("POST /events", () => {
       expect(promptFetchBodies(env.CONTROL_PLANE.fetch)).toEqual([]);
       expect(await env.SLACK_KV.get("thread:C123:111.222")).toBeNull();
       expect(postedTexts(slackFetch)).toContain(
-        'Your App Home model "GPT 5.4" is no longer enabled. Choose another model in the Slack app\'s Home tab, or start your request with `!model` and an enabled model.'
+        prefix
+          ? 'Your requested model "GPT 5.4" is no longer enabled. Start a new request with `!model` and an enabled model.'
+          : 'Your App Home model "GPT 5.4" is no longer enabled. Choose another model in the Slack app\'s Home tab, or start your request with `!model` and an enabled model.'
       );
       slackFetch.mockRestore();
     });
@@ -1894,7 +1896,7 @@ describe("POST /events", () => {
       ["slack", "", "openai/gpt-5.2"],
       ["system", "", "openai/gpt-5.2"],
     ])(
-      "refuses a disabled %s default with admin guidance with '%s' and stored model %s",
+      "refuses a disabled %s default with '%s' and stored model %s",
       async (source, prefix, storedModel) => {
         const slackFetch = mockSlackFetch();
         const env = makeSessionEnv([], {
@@ -1913,8 +1915,94 @@ describe("POST /events", () => {
         expect(sessionFetchBodies(env.CONTROL_PLANE.fetch)).toEqual([]);
         expect(promptFetchBodies(env.CONTROL_PLANE.fetch)).toEqual([]);
         expect(postedTexts(slackFetch)).toContain(
-          `The ${source === "slack" ? "Slack" : "system"} default model "Claude Haiku 4.5" is no longer enabled. Ask an admin to enable it in Settings > Models or update the ${source === "slack" ? "Slack" : "system"} default model. You can choose another model in the Slack app's Home tab, or start your request with \`!model\` and an enabled model.`
+          prefix
+            ? 'Your requested model "Claude Haiku 4.5" is no longer enabled. Start a new request with `!model` and an enabled model.'
+            : `The ${source === "slack" ? "Slack" : "system"} default model "Claude Haiku 4.5" is no longer enabled. Ask an admin to enable it in Settings > Models or update the ${source === "slack" ? "Slack" : "system"} default model. You can choose another model in the Slack app's Home tab, or start your request with \`!model\` and an enabled model.`
         );
+        slackFetch.mockRestore();
+      }
+    );
+
+    it.each(["!reasoning high", `!model ${openAIModel} !reasoning high`])(
+      "keeps request-model guidance and pending state across App Home changes for '%s'",
+      async (prefix) => {
+        const slackFetch = mockSlackFetch();
+        const responses = { enabledModels: [openAIModel, anthropicModel] };
+        const env = makeSessionEnv([], responses);
+        const classify = vi.spyOn(RepoClassifier.prototype, "classify").mockResolvedValueOnce({
+          target: null,
+          confidence: "low",
+          reasoning: "Please choose a target.",
+          needsClarification: true,
+          source: "llm",
+        });
+        await env.SLACK_KV.put(
+          "user_prefs:U123",
+          JSON.stringify({ userId: "U123", model: openAIModel, updatedAt: 1 })
+        );
+
+        await deliver(env, { text: `<@B123> ${prefix} fix the auth tests`, ts: "111.222" });
+
+        const clarification = slackApiBodies(slackFetch, "chat.postMessage").find((body) =>
+          String(body.text).includes("I couldn't determine which target")
+        );
+        const blocks = clarification?.blocks as Array<{ block_id?: string }> | undefined;
+        const pickerBlockId = blocks?.find((block) =>
+          block.block_id?.startsWith("target_picker:")
+        )?.block_id;
+        if (!pickerBlockId) throw new Error("expected request-bound picker block");
+        const requestId = pickerBlockId.slice("target_picker:".length);
+        const pending = await env.SLACK_KV.get(`pending:${requestId}`, "json");
+        expect(pending).toEqual(
+          expect.objectContaining({
+            requestId,
+            channel: "C123",
+            threadTs: "111.222",
+            launchPlan: { sessionDefaults: { model: openAIModel, reasoningEffort: "high" } },
+          })
+        );
+
+        responses.enabledModels = [anthropicModel];
+        const payload = {
+          type: "block_actions",
+          user: { id: "U123" },
+          channel: { id: "C123" },
+          message: { ts: "222.333", thread_ts: "111.222" },
+          actions: [
+            {
+              action_id: "select_repo",
+              block_id: pickerBlockId,
+              selected_option: { value: "acme/app" },
+            },
+          ],
+        };
+        const expectedTexts = [clarification?.text];
+        for (let attempt = 0; attempt < 2; attempt++) {
+          const ctx = makeCtx();
+          expect((await app.fetch(slackInteractionRequest(payload), env, ctx)).status).toBe(200);
+          for (let index = 0; index < ctx.waitUntil.mock.calls.length; index++)
+            await flushWaitUntil(ctx, index);
+
+          expectedTexts.push(
+            "Starting work...",
+            'Your requested model "GPT 5.4" is no longer enabled. Start a new request with `!model` and an enabled model.'
+          );
+          expect(postedTexts(slackFetch)).toEqual(expectedTexts);
+          expect(sessionFetchBodies(env.CONTROL_PLANE.fetch)).toEqual([]);
+          expect(promptFetchBodies(env.CONTROL_PLANE.fetch)).toEqual([]);
+          expect(await env.SLACK_KV.get("thread:C123:111.222")).toBeNull();
+          expect(await env.SLACK_KV.get(`pending:${requestId}`, "json")).toEqual(pending);
+          expect(slackApiBodies(slackFetch, "chat.update")).toEqual([]);
+
+          if (attempt === 0) {
+            await env.SLACK_KV.put(
+              "user_prefs:U123",
+              JSON.stringify({ userId: "U123", model: anthropicModel, updatedAt: 2 })
+            );
+          }
+        }
+
+        classify.mockRestore();
         slackFetch.mockRestore();
       }
     );

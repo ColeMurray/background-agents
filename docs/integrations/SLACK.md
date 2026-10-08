@@ -343,12 +343,12 @@ Slack sessions.
 | Branch           | A global branch override for new Slack sessions                              |
 | Branch by repo   | A branch override for one repository, shown when repositories are available  |
 
-The selector normally uses models enabled in **Settings > Models** in the web app. If Slack cannot
-load that list, it falls back to the default enabled models. It lists only models your agent harness
-can run. If your current model is disabled or cannot run on it, the selector shows "Choose a model"
-with no selection and a note explaining why new requests are refused until you choose a model. The
-"Currently using" summary names your model and agent harness, or marks the model as needing
-replacement.
+The selector uses models enabled in **Settings > Models** in the web app. If Slack cannot load that
+list, Home shows a temporary-unavailability notice and preserves your configured model and reasoning
+without treating the model as disabled. It lists only models your agent harness can run. If your
+current model is disabled or cannot run on it, the selector shows "Choose a model" with no selection
+and a note explaining why new requests are refused until you choose a model. The "Currently using"
+summary names your model and agent harness, or marks the model as needing replacement.
 
 Branch preference priority is:
 

@@ -235,7 +235,7 @@ describe("startSessionAndSendPrompt harness", () => {
       await startSessionAndSendPrompt(env, {
         ...options,
         launchSettings: {
-          ...settings("claude", anthropicModel),
+          ...settings("claude", "anthropic/claude-sonnet-4-6"),
           enabledModels: [openAIModel, anthropicModel],
         },
         launchPlan: { sessionDefaults: { model: "anthropic/claude-sonnet-4-6" } },

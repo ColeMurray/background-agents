@@ -114,7 +114,7 @@ describe("buildAppHomeView", () => {
       userHarness: HarnessId | undefined;
       workspaceHarness: HarnessId;
       currentModel: string;
-      availableModels?: typeof models;
+      availableModels?: typeof models | null;
     }) {
       const view = buildAppHomeView({
         appName: "Open-Inspect",
@@ -208,6 +208,23 @@ describe("buildAppHomeView", () => {
         expect(texts.at(-1)).toContain("model needs replacement");
       }
     );
+
+    it("preserves the configured model and reasoning when enablement is unknown", () => {
+      const { model, texts, reasoning } = render({
+        userHarness: "opencode",
+        workspaceHarness: "opencode",
+        currentModel: "xai/grok-4.6",
+        availableModels: null,
+      });
+
+      expect(model).toBeUndefined();
+      expect(reasoning?.initial_option?.value).toBe("high");
+      expect(texts).toContain(
+        "*Model*\nModel preferences are temporarily unavailable. Your model `xai/grok-4.6` has not been changed. New sessions cannot start until model preferences are available. Please try again."
+      );
+      expect(texts.join(" ")).not.toContain("is no longer enabled");
+      expect(texts.at(-1)).not.toContain("model needs replacement");
+    });
 
     it("explains disablement even when the harness has no enabled models", () => {
       const { model, texts, reasoning } = render({

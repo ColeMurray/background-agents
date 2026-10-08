@@ -167,7 +167,7 @@ export async function startSessionAndSendPrompt(
   const sessionDefaults = normalizeModelSelection(launchPlan?.sessionDefaults ?? userPrefs);
   const { model, reasoningEffort } = sessionDefaults;
   if (!enabledModels.includes(model)) {
-    const source = launchPlan && model !== userPrefs.model ? "request" : modelSource;
+    const source = launchPlan ? "request" : modelSource;
     log.info("slack.session.disabled_model_refused", { trace_id: traceId, model, source });
     await postMessage(
       env.SLACK_BOT_TOKEN,
