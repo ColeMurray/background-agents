@@ -227,4 +227,29 @@ describe("startSessionAndSendPrompt harness", () => {
       expect.objectContaining({ harness: "opencode", model: openAIModel })
     );
   });
+
+  it("runs a stored opening-prompt model the configured harness cannot run on the default harness", async () => {
+    const env = makeEnv();
+
+    expect(
+      await startSessionAndSendPrompt(env, {
+        ...options,
+        launchSettings: settings("claude", anthropicModel),
+        launchPlan: {
+          sessionDefaults: { model: anthropicModel },
+          promptOverrides: { model: openAIModel },
+        },
+      })
+    ).toEqual(
+      expect.objectContaining({ harness: { configured: "claude", effective: "opencode" } })
+    );
+    expect(createSession).toHaveBeenCalledWith(
+      env,
+      expect.objectContaining({ harness: "opencode", model: anthropicModel })
+    );
+    expect(deliverPrompt).toHaveBeenCalledWith(
+      env,
+      expect.objectContaining({ model: openAIModel })
+    );
+  });
 });

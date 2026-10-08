@@ -1,7 +1,11 @@
 import { escapeMrkdwnText, postMessage } from "@open-inspect/shared/slack";
 import type { CallbackContext } from "@open-inspect/shared/types/session-api";
 import { normalizeValidModels, type ValidModel } from "@open-inspect/shared/models";
-import { resolveHarnessForModel, type HarnessId } from "@open-inspect/shared/harnesses";
+import {
+  DEFAULT_HARNESS,
+  harnessSupportsModel,
+  type HarnessId,
+} from "@open-inspect/shared/harnesses";
 import { getAuthoritativeModels, getAvailableModels } from "../app-home/models";
 import {
   notifyDroppedAttachments,
@@ -198,9 +202,16 @@ export async function startSessionAndSendPrompt(
     await postMessage(env.SLACK_BOT_TOKEN, channel, firstPrompt.error, { thread_ts: threadTs });
     return null;
   }
+  // A session cannot change harness, so it must run both the session model and
+  // a distinct opening-prompt model a stored launch plan may carry.
+  const openingModel = firstPrompt.turnPlan.effective.model;
   const harness: SessionHarness = {
     configured: slackConfig.harness,
-    effective: resolveHarnessForModel(slackConfig.harness, model),
+    effective: [model, openingModel].every((launchModel) =>
+      harnessSupportsModel(slackConfig.harness, launchModel)
+    )
+      ? slackConfig.harness
+      : DEFAULT_HARNESS,
   };
   if (harness.effective !== harness.configured) {
     // Expected when a user preference or `!model` picks a model the configured
@@ -210,6 +221,7 @@ export async function startSessionAndSendPrompt(
       configured_harness: harness.configured,
       harness: harness.effective,
       model,
+      opening_model: openingModel === model ? undefined : openingModel,
     });
   }
   const preferenceRepo = branchPreferenceRepo(target);
