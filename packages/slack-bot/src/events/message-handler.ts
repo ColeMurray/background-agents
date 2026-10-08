@@ -453,9 +453,7 @@ async function handleIncomingMessage(params: IncomingMessageParams): Promise<voi
         thread_ts: clarificationThreadTs,
         blocks: buildTargetClarificationBlocks(
           result.reasoning,
-          result.target?.kind === "none"
-            ? [result.target, ...(result.alternatives ?? [])]
-            : result.alternatives,
+          result.target ? [result.target, ...(result.alternatives ?? [])] : result.alternatives,
           catalog,
           requestId
         ),

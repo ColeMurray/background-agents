@@ -862,6 +862,60 @@ describe("POST /events", () => {
     slackFetch.mockRestore();
   });
 
+  it("offers the classifier's match as the first quick pick when asking for a target", async () => {
+    mockMessagesCreate.mockResolvedValue({
+      content: [
+        {
+          type: "tool_use",
+          id: "toolu_test",
+          name: "classify_target",
+          input: {
+            targetId: "acme/web",
+            confidence: "medium",
+            reasoning: "The login page is probably in the web app.",
+            alternatives: ["acme/api"],
+          },
+        },
+      ],
+    });
+    const slackFetch = mockSlackFetch();
+    const env = makeEnv();
+    mockReposFetch(env, [
+      { owner: "acme", name: "web", defaultBranch: "main", private: true },
+      { owner: "acme", name: "api", defaultBranch: "main", private: true },
+      { owner: "acme", name: "docs", defaultBranch: "main", private: true },
+    ]);
+    const ctx = makeCtx();
+
+    await app.fetch(
+      slackEventRequest({
+        type: "app_mention",
+        text: "<@B123> fix the login page",
+        user: "U123",
+        channel: "C123",
+        ts: "111.222",
+      }),
+      env,
+      ctx
+    );
+    await flushWaitUntil(ctx);
+
+    const clarification = slackApiBodies(slackFetch, "chat.postMessage").find((body) =>
+      String(body.text).includes("I couldn't determine which target")
+    );
+    expect(clarification?.blocks).toContainEqual(
+      expect.objectContaining({
+        type: "actions",
+        elements: [
+          expect.objectContaining({ value: "acme/web" }),
+          expect.objectContaining({ value: "acme/api" }),
+        ],
+      })
+    );
+
+    slackFetch.mockRestore();
+  });
+
   it("treats a malformed session creation response as a creation failure", async () => {
     const order: string[] = [];
     const slackFetch = mockSlackFetch(order);
