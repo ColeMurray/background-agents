@@ -311,6 +311,7 @@ function getRepoIdFromSubmission(
 async function handleSelectHarness({
   action,
   env,
+  traceId,
   userId,
 }: AppHomeBlockActionContext): Promise<void> {
   const selected = action.selected_option?.value;
@@ -320,9 +321,13 @@ async function handleSelectHarness({
 
   // The model is kept even when the new harness cannot run it: App Home then
   // asks for a compatible model, and launches refuse until one is chosen.
-  await updateUserPreferences(env, userId, {
-    harness: selected === WORKSPACE_HARNESS_OPTION_VALUE ? undefined : selected,
-  });
+  const options = await getPreferenceResolutionOptions(env, traceId);
+  await updateUserPreferences(
+    env,
+    userId,
+    { harness: selected === WORKSPACE_HARNESS_OPTION_VALUE ? undefined : selected },
+    options
+  );
   await publishAppHome(env, userId);
 }
 

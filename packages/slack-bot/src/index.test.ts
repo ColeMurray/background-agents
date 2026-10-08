@@ -2788,6 +2788,43 @@ describe("POST /interactions", () => {
     slackFetch.mockRestore();
   });
 
+  it("keeps a stored reasoning effort for the workspace default model when saving a harness", async () => {
+    mockPublishView.mockResolvedValue({ ok: true });
+    const slackFetch = mockSlackFetch();
+    const env = makeSessionEnv([], {
+      slackDefaults: { model: "openai/gpt-5.4" },
+      enabledModels: ["anthropic/claude-haiku-4-5", "openai/gpt-5.4"],
+    });
+    const kv = env.SLACK_KV as unknown as {
+      get: (key: string, type: string) => Promise<unknown>;
+      put: (key: string, value: string) => Promise<void>;
+    };
+    // No App Home model, so the effort applies to the Slack default model, not DEFAULT_MODEL.
+    await kv.put(
+      "user_prefs:U123",
+      JSON.stringify({ userId: "U123", reasoningEffort: "xhigh", updatedAt: 1 })
+    );
+    const ctx = makeCtx();
+
+    const response = await app.fetch(
+      slackInteractionRequest({
+        type: "block_actions",
+        user: { id: "U123" },
+        actions: [{ action_id: "select_harness", selected_option: { value: "opencode" } }],
+      }),
+      env,
+      ctx
+    );
+    expect(response.status).toBe(200);
+    await flushWaitUntil(ctx);
+
+    expect(await kv.get("user_prefs:U123", "json")).toEqual(
+      expect.objectContaining({ harness: "opencode", reasoningEffort: "xhigh" })
+    );
+
+    slackFetch.mockRestore();
+  });
+
   it("sets Starting status for repo-selection starts before session creation", async () => {
     const order: string[] = [];
     const slackFetch = mockSlackFetch(order);
