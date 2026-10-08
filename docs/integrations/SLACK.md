@@ -262,8 +262,9 @@ is not offered for Claude Agent, because the settings page cannot see the deploy
 which may be one Claude Agent cannot run.
 
 A harness change applies to new sessions. Each thread keeps the harness its session started on. If
-the bot cannot read the Slack settings, it treats the workspace harness as OpenCode; a user's App
-Home harness still applies.
+the bot cannot read the Slack settings, App Home may show OpenCode as the workspace-harness display
+fallback without changing the user's saved App Home harness. This does not permit a new launch: new
+session requests are refused until Slack settings are available.
 
 Slack sessions are unattended, so on Claude Agent they follow the default Claude account's
 **Automated authentication** policy and may use a connected Claude account. This applies when a user
@@ -345,10 +346,12 @@ Slack sessions.
 
 The selector uses models enabled in **Settings > Models** in the web app. If Slack cannot load that
 list, Home shows a temporary-unavailability notice and preserves your configured model and reasoning
-without treating the model as disabled. It lists only models your agent harness can run. If your
-current model is disabled or cannot run on it, the selector shows "Choose a model" with no selection
-and a note explaining why new requests are refused until you choose a model. The "Currently using"
-summary names your model and agent harness, or marks the model as needing replacement.
+without treating the model as disabled. It lists only models your agent harness can run. If
+compatible enabled models are available but your current model is disabled or incompatible, the
+selector shows "Choose a model" with no selection and a refusal note. If no enabled model can run on
+the selected harness, Home shows a message instead of a selector, asking you to choose another
+harness or have an admin enable a compatible model. The "Currently using" summary names your model
+and agent harness, or marks the model as needing replacement.
 
 Branch preference priority is:
 
