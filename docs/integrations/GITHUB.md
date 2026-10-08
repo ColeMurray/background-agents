@@ -108,6 +108,10 @@ If a flag is invalid, the bot replies with a PR comment explaining why and does 
 Flags work in PR conversation comments and inline review threads. Auto-reviews and review requests
 always use the configured model.
 
+If the configured **Agent harness** cannot run the resolved model, the bot replies on the PR and
+creates no session; it does not switch to OpenCode. Retry a mention with a compatible `!model`,
+update the default model, or change the GitHub integration harness.
+
 ### Inline Review Threads
 
 When you mention the bot in a PR review thread, Open-Inspect includes the file path and diff context
@@ -217,18 +221,26 @@ repositories, and save to resolve their IDs.
 
 ### Models and Instructions
 
-| Setting                     | What it controls                                                                               |
-| --------------------------- | ---------------------------------------------------------------------------------------------- |
-| Model and reasoning effort  | Model and reasoning depth for GitHub-started sessions, when configured                         |
-| Agent harness               | Harness for GitHub-started sessions; a harness/model pair it cannot run falls back to OpenCode |
-| Code Review Instructions    | Extra guidance appended to PR review prompts                                                   |
-| Comment Action Instructions | Extra guidance appended to `@mention` action prompts                                           |
-| Repository Overrides        | Per-repository overrides for model, harness, reasoning, instructions, and behavior             |
+| Setting                     | What it controls                                                                   |
+| --------------------------- | ---------------------------------------------------------------------------------- |
+| Model and reasoning effort  | Model and reasoning depth for GitHub-started sessions, when configured             |
+| Agent harness               | Harness for GitHub-started sessions; incompatible models are refused               |
+| Code Review Instructions    | Extra guidance appended to PR review prompts                                       |
+| Comment Action Instructions | Extra guidance appended to `@mention` action prompts                               |
+| Repository Overrides        | Per-repository overrides for model, harness, reasoning, instructions, and behavior |
 
-Repository overrides take priority over global defaults for the repository they apply to. If neither
-a repository override nor global default sets a model, sessions use the deployment default model. A
+Repository overrides take priority over global defaults for the repository they apply to. Omitted
+harness and model fields inherit individually from the global settings. If neither level sets a
+harness, it is OpenCode; if neither sets a model, sessions use the deployment default model. A
 [`!model` or `!reasoning` flag](#model-and-reasoning-overrides) at the start of a mention overrides
-both for that one session.
+the corresponding model or effort setting for that one session, not the harness.
+
+Explicitly choosing a restricted harness such as **Claude Agent** requires a compatible default
+model at the same settings level (global or repository), not an inherited model. The settings form
+and control plane reject a missing model or an incompatible pair at that level. **Use system
+default** is not offered when explicitly choosing Claude Agent. Save validation does not check the
+merged global/repository pair: a model-only repository override can inherit an incompatible global
+harness, in which case the bot refuses the launch.
 
 ### Commit Signing
 

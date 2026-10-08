@@ -23,7 +23,7 @@ const slackSettingsResponseSchema = z.object({
 }) satisfies z.ZodType<{ settings: Pick<SlackGlobalConfig, "defaults"> | null }>;
 
 export interface SlackSettings {
-  /** Preferred harness for new sessions; see `resolveHarnessForModel`. */
+  /** Harness for new sessions; incompatible models are refused. */
   harness: HarnessId;
   defaultModel?: string;
   sessionInstructions?: string;

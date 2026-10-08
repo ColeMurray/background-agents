@@ -901,6 +901,44 @@ describe("IntegrationSettingsStore", () => {
   });
 
   describe("cross-field validation", () => {
+    describe.each(["github", "linear"] as const)("%s harness defaults", (integrationId) => {
+      it("requires a model with a restricted global harness without persisting", async () => {
+        await expect(
+          store.setGlobal(integrationId, { defaults: { harness: "claude" } })
+        ).rejects.toThrow("Choose a default model Claude Agent can run.");
+        expect(await store.getGlobal(integrationId)).toBeNull();
+      });
+
+      it("requires a local model with a restricted repo harness despite a compatible inherited model", async () => {
+        await store.setGlobal(integrationId, {
+          defaults: { model: "anthropic/claude-sonnet-4-6" },
+        });
+        await expect(
+          store.setRepoSettings(integrationId, "acme/widgets", { harness: "claude" })
+        ).rejects.toThrow("Choose a default model Claude Agent can run.");
+        expect(await store.getRepoSettings(integrationId, "acme/widgets")).toBeNull();
+      });
+
+      it("allows OpenCode without a model at either level", async () => {
+        await store.setGlobal(integrationId, { defaults: { harness: "opencode" } });
+        await store.setRepoSettings(integrationId, "acme/widgets", { harness: "opencode" });
+        expect((await store.getResolvedConfig(integrationId, "acme/widgets")).settings).toEqual({
+          harness: "opencode",
+        });
+      });
+
+      it("preserves sparse overrides and leaves cross-level compatibility to launch admission", async () => {
+        await store.setGlobal(integrationId, {
+          defaults: { harness: "claude", model: "anthropic/claude-sonnet-4-6" },
+        });
+        await store.setRepoSettings(integrationId, "acme/widgets", { model: "openai/gpt-5.5" });
+        expect((await store.getResolvedConfig(integrationId, "acme/widgets")).settings).toEqual({
+          harness: "claude",
+          model: "openai/gpt-5.5",
+        });
+      });
+    });
+
     it("rejects invalid reasoning effort for model on write", async () => {
       await expect(
         store.setRepoSettings("github", "acme/widgets", {

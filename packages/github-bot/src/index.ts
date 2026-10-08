@@ -167,6 +167,7 @@ const COMMENTED_SKIP_REASONS: ReadonlySet<string> = new Set([
   "team_archived",
   "invalid_inline_flags",
   "model_preferences_unavailable",
+  "harness_model_incompatible",
 ]);
 
 async function handleWebhook(
