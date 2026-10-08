@@ -22,6 +22,7 @@ import { createLogger } from "../logger";
 const log = createLogger("classifier");
 
 const CLASSIFY_REPO_TOOL_NAME = "classify_repository";
+const CLASSIFY_REPO_SYSTEM_PROMPT = `Answer by calling the ${CLASSIFY_REPO_TOOL_NAME} tool exactly once. Do not reply in plain text.`;
 
 export const classifyToolInputSchema = z.object({
   repoId: z.string().nullable(),
@@ -135,6 +136,10 @@ Return your decision with the fields repoId, confidence, reasoning, and alternat
 
 /**
  * Call Anthropic API directly (no SDK — Workers can't use CJS imports).
+ *
+ * Claude Opus 4.7 and later reject a non-default `temperature`, and Opus 5.5
+ * rejects a forced tool call, each with HTTP 400, so the system prompt asks
+ * for the call instead and a text reply falls back to clarification.
  */
 async function callAnthropic(
   apiKey: string,
@@ -151,7 +156,7 @@ async function callAnthropic(
     body: JSON.stringify({
       model,
       max_tokens: 500,
-      temperature: 0,
+      system: CLASSIFY_REPO_SYSTEM_PROMPT,
       tools: [
         {
           name: CLASSIFY_REPO_TOOL_NAME,
@@ -159,7 +164,7 @@ async function callAnthropic(
           input_schema: classifyRepoJsonSchema,
         },
       ],
-      tool_choice: { type: "tool", name: CLASSIFY_REPO_TOOL_NAME },
+      tool_choice: { type: "auto" },
       messages: [{ role: "user", content: prompt }],
     }),
     signal: AbortSignal.timeout(CLASSIFICATION_REQUEST_TIMEOUT_MS),
