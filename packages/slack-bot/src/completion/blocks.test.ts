@@ -211,6 +211,37 @@ describe("buildCompletionBlocks", () => {
   });
 });
 
+describe("response formatting", () => {
+  // Regression: agent replies are standard Markdown, but they were posted as
+  // mrkdwn, so headings, **bold**, lists and links showed up as literal syntax.
+  it("posts a reply that fits Slack's markdown block limit as one markdown block", () => {
+    const textContent = "## Should fix\n\n**1. Deadline** can be bypassed\n\n- point";
+    const blocks = buildCompletionBlocks(
+      "sess-md",
+      { ...BASE_RESPONSE, textContent },
+      BASE_CONTEXT,
+      "https://inspect.example.com"
+    );
+    expect(blocks[0]).toEqual({ type: "markdown", text: textContent });
+    expect(blocks.filter((block) => block.type === "markdown")).toHaveLength(1);
+  });
+
+  it("converts a reply longer than the markdown block limit to mrkdwn sections", () => {
+    const textContent = `## Heading\n\n**bold** ${"word ".repeat(2500)}`;
+    const blocks = buildCompletionBlocks(
+      "sess-long",
+      { ...BASE_RESPONSE, textContent },
+      BASE_CONTEXT,
+      "https://inspect.example.com"
+    );
+    expect(blocks.some((block) => block.type === "markdown")).toBe(false);
+    const sectionText = blocks
+      .map((block) => (block.type === "section" ? block.text.text : ""))
+      .join("");
+    expect(sectionText.startsWith("*Heading*\n\n*bold* word")).toBe(true);
+  });
+});
+
 describe("long response handling", () => {
   // Regression: responses were capped at 2000 chars in a single section, so
   // multi-part answers (headings + citations) stopped mid-sentence even though
@@ -224,7 +255,7 @@ describe("long response handling", () => {
 
   it("keeps a long multi-paragraph answer whole across several sections", () => {
     const paragraphs = Array.from(
-      { length: 8 },
+      { length: 16 },
       (_, i) => `## Section ${i}\n\n${"detail ".repeat(120)}`
     );
     const textContent = paragraphs.join("\n\n");
@@ -236,14 +267,14 @@ describe("long response handling", () => {
     );
     const texts = sectionTexts(blocks);
     expect(texts.length).toBeGreaterThan(1);
-    expect(texts.join("\n\n")).toContain("Section 7");
+    expect(texts.join("\n\n")).toContain("Section 15");
     expect(texts.join(" ")).not.toContain("truncated");
   });
 
   it("requests expanded rendering for every completion response section", () => {
     const responseSections = buildCompletionBlocks(
       "sess-1",
-      { ...BASE_RESPONSE, textContent: "x".repeat(4000) },
+      { ...BASE_RESPONSE, textContent: "x".repeat(13_000) },
       BASE_CONTEXT,
       "https://inspect.example.com"
     ).filter((block) => block.type === "section");
@@ -283,7 +314,7 @@ describe("long response handling", () => {
   });
 
   it("balances code fences when a fenced block spans a split", () => {
-    const code = ["```ts", ...Array.from({ length: 300 }, (_, i) => `const x${i} = ${i};`), "```"];
+    const code = ["```ts", ...Array.from({ length: 1000 }, (_, i) => `const x${i} = ${i};`), "```"];
     const blocks = buildCompletionBlocks(
       "sess-4",
       { ...BASE_RESPONSE, textContent: code.join("\n") },
