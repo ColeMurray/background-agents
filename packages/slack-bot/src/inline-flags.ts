@@ -55,20 +55,15 @@ export const resolvedTurnPlanSchema = z
 export type ResolvedTurnPlan = z.infer<typeof resolvedTurnPlanSchema>;
 
 /**
- * What a session launch does with model settings, which is not the same
- * question a single turn answers: `sessionDefaults` is persisted and inherited
- * by every later follow-up, while `promptOverrides` applies to the opening
- * prompt alone. Callers express intent here; the launcher is the authority
- * that checks it against the models enabled at launch time.
+ * The model settings a session launch asked for. `sessionDefaults` is
+ * persisted and inherited by every later follow-up; the opening prompt runs
+ * on it too. Callers express intent here; the launcher is the authority that
+ * checks it against the models enabled at launch time. Records saved before
+ * opening-prompt overrides were removed may still carry `promptOverrides`;
+ * parsing drops it.
  */
 export const sessionLaunchPlanSchema = z.object({
   sessionDefaults: modelSelectionSchema,
-  promptOverrides: z
-    .object({
-      model: validModelSchema.optional(),
-      reasoningEffort: reasoningEffortSchema.optional(),
-    })
-    .optional(),
 });
 
 export type SessionLaunchPlan = z.infer<typeof sessionLaunchPlanSchema>;

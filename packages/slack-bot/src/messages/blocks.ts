@@ -1,9 +1,8 @@
-import { DEFAULT_HARNESS, getHarnessLabel } from "@open-inspect/shared/harnesses";
+import { getHarnessLabel, type HarnessId } from "@open-inspect/shared/harnesses";
 import { getModelDisplayName } from "@open-inspect/shared/models";
 import { escapeMrkdwnText } from "@open-inspect/shared/slack";
 import { setAssistantThreadStatusBestEffort } from "../activity-status";
 import type { ModelSelection } from "../inline-flags";
-import type { SessionHarness } from "../sessions/session-launcher";
 import type { BackgroundTaskScheduler, Env } from "../types";
 
 const WORKING_MESSAGE_TEXT = "Starting work...";
@@ -25,29 +24,27 @@ export function scheduleStartingStatus(
 
 /**
  * Describe a session's model and reasoning when they are not the user's App
- * Home defaults, or when the session fell back from the configured harness.
- * Returns undefined for the common case so the acknowledgement stays bare
- * unless there is something to report.
+ * Home defaults. Returns undefined for the common case so the acknowledgement
+ * stays bare unless there is something to report.
  */
 export function formatSessionDefaultsNotice(launch: {
   sessionDefaults: ModelSelection;
   differsFromUserDefaults: boolean;
-  harness: SessionHarness;
 }): string | undefined {
-  const { configured, effective } = launch.harness;
-  const fellBack = effective !== configured;
-  if (!launch.differsFromUserDefaults && !fellBack) return undefined;
+  if (!launch.differsFromUserDefaults) return undefined;
   const parts = [getModelDisplayName(launch.sessionDefaults.model)];
   const { reasoningEffort } = launch.sessionDefaults;
   if (reasoningEffort) parts.push(`${reasoningEffort} reasoning`);
-  if (fellBack) {
-    parts.push(
-      `${getHarnessLabel(effective)} (${getHarnessLabel(configured)} can't run this model)`
-    );
-  } else if (effective !== DEFAULT_HARNESS) {
-    parts.push(getHarnessLabel(effective));
-  }
   return `Session defaults: ${parts.join(" · ")}`;
+}
+
+/** Reply to a request whose model the user's harness cannot run; no session was created. */
+export function formatHarnessLaunchRefusal(
+  compatibilityMessage: string,
+  harness: HarnessId
+): string {
+  const label = getHarnessLabel(harness);
+  return `${escapeMrkdwnText(compatibilityMessage)} Start your request with \`!model\` and a model ${label} can run, or change your model or agent harness in the Slack app's Home tab.`;
 }
 
 /** Reply to a follow-up whose `!model` the thread's harness cannot run. */

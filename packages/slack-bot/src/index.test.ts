@@ -1781,9 +1781,9 @@ describe("POST /events", () => {
     it.each([
       ["keeps the acknowledgement bare for the user's defaults", "fix the auth tests", []],
       [
-        "names Claude Agent beside a non-default model selection",
+        "reports only a non-default model selection",
         "!reasoning high fix the auth tests",
-        ["Session defaults: Claude Haiku 4.5 · high reasoning · Claude Agent"],
+        ["Session defaults: Claude Haiku 4.5 · high reasoning"],
       ],
     ] as const)("on Claude Agent, %s", async (_case, text, notices) => {
       const slackFetch = mockSlackFetch();
@@ -1799,36 +1799,43 @@ describe("POST /events", () => {
       slackFetch.mockRestore();
     });
 
-    it.each([
-      ["unset", undefined, []],
-      [
-        "Claude Agent",
-        "claude",
-        ["Session defaults: GPT 5.4 · OpenCode (Claude Agent can't run this model)"],
-      ],
-    ] as const)(
-      "acknowledges an OpenAI App Home preference with the harness %s",
-      async (_case, harness, notices) => {
-        const slackFetch = mockSlackFetch();
-        const env = makeSessionEnv([], {
-          slackDefaults: harness ? { harness } : {},
-          enabledModels: [anthropicModel, openAIModel],
-        });
-        await (env.SLACK_KV as unknown as { put: (k: string, v: string) => Promise<void> }).put(
-          "user_prefs:U123",
-          JSON.stringify({ userId: "U123", model: openAIModel, updatedAt: 1 })
-        );
+    it("refuses an OpenAI App Home model on Claude Agent without creating a session", async () => {
+      const slackFetch = mockSlackFetch();
+      const env = makeSessionEnv([], {
+        slackDefaults: { harness: "claude" },
+        enabledModels: [anthropicModel, openAIModel],
+      });
+      await (env.SLACK_KV as unknown as { put: (k: string, v: string) => Promise<void> }).put(
+        "user_prefs:U123",
+        JSON.stringify({ userId: "U123", model: openAIModel, updatedAt: 1 })
+      );
 
-        await deliver(env, { text: "<@B123> fix the auth tests", ts: "111.222" });
+      await deliver(env, { text: "<@B123> fix the auth tests", ts: "111.222" });
 
-        expect(sessionFetchBodies(env.CONTROL_PLANE.fetch)).toEqual([
-          expect.objectContaining({ harness: "opencode", model: openAIModel }),
-        ]);
-        expect(sessionDefaultsNotices(slackFetch)).toEqual(notices);
+      expect(sessionFetchBodies(env.CONTROL_PLANE.fetch)).toEqual([]);
+      expect(postedTexts(slackFetch)).toEqual([
+        "Starting work...",
+        'Model "openai/gpt-5.4" cannot run on the Claude Agent harness. Start your request with `!model` and a model Claude Agent can run, or change your model or agent harness in the Slack app\'s Home tab.',
+      ]);
+    });
 
-        slackFetch.mockRestore();
-      }
-    );
+    it("runs on the harness chosen in App Home over the workspace harness", async () => {
+      const slackFetch = mockSlackFetch();
+      const env = makeSessionEnv([], { enabledModels: [anthropicModel, openAIModel] });
+      await (env.SLACK_KV as unknown as { put: (k: string, v: string) => Promise<void> }).put(
+        "user_prefs:U123",
+        JSON.stringify({ userId: "U123", model: anthropicModel, harness: "claude", updatedAt: 1 })
+      );
+
+      await deliver(env, { text: "<@B123> fix the auth tests", ts: "111.222" });
+
+      expect(sessionFetchBodies(env.CONTROL_PLANE.fetch)).toEqual([
+        expect.objectContaining({ harness: "claude", model: anthropicModel }),
+      ]);
+      expect(sessionDefaultsNotices(slackFetch)).toEqual([]);
+
+      slackFetch.mockRestore();
+    });
 
     it("relays the control plane's refusal of a !model the thread's harness cannot run", async () => {
       const slackFetch = mockSlackFetch();
@@ -2820,7 +2827,7 @@ describe("POST /interactions", () => {
     slackFetch.mockRestore();
   });
 
-  it("reports a harness fallback in the acknowledgement of a target-picker launch", async () => {
+  it("refuses a target-picker launch whose model the harness cannot run", async () => {
     const slackFetch = mockSlackFetch();
     const env = makeSessionEnv([], {
       slackDefaults: { harness: "claude" },
@@ -2852,23 +2859,10 @@ describe("POST /interactions", () => {
     expect(response.status).toBe(200);
     await flushWaitUntil(ctx);
     await flushWaitUntil(ctx, 1);
-    expect(sessionFetchBodies(env.CONTROL_PLANE.fetch)).toEqual([
-      expect.objectContaining({ harness: "opencode", model: "openai/gpt-5.4" }),
-    ]);
-    expect(slackApiBodies(slackFetch, "chat.update")).toContainEqual(
+    expect(sessionFetchBodies(env.CONTROL_PLANE.fetch)).toEqual([]);
+    expect(slackApiBodies(slackFetch, "chat.postMessage")).toContainEqual(
       expect.objectContaining({
-        ts: "222.333",
-        blocks: expect.arrayContaining([
-          {
-            type: "context",
-            elements: [
-              {
-                type: "mrkdwn",
-                text: "Session defaults: GPT 5.4 · OpenCode (Claude Agent can't run this model)",
-              },
-            ],
-          },
-        ]),
+        text: 'Model "openai/gpt-5.4" cannot run on the Claude Agent harness. Start your request with `!model` and a model Claude Agent can run, or change your model or agent harness in the Slack app\'s Home tab.',
       })
     );
 

@@ -297,6 +297,7 @@ describe("handleTargetSelection", () => {
         model: "anthropic/claude-sonnet-4-6",
         reasoningEffort: "max",
         branch: undefined,
+        harness: "opencode" as const,
       },
     };
     vi.mocked(loadAuthoritativeSlackLaunchSettings).mockResolvedValue(launchSettings);
