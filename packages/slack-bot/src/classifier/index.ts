@@ -32,6 +32,7 @@ import { createLogger } from "../logger";
 
 const log = createLogger("classifier");
 const CLASSIFY_TARGET_TOOL_NAME = "classify_target";
+const CLASSIFY_TARGET_SYSTEM_PROMPT = `Answer by calling the ${CLASSIFY_TARGET_TOOL_NAME} tool exactly once. Do not reply in plain text.`;
 const CONFIDENCE_LEVELS = [
   "high",
   "medium",
@@ -244,19 +245,19 @@ export class RepoClassifier {
    * Call Anthropic's Messages API with the classification tool, then funnel the
    * tool input through the same {@link normalizeModelResponse} validation as
    * the OpenAI structured-output path.
+   *
+   * Claude Opus 4.7 and later reject a non-default `temperature`, and Opus 5.5
+   * rejects a forced tool call, each with HTTP 400, so the system prompt asks
+   * for the call instead and a text reply falls back to the picker.
    */
   private async callAnthropic(apiKey: string, model: string, prompt: string): Promise<LLMResponse> {
     const response = await this.getAnthropicClient(apiKey).messages.create(
       {
         model,
         max_tokens: 500,
-        temperature: 0,
+        system: CLASSIFY_TARGET_SYSTEM_PROMPT,
         tools: [CLASSIFY_TARGET_TOOL],
-        tool_choice: {
-          type: "tool",
-          name: CLASSIFY_TARGET_TOOL_NAME,
-          disable_parallel_tool_use: true,
-        },
+        tool_choice: { type: "auto", disable_parallel_tool_use: true },
         messages: [{ role: "user", content: prompt }],
       },
       { signal: AbortSignal.timeout(CLASSIFICATION_REQUEST_TIMEOUT_MS) }
