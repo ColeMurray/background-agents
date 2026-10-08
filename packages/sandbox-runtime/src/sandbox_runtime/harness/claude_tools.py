@@ -24,6 +24,7 @@ import httpx
 
 from ..memory_contract import MEMORY_TOOL_SPECS
 from ..repo_config import load_repo_manifest
+from .child_status_format import format_stored_files
 from .memory_tools import MemoryTools
 from .tool_results import error_text, text_result
 
@@ -431,6 +432,7 @@ class OpenInspectTools:
                     else f"{kind}: {artifact.get('url')}"
                 )
                 lines.append(f"    - {label}")
+        lines.extend(format_stored_files(detail.get("fileArtifacts") or []))
         final = detail.get("finalResponse")
         if final:
             unfinished = bool(detail.get("hasUnfinishedPrompt"))
@@ -449,6 +451,10 @@ class OpenInspectTools:
             if calls:
                 lines.extend(["", "    Tool summary:"])
                 lines.extend(f"      - {call.get('summary') or call.get('tool')}" for call in calls)
+            files = final.get("fileArtifacts")
+            if files is None:
+                files = final.get("mediaArtifacts") or []
+            lines.extend(format_stored_files(files, "    "))
         elif args.get("includeResponse"):
             lines.extend(["", "  Final response: not available yet"])
         trajectory = detail.get("trajectory")

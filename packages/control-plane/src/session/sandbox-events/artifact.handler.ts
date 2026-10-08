@@ -1,8 +1,7 @@
 import type { SessionArtifact } from "@open-inspect/shared/types/artifacts";
-import type { SandboxEvent } from "@open-inspect/shared/types/sandbox-events";
+import type { SandboxIngressEvent } from "@open-inspect/shared/types/sandbox-events";
 import { generateId } from "../../auth/crypto";
 import type { ArtifactRepository } from "../artifact-repository";
-import { assertArtifactType } from "../artifacts";
 import type { EventRepository } from "../event-repository";
 import type { SessionMessenger } from "../messenger";
 import type { SandboxEventContext } from "./context";
@@ -22,19 +21,16 @@ export class SandboxArtifactEventHandler {
   ) {}
 
   handleArtifact(
-    event: Extract<SandboxEvent, { type: "artifact" }>,
+    event: Extract<SandboxIngressEvent, { type: "artifact" }>,
     context: SandboxEventContext
   ): void {
-    const artifactType = assertArtifactType(event.artifactType);
-    if (artifactType === "file") {
-      throw new Error("Files require validated upload registration");
-    }
+    const artifactType = event.artifactType;
     this.updateLastActivity(context.now);
     const artifactId =
       typeof event.artifactId === "string" && event.artifactId.length > 0
         ? event.artifactId
         : generateId();
-    const augmentedEvent: Extract<SandboxEvent, { type: "artifact" }> = {
+    const augmentedEvent: Extract<SandboxIngressEvent, { type: "artifact" }> = {
       ...event,
       artifactType,
       artifactId,

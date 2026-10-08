@@ -1,12 +1,14 @@
 import { isStoredFileArtifactType, type ArtifactInfo } from "@open-inspect/shared/types/artifacts";
 import type {
   ChildSessionDetail,
+  ChildStoredFileSummary,
   ChildSessionFinalResponse,
   ChildSessionTrajectory,
 } from "@open-inspect/shared/types/session-api";
 import { eventResponseSchema, type EventResponse } from "@open-inspect/shared/types/sandbox-events";
 import {
   buildAgentResponseFromEvents,
+  toEventFileArtifactInfo,
   getArtifactLabelFromArtifact,
 } from "@open-inspect/shared/completion/extractor";
 import {
@@ -178,6 +180,29 @@ export function buildChildSessionDetail(input: BuildChildSessionDetailInput): Ch
         url: row.url ?? "",
         metadata,
       })),
+    fileArtifacts: artifacts.flatMap<ChildStoredFileSummary>(({ row, metadata }) => {
+      const reference = toEventFileArtifactInfo(
+        { artifactType: row.type, artifactId: row.id, url: row.url, metadata },
+        typeof metadata?.messageId === "string" ? metadata.messageId : null
+      );
+      if (!reference) return [];
+      if (reference.type === "file") {
+        return [
+          {
+            id: reference.id,
+            type: reference.type,
+            available: reference.available,
+            ...(reference.available
+              ? {
+                  filename: reference.metadata.filename,
+                  caption: reference.metadata.caption,
+                }
+              : {}),
+          },
+        ];
+      }
+      return [{ id: reference.id, type: reference.type, caption: reference.caption }];
+    }),
     recentEvents: recentEvents.map((event) => ({
       type: event.type,
       data: toEventResponse(event).data,

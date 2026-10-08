@@ -6,7 +6,7 @@ import {
 import type { SessionArtifact } from "@open-inspect/shared/types/artifacts";
 import {
   bootPhaseNameSchema,
-  sandboxEventSchema,
+  sandboxIngressEventSchema,
   type SandboxEvent,
 } from "@open-inspect/shared/types/sandbox-events";
 import {
@@ -84,18 +84,12 @@ export class SandboxHandler {
       return Response.json({ error: "Invalid request body" }, { status: 400 });
     }
 
-    const result = sandboxEventSchema.safeParse(raw);
+    const result = sandboxIngressEventSchema.safeParse(raw);
     if (!result.success) {
       return Response.json({ error: "Invalid sandbox event" }, { status: 400 });
     }
 
-    const event: SandboxEvent = result.data;
-    if (event.type === "artifact" && event.artifactType === "file") {
-      return Response.json(
-        { error: "Files require validated upload registration" },
-        { status: 400 }
-      );
-    }
+    const event = result.data;
     await this.sandboxEventProcessor.processSandboxEvent(event);
     return Response.json({ status: "ok" });
   }

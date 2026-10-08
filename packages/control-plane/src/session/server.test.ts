@@ -145,6 +145,26 @@ function createLogger() {
 }
 
 describe("SessionServer", () => {
+  it.each(["file", "unknown", "", null, 42])(
+    "rejects %s artifacts on the sandbox WebSocket",
+    async (artifactType) => {
+      const { server, setConnectionKind, messageDeps } = createHarness();
+      setConnectionKind("sandbox");
+      await server.onMessage(
+        "sandbox-ws",
+        JSON.stringify({
+          type: "artifact",
+          artifactType,
+          artifactId: "f1",
+          url: "sessions/s1/files/f1",
+          sandboxId: "sandbox-1",
+          timestamp: 123,
+        })
+      );
+      expect(messageDeps.processSandboxEvent).not.toHaveBeenCalled();
+    }
+  );
+
   it("dispatches HTTP routes and preserves request correlation metrics", async () => {
     const { server, httpDeps, log, requestLog } = createHarness();
     const response = await server.onRequest(

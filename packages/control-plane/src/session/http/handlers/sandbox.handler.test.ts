@@ -92,24 +92,27 @@ function createHandler() {
 }
 
 describe("SandboxHandler", () => {
-  it("rejects raw file artifact events before processing", async () => {
-    const { handler, processSandboxEvent } = createHandler();
-    const response = await handler.sandboxEvent(
-      new Request("http://internal/internal/sandbox/event", {
-        method: "POST",
-        body: JSON.stringify({
-          type: "artifact",
-          artifactType: "file",
-          artifactId: "f1",
-          url: "sessions/s1/files/f1",
-          sandboxId: "sandbox-1",
-          timestamp: 123,
-        }),
-      })
-    );
-    expect(response.status).toBe(400);
-    expect(processSandboxEvent).not.toHaveBeenCalled();
-  });
+  it.each(["file", "unknown", "", null, 42])(
+    "rejects raw %s artifact events before processing",
+    async (artifactType) => {
+      const { handler, processSandboxEvent } = createHandler();
+      const response = await handler.sandboxEvent(
+        new Request("http://internal/internal/sandbox/event", {
+          method: "POST",
+          body: JSON.stringify({
+            type: "artifact",
+            artifactType,
+            artifactId: "f1",
+            url: "sessions/s1/files/f1",
+            sandboxId: "sandbox-1",
+            timestamp: 123,
+          }),
+        })
+      );
+      expect(response.status).toBe(400);
+      expect(processSandboxEvent).not.toHaveBeenCalled();
+    }
+  );
 
   it.each(["file", "pr", "unknown"])(
     "rejects %s through legacy media registration",

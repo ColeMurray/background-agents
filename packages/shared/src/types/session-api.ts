@@ -2,7 +2,7 @@ import { harnessIdSchema } from "../harnesses";
 import { generatedFileDetailsSchema } from "../generated-files";
 import { z } from "zod";
 import { sessionSkillSelectionSchema } from "./skills";
-import { artifactTypeSchema, type AgentResponse } from "./artifacts";
+import { artifactTypeSchema, type AgentResponse, type StoredFileArtifactType } from "./artifacts";
 import { sessionRepositoriesInputSchema } from "./repositories";
 import type { EventResponse } from "./sandbox-events";
 import { MAX_WEB_PROMPT_CHARS, promptContentSchema } from "./prompts";
@@ -370,6 +370,15 @@ export interface ChildSessionTrajectory {
   limit: number;
 }
 
+/** Discovery only: no object keys, URLs, or download authorization. */
+export interface ChildStoredFileSummary {
+  id: string;
+  type: StoredFileArtifactType;
+  filename?: string;
+  caption?: string;
+  available?: boolean;
+}
+
 export interface ChildSessionDetail {
   session: {
     id: string;
@@ -384,6 +393,7 @@ export interface ChildSessionDetail {
   };
   sandbox: { status: SandboxStatus } | null;
   hasUnfinishedPrompt?: boolean;
+  fileArtifacts?: ChildStoredFileSummary[];
   artifacts: Array<{ type: string; url: string; metadata: unknown }>;
   recentEvents: Array<{ type: string; data: unknown; createdAt: number }>;
   finalResponse?: ChildSessionFinalResponse | null;

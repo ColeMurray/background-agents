@@ -175,6 +175,7 @@ describe("ChildSummaryHandler", () => {
         mimeType: "text/csv",
         sizeBytes: 12,
         messageId: "m1",
+        caption: "Revenue",
       };
       artifactRepository.listArtifacts.mockReturnValue([
         createArtifact({
@@ -187,8 +188,15 @@ describe("ChildSummaryHandler", () => {
           id: "s1",
           type: "screenshot",
           url: "sessions/public-session-1/media/s1.png",
+          metadata: JSON.stringify({ caption: "Dashboard" }),
         }),
         createArtifact({ id: "v1", type: "video", url: "sessions/public-session-1/media/v1.mp4" }),
+        createArtifact({
+          id: "invalid-file",
+          type: "file",
+          url: "sessions/private/files/invalid-file",
+          metadata: "{}",
+        }),
         createArtifact(),
       ]);
       repository.getLatestTerminalMessage.mockReturnValue(createMessage({ id: "m1" }));
@@ -218,6 +226,18 @@ describe("ChildSummaryHandler", () => {
       expect(response.artifacts).toEqual([
         { type: "pr", url: "https://example.com/pr/1", metadata: null },
       ]);
+      const expectedFiles = [
+        { id: "f1", type: "file", available: true, filename: "report.csv", caption: "Revenue" },
+        { id: "s1", type: "screenshot", caption: "Dashboard" },
+        { id: "v1", type: "video" },
+        { id: "invalid-file", type: "file", available: false },
+      ];
+      expect(response.fileArtifacts).toEqual(expectedFiles);
+      expect(JSON.stringify(response.fileArtifacts)).not.toContain("sessions/");
+      repository.listEventPage.mockReturnValue({ events: [], hasMore: false, nextCursor: null });
+      const ordinary = (await handler.getChildSummary().json()) as ChildSessionDetail;
+      expect(ordinary.fileArtifacts).toEqual(expectedFiles);
+      expect(ordinary.finalResponse).toBeUndefined();
       expect(response.finalResponse?.artifacts).toEqual([
         { type: "pr", url: "https://example.com/pr/1", label: "Pull Request", metadata: null },
       ]);
@@ -290,6 +310,7 @@ describe("ChildSummaryHandler", () => {
       },
       sandbox: { status: "ready" },
       hasUnfinishedPrompt: false,
+      fileArtifacts: [],
       artifacts: [
         {
           type: "pr",
