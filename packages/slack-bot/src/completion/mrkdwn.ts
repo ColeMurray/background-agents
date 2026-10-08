@@ -127,7 +127,9 @@ function renderInlineToken(token: Token): string {
  */
 const LINKABLE_HREF_RE = /^(?:https?:\/\/|mailto:)[^\s|<>]+$/;
 
-function renderLink(href: string, label: string): string {
+function renderLink(rawHref: string, label: string): string {
+  // Markdown destinations may spell `&` as `&amp;`; decode first so escaping doesn't double it.
+  const href = decodeEntities(rawHref);
   const text = label.trim() ? label : escapeMrkdwnText(href);
   if (LINKABLE_HREF_RE.test(href)) return `<${escapeMrkdwnText(href)}|${text}>`;
   return label.trim() ? `${label} (${escapeMrkdwnText(href)})` : text;

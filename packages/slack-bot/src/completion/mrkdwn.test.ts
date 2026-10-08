@@ -72,6 +72,15 @@ describe("markdownToMrkdwn", () => {
     );
   });
 
+  it("decodes entities in link destinations before escaping them once", () => {
+    expect(markdownToMrkdwn("[b](https://x.com/?a=1&amp;b=2)")).toBe(
+      "<https://x.com/?a=1&amp;b=2|b>"
+    );
+    expect(markdownToMrkdwn("[b](https://x.com/&lt;!here&gt;)")).toBe(
+      "b (https://x.com/&lt;!here&gt;)"
+    );
+  });
+
   it("renders an image inside a link as its alt text so links don't nest", () => {
     expect(markdownToMrkdwn("[![CI](https://a.com/badge.png)](https://b.com)")).toBe(
       "<https://b.com|CI>"
