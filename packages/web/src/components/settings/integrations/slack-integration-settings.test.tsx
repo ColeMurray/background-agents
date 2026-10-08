@@ -967,4 +967,17 @@ describe("SlackIntegrationSettings harness", () => {
     expect(defaults).not.toHaveProperty("harness");
     expect(defaults).toMatchObject({ model: "anthropic/claude-sonnet-4-6" });
   });
+
+  it.each([
+    ["warns", { harness: "claude" as const }, 1],
+    ["does not warn", { harness: "claude" as const, model: "anthropic/claude-sonnet-4-6" }, 0],
+    ["does not warn", {}, 0],
+  ])("%s about the deployment default model for %j", (_case, defaults, warnings) => {
+    setupSWR({ global: { defaults } });
+    render(<SlackIntegrationSettings />);
+
+    expect(screen.queryAllByText(/Slack sessions use the deployment default model/)).toHaveLength(
+      warnings
+    );
+  });
 });

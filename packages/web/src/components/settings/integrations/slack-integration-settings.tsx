@@ -37,6 +37,7 @@ import { filterModelOptionsForHarness, shouldClearModelForHarness } from "@/lib/
 import { environmentOptionValue, parseEnvironmentOptionValue } from "@/lib/session-target";
 import { IntegrationSettingsSkeleton } from "./integration-settings-skeleton";
 import { HarnessSelect } from "./harness-select";
+import { HarnessFallbackWarning } from "./harness-fallback-warning";
 import { SettingsCardSection } from "../settings-card-section";
 import { Button } from "@/components/ui/button";
 import { APP_NAME } from "@/lib/site-config";
@@ -383,12 +384,11 @@ function GlobalSettingsSection({
           Agent harness
         </label>
         <p id="slack-harness-help" className="text-xs text-muted-foreground mb-2">
-          Harness for new Slack sessions; existing threads keep theirs. {CLAUDE_HARNESS_LABEL} runs
-          Anthropic models only, so a session whose model resolves to another provider (from an App
-          Home preference, a <code>!model</code> flag, or the system default) runs on{" "}
-          {DEFAULT_HARNESS_LABEL}. Slack sessions run unattended: {CLAUDE_HARNESS_LABEL} sessions
-          use the default Claude account when its Automated authentication in Provider Accounts
-          allows it, and the Anthropic API key otherwise.
+          Harness for new Slack sessions; existing threads keep theirs. A session whose App Home
+          preference or <code>!model</code> flag picks a model {CLAUDE_HARNESS_LABEL} cannot run
+          runs on {DEFAULT_HARNESS_LABEL}. Slack sessions run unattended, so {CLAUDE_HARNESS_LABEL}{" "}
+          uses the default Claude account only when its Automated authentication in Provider
+          Accounts allows it, and the Anthropic API key otherwise.
         </p>
         <HarnessSelect
           id="slack-harness"
@@ -401,6 +401,7 @@ function GlobalSettingsSection({
             setDirty(true);
           }}
         />
+        <HarnessFallbackWarning integration="Slack" harness={harness} model={model} />
       </div>
 
       <div className="mb-4">

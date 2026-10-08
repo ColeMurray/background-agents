@@ -201,11 +201,10 @@ describe("startSessionAndSendPrompt harness", () => {
         ...options,
         launchSettings: settings(configuredHarness, model),
       })
-    ).toEqual(expect.objectContaining({ configuredHarness, harness }));
-    expect(createSession).toHaveBeenCalledWith(
-      env,
-      expect.objectContaining({ configuredHarness, harness, model })
+    ).toEqual(
+      expect.objectContaining({ harness: { configured: configuredHarness, effective: harness } })
     );
+    expect(createSession).toHaveBeenCalledWith(env, expect.objectContaining({ harness, model }));
   });
 
   it("falls back from a stale planned model as any launch does and runs it on a harness that can", async () => {
@@ -220,7 +219,9 @@ describe("startSessionAndSendPrompt harness", () => {
         },
         launchPlan: { sessionDefaults: { model: "anthropic/claude-sonnet-4-6" } },
       })
-    ).toEqual(expect.objectContaining({ configuredHarness: "claude", harness: "opencode" }));
+    ).toEqual(
+      expect.objectContaining({ harness: { configured: "claude", effective: "opencode" } })
+    );
     expect(createSession).toHaveBeenCalledWith(
       env,
       expect.objectContaining({ harness: "opencode", model: openAIModel })

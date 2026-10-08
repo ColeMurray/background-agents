@@ -13,7 +13,7 @@ import type { ModelCategory } from "@open-inspect/shared/models";
 import { DEFAULT_HARNESS, type HarnessId } from "@open-inspect/shared/harnesses";
 import { filterModelOptionsForHarness, shouldClearModelForHarness } from "@/lib/session-harness";
 import { HarnessSelect } from "./harness-select";
-import { GitHubHarnessWarning } from "./github-harness-warning";
+import { HarnessFallbackWarning } from "./harness-fallback-warning";
 import { browserApiFetch } from "@/lib/browser-api-fetch";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -283,7 +283,7 @@ export function GlobalSettingsSection({
         <p className="text-xs text-muted-foreground mt-1">
           Harness that runs GitHub-triggered sessions. It decides which models are available above.
         </p>
-        <GitHubHarnessWarning harness={harness} model={model} />
+        <HarnessFallbackWarning integration="GitHub" harness={harness} model={model} />
       </div>
 
       <div className="mb-4">

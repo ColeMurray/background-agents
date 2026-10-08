@@ -1621,7 +1621,7 @@ describe("POST /events", () => {
     slackFetch.mockRestore();
   });
 
-  it("uses an enabled fallback model for a reasoning-only existing-thread override", async () => {
+  it("keeps a disabled session model for a reasoning-only existing-thread override", async () => {
     const slackFetch = mockSlackFetch();
     const env = makeSessionEnv();
     const kv = env.SLACK_KV as unknown as {
@@ -1643,7 +1643,7 @@ describe("POST /events", () => {
     const response = await app.fetch(
       slackEventRequest({
         type: "app_mention",
-        text: "<@B123> !reasoning:max add coverage",
+        text: "<@B123> !reasoning:high add coverage",
         user: "U123",
         channel: "C123",
         ts: "333.444",
@@ -1656,16 +1656,19 @@ describe("POST /events", () => {
     expect(response.status).toBe(200);
     await flushWaitUntil(ctx);
 
-    expect(promptFetchBodies(env.CONTROL_PLANE.fetch)).toEqual([
+    // Like a follow-up without flags, the prompt sends no model, so the
+    // session keeps running the model its harness was chosen for.
+    const promptBodies = promptFetchBodies(env.CONTROL_PLANE.fetch);
+    expect(promptBodies).toEqual([
       expect.objectContaining({
-        model: "anthropic/claude-haiku-4-5",
-        reasoningEffort: "max",
+        reasoningEffort: "high",
         callbackContext: expect.objectContaining({
-          model: "anthropic/claude-haiku-4-5",
-          reasoningEffort: "max",
+          model: "openai/gpt-5.6-sol",
+          reasoningEffort: "high",
         }),
       }),
     ]);
+    expect(promptBodies[0]).not.toHaveProperty("model");
     expect(env.CONTROL_PLANE.fetch).toHaveBeenCalledWith(
       "https://internal/model-preferences?strict=true",
       expect.objectContaining({ method: "GET" })
@@ -1775,18 +1778,23 @@ describe("POST /events", () => {
       );
     }
 
-    it("names Claude Agent in the acknowledgement", async () => {
+    it.each([
+      ["keeps the acknowledgement bare for the user's defaults", "fix the auth tests", []],
+      [
+        "names Claude Agent beside a non-default model selection",
+        "!reasoning high fix the auth tests",
+        ["Session defaults: Claude Haiku 4.5 · high reasoning · Claude Agent"],
+      ],
+    ] as const)("on Claude Agent, %s", async (_case, text, notices) => {
       const slackFetch = mockSlackFetch();
       const env = makeSessionEnv([], { slackDefaults: { harness: "claude" } });
 
-      await deliver(env, { text: "<@B123> fix the auth tests", ts: "111.222" });
+      await deliver(env, { text: `<@B123> ${text}`, ts: "111.222" });
 
       expect(sessionFetchBodies(env.CONTROL_PLANE.fetch)).toEqual([
         expect.objectContaining({ harness: "claude", model: anthropicModel }),
       ]);
-      expect(sessionDefaultsNotices(slackFetch)).toEqual([
-        "Session defaults: Claude Haiku 4.5 · max reasoning · Claude Agent",
-      ]);
+      expect(sessionDefaultsNotices(slackFetch)).toEqual(notices);
 
       slackFetch.mockRestore();
     });
@@ -1840,22 +1848,21 @@ describe("POST /events", () => {
         expect.objectContaining({ model: openAIModel }),
       ]);
       expect(postedTexts(slackFetch)).toEqual([
-        'Model "openai/gpt-5.4" cannot run on the Claude Agent harness. Reply without `!model`, or start a new thread to use it.',
+        'Model "openai/gpt-5.4" cannot run on the Claude Agent harness. A thread keeps the harness its session started on. Reply without `!model`, or start a new thread to use that model.',
       ]);
 
       slackFetch.mockRestore();
     });
 
     it.each([
-      ["an Anthropic thread", "opencode", "anthropic/claude-sonnet-4-6", anthropicModel],
-      ["an Anthropic thread", "claude", "anthropic/claude-sonnet-4-6", anthropicModel],
-      ["a GPT thread", "claude", "openai/gpt-5.5", openAIModel],
+      ["an Anthropic thread", "anthropic/claude-sonnet-4-6"],
+      ["a GPT thread", "openai/gpt-5.5"],
     ] as const)(
-      "replaces the disabled model of %s on a !reasoning follow-up with the %s harness configured",
-      async (_case, harness, sessionModel, model) => {
+      "keeps the disabled model of %s on a !reasoning follow-up with Claude Agent configured",
+      async (_case, sessionModel) => {
         const slackFetch = mockSlackFetch();
         const env = makeSessionEnv([], {
-          slackDefaults: { harness },
+          slackDefaults: { harness: "claude" },
           enabledModels: [openAIModel, anthropicModel],
         });
         await seedThread(env, sessionModel);
@@ -1866,38 +1873,14 @@ describe("POST /events", () => {
           thread_ts: "111.222",
         });
 
-        expect(promptFetchBodies(env.CONTROL_PLANE.fetch)).toEqual([
-          expect.objectContaining({ model, reasoningEffort: "high" }),
-        ]);
+        const promptBodies = promptFetchBodies(env.CONTROL_PLANE.fetch);
+        expect(promptBodies).toEqual([expect.objectContaining({ reasoningEffort: "high" })]);
+        expect(promptBodies[0]).not.toHaveProperty("model");
         expect(slackSettingsFetches(env)).toEqual([]);
 
         slackFetch.mockRestore();
       }
     );
-
-    it("tells the user the thread's model is no longer enabled when the harness refuses its fallback", async () => {
-      const slackFetch = mockSlackFetch();
-      const env = makeSessionEnv([], {
-        enabledModels: [openAIModel, "openai/gpt-5.5"],
-        ...harnessRefusal,
-      });
-      await seedThread(env, "anthropic/claude-sonnet-4-6");
-
-      await deliver(env, {
-        text: "<@B123> !reasoning high add coverage",
-        ts: "333.444",
-        thread_ts: "111.222",
-      });
-
-      expect(promptFetchBodies(env.CONTROL_PLANE.fetch)).toEqual([
-        expect.objectContaining({ model: openAIModel, reasoningEffort: "high" }),
-      ]);
-      expect(postedTexts(slackFetch)).toEqual([
-        'This thread\'s model is no longer enabled. Model "openai/gpt-5.4" cannot run on the Claude Agent harness. Reply without `!reasoning`, ask an admin to enable a model this thread can run, or start a new thread.',
-      ]);
-
-      slackFetch.mockRestore();
-    });
   });
 
   it("preserves an existing session mapping after a transient prompt failure", async () => {
@@ -2837,12 +2820,20 @@ describe("POST /interactions", () => {
     slackFetch.mockRestore();
   });
 
-  it("names Claude Agent in the acknowledgement of a target-picker launch", async () => {
+  it("reports a harness fallback in the acknowledgement of a target-picker launch", async () => {
     const slackFetch = mockSlackFetch();
-    const env = makeSessionEnv([], { slackDefaults: { harness: "claude" } });
-    await (env.SLACK_KV as unknown as { put: (k: string, v: string) => Promise<void> }).put(
+    const env = makeSessionEnv([], {
+      slackDefaults: { harness: "claude" },
+      enabledModels: ["anthropic/claude-haiku-4-5", "openai/gpt-5.4"],
+    });
+    const kv = env.SLACK_KV as unknown as { put: (k: string, v: string) => Promise<void> };
+    await kv.put(
       "pending:C123:111.222",
       JSON.stringify({ message: "Please handle this", userId: "U123" })
+    );
+    await kv.put(
+      "user_prefs:U123",
+      JSON.stringify({ userId: "U123", model: "openai/gpt-5.4", updatedAt: 1 })
     );
     const ctx = makeCtx();
 
@@ -2862,7 +2853,7 @@ describe("POST /interactions", () => {
     await flushWaitUntil(ctx);
     await flushWaitUntil(ctx, 1);
     expect(sessionFetchBodies(env.CONTROL_PLANE.fetch)).toEqual([
-      expect.objectContaining({ harness: "claude", model: "anthropic/claude-haiku-4-5" }),
+      expect.objectContaining({ harness: "opencode", model: "openai/gpt-5.4" }),
     ]);
     expect(slackApiBodies(slackFetch, "chat.update")).toContainEqual(
       expect.objectContaining({
@@ -2873,7 +2864,7 @@ describe("POST /interactions", () => {
             elements: [
               {
                 type: "mrkdwn",
-                text: "Session defaults: Claude Haiku 4.5 · max reasoning · Claude Agent",
+                text: "Session defaults: GPT 5.4 · OpenCode (Claude Agent can't run this model)",
               },
             ],
           },

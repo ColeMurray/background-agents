@@ -29,7 +29,8 @@ export interface SlackSettings {
   sessionInstructions?: string;
 }
 
-const DEFAULT_SLACK_SETTINGS: SlackSettings = { harness: DEFAULT_HARNESS };
+// Frozen because every fallback path returns this same object.
+const DEFAULT_SLACK_SETTINGS: SlackSettings = Object.freeze({ harness: DEFAULT_HARNESS });
 
 /** Fetch and normalize workspace Slack settings without blocking callers on failure. */
 export async function getSlackSettings(env: Env, traceId?: string): Promise<SlackSettings> {
@@ -59,8 +60,7 @@ export async function getSlackSettings(env: Env, traceId?: string): Promise<Slac
     return {
       harness,
       defaultModel: model && isValidModel(model) ? model : undefined,
-      sessionInstructions:
-        typeof instructions === "string" && instructions.trim() ? instructions : undefined,
+      sessionInstructions: instructions?.trim() ? instructions : undefined,
     };
   } catch (error) {
     log.warn("slack_settings.fetch_error", {

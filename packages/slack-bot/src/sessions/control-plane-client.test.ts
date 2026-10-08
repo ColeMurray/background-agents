@@ -65,7 +65,6 @@ describe("control plane client timeouts", () => {
     });
     const result = createSession(makeEnv(fetch), {
       target,
-      configuredHarness: "opencode",
       harness: "opencode",
       model: "openai/gpt-5.4",
     });
@@ -141,18 +140,9 @@ describe("prompt harness refusal", () => {
     });
   });
 
-  it("falls back to its own message when the control plane sends none", async () => {
-    const fetch = vi.fn(async () => okJson({ code: "HARNESS_MODEL_INCOMPATIBLE" }, 400));
-
-    expect(await sendPrompt(makeEnv(fetch), promptOptions)).toEqual({
-      ok: false,
-      reason: "harness_model_incompatible",
-      message: "This thread's harness can't run that model.",
-    });
-  });
-
   it.each([
     { error: "Invalid attachment" },
+    { code: "HARNESS_MODEL_INCOMPATIBLE" },
     { code: "PROMPT_QUEUE_FULL", error: "Prompt queue is full" },
   ])("keeps other refusals transient: %j", async (body) => {
     const fetch = vi.fn(async () => okJson(body, 400));
@@ -224,7 +214,6 @@ describe("control plane client request payloads", () => {
     );
     await createSession(makeEnv(fetch), {
       target,
-      configuredHarness: "opencode",
       harness: "opencode",
       model: "openai/gpt-5.4",
       teamId,
@@ -242,7 +231,6 @@ describe("control plane client request payloads", () => {
     expect(
       await createSession(makeEnv(fetch), {
         target,
-        configuredHarness: "opencode",
         harness: "opencode",
         model: "openai/gpt-5.4",
       })
@@ -264,7 +252,6 @@ describe("control plane client request payloads", () => {
     await expect(
       createSession(makeEnv(fetch), {
         target,
-        configuredHarness: "opencode",
         harness: "opencode",
         model: "openai/gpt-5.4",
         reasoningEffort: "high",
@@ -301,7 +288,6 @@ describe("control plane client request payloads", () => {
 
     await createSession(makeEnv(fetch), {
       target: environmentTarget,
-      configuredHarness: "opencode",
       harness: "opencode",
       model: "anthropic/claude-sonnet-4-6",
       branch: "ignored-for-environments",
@@ -321,7 +307,6 @@ describe("control plane client request payloads", () => {
 
     await createSession(makeEnv(fetch), {
       target: noRepositoryTarget,
-      configuredHarness: "opencode",
       harness: "opencode",
       model: "anthropic/claude-sonnet-4-6",
       branch: "ignored-without-a-repository",
@@ -345,7 +330,6 @@ describe("control plane client request payloads", () => {
 
     await createSession(makeEnv(fetch), {
       target: noRepositoryTarget,
-      configuredHarness: "claude",
       harness,
       model,
     });
@@ -407,7 +391,6 @@ describe("service credential headers", () => {
     );
     await createSession(makeServiceEnv(fetch), {
       target,
-      configuredHarness: "opencode",
       harness: "opencode",
       model: "openai/gpt-5.4",
       slackUserId: "U0123",

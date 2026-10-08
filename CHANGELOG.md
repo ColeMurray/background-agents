@@ -2,15 +2,14 @@
 
 New features, integrations, and notable improvements to Open-Inspect — newest first.
 
-## October 6, 2026
+## October 8, 2026
 
 **Claude Agent for Slack sessions.** Choose OpenCode or Claude Agent for new Slack sessions under
 **Settings > Integrations > Slack**, beside the default model. OpenCode stays the default. The bot
-picks the model as before and runs it on OpenCode when Claude Agent cannot run it. While Claude
-Agent is selected, the acknowledgement names each session's harness. On Claude Agent, Slack sessions
-follow the Claude **Automated authentication** setting, so they can use a connected Claude
-subscription. Existing threads keep their harness. See
-[Claude Agent](docs/CLAUDE_AGENT.md#slack-sessions).
+picks the model as before and runs it on OpenCode when Claude Agent cannot run it, and the
+acknowledgement says when that happens. On Claude Agent, Slack sessions follow the Claude
+**Automated authentication** setting, so they can use a connected Claude subscription. Existing
+threads keep their harness. See [Claude Agent](docs/CLAUDE_AGENT.md#slack-sessions).
 
 ## October 4, 2026
 

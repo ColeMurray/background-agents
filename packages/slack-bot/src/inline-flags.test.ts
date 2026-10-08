@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { ValidModel } from "@open-inspect/shared/models";
-import { resolveInlinePromptOptions, threadFallbackModels } from "./inline-flags";
+import { resolveInlinePromptOptions } from "./inline-flags";
 
 describe("resolveInlinePromptOptions", () => {
   const defaults = { model: "anthropic/claude-sonnet-4-6", reasoningEffort: "high" };
@@ -109,11 +109,11 @@ describe("resolveInlinePromptOptions", () => {
   });
 });
 
-describe("resolveInlinePromptOptions fallback models", () => {
+describe("resolveInlinePromptOptions disabled session model policy", () => {
   const sessionDefaults = { model: "anthropic/claude-sonnet-4-6", reasoningEffort: "high" };
   const enabledModels = ["openai/gpt-5.4", "anthropic/claude-haiku-4-5"] satisfies ValidModel[];
 
-  it("replaces a disabled session model from every enabled model by default", () => {
+  it("replaces a disabled session model by default", () => {
     expect(
       resolveInlinePromptOptions({ reasoningEffort: "high" }, sessionDefaults, enabledModels)
     ).toEqual({
@@ -126,81 +126,27 @@ describe("resolveInlinePromptOptions fallback models", () => {
     });
   });
 
-  it("replaces a disabled session model from the fallback models", () => {
+  it("keeps a disabled session model when asked to", () => {
     expect(
-      resolveInlinePromptOptions({ reasoningEffort: "max" }, sessionDefaults, enabledModels, [
-        "anthropic/claude-haiku-4-5",
-      ])
+      resolveInlinePromptOptions({ reasoningEffort: "max" }, sessionDefaults, enabledModels, "keep")
     ).toEqual({
       ok: true,
       turnPlan: {
         sessionDefaults,
-        promptOverrides: { model: "anthropic/claude-haiku-4-5", reasoningEffort: "max" },
-        effective: { model: "anthropic/claude-haiku-4-5", reasoningEffort: "max" },
+        promptOverrides: { reasoningEffort: "max" },
+        effective: { model: "anthropic/claude-sonnet-4-6", reasoningEffort: "max" },
       },
     });
   });
 
-  it("accepts a !model that is enabled but not a fallback model", () => {
+  it("still rejects a disabled !model when keeping the session model", () => {
     expect(
-      resolveInlinePromptOptions({ model: "openai/gpt-5.4" }, sessionDefaults, enabledModels, [
-        "anthropic/claude-haiku-4-5",
-      ])
-    ).toEqual({
-      ok: true,
-      turnPlan: {
+      resolveInlinePromptOptions(
+        { model: "openai/gpt-5.5" },
         sessionDefaults,
-        promptOverrides: { model: "openai/gpt-5.4", reasoningEffort: "high" },
-        effective: { model: "openai/gpt-5.4", reasoningEffort: "high" },
-      },
-    });
-  });
-
-  it("keeps an enabled session model that is not a fallback model", () => {
-    const openaiSession = { model: "openai/gpt-5.4", reasoningEffort: "high" };
-    expect(
-      resolveInlinePromptOptions({ reasoningEffort: "high" }, openaiSession, enabledModels, [
-        "anthropic/claude-haiku-4-5",
-      ])
-    ).toEqual({
-      ok: true,
-      turnPlan: {
-        sessionDefaults: openaiSession,
-        promptOverrides: { reasoningEffort: "high" },
-        effective: openaiSession,
-      },
-    });
-  });
-});
-
-describe("threadFallbackModels", () => {
-  const enabledModels = [
-    "openai/gpt-5.4",
-    "anthropic/claude-haiku-4-5",
-    "xai/grok-4.7",
-    "anthropic/claude-opus-4-8",
-  ] satisfies ValidModel[];
-  const nonAnthropicModels = ["openai/gpt-5.4", "xai/grok-4.7"] satisfies ValidModel[];
-
-  it.each([
-    ["every enabled model to a GPT thread", "openai/gpt-5.5", enabledModels, enabledModels],
-    [
-      "only the enabled Anthropic models to an Anthropic thread",
-      "anthropic/claude-sonnet-4-6",
-      enabledModels,
-      ["anthropic/claude-haiku-4-5", "anthropic/claude-opus-4-8"],
-    ],
-    [
-      "every enabled model to an Anthropic thread when no Anthropic model is enabled",
-      "anthropic/claude-sonnet-4-6",
-      nonAnthropicModels,
-      nonAnthropicModels,
-    ],
-  ])("offers %s", (_case, sessionModel, enabled, expected) => {
-    expect(threadFallbackModels(sessionModel, enabled)).toEqual(expected);
-  });
-
-  it("decides by the stored model's provider even after it leaves the catalog", () => {
-    expect(threadFallbackModels("openai/gpt-4o", enabledModels)).toEqual(enabledModels);
+        enabledModels,
+        "keep"
+      )
+    ).toEqual({ ok: false, error: 'Model "openai/gpt-5.5" is not enabled.' });
   });
 });

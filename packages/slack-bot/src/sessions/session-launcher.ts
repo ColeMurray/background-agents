@@ -11,6 +11,7 @@ import {
 import { getUserRepoBranchPreference } from "../branch-preferences";
 import { formatChannelContext, formatThreadContext } from "../messages/context";
 import { branchPreferenceRepo, targetLabel, type SlackSessionTarget } from "../targets";
+import { createLogger } from "../logger";
 import type { Env } from "../types";
 import type { SlackActorIdentity } from "../user-identity";
 import { getResolvedUserPreferences, type ResolvedUserPreferences } from "../user-preferences";
@@ -26,6 +27,8 @@ import {
   type ModelSelection,
   type SessionLaunchPlan,
 } from "../inline-flags";
+
+const log = createLogger("session-launcher");
 
 export interface SlackLaunchSettings {
   enabledModels: ValidModel[];
@@ -101,16 +104,20 @@ export interface StartSessionOptions {
   traceId?: string;
 }
 
+/** The workspace's harness setting and the harness a session actually runs on. */
+export interface SessionHarness {
+  configured: HarnessId;
+  effective: HarnessId;
+}
+
 /** What the session was actually created with, for the acknowledgement. */
 export interface StartSessionResult {
   sessionId: string;
   sessionDefaults: ModelSelection;
   /** True when those are not the user's App Home preferences. */
   differsFromUserDefaults: boolean;
-  /** The workspace's Slack harness setting. */
-  configuredHarness: HarnessId;
-  /** The harness the session runs on: the configured one unless it cannot run the model. */
-  harness: HarnessId;
+  /** The configured harness unless it cannot run the model, in which case the default. */
+  harness: SessionHarness;
 }
 
 export async function startSessionAndSendPrompt(
@@ -191,8 +198,20 @@ export async function startSessionAndSendPrompt(
     await postMessage(env.SLACK_BOT_TOKEN, channel, firstPrompt.error, { thread_ts: threadTs });
     return null;
   }
-  const configuredHarness = slackConfig.harness;
-  const harness = resolveHarnessForModel(configuredHarness, model);
+  const harness: SessionHarness = {
+    configured: slackConfig.harness,
+    effective: resolveHarnessForModel(slackConfig.harness, model),
+  };
+  if (harness.effective !== harness.configured) {
+    // Expected when a user preference or `!model` picks a model the configured
+    // harness cannot run, so this is not a warning.
+    log.info("slack.session.harness_fallback", {
+      trace_id: traceId,
+      configured_harness: harness.configured,
+      harness: harness.effective,
+      model,
+    });
+  }
   const preferenceRepo = branchPreferenceRepo(target);
   let branch: string | undefined;
   if (preferenceRepo) {
@@ -203,8 +222,7 @@ export async function startSessionAndSendPrompt(
   const session = await createSession(env, {
     target,
     teamId,
-    configuredHarness,
-    harness,
+    harness: harness.effective,
     model,
     reasoningEffort,
     branch,
@@ -279,11 +297,5 @@ export async function startSessionAndSendPrompt(
     threadTs,
     buildThreadSession(session.sessionId, target, model, reasoningEffort, messageTs, teamId)
   );
-  return {
-    sessionId: session.sessionId,
-    sessionDefaults,
-    differsFromUserDefaults,
-    configuredHarness,
-    harness,
-  };
+  return { sessionId: session.sessionId, sessionDefaults, differsFromUserDefaults, harness };
 }

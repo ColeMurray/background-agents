@@ -119,21 +119,12 @@ session-starting `!model` that Claude Agent cannot run, such as `!model openai/g
 session on OpenCode. A follow-up stays on the thread's harness, so the control plane rejects a
 follow-up `!model` that the harness cannot run. The bot replies in the thread:
 
-> Model "openai/gpt-5.4" cannot run on the Claude Agent harness. Reply without `!model`, or start a
-> new thread to use it.
+> Model "openai/gpt-5.4" cannot run on the Claude Agent harness. A thread keeps the harness its
+> session started on. Reply without `!model`, or start a new thread to use that model.
 
-A `!reasoning`-only follow-up whose session model has since been disabled runs on a fallback model.
-The bot chooses it from the thread's session model, whatever the current harness setting, because a
-thread runs on Claude Agent only when its session model is an Anthropic model. A thread on an
-Anthropic model gets an enabled Anthropic model when one exists: the shared catalog's default model
-if it is enabled, else the first enabled Anthropic model. Any other thread, or an Anthropic thread
-with no Anthropic model enabled, gets the shared catalog's default model if it is enabled, else the
-first enabled model. When the thread's harness cannot run the fallback model, such as a Claude Agent
-thread with no Anthropic model enabled, the bot replies:
-
-> This thread's model is no longer enabled. Model "openai/gpt-5.4" cannot run on the Claude Agent
-> harness. Reply without `!reasoning`, ask an admin to enable a model this thread can run, or start
-> a new thread.
+A `!reasoning`-only follow-up keeps the thread's session model, as a follow-up without flags does,
+even if an administrator has since disabled that model. The thread's harness was chosen to run that
+model, so the follow-up always runs.
 
 To continue a session that started from a DM, reply in the Slack thread created for that DM request.
 Sending a new top-level DM is treated as a new request and may start repository selection again.
@@ -246,10 +237,11 @@ there, the bot uses the first enabled model until an administrator saves a diffe
 
 The session then runs on the configured **Agent harness** when that harness can run the resolved
 model, and on OpenCode otherwise. Claude Agent runs Anthropic models only, so an OpenAI App Home
-model or `!model openai/gpt-5.4` runs on OpenCode. While Claude Agent is selected, the "Starting
-work..." acknowledgement names each new session's harness, including a fallback:
-`Session defaults: GPT 5.4 · OpenCode (Claude Agent can't run this model)`. The settings form lists
-only models the selected harness can run.
+model or `!model openai/gpt-5.4` runs on OpenCode. The "Starting work..." acknowledgement reports a
+fallback, such as `Session defaults: GPT 5.4 · OpenCode (Claude Agent can't run this model)`, and
+names Claude Agent when it already reports a model other than your App Home default. The settings
+form lists only models the selected harness can run, and warns when Claude Agent is selected with no
+default model, because the deployment default model may be one it cannot run.
 
 A harness change applies to new sessions. Each thread keeps the harness its session started on.
 

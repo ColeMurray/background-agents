@@ -1,6 +1,5 @@
 import {
   addReaction,
-  escapeMrkdwnText,
   getChannelInfo,
   getMessageDetails,
   postMessage,
@@ -31,6 +30,7 @@ import { createLogger } from "../logger";
 import { fetchInteractiveThreadContext } from "../interactive-thread-context";
 import {
   buildWorkingMessage,
+  formatHarnessModelRefusal,
   formatSessionDefaultsNotice,
   scheduleStartingStatus,
 } from "../messages/blocks";
@@ -67,7 +67,6 @@ import {
 } from "@open-inspect/shared/inline-prompt-flags";
 import {
   resolveInlinePromptOptions,
-  threadFallbackModels,
   type ResolvedTurnPlan,
   type SessionLaunchPlan,
 } from "../inline-flags";
@@ -223,7 +222,7 @@ async function handleIncomingMessage(params: IncomingMessageParams): Promise<voi
           reasoningEffort: existingSession.reasoningEffort,
         },
         enabledModels,
-        threadFallbackModels(existingSession.model, enabledModels)
+        "keep"
       );
       if (!resolvedTurn.ok) {
         await postMessage(env.SLACK_BOT_TOKEN, channel, resolvedTurn.error, {
@@ -320,12 +319,12 @@ async function handleIncomingMessage(params: IncomingMessageParams): Promise<voi
     // user was already told inside deliverPrompt.
     if (promptResult.reason === "no_images_delivered") return;
     if (promptResult.reason === "harness_model_incompatible") {
-      const refusal = escapeMrkdwnText(promptResult.message);
-      // Without `!model`, the rejected model is the fallback for a disabled session model.
-      const reply = inlinePromptOptions.model
-        ? `${refusal} Reply without \`!model\`, or start a new thread to use it.`
-        : `This thread's model is no longer enabled. ${refusal} Reply without \`!reasoning\`, ask an admin to enable a model this thread can run, or start a new thread.`;
-      await postMessage(env.SLACK_BOT_TOKEN, channel, reply, { thread_ts: threadTs });
+      await postMessage(
+        env.SLACK_BOT_TOKEN,
+        channel,
+        formatHarnessModelRefusal(promptResult.message),
+        { thread_ts: threadTs }
+      );
       return;
     }
     if (promptResult.reason === "transient") {

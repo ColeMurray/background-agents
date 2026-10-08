@@ -72,30 +72,22 @@ Agent, and an OpenAI App Home model or `!model openai/gpt-5.4` runs on OpenCode 
 To keep Slack sessions on Claude Agent, choose an Anthropic default model. Users can still pick
 another provider's model in App Home or with `!model`, and Slack has no setting that prevents it.
 
-While Claude Agent is selected, the "Starting work..." acknowledgement names the harness of every
-new session: `Session defaults: Claude Haiku 4.5 · max reasoning · Claude Agent`, or
-`Session defaults: GPT 5.4 · OpenCode (Claude Agent can't run this model)` after a fallback. With
-OpenCode selected, the acknowledgement is unchanged.
+The "Starting work..." acknowledgement reports a fallback:
+`Session defaults: GPT 5.4 · OpenCode (Claude Agent can't run this model)`. When it already reports
+a model other than the user's App Home default, it also names Claude Agent:
+`Session defaults: Claude Haiku 4.5 · high reasoning · Claude Agent`. A session that runs the user's
+defaults on the configured harness gets the usual bare acknowledgement.
 
 A thread keeps the harness its session was created with, so switching the setting affects only new
 sessions. The control plane rejects a follow-up `!model` that the thread's harness cannot run, and
 the bot posts that explanation in the thread with advice:
 
-> Model "openai/gpt-5.4" cannot run on the Claude Agent harness. Reply without `!model`, or start a
-> new thread to use it.
+> Model "openai/gpt-5.4" cannot run on the Claude Agent harness. A thread keeps the harness its
+> session started on. Reply without `!model`, or start a new thread to use that model.
 
-A `!reasoning`-only follow-up whose session model has since been disabled runs on a fallback model.
-The bot chooses it from the thread's session model, whatever the current harness setting, because a
-thread runs on Claude Agent only when its session model is an Anthropic model. A thread on an
-Anthropic model gets an enabled Anthropic model when one exists: the shared catalog's default model
-if it is enabled, else the first enabled Anthropic model. Any other thread, or an Anthropic thread
-with no Anthropic model enabled, gets the shared catalog's default model if it is enabled, else the
-first enabled model. When the thread's harness cannot run the fallback model, such as a Claude Agent
-thread with no Anthropic model enabled, the bot replies:
-
-> This thread's model is no longer enabled. Model "openai/gpt-5.4" cannot run on the Claude Agent
-> harness. Reply without `!reasoning`, ask an admin to enable a model this thread can run, or start
-> a new thread.
+A `!reasoning`-only follow-up keeps the thread's session model, as a follow-up without flags does,
+even if an administrator has since disabled that model. The thread's harness was chosen to run that
+model, so the follow-up always runs.
 
 Slack sessions are unattended, so on Claude Agent they follow the **Automated authentication**
 policy. With a default Claude account and that policy on **Use default**, Slack usage draws on the
