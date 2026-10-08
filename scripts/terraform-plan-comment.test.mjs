@@ -11,6 +11,13 @@ const workflow = readFileSync(
   new URL("../.github/workflows/terraform.yml", import.meta.url),
   "utf8"
 );
+// Plan and apply run from a reusable workflow so the TF_VAR_* block is written
+// once. Step-level assertions below resolve against whichever file defines the
+// step; job-level ones stay on terraform.yml, which still owns the graph.
+const runWorkflow = readFileSync(
+  new URL("../.github/workflows/terraform-run.yml", import.meta.url),
+  "utf8"
+);
 const formatter = fileURLToPath(new URL("./terraform-plan-comment.mjs", import.meta.url));
 const require = createRequire(import.meta.url);
 const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor;
@@ -25,8 +32,9 @@ const maliciousPlan = [
 ].join("\n");
 
 function stepBody(name) {
-  const body = workflow
-    .split(`      - name: ${name}\n`)[1]
+  const body = [workflow, runWorkflow]
+    .map((source) => source.split(`      - name: ${name}\n`)[1])
+    .find(Boolean)
     ?.split(/\n {6}- name:|\n {2}\w[\w-]*:\n/)[0];
   assert.ok(body, `expected the ${name} step`);
   return body;
@@ -36,6 +44,17 @@ function block(name, key, indentation) {
   const match = stepBody(name).match(new RegExp(`${key}: \\|\\n((?: {${indentation}}.*\\n|\\n)*)`));
   assert.ok(match, `expected a ${key} block in ${name}`);
   return match[1].replace(new RegExp(`^ {${indentation}}`, "gm"), "");
+}
+
+// The failed-plan gate is a job rather than a step: failing the reusable
+// workflow would leave the comment job without the outcome it gates on.
+function assertPlanStatusGate() {
+  const job = workflow.split("\n  plan-status:\n")[1];
+  assert.ok(job, "expected the plan-status job");
+  assert.match(job, /needs: \[plan\]/);
+  assert.match(job, /if: always\(\) && needs\.plan\.outputs\.outcome == 'failure'/);
+  const gate = job.match(/- run: (.*)/)[1];
+  assert.equal(spawnSync("bash", ["-e", "-c", gate]).status, 1);
 }
 
 function canUpload(conclusion) {
@@ -154,12 +173,13 @@ for (const exitCode of [0, 1, 42]) {
     const githubOutput = join(directory, "github_output");
     writeFileSync(githubOutput, "existing=value\n");
     const planText = exitCode === 0 ? maliciousPlan + "\n" + "x".repeat(65000) : maliciousPlan;
-    const result = spawnSync("bash", ["-e", "-c", block("Terraform Plan", "run", 10)], {
+    const result = spawnSync("bash", ["-e", "-c", block("Terraform", "run", 10)], {
       cwd: directory,
       encoding: "utf8",
       timeout: 10000,
       env: {
         ...process.env,
+        COMMAND: "plan",
         PATH: `${directory}:${process.env.PATH}`,
         GITHUB_OUTPUT: githubOutput,
         STUB_PLAN_TEXT: planText,
@@ -185,9 +205,7 @@ for (const exitCode of [0, 1, 42]) {
     assert.ok(comment.includes(`**Status:** ${exitCode === 0 ? "Success" : "Failed"}`));
     assert.ok(Buffer.byteLength(comment) < 65536);
     if (exitCode !== 0) {
-      assert.match(stepBody("Plan Status"), /if: always\(\) && steps\.plan\.outcome == 'failure'/);
-      const gate = stepBody("Plan Status").match(/run: (.*)/)[1];
-      assert.equal(spawnSync("bash", ["-e", "-c", gate]).status, 1);
+      assertPlanStatusGate();
     }
   });
 }
@@ -203,10 +221,8 @@ for (const outcome of ["success", "failure"]) {
     assert.equal(readFileSync(join(directory, "plan_comment.txt"), "utf8"), previousComment);
     assert.equal(canUpload("failure"), false);
     assert.equal(canUpload("skipped"), false);
-    assert.match(stepBody("Plan Status"), /if: always\(\) && steps\.plan\.outcome == 'failure'/);
     if (outcome === "failure") {
-      const gate = stepBody("Plan Status").match(/run: (.*)/)[1];
-      assert.equal(spawnSync("bash", ["-e", "-c", gate]).status, 1);
+      assertPlanStatusGate();
     }
   });
 }
@@ -365,14 +381,17 @@ test("commenting has minimal permissions and never checks out or executes PR cod
     /VALIDATION_RESULT: \$\{\{ needs\.validate\.result \}\}/
   );
   const planJob = workflow.split("\n  plan:\n")[1].split("\n  comment:\n")[0];
-  assert.match(planJob, /terraform_wrapper: false/);
   assert.doesNotMatch(planJob, /github-script|GITHUB_OUTPUT|steps\.plan\.outputs\.plan/);
-  assert.match(stepBody("Terraform Plan"), /shell: bash/);
-  assert.match(stepBody("Terraform Plan"), /continue-on-error: true/);
+  // The reusable workflow runs Terraform, so it must not hold a write token.
+  assert.match(runWorkflow, /permissions:\n {6}contents: read\n/);
+  assert.doesNotMatch(runWorkflow, /pull-requests: write/);
+  assert.match(runWorkflow, /terraform_wrapper: false/);
+  assert.match(stepBody("Terraform"), /shell: bash/);
+  assert.match(stepBody("Terraform"), /continue-on-error: \$\{\{ inputs\.command == 'plan' \}\}/);
   assert.match(stepBody("Prepare Plan Comment"), /id: prepare_comment/);
   assert.match(
     stepBody("Prepare Plan Comment"),
-    /if: always\(\) && \(steps\.plan\.outcome == 'success' \|\| steps\.plan\.outcome == 'failure'\)/
+    /if: always\(\) && inputs\.command == 'plan' && \(steps\.plan\.outcome == 'success' \|\| steps\.plan\.outcome == 'failure'\)/
   );
   assert.match(
     stepBody("Upload Plan Comment"),

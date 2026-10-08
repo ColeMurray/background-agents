@@ -109,7 +109,8 @@ export function withValidatedOwnerTeam(row: AutomationRow): AutomationRow {
 }
 
 type AutomationListResult = { automations: AutomationRow[] } & (
-  { hasMore: false; nextCursor: null } | { hasMore: true; nextCursor: CreatedAtCursor }
+  | { hasMore: false; nextCursor: null }
+  | { hasMore: true; nextCursor: CreatedAtCursor }
 );
 
 /**
@@ -227,7 +228,8 @@ const countRowSchema = z.object({ count: z.number() });
  * active run of the automation; event firings block per concurrency key.
  */
 export type InvocationOverlapScope =
-  { kind: "automation" } | { kind: "concurrencyKey"; concurrencyKey: string };
+  | { kind: "automation" }
+  | { kind: "concurrencyKey"; concurrencyKey: string };
 
 /**
  * A cron slot handover: move the schedule from the slot this firing claimed

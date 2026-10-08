@@ -541,21 +541,25 @@ export class Scheduler {
     // workspaces are resolved before grant admission below. Resolution errors
     // remain launch failures. No targets produce one repo-less child.
     const children: AutomationRunRow[] = [
-      ...resolutions.map((resolution): AutomationRunRow => ({
-        ...childBase(),
-        status: resolution.error ? "failed" : "starting",
-        failure_reason: resolution.error,
-        completed_at: resolution.error ? now : null,
-        repo_owner: resolution.repository?.repoOwner ?? resolution.requested.repo_owner,
-        repo_name: resolution.repository?.repoName ?? resolution.requested.repo_name,
-        repo_id: resolution.repository?.repoId ?? resolution.requested.repo_id,
-        base_branch: resolution.repository?.baseBranch ?? resolution.requested.base_branch,
-      })),
-      ...environmentSelection.map((environment): AutomationRunRow => ({
-        ...childBase(),
-        status: "starting",
-        environment_id: environment.environment_id,
-      })),
+      ...resolutions.map(
+        (resolution): AutomationRunRow => ({
+          ...childBase(),
+          status: resolution.error ? "failed" : "starting",
+          failure_reason: resolution.error,
+          completed_at: resolution.error ? now : null,
+          repo_owner: resolution.repository?.repoOwner ?? resolution.requested.repo_owner,
+          repo_name: resolution.repository?.repoName ?? resolution.requested.repo_name,
+          repo_id: resolution.repository?.repoId ?? resolution.requested.repo_id,
+          base_branch: resolution.repository?.baseBranch ?? resolution.requested.base_branch,
+        })
+      ),
+      ...environmentSelection.map(
+        (environment): AutomationRunRow => ({
+          ...childBase(),
+          status: "starting",
+          environment_id: environment.environment_id,
+        })
+      ),
     ];
     if (children.length === 0) {
       children.push({ ...childBase(), status: "starting" });
@@ -584,7 +588,8 @@ export class Scheduler {
     // for this firing: edits made after the conditional insert cannot change which
     // account an admitted child uses.
     let providerAuthSnapshot:
-      { providerAuth: SessionModelProviderAuthInput[] } | { error: unknown } = { providerAuth: [] };
+      | { providerAuth: SessionModelProviderAuthInput[] }
+      | { error: unknown } = { providerAuth: [] };
     if (launchCandidates.length > 0) {
       try {
         providerAuthSnapshot = {

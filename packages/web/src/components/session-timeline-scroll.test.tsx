@@ -226,12 +226,15 @@ describe("timeline auto-scrolling", () => {
       if (!this.hasAttribute("data-index")) return 800;
       return Number(this.dataset.index) % 2 === 0 ? 80 : 160;
     });
-    const messages = Array.from({ length: 200 }, (_, index): SandboxEvent => ({
-      type: "user_message",
-      content: `Message ${index}`,
-      messageId: `message-${index}`,
-      timestamp: index + 10,
-    }));
+    const messages = Array.from(
+      { length: 200 },
+      (_, index): SandboxEvent => ({
+        type: "user_message",
+        content: `Message ${index}`,
+        messageId: `message-${index}`,
+        timestamp: index + 10,
+      })
+    );
     const { container, rerender } = render(
       <SessionTimeline {...baseTimelineProps} events={messages} />
     );
@@ -260,12 +263,15 @@ describe("timeline auto-scrolling", () => {
       <SessionTimeline
         {...baseTimelineProps}
         events={[
-          ...Array.from({ length: 3 }, (_, index): SandboxEvent => ({
-            type: "user_message",
-            content: `Older ${index}`,
-            messageId: `older-${index}`,
-            timestamp: index + 1,
-          })),
+          ...Array.from(
+            { length: 3 },
+            (_, index): SandboxEvent => ({
+              type: "user_message",
+              content: `Older ${index}`,
+              messageId: `older-${index}`,
+              timestamp: index + 1,
+            })
+          ),
           ...messages,
         ]}
       />

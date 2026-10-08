@@ -429,23 +429,74 @@ variables.
 
 ## Adding New Environments
 
+The Cloudflare stack in `environments/production/` is shared across environments. They differ only
+in which secrets they use and which state object they write to, so there is no Terraform to copy.
+(The AWS environments are laid out differently, with a directory each.)
+
 To add a staging environment:
 
+1. Create a GitHub Environment named `staging`.
+
+   **Set every value below on the environment.** Anything left unset falls back to the
+   repository-level value, and each of these is a name two deployments would then share. A fresh
+   `staging/terraform.tfstate` does not know production owns the name already; it plans to create or
+   adopt the resource.
+
+   | Setting                        | Why it has to differ                                                                                                                                                                                                                                                                              |
+   | ------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+   | `DEPLOYMENT_NAME`              | Feeds `name_suffix` in `locals.tf`, which names every Worker, D1 database and R2 bucket.                                                                                                                                                                                                          |
+   | `MODAL_ENVIRONMENT`            | The Modal app name is the constant `"open-inspect"` (`modal.tf`), so `DEPLOYMENT_NAME` does not separate it. The Modal environment is the only separator, and sharing it overwrites production's app and its `llm-api-keys` and `github-app` secrets. Required when `sandbox_provider = "modal"`. |
+   | `MODAL_ENVIRONMENT_WEB_SUFFIX` | Modal web endpoint URLs are built from the workspace slug and that constant app name, not the environment, so without a distinct suffix both deployments resolve to the same URLs.                                                                                                                |
+   | `CLOUDFLARE_CUSTOM_DOMAIN`     | The hostname carries no suffix, so two states would each manage a `cloudflare_workers_custom_domain` for it. Leave unset on all but one environment.                                                                                                                                              |
+
+   Beyond those, set only the secrets that differ.
+
+2. Add a caller workflow that runs `terraform-run.yml` against it:
+
+   ```yaml
+   # .github/workflows/deploy-staging.yml
+   name: Deploy Staging
+
+   on:
+     workflow_dispatch:
+
+   # terraform-run.yml needs nothing beyond a checkout. It posts no comment, so
+   # it asks for no write token; a called workflow cannot request more than its
+   # caller grants anyway.
+   permissions:
+     contents: read
+
+   jobs:
+     terraform:
+       uses: ./.github/workflows/terraform-run.yml
+       secrets: inherit
+       with:
+         command: apply
+         environment: staging
+   ```
+
+`environment` is the only identifier. It names the GitHub Environment the job binds to, so every
+`TF_VAR_*` resolves against that environment's secrets, and it derives the state object
+(`<environment>/terraform.tfstate`). Deriving rather than accepting a second input is deliberate: an
+independent state key could disagree with the environment and evaluate one deployment's
+configuration against another's state.
+
+The variable list lives in one place and is not restated per environment. `terraform-run.yml` also
+carries its own concurrency group, so the caller needs none: two applies against one environment
+serialize, and plans never queue behind an apply.
+
+To run Terraform against a non-production environment locally, pass the same derived state key at
+init. A directory already initialized against another environment needs `-reconfigure`:
+
 ```bash
-# Copy production config
-cp -r environments/production environments/staging
-
-# Update backend key in staging/backend.tf
-# key = "staging/terraform.tfstate"
-
-# Update environment variable in staging/terraform.tfvars
-# environment = "staging"
-
-# Initialize and apply
-cd environments/staging
-terraform init -backend-config="access_key=..." -backend-config="secret_key=..."
-terraform apply
+cd environments/production
+terraform init -reconfigure \
+  -backend-config="key=staging/terraform.tfstate" \
+  -backend-config="access_key=..." -backend-config="secret_key=..."
 ```
+
+Use `-reconfigure`, not `-migrate-state`. Migrating copies the state you are currently initialized
+against into the new key, which would write production's state to the staging key.
 
 ## Security Considerations
 

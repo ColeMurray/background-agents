@@ -173,12 +173,15 @@ describe("session timeline Autofix feedback", () => {
   it("preserves thread expansion after virtualization unmounts its row", async () => {
     const events: SandboxEvent[] = [
       autofixEvent(),
-      ...Array.from({ length: 500 }, (_, index): SandboxEvent => ({
-        type: "user_message",
-        content: `Message ${index}`,
-        messageId: `message-${index}`,
-        timestamp: index + 2,
-      })),
+      ...Array.from(
+        { length: 500 },
+        (_, index): SandboxEvent => ({
+          type: "user_message",
+          content: `Message ${index}`,
+          messageId: `message-${index}`,
+          timestamp: index + 2,
+        })
+      ),
     ];
     const { container } = render(<SessionTimeline {...timelineProps} events={events} />);
     const threadButton = screen.getByRole("button", {

@@ -20,7 +20,10 @@ export interface SessionAttachmentRecord {
 }
 
 export type SessionAttachmentStorageErrorReason =
-  "session_not_found" | "quota_exceeded" | "registry_unavailable" | "cleanup_failed";
+  | "session_not_found"
+  | "quota_exceeded"
+  | "registry_unavailable"
+  | "cleanup_failed";
 
 export class SessionAttachmentStorageError extends Error {
   constructor(

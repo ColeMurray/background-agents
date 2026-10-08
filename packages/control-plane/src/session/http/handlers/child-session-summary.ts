@@ -36,7 +36,8 @@ interface ChildSummaryOptions {
 }
 
 export type ChildSummaryOptionsResult =
-  { ok: true; options: ChildSummaryOptions } | { ok: false; error: string };
+  | { ok: true; options: ChildSummaryOptions }
+  | { ok: false; error: string };
 
 export interface ChildSummaryFinalResponseInput {
   message: MessageRow | null;

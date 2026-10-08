@@ -1,0 +1,322 @@
+name: Terraform Run
+
+# One job runs either plan or apply, so the TF_VAR_* block below is written
+# once. It used to be duplicated between the plan and apply jobs in
+# terraform.yml, which is why a new Terraform variable had to be added in two
+# places and why there was nowhere to parameterize an environment.
+#
+# The block stays step-scoped rather than moving to job level: at job level
+# every deployment credential would also be in the environment of `npm ci` and
+# the package builds. A composite action cannot hold it either, since composite
+# actions have no `secrets` context and all 88 would become inputs.
+#
+# This workflow never comments, and holds no write token. Posting stays in the
+# caller's `comment` job, which checks out nothing and runs no PR code.
+
+on:
+  workflow_call:
+    inputs:
+      command:
+        description: "Terraform command to run: plan or apply"
+        required: true
+        type: string
+      environment:
+        description: >-
+          Deployment to act on. Names the GitHub Environment supplying secrets
+          and, via STATE_KEY below, the state object it writes. One identifier
+          rather than two: a separate state key input could disagree with the
+          environment and evaluate one deployment's configuration against
+          another deployment's state.
+        required: true
+        type: string
+      timeout_minutes:
+        description: "Job timeout"
+        required: false
+        default: 45
+        type: number
+    outputs:
+      outcome:
+        description: "Outcome of the plan step; empty for apply"
+        value: ${{ jobs.terraform.outputs.outcome }}
+
+jobs:
+  terraform:
+    name: ${{ inputs.command }}
+    runs-on: ubuntu-latest
+    timeout-minutes: ${{ inputs.timeout_minutes }}
+    environment: ${{ inputs.environment }}
+    # Read-only. It never comments; see the header.
+    permissions:
+      contents: read
+    # Applies serialize per deployment; plans do not join that group. A group
+    # holds one running job and one pending job, and a third arrival cancels
+    # the pending one, so a shared group lets a second PR's plan cancel a
+    # queued production apply with nothing to retry it.
+    #
+    # The plan group must differ from the caller's workflow-level group:
+    # identical names at workflow and job level are a deadlock GitHub cancels
+    # the job for. It is inert anyway, the caller already serializes per ref.
+    concurrency:
+      group: ${{ inputs.command == 'apply' && format('terraform-apply-{0}', inputs.environment) || format('terraform-plan-{0}', github.ref) }}
+      cancel-in-progress: false
+    outputs:
+      outcome: ${{ steps.plan.outcome }}
+    env:
+      TF_WORKING_DIR: terraform/environments/production
+      STATE_KEY: ${{ inputs.environment }}/terraform.tfstate
+    steps:
+      # Every step below gates on the command. Without this a typo skips all of
+      # them and the job reports success having done nothing.
+      - name: Validate inputs
+        env:
+          COMMAND: ${{ inputs.command }}
+          ENVIRONMENT: ${{ inputs.environment }}
+        run: |
+          case "$COMMAND" in
+            plan|apply) ;;
+            *) echo "::error::command must be 'plan' or 'apply', got '$COMMAND'"; exit 1 ;;
+          esac
+
+          # Reaches a backend object key and a concurrency group name, and a
+          # caller may source it from a repository variable.
+          case "$ENVIRONMENT" in
+            ""|*[!A-Za-z0-9._-]*)
+              echo "::error::environment is not a plain environment name: '$ENVIRONMENT'"
+              exit 1
+              ;;
+          esac
+
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          # This job holds every deployment credential in the repository; it
+          # has no reason to also hold a git token. Nothing here pushes.
+          persist-credentials: false
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version-file: .nvmrc
+          cache: "npm"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build worker packages
+        run: |
+          npm run build -w @open-inspect/shared
+          npm run build -w @open-inspect/control-plane
+          npm run build -w @open-inspect/slack-bot
+          npm run build -w @open-inspect/github-bot
+          npm run build -w @open-inspect/linear-bot
+
+      - name: Setup uv
+        if: inputs.command == 'apply'
+        uses: astral-sh/setup-uv@v7
+
+      - name: Install Modal and Python dependencies
+        if: inputs.command == 'apply'
+        run: uv sync --frozen
+        working-directory: packages/modal-infra
+
+      # /.terraform-version is the one place the version is written, so the
+      # validate job in terraform.yml cannot drift from what plan and apply
+      # run. tfenv and tfswitch read the same file, so a local checkout
+      # matches CI. The caller cannot pass it: the env context is unavailable
+      # in a reusable workflow call's `with:` block.
+      - name: Read Terraform version
+        id: tfversion
+        run: printf 'version=%s\n' "$(cat .terraform-version)" >> "$GITHUB_OUTPUT"
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v4
+        with:
+          terraform_version: ${{ steps.tfversion.outputs.version }}
+          # Capture output as a file, not the wrapper's multiline step outputs.
+          terraform_wrapper: false
+
+      - name: Terraform Init
+        env:
+          CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID || secrets.CLOUDFLARE_ACCOUNT_ID }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+        run: |
+          terraform init \
+            -backend-config="key=${STATE_KEY}" \
+            -backend-config="access_key=${R2_ACCESS_KEY_ID}" \
+            -backend-config="secret_key=${R2_SECRET_ACCESS_KEY}" \
+            -backend-config="endpoints={s3=\"https://${CLOUDFLARE_ACCOUNT_ID}.r2.cloudflarestorage.com\"}"
+        working-directory: ${{ env.TF_WORKING_DIR }}
+
+      - name: Stage SchedulerDO deletion migration
+        run: |
+          set -euo pipefail
+          # Read state and parse it as separate steps: piping straight into jq
+          # turns a failed state read into an empty tag, which would silently
+          # skip the deletion migration and ship a worker whose class was never
+          # retired. An absent or empty state is still a valid "not v2" answer.
+          state="$(terraform state pull)"
+          current_tag="$(printf '%s' "$state" | jq -r '.resources[]? | select(.module == "module.control_plane_worker" and .type == "cloudflare_worker_version" and .name == "this") | .instances[0].attributes.migration_tag // empty')"
+          if [ "$current_tag" = "v2" ]; then
+            printf '%s\n' '{"control_plane_migration_tag":"v3","control_plane_migration_old_tag":"v2","control_plane_deleted_classes":["SchedulerDO"]}' > scheduler-do-retirement.auto.tfvars.json
+          fi
+        working-directory: ${{ env.TF_WORKING_DIR }}
+
+      # One step for both commands. Two steps would mean two copies of the
+      # TF_VAR_* block below, or hoisting it to job level where `npm ci` and
+      # the package builds would run with every deployment credential set.
+      - name: Terraform
+        id: plan
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ "$COMMAND" = apply ]; then
+            terraform apply -auto-approve
+            exit $?
+          fi
+
+          # Plan text must not be interpreted as runner workflow commands either.
+          command_token="$(openssl rand -hex 32)"
+          echo "::stop-commands::$command_token"
+          trap 'printf "\n::%s::\n" "$command_token"' EXIT
+          # -lock=false: a plan writes no state, and taking the lock would make
+          # it queue behind an apply that can run for 45 minutes.
+          terraform plan -lock=false -no-color -out=tfplan 2>&1 | tee plan_output.txt
+        working-directory: ${{ env.TF_WORKING_DIR }}
+        # Plan failures reach the PR comment instead of killing the job; the
+        # caller turns the outcome into a red check. An apply failure is fatal.
+        continue-on-error: ${{ inputs.command == 'plan' }}
+        env:
+          COMMAND: ${{ inputs.command }}
+          # Only the Modal CLI reads these two names; Terraform gets the same
+          # values as TF_VAR_modal_token_* below.
+          MODAL_TOKEN_ID: ${{ secrets.MODAL_TOKEN_ID }}
+          MODAL_TOKEN_SECRET: ${{ secrets.MODAL_TOKEN_SECRET }}
+          TF_VAR_cloudflare_api_token: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          TF_VAR_cloudflare_account_id: ${{ vars.CLOUDFLARE_ACCOUNT_ID || secrets.CLOUDFLARE_ACCOUNT_ID }}
+          TF_VAR_cloudflare_worker_subdomain: ${{ vars.CLOUDFLARE_WORKER_SUBDOMAIN || secrets.CLOUDFLARE_WORKER_SUBDOMAIN }}
+          TF_VAR_cloudflare_zone_id: ${{ vars.CLOUDFLARE_ZONE_ID || secrets.CLOUDFLARE_ZONE_ID }}
+          TF_VAR_cloudflare_custom_domain: ${{ vars.CLOUDFLARE_CUSTOM_DOMAIN || secrets.CLOUDFLARE_CUSTOM_DOMAIN }}
+          TF_VAR_r2_media_location: "${{ vars.R2_MEDIA_LOCATION || secrets.R2_MEDIA_LOCATION || 'ENAM' }}"
+          TF_VAR_r2_media_bucket_name: ${{ vars.R2_MEDIA_BUCKET_NAME || secrets.R2_MEDIA_BUCKET_NAME }}
+          TF_VAR_vercel_api_token: "${{ secrets.VERCEL_API_TOKEN || '000000000000000000000000' }}"
+          TF_VAR_vercel_team_id: "${{ vars.VERCEL_TEAM_ID || secrets.VERCEL_TEAM_ID || 'unused' }}"
+          TF_VAR_modal_token_id: ${{ secrets.MODAL_TOKEN_ID }}
+          TF_VAR_modal_token_secret: ${{ secrets.MODAL_TOKEN_SECRET }}
+          TF_VAR_modal_workspace: ${{ vars.MODAL_WORKSPACE || secrets.MODAL_WORKSPACE }}
+          TF_VAR_modal_environment: "${{ vars.MODAL_ENVIRONMENT || secrets.MODAL_ENVIRONMENT || 'main' }}"
+          TF_VAR_modal_environment_web_suffix: ${{ vars.MODAL_ENVIRONMENT_WEB_SUFFIX || secrets.MODAL_ENVIRONMENT_WEB_SUFFIX }}
+          TF_VAR_github_client_id: ${{ vars.GH_OAUTH_CLIENT_ID || secrets.GH_OAUTH_CLIENT_ID }}
+          TF_VAR_github_client_secret: ${{ secrets.GH_OAUTH_CLIENT_SECRET }}
+          TF_VAR_google_client_id: ${{ vars.GOOGLE_CLIENT_ID || secrets.GOOGLE_CLIENT_ID }}
+          TF_VAR_google_client_secret: ${{ secrets.GOOGLE_CLIENT_SECRET }}
+          TF_VAR_github_app_id: ${{ vars.GH_APP_ID || secrets.GH_APP_ID }}
+          TF_VAR_github_app_private_key: ${{ secrets.GH_APP_PRIVATE_KEY }}
+          TF_VAR_github_app_installation_id: ${{ vars.GH_APP_INSTALLATION_ID || secrets.GH_APP_INSTALLATION_ID }}
+          TF_VAR_enable_slack_bot: "${{ vars.ENABLE_SLACK_BOT || secrets.ENABLE_SLACK_BOT || 'true' }}"
+          TF_VAR_slack_bot_token: ${{ secrets.SLACK_BOT_TOKEN }}
+          TF_VAR_slack_signing_secret: ${{ secrets.SLACK_SIGNING_SECRET }}
+          TF_VAR_slack_bot_default_model: "${{ vars.SLACK_BOT_DEFAULT_MODEL || secrets.SLACK_BOT_DEFAULT_MODEL || 'claude-haiku-4-5' }}"
+          TF_VAR_anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          TF_VAR_classification_anthropic_api_key: ${{ secrets.CLASSIFICATION_ANTHROPIC_API_KEY }}
+          TF_VAR_classification_openai_api_key: ${{ secrets.CLASSIFICATION_OPENAI_API_KEY }}
+          TF_VAR_classification_model: "${{ vars.CLASSIFICATION_MODEL || 'claude-haiku-4-5' }}"
+          TF_VAR_classification_reasoning_effort: "${{ vars.CLASSIFICATION_REASONING_EFFORT }}"
+          TF_VAR_token_encryption_key: ${{ secrets.TOKEN_ENCRYPTION_KEY }}
+          TF_VAR_repo_secrets_encryption_key: ${{ secrets.REPO_SECRETS_ENCRYPTION_KEY }}
+          TF_VAR_provider_accounts_encryption_key: ${{ secrets.PROVIDER_ACCOUNTS_ENCRYPTION_KEY }}
+          TF_VAR_nextauth_secret: ${{ secrets.NEXTAUTH_SECRET }}
+          TF_VAR_modal_api_secret: ${{ secrets.MODAL_API_SECRET }}
+          TF_VAR_allowed_users: ${{ vars.ALLOWED_USERS || secrets.ALLOWED_USERS }}
+          TF_VAR_allowed_email_domains: ${{ vars.ALLOWED_EMAIL_DOMAINS || secrets.ALLOWED_EMAIL_DOMAINS }}
+          TF_VAR_allowed_emails: ${{ vars.ALLOWED_EMAILS || secrets.ALLOWED_EMAILS }}
+          TF_VAR_allowed_github_orgs: ${{ vars.ALLOWED_GITHUB_ORGS || secrets.ALLOWED_GITHUB_ORGS }}
+          TF_VAR_unsafe_allow_all_users: "${{ vars.UNSAFE_ALLOW_ALL_USERS || secrets.UNSAFE_ALLOW_ALL_USERS || 'false' }}"
+          TF_VAR_deployment_name: ${{ vars.DEPLOYMENT_NAME || secrets.DEPLOYMENT_NAME }}
+          TF_VAR_enable_github_bot: "${{ vars.ENABLE_GITHUB_BOT || secrets.ENABLE_GITHUB_BOT || 'false' }}"
+          TF_VAR_github_webhook_secret: ${{ secrets.GH_WEBHOOK_SECRET }}
+          TF_VAR_github_bot_username: ${{ vars.GH_BOT_USERNAME || secrets.GH_BOT_USERNAME }}
+          TF_VAR_github_bot_default_model: "${{ vars.GH_BOT_DEFAULT_MODEL || secrets.GH_BOT_DEFAULT_MODEL || 'anthropic/claude-haiku-4-5' }}"
+          TF_VAR_app_name: "${{ vars.APP_NAME || secrets.APP_NAME || 'Open-Inspect' }}"
+          TF_VAR_app_icon_url: ${{ vars.APP_ICON_URL || secrets.APP_ICON_URL }}
+          TF_VAR_enable_linear_bot: "${{ vars.ENABLE_LINEAR_BOT || secrets.ENABLE_LINEAR_BOT || 'false' }}"
+          TF_VAR_linear_client_id: ${{ vars.LINEAR_CLIENT_ID || secrets.LINEAR_CLIENT_ID }}
+          TF_VAR_linear_client_secret: ${{ secrets.LINEAR_CLIENT_SECRET }}
+          TF_VAR_linear_webhook_secret: ${{ secrets.LINEAR_WEBHOOK_SECRET }}
+          TF_VAR_linear_api_key: ${{ secrets.LINEAR_API_KEY }}
+          TF_VAR_linear_bot_default_model: "${{ vars.LINEAR_BOT_DEFAULT_MODEL || secrets.LINEAR_BOT_DEFAULT_MODEL || 'claude-sonnet-4-6' }}"
+          TF_VAR_web_platform: "${{ vars.WEB_PLATFORM || secrets.WEB_PLATFORM || 'vercel' }}"
+          TF_VAR_enable_durable_object_bindings: "${{ vars.ENABLE_DURABLE_OBJECT_BINDINGS || secrets.ENABLE_DURABLE_OBJECT_BINDINGS || 'true' }}"
+          TF_VAR_enable_service_bindings: "${{ vars.ENABLE_SERVICE_BINDINGS || secrets.ENABLE_SERVICE_BINDINGS || 'true' }}"
+          TF_VAR_sandbox_provider: "${{ vars.SANDBOX_PROVIDER || secrets.SANDBOX_PROVIDER || 'modal' }}"
+          TF_VAR_sandbox_inactivity_timeout_ms: "${{ vars.SANDBOX_INACTIVITY_TIMEOUT_MS || secrets.SANDBOX_INACTIVITY_TIMEOUT_MS || '600000' }}"
+          TF_VAR_teams_enforcement: "${{ vars.TEAMS_ENFORCEMENT || secrets.TEAMS_ENFORCEMENT || 'shadow' }}"
+          TF_VAR_sandbox_boot_timeout_ms: "${{ vars.SANDBOX_BOOT_TIMEOUT_MS || secrets.SANDBOX_BOOT_TIMEOUT_MS || '1800000' }}"
+          TF_VAR_daytona_api_url: ${{ vars.DAYTONA_API_URL || secrets.DAYTONA_API_URL }}
+          TF_VAR_daytona_api_key: ${{ secrets.DAYTONA_API_KEY }}
+          TF_VAR_daytona_base_snapshot: ${{ vars.DAYTONA_BASE_SNAPSHOT || secrets.DAYTONA_BASE_SNAPSHOT }}
+          TF_VAR_daytona_base_snapshot_memory_gib: "${{ vars.DAYTONA_BASE_SNAPSHOT_MEMORY_GIB || '2' }}"
+          TF_VAR_daytona_target: ${{ vars.DAYTONA_TARGET || secrets.DAYTONA_TARGET }}
+          TF_VAR_daytona_toolbox_api_url: ${{ vars.DAYTONA_TOOLBOX_API_URL || secrets.DAYTONA_TOOLBOX_API_URL }}
+          TF_VAR_daytona_prebuilds_enabled: "${{ vars.DAYTONA_PREBUILDS_ENABLED || secrets.DAYTONA_PREBUILDS_ENABLED || 'false' }}"
+          TF_VAR_vercel_sandbox_token: ${{ secrets.VERCEL_SANDBOX_TOKEN }}
+          TF_VAR_vercel_sandbox_project_id: ${{ vars.VERCEL_SANDBOX_PROJECT_ID || secrets.VERCEL_SANDBOX_PROJECT_ID }}
+          TF_VAR_vercel_sandbox_team_id: ${{ vars.VERCEL_SANDBOX_TEAM_ID || secrets.VERCEL_SANDBOX_TEAM_ID }}
+          TF_VAR_vercel_sandbox_api_base_url: ${{ vars.VERCEL_SANDBOX_API_BASE_URL || secrets.VERCEL_SANDBOX_API_BASE_URL }}
+          TF_VAR_vercel_base_snapshot_id: ${{ vars.VERCEL_BASE_SNAPSHOT_ID || secrets.VERCEL_BASE_SNAPSHOT_ID }}
+          TF_VAR_vercel_sandbox_runtime: "${{ vars.VERCEL_SANDBOX_RUNTIME || secrets.VERCEL_SANDBOX_RUNTIME || 'node24' }}"
+          TF_VAR_vercel_snapshot_expiration_ms: "${{ vars.VERCEL_SNAPSHOT_EXPIRATION_MS || secrets.VERCEL_SNAPSHOT_EXPIRATION_MS || '0' }}"
+          # Sandbox provider: OpenComputer. Inert while sandbox_provider defaults to "modal";
+          # when set to "opencomputer", Terraform builds the managed base snapshot during apply.
+          TF_VAR_opencomputer_api_url: ${{ vars.OPENCOMPUTER_API_URL || secrets.OPENCOMPUTER_API_URL }}
+          TF_VAR_opencomputer_api_key: ${{ secrets.OPENCOMPUTER_API_KEY }}
+          TF_VAR_opencomputer_template: ${{ vars.OPENCOMPUTER_TEMPLATE || secrets.OPENCOMPUTER_TEMPLATE }}
+          TF_VAR_opencomputer_project_id: ${{ vars.OPENCOMPUTER_PROJECT_ID || secrets.OPENCOMPUTER_PROJECT_ID }}
+          TF_VAR_opencomputer_target: ${{ vars.OPENCOMPUTER_TARGET || secrets.OPENCOMPUTER_TARGET }}
+          TF_VAR_e2b_api_key: ${{ secrets.E2B_API_KEY }}
+          TF_VAR_e2b_template_id: ${{ vars.E2B_TEMPLATE_ID || secrets.E2B_TEMPLATE_ID }}
+          TF_VAR_e2b_api_url: "${{ vars.E2B_API_URL || secrets.E2B_API_URL || 'https://api.e2b.app' }}"
+          TF_VAR_e2b_sandbox_timeout_seconds: "${{ vars.E2B_SANDBOX_TIMEOUT_SECONDS || secrets.E2B_SANDBOX_TIMEOUT_SECONDS || '7200' }}"
+          TF_VAR_e2b_auto_pause: "${{ vars.E2B_AUTO_PAUSE || secrets.E2B_AUTO_PAUSE || 'true' }}"
+          TF_VAR_e2b_template_cpu: "${{ vars.E2B_TEMPLATE_CPU || secrets.E2B_TEMPLATE_CPU || '2' }}"
+          TF_VAR_e2b_template_memory_mb: "${{ vars.E2B_TEMPLATE_MEMORY_MB || secrets.E2B_TEMPLATE_MEMORY_MB || '4096' }}"
+          # Documentation site (packages/docs). Leaving DOCS_SITE_ENABLED unset
+          # after provisioning the site destroys its Vercel project on apply.
+          TF_VAR_docs_site_enabled: "${{ vars.DOCS_SITE_ENABLED || secrets.DOCS_SITE_ENABLED || 'false' }}"
+          TF_VAR_docs_custom_domain: ${{ vars.DOCS_CUSTOM_DOMAIN || secrets.DOCS_CUSTOM_DOMAIN }}
+
+      - name: Prepare Plan Comment
+        id: prepare_comment
+        if: always() && inputs.command == 'plan' && (steps.plan.outcome == 'success' || steps.plan.outcome == 'failure')
+        env:
+          PLAN_OUTCOME: ${{ steps.plan.outcome }}
+        run: node "$GITHUB_WORKSPACE/scripts/terraform-plan-comment.mjs" plan_output.txt plan_comment.txt "$PLAN_OUTCOME"
+        working-directory: ${{ env.TF_WORKING_DIR }}
+
+      - name: Upload Plan Comment
+        if: steps.prepare_comment.conclusion == 'success'
+        uses: actions/upload-artifact@v7
+        with:
+          name: terraform-plan-comment
+          path: ${{ env.TF_WORKING_DIR }}/plan_comment.txt
+          if-no-files-found: error
+          retention-days: 1
+
+      # No Plan Status step here. Failing this job would make it a failed
+      # reusable workflow, whose outputs do not reliably reach the caller, and
+      # the caller's comment job gates on `outcome`. terraform.yml turns a
+      # failed outcome into a red check instead.
+      - name: Post Run Results
+        if: always()
+        env:
+          COMMAND: ${{ inputs.command }}
+          STATUS: ${{ job.status }}
+          ENVIRONMENT: ${{ inputs.environment }}
+          ACTOR: ${{ github.actor }}
+        run: |
+          echo "### Terraform $COMMAND Results"
+          echo "Status: $STATUS"
+          echo "Environment: $ENVIRONMENT"
+          echo "State: $STATE_KEY"
+          echo "Commit: $GITHUB_SHA"
+          echo "Run by: $ACTOR"

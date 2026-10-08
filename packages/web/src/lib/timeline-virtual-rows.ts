@@ -1,7 +1,8 @@
 import type { SessionTimelineItem } from "./timeline-items";
 
 export type TimelineVirtualRow =
-  { type: "item"; id: string; item: SessionTimelineItem } | { type: "thinking"; id: string };
+  | { type: "item"; id: string; item: SessionTimelineItem }
+  | { type: "thinking"; id: string };
 
 export const TIMELINE_ROW_SIZE_ESTIMATES = {
   status: 40,

@@ -33,7 +33,8 @@ export type AccessDenialReason =
   | "not_collaborator";
 export type AuditObligation = "session.private_break_glass";
 export type AccessDecision =
-  { allowed: true; audit?: AuditObligation } | { allowed: false; reason: AccessDenialReason };
+  | { allowed: true; audit?: AuditObligation }
+  | { allowed: false; reason: AccessDenialReason };
 
 export type SessionViewer =
   | {

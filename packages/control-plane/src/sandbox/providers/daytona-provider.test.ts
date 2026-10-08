@@ -60,21 +60,27 @@ function createMockClient(
       if (!config.baseSnapshot) throw new Error("DAYTONA_BASE_SNAPSHOT is required");
       return config.baseSnapshot;
     }),
-    createSandbox: vi.fn(async (): Promise<DaytonaSandboxResponse> => ({
-      id: "daytona-sandbox-id",
-      state: "started",
-    })),
-    getSandbox: vi.fn(async (): Promise<DaytonaSandboxResponse> => ({
-      id: "daytona-sandbox-id",
-      state: "started",
-    })),
+    createSandbox: vi.fn(
+      async (): Promise<DaytonaSandboxResponse> => ({
+        id: "daytona-sandbox-id",
+        state: "started",
+      })
+    ),
+    getSandbox: vi.fn(
+      async (): Promise<DaytonaSandboxResponse> => ({
+        id: "daytona-sandbox-id",
+        state: "started",
+      })
+    ),
     startSandbox: vi.fn(async () => {}),
     stopSandbox: vi.fn(async () => {}),
     deleteSandbox: vi.fn(async () => {}),
     recoverSandbox: vi.fn(async () => {}),
-    getSignedPreviewUrl: vi.fn(async (): Promise<DaytonaSignedPreviewUrlResponse> => ({
-      url: "https://preview.test/signed",
-    })),
+    getSignedPreviewUrl: vi.fn(
+      async (): Promise<DaytonaSignedPreviewUrlResponse> => ({
+        url: "https://preview.test/signed",
+      })
+    ),
     ...overrides,
   } as unknown as DaytonaRestClient;
 }

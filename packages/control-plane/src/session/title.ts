@@ -5,10 +5,12 @@ export interface SessionTitleUpdateOptions {
 type SessionTitleUpdateErrorReason = "invalid" | "not_found" | "already_set";
 
 export type SessionTitleValidationResult =
-  { ok: true; title: string } | { ok: false; reason: "invalid"; error: string };
+  | { ok: true; title: string }
+  | { ok: false; reason: "invalid"; error: string };
 
 export type SessionTitleUpdateResult =
-  { ok: true; title: string } | { ok: false; reason: SessionTitleUpdateErrorReason; error: string };
+  | { ok: true; title: string }
+  | { ok: false; reason: SessionTitleUpdateErrorReason; error: string };
 
 export function normalizeSessionTitle(title: unknown): SessionTitleValidationResult {
   if (typeof title !== "string") {

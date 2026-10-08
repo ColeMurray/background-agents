@@ -81,10 +81,14 @@ export interface FinalizeDeviceAuthorizationReconnectInput extends DeviceAuthori
 }
 
 export type DeviceAuthorizationCreateOutcome =
-  { type: "created" } | { type: "identity_conflict" } | { type: "claim_lost" };
+  | { type: "created" }
+  | { type: "identity_conflict" }
+  | { type: "claim_lost" };
 
 export type DeviceAuthorizationReconnectOutcome =
-  { type: "connected" } | { type: "claim_lost" } | { type: "target_changed" };
+  | { type: "connected" }
+  | { type: "claim_lost" }
+  | { type: "target_changed" };
 
 export interface ModelProviderAccountAtomicWriter {
   createAccountWithCredential(

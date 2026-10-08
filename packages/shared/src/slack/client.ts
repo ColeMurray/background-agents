@@ -29,7 +29,8 @@ export const SLACK_PAGINATION_TIMEOUT_MS = 30_000;
  * validated at the boundary cannot drift apart.
  */
 export type SlackEnvelope<T = object> =
-  ({ ok: true } & T) | { ok: false; error: string; retryAfter?: number };
+  | ({ ok: true } & T)
+  | { ok: false; error: string; retryAfter?: number };
 
 const slackFailureSchema = z.object({
   ok: z.literal(false),
