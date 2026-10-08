@@ -296,6 +296,7 @@ describe("handleTargetSelection", () => {
       slackConfig: { harness: "opencode" as const },
       userPreferences: {
         model: "anthropic/claude-sonnet-4-6",
+        modelOrigin: "app-home" as const,
         reasoningEffort: "max",
         branch: undefined,
         harness: "opencode" as const,

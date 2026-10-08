@@ -467,6 +467,16 @@ function retiredModelReplacement(model: string): ValidModel | undefined {
   return undefined;
 }
 
+/** Normalize a supported or retired model selection without choosing a default. */
+export function getValidModelOrReplacement(
+  model: string | undefined | null
+): ValidModel | undefined {
+  if (model && isValidModel(model)) {
+    return normalizeModelId(model) as ValidModel;
+  }
+  return (model && retiredModelReplacement(model)) || undefined;
+}
+
 /** Normalize a list to unique, canonical model IDs that exist in the current catalog. */
 export function normalizeValidModels(modelIds: readonly string[]): ValidModel[] {
   const validModels = new Set<ValidModel>();
@@ -505,10 +515,7 @@ export function resolveEnabledModel(options: {
   fallbackModel?: string | null;
 }): ValidModel {
   const fallback = getValidModelOrDefault(options.fallbackModel);
-  const desired =
-    options.model && isValidModel(options.model)
-      ? (normalizeModelId(options.model) as ValidModel)
-      : (options.model && retiredModelReplacement(options.model)) || fallback;
+  const desired = getValidModelOrReplacement(options.model) ?? fallback;
   if (!options.enabledModels) return desired;
 
   const enabledModels = normalizeValidModels(options.enabledModels);
@@ -591,8 +598,5 @@ export function getSubscriptionProviderForModel(modelId: string): SubscriptionPr
  * Accepts both prefixed and bare formats; always returns canonical prefixed format.
  */
 export function getValidModelOrDefault(model: string | undefined | null): ValidModel {
-  if (model && isValidModel(model)) {
-    return normalizeModelId(model) as ValidModel;
-  }
-  return (model && retiredModelReplacement(model)) || DEFAULT_MODEL;
+  return getValidModelOrReplacement(model) ?? DEFAULT_MODEL;
 }

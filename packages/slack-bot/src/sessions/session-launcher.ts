@@ -61,11 +61,12 @@ export async function loadAuthoritativeSlackLaunchSettings(
       slackConfig.defaultModel ?? env.DEFAULT_MODEL,
       slackConfig.harness
     );
-    const modelSource = prefs?.model
-      ? "app-home"
-      : slackConfig.defaultModel
-        ? "slack-default"
-        : "system-default";
+    const modelSource =
+      userPreferences.modelOrigin === "app-home"
+        ? "app-home"
+        : slackConfig.defaultModel
+          ? "slack-default"
+          : "system-default";
     return { enabledModels, slackConfig, userPreferences, modelSource };
   } catch (error) {
     log.warn("slack.launch_settings.unavailable", {

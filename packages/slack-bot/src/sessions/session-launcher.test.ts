@@ -68,6 +68,7 @@ const launchSettings: SlackLaunchSettings = {
   slackConfig: { harness: "opencode" },
   userPreferences: {
     model: "openai/gpt-5.4",
+    modelOrigin: "app-home",
     reasoningEffort: "high",
     branch: "user-default-branch",
     harness: "opencode",
@@ -181,6 +182,7 @@ describe("startSessionAndSendPrompt harness", () => {
       slackConfig: { harness: "opencode" },
       userPreferences: {
         model: preferredModel,
+        modelOrigin: "app-home",
         reasoningEffort: undefined,
         branch: undefined,
         harness,

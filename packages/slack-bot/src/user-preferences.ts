@@ -1,6 +1,8 @@
 import {
   DEFAULT_MODEL,
   getDefaultReasoningEffort,
+  getValidModelOrDefault,
+  getValidModelOrReplacement,
   isValidModel,
   isValidReasoningEffort,
   normalizeModelId,
@@ -29,13 +31,15 @@ type UserPreferences = z.infer<typeof slackUserPreferencesSchema>;
 
 export interface ResolvedUserPreferences {
   model: string;
+  /** Retired-model replacements still originate from the App Home preference. */
+  modelOrigin: "app-home" | "default";
   reasoningEffort: string | undefined;
   branch: string | undefined;
   /** The user's App Home harness, else the workspace's Slack harness. */
   harness: HarnessId;
 }
 
-type UserPreferencesPatch = Partial<ResolvedUserPreferences>;
+type UserPreferencesPatch = Partial<Omit<ResolvedUserPreferences, "modelOrigin">>;
 type UserPreferencesUpdater = (
   current: ResolvedUserPreferences
 ) => UserPreferencesPatch | null | undefined;
@@ -61,10 +65,8 @@ function normalizeResolvedPreferences(
   defaultModel: string | undefined
 ): ResolvedUserPreferences {
   // Preserve disabled preferences; only new-session launches check enablement.
-  const model = resolveEnabledModel({
-    model: preferences.model,
-    fallbackModel: defaultModel,
-  });
+  const preferredModel = getValidModelOrReplacement(preferences.model);
+  const model = preferredModel ?? getValidModelOrDefault(defaultModel);
   const reasoningEffort =
     preferences.reasoningEffort && isValidReasoningEffort(model, preferences.reasoningEffort)
       ? preferences.reasoningEffort
@@ -73,6 +75,7 @@ function normalizeResolvedPreferences(
 
   return {
     model,
+    modelOrigin: preferredModel ? "app-home" : "default",
     reasoningEffort,
     branch,
     harness: preferences.harness,
@@ -137,7 +140,7 @@ export function resolveUserPreferences(
 ): ResolvedUserPreferences {
   return normalizeResolvedPreferences(
     {
-      model: prefs?.model ?? defaultModel ?? DEFAULT_MODEL,
+      model: prefs?.model,
       reasoningEffort: prefs?.reasoningEffort,
       branch: prefs?.branch,
       harness: prefs?.harness ?? defaultHarness,

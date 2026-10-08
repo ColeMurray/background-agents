@@ -1887,23 +1887,55 @@ describe("POST /events", () => {
     });
 
     it.each([
-      ["slack", ""],
-      ["system", ""],
-      ["slack", "!reasoning high "],
-      ["system", "!reasoning high "],
-    ])("refuses a disabled %s default with admin guidance with '%s'", async (source, prefix) => {
+      ["slack", "", undefined],
+      ["system", "", undefined],
+      ["slack", "!reasoning high ", undefined],
+      ["system", "!reasoning high ", undefined],
+      ["slack", "", "openai/gpt-5.2"],
+      ["system", "", "openai/gpt-5.2"],
+    ])(
+      "refuses a disabled %s default with admin guidance with '%s' and stored model %s",
+      async (source, prefix, storedModel) => {
+        const slackFetch = mockSlackFetch();
+        const env = makeSessionEnv([], {
+          enabledModels: [openAIModel],
+          slackDefaults: source === "slack" ? { model: anthropicModel } : undefined,
+        });
+        if (storedModel) {
+          await env.SLACK_KV.put(
+            "user_prefs:U123",
+            JSON.stringify({ userId: "U123", model: storedModel, updatedAt: 1 })
+          );
+        }
+
+        await deliver(env, { text: `<@B123> ${prefix}fix the auth tests`, ts: "111.222" });
+
+        expect(sessionFetchBodies(env.CONTROL_PLANE.fetch)).toEqual([]);
+        expect(promptFetchBodies(env.CONTROL_PLANE.fetch)).toEqual([]);
+        expect(postedTexts(slackFetch)).toContain(
+          `The ${source === "slack" ? "Slack" : "system"} default model "Claude Haiku 4.5" is no longer enabled. Ask an admin to enable it in Settings > Models or update the ${source === "slack" ? "Slack" : "system"} default model. You can choose another model in the Slack app's Home tab, or start your request with \`!model\` and an enabled model.`
+        );
+        slackFetch.mockRestore();
+      }
+    );
+
+    it("keeps App Home guidance for a retired-model replacement matching the Slack default", async () => {
       const slackFetch = mockSlackFetch();
       const env = makeSessionEnv([], {
-        enabledModels: [openAIModel],
-        slackDefaults: source === "slack" ? { model: anthropicModel } : undefined,
+        enabledModels: [anthropicModel],
+        slackDefaults: { model: "openai/gpt-6-sol" },
       });
+      await env.SLACK_KV.put(
+        "user_prefs:U123",
+        JSON.stringify({ userId: "U123", model: "openai/gpt-5.3-codex", updatedAt: 1 })
+      );
 
-      await deliver(env, { text: `<@B123> ${prefix}fix the auth tests`, ts: "111.222" });
+      await deliver(env, { text: "<@B123> fix the auth tests", ts: "111.222" });
 
       expect(sessionFetchBodies(env.CONTROL_PLANE.fetch)).toEqual([]);
       expect(promptFetchBodies(env.CONTROL_PLANE.fetch)).toEqual([]);
       expect(postedTexts(slackFetch)).toContain(
-        `The ${source === "slack" ? "Slack" : "system"} default model "Claude Haiku 4.5" is no longer enabled. Ask an admin to enable it in Settings > Models or update the ${source === "slack" ? "Slack" : "system"} default model. You can choose another model in the Slack app's Home tab, or start your request with \`!model\` and an enabled model.`
+        'Your App Home model "GPT-6 Sol" is no longer enabled. Choose another model in the Slack app\'s Home tab, or start your request with `!model` and an enabled model.'
       );
       slackFetch.mockRestore();
     });
