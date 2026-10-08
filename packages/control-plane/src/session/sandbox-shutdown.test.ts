@@ -2449,7 +2449,7 @@ describe("unconfirmed routine checkpoint settlement", () => {
     const { restarted } = await lostToRestart(f);
 
     f.setNow(SETTLE_AT_MS - 1_000);
-    restarted.recordRuntimeFailure();
+    restarted.recordRuntimeFailure("runtime crashed");
     f.setNow(SETTLE_AT_MS);
     f.sandboxRow.last_heartbeat = SETTLE_AT_MS - 1_000;
     await expect(restarted.handleAlarm()).resolves.toBe("hold_watchdogs");
@@ -2597,19 +2597,46 @@ describe("unconfirmed routine checkpoint settlement", () => {
     expect(f.deps.sandbox.updateSandboxLastActivity).not.toHaveBeenCalled();
   });
 
-  it("records a fatal report against an older flag by giving it its operation", async () => {
+  it("holds an older flag whose runtime reported a fatal error", async () => {
     const f = settlementFixture();
     await readyWithoutDeadline(f);
     f.store.write({ ...f.store.value!, checkpointInFlight: true });
     f.sandboxRow.status = "snapshotting";
     const restarted = new SandboxShutdownCoordinator(f.deps as never);
 
-    expect(restarted.recordRuntimeFailure()).toBe(true);
+    restarted.recordRuntimeFailure("runtime crashed");
+    f.setNow(100_000 + 330_000);
+    f.sandboxRow.last_heartbeat = 429_000;
+    await restarted.handleAlarm();
 
-    expect(f.store.value?.captureOp).toMatchObject({
-      after: "continue",
-      runtimeFailedAtMs: 100_000,
+    expect(f.store.value?.phase).toBe("unknown");
+  });
+
+  it("keeps a fatal report through a confirmed checkpoint and a restart until a shutdown claims it", async () => {
+    const f = settlementFixture();
+    await readyWithoutDeadline(f);
+    let confirm!: (result: { success: true; imageId: string }) => void;
+    f.takeSnapshot.mockImplementationOnce(() => new Promise((resolve) => (confirm = resolve)));
+    const checkpoint = f.shutdown.captureCheckpoint(GENERATION, "execution_complete", "continue");
+    await vi.waitFor(() => expect(f.takeSnapshot).toHaveBeenCalledOnce());
+
+    f.shutdown.recordRuntimeFailure("runtime crashed");
+    confirm({ success: true, imageId: "checkpoint-image" });
+    await expect(checkpoint).resolves.toMatchObject({ outcome: "saved" });
+
+    // The checkpoint no longer holds, but the report does.
+    expect(f.store.value).toMatchObject({
+      checkpointInFlight: false,
+      runtimeFailure: { reason: "runtime crashed" },
     });
+    const restarted = new SandboxShutdownCoordinator(f.deps as never);
+    expect(restarted.isHolding()).toBe(false);
+    expect(restarted.admissionDecision()).toBe("held");
+    expect(restarted.pendingRuntimeFailure()).toBe("runtime crashed");
+
+    await restarted.requestShutdown("fatal_runtime_error", "emergency");
+    expect(f.store.value).not.toHaveProperty("runtimeFailure");
+    expect(restarted.pendingRuntimeFailure()).toBeNull();
   });
 
   it("commits the warning in the same transaction as the release", async () => {

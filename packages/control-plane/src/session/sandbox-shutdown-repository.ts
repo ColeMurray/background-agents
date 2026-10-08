@@ -33,8 +33,6 @@ const captureOpSchema = z.object({
   uncertainAtMs: z.number().optional(),
   /** Set once when settlement waits for a stale runtime heartbeat to recover. */
   deferredUntilMs: z.number().optional(),
-  /** The runtime reported a fatal error while the checkpoint held exclusion. */
-  runtimeFailedAtMs: z.number().optional(),
 });
 
 const stateSchema = sandboxShutdownSchema
@@ -53,6 +51,11 @@ const stateSchema = sandboxShutdownSchema
     restoreInvoked: z.boolean().optional(),
     checkpointInFlight: z.boolean().optional(),
     captureOp: captureOpSchema.optional(),
+    /**
+     * A fatal runtime report a checkpoint held back. It outlives the
+     * checkpoint, holding admission until a shutdown claims the session.
+     */
+    runtimeFailure: z.object({ reason: z.string(), atMs: z.number() }).optional(),
     /** Provenance for unattended retries, distinct from authenticated recovery eligibility. */
     captureFailure: z.boolean().optional(),
     /** A durably claimed discard; no other recovery may act while it is set. */

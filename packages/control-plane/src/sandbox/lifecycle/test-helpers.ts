@@ -526,7 +526,9 @@ export function createUnmanagedShutdown() {
     admissionDecision: vi.fn(() => "unmanaged" as const),
     handleAlarm: vi.fn(async () => "continue" as const),
     rearmCaptureSettlement: vi.fn(async () => undefined),
-    recordRuntimeFailure: vi.fn(() => false),
+    recordRuntimeFailure: vi.fn(),
+    pendingRuntimeFailure: vi.fn(() => null),
+    clearRuntimeFailure: vi.fn(),
     recover: vi.fn(async () => undefined),
     snapshot: vi.fn(() => null),
   } satisfies SandboxShutdownLifecycle;
@@ -572,7 +574,9 @@ export function createCheckpointShutdown(
         ? coordinator.requestShutdown(reason, mode)
         : Promise.resolve("unmanaged"),
     isHolding: () => coordinator.isHolding(),
-    recordRuntimeFailure: () => coordinator.recordRuntimeFailure(),
+    recordRuntimeFailure: (reason) => coordinator.recordRuntimeFailure(reason),
+    pendingRuntimeFailure: () => coordinator.pendingRuntimeFailure(),
+    clearRuntimeFailure: () => coordinator.clearRuntimeFailure(),
     admissionDecision: () => coordinator.admissionDecision(),
     onRefusedReconnect: () => coordinator.onRefusedReconnect(),
   };

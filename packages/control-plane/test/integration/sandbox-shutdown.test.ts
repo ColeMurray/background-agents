@@ -1681,6 +1681,68 @@ describe("unconfirmed checkpoint across a Durable Object reset", () => {
     ]);
   });
 
+  /**
+   * The state after a checkpoint was confirmed while a fatal report waited:
+   * the checkpoint no longer holds, and the instance resets before replaying
+   * the report.
+   */
+  async function seedPendingFatalReport(name: string) {
+    const { stub } = await initNamedSession(name);
+    await seedSandboxAuth(stub, { authToken: AUTH_TOKEN, sandboxId: SANDBOX_ID, status: "ready" });
+    await runInSessionDO(stub, (_instance: SessionDO, durableState) => {
+      durableState.storage.sql.exec(
+        "UPDATE sandbox SET modal_object_id = ?, last_heartbeat = ?, last_activity = ?",
+        "provider-object",
+        Date.now(),
+        Date.now()
+      );
+    });
+    await seedShutdown(stub, {
+      generationReady: true,
+      runtimeReady: true,
+      lifecyclePolicy: "confirmed",
+      protocolVersion: 1,
+      providerObjectId: "provider-object",
+      runtimeFailure: { reason: "runtime crashed", atMs: Date.now() },
+    });
+    await expect(
+      runInSessionDO(stub, (_instance: SessionDO, durableState) => {
+        durableState.abort("test: reset before the fatal report was replayed");
+      })
+    ).rejects.toThrow();
+    return env.SESSION.get(env.SESSION.idFromName(name));
+  }
+
+  async function expectFatalReportActedOn(stub: DurableObjectStub) {
+    const record = await readShutdown(stub);
+    expect(record).not.toHaveProperty("runtimeFailure");
+    expect(record.phase).not.toBe("running");
+    expect(await queryDO<{ status: string }>(stub, "SELECT status FROM sandbox")).not.toEqual([
+      { status: "ready" },
+    ]);
+  }
+
+  it("replays a fatal report a reset left pending on the next alarm", async () => {
+    const restored = await seedPendingFatalReport(`fatal-replay-alarm-${Date.now()}`);
+    await runInSessionDO(restored, (_instance: SessionDO, durableState) =>
+      durableState.storage.setAlarm(Date.now() + 60_000)
+    );
+
+    await expect(runDurableObjectAlarm(restored)).resolves.toBe(true);
+
+    await expectFatalReportActedOn(restored);
+  });
+
+  it("replays a fatal report a reset left pending at start-up", async () => {
+    const restored = await seedPendingFatalReport(`fatal-replay-startup-${Date.now()}`);
+    await runInSessionDO(restored, async (instance: SessionDO) => {
+      // Reading the runtime initializes it as a request would, with start-up recovery.
+      expect(componentsOf(instance).lifecycleManager.mayProcessQueuedWork()).toBe(false);
+    });
+
+    await vi.waitFor(() => expectFatalReportActedOn(restored));
+  });
+
   it("does not wake queued work for a runtime whose heartbeat the watchdog finds stale", async () => {
     const name = `checkpoint-stale-redrive-${Date.now()}`;
     const { stub } = await initNamedSession(name);

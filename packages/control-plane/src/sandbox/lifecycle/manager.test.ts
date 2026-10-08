@@ -671,7 +671,37 @@ describe("fatal runtime report during a checkpoint hold", () => {
 
     await expect(manager.terminateFailedSandbox("runtime crashed")).resolves.toBe(false);
 
-    expect(shutdown.recordRuntimeFailure).toHaveBeenCalledOnce();
+    expect(shutdown.recordRuntimeFailure).toHaveBeenCalledExactlyOnceWith("runtime crashed");
+  });
+
+  it("acts on a report left pending by a restart at the next alarm", async () => {
+    const storage = createMockStorage(createMockSession(), createMockSandbox({ status: "ready" }));
+    const broadcaster = createMockBroadcaster();
+    let pending: string | null = "runtime crashed";
+    const shutdown = {
+      ...createUnmanagedShutdown(),
+      pendingRuntimeFailure: vi.fn(() => pending),
+      clearRuntimeFailure: vi.fn(() => void (pending = null)),
+    };
+    const manager = createTestLifecycleManager(
+      createMockProvider(),
+      storage,
+      storage,
+      broadcaster,
+      createMockWebSocketManager(),
+      createMockAlarmScheduler(),
+      createMockIdGenerator(),
+      shutdown,
+      createTestConfig()
+    );
+
+    await manager.handleAlarm();
+
+    expect(broadcaster.messages).toContainEqual({
+      type: "sandbox_error",
+      error: "runtime crashed",
+    });
+    expect(shutdown.clearRuntimeFailure).toHaveBeenCalledOnce();
   });
 
   it("acts on the report once a confirmed checkpoint ends the hold", async () => {

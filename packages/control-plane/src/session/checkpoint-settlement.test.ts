@@ -23,6 +23,7 @@ function input(overrides: Partial<CheckpointSettlementInput> = {}): CheckpointSe
     owned: false,
     now: SETTLE_AT_MS,
     drainAtMs: null,
+    runtimeFailed: false,
     row: { status: "snapshotting", lastHeartbeat: SETTLE_AT_MS - 1_000 },
     heartbeat: DEFAULT_HEARTBEAT_CONFIG,
     ...overrides,
@@ -90,11 +91,7 @@ describe("decideCheckpointSettlement", () => {
       { kind: "hold" },
     ],
     ["holds a missing row", { row: null }, { kind: "hold" }],
-    [
-      "holds a runtime that reported a fatal error",
-      { op: { ...op, runtimeFailedAtMs: SETTLE_AT_MS - 1 } },
-      { kind: "hold" },
-    ],
+    ["holds a runtime that reported a fatal error", { runtimeFailed: true }, { kind: "hold" }],
     [
       "waits for an owned call to end",
       { owned: true, now: SETTLE_AT_MS - 1 },

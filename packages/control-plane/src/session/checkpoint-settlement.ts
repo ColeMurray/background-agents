@@ -33,6 +33,8 @@ export interface CheckpointSettlementInput {
   owned: boolean;
   now: number;
   drainAtMs: number | null;
+  /** The runtime reported a fatal error while the checkpoint held exclusion. */
+  runtimeFailed: boolean;
   row: { status: SandboxStatus; lastHeartbeat: number | null } | null;
   heartbeat: HeartbeatConfig;
 }
@@ -59,8 +61,7 @@ export function decideCheckpointSettlement(input: CheckpointSettlementInput): Ch
   const dueAtMs = op.deferredUntilMs ?? op.settleAtMs;
   if (now < dueAtMs) return { kind: "wait", untilMs: bound(dueAtMs) };
   const { row } = input;
-  if (!row || isDeadSandboxStatus(row.status) || op.runtimeFailedAtMs !== undefined)
-    return { kind: "hold" };
+  if (!row || isDeadSandboxStatus(row.status) || input.runtimeFailed) return { kind: "hold" };
   const live =
     (row.status === "snapshotting" || row.status === "ready") &&
     row.lastHeartbeat !== null &&

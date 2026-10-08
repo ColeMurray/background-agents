@@ -378,6 +378,8 @@ export class SandboxShutdownCoordinator {
     if (state.phase !== "running" || !this.current(state)) return "held";
     if (!this.providerMatches(state)) return "held";
     if (state.restoreInvoked) return "held";
+    // The runtime reported a fatal error; only its shutdown may follow.
+    if (state.runtimeFailure) return "held";
     if (state.lifecyclePolicy === "legacy") {
       return state.checkpointInFlight ? "held" : "ready";
     }
@@ -957,6 +959,8 @@ export class SandboxShutdownCoordinator {
           ? "The runtime failed during recovery; the provider startup outcome is unknown."
           : undefined,
       reason,
+      // The shutdown owns a held-back fatal report from here.
+      runtimeFailure: undefined,
       operationId: crypto.randomUUID(),
       stopByMs,
       captureByMs: Math.min(stopByMs + CAPTURE_MS, end - RETIRE_MS - MARGIN_MS),
@@ -1106,21 +1110,38 @@ export class SandboxShutdownCoordinator {
 
   /**
    * A fatal runtime report while a checkpoint holds exclusion cannot tear the
-   * runtime down yet, but settlement must not hand that runtime back. Reports
-   * whether the checkpoint now carries the failure.
+   * runtime down yet. It is persisted on the record, not the checkpoint, so it
+   * survives a confirmed checkpoint and a restart: admission stays held and
+   * settlement never hands the runtime back until a shutdown claims it.
    */
-  recordRuntimeFailure(): boolean {
+  recordRuntimeFailure(reason: string): void {
     const state = this.deps.store.read();
-    if (!state?.checkpointInFlight || !this.current(state)) return false;
-    // An older flag gets its operation first, so it can carry the failure.
-    const op = state.phase === "running" ? this.openCheckpointOp(state) : state.captureOp;
-    if (!this.settles(op)) return false;
-    if (op.runtimeFailedAtMs === undefined)
-      this.deps.store.write({
-        ...this.deps.store.read()!,
-        captureOp: { ...op, runtimeFailedAtMs: this.now() },
-      });
-    return true;
+    if (
+      !state?.checkpointInFlight ||
+      (state.phase !== "running" && state.phase !== "draining") ||
+      !this.current(state) ||
+      state.runtimeFailure
+    )
+      return;
+    this.deps.store.write({ ...state, runtimeFailure: { reason, atMs: this.now() } });
+  }
+
+  /** The held-back fatal report to act on now that no checkpoint holds teardown. */
+  pendingRuntimeFailure(): string | null {
+    const state = this.deps.store.read();
+    return state?.phase === "running" &&
+      state.runtimeFailure &&
+      !state.checkpointInFlight &&
+      this.current(state)
+      ? state.runtimeFailure.reason
+      : null;
+  }
+
+  /** Drops a replayed report the shutdown did not claim, such as one for a stopped row. */
+  clearRuntimeFailure(): void {
+    const state = this.deps.store.read();
+    if (state?.runtimeFailure && state.phase === "running")
+      this.deps.store.write({ ...state, runtimeFailure: undefined });
   }
 
   /** A routine checkpoint neither stops nor alters its source, so an unanswered one can be settled. */
@@ -1138,6 +1159,7 @@ export class SandboxShutdownCoordinator {
       owned: this.checkpointOperationId === op.id,
       now: this.now(),
       drainAtMs: state.drainAtMs,
+      runtimeFailed: state.runtimeFailure !== undefined,
       row: row && { status: row.status, lastHeartbeat: row.last_heartbeat },
       heartbeat: DEFAULT_HEARTBEAT_CONFIG,
     });
@@ -1294,7 +1316,6 @@ export class SandboxShutdownCoordinator {
       attempt: op.attempt,
       settle_at_ms: op.settleAtMs,
       door: op.uncertainAtMs === undefined ? "restart" : "provider",
-      runtime_failed: op.runtimeFailedAtMs !== undefined,
       provider: this.deps.provider.name,
       sandbox_id: row?.modal_sandbox_id ?? null,
       heartbeat_age_ms: row?.last_heartbeat == null ? null : this.now() - row.last_heartbeat,
