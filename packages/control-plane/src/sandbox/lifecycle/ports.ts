@@ -11,6 +11,12 @@ export type SandboxCheckpointOutcome =
   | { outcome: "unknown" };
 
 /**
+ * What a checkpoint's caller does once it is saved: `continue` keeps the
+ * runtime serving the session; `stop_source` stops the sandbox afterwards.
+ */
+export type SandboxCheckpointFollowUp = "continue" | "stop_source";
+
+/**
  * Startup policy hides persisted receipt representation from lifecycle consumers.
  * `normal` defers to existing startup checks; it is not permission to discard saved state.
  * Recovery variants keep snapshot locators distinct from retained provider-object locators.

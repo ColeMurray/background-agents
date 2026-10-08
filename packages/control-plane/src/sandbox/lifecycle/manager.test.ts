@@ -569,6 +569,180 @@ describe("status writes after a provider await (COL-99)", () => {
   });
 });
 
+describe("checkpoint intent", () => {
+  it.each([
+    ["execution_complete", "continue"],
+    ["heartbeat_timeout", "stop_source"],
+    ["inactivity_timeout", "stop_source"],
+  ])("tags a %s checkpoint as %s", async (reason, after) => {
+    const sandbox = createMockSandbox({ status: "ready" });
+    const storage = createMockStorage(createMockSession(), sandbox);
+    const shutdown = createUnmanagedShutdown();
+    const manager = createTestLifecycleManager(
+      createMockProvider({ takeSnapshot: vi.fn() }),
+      storage,
+      storage,
+      createMockBroadcaster(),
+      createMockWebSocketManager(),
+      createMockAlarmScheduler(),
+      createMockIdGenerator(),
+      shutdown,
+      createTestConfig()
+    );
+
+    await manager.triggerSnapshot(reason);
+
+    expect(shutdown.captureCheckpoint).toHaveBeenCalledWith(expect.anything(), reason, after);
+  });
+});
+
+describe("idle queue redrive", () => {
+  function redriveHarness(
+    sandbox: Partial<Parameters<typeof createMockSandbox>[0]>,
+    admission: ReturnType<SandboxShutdownLifecycle["admissionDecision"]> = "ready"
+  ) {
+    const now = Date.now();
+    const storage = createMockStorage(
+      createMockSession(),
+      createMockSandbox({ status: "ready", last_heartbeat: now, last_activity: now, ...sandbox })
+    );
+    const resumeQueuedWork = vi.fn(async () => undefined);
+    const manager = createTestLifecycleManager(
+      createMockProvider(),
+      storage,
+      storage,
+      createMockBroadcaster(),
+      createMockWebSocketManager(),
+      createMockAlarmScheduler(),
+      createMockIdGenerator(),
+      {
+        ...createUnmanagedShutdown(),
+        admissionDecision: vi.fn<SandboxShutdownLifecycle["admissionDecision"]>(() => admission),
+      },
+      { ...createTestConfig(), resumeQueuedWork }
+    );
+    return { manager, resumeQueuedWork, now };
+  }
+
+  it("wakes queued work for a ready runtime the watchdog finds healthy", async () => {
+    const { manager, resumeQueuedWork } = redriveHarness({});
+
+    await manager.redriveIdleQueue();
+    await manager.redriveIdleQueue();
+
+    // Level-triggered: each pass may kick; the queue's claim makes repeats no-ops.
+    expect(resumeQueuedWork).toHaveBeenCalledTimes(2);
+  });
+
+  it.each([
+    ["a stale heartbeat", { last_heartbeat: Date.now() - 10 * 60_000 }, "ready"],
+    [
+      "an inactivity stop that is already due",
+      { last_activity: Date.now() - DEFAULT_LIFECYCLE_CONFIG.inactivity.timeoutMs - 1_000 },
+      "ready",
+    ],
+    ["a booting runtime", { status: "connecting" as const }, "ready"],
+    ["held admission", {}, "held"],
+    ["admission that would start a sandbox", {}, "spawn_required"],
+  ] as const)("does not wake queued work for %s", async (_name, sandbox, admission) => {
+    const { manager, resumeQueuedWork } = redriveHarness(sandbox, admission);
+
+    await manager.redriveIdleQueue();
+
+    expect(resumeQueuedWork).not.toHaveBeenCalled();
+  });
+});
+
+describe("fatal runtime report during a checkpoint hold", () => {
+  it("records the failure instead of dropping it", async () => {
+    const storage = createMockStorage(createMockSession(), createMockSandbox({ status: "ready" }));
+    const shutdown = { ...createUnmanagedShutdown(), isHolding: vi.fn(() => true) };
+    const manager = createTestLifecycleManager(
+      createMockProvider(),
+      storage,
+      storage,
+      createMockBroadcaster(),
+      createMockWebSocketManager(),
+      createMockAlarmScheduler(),
+      createMockIdGenerator(),
+      shutdown,
+      createTestConfig()
+    );
+
+    await expect(manager.terminateFailedSandbox("runtime crashed")).resolves.toBe(false);
+
+    expect(shutdown.recordRuntimeFailure).toHaveBeenCalledExactlyOnceWith("runtime crashed");
+  });
+
+  it("acts on a report left pending by a restart at the next alarm", async () => {
+    const storage = createMockStorage(createMockSession(), createMockSandbox({ status: "ready" }));
+    const broadcaster = createMockBroadcaster();
+    let pending: string | null = "runtime crashed";
+    const shutdown = {
+      ...createUnmanagedShutdown(),
+      pendingRuntimeFailure: vi.fn(() => pending),
+      clearRuntimeFailure: vi.fn(() => void (pending = null)),
+    };
+    const manager = createTestLifecycleManager(
+      createMockProvider(),
+      storage,
+      storage,
+      broadcaster,
+      createMockWebSocketManager(),
+      createMockAlarmScheduler(),
+      createMockIdGenerator(),
+      shutdown,
+      createTestConfig()
+    );
+
+    await manager.handleAlarm();
+
+    expect(broadcaster.messages).toContainEqual({
+      type: "sandbox_error",
+      error: "runtime crashed",
+    });
+    expect(shutdown.clearRuntimeFailure).toHaveBeenCalledOnce();
+  });
+
+  it("acts on the report once a confirmed checkpoint ends the hold", async () => {
+    let confirm!: (result: { success: true; imageId: string }) => void;
+    const sandbox = createMockSandbox({ status: "ready" });
+    const storage = createMockStorage(createMockSession(), sandbox);
+    const broadcaster = createMockBroadcaster();
+    const takeSnapshot = vi.fn(async () => ({ success: true as const, imageId: "final-image" }));
+    takeSnapshot.mockImplementationOnce(() => new Promise((resolve) => (confirm = resolve)));
+    const provider = createMockProvider({ takeSnapshot });
+    const manager = createTestLifecycleManager(
+      provider,
+      storage,
+      storage,
+      broadcaster,
+      createMockWebSocketManager(),
+      createMockAlarmScheduler(),
+      createMockIdGenerator(),
+      createCheckpointShutdown(provider, storage, broadcaster),
+      createTestConfig()
+    );
+
+    const checkpoint = manager.triggerSnapshot("execution_complete");
+    await vi.waitFor(() => expect(takeSnapshot).toHaveBeenCalledOnce());
+    await expect(manager.terminateFailedSandbox("runtime crashed")).resolves.toBe(false);
+    expect(broadcaster.messages).not.toContainEqual({
+      type: "sandbox_error",
+      error: "runtime crashed",
+    });
+
+    confirm({ success: true, imageId: "checkpoint-image" });
+    await checkpoint;
+
+    expect(broadcaster.messages).toContainEqual({
+      type: "sandbox_error",
+      error: "runtime crashed",
+    });
+    expect(sandbox.status).not.toBe("ready");
+  });
+});
+
 describe("spawn admission race (#1589)", () => {
   // `await hashToken` is a non-storage await, so the DO input gate admits
   // other events while it runs. Whatever the sandbox row says at that moment
