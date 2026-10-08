@@ -4,7 +4,7 @@ description: Connect ChatGPT, SuperGrok, and Claude subscriptions as installatio
 audience: admin
 owner: security
 status: published
-lastReviewed: "2026-10-06"
+lastReviewed: "2026-10-08"
 relatedCode:
   - packages/shared/src/types/provider-accounts.ts
   - packages/shared/src/harnesses.ts
@@ -111,10 +111,11 @@ Defaults are resolved when a session starts. Changing a default never moves an e
 <Callout type="info" title="Anthropic defaults reach only Claude Agent">
   A default Claude account applies to Claude Agent sessions, including automations configured for
   Claude Agent. Automations and the GitHub, Linear, and Slack integrations can select their harness,
-  so switching an integration to Claude Agent lets its usage draw on the default account. Set
-  **Automated authentication** for Claude to **No account (API key)** if you want Claude Agent
-  automations and integrations on an API key while interactive Claude Agent sessions pick the
-  account.
+  so switching an integration to Claude Agent lets its usage draw on the default account. Slack
+  users can also pick Claude Agent in the Slack app's Home tab, which does the same even when the
+  Slack harness setting is OpenCode. Set **Automated authentication** for Claude to **No account
+  (API key)** if you want Claude Agent automations and integrations on an API key while interactive
+  Claude Agent sessions pick the account.
 </Callout>
 
 ## Select authentication per session

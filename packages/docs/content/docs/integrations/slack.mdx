@@ -4,7 +4,7 @@ description: Start OpenInspect sessions from Slack channels and DMs, continue th
 audience: user
 owner: integrations
 status: published
-lastReviewed: "2026-10-06"
+lastReviewed: "2026-10-08"
 relatedCode:
   - docs/integrations/SLACK.md
   - docs/CLAUDE_AGENT.md
@@ -12,6 +12,8 @@ relatedCode:
   - packages/shared/src/harnesses.ts
   - packages/slack-bot/src/sessions/session-launcher.ts
   - packages/slack-bot/src/slack-settings.ts
+  - packages/slack-bot/src/app-home/view.ts
+  - packages/control-plane/src/db/integration-settings.ts
   - packages/control-plane/src/routes/channel-bindings.ts
   - packages/control-plane/src/routes/team-channel-bindings.ts
   - packages/control-plane/src/routes/team-ownership.ts
@@ -135,7 +137,7 @@ Start a request with `!model` or `!reasoning` to override your App Home defaults
 
 A running session's defaults cannot be changed. To go back to your defaults for good, start a new session in a new thread. Both flags accept a space or a colon before the value (`!model:openai/gpt-5.6-sol`, `!reasoning:high`), and all flags must appear together at the start of the request. Models must be enabled under Settings › Models, and the reasoning value must be supported by the model.
 
-A thread runs on one [agent harness](#default-model-and-agent-harness) for its whole life. On a request that starts a session, a `!model` that Claude Agent cannot run starts the session on OpenCode. On a follow-up, the control plane rejects a `!model` that the thread's harness cannot run, and the bot replies in the thread:
+A thread runs on one [agent harness](#default-model-and-agent-harness) for its whole life. On a request that starts a session, a `!model` that your harness cannot run is refused and no session starts. On a follow-up, the control plane rejects a `!model` that the thread's harness cannot run, and the bot replies in the thread:
 
 ```text
 Model "openai/gpt-5.4" cannot run on the Claude Agent harness. A thread keeps the harness its session started on. Reply without !model, or start a new thread to use that model.
@@ -197,16 +199,17 @@ Generated PNG, JPEG, WebP, or MP4 session artifacts are attached to the completi
 
 Open the OpenInspect app in Slack and go to the **Home** tab.
 
-| Setting          | What it controls                                       |
-| ---------------- | ------------------------------------------------------ |
-| Model            | The model used when you start a new session from Slack |
-| Reasoning effort | Reasoning depth, shown for models that support it      |
-| Branch           | A global branch override for new Slack sessions        |
-| Branch by repo   | A branch override for one repository                   |
+| Setting          | What it controls                                                                               |
+| ---------------- | ---------------------------------------------------------------------------------------------- |
+| Agent harness    | **Workspace default**, **OpenCode**, or **Claude Agent** for new sessions you start from Slack |
+| Model            | The model used when you start a new session from Slack                                         |
+| Reasoning effort | Reasoning depth, shown for models that support it                                              |
+| Branch           | A global branch override for new Slack sessions                                                |
+| Branch by repo   | A branch override for one repository                                                           |
 
-The model list comes from the models enabled under Settings › Models. Branch priority is: repository-specific override, then global override, then the repository default branch. Preferences are per Slack user and affect new sessions only. A `!model` or `!reasoning` flag overrides them for the session it starts, or for a single follow-up, without changing them.
+The model list comes from the models enabled under Settings › Models and shows only models your agent harness can run. If your current model cannot run on it, the picker shows "Choose a model" with nothing selected and a note that new requests are refused until you choose one. The "Currently using" summary names your model and agent harness. Branch priority is: repository-specific override, then global override, then the repository default branch. Preferences are per Slack user and affect new sessions only. A `!model` or `!reasoning` flag overrides them for the session it starts, or for a single follow-up, without changing them.
 
-Without an App Home model, new sessions use the workspace [default model](#default-model-and-agent-harness). When the workspace's agent harness is Claude Agent, an App Home model from another provider runs your new sessions on OpenCode.
+Without an App Home model or agent harness, new sessions use the workspace [default model and agent harness](#default-model-and-agent-harness).
 
 ## Settings › Integrations › Slack
 
@@ -217,9 +220,9 @@ Administrators manage these workspace-wide Slack settings.
 | Setting       | What it controls                                                                                                                       |
 | ------------- | -------------------------------------------------------------------------------------------------------------------------------------- |
 | Default model | The model for new sessions when the requester has not chosen one in App Home. The list shows only models the selected harness can run. |
-| Agent harness | **OpenCode** (default) or **Claude Agent** for new Slack-started sessions                                                              |
+| Agent harness | **OpenCode** (default) or **Claude Agent** for new Slack-started sessions when the requester has not chosen one in App Home            |
 
-Model selection for a new session uses this priority, highest first:
+A new session runs on the requester's App Home **Agent harness**, or on the workspace **Agent harness** when the requester has not chosen one. Model selection for a new session uses this priority, highest first:
 
 1. `!model` and `!reasoning` flags on the request that starts the session.
 2. The requester's App Home model and reasoning effort.
@@ -228,11 +231,17 @@ Model selection for a new session uses this priority, highest first:
 
 If the Slack default model is disabled under Settings › Models, Slack uses the first enabled model until you save a different default.
 
-The session runs on the selected **Agent harness** when it can run that model, and on OpenCode otherwise. Claude Agent runs Anthropic models only, so with Claude Agent selected, an OpenAI App Home model or `!model openai/gpt-5.4` still works and runs on OpenCode. The "Starting work..." acknowledgement reports a fallback, for example `Session defaults: GPT 5.4 · OpenCode (Claude Agent can't run this model)`, and names Claude Agent when it already reports a model other than your App Home default. The settings form warns when Claude Agent is selected with no default model, because the deployment default model may be one it cannot run. To keep Slack sessions on Claude Agent, choose an Anthropic default model; users can still pick another provider's model in App Home or with `!model`.
+If the session's harness cannot run that model, the bot starts no session. Claude Agent runs Anthropic models only, so with Claude Agent as the harness, an OpenAI App Home model or `!model openai/gpt-5.4` is refused. After its "Starting work..." message, the bot replies in the thread:
 
-A harness change applies to new sessions. Each thread keeps the harness its session started on.
+```text
+Model "openai/gpt-5.4" cannot run on the Claude Agent harness. Start your request with !model and a model Claude Agent can run, or change your model or agent harness in the Slack app's Home tab.
+```
 
-Claude Agent sessions started from Slack are automated sessions. They use the default Claude account when its **Automated authentication** allows it, otherwise `ANTHROPIC_API_KEY`. Set **Automated authentication** to **No account (API key)** to keep them on the key. A session that falls back to OpenCode needs a credential for its model's provider, such as `OPENAI_API_KEY` or a connected ChatGPT account. See [Provider accounts](/models/provider-accounts).
+The settings form lists only models the selected harness can run and rejects saving a harness with a model it cannot run. With **Claude Agent** selected, a **Default model** is required: the form disables **Save** and shows "Choose a default model Claude Agent can run." until you pick one, and the control plane rejects saving Claude Agent without one. **Use system default** is not offered for Claude Agent, because the settings page cannot see the deployment default model, which may be one Claude Agent cannot run.
+
+A harness change applies to new sessions. Each thread keeps the harness its session started on. If the bot cannot read the Slack settings, it treats the workspace harness as OpenCode; a user's App Home harness still applies.
+
+Slack sessions are unattended, so Claude Agent sessions started from Slack are automated sessions. They use the default Claude account when its **Automated authentication** allows it, otherwise `ANTHROPIC_API_KEY`. This applies when a user picks Claude Agent in App Home too, even if the workspace harness is OpenCode. Set **Automated authentication** to **No account (API key)** to keep them on the key. See [Provider accounts](/models/provider-accounts).
 
 <Callout type="warn" title="Claude Agent loads repository configuration">
   A Claude Agent session loads the repository's `CLAUDE.md` and `.claude/` settings and hooks, and
@@ -355,15 +364,19 @@ An automation can start a session when someone posts a matching message in a wat
 
 </Accordion>
   <Accordion title="The wrong model or branch was used">
-    Open the **Home** tab and check your model, reasoning effort, and branch. Repository-specific
-    branch overrides beat the global override. Without an App Home model, sessions use the Slack
-    **Default model**, then the deployment default. Changes apply to new sessions.
+    Open the **Home** tab and check your agent harness, model, reasoning effort, and branch.
+    Repository-specific branch overrides beat the global override. Without an App Home model or
+    agent harness, sessions use the Slack **Default model** and **Agent harness**, then the
+    deployment default model. Changes apply to new sessions.
 
 </Accordion>
-  <Accordion title="A session ran on OpenCode instead of Claude Agent">
-    Claude Agent runs Anthropic models only. With Claude Agent selected, a model from another
-    provider, whether from `!model`, App Home, or the defaults, runs on OpenCode, and the "Starting
-    work..." acknowledgement says so. A harness change applies to new threads only.
+  <Accordion title="Slack refused a request because of its model">
+    Claude Agent runs Anthropic models only. When your agent harness is Claude Agent, a model from
+    another provider, whether from `!model`, App Home, or the defaults, is refused with "Model ...
+    cannot run on the Claude Agent harness." and no session starts. Start the request with `!model`
+    and an Anthropic model, or change your model or agent harness in the **Home** tab. An existing
+    thread keeps the harness its session started on, so reply without `!model` or start a new
+    thread.
 
 </Accordion>
   <Accordion title="The agent could not post a notification">

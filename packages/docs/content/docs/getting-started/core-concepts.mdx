@@ -4,7 +4,7 @@ description: The vocabulary the rest of the documentation uses, one short sectio
 audience: user
 owner: platform
 status: published
-lastReviewed: "2026-10-06"
+lastReviewed: "2026-10-08"
 relatedCode:
   - packages/shared/src/types/session-access.ts
   - packages/control-plane/src/session/session-target-secrets.ts
@@ -51,7 +51,7 @@ Learn more: [Follow-ups and stopping](/sessions/follow-ups-and-stopping).
 
 ## Harness
 
-The harness is the agent program that runs inside the sandbox. **OpenCode** is the default and runs every enabled model. **Claude Agent** runs Anthropic models only and can use a connected Claude account instead of an API key. Every session runs on exactly one harness, chosen at creation and fixed for its life; child sessions inherit it. Slack, GitHub, and Linear launches use the harness chosen in their integration settings (OpenCode by default), and automations let you choose OpenCode or Claude Agent.
+The harness is the agent program that runs inside the sandbox. **OpenCode** is the default and runs every enabled model. **Claude Agent** runs Anthropic models only and can use a connected Claude account instead of an API key. Every session runs on exactly one harness, chosen at creation and fixed for its life; child sessions inherit it. Slack, GitHub, and Linear launches use the harness chosen in their integration settings (OpenCode by default; Slack users can pick their own in App Home), and automations let you choose OpenCode or Claude Agent.
 
 Learn more: [Agent harnesses](/models/agent-harnesses).
 
