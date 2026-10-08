@@ -165,13 +165,16 @@ function buildNumberedRepos(count: number) {
 function mockReposFetch(
   env: ReturnType<typeof makeEnv>,
   repos: Array<Record<string, unknown>>,
-  teamId: string | null = null
+  teamId: string | null = null,
+  environments: Array<Record<string, unknown>> = []
 ) {
   env.CONTROL_PLANE.fetch.mockImplementation(async (input: RequestInfo | URL) => {
     const url = typeof input === "string" ? input : input.toString();
     if (url.includes("/channel-bindings/slack/"))
       return Response.json(teamId ? { teamId, kind: "primary" } : { teamId: null });
-    if (url.includes("/environments")) return Response.json({ environments: [], total: 0 });
+    if (url.includes("/environments")) {
+      return Response.json({ environments, total: environments.length });
+    }
     if (url.includes("/repos")) {
       return new Response(JSON.stringify(mockReposResponseBody(repos)), {
         status: 200,
@@ -861,6 +864,81 @@ describe("POST /events", () => {
 
     slackFetch.mockRestore();
   });
+
+  it.each([
+    {
+      match: "a repository with alternatives",
+      classification: { targetId: "acme/web", confidence: "medium", alternatives: ["acme/api"] },
+      buttonValues: ["acme/web", "acme/api"],
+    },
+    {
+      match: "an environment without alternatives",
+      classification: { targetId: "env_full_stack", confidence: "low", alternatives: [] },
+      buttonValues: ["env:env_full_stack"],
+    },
+  ])(
+    "offers the classifier's match as the first quick pick for $match",
+    async ({ classification, buttonValues }) => {
+      mockMessagesCreate.mockResolvedValue({
+        content: [
+          {
+            type: "tool_use",
+            id: "toolu_test",
+            name: "classify_target",
+            input: { ...classification, reasoning: "The login page could live in several places." },
+          },
+        ],
+      });
+      const slackFetch = mockSlackFetch();
+      const env = makeEnv();
+      mockReposFetch(
+        env,
+        [
+          { owner: "acme", name: "web", defaultBranch: "main", private: true },
+          { owner: "acme", name: "api", defaultBranch: "main", private: true },
+          { owner: "acme", name: "docs", defaultBranch: "main", private: true },
+        ],
+        null,
+        [
+          {
+            id: "env_full_stack",
+            name: "full-stack",
+            description: null,
+            prebuildEnabled: true,
+            createdAt: 1,
+            updatedAt: 1,
+            repositories: [{ repoOwner: "acme", repoName: "web", repoId: 1, baseBranch: "main" }],
+          },
+        ]
+      );
+      const ctx = makeCtx();
+
+      await app.fetch(
+        slackEventRequest({
+          type: "app_mention",
+          text: "<@B123> fix the login page",
+          user: "U123",
+          channel: "C123",
+          ts: "111.222",
+        }),
+        env,
+        ctx
+      );
+      await flushWaitUntil(ctx);
+
+      const clarification = slackApiBodies(slackFetch, "chat.postMessage").find((body) =>
+        String(body.text).includes("I couldn't determine which target")
+      );
+      expect(clarification?.blocks).toContainEqual(
+        expect.objectContaining({
+          type: "actions",
+          elements: buttonValues.map((value) => expect.objectContaining({ value })),
+        })
+      );
+
+      slackFetch.mockRestore();
+    }
+  );
 
   it("treats a malformed session creation response as a creation failure", async () => {
     const order: string[] = [];
