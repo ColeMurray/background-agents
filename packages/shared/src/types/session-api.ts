@@ -1,7 +1,8 @@
 import { harnessIdSchema } from "../harnesses";
+import { generatedFileDetailsSchema } from "../generated-files";
 import { z } from "zod";
 import { sessionSkillSelectionSchema } from "./skills";
-import type { AgentResponse } from "./artifacts";
+import { artifactTypeSchema, type AgentResponse } from "./artifacts";
 import { sessionRepositoriesInputSchema } from "./repositories";
 import type { EventResponse } from "./sandbox-events";
 import { MAX_WEB_PROMPT_CHARS, promptContentSchema } from "./prompts";
@@ -305,12 +306,18 @@ export type CreateSessionInput = z.infer<typeof createSessionInputSchema>;
 
 export const createMediaArtifactRequestSchema = z.object({
   artifactId: z.string(),
-  artifactType: z.string(),
+  artifactType: artifactTypeSchema.extract(["screenshot", "video"]),
   objectKey: z.string(),
   metadata: z.record(z.string(), z.unknown()).optional(),
 });
 
 export type CreateMediaArtifactRequest = z.infer<typeof createMediaArtifactRequestSchema>;
+
+/** Successful durable registration, not confirmation of Slack publication. */
+export const generatedFileUploadResponseSchema = generatedFileDetailsSchema.safeExtend({
+  artifactId: z.string().min(1),
+});
+export type GeneratedFileUploadResponse = z.infer<typeof generatedFileUploadResponseSchema>;
 
 export const createSessionResponseSchema = z.object({
   sessionId: z.string().min(1),

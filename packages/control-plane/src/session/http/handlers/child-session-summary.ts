@@ -1,4 +1,4 @@
-import type { ArtifactInfo } from "@open-inspect/shared/types/artifacts";
+import { isStoredFileArtifactType, type ArtifactInfo } from "@open-inspect/shared/types/artifacts";
 import type {
   ChildSessionDetail,
   ChildSessionFinalResponse,
@@ -171,11 +171,13 @@ export function buildChildSessionDetail(input: BuildChildSessionDetailInput): Ch
     },
     sandbox: input.sandbox ? { status: input.sandbox.status } : null,
     hasUnfinishedPrompt: input.hasUnfinishedPrompt,
-    artifacts: artifacts.map(({ row, metadata }) => ({
-      type: row.type,
-      url: row.url ?? "",
-      metadata,
-    })),
+    artifacts: artifacts
+      .filter(({ row }) => !isStoredFileArtifactType(row.type))
+      .map(({ row, metadata }) => ({
+        type: row.type,
+        url: row.url ?? "",
+        metadata,
+      })),
     recentEvents: recentEvents.map((event) => ({
       type: event.type,
       data: toEventResponse(event).data,
@@ -275,7 +277,7 @@ function buildArtifactInfo(
   artifact: ArtifactRow,
   metadata: Record<string, unknown> | null
 ): ArtifactInfo | null {
-  if (artifact.type === "screenshot" || artifact.type === "video") return null;
+  if (isStoredFileArtifactType(artifact.type)) return null;
 
   return {
     type: artifact.type,

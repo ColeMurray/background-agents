@@ -30,7 +30,6 @@ import type { SessionCoreRepository } from "../../session-core-repository";
 import type { SandboxStateReader } from "../../sandbox-ports";
 import type { SessionSandboxEventProcessor } from "../../sandbox-events/processor";
 import type { SandboxRow, SessionRow } from "../../types";
-import { assertArtifactType } from "../../artifacts";
 import { parseTunnelUrls } from "../../tunnel-urls";
 import { z } from "zod";
 
@@ -91,6 +90,12 @@ export class SandboxHandler {
     }
 
     const event: SandboxEvent = result.data;
+    if (event.type === "artifact" && event.artifactType === "file") {
+      return Response.json(
+        { error: "Files require validated upload registration" },
+        { status: 400 }
+      );
+    }
     await this.sandboxEventProcessor.processSandboxEvent(event);
     return Response.json({ status: "ok" });
   }
@@ -202,7 +207,7 @@ export class SandboxHandler {
       return Response.json({ error: "No active prompt" }, { status: 409 });
     }
 
-    const artifactType = assertArtifactType(body.artifactType);
+    const artifactType = body.artifactType;
     const now = this.now();
     const timestampSeconds = now / 1000;
     const artifact: SessionArtifact = {

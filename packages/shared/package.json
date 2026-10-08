@@ -229,6 +229,10 @@
     "./memory-tools": {
       "import": "./dist/memory-tools.js",
       "types": "./dist/memory-tools.d.ts"
+    },
+    "./generated-files": {
+      "import": "./dist/generated-files.js",
+      "types": "./dist/generated-files.d.ts"
     }
   },
   "scripts": {

@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import type { ChildSessionDetail } from "@open-inspect/shared/types/session-api";
 import { ChildSummaryHandler } from "./child-summary.handler";
 import {
   FINAL_RESPONSE_EVENT_PAGE_LIMIT,
@@ -162,6 +163,71 @@ function createHandler() {
 }
 
 describe("ChildSummaryHandler", () => {
+  it.each([false, true])(
+    "excludes stored-file links from child summaries (file event: %s)",
+    async (includeFileEvent) => {
+      const { handler, getSession, getSandbox, repository, artifactRepository } = createHandler();
+      getSession.mockReturnValue(createSession({ status: "completed" }));
+      getSandbox.mockReturnValue(null);
+      const metadata = {
+        objectKey: "sessions/public-session-1/files/f1",
+        filename: "report.csv",
+        mimeType: "text/csv",
+        sizeBytes: 12,
+        messageId: "m1",
+      };
+      artifactRepository.listArtifacts.mockReturnValue([
+        createArtifact({
+          id: "f1",
+          type: "file",
+          url: metadata.objectKey,
+          metadata: JSON.stringify(metadata),
+        }),
+        createArtifact({
+          id: "s1",
+          type: "screenshot",
+          url: "sessions/public-session-1/media/s1.png",
+        }),
+        createArtifact({ id: "v1", type: "video", url: "sessions/public-session-1/media/v1.mp4" }),
+        createArtifact(),
+      ]);
+      repository.getLatestTerminalMessage.mockReturnValue(createMessage({ id: "m1" }));
+      const events = includeFileEvent
+        ? [
+            createEvent({
+              id: "file-event",
+              type: "artifact",
+              message_id: "m1",
+              created_at: 2,
+              data: JSON.stringify({
+                artifactType: "file",
+                artifactId: "f1",
+                url: metadata.objectKey,
+                metadata,
+              }),
+            }),
+          ]
+        : [];
+      repository.listEventPage
+        .mockReturnValueOnce({ events: [], hasMore: false, nextCursor: null })
+        .mockReturnValueOnce({ events, hasMore: false, nextCursor: null });
+
+      const response = (await handler
+        .getChildSummary(new URL("http://internal/internal/child-summary?include=result"))
+        .json()) as ChildSessionDetail;
+      expect(response.artifacts).toEqual([
+        { type: "pr", url: "https://example.com/pr/1", metadata: null },
+      ]);
+      expect(response.finalResponse?.artifacts).toEqual([
+        { type: "pr", url: "https://example.com/pr/1", label: "Pull Request", metadata: null },
+      ]);
+      expect(response.finalResponse?.fileArtifacts).toEqual(
+        includeFileEvent ? [{ id: "f1", type: "file", available: true, metadata }] : []
+      );
+      expect(response.finalResponse?.mediaArtifacts).toEqual([]);
+    }
+  );
+
   it("returns 404 when session is missing for child summary", async () => {
     const { handler, getSession } = createHandler();
     getSession.mockReturnValue(null);

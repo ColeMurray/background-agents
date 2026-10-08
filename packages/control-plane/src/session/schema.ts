@@ -182,7 +182,7 @@ ${STEP_USAGE_TABLE_SQL};
 -- Artifacts (PRs, screenshots, video recordings, preview URLs)
 CREATE TABLE IF NOT EXISTS artifacts (
   id TEXT PRIMARY KEY,
-  type TEXT NOT NULL,                               -- 'pr', 'screenshot', 'video', 'preview', 'branch'
+  type TEXT NOT NULL,                               -- validated by shared artifactTypeSchema
   url TEXT,
   metadata TEXT,                                    -- JSON
   created_at INTEGER NOT NULL,

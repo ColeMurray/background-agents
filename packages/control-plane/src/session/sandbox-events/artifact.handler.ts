@@ -25,9 +25,11 @@ export class SandboxArtifactEventHandler {
     event: Extract<SandboxEvent, { type: "artifact" }>,
     context: SandboxEventContext
   ): void {
-    this.updateLastActivity(context.now);
-
     const artifactType = assertArtifactType(event.artifactType);
+    if (artifactType === "file") {
+      throw new Error("Files require validated upload registration");
+    }
+    this.updateLastActivity(context.now);
     const artifactId =
       typeof event.artifactId === "string" && event.artifactId.length > 0
         ? event.artifactId

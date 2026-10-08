@@ -8,6 +8,7 @@ export * from "./regex";
 export * from "./auth";
 export * from "./service-auth";
 export * from "./http-body";
+export * from "./generated-files";
 export * from "./models";
 export * from "./harnesses";
 export * from "./cron";
