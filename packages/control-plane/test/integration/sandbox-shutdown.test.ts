@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { env } from "cloudflare:test";
+import { env, runDurableObjectAlarm } from "cloudflare:test";
 import type { SessionDO } from "../../src/cloudflare/durable-object";
 import { SessionStatusProjectionStore } from "../../src/db/session-status-projection-store";
 import {
@@ -1408,5 +1408,299 @@ describe("sandbox graceful shutdown wiring", () => {
     expect(await matchingAck).toContainEqual({ type: "ack", ackId: "matching-prepared" });
     expect(await readShutdown(stub)).toMatchObject({ phase: "failed" });
     ws!.close();
+  });
+});
+
+describe("unconfirmed checkpoint across a Durable Object reset", () => {
+  /** A coordinator over the instance's real SQLite repositories. */
+  function realCoordinator(
+    instance: SessionDO,
+    durableState: DurableObjectState,
+    provider: SandboxProvider,
+    now?: () => number
+  ) {
+    const sql = durableState.storage.sql;
+    const transaction = <T>(callback: () => T) => durableState.storage.transactionSync(callback);
+    const events = new EventRepository(sql, transaction);
+    return new SandboxShutdownCoordinator({
+      store: new SandboxShutdownRepository(sql),
+      provider,
+      sandbox: componentsOf(instance).sandboxRepository,
+      session: new SessionCoreRepository(sql, transaction),
+      messages: new MessageRepository(
+        sql,
+        transaction,
+        new SessionAttachmentRepository(sql),
+        events
+      ),
+      events,
+      messenger: { broadcast: () => undefined },
+      sockets: { getSandboxSocket: () => null, send: () => false },
+      alarm: { schedule: async () => undefined },
+      background: { submit: () => undefined },
+      onLifecycleChange: async () => undefined,
+      reconcileStatusFromMessages: async () => undefined,
+      retireAccess: () => undefined,
+      now,
+    } as never);
+  }
+
+  it("keeps the checkpoint through eviction and releases it on the replacement instance", async () => {
+    const name = `checkpoint-eviction-${Date.now()}`;
+    const { stub } = await initNamedSession(name);
+    await seedSandboxAuth(stub, { authToken: AUTH_TOKEN, sandboxId: SANDBOX_ID, status: "ready" });
+    await runInSessionDO(stub, (_instance: SessionDO, durableState) => {
+      durableState.storage.sql.exec(
+        "UPDATE sandbox SET modal_object_id = ?, last_heartbeat = ?",
+        "provider-object",
+        Date.now()
+      );
+    });
+    const generation = await seedShutdown(stub, {
+      generationReady: true,
+      runtimeReady: true,
+      lifecyclePolicy: "confirmed",
+      protocolVersion: 1,
+      providerObjectId: "provider-object",
+    });
+    const provider = {
+      name: "modal",
+      capabilities: {
+        supportsSandboxTimeout: true,
+        supportsSnapshots: true,
+        supportsRestore: true,
+        supportsExplicitStop: true,
+      },
+      // The answer is lost with the instance that asked for it.
+      takeSnapshot: vi.fn(() => new Promise<never>(() => {})),
+    } as unknown as SandboxProvider;
+
+    await runInSessionDO(stub, async (instance: SessionDO, durableState) => {
+      const coordinator = realCoordinator(instance, durableState, provider);
+      void coordinator.captureCheckpoint(generation, "execution_complete", "continue");
+      await vi.waitFor(() => expect(provider.takeSnapshot).toHaveBeenCalledOnce());
+    });
+    await expect(
+      runInSessionDO(stub, (_instance: SessionDO, durableState) => {
+        durableState.abort("test: reset during checkpoint");
+      })
+    ).rejects.toThrow();
+
+    const restored = env.SESSION.get(env.SESSION.idFromName(name));
+    const persisted = await readShutdown(restored);
+    expect(persisted).toMatchObject({
+      phase: "running",
+      checkpointInFlight: true,
+      captureOp: { kind: "checkpoint", after: "continue", attempt: 1 },
+    });
+    const op = persisted.captureOp as { id: string; settleAtMs: number };
+    expect(await queryDO<{ status: string }>(restored, "SELECT status FROM sandbox")).toEqual([
+      { status: "snapshotting" },
+    ]);
+
+    const settled = await runInSessionDO(restored, async (instance: SessionDO, durableState) => {
+      componentsOf(instance).sandboxRepository.updateSandboxHeartbeat(op.settleAtMs - 1_000);
+      const coordinator = realCoordinator(instance, durableState, provider, () => op.settleAtMs);
+      return coordinator.handleAlarm();
+    });
+
+    expect(settled).toBe("continue");
+    const released = await readShutdown(restored);
+    expect(released).toMatchObject({ phase: "running", checkpointInFlight: false });
+    expect(released).not.toHaveProperty("captureOp");
+    expect(
+      await queryDO<{ status: string; last_activity: number }>(
+        restored,
+        "SELECT status, last_activity FROM sandbox"
+      )
+    ).toEqual([{ status: "ready", last_activity: op.settleAtMs }]);
+    expect(
+      await queryDO<{ id: string; type: string }>(
+        restored,
+        "SELECT id, type FROM events WHERE id = ?",
+        `capture:${op.id}:released`
+      )
+    ).toEqual([{ id: `capture:${op.id}:released`, type: "warning" }]);
+  });
+
+  /**
+   * A due checkpoint whose answer a reset lost, written before its alarm: the
+   * reset fell between the operation's write and its schedule.
+   */
+  async function seedLostCheckpoint(name: string, settleInMs = -1_000) {
+    const { stub } = await initNamedSession(name);
+    await seedSandboxAuth(stub, {
+      authToken: AUTH_TOKEN,
+      sandboxId: SANDBOX_ID,
+      status: "snapshotting",
+    });
+    const now = Date.now();
+    await runInSessionDO(stub, (_instance: SessionDO, durableState) => {
+      durableState.storage.sql.exec(
+        "UPDATE sandbox SET modal_object_id = ?, last_heartbeat = ?",
+        "provider-object",
+        now
+      );
+    });
+    const op = {
+      id: crypto.randomUUID(),
+      kind: "checkpoint",
+      reason: "execution_complete",
+      after: "continue",
+      attempt: 1,
+      deadlineAtMs: now + settleInMs - 30_000,
+      settleAtMs: now + settleInMs,
+    };
+    await seedShutdown(stub, {
+      generationReady: true,
+      runtimeReady: true,
+      lifecyclePolicy: "confirmed",
+      protocolVersion: 1,
+      providerObjectId: "provider-object",
+      checkpointInFlight: true,
+      captureOp: op,
+    });
+    await runInSessionDO(stub, async (_instance: SessionDO, durableState) => {
+      durableState.storage.sql.exec("DELETE FROM session_alarm_state");
+      await durableState.storage.deleteAlarm();
+    });
+    await expect(
+      runInSessionDO(stub, (_instance: SessionDO, durableState) => {
+        durableState.abort("test: reset before the settle alarm");
+      })
+    ).rejects.toThrow();
+    return { restored: env.SESSION.get(env.SESSION.idFromName(name)), op };
+  }
+
+  async function participantOf(stub: DurableObjectStub): Promise<string> {
+    const response = await stub.fetch("http://internal/internal/ws-token", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ userId: "user-1", canonicalUserId: "user-1" }),
+    });
+    return (await response.json<{ participantId: string }>()).participantId;
+  }
+
+  async function expectReleased(stub: DurableObjectStub, opId: string) {
+    const record = await readShutdown(stub);
+    expect(record).toMatchObject({ phase: "running", checkpointInFlight: false });
+    expect(record).not.toHaveProperty("captureOp");
+    expect(await queryDO<{ status: string }>(stub, "SELECT status FROM sandbox")).toEqual([
+      { status: "ready" },
+    ]);
+    expect(
+      await queryDO<{ id: string }>(
+        stub,
+        "SELECT id FROM events WHERE id = ?",
+        `capture:${opId}:released`
+      )
+    ).toHaveLength(1);
+  }
+
+  it("settles in an alarm that wakes the replacement instance, then keeps watching it", async () => {
+    const { restored, op } = await seedLostCheckpoint(`checkpoint-alarm-first-${Date.now()}`);
+    // Alarm-first activation initializes without the start-up re-arm. A
+    // future alarm is run explicitly; a due one would fire on its own.
+    await runInSessionDO(restored, (_instance: SessionDO, durableState) =>
+      durableState.storage.setAlarm(Date.now() + 60_000)
+    );
+
+    await expect(runDurableObjectAlarm(restored)).resolves.toBe(true);
+
+    await expectReleased(restored, op.id);
+    const nextAlarm = await runInSessionDO(restored, (_instance: SessionDO, durableState) =>
+      durableState.storage.getAlarm()
+    );
+    // The watchdog's own next check, not just the later drain deadline.
+    expect(nextAlarm).toBeGreaterThan(Date.now());
+    expect(nextAlarm).toBeLessThan((await readShutdown(restored)).drainAtMs as number);
+  });
+
+  it("re-arms on start-up after a reset before scheduling, then wakes the queued prompt", async () => {
+    const { restored, op } = await seedLostCheckpoint(
+      `checkpoint-http-first-${Date.now()}`,
+      60_000
+    );
+    // The first request initializes the replacement with the start-up re-arm.
+    const authorId = await participantOf(restored);
+    await seedMessage(restored, {
+      id: "queued-autofix",
+      authorId,
+      content: "Fix the failing check",
+      source: "web",
+      status: "pending",
+      createdAt: Date.now(),
+    });
+    await runInSessionDO(restored, async (instance: SessionDO, durableState) => {
+      vi.spyOn(componentsOf(instance).messageQueue, "processMessageQueue").mockResolvedValue(
+        undefined
+      );
+      await vi.waitFor(async () =>
+        expect(await durableState.storage.getAlarm()).toBe(op.settleAtMs)
+      );
+      // Its settle time arrives.
+      const record = new SandboxShutdownRepository(durableState.storage.sql).read()!;
+      new SandboxShutdownRepository(durableState.storage.sql).write({
+        ...record,
+        captureOp: { ...record.captureOp!, settleAtMs: Date.now() - 1_000 },
+      });
+    });
+
+    await expect(runDurableObjectAlarm(restored)).resolves.toBe(true);
+
+    await expectReleased(restored, op.id);
+    const woken = await runInSessionDO(
+      restored,
+      (instance: SessionDO) =>
+        vi.mocked(componentsOf(instance).messageQueue.processMessageQueue).mock.calls.length
+    );
+    expect(woken).toBeGreaterThan(0);
+  });
+
+  it("does not wake queued work for a runtime whose heartbeat the watchdog finds stale", async () => {
+    const name = `checkpoint-stale-redrive-${Date.now()}`;
+    const { stub } = await initNamedSession(name);
+    await seedSandboxAuth(stub, { authToken: AUTH_TOKEN, sandboxId: SANDBOX_ID, status: "ready" });
+    await runInSessionDO(stub, (_instance: SessionDO, durableState) => {
+      durableState.storage.sql.exec(
+        "UPDATE sandbox SET modal_object_id = ?, last_heartbeat = ?, last_activity = ?",
+        "provider-object",
+        Date.now() - 10 * 60_000,
+        Date.now()
+      );
+    });
+    await seedShutdown(stub, {
+      generationReady: true,
+      runtimeReady: true,
+      lifecyclePolicy: "confirmed",
+      protocolVersion: 1,
+      providerObjectId: "provider-object",
+    });
+    await seedMessage(stub, {
+      id: "queued",
+      authorId: await participantOf(stub),
+      content: "Next prompt",
+      source: "web",
+      status: "pending",
+      createdAt: Date.now(),
+    });
+    await runInSessionDO(stub, async (instance: SessionDO, durableState) => {
+      vi.spyOn(componentsOf(instance).messageQueue, "processMessageQueue").mockResolvedValue(
+        undefined
+      );
+      await durableState.storage.setAlarm(Date.now() + 60_000);
+    });
+
+    await expect(runDurableObjectAlarm(stub)).resolves.toBe(true);
+
+    const woken = await runInSessionDO(
+      stub,
+      (instance: SessionDO) =>
+        vi.mocked(componentsOf(instance).messageQueue.processMessageQueue).mock.calls.length
+    );
+    expect(woken).toBe(0);
+    expect(await queryDO<{ status: string }>(stub, "SELECT status FROM sandbox")).not.toEqual([
+      { status: "ready" },
+    ]);
   });
 });

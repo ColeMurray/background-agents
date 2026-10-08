@@ -569,6 +569,33 @@ describe("status writes after a provider await (COL-99)", () => {
   });
 });
 
+describe("checkpoint intent", () => {
+  it.each([
+    ["execution_complete", "continue"],
+    ["heartbeat_timeout", "stop_source"],
+    ["inactivity_timeout", "stop_source"],
+  ])("tags a %s checkpoint as %s", async (reason, after) => {
+    const sandbox = createMockSandbox({ status: "ready" });
+    const storage = createMockStorage(createMockSession(), sandbox);
+    const shutdown = createUnmanagedShutdown();
+    const manager = createTestLifecycleManager(
+      createMockProvider({ takeSnapshot: vi.fn() }),
+      storage,
+      storage,
+      createMockBroadcaster(),
+      createMockWebSocketManager(),
+      createMockAlarmScheduler(),
+      createMockIdGenerator(),
+      shutdown,
+      createTestConfig()
+    );
+
+    await manager.triggerSnapshot(reason);
+
+    expect(shutdown.captureCheckpoint).toHaveBeenCalledWith(expect.anything(), reason, after);
+  });
+});
+
 describe("spawn admission race (#1589)", () => {
   // `await hashToken` is a non-storage await, so the DO input gate admits
   // other events while it runs. Whatever the sandbox row says at that moment

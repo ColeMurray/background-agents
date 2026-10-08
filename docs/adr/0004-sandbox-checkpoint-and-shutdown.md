@@ -53,6 +53,21 @@ unknown unless the provider contract establishes a stronger outcome. Aborting a 
 expiring a timer does not establish remote cancellation. Stale results cannot publish a checkpoint
 for a replacement generation or release another operation's exclusion.
 
+### Settle an unconfirmed ordinary checkpoint
+
+An ordinary checkpoint persists its operation, request deadline, settle time and follow-up intent
+with its exclusion, before the provider call, so a restart can recover its schedule. An unknown
+outcome holds exclusion until the settle time. The settle time bounds the control plane's request,
+not the remote operation: an artifact the provider completes later is unreferenced.
+
+A checkpoint that neither stops nor alters its source, taken so that the current execution keeps
+serving, may then release exclusion for the same generation once the runtime is demonstrably live.
+The uncertain artifact is treated as unsaved, the release is recorded durably in the session
+timeline, and the next checkpoint captures the workspace again. A shutdown that claims the session
+first waits for the settle time and then captures the source itself. Checkpoints taken before
+stopping the source, captures that stop or alter it, and shutdown captures keep their existing
+holds: shutdown uncertainty never reopens admission.
+
 ### Keep scheduling bounds separate from retirement evidence
 
 A conservative request-start-plus-timeout estimate can schedule shutdown early. It cannot prove that
@@ -118,7 +133,10 @@ identifiers also remain stable until their dashboard and alert consumers are rev
 
 - Callers no longer reconstruct shutdown safety from multiple collaborators or cleanup callbacks.
 - An interrupted prompt requires explicit resume; clean-boundary continuation remains automatic.
-- Ambiguous checkpoint responses may now hold execution where the previous implementation resumed.
+- Ambiguous checkpoint responses hold execution until their settle time. A routine checkpoint taken
+  so the current execution keeps serving, on a provider whose capture neither stops nor alters its
+  source, then resumes the same generation once its runtime proves live by a fresh heartbeat; any
+  other stays held for the user.
 - Conservative or unproven expiry may require a provider retirement check that was previously
   skipped.
 - The persisted protocol and existing runtime compatibility floors remain unchanged. Legacy

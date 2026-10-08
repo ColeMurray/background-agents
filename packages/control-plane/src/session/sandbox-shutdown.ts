@@ -11,6 +11,7 @@ import type { Logger } from "../logger";
 import type { SandboxLifetime, SandboxProvider } from "../sandbox/provider";
 import { parsePersistedSandboxSettings } from "../sandbox/settings";
 import type {
+  SandboxCheckpointFollowUp,
   SandboxCheckpointOutcome,
   SandboxGeneration,
   SandboxStartupDecision,
@@ -18,7 +19,7 @@ import type {
 } from "../sandbox/lifecycle/ports";
 import { ShutdownRecoveryRejectedError } from "../sandbox/lifecycle/ports";
 import type { ShutdownLifecyclePolicy } from "../sandbox/lifecycle/shutdown-policy";
-import { isDeadSandboxStatus } from "../sandbox/lifecycle/decisions";
+import { DEFAULT_HEARTBEAT_CONFIG, isDeadSandboxStatus } from "../sandbox/lifecycle/decisions";
 import { legacyShutdownRecord } from "./legacy-shutdown-record";
 import type { SandboxShutdownStorage } from "./sandbox-ports";
 import type { SessionCoreRepository } from "./session-core-repository";
@@ -26,7 +27,13 @@ import type { MessageRepository } from "./message-repository";
 import type { MessageFailureService } from "./message-failure-service";
 import type { SessionMessenger } from "./messenger";
 import type { SessionWebSocketManager } from "./websocket-manager";
-import type { ShutdownRecord, ShutdownStore } from "./sandbox-shutdown-repository";
+import type { EventRepository } from "./event-repository";
+import { persistSessionWarning } from "./session-warnings";
+import type {
+  CaptureOperation,
+  ShutdownRecord,
+  ShutdownStore,
+} from "./sandbox-shutdown-repository";
 
 const STOP_MS = 60_000;
 const CAPTURE_MS = 300_000;
@@ -34,6 +41,14 @@ const RETIRE_MS = 30_000;
 const MARGIN_MS = 30_000;
 /** How long a sandbox whose save failed is kept for another attempt. */
 const RETRY_WINDOW_MS = 30 * 60_000;
+/** A runtime is live while its heartbeat is younger than the watchdog's threshold. */
+const HEARTBEAT_TIMEOUT_MS = DEFAULT_HEARTBEAT_CONFIG.timeoutMs;
+
+const LOST_CHECKPOINT_ERROR = "Checkpoint result was lost during a control-plane restart.";
+const UNCONFIRMED_CHECKPOINT_ERROR =
+  "Checkpoint provider outcome is unknown; destructive follow-up remains held.";
+const RELEASED_CHECKPOINT_WARNING =
+  "An automatic save of this sandbox could not be confirmed. The sandbox is still running with your work and the session has resumed; the next save will include it.";
 
 /** User-facing text for a prompt interrupted by a shutdown; reasons are internal codes. */
 const INTERRUPTION_MESSAGES: Record<string, string> = {
@@ -57,6 +72,8 @@ interface ShutdownDependencies {
   messages: MessageRepository;
   failures: MessageFailureService;
   messenger: SessionMessenger;
+  /** Records the timeline warning that a released checkpoint commits with its release. */
+  events: Pick<EventRepository, "createEventIfAbsent">;
   sockets: SessionWebSocketManager;
   alarm: AlarmScheduler;
   background: BackgroundTasks;
@@ -78,9 +95,12 @@ export class SandboxShutdownCoordinator {
   private discardingOperation: string | null = null;
   private activeRestoreGeneration: SandboxGeneration | null = null;
   private readonly now: () => number;
+  /** No request this instance did not make can have started after this. */
+  private readonly constructedAtMs: number;
 
   constructor(private readonly deps: ShutdownDependencies) {
     this.now = deps.now ?? Date.now;
+    this.constructedAtMs = this.now();
   }
 
   snapshot(): SandboxShutdownState | null {
@@ -748,7 +768,8 @@ export class SandboxShutdownCoordinator {
   /** Owns an ordinary capture from admission through durable outcome classification. */
   async captureCheckpoint(
     generation: SandboxGeneration,
-    reason: string
+    reason: string,
+    after: SandboxCheckpointFollowUp
   ): Promise<SandboxCheckpointOutcome> {
     if (this.checkpointOperationId || generation.sandboxId === null) return { outcome: "held" };
     const checkpointGeneration = { ...generation, sandboxId: generation.sandboxId };
@@ -778,14 +799,23 @@ export class SandboxShutdownCoordinator {
       now + CAPTURE_MS,
       state.drainAtMs === null ? Number.POSITIVE_INFINITY : state.drainAtMs - MARGIN_MS
     );
-    const id = crypto.randomUUID();
-    this.deps.store.write({ ...state, checkpointInFlight: true });
+    const op: CaptureOperation = {
+      id: crypto.randomUUID(),
+      kind: "checkpoint",
+      reason,
+      after,
+      attempt: 1,
+      deadlineAtMs,
+      settleAtMs: deadlineAtMs + MARGIN_MS,
+    };
+    const id = op.id;
+    this.deps.store.write({ ...state, checkpointInFlight: true, captureOp: op });
     this.checkpointOperationId = id;
     this.checkpointGeneration = checkpointGeneration;
     const row = this.deps.sandbox.getSandbox();
     const session = this.deps.session.getSession();
     if (!row?.modal_object_id || !session) {
-      this.endCheckpoint(id, false);
+      await this.endCheckpoint(id, false);
       return { outcome: "held" };
     }
     const previousStatus = row.status;
@@ -798,6 +828,9 @@ export class SandboxShutdownCoordinator {
       );
     if (statusChanged) this.broadcast({ type: "sandbox_status", status: "snapshotting" });
     try {
+      // Settles the checkpoint if its answer is lost. An earlier pending alarm
+      // keeps the single slot, so every alarm until then reasserts it.
+      if (this.settles(op)) await this.deps.alarm.schedule(op.settleAtMs);
       const result = await this.captureSnapshot(
         row.modal_object_id,
         session.session_name || session.id,
@@ -815,7 +848,7 @@ export class SandboxShutdownCoordinator {
           row.runtime_version
         )
       ) {
-        this.endCheckpoint(id, true);
+        await this.endCheckpoint(id, true);
         return { outcome: "unknown" };
       }
       this.broadcast({ type: "snapshot_saved", imageId: result.imageId, reason });
@@ -835,19 +868,19 @@ export class SandboxShutdownCoordinator {
         this.broadcast({ type: "sandbox_status", status: previousStatus });
         if (previousStatus === "ready") this.broadcast({ type: "sandbox_access_changed" });
       }
-      this.endCheckpoint(id, false);
+      await this.endCheckpoint(id, false);
       return {
         outcome: "saved",
         imageId: result.imageId,
         sourceStopped: result.sourceStopped,
       };
     } catch {
-      this.endCheckpoint(id, true);
+      await this.endCheckpoint(id, true);
       return { outcome: "unknown" };
     }
   }
 
-  private endCheckpoint(id: string, uncertain: boolean): void {
+  private async endCheckpoint(id: string, uncertain: boolean): Promise<void> {
     if (this.checkpointOperationId !== id) return;
     this.checkpointOperationId = null;
     const state = this.deps.store.read();
@@ -862,14 +895,30 @@ export class SandboxShutdownCoordinator {
       return;
     if (!state?.checkpointInFlight) return;
     if (uncertain) {
+      const op = state.captureOp;
+      if (
+        op?.id === id &&
+        this.settles(op) &&
+        (state.phase === "running" || state.phase === "draining")
+      ) {
+        // The provider may still be capturing. Nothing may capture or stop
+        // this source before the settle time, which then decides it.
+        const uncertainOp = { ...op, uncertainAtMs: this.now() };
+        this.deps.store.write({ ...state, captureOp: uncertainOp });
+        this.logCapture("Sandbox checkpoint outcome unconfirmed", "sandbox.capture_unconfirmed", {
+          op: uncertainOp,
+        });
+        await this.deps.alarm.schedule(op.settleAtMs);
+        return;
+      }
       this.fail(
-        { ...state, checkpointInFlight: false },
+        { ...state, checkpointInFlight: false, captureOp: undefined },
         "unknown",
-        "Checkpoint provider outcome is unknown; destructive follow-up remains held."
+        UNCONFIRMED_CHECKPOINT_ERROR
       );
       return;
     }
-    this.deps.store.write({ ...state, checkpointInFlight: false });
+    this.deps.store.write({ ...state, checkpointInFlight: false, captureOp: undefined });
     if (state.phase === "draining") this.kickAdvance();
     else this.notifyLifecycleChange();
   }
@@ -976,10 +1025,12 @@ export class SandboxShutdownCoordinator {
   private async captureUnconfirmed(state: ShutdownRecord, detail: string): Promise<void> {
     if (!this.owns(state)) return;
     if (state.checkpointInFlight) {
-      // A live checkpoint re-drives the drain when it ends. One whose result
-      // was lost to a restart may still be running at the provider, so no
-      // capture may race it.
-      if (!this.checkpointOperationId)
+      // A live checkpoint re-drives the drain when it ends, and a routine one
+      // is handed over at its settle time. Any other whose result was lost to
+      // a restart may still be running at the provider, so no capture may
+      // race it.
+      if (this.settles(state.captureOp)) this.kickAdvance();
+      else if (!this.checkpointOperationId)
         this.fail(state, "unknown", "An earlier checkpoint has an unknown result.");
       return;
     }
@@ -1008,13 +1059,15 @@ export class SandboxShutdownCoordinator {
     const state = this.normalizeInterruptedRestore();
     if (!state) return "continue";
     if (state.phase === "running") {
-      if (state.checkpointInFlight && !this.checkpointOperationId) {
-        this.fail(state, "unknown", "Checkpoint result was lost during a control-plane restart.");
+      if (state.checkpointInFlight && (await this.settleCheckpoint(state)) === "held")
         return "hold_watchdogs";
-      }
-      if (state.drainAtMs !== null) {
-        if (this.now() >= state.drainAtMs) await this.requestShutdown("sandbox_lifetime_expiring");
-        else await this.deps.alarm.schedule(state.drainAtMs);
+      // A released checkpoint may have outlived the drain deadline: drain
+      // before anything wakes queued work.
+      const current = this.deps.store.read() ?? state;
+      if (current.drainAtMs !== null) {
+        if (this.now() >= current.drainAtMs)
+          await this.requestShutdown("sandbox_lifetime_expiring");
+        else await this.deps.alarm.schedule(current.drainAtMs);
       }
       return this.isHolding() ? "hold_watchdogs" : "continue";
     }
@@ -1032,11 +1085,258 @@ export class SandboxShutdownCoordinator {
     return "hold_watchdogs";
   }
 
-  private async advance(): Promise<void> {
+  /**
+   * Restores a checkpoint's settle alarm after a restart: the scheduler
+   * rehydrates only its own deadlines, and a restart can fall between the
+   * operation's write and its alarm. A due operation is woken now rather than
+   * waiting for an unrelated alarm. Then wakes any queued work a lost kick
+   * left behind.
+   */
+  async rearmCaptureSettlement(): Promise<void> {
     const state = this.deps.store.read();
+    if (state?.checkpointInFlight && this.checkpointOperationId === null) {
+      const op =
+        state.phase === "running"
+          ? this.openCheckpointOp(state)
+          : state.phase === "draining" && this.settles(state.captureOp)
+            ? state.captureOp
+            : null;
+      if (op) await this.deps.alarm.schedule(Math.max(this.now(), this.dueAtMs(op)));
+    }
+    this.redriveIfIdle();
+  }
+
+  /**
+   * Wakes queued work nothing else will wake. A released checkpoint kicks the
+   * queue, but a restart before the queue claims a message loses that kick.
+   * This is a condition re-read from state, not a marker, so the next alarm
+   * or start-up repeats a lost kick, and a redundant one claims nothing. Only
+   * a ready runtime with a fresh heartbeat qualifies: admission checks
+   * neither, and work must not reach a runtime a watchdog is about to fence.
+   */
+  redriveIfIdle(): void {
+    const row = this.deps.sandbox.getSandbox();
+    if (
+      row?.status !== "ready" ||
+      row.last_heartbeat === null ||
+      this.now() - row.last_heartbeat >= HEARTBEAT_TIMEOUT_MS ||
+      this.deps.messages.getProcessingMessage() !== null ||
+      this.deps.messages.getNextPendingMessage() === null ||
+      this.admissionDecision() !== "ready"
+    )
+      return;
+    this.deps.log?.info("Re-driving queued work for an idle runtime", {
+      event: "sandbox.queue_redrive",
+      sandbox_id: row.modal_sandbox_id,
+    });
+    this.notifyLifecycleChange();
+  }
+
+  /** A routine checkpoint neither stops nor alters its source, so an unanswered one can be settled. */
+  private settles(op: CaptureOperation | undefined): op is CaptureOperation {
+    return (
+      op?.after === "continue" && this.deps.provider.capabilities.snapshotRequiresShutdown !== true
+    );
+  }
+
+  private dueAtMs(op: CaptureOperation): number {
+    return op.deferredUntilMs ?? op.settleAtMs;
+  }
+
+  /**
+   * The settleable operation behind a running checkpoint's flag. A flag
+   * written before operations were recorded gets one, persisted once so a
+   * later restart cannot extend it. Only a routine checkpoint moves a live row
+   * to `snapshotting`; watchdog checkpoints stop their row first.
+   */
+  private openCheckpointOp(state: ShutdownRecord): CaptureOperation | null {
+    if (state.captureOp) return this.settles(state.captureOp) ? state.captureOp : null;
+    if (
+      state.phase !== "running" ||
+      !this.current(state) ||
+      this.deps.sandbox.getSandbox()?.status !== "snapshotting"
+    )
+      return null;
+    // The lost request started before this instance, so it ended by this deadline.
+    const deadlineAtMs = this.constructedAtMs + CAPTURE_MS;
+    const op: CaptureOperation = {
+      id: crypto.randomUUID(),
+      kind: "checkpoint",
+      reason: "unrecorded",
+      after: "continue",
+      attempt: 1,
+      deadlineAtMs,
+      settleAtMs: deadlineAtMs + MARGIN_MS,
+    };
+    if (!this.settles(op)) return null;
+    this.deps.store.write({ ...state, captureOp: op });
+    return op;
+  }
+
+  /**
+   * Decides a running checkpoint this instance does not own: its answer was
+   * lost to a restart, or the provider ended without confirming it. Until the
+   * settle time the provider may still be capturing, so the session holds.
+   * Then a live runtime is handed back to the session; its workspace was never
+   * stopped or altered, and the next checkpoint captures it.
+   */
+  private async settleCheckpoint(state: ShutdownRecord): Promise<"owned" | "held" | "released"> {
+    if (this.checkpointOperationId !== null) {
+      // An earlier alarm may have consumed the settle alarm's slot.
+      if (this.settles(state.captureOp) && this.now() < state.captureOp.settleAtMs)
+        await this.deps.alarm.schedule(state.captureOp.settleAtMs);
+      return "owned";
+    }
+    const op = this.openCheckpointOp(state);
+    if (!op) {
+      this.fail({ ...state, captureOp: undefined }, "unknown", LOST_CHECKPOINT_ERROR);
+      return "held";
+    }
+    if (this.now() < this.dueAtMs(op)) {
+      await this.deps.alarm.schedule(this.dueAtMs(op));
+      return "held";
+    }
+    const current = this.deps.store.read()!;
+    // Whatever replaced the generation or claimed recovery owns the record now.
+    if (!this.current(current) || current.restoreInvoked || current.discarding) return "held";
+    if (!this.providerMatches(current)) return "held";
+    const row = this.deps.sandbox.getSandbox()!;
+    const now = this.now();
+    const live =
+      (row.status === "snapshotting" || row.status === "ready") &&
+      row.last_heartbeat !== null &&
+      now - row.last_heartbeat < HEARTBEAT_TIMEOUT_MS;
+    if (live) {
+      const released = this.releaseCheckpoint(op);
+      if (released !== "not_releasable") return released;
+    } else if (!isDeadSandboxStatus(row.status) && op.deferredUntilMs === undefined) {
+      // A runtime reconnecting after the same restart may not have reported yet.
+      const deferred = { ...op, deferredUntilMs: now + HEARTBEAT_TIMEOUT_MS };
+      this.deps.store.write({ ...current, captureOp: deferred });
+      this.logCapture("Sandbox checkpoint settlement deferred", "sandbox.capture_settled", {
+        op: deferred,
+        decision: "defer",
+      });
+      await this.deps.alarm.schedule(deferred.deferredUntilMs);
+      return "held";
+    }
+    this.logCapture("Sandbox checkpoint held", "sandbox.capture_settled", {
+      op,
+      decision: "hold",
+    });
+    const lost = op.uncertainAtMs === undefined;
+    this.fail(
+      { ...current, captureOp: undefined, checkpointInFlight: lost },
+      "unknown",
+      lost ? LOST_CHECKPOINT_ERROR : UNCONFIRMED_CHECKPOINT_ERROR
+    );
+    return "held";
+  }
+
+  /**
+   * Hands the runtime back to the session in one transaction with the
+   * timeline warning that reports it, so the warning cannot be lost after the
+   * release commits. The caller drains, and the alarm handler wakes queued
+   * work afterwards.
+   */
+  private releaseCheckpoint(op: CaptureOperation): "released" | "held" | "not_releasable" {
+    const now = this.now();
+    const result = this.deps.session.transaction(() => {
+      const state = this.deps.store.read();
+      if (
+        !state ||
+        state.phase !== "running" ||
+        !state.checkpointInFlight ||
+        state.captureOp?.id !== op.id ||
+        state.captureOp.attempt !== op.attempt ||
+        !this.current(state)
+      )
+        return { outcome: "held" as const };
+      const row = this.deps.sandbox.getSandbox()!;
+      const rowChanged = row.status === "snapshotting";
+      if (rowChanged) {
+        if (!this.deps.sandbox.transitionSandboxStatus(state.generation, "snapshotting", "ready"))
+          return { outcome: "held" as const };
+      } else if (row.status !== "ready") return { outcome: "not_releasable" as const };
+      const released: ShutdownRecord = {
+        ...state,
+        checkpointInFlight: false,
+        captureOp: undefined,
+        error: undefined,
+      };
+      this.deps.store.write(released);
+      this.deps.sandbox.updateSandboxLastActivity(now);
+      const warning = persistSessionWarning(
+        this.deps.events,
+        RELEASED_CHECKPOINT_WARNING,
+        `capture:${op.id}:released`,
+        now
+      );
+      return { outcome: "released" as const, released, rowChanged, warning };
+    });
+    if (result.outcome !== "released") return result.outcome;
+    this.logCapture("Unconfirmed sandbox checkpoint released", "sandbox.capture_settled", {
+      op,
+      decision: "release",
+    });
+    this.announce(result.released);
+    if (result.rowChanged) {
+      this.broadcast({ type: "sandbox_status", status: "ready" });
+      this.broadcast({ type: "sandbox_access_changed" });
+    }
+    if (result.warning) this.broadcast({ type: "sandbox_event", event: result.warning });
+    return "released";
+  }
+
+  private logCapture(
+    message: string,
+    event: string,
+    fields: { op: CaptureOperation; decision?: string }
+  ): void {
+    const row = this.deps.sandbox.getSandbox();
+    const { op, decision } = fields;
+    this.deps.log?.warn(message, {
+      event,
+      decision,
+      op_id: op.id,
+      after: op.after,
+      reason: op.reason,
+      attempt: op.attempt,
+      settle_at_ms: op.settleAtMs,
+      door: op.uncertainAtMs === undefined ? "restart" : "provider",
+      provider: this.deps.provider.name,
+      sandbox_id: row?.modal_sandbox_id ?? null,
+      heartbeat_age_ms: row?.last_heartbeat == null ? null : this.now() - row.last_heartbeat,
+    });
+  }
+
+  private async advance(): Promise<void> {
+    let state = this.deps.store.read();
     if (!state || !this.current(state) || !state.operationId) return;
     if (!this.providerMatches(state)) return;
     if (state.phase === "draining") {
+      const op = state.checkpointInFlight ? state.captureOp : undefined;
+      if (this.settles(op)) {
+        // A routine checkpoint this shutdown claimed may still be capturing
+        // until its settle time, so neither preparation nor an unconfirmed
+        // capture may start before then. The shutdown capture replaces it.
+        if (this.now() < op.settleAtMs) {
+          await this.deps.alarm.schedule(op.settleAtMs);
+          return;
+        }
+        // Its end re-drives the drain.
+        if (this.checkpointOperationId === op.id) return;
+        state = { ...state, checkpointInFlight: false, captureOp: undefined };
+        this.deps.store.write(state);
+        this.logCapture(
+          "Unconfirmed sandbox checkpoint handed to shutdown",
+          "sandbox.capture_settled",
+          {
+            op,
+            decision: "handoff",
+          }
+        );
+      }
       if (this.now() >= state.stopByMs!) {
         await this.captureUnconfirmed(state, "stop_deadline_exceeded");
         return;

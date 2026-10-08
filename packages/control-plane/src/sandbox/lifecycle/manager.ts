@@ -73,6 +73,7 @@ import type {
   SandboxAttachment,
   SandboxAlarm,
   SandboxAlarmResult,
+  SandboxCheckpointFollowUp,
   SandboxCheckpointOutcome,
   SandboxStartupDecision,
   SandboxWorkAdmission,
@@ -133,8 +134,13 @@ export interface SandboxShutdownLifecycle extends VmStartupReconciliationShutdow
   /** Runs and classifies an ordinary checkpoint without exposing provider ambiguity to callers. */
   captureCheckpoint(
     generation: SandboxGeneration,
-    reason: string
+    reason: string,
+    after: SandboxCheckpointFollowUp
   ): Promise<SandboxCheckpointOutcome>;
+  /** Restores a checkpoint's settle alarm on start-up, then wakes any queued work a restart stranded. */
+  rearmCaptureSettlement(): Promise<void>;
+  /** Wakes queued work for a ready, live runtime when nothing else will. */
+  redriveIfIdle(): void;
   /** Decides startup without exposing the coordinator's persisted receipt representation. */
   startupDecision(): SandboxStartupDecision;
   /** Holds a failed boot of the retained source, which deleting would lose; false for other objects. */
@@ -1457,7 +1463,9 @@ export class SandboxLifecycleManager
       sandboxId: sandbox.modal_sandbox_id,
       createdAt: sandbox.created_at,
     };
-    const result = await this.shutdown.captureCheckpoint(generation, reason);
+    // Only a turn's checkpoint keeps the runtime serving; watchdogs stop it afterwards.
+    const after = reason === "execution_complete" ? "continue" : "stop_source";
+    const result = await this.shutdown.captureCheckpoint(generation, reason, after);
     if (result.outcome === "unknown")
       this.log.error("Snapshot result is unknown", {
         event: "sandbox.snapshot_deadline_exceeded",
@@ -2053,6 +2061,16 @@ export class SandboxLifecycleManager
 
   rearmRejectedStartupCleanupAlarm(): Promise<void> {
     return rearmRejectedStartupCleanupAlarm(this.allocationCleanup);
+  }
+
+  rearmCaptureSettlement(): Promise<void> {
+    return this.shutdown.rearmCaptureSettlement();
+  }
+
+  /** Runs last in an alarm delivery, after the watchdogs have acted on fresh state. */
+  redriveIdleQueue(): void {
+    if (this.providerStartupPending) return;
+    this.shutdown.redriveIfIdle();
   }
 
   private async claimProviderStartup(

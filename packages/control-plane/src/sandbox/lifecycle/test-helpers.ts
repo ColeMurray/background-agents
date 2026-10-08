@@ -525,6 +525,8 @@ export function createUnmanagedShutdown() {
     prepared: vi.fn(),
     admissionDecision: vi.fn(() => "unmanaged" as const),
     handleAlarm: vi.fn(async () => "continue" as const),
+    rearmCaptureSettlement: vi.fn(async () => undefined),
+    redriveIfIdle: vi.fn(),
     recover: vi.fn(async () => undefined),
     snapshot: vi.fn(() => null),
   } satisfies SandboxShutdownLifecycle;
@@ -563,7 +565,8 @@ export function createCheckpointShutdown(
   } as never);
   return {
     ...createUnmanagedShutdown(),
-    captureCheckpoint: (generation, reason) => coordinator.captureCheckpoint(generation, reason),
+    captureCheckpoint: (generation, reason, after) =>
+      coordinator.captureCheckpoint(generation, reason, after),
     requestShutdown: (reason, mode) =>
       mode === "emergency"
         ? coordinator.requestShutdown(reason, mode)

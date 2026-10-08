@@ -2,8 +2,13 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { SandboxEvent } from "@open-inspect/shared/types/sandbox-events";
 import type { SandboxProvider } from "../sandbox/provider";
 import { SandboxShutdownCoordinator } from "./sandbox-shutdown";
-import type { ShutdownRecord, ShutdownStore } from "./sandbox-shutdown-repository";
+import {
+  SandboxShutdownRepository,
+  type ShutdownRecord,
+  type ShutdownStore,
+} from "./sandbox-shutdown-repository";
 import { createAlarmHandler } from "./alarm/handler";
+import { createEarliestAlarmScheduler, handleAlarmDelivery } from "./alarm/scheduler";
 
 const GENERATION = { sandboxId: "sandbox-1", createdAt: 1_000 };
 const PENDING_VM_REFERENCE = 'modal-vm-session:["session-1","sandbox-1"]';
@@ -15,6 +20,28 @@ class MemoryStore implements ShutdownStore {
   }
   write(record: ShutdownRecord) {
     this.value = structuredClone(record);
+  }
+}
+
+/** The real repository over one row, so records pass its schema as in production. */
+class DurableStore implements ShutdownStore {
+  private row: string | null = null;
+  private readonly repository = new SandboxShutdownRepository({
+    exec: (query: string, ...params: unknown[]) => {
+      if (query.trimStart().startsWith("INSERT")) this.row = params[0] as string;
+      const rows =
+        query.trimStart().startsWith("SELECT") && this.row !== null ? [{ state: this.row }] : [];
+      return { toArray: () => rows, one: () => rows[0] ?? null };
+    },
+  });
+  get value() {
+    return this.repository.read();
+  }
+  read() {
+    return this.repository.read();
+  }
+  write(record: ShutdownRecord) {
+    this.repository.write(record);
   }
 }
 
@@ -32,9 +59,9 @@ function provider(overrides: Partial<SandboxProvider> = {}): SandboxProvider {
   } as SandboxProvider;
 }
 
-function fixture(providerValue = provider()) {
+function fixture(providerValue = provider(), options: { durable?: boolean } = {}) {
   let now = 100_000;
-  const store = new MemoryStore();
+  const store = options.durable ? new DurableStore() : new MemoryStore();
   const calls: string[] = [];
   const backgroundTasks: Array<() => Promise<void>> = [];
   const socket = {};
@@ -44,6 +71,7 @@ function fixture(providerValue = provider()) {
     created_at: GENERATION.createdAt,
     runtime_version: "runtime-1",
     status: "ready",
+    last_heartbeat: 100_000 as number | null,
   };
   const deps = {
     store,
@@ -62,6 +90,7 @@ function fixture(providerValue = provider()) {
         sandboxRow.modal_object_id = null;
         return true;
       }),
+      updateSandboxLastActivity: vi.fn(),
     },
     session: {
       getSession: vi.fn(() => ({
@@ -73,8 +102,10 @@ function fixture(providerValue = provider()) {
     },
     messages: {
       getProcessingMessage: vi.fn<() => { id: string } | null>(() => null),
+      getNextPendingMessage: vi.fn<() => { id: string } | null>(() => null),
     },
     failures: { record: vi.fn(), deliver: vi.fn() },
+    events: { createEventIfAbsent: vi.fn(() => true) },
     messenger: {
       broadcast: vi.fn((message: { type: string; preservation?: { phase: string } }) => {
         if (message.type === "sandbox_preservation" && message.preservation) {
@@ -590,7 +621,7 @@ describe("SandboxShutdownCoordinator", () => {
       })
     );
     await readyFinite(f);
-    const checkpoint = f.shutdown.captureCheckpoint(GENERATION, "checkpoint");
+    const checkpoint = f.shutdown.captureCheckpoint(GENERATION, "checkpoint", "continue");
 
     await f.shutdown.requestShutdown("sandbox_lifetime_expiring");
     expect(f.deps.sockets.send).not.toHaveBeenCalledWith(
@@ -611,7 +642,9 @@ describe("SandboxShutdownCoordinator", () => {
     const f = fixture();
     await readyFinite(f, 1_000_000);
 
-    await expect(f.shutdown.captureCheckpoint(GENERATION, "checkpoint")).resolves.toEqual({
+    await expect(
+      f.shutdown.captureCheckpoint(GENERATION, "checkpoint", "continue")
+    ).resolves.toEqual({
       outcome: "held",
     });
     await expect(f.shutdown.requestShutdown("sandbox_lifetime_expiring")).resolves.toBe("owned");
@@ -625,7 +658,9 @@ describe("SandboxShutdownCoordinator", () => {
     const f = fixture();
     reserveGeneration(f, GENERATION, "confirmed");
 
-    await expect(f.shutdown.captureCheckpoint(GENERATION, "checkpoint")).resolves.toEqual({
+    await expect(
+      f.shutdown.captureCheckpoint(GENERATION, "checkpoint", "continue")
+    ).resolves.toEqual({
       outcome: "held",
     });
   });
@@ -643,7 +678,7 @@ describe("SandboxShutdownCoordinator", () => {
         })
       );
       await readyWithoutDeadline(f);
-      const run = f.shutdown.captureCheckpoint(GENERATION, "checkpoint");
+      const run = f.shutdown.captureCheckpoint(GENERATION, "heartbeat_timeout", "stop_source");
 
       await vi.advanceTimersByTimeAsync(300_000);
       await expect(run).resolves.toEqual({ outcome: "unknown" });
@@ -664,7 +699,8 @@ describe("SandboxShutdownCoordinator", () => {
       })
     );
     await readyWithoutDeadline(f);
-    const oldCapture = f.shutdown.captureCheckpoint(GENERATION, "checkpoint");
+    const oldCapture = f.shutdown.captureCheckpoint(GENERATION, "checkpoint", "continue");
+    await vi.waitFor(() => expect(resolve).toBeTypeOf("function"));
     const replacement = { sandboxId: "sandbox-2", createdAt: 2_000 };
     f.sandboxRow.modal_sandbox_id = replacement.sandboxId;
     f.sandboxRow.created_at = replacement.createdAt;
@@ -2061,5 +2097,554 @@ describe("SandboxShutdownCoordinator", () => {
       sourceRetired: false,
     });
     expect(f.shutdown.admissionDecision()).toBe("held");
+  });
+});
+
+describe("unconfirmed routine checkpoint settlement", () => {
+  const SETTLE_AT_MS = 430_000; // deadline (start + 300s) plus a 30s margin
+  const LOST = "Checkpoint result was lost during a control-plane restart.";
+
+  function settlementFixture(overrides: Partial<SandboxProvider> = {}) {
+    const takeSnapshot = vi.fn<NonNullable<SandboxProvider["takeSnapshot"]>>(async () => ({
+      success: true,
+      imageId: "next-image",
+    }));
+    const stopSandbox = vi.fn(async () => ({ success: true as const }));
+    const f = fixture(provider({ takeSnapshot, stopSandbox, ...overrides }), { durable: true });
+    return { ...f, takeSnapshot, stopSandbox };
+  }
+
+  /** A checkpoint whose provider call never answers this instance, then a restarted instance. */
+  async function lostToRestart(f: ReturnType<typeof settlementFixture>) {
+    let abandon!: (error: Error) => void;
+    f.takeSnapshot.mockImplementationOnce(
+      () => new Promise((_resolve, reject) => (abandon = reject))
+    );
+    const original = f.shutdown.captureCheckpoint(GENERATION, "execution_complete", "continue");
+    await vi.waitFor(() => expect(f.takeSnapshot).toHaveBeenCalledOnce());
+    const restarted = new SandboxShutdownCoordinator(f.deps as never);
+    return { restarted, original, abandon };
+  }
+
+  function warned(f: ReturnType<typeof fixture>, decision: string) {
+    return f.deps.log.warn.mock.calls.some(
+      ([, fields]) => (fields as { decision?: string }).decision === decision
+    );
+  }
+
+  it("holds an unconfirmed provider outcome until its settle time without failing", async () => {
+    const f = settlementFixture();
+    await readyWithoutDeadline(f);
+    f.takeSnapshot.mockRejectedValueOnce(new Error("HTTP 502"));
+
+    await expect(
+      f.shutdown.captureCheckpoint(GENERATION, "execution_complete", "continue")
+    ).resolves.toEqual({ outcome: "unknown" });
+
+    expect(f.store.value).toMatchObject({
+      phase: "running",
+      checkpointInFlight: true,
+      captureOp: { after: "continue", settleAtMs: SETTLE_AT_MS, uncertainAtMs: 100_000 },
+    });
+    expect(f.store.value?.error).toBeUndefined();
+    expect(f.shutdown.admissionDecision()).toBe("held");
+    expect(f.deps.alarm.schedule).toHaveBeenLastCalledWith(SETTLE_AT_MS);
+    expect(f.deps.messenger.broadcast).not.toHaveBeenCalledWith(
+      expect.objectContaining({ type: "sandbox_warning" })
+    );
+    expect(f.shutdown.snapshot()).not.toHaveProperty("captureOp");
+  });
+
+  it("releases a live runtime at its settle time with a durable warning", async () => {
+    const f = settlementFixture();
+    await readyWithoutDeadline(f);
+    f.takeSnapshot.mockRejectedValueOnce(new Error("HTTP 502"));
+    await f.shutdown.captureCheckpoint(GENERATION, "execution_complete", "continue");
+    const op = f.store.value!.captureOp!;
+
+    f.setNow(SETTLE_AT_MS - 1);
+    await expect(f.shutdown.handleAlarm()).resolves.toBe("hold_watchdogs");
+    expect(f.store.value?.checkpointInFlight).toBe(true);
+
+    f.setNow(SETTLE_AT_MS);
+    f.sandboxRow.last_heartbeat = SETTLE_AT_MS - 5_000;
+    await expect(f.shutdown.handleAlarm()).resolves.toBe("continue");
+
+    expect(f.store.value).toMatchObject({ phase: "running", checkpointInFlight: false });
+    expect(f.store.value).not.toHaveProperty("captureOp");
+    expect(f.sandboxRow.status).toBe("ready");
+    expect(f.deps.sandbox.updateSandboxLastActivity).toHaveBeenCalledWith(SETTLE_AT_MS);
+    expect(f.deps.events.createEventIfAbsent).toHaveBeenCalledWith(
+      expect.objectContaining({ id: `capture:${op.id}:released`, type: "warning" })
+    );
+    expect(f.deps.messenger.broadcast).toHaveBeenCalledWith({
+      type: "sandbox_event",
+      event: expect.objectContaining({ type: "warning" }),
+    });
+    expect(f.deps.messenger.broadcast).toHaveBeenCalledWith({
+      type: "sandbox_status",
+      status: "ready",
+    });
+    expect(warned(f, "release")).toBe(true);
+    expect(f.shutdown.admissionDecision()).toBe("ready");
+
+    // The next turn's checkpoint is not skipped as "already snapshotting".
+    await expect(
+      f.shutdown.captureCheckpoint(GENERATION, "execution_complete", "continue")
+    ).resolves.toMatchObject({ outcome: "saved", imageId: "next-image" });
+  });
+
+  it("settles a checkpoint whose answer a restart lost, re-arming its alarm on every pass", async () => {
+    const f = settlementFixture();
+    await readyWithoutDeadline(f);
+    const { restarted, original, abandon } = await lostToRestart(f);
+    expect(f.deps.alarm.schedule).toHaveBeenLastCalledWith(SETTLE_AT_MS);
+
+    // An unrelated earlier alarm consumed the slot; the pass reasserts settlement.
+    f.setNow(160_000);
+    f.deps.alarm.schedule.mockClear();
+    await expect(restarted.handleAlarm()).resolves.toBe("hold_watchdogs");
+    expect(f.deps.alarm.schedule).toHaveBeenCalledWith(SETTLE_AT_MS);
+    expect(f.store.value).toMatchObject({ phase: "running", checkpointInFlight: true });
+
+    f.setNow(SETTLE_AT_MS);
+    f.sandboxRow.last_heartbeat = SETTLE_AT_MS - 1_000;
+    await expect(restarted.handleAlarm()).resolves.toBe("continue");
+    expect(f.store.value).toMatchObject({ phase: "running", checkpointInFlight: false });
+    expect(f.deps.log.warn).toHaveBeenCalledWith(
+      "Unconfirmed sandbox checkpoint released",
+      expect.objectContaining({ door: "restart", decision: "release" })
+    );
+
+    // The lost attempt's late end changes nothing.
+    const released = f.store.value;
+    abandon(new Error("instance gone"));
+    await original;
+    expect(f.store.value).toEqual(released);
+  });
+
+  it("defers once for a stale heartbeat, then holds with today's error", async () => {
+    const f = settlementFixture();
+    await readyWithoutDeadline(f);
+    const { restarted } = await lostToRestart(f);
+
+    f.setNow(SETTLE_AT_MS);
+    f.sandboxRow.last_heartbeat = 100_000;
+    await expect(restarted.handleAlarm()).resolves.toBe("hold_watchdogs");
+    expect(f.store.value?.captureOp?.deferredUntilMs).toBe(SETTLE_AT_MS + 90_000);
+    expect(f.deps.alarm.schedule).toHaveBeenLastCalledWith(SETTLE_AT_MS + 90_000);
+    expect(warned(f, "defer")).toBe(true);
+
+    f.setNow(SETTLE_AT_MS + 90_000);
+    await restarted.handleAlarm();
+    expect(f.store.value).toMatchObject({
+      phase: "unknown",
+      error: LOST,
+      checkpointInFlight: true,
+    });
+    expect(f.store.value).not.toHaveProperty("captureOp");
+    expect(warned(f, "hold")).toBe(true);
+    expect(recoveryActions(restarted)).toEqual(["discard"]);
+  });
+
+  it("releases when the heartbeat recovers during the deferral", async () => {
+    const f = settlementFixture();
+    await readyWithoutDeadline(f);
+    const { restarted } = await lostToRestart(f);
+    f.setNow(SETTLE_AT_MS);
+    f.sandboxRow.last_heartbeat = 100_000;
+    await restarted.handleAlarm();
+
+    f.setNow(SETTLE_AT_MS + 90_000);
+    f.sandboxRow.last_heartbeat = SETTLE_AT_MS + 60_000;
+    await expect(restarted.handleAlarm()).resolves.toBe("continue");
+    expect(f.store.value).toMatchObject({ phase: "running", checkpointInFlight: false });
+  });
+
+  it("holds at once when the sandbox row is dead", async () => {
+    const f = settlementFixture();
+    await readyWithoutDeadline(f);
+    const { restarted } = await lostToRestart(f);
+
+    f.setNow(SETTLE_AT_MS);
+    f.sandboxRow.status = "stopped";
+    await restarted.handleAlarm();
+
+    expect(f.store.value).toMatchObject({ phase: "unknown", error: LOST });
+  });
+
+  it("keeps today's hold for watchdog checkpoints and destructive providers", async () => {
+    const watchdog = settlementFixture();
+    await readyWithoutDeadline(watchdog);
+    watchdog.takeSnapshot.mockImplementationOnce(() => new Promise(() => {}));
+    void watchdog.shutdown.captureCheckpoint(GENERATION, "heartbeat_timeout", "stop_source");
+    await vi.waitFor(() => expect(watchdog.takeSnapshot).toHaveBeenCalledOnce());
+    const restarted = new SandboxShutdownCoordinator(watchdog.deps as never);
+    watchdog.setNow(150_000);
+    await restarted.handleAlarm();
+    expect(watchdog.store.value).toMatchObject({ phase: "unknown", error: LOST });
+
+    const destructive = settlementFixture({
+      capabilities: { ...provider().capabilities, snapshotRequiresShutdown: true },
+    });
+    await readyWithoutDeadline(destructive);
+    destructive.takeSnapshot.mockRejectedValueOnce(new Error("HTTP 502"));
+    await destructive.shutdown.captureCheckpoint(GENERATION, "execution_complete", "continue");
+    expect(destructive.store.value).toMatchObject({
+      phase: "unknown",
+      error: "Checkpoint provider outcome is unknown; destructive follow-up remains held.",
+      checkpointInFlight: false,
+    });
+  });
+
+  it("gives a flag written before operations existed one settle time, never extended", async () => {
+    const f = settlementFixture();
+    await readyWithoutDeadline(f);
+    f.store.write({ ...f.store.value!, checkpointInFlight: true });
+    f.sandboxRow.status = "snapshotting";
+
+    f.setNow(200_000);
+    const first = new SandboxShutdownCoordinator(f.deps as never);
+    await expect(first.handleAlarm()).resolves.toBe("hold_watchdogs");
+    expect(f.store.value?.captureOp).toMatchObject({ after: "continue", settleAtMs: 530_000 });
+
+    f.setNow(300_000);
+    const second = new SandboxShutdownCoordinator(f.deps as never);
+    await second.rearmCaptureSettlement();
+    expect(f.deps.alarm.schedule).toHaveBeenLastCalledWith(530_000);
+    expect(f.store.value?.captureOp?.settleAtMs).toBe(530_000);
+
+    f.setNow(530_000);
+    f.sandboxRow.last_heartbeat = 525_000;
+    await expect(second.handleAlarm()).resolves.toBe("continue");
+    expect(f.store.value?.checkpointInFlight).toBe(false);
+  });
+
+  it("fails an old flag on a row that is not snapshotting, as before", async () => {
+    const f = settlementFixture();
+    await readyWithoutDeadline(f);
+    f.store.write({ ...f.store.value!, checkpointInFlight: true });
+
+    await new SandboxShutdownCoordinator(f.deps as never).handleAlarm();
+
+    expect(f.store.value).toMatchObject({ phase: "unknown", error: LOST });
+  });
+
+  it("re-arms at start-up, waking a due operation now", async () => {
+    const f = settlementFixture();
+    await readyWithoutDeadline(f);
+    const { restarted } = await lostToRestart(f);
+
+    f.setNow(200_000);
+    await restarted.rearmCaptureSettlement();
+    expect(f.deps.alarm.schedule).toHaveBeenLastCalledWith(SETTLE_AT_MS);
+
+    f.setNow(SETTLE_AT_MS + 1_000);
+    await new SandboxShutdownCoordinator(f.deps as never).rearmCaptureSettlement();
+    expect(f.deps.alarm.schedule).toHaveBeenLastCalledWith(SETTLE_AT_MS + 1_000);
+  });
+
+  it("drains before waking queued work when release outlives the drain deadline", async () => {
+    const f = settlementFixture();
+    await readyFinite(f); // drains at 700_000
+    const { restarted } = await lostToRestart(f);
+    f.deps.messages.getNextPendingMessage.mockReturnValue({ id: "queued" });
+
+    f.backgroundTasks.length = 0;
+    f.setNow(700_000);
+    f.sandboxRow.last_heartbeat = 695_000;
+    await expect(restarted.handleAlarm()).resolves.toBe("hold_watchdogs");
+    restarted.redriveIfIdle();
+
+    expect(f.store.value?.phase).toBe("draining");
+    expect(f.deps.sockets.send).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ type: "prepare_preservation" })
+    );
+    await Promise.all(f.backgroundTasks.map((task) => task()));
+    expect(f.deps.onLifecycleChange).not.toHaveBeenCalled();
+  });
+
+  it("hands an unsettled checkpoint to an archive without wedging it", async () => {
+    const f = settlementFixture();
+    await readyFinite(f);
+    const { restarted } = await lostToRestart(f);
+
+    f.setNow(150_000);
+    await expect(restarted.requestShutdown("archive")).resolves.toBe("owned");
+    const stopByMs = f.store.value!.stopByMs!;
+    expect(f.store.value).toMatchObject({ phase: "draining", checkpointInFlight: true });
+    expect(f.deps.sockets.send).not.toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ type: "prepare_preservation" })
+    );
+
+    // Past the stop deadline, the alarm waits for settlement rather than looping on it.
+    f.setNow(stopByMs + 10_000);
+    f.deps.alarm.schedule.mockClear();
+    await restarted.handleAlarm();
+    expect(f.deps.alarm.schedule.mock.calls).toEqual([[SETTLE_AT_MS]]);
+    expect(f.store.value).toMatchObject({ phase: "draining", checkpointInFlight: true });
+
+    f.setNow(SETTLE_AT_MS);
+    await restarted.handleAlarm();
+    expect(f.takeSnapshot).toHaveBeenCalledTimes(2);
+    expect(f.store.value).toMatchObject({ phase: "saved", checkpointInFlight: false });
+    expect(warned(f, "handoff")).toBe(true);
+  });
+
+  it("hands a checkpoint that fails after the shutdown claimed it to settlement", async () => {
+    const f = settlementFixture();
+    await readyFinite(f);
+    let fail!: (error: Error) => void;
+    f.takeSnapshot.mockImplementationOnce(() => new Promise((_resolve, reject) => (fail = reject)));
+    const checkpoint = f.shutdown.captureCheckpoint(GENERATION, "execution_complete", "continue");
+    await vi.waitFor(() => expect(f.takeSnapshot).toHaveBeenCalledOnce());
+
+    await f.shutdown.requestShutdown("archive");
+    fail(new Error("HTTP 524"));
+    await expect(checkpoint).resolves.toEqual({ outcome: "unknown" });
+
+    expect(f.store.value).toMatchObject({
+      phase: "draining",
+      checkpointInFlight: true,
+      captureOp: { uncertainAtMs: 100_000 },
+    });
+  });
+
+  /** The production scheduler over one alarm slot, delivered as the Durable Object does. */
+  function singleSlotAlarm() {
+    let pending: number | null = null;
+    let inFlight: number | null = null;
+    let runtime: number | null = null;
+    const deadlines = {
+      pending: () => pending,
+      earliest: () =>
+        [pending, inFlight].reduce<number | null>(
+          (min, value) => (value === null ? min : min === null ? value : Math.min(min, value)),
+          null
+        ),
+      cancelled: () => false,
+      setPending: (deadline: number) => void (pending = deadline),
+      setPendingEarliest: (deadline: number) =>
+        void (pending = pending === null ? deadline : Math.min(pending, deadline)),
+      activate: () => undefined,
+      clear: () => void (pending = inFlight = null),
+      beginDelivery: () => {
+        if (inFlight === null) [inFlight, pending] = [pending, null];
+        return inFlight;
+      },
+      completeDelivery: () => void (inFlight = null),
+    };
+    const scheduler = createEarliestAlarmScheduler(
+      {
+        getAlarm: async () => runtime,
+        setAlarm: async (at: number) => void (runtime = at),
+        deleteAlarm: async () => void (runtime = null),
+      },
+      deadlines
+    );
+    return {
+      scheduler,
+      pending: () => pending,
+      deliver(handle: () => Promise<unknown>) {
+        runtime = null; // the platform consumes the alarm it delivers
+        return handleAlarmDelivery(
+          deadlines,
+          async () => void (await handle()),
+          () => scheduler.rearmPending()
+        );
+      },
+    };
+  }
+
+  it("reasserts settlement after an earlier alarm consumes the single slot, without looping", async () => {
+    const f = settlementFixture();
+    const slot = singleSlotAlarm();
+    (f.deps as { alarm: unknown }).alarm = slot.scheduler;
+    await readyWithoutDeadline(f);
+    await slot.scheduler.schedule(160_000); // an unrelated earlier check keeps the slot
+    const { restarted } = await lostToRestart(f);
+    expect(slot.pending()).toBe(160_000);
+
+    f.setNow(160_000);
+    await slot.deliver(() => restarted.handleAlarm());
+    expect(slot.pending()).toBe(SETTLE_AT_MS);
+
+    f.setNow(SETTLE_AT_MS);
+    f.sandboxRow.last_heartbeat = SETTLE_AT_MS - 1_000;
+    await slot.deliver(() => restarted.handleAlarm());
+    expect(f.store.value?.checkpointInFlight).toBe(false);
+    expect(slot.pending()).toBeNull();
+  });
+
+  it("does not re-arm a past settle time after holding", async () => {
+    const f = settlementFixture();
+    const slot = singleSlotAlarm();
+    (f.deps as { alarm: unknown }).alarm = slot.scheduler;
+    await readyWithoutDeadline(f);
+    const { restarted } = await lostToRestart(f);
+
+    f.setNow(SETTLE_AT_MS);
+    f.sandboxRow.status = "stopped";
+    await slot.deliver(() => restarted.handleAlarm());
+
+    expect(f.store.value?.phase).toBe("unknown");
+    expect(slot.pending()).toBeNull();
+  });
+
+  it("releases a row that is already ready without announcing a status change", async () => {
+    const f = settlementFixture();
+    await readyWithoutDeadline(f);
+    const { restarted } = await lostToRestart(f);
+    f.setNow(SETTLE_AT_MS);
+    f.sandboxRow.status = "ready";
+    f.sandboxRow.last_heartbeat = SETTLE_AT_MS - 1_000;
+    f.deps.messenger.broadcast.mockClear();
+
+    await expect(restarted.handleAlarm()).resolves.toBe("continue");
+
+    expect(f.store.value?.checkpointInFlight).toBe(false);
+    expect(f.deps.messenger.broadcast).not.toHaveBeenCalledWith(
+      expect.objectContaining({ type: "sandbox_status" })
+    );
+  });
+
+  it("does not release when the row or the attempt changed under the release", async () => {
+    const f = settlementFixture();
+    await readyWithoutDeadline(f);
+    const { restarted } = await lostToRestart(f);
+    f.setNow(SETTLE_AT_MS);
+    f.sandboxRow.last_heartbeat = SETTLE_AT_MS - 1_000;
+
+    f.deps.sandbox.transitionSandboxStatus.mockReturnValueOnce(false);
+    await expect(restarted.handleAlarm()).resolves.toBe("hold_watchdogs");
+    expect(f.store.value).toMatchObject({ phase: "running", checkpointInFlight: true });
+
+    const op = f.store.value!.captureOp!;
+    f.deps.session.transaction.mockImplementationOnce((operation: () => unknown) => {
+      f.store.write({ ...f.store.value!, captureOp: { ...op, attempt: 2 } });
+      return operation();
+    });
+    await expect(restarted.handleAlarm()).resolves.toBe("hold_watchdogs");
+    expect(f.store.value).toMatchObject({ checkpointInFlight: true, captureOp: { attempt: 2 } });
+    expect(f.deps.events.createEventIfAbsent).not.toHaveBeenCalled();
+    expect(f.deps.sandbox.updateSandboxLastActivity).not.toHaveBeenCalled();
+  });
+
+  it("commits the warning with the release, so a reset after it still wakes the queue", async () => {
+    const f = settlementFixture();
+    await readyWithoutDeadline(f);
+    const { restarted } = await lostToRestart(f);
+    let inTransaction = false;
+    f.deps.session.transaction.mockImplementation((operation: () => unknown) => {
+      inTransaction = true;
+      try {
+        return operation();
+      } finally {
+        inTransaction = false;
+      }
+    });
+    const persistedInTransaction: boolean[] = [];
+    f.deps.events.createEventIfAbsent.mockImplementation(() => {
+      persistedInTransaction.push(inTransaction);
+      return true;
+    });
+    f.setNow(SETTLE_AT_MS);
+    f.sandboxRow.last_heartbeat = SETTLE_AT_MS - 1_000;
+    await restarted.handleAlarm();
+    expect(persistedInTransaction).toEqual([true]);
+
+    // The instance resets before anything woke the queue.
+    f.backgroundTasks.length = 0;
+    f.deps.messages.getNextPendingMessage.mockReturnValue({ id: "autofix" });
+    await new SandboxShutdownCoordinator(f.deps as never).rearmCaptureSettlement();
+    await Promise.all(f.backgroundTasks.map((task) => task()));
+    expect(f.deps.onLifecycleChange).toHaveBeenCalledOnce();
+  });
+
+  describe("queue redrive", () => {
+    function composedAlarm(
+      f: ReturnType<typeof fixture>,
+      shutdown: SandboxShutdownCoordinator,
+      lifecycleResult = "no_action"
+    ) {
+      return createAlarmHandler({
+        preserveBeforeWatchdogs: (allowCaptureRetry: boolean) =>
+          shutdown.handleAlarm(allowCaptureRetry),
+        terminalMessageProjection: { flushPending: vi.fn(async () => undefined) },
+        executionStop: {
+          recoverStopConfirmationTimeout: vi.fn(async () => undefined),
+          resumeAfterSandboxTermination: vi.fn(async () => undefined),
+        },
+        repository: {
+          getProcessingMessageWithStartedAt: vi.fn(() => null),
+          getNextPendingMessage: vi.fn(() => null),
+        },
+        messageQueue: { failStuckProcessingMessage: vi.fn(async () => undefined) },
+        lifecycleManager: { handleAlarm: vi.fn(async () => lifecycleResult) },
+        redriveIdleQueue: () => shutdown.redriveIfIdle(),
+        log: f.deps.log,
+      } as never);
+    }
+
+    async function runBackground(f: ReturnType<typeof fixture>) {
+      await Promise.all(f.backgroundTasks.splice(0).map((task) => task()));
+    }
+
+    it("releases once per delivery and then wakes the queued prompt", async () => {
+      const f = settlementFixture();
+      await readyWithoutDeadline(f);
+      const { restarted } = await lostToRestart(f);
+      f.backgroundTasks.length = 0;
+      f.deps.messages.getNextPendingMessage.mockReturnValue({ id: "autofix" });
+
+      f.setNow(SETTLE_AT_MS);
+      f.sandboxRow.last_heartbeat = SETTLE_AT_MS - 1_000;
+      await composedAlarm(f, restarted).handle();
+      await runBackground(f);
+
+      expect(f.deps.events.createEventIfAbsent).toHaveBeenCalledOnce();
+      expect(f.deps.onLifecycleChange).toHaveBeenCalled();
+    });
+
+    it("repeats a kick lost before the queue claimed the prompt", async () => {
+      const f = settlementFixture();
+      await readyWithoutDeadline(f);
+      f.backgroundTasks.length = 0;
+      f.deps.messages.getNextPendingMessage.mockReturnValue({ id: "autofix" });
+      f.sandboxRow.last_heartbeat = 100_000;
+
+      await composedAlarm(f, f.shutdown).handle();
+      f.backgroundTasks.length = 0; // the restart drops the submitted pump
+      await composedAlarm(f, new SandboxShutdownCoordinator(f.deps as never)).handle();
+      await runBackground(f);
+
+      expect(f.deps.onLifecycleChange).toHaveBeenCalledOnce();
+    });
+
+    it("never wakes work for a stale, booting, busy or terminated runtime", async () => {
+      const f = settlementFixture();
+      await readyWithoutDeadline(f);
+      f.backgroundTasks.length = 0;
+      f.deps.messages.getNextPendingMessage.mockReturnValue({ id: "queued" });
+
+      f.setNow(200_000); // heartbeat at 100_000 is stale
+      await composedAlarm(f, f.shutdown).handle();
+
+      f.sandboxRow.last_heartbeat = 199_000;
+      f.sandboxRow.status = "connecting";
+      await composedAlarm(f, f.shutdown).handle();
+
+      f.sandboxRow.status = "ready";
+      f.deps.messages.getProcessingMessage.mockReturnValue({ id: "running" });
+      await composedAlarm(f, f.shutdown).handle();
+
+      f.deps.messages.getProcessingMessage.mockReturnValue(null);
+      await composedAlarm(f, f.shutdown, "sandbox_terminated").handle();
+
+      await runBackground(f);
+      expect(f.deps.onLifecycleChange).not.toHaveBeenCalled();
+    });
   });
 });
