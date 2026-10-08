@@ -140,7 +140,7 @@ export interface SandboxShutdownLifecycle extends VmStartupReconciliationShutdow
   /** Restores a checkpoint's settle alarm on start-up. */
   rearmCaptureSettlement(): Promise<void>;
   /** Keeps a fatal runtime report from being lost while a checkpoint holds teardown. */
-  recordRuntimeFailure(): void;
+  recordRuntimeFailure(): boolean;
   /** Decides startup without exposing the coordinator's persisted receipt representation. */
   startupDecision(): SandboxStartupDecision;
   /** Holds a failed boot of the retained source, which deleting would lose; false for other objects. */
@@ -432,6 +432,11 @@ export class SandboxLifecycleManager
    * the launch re-drives the queue itself when it lets go.
    */
   private redriveAfterStartup: SandboxGeneration | null = null;
+  /**
+   * A fatal report this instance's in-flight checkpoint held back. A confirmed
+   * checkpoint ends the hold without settlement, so the report is replayed.
+   */
+  private deferredFatalReport: { generation: SandboxGeneration; reason: string } | null = null;
 
   /** Memoized session-scoped logger, keyed by the resolved session id. */
   private logMemo?: { sessionId: string | undefined; logger: Logger };
@@ -1472,6 +1477,25 @@ export class SandboxLifecycleManager
         reason,
         modal_object_id: sandbox.modal_object_id,
       });
+    await this.replayDeferredFatalReport(generation);
+  }
+
+  /**
+   * Acts on a fatal report the checkpoint held back once that checkpoint has
+   * ended the hold. An unconfirmed checkpoint keeps holding instead, and its
+   * settlement honors the recorded failure.
+   */
+  private async replayDeferredFatalReport(generation: SandboxGeneration): Promise<void> {
+    const deferred = this.deferredFatalReport;
+    if (
+      !deferred ||
+      deferred.generation.sandboxId !== generation.sandboxId ||
+      deferred.generation.createdAt !== generation.createdAt ||
+      this.shutdown.isHolding()
+    )
+      return;
+    this.deferredFatalReport = null;
+    await this.terminateFailedSandbox(deferred.reason);
   }
 
   /**
@@ -1805,7 +1829,12 @@ export class SandboxLifecycleManager
   async terminateFailedSandbox(reason: string): Promise<boolean> {
     if (this.shutdown.isHolding()) {
       // Teardown waits for the hold, but a held checkpoint must not hand this runtime back.
-      this.shutdown.recordRuntimeFailure();
+      const held = this.storage.getSandbox();
+      if (this.shutdown.recordRuntimeFailure() && held)
+        this.deferredFatalReport = {
+          generation: { sandboxId: held.modal_sandbox_id, createdAt: held.created_at },
+          reason,
+        };
       return false;
     }
     const sandbox = this.storage.getSandbox();

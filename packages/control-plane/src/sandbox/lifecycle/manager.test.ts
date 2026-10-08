@@ -673,6 +673,44 @@ describe("fatal runtime report during a checkpoint hold", () => {
 
     expect(shutdown.recordRuntimeFailure).toHaveBeenCalledOnce();
   });
+
+  it("acts on the report once a confirmed checkpoint ends the hold", async () => {
+    let confirm!: (result: { success: true; imageId: string }) => void;
+    const sandbox = createMockSandbox({ status: "ready" });
+    const storage = createMockStorage(createMockSession(), sandbox);
+    const broadcaster = createMockBroadcaster();
+    const takeSnapshot = vi.fn(async () => ({ success: true as const, imageId: "final-image" }));
+    takeSnapshot.mockImplementationOnce(() => new Promise((resolve) => (confirm = resolve)));
+    const provider = createMockProvider({ takeSnapshot });
+    const manager = createTestLifecycleManager(
+      provider,
+      storage,
+      storage,
+      broadcaster,
+      createMockWebSocketManager(),
+      createMockAlarmScheduler(),
+      createMockIdGenerator(),
+      createCheckpointShutdown(provider, storage, broadcaster),
+      createTestConfig()
+    );
+
+    const checkpoint = manager.triggerSnapshot("execution_complete");
+    await vi.waitFor(() => expect(takeSnapshot).toHaveBeenCalledOnce());
+    await expect(manager.terminateFailedSandbox("runtime crashed")).resolves.toBe(false);
+    expect(broadcaster.messages).not.toContainEqual({
+      type: "sandbox_error",
+      error: "runtime crashed",
+    });
+
+    confirm({ success: true, imageId: "checkpoint-image" });
+    await checkpoint;
+
+    expect(broadcaster.messages).toContainEqual({
+      type: "sandbox_error",
+      error: "runtime crashed",
+    });
+    expect(sandbox.status).not.toBe("ready");
+  });
 });
 
 describe("spawn admission race (#1589)", () => {

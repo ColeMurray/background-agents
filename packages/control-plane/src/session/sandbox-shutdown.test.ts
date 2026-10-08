@@ -2597,6 +2597,21 @@ describe("unconfirmed routine checkpoint settlement", () => {
     expect(f.deps.sandbox.updateSandboxLastActivity).not.toHaveBeenCalled();
   });
 
+  it("records a fatal report against an older flag by giving it its operation", async () => {
+    const f = settlementFixture();
+    await readyWithoutDeadline(f);
+    f.store.write({ ...f.store.value!, checkpointInFlight: true });
+    f.sandboxRow.status = "snapshotting";
+    const restarted = new SandboxShutdownCoordinator(f.deps as never);
+
+    expect(restarted.recordRuntimeFailure()).toBe(true);
+
+    expect(f.store.value?.captureOp).toMatchObject({
+      after: "continue",
+      runtimeFailedAtMs: 100_000,
+    });
+  });
+
   it("commits the warning in the same transaction as the release", async () => {
     const f = settlementFixture();
     await readyWithoutDeadline(f);

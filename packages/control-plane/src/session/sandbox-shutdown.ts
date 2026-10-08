@@ -1106,14 +1106,21 @@ export class SandboxShutdownCoordinator {
 
   /**
    * A fatal runtime report while a checkpoint holds exclusion cannot tear the
-   * runtime down yet, but settlement must not hand that runtime back.
+   * runtime down yet, but settlement must not hand that runtime back. Reports
+   * whether the checkpoint now carries the failure.
    */
-  recordRuntimeFailure(): void {
+  recordRuntimeFailure(): boolean {
     const state = this.deps.store.read();
-    const op = state?.checkpointInFlight ? state.captureOp : undefined;
-    if (!state || !this.settles(op) || op.runtimeFailedAtMs !== undefined || !this.current(state))
-      return;
-    this.deps.store.write({ ...state, captureOp: { ...op, runtimeFailedAtMs: this.now() } });
+    if (!state?.checkpointInFlight || !this.current(state)) return false;
+    // An older flag gets its operation first, so it can carry the failure.
+    const op = state.phase === "running" ? this.openCheckpointOp(state) : state.captureOp;
+    if (!this.settles(op)) return false;
+    if (op.runtimeFailedAtMs === undefined)
+      this.deps.store.write({
+        ...this.deps.store.read()!,
+        captureOp: { ...op, runtimeFailedAtMs: this.now() },
+      });
+    return true;
   }
 
   /** A routine checkpoint neither stops nor alters its source, so an unanswered one can be settled. */
