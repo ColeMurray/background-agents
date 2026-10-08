@@ -60,6 +60,34 @@ describe("markdownToMrkdwn", () => {
     );
   });
 
+  it("links only web and mailto destinations so a link can't become a mention", () => {
+    expect(markdownToMrkdwn("[here](!here) [you](@U123) [chan](#C123)")).toBe(
+      "here (!here) you (@U123) chan (#C123)"
+    );
+    expect(markdownToMrkdwn("![pic](!channel) [x](javascript:alert(1))")).toBe(
+      "pic (!channel) x (javascript:alert(1))"
+    );
+    expect(markdownToMrkdwn("[file](src/a.ts) [mail](mailto:a@b.co)")).toBe(
+      "file (src/a.ts) <mailto:a@b.co|mail>"
+    );
+  });
+
+  it("renders an image inside a link as its alt text so links don't nest", () => {
+    expect(markdownToMrkdwn("[![CI](https://a.com/badge.png)](https://b.com)")).toBe(
+      "<https://b.com|CI>"
+    );
+  });
+
+  it("falls back to the destination when a link has no label", () => {
+    expect(markdownToMrkdwn("[](https://x.com) [](src/a.ts)")).toBe(
+      "<https://x.com|https://x.com> src/a.ts"
+    );
+  });
+
+  it("shows entities inside inline code literally and decodes them in prose", () => {
+    expect(markdownToMrkdwn("`&lt;div&gt;` AT&amp;T")).toBe("`&amp;lt;div&amp;gt;` AT&amp;T");
+  });
+
   it("keeps tables readable as preformatted text", () => {
     expect(markdownToMrkdwn("| a | b |\n|---|---|\n| 1 | 2 |")).toBe(
       "```\n| a | b |\n|---|---|\n| 1 | 2 |\n```"

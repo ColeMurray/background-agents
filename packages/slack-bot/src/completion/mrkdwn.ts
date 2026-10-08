@@ -100,11 +100,12 @@ function renderInlineToken(token: Token): string {
     case "del":
       return `~${renderInline(token.tokens ?? [])}~`;
     case "codespan":
-      return `\`${escapeMrkdwnText(decodeEntities(token.text))}\``;
+      // Markdown shows entities in inline code literally, so they are not decoded.
+      return `\`${escapeMrkdwnText(token.text)}\``;
     case "link":
-      return `<${escapeMrkdwnText(token.href)}|${renderInline(token.tokens ?? [])}>`;
+      return renderLink(token.href, renderLinkLabel(token.tokens ?? []));
     case "image":
-      return `<${escapeMrkdwnText(token.href)}|${escapeMrkdwnText(token.text || token.href)}>`;
+      return renderLink(token.href, escapeMrkdwnText(token.text || token.href));
     case "br":
       return "\n";
     case "text":
@@ -119,8 +120,35 @@ function renderInlineToken(token: Token): string {
 }
 
 /**
- * The lexer HTML-escapes text and code spans (`&` → `&amp;`); undo that so
- * escapeMrkdwnText doesn't double-escape.
+ * Slack reads `<!here|x>`, `<@U123|x>` and `<#C123|x>` as mentions, so a link
+ * destination like `!here` would notify the channel. Only web and mailto
+ * destinations, the same set sanitizeLinks keeps, become Slack links; any
+ * other destination is shown as plain text after the label.
+ */
+const LINKABLE_HREF_RE = /^(?:https?:\/\/|mailto:)[^\s|<>]+$/;
+
+function renderLink(href: string, label: string): string {
+  const text = label.trim() ? label : escapeMrkdwnText(href);
+  if (LINKABLE_HREF_RE.test(href)) return `<${escapeMrkdwnText(href)}|${text}>`;
+  return label.trim() ? `${label} (${escapeMrkdwnText(href)})` : text;
+}
+
+/**
+ * mrkdwn links can't nest: in `[![CI](badge.png)](ci-url)` the inner link's `>`
+ * would end the outer one. An image inside a link label renders as its alt text.
+ */
+function renderLinkLabel(tokens: Token[]): string {
+  return tokens
+    .map((token) =>
+      token.type === "image" ? escapeMrkdwnText(token.text) : renderInlineToken(token)
+    )
+    .join("");
+}
+
+/**
+ * Markdown treats entities in text as the characters they stand for (`&amp;`
+ * is `&`). Decode the common ones so escapeMrkdwnText escapes each character
+ * once instead of showing the entity literally.
  */
 function decodeEntities(text: string): string {
   return text

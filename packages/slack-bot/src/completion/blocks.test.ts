@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildCompletionBlocks } from "./blocks";
+import { MARKDOWN_BLOCK_MAX_CHARS, buildCompletionBlocks } from "./blocks";
 import type { AgentResponse } from "@open-inspect/shared/types/artifacts";
 import type { SlackCallbackContext } from "@open-inspect/shared/types/session-api";
 
@@ -239,6 +239,31 @@ describe("response formatting", () => {
       .map((block) => (block.type === "section" ? block.text.text : ""))
       .join("");
     expect(sectionText.startsWith("*Heading*\n\n*bold* word")).toBe(true);
+  });
+
+  it("uses a markdown block up to exactly the limit and sections one character past it", () => {
+    const build = (length: number) =>
+      buildCompletionBlocks(
+        "sess-edge",
+        { ...BASE_RESPONSE, textContent: "x".repeat(length) },
+        BASE_CONTEXT,
+        "https://inspect.example.com"
+      );
+    expect(build(MARKDOWN_BLOCK_MAX_CHARS)[0].type).toBe("markdown");
+    expect(build(MARKDOWN_BLOCK_MAX_CHARS + 1)[0].type).toBe("section");
+  });
+
+  it("shows the completed placeholder for a whitespace-only reply", () => {
+    const blocks = buildCompletionBlocks(
+      "sess-blank",
+      { ...BASE_RESPONSE, textContent: "  \n " },
+      BASE_CONTEXT,
+      "https://inspect.example.com"
+    );
+    expect(blocks[0]).toEqual({
+      type: "section",
+      text: { type: "mrkdwn", text: "_Agent completed._" },
+    });
   });
 });
 
