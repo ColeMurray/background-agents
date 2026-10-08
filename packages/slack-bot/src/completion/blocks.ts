@@ -8,11 +8,21 @@ import type {
   SlackActionsBlock,
   SlackButtonElement,
   SlackContextBlock,
+  SlackMarkdownBlock,
   SlackSectionBlock,
 } from "../slack-blocks";
 import { escapeMrkdwnText, splitIntoSlackSections } from "@open-inspect/shared/slack";
+import { markdownToMrkdwn } from "./mrkdwn";
 
-type CompletionSlackBlock = SlackSectionBlock | SlackContextBlock | SlackActionsBlock;
+type CompletionSlackBlock =
+  SlackMarkdownBlock | SlackSectionBlock | SlackContextBlock | SlackActionsBlock;
+
+/**
+ * Slack's cumulative limit for all markdown blocks in one message payload. The
+ * response is the only markdown block this builder emits, so it is the budget
+ * for the response alone.
+ */
+export const MARKDOWN_BLOCK_MAX_CHARS = 12_000;
 
 /**
  * Status emoji constants.
@@ -38,13 +48,20 @@ export function buildCompletionBlocks(
 ): CompletionSlackBlock[] {
   const blocks: CompletionSlackBlock[] = [];
 
-  // 1. Response text, split across as many section blocks as it needs
-  const sections = splitIntoSlackSections(response.textContent);
-  if (sections.length === 0) {
-    blocks.push({ type: "section", text: { type: "mrkdwn", text: "_Agent completed._" } });
+  // 1. Response text. Agents write standard Markdown, which mrkdwn sections show
+  // as literal `##` and `**`. A native markdown block renders it as written; only
+  // a reply past that block's limit is converted to mrkdwn and split into sections.
+  const text = response.textContent;
+  if (text.trim() && text.length <= MARKDOWN_BLOCK_MAX_CHARS) {
+    blocks.push({ type: "markdown", text });
   } else {
-    for (const section of sections) {
-      blocks.push({ type: "section", expand: true, text: { type: "mrkdwn", text: section } });
+    const sections = splitIntoSlackSections(text.trim() ? markdownToMrkdwn(text) : "");
+    if (sections.length === 0) {
+      blocks.push({ type: "section", text: { type: "mrkdwn", text: "_Agent completed._" } });
+    } else {
+      for (const section of sections) {
+        blocks.push({ type: "section", expand: true, text: { type: "mrkdwn", text: section } });
+      }
     }
   }
 

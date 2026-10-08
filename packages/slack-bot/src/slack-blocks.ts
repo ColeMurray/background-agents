@@ -78,6 +78,11 @@ export type SlackActionsBlock = {
   block_id?: string;
   elements: SlackBlockElement[];
 };
+/**
+ * Slack renders standard Markdown in this block itself (headings, bold, lists,
+ * links, tables). Messages only, capped at MARKDOWN_BLOCK_MAX_CHARS per payload.
+ */
+export type SlackMarkdownBlock = { type: "markdown"; text: string };
 export type SlackContextBlock = { type: "context"; elements: SlackText[] };
 export type SlackInputBlock = {
   type: "input";
