@@ -19,11 +19,12 @@ sign in inside a sandbox.
 Every session runs on exactly one harness, chosen when the session is created and fixed for its
 lifetime (like the base branch). Child sessions inherit their parent's harness. Automations carry a
 harness for the sessions they create. The Linear and GitHub integrations have a harness setting
-(global and per repository, OpenCode by default); see [Linear sessions](#linear-sessions). In those
-two, a harness/model pair the harness cannot run falls back to OpenCode; the GitHub bot also logs a
-warning. The Slack integration has a workspace setting (global only, OpenCode by default) and a
-per-user choice in App Home, and refuses a request whose model the harness cannot run instead of
-falling back; see [Slack sessions](#slack-sessions).
+(global and per repository, OpenCode by default); see [Linear sessions](#linear-sessions) and
+[GitHub settings](integrations/GITHUB.md#models-and-instructions). The Slack integration has a
+workspace setting (global only, OpenCode by default) and a per-user choice in App Home; see
+[Slack sessions](#slack-sessions). All three preserve the selected harness: if it cannot run the
+resolved model, the bot replies with an explanation and creates no session instead of falling back
+to OpenCode.
 
 | Harness          | Models                | Anthropic authentication                   | Notes                                 |
 | ---------------- | --------------------- | ------------------------------------------ | ------------------------------------- |
@@ -41,20 +42,29 @@ sessions that cannot use it.
 ### Linear sessions
 
 **Settings > Integrations > Linear** has an **Agent harness** setting, globally and per repository
-override; a repository override wins, and unset means OpenCode. The setting is a preference that
-follows the model: Linear resolves the model first (`model:*` label, user preference, repository or
-global default, deployment `DEFAULT_MODEL`), then runs the session on the configured harness when it
-can run that model and on OpenCode otherwise. So with Claude Agent selected, an Anthropic model runs
-on Claude Agent and a `model:gpt-*` label (or a non-Anthropic default) runs on OpenCode instead of
-failing. The Linear activity names the harness:
-`Creating coding session on <target> (agent: Claude Agent, model: …)`. To keep every Linear session
-on Claude Agent, choose an Anthropic default model, keep any repository override's model Anthropic,
-and turn off **Allow user model preferences** and **Allow model labels**.
+override; a repository harness override wins, otherwise it inherits the global harness, with
+OpenCode used when neither sets one. Linear resolves the model (`model:*` label, user preference,
+repository or global default, deployment `DEFAULT_MODEL`) without changing that harness. With Claude
+Agent selected, a non-Anthropic model is refused: the bot posts an error activity in Linear and
+creates no coding session. Choose a compatible `model:*` label, user preference, or default model,
+or change the Linear integration harness, then delegate again. Labels and user preferences apply
+only when allowed. For successful launches, the Linear activity names the harness:
+`Creating coding session on <target> (agent: Claude Agent, model: …)`.
 
-Saving a harness and an incompatible model at the same level (for example Claude Agent with an
-OpenAI model) is rejected, and the settings form only lists models the harness can run. A repository
-override that sets only one of the two can still combine with the other level's value; the fallback
-above covers it.
+For both GitHub and Linear, explicitly selecting a restricted harness such as Claude Agent requires
+a compatible default model at that same settings level (global or repository). A repository harness
+override cannot use an inherited model to satisfy this requirement. Saving an incompatible pair at
+the same level is rejected. Omitted repository harness and model fields still inherit individually
+from the global settings. Save validation checks each explicit level, not the merged result;
+cross-level mismatches are refused at launch rather than switched to OpenCode.
+
+Existing GitHub and Linear settings that select Claude Agent without a default model are not
+automatically migrated. They remain readable, and a rejected save leaves the stored settings
+unchanged. Before saving any edits, including unrelated settings, an administrator must open
+**Settings > Integrations > GitHub** or **Linear** and choose a compatible Anthropic default model
+at every global or repository level that explicitly selects Claude Agent. Setting only a global
+model does not repair a repository's explicit Claude Agent selection. Alternatively, switch that
+level to OpenCode, or remove the repository harness override to inherit the global settings.
 
 Linear sessions are unattended, so on Claude Agent they follow the **Automated authentication**
 policy: with a default Claude account and that policy on **Use default**, Linear usage draws on the

@@ -4,7 +4,7 @@ description: Start OpenInspect sessions by mentioning or assigning the Linear Ag
 audience: user
 owner: integrations
 status: published
-lastReviewed: "2026-10-03"
+lastReviewed: "2026-10-08"
 relatedCode:
   - docs/integrations/LINEAR.md
   - packages/shared/src/types/integrations.ts
@@ -180,7 +180,9 @@ Model selection uses this priority, highest first:
 3. The repository override, then the global Linear default.
 4. The deployment default model.
 
-The session runs on the selected **Agent harness** when it can run that model, and on OpenCode otherwise. Claude Agent runs Anthropic models only, so with Claude Agent selected a `model:gpt-*` label still works and runs on OpenCode. The "Creating coding session" activity in Linear names the harness. To keep every Linear session on Claude Agent, choose an Anthropic default model, keep any repository override's model Anthropic, and turn off user preferences and model labels.
+The selected **Agent harness** is preserved. If it cannot run the resolved model, the bot posts an error activity in Linear and creates no coding session instead of switching to OpenCode. Claude Agent runs Anthropic models only, so a `model:gpt-*` label is refused on that harness. Choose a compatible `model:*` label, user preference, or default model, or change the Linear integration harness, then delegate again. Labels and user preferences apply only when allowed. For successful launches, the "Creating coding session" activity names the harness.
+
+Omitted repository harness and model fields inherit individually from the global settings. If neither level sets a harness, it is OpenCode. Explicitly choosing a restricted harness such as **Claude Agent** requires a compatible default model at that same settings level (global or repository), not an inherited model. The settings form and control plane reject a missing model or an incompatible pair at that level. Save validation does not check the merged global/repository pair; cross-level mismatches are refused at launch.
 
 Claude Agent sessions started from Linear are automated sessions: they use the default Claude account when its **Automated authentication** allows it, otherwise `ANTHROPIC_API_KEY`. See [Provider accounts](/models/provider-accounts). A harness change applies to new sessions; follow-ups keep the session's harness.
 
@@ -230,8 +232,10 @@ Claude Agent sessions started from Linear are automated sessions: they use the d
 </Accordion>
   <Accordion title="The wrong model was used">
     Repository overrides, user preferences, and `model:*` labels all affect selection, in the
-    priority order above. A model Claude Agent cannot run falls back to OpenCode. Changes apply to
-    new Linear-started sessions.
+    priority order above. A model the configured harness cannot run is refused with an error
+    activity and no coding session. Choose a compatible label, user preference, or default model,
+    or change the integration harness, then delegate again. Changes apply to new Linear-started
+    sessions.
 
 </Accordion>
   <Accordion title="The wrong repository was used">

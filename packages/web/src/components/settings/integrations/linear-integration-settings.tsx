@@ -17,6 +17,7 @@ import {
 import {
   MODEL_REASONING_CONFIG,
   getValidModelOrDefault,
+  isValidModel,
   isValidReasoningEffort,
   type ModelCategory,
   type ValidModel,
@@ -24,6 +25,7 @@ import {
 import {
   DEFAULT_HARNESS,
   checkHarnessCompatibility,
+  getHarnessCapabilities,
   getHarnessLabel,
   getValidHarnessOrDefault,
   type HarnessId,
@@ -62,6 +64,7 @@ import { useCurrentUserAuthorization } from "@/hooks/use-current-user-authorizat
 
 const GLOBAL_SETTINGS_KEY = "/api/integration-settings/linear";
 const REPO_SETTINGS_KEY = "/api/integration-settings/linear/repos";
+const INHERIT_MODEL_VALUE = "__inherit__";
 
 interface GlobalResponse {
   settings: LinearGlobalConfig | null;
@@ -209,6 +212,10 @@ function GlobalSettingsSection({
   }, [settings, dirty, saving]);
 
   const isConfigured = settings !== null && settings !== undefined;
+  const harnessNeedsModel = getHarnessCapabilities(harness).modelFamilies !== "any";
+  const invalidModelSelection =
+    (harnessNeedsModel && !model) ||
+    (model !== "" && (!isValidModel(model) || shouldClearModelForHarness(harness, model)));
   const resetNotice =
     "Reset all Linear settings to defaults? New sessions run on OpenCode, both label/user model overrides are enabled, and the default policy for unbound Linear teams is restored.";
 
@@ -250,7 +257,7 @@ function GlobalSettingsSection({
   };
 
   const handleSave = async () => {
-    if (!canManageGlobal || saving || !dirty) return;
+    if (!canManageGlobal || saving || !dirty || invalidModelSelection) return;
     setSaving(true);
     setError("");
 
@@ -305,7 +312,7 @@ function GlobalSettingsSection({
   return (
     <SettingsCardSection
       title="Defaults & Scope"
-      description="Global model, fallback behavior, and repository scope."
+      description="Global model, runtime behavior, and repository scope."
     >
       <fieldset disabled={saving} className="min-w-0">
         {error && <Message tone="error" text={error} />}
@@ -353,10 +360,10 @@ function GlobalSettingsSection({
           </label>
           <p id="linear-harness-help" className="text-xs text-muted-foreground mb-2">
             Harness for new Linear sessions; running sessions keep theirs. Claude Agent runs
-            Anthropic models only, so a session whose model resolves to another provider (from a
-            model label, a user preference, or the system default) runs on OpenCode. Claude Agent
-            sessions use the default Claude account when its Automated authentication in Provider
-            Accounts allows it, and the Anthropic API key otherwise.
+            Anthropic models only. Linear refuses to launch a session whose resolved model its
+            harness cannot run, including model labels and user preferences. Claude Agent sessions
+            use the default Claude account when its Automated authentication in Provider Accounts
+            allows it, and the Anthropic API key otherwise.
           </p>
           <HarnessSelect
             id="linear-harness"
@@ -379,6 +386,7 @@ function GlobalSettingsSection({
           model={model}
           reasoningEffort={effort}
           modelOptions={filterModelOptionsForHarness(harness, enabledModelOptions)}
+          modelRequired={harnessNeedsModel}
           onChange={(nextModel, nextEffort) => {
             setModel(nextModel);
             setEffort(nextEffort);
@@ -386,6 +394,11 @@ function GlobalSettingsSection({
             setError("");
           }}
         />
+        {invalidModelSelection && (
+          <p className="text-xs text-destructive mb-4">
+            Choose a default model {getHarnessLabel(harness)} can run.
+          </p>
+        )}
 
         <div className="grid sm:grid-cols-2 gap-2 mb-4">
           <label className="flex items-center justify-between px-3 py-2 border border-border rounded-sm cursor-pointer hover:bg-muted/50 transition text-sm">
@@ -517,7 +530,7 @@ function GlobalSettingsSection({
         </div>
 
         <div className="flex items-center gap-2">
-          <Button onClick={handleSave} disabled={saving || !dirty}>
+          <Button onClick={handleSave} disabled={saving || !dirty || invalidModelSelection}>
             {saving ? "Saving..." : "Save"}
           </Button>
 
@@ -663,7 +676,15 @@ function RepoOverrideRow({
 
   const reasoningConfig = model ? MODEL_REASONING_CONFIG[model as ValidModel] : undefined;
   const effectiveHarness = harness ?? inheritedHarness;
-  // Save-time validation only sees one level; a clash across levels falls back at launch.
+  // Only explicit settings at this level are validated. Cross-level
+  // incompatibilities are refused at launch.
+  const harnessNeedsModel =
+    harness !== undefined && getHarnessCapabilities(harness).modelFamilies !== "any";
+  const invalidModelSelection =
+    (harnessNeedsModel && !model) ||
+    (model !== "" &&
+      (!isValidModel(model) ||
+        (harness !== undefined && shouldClearModelForHarness(harness, model))));
   const effectiveModel = model || inheritedModel;
   const mismatch = effectiveModel
     ? checkHarnessCompatibility(effectiveHarness, getValidModelOrDefault(effectiveModel))
@@ -680,15 +701,17 @@ function RepoOverrideRow({
   };
 
   const handleModelChange = (newModel: string) => {
-    setModel(newModel);
+    const value = newModel === INHERIT_MODEL_VALUE ? "" : newModel;
+    setModel(value);
     setDirty(true);
 
-    if (effort && newModel && !isValidReasoningEffort(newModel, effort)) {
+    if (effort && (!value || !isValidReasoningEffort(value, effort))) {
       setEffort("");
     }
   };
 
   const handleSave = async () => {
+    if (invalidModelSelection) return;
     const repository = parseRepositoryFullName(entry.repo);
     if (!repository) return;
     setSaving(true);
@@ -762,11 +785,17 @@ function RepoOverrideRow({
           inheritLabel={`Inherit (${getHarnessLabel(inheritedHarness)})`}
         />
 
-        <Select value={model} onValueChange={handleModelChange}>
-          <SelectTrigger density="compact">
-            <SelectValue placeholder="Default model" />
+        <Select
+          value={model || (harnessNeedsModel ? "" : INHERIT_MODEL_VALUE)}
+          onValueChange={handleModelChange}
+        >
+          <SelectTrigger density="compact" aria-label="Model">
+            <SelectValue placeholder="Choose a model" />
           </SelectTrigger>
           <SelectContent>
+            {!harnessNeedsModel && (
+              <SelectItem value={INHERIT_MODEL_VALUE}>Use global model</SelectItem>
+            )}
             {filterModelOptionsForHarness(effectiveHarness, enabledModelOptions).map((group) => (
               <SelectGroup key={group.category}>
                 <SelectLabel>{group.category}</SelectLabel>
@@ -836,7 +865,7 @@ function RepoOverrideRow({
       </div>
 
       <div className="flex items-center gap-2">
-        <Button size="sm" onClick={handleSave} disabled={saving || !dirty}>
+        <Button size="sm" onClick={handleSave} disabled={saving || !dirty || invalidModelSelection}>
           {saving ? "..." : "Save"}
         </Button>
 
@@ -845,9 +874,17 @@ function RepoOverrideRow({
         </Button>
       </div>
 
-      {mismatch && (
+      {invalidModelSelection && (
+        <p className="text-xs text-destructive">
+          Choose a default model {getHarnessLabel(effectiveHarness)} can run for this repository.
+          {harnessNeedsModel &&
+            " An explicit restricted harness requires a model at the same level."}
+        </p>
+      )}
+      {!invalidModelSelection && mismatch && (
         <p className="text-xs text-warning">
-          {mismatch.message} Sessions using this default model will fall back to OpenCode.
+          {mismatch.message} Sessions using this default model will be refused. Choose a compatible
+          model or change the integration harness.
         </p>
       )}
     </div>

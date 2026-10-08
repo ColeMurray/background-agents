@@ -3,7 +3,7 @@
  */
 
 import type { TeamRepoMapping, StaticTargetConfig } from "./types";
-import { resolveHarnessForModel, type HarnessId } from "@open-inspect/shared/harnesses";
+import { DEFAULT_HARNESS, type HarnessId } from "@open-inspect/shared/harnesses";
 import {
   getDefaultReasoningEffort,
   getValidModelOrDefault,
@@ -78,8 +78,8 @@ export interface ResolveSessionAgentInput {
 
 /**
  * Resolve the model (label → user preference → config → env default), its
- * reasoning effort, and the harness that runs it. The harness follows the
- * model: the configured harness when it can run the model, else OpenCode.
+ * reasoning effort, and the configured harness. Compatibility is checked by
+ * the webhook handler before session creation.
  */
 export function resolveSessionAgentSettings(input: ResolveSessionAgentInput): {
   harness: HarnessId;
@@ -101,7 +101,7 @@ export function resolveSessionAgentSettings(input: ResolveSessionAgentInput): {
 
   const normalizedModel = getValidModelOrDefault(model);
   return {
-    harness: resolveHarnessForModel(input.configHarness, normalizedModel),
+    harness: input.configHarness ?? DEFAULT_HARNESS,
     model: normalizedModel,
     reasoningEffort: resolveReasoningEffort(input, normalizedModel, modelSource),
   };
