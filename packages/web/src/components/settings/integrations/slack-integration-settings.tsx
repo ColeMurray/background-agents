@@ -456,8 +456,8 @@ function GlobalSettingsSection({
         )}
         {!selectedModelEnabled && selectedModelLabel && (
           <p className="text-xs text-destructive mt-2">
-            {selectedModelLabel} is disabled in model settings. Slack will use the first enabled
-            model until you save a different default.
+            {selectedModelLabel} is disabled in model settings. Slack refuses new sessions using
+            this default. Re-enable it or save an enabled default.
           </p>
         )}
       </div>

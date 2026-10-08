@@ -334,6 +334,17 @@ describe("SlackIntegrationSettings", () => {
     expect(body.settings.defaults?.model).toBe("openai/gpt-5.4");
   });
 
+  it("explains refusal and recovery when the saved default model is disabled", () => {
+    setupSWR({ global: { defaults: { model: "anthropic/claude-opus-4-6" } } });
+    render(<SlackIntegrationSettings />);
+
+    expect(
+      screen.getByText(
+        "Claude Opus 4.6 is disabled in model settings. Slack refuses new sessions using this default. Re-enable it or save an enabled default."
+      )
+    ).toBeInTheDocument();
+  });
+
   it("clearing the selected default model omits model while preserving other defaults", async () => {
     const user = userEvent.setup();
     setupSWR({

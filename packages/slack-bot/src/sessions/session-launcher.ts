@@ -1,27 +1,31 @@
 import { escapeMrkdwnText, postMessage } from "@open-inspect/shared/slack";
 import type { CallbackContext } from "@open-inspect/shared/types/session-api";
-import {
-  normalizeValidModels,
-  resolveEnabledModel,
-  type ValidModel,
-} from "@open-inspect/shared/models";
+import type { ValidModel } from "@open-inspect/shared/models";
 import { checkHarnessCompatibility } from "@open-inspect/shared/harnesses";
-import { getAuthoritativeModels, getAvailableModels } from "../app-home/models";
+import { getAuthoritativeModels, MODEL_PREFERENCES_UNAVAILABLE_MESSAGE } from "../app-home/models";
 import {
   notifyDroppedAttachments,
   preparePromptImageAttachments,
   type SlackImageAttachment,
 } from "../attachments";
 import { getUserRepoBranchPreference } from "../branch-preferences";
-import { formatHarnessLaunchRefusal } from "../messages/blocks";
+import {
+  formatDisabledModelLaunchRefusal,
+  formatHarnessLaunchRefusal,
+  type LaunchModelSource,
+} from "../messages/blocks";
 import { formatChannelContext, formatThreadContext } from "../messages/context";
 import { branchPreferenceRepo, targetLabel, type SlackSessionTarget } from "../targets";
 import { createLogger } from "../logger";
 import type { Env } from "../types";
 import type { SlackActorIdentity } from "../user-identity";
-import { getResolvedUserPreferences, type ResolvedUserPreferences } from "../user-preferences";
+import {
+  getAuthoritativeUserPreferences,
+  resolveUserPreferences,
+  type ResolvedUserPreferences,
+} from "../user-preferences";
 import { createSession } from "./control-plane-client";
-import { getSlackSettings, type SlackSettings } from "../slack-settings";
+import { getAuthoritativeSlackSettings, type SlackSettings } from "../slack-settings";
 import { deliverPrompt } from "./prompt-delivery";
 import { buildThreadSession, storeThreadSession } from "./thread-session-store";
 import {
@@ -37,37 +41,7 @@ export interface SlackLaunchSettings {
   enabledModels: ValidModel[];
   slackConfig: SlackSettings;
   userPreferences: ResolvedUserPreferences;
-}
-
-async function resolveSlackLaunchSettings(
-  env: Env,
-  userId: string,
-  enabledModels: ValidModel[],
-  slackConfig: SlackSettings
-): Promise<SlackLaunchSettings> {
-  const userPreferences = await getResolvedUserPreferences(env, userId, {
-    defaultModel: slackConfig.defaultModel ?? env.DEFAULT_MODEL,
-    enabledModels,
-    defaultHarness: slackConfig.harness,
-  });
-  return { enabledModels, slackConfig, userPreferences };
-}
-
-export async function loadSlackLaunchSettings(
-  env: Env,
-  userId: string,
-  traceId?: string
-): Promise<SlackLaunchSettings> {
-  const [availableModels, slackConfig] = await Promise.all([
-    getAvailableModels(env, traceId),
-    getSlackSettings(env, traceId),
-  ]);
-  return resolveSlackLaunchSettings(
-    env,
-    userId,
-    normalizeValidModels(availableModels.map((modelOption) => modelOption.value)),
-    slackConfig
-  );
+  modelSource: Exclude<LaunchModelSource, "request">;
 }
 
 export async function loadAuthoritativeSlackLaunchSettings(
@@ -75,11 +49,33 @@ export async function loadAuthoritativeSlackLaunchSettings(
   userId: string,
   traceId?: string
 ): Promise<SlackLaunchSettings | null> {
-  const [enabledModels, slackConfig] = await Promise.all([
-    getAuthoritativeModels(env, traceId),
-    getSlackSettings(env, traceId),
-  ]);
-  return enabledModels ? resolveSlackLaunchSettings(env, userId, enabledModels, slackConfig) : null;
+  try {
+    const [enabledModels, slackConfig, prefs] = await Promise.all([
+      getAuthoritativeModels(env, traceId),
+      getAuthoritativeSlackSettings(env, traceId),
+      getAuthoritativeUserPreferences(env, userId),
+    ]);
+    if (!enabledModels || !slackConfig) return null;
+    const userPreferences = resolveUserPreferences(
+      prefs,
+      slackConfig.defaultModel ?? env.DEFAULT_MODEL,
+      slackConfig.harness
+    );
+    const modelSource =
+      userPreferences.modelOrigin === "app-home"
+        ? "app-home"
+        : slackConfig.defaultModel
+          ? "slack-default"
+          : "system-default";
+    return { enabledModels, slackConfig, userPreferences, modelSource };
+  } catch (error) {
+    log.warn("slack.launch_settings.unavailable", {
+      trace_id: traceId,
+      user_id: userId,
+      error: error instanceof Error ? error : new Error(String(error)),
+    });
+    return null;
+  }
 }
 
 export interface StartSessionOptions {
@@ -156,22 +152,31 @@ export async function startSessionAndSendPrompt(
     );
     return null;
   }
-  const {
-    enabledModels,
-    slackConfig,
-    userPreferences: userPrefs,
-  } = providedLaunchSettings ?? (await loadSlackLaunchSettings(env, actor.userId, traceId));
-  // Whatever the caller asked for is only intent: a plan can be minutes or
-  // hours old by the time a deferred target selection reaches this point, so
-  // the enabled-model set is applied here, against the list just loaded.
-  // Normalizing again carries the requested reasoning effort over to a
-  // replacement model that supports it, else uses the replacement's default.
-  const requestedDefaults = normalizeModelSelection(launchPlan?.sessionDefaults ?? userPrefs);
-  const sessionDefaults = normalizeModelSelection({
-    model: resolveEnabledModel({ model: requestedDefaults.model, enabledModels }),
-    reasoningEffort: requestedDefaults.reasoningEffort,
-  });
+  const launchSettings =
+    providedLaunchSettings ??
+    (await loadAuthoritativeSlackLaunchSettings(env, actor.userId, traceId));
+  if (!launchSettings) {
+    await postMessage(env.SLACK_BOT_TOKEN, channel, MODEL_PREFERENCES_UNAVAILABLE_MESSAGE, {
+      thread_ts: threadTs,
+    });
+    return null;
+  }
+  const { enabledModels, slackConfig, userPreferences: userPrefs, modelSource } = launchSettings;
+  // Deferred plans may outlive a model's enablement. Refuse the selected model
+  // rather than substituting one the user never chose.
+  const sessionDefaults = normalizeModelSelection(launchPlan?.sessionDefaults ?? userPrefs);
   const { model, reasoningEffort } = sessionDefaults;
+  if (!enabledModels.includes(model)) {
+    const source = launchPlan ? "request" : modelSource;
+    log.info("slack.session.disabled_model_refused", { trace_id: traceId, model, source });
+    await postMessage(
+      env.SLACK_BOT_TOKEN,
+      channel,
+      formatDisabledModelLaunchRefusal(model, source),
+      { thread_ts: threadTs }
+    );
+    return null;
+  }
   const differsFromUserDefaults = !sameModelSelection(
     sessionDefaults,
     normalizeModelSelection(userPrefs)

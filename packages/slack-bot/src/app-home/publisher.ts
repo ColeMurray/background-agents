@@ -22,7 +22,6 @@ export async function publishAppHome(env: Env, userId: string): Promise<void> {
   const current = resolveUserPreferences(
     prefs,
     slackConfig.defaultModel ?? env.DEFAULT_MODEL,
-    availableModels.map((model) => model.value),
     slackConfig.harness
   );
   const view = buildAppHomeView({

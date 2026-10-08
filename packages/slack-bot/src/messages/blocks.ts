@@ -38,6 +38,20 @@ export function formatSessionDefaultsNotice(launch: {
   return `Session defaults: ${parts.join(" · ")}`;
 }
 
+export type LaunchModelSource = "app-home" | "slack-default" | "system-default" | "request";
+
+export function formatDisabledModelLaunchRefusal(model: string, source: LaunchModelSource): string {
+  const name = escapeMrkdwnText(getModelDisplayName(model));
+  if (source === "app-home") {
+    return `Your App Home model "${name}" is no longer enabled. Choose another model in the Slack app's Home tab, or start your request with \`!model\` and an enabled model.`;
+  }
+  if (source === "request") {
+    return `Your requested model "${name}" is no longer enabled. Start a new request with \`!model\` and an enabled model.`;
+  }
+  const label = source === "slack-default" ? "Slack default" : "system default";
+  return `The ${label} model "${name}" is no longer enabled. Ask an admin to enable it in Settings > Models or update the ${label} model. You can choose another model in the Slack app's Home tab, or start your request with \`!model\` and an enabled model.`;
+}
+
 /** Reply to a request whose model the user's harness cannot run; no session was created. */
 export function formatHarnessLaunchRefusal(
   compatibilityMessage: string,

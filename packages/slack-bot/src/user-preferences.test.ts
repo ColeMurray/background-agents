@@ -1,7 +1,8 @@
-import { getDefaultReasoningEffort } from "@open-inspect/shared/models";
+import { DEFAULT_MODEL, getDefaultReasoningEffort } from "@open-inspect/shared/models";
 import { describe, expect, it, vi } from "vitest";
 import type { Env } from "./types";
 import {
+  getAuthoritativeUserPreferences,
   getUserPreferences,
   resolveUserPreferences,
   updateUserPreferences,
@@ -32,6 +33,15 @@ function makeEnv(): Env {
 }
 
 describe("getUserPreferences", () => {
+  it("distinguishes missing preferences from failed authoritative reads", async () => {
+    const env = makeEnv();
+    await expect(getAuthoritativeUserPreferences(env, "U123")).resolves.toBeNull();
+
+    const error = new Error("KV unavailable");
+    vi.mocked(env.SLACK_KV.get).mockRejectedValueOnce(error);
+    await expect(getAuthoritativeUserPreferences(env, "U123")).rejects.toThrow(error);
+  });
+
   it("returns null for malformed stored preferences", async () => {
     const env = makeEnv();
     await env.SLACK_KV.put(
@@ -39,6 +49,7 @@ describe("getUserPreferences", () => {
       JSON.stringify({ userId: "U123", updatedAt: "yesterday" })
     );
 
+    await expect(getAuthoritativeUserPreferences(env, "U123")).rejects.toThrow();
     await expect(getUserPreferences(env, "U123")).resolves.toBeNull();
   });
 });
@@ -134,7 +145,6 @@ describe("updateUserPreferences", () => {
       { branch: "feature/test" },
       {
         defaultModel: "openai/gpt-5.4",
-        enabledModels: ["openai/gpt-5.4"],
       }
     );
 
@@ -153,13 +163,31 @@ describe("updateUserPreferences", () => {
       { reasoningEffort: "none" },
       {
         defaultModel: "openai/gpt-5.4",
-        enabledModels: ["openai/gpt-5.4"],
       }
     );
 
     const prefs = await getUserPreferences(env, "U123");
     expect(prefs?.model).toBeUndefined();
     expect(prefs?.reasoningEffort).toBe("none");
+  });
+
+  it("preserves reasoning for the stored model on unrelated preference updates", async () => {
+    const env = makeEnv();
+    await env.SLACK_KV.put(
+      "user_prefs:U123",
+      JSON.stringify({
+        userId: "U123",
+        model: "openai/gpt-5.4",
+        reasoningEffort: "none",
+        updatedAt: 1,
+      })
+    );
+
+    await updateUserPreferences(env, "U123", { branch: "feature/test", harness: "claude" });
+
+    expect(await getUserPreferences(env, "U123")).toEqual(
+      expect.objectContaining({ model: "openai/gpt-5.4", reasoningEffort: "none" })
+    );
   });
 });
 
@@ -170,11 +198,11 @@ describe("resolveUserPreferences", () => {
         userId: "U123",
         updatedAt: 1,
       },
-      "anthropic/claude-sonnet-4-6",
-      ["anthropic/claude-sonnet-4-6"]
+      "anthropic/claude-sonnet-4-6"
     );
 
     expect(resolved.model).toBe("anthropic/claude-sonnet-4-6");
+    expect(resolved.modelOrigin).toBe("default");
   });
 
   it("uses a stored model before the Slack default", () => {
@@ -184,74 +212,76 @@ describe("resolveUserPreferences", () => {
         model: "anthropic/claude-haiku-4-5",
         updatedAt: 1,
       },
-      "anthropic/claude-sonnet-4-6",
-      ["anthropic/claude-haiku-4-5", "anthropic/claude-sonnet-4-6"]
+      "anthropic/claude-sonnet-4-6"
     );
 
     expect(resolved.model).toBe("anthropic/claude-haiku-4-5");
+    expect(resolved.modelOrigin).toBe("app-home");
   });
 
   it("migrates a stored Codex model without switching to the Slack default provider", () => {
     const resolved = resolveUserPreferences(
       { userId: "U123", model: "openai/gpt-5.3-codex", updatedAt: 1 },
-      "anthropic/claude-sonnet-4-6",
-      ["anthropic/claude-sonnet-4-6", "openai/gpt-6-sol"]
+      "anthropic/claude-sonnet-4-6"
     );
 
     expect(resolved.model).toBe("openai/gpt-6-sol");
+    expect(resolved.modelOrigin).toBe("app-home");
   });
 
-  it("uses the Slack default before the shared default for unsupported stored models", () => {
-    const resolved = resolveUserPreferences(
-      {
-        userId: "U123",
-        model: "openai/gpt-5.2",
-        updatedAt: 1,
-      },
-      "openai/gpt-5.4",
-      ["anthropic/claude-sonnet-4-6", "openai/gpt-5.4"]
-    );
+  it.each(["openai/gpt-5.4", undefined])(
+    "uses default %s for unsupported stored models",
+    (defaultModel) => {
+      const resolved = resolveUserPreferences(
+        {
+          userId: "U123",
+          model: "openai/gpt-5.2",
+          updatedAt: 1,
+        },
+        defaultModel
+      );
 
-    expect(resolved.model).toBe("openai/gpt-5.4");
-  });
+      expect(resolved.model).toBe(defaultModel ?? DEFAULT_MODEL);
+      expect(resolved.modelOrigin).toBe("default");
+    }
+  );
 
-  it("falls back when the App Home model is no longer enabled", () => {
-    const resolved = resolveUserPreferences(
-      {
-        userId: "U123",
-        model: "anthropic/claude-haiku-4-5",
-        updatedAt: 1,
-      },
-      "anthropic/claude-sonnet-4-6",
-      ["openai/gpt-5.4", "anthropic/claude-sonnet-4-6"]
-    );
+  it.each(["openai/gpt-6-sol", "gpt-5.3-codex", "openai/gpt-5.3-codex-spark"])(
+    "preserves the App Home origin of %s even when it matches the default",
+    (model) => {
+      const resolved = resolveUserPreferences(
+        { userId: "U123", model, updatedAt: 1 },
+        "openai/gpt-6-sol"
+      );
 
-    expect(resolved.model).toBe("anthropic/claude-sonnet-4-6");
-  });
+      expect(resolved.model).toBe("openai/gpt-6-sol");
+      expect(resolved.modelOrigin).toBe("app-home");
+    }
+  );
 
-  it("uses the first enabled model when neither preferred nor default is enabled", () => {
-    const resolved = resolveUserPreferences(
-      {
-        userId: "U123",
-        model: "anthropic/claude-haiku-4-5",
-        updatedAt: 1,
-      },
-      "anthropic/claude-sonnet-4-6",
-      ["openai/gpt-5.4"]
-    );
-
-    expect(resolved.model).toBe("openai/gpt-5.4");
-  });
-
-  it("ignores removed models when choosing the first enabled model", () => {
+  it("preserves the App Home model and its reasoning for launch-time validation", () => {
     const resolved = resolveUserPreferences(
       {
         userId: "U123",
         model: "anthropic/claude-haiku-4-5",
+        reasoningEffort: "max",
         updatedAt: 1,
       },
-      "anthropic/claude-sonnet-4-6",
-      ["openai/gpt-5.2", "gpt-5.4"]
+      "anthropic/claude-sonnet-4-6"
+    );
+
+    expect(resolved.model).toBe("anthropic/claude-haiku-4-5");
+    expect(resolved.reasoningEffort).toBe("max");
+  });
+
+  it("canonicalizes a bare App Home model without changing the selection", () => {
+    const resolved = resolveUserPreferences(
+      {
+        userId: "U123",
+        model: "gpt-5.4",
+        updatedAt: 1,
+      },
+      "anthropic/claude-sonnet-4-6"
     );
 
     expect(resolved.model).toBe("openai/gpt-5.4");
@@ -264,8 +294,7 @@ describe("resolveUserPreferences", () => {
         reasoningEffort: "none",
         updatedAt: 1,
       },
-      "openai/gpt-5.4",
-      ["openai/gpt-5.4"]
+      "openai/gpt-5.4"
     );
 
     expect(resolved.model).toBe("openai/gpt-5.4");

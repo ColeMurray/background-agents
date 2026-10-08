@@ -13,6 +13,7 @@ import {
   getDefaultReasoningEffort,
   getReasoningConfig,
   getValidModelOrDefault,
+  getValidModelOrReplacement,
   isValidModel,
   isValidReasoningEffort,
   normalizeModelId,
@@ -358,6 +359,16 @@ describe("model utilities", () => {
       "",
     ]) {
       expect(() => getSubscriptionProviderForModel(model)).toThrow();
+    }
+  });
+
+  it("recognizes valid and retired selections without substituting a default", () => {
+    expect(getValidModelOrReplacement("gpt-5.4")).toBe("openai/gpt-5.4");
+    for (const model of ["openai/gpt-5.3-codex", "gpt-5.3-codex-spark"]) {
+      expect(getValidModelOrReplacement(model)).toBe("openai/gpt-6-sol");
+    }
+    for (const model of ["openai/gpt-5.2", "invalid-model", "", null, undefined]) {
+      expect(getValidModelOrReplacement(model)).toBeUndefined();
     }
   });
 

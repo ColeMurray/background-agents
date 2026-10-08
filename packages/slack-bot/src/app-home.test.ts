@@ -114,6 +114,7 @@ describe("buildAppHomeView", () => {
       userHarness: HarnessId | undefined;
       workspaceHarness: HarnessId;
       currentModel: string;
+      availableModels?: typeof models | null;
     }) {
       const view = buildAppHomeView({
         appName: "Open-Inspect",
@@ -139,7 +140,12 @@ describe("buildAppHomeView", () => {
             ? [block.text.text]
             : []
       );
-      return { harness: select("harness_selection"), model: select("model_selection"), texts };
+      return {
+        harness: select("harness_selection"),
+        model: select("model_selection"),
+        reasoning: select("reasoning_selection"),
+        texts,
+      };
     }
 
     it("offers the workspace default and every harness, selecting the workspace by default", () => {
@@ -181,6 +187,57 @@ describe("buildAppHomeView", () => {
       expect(model?.placeholder?.text).toBe("Choose a model");
       expect(texts).toContain(
         "Your model `openai/gpt-5.4` can't run on Claude Agent, so new requests are refused until you choose a model above."
+      );
+    });
+
+    it.each(["opencode", "claude"] as const)(
+      "asks to replace a disabled model on %s instead of selecting another model",
+      (userHarness) => {
+        const { model, texts, reasoning } = render({
+          userHarness,
+          workspaceHarness: "opencode",
+          currentModel: "anthropic/claude-sonnet-4-6",
+        });
+
+        expect(model?.initial_option).toBeUndefined();
+        expect(model?.placeholder?.text).toBe("Choose a model");
+        expect(reasoning).toBeUndefined();
+        expect(texts).toContain(
+          "Your model `anthropic/claude-sonnet-4-6` is no longer enabled, so new requests are refused until you choose a model above."
+        );
+        expect(texts.at(-1)).toContain("model needs replacement");
+      }
+    );
+
+    it("preserves the configured model and reasoning when enablement is unknown", () => {
+      const { model, texts, reasoning } = render({
+        userHarness: "opencode",
+        workspaceHarness: "opencode",
+        currentModel: "xai/grok-4.6",
+        availableModels: null,
+      });
+
+      expect(model).toBeUndefined();
+      expect(reasoning?.initial_option?.value).toBe("high");
+      expect(texts).toContain(
+        "*Model*\nModel preferences are temporarily unavailable. Your model `xai/grok-4.6` has not been changed. New sessions cannot start until model preferences are available. Please try again."
+      );
+      expect(texts.join(" ")).not.toContain("is no longer enabled");
+      expect(texts.at(-1)).not.toContain("model needs replacement");
+    });
+
+    it("explains disablement even when the harness has no enabled models", () => {
+      const { model, texts, reasoning } = render({
+        userHarness: "claude",
+        workspaceHarness: "opencode",
+        currentModel: "anthropic/claude-sonnet-4-6",
+        availableModels: [models[1]],
+      });
+
+      expect(model).toBeUndefined();
+      expect(reasoning).toBeUndefined();
+      expect(texts).toContain(
+        "*Model*\nYour model `anthropic/claude-sonnet-4-6` is no longer enabled. No enabled model can run on Claude Agent. Choose another agent harness, or ask an admin to enable a model it can run."
       );
     });
   });

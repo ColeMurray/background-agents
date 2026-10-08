@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { DEFAULT_HARNESS } from "@open-inspect/shared/harnesses";
 import type { Env } from "./types";
-import { getSlackSettings } from "./slack-settings";
+import { getAuthoritativeSlackSettings, getSlackSettings } from "./slack-settings";
 
 function makeEnv(fetch: ReturnType<typeof vi.fn>): Env {
   return {
@@ -80,6 +80,32 @@ describe("getSlackSettings", () => {
       expect(warnings()).toEqual([]);
     }
   );
+
+  it.each([{ settings: null }, { settings: {} }])(
+    "accepts absent authoritative settings: %j",
+    async (body) => {
+      const fetch = vi.fn().mockResolvedValue(Response.json(body));
+      await expect(getAuthoritativeSlackSettings(makeEnv(fetch))).resolves.toEqual({
+        harness: DEFAULT_HARNESS,
+      });
+    }
+  );
+
+  it.each([
+    ["HTTP error", () => new Response("unavailable", { status: 503 })],
+    ["malformed response", () => Response.json({ settings: { defaults: { model: 123 } } })],
+    ["invalid JSON", () => new Response("invalid")],
+  ] as const)("returns unavailable authoritative settings on %s", async (_case, response) => {
+    captureWarnings();
+    const fetch = vi.fn().mockResolvedValue(response());
+    await expect(getAuthoritativeSlackSettings(makeEnv(fetch))).resolves.toBeNull();
+  });
+
+  it("returns unavailable authoritative settings when the fetch throws", async () => {
+    captureWarnings();
+    const fetch = vi.fn().mockRejectedValue(new Error("network down"));
+    await expect(getAuthoritativeSlackSettings(makeEnv(fetch))).resolves.toBeNull();
+  });
 
   it("returns an empty config and warns on a malformed settings response", async () => {
     const warnings = captureWarnings();

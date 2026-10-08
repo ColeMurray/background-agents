@@ -1,6 +1,8 @@
 import {
   DEFAULT_MODEL,
   getDefaultReasoningEffort,
+  getValidModelOrDefault,
+  getValidModelOrReplacement,
   isValidModel,
   isValidReasoningEffort,
   normalizeModelId,
@@ -29,13 +31,15 @@ type UserPreferences = z.infer<typeof slackUserPreferencesSchema>;
 
 export interface ResolvedUserPreferences {
   model: string;
+  /** Retired-model replacements still originate from the App Home preference. */
+  modelOrigin: "app-home" | "default";
   reasoningEffort: string | undefined;
   branch: string | undefined;
   /** The user's App Home harness, else the workspace's Slack harness. */
   harness: HarnessId;
 }
 
-type UserPreferencesPatch = Partial<ResolvedUserPreferences>;
+type UserPreferencesPatch = Partial<Omit<ResolvedUserPreferences, "modelOrigin">>;
 type UserPreferencesUpdater = (
   current: ResolvedUserPreferences
 ) => UserPreferencesPatch | null | undefined;
@@ -58,25 +62,20 @@ function normalizeResolvedPreferences(
     branch?: string;
     harness: HarnessId;
   },
-  defaultModel: string | undefined,
-  options: { validateBranch?: boolean; enabledModels?: string[] } = {}
+  defaultModel: string | undefined
 ): ResolvedUserPreferences {
-  const model = resolveEnabledModel({
-    model: preferences.model,
-    fallbackModel: defaultModel,
-    enabledModels: options.enabledModels,
-  });
+  // Preserve disabled preferences; only new-session launches check enablement.
+  const preferredModel = getValidModelOrReplacement(preferences.model);
+  const model = preferredModel ?? getValidModelOrDefault(defaultModel);
   const reasoningEffort =
     preferences.reasoningEffort && isValidReasoningEffort(model, preferences.reasoningEffort)
       ? preferences.reasoningEffort
       : getDefaultReasoningEffort(model);
-  const branch =
-    options.validateBranch === false
-      ? normalizeBranchPreference(preferences.branch)
-      : getValidatedBranch(preferences.branch);
+  const branch = getValidatedBranch(preferences.branch);
 
   return {
     model,
+    modelOrigin: preferredModel ? "app-home" : "default",
     reasoningEffort,
     branch,
     harness: preferences.harness,
@@ -121,7 +120,6 @@ function mergeUserPreferencesPatch(
   const resolvedModel = resolveEnabledModel({
     model,
     fallbackModel: options.defaultModel ?? DEFAULT_MODEL,
-    enabledModels: options.enabledModels,
   });
   if (reasoningEffort && !isValidReasoningEffort(resolvedModel, reasoningEffort)) {
     reasoningEffort = undefined;
@@ -138,26 +136,32 @@ function mergeUserPreferencesPatch(
 export function resolveUserPreferences(
   prefs: UserPreferences | null | undefined,
   defaultModel: string | undefined,
-  enabledModels?: string[],
   defaultHarness: HarnessId = DEFAULT_HARNESS
 ): ResolvedUserPreferences {
   return normalizeResolvedPreferences(
     {
-      model: prefs?.model ?? defaultModel ?? DEFAULT_MODEL,
+      model: prefs?.model,
       reasoningEffort: prefs?.reasoningEffort,
       branch: prefs?.branch,
       harness: prefs?.harness ?? defaultHarness,
     },
-    defaultModel,
-    { enabledModels }
+    defaultModel
   );
 }
 
 export interface UserPreferenceResolutionOptions {
   defaultModel?: string;
-  enabledModels?: string[];
   /** The workspace's Slack harness, used when the user has not chosen one. */
   defaultHarness?: HarnessId;
+}
+
+/** Missing preferences are null; failed reads and malformed records reject. */
+export async function getAuthoritativeUserPreferences(
+  env: Env,
+  userId: string
+): Promise<UserPreferences | null> {
+  const data = await createKvCacheStore(env.SLACK_KV).get(getUserPreferencesKey(userId), "json");
+  return data === null ? null : slackUserPreferencesSchema.parse(data);
 }
 
 export async function getUserPreferences(
@@ -165,10 +169,7 @@ export async function getUserPreferences(
   userId: string
 ): Promise<UserPreferences | null> {
   try {
-    const key = getUserPreferencesKey(userId);
-    const data = await createKvCacheStore(env.SLACK_KV).get(key, "json");
-    const parsed = slackUserPreferencesSchema.safeParse(data);
-    return parsed.success ? parsed.data : null;
+    return await getAuthoritativeUserPreferences(env, userId);
   } catch (e) {
     log.error("kv.get", {
       key_prefix: "user_prefs",
@@ -188,7 +189,6 @@ export async function getResolvedUserPreferences(
   return resolveUserPreferences(
     prefs,
     options.defaultModel ?? env.DEFAULT_MODEL,
-    options.enabledModels,
     options.defaultHarness
   );
 }
@@ -213,7 +213,6 @@ async function saveUserPreferences(
     const resolvedModel = resolveEnabledModel({
       model,
       fallbackModel: options.defaultModel ?? env.DEFAULT_MODEL,
-      enabledModels: options.enabledModels,
     });
     if (reasoningEffort && !isValidReasoningEffort(resolvedModel, reasoningEffort)) {
       reasoningEffort = undefined;
@@ -250,7 +249,6 @@ export async function updateUserPreferences(
   const resolvedCurrent = resolveUserPreferences(
     current,
     options.defaultModel ?? env.DEFAULT_MODEL,
-    options.enabledModels,
     options.defaultHarness
   );
   const patch =
@@ -261,7 +259,6 @@ export async function updateUserPreferences(
 
   const merged = mergeUserPreferencesPatch(userId, current, patch, {
     defaultModel: options.defaultModel ?? env.DEFAULT_MODEL,
-    enabledModels: options.enabledModels,
   });
   return merged ? saveUserPreferences(env, userId, merged, options) : false;
 }

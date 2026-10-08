@@ -1,9 +1,4 @@
-import {
-  DEFAULT_ENABLED_MODELS,
-  MODEL_OPTIONS,
-  normalizeValidModels,
-  type ValidModel,
-} from "@open-inspect/shared/models";
+import { MODEL_OPTIONS, normalizeValidModels, type ValidModel } from "@open-inspect/shared/models";
 import type { Env } from "../types";
 import { signedControlPlaneFetch } from "../internal-auth";
 import type { ModelOption } from "./slack-types";
@@ -22,19 +17,16 @@ function isObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-function getDefaultModelOptions(): ModelOption[] {
-  const defaultSet = new Set<string>(DEFAULT_ENABLED_MODELS);
-  const defaultOptions = ALL_MODELS.filter((model) => defaultSet.has(model.value));
-  return defaultOptions.length > 0 ? defaultOptions : ALL_MODELS;
-}
-
-async function fetchEnabledModels(
+export async function getAuthoritativeModels(
   env: Env,
-  url: string,
   traceId?: string
 ): Promise<ValidModel[] | null> {
   try {
-    const response = await signedControlPlaneFetch(env, { method: "GET", url, traceId });
+    const response = await signedControlPlaneFetch(env, {
+      method: "GET",
+      url: "https://internal/model-preferences?strict=true",
+      traceId,
+    });
     if (!response.ok) return null;
     const data = await response.json();
     if (
@@ -51,20 +43,13 @@ async function fetchEnabledModels(
   }
 }
 
-export async function getAvailableModels(env: Env, traceId?: string): Promise<ModelOption[]> {
-  const enabledModels = await fetchEnabledModels(
-    env,
-    "https://internal/model-preferences",
-    traceId
-  );
-  if (!enabledModels) return getDefaultModelOptions();
-  const enabledSet = new Set<ValidModel>(enabledModels);
-  return ALL_MODELS.filter((model) => enabledSet.has(model.value));
-}
-
-export async function getAuthoritativeModels(
+/** Null means enablement is unknown, not that a configured model is disabled. */
+export async function getAvailableModels(
   env: Env,
   traceId?: string
-): Promise<ValidModel[] | null> {
-  return fetchEnabledModels(env, "https://internal/model-preferences?strict=true", traceId);
+): Promise<ModelOption[] | null> {
+  const enabledModels = await getAuthoritativeModels(env, traceId);
+  if (!enabledModels) return null;
+  const enabledSet = new Set<ValidModel>(enabledModels);
+  return ALL_MODELS.filter((model) => enabledSet.has(model.value));
 }

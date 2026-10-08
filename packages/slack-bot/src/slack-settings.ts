@@ -29,11 +29,19 @@ export interface SlackSettings {
   sessionInstructions?: string;
 }
 
-// Frozen because every fallback path returns this same object.
+// Shared by absent settings and App Home's display fallback.
 const DEFAULT_SLACK_SETTINGS: SlackSettings = Object.freeze({ harness: DEFAULT_HARNESS });
 
 /** Fetch and normalize workspace Slack settings without blocking callers on failure. */
 export async function getSlackSettings(env: Env, traceId?: string): Promise<SlackSettings> {
+  return (await getAuthoritativeSlackSettings(env, traceId)) ?? DEFAULT_SLACK_SETTINGS;
+}
+
+/** Return null on failure, distinct from successfully reading absent settings. */
+export async function getAuthoritativeSlackSettings(
+  env: Env,
+  traceId?: string
+): Promise<SlackSettings | null> {
   try {
     const response = await signedControlPlaneFetch(env, {
       method: "GET",
@@ -44,15 +52,14 @@ export async function getSlackSettings(env: Env, traceId?: string): Promise<Slac
       log.warn("slack_settings.fetch_failed", {
         trace_id: traceId,
         http_status: response.status,
-        fallback: "defaults",
       });
-      return DEFAULT_SLACK_SETTINGS;
+      return null;
     }
 
     const parsed = slackSettingsResponseSchema.safeParse(await response.json());
     if (!parsed.success) {
-      log.warn("slack_settings.invalid_response", { trace_id: traceId, fallback: "defaults" });
-      return DEFAULT_SLACK_SETTINGS;
+      log.warn("slack_settings.invalid_response", { trace_id: traceId });
+      return null;
     }
     const defaults = parsed.data.settings?.defaults;
     if (!defaults) return DEFAULT_SLACK_SETTINGS;
@@ -66,8 +73,7 @@ export async function getSlackSettings(env: Env, traceId?: string): Promise<Slac
     log.warn("slack_settings.fetch_error", {
       trace_id: traceId,
       error: error instanceof Error ? error : new Error(String(error)),
-      fallback: "defaults",
     });
-    return DEFAULT_SLACK_SETTINGS;
+    return null;
   }
 }

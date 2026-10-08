@@ -4,7 +4,11 @@ import {
   harnessSupportsModel,
   type HarnessId,
 } from "@open-inspect/shared/harnesses";
-import { getDefaultReasoningEffort, getReasoningConfig } from "@open-inspect/shared/models";
+import {
+  getDefaultReasoningEffort,
+  getModelDisplayName,
+  getReasoningConfig,
+} from "@open-inspect/shared/models";
 import type { RepoConfig } from "@open-inspect/shared/types/repository-catalog";
 import { CLEAR_REPO_BRANCH_ACTION_ID, REPO_BRANCH_SELECTOR_ACTION_ID } from "../branch-preferences";
 import {
@@ -22,7 +26,8 @@ import { plainTextOption } from "../slack-options";
 
 export interface AppHomeViewState {
   appName: string;
-  availableModels: ModelOption[];
+  /** Null means the authoritative enabled-model list is unavailable. */
+  availableModels: ModelOption[] | null;
   /** The harness the user chose; undefined follows the workspace harness. */
   userHarness: HarnessId | undefined;
   workspaceHarness: HarnessId;
@@ -100,23 +105,35 @@ function buildHarnessBlocks(
 }
 
 /**
- * The model picker lists only models the harness can run. A current model it
- * cannot run is left unselected with a warning, because launches refuse it.
+ * The model picker lists only enabled models the harness can run. An unusable
+ * current model is left unselected with a warning, because launches refuse it.
  */
 function buildModelBlocks(
   harness: HarnessId,
   currentModel: string,
   currentModelInfo: ModelOption | undefined,
-  modelOptions: ModelOption[]
+  modelOptions: ModelOption[] | null,
+  modelDisabled: boolean
 ): AppHomeBlock[] {
   const harnessLabel = getHarnessLabel(harness);
+  if (!modelOptions) {
+    return [
+      {
+        type: "section",
+        text: {
+          type: "mrkdwn",
+          text: `*Model*\nModel preferences are temporarily unavailable. Your model \`${currentModel}\` has not been changed. New sessions cannot start until model preferences are available. Please try again.`,
+        },
+      },
+    ];
+  }
   if (modelOptions.length === 0) {
     return [
       {
         type: "section",
         text: {
           type: "mrkdwn",
-          text: `*Model*\nNo enabled model can run on ${harnessLabel}. Choose another agent harness, or ask an admin to enable a model it can run.`,
+          text: `*Model*\n${modelDisabled ? `Your model \`${currentModel}\` is no longer enabled. ` : ""}No enabled model can run on ${harnessLabel}. Choose another agent harness, or ask an admin to enable a model it can run.`,
         },
       },
     ];
@@ -151,7 +168,7 @@ function buildModelBlocks(
             elements: [
               {
                 type: "mrkdwn" as const,
-                text: `Your model \`${currentModel}\` can't run on ${harnessLabel}, so new requests are refused until you choose a model above.`,
+                text: `Your model \`${currentModel}\` ${modelDisabled ? "is no longer enabled" : `can't run on ${harnessLabel}`}, so new requests are refused until you choose a model above.`,
               },
             ],
           },
@@ -366,7 +383,7 @@ function buildSummaryBlock(
   currentBranch: string | undefined
 ): AppHomeBlock {
   const parts = [
-    currentModelInfo ? `*${currentModelInfo.label}*` : "*no model it can run*",
+    currentModelInfo ? `*${currentModelInfo.label}*` : "*model needs replacement*",
     ...(currentModelInfo && effectiveEffort ? [effectiveEffort] : []),
     ...(currentBranch ? [`branch:${currentBranch}`] : []),
     getHarnessLabel(harness),
@@ -389,13 +406,13 @@ export function buildAppHomeView({
   repoBranchPreferences,
 }: AppHomeViewState): AppHomeView {
   const harness = userHarness ?? workspaceHarness;
-  const modelOptions = availableModels.filter((model) =>
-    harnessSupportsModel(harness, model.value)
-  );
-  const currentModelInfo = harnessSupportsModel(harness, currentModel)
-    ? (modelOptions.find((model) => model.value === currentModel) ??
-      modelOptions[0] ?? { label: currentModel, value: currentModel })
-    : undefined;
+  const modelOptions =
+    availableModels?.filter((model) => harnessSupportsModel(harness, model.value)) ?? null;
+  const modelDisabled =
+    availableModels !== null && !availableModels.some((model) => model.value === currentModel);
+  const currentModelInfo = modelOptions
+    ? modelOptions.find((model) => model.value === currentModel)
+    : { label: getModelDisplayName(currentModel), value: currentModel };
   const effectiveEffort = currentEffort ?? getDefaultReasoningEffort(currentModel);
 
   return {
@@ -414,7 +431,7 @@ export function buildAppHomeView({
       },
       { type: "divider" },
       ...buildHarnessBlocks(userHarness, workspaceHarness),
-      ...buildModelBlocks(harness, currentModel, currentModelInfo, modelOptions),
+      ...buildModelBlocks(harness, currentModel, currentModelInfo, modelOptions, modelDisabled),
       ...(currentModelInfo ? buildReasoningBlocks(currentModel, effectiveEffort) : []),
       ...buildGlobalBranchBlocks(currentBranch),
       ...buildRepoBranchBlocks(repos, repoBranchPreferences),
