@@ -30,8 +30,9 @@ export function getGeneratedFileMimeType(filename: string): string {
 
 function hasForbiddenFilenameCharacters(filename: string): boolean {
   return Array.from(filename).some((char) => {
-    const code = char.charCodeAt(0);
-    return code < 32 || code === 127 || char === "/" || char === "\\";
+    // Joiners are needed for legitimate scripts and emoji; bidi/invisible controls are not.
+    const isControl = /[\p{Cc}\p{Cf}]/u.test(char) && char !== "\u200C" && char !== "\u200D";
+    return isControl || char === "/" || char === "\\";
   });
 }
 

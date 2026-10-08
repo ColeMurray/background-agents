@@ -262,12 +262,25 @@ export function buildAgentResponseFromEvents(
     .filter((artifact: ArtifactInfo | null): artifact is ArtifactInfo => artifact !== null);
 
   const fileArtifacts: StoredFileArtifactInfo[] = [];
-  const fileArtifactIds = new Set<string>();
+  const fileArtifactIndexes = new Map<string, number>();
   for (const event of chronologicalEvents) {
     if (event.type !== "artifact") continue;
     const fileArtifact = toEventFileArtifactInfo(event.data, event.messageId);
-    if (!fileArtifact || fileArtifactIds.has(fileArtifact.id)) continue;
-    fileArtifactIds.add(fileArtifact.id);
+    if (!fileArtifact) continue;
+    const existingIndex = fileArtifactIndexes.get(fileArtifact.id);
+    if (existingIndex !== undefined) {
+      const existing = fileArtifacts[existingIndex];
+      if (
+        existing.type === "file" &&
+        !existing.available &&
+        fileArtifact.type === "file" &&
+        fileArtifact.available
+      ) {
+        fileArtifacts[existingIndex] = fileArtifact;
+      }
+      continue;
+    }
+    fileArtifactIndexes.set(fileArtifact.id, fileArtifacts.length);
     fileArtifacts.push(fileArtifact);
   }
 

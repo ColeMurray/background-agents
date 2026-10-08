@@ -657,6 +657,27 @@ describe("generated file completion extraction", () => {
     expect(response.artifacts).toEqual([]);
   });
 
+  it("recovers a later validated file without changing its original chronological position", () => {
+    const invalid = fileEvent({ id: "invalid", createdAt: 10 });
+    invalid.data.metadata = null;
+    const valid = fileEvent({ id: "valid", createdAt: 30 });
+    const laterInvalid = fileEvent({ id: "later-invalid", createdAt: 40 });
+    laterInvalid.data.metadata = null;
+    const media: EventResponse = {
+      id: "media",
+      type: "artifact",
+      messageId: "m1",
+      createdAt: 20,
+      data: { artifactType: "screenshot", artifactId: "image" },
+    };
+    const response = buildAgentResponseFromEvents([laterInvalid, valid, media, invalid]);
+    expect(response.fileArtifacts).toEqual([
+      { id: "f1", type: "file", available: true, metadata },
+      { id: "image", type: "screenshot" },
+    ]);
+    expect(response.mediaArtifacts).toEqual([{ id: "image", type: "screenshot" }]);
+  });
+
   it.each([
     null,
     { ...metadata, sizeBytes: 0 },

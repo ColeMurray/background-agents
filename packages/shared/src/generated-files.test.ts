@@ -55,6 +55,51 @@ describe("generated filenames and download headers", () => {
     expect(() => normalizeGeneratedFileFilename("a".repeat(256))).toThrow();
   });
 
+  it.each([
+    "\u061C",
+    "\u200E",
+    "\u200F",
+    "\u202A",
+    "\u202B",
+    "\u202C",
+    "\u202D",
+    "\u202E",
+    "\u2066",
+    "\u2067",
+    "\u2068",
+    "\u2069",
+    "\u00AD",
+    "\u200B",
+    "\u2060",
+    "\uFEFF",
+    "\u0085",
+  ])("rejects Unicode controls before normalization, persistence, or headers: %j", (control) => {
+    const filename = `invoice${control}fdp.exe`;
+    expect(() => normalizeGeneratedFileFilename(filename)).toThrow();
+    expect(() => normalizeGeneratedFileFilename(`${control}invoice.exe${control}`)).toThrow();
+    expect(generatedFileFilenameSchema.safeParse(filename).success).toBe(false);
+    expect(
+      generatedFileArtifactMetadataSchema.safeParse({
+        ...fileMetadata,
+        filename,
+        mimeType: "application/octet-stream",
+      }).success
+    ).toBe(false);
+    expect(() => formatGeneratedFileDisposition(filename)).toThrow();
+    const header = `attachment; filename="invoice_fdp.exe"; filename*=UTF-8''${encodeURIComponent(filename)}`;
+    expect(parseGeneratedFileDisposition(header)).toBeNull();
+  });
+
+  it.each(["تقرير.csv", "דוח.pdf", "گزارش\u200Cنهایی.csv", "👩\u200D💻.csv"])(
+    "preserves ordinary Unicode names and script/emoji joiners: %j",
+    (filename) => {
+      expect(normalizeGeneratedFileFilename(filename)).toBe(filename);
+      expect(parseGeneratedFileDisposition(formatGeneratedFileDisposition(filename))).toBe(
+        filename
+      );
+    }
+  );
+
   it.each(["report.csv", 'Revenue "Q1"; 100%.csv', "日本語😀.xlsx", "résumé (final)'!.pdf"])(
     "round-trips an attachment filename %j without raw Unicode in headers",
     (filename) => {
