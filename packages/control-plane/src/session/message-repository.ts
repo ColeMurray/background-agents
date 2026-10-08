@@ -22,9 +22,15 @@ const messageStopConfirmationRowSchema = messageRowSchema
   .pick({ id: true, stop_confirmation_deadline: true })
   .extend({ stop_confirmation_deadline: z.number() });
 const messageCreatedAtRowSchema = messageRowSchema.pick({ id: true, created_at: true });
+const messageReportedCostRowSchema = messageRowSchema.pick({ reported_cost_usd: true });
 const messageCallbackContextRowSchema = messageRowSchema.pick({
   callback_context: true,
   source: true,
+});
+const messageCancellationRowSchema = z.object({
+  status: z.unknown().optional(),
+  source: z.string(),
+  callback_context: z.string().nullable(),
 });
 const messageCompletionStateRowSchema = z.object({
   status: z.unknown().optional(),
@@ -32,6 +38,7 @@ const messageCompletionStateRowSchema = z.object({
   started_at: z.number().nullable(),
 });
 const messageProcessingAuthorRowSchema = messageRowSchema.pick({ author_id: true });
+const sessionBudgetExhaustedRowSchema = z.object({ budget_exhausted: z.number() });
 
 export interface RecordedMessageCompletion {
   messageId: string;
@@ -166,9 +173,11 @@ export class MessageRepository {
     // would only expose the post-update value.
     const rows = this.sql
       .exec(`SELECT reported_cost_usd FROM messages WHERE id = ?`, messageId)
-      .toArray() as Array<{ reported_cost_usd: number }>;
+      .toArray();
     if (rows.length !== 1) return 0;
-    const previous = rows[0].reported_cost_usd;
+    const parsed = messageReportedCostRowSchema.safeParse(rows[0]);
+    if (!parsed.success) throw new SessionStorageIntegrityError("Malformed persisted message row");
+    const previous = parsed.data.reported_cost_usd;
     if (reportedCostUsd <= previous) return 0;
     this.sql.exec(
       `UPDATE messages SET reported_cost_usd = ? WHERE id = ?`,
@@ -243,10 +252,9 @@ export class MessageRepository {
       if (existingMessageId) {
         return { kind: "duplicate", messageId: existingMessageId };
       }
-      const budget = (
-        this.sql.exec(`SELECT budget_exhausted FROM session LIMIT 1`).toArray() as Array<{
-          budget_exhausted: number;
-        }>
+      const budget = parseStorageRows(
+        this.sql.exec(`SELECT budget_exhausted FROM session LIMIT 1`).toArray(),
+        sessionBudgetExhaustedRowSchema
       )[0];
       if (budget?.budget_exhausted === 1) {
         return { kind: "rejected", reason: "budget_exhausted" };
@@ -318,13 +326,9 @@ export class MessageRepository {
         `SELECT status, source, callback_context FROM messages WHERE id = ?`,
         messageId
       );
-      const message = (
-        result.toArray() as Array<{
-          status?: unknown;
-          source: string;
-          callback_context: string | null;
-        }>
-      )[0];
+      const rawMessage = result.toArray()[0];
+      const parsedMessage = messageCancellationRowSchema.safeParse(rawMessage);
+      const message = parsedMessage.success ? parsedMessage.data : null;
       const status = parseMessageStatus(message?.status);
       if (
         !message ||
