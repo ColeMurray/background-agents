@@ -25,7 +25,7 @@ An Inbound Webhook automation gives you a URL and API key; any system that can s
 1. Create an automation with **Trigger Type** set to **Inbound Webhook**.
 2. After creation, copy the **Webhook URL** and **API Key** shown on the page.
 3. Send an authenticated `POST` with a JSON body.
-4. OpenInspect checks the request against the automation's conditions and, if they pass, starts a session whose prompt is your saved instructions followed by a context block containing the payload.
+4. OpenInspect checks the request against the automation's conditions and, if they pass, starts a session whose prompt is your saved instructions followed by a context block containing the payload. A delivery with a `sessionKey` can continue the session an earlier delivery started instead; see [Continuing a session](#continuing-a-session).
 
 ```mermaid
 flowchart TB
@@ -38,7 +38,10 @@ flowchart TB
     filters -->|No| none["ok: true, triggered: 0"]
     filters -->|Yes| dedupe{"idempotencyKey already seen?"}
     dedupe -->|Yes| skipped["ok: true, skipped: 1"]
-    dedupe -->|No| execution{"Execution authorized?"}
+    dedupe -->|No| continues{"sessionKey matches a run from the last 7 days?"}
+    continues -->|Yes| followup["Follow-up queued on that run's session"]
+    followup --> steered["ok: true, steered: 1"]
+    continues -->|No| execution{"Execution authorized?"}
     execution -->|No| skipped
     execution -->|Yes| session["Session: instructions, then the payload context block"]
     session --> triggered["ok: true, triggered: 1"]
@@ -136,6 +139,17 @@ If your sender may retry, include a top-level `idempotencyKey` string in the bod
 - The `idempotencyKey` stays in the stored body but is removed from the context block the agent sees.
 - Without an `idempotencyKey`, every delivery gets its own key, so separate deliveries to the same automation can run concurrently.
 
+## Continuing a session
+
+To send several deliveries to one session, include a top-level `sessionKey` string in the body. The first delivery with a key starts a run as usual. A later delivery with the same key, within 7 days of that run's start, is queued as a follow-up prompt on its session instead, whether the run is still working or has finished. The follow-up is the payload's context block; the saved instructions are not repeated.
+
+- Conditions still apply. A delivery that fails them does nothing.
+- The follow-up is sent as the automation's executor, who must be able to collaborate on the session. Without that access the delivery counts as skipped and nothing starts.
+- `sessionKey` stays in the stored body but is removed from the context block, and it must be a non-empty string. Anything else is rejected with `400`.
+- Pair it with an `idempotencyKey` so retries are safe: the session recognizes a retried follow-up and the delivery counts as skipped.
+- A delivery that arrives before the first run's session exists is skipped for concurrency, like any overlapping delivery with the same key.
+- After 7 days, or once the session can no longer take prompts, the next delivery starts a new run, and later deliveries continue that one.
+
 ## Responses
 
 A successful request returns:
@@ -144,12 +158,12 @@ A successful request returns:
 { "ok": true, "triggered": 1, "skipped": 0, "steered": 0, "invocationId": "3f2a…" }
 ```
 
-| Field          | Meaning                                                                                                                                                                                                    |
-| -------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `triggered`    | Runs started by this delivery                                                                                                                                                                              |
-| `skipped`      | Runs not started because of duplicate delivery, concurrency protection, or runtime authorization denial                                                                                                    |
-| `steered`      | Replies routed into an existing session; used by Slack thread replies and 0 for webhook deliveries                                                                                                         |
-| `invocationId` | The firing this delivery belongs to: new, recorded as skipped for concurrency, or the original for a duplicate `idempotencyKey`. `null` when nothing was recorded. See [Checking status](#checking-status) |
+| Field          | Meaning                                                                                                                                                                                                                                                           |
+| -------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `triggered`    | Runs started by this delivery                                                                                                                                                                                                                                     |
+| `skipped`      | Runs not started because of duplicate delivery, concurrency protection, or runtime authorization denial                                                                                                                                                           |
+| `steered`      | Follow-ups routed into an existing session: Slack thread replies, and webhook deliveries whose `sessionKey` matches a recent run                                                                                                                                  |
+| `invocationId` | The firing this delivery belongs to: new, recorded as skipped for concurrency, the original for a duplicate `idempotencyKey`, or the run's own for a follow-up routed into its session. `null` when nothing was recorded. See [Checking status](#checking-status) |
 
 A request whose conditions do not match returns `ok: true` with `triggered: 0`.
 
@@ -157,13 +171,13 @@ Runtime authorization denial returns `ok: true` with `triggered: 0` and `skipped
 
 ### Error responses
 
-| Status | Meaning                                                    |
-| ------ | ---------------------------------------------------------- |
-| `400`  | Invalid JSON body                                          |
-| `401`  | Missing or invalid API key                                 |
-| `404`  | Automation not found, or not an Inbound Webhook automation |
-| `413`  | Body larger than 64 KB                                     |
-| `415`  | `Content-Type` was not `application/json`                  |
+| Status | Meaning                                                             |
+| ------ | ------------------------------------------------------------------- |
+| `400`  | Invalid JSON body, or a `sessionKey` that is not a non-empty string |
+| `401`  | Missing or invalid API key                                          |
+| `404`  | Automation not found, or not an Inbound Webhook automation          |
+| `413`  | Body larger than 64 KB                                              |
+| `415`  | `Content-Type` was not `application/json`                           |
 
 A paused automation accepts the request but starts nothing.
 

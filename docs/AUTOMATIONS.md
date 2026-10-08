@@ -104,7 +104,9 @@ deployments, monitoring systems, scheduled jobs, and custom integrations.
 2. Copy the generated webhook URL and API key shown after creation.
 3. Send an authenticated HTTP `POST` request with a JSON body.
 4. Open-Inspect prepends a webhook context block to your automation instructions and starts a new
-   session if the request matches the automation's conditions.
+   session if the request matches the automation's conditions. A request with a `sessionKey` can
+   continue the session an earlier request started instead (see
+   [Continuing a Session](#continuing-a-session)).
 
 ### Setup Notes
 
@@ -204,6 +206,21 @@ shown to the agent.
 If you do not provide an `idempotencyKey`, each webhook delivery gets its own concurrency key. That
 means separate deliveries for the same automation can run at the same time.
 
+### Continuing a Session
+
+Include a `sessionKey` string in the JSON body to send several deliveries to one session. The first
+delivery with a key starts a run as usual. A later delivery with the same key, within 7 days of that
+run's start, is queued as a follow-up prompt on its session instead of starting a run, whether the
+run is still working or has finished. The follow-up carries the payload's context block without the
+saved instructions, and it is sent as the automation's executor, who must be able to collaborate on
+the session; without that access the delivery is skipped.
+
+Conditions still apply to follow-ups. The `sessionKey` stays in the stored body, is removed from the
+context block, and must be a non-empty string, or the request is rejected with `400`. Pair it with
+an `idempotencyKey`: the session recognizes a retried follow-up and the retry counts as skipped. A
+delivery that arrives before the first run's session exists is skipped for concurrency. After the
+window, or once the session can no longer take prompts, the next delivery starts a new run.
+
 ### Responses
 
 Successful requests return JSON in this shape:
@@ -212,11 +229,12 @@ Successful requests return JSON in this shape:
 { "ok": true, "triggered": 1, "skipped": 0, "steered": 0, "invocationId": "3f2a…" }
 ```
 
-`triggered` is the number of automation runs started. `invocationId` identifies the firing this
-request belongs to (for a repeated `idempotencyKey`, the original firing), or is `null` when nothing
-was recorded. Read its status with the same API key at
-`GET /webhooks/automation/<automation-id>/invocations/<invocation-id>`, which returns
-`{ invocationId, status, runs: [{ id, status, sessionId }] }` and never session content.
+`triggered` is the number of automation runs started, and `steered` the number of follow-ups routed
+into an existing session by a `sessionKey`. `invocationId` identifies the firing this request
+belongs to (for a repeated `idempotencyKey`, the original firing, and for a follow-up, the firing of
+the run whose session took it), or is `null` when nothing was recorded. Read its status with the
+same API key at `GET /webhooks/automation/<automation-id>/invocations/<invocation-id>`, which
+returns `{ invocationId, status, runs: [{ id, status, sessionId }] }` and never session content.
 
 `skipped` includes runs not started because of duplicate delivery, concurrency protection, or
 runtime authorization denial. Authorization denial does not pause an event-driven automation or
@@ -227,7 +245,7 @@ another delivery.
 
 | Status | Meaning                                          |
 | ------ | ------------------------------------------------ |
-| `400`  | Invalid JSON body                                |
+| `400`  | Invalid JSON body, or an invalid `sessionKey`    |
 | `401`  | Missing or invalid API key                       |
 | `404`  | Automation not found or not a webhook automation |
 | `413`  | Payload too large                                |
@@ -507,7 +525,8 @@ those triggers fires while a previous run is still in progress, the new run is r
 
 Event-driven automations use concurrency keys instead. For inbound webhooks, retries with the same
 `idempotencyKey` are treated as the same event, but separate deliveries without a shared
-`idempotencyKey` can overlap.
+`idempotencyKey` can overlap. Deliveries that share a `sessionKey` are keyed by it: a later one
+continues the first run's session rather than overlapping it.
 
 Slack Message triggers key concurrency by thread. Replies in a thread are not skipped — for 7 days
 after the thread's first trigger they continue the same session (during the run and after it

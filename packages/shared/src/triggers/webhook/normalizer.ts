@@ -12,14 +12,25 @@ import { buildWebhookContextBlock } from "./context";
 export function normalizeWebhookEvent(
   automationId: string,
   body: unknown,
-  idempotencyKey?: string
+  idempotencyKey?: string,
+  sessionKey?: string
 ): WebhookAutomationEvent {
   const deliveryId = idempotencyKey || generateDeliveryId();
+  const triggerKey = idempotencyKey ? `webhook:idem:${idempotencyKey}` : `webhook:${deliveryId}`;
 
-  // Strip idempotencyKey from body before including in context
+  // Strip the delivery fields from body before including in context
   let contextBody = body;
-  if (body && typeof body === "object" && "idempotencyKey" in (body as Record<string, unknown>)) {
-    const { idempotencyKey: _, ...rest } = body as Record<string, unknown>;
+  if (
+    body &&
+    typeof body === "object" &&
+    ("idempotencyKey" in (body as Record<string, unknown>) ||
+      "sessionKey" in (body as Record<string, unknown>))
+  ) {
+    const {
+      idempotencyKey: _idempotencyKey,
+      sessionKey: _sessionKey,
+      ...rest
+    } = body as Record<string, unknown>;
     contextBody = rest;
   }
 
@@ -27,8 +38,9 @@ export function normalizeWebhookEvent(
     source: "webhook",
     eventType: "webhook.received",
     automationId,
-    triggerKey: idempotencyKey ? `webhook:idem:${idempotencyKey}` : `webhook:${deliveryId}`,
-    concurrencyKey: idempotencyKey ? `webhook:idem:${idempotencyKey}` : `webhook:${deliveryId}`,
+    triggerKey,
+    concurrencyKey: sessionKey ? `webhook:session:${sessionKey}` : triggerKey,
+    ...(sessionKey ? { sessionKey } : {}),
     body,
     contextBlock: buildWebhookContextBlock(contextBody),
     meta: { deliveryId, receivedAt: Date.now() },

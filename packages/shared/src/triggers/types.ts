@@ -206,6 +206,7 @@ export const webhookAutomationEventSchema = z.object({
   ...baseAutomationEventSchema,
   source: z.literal("webhook"),
   automationId: z.string().min(1),
+  sessionKey: z.string().min(1).optional(),
   body: z.unknown(),
 });
 

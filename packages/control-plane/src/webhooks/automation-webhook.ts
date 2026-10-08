@@ -34,6 +34,19 @@ export function parseWebhookIdempotencyKey(body: unknown): string | undefined {
   return typeof body.idempotencyKey === "string" ? body.idempotencyKey : undefined;
 }
 
+type ParsedWebhookSessionKey = { ok: true; sessionKey: string | undefined } | { ok: false };
+
+export function parseWebhookSessionKey(body: unknown): ParsedWebhookSessionKey {
+  if (!body || typeof body !== "object" || Array.isArray(body) || !("sessionKey" in body)) {
+    return { ok: true, sessionKey: undefined };
+  }
+
+  const { sessionKey } = body;
+  return typeof sessionKey === "string" && sessionKey.length > 0
+    ? { ok: true, sessionKey }
+    : { ok: false };
+}
+
 type WebhookAuthentication =
   { ok: true; automation: AutomationRow } | { ok: false; response: Response };
 
@@ -96,10 +109,14 @@ async function handleAutomationWebhook(
   }
 
   const idempotencyKey = parseWebhookIdempotencyKey(body);
+  const session = parseWebhookSessionKey(body);
+  if (!session.ok) {
+    return error("sessionKey must be a non-empty string", 400);
+  }
 
   // 4. Normalize and process the event. A webhook event targets exactly one
   // automation, so it has at most one invocation.
-  const event = normalizeWebhookEvent(automationId, body, idempotencyKey);
+  const event = normalizeWebhookEvent(automationId, body, idempotencyKey, session.sessionKey);
   const { invocationIds, ...counts } = await new Scheduler(ctx.db, env, ctx.executionCtx).event(
     event
   );
