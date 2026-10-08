@@ -1354,6 +1354,18 @@ describe("IntegrationSettingsStore", () => {
       ).rejects.toThrow('Model "openai/gpt-5.4" cannot run on the Claude Agent harness.');
     });
 
+    it("requires a default model for a global slack harness limited to some models", async () => {
+      await expect(store.setGlobal("slack", { defaults: { harness: "claude" } })).rejects.toThrow(
+        "Choose a default model Claude Agent can run."
+      );
+    });
+
+    it("allows the default slack harness without a default model", async () => {
+      await store.setGlobal("slack", { defaults: { harness: "opencode" } });
+
+      expect((await store.getGlobal("slack"))?.defaults).toEqual({ harness: "opencode" });
+    });
+
     it("rejects harness at per-repo level (global-only field)", async () => {
       await expect(
         store.setRepoSettings("slack", "acme/widgets", {

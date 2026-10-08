@@ -946,7 +946,7 @@ describe("SlackIntegrationSettings harness", () => {
     expect(await optionNames(user, model)).toEqual(["Claude Sonnet 4.6"]);
   });
 
-  it("clears a default model the selected harness cannot run and saves the harness", async () => {
+  it("clears a default model the selected harness cannot run and requires a new one before saving", async () => {
     const user = userEvent.setup();
     setupSWR({ global: { defaults: { model: "openai/gpt-5.4", mentionsPolicy: "strip" } } });
     fetchMock.mockResolvedValue(okJson({}));
@@ -960,12 +960,23 @@ describe("SlackIntegrationSettings harness", () => {
       })
     );
 
-    expect(screen.getByRole("combobox", { name: "Default model" })).toHaveTextContent(
-      "Use system default"
+    const model = screen.getByRole("combobox", { name: "Default model" });
+    expect(model).toHaveTextContent("Choose a model");
+    expect(screen.getByText(/Choose a default model Claude Agent can run/)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /^save$/i })).toBeDisabled();
+    expect(screen.queryByRole("button", { name: "Use system default" })).not.toBeInTheDocument();
+
+    await user.click(model);
+    await user.click(
+      await within(await screen.findByRole("listbox")).findByRole("option", {
+        name: "Claude Sonnet 4.6",
+      })
     );
+
     expect(await savedDefaults(user)).toEqual({
       agentNotificationsEnabled: false,
       harness: "claude",
+      model: "anthropic/claude-sonnet-4-6",
       mentionsPolicy: "strip",
       unboundChannels: "workspace",
     });
@@ -991,16 +1002,10 @@ describe("SlackIntegrationSettings harness", () => {
     expect(defaults).toMatchObject({ model: "anthropic/claude-sonnet-4-6" });
   });
 
-  it.each([
-    ["warns", { harness: "claude" as const }, 1],
-    ["does not warn", { harness: "claude" as const, model: "anthropic/claude-sonnet-4-6" }, 0],
-    ["does not warn", {}, 0],
-  ])("%s about the deployment default model for %j", (_case, defaults, warnings) => {
-    setupSWR({ global: { defaults } });
+  it("asks for a default model when saved settings use Claude Agent without one", () => {
+    setupSWR({ global: { defaults: { harness: "claude" } } });
     render(<SlackIntegrationSettings />);
 
-    expect(screen.queryAllByText(/Slack sessions use the deployment default model/)).toHaveLength(
-      warnings
-    );
+    expect(screen.getByText(/Choose a default model Claude Agent can run/)).toBeInTheDocument();
   });
 });

@@ -20,7 +20,7 @@ import {
 import { DEFAULT_HARNESS, type HarnessId } from "@open-inspect/shared/harnesses";
 import { filterModelOptionsForHarness, shouldClearModelForHarness } from "@/lib/session-harness";
 import { HarnessSelect } from "./harness-select";
-import { HarnessFallbackWarning } from "./harness-fallback-warning";
+import { GitHubHarnessWarning } from "./github-harness-warning";
 import { browserApiFetch } from "@/lib/browser-api-fetch";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -371,11 +371,7 @@ function RepoOverrideRow({
         </Button>
       </div>
 
-      <HarnessFallbackWarning
-        integration="GitHub"
-        harness={effectiveHarness}
-        model={effectiveModel}
-      />
+      <GitHubHarnessWarning harness={effectiveHarness} model={effectiveModel} />
 
       <div>
         <p className="text-xs font-medium text-muted-foreground mb-1">

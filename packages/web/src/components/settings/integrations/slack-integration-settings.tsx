@@ -26,6 +26,7 @@ import {
 import { MODEL_OPTIONS } from "@open-inspect/shared/models";
 import {
   DEFAULT_HARNESS,
+  getHarnessCapabilities,
   getHarnessLabel,
   getValidHarnessOrDefault,
   type HarnessId,
@@ -37,7 +38,6 @@ import { filterModelOptionsForHarness, shouldClearModelForHarness } from "@/lib/
 import { environmentOptionValue, parseEnvironmentOptionValue } from "@/lib/session-target";
 import { IntegrationSettingsSkeleton } from "./integration-settings-skeleton";
 import { HarnessSelect } from "./harness-select";
-import { HarnessFallbackWarning } from "./harness-fallback-warning";
 import { SettingsCardSection } from "../settings-card-section";
 import { Button } from "@/components/ui/button";
 import { APP_NAME } from "@/lib/site-config";
@@ -214,6 +214,9 @@ function GlobalSettingsSection({
     getValidHarnessOrDefault(settings?.defaults?.harness)
   );
   const [model, setModel] = useState(settings?.defaults?.model ?? "");
+  // The system default model is not visible here, so a harness limited to
+  // some models needs an explicit default model it can run.
+  const harnessNeedsModel = getHarnessCapabilities(harness).modelFamilies !== "any";
   const [mentionsPolicy, setMentionsPolicy] = useState<SlackMentionsPolicy>(
     settings?.defaults?.mentionsPolicy ?? DEFAULT_MENTIONS_POLICY
   );
@@ -384,11 +387,11 @@ function GlobalSettingsSection({
           Agent harness
         </label>
         <p id="slack-harness-help" className="text-xs text-muted-foreground mb-2">
-          Harness for new Slack sessions; existing threads keep theirs. A session whose App Home
-          preference or <code>!model</code> flag picks a model {CLAUDE_HARNESS_LABEL} cannot run
-          runs on {DEFAULT_HARNESS_LABEL}. Slack sessions run unattended, so {CLAUDE_HARNESS_LABEL}{" "}
-          uses the default Claude account only when its Automated authentication in Provider
-          Accounts allows it, and the Anthropic API key otherwise.
+          Default harness for new Slack sessions; users can choose their own in Slack App Home, and
+          existing threads keep theirs. Slack refuses a request whose model its harness cannot run.
+          Slack sessions run unattended, so {CLAUDE_HARNESS_LABEL} uses the default Claude account
+          only when its Automated authentication in Provider Accounts allows it, and the Anthropic
+          API key otherwise.
         </p>
         <HarnessSelect
           id="slack-harness"
@@ -402,7 +405,6 @@ function GlobalSettingsSection({
             setDirty(true);
           }}
         />
-        <HarnessFallbackWarning integration="Slack" harness={harness} model={model} />
       </div>
 
       <div className="mb-4">
@@ -419,7 +421,9 @@ function GlobalSettingsSection({
           disabled={modelsLoading}
         >
           <SelectTrigger className="w-full sm:w-96" aria-label="Default model">
-            <SelectValue placeholder="Use system default" />
+            <SelectValue
+              placeholder={harnessNeedsModel ? "Choose a model" : "Use system default"}
+            />
           </SelectTrigger>
           <SelectContent>
             {filterModelOptionsForHarness(harness, enabledModelOptions).map((group) =>
@@ -431,7 +435,7 @@ function GlobalSettingsSection({
             )}
           </SelectContent>
         </Select>
-        {model && (
+        {model && !harnessNeedsModel && (
           <Button
             type="button"
             variant="ghost"
@@ -443,6 +447,12 @@ function GlobalSettingsSection({
           >
             Use system default
           </Button>
+        )}
+        {harnessNeedsModel && !model && (
+          <p className="text-xs text-destructive mt-2">
+            Choose a default model {getHarnessLabel(harness)} can run. The system default model may
+            be one it cannot run, and Slack refuses those requests.
+          </p>
         )}
         {!selectedModelEnabled && selectedModelLabel && (
           <p className="text-xs text-destructive mt-2">
@@ -503,7 +513,7 @@ function GlobalSettingsSection({
       </div>
 
       <div className="flex items-center gap-2">
-        <Button onClick={handleSave} disabled={saving || !dirty}>
+        <Button onClick={handleSave} disabled={saving || !dirty || (harnessNeedsModel && !model)}>
           {saving ? "Saving..." : "Save"}
         </Button>
 
