@@ -16,10 +16,11 @@ import { matchTargetId, resolveChannelTargets, resolveRoutingRuleTargets } from 
 import { escapeMrkdwnText } from "@open-inspect/shared/slack";
 import {
   CLASSIFICATION_REQUEST_TIMEOUT_MS,
-  DEFAULT_CLASSIFICATION_MODEL,
   callOpenAIStructured,
-  requireClassificationProviderKey,
-  resolveClassificationProvider,
+  resolveClassificationTarget,
+  type AnthropicMessagesTarget,
+  type ClassificationTarget,
+  type OpenAIChatTarget,
 } from "@open-inspect/shared/classification";
 import {
   NO_REPOSITORY_TARGET_VALUE,
@@ -200,14 +201,13 @@ function extractStructuredResponse(response: Anthropic.Messages.Message): LLMRes
  * so both providers are driven from that one declaration.
  */
 async function callOpenAI(
-  apiKey: string,
-  model: string,
+  target: OpenAIChatTarget,
   prompt: string,
   reasoningEffort?: string
 ): Promise<LLMResponse> {
   const parsed = await callOpenAIStructured(
-    apiKey,
-    model,
+    target.apiKey,
+    target.model,
     prompt,
     {
       name: CLASSIFY_TARGET_TOOL_NAME,
@@ -232,28 +232,37 @@ export class RepoClassifier {
 
   /**
    * Lazily construct the Anthropic client so an OpenAI-configured deployment
-   * (no `ANTHROPIC_API_KEY`) never reaches `new Anthropic({ apiKey: undefined })`.
+   * never builds one. The target comes from this classifier's fixed env, so
+   * the first call's client serves every later one.
+   *
+   * The key goes in `apiKey`, never `authToken`, because Claude in Amazon
+   * Bedrock reads its API key from the same `x-api-key` header as the Anthropic
+   * API.
    */
-  private getAnthropicClient(apiKey: string): Anthropic {
+  private getAnthropicClient(target: AnthropicMessagesTarget): Anthropic {
     if (!this.anthropicClient) {
-      this.anthropicClient = new Anthropic({ apiKey });
+      this.anthropicClient = new Anthropic({ apiKey: target.apiKey, baseURL: target.baseUrl });
     }
     return this.anthropicClient;
   }
 
   /**
-   * Call Anthropic's Messages API with the classification tool, then funnel the
-   * tool input through the same {@link normalizeModelResponse} validation as
-   * the OpenAI structured-output path.
+   * Call the Messages API (Anthropic or Claude in Amazon Bedrock) with the
+   * classification tool, then funnel the tool input through the same
+   * {@link normalizeModelResponse} validation as the OpenAI structured-output
+   * path.
    *
    * Claude Opus 4.7 and later reject a non-default `temperature`, and Opus 5.5
    * rejects a forced tool call, each with HTTP 400, so the system prompt asks
    * for the call instead and a text reply falls back to the picker.
    */
-  private async callAnthropic(apiKey: string, model: string, prompt: string): Promise<LLMResponse> {
-    const response = await this.getAnthropicClient(apiKey).messages.create(
+  private async callAnthropic(
+    target: AnthropicMessagesTarget,
+    prompt: string
+  ): Promise<LLMResponse> {
+    const response = await this.getAnthropicClient(target).messages.create(
       {
-        model,
+        model: target.model,
         max_tokens: 500,
         system: CLASSIFY_TARGET_SYSTEM_PROMPT,
         tools: [CLASSIFY_TARGET_TOOL],
@@ -389,28 +398,45 @@ export class RepoClassifier {
     }
 
     // Use LLM for classification
+    const offerPicker = (
+      e: unknown,
+      provider?: ClassificationTarget["provider"]
+    ): ClassificationResult => {
+      log.error("classifier.classify", {
+        trace_id: traceId,
+        method: "llm",
+        provider,
+        outcome: "error",
+        error: e instanceof Error ? e : new Error(String(e)),
+        channel_id: context?.channelId,
+      });
+
+      return {
+        target: null,
+        confidence: "low",
+        reasoning:
+          "Could not classify a target from structured model output. Please pick one below.",
+        // No basis to suggest specific targets on a classification failure;
+        // the picker lets the user search the full list.
+        alternatives: undefined,
+        needsClarification: true,
+        source: "llm",
+      };
+    };
+
+    let llmTarget: ClassificationTarget;
+    try {
+      llmTarget = resolveClassificationTarget(this.env);
+    } catch (e) {
+      return offerPicker(e);
+    }
+
     try {
       const prompt = buildClassificationPrompt(message, catalog, context);
-      const modelId = this.env.CLASSIFICATION_MODEL || DEFAULT_CLASSIFICATION_MODEL;
-      const { provider, model } = resolveClassificationProvider(modelId);
-
       const llmResult =
-        provider === "anthropic"
-          ? await this.callAnthropic(
-              requireClassificationProviderKey(
-                this.env.ANTHROPIC_API_KEY,
-                "ANTHROPIC_API_KEY",
-                modelId
-              ),
-              model,
-              prompt
-            )
-          : await callOpenAI(
-              requireClassificationProviderKey(this.env.OPENAI_API_KEY, "OPENAI_API_KEY", modelId),
-              model,
-              prompt,
-              this.env.CLASSIFICATION_REASONING_EFFORT
-            );
+        llmTarget.protocol === "anthropic-messages"
+          ? await this.callAnthropic(llmTarget, prompt)
+          : await callOpenAI(llmTarget, prompt, this.env.CLASSIFICATION_REASONING_EFFORT);
 
       const matchedTarget = llmResult.targetId ? matchTargetId(llmResult.targetId, catalog) : null;
 
@@ -441,25 +467,7 @@ export class RepoClassifier {
         source: "llm",
       };
     } catch (e) {
-      log.error("classifier.classify", {
-        trace_id: traceId,
-        method: "llm",
-        outcome: "error",
-        error: e instanceof Error ? e : new Error(String(e)),
-        channel_id: context?.channelId,
-      });
-
-      return {
-        target: null,
-        confidence: "low",
-        reasoning:
-          "Could not classify a target from structured model output. Please pick one below.",
-        // No basis to suggest specific targets on a classification failure;
-        // the picker lets the user search the full list.
-        alternatives: undefined,
-        needsClarification: true,
-        source: "llm",
-      };
+      return offerPicker(e, llmTarget.provider);
     }
   }
 }

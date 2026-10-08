@@ -284,6 +284,7 @@ LINEAR_API_KEY # Optional; fallback comment posting
 ANTHROPIC_API_KEY # Optional; injected into Modal/OpenComputer sandboxes and used by an Anthropic classifier when CLASSIFICATION_ANTHROPIC_API_KEY is unset
 CLASSIFICATION_ANTHROPIC_API_KEY # Optional; classifier-only Anthropic key that never reaches sandboxes
 CLASSIFICATION_OPENAI_API_KEY # Required when classification_model is an OpenAI model and the Slack or Linear bot is enabled
+CLASSIFICATION_BEDROCK_API_KEY # Required when classification_model is a Bedrock model and the Slack or Linear bot is enabled; see "Classify on Amazon Bedrock (Optional)" in docs/GETTING_STARTED.md
 
 # Security Secrets
 TOKEN_ENCRYPTION_KEY

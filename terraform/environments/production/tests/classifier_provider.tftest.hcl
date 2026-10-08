@@ -57,7 +57,7 @@ run "anthropic_classifier_by_default" {
   command = plan
 
   assert {
-    condition     = !local.classifier_uses_openai
+    condition     = local.classifier_provider == "anthropic"
     error_message = "The default classification model must resolve to Anthropic."
   }
 
@@ -109,6 +109,14 @@ run "anthropic_classifier_by_default" {
       one([for b in local.classifier_secret_bindings : b.value]) == var.anthropic_api_key
     )
     error_message = "An Anthropic classifier must bind the deployment-wide anthropic_api_key."
+  }
+
+  assert {
+    condition = (
+      !contains(module.slack_bot_worker[0].secret_binding_names, "BEDROCK_API_KEY") &&
+      !contains(module.linear_bot_worker[0].secret_binding_names, "BEDROCK_API_KEY")
+    )
+    error_message = "An Anthropic-classifier deployment must not bind a Bedrock key."
   }
 }
 
@@ -191,7 +199,7 @@ run "openai_classifier_binds_openai_key" {
   }
 
   assert {
-    condition     = local.classifier_uses_openai
+    condition     = local.classifier_provider == "openai"
     error_message = "A bare gpt- classification model must resolve to OpenAI."
   }
 
@@ -266,7 +274,7 @@ run "prefixed_openai_model_resolves_to_openai" {
   }
 
   assert {
-    condition     = local.classifier_uses_openai
+    condition     = local.classifier_provider == "openai"
     error_message = "An openai/-prefixed classification model must resolve to OpenAI."
   }
 }
@@ -279,7 +287,7 @@ run "prefixed_anthropic_model_resolves_to_anthropic" {
   }
 
   assert {
-    condition     = !local.classifier_uses_openai
+    condition     = local.classifier_provider == "anthropic"
     error_message = "An anthropic/-prefixed classification model must resolve to Anthropic."
   }
 }
@@ -378,7 +386,135 @@ run "accepts_a_prefixed_model_with_one_character" {
   }
 
   assert {
-    condition     = !local.classifier_uses_openai
+    condition     = local.classifier_provider == "anthropic"
     error_message = "A minimal claude- id must still resolve to Anthropic."
+  }
+}
+
+run "bedrock_classifier_binds_only_the_bedrock_key" {
+  command = plan
+
+  variables {
+    classification_model           = "bedrock/us-east-1/us.anthropic.claude-haiku-4-5-20251001-v1:0"
+    classification_bedrock_api_key = "test-bedrock-key"
+  }
+
+  assert {
+    condition     = local.classifier_provider == "bedrock"
+    error_message = "A bedrock/<region>/ classification model must resolve to Bedrock."
+  }
+
+  assert {
+    condition = (
+      local.classifier_secret_bindings == tomap({ BEDROCK_API_KEY = { value = "test-bedrock-key" } }) &&
+      contains(module.slack_bot_worker[0].secret_binding_names, "BEDROCK_API_KEY") &&
+      contains(module.linear_bot_worker[0].secret_binding_names, "BEDROCK_API_KEY")
+    )
+    error_message = "A Bedrock-classifier deployment must bind the Bedrock key on both classifier bots."
+  }
+
+  assert {
+    condition = (
+      !contains(module.slack_bot_worker[0].secret_binding_names, "ANTHROPIC_API_KEY") &&
+      !contains(module.linear_bot_worker[0].secret_binding_names, "ANTHROPIC_API_KEY") &&
+      !contains(module.slack_bot_worker[0].secret_binding_names, "OPENAI_API_KEY") &&
+      !contains(module.linear_bot_worker[0].secret_binding_names, "OPENAI_API_KEY")
+    )
+    error_message = "A Bedrock-classifier deployment must not bind a key it never uses."
+  }
+}
+
+run "bedrock_accepts_a_gov_region" {
+  command = plan
+
+  variables {
+    classification_model           = "bedrock/us-gov-west-1/us-gov.anthropic.claude-haiku-4-5-20251001-v1:0"
+    classification_bedrock_api_key = "test-bedrock-key"
+  }
+
+  assert {
+    condition     = local.classifier_provider == "bedrock"
+    error_message = "A Bedrock id in a gov region must resolve to Bedrock."
+  }
+}
+
+run "bedrock_accepts_a_global_inference_profile" {
+  command = plan
+
+  variables {
+    classification_model           = "bedrock/us-east-1/global.anthropic.claude-opus-5-5"
+    classification_bedrock_api_key = "test-bedrock-key"
+  }
+
+  assert {
+    condition     = local.classifier_provider == "bedrock"
+    error_message = "A global inference profile id must resolve to Bedrock."
+  }
+}
+
+run "bedrock_classifier_requires_bedrock_key" {
+  command = plan
+
+  variables {
+    classification_model           = "bedrock/us-east-1/us.anthropic.claude-haiku-4-5-20251001-v1:0"
+    classification_bedrock_api_key = ""
+  }
+
+  expect_failures = [var.classification_bedrock_api_key]
+}
+
+run "bedrock_model_without_bots_needs_no_key" {
+  command = plan
+
+  variables {
+    classification_model           = "bedrock/us-east-1/us.anthropic.claude-haiku-4-5-20251001-v1:0"
+    classification_bedrock_api_key = ""
+    enable_slack_bot               = false
+    enable_linear_bot              = false
+  }
+
+  assert {
+    condition     = length(module.slack_bot_worker) == 0 && length(module.linear_bot_worker) == 0
+    error_message = "Neither classifier bot should be deployed in this configuration."
+  }
+}
+
+run "rejects_reasoning_effort_for_bedrock_classifier" {
+  command = plan
+
+  variables {
+    classification_model            = "bedrock/us-east-1/us.anthropic.claude-haiku-4-5-20251001-v1:0"
+    classification_bedrock_api_key  = "test-bedrock-key"
+    classification_reasoning_effort = "low"
+  }
+
+  expect_failures = [var.classification_reasoning_effort]
+}
+
+# The fixture-parity run below covers the grammar; this proves the
+# classification_model validation applies that same table to a bedrock/ id.
+run "rejects_a_malformed_bedrock_id" {
+  command = plan
+
+  variables {
+    classification_model           = "bedrock/us-east-1/"
+    classification_bedrock_api_key = "test-bedrock-key"
+  }
+
+  expect_failures = [var.classification_model]
+}
+
+run "classifier_grammar_matches_the_shared_fixtures" {
+  command = plan
+
+  assert {
+    condition = alltrue([
+      for fixture in jsondecode(file("${var.project_root}/packages/shared/test-fixtures/classification-model-ids.json")) :
+      one([
+        for candidate, pattern in local.classifier_model_patterns : candidate
+        if can(regex(pattern, fixture.id))
+      ]) == try(fixture.parsed.provider, null)
+    ])
+    error_message = "local.classifier_model_patterns disagrees with parseClassificationModel on a shared fixture id."
   }
 }

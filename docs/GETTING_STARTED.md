@@ -104,6 +104,7 @@ the matching optional section:
 | [Modal](https://modal.com)                                | Sandbox infrastructure (default `sandbox_provider = "modal"`)   |
 | [GitHub](https://github.com/settings/developers)          | OAuth + repository access                                       |
 | [Anthropic](https://console.anthropic.com) _(optional)_   | Claude API (the Slack/Linear bot classifier's default provider) |
+| [Bedrock](https://aws.amazon.com/bedrock) _(optional)_    | Alternative Claude host for the Slack/Linear bot classifier     |
 | [Daytona](https://app.daytona.io) _(optional)_            | Sandbox infrastructure when `sandbox_provider = "daytona"`      |
 | [Vercel Sandboxes](https://vercel.com) _(optional)_       | Sandbox infrastructure when `sandbox_provider = "vercel"`       |
 | [OpenComputer](https://app.opencomputer.dev) _(optional)_ | Sandbox infrastructure when `sandbox_provider = "opencomputer"` |
@@ -236,7 +237,7 @@ Create an R2 API Token:
 Optional for the core path, which sets `enable_slack_bot = false` and `enable_linear_bot = false` in
 Step 5. Terraform's own default enables the Slack bot, and its classifier runs on Claude, so
 `terraform apply` fails without this key unless both bots are disabled or `classification_model`
-points at an OpenAI model. If you enable Slack or Linear later, set either
+points at an OpenAI or Bedrock model. If you enable Slack or Linear later, set either
 `classification_anthropic_api_key` or `anthropic_api_key` then; prefer the classifier-only key
 unless you also want a deployment-wide sandbox key, because it is never injected into sandboxes.
 Coding sessions themselves need no key here — those model credentials can be added as secrets in the
@@ -246,6 +247,41 @@ sandboxes as a deployment-wide default.
 1. Go to [Anthropic Console](https://console.anthropic.com)
 2. Create an API key
 3. Note the **API Key** (starts with `sk-ant-`)
+
+#### Classify on Amazon Bedrock (Optional)
+
+The Slack and Linear classifiers can call Claude in Amazon Bedrock instead of the Claude API. This
+setting affects only the classifiers, not coding sessions. The classifiers send Messages API
+requests to the Amazon Bedrock runtime endpoint, `bedrock-runtime.<region>.amazonaws.com`, in the
+Region you choose.
+
+1. Choose any AWS Region where the Claude model is available in Amazon Bedrock. Open the model's
+   card in the Amazon Bedrock console and copy its inference profile ID, such as
+   `us.anthropic.claude-haiku-4-5-20251001-v1:0`.
+2. Enable the model for the AWS account once. With an identity that has `aws-marketplace:Subscribe`,
+   `aws-marketplace:Unsubscribe`, and `aws-marketplace:ViewSubscriptions`, open the model in the
+   Amazon Bedrock console model catalog and submit Anthropic's first-time use form. Until AWS
+   finishes setting up access, requests return `AccessDeniedException`, and every classification
+   falls back to asking the user.
+3. In the AWS console, create a long-term Amazon Bedrock API key. Its IAM identity needs
+   `bedrock:InvokeModel` and `bedrock:GetInferenceProfile` on the inference profile,
+   `bedrock:InvokeModel` on the models it routes to, and `bedrock:CallWithBearerToken`.
+4. Record the key's expiry date. AWS recommends long-term keys for exploration only, and each key
+   expires on the date set when you create it. Rotate `classification_bedrock_api_key` before that
+   date. Do not use a short-term key. It expires within 12 hours, and after that every
+   classification falls back to asking the user.
+5. Set the model and key in `terraform.tfvars`. The model ID is `bedrock/<aws-region>/` followed by
+   the inference profile ID:
+
+   ```hcl
+   classification_model           = "bedrock/us-east-1/us.anthropic.claude-haiku-4-5-20251001-v1:0"
+   classification_bedrock_api_key = "<long-term Amazon Bedrock API key>"
+   ```
+
+   The classifiers then need no Anthropic key. Terraform checks only the ID's format. Use the
+   inference profile ID. Bedrock rejects the plain ID `anthropic.claude-haiku-4-5` as an invalid
+   identifier, and rejects on-demand requests to some in-Region model IDs, such as
+   `anthropic.claude-haiku-4-5-20251001-v1:0`.
 
 > **Want to use your OpenAI ChatGPT subscription?** See [Using OpenAI Models](OPENAI_MODELS.md) for
 > setup instructions (can be configured after deployment).
@@ -478,10 +514,13 @@ anthropic_api_key = ""
 # classification_anthropic_api_key = ""   # Classifier-only key; never reaches sandboxes
 
 # Slack/Linear classifier provider, chosen by classification_model.
-# An OpenAI model requires classification_openai_api_key. An Anthropic model is
-# served by classification_anthropic_api_key, falling back to anthropic_api_key.
+# An OpenAI model requires classification_openai_api_key. A Bedrock model
+# ("bedrock/<aws-region>/<inference-profile-id>") requires classification_bedrock_api_key.
+# An Anthropic model is served by classification_anthropic_api_key, falling back
+# to anthropic_api_key.
 # classification_model = "claude-haiku-4-5"   # e.g. "gpt-5.4-mini" to classify on OpenAI
 classification_openai_api_key = ""   # Required when classification_model is an OpenAI id
+# classification_bedrock_api_key = ""         # Required when classification_model is a Bedrock id
 # classification_reasoning_effort = "low"     # OpenAI ids only; blank keeps the model default
 
 # Security Secrets (from Step 4)
@@ -530,8 +569,8 @@ teams_enforcement = "on"
 > **Core path bot settings**: The snippet above deploys with `enable_slack_bot = false`,
 > `enable_github_bot = false`, and `enable_linear_bot = false`. Keep `enable_slack_bot = false`
 > explicit: Terraform defaults it to `true`, which requires Slack credentials and an Anthropic (or
-> OpenAI classifier) key. With all three bots off, `anthropic_api_key` is optional. Turn bots on
-> later with the [Slack](#slack-bot-optional), [Linear](#linear-agent-optional), and
+> OpenAI or Bedrock classifier) key. With all three bots off, `anthropic_api_key` is optional. Turn
+> bots on later with the [Slack](#slack-bot-optional), [Linear](#linear-agent-optional), and
 > [GitHub bot](#github-bot-optional) sections.
 
 ### Choose Sign-In Providers
@@ -1012,8 +1051,8 @@ slack_signing_secret             = "your-signing-secret"
 classification_anthropic_api_key = "sk-ant-..." # Classifier-only; or set anthropic_api_key
 ```
 
-The Slack classifier needs an Anthropic key unless `classification_model` points at an OpenAI model;
-see [Anthropic (Optional)](#anthropic-optional).
+The Slack classifier needs an Anthropic key unless `classification_model` points at an OpenAI or
+Bedrock model; see [Anthropic (Optional)](#anthropic-optional).
 
 #### Event Subscriptions (Configure After Deployment)
 
@@ -1112,8 +1151,8 @@ Skip this section if you don't need the Linear Agent integration.
 5. Record the client ID, client secret, and webhook signing secret for `terraform.tfvars`.
 6. Set `enable_linear_bot = true`, `linear_client_id`, `linear_client_secret`, and
    `linear_webhook_secret` in `terraform.tfvars`, then run `terraform apply`. Like Slack, the Linear
-   classifier needs an Anthropic key unless `classification_model` points at an OpenAI model; see
-   [Anthropic (Optional)](#anthropic-optional).
+   classifier needs an Anthropic key unless `classification_model` points at an OpenAI or Bedrock
+   model; see [Anthropic (Optional)](#anthropic-optional).
 
 The app is installed after deployment in [Install the Linear Agent](#install-the-linear-agent).
 Runtime access uses replaceable client-credentials tokens; authorization-code refresh tokens are not
@@ -1390,6 +1429,7 @@ Secrets for credentials:
 | `ANTHROPIC_API_KEY`                | Optional; reaches Modal and OpenComputer sandboxes; classifier fallback                         |
 | `CLASSIFICATION_ANTHROPIC_API_KEY` | Optional classifier-only Anthropic key; never reaches sandboxes                                 |
 | `CLASSIFICATION_OPENAI_API_KEY`    | Classifier OpenAI key (required when `classification_model` is an OpenAI id)                    |
+| `CLASSIFICATION_BEDROCK_API_KEY`   | Classifier Amazon Bedrock API key (required when `classification_model` is a Bedrock id)        |
 | `OPENAI_API_KEY`                   | Optional OpenAI API key used when a session selects API-key authentication                      |
 | `XAI_API_KEY`                      | Optional xAI API key used when a session selects API-key authentication                         |
 | `DEEPSEEK_API_KEY`                 | DeepSeek API key (optional, required only for DeepSeek models)                                  |
@@ -1419,12 +1459,14 @@ also needs a compatible allowlist; see [Choose Sign-In Providers](#choose-sign-i
 `CLASSIFICATION_MODEL` is an optional Actions **variable**, not a secret — add it under Settings →
 Secrets and variables → Actions → _Variables_ to point the Slack/Linear classifiers at a different
 model (for example `gpt-5.4-mini`). Leave it unset to keep the Terraform default. An OpenAI value
-also requires the `CLASSIFICATION_OPENAI_API_KEY` secret; an Anthropic value is served by
-`CLASSIFICATION_ANTHROPIC_API_KEY`, falling back to `ANTHROPIC_API_KEY`. To keep the classifier key
-out of Modal and OpenComputer sandboxes, set `CLASSIFICATION_ANTHROPIC_API_KEY` and leave
-`ANTHROPIC_API_KEY` unset; sandboxes then take model credentials from Open-Inspect's secret store.
-The optional `CLASSIFICATION_REASONING_EFFORT` variable sets the reasoning effort an OpenAI
-classifier requests (for example `low`); leave it unset to use the model's default.
+also requires the `CLASSIFICATION_OPENAI_API_KEY` secret, and a Bedrock value
+(`bedrock/<aws-region>/<inference-profile-id>`) requires the `CLASSIFICATION_BEDROCK_API_KEY`
+secret; an Anthropic value is served by `CLASSIFICATION_ANTHROPIC_API_KEY`, falling back to
+`ANTHROPIC_API_KEY`. To keep the classifier key out of Modal and OpenComputer sandboxes, set
+`CLASSIFICATION_ANTHROPIC_API_KEY` and leave `ANTHROPIC_API_KEY` unset; sandboxes then take model
+credentials from Open-Inspect's secret store. The optional `CLASSIFICATION_REASONING_EFFORT`
+variable sets the reasoning effort an OpenAI classifier requests (for example `low`); leave it unset
+to use the model's default.
 
 When enabling or upgrading the Linear bot, also enable **Client credentials tokens** on the OAuth
 application in **Linear Settings → API → Applications**. This provider-side setting is not managed
