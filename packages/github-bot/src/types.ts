@@ -26,6 +26,13 @@ export interface Env {
   /** GitHub App bot username (e.g., "open-inspect-bot[bot]"). */
   GITHUB_BOT_USERNAME: string;
 
+  /**
+   * Login of the optional reviewer GitHub App (e.g., "my-reviewer[bot]"),
+   * whose installation token submits reviews. Unset means the main App
+   * reviews under its own identity.
+   */
+  GITHUB_REVIEWER_USERNAME?: string;
+
   /** GitHub App ID for JWT generation. */
   GITHUB_APP_ID: string;
 
