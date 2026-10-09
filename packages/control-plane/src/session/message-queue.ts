@@ -753,6 +753,7 @@ export class SessionMessageQueue {
       reasoningEffort: data.reasoningEffort,
       attachments: data.attachments,
       callbackContext: data.callbackContext,
+      clientRequestId: data.clientRequestId,
     });
 
     await this.processMessageQueue();

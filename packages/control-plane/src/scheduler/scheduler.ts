@@ -21,6 +21,7 @@ import {
   type AutomationEvent,
   type SlackAutomationEvent,
   type TriggerConfig,
+  type WebhookAutomationEvent,
 } from "@open-inspect/shared/triggers";
 import { nextCronOccurrence } from "@open-inspect/shared/cron";
 import type {
@@ -73,7 +74,7 @@ import { TeamRepositoryGrantStore } from "../db/team-repository-grants";
 import { AuthorizationService } from "../authorization/service";
 import { evaluateSessionAdmission } from "../authorization/session-admission";
 import { createRequestMetrics } from "../db/instrumented-sql-database";
-import { generateId } from "../auth/crypto";
+import { generateId, hashToken } from "../auth/crypto";
 import { createLogger, parseLogLevel } from "../logger";
 import type { CorrelationContext, Logger } from "../logger";
 import type { Env } from "../types";
@@ -177,12 +178,13 @@ const RECOVERY_SWEEP_LIMIT = 50;
 const INVOCATION_SWEEP_WINDOW_MS = 24 * 60 * 60 * 1000;
 
 /**
- * How long after a slack run's first trigger that thread replies keep continuing
- * the same session (matches the interactive thread→session KV TTL of 7 days). Steering
- * does not create new runs, so this is measured from the root run's `created_at` and
- * does not slide — a reply after the window forks a fresh run.
+ * How long after a run's first trigger that slack thread replies, and webhook
+ * deliveries with the same sessionKey, keep continuing the same session (matches the
+ * interactive thread→session KV TTL of 7 days). Steering does not create new runs, so
+ * this is measured from the root run's `created_at` and does not slide — a follow-up
+ * after the window forks a fresh run.
  */
-const SLACK_THREAD_CONTINUITY_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
+const SESSION_CONTINUITY_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
 
 /**
  * Bound on the thread-context request. It sits between admission and launch, so
@@ -311,10 +313,14 @@ interface ExecutionPrincipal {
 
 type SchedulerPromptRequest = Pick<
   EnqueuePromptRequest,
-  "content" | "authorId" | "canonicalUserId" | "source" | "scmEnrichment"
+  "content" | "authorId" | "canonicalUserId" | "source" | "scmEnrichment" | "clientRequestId"
 > & {
-  callbackContext: AutomationCallbackContext | SlackCallbackContext;
+  callbackContext?: AutomationCallbackContext | SlackCallbackContext;
 };
+
+class SessionPromptConflictError extends Error {}
+
+type WebhookContinuation = { steered: boolean; invocationId: string };
 
 export async function resolveAutomationProviderAuth(
   db: SqlDatabase,
@@ -1217,23 +1223,11 @@ export class Scheduler {
             slackEvent.actorUserId
           );
           if (!identity) return null;
-          const authorization = await new AuthorizationService(this.db).getEffectiveAuthorization(
-            identity.userId
+          return await this.collaboratorContext(
+            identity.userId,
+            `automation:slack-steering:${slackEvent.triggerKey}`,
+            slackEvent.triggerKey
           );
-          if (
-            authorization.suspendedAt !== null ||
-            !authorization.permissions.includes("sessions.collaborate")
-          )
-            return null;
-          return {
-            db: this.db,
-            trace_id: `automation:slack-steering:${slackEvent.triggerKey}`,
-            request_id: slackEvent.triggerKey,
-            metrics: createRequestMetrics(),
-            executionCtx: this.backgroundJobs,
-            principal: { kind: "user", userId: identity.userId },
-            authorization,
-          } satisfies RequestContext;
         } catch (error) {
           this.log.warn("Failed to authorize slack actor for session steering", {
             event: "scheduler.slack_steer_authorization_failed",
@@ -1260,6 +1254,15 @@ export class Scheduler {
     for (const automation of candidates) {
       const now = Date.now();
 
+      if (event.source === "webhook" && event.sessionKey) {
+        const original = await store.getInvocationIdByTriggerKey(automation.id, event.triggerKey);
+        if (original) {
+          invocationIds.push(original);
+          skipped++;
+          continue;
+        }
+      }
+
       // Slack thread continuity — mirrors the interactive @mention path: any reply
       // in a thread that already has a session (any run status, within the
       // continuity window) continues that session, regardless of trigger
@@ -1272,7 +1275,7 @@ export class Scheduler {
         const steerable = await store.getLatestSteerableRunForThread(
           automation.id,
           event.concurrencyKey,
-          now - SLACK_THREAD_CONTINUITY_WINDOW_MS
+          now - SESSION_CONTINUITY_WINDOW_MS
         );
         if (steerable?.session_id) {
           const actor = await slackSteeringActor(event);
@@ -1328,6 +1331,19 @@ export class Scheduler {
       }
       if (!matchesConditions(config.conditions, event, conditionRegistry)) {
         continue;
+      }
+
+      if (event.source === "webhook" && event.sessionKey) {
+        const continued = await this.continueWebhookSession(store, automation, event, now);
+        if (continued) {
+          invocationIds.push(continued.invocationId);
+          if (continued.steered) {
+            steered++;
+          } else {
+            skipped++;
+          }
+          continue;
+        }
       }
 
       if (event.source === "slack" && !slackSettingsLoaded) {
@@ -2042,6 +2058,105 @@ export class Scheduler {
     }
   }
 
+  private async collaboratorContext(
+    userId: string,
+    traceId: string,
+    requestId: string
+  ): Promise<RequestContext | null> {
+    const authorization = await new AuthorizationService(this.db).getEffectiveAuthorization(userId);
+    if (
+      authorization.suspendedAt !== null ||
+      !authorization.permissions.includes("sessions.collaborate")
+    )
+      return null;
+    return {
+      db: this.db,
+      trace_id: traceId,
+      request_id: requestId,
+      metrics: createRequestMetrics(),
+      executionCtx: this.backgroundJobs,
+      principal: { kind: "user", userId },
+      authorization,
+    } satisfies RequestContext;
+  }
+
+  private async continueWebhookSession(
+    store: AutomationStore,
+    automation: AutomationRow,
+    event: WebhookAutomationEvent,
+    now: number
+  ): Promise<WebhookContinuation | null> {
+    const run = await store.getLatestSteerableRunForThread(
+      automation.id,
+      event.concurrencyKey,
+      now - SESSION_CONTINUITY_WINDOW_MS
+    );
+    if (!run?.session_id) return null;
+
+    const owner = await store.resolveCanonicalOwner(automation);
+    let allowed = false;
+    try {
+      const actor = owner.user_id
+        ? await this.collaboratorContext(
+            owner.user_id,
+            `automation:webhook-steering:${event.triggerKey}`,
+            event.triggerKey
+          )
+        : null;
+      allowed =
+        actor !== null &&
+        (await evaluateSessionAdmission(actor, this.env, run.session_id, "collaborate", null))
+          .kind === "allowed";
+    } catch (error) {
+      this.log.warn("Failed to authorize the executor for webhook session steering", {
+        event: "scheduler.webhook_steer_authorization_failed",
+        automation_id: automation.id,
+        session_id: run.session_id,
+        error: error instanceof Error ? error : new Error(String(error)),
+      });
+    }
+    if (!allowed) {
+      this.log.warn("Blocked webhook steering for an executor without session access", {
+        event: "scheduler.webhook_steer_unauthorized",
+        automation_id: automation.id,
+        session_id: run.session_id,
+      });
+      return { steered: false, invocationId: run.invocation_id };
+    }
+
+    try {
+      await this.enqueueSessionPrompt(
+        run.session_id,
+        {
+          content: `${event.contextBlock}\n\n---\n\n${AUTOMATION_CONTEXT_GUARDRAIL}`,
+          authorId: owner.created_by,
+          canonicalUserId: owner.user_id,
+          source: "automation",
+          clientRequestId: `webhook:${await hashToken(`${automation.id}:${String(event.meta.deliveryId)}`)}`,
+        },
+        { trace_id: `automation:${automation.id}`, request_id: event.triggerKey }
+      );
+    } catch (e) {
+      if (e instanceof SessionPromptConflictError) {
+        return { steered: false, invocationId: run.invocation_id };
+      }
+      this.log.warn("Failed to steer webhook session; falling through to trigger path", {
+        event: "scheduler.webhook_steer_failed",
+        automation_id: automation.id,
+        session_id: run.session_id,
+        error: e instanceof Error ? e : new Error(String(e)),
+      });
+      return null;
+    }
+
+    this.log.info("Steered session with webhook follow-up", {
+      event: "scheduler.webhook_steer",
+      automation_id: automation.id,
+      session_id: run.session_id,
+    });
+    return { steered: true, invocationId: run.invocation_id };
+  }
+
   /** Enqueue a prompt onto a session's queue through its runtime's prompt route. */
   private async enqueueSessionPrompt(
     sessionId: string,
@@ -2058,6 +2173,9 @@ export class Scheduler {
       }
     );
 
+    if (promptResponse.status === 409) {
+      throw new SessionPromptConflictError("Prompt enqueue failed with status 409");
+    }
     if (!promptResponse.ok) {
       throw new Error(`Prompt enqueue failed with status ${promptResponse.status}`);
     }

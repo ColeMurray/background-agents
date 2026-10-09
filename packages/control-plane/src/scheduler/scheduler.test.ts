@@ -13,8 +13,9 @@ import type { SqlDatabase } from "../db/sql-database";
 import type { FetchClient } from "../platform-ports";
 import { fakeSessionRuntimeDispatch } from "../router.test-support";
 import type { Logger } from "../logger";
+import type * as AuthCrypto from "../auth/crypto";
 import type { AutomationRow, InvocationRunAggregate } from "../db/automation-store";
-import type { SlackAutomationEvent } from "@open-inspect/shared/triggers";
+import { normalizeWebhookEvent, type SlackAutomationEvent } from "@open-inspect/shared/triggers";
 import { verifyCallbackSignature } from "@open-inspect/shared/auth";
 import type { Team } from "@open-inspect/shared/types/teams";
 import type { EffectiveAuthorization } from "@open-inspect/shared/rbac";
@@ -277,7 +278,8 @@ vi.mock("../db/slack-channel-store", () => ({
   }),
 }));
 
-vi.mock("../auth/crypto", () => ({
+vi.mock("../auth/crypto", async (importOriginal) => ({
+  ...(await importOriginal<typeof AuthCrypto>()),
   generateId: vi.fn(() => `id-${Math.random().toString(36).slice(2, 8)}`),
 }));
 
@@ -3768,6 +3770,225 @@ describe("Scheduler", () => {
       );
       // Not treated as a concurrency skip.
       expect(mockStore.insertSkippedInvocation).not.toHaveBeenCalled();
+    });
+
+    describe("webhook sessionKey", () => {
+      const sampleWebhookAutomation = {
+        ...sampleAutomation,
+        id: "auto-hook",
+        name: "Card agent",
+        trigger_type: "webhook",
+        schedule_cron: null,
+        next_run_at: null,
+        trigger_config: JSON.stringify({ conditions: [] }),
+      };
+
+      const iterateOnly = {
+        ...sampleWebhookAutomation,
+        trigger_config: JSON.stringify({
+          conditions: [
+            {
+              type: "jsonpath",
+              operator: "all_match",
+              value: [{ path: "$.mode", comparison: "eq", value: "iterate" }],
+            },
+          ],
+        }),
+      };
+
+      function webhookEvent(body: Record<string, unknown>, idempotencyKey?: string) {
+        return normalizeWebhookEvent("auto-hook", body, idempotencyKey, "card-42");
+      }
+
+      async function promptRequestBody(input: RequestInfo, init?: RequestInit) {
+        const text = input instanceof Request ? await input.clone().text() : String(init?.body);
+        return JSON.parse(text) as Record<string, unknown>;
+      }
+
+      beforeEach(() => {
+        mockStore.getById.mockResolvedValue(sampleWebhookAutomation);
+      });
+
+      it("continues the session an earlier delivery with the same key started", async () => {
+        mockStore.getLatestSteerableRunForThread.mockResolvedValue(
+          sampleRunRow({ invocation_id: "inv-card", status: "completed", session_id: "sess-card" })
+        );
+        const stub = createMockSessionStub();
+
+        const result = await createScheduler(createEnv(undefined, stub)).event(
+          webhookEvent({ mode: "iterate", pr: 8262 }, "review-1")
+        );
+
+        expect(result).toEqual({
+          triggered: 0,
+          skipped: 0,
+          steered: 1,
+          invocationIds: ["inv-card"],
+        });
+        expect(mockStore.getLatestSteerableRunForThread).toHaveBeenCalledWith(
+          "auto-hook",
+          "webhook:session:card-42",
+          expect.any(Number)
+        );
+        const promptBody = await getPromptBody(vi.mocked(stub.fetch));
+        expect(promptBody.source).toBe("automation");
+        expect(promptBody.callbackContext).toBeUndefined();
+        expect(promptBody.clientRequestId).toMatch(/^webhook:[0-9a-f]{64}$/);
+        expect(promptBody.content).toContain('"pr": 8262');
+        expect(promptBody.content).not.toContain(sampleWebhookAutomation.instructions);
+        expect(mockStore.insertInvocationGuarded).not.toHaveBeenCalled();
+      });
+
+      it("resolves a retry of the delivery that started the session to its invocation", async () => {
+        mockStore.getInvocationIdByTriggerKey.mockResolvedValue("inv-first");
+        mockStore.getLatestSteerableRunForThread.mockResolvedValue(
+          sampleRunRow({ session_id: "sess-card" })
+        );
+        const stub = createMockSessionStub();
+
+        const result = await createScheduler(createEnv(undefined, stub)).event(
+          webhookEvent({ mode: "build" }, "first")
+        );
+
+        expect(result).toEqual({
+          triggered: 0,
+          skipped: 1,
+          steered: 0,
+          invocationIds: ["inv-first"],
+        });
+        expect(promptCallCount(vi.mocked(stub.fetch))).toBe(0);
+      });
+
+      it("resolves a retry to its invocation after the conditions stop matching it", async () => {
+        mockStore.getById.mockResolvedValue(iterateOnly);
+        mockStore.getInvocationIdByTriggerKey.mockResolvedValue("inv-first");
+
+        const result = await createScheduler().event(webhookEvent({ mode: "build" }, "first"));
+
+        expect(result).toEqual({
+          triggered: 0,
+          skipped: 1,
+          steered: 0,
+          invocationIds: ["inv-first"],
+        });
+        expect(mockStore.getInvocationIdByTriggerKey).toHaveBeenCalledWith(
+          "auto-hook",
+          "webhook:idem:first"
+        );
+      });
+
+      it("sends a retried follow-up with the same request id and counts the session's conflict as a duplicate", async () => {
+        mockStore.getLatestSteerableRunForThread.mockResolvedValue(
+          sampleRunRow({ invocation_id: "inv-card", session_id: "sess-card" })
+        );
+        const requestIds: unknown[] = [];
+        const stub = {
+          fetch: vi.fn(async (input: RequestInfo, init?: RequestInit) => {
+            const url = typeof input === "string" ? input : input.url;
+            if (new URL(url).pathname !== "/internal/prompt")
+              return new Response("Not Found", { status: 404 });
+            requestIds.push((await promptRequestBody(input, init)).clientRequestId);
+            return requestIds.length === 1
+              ? Response.json({ messageId: "msg-1", status: "queued" })
+              : Response.json({ code: "PROMPT_REQUEST_CONFLICT" }, { status: 409 });
+          }),
+        } as never;
+        const scheduler = createScheduler(createEnv(undefined, stub));
+
+        expect(await scheduler.event(webhookEvent({ mode: "iterate" }, "review-1"))).toMatchObject({
+          steered: 1,
+        });
+        expect(await scheduler.event(webhookEvent({ mode: "iterate" }, "review-1"))).toEqual({
+          triggered: 0,
+          skipped: 1,
+          steered: 0,
+          invocationIds: ["inv-card"],
+        });
+        expect(requestIds[1]).toBe(requestIds[0]);
+        expect(mockStore.insertInvocationGuarded).not.toHaveBeenCalled();
+      });
+
+      it("starts a run of its own, keyed to the session, when no session has the key yet", async () => {
+        const stub = createMockSessionStub();
+
+        const result = await createScheduler(createEnv(undefined, stub)).event(
+          webhookEvent({ mode: "build" })
+        );
+
+        expect(result.steered).toBe(0);
+        expect(mockStore.insertInvocationGuarded).toHaveBeenCalledWith(
+          expect.objectContaining({
+            invocation: expect.objectContaining({ concurrency_key: "webhook:session:card-42" }),
+          })
+        );
+      });
+
+      it("falls through to a new run when the session cannot take the prompt", async () => {
+        mockStore.getLatestSteerableRunForThread.mockResolvedValue(
+          sampleRunRow({ session_id: "sess-archived" })
+        );
+        const stub = {
+          fetch: vi.fn(async (input: RequestInfo) => {
+            const url = typeof input === "string" ? input : input.url;
+            const path = new URL(url).pathname;
+            if (path === "/internal/init") return Response.json({ status: "ok" });
+            return new Response("Gone", { status: 410 });
+          }),
+        } as never;
+
+        const result = await createScheduler(createEnv(undefined, stub)).event(
+          webhookEvent({ mode: "iterate" })
+        );
+
+        expect(result.steered).toBe(0);
+        expect(mockStore.insertInvocationGuarded).toHaveBeenCalled();
+      });
+
+      it.each(["missing collaboration permission", "session admission denied"])(
+        "neither steers nor starts a run for an executor with %s",
+        async (scenario) => {
+          mockStore.getLatestSteerableRunForThread.mockResolvedValue(
+            sampleRunRow({ invocation_id: "inv-card", session_id: "sess-card" })
+          );
+          if (scenario === "missing collaboration permission") {
+            mockGetEffectiveAuthorization.mockResolvedValue(
+              steeringAuthorization({ permissions: [] })
+            );
+          } else {
+            mockEvaluateSessionAdmission.mockResolvedValue({ kind: "not_found" });
+          }
+          const stub = createMockSessionStub();
+
+          const result = await createScheduler(createEnv(undefined, stub)).event(
+            webhookEvent({ mode: "iterate" })
+          );
+
+          expect(result).toEqual({
+            triggered: 0,
+            skipped: 1,
+            steered: 0,
+            invocationIds: ["inv-card"],
+          });
+          expect(promptCallCount(vi.mocked(stub.fetch))).toBe(0);
+          expect(mockStore.insertInvocationGuarded).not.toHaveBeenCalled();
+          expect(mockGetEffectiveAuthorization).toHaveBeenCalledWith("user-1");
+        }
+      );
+
+      it("does not continue a session for a delivery that fails the conditions", async () => {
+        mockStore.getById.mockResolvedValue(iterateOnly);
+        mockStore.getLatestSteerableRunForThread.mockResolvedValue(
+          sampleRunRow({ session_id: "sess-card" })
+        );
+        const stub = createMockSessionStub();
+
+        const result = await createScheduler(createEnv(undefined, stub)).event(
+          webhookEvent({ mode: "demo" })
+        );
+
+        expect(result).toEqual({ triggered: 0, skipped: 0, steered: 0, invocationIds: [] });
+        expect(promptCallCount(vi.mocked(stub.fetch))).toBe(0);
+      });
     });
   });
 
