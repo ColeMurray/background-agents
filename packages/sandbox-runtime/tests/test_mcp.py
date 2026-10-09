@@ -249,3 +249,72 @@ class TestNpmPackageRegex:
     )
     def test_rejects_dangerous_inputs(self, regex, pkg):
         assert not regex.match(pkg), f"Expected {pkg} to NOT match"
+
+
+# ─── Tool allowlists in the OpenCode config ──────────────────────────────────
+
+
+async def _start_and_capture_config(sup, installed_paths=frozenset()):
+    with (
+        patch.object(sup, "_setup_managed_oauth"),
+        patch.object(sup, "_install_mcp_packages", new_callable=AsyncMock),
+        patch.object(sup, "_prepare_opencode_filesystem", return_value=set(installed_paths)),
+        patch.object(sup, "_wait_for_health", new_callable=AsyncMock),
+        patch(
+            "sandbox_runtime.opencode_server.asyncio.create_subprocess_exec",
+            new_callable=AsyncMock,
+            return_value=MagicMock(stdout=None),
+        ) as spawn,
+        patch(
+            "sandbox_runtime.opencode_server.asyncio.create_task",
+            side_effect=lambda coro: coro.close(),
+        ),
+    ):
+        await sup.start((), sup.workspace_path)
+    return json.loads(spawn.call_args.kwargs["env"]["OPENCODE_CONFIG_CONTENT"])
+
+
+class TestToolAllowlistConfig:
+    @pytest.mark.asyncio
+    async def test_unrestricted_servers_keep_the_blanket_permission(self, tmp_path):
+        sup = _make_supervisor(
+            {"mcp_servers": [{"name": "docs", "type": "remote", "url": "https://mcp.docs"}]}
+        )
+        sup.workspace_path = tmp_path
+        config = await _start_and_capture_config(sup)
+        assert config["permission"] == {"*": {"*": "allow"}}
+
+    @pytest.mark.asyncio
+    async def test_restricted_server_rules_follow_the_global_allow(self, tmp_path):
+        sup = _make_supervisor(
+            {
+                "mcp_servers": [
+                    {
+                        "name": "memory",
+                        "type": "remote",
+                        "url": "https://mcp.memory",
+                        "toolAllowlist": ["recall"],
+                    }
+                ]
+            }
+        )
+        sup.workspace_path = tmp_path / "repo"
+        # Open-Inspect's tools and the repository's own share the project tool directory.
+        project_tools = sup.workspace_path / ".opencode" / "tool"
+        project_tools.mkdir(parents=True)
+        for name in ("memory_read.js", "spawn-child.js", "memory_local.ts", "memory_notes.md"):
+            (project_tools / name).write_text("")
+        global_tools = tmp_path / "global" / "tools"
+        global_tools.mkdir(parents=True)
+        (global_tools / "memory_global.js").write_text("")
+        with patch.dict(os.environ, {"OPENCODE_CONFIG_DIR": str(tmp_path / "global")}):
+            config = await _start_and_capture_config(sup)
+        assert list(config["permission"].items()) == [
+            ("*", {"*": "allow"}),
+            ("memory_*", "deny"),
+            ("memory_recall", "allow"),
+            ("memory_global", "allow"),
+            ("memory_local", "allow"),
+            ("memory_read", "allow"),
+        ]
+        assert config["mcp"]["memory"]["url"] == "https://mcp.memory"

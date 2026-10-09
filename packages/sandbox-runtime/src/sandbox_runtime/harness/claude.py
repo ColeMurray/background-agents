@@ -17,7 +17,7 @@ from collections.abc import AsyncIterator, Callable, Mapping
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Final, Protocol
 
-from claude_agent_sdk import ClaudeAgentOptions, ClaudeSDKClient
+from claude_agent_sdk import ClaudeAgentOptions, ClaudeSDKClient, HookMatcher
 
 from ..attachment_processor import (
     MAX_SESSION_ATTACHMENTS_PER_MESSAGE,
@@ -27,6 +27,12 @@ from ..credentials.provider_credential_client import (
     RuntimeCredentialClient,
     RuntimeCredentialDenied,
     RuntimeCredentialUnavailable,
+)
+from ..mcp_tool_access import (
+    claude_tool_guard,
+    claude_tool_rules,
+    mcp_name_segment,
+    namespace_allowlists,
 )
 from .base import (
     EventSink,
@@ -315,13 +321,23 @@ class ClaudeHarness:
             raise RuntimeError("Claude harness is not open")
         mcp_servers: dict[str, Any] = mcp_server_options(self.config.mcp_servers)
         allowed_tools = [*ALLOWED_TOOLS]
-        allowed_tools.extend(f"mcp__{name}__*" for name in mcp_servers)
+        disallowed_tools = [*DISALLOWED_TOOLS]
+        allowlists = namespace_allowlists(
+            server for server in self.config.mcp_servers if str(server.get("name")) in mcp_servers
+        )
+        for name in mcp_servers:
+            allowed, disallowed = claude_tool_rules(name, allowlists[mcp_name_segment(name)])
+            allowed_tools.extend(allowed)
+            disallowed_tools.extend(disallowed)
         if self._tool_client is not None:
             if self._tool_server is None:
                 factory = self._tool_server_factory or _default_tool_server
                 self._tool_server = factory(self._tool_client)
             mcp_servers[OI_TOOL_SERVER_NAME] = self._tool_server
             allowed_tools.append(f"mcp__{OI_TOOL_SERVER_NAME}__*")
+            # The built-in server replaces a configured one of the same name.
+            allowlists.pop(OI_TOOL_SERVER_NAME, None)
+        tool_guard = claude_tool_guard(allowlists)
         system_prompt: dict[str, Any] = {"type": "preset", "preset": "claude_code"}
         if self.config.system_prompt_append:
             system_prompt["append"] = self.config.system_prompt_append
@@ -332,7 +348,7 @@ class ClaudeHarness:
             "model": model,
             "mcp_servers": mcp_servers,
             "allowed_tools": allowed_tools,
-            "disallowed_tools": [*DISALLOWED_TOOLS],
+            "disallowed_tools": disallowed_tools,
             "permission_mode": "dontAsk",
             "system_prompt": system_prompt,
             "settings": CLAUDE_POLICY_SETTINGS,
@@ -343,6 +359,8 @@ class ClaudeHarness:
             "stderr": self._trajectory.stderr,
             **reasoning_options(model, reasoning_effort),
         }
+        if tool_guard is not None:
+            kwargs["hooks"] = {"PreToolUse": [HookMatcher(hooks=[tool_guard])]}
         if self._resume_on_connect:
             kwargs["resume"] = self.session_id
         else:

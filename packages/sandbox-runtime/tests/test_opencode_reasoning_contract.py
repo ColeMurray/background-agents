@@ -23,6 +23,7 @@ import os
 import shutil
 import socket
 import subprocess
+import sys
 import threading
 import time
 import urllib.request
@@ -31,6 +32,7 @@ from pathlib import Path
 
 import pytest
 
+from sandbox_runtime.mcp_tool_access import OPENCODE_BUILTIN_TOOL_IDS, opencode_permission_rules
 from tests.test_prompt_stream import make_stream
 
 pytest_plugins = ["tests.test_reasoning_config"]
@@ -38,6 +40,7 @@ pytest_plugins = ["tests.test_reasoning_config"]
 BINARY = os.environ.get("OPENCODE_TEST_BINARY")
 pytestmark = pytest.mark.skipif(not BINARY, reason="set OPENCODE_TEST_BINARY for wire tests")
 CATALOG = Path(__file__).parent / "fixtures/reasoning-models.json"
+MCP_FIXTURE_SERVER = Path(__file__).parent / "fixtures/mcp_stdio_server.py"
 
 
 def openai_events(model):
@@ -167,6 +170,39 @@ async def wire_server(tmp_path, reasoning_config, request):
                 "_bridge-client.js",
             ):
                 shutil.copy(source / name, destination / name)
+        if getattr(request, "param", None) == "mcp":
+            # "docs" allows one of its tools. "docs_extra" extends its name, so
+            # OpenCode cannot tell its tools from docs' own extra_* tools and it
+            # gets none. "my.\U0001f600notes" checks name sanitization, including a
+            # character JavaScript sees as two UTF-16 code units.
+            fixture_tools = {
+                "docs": ["search", "fetch_page", "extra_delete_everything"],
+                "docs_extra": ["ping"],
+                "my.\U0001f600notes": ["read/page", "write"],
+            }
+            config["mcp"] = {
+                name: {
+                    "type": "local",
+                    "command": [sys.executable, str(MCP_FIXTURE_SERVER), *tools],
+                }
+                for name, tools in fixture_tools.items()
+            }
+            servers = [
+                {"name": "docs", "toolAllowlist": ["search"]},
+                {"name": "docs_extra"},
+                {"name": "my.\U0001f600notes", "toolAllowlist": ["read/page"]},
+            ]
+            # A repository's own tool whose name starts like a restricted server's.
+            custom_tools = tmp_path / ".opencode/tool"
+            custom_tools.mkdir(parents=True, exist_ok=True)
+            (custom_tools / "docs_local.js").write_text(
+                'import { tool } from "@opencode-ai/plugin";\n'
+                'export default tool({ description: "Local docs", args: {}, '
+                'async execute() { return "ok"; } });\n'
+            )
+            config["permission"].update(
+                opencode_permission_rules(servers, (*OPENCODE_BUILTIN_TOOL_IDS, "docs_local"))
+            )
         config["agent"] = {"build": {"options": {"reasoningEffort": "high"}}}
         for provider in ("openai", "anthropic"):
             config["provider"].setdefault(provider, {})["options"] = {
@@ -263,6 +299,25 @@ async def test_memory_text_and_tool_contract_reach_real_opencode_provider_reques
     assert "memoryId" in tools["memory_read"]["input_schema"]["properties"]
     assert "ownerUserId" not in tools["memory_write"]["input_schema"]["properties"]
     assert "environmentId" not in tools["memory_write"]["input_schema"]["properties"]
+
+
+@pytest.mark.parametrize("wire_server", ["mcp"], indirect=True)
+async def test_mcp_tool_allowlist_reaches_real_opencode_provider_request(wire_server):
+    call, captured = wire_server
+    builtin_ids = set(call("/experimental/tool/ids")) - {"invalid", "docs_local"}
+    assert builtin_ids == set(OPENCODE_BUILTIN_TOOL_IDS)
+
+    sent, _ = submit(call, captured, "anthropic/claude-sonnet-4-6", None)
+    names = {tool["name"] for tool in sent["tools"]}
+    assert {"docs_search", "my___notes_read_page", "docs_local"} <= names
+    hidden = {
+        "docs_fetch_page",
+        "docs_extra_delete_everything",
+        "docs_extra_ping",
+        "my___notes_write",
+    }
+    assert not hidden & names
+    assert {"bash", "read", "edit", "write", "glob", "grep"} <= names
 
 
 async def test_all_fixture_efforts_reach_provider(wire_server):

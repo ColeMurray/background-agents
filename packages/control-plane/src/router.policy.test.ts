@@ -30,6 +30,12 @@ describe("route policy table", () => {
     expect(routeFor("POST", "/github/route")).toBeUndefined();
   });
 
+  it("requires MCP management to list a server's tools", () => {
+    expect(routeFor("POST", "/mcp-servers/server-1/tools")?.authorization).toMatchObject({
+      allOf: [{ kind: "permission", permission: "mcp_servers.manage" }],
+    });
+  });
+
   it("does not expose a member-facing team activity route", () => {
     expect(routeFor("GET", "/teams/team-1/activity")).toBeUndefined();
     expect(routeFor("GET", "/audit-events")?.authorization).toMatchObject({
@@ -39,11 +45,11 @@ describe("route policy table", () => {
   });
 
   it("publishes the complete canonical route catalog", () => {
-    expect(routes).toHaveLength(235);
+    expect(routes).toHaveLength(236);
 
     const paths = routes.map((route) => route.path);
-    expect(new Set(paths).size).toBe(179);
-    expect(new Set(routes.map((route) => `${route.method}:${route.path}`)).size).toBe(235);
+    expect(new Set(paths).size).toBe(180);
+    expect(new Set(routes.map((route) => `${route.method}:${route.path}`)).size).toBe(236);
     expect(routeFor("POST", "/sessions/session-1/sandbox-memory/search")).toMatchObject({
       authentication: { kind: "sandbox" },
       supportedScmProviders: "all",
