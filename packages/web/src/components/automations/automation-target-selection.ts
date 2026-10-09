@@ -75,6 +75,21 @@ export function sameEnvironmentIds(a: readonly string[], b: readonly string[]): 
   return sameStringList([...a].sort(), [...b].sort());
 }
 
+/** Repository order is not persisted either; names compare case-insensitively, base branches exactly. */
+export function sameRepositories(
+  a: readonly AutomationRepositoryInput[],
+  b: readonly AutomationRepositoryInput[]
+): boolean {
+  const entries = (repositories: readonly AutomationRepositoryInput[]) =>
+    repositories
+      .map(
+        (repository) =>
+          `${repositoryKey(repository.repoOwner, repository.repoName)}@${repository.baseBranch ?? ""}`
+      )
+      .sort();
+  return sameStringList(entries(a), entries(b));
+}
+
 function sameTarget(a: AutomationSessionTarget, b: AutomationSessionTarget): boolean {
   return a.kind === "repo"
     ? b.kind === "repo" && b.repoFullName === a.repoFullName
