@@ -3,9 +3,13 @@ import {
   MEMORY_SELECTION_BUDGET,
   MEMORY_AGENT_WRITE_QUOTAS,
   MEMORY_TRANSITIONS,
+  MEMORY_AUTHOR_KINDS,
   memoryContentSchema,
+  memoryArchiveKindSchema,
+  memoryScopeTypeSchema,
+  memoryStatusSchema,
+  memoryTypeSchema,
   type MemoryAction,
-  type MemoryArchiveKind,
   type MemoryAuditAction,
   type MemoryAuthorKind,
   type MemoryContent,
@@ -14,6 +18,7 @@ import {
   type MemoryStatus,
   type MemoryType,
 } from "@open-inspect/shared/types/memories";
+import { z } from "zod";
 import { generateId, hashToken } from "../auth/crypto";
 import { MemoryConflictError, MemoryValidationError } from "../memory/errors";
 import { initialStatus } from "../memory/lifecycle";
@@ -23,10 +28,8 @@ import {
   partitionPredicate,
   samePartition,
   type MemoryPartition,
-  type PartitionColumns,
   scopeDisplayColumns,
   scopeFromColumns,
-  type ScopeDisplayColumns,
 } from "../memory/partition";
 import type { MemoryActor, MemoryCandidate, MemoryRecord } from "../memory/types";
 import { MAX_D1_QUERY_PARAMETERS } from "./query-limits";
@@ -42,25 +45,39 @@ import {
 
 const MEMORY_CHANGED = "Memory changed; reload before editing";
 
-interface MemoryRow extends PartitionColumns, ScopeDisplayColumns {
-  id: string;
-  memory_type: MemoryType;
-  status: MemoryStatus;
-  archive_kind: MemoryArchiveKind | null;
-  archive_note: string | null;
-  current_revision_id: string;
-  title: string;
-  description: string;
-  content: string | null;
-  revision_number: number;
-  author_kind: MemoryAuthorKind;
-  author_user_id: string | null;
-  author_session_id: string | null;
-  supersedes_memory_id: string | null;
-  approved_at: number | null;
-  archived_at: number | null;
-  created_at: number;
-  updated_at: number;
+export const memoryRowSchema = z.object({
+  id: z.string(),
+  partition_type: memoryScopeTypeSchema,
+  owner_user_id: z.string().nullable(),
+  repo_id: z.number().nullable(),
+  environment_id: z.string().nullable(),
+  repo_owner: z.string().nullable(),
+  repo_name: z.string().nullable(),
+  memory_type: memoryTypeSchema,
+  status: memoryStatusSchema,
+  archive_kind: memoryArchiveKindSchema.nullable(),
+  archive_note: z.string().nullable(),
+  current_revision_id: z.string(),
+  title: z.string(),
+  description: z.string(),
+  content: z.string().nullable(),
+  revision_number: z.number(),
+  author_kind: z.enum(MEMORY_AUTHOR_KINDS),
+  author_user_id: z.string().nullable(),
+  author_session_id: z.string().nullable(),
+  supersedes_memory_id: z.string().nullable(),
+  approved_at: z.number().nullable(),
+  archived_at: z.number().nullable(),
+  created_at: z.number(),
+  updated_at: z.number(),
+});
+type MemoryRow = z.infer<typeof memoryRowSchema>;
+
+export function parseMemoryCandidateTotal(row: unknown): number {
+  if (typeof row !== "object" || row === null) throw new Error("Invalid memory count row");
+  const total = Reflect.get(row, "total");
+  if (typeof total !== "number") throw new Error("Invalid memory count row");
+  return total;
 }
 
 /** A live record with its full current revision. */
@@ -180,7 +197,7 @@ export class MemoryRecordStore {
   ): Promise<{ candidates: MemoryCandidate[]; omittedCount: number }> {
     if (!partitions.length) return { candidates: [], omittedCount: 0 };
     const active = sql`m.status = 'active' AND ${inPartitions(partitions)}`;
-    const [totals, ranked] = await this.db.batch<{ total: number } | MemoryRow>([
+    const [totals, ranked] = await this.db.batch<unknown>([
       prepareSql(this.db, sql`SELECT COUNT(*) AS total FROM memories m WHERE ${active}`),
       prepareSql(
         this.db,
@@ -198,8 +215,8 @@ export class MemoryRecordStore {
             OR (memory_type = 'fact' AND rank_in_partition <= ${MEMORY_SELECTION_BUDGET.catalogRecords})`
       ),
     ]);
-    const candidates = (ranked.results as MemoryRow[]).map(candidateFromRow);
-    const total = (totals.results[0] as { total: number }).total;
+    const candidates = z.array(memoryRowSchema).parse(ranked.results).map(candidateFromRow);
+    const total = parseMemoryCandidateTotal(totals.results[0]);
     return { candidates, omittedCount: total - candidates.length };
   }
 
