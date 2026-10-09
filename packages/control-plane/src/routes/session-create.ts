@@ -335,6 +335,28 @@ export async function handleCreateSession(
     return error("Failed to create session", 500);
   }
 
+  // Bots enroll an actor on its first control-plane request, which for Slack is
+  // a nameless channel read (repos, environments) before this one, so admission
+  // never saw the profile sent here and the user would stay "Unnamed". Fill
+  // only what is empty, and only once the session exists, so this enrichment
+  // never runs for a denied request. Email is left alone: it must not relink a
+  // known actor.
+  if (ctx.principal?.kind === "service" && ctx.principal.actor && resolvedUserId) {
+    try {
+      await userStore.fillMissingProfile(resolvedUserId, {
+        displayName: body.actorDisplayName,
+        avatarUrl: body.actorAvatarUrl,
+      });
+    } catch (e) {
+      logger.warn("Failed to fill missing actor profile", {
+        event: "session_create.actor_profile_fill_failed",
+        error: e instanceof Error ? e.message : String(e),
+        session_id: sessionId,
+        trace_id: ctx.trace_id,
+      });
+    }
+  }
+
   const result: CreateSessionResponse = {
     sessionId,
     status: "created",

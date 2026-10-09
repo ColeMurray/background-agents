@@ -7,7 +7,7 @@ import {
 import { generateId } from "../auth/crypto";
 import { normalizeEmail } from "./email";
 import { isUniqueConstraintError } from "./errors";
-import type { SqlDatabase } from "./sql-database";
+import type { SqlDatabase, SqlStatement } from "./sql-database";
 
 // ── Public types ────────────────────────────────────────────────────
 
@@ -332,6 +332,50 @@ export class UserStore {
       providerIssuer: issuer,
       createdAt: now,
     };
+  }
+
+  /**
+   * Set the display name and avatar only where the user has none. "None" means
+   * NULL or whitespace-only, decided with JS `trim()` to match how the web app
+   * decides a name is missing (SQL `TRIM` strips only spaces). Each UPDATE is a
+   * compare-and-set on the value just read, so a concurrent writer's value is
+   * never overwritten. Incoming values are trimmed; blank ones are ignored.
+   */
+  async fillMissingProfile(
+    userId: string,
+    profile: { displayName?: string; avatarUrl?: string }
+  ): Promise<void> {
+    const displayName = profile.displayName?.trim();
+    const avatarUrl = profile.avatarUrl?.trim();
+    if (!displayName && !avatarUrl) return;
+
+    const current = await this.db
+      .prepare("SELECT display_name, avatar_url FROM users WHERE id = ?")
+      .bind(userId)
+      .first<{ display_name: string | null; avatar_url: string | null }>();
+    if (!current) return;
+
+    const now = Date.now();
+    const statements: SqlStatement[] = [];
+    if (displayName && !current.display_name?.trim()) {
+      statements.push(
+        this.db
+          .prepare(
+            "UPDATE users SET display_name = ?, updated_at = ? WHERE id = ? AND (display_name IS NULL OR display_name = ?)"
+          )
+          .bind(displayName, now, userId, current.display_name)
+      );
+    }
+    if (avatarUrl && !current.avatar_url?.trim()) {
+      statements.push(
+        this.db
+          .prepare(
+            "UPDATE users SET avatar_url = ?, updated_at = ? WHERE id = ? AND (avatar_url IS NULL OR avatar_url = ?)"
+          )
+          .bind(avatarUrl, now, userId, current.avatar_url)
+      );
+    }
+    if (statements.length > 0) await this.db.batch(statements);
   }
 
   async updateUser(userId: string, updates: UserUpdate): Promise<void> {
