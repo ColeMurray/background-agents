@@ -3,6 +3,7 @@ import {
   mcpServerCredentialMapSchema,
   mcpServerTypeSchema,
   type McpServerConfig,
+  type McpServerCredentials,
   type McpServerMetadata,
   type ValidatedCreateMcpServerInput,
   type ValidatedUpdateMcpServerInput,
@@ -105,7 +106,7 @@ function rowToConfig(row: McpServerRow, payload: Record<string, string>): McpSer
   };
 }
 
-function rowToMetadata(row: McpServerRow, credentialKeys: string[]): McpServerMetadata {
+function rowToMetadata(row: McpServerRow): McpServerMetadata {
   const type = mcpServerTypeSchema.parse(row.type);
   const hasCredentials = row.env !== "" && row.env !== "{}" && row.env !== "null";
   return {
@@ -117,32 +118,9 @@ function rowToMetadata(row: McpServerRow, credentialKeys: string[]): McpServerMe
     url: type === "remote" ? (row.url ?? undefined) : undefined,
     hasEnv: type === "local" && hasCredentials,
     hasHeaders: type === "remote" && hasCredentials,
-    envKeys: type === "local" ? credentialKeys : [],
-    headerKeys: type === "remote" ? credentialKeys : [],
     repoScopes: parseRepoScopes(row.repo_scope),
     enabled: row.enabled === 1,
   };
-}
-
-/**
- * The submitted map is the full credential set: keys left out are deleted, and a `null`
- * value keeps that key's saved value so the edit form never needs to read values back.
- */
-function resolveCredentialUpdate(
-  submitted: Record<string, string | null>,
-  saved: Record<string, string>
-): Record<string, string> {
-  const resolved: Record<string, string> = {};
-  for (const [key, value] of Object.entries(submitted)) {
-    if (value !== null) {
-      resolved[key] = value;
-    } else if (Object.hasOwn(saved, key)) {
-      resolved[key] = saved[key];
-    } else {
-      throw new McpServerValidationError(`No saved value for '${key}'; enter a value`);
-    }
-  }
-  return resolved;
 }
 
 export class McpServerStore {
@@ -188,17 +166,11 @@ export class McpServerStore {
     return rowToConfig(row, env);
   }
 
-  /** Metadata carries credential names so the edit form can list them; values never leave. */
-  private async toMetadata(row: McpServerRow): Promise<McpServerMetadata> {
-    const credentials = await this.decryptEnv(row.env, row.id);
-    return rowToMetadata(row, Object.keys(credentials));
-  }
-
   async list(repoScope?: string): Promise<McpServerMetadata[]> {
     const { results } = await this.db
       .prepare("SELECT * FROM mcp_servers ORDER BY name")
       .all<McpServerRow>();
-    const metadata = await Promise.all(results.map((row) => this.toMetadata(row)));
+    const metadata = results.map(rowToMetadata);
     if (repoScope === undefined) return metadata;
     const normalized = repoScope.toLowerCase();
     return metadata.filter((c) => {
@@ -212,7 +184,23 @@ export class McpServerStore {
       .prepare("SELECT * FROM mcp_servers WHERE id = ?")
       .bind(id)
       .first<McpServerRow>();
-    return row ? this.toMetadata(row) : null;
+    return row ? rowToMetadata(row) : null;
+  }
+
+  /** Decrypted credentials for the settings edit form; callers must hold `mcp_servers.manage`. */
+  async getCredentials(id: string): Promise<McpServerCredentials | null> {
+    const row = await this.db
+      .prepare("SELECT * FROM mcp_servers WHERE id = ?")
+      .bind(id)
+      .first<McpServerRow>();
+    if (!row) return null;
+    const config = await this.decryptRow(row);
+    return {
+      id: row.id,
+      revision: row.revision,
+      type: config.type,
+      ...(config.type === "remote" ? { headers: config.headers } : { env: config.env }),
+    };
   }
 
   async create(config: ValidatedCreateMcpServerInput): Promise<McpServerMetadata> {
@@ -293,14 +281,11 @@ export class McpServerStore {
     let encryptedEnv: string;
     if (credentialsChanged) {
       const existing = await this.decryptRow(row);
-      // Saved credentials carry over only while the server keeps its type.
-      const saved =
-        existing.type === mergedType
-          ? ((existing.type === "remote" ? existing.headers : existing.env) ?? {})
-          : {};
-      const submitted = mergedType === "remote" ? patch.headers : patch.env;
+      const mergedType = patch.type ?? existing.type;
+      const mergedEnv = patch.env !== undefined ? patch.env : existing.env;
+      const mergedHeaders = patch.headers !== undefined ? patch.headers : existing.headers;
       encryptedEnv = await this.encryptEnv(
-        submitted !== undefined ? resolveCredentialUpdate(submitted, saved) : saved
+        mergedType === "remote" ? (mergedHeaders ?? {}) : (mergedEnv ?? {})
       );
     } else {
       encryptedEnv = row.env;
@@ -346,7 +331,7 @@ export class McpServerStore {
       if (!updated) {
         throw new McpServerConflictError("MCP server changed; reload and try again");
       }
-      return this.toMetadata(updated);
+      return rowToMetadata(updated);
     } catch (err) {
       if (isUniqueConstraintError(err)) {
         throw new McpServerValidationError(

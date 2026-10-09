@@ -13,17 +13,18 @@ expect.extend(matchers);
 const mocks = vi.hoisted(() => ({
   mutate: vi.fn(),
   updateMcpServer: vi.fn(),
-  toastError: vi.fn(),
+  fetchMcpServerCredentials: vi.fn(),
   allowedPermissions: null as Set<string> | null,
 }));
 
-vi.mock("sonner", () => ({ toast: { success: vi.fn(), error: mocks.toastError } }));
+vi.mock("sonner", () => ({ toast: { success: vi.fn(), error: vi.fn() } }));
 vi.mock("@/hooks/use-repos", () => ({
   useRepos: () => ({ repos: [], loading: false }),
 }));
 vi.mock("@/hooks/use-mcp-servers", () => ({
   useMcpServers: () => ({ servers, loading: false, mutate: mocks.mutate }),
   createMcpServer: vi.fn(),
+  fetchMcpServerCredentials: mocks.fetchMcpServerCredentials,
   updateMcpServer: mocks.updateMcpServer,
   deleteMcpServer: vi.fn(),
 }));
@@ -43,8 +44,6 @@ const servers: McpServerMetadata[] = [
     url: "https://a.example.com",
     hasEnv: false,
     hasHeaders: false,
-    envKeys: [],
-    headerKeys: [],
     repoScopes: null,
     enabled: true,
   },
@@ -56,8 +55,6 @@ const servers: McpServerMetadata[] = [
     url: "https://b.example.com",
     hasEnv: false,
     hasHeaders: false,
-    envKeys: [],
-    headerKeys: [],
     repoScopes: null,
     enabled: true,
   },
@@ -69,12 +66,17 @@ const servers: McpServerMetadata[] = [
     url: "https://c.example.com",
     hasEnv: false,
     hasHeaders: true,
-    envKeys: [],
-    headerKeys: ["Authorization", "X-Api-Key"],
     repoScopes: null,
     enabled: true,
   },
 ];
+
+const savedHeaders = {
+  id: "server-c",
+  revision: 2,
+  type: "remote" as const,
+  headers: { Authorization: "Bearer old", "X-Api-Key": "key-1" },
+};
 
 afterEach(() => {
   cleanup();
@@ -145,80 +147,71 @@ describe("McpServersSettings", () => {
     });
   });
 
-  it("lists saved header names without their values", async () => {
+  it("shows saved header names and values when editing", async () => {
+    mocks.fetchMcpServerCredentials.mockResolvedValue(savedHeaders);
     const user = userEvent.setup();
     render(<McpServersSettings />);
 
     await user.click(screen.getByRole("button", { name: /Server C/ }));
 
-    expect(screen.getByDisplayValue("Authorization")).toBeInTheDocument();
+    expect(mocks.fetchMcpServerCredentials).toHaveBeenCalledWith("server-c");
+    expect(await screen.findByDisplayValue("Authorization")).toBeInTheDocument();
     expect(screen.getByDisplayValue("X-Api-Key")).toBeInTheDocument();
-    const savedValues = screen.getAllByPlaceholderText("•••••••• (saved)");
-    expect(savedValues).toHaveLength(2);
-    savedValues.forEach((input) => expect(input).toHaveValue(""));
+    expect(screen.getByDisplayValue("Bearer old")).toBeInTheDocument();
+    expect(screen.getByDisplayValue("key-1")).toBeInTheDocument();
   });
 
-  it("keeps untouched saved headers when one is changed", async () => {
+  it("saves the headers shown in the form, keeping untouched ones", async () => {
+    mocks.fetchMcpServerCredentials.mockResolvedValue(savedHeaders);
     mocks.updateMcpServer.mockResolvedValue({ ...servers[2], revision: 3 });
     const user = userEvent.setup();
     render(<McpServersSettings />);
 
     await user.click(screen.getByRole("button", { name: /Server C/ }));
-    await user.type(screen.getAllByPlaceholderText("•••••••• (saved)")[0], "Bearer new");
+    const authValue = await screen.findByDisplayValue("Bearer old");
+    await user.clear(authValue);
+    await user.type(authValue, "Bearer new");
     await user.click(screen.getByRole("button", { name: "Save Changes" }));
 
     await waitFor(() => expect(mocks.updateMcpServer).toHaveBeenCalled());
     expect(mocks.updateMcpServer).toHaveBeenCalledWith(
       "server-c",
       expect.objectContaining({
-        headers: { Authorization: "Bearer new", "X-Api-Key": null },
+        headers: { Authorization: "Bearer new", "X-Api-Key": "key-1" },
         revision: 2,
       })
     );
   });
 
   it("deletes a saved header when its row is removed", async () => {
+    mocks.fetchMcpServerCredentials.mockResolvedValue(savedHeaders);
     mocks.updateMcpServer.mockResolvedValue({ ...servers[2], revision: 3 });
     const user = userEvent.setup();
     render(<McpServersSettings />);
 
     await user.click(screen.getByRole("button", { name: /Server C/ }));
+    await screen.findByDisplayValue("X-Api-Key");
     await user.click(screen.getAllByRole("button", { name: "Remove" })[1]);
     await user.click(screen.getByRole("button", { name: "Save Changes" }));
 
     await waitFor(() => expect(mocks.updateMcpServer).toHaveBeenCalled());
     expect(mocks.updateMcpServer).toHaveBeenCalledWith(
       "server-c",
-      expect.objectContaining({ headers: { Authorization: null } })
+      expect.objectContaining({ headers: { Authorization: "Bearer old" } })
     );
   });
 
-  it("deletes every saved header when all rows are removed", async () => {
+  it("keeps saved headers when they fail to load and no new values are entered", async () => {
+    mocks.fetchMcpServerCredentials.mockRejectedValue(new Error("boom"));
     mocks.updateMcpServer.mockResolvedValue({ ...servers[2], revision: 3 });
     const user = userEvent.setup();
     render(<McpServersSettings />);
 
     await user.click(screen.getByRole("button", { name: /Server C/ }));
-    await user.click(screen.getAllByRole("button", { name: "Remove" })[1]);
-    await user.click(screen.getAllByRole("button", { name: "Remove" })[0]);
+    expect(await screen.findByText(/Credentials are configured/)).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Save Changes" }));
 
     await waitFor(() => expect(mocks.updateMcpServer).toHaveBeenCalled());
-    expect(mocks.updateMcpServer).toHaveBeenCalledWith(
-      "server-c",
-      expect.objectContaining({ headers: {} })
-    );
-  });
-
-  it("rejects renaming a saved header without a new value", async () => {
-    const user = userEvent.setup();
-    render(<McpServersSettings />);
-
-    await user.click(screen.getByRole("button", { name: /Server C/ }));
-    await user.type(screen.getByDisplayValue("X-Api-Key"), "-2");
-    await user.click(screen.getByRole("button", { name: "Save Changes" }));
-
-    expect(mocks.toastError).toHaveBeenCalledWith(expect.stringContaining("X-Api-Key-2"));
-    expect(mocks.updateMcpServer).not.toHaveBeenCalled();
+    expect(mocks.updateMcpServer.mock.calls[0][1]).not.toHaveProperty("headers");
   });
 });

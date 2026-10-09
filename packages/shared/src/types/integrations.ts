@@ -708,8 +708,6 @@ export const DEFAULT_MCP_SERVER_ENABLED = true;
 export const mcpServerTypeSchema = z.enum(["local", "remote"]);
 export const mcpServerCommandSchema = z.array(z.string()).min(1);
 export const mcpServerCredentialMapSchema = z.record(z.string(), z.string());
-/** Full credential set for an update; `null` keeps that key's saved value. */
-export const mcpServerCredentialUpdateMapSchema = z.record(z.string(), z.string().nullable());
 
 const mcpServerCommonFields = {
   name: z.string().trim().min(1),
@@ -745,8 +743,8 @@ export const updateMcpServerInputSchema = z
     type: mcpServerTypeSchema,
     command: mcpServerCommandSchema,
     url: z.url(),
-    env: mcpServerCredentialUpdateMapSchema,
-    headers: mcpServerCredentialUpdateMapSchema,
+    env: mcpServerCredentialMapSchema,
+    headers: mcpServerCredentialMapSchema,
   })
   .partial()
   .strict();
@@ -762,7 +760,7 @@ export type ValidatedUpdateMcpServerInput = Omit<
   "revision"
 >;
 
-/** MCP server metadata for API responses — credential names only, never values. */
+/** MCP server metadata for API responses — no decrypted credentials. */
 export interface McpServerMetadata {
   id: string;
   revision: number;
@@ -772,12 +770,20 @@ export interface McpServerMetadata {
   url?: string;
   hasEnv: boolean;
   hasHeaders: boolean;
-  /** Names of saved environment variables (local servers). */
-  envKeys: string[];
-  /** Names of saved HTTP headers (remote servers). */
-  headerKeys: string[];
   repoScopes?: string[] | null;
   enabled: boolean;
+}
+
+/**
+ * Saved MCP server credentials, decrypted for the settings edit form.
+ * Only returned to callers with `mcp_servers.manage`.
+ */
+export interface McpServerCredentials {
+  id: string;
+  revision: number;
+  type: "local" | "remote";
+  env?: Record<string, string>;
+  headers?: Record<string, string>;
 }
 
 export const INTEGRATION_DEFINITIONS: {
