@@ -65,6 +65,13 @@ export const issueCommentPayloadSchema = z.object({
   sender: githubSenderSchema,
 });
 
+// Thread anchor fields only refine the prompt, so a missing or unexpected value
+// degrades to "no anchor" instead of rejecting a mention the bot used to accept.
+// GitHub sends `line: null` for outdated threads, so invalid values fall back to
+// undefined rather than null to keep the two cases distinguishable.
+const lineNumberSchema = z.number().int().positive().nullable().optional().catch(undefined);
+const diffSideSchema = z.enum(["LEFT", "RIGHT"]).nullable().optional().catch(undefined);
+
 export const reviewCommentPayloadSchema = z.object({
   action: z.literal("created"),
   pull_request: pullRequestSchema.omit({ body: true, user: true }),
@@ -74,6 +81,18 @@ export const reviewCommentPayloadSchema = z.object({
     path: z.string(),
     diff_hunk: z.string(),
     user: githubUserSchema,
+    in_reply_to_id: z.number().int().positive().optional().catch(undefined),
+    // Interpolated into shell commands in the prompt, so only a hex SHA is kept.
+    commit_id: z
+      .string()
+      .regex(/^[0-9a-f]{40,64}$/)
+      .optional()
+      .catch(undefined),
+    subject_type: z.string().optional().catch(undefined),
+    line: lineNumberSchema,
+    start_line: lineNumberSchema,
+    side: diffSideSchema,
+    start_side: diffSideSchema,
   }),
   repository: repositorySchema,
   sender: githubSenderSchema,

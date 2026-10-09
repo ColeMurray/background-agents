@@ -4,7 +4,7 @@ description: Automatic pull request reviews, @mention actions, PR Feedback Autof
 audience: team-owner
 owner: integrations
 status: published
-lastReviewed: "2026-10-03"
+lastReviewed: "2026-10-04"
 relatedCode:
   - docs/integrations/GITHUB.md
   - packages/shared/src/types/integrations.ts
@@ -14,6 +14,8 @@ relatedCode:
   - packages/control-plane/src/authorization/teams-enforcement.ts
   - packages/github-bot/src/session-startup.ts
   - packages/github-bot/src/session-target.ts
+  - packages/github-bot/src/prompts.ts
+  - packages/github-bot/src/suggested-changes.ts
   - packages/control-plane/src/autofix/service.ts
   - packages/web/src/components/settings/integrations/github-global-settings-section.tsx
   - packages/web/src/components/settings/integrations/github-autofix-settings-fields.tsx
@@ -76,7 +78,7 @@ flowchart TB
 
 **When it skips.** Auto-review does not run when the PR is a draft, the repository is outside the bot's scope, the opener is not an allowed trigger user, or auto-review is disabled globally or for that repository. A PR opened by the App bot itself can be reviewed if that bot login is explicitly allowed under **Allowed Trigger Users**; in that case the review uses a comment rather than an approval or change request. Converting a draft to ready for review does not trigger it; mention the bot in a comment instead.
 
-**What it posts.** A general review comment, an approval, a request for changes, or inline review comments, depending on what the agent finds.
+**What it posts.** A general review comment, an approval, a request for changes, or inline review comments, depending on what the agent finds. When an inline comment proposes a concrete fix confined to lines of the diff, the agent writes it as a GitHub [suggested change](https://docs.github.com/en/pull-requests/collaborating-with-pull-requests/reviewing-changes-in-pull-requests/incorporating-feedback-in-your-pull-request) so the PR author can apply it with **Commit suggestion**. The agent pins the PR's head commit once, reads the diff and files at exactly that commit, and anchors every comment to it, so if the lines change before the author applies one, GitHub marks it outdated rather than applying it to the wrong code. To keep fixes in prose, say so in the code review custom instructions.
 
 ## @mention actions
 
@@ -96,7 +98,9 @@ The flags work like Slack's: each accepts a space or a colon before the value (`
 
 **Inline review threads.** When you mention the bot in a review thread, the prompt includes that thread's file path and diff context. The agent can reply in the thread and can also post a summary comment on the PR.
 
-**Branch and session behavior.** Comment-triggered sessions start from the repository's default branch, not the PR head branch, so use them for answers and discussion rather than asking the agent to push to the PR branch. Each accepted webhook starts a new session; GitHub comments do not continue an existing session the way Slack replies do, though the agent reads the current PR conversation when it needs context. Mentions on ordinary issues are ignored, and so are the bot's own comments.
+**Suggested changes.** Ask for suggestions explicitly, for example `@my-app[bot] suggest a fix` or `@my-app[bot] propose a change, don't push`. The agent then leaves GitHub suggested changes instead of pushing: as a reply in the review thread you mentioned it in, or as a comment-only review for other lines. In a review thread, it may also answer a question with a suggestion for the thread's own lines. A request to make a change still gets a change, never a suggestion in its place. The agent doesn't add suggestions to outdated threads, file-level comments, or comments on removed lines, because GitHub can't apply them there.
+
+**Branch and session behavior.** Comment-triggered sessions start from the repository's default branch, not the PR head branch. If you ask for a code change, the agent checks out the PR branch with `gh pr checkout` before pushing. Each accepted webhook starts a new session; GitHub comments do not continue an existing session the way Slack replies do, though the agent reads the current PR conversation when it needs context. Mentions on ordinary issues are ignored, and so are the bot's own comments.
 
 ### Team routing
 
@@ -110,9 +114,9 @@ A routing lookup failure stops the request rather than guessing. Trigger-user ch
 
 `TEAMS_ENFORCEMENT` remains `shadow` by default, not `on`. Team routing and creation checks do not imply full team-read isolation in that mode.
 
-<Callout type="info" title="Want changes pushed to the PR branch?">
-  Enable [PR Feedback Autofix](#pr-feedback-autofix). It resumes the session that created the PR, on
-  that PR's branch, instead of starting a fresh session from the default branch.
+<Callout type="info" title="Want feedback to continue the session that created the PR?">
+  Enable [PR Feedback Autofix](#pr-feedback-autofix). It resumes that session, with its context, on
+  the PR's branch, instead of starting a fresh session from the default branch.
 </Callout>
 
 ## What you see

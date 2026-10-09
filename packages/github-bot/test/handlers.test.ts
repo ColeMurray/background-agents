@@ -724,6 +724,7 @@ describe("handlePullRequestOpened", () => {
     expect(promptBody.source).toBe("github");
     expect(promptBody).not.toHaveProperty("authorId");
     expect(promptBody.content).toContain("Pull Request #42");
+    expect(promptBody.content).toContain('commit_id: "<head commit>"');
 
     expect(log.info).toHaveBeenCalledWith(
       "session.created",
@@ -802,7 +803,7 @@ describe("handlePullRequestOpened", () => {
       handler_action: "auto_review",
     });
     expect(sessionCreateBody(getControlPlaneFetch(env)).scmLogin).toBe("test-bot[bot]");
-    expect(promptSendBody(getControlPlaneFetch(env)).content).toContain('"event": "COMMENT"');
+    expect(promptSendBody(getControlPlaneFetch(env)).content).toContain('event: "COMMENT"');
   });
 
   it("rejects a bot-authored PR when the bot is not an allowed trigger user", async () => {
@@ -964,7 +965,8 @@ describe("handleReviewRequested", () => {
     expect(promptBody).not.toHaveProperty("authorId");
     expect(promptBody.content).toContain("Pull Request #42");
     expect(promptBody.content).toContain("acme/widgets");
-    expect(promptBody.content).toContain("gh pr diff 42");
+    expect(promptBody.content).toContain("gh pr view 42 --json baseRefOid,headRefOid");
+    expect(promptBody.content).toContain('commit_id: "<head commit>"');
 
     // Verify logging
     expect(log.info).toHaveBeenCalledWith(
@@ -1228,6 +1230,53 @@ describe("handleReviewComment", () => {
 
     expect(result).toEqual({ outcome: "skipped", skip_reason: "self_comment" });
     expect(generateInstallationToken).not.toHaveBeenCalled();
+  });
+
+  it("anchors reply suggestions to the thread and replies to its root comment", async () => {
+    const env = createMockEnv();
+    const log = createMockLogger();
+    const payload: ReviewCommentPayload = {
+      ...reviewCommentPayload,
+      comment: {
+        ...reviewCommentPayload.comment,
+        in_reply_to_id: 150,
+        commit_id: "d34db33fd34db33fd34db33fd34db33fd34db33f",
+        subject_type: "line",
+        start_line: 10,
+        start_side: "RIGHT",
+        line: 12,
+        side: "RIGHT",
+      },
+    };
+
+    await handleReviewComment(env, log, payload, "trace-thread");
+
+    const { content } = promptSendBody(getControlPlaneFetch(env));
+    expect(content).toContain("pulls/42/comments/150/replies");
+    expect(content).not.toContain("comments/200/replies");
+    expect(content).toContain("replaces lines 10-12 of `src/cache.ts`");
+    expect(content).toContain(
+      `git show 'd34db33fd34db33fd34db33fd34db33fd34db33f:src/cache.ts' > "$f" && sed -n '10,12p' "$f"`
+    );
+    expect(content).toContain('commit_id: "<head commit>"');
+    // The reaction still acknowledges the comment that mentioned the bot.
+    expect(postReaction).toHaveBeenCalledWith(
+      "test-installation-token",
+      "https://api.github.com/repos/acme/widgets/pulls/comments/200/reactions",
+      "eyes",
+      "Open-Inspect"
+    );
+  });
+
+  it("forbids reply suggestions when the payload has no thread range", async () => {
+    const env = createMockEnv();
+    const log = createMockLogger();
+
+    await handleReviewComment(env, log, reviewCommentPayload, "trace-legacy");
+
+    const { content } = promptSendBody(getControlPlaneFetch(env));
+    expect(content).toContain("Do not put a suggestion block in a reply to this review thread");
+    expect(content).toContain("comments/200/replies");
   });
 
   it("returns early when repo not in enabledRepos", async () => {
