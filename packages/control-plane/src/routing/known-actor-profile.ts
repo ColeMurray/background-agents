@@ -35,18 +35,20 @@ export class KnownActorProfileClaim {
   ) {}
 
   async claim(actor: KnownActor, profile: ServiceActorProfileClaims): Promise<void> {
-    await Promise.all([
-      this.users.fillMissingProfile(actor.canonicalUserId, profile),
-      this.claimEmail(actor, profile.email),
-    ]);
+    // One read decides what is missing, so a complete profile costs no writes;
+    // the guarded writes stay authoritative if another writer gets there first.
+    const user = await this.users.getUserById(actor.canonicalUserId);
+    if (!user) return;
+    await this.users.fillMissingProfile(actor.canonicalUserId, {
+      displayName: user.displayName?.trim() ? undefined : profile.displayName,
+      avatarUrl: user.avatarUrl?.trim() ? undefined : profile.avatarUrl,
+    });
+    if (normalizeEmail(user.email) === null) await this.claimEmail(actor, profile.email);
   }
 
   private async claimEmail(actor: KnownActor, claimedEmail: string | undefined): Promise<void> {
     const email = isEmailAttestingProvider(actor.provider) ? normalizeEmail(claimedEmail) : null;
     if (!email) return;
-
-    const target = await this.claimStore.getEmailState(actor.canonicalUserId);
-    if (!target || normalizeEmail(target.email) !== null) return;
 
     const emailOwnerId = await this.claimStore.findEmailOwnerId(email);
     if (emailOwnerId !== null) {
