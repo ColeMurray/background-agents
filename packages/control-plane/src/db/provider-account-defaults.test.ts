@@ -26,7 +26,7 @@ function database(options: { first?: unknown; all?: unknown[] }) {
 
 const validRow = {
   provider: "openai",
-  provider_account_id: "01".repeat(16),
+  provider_account_id: "first-account",
   unattended_mode: "provider_account",
   created_by: null,
   updated_by: null,
@@ -35,12 +35,12 @@ const validRow = {
 };
 
 describe("ProviderDefaultStore", () => {
-  it("returns a provider default row with nullable audit fields", async () => {
+  it("returns a provider default row with nullable audit fields and existing text IDs", async () => {
     await expect(
       new ProviderDefaultStore(database({ first: validRow })).get("openai")
     ).resolves.toEqual({
       provider: "openai",
-      providerAccountId: "01".repeat(16),
+      providerAccountId: "first-account",
       unattendedMode: "provider_account",
       createdBy: null,
       updatedBy: null,

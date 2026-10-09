@@ -1,5 +1,4 @@
 import {
-  modelProviderAccountIdSchema,
   providerAuthModeSchema,
   subscriptionProviderIdSchema,
   type ModelProviderAccountDefault,
@@ -17,7 +16,7 @@ export type ProviderDefault = ModelProviderAccountDefault;
 
 const providerDefaultRowSchema = z.object({
   provider: subscriptionProviderIdSchema,
-  provider_account_id: modelProviderAccountIdSchema,
+  provider_account_id: z.string().min(1),
   unattended_mode: providerAuthModeSchema,
   created_by: z.string().nullable(),
   updated_by: z.string().nullable(),
