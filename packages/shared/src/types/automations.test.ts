@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   automationInvocationStatusSchema,
+  automationRunStatusSchema,
   validateAutomationTargetCounts,
   createAutomationRequestSchema,
   listAutomationsResponseSchema,
@@ -145,6 +146,11 @@ describe("listAutomationsResponseSchema", () => {
 });
 
 describe("automation grant-denial statuses", () => {
+  it("accepts only canonical run statuses", () => {
+    expect(automationRunStatusSchema.parse("unauthorized")).toBe("unauthorized");
+    expect(automationRunStatusSchema.safeParse("done").success).toBe(false);
+  });
+
   it("adds unauthorized without changing the existing invocation statuses", () => {
     expect(automationInvocationStatusSchema.options).toEqual([
       "starting",
