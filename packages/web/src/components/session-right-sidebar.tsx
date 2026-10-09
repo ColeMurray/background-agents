@@ -184,7 +184,9 @@ export function SessionRightSidebarContent({
       // Trace read and stream failures arrive as NDJSON records inside a 200 response.
       const failed = (await blob.text()).split("\n").some((line) => {
         if (!line) return false;
-        const { type } = JSON.parse(line) as { type?: unknown };
+        const record: unknown = JSON.parse(line);
+        if (typeof record !== "object" || record === null) throw new Error("Invalid trace record");
+        const type = "type" in record ? record.type : undefined;
         return type === "session_error" || type === "error";
       });
       if (failed) throw new Error("Trace export failed");

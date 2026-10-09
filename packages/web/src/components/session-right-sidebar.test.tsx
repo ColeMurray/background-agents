@@ -541,6 +541,31 @@ describe("SessionRightSidebar", () => {
     }
   );
 
+  it("reports a malformed trace export record as a failed download", async () => {
+    vi.mocked(browserApiFetch).mockResolvedValueOnce(
+      new Response("null\n", { headers: { "Content-Type": "application/x-ndjson" } })
+    );
+    const click = vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => {});
+    render(
+      <Sidebar
+        sessionId="session-1"
+        sessionState={sessionState}
+        participants={[]}
+        presenceSynced={false}
+        events={[]}
+        artifacts={[]}
+        onOpenMedia={vi.fn()}
+        capabilities={FULL_CAPABILITIES}
+      />
+    );
+
+    selectTab("Info");
+    fireEvent.click(screen.getByRole("button", { name: "Download trace" }));
+    await waitFor(() => expect(toast.error).toHaveBeenCalledWith("Failed to download trace"));
+    expect(click).not.toHaveBeenCalled();
+    expect(URL.createObjectURL).not.toHaveBeenCalled();
+  });
+
   it("aborts a trace body that stalls after headers and re-enables the download button", async () => {
     vi.useFakeTimers();
     let fetchSignal: AbortSignal | undefined;
