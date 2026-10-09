@@ -33,6 +33,7 @@ import { filterModelOptionsForHarness, shouldClearModelForHarness } from "@/lib/
 import { browserApiFetch } from "@/lib/browser-api-fetch";
 import { IntegrationSettingsSkeleton } from "./integration-settings-skeleton";
 import { SettingsCardSection } from "../settings-card-section";
+import { RepoOverrideSelector } from "../repo-override-selector";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Textarea } from "@/components/ui/textarea";
@@ -614,23 +615,12 @@ function RepoOverridesSection({
         </p>
       )}
 
-      <div className="flex items-center gap-2">
-        <Select value={addingRepo} onValueChange={setAddingRepo}>
-          <SelectTrigger className="flex-1">
-            <SelectValue placeholder="Select a repository..." />
-          </SelectTrigger>
-          <SelectContent>
-            {availableForOverride.map((repo) => (
-              <SelectItem key={repo.fullName} value={repo.fullName.toLowerCase()}>
-                {repo.fullName}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
-        <Button onClick={handleAdd} disabled={!addingRepo}>
-          Add Override
-        </Button>
-      </div>
+      <RepoOverrideSelector
+        value={addingRepo}
+        onValueChange={setAddingRepo}
+        repositories={availableForOverride}
+        onAdd={handleAdd}
+      />
     </div>
   );
 }

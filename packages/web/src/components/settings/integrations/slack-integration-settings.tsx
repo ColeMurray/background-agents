@@ -39,6 +39,7 @@ import { environmentOptionValue, parseEnvironmentOptionValue } from "@/lib/sessi
 import { IntegrationSettingsSkeleton } from "./integration-settings-skeleton";
 import { HarnessSelect } from "./harness-select";
 import { SettingsCardSection } from "../settings-card-section";
+import { RepoOverrideSelector } from "../repo-override-selector";
 import { Button } from "@/components/ui/button";
 import { APP_NAME } from "@/lib/site-config";
 import { RadioCard } from "@/components/ui/form-controls";
@@ -601,23 +602,13 @@ function RepoOverridesSection({
         </p>
       )}
 
-      <div className="flex items-center gap-2">
-        <Select value={addingRepo} onValueChange={setAddingRepo}>
-          <SelectTrigger className="flex-1" aria-label="Select a repository">
-            <SelectValue placeholder="Select a repository..." />
-          </SelectTrigger>
-          <SelectContent>
-            {availableForOverride.map((repo) => (
-              <SelectItem key={repo.fullName} value={repo.fullName.toLowerCase()}>
-                {repo.fullName}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
-        <Button onClick={handleAdd} disabled={!addingRepo}>
-          Add Override
-        </Button>
-      </div>
+      <RepoOverrideSelector
+        value={addingRepo}
+        onValueChange={setAddingRepo}
+        repositories={availableForOverride}
+        onAdd={handleAdd}
+        ariaLabel="Select a repository"
+      />
     </div>
   );
 }
