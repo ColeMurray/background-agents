@@ -711,7 +711,10 @@ describe("sig1 service-credential authentication", () => {
       providerUserId: "U-PARTIAL-PROFILE",
       avatarUrl: "https://avatars.slack.test/kept.png",
     });
-    await env.DB.prepare("UPDATE users SET display_name = '   ' WHERE id = ?").bind(known.id).run();
+    // Tabs and newlines too: the web app treats any whitespace-only name as missing.
+    await env.DB.prepare("UPDATE users SET display_name = ? WHERE id = ?")
+      .bind(" \t\n ", known.id)
+      .run();
     const other = await users.createUser({
       displayName: "Other Member",
       email: "other@corp.test",
