@@ -38,6 +38,7 @@ class McpServerConfig(TypedDict, total=False):
     env: dict[str, str]
     headers: dict[str, str]
     repoScopes: list[str] | None
+    toolAllowlist: list[str] | None
     enabled: bool
 
 

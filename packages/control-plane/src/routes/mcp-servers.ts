@@ -11,6 +11,7 @@ import {
 import { Hono } from "hono";
 import type { Env } from "../types";
 import { createLogger } from "../logger";
+import { McpToolDiscoveryError, discoverRemoteMcpTools } from "../mcp/tool-discovery";
 import { requireRepoSecretsEncryptionKey } from "../env-validation";
 import { admit, dispatch } from "../routing/admit";
 import type { ControlPlaneHonoEnv } from "../routing/hono-env";
@@ -165,6 +166,55 @@ async function handleDeleteMcpServer(
   return json({ ok: true });
 }
 
+/** Connects to a saved remote server with its stored headers and lists its tools. */
+/** The underlying error messages, for logs only: they can quote the server's response. */
+function causeMessage(cause: unknown): string | undefined {
+  if (cause instanceof AggregateError) {
+    return cause.errors.map((error) => causeMessage(error)).join("; ");
+  }
+  return cause instanceof Error ? cause.message : undefined;
+}
+
+async function handleDiscoverMcpTools(
+  _request: Request,
+  env: Env,
+  params: { id: string },
+  ctx: RequestContext
+): Promise<Response> {
+  const { id } = params;
+  if (!ctx.db) return error("Database not configured", 503);
+
+  const store = new McpServerStore(ctx.db, requireRepoSecretsEncryptionKey(env));
+  const server = await store.getDecrypted(id);
+  if (!server) return error("MCP server not found", 404);
+  if (server.type !== "remote") {
+    return error("Only remote MCP servers can list their tools", 400);
+  }
+
+  try {
+    const tools = await discoverRemoteMcpTools(server);
+    logger.info("MCP server tools discovered", {
+      event: "mcp_server.tools_discovered",
+      request_id: ctx.request_id,
+      trace_id: ctx.trace_id,
+      id,
+      tool_count: tools.length,
+    });
+    return json({ tools });
+  } catch (err) {
+    logger.warn("MCP server tool discovery failed", {
+      event: "mcp_server.tool_discovery_failed",
+      request_id: ctx.request_id,
+      trace_id: ctx.trace_id,
+      id,
+      error: err instanceof Error ? err.message : String(err),
+      cause: err instanceof Error ? causeMessage(err.cause) : undefined,
+    });
+    const reason = err instanceof McpToolDiscoveryError ? `: ${err.message}` : "";
+    return error(`Could not load tools from the MCP server${reason}`, 502);
+  }
+}
+
 const MCP_READ = admit({
   ...GITHUB_USER_OR_SERVICE_ROUTE,
   authorization: requirePermission("mcp_servers.read"),
@@ -181,3 +231,7 @@ mcpServerRoutes.post("/mcp-servers", MCP_MANAGE, (c) => dispatch(c, handleCreate
 mcpServerRoutes.get("/mcp-servers/:id", MCP_READ, (c) => dispatch(c, handleGetMcpServer));
 mcpServerRoutes.put("/mcp-servers/:id", MCP_MANAGE, (c) => dispatch(c, handleUpdateMcpServer));
 mcpServerRoutes.delete("/mcp-servers/:id", MCP_MANAGE, (c) => dispatch(c, handleDeleteMcpServer));
+// Manage, not read: the control plane connects out with the server's stored credentials.
+mcpServerRoutes.post("/mcp-servers/:id/tools", MCP_MANAGE, (c) =>
+  dispatch(c, handleDiscoverMcpTools)
+);

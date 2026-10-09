@@ -1,14 +1,17 @@
 ---
 title: MCP servers
-description: Give agents extra tools by registering local or remote MCP servers, scoping them to repositories, and keeping local servers fast to start.
+description: Give agents extra tools by registering local or remote MCP servers, scoping them to repositories, choosing which of their tools agents see, and keeping local servers fast to start.
 audience: team-owner
 owner: platform
 status: published
-lastReviewed: "2026-09-23"
+lastReviewed: "2026-10-09"
 relatedCode:
   - packages/shared/src/types/integrations.ts
   - packages/web/src/components/settings/mcp-servers-settings.tsx
+  - packages/web/src/components/settings/mcp-tool-access.tsx
   - packages/control-plane/src/routes/mcp-servers.ts
+  - packages/control-plane/src/mcp/tool-discovery.ts
+  - packages/sandbox-runtime/src/sandbox_runtime/mcp_tool_access.py
   - docs/HOW_IT_WORKS.md
   - docs/CLAUDE_AGENT.md
 ---
@@ -48,7 +51,7 @@ For a remote server, enter the URL, such as `https://mcp.example.com/sse`. Optio
 <Step>
 ### Availability and state
 
-Choose "All repositories" (available in every agent session) or "Selected repositories only" and tick the repositories. Leave Enabled on, then click Add Server.
+Choose "All repositories" (available in every agent session) or "Selected repositories only" and tick the repositories. Leave Enabled on, then click Add Server. To limit the server's tools, see [Limit the tools an agent sees](#limit-the-tools-an-agent-sees).
 
 </Step>
 </Steps>
@@ -72,12 +75,36 @@ Credentials you enter as environment variables or headers are stored encrypted o
 
 Edit a server from the list to change any field and click Save Changes. Deleting a server cannot be undone.
 
+## Limit the tools an agent sees
+
+Every tool a server offers adds its name, description, and input schema to the agent's context. A server with many tools can take up a large part of the context window in every request, even when a session only needs a few of them. Under Tools, choose:
+
+| Option              | Effect                                                                                                                                                              |
+| ------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| All tools           | The default. The agent sees every tool the server offers, including tools the server adds later.                                                                    |
+| Selected tools only | The agent can use only the tools you choose. Tools the server adds later stay off until you select them. With no tool selected, the server is left out of sessions. |
+
+To choose tools for a remote server, save it first, then open it and click Load tools. OpenInspect connects to the server with its saved URL and headers and lists the tools it offers; tick the ones the agent should use. Loading tools requires the `mcp_servers.manage` permission. If you edit the URL or headers, save before loading so the list comes from the new connection.
+
+For a local server, or when a remote server cannot be reached from OpenInspect, type each tool name and click Add. Use the names the server advertises, such as `search_issues`. After you load tools, a selected tool that the server no longer offers is listed under "Selected but not offered by the server" so you can remove it.
+
+The list shows the number of selected tools next to each restricted server.
+
+How each harness applies the selection:
+
+- OpenCode: tools outside the selection are left out of every request, so they take no context.
+- Claude Agent: only the selected tools are allowed, and calls to any other tool of that server are refused, even when Claude settings in the repository allow them. Those tools can still appear in Claude Agent's tool list.
+
+Both harnesses build a tool's name from the server and tool names, so they cannot always tell apart servers whose names overlap. While a server such as `docs` is limited, a server whose name extends it (`docs_extra` in OpenCode, `docs__extra` in either harness) gets no tools rather than expose the limited server's other tools. Rename one of them to avoid this.
+
+A selection takes effect the next time a session's sandbox starts; a running session keeps the tools it started with.
+
 ## How servers reach the agent
 
 - OpenCode: enabled servers in scope are written into the session's OpenCode configuration when the agent starts.
-- Claude Agent: the same servers are passed through unchanged to the harness. OpenInspect's own tools reach Claude Agent through a built-in server named `oi`, separate from the servers you register.
+- Claude Agent: the same servers are passed to the harness. OpenInspect's own tools reach Claude Agent through a built-in server named `oi`, separate from the servers you register.
 
-Server commands, arguments, and credentials are passed through as configured. Changes apply to new sessions; a running session keeps the server set it started with.
+Server commands, arguments, and credentials are passed through as configured, and each server's tool selection is applied as described in [Limit the tools an agent sees](#limit-the-tools-an-agent-sees). Changes apply to new sessions; a running session keeps the server set it started with.
 
 ## Startup cost of local servers
 
@@ -121,6 +148,21 @@ See [lifecycle scripts](/configure/lifecycle-scripts) and [prebuilt images](/con
     Cause: the version in the command does not match the version installed by `setup.sh`, or the
     image has not been rebuilt since the change. Fix: use the exact same `package@version` in both
     places and rebuild the prebuilt image.
+
+</Accordion>
+  <Accordion title="Load tools fails">
+    Cause: the server is unreachable from OpenInspect, rejects the saved headers, or does not
+    answer within 15 seconds. The message includes the HTTP status when the server returned one;
+    401 or 403 means it rejected the headers. Fix: check the URL and headers, save, and try again.
+    You can also type tool names by hand.
+
+</Accordion>
+  <Accordion title="A tool is missing from sessions after limiting a server">
+    Cause: the server is set to "Selected tools only" and the tool is not selected, or its name
+    does not match the name the server advertises. A server whose name extends a limited
+    server's name, such as `docs_extra` next to `docs`, gets no tools. Fix: open
+    the server, click Load tools and tick the tool (for a local server, type its exact name), then
+    start a new session. For a name clash, rename one of the servers.
 
 </Accordion>
   <Accordion title="Save fails with a validation error">

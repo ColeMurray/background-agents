@@ -33,6 +33,12 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import { useCurrentUserAuthorization } from "@/hooks/use-current-user-authorization";
+import {
+  McpToolAccess,
+  toolAccessFromAllowlist,
+  toolAccessToAllowlist,
+  type ToolAccess,
+} from "./mcp-tool-access";
 
 type ScopeMode = "global" | "selected";
 type Editor =
@@ -62,6 +68,7 @@ type FormState = {
   envRows: EnvRow[];
   repoScopes: string[];
   scopeMode: ScopeMode;
+  toolAccess: ToolAccess;
   enabled: boolean;
 };
 
@@ -73,6 +80,7 @@ const emptyForm: FormState = {
   envRows: [createEnvRow()],
   repoScopes: [],
   scopeMode: "global",
+  toolAccess: toolAccessFromAllowlist(null),
   enabled: DEFAULT_MCP_SERVER_ENABLED,
 };
 
@@ -90,6 +98,7 @@ function metadataToForm(metadata: McpServerMetadata): FormState {
     envRows: [createEnvRow()],
     repoScopes: metadata.repoScopes ?? [],
     scopeMode: metadata.repoScopes?.length ? "selected" : "global",
+    toolAccess: toolAccessFromAllowlist(metadata.toolAllowlist),
     enabled: metadata.enabled,
   };
 }
@@ -265,6 +274,31 @@ interface McpServerFormProps {
   loadingRepos: boolean;
   radioPrefix: string;
   hasExistingCredentials?: boolean;
+  /** The saved server whose tools can be loaded, unless its connection was edited. */
+  savedServer?: McpServerMetadata;
+}
+
+function toolDiscovery(form: FormState, savedServer: McpServerMetadata | undefined) {
+  if (form.type === "local") {
+    return {
+      kind: "unavailable",
+      reason: "Local servers start inside the sandbox, so add their tool names below.",
+    } as const;
+  }
+  if (!savedServer) {
+    return { kind: "unavailable", reason: "Save the server to load its tools." } as const;
+  }
+  const connectionEdited =
+    savedServer.type !== "remote" ||
+    form.url.trim() !== savedServer.url ||
+    Object.keys(envRowsToRecord(form.envRows)).length > 0;
+  if (connectionEdited) {
+    return {
+      kind: "unavailable",
+      reason: "Save the connection changes to load tools with them.",
+    } as const;
+  }
+  return { kind: "available", serverId: savedServer.id, revision: savedServer.revision } as const;
 }
 
 function McpServerForm({
@@ -274,6 +308,7 @@ function McpServerForm({
   loadingRepos,
   radioPrefix,
   hasExistingCredentials,
+  savedServer,
 }: McpServerFormProps) {
   const selectedRepoScopes = new Set(form.repoScopes);
 
@@ -424,6 +459,13 @@ function McpServerForm({
         )}
       </div>
 
+      <McpToolAccess
+        value={form.toolAccess}
+        onChange={(toolAccess) => setForm({ ...form, toolAccess })}
+        radioPrefix={radioPrefix}
+        discovery={toolDiscovery(form, savedServer)}
+      />
+
       <label
         htmlFor={`mcp-enabled-${radioPrefix}`}
         className="flex items-center justify-between cursor-pointer"
@@ -503,6 +545,7 @@ export function McpServersSettings() {
         enabled: form.enabled,
         repoScopes:
           form.scopeMode === "selected" && form.repoScopes.length > 0 ? form.repoScopes : null,
+        toolAllowlist: toolAccessToAllowlist(form.toolAccess),
       };
 
       const envRecord = envRowsToRecord(form.envRows);
@@ -672,6 +715,14 @@ export function McpServersSettings() {
                         ) : (
                           <span className="ml-2 text-muted-foreground/60">• global</span>
                         )}
+                        {server.toolAllowlist && (
+                          <span className="ml-2 text-accent">
+                            •{" "}
+                            {server.toolAllowlist.length === 1
+                              ? "1 tool"
+                              : `${server.toolAllowlist.length} tools`}
+                          </span>
+                        )}
                       </div>
                     </div>
                   </button>
@@ -706,6 +757,7 @@ export function McpServersSettings() {
                       hasExistingCredentials={
                         server.type === form.type && (server.hasEnv || server.hasHeaders)
                       }
+                      savedServer={server}
                     />
                     <div className="flex gap-2 pt-2">
                       <Button onClick={save} disabled={saving} size="sm">
