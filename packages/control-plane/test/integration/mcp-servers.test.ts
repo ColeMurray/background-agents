@@ -240,6 +240,38 @@ describe("MCP Servers API", () => {
     });
   });
 
+  describe("GET /mcp-servers/:id/credentials", () => {
+    it("returns the saved headers of a remote server", async () => {
+      const createRes = await serviceFetch("https://test.local/mcp-servers", {
+        method: "POST",
+        body: JSON.stringify({
+          name: "credentials-test",
+          type: "remote",
+          url: "https://test.example.com",
+          headers: { Authorization: "Bearer sk-test", "X-Api-Key": "key-1" },
+        }),
+      });
+      const created = await createRes.json<McpServerMetadata>();
+
+      const response = await serviceFetch(
+        `https://test.local/mcp-servers/${created.id}/credentials`
+      );
+      expect(response.status).toBe(200);
+      expect(response.headers.get("Cache-Control")).toBe("private, no-store");
+      expect(await response.json()).toEqual({
+        id: created.id,
+        revision: 1,
+        type: "remote",
+        headers: { Authorization: "Bearer sk-test", "X-Api-Key": "key-1" },
+      });
+    });
+
+    it("returns 404 for missing server", async () => {
+      const response = await serviceFetch("https://test.local/mcp-servers/nonexistent/credentials");
+      expect(response.status).toBe(404);
+    });
+  });
+
   describe("PUT /mcp-servers/:id", () => {
     it("updates server fields", async () => {
       const createRes = await serviceFetch("https://test.local/mcp-servers", {

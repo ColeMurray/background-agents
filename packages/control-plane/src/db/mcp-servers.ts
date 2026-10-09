@@ -3,6 +3,7 @@ import {
   mcpServerCredentialMapSchema,
   mcpServerTypeSchema,
   type McpServerConfig,
+  type McpServerCredentials,
   type McpServerMetadata,
   type ValidatedCreateMcpServerInput,
   type ValidatedUpdateMcpServerInput,
@@ -184,6 +185,22 @@ export class McpServerStore {
       .bind(id)
       .first<McpServerRow>();
     return row ? rowToMetadata(row) : null;
+  }
+
+  /** Decrypted credentials for the settings edit form; callers must hold `mcp_servers.manage`. */
+  async getCredentials(id: string): Promise<McpServerCredentials | null> {
+    const row = await this.db
+      .prepare("SELECT * FROM mcp_servers WHERE id = ?")
+      .bind(id)
+      .first<McpServerRow>();
+    if (!row) return null;
+    const config = await this.decryptRow(row);
+    return {
+      id: row.id,
+      revision: row.revision,
+      type: config.type,
+      ...(config.type === "remote" ? { headers: config.headers } : { env: config.env }),
+    };
   }
 
   async create(config: ValidatedCreateMcpServerInput): Promise<McpServerMetadata> {
