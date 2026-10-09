@@ -70,6 +70,22 @@ describe("known service actor profile claims", () => {
     });
   });
 
+  it("claims an attested email over a legacy blank stored email", async () => {
+    const legacy = await enrollNameless("slack", "U-LEGACY-BLANK");
+    // Migration 0057 trims a whitespace-only legacy email to ''.
+    await env.DB.prepare("UPDATE users SET email = '' WHERE id = ?").bind(legacy.id).run();
+
+    const created = await createSession("slack-bot", "slack:U-LEGACY-BLANK", {
+      actorEmail: "legacy@corp.test",
+    });
+
+    expect(created.status).toBe(201);
+    await expect(users.getUserById(legacy.id)).resolves.toMatchObject({
+      email: "legacy@corp.test",
+      emailVerified: true,
+    });
+  });
+
   it("keeps a known actor's existing name, avatar, and email", async () => {
     const known = await users.resolveOrCreateUser({
       provider: "linear",
