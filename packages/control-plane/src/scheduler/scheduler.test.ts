@@ -3783,6 +3783,19 @@ describe("Scheduler", () => {
         trigger_config: JSON.stringify({ conditions: [] }),
       };
 
+      const iterateOnly = {
+        ...sampleWebhookAutomation,
+        trigger_config: JSON.stringify({
+          conditions: [
+            {
+              type: "jsonpath",
+              operator: "all_match",
+              value: [{ path: "$.mode", comparison: "eq", value: "iterate" }],
+            },
+          ],
+        }),
+      };
+
       function webhookEvent(body: Record<string, unknown>, idempotencyKey?: string) {
         return normalizeWebhookEvent("auto-hook", body, idempotencyKey, "card-42");
       }
@@ -3844,6 +3857,24 @@ describe("Scheduler", () => {
           invocationIds: ["inv-first"],
         });
         expect(promptCallCount(vi.mocked(stub.fetch))).toBe(0);
+      });
+
+      it("resolves a retry to its invocation after the conditions stop matching it", async () => {
+        mockStore.getById.mockResolvedValue(iterateOnly);
+        mockStore.getInvocationIdByTriggerKey.mockResolvedValue("inv-first");
+
+        const result = await createScheduler().event(webhookEvent({ mode: "build" }, "first"));
+
+        expect(result).toEqual({
+          triggered: 0,
+          skipped: 1,
+          steered: 0,
+          invocationIds: ["inv-first"],
+        });
+        expect(mockStore.getInvocationIdByTriggerKey).toHaveBeenCalledWith(
+          "auto-hook",
+          "webhook:idem:first"
+        );
       });
 
       it("sends a retried follow-up with the same request id and counts the session's conflict as a duplicate", async () => {
@@ -3945,18 +3976,7 @@ describe("Scheduler", () => {
       );
 
       it("does not continue a session for a delivery that fails the conditions", async () => {
-        mockStore.getById.mockResolvedValue({
-          ...sampleWebhookAutomation,
-          trigger_config: JSON.stringify({
-            conditions: [
-              {
-                type: "jsonpath",
-                operator: "all_match",
-                value: [{ path: "$.mode", comparison: "eq", value: "iterate" }],
-              },
-            ],
-          }),
-        });
+        mockStore.getById.mockResolvedValue(iterateOnly);
         mockStore.getLatestSteerableRunForThread.mockResolvedValue(
           sampleRunRow({ session_id: "sess-card" })
         );
