@@ -3,7 +3,6 @@ import { useAuthSession } from "@/lib/auth-session";
 import { browserApiFetch } from "@/lib/browser-api-fetch";
 import type {
   CreateMcpServerRequest,
-  McpServerCredentials,
   McpServerMetadata,
   UpdateMcpServerRequest,
 } from "@open-inspect/shared/types/integrations";
@@ -31,15 +30,6 @@ export async function createMcpServer(config: CreateMcpServerRequest): Promise<M
   if (!response.ok) {
     const error = await response.json().catch(() => ({}));
     throw new Error(error.error || "Failed to create MCP server");
-  }
-  return response.json();
-}
-
-export async function fetchMcpServerCredentials(id: string): Promise<McpServerCredentials> {
-  const response = await browserApiFetch(`${MCP_SERVERS_KEY}/${id}/credentials`);
-  if (!response.ok) {
-    const error = await response.json().catch(() => ({}));
-    throw new Error(error.error || "Failed to load MCP server credentials");
   }
   return response.json();
 }

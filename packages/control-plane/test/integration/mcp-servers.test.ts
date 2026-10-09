@@ -12,6 +12,8 @@ interface McpServerMetadata {
   url?: string;
   hasEnv: boolean;
   hasHeaders: boolean;
+  envKeys: string[];
+  headerKeys: string[];
   repoScopes: string[] | null;
   enabled: boolean;
 }
@@ -240,38 +242,6 @@ describe("MCP Servers API", () => {
     });
   });
 
-  describe("GET /mcp-servers/:id/credentials", () => {
-    it("returns the saved headers of a remote server", async () => {
-      const createRes = await serviceFetch("https://test.local/mcp-servers", {
-        method: "POST",
-        body: JSON.stringify({
-          name: "credentials-test",
-          type: "remote",
-          url: "https://test.example.com",
-          headers: { Authorization: "Bearer sk-test", "X-Api-Key": "key-1" },
-        }),
-      });
-      const created = await createRes.json<McpServerMetadata>();
-
-      const response = await serviceFetch(
-        `https://test.local/mcp-servers/${created.id}/credentials`
-      );
-      expect(response.status).toBe(200);
-      expect(response.headers.get("Cache-Control")).toBe("private, no-store");
-      expect(await response.json()).toEqual({
-        id: created.id,
-        revision: 1,
-        type: "remote",
-        headers: { Authorization: "Bearer sk-test", "X-Api-Key": "key-1" },
-      });
-    });
-
-    it("returns 404 for missing server", async () => {
-      const response = await serviceFetch("https://test.local/mcp-servers/nonexistent/credentials");
-      expect(response.status).toBe(404);
-    });
-  });
-
   describe("PUT /mcp-servers/:id", () => {
     it("updates server fields", async () => {
       const createRes = await serviceFetch("https://test.local/mcp-servers", {
@@ -293,6 +263,47 @@ describe("MCP Servers API", () => {
       expect(body.name).toBe("updated-name");
       expect(body.url).toBe("https://new.example.com");
       expect(body.revision).toBe(2);
+    });
+
+    it("keeps saved headers sent as null and deletes headers left out", async () => {
+      const createRes = await serviceFetch("https://test.local/mcp-servers", {
+        method: "POST",
+        body: JSON.stringify({
+          name: "header-update",
+          type: "remote",
+          url: "https://test.example.com",
+          headers: { Authorization: "Bearer sk-test", "X-Api-Key": "key-1" },
+        }),
+      });
+      const created = await createRes.json<McpServerMetadata>();
+      expect(created.headerKeys).toEqual(["Authorization", "X-Api-Key"]);
+
+      const response = await serviceFetch(`https://test.local/mcp-servers/${created.id}`, {
+        method: "PUT",
+        body: JSON.stringify({ headers: { Authorization: null, "X-New": "new-value" } }),
+      });
+      expect(response.status).toBe(200);
+      const body = await response.json<McpServerMetadata>();
+      expect(body.headerKeys).toEqual(["Authorization", "X-New"]);
+      expect(JSON.stringify(body)).not.toContain("sk-test");
+    });
+
+    it("rejects null for a header with no saved value", async () => {
+      const createRes = await serviceFetch("https://test.local/mcp-servers", {
+        method: "POST",
+        body: JSON.stringify({
+          name: "header-update-unknown",
+          type: "remote",
+          url: "https://test.example.com",
+        }),
+      });
+      const created = await createRes.json<McpServerMetadata>();
+
+      const response = await serviceFetch(`https://test.local/mcp-servers/${created.id}`, {
+        method: "PUT",
+        body: JSON.stringify({ headers: { Authorization: null } }),
+      });
+      expect(response.status).toBe(400);
     });
 
     it("rejects a stale revision and accepts a retry from the latest revision", async () => {

@@ -8,7 +8,7 @@
 import { describe, it, expect, vi } from "vitest";
 import type { ValidatedCreateMcpServerInput } from "@open-inspect/shared/types/integrations";
 import { McpServerStore, McpServerValidationError } from "./mcp-servers";
-import { generateEncryptionKey } from "../auth/crypto";
+import { decryptToken, generateEncryptionKey } from "../auth/crypto";
 
 // ─── Fake D1 helpers ────────────────────────────────────────────────────────
 
@@ -141,6 +141,15 @@ describe("McpServerStore", () => {
       expect("headers" in result!).toBe(false);
     });
 
+    it("lists saved header names but not their values", async () => {
+      const { db } = createFakeD1({ firstResult: remoteRowWithHeaders });
+      const store = new McpServerStore(db, TEST_ENCRYPTION_KEY);
+      const result = await store.get("ghi789");
+      expect(result!.headerKeys).toEqual(["Authorization", "X-Api-Key"]);
+      expect(result!.envKeys).toEqual([]);
+      expect(JSON.stringify(result)).not.toContain("sk-test-123");
+    });
+
     it("returns null when not found", async () => {
       const { db } = createFakeD1({ firstResult: null });
       const store = new McpServerStore(db, TEST_ENCRYPTION_KEY);
@@ -222,33 +231,6 @@ describe("McpServerStore", () => {
     });
   });
 
-  describe("getCredentials()", () => {
-    it("returns saved headers for remote servers", async () => {
-      const { db } = createFakeD1({ firstResult: remoteRowWithHeaders });
-      const store = new McpServerStore(db, TEST_ENCRYPTION_KEY);
-      const result = await store.getCredentials("ghi789");
-      expect(result).toEqual({
-        id: "ghi789",
-        revision: 1,
-        type: "remote",
-        headers: { Authorization: "Bearer sk-test-123", "X-Api-Key": "key-456" },
-      });
-    });
-
-    it("returns saved env for local servers", async () => {
-      const { db } = createFakeD1({ firstResult: sampleRow });
-      const store = new McpServerStore(db, TEST_ENCRYPTION_KEY);
-      const result = await store.getCredentials("abc123");
-      expect(result).toEqual({ id: "abc123", revision: 1, type: "local", env: { DEBUG: "1" } });
-    });
-
-    it("returns null when not found", async () => {
-      const { db } = createFakeD1({ firstResult: null });
-      const store = new McpServerStore(db, TEST_ENCRYPTION_KEY);
-      expect(await store.getCredentials("nonexistent")).toBeNull();
-    });
-  });
-
   describe("create()", () => {
     it("throws McpServerValidationError for local server without command", async () => {
       const { db } = createFakeD1();
@@ -288,6 +270,30 @@ describe("McpServerStore", () => {
       const err = await store.update("abc123", { type: "remote" }).catch((e) => e);
       expect(err).toBeInstanceOf(McpServerValidationError);
       expect(err.message).toMatch(/require a URL/i);
+    });
+
+    it("keeps saved values for keys submitted as null and drops keys left out", async () => {
+      const { db, statements } = createFakeD1({ firstResult: remoteRowWithHeaders });
+      const store = new McpServerStore(db, TEST_ENCRYPTION_KEY);
+      await store.update("ghi789", { headers: { Authorization: null, "X-New": "new-value" } });
+
+      const updateStatement = statements.find((s) => s.sql.startsWith("UPDATE mcp_servers"));
+      const storedEnv = await decryptToken(
+        updateStatement!.params[4] as string,
+        TEST_ENCRYPTION_KEY
+      );
+      expect(JSON.parse(storedEnv)).toEqual({
+        Authorization: "Bearer sk-test-123",
+        "X-New": "new-value",
+      });
+    });
+
+    it("rejects null for a key with no saved value", async () => {
+      const { db } = createFakeD1({ firstResult: remoteRowWithHeaders });
+      const store = new McpServerStore(db, TEST_ENCRYPTION_KEY);
+      const err = await store.update("ghi789", { headers: { Unknown: null } }).catch((e) => e);
+      expect(err).toBeInstanceOf(McpServerValidationError);
+      expect(err.message).toMatch(/No saved value for 'Unknown'/);
     });
 
     it("throws McpServerValidationError when changing type to local without command", async () => {

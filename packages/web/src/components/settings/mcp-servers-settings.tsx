@@ -1,17 +1,16 @@
 "use client";
 
-import { useState, useCallback, useRef, type ClipboardEvent } from "react";
+import { useState, useCallback, type ClipboardEvent } from "react";
 import { toast } from "sonner";
 import type {
   CreateMcpServerRequest,
-  McpServerCredentials,
   McpServerMetadata,
+  UpdateMcpServerRequest,
 } from "@open-inspect/shared/types/integrations";
 import { DEFAULT_MCP_SERVER_ENABLED } from "@open-inspect/shared/types/integrations";
 import {
   useMcpServers,
   createMcpServer,
-  fetchMcpServerCredentials,
   updateMcpServer,
   deleteMcpServer,
 } from "@/hooks/use-mcp-servers";
@@ -39,19 +38,30 @@ import { useCurrentUserAuthorization } from "@/hooks/use-current-user-authorizat
 type ScopeMode = "global" | "selected";
 type Editor =
   | { kind: "new"; draftId: string }
-  | { kind: "existing"; draftId: string; id: string; revision: number };
+  | {
+      kind: "existing";
+      draftId: string;
+      id: string;
+      revision: number;
+      type: "local" | "remote";
+      hasCredentials: boolean;
+    };
 
-type EnvRow = { id: string; key: string; value: string };
-type CredentialsLoad = { draftId: string; status: "loading" | "loaded" | "failed" };
+/** `savedKey` marks a row loaded from a saved credential; its value is never sent to the browser. */
+type EnvRow = { id: string; key: string; value: string; savedKey?: string };
 
-function createEnvRow(init?: { key: string; value: string }): EnvRow {
-  return { id: crypto.randomUUID(), key: init?.key ?? "", value: init?.value ?? "" };
+function createEnvRow(init?: { key: string; value: string; savedKey?: string }): EnvRow {
+  return {
+    id: crypto.randomUUID(),
+    key: init?.key ?? "",
+    value: init?.value ?? "",
+    savedKey: init?.savedKey,
+  };
 }
 
-function credentialsToEnvRows(credentials: McpServerCredentials): EnvRow[] {
-  const saved = credentials.type === "remote" ? credentials.headers : credentials.env;
-  const rows = Object.entries(saved ?? {}).map(([key, value]) => createEnvRow({ key, value }));
-  return rows.length > 0 ? rows : [createEnvRow()];
+function savedKeysToEnvRows(keys: string[]): EnvRow[] {
+  if (keys.length === 0) return [createEnvRow()];
+  return keys.map((key) => createEnvRow({ key, value: "", savedKey: key }));
 }
 
 function envRowsToRecord(rows: EnvRow[]): Record<string, string> {
@@ -59,6 +69,26 @@ function envRowsToRecord(rows: EnvRow[]): Record<string, string> {
   for (const row of rows) {
     const k = row.key.trim();
     if (k && row.value) result[k] = row.value;
+  }
+  return result;
+}
+
+/**
+ * The full credential set for an update. A saved row left blank is sent as `null`,
+ * which keeps its stored value; rows that are gone are deleted.
+ */
+function envRowsToUpdateRecord(rows: EnvRow[]): Record<string, string | null> {
+  const result: Record<string, string | null> = {};
+  for (const row of rows) {
+    const k = row.key.trim();
+    if (!k) continue;
+    if (row.value) {
+      result[k] = row.value;
+    } else if (row.savedKey === k) {
+      result[k] = null;
+    } else if (row.savedKey !== undefined) {
+      throw new Error(`Enter a value for ${k}; a saved value can't be copied to a new name`);
+    }
   }
   return result;
 }
@@ -96,7 +126,9 @@ function metadataToForm(metadata: McpServerMetadata): FormState {
         )
         .join(" ") ?? "",
     url: metadata.url ?? "",
-    envRows: [createEnvRow()],
+    envRows: savedKeysToEnvRows(
+      metadata.type === "remote" ? metadata.headerKeys : metadata.envKeys
+    ),
     repoScopes: metadata.repoScopes ?? [],
     scopeMode: metadata.repoScopes?.length ? "selected" : "global",
     enabled: metadata.enabled,
@@ -130,17 +162,7 @@ function parseCommand(cmd: string): string[] {
   return tokens;
 }
 
-function EnvRowsEditor({
-  form,
-  setForm,
-  hasExistingCredentials,
-  loadingCredentials,
-}: {
-  form: FormState;
-  setForm: (form: FormState) => void;
-  hasExistingCredentials?: boolean;
-  loadingCredentials?: boolean;
-}) {
+function EnvRowsEditor({ form, setForm }: { form: FormState; setForm: (form: FormState) => void }) {
   const isRemote = form.type === "remote";
   const label = isRemote ? "HTTP Headers" : "Environment Variables";
   const keyPlaceholder = isRemote ? "Header-Name" : "KEY_NAME";
@@ -214,62 +236,55 @@ function EnvRowsEditor({
         <Label>
           {label} <span className="text-muted-foreground font-normal">(optional)</span>
         </Label>
-        <Button
-          type="button"
-          variant="subtle"
-          size="xs"
-          onClick={addRow}
-          disabled={loadingCredentials}
-        >
+        <Button type="button" variant="subtle" size="xs" onClick={addRow}>
           + Add
         </Button>
       </div>
-      {loadingCredentials && (
-        <p className="text-xs text-muted-foreground mb-1">Loading saved {label.toLowerCase()}...</p>
-      )}
-      {hasExistingCredentials && form.envRows.every((r) => !r.value.trim()) && (
+      {form.envRows.some((r) => r.savedKey !== undefined) && (
         <p className="text-xs text-muted-foreground mb-1">
-          Credentials are configured. Enter new values to replace them, or leave empty to keep
-          existing.
+          Saved values are hidden. Leave a value blank to keep it, or remove the row to delete it.
         </p>
       )}
       <div className="space-y-1.5">
-        {!loadingCredentials &&
-          form.envRows.map((row) => (
-            <div key={row.id} className="flex gap-1.5">
-              <Input
-                value={row.key}
-                onChange={(e) => updateRow(row.id, "key", e.target.value)}
-                onPaste={handlePaste}
-                placeholder={keyPlaceholder}
-                className="flex-1 min-w-[140px] font-mono text-xs h-8"
-              />
-              <Input
-                type="password"
-                value={row.value}
-                onChange={(e) => updateRow(row.id, "value", e.target.value)}
-                onPaste={handlePaste}
-                placeholder={valuePlaceholder}
-                className="flex-1 min-w-[180px] font-mono text-xs h-8"
-              />
-              <button
-                type="button"
-                onClick={() => removeRow(row.id)}
-                className="px-1.5 text-muted-foreground hover:text-destructive transition"
-                aria-label="Remove"
+        {form.envRows.map((row) => (
+          <div key={row.id} className="flex gap-1.5">
+            <Input
+              value={row.key}
+              onChange={(e) => updateRow(row.id, "key", e.target.value)}
+              onPaste={handlePaste}
+              placeholder={keyPlaceholder}
+              className="flex-1 min-w-[140px] font-mono text-xs h-8"
+            />
+            <Input
+              type="password"
+              value={row.value}
+              onChange={(e) => updateRow(row.id, "value", e.target.value)}
+              onPaste={handlePaste}
+              placeholder={
+                row.savedKey !== undefined && row.key.trim() === row.savedKey
+                  ? "•••••••• (saved)"
+                  : valuePlaceholder
+              }
+              className="flex-1 min-w-[180px] font-mono text-xs h-8"
+            />
+            <button
+              type="button"
+              onClick={() => removeRow(row.id)}
+              className="px-1.5 text-muted-foreground hover:text-destructive transition"
+              aria-label="Remove"
+            >
+              <svg
+                className="w-3.5 h-3.5"
+                fill="none"
+                viewBox="0 0 24 24"
+                stroke="currentColor"
+                strokeWidth={2}
               >
-                <svg
-                  className="w-3.5 h-3.5"
-                  fill="none"
-                  viewBox="0 0 24 24"
-                  stroke="currentColor"
-                  strokeWidth={2}
-                >
-                  <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
-                </svg>
-              </button>
-            </div>
-          ))}
+                <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+              </svg>
+            </button>
+          </div>
+        ))}
       </div>
       <p className="text-xs text-muted-foreground mt-1">
         Paste a <code className="text-xs">.env</code> block into any field to import multiple
@@ -285,19 +300,9 @@ interface McpServerFormProps {
   repos: { fullName: string; private?: boolean }[];
   loadingRepos: boolean;
   radioPrefix: string;
-  hasExistingCredentials?: boolean;
-  loadingCredentials?: boolean;
 }
 
-function McpServerForm({
-  form,
-  setForm,
-  repos,
-  loadingRepos,
-  radioPrefix,
-  hasExistingCredentials,
-  loadingCredentials,
-}: McpServerFormProps) {
+function McpServerForm({ form, setForm, repos, loadingRepos, radioPrefix }: McpServerFormProps) {
   const selectedRepoScopes = new Set(form.repoScopes);
 
   return (
@@ -377,12 +382,7 @@ function McpServerForm({
         </div>
       )}
 
-      <EnvRowsEditor
-        form={form}
-        setForm={setForm}
-        hasExistingCredentials={hasExistingCredentials}
-        loadingCredentials={loadingCredentials}
-      />
+      <EnvRowsEditor form={form} setForm={setForm} />
 
       <div>
         <Label className="mb-1.5">Availability</Label>
@@ -475,51 +475,30 @@ export function McpServersSettings() {
   const [form, setForm] = useState<FormState>(emptyForm);
   const [saving, setSaving] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<string | null>(null);
-  const [credentialsLoad, setCredentialsLoad] = useState<CredentialsLoad | null>(null);
-  const activeDraftId = useRef<string | null>(null);
-
-  function openEditor(next: Editor | null) {
-    activeDraftId.current = next?.draftId ?? null;
-    setEditor(next);
-  }
 
   function startNew() {
     setForm(emptyForm);
-    openEditor({ kind: "new", draftId: crypto.randomUUID() });
+    setEditor({ kind: "new", draftId: crypto.randomUUID() });
   }
 
   function startEdit(server: McpServerMetadata) {
     if (editor?.kind === "existing" && editor.id === server.id) {
-      openEditor(null);
-      return;
-    }
-    const draftId = crypto.randomUUID();
-    setForm(metadataToForm(server));
-    openEditor({ kind: "existing", draftId, id: server.id, revision: server.revision });
-    setCredentialsLoad(null);
-    if (server.hasEnv || server.hasHeaders) void loadCredentials(server.id, draftId);
-  }
-
-  async function loadCredentials(id: string, draftId: string) {
-    setCredentialsLoad({ draftId, status: "loading" });
-    try {
-      const credentials = await fetchMcpServerCredentials(id);
-      if (activeDraftId.current !== draftId) return;
-      setForm((current) =>
-        current.type === credentials.type
-          ? { ...current, envRows: credentialsToEnvRows(credentials) }
-          : current
-      );
-      setCredentialsLoad({ draftId, status: "loaded" });
-    } catch (err) {
-      if (activeDraftId.current !== draftId) return;
-      setCredentialsLoad({ draftId, status: "failed" });
-      toast.error(err instanceof Error ? err.message : "Failed to load saved credentials");
+      setEditor(null);
+    } else {
+      setForm(metadataToForm(server));
+      setEditor({
+        kind: "existing",
+        draftId: crypto.randomUUID(),
+        id: server.id,
+        revision: server.revision,
+        type: server.type,
+        hasCredentials: server.hasEnv || server.hasHeaders,
+      });
     }
   }
 
   function cancel() {
-    openEditor(null);
+    setEditor(null);
   }
 
   async function save() {
@@ -552,37 +531,40 @@ export function McpServersSettings() {
           form.scopeMode === "selected" && form.repoScopes.length > 0 ? form.repoScopes : null,
       };
 
-      const envRecord = envRowsToRecord(form.envRows);
-      const hasEnvValues = Object.keys(envRecord).length > 0;
-      // Once saved credentials are loaded into the form, the rows are the full set: send them
-      // so removed rows are deleted. If loading failed, blank rows still mean "keep existing".
-      const credentialsLoaded =
-        credentialsLoad?.draftId === saveOwner.draftId && credentialsLoad.status === "loaded";
-      const includeCredentials = hasEnvValues || credentialsLoaded || saveOwner.kind === "new";
-      const payload: CreateMcpServerRequest =
+      const target =
         form.type === "remote"
-          ? {
-              ...common,
-              type: "remote",
-              url: form.url.trim(),
-              ...(includeCredentials ? { headers: envRecord } : {}),
-            }
-          : {
-              ...common,
-              type: "local",
-              command: parseCommand(form.command),
-              ...(includeCredentials ? { env: envRecord } : {}),
-            };
+          ? { type: "remote" as const, url: form.url.trim() }
+          : { type: "local" as const, command: parseCommand(form.command) };
 
       if (saveOwner.kind === "new") {
+        const envRecord = envRowsToRecord(form.envRows);
+        const payload: CreateMcpServerRequest =
+          target.type === "remote"
+            ? { ...common, ...target, headers: envRecord }
+            : { ...common, ...target, env: envRecord };
         await createMcpServer(payload);
         toast.success("MCP server created");
       } else {
-        await updateMcpServer(saveOwner.id, { ...payload, revision: saveOwner.revision });
+        const envRecord = envRowsToUpdateRecord(form.envRows);
+        // Send the set if it has entries, or if every saved credential was removed.
+        const includeCredentials =
+          Object.keys(envRecord).length > 0 ||
+          (saveOwner.hasCredentials && saveOwner.type === form.type);
+        const credentials = includeCredentials
+          ? form.type === "remote"
+            ? { headers: envRecord }
+            : { env: envRecord }
+          : {};
+        const payload: UpdateMcpServerRequest = {
+          ...common,
+          ...target,
+          ...credentials,
+          revision: saveOwner.revision,
+        };
+        await updateMcpServer(saveOwner.id, payload);
         toast.success("MCP server updated");
       }
 
-      if (activeDraftId.current === saveOwner.draftId) activeDraftId.current = null;
       setEditor((current) => (current?.draftId === saveOwner.draftId ? null : current));
       mutate();
     } catch (err) {
@@ -597,7 +579,7 @@ export function McpServersSettings() {
       await deleteMcpServer(id);
       mutate();
       if (editor?.kind === "existing" && editor.id === id) {
-        openEditor(null);
+        setEditor(null);
       }
       toast.success("MCP server deleted");
     } catch (err) {
@@ -755,19 +737,9 @@ export function McpServersSettings() {
                       repos={repos}
                       loadingRepos={loadingRepos}
                       radioPrefix={server.id}
-                      hasExistingCredentials={
-                        credentialsLoad?.status === "failed" &&
-                        server.type === form.type &&
-                        (server.hasEnv || server.hasHeaders)
-                      }
-                      loadingCredentials={credentialsLoad?.status === "loading"}
                     />
                     <div className="flex gap-2 pt-2">
-                      <Button
-                        onClick={save}
-                        disabled={saving || credentialsLoad?.status === "loading"}
-                        size="sm"
-                      >
+                      <Button onClick={save} disabled={saving} size="sm">
                         {saving ? "Saving..." : "Save Changes"}
                       </Button>
                       <Button onClick={cancel} variant="outline" size="sm">

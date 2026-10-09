@@ -60,7 +60,7 @@ Choose "All repositories" (available in every agent session) or "Selected reposi
 | Local  | A command as an argument list, plus optional environment variables | Prepares the package (for `npx` commands) and starts the process inside the sandbox |
 | Remote | A URL, plus optional headers                                       | Connects the agent to the URL from inside the sandbox                               |
 
-Credentials you enter as environment variables or headers are stored encrypted on the server side and injected into the session when the server is prepared. The server list only reports whether a server has them. Opening a server to edit it loads its saved names and values into the form (values stay masked), and only users with `mcp_servers.manage` can load them.
+Credentials you enter as environment variables or headers are stored encrypted on the server side. The settings page shows the names of saved credentials but never their values. They are injected into the session when the server is prepared.
 
 ## Scope and enablement
 
@@ -70,7 +70,7 @@ Credentials you enter as environment variables or headers are stored encrypted o
 | Selected repositories only | The server is available only in sessions for the chosen repositories. At least one must be selected.                   |
 | Enabled switch             | A disabled server stays configured but is not passed to any session. Toggle it from the list without opening the form. |
 
-Edit a server from the list to change any field and click Save Changes. The saved environment variables or headers are replaced with the rows in the form, so removing a row deletes that credential. Deleting a server cannot be undone.
+Edit a server from the list to change any field and click Save Changes. Saved environment variables or headers appear as rows with hidden values: leave a value blank to keep it, enter a new one to replace it, or remove the row to delete it. Deleting a server cannot be undone.
 
 ## How servers reach the agent
 
