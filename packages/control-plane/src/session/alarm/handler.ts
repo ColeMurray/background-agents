@@ -9,7 +9,10 @@ import type { SessionTerminalMessageProjection } from "../terminal-message-proje
 
 export interface AlarmHandlerDeps {
   preserveBeforeWatchdogs?: (allowCaptureRetry: boolean) => Promise<"continue" | "hold_watchdogs">;
-  repository: MessageRepository;
+  repository: Pick<
+    MessageRepository,
+    "getProcessingMessageWithStartedAt" | "getNextPendingMessage"
+  >;
   messageQueue: Pick<SessionMessageQueue, "failStuckProcessingMessage" | "failPendingMessage">;
   executionStop: Pick<
     ExecutionStopCoordinator,
