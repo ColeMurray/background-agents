@@ -156,19 +156,33 @@ export class SandboxHandler {
     // when the socket closes first. Landing it here puts the phase and the
     // failure metadata on the timeline for the failure the user sees; the
     // sequence number de-duplicates it against the socket copy.
+    //
+    // That write is best effort, and deliberately cannot take the failure
+    // path with it. Behind the processor it is a bare sql.exec, so a storage
+    // failure would otherwise propagate out of this handler before
+    // `failSandbox` runs and leave a sandbox that just reported a fatal
+    // error live, with nothing to terminate or retry it. Losing the timeline
+    // detail is bad; losing the failure is worse.
     const { phase, bootSeq, repoOwner, repoName } = result.data;
     if (phase !== undefined) {
-      await this.sandboxEventProcessor.processSandboxEvent({
-        type: "boot_progress",
-        phase,
-        status: "failed",
-        bootSeq: bootSeq ?? Number.MAX_SAFE_INTEGER,
-        ...(repoOwner !== undefined ? { repoOwner } : {}),
-        ...(repoName !== undefined ? { repoName } : {}),
-        detail: result.data.error,
-        sandboxId: currentSandbox.modal_sandbox_id ?? currentSandbox.id,
-        timestamp: this.now() / 1000,
-      });
+      try {
+        await this.sandboxEventProcessor.processSandboxEvent({
+          type: "boot_progress",
+          phase,
+          status: "failed",
+          bootSeq: bootSeq ?? Number.MAX_SAFE_INTEGER,
+          ...(repoOwner !== undefined ? { repoOwner } : {}),
+          ...(repoName !== undefined ? { repoName } : {}),
+          detail: result.data.error,
+          sandboxId: currentSandbox.modal_sandbox_id ?? currentSandbox.id,
+          timestamp: this.now() / 1000,
+        });
+      } catch (error) {
+        log.warn("Failed to land the fatal report on the timeline", {
+          event: "sandbox.error_timeline_failed",
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
     }
     await this.failSandbox(result.data.error);
     return Response.json({ status: "ok" });
