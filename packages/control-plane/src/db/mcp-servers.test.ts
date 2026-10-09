@@ -222,6 +222,33 @@ describe("McpServerStore", () => {
     });
   });
 
+  describe("getCredentials()", () => {
+    it("returns saved headers for remote servers", async () => {
+      const { db } = createFakeD1({ firstResult: remoteRowWithHeaders });
+      const store = new McpServerStore(db, TEST_ENCRYPTION_KEY);
+      const result = await store.getCredentials("ghi789");
+      expect(result).toEqual({
+        id: "ghi789",
+        revision: 1,
+        type: "remote",
+        headers: { Authorization: "Bearer sk-test-123", "X-Api-Key": "key-456" },
+      });
+    });
+
+    it("returns saved env for local servers", async () => {
+      const { db } = createFakeD1({ firstResult: sampleRow });
+      const store = new McpServerStore(db, TEST_ENCRYPTION_KEY);
+      const result = await store.getCredentials("abc123");
+      expect(result).toEqual({ id: "abc123", revision: 1, type: "local", env: { DEBUG: "1" } });
+    });
+
+    it("returns null when not found", async () => {
+      const { db } = createFakeD1({ firstResult: null });
+      const store = new McpServerStore(db, TEST_ENCRYPTION_KEY);
+      expect(await store.getCredentials("nonexistent")).toBeNull();
+    });
+  });
+
   describe("create()", () => {
     it("throws McpServerValidationError for local server without command", async () => {
       const { db } = createFakeD1();
