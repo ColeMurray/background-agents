@@ -20,6 +20,7 @@ on:
       - "packages/shared/**"
       - "packages/web/**" # Web app deployed via Terraform when web_platform = "cloudflare"
       - ".github/workflows/terraform.yml"
+      - ".github/workflows/build-workers.yml"
       - ".nvmrc"
   pull_request:
     branches: [main]
@@ -40,6 +41,7 @@ on:
       - "packages/shared/**"
       - "packages/web/**"
       - ".github/workflows/terraform.yml"
+      - ".github/workflows/build-workers.yml"
       - ".nvmrc"
   workflow_dispatch: # Allow manual trigger
 
@@ -94,6 +96,7 @@ jobs:
       validate: ${{ steps.validate.outcome }}
       test: ${{ steps.test.outcome }}
       modal-test: ${{ steps.modal_test.outcome }}
+      worker-module-test: ${{ steps.worker_module_test.outcome }}
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -133,11 +136,27 @@ jobs:
           terraform test
         working-directory: terraform/modules/modal-app
 
+      - name: Cloudflare Worker module tests
+        id: worker_module_test
+        run: |
+          terraform init -backend=false
+          terraform test
+        working-directory: terraform/modules/cloudflare-worker
+
+  # Builds the Worker bundles once, for plan or apply to download. Terraform
+  # deploys these files as built (build_workers_in_terraform = false) instead
+  # of rebuilding them mid-apply.
+  build:
+    name: Build
+    needs: [check-secrets]
+    if: needs.check-secrets.outputs.has-secrets == 'true'
+    uses: ./.github/workflows/build-workers.yml
+
   plan:
     name: Plan
     runs-on: ubuntu-latest
     timeout-minutes: 15
-    needs: [validate, check-secrets]
+    needs: [validate, check-secrets, build]
     if: github.event_name == 'pull_request' && needs.check-secrets.outputs.has-secrets == 'true'
     outputs:
       outcome: ${{ steps.plan.outcome }}
@@ -145,22 +164,10 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v7
 
-      - name: Setup Node.js
-        uses: actions/setup-node@v7
+      - name: Download worker bundles
+        uses: actions/download-artifact@v8
         with:
-          node-version-file: .nvmrc
-          cache: "npm"
-
-      - name: Install dependencies
-        run: npm ci
-
-      - name: Build worker packages
-        run: |
-          npm run build -w @open-inspect/shared
-          npm run build -w @open-inspect/control-plane
-          npm run build -w @open-inspect/slack-bot
-          npm run build -w @open-inspect/github-bot
-          npm run build -w @open-inspect/linear-bot
+          name: ${{ needs.build.outputs.artifact-name }}
 
       - name: Setup Terraform
         uses: hashicorp/setup-terraform@v4
@@ -206,6 +213,10 @@ jobs:
         working-directory: ${{ env.TF_WORKING_DIR }}
         continue-on-error: true
         env:
+          # The bundles come from the Build job. Terraform must not rebuild them,
+          # and refuses any file that is not the one that job recorded.
+          TF_VAR_build_workers_in_terraform: "false"
+          TF_VAR_worker_bundle_sha256: ${{ needs.build.outputs.worker-bundle-sha256 }}
           TF_VAR_cloudflare_api_token: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           TF_VAR_cloudflare_account_id: ${{ vars.CLOUDFLARE_ACCOUNT_ID || secrets.CLOUDFLARE_ACCOUNT_ID }}
           TF_VAR_cloudflare_worker_subdomain: ${{ vars.CLOUDFLARE_WORKER_SUBDOMAIN || secrets.CLOUDFLARE_WORKER_SUBDOMAIN }}
@@ -341,6 +352,7 @@ jobs:
           VALIDATE_OUTCOME: ${{ needs.validate.outputs.validate }}
           TEST_OUTCOME: ${{ needs.validate.outputs.test }}
           MODAL_TEST_OUTCOME: ${{ needs.validate.outputs.modal-test }}
+          WORKER_MODULE_TEST_OUTCOME: ${{ needs.validate.outputs.worker-module-test }}
         with:
           script: |
             const validationResult = process.env.VALIDATION_RESULT;
@@ -350,7 +362,8 @@ jobs:
               Init: process.env.INIT_OUTCOME,
               Validate: process.env.VALIDATE_OUTCOME,
               Tests: process.env.TEST_OUTCOME,
-              'Modal module tests': process.env.MODAL_TEST_OUTCOME
+              'Modal module tests': process.env.MODAL_TEST_OUTCOME,
+              'Worker module tests': process.env.WORKER_MODULE_TEST_OUTCOME
             };
             const rows = Object.entries(statuses).map(([step, outcome]) =>
               `| ${step} | ${outcome === 'success' ? 'Success' : outcome || (validationResult === 'skipped' ? 'skipped' : 'Not reported')} |`
@@ -425,7 +438,7 @@ jobs:
     name: Apply
     runs-on: ubuntu-latest
     timeout-minutes: 45
-    needs: [validate, check-secrets]
+    needs: [validate, check-secrets, build]
     if: (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && github.ref == 'refs/heads/main' && needs.check-secrets.outputs.has-secrets == 'true'
     environment: production
     steps:
@@ -441,13 +454,12 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Build worker packages
-        run: |
-          npm run build -w @open-inspect/shared
-          npm run build -w @open-inspect/control-plane
-          npm run build -w @open-inspect/slack-bot
-          npm run build -w @open-inspect/github-bot
-          npm run build -w @open-inspect/linear-bot
+      # Also restores packages/shared/dist, which the Vercel and OpenComputer
+      # snapshot builders import during apply.
+      - name: Download worker bundles
+        uses: actions/download-artifact@v8
+        with:
+          name: ${{ needs.build.outputs.artifact-name }}
 
       - name: Setup uv
         uses: astral-sh/setup-uv@v7
@@ -489,6 +501,10 @@ jobs:
         run: terraform apply -auto-approve
         working-directory: ${{ env.TF_WORKING_DIR }}
         env:
+          # The bundles come from the Build job. Terraform must not rebuild them,
+          # and refuses any file that is not the one that job recorded.
+          TF_VAR_build_workers_in_terraform: "false"
+          TF_VAR_worker_bundle_sha256: ${{ needs.build.outputs.worker-bundle-sha256 }}
           TF_VAR_cloudflare_api_token: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           TF_VAR_cloudflare_account_id: ${{ vars.CLOUDFLARE_ACCOUNT_ID || secrets.CLOUDFLARE_ACCOUNT_ID }}
           TF_VAR_cloudflare_worker_subdomain: ${{ vars.CLOUDFLARE_WORKER_SUBDOMAIN || secrets.CLOUDFLARE_WORKER_SUBDOMAIN }}
