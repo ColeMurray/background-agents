@@ -7,7 +7,7 @@ import {
 import { generateId } from "../auth/crypto";
 import { normalizeEmail } from "./email";
 import { isUniqueConstraintError } from "./errors";
-import type { SqlDatabase } from "./sql-database";
+import type { SqlDatabase, SqlStatement } from "./sql-database";
 
 // ── Public types ────────────────────────────────────────────────────
 
@@ -332,6 +332,40 @@ export class UserStore {
       providerIssuer: issuer,
       createdAt: now,
     };
+  }
+
+  /**
+   * Set the display name and avatar only where the user has none, in one
+   * conditional UPDATE each so a concurrent writer's value is never overwritten.
+   * Values are trimmed; blank values are ignored.
+   */
+  async fillMissingProfile(
+    userId: string,
+    profile: { displayName?: string; avatarUrl?: string }
+  ): Promise<void> {
+    const displayName = profile.displayName?.trim();
+    const avatarUrl = profile.avatarUrl?.trim();
+    const now = Date.now();
+    const statements: SqlStatement[] = [];
+    if (displayName) {
+      statements.push(
+        this.db
+          .prepare(
+            "UPDATE users SET display_name = ?, updated_at = ? WHERE id = ? AND (display_name IS NULL OR TRIM(display_name) = '')"
+          )
+          .bind(displayName, now, userId)
+      );
+    }
+    if (avatarUrl) {
+      statements.push(
+        this.db
+          .prepare(
+            "UPDATE users SET avatar_url = ?, updated_at = ? WHERE id = ? AND (avatar_url IS NULL OR TRIM(avatar_url) = '')"
+          )
+          .bind(avatarUrl, now, userId)
+      );
+    }
+    if (statements.length > 0) await this.db.batch(statements);
   }
 
   async updateUser(userId: string, updates: UserUpdate): Promise<void> {

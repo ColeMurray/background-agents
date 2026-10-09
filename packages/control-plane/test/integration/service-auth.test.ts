@@ -617,6 +617,159 @@ describe("sig1 service-credential authentication", () => {
     ).resolves.toEqual({ title: "Readable after claim extraction", userId: member.id });
   });
 
+  it("saves a Slack actor's name on session creation after a nameless first contact", async () => {
+    // The Slack bot reads the channel's repos and environments as the actor
+    // before it creates the session, so the actor is enrolled without a name.
+    const firstContact = await signedFetch({
+      service: "slack-bot",
+      method: "GET",
+      url: "https://test.local/sessions",
+      actor: "slack:U-NAMELESS-FIRST",
+    });
+    expect(firstContact.status).toBe(200);
+    const users = new UserStore(env.DB);
+    const identity = await users.getIdentity("slack", "U-NAMELESS-FIRST");
+    expect(identity).not.toBeNull();
+    await expect(users.getUserById(identity!.userId)).resolves.toMatchObject({
+      displayName: null,
+    });
+
+    const created = await signedFetch({
+      service: "slack-bot",
+      method: "POST",
+      url: "https://test.local/sessions",
+      actor: "slack:U-NAMELESS-FIRST",
+      body: JSON.stringify({
+        title: "Named on creation",
+        model: "anthropic/claude-haiku-4-5",
+        actorDisplayName: "Ada Lovelace",
+        actorAvatarUrl: "https://avatars.slack.test/ada.png",
+      }),
+    });
+
+    expect(created.status).toBe(201);
+    await expect(users.getUserById(identity!.userId)).resolves.toMatchObject({
+      displayName: "Ada Lovelace",
+      avatarUrl: "https://avatars.slack.test/ada.png",
+    });
+  });
+
+  it("writes no name for a known actor whose session creation is denied", async () => {
+    const users = new UserStore(env.DB);
+    const nameless = await users.resolveOrCreateUser({
+      provider: "slack",
+      providerUserId: "U-NAMELESS-SUSPENDED",
+    });
+    await env.DB.prepare("UPDATE users SET suspended_at = 1 WHERE id = ?").bind(nameless.id).run();
+
+    const denied = await signedFetch({
+      service: "slack-bot",
+      method: "POST",
+      url: "https://test.local/sessions",
+      actor: "slack:U-NAMELESS-SUSPENDED",
+      body: JSON.stringify({
+        title: "Denied",
+        model: "anthropic/claude-haiku-4-5",
+        actorDisplayName: "Should Not Be Saved",
+      }),
+    });
+
+    expect(denied.status).toBe(403);
+    await expect(users.getUserById(nameless.id)).resolves.toMatchObject({ displayName: null });
+  });
+
+  it("keeps an existing name when a known actor creates a session", async () => {
+    const users = new UserStore(env.DB);
+    const known = await users.resolveOrCreateUser({
+      provider: "slack",
+      providerUserId: "U-ALREADY-NAMED",
+      displayName: "Chosen Name",
+    });
+
+    const created = await signedFetch({
+      service: "slack-bot",
+      method: "POST",
+      url: "https://test.local/sessions",
+      actor: "slack:U-ALREADY-NAMED",
+      body: JSON.stringify({
+        title: "Name unchanged",
+        model: "anthropic/claude-haiku-4-5",
+        actorDisplayName: "slack-handle",
+      }),
+    });
+
+    expect(created.status).toBe(201);
+    await expect(users.getUserById(known.id)).resolves.toMatchObject({
+      displayName: "Chosen Name",
+    });
+  });
+
+  it("fills each empty profile field on its own and never touches email or linkage", async () => {
+    const users = new UserStore(env.DB);
+    const known = await users.resolveOrCreateUser({
+      provider: "slack",
+      providerUserId: "U-PARTIAL-PROFILE",
+      avatarUrl: "https://avatars.slack.test/kept.png",
+    });
+    await env.DB.prepare("UPDATE users SET display_name = '   ' WHERE id = ?").bind(known.id).run();
+    const other = await users.createUser({
+      displayName: "Other Member",
+      email: "other@corp.test",
+      emailVerified: true,
+    });
+
+    const created = await signedFetch({
+      service: "slack-bot",
+      method: "POST",
+      url: "https://test.local/sessions",
+      actor: "slack:U-PARTIAL-PROFILE",
+      body: JSON.stringify({
+        title: "Partial profile",
+        model: "anthropic/claude-haiku-4-5",
+        actorDisplayName: "  Grace Hopper  ",
+        actorAvatarUrl: "https://avatars.slack.test/replacement.png",
+        actorEmail: "other@corp.test",
+      }),
+    });
+
+    expect(created.status).toBe(201);
+    await expect(users.getUserById(known.id)).resolves.toMatchObject({
+      displayName: "Grace Hopper",
+      avatarUrl: "https://avatars.slack.test/kept.png",
+      email: null,
+      emailVerified: false,
+    });
+    await expect(users.getIdentity("slack", "U-PARTIAL-PROFILE")).resolves.toMatchObject({
+      userId: known.id,
+    });
+    await expect(users.getUserById(other.id)).resolves.toMatchObject({
+      displayName: "Other Member",
+    });
+  });
+
+  it("ignores a blank profile name from the bot", async () => {
+    const users = new UserStore(env.DB);
+    const nameless = await users.resolveOrCreateUser({
+      provider: "slack",
+      providerUserId: "U-BLANK-CLAIM",
+    });
+
+    const created = await signedFetch({
+      service: "slack-bot",
+      method: "POST",
+      url: "https://test.local/sessions",
+      actor: "slack:U-BLANK-CLAIM",
+      body: JSON.stringify({
+        title: "Blank claim",
+        model: "anthropic/claude-haiku-4-5",
+        actorDisplayName: "   ",
+      }),
+    });
+
+    expect(created.status).toBe(201);
+    await expect(users.getUserById(nameless.id)).resolves.toMatchObject({ displayName: null });
+  });
+
   it("denies a first-contact Linear actor whose attested email selects a suspended Member", async () => {
     const users = new UserStore(env.DB);
     const suspended = await users.createUser({
