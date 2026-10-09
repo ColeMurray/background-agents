@@ -32,7 +32,9 @@
     "build": "npm run build -w @open-inspect/shared && npm run build --workspaces --if-present",
     "build:opencomputer-template": "npm run build-template -w @open-inspect/opencomputer-infra --",
     "rbac:bootstrap-owner": "node --experimental-transform-types scripts/bootstrap-workspace-owner.ts",
-    "prepare": "node -e \"if (process.env.CI) process.exit(0)\" && husky"
+    "prepare": "node -e \"if (process.env.CI) process.exit(0)\" && husky",
+    "preview": "npm run build -w @open-inspect/shared && npm start -w @open-inspect/preview --",
+    "test:preview": "npm run build -w @open-inspect/shared && npm test -w @open-inspect/preview && npm run test:e2e -w @open-inspect/preview"
   },
   "devDependencies": {
     "@eslint/js": "^9.18.0",

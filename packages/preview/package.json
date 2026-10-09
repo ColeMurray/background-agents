@@ -1,0 +1,26 @@
+{
+  "name": "@open-inspect/preview",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Disposable authenticated local preview of the web app and control plane",
+  "type": "module",
+  "scripts": {
+    "start": "node bin/preview.mjs",
+    "test": "vitest run",
+    "test:e2e": "playwright test",
+    "typecheck": "tsc --noEmit && tsc --noEmit -p e2e",
+    "lint": "eslint src/ e2e/"
+  },
+  "dependencies": {
+    "@open-inspect/control-plane": "file:../control-plane",
+    "@open-inspect/shared": "file:../shared",
+    "dotenv": "^16.6.1",
+    "esbuild": "^0.28.1"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.63.0",
+    "@types/node": "^24.0.0",
+    "typescript": "^5.7.2",
+    "vitest": "^4.1.11"
+  }
+}
