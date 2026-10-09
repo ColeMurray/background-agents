@@ -1254,6 +1254,15 @@ export class Scheduler {
     for (const automation of candidates) {
       const now = Date.now();
 
+      if (event.source === "webhook" && event.sessionKey) {
+        const original = await store.getInvocationIdByTriggerKey(automation.id, event.triggerKey);
+        if (original) {
+          invocationIds.push(original);
+          skipped++;
+          continue;
+        }
+      }
+
       // Slack thread continuity — mirrors the interactive @mention path: any reply
       // in a thread that already has a session (any run status, within the
       // continuity window) continues that session, regardless of trigger
@@ -2077,9 +2086,6 @@ export class Scheduler {
     event: WebhookAutomationEvent,
     now: number
   ): Promise<WebhookContinuation | null> {
-    const original = await store.getInvocationIdByTriggerKey(automation.id, event.triggerKey);
-    if (original) return { steered: false, invocationId: original };
-
     const run = await store.getLatestSteerableRunForThread(
       automation.id,
       event.concurrencyKey,
