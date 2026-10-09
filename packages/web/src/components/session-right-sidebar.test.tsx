@@ -511,35 +511,39 @@ describe("SessionRightSidebar", () => {
     expect(click.mock.instances[0]).toHaveProperty("href", "blob:session-trace");
   });
 
-  it.each(["session_error", "error"])(
-    "reports a %s export record as a failed download",
-    async (type) => {
-      vi.mocked(browserApiFetch).mockResolvedValueOnce(
-        new Response(`{"schemaVersion":1,"type":"${type}"}\n`, {
-          headers: { "Content-Type": "application/x-ndjson" },
-        })
-      );
-      const click = vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => {});
-      render(
-        <Sidebar
-          sessionId="session-1"
-          sessionState={sessionState}
-          participants={[]}
-          presenceSynced={false}
-          events={[]}
-          artifacts={[]}
-          onOpenMedia={vi.fn()}
-          capabilities={FULL_CAPABILITIES}
-        />
-      );
+  it.each([
+    ["session_error record", '{"schemaVersion":1,"type":"session_error"}\n'],
+    ["error record", '{"schemaVersion":1,"type":"error"}\n'],
+    ["number record", "42\n"],
+    ["boolean record", "false\n"],
+    ["string record", '"not an object"\n'],
+    ["array record", "[]\n"],
+  ])("reports a %s as a failed download", async (_name, body) => {
+    vi.mocked(browserApiFetch).mockResolvedValueOnce(
+      new Response(body, {
+        headers: { "Content-Type": "application/x-ndjson" },
+      })
+    );
+    const click = vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => {});
+    render(
+      <Sidebar
+        sessionId="session-1"
+        sessionState={sessionState}
+        participants={[]}
+        presenceSynced={false}
+        events={[]}
+        artifacts={[]}
+        onOpenMedia={vi.fn()}
+        capabilities={FULL_CAPABILITIES}
+      />
+    );
 
-      selectTab("Info");
-      fireEvent.click(screen.getByRole("button", { name: "Download trace" }));
-      await waitFor(() => expect(toast.error).toHaveBeenCalledWith("Failed to download trace"));
-      expect(click).not.toHaveBeenCalled();
-      expect(URL.createObjectURL).not.toHaveBeenCalled();
-    }
-  );
+    selectTab("Info");
+    fireEvent.click(screen.getByRole("button", { name: "Download trace" }));
+    await waitFor(() => expect(toast.error).toHaveBeenCalledWith("Failed to download trace"));
+    expect(click).not.toHaveBeenCalled();
+    expect(URL.createObjectURL).not.toHaveBeenCalled();
+  });
 
   it("aborts a trace body that stalls after headers and re-enables the download button", async () => {
     vi.useFakeTimers();
