@@ -17,6 +17,7 @@ import {
   type SlackWireDenialReason,
 } from "@open-inspect/shared/slack";
 import type { SlackGlobalSettings } from "@open-inspect/shared/types/integrations";
+import { z } from "zod";
 import { IntegrationSettingsStore, resolveSlackSettings } from "../db/integration-settings";
 import { SessionIndexStore } from "../db/session-index";
 import { TeamChannelBindingStore } from "../db/team-channel-bindings";
@@ -42,6 +43,50 @@ const CHANNEL_NAME_CACHE_TTL_MS = 60_000;
 const CHANNEL_NAME_CACHE_MAX_ENTRIES = 1_000;
 const channelNameCache = new Map<string, { id: string; expiresAt: number }>();
 
+const channelInputSchema = z.preprocess(
+  (value) => (typeof value === "string" ? value.trim() : ""),
+  z
+    .string()
+    .min(1, `channel must be 1..${CHANNEL_INPUT_MAX_LENGTH} characters.`)
+    .max(CHANNEL_INPUT_MAX_LENGTH, `channel must be 1..${CHANNEL_INPUT_MAX_LENGTH} characters.`)
+);
+
+const textInputSchema = z.preprocess(
+  (value) => (typeof value === "string" ? value : ""),
+  z
+    .string()
+    .min(1, "text is required.")
+    .max(RAW_TEXT_INPUT_MAX_LENGTH, `text must be at most ${RAW_TEXT_INPUT_MAX_LENGTH} characters.`)
+);
+
+const optionalNonEmptyStringSchema = z.preprocess(
+  (value) => (typeof value === "string" && value.length > 0 ? value : undefined),
+  z.string().optional()
+);
+
+const reasonInputSchema = z.preprocess(
+  (value) =>
+    typeof value === "string" && value.length > 0 ? value.slice(0, REASON_MAX_LENGTH) : undefined,
+  z.string().optional()
+);
+
+const slackNotifyBodySchema = z
+  .preprocess(
+    (value) => (Array.isArray(value) ? {} : value),
+    z.object({
+      channel: channelInputSchema,
+      text: textInputSchema,
+      thread_ts: optionalNonEmptyStringSchema,
+      reason: reasonInputSchema,
+    })
+  )
+  .transform(({ channel, text, thread_ts, reason }) => ({
+    channel,
+    text,
+    threadTs: thread_ts,
+    reason,
+  }));
+
 function cacheChannelName(token: string, channel: { id: string; name: string }, expiresAt: number) {
   const key = JSON.stringify([token, channel.name.toLowerCase()]);
   channelNameCache.delete(key);
@@ -52,12 +97,7 @@ function cacheChannelName(token: string, channel: { id: string; name: string }, 
   }
 }
 
-interface ParsedBody {
-  channel: string;
-  text: string;
-  threadTs: string | undefined;
-  reason: string | undefined;
-}
+type ParsedBody = z.infer<typeof slackNotifyBodySchema>;
 
 interface AuditFields {
   prompt_author_user_id: string | null;
@@ -248,40 +288,16 @@ async function parseBody(request: Request): Promise<ParsedBody | Response> {
     return failureResponse("invalid_input", "Body must be valid JSON.");
   }
 
-  if (raw === null || typeof raw !== "object") {
-    return failureResponse("invalid_input", "Body must be a JSON object.");
-  }
-  const body = raw as Record<string, unknown>;
-
-  const channelValue = typeof body.channel === "string" ? body.channel.trim() : "";
-  if (channelValue.length === 0 || channelValue.length > CHANNEL_INPUT_MAX_LENGTH) {
+  const parsed = slackNotifyBodySchema.safeParse(raw);
+  if (!parsed.success) {
+    const issue = parsed.error.issues[0];
     return failureResponse(
       "invalid_input",
-      `channel must be 1..${CHANNEL_INPUT_MAX_LENGTH} characters.`
-    );
-  }
-  const text = typeof body.text === "string" ? body.text : "";
-  if (text.length === 0) {
-    return failureResponse("invalid_input", "text is required.");
-  }
-  if (text.length > RAW_TEXT_INPUT_MAX_LENGTH) {
-    return failureResponse(
-      "invalid_input",
-      `text must be at most ${RAW_TEXT_INPUT_MAX_LENGTH} characters.`
+      issue && issue.path.length > 0 ? issue.message : "Body must be a JSON object."
     );
   }
 
-  const threadTs =
-    typeof body.thread_ts === "string" && body.thread_ts.length > 0 ? body.thread_ts : undefined;
-  const rawReason = typeof body.reason === "string" ? body.reason : undefined;
-  const reason = rawReason ? rawReason.slice(0, REASON_MAX_LENGTH) : undefined;
-
-  return {
-    channel: channelValue,
-    text,
-    threadTs,
-    reason,
-  };
+  return parsed.data;
 }
 
 function buildBlocks(opts: {

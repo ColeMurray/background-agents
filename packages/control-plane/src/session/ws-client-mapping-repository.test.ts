@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import type { SqlResult, SqlStorage } from "./sql-storage";
+import { SessionStorageIntegrityError } from "./types";
 import { WsClientMappingRepository } from "./ws-client-mapping-repository";
 
 function createMockSql() {
@@ -115,6 +116,27 @@ describe("WsClientMappingRepository", () => {
         },
       ]);
       expect(repository.getWsClientMapping("ws-1")).toBeNull();
+    }
+  );
+
+  it("parses the next authorization expiration row", () => {
+    mock.setRows([{ expires_at: 2000 }]);
+
+    expect(repository.getNextAuthorizationExpiry()).toBe(2000);
+  });
+
+  it("accepts a null next authorization expiration", () => {
+    mock.setRows([{ expires_at: null }]);
+
+    expect(repository.getNextAuthorizationExpiry()).toBeNull();
+  });
+
+  it.each([undefined, "2000", Number.NaN, Number.POSITIVE_INFINITY])(
+    "rejects malformed next authorization expiration rows: %s",
+    (expiresAt) => {
+      mock.setRows([{ expires_at: expiresAt }]);
+
+      expect(() => repository.getNextAuthorizationExpiry()).toThrow(SessionStorageIntegrityError);
     }
   );
 });

@@ -1,5 +1,6 @@
 import { z } from "zod";
 import type { SqlStorage } from "./sql-storage";
+import { SessionStorageIntegrityError } from "./types";
 
 /** WS client mapping result for hibernation recovery. */
 const wsClientMappingResultSchema = z.object({
@@ -12,6 +13,10 @@ const wsClientMappingResultSchema = z.object({
   auth_name: z.string().nullable().optional(),
   /** Wall-clock time when the persisted authorization lease expires. */
   authorization_expires_at: z.number().finite(),
+});
+
+const wsClientAuthorizationExpiryRowSchema = z.object({
+  expires_at: z.number().finite().nullable(),
 });
 
 export type WsClientMappingResult = z.infer<typeof wsClientMappingResultSchema>;
@@ -85,9 +90,13 @@ export class WsClientMappingRepository {
 
   /** Return the earliest persisted authorization expiration, if any. */
   getNextAuthorizationExpiry(): number | null {
-    const rows = this.sql
-      .exec(`SELECT MIN(authorization_expires_at) AS expires_at FROM ws_client_mapping`)
-      .toArray() as Array<{ expires_at: number | null }>;
-    return rows[0]?.expires_at ?? null;
+    const result = this.sql.exec(
+      `SELECT MIN(authorization_expires_at) AS expires_at FROM ws_client_mapping`
+    );
+    const parsed = wsClientAuthorizationExpiryRowSchema.safeParse(result.toArray()[0]);
+    if (!parsed.success) {
+      throw new SessionStorageIntegrityError("Invalid WebSocket authorization expiry row");
+    }
+    return parsed.data.expires_at;
   }
 }
