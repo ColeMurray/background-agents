@@ -67,20 +67,20 @@ Each prompt is a message with its own status.
 | -------- | -------------------------------------------------------------------------------------------------------------- |
 | Enabled  | Running normally and ready to respond to its trigger.                                                          |
 | Degraded | Enabled but has recent consecutive failures. The badge shows the count, for example "Degraded (2 failures)".   |
-| Paused   | Not firing. Either paused by hand or auto-paused after 3 consecutive failures. Resume it to reset the counter. |
+| Paused   | Not firing. Either paused by hand or auto-paused after 5 consecutive failures. Resume it to reset the counter. |
 
 ## Run status
 
 A run is one session started by an automation firing. A multi-repository firing has one run per repository, and the firing's own row summarises them.
 
-| Status          | Meaning                                                                                                                 |
-| --------------- | ----------------------------------------------------------------------------------------------------------------------- |
-| Starting        | A session is being created for this run.                                                                                |
-| Running         | At least one session is executing.                                                                                      |
-| Completed       | Every session finished successfully.                                                                                    |
-| Failed          | Every session hit an error. The failure reason is shown on the run.                                                     |
-| Partial failure | A multi-repository firing where some repositories completed and some failed. Shown on the firing row only.              |
-| Skipped         | The firing was skipped because a previous run was still active ("concurrent run active"). A skipped firing has no runs. |
+| Status          | Meaning                                                                                                                                        |
+| --------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
+| Starting        | A session is being created for this run.                                                                                                       |
+| Running         | At least one session is executing.                                                                                                             |
+| Completed       | Every session finished successfully.                                                                                                           |
+| Failed          | Every session hit an error. The failure reason is shown on the run.                                                                            |
+| Partial failure | A multi-repository firing where some repositories completed and some failed. Shown on the firing row only.                                     |
+| Skipped         | The firing was skipped because the automation was already at its concurrent-run bound ("concurrent run active"). A skipped firing has no runs. |
 
 ## Image build status
 
