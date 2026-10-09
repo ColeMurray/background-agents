@@ -67,6 +67,7 @@ const sampleRow = {
   url: null,
   env: JSON.stringify({ DEBUG: "1" }),
   repo_scope: null,
+  tool_allowlist: null,
   enabled: 1,
   created_at: 1000,
   updated_at: 1000,
@@ -81,6 +82,7 @@ const remoteRow = {
   url: "https://mcp.example.com/sse",
   env: "{}",
   repo_scope: JSON.stringify(["carboncopyinc/habakkuk"]),
+  tool_allowlist: null,
   enabled: 1,
   created_at: 1001,
   updated_at: 1001,
@@ -147,6 +149,25 @@ describe("McpServerStore", () => {
       const result = await store.get("nonexistent");
       expect(result).toBeNull();
     });
+
+    it.each([
+      ["every tool", null, null],
+      ["no tools", "[]", []],
+      ["the stored tools", JSON.stringify(["fetch", "search"]), ["fetch", "search"]],
+    ])("reads a tool allowlist exposing %s", async (_case, stored, expected) => {
+      const { db } = createFakeD1({ firstResult: { ...remoteRow, tool_allowlist: stored } });
+      const store = new McpServerStore(db, TEST_ENCRYPTION_KEY);
+      expect((await store.get("def456"))!.toolAllowlist).toEqual(expected);
+    });
+
+    it.each([["not json"], [JSON.stringify({ tools: ["search"] })], [JSON.stringify([""])]])(
+      "exposes no tools when the stored allowlist %s is unreadable",
+      async (stored) => {
+        const { db } = createFakeD1({ firstResult: { ...remoteRow, tool_allowlist: stored } });
+        const store = new McpServerStore(db, TEST_ENCRYPTION_KEY);
+        expect((await store.get("def456"))!.toolAllowlist).toEqual([]);
+      }
+    );
 
     it("handles corrupted JSON in command gracefully", async () => {
       const corruptRow = { ...sampleRow, command: "not-json" };
@@ -244,6 +265,25 @@ describe("McpServerStore", () => {
       } as unknown as ValidatedCreateMcpServerInput;
       await expect(store.create(invalid)).rejects.toThrow(McpServerValidationError);
     });
+
+    it.each([
+      ["no allowlist", undefined, null],
+      ["an empty allowlist", [], "[]"],
+      ["named tools", ["fetch", "search"], JSON.stringify(["fetch", "search"])],
+    ])("stores %s", async (_case, toolAllowlist, stored) => {
+      const { db, statements } = createFakeD1({ firstResult: remoteRow });
+      const store = new McpServerStore(db, TEST_ENCRYPTION_KEY);
+      await store.create({
+        name: "docs",
+        type: "remote",
+        url: "https://mcp.example.com/mcp",
+        enabled: true,
+        toolAllowlist,
+      });
+      const insert = statements.find((statement) => statement.sql.includes("INSERT INTO"))!;
+      expect(insert.sql).toContain("tool_allowlist");
+      expect(insert.params[7]).toBe(stored);
+    });
   });
 
   describe("update()", () => {
@@ -270,6 +310,22 @@ describe("McpServerStore", () => {
       const err = await store.update("def456", { type: "local" }).catch((e) => e);
       expect(err).toBeInstanceOf(McpServerValidationError);
       expect(err.message).toMatch(/require a command/i);
+    });
+
+    it.each([
+      ["keeps the stored allowlist when the patch omits it", {}, '["search"]'],
+      ["restores every tool for a null allowlist", { toolAllowlist: null }, null],
+      ["stores an empty allowlist", { toolAllowlist: [] }, "[]"],
+      ["stores the patched tools", { toolAllowlist: ["fetch"] }, '["fetch"]'],
+    ])("%s", async (_case, patch, stored) => {
+      const { db, statements } = createFakeD1({
+        firstResult: { ...remoteRow, tool_allowlist: '["search"]' },
+      });
+      const store = new McpServerStore(db, TEST_ENCRYPTION_KEY);
+      await store.update("def456", patch);
+      const update = statements.find((statement) => statement.sql.includes("UPDATE"))!;
+      expect(update.sql).toContain("tool_allowlist = ?");
+      expect(update.params[6]).toBe(stored);
     });
   });
 
@@ -326,6 +382,34 @@ describe("McpServerStore", () => {
       });
       expect(remote.env).toBeUndefined();
     });
+
+    it("carries each server's tool allowlist into the session config", async () => {
+      const { db } = createFakeD1({
+        allResults: [sampleRow, { ...remoteRow, tool_allowlist: '["search"]' }],
+      });
+      const store = new McpServerStore(db, TEST_ENCRYPTION_KEY);
+      const results = await store.getDecryptedForSession([
+        { repoOwner: "carboncopyinc", repoName: "habakkuk" },
+      ]);
+      expect(results.map((server) => [server.name, server.toolAllowlist])).toEqual([
+        ["playwright", null],
+        ["remote-mcp", ["search"]],
+      ]);
+    });
+
+    it.each(["[]", "not json"])(
+      "leaves out a server whose stored allowlist %s allows no tools",
+      async (stored) => {
+        const { db } = createFakeD1({
+          allResults: [sampleRow, { ...remoteRow, tool_allowlist: stored }],
+        });
+        const store = new McpServerStore(db, TEST_ENCRYPTION_KEY);
+        const results = await store.getDecryptedForSession([
+          { repoOwner: "carboncopyinc", repoName: "habakkuk" },
+        ]);
+        expect(results.map((server) => server.name)).toEqual(["playwright"]);
+      }
+    );
 
     it("returns env (not headers) for local servers", async () => {
       const { db } = createFakeD1({ allResults: [sampleRow] });
