@@ -27,6 +27,14 @@ describe("normalizeWebhookEvent", () => {
     expect(event.contextBlock).not.toContain("idempotencyKey");
     expect(event.contextBlock).toContain("value");
   });
+
+  it("does not treat array payloads as idempotency-key records", () => {
+    const body = ["idempotencyKey", "value"];
+    const event = normalizeWebhookEvent("auto-1", body);
+
+    expect(event.body).toEqual(body);
+    expect(event.contextBlock).toContain("idempotencyKey");
+  });
 });
 
 describe("resolveJsonPath", () => {
@@ -45,6 +53,10 @@ describe("resolveJsonPath", () => {
 
   it("handles null in path", () => {
     expect(resolveJsonPath("$.a.b", { a: null })).toBeUndefined();
+  });
+
+  it("resolves array members without asserting the container as a record", () => {
+    expect(resolveJsonPath("$.items.0.name", { items: [{ name: "first" }] })).toBe("first");
   });
 });
 
