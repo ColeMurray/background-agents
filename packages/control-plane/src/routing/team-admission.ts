@@ -1,5 +1,6 @@
 import { isWorkspaceAdmin } from "@open-inspect/shared/rbac";
 import { resolveTeamAccess } from "@open-inspect/shared/types/team-access";
+import { isSelfActingPrincipal } from "../auth/principal";
 import { viewerFromContext } from "../authorization/session-admission";
 import { TeamMembershipStore } from "../db/team-memberships";
 import { TeamStore } from "../db/teams";
@@ -39,7 +40,9 @@ export async function enforceTeamRequirement(
   ctx: RequestContext,
   evidence: AuthorizationEvidence
 ): Promise<AuthorizationFailure | null> {
-  if (ctx.principal?.kind !== "user") {
+  // An access token resolves its owner's team access, as it does every other
+  // requirement; the method gate has already refused its writes.
+  if (!isSelfActingPrincipal(ctx.principal)) {
     return authorizationDenial(
       json({ error: "Forbidden", code: "service_capability_required" }, 403),
       evidence,

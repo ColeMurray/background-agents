@@ -168,6 +168,23 @@ describe("resolveGitHubCredentialAuthority", () => {
     expect(getUserAuth).not.toHaveBeenCalled();
   });
 
+  it("authorizes access-token principals without browser-session provenance", async () => {
+    const getUserAuth = vi.fn(() => {
+      throw new Error("At least one sign-in provider must be configured");
+    });
+
+    await expect(
+      resolveGitHubCredentialAuthority(
+        createContext({
+          principal: { kind: "access-token", userId: "user-1", tokenId: "token-1" },
+          getUserAuth,
+        }),
+        BROWSER_HEADERS
+      )
+    ).resolves.toEqual({ kind: "service_principal" });
+    expect(getUserAuth).not.toHaveBeenCalled();
+  });
+
   it("rejects sandbox principals", async () => {
     await expect(
       resolveGitHubCredentialAuthority(
