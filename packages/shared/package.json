@@ -242,7 +242,7 @@
     "generate:memory-contract": "UPDATE_MEMORY_CONTRACT=1 vitest run src/memory-tools.test.ts"
   },
   "devDependencies": {
-    "@vitest/coverage-v8": "^4.1.11",
+    "@vitest/coverage-v8": "^5.0.2",
     "typescript": "^5.7.2",
     "vitest": "^4.1.11"
   },
