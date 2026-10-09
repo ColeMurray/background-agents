@@ -517,6 +517,7 @@ describe("SessionRightSidebar", () => {
     ["number record", "42\n"],
     ["boolean record", "false\n"],
     ["string record", '"not an object"\n'],
+    ["array record", "[]\n"],
   ])("reports a %s as a failed download", async (_name, body) => {
     vi.mocked(browserApiFetch).mockResolvedValueOnce(
       new Response(body, {

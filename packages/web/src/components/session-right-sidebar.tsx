@@ -185,7 +185,9 @@ export function SessionRightSidebarContent({
       const failed = (await blob.text()).split("\n").some((line) => {
         if (!line) return false;
         const record: unknown = JSON.parse(line);
-        if (typeof record !== "object" || record === null) throw new Error("Invalid trace record");
+        if (typeof record !== "object" || record === null || Array.isArray(record)) {
+          throw new Error("Invalid trace record");
+        }
         const type = "type" in record ? record.type : undefined;
         return type === "session_error" || type === "error";
       });

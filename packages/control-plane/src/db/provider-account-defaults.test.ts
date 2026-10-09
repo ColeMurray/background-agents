@@ -62,4 +62,28 @@ describe("ProviderDefaultStore", () => {
       ).list()
     ).rejects.toThrow("Invalid provider default row");
   });
+
+  it("rejects invalid persisted audit and timestamp fields", async () => {
+    await expect(
+      new ProviderDefaultStore(database({ first: { ...validRow, created_by: "" } })).get("openai")
+    ).rejects.toThrow("Invalid provider default row");
+
+    await expect(
+      new ProviderDefaultStore(database({ first: { ...validRow, created_at: -1 } })).get("openai")
+    ).rejects.toThrow("Invalid provider default row");
+  });
+
+  it("rejects invalid audit and timestamp fields before writing", async () => {
+    const store = new ProviderDefaultStore(database({}));
+
+    await expect(store.set("openai", "account-auth", "api_key", "", 1)).rejects.toThrow(
+      "Invalid provider default write"
+    );
+    await expect(store.set("openai", "account-auth", "api_key", null, -1)).rejects.toThrow(
+      "Invalid provider default write"
+    );
+    expect(() => store.bindSetForFirstActiveAccount("account-auth", "openai", "", 1)).toThrow(
+      "Invalid provider default write"
+    );
+  });
 });
