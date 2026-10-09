@@ -74,6 +74,49 @@ describe("buildCodeReviewPrompt", () => {
     expect(prompt).not.toContain("gh api repos/group/subgroup/widgets/pulls/42/reviews");
   });
 
+  it("teaches the applyable suggestion fence and its range anchors", () => {
+    const prompt = buildCodeReviewPrompt(baseParams);
+    // The whole point: a `suggestion` fence in a line-anchored comment body is what GitHub
+    // renders with a "Commit suggestion" button, and start_line/start_side anchors a range.
+    expect(prompt).toContain("## Applyable Suggestions");
+    expect(prompt).toContain("```suggestion");
+    expect(prompt).toContain('"start_line": <first line>');
+    expect(prompt).toContain('"start_side": "RIGHT"');
+    // A fence is multi-line, and every comment body ships as a JSON string in the review
+    // payload, so the agent has to be told how to encode the line breaks.
+    expect(prompt).toContain("is a JSON string, so encode its newlines");
+  });
+
+  it("fences the suggestion contract against the ways an applied suggestion breaks code", () => {
+    const prompt = buildCodeReviewPrompt(baseParams);
+    // A suggestion is one click from merge, so each of these is load-bearing: the fence replaces
+    // the anchored lines verbatim, so a diff marker, an ellipsis, or lost indentation applies
+    // cleanly and corrupts the file.
+    expect(prompt).toContain("REPLACES the comment's anchored lines verbatim");
+    expect(prompt).toContain("Reproduce the original leading whitespace exactly");
+    expect(prompt).toContain("HTTP 422");
+    expect(prompt).toContain("post NO fence");
+    // And the agent must check rather than guess — it has the head branch checked out. It reads
+    // the anchored lines with its file-read tool: a PR can add a file whose name is shell syntax,
+    // so a path that reaches shell source is command substitution.
+    expect(prompt).toContain("Read the exact anchored lines with your file-read tool");
+    expect(prompt).not.toContain("sed -n");
+  });
+
+  it("requires every anchor — a lone line as much as a range endpoint — to sit inside a diff hunk", () => {
+    const prompt = buildCodeReviewPrompt(baseParams);
+    // Regression: this used to gate diff-hunk membership on start_line only, so a single-line
+    // `line` anchor outside the diff could still be suggested and would be rejected with 422.
+    expect(prompt).toContain("EVERY anchor line must fall inside a hunk of `gh pr diff`");
+    expect(prompt).toContain("single `line` of a");
+    expect(prompt).toContain("both `start_line` and `line`");
+    expect(prompt).toContain("including a lone `line`");
+    expect(prompt).toContain("not only range endpoints");
+    // Regression guard: the old wording scoped the requirement to range endpoints only.
+    expect(prompt).not.toContain("only when BOTH endpoints appear in a hunk");
+    expect(prompt).not.toContain("gh pr diff <path>");
+  });
+
   it("limits self-reviews to comments", () => {
     const prompt = buildCodeReviewPrompt({ ...baseParams, isSelfReview: true });
     expect(prompt).toContain('"event": "COMMENT"');
@@ -201,9 +244,78 @@ describe("buildCommentActionPrompt", () => {
     expect(prompt).not.toContain("reply to the specific review thread");
   });
 
+  it("offers applyable suggestions only on a validated inherited thread anchor", () => {
+    const prompt = buildCommentActionPrompt({
+      ...baseParams,
+      filePath: "src/cache.ts",
+      diffHunk: "@@ -10,3 +10,5 @@\n+const cache = new Map();",
+      commentId: 999,
+    });
+    expect(prompt).toContain("## Applyable Suggestions");
+    expect(prompt).toContain("```suggestion");
+    expect(prompt).toContain("-F body=@/tmp/reply.md");
+    expect(prompt).toContain("-F body=@/tmp/summary.md");
+    expect(prompt).toContain("inherits the parent comment's line anchor");
+    expect(prompt).toContain("do not send `line`, `start_line`,");
+    expect(prompt).toContain("If any pushed");
+    expect(prompt).not.toContain("EVERY anchor line");
+    expect(prompt).not.toContain("-F start_line=");
+    // The summary lands on issues/{n}/comments, which has no line anchor, so a fence there is
+    // inert — the agent has to know which of its two posting paths can carry one.
+    expect(prompt).toContain("renders as an inert code block");
+  });
+
+  it("requires code location context before offering an inherited suggestion", () => {
+    const prompt = buildCommentActionPrompt({ ...baseParams, commentId: 999 });
+    expect(prompt).toContain("Reply in prose");
+    expect(prompt).not.toContain("## Applyable Suggestions");
+    expect(prompt).not.toContain("```suggestion");
+  });
+
+  it("omits the suggestion contract when there is no thread to reply to", () => {
+    const prompt = buildCommentActionPrompt(baseParams);
+    expect(prompt).not.toContain("## Applyable Suggestions");
+    expect(prompt).not.toContain("```suggestion");
+  });
+
   it("includes summary comment instruction with correct repo path", () => {
     const prompt = buildCommentActionPrompt(baseParams);
     expect(prompt).toContain("repos/acme/widgets/issues/42/comments");
+  });
+
+  it("writes every posted body to a file and offers no fixed heredoc delimiter", () => {
+    const prompt = buildCommentActionPrompt({
+      ...baseParams,
+      filePath: "src/cache.ts",
+      diffHunk: "@@ -10,3 +10,5 @@\n+const cache = new Map();",
+      commentId: 999,
+    });
+    // A suggestion fence carries backticks, and backticks inside a double-quoted shell argument
+    // are command substitution, so no body is ever inlined into the gh call.
+    expect(prompt).not.toContain("-f body=");
+    // A quoted heredoc stops expansion but still ends at the first line equal to the delimiter,
+    // and a fence quoting a script's own `EOF` is exactly such a line — so no fixed delimiter is
+    // offered, and the shell fallback has to prove the delimiter is absent from the body.
+    expect(prompt).toContain("A body line equal to a heredoc delimiter");
+    expect(prompt).toContain("confirm it appears on no line of the body");
+    expect(prompt).not.toContain("<<'EOF'");
+    expect(prompt).not.toContain("<<EOF");
+  });
+
+  it("encodes a nested-namespace owner as a single route segment in every API call", () => {
+    const prompt = buildCommentActionPrompt({
+      ...baseParams,
+      owner: "group/platform",
+      filePath: "src/cache.ts",
+      diffHunk: "@@ -10,3 +10,5 @@\n+const cache = new Map();",
+      commentId: 999,
+    });
+    // Route construction stays aligned with the shared repository-identity contract.
+    expect(prompt).toContain("repos/group%2Fplatform/widgets/issues/42/comments");
+    expect(prompt).toContain("repos/group%2Fplatform/widgets/pulls/42/comments/999/replies");
+    expect(prompt).not.toContain("repos/group/platform/widgets");
+    // The human-readable intro line is prose, not a route, and stays unencoded.
+    expect(prompt).toContain("Pull Request #42 in group/platform/widgets.");
   });
 
   it("escapes embedded closing user_content tags in comment body", () => {
