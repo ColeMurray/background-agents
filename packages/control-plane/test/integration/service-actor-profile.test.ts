@@ -1,7 +1,9 @@
-import { beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { env } from "cloudflare:test";
 import type { ServiceName } from "@open-inspect/shared/service-auth";
+import { IdentityClaimStore } from "../../src/db/identity-claim-store";
 import { UserStore } from "../../src/db/user-store";
+import { KnownActorProfileClaim } from "../../src/routing/known-actor-profile";
 import { cleanD1Tables } from "./cleanup";
 import { serviceFetch } from "./helpers";
 
@@ -37,6 +39,10 @@ describe("known service actor profile claims", () => {
   beforeEach(async () => {
     await cleanD1Tables();
     users = new UserStore(env.DB);
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
   });
 
   async function enrollNameless(provider: "slack" | "linear", providerUserId: string) {
@@ -82,6 +88,37 @@ describe("known service actor profile claims", () => {
     expect(created.status).toBe(201);
     await expect(users.getUserById(legacy.id)).resolves.toMatchObject({
       email: "legacy@corp.test",
+      emailVerified: true,
+    });
+  });
+
+  it("does not report a split when a concurrent request claimed the email for this user", async () => {
+    const nameless = await enrollNameless("slack", "U-CONCURRENT");
+    const claimStore = new IdentityClaimStore(env.DB);
+    const findEmailOwnerId = claimStore.findEmailOwnerId.bind(claimStore);
+    // The concurrent claim lands after this request read the missing email
+    // and before it looks up the email's owner.
+    vi.spyOn(claimStore, "findEmailOwnerId").mockImplementation(async (email) => {
+      await claimStore.claimEmail(nameless.id, email);
+      return findEmailOwnerId(email);
+    });
+    const warnings = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    await new KnownActorProfileClaim(users, claimStore).claim(
+      {
+        provider: "slack",
+        providerUserId: "U-CONCURRENT",
+        participantUserId: "slack:U-CONCURRENT",
+        canonicalUserId: nameless.id,
+      },
+      { email: "concurrent@corp.test" }
+    );
+
+    expect(warnings.mock.calls.map(([line]) => JSON.parse(String(line)))).not.toContainEqual(
+      expect.objectContaining({ event: "auth.subject_email_collision" })
+    );
+    await expect(users.getUserById(nameless.id)).resolves.toMatchObject({
+      email: "concurrent@corp.test",
       emailVerified: true,
     });
   });

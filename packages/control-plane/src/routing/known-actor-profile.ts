@@ -51,6 +51,8 @@ export class KnownActorProfileClaim {
     if (!email) return;
 
     const emailOwnerId = await this.claimStore.findEmailOwnerId(email);
+    // A concurrent request may already have claimed it for this same user.
+    if (emailOwnerId === actor.canonicalUserId) return;
     if (emailOwnerId !== null) {
       logger.warn("Actor identity and attested email belong to different canonical users", {
         event: "auth.subject_email_collision",
