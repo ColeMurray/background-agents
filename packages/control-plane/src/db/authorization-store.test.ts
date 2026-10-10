@@ -130,6 +130,30 @@ describe("AuthorizationStore", () => {
     await expect(store.listRoles()).rejects.toThrow("Malformed persisted authorization role row");
   });
 
+  it.each([
+    ["negative number", -1],
+    ["fractional number", 1.5],
+    ["negative string", "-1"],
+    ["unsafe integer string", "9007199254740992"],
+    ["overflowing digit string", "9".repeat(400)],
+  ])("rejects a persisted role count that is a %s", async (_label, assignmentCount) => {
+    const store = new AuthorizationStore(
+      fakeDatabase({
+        allResults: [
+          {
+            id: "role_custom",
+            key: null,
+            name: "Custom",
+            description: null,
+            assignment_count: assignmentCount,
+          },
+        ],
+      })
+    );
+
+    await expect(store.listRoles()).rejects.toThrow("Malformed persisted authorization role row");
+  });
+
   it("maps nullable persisted member fields at the store boundary", async () => {
     const store = new AuthorizationStore(
       fakeDatabase({

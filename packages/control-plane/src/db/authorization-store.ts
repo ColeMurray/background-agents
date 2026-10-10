@@ -25,8 +25,9 @@ const effectiveRowSchema = z.object({
 type EffectiveRow = z.infer<typeof effectiveRowSchema>;
 
 const countValueSchema = z
-  .union([z.number(), z.string().regex(/^-?\d+$/)])
-  .transform((value) => Number(value));
+  .union([z.number(), z.string().regex(/^\d+$/)])
+  .transform((value) => Number(value))
+  .pipe(z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER));
 
 const roleRowSchema = z.object({
   id: z.string(),
