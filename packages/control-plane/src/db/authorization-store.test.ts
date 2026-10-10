@@ -112,6 +112,77 @@ describe("AuthorizationStore", () => {
     ]);
   });
 
+  it("rejects a malformed persisted role row", async () => {
+    const store = new AuthorizationStore(
+      fakeDatabase({
+        allResults: [
+          {
+            id: "role_custom",
+            key: null,
+            name: "Custom",
+            description: null,
+            assignment_count: "many",
+          },
+        ],
+      })
+    );
+
+    await expect(store.listRoles()).rejects.toThrow("Malformed persisted authorization role row");
+  });
+
+  it("maps nullable persisted member fields at the store boundary", async () => {
+    const store = new AuthorizationStore(
+      fakeDatabase({
+        allResults: [
+          {
+            user_id: "user-1",
+            display_name: null,
+            email: null,
+            suspended_at: null,
+            role_id: "role_builtin_owner",
+            role_key: "owner",
+            role_name: "Owner",
+          },
+        ],
+      })
+    );
+
+    await expect(store.listMembers()).resolves.toEqual([
+      {
+        userId: "user-1",
+        displayName: null,
+        email: null,
+        suspendedAt: null,
+        role: {
+          id: "role_builtin_owner",
+          key: "owner",
+          name: "Owner",
+        },
+      },
+    ]);
+  });
+
+  it("rejects a partial persisted member row", async () => {
+    const store = new AuthorizationStore(
+      fakeDatabase({
+        allResults: [
+          {
+            user_id: "user-1",
+            display_name: null,
+            email: null,
+            suspended_at: null,
+            role_id: "role_builtin_owner",
+            role_key: "owner",
+          },
+        ],
+      })
+    );
+
+    await expect(store.listMembers()).rejects.toThrow(
+      "Malformed persisted authorization member row"
+    );
+  });
+
   it("returns the mutation outcome from the audit insert that gates writes", async () => {
     const prepared: Array<{ sql: string; values: unknown[] }> = [];
     const store = new AuthorizationStore(

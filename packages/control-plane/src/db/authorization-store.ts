@@ -24,23 +24,31 @@ const effectiveRowSchema = z.object({
 
 type EffectiveRow = z.infer<typeof effectiveRowSchema>;
 
-interface RoleRow {
-  id: string;
-  key: BuiltInRoleKey | null;
-  name: string;
-  description: string | null;
-  assignment_count: number;
-}
+const countValueSchema = z
+  .union([z.number(), z.string().regex(/^-?\d+$/)])
+  .transform((value) => Number(value));
 
-interface MemberRow {
-  user_id: string;
-  display_name: string | null;
-  email: string | null;
-  suspended_at: number | null;
-  role_id: string;
-  role_key: BuiltInRoleKey | null;
-  role_name: string;
-}
+const roleRowSchema = z.object({
+  id: z.string(),
+  key: builtInRoleKeySchema.nullable(),
+  name: z.string(),
+  description: z.string().nullable(),
+  assignment_count: countValueSchema,
+});
+
+type RoleRow = z.infer<typeof roleRowSchema>;
+
+const memberRowSchema = z.object({
+  user_id: z.string(),
+  display_name: z.string().nullable(),
+  email: z.string().nullable(),
+  suspended_at: z.number().nullable(),
+  role_id: z.string(),
+  role_key: builtInRoleKeySchema.nullable(),
+  role_name: z.string(),
+});
+
+type MemberRow = z.infer<typeof memberRowSchema>;
 
 /** Persistence view of a user's assignment and suspension state before grants are resolved. */
 export interface EffectiveAuthorizationRecord {
@@ -130,6 +138,18 @@ function parseEffectiveRow(row: unknown): EffectiveRow {
   throw new Error("Malformed persisted authorization row");
 }
 
+function parseRoleRow(row: unknown): RoleRow {
+  const parsed = roleRowSchema.safeParse(row);
+  if (parsed.success) return parsed.data;
+  throw new Error("Malformed persisted authorization role row");
+}
+
+function parseMemberRow(row: unknown): MemberRow {
+  const parsed = memberRowSchema.safeParse(row);
+  if (parsed.success) return parsed.data;
+  throw new Error("Malformed persisted authorization member row");
+}
+
 function toRoleRecord(row: RoleRow): AuthorizationRoleRecord {
   return {
     ...toRoleReference(row.id, row.key, row.name),
@@ -191,8 +211,8 @@ export class AuthorizationStore {
          GROUP BY r.id
          ORDER BY r.is_system DESC, r.normalized_name ASC`
       )
-      .all<RoleRow>();
-    return result.results.map(toRoleRecord);
+      .all<unknown>();
+    return result.results.map((row) => toRoleRecord(parseRoleRow(row)));
   }
 
   /** Loads a role and its assignment count, or null when absent. */
@@ -206,8 +226,8 @@ export class AuthorizationStore {
          WHERE r.id = ? GROUP BY r.id`
       )
       .bind(roleId)
-      .first<RoleRow>();
-    return row ? toRoleRecord(row) : null;
+      .first<unknown>();
+    return row ? toRoleRecord(parseRoleRow(row)) : null;
   }
 
   /** Lists users with role assignments; unassigned users are intentionally excluded. */
@@ -221,8 +241,8 @@ export class AuthorizationStore {
          JOIN roles r ON r.id = ura.role_id
          ORDER BY COALESCE(u.display_name, u.email, u.id) COLLATE NOCASE`
       )
-      .all<MemberRow>();
-    return result.results.map(toMember);
+      .all<unknown>();
+    return result.results.map((row) => toMember(parseMemberRow(row)));
   }
 
   /** Atomically revalidates the actor, preserves owner invariants, updates the role, and audits. */
