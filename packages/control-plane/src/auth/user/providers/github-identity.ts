@@ -106,9 +106,31 @@ export class GitHubProviderIdentityResolver {
         headers: this.apiHeaders(accessToken),
       });
       if (!response.ok) {
+        // #2153: a bare "lookup was not successful" names neither the status
+        // nor the fix. A 403 here is usually the GitHub App missing
+        // Account -> Email addresses: Read-only — unless the rate limit is
+        // exhausted, which also answers 403. Primary rate limiting carries
+        // x-ratelimit-remaining: 0 and secondary rate limiting carries
+        // retry-after, so either header withholds the hint. Log both so the
+        // control-plane log points at the fix, and carry the status in the
+        // thrown error.
+        const rateLimited =
+          response.headers.get("x-ratelimit-remaining") === "0" ||
+          response.headers.get("retry-after") !== null;
+        const permissionHint =
+          response.status === 403 && !rateLimited
+            ? "Grant the GitHub App the Account -> Email addresses: Read-only permission"
+            : undefined;
+        this.logger.error("GitHub email lookup failed", {
+          event: "auth.github_email_lookup_failed",
+          status: response.status,
+          ...(permissionHint ? { hint: permissionHint } : {}),
+        });
         throw new OAuthProviderError(
           "provider_unavailable",
-          "GitHub email lookup was not successful"
+          `GitHub email lookup was not successful (status ${response.status}${
+            permissionHint ? `; ${permissionHint}` : ""
+          })`
         );
       }
       const parsed = githubEmailPageSchema.safeParse(
