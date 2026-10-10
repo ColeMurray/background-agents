@@ -162,7 +162,7 @@ describe("repository list route", () => {
     expect(response.status).toBe(200);
     expect(mockCacheGet).toHaveBeenCalledWith(REPOS_CACHE_KEY, "json");
     expect(mockCachePut).toHaveBeenCalledWith(REPOS_CACHE_KEY, expect.any(String), {
-      expirationTtl: 3600,
+      ttlMs: 3_600_000,
     });
     const cached = JSON.parse(mockCachePut.mock.calls[0][1]) as { scmIdentity: string };
     expect(cached.scmIdentity).toBe(expectedIdentity);

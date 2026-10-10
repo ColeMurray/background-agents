@@ -38,7 +38,7 @@ export { REPOS_CACHE_KEY, reposCacheIdentity } from "../repos/cache";
 const logger = createLogger("router:repos");
 
 const REPOS_CACHE_FRESH_MS = 5 * 60 * 1000;
-const REPOS_CACHE_KV_TTL_SECONDS = 3600;
+const REPOS_CACHE_KV_TTL_MS = 3600 * 1000;
 
 type ReposRefreshResult =
   | { ok: true; repos: EnrichedRepository[]; cachedAt: string }
@@ -109,7 +109,7 @@ async function refreshReposCache(
     await cacheStore.put(
       REPOS_CACHE_KEY,
       JSON.stringify({ repos: enrichedRepos, cachedAt, scmIdentity, freshUntil }),
-      { expirationTtl: REPOS_CACHE_KV_TTL_SECONDS }
+      { ttlMs: REPOS_CACHE_KV_TTL_MS }
     );
     logger.info("Repos cache refreshed", {
       trace_id: traceId,

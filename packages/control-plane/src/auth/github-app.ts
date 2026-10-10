@@ -33,8 +33,8 @@ export const INSTALLATION_TOKEN_MIN_REMAINING_MS = 5 * 60 * 1000;
 /** Maximum distinct token scopes retained in the process cache. */
 export const INSTALLATION_TOKEN_MEMORY_CACHE_MAX_ENTRIES = 128;
 
-/** Upper bound for KV cache TTL (seconds). */
-const INSTALLATION_TOKEN_CACHE_MAX_TTL_SECONDS = 3600;
+/** Upper bound for KV cache TTL (ms). */
+const INSTALLATION_TOKEN_CACHE_MAX_TTL_MS = 3600 * 1000;
 
 const INSTALLATION_TOKEN_CACHE_KEY_PREFIX = "github:installation-token:v2";
 
@@ -378,13 +378,10 @@ async function writeInstallationTokenToCache(
   }
 
   const cacheBoundLifetimeMs = Math.min(remainingLifetimeMs, INSTALLATION_TOKEN_CACHE_MAX_AGE_MS);
-  const ttlSeconds = Math.max(
-    1,
-    Math.min(INSTALLATION_TOKEN_CACHE_MAX_TTL_SECONDS, Math.floor(cacheBoundLifetimeMs / 1000))
-  );
+  const ttlMs = Math.max(1, Math.min(INSTALLATION_TOKEN_CACHE_MAX_TTL_MS, cacheBoundLifetimeMs));
 
   try {
-    await env.cacheStore.put(cacheKey, JSON.stringify(cached), { expirationTtl: ttlSeconds });
+    await env.cacheStore.put(cacheKey, JSON.stringify(cached), { ttlMs });
   } catch {
     // Cache failures are non-fatal.
   }
