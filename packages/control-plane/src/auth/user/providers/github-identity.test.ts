@@ -290,6 +290,23 @@ describe("GitHubProviderIdentityResolver", () => {
     });
   });
 
+  it("withholds the permission hint on a secondary rate limit", async () => {
+    const logger = { error: vi.fn() };
+    const resolver = new GitHubProviderIdentityResolver(config, {
+      fetch: emailsFetch(403, { "retry-after": "60" }),
+      logger,
+    });
+
+    await expect(resolver.resolveIdentity("ghu-access")).rejects.toMatchObject({
+      failure: "provider_unavailable",
+      message: "GitHub email lookup was not successful (status 403)",
+    });
+    expect(logger.error).toHaveBeenCalledWith("GitHub email lookup failed", {
+      event: "auth.github_email_lookup_failed",
+      status: 403,
+    });
+  });
+
   it("carries the status without a hint on a non-403 email failure", async () => {
     const logger = { error: vi.fn() };
     const resolver = new GitHubProviderIdentityResolver(config, {

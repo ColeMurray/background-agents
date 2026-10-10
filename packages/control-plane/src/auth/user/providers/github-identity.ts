@@ -109,9 +109,14 @@ export class GitHubProviderIdentityResolver {
         // #2153: a bare "lookup was not successful" names neither the status
         // nor the fix. A 403 here is usually the GitHub App missing
         // Account -> Email addresses: Read-only — unless the rate limit is
-        // exhausted, which also answers 403. Log both so the control-plane
-        // log points at the fix, and carry the status in the thrown error.
-        const rateLimited = response.headers.get("x-ratelimit-remaining") === "0";
+        // exhausted, which also answers 403. Primary rate limiting carries
+        // x-ratelimit-remaining: 0 and secondary rate limiting carries
+        // retry-after, so either header withholds the hint. Log both so the
+        // control-plane log points at the fix, and carry the status in the
+        // thrown error.
+        const rateLimited =
+          response.headers.get("x-ratelimit-remaining") === "0" ||
+          response.headers.get("retry-after") !== null;
         const permissionHint =
           response.status === 403 && !rateLimited
             ? "Grant the GitHub App the Account -> Email addresses: Read-only permission"
