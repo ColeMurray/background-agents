@@ -43,6 +43,8 @@ const replaceMemberStatusInput: Parameters<AuthorizationStore["replaceMemberStat
 };
 
 describe("AuthorizationStore", () => {
+  const canonicalUserId = "a".repeat(32);
+
   it("maps an effective authorization row with no role assignment", async () => {
     const store = new AuthorizationStore(
       fakeDatabase({
@@ -159,7 +161,7 @@ describe("AuthorizationStore", () => {
       fakeDatabase({
         allResults: [
           {
-            user_id: "user-1",
+            user_id: canonicalUserId,
             display_name: null,
             email: null,
             suspended_at: null,
@@ -173,7 +175,7 @@ describe("AuthorizationStore", () => {
 
     await expect(store.listMembers()).resolves.toEqual([
       {
-        userId: "user-1",
+        userId: canonicalUserId,
         displayName: null,
         email: null,
         suspendedAt: null,
@@ -184,6 +186,33 @@ describe("AuthorizationStore", () => {
         },
       },
     ]);
+  });
+
+  it.each([
+    ["noncanonical user ID", { user_id: "user-1" }],
+    ["negative suspension timestamp", { suspended_at: -1 }],
+    ["fractional suspension timestamp", { suspended_at: 1.5 }],
+  ])("rejects a persisted member row with a %s", async (_label, override) => {
+    const store = new AuthorizationStore(
+      fakeDatabase({
+        allResults: [
+          {
+            user_id: canonicalUserId,
+            display_name: null,
+            email: null,
+            suspended_at: null,
+            role_id: "role_builtin_owner",
+            role_key: "owner",
+            role_name: "Owner",
+            ...override,
+          },
+        ],
+      })
+    );
+
+    await expect(store.listMembers()).rejects.toThrow(
+      "Malformed persisted authorization member row"
+    );
   });
 
   it("rejects a partial persisted member row", async () => {

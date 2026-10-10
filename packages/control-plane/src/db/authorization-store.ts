@@ -6,6 +6,7 @@ import {
   type PermissionId,
   type RoleReference,
   type WorkspaceMember,
+  workspaceMemberSchema,
 } from "@open-inspect/shared/rbac";
 import type { AuditOperationAction } from "@open-inspect/shared/types/audit-events";
 import { z } from "zod";
@@ -160,13 +161,15 @@ function toRoleRecord(row: RoleRow): AuthorizationRoleRecord {
 }
 
 function toMember(row: MemberRow): WorkspaceMember {
-  return {
+  const parsed = workspaceMemberSchema.safeParse({
     userId: row.user_id,
     displayName: row.display_name,
     email: row.email,
     suspendedAt: row.suspended_at,
     role: toRoleReference(row.role_id, row.role_key, row.role_name),
-  };
+  });
+  if (parsed.success) return parsed.data;
+  throw new Error("Malformed persisted authorization member row");
 }
 
 /** Persists RBAC reads and authorization-guarded, audited member mutations. */
