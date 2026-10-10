@@ -24,7 +24,7 @@ import { createCachedResource } from "./cached-resource";
 import {
   controlPlaneFetch,
   fetchControlPlaneJson,
-  KV_CACHE_TTL_SECONDS,
+  KV_CACHE_TTL_MS,
   LOCAL_CACHE_TTL_MS,
 } from "./control-plane";
 import { createLogger } from "../logger";
@@ -168,7 +168,7 @@ export async function getAvailableRepos(
       // Also store in KV for persistence across worker restarts
       try {
         await createKvCacheStore(env.SLACK_KV).put(cacheKey, JSON.stringify(repos), {
-          expirationTtl: KV_CACHE_TTL_SECONDS,
+          ttlMs: KV_CACHE_TTL_MS,
         });
       } catch (e) {
         log.warn("kv.put", {
@@ -308,7 +308,7 @@ export async function getWatchedChannels(env: Env, traceId?: string): Promise<Se
 
     try {
       await kv.put(WATCHED_CHANNELS_CACHE_KEY, JSON.stringify(channels), {
-        expirationTtl: KV_CACHE_TTL_SECONDS,
+        ttlMs: KV_CACHE_TTL_MS,
       });
     } catch (e) {
       log.warn("kv.put", {
