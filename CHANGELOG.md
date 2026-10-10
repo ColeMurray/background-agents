@@ -2,6 +2,16 @@
 
 New features, integrations, and notable improvements to Open-Inspect — newest first.
 
+## October 9, 2026
+
+**MCP tool selection.** Choose which of an MCP server's tools agents can use under **Settings > MCP
+Servers**. Set a server to **Selected tools only**, click **Load tools** to list what a remote
+server offers, and tick the tools to keep; for a local server, type tool names. OpenCode leaves the
+other tools out of every request, so a large server no longer fills the context window. Claude Agent
+allows only the selected tools and refuses the rest. Servers default to **All tools**, so existing
+configurations are unchanged. Requires D1 migration 0086 and a sandbox image rebuild. See
+[MCP tool allowlists](docs/HOW_IT_WORKS.md#mcp-tool-allowlists).
+
 ## October 8, 2026
 
 **Claude Agent for Slack sessions.** Choose OpenCode or Claude Agent for new Slack sessions under

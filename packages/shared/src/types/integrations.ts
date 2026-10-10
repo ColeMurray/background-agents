@@ -701,10 +701,19 @@ export interface McpServerConfig {
   env?: Record<string, string>;
   headers?: Record<string, string>;
   repoScopes?: string[] | null;
+  /** Server tool names the agent may use. Null or absent exposes every tool. */
+  toolAllowlist?: string[] | null;
   enabled: boolean;
 }
 
 export const DEFAULT_MCP_SERVER_ENABLED = true;
+/** Most tools an allowlist may name; discovery fails for a server that advertises more. */
+export const MAX_MCP_SERVER_TOOLS = 1000;
+/** Allowlisted tool names: trimmed, non-empty, deduplicated and sorted. */
+export const mcpToolAllowlistSchema = z
+  .array(z.string().trim().min(1).max(256))
+  .max(MAX_MCP_SERVER_TOOLS)
+  .transform((tools) => [...new Set(tools)].sort());
 export const mcpServerTypeSchema = z.enum(["local", "remote"]);
 export const mcpServerCommandSchema = z.array(z.string()).min(1);
 export const mcpServerCredentialMapSchema = z.record(z.string(), z.string());
@@ -712,6 +721,7 @@ export const mcpServerCredentialMapSchema = z.record(z.string(), z.string());
 const mcpServerCommonFields = {
   name: z.string().trim().min(1),
   repoScopes: z.array(z.string()).nullable().optional(),
+  toolAllowlist: mcpToolAllowlistSchema.nullable().optional(),
   enabled: z.boolean().optional(),
 };
 
@@ -771,7 +781,18 @@ export interface McpServerMetadata {
   hasEnv: boolean;
   hasHeaders: boolean;
   repoScopes?: string[] | null;
+  toolAllowlist?: string[] | null;
   enabled: boolean;
+}
+
+/** One tool a remote MCP server advertises, as returned by tool discovery. */
+export interface McpToolMetadata {
+  name: string;
+  description?: string;
+}
+
+export interface DiscoverMcpToolsResponse {
+  tools: McpToolMetadata[];
 }
 
 export const INTEGRATION_DEFINITIONS: {

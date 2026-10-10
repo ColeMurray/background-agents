@@ -209,6 +209,86 @@ class TestOptions:
         assert "mcp__local__*" in options["allowed_tools"]
         assert "Bash" in options["allowed_tools"]
 
+    @pytest.mark.asyncio
+    async def test_tool_allowlists_limit_each_servers_tools(self, tmp_path: Path) -> None:
+        h = Harness(
+            tmp_path,
+            turns=[[_result(0.1)]],
+            mcp_servers=(
+                {"name": "linear", "type": "remote", "url": "https://mcp.linear"},
+                {
+                    "name": "docs",
+                    "type": "remote",
+                    "url": "https://mcp.docs",
+                    "toolAllowlist": ["search", "fetch/page"],
+                },
+                {
+                    "name": "noisy",
+                    "type": "local",
+                    "command": ["npx", "noisy"],
+                    "toolAllowlist": [],
+                },
+            ),
+        )
+        await h.harness.open()
+        await h.harness.create_session()
+        await _run(
+            h.harness,
+            HarnessPrompt(message_id="m1", text="hi", model="m"),
+        )
+        options = h.client.options
+        mcp_rules = [tool for tool in options["allowed_tools"] if tool.startswith("mcp__")]
+        assert mcp_rules[:3] == [
+            "mcp__linear__*",
+            "mcp__docs__search",
+            "mcp__docs__fetch_page",
+        ]
+        assert "mcp__docs__*" not in options["allowed_tools"]
+        assert not any(tool.startswith("mcp__noisy") for tool in options["allowed_tools"])
+        assert options["disallowed_tools"] == ["AskUserQuestion", "mcp__noisy"]
+        assert set(options["mcp_servers"]) >= {"linear", "docs", "noisy"}
+        # Approvals from other sources add up, so a hook refuses the unselected tools.
+        [matcher] = options["hooks"]["PreToolUse"]
+        [guard] = matcher.hooks
+        denied = await guard({"tool_name": "mcp__docs__delete"}, None, None)
+        assert denied["hookSpecificOutput"]["permissionDecision"] == "deny"
+        assert await guard({"tool_name": "mcp__docs__fetch_page"}, None, None) == {}
+        assert await guard({"tool_name": "mcp__linear__anything"}, None, None) == {}
+
+    async def test_no_tool_guard_without_allowlists(self, tmp_path: Path) -> None:
+        h = Harness(
+            tmp_path,
+            turns=[[_result(0.1)]],
+            mcp_servers=({"name": "linear", "type": "remote", "url": "https://mcp.linear"},),
+        )
+        await h.harness.open()
+        await h.harness.create_session()
+        await _run(h.harness, HarnessPrompt(message_id="m1", text="hi", model="m"))
+        assert "hooks" not in h.client.options
+
+    async def test_servers_sharing_tool_names_share_the_strictest_allowlist(
+        self, tmp_path: Path
+    ) -> None:
+        h = Harness(
+            tmp_path,
+            turns=[[_result(0.1)]],
+            mcp_servers=(
+                {"name": "my.docs", "type": "remote", "url": "https://mcp.docs"},
+                {
+                    "name": "my_docs",
+                    "type": "remote",
+                    "url": "https://mcp.docs2",
+                    "toolAllowlist": ["search"],
+                },
+            ),
+        )
+        await h.harness.open()
+        await h.harness.create_session()
+        await _run(h.harness, HarnessPrompt(message_id="m1", text="hi", model="m"))
+        allowed = h.client.options["allowed_tools"]
+        assert "mcp__my_docs__*" not in allowed
+        assert allowed.count("mcp__my_docs__search") == 2
+
     async def test_stdout_ceiling_clears_the_whole_attachment_budget(self, tmp_path: Path) -> None:
         """One NDJSON line carries every attachment the runtime accepts.
 

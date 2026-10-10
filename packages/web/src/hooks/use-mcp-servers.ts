@@ -3,7 +3,9 @@ import { useAuthSession } from "@/lib/auth-session";
 import { browserApiFetch } from "@/lib/browser-api-fetch";
 import type {
   CreateMcpServerRequest,
+  DiscoverMcpToolsResponse,
   McpServerMetadata,
+  McpToolMetadata,
   UpdateMcpServerRequest,
 } from "@open-inspect/shared/types/integrations";
 
@@ -58,4 +60,17 @@ export async function deleteMcpServer(id: string): Promise<void> {
     const error = await response.json().catch(() => ({}));
     throw new Error(error.error || "Failed to delete MCP server");
   }
+}
+
+/** Asks the control plane to connect to a saved remote server and list its tools. */
+export async function discoverMcpTools(id: string): Promise<McpToolMetadata[]> {
+  const response = await browserApiFetch(`${MCP_SERVERS_KEY}/${encodeURIComponent(id)}/tools`, {
+    method: "POST",
+  });
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({}));
+    throw new Error(error.error || "Failed to load MCP server tools");
+  }
+  const body: DiscoverMcpToolsResponse = await response.json();
+  return body.tools;
 }

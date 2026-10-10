@@ -276,7 +276,9 @@ fix instead.
 - **Tools.** Open-Inspect's own tools are served to the Claude harness in-process as the `oi` MCP
   server: child sessions and `upload-media` always, `create-pull-request` when the session has a
   repository, and `slack-notify` when agent notifications are enabled for the repository. Session
-  MCP servers are passed through unchanged.
+  MCP servers are passed through, with a server's tool allowlist applied: only its selected tools
+  are allowed (`mcp__<server>__<tool>`). The control plane leaves out a server with an empty
+  allowlist.
 - **Sub-agents.** The child runs with `CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1`, so an `Agent` tool
   call returns only when its sub-agent has finished, and several sub-agents launched in one message
   still run concurrently. This is the same contract as OpenCode's `task` tool, and the timeline

@@ -15,6 +15,12 @@ import httpx
 from .constants import OPENCODE_PORT
 from .git_excludes import install_runtime_git_excludes
 from .mcp_packages import McpPackageInstaller
+from .mcp_tool_access import (
+    OPENCODE_BUILTIN_TOOL_IDS,
+    namespace_allowlists,
+    opencode_permission_rules,
+    opencode_shadowed_namespaces,
+)
 from .memories import memory_path
 from .process_output import iter_process_lines
 from .sandbox_bin import install_bin_scripts
@@ -28,6 +34,21 @@ if TYPE_CHECKING:
 _LOG_FORWARD_STREAM_LIMIT_BYTES = 1024 * 1024
 AGENT_TOOLS_GATED_ON_ENV = {"slack-notify.js": "AGENT_SLACK_NOTIFY_ENABLED"}
 AGENT_TOOLS_REQUIRING_REPOSITORY: set[str] = set()
+
+
+def _custom_tool_ids(workdir: Path) -> list[str]:
+    """Custom tools OpenCode loads from the project and global config, both
+    Open-Inspect's and the repository's own, named after their files."""
+    config_dirs = (workdir / ".opencode", resolve_opencode_global_config_dir())
+    return sorted(
+        {
+            path.stem
+            for config_dir in config_dirs
+            for subdirectory in ("tool", "tools")
+            for path in (config_dir / subdirectory).glob("*")
+            if path.suffix in {".js", ".ts"}
+        }
+    )
 
 
 def resolve_opencode_global_config_dir() -> Path:
@@ -431,6 +452,15 @@ class OpenCodeServer:
         # Working directory: the repo for single-repo sessions, /workspace
         # for multi-repo (every member visible) and repo-less sessions.
         installed_runtime_paths = self._prepare_opencode_filesystem(workdir, repositories)
+        tool_rules = opencode_permission_rules(
+            mcp_servers, (*OPENCODE_BUILTIN_TOOL_IDS, *_custom_tool_ids(workdir))
+        )
+        if tool_rules:
+            opencode_config["permission"].update(tool_rules)
+            self.log.info("mcp.tool_allowlists_applied", rule_count=len(tool_rules))
+            shadowed = opencode_shadowed_namespaces(namespace_allowlists(mcp_servers))
+            if shadowed:
+                self.log.warn("mcp.tool_allowlist_shadowed_servers", namespaces=shadowed)
         # Deploy auth proxy plugins for control-plane-managed subscriptions.
         opencode_dir = workdir / ".opencode"
         managed_plugins = (
