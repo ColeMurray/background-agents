@@ -388,6 +388,19 @@ export function memorySearchTerms(query: string): string[] {
   return [...new Set(query.toLowerCase().split(/\s+/).filter(Boolean))];
 }
 
+/**
+ * Management-list text filter (`GET /memories?search=`): the same literal terms and bounds as agent
+ * search, except that blank means "no filter" rather than an error, since it backs a search box.
+ */
+export const memoryListSearchSchema = z
+  .string()
+  .trim()
+  .max(MEMORY_SEARCH_LIMITS.query)
+  .refine(
+    (query) => memorySearchTerms(query).length <= MEMORY_SEARCH_LIMITS.terms,
+    "Too many search terms"
+  );
+
 /** Optional `repoOwner`/`repoName` selector shared by agent search and write inputs. */
 const repositorySelectorShape = {
   repoOwner: repositoryPairInputSchema.shape.repoOwner

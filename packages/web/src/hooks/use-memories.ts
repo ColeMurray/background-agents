@@ -36,19 +36,30 @@ function apiRequest<T>(path: BrowserApiPath, schema: z.ZodType<T>, init?: Reques
   return browserApiJson(path, schema, "Memory request failed", init);
 }
 
-function memoryListKey(scope: MemoryScope, status: MemoryStatus, offset: number): BrowserApiPath {
+function memoryListKey(
+  scope: MemoryScope,
+  status: MemoryStatus,
+  offset: number,
+  search: string
+): BrowserApiPath {
   const query = memoryScopeToSearchParams(scope);
   query.set("status", status);
   query.set("offset", String(offset));
   query.set("limit", String(MEMORY_LIST_PAGE_SIZE));
+  if (search) query.set("search", search);
   return `${MEMORIES_KEY}?${query}`;
 }
 
-/** Cache each management page independently by scope, status, and offset. */
-export function useMemories(scope: MemoryScope, status: MemoryStatus, offset: number) {
+/** Cache each management page independently by scope, status, offset, and search text. */
+export function useMemories(
+  scope: MemoryScope,
+  status: MemoryStatus,
+  offset: number,
+  search: string = ""
+) {
   const { data: session, status: authStatus } = useAuthSession();
   const { data, isLoading, error, mutate } = useSWR(
-    session ? memoryListKey(scope, status, offset) : null,
+    session ? memoryListKey(scope, status, offset, search) : null,
     (path) => apiRequest(path, memoryListResponseSchema)
   );
   return {

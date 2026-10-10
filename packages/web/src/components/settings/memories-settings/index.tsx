@@ -13,13 +13,8 @@ import { useRepos } from "@/hooks/use-repos";
 import { useEnvironments } from "@/hooks/use-environments";
 import { errorMessage, PERSONAL_MEMORY_DISCLOSURE } from "@/lib/memories";
 import { Switch } from "@/components/ui/switch";
-import {
-  Select,
-  SelectTrigger,
-  SelectValue,
-  SelectContent,
-  SelectItem,
-} from "@/components/ui/select";
+import { Combobox, type ComboboxGroup } from "@/components/ui/combobox";
+import { ChevronDownIcon } from "@/components/ui/icons";
 import { MemoryCollection } from "./memory-collection";
 
 /** Persist the account-wide default and disclose the audience of included personal context. */
@@ -104,9 +99,25 @@ export function SharedMemoriesSettings() {
     })),
     ...environments.map((environment) => ({
       scope: { type: "environment", environmentId: environment.id } as const,
-      label: `Environment: ${environment.name}`,
+      label: environment.name,
     })),
   ];
+  // Searchable and grouped, like the repository picker in Secrets: deployments can have many repos.
+  const groups: ComboboxGroup[] = [
+    { category: "Repositories", type: "repository" },
+    { category: "Environments", type: "environment" },
+  ]
+    .map(({ category, type }) => ({
+      category,
+      options: options
+        .filter((option) => option.scope.type === type)
+        .map((option) => ({ value: memoryScopeDisplayKey(option.scope), label: option.label })),
+    }))
+    .filter((group) => group.options.length > 0);
+  const selectedKey = scope ? memoryScopeDisplayKey(scope) : "";
+  const selectedLabel = options.find(
+    (option) => memoryScopeDisplayKey(option.scope) === selectedKey
+  )?.label;
   return (
     <section className="space-y-6">
       <div>
@@ -116,28 +127,37 @@ export function SharedMemoriesSettings() {
           sessions load them.
         </p>
       </div>
-      <Select
-        value={scope ? memoryScopeDisplayKey(scope) : ""}
-        onValueChange={(key) =>
-          setSelection(
-            options.find((option) => memoryScopeDisplayKey(option.scope) === key)?.scope ?? null
-          )
-        }
-      >
-        <SelectTrigger aria-label="Memory scope">
-          <SelectValue placeholder="Choose a repository or environment" />
-        </SelectTrigger>
-        <SelectContent>
-          {options.map((option) => {
-            const key = memoryScopeDisplayKey(option.scope);
-            return (
-              <SelectItem key={key} value={key}>
-                {option.label}
-              </SelectItem>
-            );
-          })}
-        </SelectContent>
-      </Select>
+      <div>
+        <label
+          id="shared-memory-scope-label"
+          htmlFor="shared-memory-scope"
+          className="mb-1.5 block text-sm font-medium text-foreground"
+        >
+          Memory scope
+        </label>
+        <Combobox
+          id="shared-memory-scope"
+          labelId="shared-memory-scope-label"
+          value={selectedKey}
+          onChange={(key) =>
+            setSelection(
+              options.find((option) => memoryScopeDisplayKey(option.scope) === key)?.scope ?? null
+            )
+          }
+          items={groups}
+          searchable
+          searchPlaceholder="Search repositories and environments..."
+          filterFn={(option, query) => option.label.toLowerCase().includes(query)}
+          direction="down"
+          dropdownWidth="w-full max-w-sm"
+          triggerClassName="w-full max-w-sm flex items-center justify-between px-3 py-2 text-sm border border-border bg-input text-foreground hover:border-foreground/30 disabled:opacity-50 disabled:cursor-not-allowed transition"
+        >
+          <span className={`truncate ${selectedLabel ? "" : "text-muted-foreground"}`}>
+            {selectedLabel ?? "Choose a repository or environment"}
+          </span>
+          <ChevronDownIcon className="h-3 w-3 flex-shrink-0" />
+        </Combobox>
+      </div>
       {(reposLoading || environmentsLoading) && <p className="text-sm">Loading scopes…</p>}
       {(reposError || environmentsError) && (
         <p role="alert" className="text-sm text-destructive">

@@ -1,4 +1,6 @@
+import { FACT_SEARCH_FIELDS, type FactSearchField } from "../memory/fact-search";
 import { partitionPredicate, type MemoryPartition } from "../memory/partition";
+import { LIKE_ESCAPE_CLAUSE } from "./like-pattern";
 import { sql, type SqlFragment } from "./sql-fragment";
 
 /**
@@ -15,3 +17,21 @@ export function inPartitions(partitions: readonly MemoryPartition[]): SqlFragmen
     " OR "
   )})`;
 }
+
+const SEARCH_COLUMNS: Record<FactSearchField, SqlFragment> = {
+  title: sql`lower(r.title)`,
+  description: sql`lower(r.description)`,
+  content: sql`lower(r.content)`,
+};
+const LIKE_ESCAPE = sql.constant(LIKE_ESCAPE_CLAUSE);
+
+/** The current revision's `field` matches `pattern`, a lowercase `like-pattern` pattern. */
+export const revisionFieldMatches = (field: FactSearchField, pattern: string): SqlFragment =>
+  sql`${SEARCH_COLUMNS[field]} LIKE ${pattern} ${LIKE_ESCAPE}`;
+
+/** The pattern matches at least one searchable field of the current revision. */
+export const revisionMatchesAnyField = (pattern: string): SqlFragment =>
+  sql`(${sql.join(
+    FACT_SEARCH_FIELDS.map(({ field }) => revisionFieldMatches(field, pattern)),
+    " OR "
+  )})`;

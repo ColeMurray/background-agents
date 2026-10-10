@@ -1,7 +1,9 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
+import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import {
+  MEMORY_SEARCH_LIMITS,
   MEMORY_STATUSES,
   type MemoryContent,
   type MemoryDto,
@@ -10,6 +12,8 @@ import {
 import { applyMemoryAction, createMemory, reviseMemory } from "@/hooks/use-memories";
 import { errorMessage, MEMORY_STATUS_LABELS } from "@/lib/memories";
 import { Button } from "@/components/ui/button";
+import { SearchIcon } from "@/components/ui/icons";
+import { Input } from "@/components/ui/input";
 import { SegmentedControl } from "@/components/ui/segmented-control";
 import { MemoryCard } from "./memory-card";
 import { MemoryEditor } from "./memory-editor";
@@ -33,8 +37,48 @@ const STATUS_OPTIONS = MEMORY_STATUSES.map((value) => ({
 }));
 
 /** Manage a paginated scope using server capabilities and revision-fenced mutations. */
+const SEARCH_DEBOUNCE_MS = 300;
+
+/**
+ * Search text typed into the box, committed after a pause and mirrored in `?search=` so a filtered
+ * list can be shared or reloaded (the same pattern as the automations list).
+ */
+function useCommittedSearch() {
+  const params = useSearchParams();
+  const router = useRouter();
+  const pathname = usePathname();
+  const urlSearch = params.get("search") ?? "";
+  const [input, setInput] = useState(urlSearch);
+  const [committed, setCommitted] = useState(urlSearch.trim());
+  // Navigation that changes `?search=` (a link, back/forward) replaces whatever was typed, so the
+  // pending write below never puts the old text back.
+  const [lastUrlSearch, setLastUrlSearch] = useState(urlSearch);
+  if (urlSearch !== lastUrlSearch) {
+    setLastUrlSearch(urlSearch);
+    // Our own write echoes back as the trimmed input; keep the box as typed (e.g. a trailing space).
+    if (urlSearch !== input.trim()) setInput(urlSearch);
+    setCommitted(urlSearch.trim());
+  }
+  useEffect(() => {
+    const timeout = window.setTimeout(() => {
+      const next = input.trim();
+      setCommitted(next);
+      const query = new URLSearchParams(params.toString());
+      if (next) query.set("search", next);
+      else query.delete("search");
+      if (query.toString() !== params.toString()) {
+        const queryString = query.toString();
+        router.replace(queryString ? `${pathname}?${queryString}` : pathname, { scroll: false });
+      }
+    }, SEARCH_DEBOUNCE_MS);
+    return () => window.clearTimeout(timeout);
+  }, [input, params, pathname, router]);
+  return { input, setInput, committed };
+}
+
 export function MemoryCollection({ scope }: { scope: MemoryScope }) {
-  const collection = useMemoryCollection(scope);
+  const search = useCommittedSearch();
+  const collection = useMemoryCollection(scope, search.committed);
   const [panel, setPanel] = useState<MemoryPanel>(() =>
     collection.focusedId ? { kind: "history", memoryId: collection.focusedId } : NO_PANEL
   );
@@ -89,6 +133,21 @@ export function MemoryCollection({ scope }: { scope: MemoryScope }) {
           </Button>
         )}
       </div>
+      <div className="relative">
+        <SearchIcon
+          className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground"
+          aria-hidden="true"
+        />
+        <Input
+          type="search"
+          aria-label="Search memories"
+          placeholder="Search title, description or content"
+          value={search.input}
+          maxLength={MEMORY_SEARCH_LIMITS.query}
+          onChange={(event) => search.setInput(event.target.value)}
+          className="pl-9"
+        />
+      </div>
       <nav className="flex gap-2" aria-label="Memory pages">
         <Button
           type="button"
@@ -130,7 +189,9 @@ export function MemoryCollection({ scope }: { scope: MemoryScope }) {
       {collection.loading && <p className="text-sm text-muted-foreground">Loading memories…</p>}
       {!collection.loading && !collection.error && collection.records.length === 0 && (
         <p className="text-sm text-muted-foreground">
-          No {MEMORY_STATUS_LABELS[collection.status].toLowerCase()} memories for this scope.
+          {search.committed
+            ? `No ${MEMORY_STATUS_LABELS[collection.status].toLowerCase()} memories match “${search.committed}”.`
+            : `No ${MEMORY_STATUS_LABELS[collection.status].toLowerCase()} memories for this scope.`}
         </p>
       )}
       {collection.records.map((record) => (

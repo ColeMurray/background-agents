@@ -80,6 +80,40 @@ describe("memory HTTP lifecycle and session boundaries", () => {
     );
     expect((await request("/memories?limit=10000")).status).toBe(400);
   });
+  it("filters management records by literal terms across title, description and body", async () => {
+    const byTitle = await createMemory({ ...content, title: "Rspec retries" });
+    const byDescription = await createMemory({
+      ...content,
+      description: "Flaky RSPEC suites in CI",
+    });
+    const byBody = await createMemory({ ...content, content: "Run rspec with --seed" });
+    const wildcard = await createMemory({ ...content, title: "Coverage at 100%_done" });
+    await createMemory();
+    const ids = async (search: string, extra = "") => {
+      const response = await request(`/memories?search=${encodeURIComponent(search)}${extra}`);
+      expect(response.status).toBe(200);
+      const body = (await response.json()) as { memories: { id: string }[]; nextOffset: unknown };
+      return { ids: body.memories.map((memory) => memory.id).sort(), nextOffset: body.nextOffset };
+    };
+
+    expect((await ids("RSpec")).ids).toEqual([byTitle.id, byDescription.id, byBody.id].sort());
+    // Every term must match somewhere in the record.
+    expect((await ids("rspec seed")).ids).toEqual([byBody.id]);
+    // `%` and `_` match themselves, not any text.
+    expect((await ids("100%_")).ids).toEqual([wildcard.id]);
+    expect((await ids("%")).ids).toEqual([wildcard.id]);
+    // Search combines with paging and status.
+    const firstPage = await ids("rspec", "&limit=2");
+    expect(firstPage.ids).toHaveLength(2);
+    expect(firstPage.nextOffset).toBe(2);
+    expect((await ids("rspec", "&status=archived")).ids).toEqual([]);
+    // A blank search is no filter; oversized searches are rejected.
+    expect((await ids("   ")).ids).toHaveLength(5);
+    expect((await request(`/memories?search=${"x".repeat(257)}`)).status).toBe(400);
+    expect(
+      (await request(`/memories?search=${encodeURIComponent("a b c d e f g h i")}`)).status
+    ).toBe(400);
+  });
   it("keeps personal management owner-only, including other administrators", async () => {
     const record = await createMemory();
     expect((await request(`/memories/${record.id}`, "GET", undefined, OTHER)).status).toBe(404);
