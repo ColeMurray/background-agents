@@ -3,7 +3,7 @@
 import { useRepos } from "@/hooks/use-repos";
 import { useState } from "react";
 import { Button } from "@/components/ui/button";
-import { ChevronDownIcon, CheckIcon, PlusIcon } from "@/components/ui/icons";
+import { ChevronDownIcon, PlusIcon } from "@/components/ui/icons";
 import { Combobox } from "@/components/ui/combobox";
 import { Input } from "@/components/ui/input";
 import useSWR from "swr";
@@ -41,6 +41,7 @@ import {
 } from "./sandbox-settings-schema";
 import { useCurrentUserAuthorization } from "@/hooks/use-current-user-authorization";
 import { getPublicSandboxProvider } from "@/lib/sandbox-provider";
+import { GlobalRepositoryOption } from "./global-repository-option";
 
 const GLOBAL_SCOPE = "__global__";
 
@@ -696,24 +697,11 @@ export function SandboxSettingsPage() {
           disabled={loadingRepos}
           triggerClassName="w-full max-w-sm flex items-center justify-between px-3 py-2 text-sm border border-border bg-input text-foreground hover:border-foreground/30 disabled:opacity-50 disabled:cursor-not-allowed transition"
           prependContent={({ select }) => (
-            <>
-              <button
-                type="button"
-                onClick={() => select(GLOBAL_SCOPE)}
-                className={`w-full flex items-center justify-between px-3 py-2 text-sm hover:bg-muted transition ${
-                  isGlobal ? "text-foreground" : "text-muted-foreground"
-                }`}
-              >
-                <div className="flex flex-col items-start text-left">
-                  <span className="font-medium">All Repositories (Global)</span>
-                  <span className="text-xs text-secondary-foreground">
-                    Shared across all repositories
-                  </span>
-                </div>
-                {isGlobal && <CheckIcon className="w-4 h-4 text-accent" />}
-              </button>
-              {repos.length > 0 && <div className="border-t border-border my-1" />}
-            </>
+            <GlobalRepositoryOption
+              selected={isGlobal}
+              showDivider={repos.length > 0}
+              onSelect={() => select(GLOBAL_SCOPE)}
+            />
           )}
         >
           <span className="truncate">{displayRepoName}</span>
