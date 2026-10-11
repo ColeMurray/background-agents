@@ -68,7 +68,6 @@ export type SlackSectionBlock = {
   type: "section";
   block_id?: string;
   text: SlackText;
-  expand?: boolean;
   // A section accessory may be a button or a select (the repo clarification
   // picker uses an external_select), not only a button.
   accessory?: SlackBlockElement;

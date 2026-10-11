@@ -41,13 +41,15 @@ const ERROR_FOOTER_LIMIT = 200;
  *
  * Every reply, whatever its length, gets the same treatment:
  * - It is cut to one fence-balanced block of at most MARKDOWN_BLOCK_MAX_CHARS that
- *   ends with a pointer to the session. Splitting into more `markdown` blocks would
- *   not help, since they share that cap.
- * - Broadcast mentions are stripped, as for all agent-posted text (see
- *   `sanitizeAgentText`). Slack resolves `<!here>`, `<!channel>` and `<!everyone>`
- *   inside a `markdown` block to real broadcasts (checked by posting one and reading
- *   back the stored rich_text). Markdown links such as `[x](!here)` stay plain links,
- *   so they need no handling. User mentions pass through, as before.
+ *   ends with a pointer to the session. More `markdown` blocks would not help, since
+ *   they share that cap.
+ * - Broadcast mentions are stripped, the same always-on strip `sanitizeAgentText`
+ *   applies to agent notifications. Slack resolves `<!here>` and `<!channel>` inside
+ *   a `markdown` block to real broadcasts (checked by posting one and reading back the
+ *   stored rich_text), while a Markdown link such as `[x](!here)` stays a plain link.
+ * - User mentions (`<@U…>`) pass through unchanged. The notify route's configurable
+ *   user-mention policy lives in integration settings this path does not read, so it
+ *   is out of scope here.
  */
 function buildResponseBlock(text: string): SlackMarkdownBlock | SlackSectionBlock {
   const [body] = splitIntoSlackSections(stripBroadcastMentions(text), MARKDOWN_BLOCK_MAX_CHARS, 1);

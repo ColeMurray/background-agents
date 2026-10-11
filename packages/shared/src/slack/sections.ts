@@ -1,8 +1,8 @@
 /**
  * Fit long agent text into Slack's block limits.
  *
- * Slack caps each block's text and rejects the whole message if any block exceeds
- * it. Two surfaces post agent text: the messages an agent posts itself through the
+ * Slack rejects a whole message whose blocks exceed its text limits. Two surfaces
+ * post agent text: the messages an agent posts itself through the
  * notify route in the control plane (split across mrkdwn section blocks, see
  * SECTION_TEXT_MAX_CHARS), and the completion reply the Slack bot posts when a
  * session finishes (one Markdown block, see MARKDOWN_BLOCK_MAX_CHARS). The policy
@@ -21,9 +21,7 @@ export const SECTION_TEXT_MAX_CHARS = 3000;
 /**
  * Slack's cumulative cap on the text of all `markdown` blocks in one message.
  * Unlike a section's mrkdwn, a `markdown` block renders standard Markdown
- * (headings, bold, lists, links, tables), which is what agents write. Text over
- * this is truncated with a pointer to the session rather than split, since a
- * second Markdown block would count against the same cap.
+ * (headings, bold, lists, links, tables), which is what agents write.
  */
 export const MARKDOWN_BLOCK_MAX_CHARS = 12_000;
 

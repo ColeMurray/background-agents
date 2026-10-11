@@ -251,6 +251,7 @@ describe("response block", () => {
     ];
     const [response] = markdownBlocks(build(code.join("\n")));
     expect(response.text.length).toBeLessThanOrEqual(MARKDOWN_BLOCK_MAX_CHARS);
+    expect(response.text).toContain("truncated — open the session");
     expect(fenceCount(response.text) % 2).toBe(0);
   });
 
