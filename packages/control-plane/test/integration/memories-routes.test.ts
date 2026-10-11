@@ -101,7 +101,7 @@ describe("memory HTTP lifecycle and session boundaries", () => {
     expect((await ids("rspec seed")).ids).toEqual([byBody.id]);
     // `%` and `_` match themselves, not any text.
     expect((await ids("100%_")).ids).toEqual([wildcard.id]);
-    expect((await ids("%")).ids).toEqual([wildcard.id]);
+    expect((await ids("0%")).ids).toEqual([wildcard.id]);
     // Search combines with paging and status.
     const firstPage = await ids("rspec", "&limit=2");
     expect(firstPage.ids).toHaveLength(2);
@@ -110,6 +110,9 @@ describe("memory HTTP lifecycle and session boundaries", () => {
     // A blank search is no filter; oversized searches are rejected.
     expect((await ids("   ")).ids).toHaveLength(5);
     expect((await request(`/memories?search=${"x".repeat(257)}`)).status).toBe(400);
+    // Nonblank searches share agent search's minimum length.
+    expect((await request("/memories?search=a")).status).toBe(400);
+    expect((await request("/memories?search=%20a%20")).status).toBe(400);
     expect(
       (await request(`/memories?search=${encodeURIComponent("a b c d e f g h i")}`)).status
     ).toBe(400);

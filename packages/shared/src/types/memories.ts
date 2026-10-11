@@ -395,10 +395,14 @@ export function memorySearchTerms(query: string): string[] {
 export const memoryListSearchSchema = z
   .string()
   .trim()
-  .max(MEMORY_SEARCH_LIMITS.query)
+  .max(MEMORY_SEARCH_LIMITS.query, `Use at most ${MEMORY_SEARCH_LIMITS.query} characters.`)
+  .refine(
+    (query) => query === "" || query.length >= MEMORY_SEARCH_LIMITS.queryMin,
+    `Use at least ${MEMORY_SEARCH_LIMITS.queryMin} characters.`
+  )
   .refine(
     (query) => memorySearchTerms(query).length <= MEMORY_SEARCH_LIMITS.terms,
-    "Too many search terms"
+    `Use at most ${MEMORY_SEARCH_LIMITS.terms} search terms.`
   );
 
 /** Optional `repoOwner`/`repoName` selector shared by agent search and write inputs. */

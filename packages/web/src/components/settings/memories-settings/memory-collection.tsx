@@ -5,6 +5,7 @@ import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import {
   MEMORY_SEARCH_LIMITS,
   MEMORY_STATUSES,
+  memoryListSearchSchema,
   type MemoryContent,
   type MemoryDto,
   type MemoryScope,
@@ -43,13 +44,27 @@ const SEARCH_DEBOUNCE_MS = 300;
  * Search text typed into the box, committed after a pause and mirrored in `?search=` so a filtered
  * list can be shared or reloaded (the same pattern as the automations list).
  */
+/**
+ * What a typed search would send, checked with the server's own rules: under the minimum length is
+ * no filter yet (the list stays put while typing), and an over-limit search is not sent at all but
+ * explained, so the list never turns into a 400 error.
+ */
+function checkSearch(raw: string): { committed: string } | { problem: string } {
+  const trimmed = raw.trim();
+  if (trimmed.length < MEMORY_SEARCH_LIMITS.queryMin) return { committed: "" };
+  const parsed = memoryListSearchSchema.safeParse(trimmed);
+  return parsed.success ? { committed: parsed.data } : { problem: parsed.error.issues[0].message };
+}
+
 function useCommittedSearch() {
   const params = useSearchParams();
   const router = useRouter();
   const pathname = usePathname();
   const urlSearch = params.get("search") ?? "";
+  const initial = checkSearch(urlSearch);
   const [input, setInput] = useState(urlSearch);
-  const [committed, setCommitted] = useState(urlSearch.trim());
+  const [committed, setCommitted] = useState("committed" in initial ? initial.committed : "");
+  const [problem, setProblem] = useState("problem" in initial ? initial.problem : null);
   // Navigation that changes `?search=` (a link, back/forward) replaces whatever was typed, so the
   // pending write below never puts the old text back.
   const [lastUrlSearch, setLastUrlSearch] = useState(urlSearch);
@@ -57,14 +72,22 @@ function useCommittedSearch() {
     setLastUrlSearch(urlSearch);
     // Our own write echoes back as the trimmed input; keep the box as typed (e.g. a trailing space).
     if (urlSearch !== input.trim()) setInput(urlSearch);
-    setCommitted(urlSearch.trim());
+    const fromUrl = checkSearch(urlSearch);
+    if ("committed" in fromUrl) setCommitted(fromUrl.committed);
+    setProblem("problem" in fromUrl ? fromUrl.problem : null);
   }
   useEffect(() => {
     const timeout = window.setTimeout(() => {
-      const next = input.trim();
-      setCommitted(next);
+      const checked = checkSearch(input);
+      if ("problem" in checked) {
+        // Keep the last valid results on screen rather than sending a query the server rejects.
+        setProblem(checked.problem);
+        return;
+      }
+      setProblem(null);
+      setCommitted(checked.committed);
       const query = new URLSearchParams(params.toString());
-      if (next) query.set("search", next);
+      if (checked.committed) query.set("search", checked.committed);
       else query.delete("search");
       if (query.toString() !== params.toString()) {
         const queryString = query.toString();
@@ -73,7 +96,7 @@ function useCommittedSearch() {
     }, SEARCH_DEBOUNCE_MS);
     return () => window.clearTimeout(timeout);
   }, [input, params, pathname, router]);
-  return { input, setInput, committed };
+  return { input, setInput, committed, problem };
 }
 
 export function MemoryCollection({ scope }: { scope: MemoryScope }) {
@@ -145,9 +168,16 @@ export function MemoryCollection({ scope }: { scope: MemoryScope }) {
           value={search.input}
           maxLength={MEMORY_SEARCH_LIMITS.query}
           onChange={(event) => search.setInput(event.target.value)}
+          aria-invalid={search.problem ? true : undefined}
+          aria-describedby={search.problem ? "memory-search-problem" : undefined}
           className="pl-9"
         />
       </div>
+      {search.problem && (
+        <p id="memory-search-problem" role="alert" className="text-sm text-destructive">
+          {search.problem}
+        </p>
+      )}
       <nav className="flex gap-2" aria-label="Memory pages">
         <Button
           type="button"

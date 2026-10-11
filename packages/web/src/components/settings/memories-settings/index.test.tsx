@@ -322,6 +322,34 @@ describe("memory management", () => {
     expect(mocks.replace).not.toHaveBeenCalled();
   });
 
+  it("explains a search with too many terms instead of requesting it", async () => {
+    render(<MemoriesSettings />);
+    const box = screen.getByRole("searchbox", { name: "Search memories" });
+    fireEvent.change(box, { target: { value: "rspec" } });
+    await waitFor(() =>
+      expect(mocks.collection).toHaveBeenLastCalledWith({ type: "personal" }, "active", 0, "rspec")
+    );
+    fireEvent.change(box, { target: { value: "a1 b2 c3 d4 e5 f6 g7 h8 i9" } });
+    expect(await screen.findByText("Use at most 8 search terms.")).toBeTruthy();
+    expect(mocks.collection).toHaveBeenLastCalledWith({ type: "personal" }, "active", 0, "rspec");
+    expect(mocks.collection).not.toHaveBeenCalledWith(
+      { type: "personal" },
+      "active",
+      0,
+      "a1 b2 c3 d4 e5 f6 g7 h8 i9"
+    );
+  });
+
+  it("does not filter on a single character", async () => {
+    render(<MemoriesSettings />);
+    fireEvent.change(screen.getByRole("searchbox", { name: "Search memories" }), {
+      target: { value: "r" },
+    });
+    await new Promise((resolve) => setTimeout(resolve, 400));
+    expect(mocks.collection).toHaveBeenLastCalledWith({ type: "personal" }, "active", 0, "");
+    expect(screen.queryByRole("alert")).toBeNull();
+  });
+
   it("starts from a search already in the URL", () => {
     mocks.params = new URLSearchParams({ search: "docker" });
     render(<MemoriesSettings />);
