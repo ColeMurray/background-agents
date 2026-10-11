@@ -46,6 +46,16 @@ describe("stripBroadcastMentions", () => {
     expect(stripBroadcastMentions("<!subteam^S123>")).toBe("");
   });
 
+  it("removes the labelled forms Slack also accepts", () => {
+    expect(stripBroadcastMentions("<!here|here> <!channel|x> <!everyone|all>")).toBe("  ");
+  });
+
+  it("removes broadcasts that only appear once an inner one is removed", () => {
+    expect(stripBroadcastMentions("<!<!here>here>")).toBe("");
+    expect(stripBroadcastMentions("<!<!here>channel> hi")).toBe(" hi");
+    expect(stripBroadcastMentions("<!<!<!here>here>channel>")).toBe("");
+  });
+
   it("removes multiple broadcasts in one input", () => {
     expect(stripBroadcastMentions("<!channel> hi <!here> <!subteam^S123|@team>")).toBe(" hi  ");
   });
