@@ -9,7 +9,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { PlusIcon, SearchIcon } from "@/components/ui/icons";
 import { useAutomationScope } from "@/hooks/use-automation-scope";
-import { SEARCH_DEBOUNCE_MS } from "@/hooks/use-url-search-param";
+import { SEARCH_DEBOUNCE_MS } from "@/lib/search";
 
 export default function AutomationsPage() {
   return (

@@ -103,9 +103,9 @@ export function MemoryCollection({ scope }: { scope: MemoryScope }) {
           type="search"
           aria-label="Search memories"
           placeholder="Search title, description or content"
-          value={search.input}
+          value={search.text}
           maxLength={MEMORY_SEARCH_LIMITS.query}
-          onChange={(event) => search.setInput(event.target.value)}
+          onChange={(event) => search.setText(event.target.value)}
           aria-invalid={search.problem ? true : undefined}
           aria-describedby={search.problem ? "memory-search-problem" : undefined}
           className="pl-9"

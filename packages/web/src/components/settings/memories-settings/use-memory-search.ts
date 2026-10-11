@@ -15,11 +15,11 @@ function commitMemorySearch(raw: string): string | null {
  * would reject, while the last valid results stay on screen.
  */
 export function useMemorySearch() {
-  const { input, setInput, value } = useUrlSearchParam("search", commitMemorySearch);
-  const typed = memoryListSearchFromInput(input);
+  const { text, setText, value } = useUrlSearchParam("search", commitMemorySearch);
+  const typed = memoryListSearchFromInput(text);
   return {
-    input,
-    setInput,
+    text,
+    setText,
     search: commitMemorySearch(value) ?? "",
     problem: "problem" in typed ? typed.problem : null,
   };

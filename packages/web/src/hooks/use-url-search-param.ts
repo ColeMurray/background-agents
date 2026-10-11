@@ -1,71 +1,84 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
-
-/** How long a search box waits after the last keystroke before writing the URL. */
-export const SEARCH_DEBOUNCE_MS = 300;
+import { SEARCH_DEBOUNCE_MS } from "@/lib/search";
 
 /**
  * A search box mirrored in one URL query parameter, so a filtered view can be shared or reloaded.
  *
- * The URL is the source of truth for the applied search (`value`). Text typed but not yet in the
- * URL is pending: it is written after SEARCH_DEBOUNCE_MS, and when the URL then shows what that
- * text commits to, the box keeps the text as typed (a trailing space, or a one-letter edit that
- * commits to no search). Any other URL change is navigation (a link, back/forward) and replaces
- * the box, as on the sessions page.
+ * The URL is the source of truth for the applied search (`value`). Typed text is written to the
+ * URL after SEARCH_DEBOUNCE_MS, through `commit`, which maps text to the value to write ("" removes
+ * the parameter) or to null when the text should not be written at all.
  *
- * `commit` maps typed text to the value to write ("" removes the parameter), or null when the text
- * should not be written at all. Pass a stable function.
+ * A write takes a moment to show up in the URL, so the hook tracks the value it last wrote rather
+ * than comparing against the rendered URL (as the sessions page does):
+ * - When the URL reaches the value we wrote, the box keeps the text as typed (a trailing space, or
+ *   a one-letter edit that commits to no search). An earlier write landing late is ignored.
+ * - A later edit is written even if the URL has not caught up, so reversing a change before the
+ *   previous write lands is not lost.
+ * - Any URL change while nothing of ours is in flight is navigation (a link, back/forward) and
+ *   replaces the box, including text not yet written. Navigation that lands while a write is in
+ *   flight is overtaken by that write.
  */
 export function useUrlSearchParam(name: string, commit: (raw: string) => string | null) {
   const params = useSearchParams();
   const router = useRouter();
   const pathname = usePathname();
   const value = params.get(name) ?? "";
-  const [input, setInput] = useState(value);
+  const [text, setTextState] = useState(value);
+  // Text typed since the URL last matched the box; null when there is none.
   const pending = useRef<string | null>(null);
+  // The value we wrote and have not yet seen in the URL; null when no write is in flight.
+  const inFlight = useRef<string | null>(null);
+  const commitRef = useRef(commit);
+  useEffect(() => {
+    commitRef.current = commit;
+  }, [commit]);
 
   useEffect(() => {
-    const typed = pending.current;
-    const target = typed === null ? null : commit(typed);
-    if (target === value) {
-      // Our own write landed; keep the box as typed.
-      pending.current = null;
-    } else if (typed === null || target === null) {
-      // Nothing of ours is on its way to the URL, so this change is navigation.
-      pending.current = null;
-      setInput(value);
+    if (inFlight.current !== null) {
+      if (value !== inFlight.current) return; // an earlier write of ours landing late
+      inFlight.current = null;
+      if (pending.current !== null && commitRef.current(pending.current) === value) {
+        pending.current = null; // the typed text is applied; keep it as typed
+      }
+      return;
     }
-    // Otherwise an earlier keystroke's write landed while newer text waits to be written.
-  }, [commit, value]);
+    pending.current = null;
+    setTextState(value);
+  }, [value]);
 
   useEffect(() => {
     const typed = pending.current;
     if (typed === null) return;
-    const target = commit(typed);
+    const target = commitRef.current(typed);
     if (target === null) return;
     const timeout = window.setTimeout(() => {
+      const expected = inFlight.current ?? params.get(name) ?? "";
+      if (target === expected) {
+        if (inFlight.current === null) pending.current = null;
+        return;
+      }
       const query = new URLSearchParams(params.toString());
       if (target) query.set(name, target);
       else query.delete(name);
-      if (query.toString() === params.toString()) {
-        pending.current = null;
-        return;
-      }
       const queryString = query.toString();
+      inFlight.current = target;
       router.replace(queryString ? `${pathname}?${queryString}` : pathname, { scroll: false });
     }, SEARCH_DEBOUNCE_MS);
     return () => window.clearTimeout(timeout);
-  }, [commit, input, name, params, pathname, router]);
+  }, [text, name, params, pathname, router]);
+
+  const setText = useCallback((next: string) => {
+    pending.current = next;
+    setTextState(next);
+  }, []);
 
   return {
     /** The box's text, including anything not yet written to the URL. */
-    input,
-    setInput(next: string) {
-      pending.current = next;
-      setInput(next);
-    },
+    text,
+    setText,
     /** The parameter's current URL value. */
     value,
   };

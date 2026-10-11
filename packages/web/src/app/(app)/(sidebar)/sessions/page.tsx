@@ -24,7 +24,7 @@ import {
   parseSessionDiscoveryQuery,
   type SessionDiscoveryQuery,
 } from "@/lib/session-discovery";
-import { SEARCH_DEBOUNCE_MS } from "@/hooks/use-url-search-param";
+import { SEARCH_DEBOUNCE_MS } from "@/lib/search";
 
 const MANAGE_ARCHIVED_SESSIONS_HREF = "/settings?tab=data-controls";
 
