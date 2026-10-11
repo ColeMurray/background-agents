@@ -6,18 +6,19 @@
  * interchangeable, so each case pins a semantic one of them could otherwise
  * drift on.
  *
- * Expiry is the one case KV cannot run: its clock is the runtime's, and it
- * rejects a TTL under a minute, so an honest test would sleep for one. The
- * suite runs it against the implementations whose clock the caller owns and
- * asserts on KV only that an entry with a TTL is readable before it passes —
- * which is what the port promises and all a caller can observe either way.
+ * Expiry is the one case KV cannot run: its clock is the runtime's, and the
+ * port rejects a TTL under `CACHE_STORE_MIN_TTL_MS`, so an honest test would
+ * sleep for that long. The suite runs it against the implementations whose
+ * clock the caller owns and asserts on KV only that an entry with a TTL is
+ * readable before it passes — which is what the port promises and all a
+ * caller can observe either way.
  */
 
 import { describe, expect, it } from "vitest";
-import type { CacheStore } from "@open-inspect/shared/cache-store";
-
-/** The shortest TTL the suite writes, in milliseconds. */
-const MIN_TTL_MS = 60_000;
+import {
+  CACHE_STORE_MIN_TTL_MS as MIN_TTL_MS,
+  type CacheStore,
+} from "@open-inspect/shared/cache-store";
 
 export interface CacheStoreUnderTest {
   store: CacheStore;
@@ -107,6 +108,16 @@ export function registerCacheStoreConformanceSuite(
         await store.delete(key);
       });
     });
+
+    it.each([MIN_TTL_MS - 1, 0, -1, Number.NaN, Number.POSITIVE_INFINITY])(
+      "rejects a ttlMs of %s and writes nothing",
+      async (ttlMs) => {
+        await withKey("ttl-invalid", async ({ store }, key) => {
+          await expect(store.put(key, "a value", { ttlMs })).rejects.toThrow(RangeError);
+          expect(await store.get(key)).toBeNull();
+        });
+      }
+    );
 
     it("serves an entry that still has time left on its TTL", async () => {
       await withKey("ttl-live", async ({ store }, key) => {

@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { createKvCacheStore } from "./cache-store";
+import { CACHE_STORE_MIN_TTL_MS, createKvCacheStore } from "./cache-store";
 
 function fakeKv() {
   return {
@@ -22,11 +22,20 @@ describe("createKvCacheStore TTL mapping (#1779)", () => {
     expect(kv.put).toHaveBeenCalledWith("k", "v", { expirationTtl: 301 });
   });
 
-  it("raises a sub-minute TTL to the KV minimum instead of sending a value KV rejects", async () => {
+  it("sends the minimum TTL as KV's shortest expiration", async () => {
     const kv = fakeKv();
-    await createKvCacheStore(kv).put("k", "v", { ttlMs: 30_000 });
+    await createKvCacheStore(kv).put("k", "v", { ttlMs: CACHE_STORE_MIN_TTL_MS });
     expect(kv.put).toHaveBeenCalledWith("k", "v", { expirationTtl: 60 });
   });
+
+  it.each([CACHE_STORE_MIN_TTL_MS - 1, 0, -1, Number.NaN, Number.POSITIVE_INFINITY])(
+    "rejects a ttlMs of %s without writing to KV",
+    async (ttlMs) => {
+      const kv = fakeKv();
+      await expect(createKvCacheStore(kv).put("k", "v", { ttlMs })).rejects.toThrow(RangeError);
+      expect(kv.put).not.toHaveBeenCalled();
+    }
+  );
 
   it("sends no TTL option when none is asked for", async () => {
     const kv = fakeKv();
