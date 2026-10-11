@@ -240,9 +240,7 @@ create-session request carries a discriminated choice, never an ambiguous nullab
 
 ```ts
 type SessionSkillSelection =
-  | { mode: "all" }
-  | { mode: "none" }
-  | { mode: "profile"; profileId: string };
+  { mode: "all" } | { mode: "none" } | { mode: "profile"; profileId: string };
 ```
 
 Bot, automation, Slack, Linear, and GitHub-created sessions use `{ mode: "all" }` unless their

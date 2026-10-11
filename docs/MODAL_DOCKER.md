@@ -33,10 +33,18 @@ The harness, bridge, workspace, IDE, and desktop run directly on the VM host. Do
 workloads such as PostgreSQL, Redis, and container builds. The runtime supervises the local daemon;
 user environment variables cannot enable Docker or redirect its readiness probes.
 
-Generic `cpuCores` and `memoryMib` size the **outer VM**, not individual containers. Missing/null
-values select the offering defaults (currently 2 cores and 4096 MiB). Positive explicit settings
-override them. VM image builds use their scope's configured resources. Standard build sizing is
-unchanged. These values are product defaults, not claimed Modal minimums.
+Generic `cpuCores` and `memoryMib` reserve resources for the **outer VM**, not individual
+containers. Missing/null requests select the offering defaults: 0.5 CPU cores and 2048 MiB. The VM
+can burst up to `cpuLimitCores` and `memoryLimitMib`; missing/null limits default to 2 CPU cores and
+4096 MiB, or the corresponding request if it is larger. Explicit limits must be at least the
+effective request. VM image builds use their scope's configured requests and limits. Standard build
+sizing is unchanged. These values are product defaults, not claimed Modal minimums.
+
+Modal bills CPU and memory by `max(request, actual usage)`, not the configured limit. Bursting above
+the request depends on spare host capacity; memory pressure can evict a sandbox using more than its
+request. CPU is throttled at its limit and exceeding the memory limit can cause an OOM kill. Size
+requests using observed usage and monitor exit reasons, especially for Docker and parallel builds.
+See [Modal Sandbox resources](https://modal.com/docs/guide/sandbox-resources).
 
 ## Snapshots and recovery
 

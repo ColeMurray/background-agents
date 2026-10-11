@@ -49,6 +49,7 @@ import {
   DEFAULT_CONNECTING_TIMEOUT_CONFIG,
   DEFAULT_BOOT_BUDGET_CONFIG,
   type CircuitBreakerConfig,
+  type CircuitBreakerState,
   type SpawnConfig,
 } from "./decisions";
 import { evaluateAlarmPolicy, type AlarmPolicyConfig } from "./alarm-policy";
@@ -170,6 +171,13 @@ interface SandboxCircuitBreakerInfo {
   snapshot_runtime_version: string | null;
   spawn_failure_count: number | null;
   last_spawn_failure: number | null;
+}
+
+function toCircuitBreakerState(sandbox: SandboxCircuitBreakerInfo | null): CircuitBreakerState {
+  return {
+    failureCount: sandbox?.spawn_failure_count || 0,
+    lastFailureTime: sandbox?.last_spawn_failure || 0,
+  };
 }
 
 /**
@@ -332,6 +340,8 @@ interface AlarmContext extends WatchdogContext {
 export interface SandboxLifecycleConfig extends AlarmPolicyConfig, SandboxLaunchConfig {
   /** Persist a user-visible lifecycle warning in the session event stream. */
   recordWarning?: (message: string, eventId: string) => void;
+  /** Pump the message queue once a deferred connect-timeout re-drive may proceed. */
+  resumeQueuedWork?: () => Promise<void>;
   circuitBreaker: CircuitBreakerConfig;
   spawn: SpawnConfig;
   controlPlaneUrl: string;
@@ -410,6 +420,12 @@ export class SandboxLifecycleManager
   private isSpawningSandbox = false;
   private isTerminatingSandbox = false;
   private providerStartupPending = false;
+  /**
+   * A connect-timed-out generation whose launch was still in flight. That
+   * launch holds startup admission, so the alarm's queue pump was refused;
+   * the launch re-drives the queue itself when it lets go.
+   */
+  private redriveAfterStartup: SandboxGeneration | null = null;
 
   /** Memoized session-scoped logger, keyed by the resolved session id. */
   private logMemo?: { sessionId: string | undefined; logger: Logger };
@@ -495,6 +511,7 @@ export class SandboxLifecycleManager
       usesProviderManagedStop: () => this.usesProviderManagedStop(),
       snapshotRequiresShutdown: () => !!provider.capabilities.snapshotRequiresShutdown,
       recordSpawnFailure: (now, attemptStartedAt) => this.recordSpawnFailure(now, attemptStartedAt),
+      isCircuitBreakerOpen: (now) => this.isCircuitBreakerOpen(now),
       reportSandboxError: (reason) => this.reportSandboxError(reason),
       triggerSnapshot: (reason) => this.triggerSnapshot(reason),
       stopProviderSandboxSafely: (options) => this.stopProviderSandboxSafely(options),
@@ -631,10 +648,7 @@ export class SandboxLifecycleManager
 
   /** Circuit-breaker admission for decisions that launch provider work. */
   private admitLaunch(sandboxState: SandboxCircuitBreakerInfo | null, now: number): boolean {
-    const circuitBreakerState = {
-      failureCount: sandboxState?.spawn_failure_count || 0,
-      lastFailureTime: sandboxState?.last_spawn_failure || 0,
-    };
+    const circuitBreakerState = toCircuitBreakerState(sandboxState);
     const cbDecision = evaluateCircuitBreaker(circuitBreakerState, this.config.circuitBreaker, now);
 
     if (cbDecision.shouldReset) {
@@ -955,6 +969,29 @@ export class SandboxLifecycleManager
       this.isSpawningSandbox = false;
       this.providerStartupPending = false;
       this.vmStartup.finalizeForeground(generation);
+      await this.resumeDeferredRedrive(generation);
+    }
+  }
+
+  /**
+   * Deliver a re-drive the connect watchdog deferred to this launch. Runs
+   * after the startup flags are released; the queue pump re-applies the
+   * hold, supersession, and breaker checks. A launch for any other
+   * generation drops the deferral: a newer launch owns the queue.
+   */
+  private async resumeDeferredRedrive(generation: SandboxGeneration | null): Promise<void> {
+    const deferred = this.redriveAfterStartup;
+    if (!deferred) return;
+    this.redriveAfterStartup = null;
+    if (generation?.sandboxId !== deferred.sandboxId || generation.createdAt !== deferred.createdAt)
+      return;
+    try {
+      await this.config.resumeQueuedWork?.();
+    } catch (error) {
+      this.log.error("Deferred connect-timeout re-drive failed", {
+        event: "sandbox.connect_timeout_redrive_failed",
+        error: error instanceof Error ? error.message : String(error),
+      });
     }
   }
 
@@ -1000,17 +1037,22 @@ export class SandboxLifecycleManager
    * deterministic late failure would be re-driven forever.
    */
   private recordSpawnFailure(now: number, attemptStartedAt: number = now): void {
-    const sandbox = this.storage.getSandboxWithCircuitBreaker();
     const streak = evaluateCircuitBreaker(
-      {
-        failureCount: sandbox?.spawn_failure_count || 0,
-        lastFailureTime: sandbox?.last_spawn_failure || 0,
-      },
+      toCircuitBreakerState(this.storage.getSandboxWithCircuitBreaker()),
       this.config.circuitBreaker,
       attemptStartedAt
     );
     if (streak.shouldReset) this.storage.resetCircuitBreaker();
     this.storage.incrementCircuitBreakerFailure(now);
+  }
+
+  /** Whether `admitLaunch` would refuse a launch at `now`. */
+  private isCircuitBreakerOpen(now: number): boolean {
+    return !evaluateCircuitBreaker(
+      toCircuitBreakerState(this.storage.getSandboxWithCircuitBreaker()),
+      this.config.circuitBreaker,
+      now
+    ).shouldProceed;
   }
 
   /**
@@ -1233,6 +1275,7 @@ export class SandboxLifecycleManager
       this.isSpawningSandbox = false;
       this.providerStartupPending = false;
       this.vmStartup.finalizeForeground(generation);
+      await this.resumeDeferredRedrive(generation);
     }
   }
 
@@ -1372,6 +1415,7 @@ export class SandboxLifecycleManager
     } finally {
       this.isSpawningSandbox = false;
       this.providerStartupPending = false;
+      await this.resumeDeferredRedrive(generation);
     }
   }
 
@@ -1516,7 +1560,8 @@ export class SandboxLifecycleManager
    * Stop a provider sandbox on a path that has already decided the sandbox is
    * gone. The row has been failed and published by the time these run, so a
    * provider that refuses the stop leaks a container but must not derail the
-   * recovery — hence log-and-continue rather than rethrow.
+   * recovery — hence log-and-continue rather than rethrow. Resolves false when
+   * the stop failed, for callers whose next step depends on it.
    */
   private async stopProviderSandboxSafely(options: {
     reason: string;
@@ -1526,7 +1571,7 @@ export class SandboxLifecycleManager
     failureMessage: string;
     level?: "warn" | "error";
     data?: Record<string, unknown>;
-  }): Promise<void> {
+  }): Promise<boolean> {
     try {
       await this.stopProviderSandbox(
         options.reason,
@@ -1535,11 +1580,13 @@ export class SandboxLifecycleManager
         options.providerObjectId,
         options.generationCreatedAtMs
       );
+      return true;
     } catch (error) {
       this.log[options.level ?? "warn"](options.failureMessage, {
         ...options.data,
         error: error instanceof Error ? error.message : String(error),
       });
+      return false;
     }
   }
 
@@ -1591,13 +1638,17 @@ export class SandboxLifecycleManager
         });
         return "no_action";
 
-      case "connecting_timeout":
-        return failConnectTimeout(
+      case "connecting_timeout": {
+        const result = await failConnectTimeout(
           this.watchdogEffects,
           finding.elapsedMs,
           this.config.connectingTimeout.timeoutMs,
           context
         );
+        if (result === "sandbox_terminated" && this.isSpawningSandbox)
+          this.redriveAfterStartup = alarmGeneration;
+        return result;
+      }
 
       case "heartbeat_stale":
         return terminateStaleHeartbeat(

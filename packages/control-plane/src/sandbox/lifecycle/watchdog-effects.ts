@@ -37,6 +37,8 @@ export interface WatchdogEffectsDependencies {
   usesProviderManagedStop: () => boolean;
   snapshotRequiresShutdown: () => boolean;
   recordSpawnFailure: (now: number, attemptStartedAt: number) => void;
+  /** Whether the circuit breaker would refuse a launch at `now`. */
+  isCircuitBreakerOpen: (now: number) => boolean;
   reportSandboxError: (reason: string) => void;
   triggerSnapshot: (reason: string) => Promise<void>;
   stopProviderSandboxSafely: (options: {
@@ -46,11 +48,19 @@ export interface WatchdogEffectsDependencies {
     generationCreatedAtMs: number;
     failureMessage: string;
     level?: "warn" | "error";
-  }) => Promise<void>;
+  }) => Promise<boolean>;
   getLogger: () => Pick<Logger, "info" | "warn" | "error">;
 }
 
-/** Fail and charge the boot before stop; providers without stop permit late bridge self-heal. */
+/**
+ * Fail and charge the boot before stop; providers without stop permit late
+ * bridge self-heal. A fenced and stopped generation is replaced at once: the
+ * prompt it was booting for may come from a bot that never sends another, so
+ * waiting for the next message would strand it. The breaker bounds that chain.
+ * When no replacement can follow (the breaker opened, or the stop failed and a
+ * fenced generation cannot be replaced until it is confirmed stopped), the
+ * prompt fails instead of waiting with nothing scheduled to retry it.
+ */
 export async function failConnectTimeout(
   deps: Pick<
     WatchdogEffectsDependencies,
@@ -60,6 +70,7 @@ export async function failConnectTimeout(
     | "access"
     | "canStopProviderSandbox"
     | "recordSpawnFailure"
+    | "isCircuitBreakerOpen"
     | "reportSandboxError"
     | "stopProviderSandboxSafely"
     | "getLogger"
@@ -75,15 +86,18 @@ export async function failConnectTimeout(
   });
   deps.storage.updateSandboxStatus("failed");
   deps.recordSpawnFailure(ctx.now, ctx.sandbox.created_at);
+  const retriesExhausted = deps.isCircuitBreakerOpen(ctx.now);
   deps.access.clearAccess();
   const held = deps.shutdown.holdFailedRetainedBoot(
     "Sandbox failed to connect within the allowed time",
     { sandboxId: ctx.sandbox.modal_sandbox_id, createdAt: ctx.sandbox.created_at }
   );
-  if (!held && deps.canStopProviderSandbox()) {
+  const replaceable = !held && deps.canStopProviderSandbox();
+  let stopped = false;
+  if (replaceable) {
     // Refuse a bridge arriving during stop, but don't fence an unstoppable late boot.
     deps.storage.fenceSandboxGeneration();
-    await deps.stopProviderSandboxSafely({
+    stopped = await deps.stopProviderSandboxSafely({
       reason: "connecting_timeout",
       intent: "destroy",
       providerObjectId: ctx.providerObjectId,
@@ -92,12 +106,27 @@ export async function failConnectTimeout(
     });
   }
   deps.broadcaster.broadcast({ type: "sandbox_status", status: "failed" });
-  deps.reportSandboxError(
-    held
-      ? "Sandbox failed to connect within the allowed time."
-      : "Sandbox failed to connect within the allowed time. It will be retried on your next message."
-  );
-  return "sandbox_failed";
+  if (held) {
+    deps.reportSandboxError("Sandbox failed to connect within the allowed time.");
+    return "sandbox_failed";
+  }
+  if (!replaceable) {
+    deps.reportSandboxError(
+      "Sandbox failed to connect within the allowed time. It will be retried on your next message."
+    );
+    return "sandbox_failed";
+  }
+  const reason = retriesExhausted
+    ? "Sandbox failed to connect within the allowed time after repeated attempts."
+    : !stopped
+      ? "Sandbox failed to connect within the allowed time and could not be stopped for a retry."
+      : "Sandbox failed to connect within the allowed time. Queued prompts will be retried on a fresh sandbox.";
+  deps.reportSandboxError(reason);
+  // A launch that replaced this generation during stop owns the queue now.
+  if (!ctx.isCurrentGeneration()) return "sandbox_failed";
+  return retriesExhausted || !stopped
+    ? { kind: "connect_timeout_unrecoverable", reason }
+    : "sandbox_terminated";
 }
 
 /** Preserve a ready workspace, but never turn an incomplete boot into a restore point. */

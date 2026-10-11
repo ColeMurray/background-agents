@@ -12,9 +12,12 @@ import {
   PENDING_VM_REFERENCE_MATERIALIZE_BOUND_MS,
 } from "../lifecycle/decisions";
 import type { ModalClient, ModalBackend, CreateImageBuildSandboxResponse } from "../client";
-import type { SandboxSettings } from "@open-inspect/shared/types/integrations";
+import type { SandboxResources } from "@open-inspect/shared/types/integrations";
 import type { CorrelationContext } from "../../logger";
-import { supportsConfigurableSandboxTimeout } from "@open-inspect/shared/types/integrations";
+import {
+  supportsConfigurableSandboxTimeout,
+  validateSandboxResourceLimits,
+} from "@open-inspect/shared/types/integrations";
 import type { SourceControlProviderName } from "../../source-control";
 import { scmCloneIdentity, type ScmCloneIdentity } from "../sandbox-env";
 import {
@@ -57,7 +60,7 @@ interface StartModalImageBuildConfig {
 }
 
 export interface ModalImageBuildTriggerConfig extends ImageBuildProviderTriggerConfig {
-  resources?: Pick<SandboxSettings, "cpuCores" | "memoryMib">;
+  resources?: SandboxResources;
 }
 
 export interface TerminateModalImageBuildConfig {
@@ -211,6 +214,7 @@ export class ModalSandboxProvider implements SandboxProvider, ModalImageBuildPro
    * Create a new sandbox via Modal API.
    */
   async createSandbox(config: CreateSandboxConfig): Promise<CreateSandboxResult> {
+    this.validateResources(config.sandboxSettings);
     const observedAtMs = Date.now();
     const timeoutSeconds = config.timeoutSeconds ?? DEFAULT_SANDBOX_TIMEOUT_SECONDS;
     try {
@@ -270,6 +274,7 @@ export class ModalSandboxProvider implements SandboxProvider, ModalImageBuildPro
    * Restore a sandbox from a filesystem snapshot.
    */
   async restoreFromSnapshot(config: RestoreConfig): Promise<RestoreResult> {
+    this.validateResources(config.sandboxSettings);
     const observedAtMs = Date.now();
     const timeoutSeconds = config.timeoutSeconds ?? DEFAULT_SANDBOX_TIMEOUT_SECONDS;
     try {
@@ -444,6 +449,8 @@ export class ModalSandboxProvider implements SandboxProvider, ModalImageBuildPro
   private async createImageBuildSandbox(
     config: ModalImageBuildTriggerConfig
   ): Promise<CreateImageBuildSandboxResponse> {
+    // Standard Modal builds use their own fixed resources, not the session settings.
+    if (this.name === "modal-vm") this.validateResources(config.resources);
     try {
       return await this.client.createImageBuildSandbox(
         {
@@ -474,6 +481,11 @@ export class ModalSandboxProvider implements SandboxProvider, ModalImageBuildPro
     } catch (error) {
       throw this.classifyImageBuildError("Failed to start Modal image build sandbox", error);
     }
+  }
+
+  private validateResources(resources?: SandboxResources): void {
+    const error = validateSandboxResourceLimits(resources ?? {}, this.name);
+    if (error) throw new SandboxProviderError(error, "permanent");
   }
 
   private assertBackend(result: { sandboxBackend?: unknown }): void {

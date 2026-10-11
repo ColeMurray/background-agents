@@ -96,7 +96,7 @@ jobs:
       modal-test: ${{ steps.modal_test.outcome }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
 
       - name: Setup Terraform
         uses: hashicorp/setup-terraform@v4
@@ -143,10 +143,10 @@ jobs:
       outcome: ${{ steps.plan.outcome }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
 
       - name: Setup Node.js
-        uses: actions/setup-node@v6
+        uses: actions/setup-node@v7
         with:
           node-version-file: .nvmrc
           cache: "npm"
@@ -309,7 +309,7 @@ jobs:
 
       - name: Upload Plan Comment
         if: steps.prepare_comment.conclusion == 'success'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: terraform-plan-comment
           path: ${{ env.TF_WORKING_DIR }}/plan_comment.txt
@@ -331,7 +331,7 @@ jobs:
     # No checkout or execution of PR code. Artifacts are read only as comment data.
     steps:
       - name: Post Validation Results
-        uses: actions/github-script@v8
+        uses: actions/github-script@v9
         env:
           HAS_SECRETS: ${{ needs.check-secrets.outputs.has-secrets }}
           CHECK_SECRETS_RESULT: ${{ needs.check-secrets.result }}
@@ -392,14 +392,14 @@ jobs:
 
       - name: Download Plan Comment
         if: needs.plan.outputs.outcome == 'success' || needs.plan.outputs.outcome == 'failure'
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: terraform-plan-comment
           path: ${{ runner.temp }}/terraform-plan-comment
 
       - name: Post Plan Results
         if: needs.plan.outputs.outcome == 'success' || needs.plan.outputs.outcome == 'failure'
-        uses: actions/github-script@v8
+        uses: actions/github-script@v9
         env:
           PLAN_COMMENT_PATH: ${{ runner.temp }}/terraform-plan-comment/plan_comment.txt
         with:
@@ -430,10 +430,10 @@ jobs:
     environment: production
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
 
       - name: Setup Node.js
-        uses: actions/setup-node@v6
+        uses: actions/setup-node@v7
         with:
           node-version-file: .nvmrc
           cache: "npm"
@@ -450,7 +450,7 @@ jobs:
           npm run build -w @open-inspect/linear-bot
 
       - name: Setup uv
-        uses: astral-sh/setup-uv@v8.2.0
+        uses: astral-sh/setup-uv@v7
 
       - name: Install Modal and Python dependencies
         run: uv sync --frozen

@@ -96,11 +96,7 @@ export function createAlarmHandler(deps: AlarmHandlerDeps): AlarmHandler {
       if (lifecycleResult === "sandbox_terminated") {
         await deps.executionStop.resumeAfterSandboxTermination();
       }
-      if (
-        bootPrompt &&
-        typeof lifecycleResult === "object" &&
-        lifecycleResult.kind === "boot_budget_exceeded"
-      ) {
+      if (bootPrompt && typeof lifecycleResult === "object") {
         // The boot was for that prompt; it fails with the same words the user
         // sees, and nothing re-drives it onto a fresh sandbox.
         await deps.messageQueue.failPendingMessage(bootPrompt.id, lifecycleResult.reason);

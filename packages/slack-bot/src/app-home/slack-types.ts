@@ -15,11 +15,7 @@ export interface ModelOption {
 }
 
 export type AppHomeBlock =
-  | SlackHeaderBlock
-  | SlackSectionBlock
-  | SlackActionsBlock
-  | SlackContextBlock
-  | SlackDividerBlock;
+  SlackHeaderBlock | SlackSectionBlock | SlackActionsBlock | SlackContextBlock | SlackDividerBlock;
 export type AppHomeModalBlock = SlackSectionBlock | SlackInputBlock;
 export type AppHomeView = { type: "home"; blocks: AppHomeBlock[] };
 

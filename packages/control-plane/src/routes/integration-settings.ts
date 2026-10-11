@@ -14,6 +14,7 @@ import {
   type SandboxSettings,
   type VncSettings,
 } from "@open-inspect/shared/types/integrations";
+import { getValidHarnessOrDefault } from "@open-inspect/shared/harnesses";
 import { isValidReasoningEffort } from "@open-inspect/shared/models";
 import {
   IntegrationSettingsStore,
@@ -412,6 +413,7 @@ async function handleGetResolvedConfig(
       repo,
       config: {
         model: githubSettings.model ?? null,
+        harness: getValidHarnessOrDefault(githubSettings.harness),
         reasoningEffort,
         autoReviewOnOpen: githubSettings.autoReviewOnOpen ?? true,
         enabledRepos,
@@ -435,6 +437,7 @@ async function handleGetResolvedConfig(
       integrationId: id,
       repo,
       config: {
+        harness: getValidHarnessOrDefault(linearSettings.harness),
         model: linearSettings.model ?? null,
         reasoningEffort: linearReasoningEffort,
         allowUserPreferenceOverride: linearSettings.allowUserPreferenceOverride ?? true,
@@ -486,6 +489,8 @@ async function handleGetResolvedConfig(
         // null → use the provider's default reservation (no override configured).
         cpuCores: sandboxSettings.cpuCores ?? null,
         memoryMib: sandboxSettings.memoryMib ?? null,
+        cpuLimitCores: sandboxSettings.cpuLimitCores ?? null,
+        memoryLimitMib: sandboxSettings.memoryLimitMib ?? null,
         sandboxTimeoutMs: sandboxSettings.sandboxTimeoutMs ?? null,
         finalSnapshotBufferMs: sandboxSettings.finalSnapshotBufferMs ?? null,
         enabledRepos,

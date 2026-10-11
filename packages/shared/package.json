@@ -46,6 +46,10 @@
       "import": "./dist/http-body.js",
       "types": "./dist/http-body.d.ts"
     },
+    "./inline-prompt-flags": {
+      "import": "./dist/inline-prompt-flags.js",
+      "types": "./dist/inline-prompt-flags.d.ts"
+    },
     "./regex": {
       "import": "./dist/regex.js",
       "types": "./dist/regex.d.ts"

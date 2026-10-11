@@ -99,9 +99,9 @@ function harness(
     },
   ]);
   const clearProviderSessionCleanup = vi.fn(async () => true);
-  const listScopes = vi.fn(
-    async (): Promise<ImageBuildScope[]> => [{ kind: "repo", id: "acme/web" }]
-  );
+  const listScopes = vi.fn(async (): Promise<ImageBuildScope[]> => [
+    { kind: "repo", id: "acme/web" },
+  ]);
   const listRecoverableFinalizations = vi.fn(
     async (): Promise<
       Array<{ id: string; completion_hash: string; callback_token_used_at: number }>

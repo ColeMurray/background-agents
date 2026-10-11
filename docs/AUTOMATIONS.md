@@ -209,10 +209,14 @@ means separate deliveries for the same automation can run at the same time.
 Successful requests return JSON in this shape:
 
 ```json
-{ "ok": true, "triggered": 1, "skipped": 0 }
+{ "ok": true, "triggered": 1, "skipped": 0, "steered": 0, "invocationId": "3f2a…" }
 ```
 
-`triggered` is the number of automation runs started.
+`triggered` is the number of automation runs started. `invocationId` identifies the firing this
+request belongs to (for a repeated `idempotencyKey`, the original firing), or is `null` when nothing
+was recorded. Read its status with the same API key at
+`GET /webhooks/automation/<automation-id>/invocations/<invocation-id>`, which returns
+`{ invocationId, status, runs: [{ id, status, sessionId }] }` and never session content.
 
 `skipped` includes runs not started because of duplicate delivery, concurrency protection, or
 runtime authorization denial. Authorization denial does not pause an event-driven automation or

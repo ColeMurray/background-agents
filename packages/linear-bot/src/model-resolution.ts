@@ -3,6 +3,7 @@
  */
 
 import type { TeamRepoMapping, StaticTargetConfig } from "./types";
+import { resolveHarnessForModel, type HarnessId } from "@open-inspect/shared/harnesses";
 import {
   getDefaultReasoningEffort,
   getValidModelOrDefault,
@@ -62,8 +63,10 @@ export function extractModelFromLabels(labels: Array<{ name: string }>): ValidMo
   return null;
 }
 
-export interface ResolveSessionModelInput {
+export interface ResolveSessionAgentInput {
   envDefaultModel: string;
+  /** Configured harness preference; absent means the built-in harness. */
+  configHarness?: HarnessId;
   configModel: string | null;
   configReasoningEffort: string | null;
   allowUserPreferenceOverride: boolean;
@@ -73,7 +76,13 @@ export interface ResolveSessionModelInput {
   labelModel?: string | null;
 }
 
-export function resolveSessionModelSettings(input: ResolveSessionModelInput): {
+/**
+ * Resolve the model (label → user preference → config → env default), its
+ * reasoning effort, and the harness that runs it. The harness follows the
+ * model: the configured harness when it can run the model, else OpenCode.
+ */
+export function resolveSessionAgentSettings(input: ResolveSessionAgentInput): {
+  harness: HarnessId;
   model: string;
   reasoningEffort: string | undefined;
 } {
@@ -91,23 +100,34 @@ export function resolveSessionModelSettings(input: ResolveSessionModelInput): {
   }
 
   const normalizedModel = getValidModelOrDefault(model);
+  return {
+    harness: resolveHarnessForModel(input.configHarness, normalizedModel),
+    model: normalizedModel,
+    reasoningEffort: resolveReasoningEffort(input, normalizedModel, modelSource),
+  };
+}
 
+function resolveReasoningEffort(
+  input: ResolveSessionAgentInput,
+  model: string,
+  modelSource: "config" | "env" | "user" | "label"
+): string | undefined {
   if (
     input.allowUserPreferenceOverride &&
     input.userReasoningEffort &&
-    isValidReasoningEffort(normalizedModel, input.userReasoningEffort)
+    isValidReasoningEffort(model, input.userReasoningEffort)
   ) {
-    return { model: normalizedModel, reasoningEffort: input.userReasoningEffort };
+    return input.userReasoningEffort;
   }
 
   if (
     modelSource !== "user" &&
     modelSource !== "label" &&
     input.configReasoningEffort &&
-    isValidReasoningEffort(normalizedModel, input.configReasoningEffort)
+    isValidReasoningEffort(model, input.configReasoningEffort)
   ) {
-    return { model: normalizedModel, reasoningEffort: input.configReasoningEffort };
+    return input.configReasoningEffort;
   }
 
-  return { model: normalizedModel, reasoningEffort: getDefaultReasoningEffort(normalizedModel) };
+  return getDefaultReasoningEffort(model);
 }

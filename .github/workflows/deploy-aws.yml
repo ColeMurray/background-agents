@@ -125,7 +125,7 @@ jobs:
     timeout-minutes: 50
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           # This job holds AWS credentials; it has no reason to also hold a git
           # token. Nothing after this pushes, tags or fetches.

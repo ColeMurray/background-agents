@@ -1,9 +1,13 @@
 // @vitest-environment jsdom
 
-import { Component, type PropsWithChildren, type ReactNode } from "react";
+import "@testing-library/jest-dom/vitest";
+import { Component, memo, useEffect, useRef, type PropsWithChildren, type ReactNode } from "react";
 import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { SessionSnapshot } from "@open-inspect/shared/types/server-messages";
+import type { SessionDiffState } from "@open-inspect/shared/types/session-diffs";
+import { SafeMarkdown } from "@/components/safe-markdown";
 import { resolveSessionCapabilities } from "@/lib/session-capabilities";
 import SessionPage from "./page";
 
@@ -16,6 +20,8 @@ const mocks = vi.hoisted(() => ({
   sidebar: vi.fn(),
   overlay: vi.fn(),
   composer: vi.fn(),
+  timeline: vi.fn(),
+  diffState: null as SessionDiffState | null,
   snapshot: null as SessionSnapshot | null,
   mobile: false,
 }));
@@ -51,7 +57,7 @@ vi.mock("@/hooks/use-enabled-models", () => ({
   useEnabledModels: () => ({ enabledModels: [], enabledModelOptions: [], loading: false }),
 }));
 vi.mock("@/hooks/use-session-diffs", () => ({
-  useSessionDiffs: () => ({ state: null, isLoading: false }),
+  useSessionDiffs: () => ({ state: mocks.diffState, isLoading: false }),
 }));
 vi.mock("@/hooks/use-media-query", () => ({ useMediaQuery: () => mocks.mobile }));
 vi.mock("@/hooks/use-session-details-sidebar", () => ({
@@ -67,21 +73,45 @@ vi.mock("@/components/session-header", () => ({ SessionHeader: mocks.header }));
 vi.mock("@/components/session-right-sidebar", () => ({ SessionRightSidebar: mocks.sidebar }));
 vi.mock("@/components/session-details-overlay", () => ({ SessionDetailsOverlay: mocks.overlay }));
 vi.mock("@/components/session-prompt-composer", () => ({ SessionPromptComposer: mocks.composer }));
-vi.mock("@/components/session-timeline", () => ({ SessionTimeline: () => null }));
+vi.mock("@/components/session-timeline", () => ({ SessionTimeline: mocks.timeline }));
 vi.mock("@/components/media-lightbox", () => ({ MediaLightbox: () => null }));
 vi.mock("@/components/queued-prompt-stack", () => ({ QueuedPromptStack: () => null }));
 vi.mock("@/components/session-desktop-layout", () => ({
-  SessionDesktopLayout: ({ workspace, sidebar }: { workspace: ReactNode; sidebar: ReactNode }) => (
+  SessionDesktopLayout: ({
+    workspace,
+    sidebar,
+    changes,
+  }: {
+    workspace: ReactNode;
+    sidebar: ReactNode;
+    changes: ReactNode;
+  }) => (
     <>
-      {workspace}
+      <div hidden={Boolean(changes)}>{workspace}</div>
+      {changes}
       {sidebar}
     </>
   ),
+}));
+// Like the real panel, it takes focus when it opens.
+vi.mock("@/components/session-changes-panel", () => ({
+  SessionChangesPanel: function ChangesPanel({ onClose }: { onClose: () => void }) {
+    const ref = useRef<HTMLElement>(null);
+    useEffect(() => ref.current?.focus(), []);
+    return (
+      <section ref={ref} tabIndex={-1} aria-label="Session changes">
+        <button type="button" onClick={onClose}>
+          Close changes
+        </button>
+      </section>
+    );
+  },
 }));
 
 beforeEach(() => {
   vi.clearAllMocks();
   mocks.mobile = false;
+  mocks.diffState = null;
   mocks.snapshot = {
     session: {
       id: "session-1",
@@ -134,6 +164,7 @@ beforeEach(() => {
     mocks.sidebar,
     mocks.overlay,
     mocks.composer,
+    mocks.timeline,
   ]) {
     component.mockReturnValue(null);
   }
@@ -214,4 +245,75 @@ it("keeps desktop actions available without collaboration and refreshes sidebar 
       onUpdated: mocks.refreshSnapshot,
     });
   }
+});
+
+// Memoized like the timeline's EventItem, so page re-renders keep the rendered link.
+const AssistantMessage = memo(function AssistantMessage() {
+  return <SafeMarkdown content="Updated [src/app.ts](src/app.ts)." linkRepositoryFiles />;
+});
+
+it.each([
+  ["the desktop changes panel", false],
+  ["the mobile changes sheet", true],
+])("returns focus to the timeline file link after closing %s", async (_surface, mobile) => {
+  mocks.mobile = mobile;
+  mocks.diffState = {
+    version: 1,
+    current: {
+      version: 1,
+      revisionId: "revision-1",
+      capturedAt: 100,
+      triggerMessageId: null,
+      repositories: [
+        {
+          status: "ready",
+          position: 0,
+          repoOwner: "acme",
+          repoName: "web",
+          baseSha: "a".repeat(40),
+          headSha: "b".repeat(40),
+          truncated: false,
+          omittedFileCount: 0,
+          files: [
+            {
+              id: "file-1",
+              path: "src/app.ts",
+              status: "modified",
+              additions: 1,
+              deletions: 0,
+              renderState: "renderable",
+            },
+          ],
+        },
+      ],
+    },
+    lastError: null,
+    unavailableReason: null,
+  };
+  mocks.timeline.mockImplementation(() => <AssistantMessage />);
+  // The details sidebar lists the same file; below lg it is not on screen.
+  mocks.sidebar.mockImplementation(() => (
+    <button
+      type="button"
+      hidden={mobile}
+      data-diff-repository-position="0"
+      data-diff-path="src/app.ts"
+    >
+      Sidebar src/app.ts
+    </button>
+  ));
+  // jsdom has no layout, so offsetParent stands in for "rendered".
+  vi.spyOn(HTMLElement.prototype, "offsetParent", "get").mockImplementation(function (
+    this: HTMLElement
+  ) {
+    return this.closest("[hidden]") ? null : document.body;
+  });
+  const user = userEvent.setup();
+  render(<SessionPage />);
+
+  const link = screen.getByRole("button", { name: "src/app.ts" });
+  await user.click(link);
+  await user.click(await screen.findByRole("button", { name: "Close changes" }));
+
+  await waitFor(() => expect(link).toHaveFocus());
 });

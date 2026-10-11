@@ -488,7 +488,7 @@ describe("cross-path alarm effects", () => {
       await expect(pending).resolves.toBe("sandbox_failed");
 
       const error =
-        "Sandbox failed to connect within the allowed time. It will be retried on your next message.";
+        "Sandbox failed to connect within the allowed time. Queued prompts will be retried on a fresh sandbox.";
       expect(sandbox).toEqual({
         ...replacement,
         last_spawn_error: error,

@@ -165,6 +165,7 @@ function createMockStore() {
     insertSkippedInvocation: vi.fn().mockResolvedValue({ inserted: true }),
     recordAuthorizationDenied: vi.fn().mockResolvedValue({ inserted: true, paused: true }),
     getInvocationById: vi.fn().mockResolvedValue(null),
+    getInvocationIdByTriggerKey: vi.fn().mockResolvedValue(null),
     getInvocationRunAggregate: vi.fn().mockResolvedValue(aggregate()),
     tryMarkInvocationFailureCounted: vi.fn().mockResolvedValue(true),
     getUncountedFailedInvocations: vi.fn().mockResolvedValue([]),
@@ -2772,7 +2773,12 @@ describe("Scheduler", () => {
 
         const result = await createScheduler(createEnv(undefined, stub)).event(makeSlackEvent());
 
-        expect(result).toEqual({ triggered: 1, skipped: 1, steered: 0 });
+        expect(result).toEqual({
+          triggered: 1,
+          skipped: 1,
+          steered: 0,
+          invocationIds: [expect.any(String)],
+        });
         expect(mockStore.insertInvocationGuarded).toHaveBeenCalledTimes(1);
         expect(mockStore.insertInvocationGuarded).toHaveBeenCalledWith(
           expect.objectContaining({
@@ -2817,7 +2823,7 @@ describe("Scheduler", () => {
         // Fails the automation's text condition, so no run is admitted.
         expect(
           await createScheduler(env).event(makeSlackEvent({ text: "unrelated chatter" }))
-        ).toEqual({ triggered: 0, skipped: 0, steered: 0 });
+        ).toEqual({ triggered: 0, skipped: 0, steered: 0, invocationIds: [] });
 
         expect(threadContextCalls(slackFetch)).toHaveLength(0);
       });
@@ -2831,7 +2837,7 @@ describe("Scheduler", () => {
 
         expect(
           await createScheduler(env).event(makeSlackEvent({ text: "also update the changelog" }))
-        ).toEqual({ triggered: 0, skipped: 0, steered: 1 });
+        ).toEqual({ triggered: 0, skipped: 0, steered: 1, invocationIds: [] });
 
         expect(threadContextCalls(slackFetch)).toHaveLength(0);
       });
@@ -2846,6 +2852,7 @@ describe("Scheduler", () => {
           triggered: 0,
           skipped: 1,
           steered: 0,
+          invocationIds: [expect.any(String)],
         });
 
         expect(threadContextCalls(slackFetch)).toHaveLength(0);
@@ -2863,6 +2870,7 @@ describe("Scheduler", () => {
           triggered: 0,
           skipped: 1,
           steered: 0,
+          invocationIds: [],
         });
 
         expect(threadContextCalls(slackFetch)).toHaveLength(0);
@@ -2877,6 +2885,7 @@ describe("Scheduler", () => {
           triggered: 1,
           skipped: 0,
           steered: 0,
+          invocationIds: [expect.any(String)],
         });
 
         expect(threadContextCalls(slackFetch)).toHaveLength(1);
@@ -2905,6 +2914,7 @@ describe("Scheduler", () => {
           triggered: 2,
           skipped: 0,
           steered: 0,
+          invocationIds: [expect.any(String), expect.any(String)],
         });
 
         expect(mockStore.insertInvocationGuarded).toHaveBeenCalledTimes(2);
@@ -2927,6 +2937,7 @@ describe("Scheduler", () => {
           triggered: 1,
           skipped: 1,
           steered: 0,
+          invocationIds: [expect.any(String)],
         });
 
         expect(mockStore.insertInvocationGuarded).toHaveBeenCalledTimes(1);
@@ -2954,6 +2965,7 @@ describe("Scheduler", () => {
           triggered: 1,
           skipped: 0,
           steered: 0,
+          invocationIds: [expect.any(String)],
         });
 
         const prompt = await getPromptBody(vi.mocked(stub.fetch));
@@ -2981,6 +2993,7 @@ describe("Scheduler", () => {
           triggered: 1,
           skipped: 0,
           steered: 0,
+          invocationIds: [expect.any(String)],
         });
 
         // The run still launches — a slow Slack read must not strand children.
@@ -3005,6 +3018,7 @@ describe("Scheduler", () => {
           triggered: 1,
           skipped: 0,
           steered: 0,
+          invocationIds: [expect.any(String)],
         });
 
         const prompt = await getPromptBody(vi.mocked(stub.fetch));
@@ -3027,6 +3041,7 @@ describe("Scheduler", () => {
           triggered: 1,
           skipped: 0,
           steered: 0,
+          invocationIds: [expect.any(String)],
         });
 
         expect(threadContextCalls(slackFetch)).toHaveLength(0);
@@ -3051,7 +3066,7 @@ describe("Scheduler", () => {
         makeSlackEvent({ text: "thanks — also update the changelog" })
       );
 
-      expect(result).toEqual({ triggered: 0, skipped: 0, steered: 1 });
+      expect(result).toEqual({ triggered: 0, skipped: 0, steered: 1, invocationIds: [] });
 
       // The continuity lookup is scoped to the thread's concurrency key and a
       // 7-day window measured from now.
@@ -3229,7 +3244,7 @@ describe("Scheduler", () => {
         await createScheduler(createEnv(undefined, stub)).event(
           makeSlackEvent({ text: "also update the changelog" })
         )
-      ).toEqual({ triggered: 0, skipped: 0, steered: 1 });
+      ).toEqual({ triggered: 0, skipped: 0, steered: 1, invocationIds: [] });
       const body = await getPromptBody(vi.mocked(stub.fetch));
       expect(body.canonicalUserId).toBe("slack-actor-user");
       expect(body.scmEnrichment).toEqual({ userId: null, login: null, name: null, email: null });
@@ -3263,6 +3278,7 @@ describe("Scheduler", () => {
         triggered: 0,
         skipped: 0,
         steered: 2,
+        invocationIds: [],
       });
 
       expect(mockUserStoreGetIdentity).toHaveBeenCalledTimes(1);
@@ -3311,6 +3327,7 @@ describe("Scheduler", () => {
           triggered: 0,
           skipped: 0,
           steered: 0,
+          invocationIds: [],
         });
         expect(stub.fetch).not.toHaveBeenCalled();
         expect(mockEvaluateSessionAdmission).not.toHaveBeenCalled();
@@ -3331,6 +3348,7 @@ describe("Scheduler", () => {
           triggered: 0,
           skipped: 0,
           steered: 0,
+          invocationIds: [],
         });
         expect(stub.fetch).not.toHaveBeenCalled();
         expect(mockStore.insertInvocationGuarded).not.toHaveBeenCalled();
@@ -3358,6 +3376,7 @@ describe("Scheduler", () => {
           triggered: 0,
           skipped: 0,
           steered: 1,
+          invocationIds: [],
         });
         expect(requests).toHaveBeenCalledTimes(1);
         expect(requests.mock.calls[0][1]).toBe("sess-allowed");
@@ -3392,7 +3411,7 @@ describe("Scheduler", () => {
         makeSlackEvent({ text: "actually, can you also bump the version?" })
       );
 
-      expect(result).toEqual({ triggered: 0, skipped: 0, steered: 1 });
+      expect(result).toEqual({ triggered: 0, skipped: 0, steered: 1, invocationIds: [] });
 
       const promptBody = await getPromptBody(fetchMock);
       expect(promptBody.source).toBe("slack");
@@ -3426,7 +3445,7 @@ describe("Scheduler", () => {
         makeSlackEvent({ text: "thanks — also check the rollout" })
       );
 
-      expect(result).toEqual({ triggered: 0, skipped: 0, steered: 1 });
+      expect(result).toEqual({ triggered: 0, skipped: 0, steered: 1, invocationIds: [] });
 
       const promptBody = await getPromptBody(fetchMock);
       expect(promptBody.callbackContext).toMatchObject({
@@ -3452,6 +3471,7 @@ describe("Scheduler", () => {
         triggered: 0,
         skipped: 0,
         steered: 1,
+        invocationIds: [],
       });
 
       const promptBody = await getPromptBody(fetchMock);
@@ -3476,7 +3496,12 @@ describe("Scheduler", () => {
       // Matching text so the trigger conditions pass.
       const result = await scheduler.event(makeSlackEvent());
 
-      expect(result).toEqual({ triggered: 1, skipped: 0, steered: 0 });
+      expect(result).toEqual({
+        triggered: 1,
+        skipped: 0,
+        steered: 0,
+        invocationIds: [expect.any(String)],
+      });
 
       const params = mockStore.insertInvocationGuarded.mock.calls[0][0];
       expect(params.invocation).toMatchObject({
@@ -3517,7 +3542,12 @@ describe("Scheduler", () => {
 
       const result = await scheduler.event(makeSlackEvent());
 
-      expect(result).toEqual({ triggered: 1, skipped: 0, steered: 0 });
+      expect(result).toEqual({
+        triggered: 1,
+        skipped: 0,
+        steered: 0,
+        invocationIds: [expect.any(String)],
+      });
       const prompt = await getPromptBody(vi.mocked(stub.fetch));
       expect(prompt.content).toBe(
         "Run tests\n\n## Additional Instructions\n\nAlways run tests.\n---\n\n" +
@@ -3541,6 +3571,7 @@ describe("Scheduler", () => {
         triggered: 1,
         skipped: 0,
         steered: 0,
+        invocationIds: [expect.any(String)],
       });
 
       const prompt = await getPromptBody(vi.mocked(stub.fetch));
@@ -3563,7 +3594,12 @@ describe("Scheduler", () => {
 
       const result = await scheduler.event(makeSlackEvent());
 
-      expect(result).toEqual({ triggered: 1, skipped: 0, steered: 0 });
+      expect(result).toEqual({
+        triggered: 1,
+        skipped: 0,
+        steered: 0,
+        invocationIds: [expect.any(String)],
+      });
       const prompt = await getPromptBody(vi.mocked(stub.fetch));
       expect(prompt.content).toBe(
         `Run tests\n---\n\n${sampleSlackContextBlock}\n\n---\n\n` +
@@ -3590,7 +3626,12 @@ describe("Scheduler", () => {
       const scheduler = createScheduler(env);
       const result = await scheduler.event(makeSlackEvent());
 
-      expect(result).toEqual({ triggered: 0, skipped: 1, steered: 0 });
+      expect(result).toEqual({
+        triggered: 0,
+        skipped: 1,
+        steered: 0,
+        invocationIds: [expect.any(String)],
+      });
       // The skip is a childless invocation carrying the message coordinates
       // but never the dedup trigger_key (a skip must not consume the slot).
       expect(mockStore.insertSkippedInvocation).toHaveBeenCalledWith(
@@ -3617,15 +3658,77 @@ describe("Scheduler", () => {
           "D1_ERROR: UNIQUE constraint failed: automation_invocations.automation_id, automation_invocations.trigger_key"
         )
       );
+      // A concurrent delivery wins the insert race after the pre-check missed it.
+      mockStore.getInvocationIdByTriggerKey
+        .mockResolvedValueOnce(null)
+        .mockResolvedValueOnce("inv-winner");
 
       const scheduler = createScheduler();
       const result = await scheduler.event(makeSlackEvent());
 
-      expect(result).toEqual({ triggered: 0, skipped: 1, steered: 0 });
+      expect(result).toEqual({
+        triggered: 0,
+        skipped: 1,
+        steered: 0,
+        invocationIds: ["inv-winner"],
+      });
       // Dedup is a silent no-op — no skip row, no schedule advance.
       expect(mockStore.insertSkippedInvocation).not.toHaveBeenCalled();
       expect(mockStore.update).not.toHaveBeenCalled();
     });
+
+    it("resolves a redelivery to the owning invocation even while it is still running", async () => {
+      mockGetSlackAutomationsForChannel.mockResolvedValue([sampleSlackAutomation]);
+      mockStore.getLatestSteerableRunForThread.mockResolvedValue(null);
+      mockStore.getActiveRunForKey.mockResolvedValue(sampleRunRow({ id: "busy" }));
+      mockStore.getInvocationIdByTriggerKey.mockResolvedValue("inv-original");
+      const event = makeSlackEvent();
+
+      const result = await createScheduler().event(event);
+
+      expect(result).toEqual({
+        triggered: 0,
+        skipped: 1,
+        steered: 0,
+        invocationIds: ["inv-original"],
+      });
+      expect(mockStore.getInvocationIdByTriggerKey).toHaveBeenCalledWith(
+        sampleSlackAutomation.id,
+        event.triggerKey
+      );
+      // Not an overlap: no skip row and no "already active" notice for a redelivery.
+      expect(mockStore.insertSkippedInvocation).not.toHaveBeenCalled();
+      expect(mockStore.insertInvocationGuarded).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      { path: "the overlap pre-check", active: true, inserted: true },
+      { path: "a lost guarded insert", active: false, inserted: false },
+    ])(
+      "resolves a concurrent same-key delivery admitted after the trigger-key check ($path)",
+      async ({ active, inserted }) => {
+        mockGetSlackAutomationsForChannel.mockResolvedValue([sampleSlackAutomation]);
+        mockStore.getLatestSteerableRunForThread.mockResolvedValue(null);
+        mockStore.getActiveRunForKey.mockResolvedValue(
+          active ? sampleRunRow({ id: "original-child" }) : null
+        );
+        mockStore.insertInvocationGuarded.mockResolvedValueOnce({ inserted });
+        // The original commits its invocation between the pre-check and the overlap.
+        mockStore.getInvocationIdByTriggerKey
+          .mockResolvedValueOnce(null)
+          .mockResolvedValueOnce("inv-original");
+
+        const result = await createScheduler().event(makeSlackEvent());
+
+        expect(result).toEqual({
+          triggered: 0,
+          skipped: 1,
+          steered: 0,
+          invocationIds: ["inv-original"],
+        });
+        expect(mockStore.insertSkippedInvocation).not.toHaveBeenCalled();
+      }
+    );
 
     it("falls through to a new trigger when steering the session fails", async () => {
       mockGetSlackAutomationsForChannel.mockResolvedValue([sampleSlackAutomation]);
@@ -3652,7 +3755,12 @@ describe("Scheduler", () => {
 
       // Steer failed → fell through → matched conditions → invocation created
       // but its only child failed to launch, so triggered stays 0.
-      expect(result).toEqual({ triggered: 0, skipped: 0, steered: 0 });
+      expect(result).toEqual({
+        triggered: 0,
+        skipped: 0,
+        steered: 0,
+        invocationIds: [expect.any(String)],
+      });
       expect(mockStore.insertInvocationGuarded).toHaveBeenCalledWith(
         expect.objectContaining({
           invocation: expect.objectContaining({ automation_id: "auto-slack", source: "event" }),
@@ -3833,6 +3941,7 @@ describe("Scheduler", () => {
           triggered: 0,
           skipped: 1,
           steered: 0,
+          invocationIds: [expect.any(String)],
         });
         expect(mockStore.incrementConsecutiveFailures).not.toHaveBeenCalled();
       });

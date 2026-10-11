@@ -113,6 +113,7 @@ describe("GitHub event admission", () => {
       triggered: 1,
       skipped: 0,
       steered: 0,
+      invocationIds: [expect.any(String)],
     });
     expect(fire).toHaveBeenCalledTimes(2);
     expect(mocks.current).toHaveBeenCalledTimes(2);
@@ -131,6 +132,7 @@ describe("GitHub event admission", () => {
       triggered: 1,
       skipped: 0,
       steered: 0,
+      invocationIds: [expect.any(String)],
     });
     expect(mocks.deny).toHaveBeenCalledOnce();
     expect(fire).toHaveBeenCalledTimes(2);
@@ -146,6 +148,7 @@ describe("GitHub event admission", () => {
       triggered: 0,
       skipped: 1,
       steered: 0,
+      invocationIds: [],
     });
     expect(fire).toHaveBeenCalledOnce();
     expect(mocks.deny).toHaveBeenCalledOnce();
@@ -156,11 +159,12 @@ describe("GitHub event admission", () => {
     mocks.deny.mockResolvedValue(true);
     const fire = vi
       .fn<() => Promise<StartInvocationResult>>()
-      .mockResolvedValue({ outcome: "skipped" });
+      .mockResolvedValue({ outcome: "skipped", invocationId: "inv-skip" });
     expect(await admitGitHubEvent(db, event, fire, log)).toEqual({
       triggered: 0,
       skipped: 1,
       steered: 0,
+      invocationIds: [],
     });
     expect(mocks.deny).toHaveBeenCalledOnce();
     expect(fire).not.toHaveBeenCalled();
@@ -206,6 +210,7 @@ describe("GitHub event admission", () => {
       triggered: 0,
       skipped: 1,
       steered: 0,
+      invocationIds: [],
     });
     expect(fire).toHaveBeenCalledOnce();
     expect(mocks.deny).not.toHaveBeenCalled();
@@ -221,6 +226,7 @@ describe("GitHub event admission", () => {
       triggered: 0,
       skipped: 1,
       steered: 0,
+      invocationIds: [expect.any(String)],
     });
     expect(fire).toHaveBeenCalledOnce();
   });
@@ -239,6 +245,11 @@ describe("GitHub event admission", () => {
     await vi.waitFor(() => expect(fire).toHaveBeenCalledOnce());
     expect(settled).toBe(false);
     finish?.(started);
-    expect(await admission).toEqual({ triggered: 1, skipped: 0, steered: 0 });
+    expect(await admission).toEqual({
+      triggered: 1,
+      skipped: 0,
+      steered: 0,
+      invocationIds: [expect.any(String)],
+    });
   });
 });

@@ -116,8 +116,7 @@ export function resolveReasoningEffort(
 type NormalizedRepositoryInput = NonNullable<CreateAutomationBody["repositories"]>[number];
 
 type RepositorySelectionRequest =
-  | { kind: "unchanged" }
-  | { kind: "replace"; repositories: NormalizedRepositoryInput[] };
+  { kind: "unchanged" } | { kind: "replace"; repositories: NormalizedRepositoryInput[] };
 
 /**
  * Selection validation failures carry their HTTP status; request shape
@@ -229,8 +228,7 @@ export function validateTargetCounts(
 }
 
 type EnvironmentSelectionRequest =
-  | { kind: "unchanged" }
-  | { kind: "replace"; environmentIds: string[] };
+  { kind: "unchanged" } | { kind: "replace"; environmentIds: string[] };
 
 /**
  * Select the environments from an already-parsed create/update body (design

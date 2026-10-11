@@ -172,15 +172,16 @@ remain the responsibility of Linear's GitHub integration and the team's PR autom
 
 Open the web app and go to **Settings > Integrations > Linear** to configure the Linear Agent.
 
-| Setting                        | What it controls                                                  |
-| ------------------------------ | ----------------------------------------------------------------- |
-| Default model and effort       | Model and reasoning depth for Linear-started sessions             |
-| Repository Scope               | Whether Linear can run in all accessible repos or selected repos  |
-| Issue Session Instructions     | Extra guidance appended to Linear issue prompts                   |
-| Allow user model preferences   | Whether admin-managed user preferences can override the model     |
-| Allow model labels (`model:*`) | Whether Linear issue labels can choose the model                  |
-| Tool progress activities       | Whether Linear shows intermediate file and command activity       |
-| Repository Overrides           | Per-repository defaults for model, reasoning, and Linear behavior |
+| Setting                        | What it controls                                                 |
+| ------------------------------ | ---------------------------------------------------------------- |
+| Agent harness                  | OpenCode (default) or Claude Agent for new Linear sessions       |
+| Default model and effort       | Model and reasoning depth for Linear-started sessions            |
+| Repository Scope               | Whether Linear can run in all accessible repos or selected repos |
+| Issue Session Instructions     | Extra guidance appended to Linear issue prompts                  |
+| Allow user model preferences   | Whether admin-managed user preferences can override the model    |
+| Allow model labels (`model:*`) | Whether Linear issue labels can choose the model                 |
+| Tool progress activities       | Whether Linear shows intermediate file and command activity      |
+| Repository Overrides           | Per-repository harness, model, reasoning, and Linear behavior    |
 
 If no Linear settings are configured, all accessible repositories are in scope, user preferences and
 model labels are allowed, and tool progress is enabled.
@@ -191,6 +192,12 @@ Model selection uses this priority, highest to lowest:
 2. Linear user preference, when allowed.
 3. Repository override or global Linear default.
 4. Deployment default model.
+
+The session then runs on the configured **Agent harness** when that harness can run the resolved
+model, and on OpenCode otherwise: Claude Agent runs Anthropic models only, so a `model:gpt-*` label
+or a non-Anthropic default runs on OpenCode. The "Creating coding session" activity names the
+harness. On Claude Agent, Linear sessions follow the provider's **Automated authentication** policy
+and may use a connected Claude account; see [Claude Agent](../CLAUDE_AGENT.md#linear-sessions).
 
 Linear user preferences are currently admin/API-managed, not set from a self-service Linear screen.
 
@@ -270,7 +277,8 @@ the rejected API request once. A reinstall is not normally required.
 ### The wrong model was used
 
 Check **Settings > Integrations > Linear**. Repository overrides, user preferences, and `model:*`
-labels can affect model selection. Changes apply to new Linear-started sessions.
+labels can affect model selection. A non-Anthropic model runs on OpenCode even when the harness is
+Claude Agent. Changes apply to new Linear-started sessions.
 
 ### The wrong repository was used
 

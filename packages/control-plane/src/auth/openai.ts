@@ -61,8 +61,7 @@ export type OpenAIDeviceAuthorization = {
   intervalMs: number;
 };
 export type OpenAIDeviceStatus =
-  | { status: "pending" }
-  | { status: "authorized"; authorizationCode: string; codeVerifier: string };
+  { status: "pending" } | { status: "authorized"; authorizationCode: string; codeVerifier: string };
 
 export class OpenAITokenRefreshError extends Error {
   constructor(

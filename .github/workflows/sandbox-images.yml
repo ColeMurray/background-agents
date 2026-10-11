@@ -28,13 +28,13 @@ jobs:
           - provider: vercel
             base: amazonlinux:2023
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           persist-credentials: false
-      - uses: actions/setup-node@v6
+      - uses: actions/setup-node@v7
         with:
           node-version-file: .nvmrc
-      - uses: astral-sh/setup-uv@v6
+      - uses: astral-sh/setup-uv@v7
         with:
           version: "0.9.7"
       - name: Check frozen image inputs and planner regressions

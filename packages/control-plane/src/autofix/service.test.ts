@@ -99,15 +99,13 @@ function buildService() {
       repoOwner: "acme",
       repoName: "widgets",
     })),
-    getPullRequestFeedback: vi.fn(
-      async (): Promise<GitHubPullRequestFeedback> => ({
-        kind: "pr_comment",
-        id: "1234",
-        body: "Please handle the null case.",
-        url: "https://github.com/acme/widgets/pull/42#issuecomment-1234",
-        author: { id: "7", login: "alice", type: "User" },
-      })
-    ),
+    getPullRequestFeedback: vi.fn(async (): Promise<GitHubPullRequestFeedback> => ({
+      kind: "pr_comment",
+      id: "1234",
+      body: "Please handle the null case.",
+      url: "https://github.com/acme/widgets/pull/42#issuecomment-1234",
+      author: { id: "7", login: "alice", type: "User" },
+    })),
     hasPullRequestWritePermission: vi.fn(async () => true),
   };
   const sessions = {

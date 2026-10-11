@@ -448,6 +448,56 @@ describe("UserStore", () => {
     });
   });
 
+  // ── fillMissingProfile ──────────────────────────────────────────
+
+  describe("fillMissingProfile", () => {
+    it("fills a NULL or blank display name and avatar with trimmed values", async () => {
+      const nameless = await store.createUser({});
+      const blank = await store.createUser({ displayName: "  ", avatarUrl: "" });
+
+      for (const user of [nameless, blank]) {
+        await store.fillMissingProfile(user.id, {
+          displayName: "  Ada Lovelace ",
+          avatarUrl: " https://avatars.test/ada.png ",
+        });
+        await expect(store.getUserById(user.id)).resolves.toMatchObject({
+          displayName: "Ada Lovelace",
+          avatarUrl: "https://avatars.test/ada.png",
+        });
+      }
+    });
+
+    it("keeps existing values and fills each missing field on its own", async () => {
+      const user = await store.createUser({
+        displayName: "Chosen Name",
+        email: "chosen@example.com",
+      });
+
+      await store.fillMissingProfile(user.id, {
+        displayName: "slack-handle",
+        avatarUrl: "https://avatars.test/new.png",
+      });
+
+      await expect(store.getUserById(user.id)).resolves.toMatchObject({
+        displayName: "Chosen Name",
+        avatarUrl: "https://avatars.test/new.png",
+        email: "chosen@example.com",
+      });
+    });
+
+    it("ignores blank inputs and leaves updated_at alone when nothing is filled", async () => {
+      const user = await store.createUser({});
+
+      await store.fillMissingProfile(user.id, { displayName: "   ", avatarUrl: undefined });
+
+      await expect(store.getUserById(user.id)).resolves.toMatchObject({
+        displayName: null,
+        avatarUrl: null,
+        updatedAt: user.updatedAt,
+      });
+    });
+  });
+
   // ── createIdentity ──────────────────────────────────────────────
 
   describe("createIdentity", () => {

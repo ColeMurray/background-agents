@@ -7,7 +7,6 @@ import {
 import type { Env } from "../types";
 import { signedControlPlaneFetch } from "../internal-auth";
 import type { ModelOption } from "./slack-types";
-import { getSlackSettings } from "../slack-settings";
 
 const ALL_MODELS = MODEL_OPTIONS.flatMap((group) =>
   group.models.map((model) => ({
@@ -68,11 +67,4 @@ export async function getAuthoritativeModels(
   traceId?: string
 ): Promise<ValidModel[] | null> {
   return fetchEnabledModels(env, "https://internal/model-preferences?strict=true", traceId);
-}
-
-export async function getSlackDefaultModel(
-  env: Env,
-  traceId?: string
-): Promise<string | undefined> {
-  return (await getSlackSettings(env, traceId)).defaultModel;
 }

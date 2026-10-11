@@ -286,10 +286,7 @@ export type SessionMemoryAccessDecision =
   | {
       kind: "denied";
       reason:
-        | "team_inactive"
-        | "repository_ungranted"
-        | "owner_unavailable"
-        | "environment_unavailable";
+        "team_inactive" | "repository_ungranted" | "owner_unavailable" | "environment_unavailable";
       /** The partition that failed, when a single one can be identified. */
       partition?: MemoryPartition;
     };

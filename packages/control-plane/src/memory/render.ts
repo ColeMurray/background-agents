@@ -9,8 +9,7 @@ import type { SessionMemorySelection } from "./types";
 
 /** The fields one rendered line needs. */
 export type RenderableMemory = { memoryId: string; scope: MemoryScope; title: string } & (
-  | { inclusion: "full"; content: string }
-  | { inclusion: "summary"; description: string }
+  { inclusion: "full"; content: string } | { inclusion: "summary"; description: string }
 );
 
 /** A renderable entry for one pinned revision. */

@@ -24,6 +24,12 @@ import {
   type SlackMentionsPolicy,
   type SlackRoutingRule,
 } from "@open-inspect/shared/types/integrations";
+import {
+  checkHarnessCompatibility,
+  getHarnessCapabilities,
+  getHarnessLabel,
+  type HarnessId,
+} from "@open-inspect/shared/harnesses";
 import { isValidModel, isValidReasoningEffort } from "@open-inspect/shared/models";
 import { normalizeSandboxSettings } from "../sandbox/settings";
 import type { SqlDatabase } from "./sql-database";
@@ -418,9 +424,27 @@ export class IntegrationSettingsStore {
     return settings;
   }
 
-  private validateModelAndEffort(settings: { model?: string; reasoningEffort?: string }): void {
+  /**
+   * Model, reasoning effort and (where the integration has one) harness, checked
+   * together. A harness and model saved at the same level must be compatible,
+   * like an automation on save; values merged from other levels can still
+   * disagree, so launchers resolve that with `resolveHarnessForModel`.
+   */
+  private validateAgentSelection(settings: {
+    model?: string;
+    reasoningEffort?: string;
+    harness?: HarnessId;
+  }): void {
     if (settings.model !== undefined && !isValidModel(settings.model)) {
       throw new IntegrationSettingsValidationError(`Invalid model ID: ${settings.model}`);
+    }
+
+    const harnessIncompatibility =
+      settings.harness !== undefined && settings.model !== undefined
+        ? checkHarnessCompatibility(settings.harness, settings.model)
+        : null;
+    if (harnessIncompatibility) {
+      throw new IntegrationSettingsValidationError(harnessIncompatibility.message);
     }
 
     if (
@@ -435,7 +459,7 @@ export class IntegrationSettingsStore {
   }
 
   private validateAndNormalizeGitHubSettings(settings: GitHubBotSettings): GitHubBotSettings {
-    this.validateModelAndEffort(settings);
+    this.validateAgentSelection(settings);
 
     if (
       settings.codeReviewInstructions !== undefined &&
@@ -525,7 +549,7 @@ export class IntegrationSettingsStore {
   }
 
   private validateLinearSettings(settings: LinearBotSettings): void {
-    this.validateModelAndEffort(settings);
+    this.validateAgentSelection(settings);
 
     if (
       settings.allowUserPreferenceOverride !== undefined &&
@@ -585,6 +609,7 @@ export class IntegrationSettingsStore {
       level === "global"
         ? new Set([
             "agentNotificationsEnabled",
+            "harness",
             "model",
             "mentionsPolicy",
             "unboundChannels",
@@ -606,7 +631,19 @@ export class IntegrationSettingsStore {
       throw new IntegrationSettingsValidationError("agentNotificationsEnabled must be a boolean");
     }
 
-    this.validateModelAndEffort(settings);
+    this.validateAgentSelection(settings);
+    // Slack refuses a model the harness cannot run. The bot's deployment
+    // default model is not visible here or in the settings form, so a harness
+    // limited to some models needs an explicit default model it can run.
+    if (
+      settings.harness !== undefined &&
+      settings.model === undefined &&
+      getHarnessCapabilities(settings.harness).modelFamilies !== "any"
+    ) {
+      throw new IntegrationSettingsValidationError(
+        `Choose a default model ${getHarnessLabel(settings.harness)} can run.`
+      );
+    }
 
     if (
       settings.mentionsPolicy !== undefined &&

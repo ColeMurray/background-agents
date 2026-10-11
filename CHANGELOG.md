@@ -2,7 +2,41 @@
 
 New features, integrations, and notable improvements to Open-Inspect — newest first.
 
+## October 8, 2026
+
+**Claude Agent for Slack sessions.** Choose OpenCode or Claude Agent for new Slack sessions under
+**Settings > Integrations > Slack**, and let each user override it in the Slack app's **Home** tab.
+OpenCode stays the default. Claude Agent requires a Slack default model it can run. A request whose
+model the harness cannot run is refused with advice in the thread instead of starting a session. On
+Claude Agent, Slack sessions follow the Claude **Automated authentication** setting, so they can use
+a connected Claude subscription. Existing threads keep their harness. See
+[Claude Agent](docs/CLAUDE_AGENT.md#slack-sessions).
+
+## October 4, 2026
+
+**GitHub model overrides.** Start a GitHub `@mention` with `!model` or `!reasoning`, the same flags
+Slack uses, to pick the model and reasoning effort for that session. Upgrade the GitHub bot and
+control plane together. See
+[GitHub integration](docs/integrations/GITHUB.md#model-and-reasoning-overrides).
+
+## October 3, 2026
+
+**Persistent memory.** Personal, repository, and environment memories carry facts and directives
+between sessions. Agents in both harnesses search, read, and propose memories. Only personal facts
+written in a root session that has stayed private and owner-only become active immediately; all
+other agent writes wait for approval. Manage personal memories under **Settings > Memories** and
+repository and environment memories under **Settings > Shared memories**; each session's sidebar
+lists the memories it loaded. Requires D1 migration 0084 and a sandbox image rebuild. See
+[Persistent session memory](docs/MEMORY.md).
+
 ## October 2, 2026
+
+**Analytics redesign.** The analytics page is now an overview plus Usage, Cost, Pull requests, and
+People tabs. The range, scope, and tab are kept in the URL. A new **Session origins** breakdown
+shows where sessions start and who they are attributed to.
+
+**Saved prompt drafts.** Unsent prompts survive page reloads. Each session and the new-session
+composer keep their own draft.
 
 **Teams.** Group members into teams that own sessions, environments, automations, and secrets, with
 repository grants and Slack and Linear channel bindings managed from **Settings > Teams**. GitHub
@@ -20,6 +54,10 @@ default.
 **Brokered credentials for Modal restores.** Restored Modal sandboxes now fetch git credentials from
 the control plane like fresh ones, so Modal no longer needs the `github-app` secret. You can delete
 it after upgrading.
+
+**Session page redesign.** The session sidebar is split into Info, Changes, Tasks, and Tools tabs,
+with captured media under **Artifacts** in Info. Changed files open in the main column beside the
+sidebar, which leaves room for split diffs.
 
 ## September 28, 2026
 

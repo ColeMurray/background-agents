@@ -72,6 +72,7 @@ describe("sig1 service-credential authentication", () => {
     ["slack-bot", "/integration-settings/slack", 200],
     ["slack-bot", "/integration-settings/slack/watched-channels", 200],
     ["slack-bot", "/model-preferences", 200],
+    ["github-bot", "/model-preferences", 200],
   ] as const)(
     "allows actorless %s metadata/config read %s",
     async (service, path, expectedStatus) => {

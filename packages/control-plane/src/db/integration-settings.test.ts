@@ -385,6 +385,22 @@ describe("IntegrationSettingsStore", () => {
       ).resolves.not.toThrow();
     });
 
+    it("accepts a compatible harness/model pair on setGlobal", async () => {
+      await expect(
+        store.setGlobal("github", {
+          defaults: { harness: "claude", model: "anthropic/claude-opus-4-6" },
+        })
+      ).resolves.not.toThrow();
+    });
+
+    it("rejects an incompatible harness/model pair on setGlobal", async () => {
+      await expect(
+        store.setGlobal("github", {
+          defaults: { harness: "claude", model: "openai/gpt-5.4" },
+        })
+      ).rejects.toThrow('Model "openai/gpt-5.4" cannot run on the Claude Agent harness.');
+    });
+
     it("rejects malformed stored global settings", async () => {
       (db as unknown as { globalRows: Map<string, GlobalRow> }).globalRows.set("github", {
         integration_id: "github",
@@ -1129,6 +1145,67 @@ describe("IntegrationSettingsStore", () => {
       expect(result).toEqual({ cpuCores: 0.5, memoryMib: 64 });
     });
 
+    it("inherits resource caps through repo and environment scopes with null resets", async () => {
+      await store.setGlobal("sandbox", {
+        defaults: { cpuCores: 0.5, memoryMib: 2048, cpuLimitCores: 2, memoryLimitMib: 4096 },
+      });
+      await store.setRepoSettings("sandbox", "acme/app", { cpuLimitCores: 3 });
+      expect((await store.getResolvedConfig("sandbox", "acme/app")).settings).toEqual({
+        cpuCores: 0.5,
+        memoryMib: 2048,
+        cpuLimitCores: 3,
+        memoryLimitMib: 4096,
+      });
+      await store.setEnvironmentSettings("sandbox", "env_1", {
+        cpuLimitCores: null,
+        memoryLimitMib: null,
+      });
+      expect(await store.getEnvironmentSettings("sandbox", "env_1")).toEqual({
+        cpuLimitCores: null,
+        memoryLimitMib: null,
+      });
+      expect((await store.getResolvedConfig("sandbox", "acme/app", "env_1")).settings).toEqual({
+        cpuCores: 0.5,
+        memoryMib: 2048,
+        cpuLimitCores: null,
+        memoryLimitMib: null,
+      });
+    });
+
+    it("preserves conflicting merged caps across repo and environment layers", async () => {
+      await store.setGlobal("sandbox", { defaults: { cpuLimitCores: 2, memoryLimitMib: 4096 } });
+      await store.setRepoSettings("sandbox", "acme/app", { cpuCores: 4 });
+      await store.setEnvironmentSettings("sandbox", "env_1", { memoryMib: 8192 });
+      expect((await store.getResolvedConfig("sandbox", "acme/app", "env_1")).settings).toEqual({
+        cpuCores: 4,
+        memoryMib: 8192,
+        cpuLimitCores: 2,
+        memoryLimitMib: 4096,
+      });
+      await store.setEnvironmentSettings("sandbox", "env_1", {
+        cpuLimitCores: 4,
+        memoryLimitMib: 8192,
+      });
+      expect((await store.getResolvedConfig("sandbox", "acme/app", "env_1")).settings).toEqual({
+        cpuCores: 4,
+        cpuLimitCores: 4,
+        memoryLimitMib: 8192,
+      });
+    });
+
+    it("preserves explicit caps below requests on provider-agnostic writes and reads", async () => {
+      const settings = { cpuCores: 4, cpuLimitCores: 2, memoryMib: 8192, memoryLimitMib: 4096 };
+      await store.setGlobal("sandbox", { defaults: settings });
+      expect((await store.getGlobal("sandbox"))?.defaults).toEqual(settings);
+      await store.setRepoSettings("sandbox", "acme/app", settings);
+      expect(await store.getRepoSettings("sandbox", "acme/app")).toEqual(settings);
+      await store.setEnvironmentSettings("sandbox", "env_1", settings);
+      expect(await store.getEnvironmentSettings("sandbox", "env_1")).toEqual(settings);
+      expect((await store.getResolvedConfig("sandbox", "acme/app", "env_1")).settings).toEqual(
+        settings
+      );
+    });
+
     it("preserves null repo resource overrides over inherited global defaults", async () => {
       await store.setGlobal("sandbox", { defaults: { cpuCores: 2, memoryMib: 4096 } });
       await store.setRepoSettings("sandbox", "acme/app", { cpuCores: null, memoryMib: null });
@@ -1257,6 +1334,43 @@ describe("IntegrationSettingsStore", () => {
         store.setGlobal("slack", {
           defaults: { model: "not-a-real-model" },
         })
+      ).rejects.toThrow(IntegrationSettingsValidationError);
+    });
+
+    it("round-trips a global slack harness with a model it can run", async () => {
+      await store.setGlobal("slack", {
+        defaults: { harness: "claude", model: "anthropic/claude-haiku-4-5" },
+      });
+
+      const result = await store.getGlobal("slack");
+      expect(result?.defaults).toEqual({ harness: "claude", model: "anthropic/claude-haiku-4-5" });
+    });
+
+    it("rejects a global slack harness saved with a model it cannot run", async () => {
+      await expect(
+        store.setGlobal("slack", {
+          defaults: { harness: "claude", model: "openai/gpt-5.4" },
+        })
+      ).rejects.toThrow('Model "openai/gpt-5.4" cannot run on the Claude Agent harness.');
+    });
+
+    it("requires a default model for a global slack harness limited to some models", async () => {
+      await expect(store.setGlobal("slack", { defaults: { harness: "claude" } })).rejects.toThrow(
+        "Choose a default model Claude Agent can run."
+      );
+    });
+
+    it("allows the default slack harness without a default model", async () => {
+      await store.setGlobal("slack", { defaults: { harness: "opencode" } });
+
+      expect((await store.getGlobal("slack"))?.defaults).toEqual({ harness: "opencode" });
+    });
+
+    it("rejects harness at per-repo level (global-only field)", async () => {
+      await expect(
+        store.setRepoSettings("slack", "acme/widgets", {
+          harness: "claude",
+        } as unknown as { agentNotificationsEnabled?: boolean })
       ).rejects.toThrow(IntegrationSettingsValidationError);
     });
 

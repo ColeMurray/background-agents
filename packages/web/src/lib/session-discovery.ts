@@ -122,8 +122,7 @@ const SESSION_DISCOVERY_PARAMS: readonly string[] = [
 ];
 
 export type SessionDiscoveryParseResult =
-  | { success: true; data: SessionDiscoveryQuery }
-  | { success: false; invalidParams: string[] };
+  { success: true; data: SessionDiscoveryQuery } | { success: false; invalidParams: string[] };
 
 /**
  * Parse the page URL. The shared list-query codec is the validation boundary

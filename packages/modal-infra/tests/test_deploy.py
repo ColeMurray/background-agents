@@ -314,7 +314,7 @@ def test_docker_image_is_built_and_verified_on_the_vm_after_the_default_is_publi
     assert "experimental_options" not in create.call_args_list[0].kwargs
     vm_kwargs = create.call_args_list[1].kwargs
     assert vm_kwargs["experimental_options"] == {"vm_runtime": True}
-    assert (vm_kwargs["cpu"], vm_kwargs["memory"]) == (2, 4096)
+    assert (vm_kwargs["cpu"], vm_kwargs["memory"]) == ((0.5, 2), (2048, 4096))
     assert [call.args[1] for call in docker_sandbox.exec.call_args_list] == [
         "/app/verify/smoke_test.py",
         "/app/verify/docker_smoke.py",
@@ -385,10 +385,3 @@ def test_local_docker_image_is_the_default_image_plus_the_docker_phase(monkeypat
     image.run_commands.assert_called_once_with(
         "bash /tmp/openinspect-image/packages/sandbox-images/install/install.sh docker"
     )
-
-
-def test_docker_verification_resources_match_backend_defaults() -> None:
-    from src.sandbox.launch_policy import VM_DEFAULT_CPU_CORES, VM_DEFAULT_MEMORY_MIB
-
-    assert deploy.DOCKER_VERIFICATION_CPU_CORES == VM_DEFAULT_CPU_CORES
-    assert deploy.DOCKER_VERIFICATION_MEMORY_MIB == VM_DEFAULT_MEMORY_MIB

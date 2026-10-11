@@ -27,10 +27,17 @@ interface SandboxShutdownBannerProps {
 }
 
 export function SandboxShutdownBanner({ shutdown, onRecover }: SandboxShutdownBannerProps) {
+  if (!shutdown) return null;
+  // Recovery state describes one phase; a new phase gets a fresh banner.
+  return <ShutdownPhaseBanner key={shutdown.phase} shutdown={shutdown} onRecover={onRecover} />;
+}
+
+function ShutdownPhaseBanner({
+  shutdown,
+  onRecover,
+}: SandboxShutdownBannerProps & { shutdown: SandboxShutdownState }) {
   const [pendingAction, setPendingAction] = useState<ShutdownRecoveryAction | null>(null);
   const [recoveryError, setRecoveryError] = useState<string | null>(null);
-
-  if (!shutdown) return null;
 
   const { phase } = shutdown;
   const isError = phase === "failed" || phase === "unknown";

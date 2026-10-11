@@ -37,6 +37,44 @@ describe("parsePersistedSandboxSettings", () => {
 });
 
 describe("normalizeSandboxSettings", () => {
+  it.each([
+    { cpuLimitCores: 0 },
+    { cpuLimitCores: -1 },
+    { cpuLimitCores: Infinity },
+    { cpuLimitCores: NaN },
+    { memoryLimitMib: 0 },
+    { memoryLimitMib: -1 },
+    { memoryLimitMib: 2048.5 },
+    { memoryLimitMib: Infinity },
+  ])("rejects invalid resource limits %j", (settings) => {
+    expect(() => normalizeSandboxSettings(settings)).toThrow(SandboxSettingsValidationError);
+    expect(normalizeSandboxSettings(settings, { invalid: "omit" })).toEqual({});
+  });
+
+  it("preserves fractional CPU caps, integer memory caps, and null resets", () => {
+    const settings = { cpuLimitCores: 0.5, memoryLimitMib: 64 };
+    expect(normalizeSandboxSettings(settings)).toEqual(settings);
+    expect(normalizeSandboxSettings({ cpuLimitCores: null, memoryLimitMib: null })).toEqual({
+      cpuLimitCores: null,
+      memoryLimitMib: null,
+    });
+  });
+
+  it.each([false, true])("preserves explicit request/cap pairs with partial=%s", (partial) => {
+    const conflicting = { cpuCores: 2, cpuLimitCores: 1, memoryMib: 4096, memoryLimitMib: 2048 };
+    expect(normalizeSandboxSettings(conflicting, { partial })).toEqual(conflicting);
+    const settings = { cpuCores: 0.5, cpuLimitCores: 0.5, memoryMib: null, memoryLimitMib: 64 };
+    expect(normalizeSandboxSettings(settings, { partial })).toEqual(settings);
+    expect(normalizeSandboxSettings({ cpuLimitCores: 0.25 }, { partial })).toEqual({
+      cpuLimitCores: 0.25,
+    });
+  });
+
+  it("preserves conflicting persisted caps for provider-aware launch validation", () => {
+    const settings = { cpuCores: 4, cpuLimitCores: 2, memoryMib: 8192, memoryLimitMib: 4096 };
+    expect(normalizeSandboxSettings(settings, { invalid: "omit" })).toEqual(settings);
+    expect(parsePersistedSandboxSettings(JSON.stringify(settings))).toEqual(settings);
+  });
   it("throws for invalid settings by default", () => {
     expect(() => normalizeSandboxSettings({ cpuCores: 0 })).toThrow(SandboxSettingsValidationError);
     expect(() => normalizeSandboxSettings({ memoryMib: 256.5 })).toThrow(

@@ -264,6 +264,8 @@ export const memoryPreviewSchema = z
   .object({
     repositories: repositoriesInputSchema.optional(),
     environmentId: z.string().min(1).optional(),
+    /** The team that would own the session; team sessions read memories through its grants. */
+    teamId: z.string().min(1).optional(),
     includePersonalMemories: z.boolean().optional(),
   })
   .strict();

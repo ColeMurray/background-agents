@@ -135,13 +135,11 @@ describe("E2BSandboxProvider graceful shutdown", () => {
       pauseSandbox: vi.fn(async () => {
         throw new E2BConflictError("already transitioning");
       }),
-      getSandbox: vi.fn(
-        async (): Promise<E2BSandboxDetail> => ({
-          sandboxID: "x",
-          templateID: "tmpl",
-          state: "running",
-        })
-      ),
+      getSandbox: vi.fn(async (): Promise<E2BSandboxDetail> => ({
+        sandboxID: "x",
+        templateID: "tmpl",
+        state: "running",
+      })),
     });
     await expect(
       new E2BSandboxProvider(client, providerConfig).stopSandbox({

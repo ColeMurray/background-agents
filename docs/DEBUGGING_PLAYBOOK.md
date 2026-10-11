@@ -437,7 +437,10 @@ Fencing revokes a generation for good: the sandbox token hash is blanked, the so
 exits cleanly, and the supervisor logs `supervisor.boot_cancelled` and stops the sandbox. A fenced
 `failed` row never becomes `ready`, even if a late `ready` arrives. A connect-watchdog failure
 fences only when the provider can stop the sandbox; otherwise the boot may still connect later,
-which is logged as `sandbox.failed_reconnected` and resumes as `connecting`.
+which is logged as `sandbox.failed_reconnected` and resumes as `connecting`. A fenced
+connect-watchdog failure re-drives the pending prompt onto a replacement sandbox right away. If
+those timeouts open the circuit breaker, or the provider stop fails (a fenced generation is replaced
+only after a confirmed stop), that prompt fails instead.
 
 ### "Why did a sandbox spawn fail?"
 

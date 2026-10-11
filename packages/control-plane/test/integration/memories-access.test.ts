@@ -234,6 +234,33 @@ describe("memory shared-scope authorization", () => {
     ).toEqual([]);
   });
 
+  it("previews the environment memories a team session pins", async () => {
+    await env.DB.batch([
+      env.DB.prepare(
+        "INSERT INTO role_permissions (role_id, permission_id) VALUES (?, 'environments.use')"
+      ).bind(`role_custom_${MEMBER}`),
+      env.DB.prepare(
+        `INSERT INTO environment_repositories
+         (environment_id, position, repo_owner, repo_name, repo_id, base_branch)
+         VALUES ('dev', 0, ?, ?, ?, 'main')`
+      ).bind(repo.repoOwner, repo.repoName, repo.repoId),
+    ]);
+    const record = await createRecord(devPartition);
+    const target = { environmentId: "dev", teamId: "engineering" };
+    const created = await request("/sessions", "POST", target);
+    expect(created.status).toBe(201);
+    const { sessionId } = await created.json<{ sessionId: string }>();
+    const pinned = (
+      await new SessionMemorySelectionStore(env.DB).loadSelection(sessionId)
+    )?.selection.items.map((item) => item.memoryId);
+    expect(pinned).toEqual([record.id]);
+    const preview = await request("/memories/preview", "POST", target);
+    expect(preview.status).toBe(200);
+    const { items } = await preview.json<{ items: { memoryId: string }[] }>();
+    expect(items.map((item) => item.memoryId)).toEqual(pinned);
+    expect((await request("/memories/preview", "POST", target, OUTSIDER)).status).toBe(403);
+  });
+
   it("does not inject repository memories into an unauthorized workspace automation", async () => {
     await env.DB.prepare(
       `INSERT INTO automations
