@@ -1,5 +1,4 @@
 import {
-  FACT_SEARCH_FIELDS,
   type FactHit,
   type FactQuery,
   type FactSearchIndex,
@@ -13,7 +12,9 @@ import {
   type ScopeDisplayColumns,
 } from "../memory/partition";
 import { likeContains } from "./like-pattern";
-import { CURRENT_MEMORY, revisionFieldMatches, revisionMatchesAnyField } from "./memory-queries";
+import { FACT_SEARCH_WEIGHTS } from "../memory/fact-search";
+import { MEMORY_SEARCH_FIELDS } from "../memory/search-fields";
+import { CURRENT_MEMORY, revisionFieldMatches, revisionMatchesAllTerms } from "./memory-queries";
 import type { SqlDatabase } from "./sql-database";
 import { prepareSql, sql, type SqlFragment } from "./sql-fragment";
 
@@ -27,8 +28,9 @@ interface FactHitRow extends PartitionColumns, ScopeDisplayColumns {
 /** The weight of the strongest field the term matches (fields are listed strongest first). */
 const strongestFieldWeight = (pattern: string) =>
   sql`(CASE ${sql.join(
-    FACT_SEARCH_FIELDS.map(
-      ({ field, weight }) => sql`WHEN ${revisionFieldMatches(field, pattern)} THEN ${weight}`
+    MEMORY_SEARCH_FIELDS.map(
+      (field) =>
+        sql`WHEN ${revisionFieldMatches(field, pattern)} THEN ${FACT_SEARCH_WEIGHTS[field]}`
     ),
     " "
   )} ELSE 0 END)`;
@@ -42,7 +44,7 @@ function searchable({ partition, pinnedIn }: FactSearchPartition): SqlFragment {
 
 /**
  * Portable lexical search: escaped `LIKE` over current active facts, ranked in SQL by
- * {@link FACT_SEARCH_FIELDS} in a single statement. Body matching scans text, so response
+ * {@link FACT_SEARCH_WEIGHTS} in a single statement. Body matching scans text, so response
  * bounds do not imply constant query cost.
  */
 export class LexicalFactIndex implements FactSearchIndex {
@@ -59,7 +61,7 @@ export class LexicalFactIndex implements FactSearchIndex {
         ${CURRENT_MEMORY}
         WHERE m.status = 'active' AND m.memory_type = 'fact'
           AND (${sql.join(query.partitions.map(searchable), " OR ")})
-          AND ${sql.join(patterns.map(revisionMatchesAnyField), " AND ")}
+          AND ${revisionMatchesAllTerms(patterns)}
         ORDER BY ${sql.join(patterns.map(strongestFieldWeight), " + ")} DESC, m.updated_at DESC, m.id
         LIMIT ${query.limit + 1}`
     ).all<FactHitRow>();

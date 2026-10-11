@@ -13,7 +13,7 @@ import { useMemories, useMemory } from "@/hooks/use-memories";
  * One status tab of a scope's records, paged and optionally filtered by search text, with any
  * deep-linked record kept visible.
  */
-export function useMemoryCollection(scope: MemoryScope, search: string = "") {
+export function useMemoryCollection(scope: MemoryScope, search: string) {
   const focusedId = useSearchParams().get("memoryId");
   const focused = useMemory(focusedId);
   const [selectedStatus, setSelectedStatus] = useState<MemoryStatus | null>(null);

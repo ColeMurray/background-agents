@@ -55,7 +55,7 @@ export function useMemories(
   scope: MemoryScope,
   status: MemoryStatus,
   offset: number,
-  search: string = ""
+  search: string
 ) {
   const { data: session, status: authStatus } = useAuthSession();
   const { data, isLoading, error, mutate } = useSWR(

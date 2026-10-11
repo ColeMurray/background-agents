@@ -32,7 +32,7 @@ import type { MemoryActor, MemoryCandidate, MemoryRecord } from "../memory/types
 import { MAX_D1_QUERY_PARAMETERS } from "./query-limits";
 import type { SqlDatabase, SqlStatement } from "./sql-database";
 import { likeContains } from "./like-pattern";
-import { CURRENT_MEMORY, inPartitions, revisionMatchesAnyField } from "./memory-queries";
+import { CURRENT_MEMORY, inPartitions, revisionMatchesAllTerms } from "./memory-queries";
 import { prepareSql, sql, type SqlFragment } from "./sql-fragment";
 import {
   agentWriteGuard,
@@ -105,8 +105,8 @@ interface MemoryListOptions {
   status: MemoryStatus;
   offset: number;
   limit: number;
-  /** Lowercase literal terms (see `memorySearchTerms`); each must match title, description or body. */
-  terms?: readonly string[];
+  /** Lowercase literal terms (see `memorySearchTerms`); each must match title, description or body. Empty means no filter. */
+  terms: readonly string[];
 }
 
 /** Content for a new record; the partition is resolved and authorized by the caller. */
@@ -143,15 +143,10 @@ export class MemoryRecordStore {
   /** Read one management page in stable updated-time/ID order. */
   async list(partition: MemoryPartition, options: MemoryListOptions): Promise<MemoryRecord[]> {
     // Management search keeps the list's stable order (agent search ranks instead) so paging holds.
-    const termFilter = options.terms?.length
-      ? sql` AND ${sql.join(
-          options.terms.map((term) => revisionMatchesAnyField(likeContains(term))),
-          " AND "
-        )}`
-      : sql.empty;
     const result = await prepareSql(
       this.db,
-      sql`${CURRENT_MEMORY_SELECT} WHERE ${partitionPredicate(partition)} AND m.status = ${options.status}${termFilter}
+      sql`${CURRENT_MEMORY_SELECT} WHERE ${partitionPredicate(partition)} AND m.status = ${options.status}
+        AND ${revisionMatchesAllTerms(options.terms.map(likeContains))}
         ORDER BY m.updated_at DESC, m.id LIMIT ${options.limit} OFFSET ${options.offset}`
     ).all<MemoryRow>();
     return result.results.map(memoryFromRow);

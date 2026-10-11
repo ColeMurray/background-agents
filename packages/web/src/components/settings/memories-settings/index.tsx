@@ -13,7 +13,11 @@ import { useRepos } from "@/hooks/use-repos";
 import { useEnvironments } from "@/hooks/use-environments";
 import { errorMessage, PERSONAL_MEMORY_DISCLOSURE } from "@/lib/memories";
 import { Switch } from "@/components/ui/switch";
-import { Combobox, type ComboboxGroup } from "@/components/ui/combobox";
+import {
+  Combobox,
+  FIELD_COMBOBOX_TRIGGER_CLASS,
+  type ComboboxGroup,
+} from "@/components/ui/combobox";
 import { ChevronDownIcon } from "@/components/ui/icons";
 import { MemoryCollection } from "./memory-collection";
 
@@ -92,32 +96,34 @@ export function SharedMemoriesSettings() {
   const [selection, setSelection] = useState<MemoryScope | null>(null);
   const linkedScope = memoryScopeFromSearchParams(params);
   const scope = selection ?? (linkedScope?.type === "personal" ? null : linkedScope);
-  const options: { scope: MemoryScope; label: string }[] = [
-    ...repos.map((repo) => ({
-      scope: { type: "repository", repoOwner: repo.owner, repoName: repo.name } as const,
-      label: repo.fullName,
-    })),
-    ...environments.map((environment) => ({
-      scope: { type: "environment", environmentId: environment.id } as const,
-      label: environment.name,
-    })),
-  ];
   // Searchable and grouped, like the repository picker in Secrets: deployments can have many repos.
+  const scopeOptions = new Map<string, { scope: MemoryScope; label: string }>();
+  const group = (category: string, entries: { scope: MemoryScope; label: string }[]) => ({
+    category,
+    options: entries.map((entry) => {
+      const key = memoryScopeDisplayKey(entry.scope);
+      scopeOptions.set(key, entry);
+      return { value: key, label: entry.label };
+    }),
+  });
   const groups: ComboboxGroup[] = [
-    { category: "Repositories", type: "repository" },
-    { category: "Environments", type: "environment" },
-  ]
-    .map(({ category, type }) => ({
-      category,
-      options: options
-        .filter((option) => option.scope.type === type)
-        .map((option) => ({ value: memoryScopeDisplayKey(option.scope), label: option.label })),
-    }))
-    .filter((group) => group.options.length > 0);
+    group(
+      "Repositories",
+      repos.map((repo) => ({
+        scope: { type: "repository", repoOwner: repo.owner, repoName: repo.name },
+        label: repo.fullName,
+      }))
+    ),
+    group(
+      "Environments",
+      environments.map((environment) => ({
+        scope: { type: "environment", environmentId: environment.id },
+        label: environment.name,
+      }))
+    ),
+  ].filter((entry) => entry.options.length > 0);
   const selectedKey = scope ? memoryScopeDisplayKey(scope) : "";
-  const selectedLabel = options.find(
-    (option) => memoryScopeDisplayKey(option.scope) === selectedKey
-  )?.label;
+  const selectedLabel = scopeOptions.get(selectedKey)?.label;
   return (
     <section className="space-y-6">
       <div>
@@ -139,18 +145,13 @@ export function SharedMemoriesSettings() {
           id="shared-memory-scope"
           labelId="shared-memory-scope-label"
           value={selectedKey}
-          onChange={(key) =>
-            setSelection(
-              options.find((option) => memoryScopeDisplayKey(option.scope) === key)?.scope ?? null
-            )
-          }
+          onChange={(key) => setSelection(scopeOptions.get(key)?.scope ?? null)}
           items={groups}
           searchable
           searchPlaceholder="Search repositories and environments..."
-          filterFn={(option, query) => option.label.toLowerCase().includes(query)}
           direction="down"
           dropdownWidth="w-full max-w-sm"
-          triggerClassName="w-full max-w-sm flex items-center justify-between px-3 py-2 text-sm border border-border bg-input text-foreground hover:border-foreground/30 disabled:opacity-50 disabled:cursor-not-allowed transition"
+          triggerClassName={FIELD_COMBOBOX_TRIGGER_CLASS}
         >
           <span className={`truncate ${selectedLabel ? "" : "text-muted-foreground"}`}>
             {selectedLabel ?? "Choose a repository or environment"}

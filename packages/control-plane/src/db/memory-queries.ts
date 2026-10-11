@@ -1,5 +1,5 @@
-import { FACT_SEARCH_FIELDS, type FactSearchField } from "../memory/fact-search";
 import { partitionPredicate, type MemoryPartition } from "../memory/partition";
+import { MEMORY_SEARCH_FIELDS, type MemorySearchField } from "../memory/search-fields";
 import { LIKE_ESCAPE_CLAUSE } from "./like-pattern";
 import { sql, type SqlFragment } from "./sql-fragment";
 
@@ -18,7 +18,7 @@ export function inPartitions(partitions: readonly MemoryPartition[]): SqlFragmen
   )})`;
 }
 
-const SEARCH_COLUMNS: Record<FactSearchField, SqlFragment> = {
+const SEARCH_COLUMNS: Record<MemorySearchField, SqlFragment> = {
   title: sql`lower(r.title)`,
   description: sql`lower(r.description)`,
   content: sql`lower(r.content)`,
@@ -26,12 +26,16 @@ const SEARCH_COLUMNS: Record<FactSearchField, SqlFragment> = {
 const LIKE_ESCAPE = sql.constant(LIKE_ESCAPE_CLAUSE);
 
 /** The current revision's `field` matches `pattern`, a lowercase `like-pattern` pattern. */
-export const revisionFieldMatches = (field: FactSearchField, pattern: string): SqlFragment =>
+export const revisionFieldMatches = (field: MemorySearchField, pattern: string): SqlFragment =>
   sql`${SEARCH_COLUMNS[field]} LIKE ${pattern} ${LIKE_ESCAPE}`;
 
 /** The pattern matches at least one searchable field of the current revision. */
 export const revisionMatchesAnyField = (pattern: string): SqlFragment =>
   sql`(${sql.join(
-    FACT_SEARCH_FIELDS.map(({ field }) => revisionFieldMatches(field, pattern)),
+    MEMORY_SEARCH_FIELDS.map((field) => revisionFieldMatches(field, pattern)),
     " OR "
   )})`;
+
+/** Every pattern matches some searchable field; no patterns means no filter. */
+export const revisionMatchesAllTerms = (patterns: readonly string[]): SqlFragment =>
+  patterns.length ? sql`(${sql.join(patterns.map(revisionMatchesAnyField), " AND ")})` : sql`1 = 1`;

@@ -1,11 +1,9 @@
 "use client";
 
-import { useEffect, useState } from "react";
-import { usePathname, useRouter, useSearchParams } from "next/navigation";
+import { useState } from "react";
 import {
   MEMORY_SEARCH_LIMITS,
   MEMORY_STATUSES,
-  memoryListSearchSchema,
   type MemoryContent,
   type MemoryDto,
   type MemoryScope,
@@ -19,6 +17,7 @@ import { SegmentedControl } from "@/components/ui/segmented-control";
 import { MemoryCard } from "./memory-card";
 import { MemoryEditor } from "./memory-editor";
 import { useMemoryCollection } from "./use-memory-collection";
+import { useMemorySearch } from "./use-memory-search";
 
 /**
  * The one open panel in a collection. Card-local panels key on the record ID so actions use the
@@ -38,70 +37,9 @@ const STATUS_OPTIONS = MEMORY_STATUSES.map((value) => ({
 }));
 
 /** Manage a paginated scope using server capabilities and revision-fenced mutations. */
-const SEARCH_DEBOUNCE_MS = 300;
-
-/**
- * Search text typed into the box, committed after a pause and mirrored in `?search=` so a filtered
- * list can be shared or reloaded (the same pattern as the automations list).
- */
-/**
- * What a typed search would send, checked with the server's own rules: under the minimum length is
- * no filter yet (the list stays put while typing), and an over-limit search is not sent at all but
- * explained, so the list never turns into a 400 error.
- */
-function checkSearch(raw: string): { committed: string } | { problem: string } {
-  const trimmed = raw.trim();
-  if (trimmed.length < MEMORY_SEARCH_LIMITS.queryMin) return { committed: "" };
-  const parsed = memoryListSearchSchema.safeParse(trimmed);
-  return parsed.success ? { committed: parsed.data } : { problem: parsed.error.issues[0].message };
-}
-
-function useCommittedSearch() {
-  const params = useSearchParams();
-  const router = useRouter();
-  const pathname = usePathname();
-  const urlSearch = params.get("search") ?? "";
-  const initial = checkSearch(urlSearch);
-  const [input, setInput] = useState(urlSearch);
-  const [committed, setCommitted] = useState("committed" in initial ? initial.committed : "");
-  const [problem, setProblem] = useState("problem" in initial ? initial.problem : null);
-  // Navigation that changes `?search=` (a link, back/forward) replaces whatever was typed, so the
-  // pending write below never puts the old text back.
-  const [lastUrlSearch, setLastUrlSearch] = useState(urlSearch);
-  if (urlSearch !== lastUrlSearch) {
-    setLastUrlSearch(urlSearch);
-    // Our own write echoes back as the trimmed input; keep the box as typed (e.g. a trailing space).
-    if (urlSearch !== input.trim()) setInput(urlSearch);
-    const fromUrl = checkSearch(urlSearch);
-    if ("committed" in fromUrl) setCommitted(fromUrl.committed);
-    setProblem("problem" in fromUrl ? fromUrl.problem : null);
-  }
-  useEffect(() => {
-    const timeout = window.setTimeout(() => {
-      const checked = checkSearch(input);
-      if ("problem" in checked) {
-        // Keep the last valid results on screen rather than sending a query the server rejects.
-        setProblem(checked.problem);
-        return;
-      }
-      setProblem(null);
-      setCommitted(checked.committed);
-      const query = new URLSearchParams(params.toString());
-      if (checked.committed) query.set("search", checked.committed);
-      else query.delete("search");
-      if (query.toString() !== params.toString()) {
-        const queryString = query.toString();
-        router.replace(queryString ? `${pathname}?${queryString}` : pathname, { scroll: false });
-      }
-    }, SEARCH_DEBOUNCE_MS);
-    return () => window.clearTimeout(timeout);
-  }, [input, params, pathname, router]);
-  return { input, setInput, committed, problem };
-}
-
 export function MemoryCollection({ scope }: { scope: MemoryScope }) {
-  const search = useCommittedSearch();
-  const collection = useMemoryCollection(scope, search.committed);
+  const search = useMemorySearch();
+  const collection = useMemoryCollection(scope, search.search);
   const [panel, setPanel] = useState<MemoryPanel>(() =>
     collection.focusedId ? { kind: "history", memoryId: collection.focusedId } : NO_PANEL
   );
@@ -219,9 +157,8 @@ export function MemoryCollection({ scope }: { scope: MemoryScope }) {
       {collection.loading && <p className="text-sm text-muted-foreground">Loading memories…</p>}
       {!collection.loading && !collection.error && collection.records.length === 0 && (
         <p className="text-sm text-muted-foreground">
-          {search.committed
-            ? `No ${MEMORY_STATUS_LABELS[collection.status].toLowerCase()} memories match “${search.committed}”.`
-            : `No ${MEMORY_STATUS_LABELS[collection.status].toLowerCase()} memories for this scope.`}
+          No {MEMORY_STATUS_LABELS[collection.status].toLowerCase()} memories{" "}
+          {search.search ? `match “${search.search}”.` : "for this scope."}
         </p>
       )}
       {collection.records.map((record) => (

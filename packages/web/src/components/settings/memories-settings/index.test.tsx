@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import type { MemoryDto, MemoryRevision } from "@open-inspect/shared/types/memories";
 import { MemoriesSettings, SharedMemoriesSettings } from ".";
 
@@ -21,11 +21,20 @@ const mocks = vi.hoisted(() => ({
   replace: vi.fn(),
   environments: [] as { id: string; name: string }[],
 }));
-vi.mock("next/navigation", () => ({
-  useSearchParams: () => mocks.params,
-  usePathname: () => "/settings",
-  useRouter: () => ({ replace: mocks.replace }),
-}));
+// Like the real router, replace() updates the URL and re-renders readers of useSearchParams.
+const urlListeners = new Set<() => void>();
+vi.mock("next/navigation", async () => {
+  const { useSyncExternalStore } = await import("react");
+  const subscribe = (listener: () => void) => {
+    urlListeners.add(listener);
+    return () => urlListeners.delete(listener);
+  };
+  return {
+    useSearchParams: () => useSyncExternalStore(subscribe, () => mocks.params),
+    usePathname: () => "/settings",
+    useRouter: () => ({ replace: mocks.replace }),
+  };
+});
 vi.mock("@/hooks/use-memories", () => ({
   createMemory: mocks.createMemory,
   reviseMemory: mocks.reviseMemory,
@@ -110,6 +119,10 @@ describe("memory management", () => {
     cleanup();
     vi.clearAllMocks();
     mocks.params = new URLSearchParams();
+    mocks.replace.mockImplementation((href: string) => {
+      mocks.params = new URLSearchParams(href.split("?")[1] ?? "");
+      act(() => urlListeners.forEach((listener) => listener()));
+    });
     mocks.records = [];
     mocks.focused = undefined;
     mocks.revisions = [];
@@ -348,6 +361,18 @@ describe("memory management", () => {
     await new Promise((resolve) => setTimeout(resolve, 400));
     expect(mocks.collection).toHaveBeenLastCalledWith({ type: "personal" }, "active", 0, "");
     expect(screen.queryByRole("alert")).toBeNull();
+  });
+
+  it("keeps a one-character edit after the URL echo", async () => {
+    mocks.params = new URLSearchParams({ search: "rspec" });
+    render(<MemoriesSettings />);
+    const box = screen.getByRole("searchbox", { name: "Search memories" }) as HTMLInputElement;
+    fireEvent.change(box, { target: { value: "r" } });
+    await waitFor(() =>
+      expect(mocks.replace).toHaveBeenLastCalledWith("/settings", { scroll: false })
+    );
+    expect(box.value).toBe("r");
+    expect(mocks.collection).toHaveBeenLastCalledWith({ type: "personal" }, "active", 0, "");
   });
 
   it("starts from a search already in the URL", () => {

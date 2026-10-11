@@ -34,7 +34,7 @@ function memory(content: Partial<MemoryContent> = {}, extra: Partial<NewMemory> 
     ...extra,
   };
 }
-const page = { status: "active" as const, offset: 0, limit: 50 };
+const page = { status: "active" as const, offset: 0, limit: 50, terms: [] };
 
 describe("memory persistence", () => {
   beforeEach(async () => {
