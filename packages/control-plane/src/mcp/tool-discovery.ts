@@ -9,14 +9,13 @@ import {
 } from "@modelcontextprotocol/client";
 import {
   MAX_MCP_SERVER_TOOLS,
-  type McpServerConfig,
   type McpToolMetadata,
 } from "@open-inspect/shared/types/integrations";
 
 const DISCOVERY_TIMEOUT_MS = 15_000;
 const MAX_LIST_TOOLS_PAGES = 64;
 const MAX_TOOL_DESCRIPTION_LENGTH = 2000;
-// Statuses meaning the URL does not speak Streamable HTTP, so the SSE status explains more.
+// Statuses meaning the URL does not speak Streamable HTTP.
 const NOT_STREAMABLE_HTTP_STATUSES = new Set([404, 405]);
 
 export class McpToolDiscoveryError extends Error {
@@ -97,54 +96,63 @@ interface DiscoveryOptions {
   timeoutMs?: number;
 }
 
+/** A remote MCP server's connection settings. */
+export interface RemoteMcpServer {
+  url: string;
+  headers: Record<string, string>;
+}
+
+type ListToolsAttempt =
+  { tools: McpToolMetadata[] } | { error: unknown; status: number | undefined };
+
 /**
- * Lists the tools a remote MCP server advertises, connecting with its stored
+ * Lists the tools a remote MCP server advertises, connecting with the given
  * headers. Tries Streamable HTTP first and, when that is rejected with a 4xx
  * status, falls back to the legacy SSE transport, as the MCP specification
  * describes for backwards compatibility.
  */
 export async function discoverRemoteMcpTools(
-  server: McpServerConfig,
+  server: RemoteMcpServer,
   { fetch: baseFetch = fetch, timeoutMs = DISCOVERY_TIMEOUT_MS }: DiscoveryOptions = {}
 ): Promise<McpToolMetadata[]> {
-  if (server.type !== "remote" || !server.url) {
-    throw new McpToolDiscoveryError("Only remote MCP servers can list their tools");
-  }
   const url = new URL(server.url);
   if (url.protocol !== "https:" && url.protocol !== "http:") {
     throw new McpToolDiscoveryError("The MCP server URL must use HTTP or HTTPS");
   }
 
   const timeout = AbortSignal.timeout(timeoutMs);
-  const timedOut = (cause: unknown) =>
-    new McpToolDiscoveryError(`The server did not respond within ${timeoutMs / 1000} seconds`, {
-      cause,
-    });
-  const request = authenticatedFetch(server.headers ?? {}, timeout, baseFetch);
+  const request = authenticatedFetch(server.headers, timeout, baseFetch);
+  // Throws discovery errors and timeouts as McpToolDiscoveryError; returns any
+  // other failure, with its HTTP status, for the caller to judge.
+  const attempt = async (transport: Transport): Promise<ListToolsAttempt> => {
+    try {
+      return { tools: await listTools(transport, timeout) };
+    } catch (err) {
+      if (err instanceof McpToolDiscoveryError) throw err;
+      if (timeout.aborted) {
+        throw new McpToolDiscoveryError(
+          `The server did not respond within ${timeoutMs / 1000} seconds`,
+          { cause: err }
+        );
+      }
+      return { error: err, status: httpStatus(err) };
+    }
+  };
 
-  let streamableError: unknown;
-  let streamableStatus: number;
-  try {
-    return await listTools(new StreamableHTTPClientTransport(url, { fetch: request }), timeout);
-  } catch (err) {
-    if (err instanceof McpToolDiscoveryError) throw err;
-    if (timeout.aborted) throw timedOut(err);
-    const status = httpStatus(err);
-    // Only a 4xx can mean a legacy SSE server; any other failure is the real one.
-    if (status === undefined) throw err;
-    if (status < 400 || status >= 500) throw statusError(status, err);
-    streamableError = err;
-    streamableStatus = status;
+  const streamable = await attempt(new StreamableHTTPClientTransport(url, { fetch: request }));
+  if ("tools" in streamable) return streamable.tools;
+  // Only a 4xx can mean a legacy SSE server; any other failure is the real one.
+  if (streamable.status === undefined) throw streamable.error;
+  if (streamable.status < 400 || streamable.status >= 500) {
+    throw statusError(streamable.status, streamable.error);
   }
 
-  try {
-    return await listTools(new SSEClientTransport(url, { fetch: request }), timeout);
-  } catch (err) {
-    if (err instanceof McpToolDiscoveryError) throw err;
-    if (timeout.aborted) throw timedOut(err);
-    const status = NOT_STREAMABLE_HTTP_STATUSES.has(streamableStatus)
-      ? (httpStatus(err) ?? streamableStatus)
-      : streamableStatus;
-    throw statusError(status, new AggregateError([streamableError, err]));
-  }
+  const sse = await attempt(new SSEClientTransport(url, { fetch: request }));
+  if ("tools" in sse) return sse.tools;
+  // Those statuses only say the URL does not speak Streamable HTTP, so the SSE
+  // status explains more; any other 4xx, such as a 401, is the real answer.
+  const status = NOT_STREAMABLE_HTTP_STATUSES.has(streamable.status)
+    ? (sse.status ?? streamable.status)
+    : streamable.status;
+  throw statusError(status, new AggregateError([streamable.error, sse.error]));
 }

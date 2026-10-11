@@ -42,6 +42,7 @@ from sandbox_runtime.harness.claude import (
     reasoning_options,
 )
 from sandbox_runtime.harness.claude_env import ClaudeAuthMode
+from sandbox_runtime.harness.claude_tools import OI_TOOL_SERVER_NAME, ToolServerConfig
 from sandbox_runtime.harness.claude_translate import AUTHENTICATION_FAILED_MESSAGE
 from tests.claude_fakes import (
     FakeCredentialClient,
@@ -264,7 +265,39 @@ class TestOptions:
         await h.harness.open()
         await h.harness.create_session()
         await _run(h.harness, HarnessPrompt(message_id="m1", text="hi", model="m"))
-        assert "hooks" not in h.client.options
+        assert h.client.options["hooks"] == {}
+
+    async def test_built_in_tool_server_replaces_a_configured_one(self, tmp_path: Path) -> None:
+        h = Harness(
+            tmp_path,
+            turns=[[_result(0.1)]],
+            mcp_servers=(
+                {
+                    "name": OI_TOOL_SERVER_NAME,
+                    "type": "remote",
+                    "url": "https://mcp.oi",
+                    "toolAllowlist": ["search"],
+                },
+            ),
+            tools=ToolServerConfig(
+                control_plane_url="https://control-plane.test",
+                session_id="s1",
+                auth_token="token",
+                repo_manifest_path=tmp_path / "manifest.json",
+                has_repository=False,
+                slack_notify_enabled=False,
+            ),
+            tool_server_factory=lambda _client: "built-in",
+        )
+        await h.harness.open()
+        await h.harness.create_session()
+        await _run(h.harness, HarnessPrompt(message_id="m1", text="hi", model="m"))
+        options = h.client.options
+        assert options["mcp_servers"][OI_TOOL_SERVER_NAME] == "built-in"
+        assert f"mcp__{OI_TOOL_SERVER_NAME}__*" in options["allowed_tools"]
+        assert f"mcp__{OI_TOOL_SERVER_NAME}__search" not in options["allowed_tools"]
+        assert options["hooks"] == {}
+        await h.harness.close()
 
     async def test_servers_sharing_tool_names_share_the_strictest_allowlist(
         self, tmp_path: Path
@@ -287,7 +320,7 @@ class TestOptions:
         await _run(h.harness, HarnessPrompt(message_id="m1", text="hi", model="m"))
         allowed = h.client.options["allowed_tools"]
         assert "mcp__my_docs__*" not in allowed
-        assert allowed.count("mcp__my_docs__search") == 2
+        assert allowed.count("mcp__my_docs__search") == 1
 
     async def test_stdout_ceiling_clears_the_whole_attachment_budget(self, tmp_path: Path) -> None:
         """One NDJSON line carries every attachment the runtime accepts.

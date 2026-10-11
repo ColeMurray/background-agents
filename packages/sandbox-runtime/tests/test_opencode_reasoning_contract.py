@@ -29,10 +29,12 @@ import time
 import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from unittest.mock import MagicMock
 
 import pytest
 
-from sandbox_runtime.mcp_tool_access import OPENCODE_BUILTIN_TOOL_IDS, opencode_permission_rules
+from sandbox_runtime.mcp_tool_access import OPENCODE_BUILTIN_TOOL_IDS, opencode_tool_policy
+from sandbox_runtime.opencode_server import _custom_tool_ids
 from tests.test_prompt_stream import make_stream
 
 pytest_plugins = ["tests.test_reasoning_config"]
@@ -109,7 +111,7 @@ def anthropic_events(model):
 
 
 @pytest.fixture
-async def wire_server(tmp_path, reasoning_config, request):
+async def wire_server(tmp_path, reasoning_config, request, monkeypatch):
     assert subprocess.check_output([BINARY, "--version"], text=True).strip() == "1.18.29"
     captured = []
 
@@ -192,17 +194,31 @@ async def wire_server(tmp_path, reasoning_config, request):
                 {"name": "docs_extra"},
                 {"name": "my.\U0001f600notes", "toolAllowlist": ["read/page"]},
             ]
-            # A repository's own tool whose name starts like a restricted server's.
+            # A repository's own tools whose names start like a restricted server's:
+            # OpenCode names a default export after its file and a named export
+            # <file>_<export>, even in a file named exactly like the server. Each
+            # file is one line with a commented-out export of docs' unselected
+            # fetch_page, which must not be mistaken for a tool.
             custom_tools = tmp_path / ".opencode/tool"
             custom_tools.mkdir(parents=True, exist_ok=True)
-            (custom_tools / "docs_local.js").write_text(
-                'import { tool } from "@opencode-ai/plugin";\n'
-                'export default tool({ description: "Local docs", args: {}, '
-                'async execute() { return "ok"; } });\n'
+            definition = (
+                'tool({ description: "Local", args: {}, async execute() { return "ok"; } })'
             )
-            config["permission"].update(
-                opencode_permission_rules(servers, (*OPENCODE_BUILTIN_TOOL_IDS, "docs_local"))
-            )
+            for file_name, export in (
+                ("docs_local.js", "default"),
+                ("docs_notes.js", "const lookup ="),
+                ("docs.js", "const local_index ="),
+            ):
+                (custom_tools / file_name).write_text(
+                    'import { tool } from "@opencode-ai/plugin"; '
+                    f"/* export const fetch_page = 1; */ export {export} {definition};\n"
+                )
+            monkeypatch.setenv("OPENCODE_CONFIG_DIR", str(tmp_path / "config/opencode"))
+            log = MagicMock()
+            custom_tool_ids = await _custom_tool_ids(tmp_path, log)
+            log.warn.assert_not_called()
+            policy = opencode_tool_policy(servers, (*OPENCODE_BUILTIN_TOOL_IDS, *custom_tool_ids))
+            config["permission"].update(policy.rules)
         config["agent"] = {"build": {"options": {"reasoningEffort": "high"}}}
         for provider in ("openai", "anthropic"):
             config["provider"].setdefault(provider, {})["options"] = {
@@ -304,12 +320,16 @@ async def test_memory_text_and_tool_contract_reach_real_opencode_provider_reques
 @pytest.mark.parametrize("wire_server", ["mcp"], indirect=True)
 async def test_mcp_tool_allowlist_reaches_real_opencode_provider_request(wire_server):
     call, captured = wire_server
-    builtin_ids = set(call("/experimental/tool/ids")) - {"invalid", "docs_local"}
-    assert builtin_ids == set(OPENCODE_BUILTIN_TOOL_IDS)
+    custom_ids = {"docs_local", "docs_notes_lookup", "docs_local_index"}
+    assert set(call("/experimental/tool/ids")) == {
+        *OPENCODE_BUILTIN_TOOL_IDS,
+        *custom_ids,
+        "invalid",
+    }
 
     sent, _ = submit(call, captured, "anthropic/claude-sonnet-4-6", None)
     names = {tool["name"] for tool in sent["tools"]}
-    assert {"docs_search", "my___notes_read_page", "docs_local"} <= names
+    assert {"docs_search", "my___notes_read_page", *custom_ids} <= names
     hidden = {
         "docs_fetch_page",
         "docs_extra_delete_everything",

@@ -4,6 +4,7 @@
   "minimumCompatibleGeneration": 62,
   "minimumPreservationGeneration": 71,
   "minimumRebuildGeneration": 77,
+  "minimumMcpToolAllowlistGeneration": 77,
   "harnessMinimumGeneration": {
     "claude": 77,
     "opencode": 77,

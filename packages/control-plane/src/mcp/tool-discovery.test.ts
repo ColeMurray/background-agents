@@ -1,24 +1,16 @@
 import type { FetchLike } from "@modelcontextprotocol/client";
-import {
-  MAX_MCP_SERVER_TOOLS,
-  type McpServerConfig,
-} from "@open-inspect/shared/types/integrations";
+import { MAX_MCP_SERVER_TOOLS } from "@open-inspect/shared/types/integrations";
 import { describe, expect, it, vi } from "vitest";
 import {
   McpToolDiscoveryError,
   authenticatedFetch,
   discoverRemoteMcpTools,
+  type RemoteMcpServer,
 } from "./tool-discovery";
 
-const remoteServer: McpServerConfig = {
-  id: "mcp-1",
-  name: "docs",
-  type: "remote",
+const remoteServer: RemoteMcpServer = {
   url: "https://mcp.example.com/mcp",
   headers: { Authorization: "Bearer secret", "X-Tenant": "acme" },
-  repoScopes: null,
-  toolAllowlist: null,
-  enabled: true,
 };
 
 function jsonResponse(body: unknown): Response {
@@ -222,6 +214,37 @@ describe("discoverRemoteMcpTools", () => {
     }
   );
 
+  it("reports the Streamable HTTP status when SSE fails without one", async () => {
+    const fetchMock = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      if (init?.method === "POST") return new Response("internal detail", { status: 404 });
+      throw new TypeError("fetch failed");
+    });
+
+    const err = await discoverRemoteMcpTools(remoteServer, {
+      fetch: fetchMock as unknown as FetchLike,
+    }).catch((e) => e);
+    expect(err).toBeInstanceOf(McpToolDiscoveryError);
+    expect(err.message).toBe("The server returned HTTP 404");
+  });
+
+  it("reports a timeout during the SSE fallback", async () => {
+    const fetchMock = vi.fn((_input: RequestInfo | URL, init?: RequestInit) =>
+      init?.method === "POST"
+        ? Promise.resolve(new Response(null, { status: 405 }))
+        : new Promise<Response>((_resolve, reject) => {
+            init?.signal?.addEventListener("abort", () => reject(init.signal?.reason));
+          })
+    );
+
+    const err = await discoverRemoteMcpTools(remoteServer, {
+      fetch: fetchMock as unknown as FetchLike,
+      timeoutMs: 20,
+    }).catch((e) => e);
+    expect(err).toBeInstanceOf(McpToolDiscoveryError);
+    expect(err.message).toMatch(/did not respond within/);
+    expect(fetchMock.mock.calls.some(([, init]) => init?.method !== "POST")).toBe(true);
+  });
+
   it("reports a Streamable HTTP server error without trying SSE", async () => {
     const fetchMock = vi.fn(
       async (_input: RequestInfo | URL, _init?: RequestInit) =>
@@ -277,14 +300,14 @@ describe("discoverRemoteMcpTools", () => {
     expect(err.message).toMatch(/did not respond within/);
   }, 5_000);
 
-  it.each<[string, McpServerConfig]>([
-    ["a local server", { ...remoteServer, type: "local", url: undefined, command: ["npx"] }],
-    ["a non-HTTP URL", { ...remoteServer, url: "ftp://mcp.example.com" }],
-  ])("refuses %s without connecting", async (_case, server) => {
+  it("refuses a non-HTTP URL without connecting", async () => {
     const fetchMock = vi.fn() as unknown as FetchLike;
-    await expect(discoverRemoteMcpTools(server, { fetch: fetchMock })).rejects.toBeInstanceOf(
-      McpToolDiscoveryError
-    );
+    await expect(
+      discoverRemoteMcpTools(
+        { ...remoteServer, url: "ftp://mcp.example.com" },
+        { fetch: fetchMock }
+      )
+    ).rejects.toBeInstanceOf(McpToolDiscoveryError);
     expect(fetchMock).not.toHaveBeenCalled();
   });
 });

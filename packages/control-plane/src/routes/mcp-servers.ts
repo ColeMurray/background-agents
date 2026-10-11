@@ -166,7 +166,6 @@ async function handleDeleteMcpServer(
   return json({ ok: true });
 }
 
-/** Connects to a saved remote server with its stored headers and lists its tools. */
 /** The underlying error messages, for logs only: they can quote the server's response. */
 function causeMessage(cause: unknown): string | undefined {
   if (cause instanceof AggregateError) {
@@ -175,6 +174,7 @@ function causeMessage(cause: unknown): string | undefined {
   return cause instanceof Error ? cause.message : undefined;
 }
 
+/** Connects to a saved remote server with its stored headers and lists its tools. */
 async function handleDiscoverMcpTools(
   _request: Request,
   env: Env,
@@ -187,12 +187,12 @@ async function handleDiscoverMcpTools(
   const store = new McpServerStore(ctx.db, requireRepoSecretsEncryptionKey(env));
   const server = await store.getDecrypted(id);
   if (!server) return error("MCP server not found", 404);
-  if (server.type !== "remote") {
+  if (server.type !== "remote" || !server.url) {
     return error("Only remote MCP servers can list their tools", 400);
   }
 
   try {
-    const tools = await discoverRemoteMcpTools(server);
+    const tools = await discoverRemoteMcpTools({ url: server.url, headers: server.headers ?? {} });
     logger.info("MCP server tools discovered", {
       event: "mcp_server.tools_discovered",
       request_id: ctx.request_id,
