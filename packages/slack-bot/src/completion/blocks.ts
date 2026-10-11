@@ -11,18 +11,15 @@ import type {
   SlackMarkdownBlock,
   SlackSectionBlock,
 } from "../slack-blocks";
-import { escapeMrkdwnText, splitIntoSlackSections } from "@open-inspect/shared/slack";
-import { markdownToMrkdwn } from "./mrkdwn";
+import {
+  escapeMrkdwnText,
+  MARKDOWN_BLOCK_MAX_CHARS,
+  splitIntoSlackSections,
+  stripBroadcastMentions,
+} from "@open-inspect/shared/slack";
 
 type CompletionSlackBlock =
   SlackMarkdownBlock | SlackSectionBlock | SlackContextBlock | SlackActionsBlock;
-
-/**
- * Slack's cumulative limit for all markdown blocks in one message payload. The
- * response is the only markdown block this builder emits, so it is the budget
- * for the response alone.
- */
-export const MARKDOWN_BLOCK_MAX_CHARS = 12_000;
 
 /**
  * Status emoji constants.
@@ -38,6 +35,27 @@ const STATUS_EMOJI = {
 const ERROR_FOOTER_LIMIT = 200;
 
 /**
+ * The agent's reply as the message's only `markdown` block. Agents write standard
+ * Markdown, which a mrkdwn section shows as literal `##` and `**`; a `markdown`
+ * block renders it as written.
+ *
+ * Every reply, whatever its length, gets the same treatment:
+ * - It is cut to one fence-balanced block of at most MARKDOWN_BLOCK_MAX_CHARS that
+ *   ends with a pointer to the session. Splitting into more `markdown` blocks would
+ *   not help, since they share that cap.
+ * - Broadcast mentions are stripped, as for all agent-posted text (see
+ *   `sanitizeAgentText`). Slack resolves `<!here>`, `<!channel>` and `<!everyone>`
+ *   inside a `markdown` block to real broadcasts (checked by posting one and reading
+ *   back the stored rich_text). Markdown links such as `[x](!here)` stay plain links,
+ *   so they need no handling. User mentions pass through, as before.
+ */
+function buildResponseBlock(text: string): SlackMarkdownBlock | SlackSectionBlock {
+  const [body] = splitIntoSlackSections(stripBroadcastMentions(text), MARKDOWN_BLOCK_MAX_CHARS, 1);
+  if (!body) return { type: "section", text: { type: "mrkdwn", text: "_Agent completed._" } };
+  return { type: "markdown", text: body };
+}
+
+/**
  * Build Slack blocks for completion message.
  */
 export function buildCompletionBlocks(
@@ -48,22 +66,8 @@ export function buildCompletionBlocks(
 ): CompletionSlackBlock[] {
   const blocks: CompletionSlackBlock[] = [];
 
-  // 1. Response text. Agents write standard Markdown, which mrkdwn sections show
-  // as literal `##` and `**`. A native markdown block renders it as written; only
-  // a reply past that block's limit is converted to mrkdwn and split into sections.
-  const text = response.textContent;
-  if (text.trim() && text.length <= MARKDOWN_BLOCK_MAX_CHARS) {
-    blocks.push({ type: "markdown", text });
-  } else {
-    const sections = splitIntoSlackSections(text.trim() ? markdownToMrkdwn(text) : "");
-    if (sections.length === 0) {
-      blocks.push({ type: "section", text: { type: "mrkdwn", text: "_Agent completed._" } });
-    } else {
-      for (const section of sections) {
-        blocks.push({ type: "section", expand: true, text: { type: "mrkdwn", text: section } });
-      }
-    }
-  }
+  // 1. Response text
+  blocks.push(buildResponseBlock(response.textContent));
 
   // 2. Artifacts (PRs, branches)
   if (response.artifacts.length > 0) {

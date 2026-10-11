@@ -309,7 +309,8 @@ The web session is the best place to watch live output, inspect files, or take o
 
 When the agent finishes, Slack receives a completion reply with:
 
-- The agent's final response, shortened if it is too long for Slack
+- The agent's final response, rendered as Markdown (headings, lists, links, tables) and shortened if
+  it is too long for Slack. Broadcast mentions such as `@here` and `@channel` are removed.
 - Created artifacts such as pull requests or branches
 - A few key tool actions, such as edits or commands
 - The final status, model, session target, and reasoning effort when available

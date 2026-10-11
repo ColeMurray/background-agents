@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { splitIntoSlackSections } from "./sections";
+import { MARKDOWN_BLOCK_MAX_CHARS, splitIntoSlackSections } from "./sections";
 
 describe("splitIntoSlackSections", () => {
   it("preserves whitespace exactly across section boundaries", () => {
@@ -130,6 +130,30 @@ describe("splitIntoSlackSections", () => {
     for (const section of sections.slice(1)) {
       expect(section.startsWith("```python\n")).toBe(true);
     }
+  });
+});
+
+describe("one markdown block (maxSections = 1)", () => {
+  // The Slack completion reply is a single markdown block cut by this splitter.
+  it("returns one body within the markdown cap, fence-balanced, with the session pointer", () => {
+    const code = [
+      "## Code",
+      "```ts",
+      ...Array.from({ length: 2_000 }, (_, i) => `const x${i} = ${i};`),
+      "```",
+    ];
+    const sections = splitIntoSlackSections(code.join("\n"), MARKDOWN_BLOCK_MAX_CHARS, 1);
+    expect(sections).toHaveLength(1);
+    expect(sections[0].length).toBeLessThanOrEqual(MARKDOWN_BLOCK_MAX_CHARS);
+    expect((sections[0].match(/```/g) ?? []).length % 2).toBe(0);
+    expect(sections[0]).toContain("truncated — open the session");
+  });
+
+  it("returns text within the cap unchanged and nothing for whitespace", () => {
+    expect(splitIntoSlackSections("## Short\n\n- a", MARKDOWN_BLOCK_MAX_CHARS, 1)).toEqual([
+      "## Short\n\n- a",
+    ]);
+    expect(splitIntoSlackSections("  \n ", MARKDOWN_BLOCK_MAX_CHARS, 1)).toEqual([]);
   });
 });
 
