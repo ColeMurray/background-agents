@@ -9,12 +9,21 @@ from __future__ import annotations
 
 import fnmatch
 import re
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
-if TYPE_CHECKING:
-    from collections.abc import Iterable, Mapping
+from claude_agent_sdk import HookMatcher
 
-    from claude_agent_sdk.types import HookCallback, HookContext, HookInput, SyncHookJSONOutput
+if TYPE_CHECKING:
+    from collections.abc import Collection, Iterable, Mapping
+
+    from claude_agent_sdk.types import (
+        HookCallback,
+        HookContext,
+        HookEvent,
+        HookInput,
+        SyncHookJSONOutput,
+    )
 
     Allowlists = dict[str, tuple[str, ...] | None]
 
@@ -22,12 +31,14 @@ if TYPE_CHECKING:
 # names with every character outside this set replaced by "_".
 _UNSAFE_NAME_CHARS = re.compile(r"[^a-zA-Z0-9_-]")
 
-# OpenCode's built-in tools (``GET /experimental/tool/ids``) at the version pinned
-# in packages/sandbox-images/toolchain.json. OpenCode names an MCP tool
-# ``<server>_<tool>`` with no namespace marker, so a server's deny rule can also
-# match a built-in such as ``apply_patch``; these are re-allowed after the MCP
-# rules. Re-run the wire contract test in test_opencode_reasoning_contract.py
-# when bumping OpenCode.
+# OpenCode's built-in tools (``GET /experimental/tool/ids``) at OpenCode
+# OPENCODE_BUILTIN_TOOL_IDS_VERSION. OpenCode names an MCP tool
+# ``<server>_<tool>`` with no namespace marker, so a server's deny pattern could
+# also match a built-in id; these are re-allowed after the MCP rules. When
+# bumping OpenCode in packages/sandbox-images/toolchain.json, re-run the wire
+# contract test in test_opencode_reasoning_contract.py against the new binary
+# (updating the version it asserts), then update this tuple and its version.
+OPENCODE_BUILTIN_TOOL_IDS_VERSION = "1.18.29"
 OPENCODE_BUILTIN_TOOL_IDS = (
     "apply_patch",
     "bash",
@@ -61,7 +72,7 @@ def tool_allowlist(server: Mapping[str, Any]) -> tuple[str, ...] | None:
     return tuple(tool for tool in raw if isinstance(tool, str) and tool)
 
 
-def namespace_allowlists(servers: Iterable[Mapping[str, Any]]) -> Allowlists:
+def _namespace_allowlists(servers: Iterable[Mapping[str, Any]]) -> Allowlists:
     """Each tool-name namespace's allowlist, keyed by sanitized server name.
 
     Servers whose names differ only in sanitized characters (``my.docs`` and
@@ -82,17 +93,16 @@ def namespace_allowlists(servers: Iterable[Mapping[str, Any]]) -> Allowlists:
     return allowlists
 
 
-def opencode_shadowed_namespaces(allowlists: Allowlists) -> list[str]:
-    """Unrestricted namespaces that extend a restricted one (``docs_extra`` next
-    to ``docs``). OpenCode names tools ``<server>_<tool>``, so ``docs_extra_*``
-    would also match ``docs``' own ``extra_*`` tools; these servers get none of
-    their own tools rather than widen the restricted server's allowlist."""
-    restricted = [namespace for namespace, allowlist in allowlists.items() if allowlist is not None]
-    return sorted(
-        namespace
-        for namespace, allowlist in allowlists.items()
-        if allowlist is None and any(namespace.startswith(f"{other}_") for other in restricted)
-    )
+@dataclass(frozen=True)
+class OpenCodeToolPolicy:
+    """OpenCode ``permission`` rules for a session's MCP servers.
+
+    ``rules`` is empty when no server is restricted. ``shadowed`` lists the
+    unrestricted namespaces ``opencode_tool_policy`` leaves without an allow rule.
+    """
+
+    rules: dict[str, str] = field(default_factory=dict)
+    shadowed: list[str] = field(default_factory=list)
 
 
 def _set_last(rules: dict[str, str], key: str, action: str) -> None:
@@ -102,23 +112,31 @@ def _set_last(rules: dict[str, str], key: str, action: str) -> None:
     rules[key] = action
 
 
-def opencode_permission_rules(
+def opencode_tool_policy(
     servers: Iterable[Mapping[str, Any]], other_tool_ids: Iterable[str]
-) -> dict[str, str]:
-    """OpenCode ``permission`` rules that hide every tool outside an allowlist.
+) -> OpenCodeToolPolicy:
+    """Rules that hide every MCP tool outside its server's allowlist.
 
     Denied tools are left out of the model request, not only refused when
     called. Rules follow the global allow, ordered so that a restricted
     namespace extending another (``foo_bar`` after ``foo``) keeps its own rules,
-    and ``other_tool_ids`` (built-in and custom tools) caught by a deny
-    pattern are re-allowed last. Returns no rules when nothing is restricted,
-    leaving the global allow as the only rule.
-    """
-    allowlists = namespace_allowlists(servers)
-    if all(allowlist is None for allowlist in allowlists.values()):
-        return {}
+    and ``other_tool_ids`` (built-in and custom tools) caught by a deny pattern
+    are re-allowed last.
 
-    shadowed = set(opencode_shadowed_namespaces(allowlists))
+    OpenCode names tools ``<server>_<tool>``, so an unrestricted ``docs_extra``'s
+    ``docs_extra_*`` would also match restricted ``docs``' own ``extra_*``
+    tools. Such a server gets no allow rule rather than widening the allowlist.
+    """
+    allowlists = _namespace_allowlists(servers)
+    restricted = [namespace for namespace, allowlist in allowlists.items() if allowlist is not None]
+    if not restricted:
+        return OpenCodeToolPolicy()
+
+    shadowed = sorted(
+        namespace
+        for namespace, allowlist in allowlists.items()
+        if allowlist is None and any(namespace.startswith(f"{other}_") for other in restricted)
+    )
     rules: dict[str, str] = {}
     for namespace in sorted(allowlists, key=len):
         allowlist = allowlists[namespace]
@@ -134,37 +152,67 @@ def opencode_permission_rules(
     for tool_id in other_tool_ids:
         if any(fnmatch.fnmatchcase(tool_id, pattern) for pattern in denied):
             _set_last(rules, tool_id, "allow")
-    return rules
+    return OpenCodeToolPolicy(rules, shadowed)
 
 
-def claude_tool_rules(name: str, allowlist: tuple[str, ...] | None) -> tuple[list[str], list[str]]:
-    """``(allowed_tools, disallowed_tools)`` entries for one Claude MCP server.
+@dataclass(frozen=True)
+class ClaudeToolPolicy:
+    """Claude Agent SDK options for a session's MCP servers; ``hooks`` is empty
+    when no server is restricted."""
+
+    allowed_tools: list[str]
+    disallowed_tools: list[str]
+    hooks: dict[HookEvent, list[HookMatcher]] = field(default_factory=dict)
+
+
+def claude_tool_policy(
+    servers: Iterable[Mapping[str, Any]], *, reserved: Collection[str] = ()
+) -> ClaudeToolPolicy:
+    """Allow and deny rules for each server's tools, plus a guard hook.
+
+    ``reserved`` names servers the harness provides itself in place of any
+    configured server of the same name: their configured allowlists are ignored
+    and all their tools are allowed.
 
     Under ``dontAsk`` a listed tool runs and any other is refused, unless another
-    approval covers it; ``claude_tool_guard`` refuses those. Claude Code removes
-    a tool from context only when a deny rule names it, and the runtime does not
+    approval covers it. Approvals add up across sources: a ``mcp__docs__*`` rule
+    in the session's Claude settings, or the wildcard of a server whose name
+    overlaps (``mcp__docs__*`` also matches ``docs__extra``'s tools, since
+    Claude Code splits names on ``__``), would approve unselected tools, so a
+    ``PreToolUse`` hook refuses them; a hook's deny wins. That also leaves an
+    unrestricted ``docs__extra`` next to a restricted ``docs`` without tools,
+    since their tool names cannot be told apart. Claude Code removes a
+    tool from context only when a deny rule names it, and the runtime does not
     know a server's other tool names, so they stay visible but are refused; an
     empty allowlist denies the whole server with a bare server rule.
     """
-    prefix = f"mcp__{mcp_name_segment(name)}"
-    if allowlist is None:
-        return [f"{prefix}__*"], []
-    if not allowlist:
-        return [], [prefix]
-    return [f"{prefix}__{mcp_name_segment(tool)}" for tool in allowlist], []
+    allowlists = {
+        namespace: allowlist
+        for namespace, allowlist in _namespace_allowlists(servers).items()
+        if namespace not in reserved
+    }
+    allowed: list[str] = []
+    disallowed: list[str] = []
+    for namespace, allowlist in allowlists.items():
+        prefix = f"mcp__{namespace}"
+        if allowlist is None:
+            allowed.append(f"{prefix}__*")
+        elif not allowlist:
+            disallowed.append(prefix)
+        else:
+            allowed.extend(f"{prefix}__{mcp_name_segment(tool)}" for tool in allowlist)
+    allowed.extend(f"mcp__{name}__*" for name in reserved)
 
-
-def claude_tool_guard(allowlists: Allowlists) -> HookCallback | None:
-    """A ``PreToolUse`` hook refusing every unselected tool of a restricted server.
-
-    Approvals add up across sources: a ``mcp__docs__*`` rule in the session's
-    Claude settings, or the wildcard of a server whose name overlaps
-    (``mcp__docs__*`` also matches ``docs__extra``'s tools, since Claude Code
-    splits names on ``__``), would otherwise approve them. A hook's deny wins.
-    """
     restricted = {ns: allowlist for ns, allowlist in allowlists.items() if allowlist is not None}
     if not restricted:
-        return None
+        return ClaudeToolPolicy(allowed, disallowed)
+    guard = HookMatcher(hooks=[_claude_tool_guard(restricted)])
+    return ClaudeToolPolicy(allowed, disallowed, {"PreToolUse": [guard]})
+
+
+def _claude_tool_guard(restricted: dict[str, tuple[str, ...]]) -> HookCallback:
+    """A ``PreToolUse`` hook refusing every ``mcp__<restricted>__*`` tool outside
+    its allowlist."""
     prefixes = tuple(f"mcp__{namespace}__" for namespace in restricted)
     allowed = frozenset(
         f"mcp__{namespace}__{mcp_name_segment(tool)}"

@@ -37,6 +37,7 @@ import {
   McpToolAccess,
   toolAccessFromAllowlist,
   toolAccessToAllowlist,
+  type McpToolDiscovery,
   type ToolAccess,
 } from "./mcp-tool-access";
 
@@ -278,27 +279,27 @@ interface McpServerFormProps {
   savedServer?: McpServerMetadata;
 }
 
-function toolDiscovery(form: FormState, savedServer: McpServerMetadata | undefined) {
+function toolDiscovery(
+  form: FormState,
+  savedServer: McpServerMetadata | undefined
+): McpToolDiscovery {
   if (form.type === "local") {
     return {
       kind: "unavailable",
       reason: "Local servers start inside the sandbox, so add their tool names below.",
-    } as const;
+    };
   }
   if (!savedServer) {
-    return { kind: "unavailable", reason: "Save the server to load its tools." } as const;
+    return { kind: "unavailable", reason: "Save the server to load its tools." };
   }
   const connectionEdited =
     savedServer.type !== "remote" ||
     form.url.trim() !== savedServer.url ||
     Object.keys(envRowsToRecord(form.envRows)).length > 0;
   if (connectionEdited) {
-    return {
-      kind: "unavailable",
-      reason: "Save the connection changes to load tools with them.",
-    } as const;
+    return { kind: "unavailable", reason: "Save the connection changes to load tools with them." };
   }
-  return { kind: "available", serverId: savedServer.id, revision: savedServer.revision } as const;
+  return { kind: "available", serverId: savedServer.id, revision: savedServer.revision };
 }
 
 function McpServerForm({

@@ -2,7 +2,7 @@
 /// <reference types="@testing-library/jest-dom" />
 
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { cleanup, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import * as matchers from "@testing-library/jest-dom/matchers";
 import type { McpServerMetadata } from "@open-inspect/shared/types/integrations";
@@ -256,6 +256,47 @@ describe("McpServersSettings", () => {
       expect(screen.getByText(/Save the connection changes/)).toBeInTheDocument();
     });
 
+    it("drops tools that finish loading after the connection was edited", async () => {
+      let resolveTools: (tools: typeof catalog) => void = () => {};
+      mocks.discoverMcpTools.mockReturnValue(new Promise((resolve) => (resolveTools = resolve)));
+      const user = userEvent.setup();
+      render(<McpServersSettings />);
+
+      await user.click(screen.getByRole("button", { name: /Server A/ }));
+      await user.click(screen.getByRole("radio", { name: /Selected tools only/ }));
+      await user.click(screen.getByRole("button", { name: "Load tools" }));
+      const url = screen.getByDisplayValue("https://a.example.com");
+      await user.type(url, "/v2");
+      await act(async () => resolveTools(catalog));
+      await user.clear(url);
+      await user.type(url, "https://a.example.com");
+
+      expect(screen.getByRole("button", { name: "Load tools" })).toBeInTheDocument();
+      expect(screen.queryByRole("checkbox", { name: /search/ })).not.toBeInTheDocument();
+    });
+
+    it("drops loaded tools when the server is saved elsewhere", async () => {
+      mocks.discoverMcpTools.mockResolvedValue(catalog);
+      const user = userEvent.setup();
+      const { rerender } = render(<McpServersSettings />);
+
+      await user.click(screen.getByRole("button", { name: /Server A/ }));
+      await user.click(screen.getByRole("radio", { name: /Selected tools only/ }));
+      await user.click(screen.getByRole("button", { name: "Load tools" }));
+      expect(await screen.findByRole("checkbox", { name: /^search/ })).toBeInTheDocument();
+      // Another admin replaced the headers, so the loaded tools may not apply.
+      const original = servers[0];
+      servers[0] = { ...original, revision: original.revision + 1, hasHeaders: true };
+      try {
+        rerender(<McpServersSettings />);
+      } finally {
+        servers[0] = original;
+      }
+
+      expect(screen.getByRole("button", { name: "Load tools" })).toBeInTheDocument();
+      expect(screen.queryByRole("checkbox", { name: /^search/ })).not.toBeInTheDocument();
+    });
+
     it("waits for typed headers to be saved before loading tools", async () => {
       const user = userEvent.setup();
       render(<McpServersSettings />);
@@ -327,7 +368,7 @@ describe("McpServersSettings", () => {
       await waitFor(() =>
         expect(mocks.updateMcpServer).toHaveBeenCalledWith(
           "server-c",
-          expect.objectContaining({ toolAllowlist: ["click", "navigate"] })
+          expect.objectContaining({ toolAllowlist: ["navigate", "click"] })
         )
       );
     });

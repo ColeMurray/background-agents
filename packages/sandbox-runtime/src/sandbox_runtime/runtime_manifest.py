@@ -12,6 +12,10 @@ class RuntimeManifest(TypedDict):
     minimumCompatibleGeneration: int
     minimumPreservationGeneration: int
     minimumRebuildGeneration: int
+    # The first runtime that enforces MCP server tool allowlists; older ones
+    # would give a restricted server every tool, so the control plane leaves
+    # restricted servers out of their launches.
+    minimumMcpToolAllowlistGeneration: int
     # Per-harness floors for prebuilt-image selection: a harness whose runtime
     # support arrived later than the global floor names its own generation.
     harnessMinimumGeneration: dict[str, int]
