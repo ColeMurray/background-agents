@@ -15,10 +15,9 @@
 import { toDisplayStatus, type SessionArtifact } from "@open-inspect/shared/types/artifacts";
 import { z } from "zod";
 import type { SessionPullRequestRecord } from "../db/session-pull-request-store";
+import { parseArtifactMetadataJson } from "./artifact-metadata";
 import type { UpdateArtifactData } from "./artifact-repository";
 import type { ArtifactRow } from "./types";
-
-const artifactMetadataSchema = z.record(z.string(), z.unknown());
 
 /**
  * Mirrors PullRequestSnapshot (source-control/types.ts) — the wire body the
@@ -84,9 +83,7 @@ export function snapshotToRecord(
 export function parsePullRequestArtifactMetadata(raw: string | null): Record<string, unknown> {
   if (!raw) return {};
   try {
-    const parsed: unknown = JSON.parse(raw);
-    const result = artifactMetadataSchema.safeParse(parsed);
-    return result.success ? result.data : {};
+    return parseArtifactMetadataJson(raw) ?? {};
   } catch {
     return {};
   }
