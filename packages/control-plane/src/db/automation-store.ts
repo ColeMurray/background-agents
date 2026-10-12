@@ -1630,14 +1630,15 @@ export class AutomationStore {
   }
 
   /**
-   * The most recent materialized run (any status, with a session) for a thread's
-   * concurrency key, created at/after `sinceMs`. Powers Slack thread-session
-   * continuity: a reply continues this run's session regardless of run status.
-   * Excludes skipped rows and not-yet-started runs (session_id NULL). Served by
+   * The most recent materialized run (any status, with a session) for a
+   * concurrency key, created at/after `sinceMs`. Powers session continuity: a
+   * Slack thread reply or a webhook delivery with the same `sessionKey`
+   * continues this run's session regardless of run status. Excludes skipped rows
+   * and not-yet-started runs (session_id NULL). Served by
    * idx_invocations_concurrency joined to idx_runs_invocation (keys live on the
    * invocation).
    */
-  async getLatestSteerableRunForThread(
+  async getLatestSteerableRunForConcurrencyKey(
     automationId: string,
     concurrencyKey: string | null,
     sinceMs: number

@@ -7,7 +7,8 @@ import type {
   WebhookInvocationStatusResponse,
   WebhookTriggerResponse,
 } from "@open-inspect/shared";
-import { normalizeWebhookEvent } from "@open-inspect/shared/triggers";
+import { z } from "zod";
+import { normalizeWebhookEvent, type WebhookDeliveryOptions } from "@open-inspect/shared/triggers";
 import { AutomationStore, type AutomationRow } from "../db/automation-store";
 import { verifyWebhookApiKey } from "../auth/webhook-key";
 import { Hono } from "hono";
@@ -26,25 +27,22 @@ import { Scheduler } from "../scheduler/scheduler";
 /** Maximum webhook payload size (64KB). */
 const MAX_PAYLOAD_SIZE = 64 * 1024;
 
-export function parseWebhookIdempotencyKey(body: unknown): string | undefined {
-  if (!body || typeof body !== "object" || Array.isArray(body) || !("idempotencyKey" in body)) {
-    return undefined;
-  }
+const webhookDeliveryFieldsSchema = z.object({
+  idempotencyKey: z.string().optional().catch(undefined),
+  sessionKey: z.string().min(1).optional(),
+});
 
-  return typeof body.idempotencyKey === "string" ? body.idempotencyKey : undefined;
-}
+type ParsedWebhookDeliveryFields =
+  { ok: true; fields: WebhookDeliveryOptions } | { ok: false; error: string };
 
-type ParsedWebhookSessionKey = { ok: true; sessionKey: string | undefined } | { ok: false };
+/** Read the delivery fields a webhook body may carry; a non-string idempotencyKey is ignored. */
+export function parseWebhookDeliveryFields(body: unknown): ParsedWebhookDeliveryFields {
+  if (!body || typeof body !== "object" || Array.isArray(body)) return { ok: true, fields: {} };
 
-export function parseWebhookSessionKey(body: unknown): ParsedWebhookSessionKey {
-  if (!body || typeof body !== "object" || Array.isArray(body) || !("sessionKey" in body)) {
-    return { ok: true, sessionKey: undefined };
-  }
-
-  const { sessionKey } = body;
-  return typeof sessionKey === "string" && sessionKey.length > 0
-    ? { ok: true, sessionKey }
-    : { ok: false };
+  const parsed = webhookDeliveryFieldsSchema.safeParse(body);
+  return parsed.success
+    ? { ok: true, fields: parsed.data }
+    : { ok: false, error: "sessionKey must be a non-empty string" };
 }
 
 type WebhookAuthentication =
@@ -108,15 +106,14 @@ async function handleAutomationWebhook(
     return error("Invalid JSON body", 400);
   }
 
-  const idempotencyKey = parseWebhookIdempotencyKey(body);
-  const session = parseWebhookSessionKey(body);
-  if (!session.ok) {
-    return error("sessionKey must be a non-empty string", 400);
+  const delivery = parseWebhookDeliveryFields(body);
+  if (!delivery.ok) {
+    return error(delivery.error, 400);
   }
 
   // 4. Normalize and process the event. A webhook event targets exactly one
   // automation, so it has at most one invocation.
-  const event = normalizeWebhookEvent(automationId, body, idempotencyKey, session.sessionKey);
+  const event = normalizeWebhookEvent(automationId, body, delivery.fields);
   const { invocationIds, ...counts } = await new Scheduler(ctx.db, env, ctx.executionCtx).event(
     event
   );

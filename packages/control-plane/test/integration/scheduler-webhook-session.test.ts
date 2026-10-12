@@ -65,7 +65,11 @@ describe("Scheduler webhook sessionKey (real D1)", () => {
     const { scheduler, prompts } = createScheduler();
 
     const result = await scheduler.event(
-      normalizeWebhookEvent(AUTOMATION_ID, { mode: "iterate", pr: 8262 }, "review-1", "card-42")
+      normalizeWebhookEvent(
+        AUTOMATION_ID,
+        { mode: "iterate", pr: 8262 },
+        { idempotencyKey: "review-1", sessionKey: "card-42" }
+      )
     );
 
     expect(result).toEqual({

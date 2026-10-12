@@ -6,6 +6,7 @@ import type { TriggerSourceDefinition } from "../types";
 
 export { conditions as webhookConditions } from "./conditions";
 export { normalizeWebhookEvent, resolveJsonPath, evaluateJsonPathFilter } from "./normalizer";
+export type { WebhookDeliveryOptions } from "./normalizer";
 export { buildWebhookContextBlock } from "./context";
 
 export const webhookSource: TriggerSourceDefinition = {

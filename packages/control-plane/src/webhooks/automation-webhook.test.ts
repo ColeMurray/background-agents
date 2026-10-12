@@ -1,41 +1,31 @@
 import { describe, expect, it } from "vitest";
-import { parseWebhookIdempotencyKey, parseWebhookSessionKey } from "./automation-webhook";
+import { parseWebhookDeliveryFields } from "./automation-webhook";
 
-describe("parseWebhookIdempotencyKey", () => {
-  it("returns a string idempotency key", () => {
-    expect(parseWebhookIdempotencyKey({ idempotencyKey: "deploy-123" })).toBe("deploy-123");
-  });
-
-  it("returns undefined when the key is missing", () => {
-    expect(parseWebhookIdempotencyKey({ action: "deploy" })).toBeUndefined();
-  });
-
-  it("rejects malformed idempotency keys", () => {
-    expect(parseWebhookIdempotencyKey({ idempotencyKey: 123 })).toBeUndefined();
-    expect(parseWebhookIdempotencyKey({ idempotencyKey: null })).toBeUndefined();
-    expect(parseWebhookIdempotencyKey(null)).toBeUndefined();
-  });
-});
-
-describe("parseWebhookSessionKey", () => {
-  it("returns a string session key", () => {
-    expect(parseWebhookSessionKey({ sessionKey: "card-42" })).toEqual({
+describe("parseWebhookDeliveryFields", () => {
+  it("reads both delivery fields", () => {
+    expect(
+      parseWebhookDeliveryFields({ idempotencyKey: "deploy-123", sessionKey: "card-42" })
+    ).toEqual({
       ok: true,
-      sessionKey: "card-42",
+      fields: { idempotencyKey: "deploy-123", sessionKey: "card-42" },
     });
   });
 
-  it("leaves the session key unset when it is missing", () => {
-    expect(parseWebhookSessionKey({ action: "deploy" })).toEqual({
-      ok: true,
-      sessionKey: undefined,
-    });
-    expect(parseWebhookSessionKey(null)).toEqual({ ok: true, sessionKey: undefined });
+  it("leaves both unset for a body without them or a body that is not an object", () => {
+    expect(parseWebhookDeliveryFields({ action: "deploy" })).toEqual({ ok: true, fields: {} });
+    expect(parseWebhookDeliveryFields(null)).toEqual({ ok: true, fields: {} });
+    expect(parseWebhookDeliveryFields(["sessionKey"])).toEqual({ ok: true, fields: {} });
   });
 
-  it("refuses a session key that is not a non-empty string", () => {
-    expect(parseWebhookSessionKey({ sessionKey: "" })).toEqual({ ok: false });
-    expect(parseWebhookSessionKey({ sessionKey: 42 })).toEqual({ ok: false });
-    expect(parseWebhookSessionKey({ sessionKey: null })).toEqual({ ok: false });
+  it("ignores an idempotencyKey that is not a string", () => {
+    expect(parseWebhookDeliveryFields({ idempotencyKey: 123 })).toEqual({ ok: true, fields: {} });
+    expect(parseWebhookDeliveryFields({ idempotencyKey: null })).toEqual({ ok: true, fields: {} });
+  });
+
+  it.each(["", 42, null])("rejects a sessionKey of %j", (sessionKey) => {
+    expect(parseWebhookDeliveryFields({ sessionKey })).toEqual({
+      ok: false,
+      error: "sessionKey must be a non-empty string",
+    });
   });
 });

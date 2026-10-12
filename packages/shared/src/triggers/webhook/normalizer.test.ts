@@ -12,13 +12,20 @@ describe("normalizeWebhookEvent", () => {
   });
 
   it("uses idempotencyKey for trigger key when provided", () => {
-    const event = normalizeWebhookEvent("auto-1", { test: true }, "my-key");
+    const event = normalizeWebhookEvent("auto-1", { test: true }, { idempotencyKey: "my-key" });
     expect(event.triggerKey).toBe("webhook:idem:my-key");
     expect(event.concurrencyKey).toBe("webhook:idem:my-key");
   });
 
   it("scopes concurrency to the sessionKey and keeps dedup on the idempotencyKey", () => {
-    const event = normalizeWebhookEvent("auto-1", { test: true }, "my-key", "card-42");
+    const event = normalizeWebhookEvent(
+      "auto-1",
+      { test: true },
+      {
+        idempotencyKey: "my-key",
+        sessionKey: "card-42",
+      }
+    );
     expect(event.triggerKey).toBe("webhook:idem:my-key");
     expect(event.concurrencyKey).toBe("webhook:session:card-42");
     expect(event.sessionKey).toBe("card-42");
@@ -32,8 +39,7 @@ describe("normalizeWebhookEvent", () => {
     const event = normalizeWebhookEvent(
       "auto-1",
       { sessionKey: "card-42", data: "value" },
-      undefined,
-      "card-42"
+      { sessionKey: "card-42" }
     );
     expect(event.body).toEqual({ sessionKey: "card-42", data: "value" });
     expect(event.contextBlock).not.toContain("sessionKey");
@@ -44,11 +50,16 @@ describe("normalizeWebhookEvent", () => {
     const event = normalizeWebhookEvent(
       "auto-1",
       { idempotencyKey: "key-1", data: "value" },
-      "key-1"
+      { idempotencyKey: "key-1" }
     );
     expect(event.body).toEqual({ idempotencyKey: "key-1", data: "value" });
     expect(event.contextBlock).not.toContain("idempotencyKey");
     expect(event.contextBlock).toContain("value");
+  });
+
+  it("puts a body that is not an object in the context as it is", () => {
+    expect(normalizeWebhookEvent("auto-1", ["sessionKey"]).contextBlock).toContain("sessionKey");
+    expect(normalizeWebhookEvent("auto-1", "plain text").contextBlock).toContain("plain text");
   });
 });
 
