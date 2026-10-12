@@ -89,6 +89,7 @@ export {
   evaluateJsonPathFilter,
   buildWebhookContextBlock,
 } from "./webhook";
+export type { WebhookDeliveryOptions } from "./webhook";
 
 // Slack source module
 export {

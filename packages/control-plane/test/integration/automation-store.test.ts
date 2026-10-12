@@ -1034,7 +1034,7 @@ describe("AutomationStore (D1 integration)", () => {
       expect(active!.id).toBe("run-ck3");
     });
 
-    it("getLatestSteerableRunForThread finds a completed run with a session (any status)", async () => {
+    it("getLatestSteerableRunForConcurrencyKey finds a completed run with a session (any status)", async () => {
       const store = new AutomationStore(env.DB);
       await store.create(makeAutomation({ id: "auto-steer1" }));
 
@@ -1045,12 +1045,16 @@ describe("AutomationStore (D1 integration)", () => {
         completed_at: Date.now(),
       });
 
-      const run = await store.getLatestSteerableRunForThread("auto-steer1", "slack:C1:t1", 0);
+      const run = await store.getLatestSteerableRunForConcurrencyKey(
+        "auto-steer1",
+        "slack:C1:t1",
+        0
+      );
       expect(run).not.toBeNull();
       expect(run!.id).toBe("run-steer1");
     });
 
-    it("getLatestSteerableRunForThread excludes runs without a session", async () => {
+    it("getLatestSteerableRunForConcurrencyKey excludes runs without a session", async () => {
       const store = new AutomationStore(env.DB);
       await store.create(makeAutomation({ id: "auto-steer2" }));
 
@@ -1061,11 +1065,15 @@ describe("AutomationStore (D1 integration)", () => {
         session_id: null,
       });
 
-      const run = await store.getLatestSteerableRunForThread("auto-steer2", "slack:C1:t2", 0);
+      const run = await store.getLatestSteerableRunForConcurrencyKey(
+        "auto-steer2",
+        "slack:C1:t2",
+        0
+      );
       expect(run).toBeNull();
     });
 
-    it("getLatestSteerableRunForThread excludes runs created before the window", async () => {
+    it("getLatestSteerableRunForConcurrencyKey excludes runs created before the window", async () => {
       const store = new AutomationStore(env.DB);
       await store.create(makeAutomation({ id: "auto-steer3" }));
 
@@ -1077,11 +1085,15 @@ describe("AutomationStore (D1 integration)", () => {
       });
 
       const sinceMs = Date.now() - 24 * 60 * 60 * 1000;
-      const run = await store.getLatestSteerableRunForThread("auto-steer3", "slack:C1:t3", sinceMs);
+      const run = await store.getLatestSteerableRunForConcurrencyKey(
+        "auto-steer3",
+        "slack:C1:t3",
+        sinceMs
+      );
       expect(run).toBeNull();
     });
 
-    it("getLatestSteerableRunForThread returns the most recent session run for the key", async () => {
+    it("getLatestSteerableRunForConcurrencyKey returns the most recent session run for the key", async () => {
       const store = new AutomationStore(env.DB);
       await store.create(makeAutomation({ id: "auto-steer4" }));
 
@@ -1100,14 +1112,18 @@ describe("AutomationStore (D1 integration)", () => {
         created_at: Date.now(),
       });
 
-      const run = await store.getLatestSteerableRunForThread("auto-steer4", "slack:C1:t4", 0);
+      const run = await store.getLatestSteerableRunForConcurrencyKey(
+        "auto-steer4",
+        "slack:C1:t4",
+        0
+      );
       expect(run!.id).toBe("run-steer4-newer");
     });
 
-    it("getLatestSteerableRunForThread returns null for a null concurrency key", async () => {
+    it("getLatestSteerableRunForConcurrencyKey returns null for a null concurrency key", async () => {
       const store = new AutomationStore(env.DB);
       await store.create(makeAutomation({ id: "auto-steer5" }));
-      const run = await store.getLatestSteerableRunForThread("auto-steer5", null, 0);
+      const run = await store.getLatestSteerableRunForConcurrencyKey("auto-steer5", null, 0);
       expect(run).toBeNull();
     });
   });
