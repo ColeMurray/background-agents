@@ -108,22 +108,30 @@ export class GitHubProviderIdentityResolver {
       if (!response.ok) {
         // #2153: a bare "lookup was not successful" names neither the status
         // nor the fix. A 403 here is usually the GitHub App missing
-        // Account -> Email addresses: Read-only — unless the rate limit is
-        // exhausted, which also answers 403. Primary rate limiting carries
+        // Account -> Email addresses: Read-only — unless it is rate limiting,
+        // which also answers 403. Primary rate limiting carries
         // x-ratelimit-remaining: 0 and secondary rate limiting carries
-        // retry-after, so either header withholds the hint. Log both so the
+        // retry-after, but secondary limits may arrive with neither header, so
+        // the response body is checked too ("Resource not accessible by
+        // integration" means a missing permission; a "rate limit" message
+        // means wait, not re-permission). A 403 past page 1 cannot be a
+        // missing permission either, because page 1 already succeeded with the
+        // same token. Log both the status and GitHub's message so the
         // control-plane log points at the fix, and carry the status in the
         // thrown error.
+        const bodyMessage = await this.readGitHubErrorMessage(response);
         const rateLimited =
           response.headers.get("x-ratelimit-remaining") === "0" ||
-          response.headers.get("retry-after") !== null;
+          response.headers.get("retry-after") !== null ||
+          /rate limit/i.test(bodyMessage ?? "");
         const permissionHint =
-          response.status === 403 && !rateLimited
-            ? "Grant the GitHub App the Account -> Email addresses: Read-only permission"
+          response.status === 403 && page === 1 && !rateLimited
+            ? "Grant the GitHub App the Account -> Email addresses: Read-only permission and approve the installation update (see docs/GETTING_STARTED.md step 7)"
             : undefined;
         this.logger.error("GitHub email lookup failed", {
           event: "auth.github_email_lookup_failed",
           status: response.status,
+          ...(bodyMessage ? { githubMessage: bodyMessage } : {}),
           ...(permissionHint ? { hint: permissionHint } : {}),
         });
         throw new OAuthProviderError(
@@ -166,6 +174,29 @@ export class GitHubProviderIdentityResolver {
       return await response.json();
     } catch {
       throw new OAuthProviderError("malformed_response", `${context} response was not JSON`);
+    }
+  }
+
+  private async readGitHubErrorMessage(response: Response): Promise<string | undefined> {
+    try {
+      const text = await response.clone().text();
+      if (!text) return undefined;
+      try {
+        const data: unknown = JSON.parse(text);
+        if (
+          typeof data === "object" &&
+          data !== null &&
+          "message" in data &&
+          typeof (data as { message: unknown }).message === "string"
+        ) {
+          return (data as { message: string }).message;
+        }
+        return undefined;
+      } catch {
+        return text.slice(0, 200);
+      }
+    } catch {
+      return undefined;
     }
   }
 
