@@ -231,4 +231,32 @@ describe("Scheduler webhook sessionKey (real D1)", () => {
     expect(steps).toEqual(["A", "B"]);
     expect(await store.getHeldPrompts(run.id)).toEqual([]);
   });
+
+  it("releases held deliveries once the run completes, if the launch never recorded its first prompt", async () => {
+    const { run, store } = await seedLaunchingRun();
+    const { scheduler, prompts } = createScheduler();
+
+    await scheduler.event(delivery("A"));
+    // The launching worker died after queueing the first prompt, before recording it:
+    // the run still reads as launching, so A stays held.
+    await env.DB.prepare("UPDATE automation_run_held_prompts SET created_at = created_at - ?")
+      .bind(10 * 60 * 1000)
+      .run();
+    await scheduler.tick();
+    expect(prompts).not.toHaveBeenCalled();
+
+    await scheduler.runComplete({
+      automationId: AUTOMATION_ID,
+      runId: run.id,
+      sessionId: SESSION_ID,
+      messageId: "msg-first",
+      success: true,
+    });
+    await scheduler.tick();
+
+    expect(prompts).toHaveBeenCalledTimes(1);
+    const { content } = (await prompts.mock.calls[0]![0].json()) as { content: string };
+    expect(content).toContain('"step": "A"');
+    expect(await store.getHeldPrompts(run.id)).toEqual([]);
+  });
 });

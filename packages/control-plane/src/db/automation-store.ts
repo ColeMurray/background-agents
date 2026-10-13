@@ -1675,7 +1675,8 @@ export class AutomationStore {
 
   /**
    * The most recent run for a concurrency key that has a session (any status)
-   * or is still starting. Powers session continuity: a Slack thread reply or a
+   * or is still launching. A session id the run claimed but never created (a
+   * launch that failed early) does not count. Powers session continuity: a Slack thread reply or a
    * webhook delivery with the same `sessionKey` continues this run's session
    * regardless of run status. Excludes skipped rows and runs that never got a
    * session. `last_activity_at` is the session's latest activity, falling back
@@ -1699,7 +1700,11 @@ export class AutomationStore {
          LEFT JOIN sessions s ON r.session_id = s.id
          WHERE r.automation_id = ?
            AND i.concurrency_key = ?
-           AND (r.session_id IS NOT NULL OR r.status = 'starting')
+           AND (
+             s.id IS NOT NULL
+             OR r.status = 'starting'
+             OR (r.status = 'running' AND r.first_prompt_pending = 1)
+           )
          ORDER BY r.created_at DESC LIMIT 1`
       )
       .bind(automationId, concurrencyKey)

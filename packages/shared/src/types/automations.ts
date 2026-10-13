@@ -332,11 +332,14 @@ export interface WebhookTriggerResponse {
 /**
  * `POST /webhooks/automation/:id` error when the session a `sessionKey` continues
  * does not take the follow-up: 409 when it cannot take prompts, 429 when its queue
- * is full, 503 when it could not be reached.
+ * is full, 503 when it could not be reached, 422 for any other refusal.
  */
 export interface WebhookFollowUpRefusedResponse {
   error: string;
-  /** e.g. SESSION_NOT_PROMPTABLE, BUDGET_EXHAUSTED, PROMPT_QUEUE_FULL, SESSION_UNAVAILABLE. */
+  /**
+   * e.g. SESSION_NOT_PROMPTABLE, BUDGET_EXHAUSTED, PROMPT_QUEUE_FULL, SESSION_UNAVAILABLE,
+   * FOLLOW_UP_REJECTED.
+   */
   code: string;
   /** The continued run's invocation. */
   invocationId: string;

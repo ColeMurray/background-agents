@@ -712,8 +712,12 @@ export class SessionMessageQueue {
   ): Promise<{ messageId: string; status: "queued" }> {
     this.assertPromptableSession();
     this.assertSandboxAcceptingPrompts();
-    this.assertBudgetAvailable();
-    this.assertQueueCapacity();
+    if (!data.clientRequestId) {
+      // A request id may name a prompt already queued; enqueuePromptCore checks
+      // budget and capacity after its idempotency lookup.
+      this.assertBudgetAvailable();
+      this.assertQueueCapacity();
+    }
     let participant = this.participantService.getByUserId(data.authorId);
     if (!participant) {
       const name = data.scmEnrichment?.name || data.authorId;

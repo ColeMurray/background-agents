@@ -57,15 +57,20 @@ export function parseWebhookDeliveryFields(body: unknown): ParsedWebhookDelivery
 /**
  * The sender sees a follow-up its session would not take, rather than the delivery
  * starting over in a fresh session: 409 when the session cannot take prompts, 429 when
- * its queue is full, and 503 when it could not be reached, which is safe to retry with
- * the same idempotencyKey.
+ * its queue is full, 503 when it could not be reached or failed, which is safe to retry
+ * with the same idempotencyKey, and 422 for any other refusal, which a retry repeats.
  */
-function followUpRefusedResponse(refusal: SessionFollowUpRefusedError): Response {
-  const status = refusal.status === 409 || refusal.status === 429 ? refusal.status : 503;
+export function followUpRefusedResponse(refusal: SessionFollowUpRefusedError): Response {
+  const status =
+    refusal.status === 409 || refusal.status === 429
+      ? refusal.status
+      : refusal.status === null || refusal.status >= 500
+        ? 503
+        : 422;
   return json(
     {
       error: refusal.message,
-      code: refusal.code ?? "SESSION_UNAVAILABLE",
+      code: refusal.code ?? (status === 503 ? "SESSION_UNAVAILABLE" : "FOLLOW_UP_REJECTED"),
       invocationId: refusal.invocationId,
     } satisfies WebhookFollowUpRefusedResponse,
     status

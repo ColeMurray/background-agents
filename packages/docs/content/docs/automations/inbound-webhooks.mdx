@@ -183,6 +183,7 @@ Runtime authorization denial returns `ok: true` with `triggered: 0` and `skipped
 | `409`  | A `sessionKey` follow-up the session cannot take: `SESSION_NOT_PROMPTABLE` (archived or cancelled), `BUDGET_EXHAUSTED`, or `SANDBOX_RECOVERY_REQUIRED` |
 | `413`  | Body larger than 64 KB                                                                                                                                 |
 | `415`  | `Content-Type` was not `application/json`                                                                                                              |
+| `422`  | A `sessionKey` follow-up the session rejected for another reason; a retry is rejected the same way                                                     |
 | `429`  | A `sessionKey` follow-up whose session queue is full (`PROMPT_QUEUE_FULL`)                                                                             |
 | `503`  | A `sessionKey` follow-up whose session could not be reached (`SESSION_UNAVAILABLE`). Retrying with the same `idempotencyKey` is safe                   |
 

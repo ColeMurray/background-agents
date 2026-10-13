@@ -2152,6 +2152,15 @@ describe("Scheduler", () => {
       mockTeamChannelBindingGet.mockReset().mockResolvedValue({ teamId: "team-a" });
     });
 
+    it("records the run's first prompt as queued, since the session ran it", async () => {
+      await createScheduler().runComplete(runCompletion());
+
+      expect(mockStore.markRunFirstPromptQueued).toHaveBeenCalledWith("run-1");
+      expect(mockStore.markRunFirstPromptQueued.mock.invocationCallOrder[0]).toBeLessThan(
+        mockStore.updateRun.mock.invocationCallOrder[0]!
+      );
+    });
+
     describe("Slack publication preparation retries", () => {
       function createSlackCompletionHarness(overrides?: Partial<Env>) {
         mockStore.getInvocationById.mockResolvedValue({

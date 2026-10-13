@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { WEBHOOK_SESSION_KEY_MAX_LENGTH } from "@open-inspect/shared/triggers";
-import { parseWebhookDeliveryFields } from "./automation-webhook";
+import { followUpRefusedResponse, parseWebhookDeliveryFields } from "./automation-webhook";
+import { SessionFollowUpRefusedError } from "../scheduler/scheduler";
 
 describe("parseWebhookDeliveryFields", () => {
   it("reads both delivery fields", () => {
@@ -40,4 +41,30 @@ describe("parseWebhookDeliveryFields", () => {
       fields: { sessionKey },
     });
   });
+});
+
+describe("followUpRefusedResponse", () => {
+  it.each([
+    { status: 409, code: "BUDGET_EXHAUSTED", expected: 409, expectedCode: "BUDGET_EXHAUSTED" },
+    { status: 429, code: "PROMPT_QUEUE_FULL", expected: 429, expectedCode: "PROMPT_QUEUE_FULL" },
+    { status: null, code: null, expected: 503, expectedCode: "SESSION_UNAVAILABLE" },
+    { status: 500, code: null, expected: 503, expectedCode: "SESSION_UNAVAILABLE" },
+    {
+      status: 400,
+      code: "HARNESS_MODEL_INCOMPATIBLE",
+      expected: 422,
+      expectedCode: "HARNESS_MODEL_INCOMPATIBLE",
+    },
+    { status: 400, code: null, expected: 422, expectedCode: "FOLLOW_UP_REJECTED" },
+  ])(
+    "answers a $status refusal with $expected",
+    async ({ status, code, expected, expectedCode }) => {
+      const response = followUpRefusedResponse(
+        new SessionFollowUpRefusedError({ kind: "refused", invocationId: "inv-1", status, code })
+      );
+
+      expect(response.status).toBe(expected);
+      expect(await response.json()).toMatchObject({ code: expectedCode, invocationId: "inv-1" });
+    }
+  );
 });

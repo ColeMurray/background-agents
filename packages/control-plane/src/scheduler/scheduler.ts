@@ -1495,6 +1495,11 @@ export class Scheduler {
       return;
     }
 
+    // The session ran the run's first prompt, so it was queued even if the
+    // launching worker died before recording that. The held-prompt sweep then
+    // releases follow-ups held during the launch instead of dropping them.
+    await store.markRunFirstPromptQueued(body.runId);
+
     // SQL-guarded transition: only an active run may go terminal. When the
     // guard suppresses the write (recovery sweep or a concurrent callback got
     // there first) the callback is acknowledged as ignored — a terminal child

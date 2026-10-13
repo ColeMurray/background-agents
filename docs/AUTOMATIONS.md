@@ -222,8 +222,8 @@ with `400`. Pair it with an `idempotencyKey`: the session recognizes a retried f
 retry counts as skipped. A follow-up that arrives while the first run is still starting is held and
 queued right after the run's own first prompt. If the session will not take a follow-up (archived,
 cancelled, out of budget, needing sandbox recovery, or unreachable), the request fails with `409`,
-`429`, or `503` instead of starting over in a new session. After 7 days without activity in the
-session, the next delivery starts a new run.
+`422`, `429`, or `503` instead of starting over in a new session. After 7 days without activity in
+the session, the next delivery starts a new run.
 
 ### Responses
 
@@ -255,6 +255,7 @@ another delivery.
 | `409`  | The `sessionKey` session cannot take prompts: `SESSION_NOT_PROMPTABLE`, `BUDGET_EXHAUSTED`, `SANDBOX_RECOVERY_REQUIRED` |
 | `413`  | Payload too large                                                                                                       |
 | `415`  | `Content-Type` was not `application/json`                                                                               |
+| `422`  | The `sessionKey` session rejected the follow-up for another reason; a retry is rejected the same way                    |
 | `429`  | The `sessionKey` session's queue is full (`PROMPT_QUEUE_FULL`)                                                          |
 | `503`  | The `sessionKey` session could not be reached (`SESSION_UNAVAILABLE`); safe to retry with the same `idempotencyKey`     |
 
