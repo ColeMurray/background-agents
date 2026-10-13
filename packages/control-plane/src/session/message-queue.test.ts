@@ -1061,6 +1061,19 @@ describe("SessionMessageQueue", () => {
     expect(h.sessionIndex.touchUpdatedAt).toHaveBeenCalledWith("s1");
   });
 
+  it("touches the session index when an API prompt is queued", async () => {
+    const h = buildQueue();
+
+    await h.queue.enqueuePromptFromApi({
+      content: "follow-up",
+      authorId: "user-1",
+      source: "automation",
+    });
+    await h.backgroundTasks.settle();
+
+    expect(h.sessionIndex.touchUpdatedAt).toHaveBeenCalledWith("s1");
+  });
+
   it("returns a null position when retrying a completed correlated prompt", async () => {
     const h = buildQueue();
     h.repository.getMessageByClientRequestId.mockReturnValue(

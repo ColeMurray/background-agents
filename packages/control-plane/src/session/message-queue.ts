@@ -350,14 +350,7 @@ export class SessionMessageQueue {
       throw error;
     }
 
-    const session = this.repository.getSession();
-    const sessionId = session?.session_name || session?.id;
-    if (sessionId) {
-      this.backgroundTasks.submit(() => this.sessionIndex.touchUpdatedAt(sessionId), {
-        name: "session_index.touch_updated_at",
-        context: { session_id: sessionId },
-      });
-    }
+    this.touchSessionActivity();
 
     this.wsManager.send(ws, {
       type: "prompt_queued",
@@ -764,6 +757,9 @@ export class SessionMessageQueue {
       clientRequestId: data.clientRequestId,
     });
 
+    // An already-active session keeps its index timestamp through the status sync, so
+    // record the activity here: session continuity measures its window from it.
+    this.touchSessionActivity();
     await this.processMessageQueue();
 
     return { messageId: enqueued.messageId, status: "queued", deduplicated: enqueued.deduplicated };
@@ -894,6 +890,17 @@ export class SessionMessageQueue {
     });
 
     return { messageId, position, deduplicated: false };
+  }
+
+  /** Refresh the session index's activity timestamp in the background. */
+  private touchSessionActivity(): void {
+    const session = this.repository.getSession();
+    const sessionId = session?.session_name || session?.id;
+    if (!sessionId) return;
+    this.backgroundTasks.submit(() => this.sessionIndex.touchUpdatedAt(sessionId), {
+      name: "session_index.touch_updated_at",
+      context: { session_id: sessionId },
+    });
   }
 
   private assertBudgetAvailable(): void {
