@@ -139,6 +139,34 @@ describe("preparePullRequestArtifactUpdate", () => {
     ).toBeNull();
   });
 
+  it("accepts changed content at the same provider timestamp", () => {
+    const update = preparePullRequestArtifactUpdate(
+      artifact(),
+      snapshot({ isDraft: true, providerUpdatedAt: 1_000 }),
+      300
+    );
+
+    expect(update?.artifact.metadata).toMatchObject({ state: "draft", isDraft: true });
+  });
+
+  it("accepts snapshots when either provider timestamp is missing", () => {
+    expect(
+      preparePullRequestArtifactUpdate(
+        artifact(),
+        snapshot({ isDraft: true, providerUpdatedAt: undefined }),
+        300
+      )
+    ).not.toBeNull();
+
+    expect(
+      preparePullRequestArtifactUpdate(
+        artifact({ metadata: '{"state":"open"}' }),
+        snapshot({ isDraft: true, providerUpdatedAt: 999 }),
+        300
+      )
+    ).not.toBeNull();
+  });
+
   it("returns null when the snapshot does not materially change the artifact", () => {
     expect(preparePullRequestArtifactUpdate(artifact(), snapshot(), 300)).toBeNull();
   });
