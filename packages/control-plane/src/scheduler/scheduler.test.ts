@@ -121,8 +121,12 @@ vi.mock("../session/skill-resolution", () => ({
 }));
 
 const { resolveManagedSkills } = await import("../session/skill-resolution");
-const { AutomationExecutionUnauthorizedError, EXECUTION_DEADLINE_GRACE_MS, Scheduler } =
-  await import("./scheduler");
+const {
+  AutomationExecutionUnauthorizedError,
+  EXECUTION_DEADLINE_GRACE_MS,
+  Scheduler,
+  SessionFollowUpRefusedError,
+} = await import("./scheduler");
 
 // ─── Mock factories ──────────────────────────────────────────────────────────
 
@@ -151,7 +155,13 @@ function createMockStore() {
     getOverdueAutomations: vi.fn().mockResolvedValue([]),
     getActiveRunForAutomation: vi.fn().mockResolvedValue(null),
     getActiveRunForKey: vi.fn().mockResolvedValue(null),
-    getLatestSteerableRunForConcurrencyKey: vi.fn().mockResolvedValue(null),
+    getLatestContinuableRun: vi.fn().mockResolvedValue(null),
+    markRunFirstPromptQueued: vi.fn().mockResolvedValue(undefined),
+    holdPromptForLaunchingRun: vi.fn().mockResolvedValue(true),
+    getHeldPrompts: vi.fn().mockResolvedValue([]),
+    deleteHeldPrompt: vi.fn().mockResolvedValue(undefined),
+    deleteHeldPromptsForRun: vi.fn().mockResolvedValue(0),
+    getRunsWithStaleHeldPrompts: vi.fn().mockResolvedValue([]),
     getRepositoriesForAutomation: vi.fn().mockResolvedValue([]),
     getRepositoriesForAutomationIds: vi.fn().mockResolvedValue(new Map()),
     getEnvironmentsForAutomation: vi.fn().mockResolvedValue([]),
@@ -509,6 +519,8 @@ function sampleRunRow(overrides?: Record<string, unknown>) {
     repo_name: "web-app",
     repo_id: 12345,
     base_branch: "main",
+    first_prompt_pending: 0,
+    last_activity_at: now,
     ...overrides,
   };
 }
@@ -2819,7 +2831,7 @@ describe("Scheduler", () => {
 
       it("does not request context for an unmatched reply", async () => {
         mockGetSlackAutomationsForChannel.mockResolvedValue([sampleSlackAutomation]);
-        mockStore.getLatestSteerableRunForConcurrencyKey.mockResolvedValue(null);
+        mockStore.getLatestContinuableRun.mockResolvedValue(null);
         const { slackFetch, env } = threadContextEnv();
 
         // Fails the automation's text condition, so no run is admitted.
@@ -2832,7 +2844,7 @@ describe("Scheduler", () => {
 
       it("does not request context for a successfully steered reply", async () => {
         mockGetSlackAutomationsForChannel.mockResolvedValue([sampleSlackAutomation]);
-        mockStore.getLatestSteerableRunForConcurrencyKey.mockResolvedValue(
+        mockStore.getLatestContinuableRun.mockResolvedValue(
           sampleRunRow({ id: "active-run", session_id: "sess-running" })
         );
         const { slackFetch, env } = threadContextEnv();
@@ -2846,7 +2858,7 @@ describe("Scheduler", () => {
 
       it("does not request context when admission is skipped for concurrency", async () => {
         mockGetSlackAutomationsForChannel.mockResolvedValue([sampleSlackAutomation]);
-        mockStore.getLatestSteerableRunForConcurrencyKey.mockResolvedValue(null);
+        mockStore.getLatestContinuableRun.mockResolvedValue(null);
         mockStore.getActiveRunForKey.mockResolvedValue(sampleRunRow({ id: "busy" }));
         const { slackFetch, env } = threadContextEnv();
 
@@ -2862,7 +2874,7 @@ describe("Scheduler", () => {
 
       it("does not request context when the invocation is deduplicated", async () => {
         mockGetSlackAutomationsForChannel.mockResolvedValue([sampleSlackAutomation]);
-        mockStore.getLatestSteerableRunForConcurrencyKey.mockResolvedValue(null);
+        mockStore.getLatestContinuableRun.mockResolvedValue(null);
         mockStore.insertInvocationGuarded.mockRejectedValue(
           new Error("UNIQUE constraint failed: automation_invocations.trigger_key")
         );
@@ -2880,7 +2892,7 @@ describe("Scheduler", () => {
 
       it("requests context once for an admitted run and splices it into the prompt", async () => {
         mockGetSlackAutomationsForChannel.mockResolvedValue([sampleSlackAutomation]);
-        mockStore.getLatestSteerableRunForConcurrencyKey.mockResolvedValue(null);
+        mockStore.getLatestContinuableRun.mockResolvedValue(null);
         const { slackFetch, env, stub } = threadContextEnv();
 
         expect(await createScheduler(env).event(makeSlackEvent())).toEqual({
@@ -2909,7 +2921,7 @@ describe("Scheduler", () => {
           sampleSlackAutomation,
           { ...sampleSlackAutomation, id: "auto-slack-2" },
         ]);
-        mockStore.getLatestSteerableRunForConcurrencyKey.mockResolvedValue(null);
+        mockStore.getLatestContinuableRun.mockResolvedValue(null);
         const { slackFetch, env } = threadContextEnv();
 
         expect(await createScheduler(env).event(makeSlackEvent())).toEqual({
@@ -2929,7 +2941,7 @@ describe("Scheduler", () => {
           sampleSlackAutomation,
           { ...sampleSlackAutomation, id: "auto-slack-2" },
         ]);
-        mockStore.getLatestSteerableRunForConcurrencyKey.mockResolvedValue(null);
+        mockStore.getLatestContinuableRun.mockResolvedValue(null);
         mockIsAutomationExecutionAuthorized
           .mockResolvedValueOnce(false)
           .mockResolvedValueOnce(true);
@@ -2952,7 +2964,7 @@ describe("Scheduler", () => {
 
       it("launches without history when the context request fails", async () => {
         mockGetSlackAutomationsForChannel.mockResolvedValue([sampleSlackAutomation]);
-        mockStore.getLatestSteerableRunForConcurrencyKey.mockResolvedValue(null);
+        mockStore.getLatestContinuableRun.mockResolvedValue(null);
         const slackFetch = vi.fn(async () => new Response("nope", { status: 500 }));
         const stub = createMockSessionStub();
         const env = createEnv(
@@ -2977,7 +2989,7 @@ describe("Scheduler", () => {
 
       it("launches without history when the context request is aborted", async () => {
         mockGetSlackAutomationsForChannel.mockResolvedValue([sampleSlackAutomation]);
-        mockStore.getLatestSteerableRunForConcurrencyKey.mockResolvedValue(null);
+        mockStore.getLatestContinuableRun.mockResolvedValue(null);
         // What a timed-out binding fetch looks like to the caller.
         const slackFetch = vi.fn(async () => {
           throw Object.assign(new Error("The operation was aborted"), { name: "TimeoutError" });
@@ -3006,7 +3018,7 @@ describe("Scheduler", () => {
 
       it("uses the baseline prompt when lazy prompt construction rejects", async () => {
         mockGetSlackAutomationsForChannel.mockResolvedValue([sampleSlackAutomation]);
-        mockStore.getLatestSteerableRunForConcurrencyKey.mockResolvedValue(null);
+        mockStore.getLatestContinuableRun.mockResolvedValue(null);
         const { env, stub } = threadContextEnv();
         const scheduler = createScheduler(env);
         const promptBuilder = scheduler as unknown as {
@@ -3036,7 +3048,7 @@ describe("Scheduler", () => {
 
       it("skips the request entirely for a top-level message", async () => {
         mockGetSlackAutomationsForChannel.mockResolvedValue([sampleSlackAutomation]);
-        mockStore.getLatestSteerableRunForConcurrencyKey.mockResolvedValue(null);
+        mockStore.getLatestContinuableRun.mockResolvedValue(null);
         const { slackFetch, env } = threadContextEnv();
 
         expect(await createScheduler(env).event(makeSlackEvent({ threadTs: undefined }))).toEqual({
@@ -3052,7 +3064,7 @@ describe("Scheduler", () => {
 
     it("steers the thread session even when the follow-up fails trigger conditions", async () => {
       mockGetSlackAutomationsForChannel.mockResolvedValue([sampleSlackAutomation]);
-      mockStore.getLatestSteerableRunForConcurrencyKey.mockResolvedValue(
+      mockStore.getLatestContinuableRun.mockResolvedValue(
         sampleRunRow({ id: "active-run", session_id: "sess-running" })
       );
 
@@ -3070,17 +3082,11 @@ describe("Scheduler", () => {
 
       expect(result).toEqual({ triggered: 0, skipped: 0, steered: 1, invocationIds: ["inv-1"] });
 
-      // The continuity lookup is scoped to the thread's concurrency key and a
-      // 7-day window measured from now.
-      expect(mockStore.getLatestSteerableRunForConcurrencyKey).toHaveBeenCalledWith(
+      // The continuity lookup is scoped to the thread's concurrency key.
+      expect(mockStore.getLatestContinuableRun).toHaveBeenCalledWith(
         "auto-slack",
-        "slack:C1:thread-root",
-        expect.any(Number)
+        "slack:C1:thread-root"
       );
-      const sinceMs = mockStore.getLatestSteerableRunForConcurrencyKey.mock.calls[0]?.[2] as number;
-      const sevenDaysMs = 7 * 24 * 60 * 60 * 1000;
-      expect(sinceMs).toBeGreaterThanOrEqual(Date.now() - sevenDaysMs - 1000);
-      expect(sinceMs).toBeLessThanOrEqual(Date.now() - sevenDaysMs + 1000);
 
       // The follow-up was enqueued onto the existing session as a slack-sourced
       // turn, so its reply posts back in-thread via /callbacks/complete.
@@ -3107,7 +3113,7 @@ describe("Scheduler", () => {
 
     it("attributes a Slack automation follow-up to the actor, not the automation owner", async () => {
       mockGetSlackAutomationsForChannel.mockResolvedValue([sampleSlackAutomation]);
-      mockStore.getLatestSteerableRunForConcurrencyKey.mockResolvedValue(
+      mockStore.getLatestContinuableRun.mockResolvedValue(
         sampleRunRow({ session_id: "sess-running" })
       );
       mockUserStoreGetIdentitiesForUser.mockImplementation(async (userId: string) =>
@@ -3134,7 +3140,7 @@ describe("Scheduler", () => {
 
     it("resolves the Slack actor's verified profile when no login is cached", async () => {
       mockGetSlackAutomationsForChannel.mockResolvedValue([sampleSlackAutomation]);
-      mockStore.getLatestSteerableRunForConcurrencyKey.mockResolvedValue(
+      mockStore.getLatestContinuableRun.mockResolvedValue(
         sampleRunRow({ session_id: "sess-running" })
       );
       mockUserStoreGetIdentitiesForUser.mockResolvedValue([
@@ -3175,7 +3181,7 @@ describe("Scheduler", () => {
       "steers without attribution when the actor grant is %s",
       async (scenario) => {
         mockGetSlackAutomationsForChannel.mockResolvedValue([sampleSlackAutomation]);
-        mockStore.getLatestSteerableRunForConcurrencyKey.mockResolvedValue(
+        mockStore.getLatestContinuableRun.mockResolvedValue(
           sampleRunRow({ session_id: "sess-running" })
         );
         mockUserStoreGetIdentitiesForUser.mockResolvedValue([
@@ -3206,7 +3212,7 @@ describe("Scheduler", () => {
 
     it("does not steer or start an owner run for a mismatched actor profile", async () => {
       mockGetSlackAutomationsForChannel.mockResolvedValue([sampleSlackAutomation]);
-      mockStore.getLatestSteerableRunForConcurrencyKey.mockResolvedValue(
+      mockStore.getLatestContinuableRun.mockResolvedValue(
         sampleRunRow({ session_id: "sess-running" })
       );
       mockUserStoreGetIdentitiesForUser.mockResolvedValue([
@@ -3234,7 +3240,7 @@ describe("Scheduler", () => {
 
     it("steers a natural follow-up without attribution when GitHub identity is ambiguous", async () => {
       mockGetSlackAutomationsForChannel.mockResolvedValue([sampleSlackAutomation]);
-      mockStore.getLatestSteerableRunForConcurrencyKey.mockResolvedValue(
+      mockStore.getLatestContinuableRun.mockResolvedValue(
         sampleRunRow({ session_id: "sess-running" })
       );
       mockUserStoreGetIdentitiesForUser.mockResolvedValue([
@@ -3255,7 +3261,7 @@ describe("Scheduler", () => {
 
     it("does not start an owner run when steering attribution storage fails", async () => {
       mockGetSlackAutomationsForChannel.mockResolvedValue([sampleSlackAutomation]);
-      mockStore.getLatestSteerableRunForConcurrencyKey.mockResolvedValue(
+      mockStore.getLatestContinuableRun.mockResolvedValue(
         sampleRunRow({ session_id: "sess-running" })
       );
       mockUserStoreGetIdentitiesForUser.mockRejectedValue(new Error("D1 unavailable"));
@@ -3272,7 +3278,7 @@ describe("Scheduler", () => {
         sampleSlackAutomation,
         { ...sampleSlackAutomation, id: "auto-slack-2" },
       ]);
-      mockStore.getLatestSteerableRunForConcurrencyKey
+      mockStore.getLatestContinuableRun
         .mockResolvedValueOnce(sampleRunRow({ id: "active-run-1", session_id: "sess-running-1" }))
         .mockResolvedValueOnce(sampleRunRow({ id: "active-run-2", session_id: "sess-running-2" }));
 
@@ -3298,7 +3304,7 @@ describe("Scheduler", () => {
 
       beforeEach(() => {
         mockGetSlackAutomationsForChannel.mockResolvedValue([sampleSlackAutomation]);
-        mockStore.getLatestSteerableRunForConcurrencyKey.mockResolvedValue(
+        mockStore.getLatestContinuableRun.mockResolvedValue(
           sampleRunRow({ session_id: sessionId })
         );
       });
@@ -3362,7 +3368,7 @@ describe("Scheduler", () => {
           sampleSlackAutomation,
           { ...sampleSlackAutomation, id: "auto-slack-2" },
         ]);
-        mockStore.getLatestSteerableRunForConcurrencyKey
+        mockStore.getLatestContinuableRun
           .mockResolvedValueOnce(sampleRunRow({ session_id: sessionIds[0] }))
           .mockResolvedValueOnce(sampleRunRow({ session_id: sessionIds[1] }));
         mockEvaluateSessionAdmission
@@ -3399,7 +3405,7 @@ describe("Scheduler", () => {
       mockGetSlackAutomationsForChannel.mockResolvedValue([sampleSlackAutomation]);
       // The thread's run finished, but its session is still steerable within the
       // window — like replying after an @mention turn ends.
-      mockStore.getLatestSteerableRunForConcurrencyKey.mockResolvedValue(
+      mockStore.getLatestContinuableRun.mockResolvedValue(
         sampleRunRow({ id: "done-run", status: "completed", session_id: "sess-done" })
       );
 
@@ -3426,7 +3432,7 @@ describe("Scheduler", () => {
 
     it("uses a no-repository label when steering a repo-less run's thread", async () => {
       mockGetSlackAutomationsForChannel.mockResolvedValue([sampleSlackAutomation]);
-      mockStore.getLatestSteerableRunForConcurrencyKey.mockResolvedValue(
+      mockStore.getLatestContinuableRun.mockResolvedValue(
         sampleRunRow({
           id: "active-run",
           session_id: "sess-running",
@@ -3458,7 +3464,7 @@ describe("Scheduler", () => {
 
     it("anchors the thread to the message ts for a top-level (non-reply) follow-up", async () => {
       mockGetSlackAutomationsForChannel.mockResolvedValue([sampleSlackAutomation]);
-      mockStore.getLatestSteerableRunForConcurrencyKey.mockResolvedValue(
+      mockStore.getLatestContinuableRun.mockResolvedValue(
         sampleRunRow({ id: "active-run", session_id: "sess-running" })
       );
 
@@ -3486,7 +3492,7 @@ describe("Scheduler", () => {
     it("starts a fresh event invocation when no steerable session exists (outside the window)", async () => {
       mockGetSlackAutomationsForChannel.mockResolvedValue([sampleSlackAutomation]);
       // Outside the continuity window → no steerable run, and no active run.
-      mockStore.getLatestSteerableRunForConcurrencyKey.mockResolvedValue(null);
+      mockStore.getLatestContinuableRun.mockResolvedValue(null);
       mockStore.getActiveRunForKey.mockResolvedValue(null);
 
       const stub = createMockSessionStub();
@@ -3534,7 +3540,7 @@ describe("Scheduler", () => {
 
     it("appends workspace session instructions to a new Slack automation session", async () => {
       mockGetSlackAutomationsForChannel.mockResolvedValue([sampleSlackAutomation]);
-      mockStore.getLatestSteerableRunForConcurrencyKey.mockResolvedValue(null);
+      mockStore.getLatestContinuableRun.mockResolvedValue(null);
       mockStore.getActiveRunForKey.mockResolvedValue(null);
 
       const stub = createMockSessionStub();
@@ -3561,7 +3567,7 @@ describe("Scheduler", () => {
 
     it("does not append whitespace-only workspace instructions", async () => {
       mockGetSlackAutomationsForChannel.mockResolvedValue([sampleSlackAutomation]);
-      mockStore.getLatestSteerableRunForConcurrencyKey.mockResolvedValue(null);
+      mockStore.getLatestContinuableRun.mockResolvedValue(null);
       mockStore.getActiveRunForKey.mockResolvedValue(null);
 
       const stub = createMockSessionStub();
@@ -3586,7 +3592,7 @@ describe("Scheduler", () => {
 
     it("launches without workspace instructions when the settings read fails", async () => {
       mockGetSlackAutomationsForChannel.mockResolvedValue([sampleSlackAutomation]);
-      mockStore.getLatestSteerableRunForConcurrencyKey.mockResolvedValue(null);
+      mockStore.getLatestContinuableRun.mockResolvedValue(null);
       mockStore.getActiveRunForKey.mockResolvedValue(null);
 
       const stub = createMockSessionStub();
@@ -3613,7 +3619,7 @@ describe("Scheduler", () => {
     it("posts the already-active notice for a reply racing the initial trigger (no session yet)", async () => {
       mockGetSlackAutomationsForChannel.mockResolvedValue([sampleSlackAutomation]);
       // Run is still starting → not yet steerable, but it blocks a second run.
-      mockStore.getLatestSteerableRunForConcurrencyKey.mockResolvedValue(null);
+      mockStore.getLatestContinuableRun.mockResolvedValue(null);
       mockStore.getActiveRunForKey.mockResolvedValue({
         id: "starting-run",
         status: "starting",
@@ -3653,7 +3659,7 @@ describe("Scheduler", () => {
 
     it("deduplicates a redelivered event via the invocation trigger-key index", async () => {
       mockGetSlackAutomationsForChannel.mockResolvedValue([sampleSlackAutomation]);
-      mockStore.getLatestSteerableRunForConcurrencyKey.mockResolvedValue(null);
+      mockStore.getLatestContinuableRun.mockResolvedValue(null);
       mockStore.getActiveRunForKey.mockResolvedValue(null);
       mockStore.insertInvocationGuarded.mockRejectedValue(
         new Error(
@@ -3681,7 +3687,7 @@ describe("Scheduler", () => {
 
     it("resolves a redelivery to the owning invocation even while it is still running", async () => {
       mockGetSlackAutomationsForChannel.mockResolvedValue([sampleSlackAutomation]);
-      mockStore.getLatestSteerableRunForConcurrencyKey.mockResolvedValue(null);
+      mockStore.getLatestContinuableRun.mockResolvedValue(null);
       mockStore.getActiveRunForKey.mockResolvedValue(sampleRunRow({ id: "busy" }));
       mockStore.getInvocationIdByTriggerKey.mockResolvedValue("inv-original");
       const event = makeSlackEvent();
@@ -3710,7 +3716,7 @@ describe("Scheduler", () => {
       "resolves a concurrent same-key delivery admitted after the trigger-key check ($path)",
       async ({ active, inserted }) => {
         mockGetSlackAutomationsForChannel.mockResolvedValue([sampleSlackAutomation]);
-        mockStore.getLatestSteerableRunForConcurrencyKey.mockResolvedValue(null);
+        mockStore.getLatestContinuableRun.mockResolvedValue(null);
         mockStore.getActiveRunForKey.mockResolvedValue(
           active ? sampleRunRow({ id: "original-child" }) : null
         );
@@ -3737,7 +3743,7 @@ describe("Scheduler", () => {
       // A completed run is steerable, but the enqueue will fail; with the run no
       // longer active, the reply is re-evaluated as a new trigger (it matches),
       // mirroring the @mention path's stale-session → new-session recovery.
-      mockStore.getLatestSteerableRunForConcurrencyKey.mockResolvedValue(
+      mockStore.getLatestContinuableRun.mockResolvedValue(
         sampleRunRow({ id: "done-run", status: "completed", session_id: "sess-done" })
       );
       mockStore.getActiveRunForKey.mockResolvedValue(null);
@@ -3810,7 +3816,7 @@ describe("Scheduler", () => {
       });
 
       it("continues the session an earlier delivery with the same key started", async () => {
-        mockStore.getLatestSteerableRunForConcurrencyKey.mockResolvedValue(
+        mockStore.getLatestContinuableRun.mockResolvedValue(
           sampleRunRow({ invocation_id: "inv-card", status: "completed", session_id: "sess-card" })
         );
         const stub = createMockSessionStub();
@@ -3825,10 +3831,9 @@ describe("Scheduler", () => {
           steered: 1,
           invocationIds: ["inv-card"],
         });
-        expect(mockStore.getLatestSteerableRunForConcurrencyKey).toHaveBeenCalledWith(
+        expect(mockStore.getLatestContinuableRun).toHaveBeenCalledWith(
           "auto-hook",
-          "webhook:session:card-42",
-          expect.any(Number)
+          "webhook:session:card-42"
         );
         const promptBody = await getPromptBody(vi.mocked(stub.fetch));
         expect(promptBody.source).toBe("automation");
@@ -3841,7 +3846,7 @@ describe("Scheduler", () => {
 
       it("resolves a retry of the delivery that started the session to its invocation", async () => {
         mockStore.getInvocationIdByTriggerKey.mockResolvedValue("inv-first");
-        mockStore.getLatestSteerableRunForConcurrencyKey.mockResolvedValue(
+        mockStore.getLatestContinuableRun.mockResolvedValue(
           sampleRunRow({ session_id: "sess-card" })
         );
         const stub = createMockSessionStub();
@@ -3878,7 +3883,7 @@ describe("Scheduler", () => {
       });
 
       it("sends a retried follow-up with the same request id and counts the session's conflict as a duplicate", async () => {
-        mockStore.getLatestSteerableRunForConcurrencyKey.mockResolvedValue(
+        mockStore.getLatestContinuableRun.mockResolvedValue(
           sampleRunRow({ invocation_id: "inv-card", session_id: "sess-card" })
         );
         const requestIds: unknown[] = [];
@@ -3923,62 +3928,231 @@ describe("Scheduler", () => {
         );
       });
 
-      it("falls through to a new run when the session cannot take the prompt", async () => {
-        mockStore.getLatestSteerableRunForConcurrencyKey.mockResolvedValue(
-          sampleRunRow({ session_id: "sess-archived" })
+      it("starts a fresh run when the session has been idle past the window", async () => {
+        mockStore.getLatestContinuableRun.mockResolvedValue(
+          sampleRunRow({
+            session_id: "sess-card",
+            last_activity_at: Date.now() - 8 * 24 * 60 * 60 * 1000,
+          })
         );
-        const stub = {
-          fetch: vi.fn(async (input: RequestInfo) => {
-            const url = typeof input === "string" ? input : input.url;
-            const path = new URL(url).pathname;
-            if (path === "/internal/init") return Response.json({ status: "ok" });
-            return new Response("Gone", { status: 410 });
-          }),
-        } as never;
+        const stub = createMockSessionStub();
 
         const result = await createScheduler(createEnv(undefined, stub)).event(
-          webhookEvent({ mode: "iterate" })
+          webhookEvent({ mode: "build" })
         );
 
         expect(result.steered).toBe(0);
         expect(mockStore.insertInvocationGuarded).toHaveBeenCalled();
       });
 
+      describe("while the run launches", () => {
+        const heldRow = (prompt: Record<string, unknown>) => ({
+          id: "held-1",
+          run_id: "run-1",
+          actor_user_id: "user-1",
+          actor_author_id: "user-1",
+          prompt: JSON.stringify(prompt),
+          request_id: "webhook:idem:held",
+          created_at: now,
+        });
+
+        async function promptContents(fetchMock: ReturnType<typeof vi.fn>) {
+          const contents: unknown[] = [];
+          for (const [input, init] of fetchMock.mock.calls as [RequestInfo, RequestInit?][]) {
+            const url = typeof input === "string" ? input : input.url;
+            if (new URL(url).pathname !== "/internal/prompt") continue;
+            contents.push((await promptRequestBody(input, init)).content);
+          }
+          return contents;
+        }
+
+        it.each([
+          { phase: "before it has a session", run: { status: "starting", session_id: null } },
+          { phase: "before its first prompt", run: { first_prompt_pending: 1 } },
+        ])("holds a follow-up that arrives $phase", async ({ run }) => {
+          mockStore.getLatestContinuableRun.mockResolvedValue(
+            sampleRunRow({ invocation_id: "inv-card", ...run })
+          );
+          const stub = createMockSessionStub();
+
+          const result = await createScheduler(createEnv(undefined, stub)).event(
+            webhookEvent({ mode: "iterate" }, "review-2")
+          );
+
+          expect(result).toEqual({
+            triggered: 0,
+            skipped: 0,
+            steered: 1,
+            invocationIds: ["inv-card"],
+          });
+          expect(promptCallCount(vi.mocked(stub.fetch))).toBe(0);
+          expect(mockEvaluateSessionAdmission).not.toHaveBeenCalled();
+          const held = mockStore.holdPromptForLaunchingRun.mock.calls[0]?.[0] as {
+            run_id: string;
+            actor_user_id: string;
+            request_id: string;
+            prompt: string;
+          };
+          expect(held).toMatchObject({
+            run_id: "run-1",
+            actor_user_id: "user-1",
+            request_id: "webhook:idem:review-2",
+          });
+          expect(JSON.parse(held.prompt)).toMatchObject({
+            source: "automation",
+            clientRequestId: expect.stringMatching(/^webhook:[0-9a-f]{64}$/),
+          });
+          expect(mockStore.insertInvocationGuarded).not.toHaveBeenCalled();
+        });
+
+        it("continues the session directly when the run finishes launching first", async () => {
+          mockStore.getLatestContinuableRun
+            .mockResolvedValueOnce(
+              sampleRunRow({ invocation_id: "inv-card", first_prompt_pending: 1 })
+            )
+            .mockResolvedValueOnce(
+              sampleRunRow({ invocation_id: "inv-card", first_prompt_pending: 0 })
+            );
+          mockStore.holdPromptForLaunchingRun.mockResolvedValue(false);
+          const stub = createMockSessionStub();
+
+          const result = await createScheduler(createEnv(undefined, stub)).event(
+            webhookEvent({ mode: "iterate" })
+          );
+
+          expect(result).toMatchObject({ steered: 1, invocationIds: ["inv-card"] });
+          expect(promptCallCount(vi.mocked(stub.fetch))).toBe(1);
+        });
+
+        it("releases held follow-ups after the run's own first prompt", async () => {
+          mockStore.getHeldPrompts.mockResolvedValue([
+            heldRow({ content: "HELD", authorId: "user-1", source: "automation" }),
+          ]);
+          const stub = createMockSessionStub();
+
+          await createScheduler(createEnv(undefined, stub)).event(webhookEvent({ mode: "build" }));
+
+          const contents = await promptContents(vi.mocked(stub.fetch));
+          expect(contents).toHaveLength(2);
+          expect(contents[0]).toContain(sampleWebhookAutomation.instructions);
+          expect(contents[1]).toBe("HELD");
+          expect(mockStore.markRunFirstPromptQueued.mock.invocationCallOrder[0]).toBeLessThan(
+            mockStore.getHeldPrompts.mock.invocationCallOrder[0]!
+          );
+          expect(mockStore.deleteHeldPrompt).toHaveBeenCalledWith("held-1");
+        });
+
+        it("keeps a held follow-up for the sweep when the session cannot be reached", async () => {
+          mockStore.getRunsWithStaleHeldPrompts.mockResolvedValue([
+            sampleRunRow({ session_id: "sess-card", first_prompt_pending: 0 }),
+          ]);
+          mockStore.getHeldPrompts.mockResolvedValue([heldRow({ content: "HELD" })]);
+          const stub = {
+            fetch: vi.fn(async () => Response.json({ error: "down" }, { status: 503 })),
+          } as never;
+
+          await createScheduler(createEnv(undefined, stub)).tick();
+
+          expect(mockStore.deleteHeldPrompt).not.toHaveBeenCalled();
+        });
+
+        it.each([
+          {
+            state: "its first prompt is queued",
+            run: { first_prompt_pending: 0 },
+            released: true,
+            dropped: false,
+          },
+          {
+            state: "it ended before its first prompt",
+            run: { status: "failed", first_prompt_pending: 1 },
+            released: false,
+            dropped: true,
+          },
+          {
+            state: "it is still launching",
+            run: { first_prompt_pending: 1 },
+            released: false,
+            dropped: false,
+          },
+        ])(
+          "settles a missed release in the sweep when $state",
+          async ({ run, released, dropped }) => {
+            mockStore.getRunsWithStaleHeldPrompts.mockResolvedValue([
+              sampleRunRow({ session_id: "sess-card", ...run }),
+            ]);
+            mockStore.getHeldPrompts.mockResolvedValue([heldRow({ content: "HELD" })]);
+            const stub = createMockSessionStub();
+
+            await createScheduler(createEnv(undefined, stub)).tick();
+
+            expect(promptCallCount(vi.mocked(stub.fetch))).toBe(released ? 1 : 0);
+            expect(mockStore.deleteHeldPrompt).toHaveBeenCalledTimes(released ? 1 : 0);
+            expect(mockStore.deleteHeldPromptsForRun).toHaveBeenCalledTimes(dropped ? 1 : 0);
+          }
+        );
+      });
+
+      it("refuses the delivery, rather than starting a fresh run, when the session cannot be reached", async () => {
+        mockStore.getLatestContinuableRun.mockResolvedValue(
+          sampleRunRow({ invocation_id: "inv-card", session_id: "sess-card" })
+        );
+        const stub = {
+          fetch: vi.fn(async () => {
+            throw new Error("network down");
+          }),
+        } as never;
+
+        await expect(
+          createScheduler(createEnv(undefined, stub)).event(webhookEvent({ mode: "iterate" }))
+        ).rejects.toMatchObject({
+          name: "SessionFollowUpRefusedError",
+          invocationId: "inv-card",
+          status: null,
+          code: null,
+        });
+        expect(mockStore.insertInvocationGuarded).not.toHaveBeenCalled();
+      });
+
       it.each([
-        { refusal: "a session that cannot take prompts", payload: { error: "not promptable" } },
+        { refusal: "a closed session", status: 409, code: "SESSION_NOT_PROMPTABLE" },
         {
           refusal: "a sandbox that needs recovery",
-          payload: { error: "blocked", code: "SANDBOX_RECOVERY_REQUIRED" },
+          status: 409,
+          code: "SANDBOX_RECOVERY_REQUIRED",
         },
-        { refusal: "a spent budget", payload: { error: "spent", code: "BUDGET_EXHAUSTED" } },
+        { refusal: "a spent budget", status: 409, code: "BUDGET_EXHAUSTED" },
+        { refusal: "a full queue", status: 429, code: "PROMPT_QUEUE_FULL" },
+        { refusal: "a server error", status: 500, code: null },
       ])(
-        "falls through to a new run when the session refuses with $refusal",
-        async ({ payload }) => {
-          mockStore.getLatestSteerableRunForConcurrencyKey.mockResolvedValue(
+        "refuses the delivery, rather than starting a fresh run, for $refusal",
+        async ({ status, code }) => {
+          mockStore.getLatestContinuableRun.mockResolvedValue(
             sampleRunRow({ invocation_id: "inv-card", session_id: "sess-card" })
           );
           const stub = {
-            fetch: vi.fn(async (input: RequestInfo) => {
-              const url = typeof input === "string" ? input : input.url;
-              if (new URL(url).pathname === "/internal/init")
-                return Response.json({ status: "ok" });
-              return Response.json(payload, { status: 409 });
-            }),
+            fetch: vi.fn(async () =>
+              Response.json({ error: "refused", ...(code ? { code } : {}) }, { status })
+            ),
           } as never;
 
-          const result = await createScheduler(createEnv(undefined, stub)).event(
-            webhookEvent({ mode: "iterate" }, "review-1")
-          );
+          const refusal = await createScheduler(createEnv(undefined, stub))
+            .event(webhookEvent({ mode: "iterate" }, "review-1"))
+            .then(
+              () => null,
+              (error: unknown) => error
+            );
 
-          expect(result.steered).toBe(0);
-          expect(mockStore.insertInvocationGuarded).toHaveBeenCalled();
+          expect(refusal).toBeInstanceOf(SessionFollowUpRefusedError);
+          expect(refusal).toMatchObject({ invocationId: "inv-card", status, code });
+          expect(mockStore.insertInvocationGuarded).not.toHaveBeenCalled();
         }
       );
 
       it.each(["missing collaboration permission", "session admission denied"])(
         "neither steers nor starts a run for an executor with %s",
         async (scenario) => {
-          mockStore.getLatestSteerableRunForConcurrencyKey.mockResolvedValue(
+          mockStore.getLatestContinuableRun.mockResolvedValue(
             sampleRunRow({ invocation_id: "inv-card", session_id: "sess-card" })
           );
           if (scenario === "missing collaboration permission") {
@@ -4008,7 +4182,7 @@ describe("Scheduler", () => {
 
       it("does not continue a session for a delivery that fails the conditions", async () => {
         mockStore.getById.mockResolvedValue(iterateOnly);
-        mockStore.getLatestSteerableRunForConcurrencyKey.mockResolvedValue(
+        mockStore.getLatestContinuableRun.mockResolvedValue(
           sampleRunRow({ session_id: "sess-card" })
         );
         const stub = createMockSessionStub();
@@ -4185,7 +4359,7 @@ describe("Scheduler", () => {
 
       it("counts an event launch denial as skipped", async () => {
         mockGetSlackAutomationsForChannel.mockResolvedValue([sampleSlackAutomation]);
-        mockStore.getLatestSteerableRunForConcurrencyKey.mockResolvedValue(null);
+        mockStore.getLatestContinuableRun.mockResolvedValue(null);
         mockStore.getActiveRunForKey.mockResolvedValue(null);
         denyAfterAdmission();
 

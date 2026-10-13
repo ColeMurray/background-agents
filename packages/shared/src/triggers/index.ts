@@ -23,12 +23,14 @@ export type {
 } from "./types";
 export {
   TRIGGER_TYPE_TO_SOURCE,
+  WEBHOOK_SESSION_KEY_MAX_LENGTH,
   automationTriggerTypeSchema,
   automationEventSchema,
   githubAutomationEventSchema,
   linearAutomationEventSchema,
   sentryAutomationEventSchema,
   webhookAutomationEventSchema,
+  webhookSessionKeySchema,
   slackAutomationEventSchema,
   triggerConfigSchema,
 } from "./types";

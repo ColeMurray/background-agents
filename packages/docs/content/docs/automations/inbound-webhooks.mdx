@@ -38,9 +38,11 @@ flowchart TB
     filters -->|No| none["ok: true, triggered: 0"]
     filters -->|Yes| dedupe{"idempotencyKey already seen?"}
     dedupe -->|Yes| skipped["ok: true, skipped: 1"]
-    dedupe -->|No| continues{"sessionKey matches a run from the last 7 days?"}
-    continues -->|Yes| followup["Follow-up queued on that run's session"]
+    dedupe -->|No| continues{"sessionKey session active in the last 7 days?"}
+    continues -->|Yes| takes{"Session takes the follow-up?"}
+    takes -->|Yes| followup["Follow-up queued after the run's own first prompt"]
     followup --> steered["ok: true, steered: 1"]
+    takes -->|No| refused["409, 429, or 503 with a code"]
     continues -->|No| execution{"Execution authorized?"}
     execution -->|No| skipped
     execution -->|Yes| session["Session: instructions, then the payload context block"]
@@ -141,14 +143,16 @@ If your sender may retry, include a top-level `idempotencyKey` string in the bod
 
 ## Continuing a session
 
-To send several deliveries to one session, include a top-level `sessionKey` string in the body. The first delivery with a key starts a run as usual. A later delivery with the same key, within 7 days of that run's start, is queued as a follow-up prompt on its session instead, whether the run is still working or has finished. The follow-up is the payload's context block; the saved instructions are not repeated.
+To send several deliveries to one session, include a top-level `sessionKey` string in the body. The first delivery with a key starts a run as usual. A later delivery with the same key is queued as a follow-up prompt on that run's session instead, whether the run is still starting, working, or finished, as long as the session was active within the last 7 days. The follow-up is the payload's context block; the saved instructions are not repeated.
 
 - Conditions still apply. A delivery that fails them does nothing.
 - The follow-up is sent as the automation's executor, who must be able to collaborate on the session. Without that access the delivery counts as skipped and nothing starts.
-- `sessionKey` stays in the stored body but is removed from the context block, and it must be a non-empty string. Anything else is rejected with `400`.
+- `sessionKey` stays in the stored body but is removed from the context block. It must be a non-empty string of at most 256 characters; anything else is rejected with `400`.
 - Pair it with an `idempotencyKey` so retries are safe: the session recognizes a retried follow-up and the delivery counts as skipped.
-- A delivery that arrives before the first run's session exists is skipped for concurrency, like any overlapping delivery with the same key.
-- After 7 days, or once the session can no longer take prompts, the next delivery starts a new run, and later deliveries continue that one.
+- A follow-up that arrives while the first run is still starting is held and queued right after the run's own first prompt. It counts as steered.
+- Two deliveries with a new key that arrive at the same moment do not start two runs: one starts the run and the other is skipped for concurrency.
+- If the session will not take the follow-up, for example because it was archived or ran out of budget, the request fails with an [error response](#error-responses) instead of starting over in a new session.
+- After 7 days without activity in the session, the next delivery starts a new run, and later deliveries continue that one.
 
 ## Responses
 
@@ -171,13 +175,18 @@ Runtime authorization denial returns `ok: true` with `triggered: 0` and `skipped
 
 ### Error responses
 
-| Status | Meaning                                                             |
-| ------ | ------------------------------------------------------------------- |
-| `400`  | Invalid JSON body, or a `sessionKey` that is not a non-empty string |
-| `401`  | Missing or invalid API key                                          |
-| `404`  | Automation not found, or not an Inbound Webhook automation          |
-| `413`  | Body larger than 64 KB                                              |
-| `415`  | `Content-Type` was not `application/json`                           |
+| Status | Meaning                                                                                                                                                |
+| ------ | ------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `400`  | Invalid JSON body, or a `sessionKey` that is not a non-empty string of at most 256 characters                                                          |
+| `401`  | Missing or invalid API key                                                                                                                             |
+| `404`  | Automation not found, or not an Inbound Webhook automation                                                                                             |
+| `409`  | A `sessionKey` follow-up the session cannot take: `SESSION_NOT_PROMPTABLE` (archived or cancelled), `BUDGET_EXHAUSTED`, or `SANDBOX_RECOVERY_REQUIRED` |
+| `413`  | Body larger than 64 KB                                                                                                                                 |
+| `415`  | `Content-Type` was not `application/json`                                                                                                              |
+| `429`  | A `sessionKey` follow-up whose session queue is full (`PROMPT_QUEUE_FULL`)                                                                             |
+| `503`  | A `sessionKey` follow-up whose session could not be reached (`SESSION_UNAVAILABLE`). Retrying with the same `idempotencyKey` is safe                   |
+
+A refused follow-up returns `{ "error": "…", "code": "…", "invocationId": "…" }`, where `invocationId` is the run whose session refused it. Nothing new starts. To start over in a new session, send a different `sessionKey`.
 
 A paused automation accepts the request but starts nothing.
 
@@ -218,6 +227,7 @@ curl "https://<your-worker-url>/webhooks/automation/<automation-id>/invocations/
 | `404`                         | Wrong automation id, or the automation uses a different trigger type                                                   | Copy the URL from the detail page                                                                                                                                      |
 | `ok: true` but `triggered: 0` | A filter did not match, the automation is paused, or the delivery was skipped (including runtime authorization denial) | Check filters and status; if `skipped: 1`, check duplicates/concurrency and the executor's active status, permissions, team membership, active team, and target grants |
 | Retries create no run         | The retry reused an `idempotencyKey` that already fired                                                                | Expected; use a new key for a genuinely new event                                                                                                                      |
+| `409` for a `sessionKey`      | The session that key continues was archived, cancelled, ran out of budget, or needs sandbox recovery                   | Restore or recover the session in the web app, or send a new `sessionKey` to start a fresh session                                                                     |
 
 ## Next steps
 

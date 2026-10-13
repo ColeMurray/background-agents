@@ -4,11 +4,17 @@
 
 import type {
   AutomationInvocation,
+  WebhookFollowUpRefusedResponse,
   WebhookInvocationStatusResponse,
   WebhookTriggerResponse,
 } from "@open-inspect/shared";
 import { z } from "zod";
-import { normalizeWebhookEvent, type WebhookDeliveryOptions } from "@open-inspect/shared/triggers";
+import {
+  normalizeWebhookEvent,
+  WEBHOOK_SESSION_KEY_MAX_LENGTH,
+  webhookSessionKeySchema,
+  type WebhookDeliveryOptions,
+} from "@open-inspect/shared/triggers";
 import { AutomationStore, type AutomationRow } from "../db/automation-store";
 import { verifyWebhookApiKey } from "../auth/webhook-key";
 import { Hono } from "hono";
@@ -22,14 +28,14 @@ import {
   SCM_AGNOSTIC_HANDLER_AUTHENTICATED_ROUTE,
 } from "../routes/shared";
 import type { Env } from "../types";
-import { Scheduler } from "../scheduler/scheduler";
+import { Scheduler, SessionFollowUpRefusedError } from "../scheduler/scheduler";
 
 /** Maximum webhook payload size (64KB). */
 const MAX_PAYLOAD_SIZE = 64 * 1024;
 
 const webhookDeliveryFieldsSchema = z.object({
   idempotencyKey: z.string().optional().catch(undefined),
-  sessionKey: z.string().min(1).optional(),
+  sessionKey: webhookSessionKeySchema.optional(),
 });
 
 type ParsedWebhookDeliveryFields =
@@ -42,7 +48,28 @@ export function parseWebhookDeliveryFields(body: unknown): ParsedWebhookDelivery
   const parsed = webhookDeliveryFieldsSchema.safeParse(body);
   return parsed.success
     ? { ok: true, fields: parsed.data }
-    : { ok: false, error: "sessionKey must be a non-empty string" };
+    : {
+        ok: false,
+        error: `sessionKey must be a non-empty string of at most ${WEBHOOK_SESSION_KEY_MAX_LENGTH} characters`,
+      };
+}
+
+/**
+ * The sender sees a follow-up its session would not take, rather than the delivery
+ * starting over in a fresh session: 409 when the session cannot take prompts, 429 when
+ * its queue is full, and 503 when it could not be reached, which is safe to retry with
+ * the same idempotencyKey.
+ */
+function followUpRefusedResponse(refusal: SessionFollowUpRefusedError): Response {
+  const status = refusal.status === 409 || refusal.status === 429 ? refusal.status : 503;
+  return json(
+    {
+      error: refusal.message,
+      code: refusal.code ?? "SESSION_UNAVAILABLE",
+      invocationId: refusal.invocationId,
+    } satisfies WebhookFollowUpRefusedResponse,
+    status
+  );
 }
 
 type WebhookAuthentication =
@@ -114,9 +141,14 @@ async function handleAutomationWebhook(
   // 4. Normalize and process the event. A webhook event targets exactly one
   // automation, so it has at most one invocation.
   const event = normalizeWebhookEvent(automationId, body, delivery.fields);
-  const { invocationIds, ...counts } = await new Scheduler(ctx.db, env, ctx.executionCtx).event(
-    event
-  );
+  let result;
+  try {
+    result = await new Scheduler(ctx.db, env, ctx.executionCtx).event(event);
+  } catch (e) {
+    if (e instanceof SessionFollowUpRefusedError) return followUpRefusedResponse(e);
+    throw e;
+  }
+  const { invocationIds, ...counts } = result;
   return json({
     ok: true,
     ...counts,

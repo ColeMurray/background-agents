@@ -459,12 +459,13 @@ condition to filter by content. See
   automation's instructions; without an explicit instruction it will answer every message it is
   woken for. A run that opened a pull request or produced other artifacts always posts, and
   interactive `@mention` sessions never decline — a person is waiting on a visible answer there.
-- Authorized replies in a thread continue the same session, during the run and after it finishes,
-  for up to 7 days after the thread's first trigger, like replying in an `@mention` thread. The
-  reply is routed to that session as a follow-up prompt (re-spawned from a snapshot if it had gone
-  idle), gets its own 👀 reaction and in-thread response, and does **not** need to match the
-  trigger's text condition — conditions gate new runs, not replies that continue a thread. A reply
-  more than 7 days after the first trigger starts a fresh run.
+- Authorized replies in a thread continue the same session, while the run starts, during it, and
+  after it finishes, until the session has been idle for 7 days, like replying in an `@mention`
+  thread. The reply is routed to that session as a follow-up prompt (re-spawned from a snapshot if
+  it had gone idle; held until the run's own first prompt while the run is starting), gets its own
+  👀 reaction and in-thread response, and does **not** need to match the trigger's text condition —
+  conditions gate new runs, not replies that continue a thread. A reply after 7 idle days starts a
+  fresh run.
 
 The automation scheduler checks each reply author's session collaboration access; a rejected author
 does not start a replacement run for that automation. This is separate from interactive

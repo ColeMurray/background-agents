@@ -43,7 +43,10 @@ export class MessagesHandler {
         return Response.json({ error: error.message }, { status: 400 });
       }
       if (error instanceof SessionNotPromptableError) {
-        return Response.json({ error: error.message }, { status: 409 });
+        return Response.json(
+          { error: error.message, code: "SESSION_NOT_PROMPTABLE" },
+          { status: 409 }
+        );
       }
       if (error instanceof SandboxPromptBlockedError) {
         return Response.json(

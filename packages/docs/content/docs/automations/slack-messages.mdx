@@ -32,7 +32,7 @@ flowchart TB
     session --> reply{"Final message is NO_REPLY?"}
     reply -->|No| posted["Response posted in the thread"]
     reply -->|Yes| cleared["Reaction cleared, nothing posted"]
-    posted --> followup["Thread replies continue the session for 7 days"]
+    posted --> followup["Thread replies continue the session until it is idle for 7 days"]
 ```
 
 ## How this differs from @mention sessions
@@ -104,14 +104,14 @@ A run that opened a pull request or produced other artifacts always posts.
 
 ## Thread replies continue the session
 
-Authorized replies in a thread continue the same session, during the run and after it finishes, for up to 7 days after the thread's first trigger. An admitted reply is queued as a follow-up prompt on that session (re-spawned from a snapshot if it had gone idle), gets its own eyes reaction, and the agent posts its response while publication is allowed. A follow-up does not need to match the trigger conditions: conditions gate new runs, not replies that continue a thread. The scheduler checks the reply author's session collaboration access separately.
+Authorized replies in a thread continue the same session, while the run starts, during it, and after it finishes, until the session has been idle for 7 days. An admitted reply is queued as a follow-up prompt on that session (re-spawned from a snapshot if it had gone idle), gets its own eyes reaction, and the agent posts its response while publication is allowed. A follow-up does not need to match the trigger conditions: conditions gate new runs, not replies that continue a thread. The scheduler checks the reply author's session collaboration access separately.
 
 An unauthorized reply does not fall through to start a new run for that automation. This scheduler path is distinct from [interactive mapped-thread handling](/integrations/slack#threaded-conversations): if there is no steerable session, or enqueueing fails, the scheduler can re-evaluate the reply as a new trigger. Publication can still be refused after a run is admitted.
 
 Two edge cases:
 
-- A reply that races the very first trigger before its session exists gets an ephemeral "a run is already active" notice instead of being queued.
-- A reply more than 7 days after the first trigger starts a fresh run.
+- A reply that arrives while the run is still starting is held and queued right after the run's own first prompt. Only a reply that races the very first trigger before its run exists gets an ephemeral "a run is already active" notice instead.
+- A reply after the session has been idle for 7 days starts a fresh run.
 
 Attachments on thread replies are not forwarded either.
 

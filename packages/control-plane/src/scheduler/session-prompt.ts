@@ -21,10 +21,20 @@ export type SessionPromptOutcome =
   | { kind: "rejected"; status: number; code: string | null };
 
 /** Enqueue a prompt onto a session's queue through its runtime's prompt route. */
-export async function enqueueSessionPrompt(
+export function enqueueSessionPrompt(
   env: Env,
   sessionId: string,
   body: SchedulerPromptRequest,
+  ctx: CorrelationContext
+): Promise<SessionPromptOutcome> {
+  return enqueueSerializedSessionPrompt(env, sessionId, JSON.stringify(body), ctx);
+}
+
+/** {@link enqueueSessionPrompt} for a request body serialized earlier, e.g. a held prompt. */
+export async function enqueueSerializedSessionPrompt(
+  env: Env,
+  sessionId: string,
+  body: string,
   ctx: CorrelationContext
 ): Promise<SessionPromptOutcome> {
   const response = await createSessionRuntimeClient(env, ctx).fetch(
@@ -33,7 +43,7 @@ export async function enqueueSessionPrompt(
     {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body),
+      body,
     }
   );
   if (response.ok) return { kind: "queued" };

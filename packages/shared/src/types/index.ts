@@ -336,6 +336,7 @@ export type {
   AutomationInvocation,
   ListAutomationInvocationsResponse,
   WebhookTriggerResponse,
+  WebhookFollowUpRefusedResponse,
   WebhookInvocationStatusResponse,
 } from "./automations";
 

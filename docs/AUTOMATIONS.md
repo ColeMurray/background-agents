@@ -209,17 +209,21 @@ means separate deliveries for the same automation can run at the same time.
 ### Continuing a Session
 
 Include a `sessionKey` string in the JSON body to send several deliveries to one session. The first
-delivery with a key starts a run as usual. A later delivery with the same key, within 7 days of that
-run's start, is queued as a follow-up prompt on its session instead of starting a run, whether the
-run is still working or has finished. The follow-up carries the payload's context block without the
-saved instructions, and it is sent as the automation's executor, who must be able to collaborate on
-the session; without that access the delivery is skipped.
+delivery with a key starts a run as usual. A later delivery with the same key is queued as a
+follow-up prompt on that run's session instead of starting a run, whether the run is still starting,
+working, or finished, as long as the session was active within the last 7 days. The follow-up
+carries the payload's context block without the saved instructions, and it is sent as the
+automation's executor, who must be able to collaborate on the session; without that access the
+delivery is skipped.
 
 Conditions still apply to follow-ups. The `sessionKey` stays in the stored body, is removed from the
-context block, and must be a non-empty string, or the request is rejected with `400`. Pair it with
-an `idempotencyKey`: the session recognizes a retried follow-up and the retry counts as skipped. A
-delivery that arrives before the first run's session exists is skipped for concurrency. After the
-window, or once the session can no longer take prompts, the next delivery starts a new run.
+context block, and must be a non-empty string of at most 256 characters, or the request is rejected
+with `400`. Pair it with an `idempotencyKey`: the session recognizes a retried follow-up and the
+retry counts as skipped. A follow-up that arrives while the first run is still starting is held and
+queued right after the run's own first prompt. If the session will not take a follow-up (archived,
+cancelled, out of budget, needing sandbox recovery, or unreachable), the request fails with `409`,
+`429`, or `503` instead of starting over in a new session. After 7 days without activity in the
+session, the next delivery starts a new run.
 
 ### Responses
 
@@ -243,13 +247,19 @@ another delivery.
 
 ### Error Responses
 
-| Status | Meaning                                          |
-| ------ | ------------------------------------------------ |
-| `400`  | Invalid JSON body, or an invalid `sessionKey`    |
-| `401`  | Missing or invalid API key                       |
-| `404`  | Automation not found or not a webhook automation |
-| `413`  | Payload too large                                |
-| `415`  | `Content-Type` was not `application/json`        |
+| Status | Meaning                                                                                                                 |
+| ------ | ----------------------------------------------------------------------------------------------------------------------- |
+| `400`  | Invalid JSON body, or an invalid `sessionKey`                                                                           |
+| `401`  | Missing or invalid API key                                                                                              |
+| `404`  | Automation not found or not a webhook automation                                                                        |
+| `409`  | The `sessionKey` session cannot take prompts: `SESSION_NOT_PROMPTABLE`, `BUDGET_EXHAUSTED`, `SANDBOX_RECOVERY_REQUIRED` |
+| `413`  | Payload too large                                                                                                       |
+| `415`  | `Content-Type` was not `application/json`                                                                               |
+| `429`  | The `sessionKey` session's queue is full (`PROMPT_QUEUE_FULL`)                                                          |
+| `503`  | The `sessionKey` session could not be reached (`SESSION_UNAVAILABLE`); safe to retry with the same `idempotencyKey`     |
+
+A refused follow-up returns `{ "error", "code", "invocationId" }`, where `invocationId` is the run
+whose session refused it, and starts nothing.
 
 ---
 
@@ -343,14 +353,15 @@ the message needs nothing from you, reply with exactly `NO_REPLY` and nothing el
 agent will answer everything it is woken for unless told otherwise. A run that opened a pull request
 or produced other artifacts always posts.
 
-Every reply in a thread **continues the same session** — during the run and after it finishes — for
-up to 7 days after the thread's first trigger, exactly like replying in an `@mention` thread. The
-reply is enqueued as a follow-up turn on that session (re-spawning it from a snapshot if it had gone
-idle), and the agent posts its response in-thread when the turn finishes. A follow-up does not need
-to match the trigger condition — conditions gate new runs, not replies that continue an existing
-thread. If a reply races the very first trigger before its session exists, it falls back to an
-ephemeral "a run is already active" notice (reason `concurrent_run_active`); a reply more than 7
-days after the first trigger starts a fresh run.
+Every reply in a thread **continues the same session** — while the run starts, during it, and after
+it finishes — until the session has been idle for 7 days, exactly like replying in an `@mention`
+thread. The reply is enqueued as a follow-up turn on that session (re-spawning it from a snapshot if
+it had gone idle), and the agent posts its response in-thread when the turn finishes. A reply that
+arrives while the run is still starting is held and queued right after the run's own first prompt. A
+follow-up does not need to match the trigger condition — conditions gate new runs, not replies that
+continue an existing thread. If a reply races the very first trigger before its run exists, it falls
+back to an ephemeral "a run is already active" notice (reason `concurrent_run_active`); a reply
+after 7 idle days starts a fresh run.
 
 These automation follow-ups also forward text only. Attachments on a thread reply are not delivered
 to the session.
@@ -528,10 +539,10 @@ Event-driven automations use concurrency keys instead. For inbound webhooks, ret
 `idempotencyKey` can overlap. Deliveries that share a `sessionKey` are keyed by it: a later one
 continues the first run's session rather than overlapping it.
 
-Slack Message triggers key concurrency by thread. Replies in a thread are not skipped — for 7 days
-after the thread's first trigger they continue the same session (during the run and after it
-finishes), routed to that session as follow-up prompts (see the **Run feedback** note under
-[Slack Message Triggers](#slack-message-triggers)).
+Slack Message triggers key concurrency by thread. Replies in a thread are not skipped — until the
+session has been idle for 7 days they continue the same session (while the run starts, during it,
+and after it finishes), routed to that session as follow-up prompts (see the **Run feedback** note
+under [Slack Message Triggers](#slack-message-triggers)).
 
 This prevents overlapping sessions from interfering with each other on the same repository.
 

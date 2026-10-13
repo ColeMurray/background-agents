@@ -44,6 +44,7 @@ const linkedRunRow: EnrichedRunRow = {
   repo_id: 42,
   base_branch: "main",
   environment_id: "env_run_snapshot",
+  first_prompt_pending: 0,
   session_title: "Confidential session title",
   artifact_summary: "Confidential pull request summary",
 };

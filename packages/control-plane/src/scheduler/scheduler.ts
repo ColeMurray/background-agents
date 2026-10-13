@@ -106,9 +106,12 @@ import {
 import type { RequestContext } from "../routes/shared";
 import {
   continueSession,
+  releaseHeldPrompts,
   steeringActor,
+  sweepHeldPrompts,
   type ContinuationOutcome,
   type ContinuationPolicy,
+  type SessionContinuityDeps,
   type SteeringActor,
 } from "./session-continuity";
 import { enqueueSessionPrompt } from "./session-prompt";
@@ -265,6 +268,29 @@ export class AutomationExecutionUnauthorizedError extends Error {
   constructor(readonly reason = "execution_authorization_denied") {
     super("Automation execution principal is not authorized");
     this.name = "AutomationExecutionUnauthorizedError";
+  }
+}
+
+/**
+ * Raised when the session a webhook sessionKey continues does not take the follow-up.
+ * The sender sees the refusal instead of the delivery starting over in a fresh session.
+ */
+export class SessionFollowUpRefusedError extends Error {
+  readonly invocationId: string;
+  /** The session's response status; null when it could not be reached. */
+  readonly status: number | null;
+  readonly code: string | null;
+
+  constructor(refusal: Extract<ContinuationOutcome, { kind: "refused" }>) {
+    super(
+      refusal.status === null
+        ? "The session could not be reached for this follow-up"
+        : `The session refused this follow-up with status ${refusal.status}`
+    );
+    this.name = "SessionFollowUpRefusedError";
+    this.invocationId = refusal.invocationId;
+    this.status = refusal.status;
+    this.code = refusal.code;
   }
 }
 
@@ -517,6 +543,8 @@ export class Scheduler {
       execution_deadline_at: null,
       completed_at: null,
       created_at: now,
+      // Raised by the claim, until the run's first prompt is queued.
+      first_prompt_pending: 0,
       repo_owner: null,
       repo_name: null,
       repo_id: null,
@@ -726,6 +754,7 @@ export class Scheduler {
         );
         child.status = "running";
         child.session_id = sessionId;
+        await this.releaseFollowUpsHeldDuringLaunch(store, child);
       } catch (e) {
         const message = e instanceof Error ? e.message : String(e);
         this.log.error("Failed to launch automation run", {
@@ -851,8 +880,9 @@ export class Scheduler {
     let failed = 0;
     let launchedChildren = 0;
 
-    // 1. Recovery sweep
+    // 1. Recovery sweeps
     await this.recoverySweep(store);
+    await sweepHeldPrompts(this.continuityDeps(store), now);
 
     // 2. Process overdue automations, bounded by the per-tick child budget.
     const overdue = await store.getOverdueAutomations(now, MAX_PER_TICK);
@@ -1223,20 +1253,16 @@ export class Scheduler {
     let concurrencySkipped = false;
     let slackSessionInstructions: string | undefined;
     let slackSettingsLoaded = false;
-    const continuity = { store, env: this.env, log: this.log };
-    const settle = (outcome: ContinuationOutcome): boolean => {
-      switch (outcome.kind) {
-        case "steered":
-          steered++;
-          invocationIds.push(outcome.invocationId);
-          return true;
-        case "skipped":
-          skipped++;
-          if (outcome.invocationId) invocationIds.push(outcome.invocationId);
-          return true;
-        case "fall_through":
-          return false;
+    const continuity = this.continuityDeps(store);
+    const recordContinuation = (
+      outcome: Extract<ContinuationOutcome, { kind: "steered" | "skipped" }>
+    ): void => {
+      if (outcome.kind === "steered") {
+        steered++;
+      } else {
+        skipped++;
       }
+      if (outcome.invocationId) invocationIds.push(outcome.invocationId);
     };
 
     for (const automation of candidates) {
@@ -1259,22 +1285,21 @@ export class Scheduler {
       // the run finished should still land in the same session. Its reply posts
       // back in-thread via the slack completion callback, exactly like an
       // interactive follow-up.
-      // No steerable session (outside the window, no session yet, or a session that
-      // refuses the prompt) falls through: like the @mention path's stale-session
-      // recovery, the reply is re-evaluated as a potential new trigger below.
-      if (
-        event.source === "slack" &&
-        settle(
-          await continueSession(
-            continuity,
-            automation,
-            event.concurrencyKey,
-            now,
-            this.slackContinuation(event, automation, () => slackSteeringActor(event))
-          )
-        )
-      ) {
-        continue;
+      // No session active within the window, or one that refuses the reply, falls
+      // through: like the @mention path's stale-session recovery, the reply is
+      // re-evaluated as a potential new trigger below.
+      if (event.source === "slack") {
+        const outcome = await continueSession(
+          continuity,
+          automation,
+          event.concurrencyKey,
+          now,
+          this.slackContinuation(event, automation, () => slackSteeringActor(event))
+        );
+        if (outcome.kind === "steered" || outcome.kind === "skipped") {
+          recordContinuation(outcome);
+          continue;
+        }
       }
 
       // Trigger conditions gate starting a NEW run.
@@ -1293,20 +1318,19 @@ export class Scheduler {
         continue;
       }
 
-      if (
-        event.source === "webhook" &&
-        event.sessionKey &&
-        settle(
-          await continueSession(
-            continuity,
-            automation,
-            event.concurrencyKey,
-            now,
-            this.webhookContinuation(event, automation, store)
-          )
-        )
-      ) {
-        continue;
+      if (event.source === "webhook" && event.sessionKey) {
+        const outcome = await continueSession(
+          continuity,
+          automation,
+          event.concurrencyKey,
+          now,
+          this.webhookContinuation(event, automation, store)
+        );
+        if (outcome.kind === "refused") throw new SessionFollowUpRefusedError(outcome);
+        if (outcome.kind !== "fall_through") {
+          recordContinuation(outcome);
+          continue;
+        }
       }
 
       if (event.source === "slack" && !slackSettingsLoaded) {
@@ -1316,9 +1340,9 @@ export class Scheduler {
 
       // Event firings are invocations of 1 (or 0 children when skipped): same
       // per-key concurrency, same trigger_key dedup — both now enforced on the
-      // invocation, atomically. The overlap skip also covers the brief slack
-      // window before a run has created its session (no steerable row yet), so
-      // a reply racing the initial trigger gets the "already active" notice
+      // invocation, atomically. Once a run exists, continuity holds a reply that
+      // races its launch; the overlap skip covers a reply racing the initial
+      // trigger before its run exists, which gets the "already active" notice
       // instead of a second session.
       const instructions = appendSlackSessionInstructions(
         automation.instructions,
@@ -1894,6 +1918,38 @@ export class Scheduler {
     await initializeSession(this.env, sessionInput, ctx);
   }
 
+  private continuityDeps(store: AutomationStore): SessionContinuityDeps {
+    return {
+      store,
+      env: this.env,
+      log: this.log,
+      db: this.db,
+      backgroundJobs: this.backgroundJobs,
+    };
+  }
+
+  /**
+   * Follow-ups that continued this run's session while it launched were held so they
+   * land after its first prompt, which is now queued. Never throws: the launch itself
+   * succeeded, and the held-prompt sweep retries a failed release.
+   */
+  private async releaseFollowUpsHeldDuringLaunch(
+    store: AutomationStore,
+    run: AutomationRunRow
+  ): Promise<void> {
+    try {
+      await store.markRunFirstPromptQueued(run.id);
+      await releaseHeldPrompts(this.continuityDeps(store), run);
+    } catch (error) {
+      this.log.error("Failed to release follow-ups held during launch", {
+        event: "scheduler.held_prompt_release_failed",
+        automation_id: run.automation_id,
+        run_id: run.id,
+        error: error instanceof Error ? error : new Error(String(error)),
+      });
+    }
+  }
+
   private async sendPromptToSession(
     sessionId: string,
     automation: AutomationRow,
@@ -1952,14 +2008,12 @@ export class Scheduler {
   }
 
   /**
-   * Route a follow-up slack message in a thread to its run's existing session as
-   * the next turn — whether that run is still in flight, completed, or failed —
-   * so every reply in the thread continues the same session, like the interactive
-   * @mention path. If the session has gone idle the prompt re-spawns/restores it
-   * in the background; its reply posts back in-thread via the slack completion
-   * callback (source "slack"), exactly like an interactive follow-up. Returns
-   * false when the enqueue fails, so the caller can fall through to the trigger
-   * path (stale-session recovery).
+   * Continuity for a follow-up slack message in a thread: it becomes the next turn
+   * of its run's existing session — whether that run is still in flight, completed,
+   * or failed — so every reply in the thread continues the same session, like the
+   * interactive @mention path. If the session has gone idle the prompt
+   * re-spawns/restores it in the background; its reply posts back in-thread via the
+   * slack completion callback (source "slack"), exactly like an interactive follow-up.
    */
   private slackContinuation(
     event: SlackAutomationEvent,
@@ -2014,6 +2068,11 @@ export class Scheduler {
     };
   }
 
+  /**
+   * Continuity for a webhook delivery with a sessionKey: its context block becomes the
+   * next turn of the session, sent as the automation's executor (whom the run acts as).
+   * No callback context, so the run's own status is untouched.
+   */
   private webhookContinuation(
     event: WebhookAutomationEvent,
     automation: AutomationRow,

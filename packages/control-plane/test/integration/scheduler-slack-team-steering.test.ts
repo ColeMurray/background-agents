@@ -104,16 +104,14 @@ async function seedSteerableSession(
       now
     )
     .run();
-  await seedRun(
-    makeRunRow(automationId, {
-      id: `run-${sessionId}`,
-      session_id: sessionId,
-      status: "completed",
-      completed_at: now,
-    }),
-    { concurrencyKey: THREAD_KEY }
-  );
-  return { automationId, sessionId };
+  const run = makeRunRow(automationId, {
+    id: `run-${sessionId}`,
+    session_id: sessionId,
+    status: "completed",
+    completed_at: now,
+  });
+  await seedRun(run, { concurrencyKey: THREAD_KEY });
+  return { automationId, sessionId, invocationId: run.invocation_id };
 }
 
 async function expectOriginalRunOnly(automationId: string) {
@@ -168,7 +166,7 @@ describe("Scheduler Slack team steering (real D1)", () => {
       const sessionGet = vi.spyOn(SessionIndexStore.prototype, "get");
       const { scheduler, requests } = createSteeringScheduler("off");
       const result = await scheduler.event(slackEvent(SESSION_OWNER));
-      expect(result).toEqual({ triggered: 0, skipped: 0, steered: 0, invocationIds: [] });
+      expect(result).toEqual({ triggered: 0, skipped: 1, steered: 0, invocationIds: [] });
       expect(sessionGet).toHaveBeenCalledWith(sessionId);
       expect(requests).not.toHaveBeenCalled();
       await expectOriginalRunOnly(automationId);
@@ -178,7 +176,11 @@ describe("Scheduler Slack team steering (real D1)", () => {
   it.each(["off", "shadow", "on"] as const)(
     "preserves workspace collaboration-only steering in %s mode",
     async (mode) => {
-      const { automationId } = await seedSteerableSession("session-steering", null, "workspace");
+      const { automationId, invocationId } = await seedSteerableSession(
+        "session-steering",
+        null,
+        "workspace"
+      );
       await new TeamChannelBindingStore(env.DB).remove(SESSION_TEAM, "slack", "C1", {
         actorUserId: SESSION_OWNER,
         requestId: "workspace-steering-fixture",
@@ -186,12 +188,11 @@ describe("Scheduler Slack team steering (real D1)", () => {
       await assignCustomRole(MEMBER, ["sessions.collaborate"]);
       const { scheduler, requests } = createSteeringScheduler(mode);
       const result = await scheduler.event(slackEvent(MEMBER));
-      expect(result).toEqual({
-        triggered: 0,
-        skipped: 0,
-        steered: mode === "on" ? 0 : 1,
-        invocationIds: [],
-      });
+      expect(result).toEqual(
+        mode === "on"
+          ? { triggered: 0, skipped: 1, steered: 0, invocationIds: [] }
+          : { triggered: 0, skipped: 0, steered: 1, invocationIds: [invocationId] }
+      );
       expect(requests).toHaveBeenCalledTimes(mode === "on" ? 0 : 1);
       await expectOriginalRunOnly(automationId);
     }
@@ -200,23 +201,29 @@ describe("Scheduler Slack team steering (real D1)", () => {
   it.each([SESSION_OWNER, MEMBER])(
     "revalidates %s participation across archive and membership removal",
     async (actor) => {
-      const { automationId, sessionId } = await seedSteerableSession();
+      const { automationId, sessionId, invocationId } = await seedSteerableSession();
       const collaborators = new SessionCollaboratorStore(env.DB);
       if (actor === MEMBER) await collaborators.add(sessionId, actor, SESSION_OWNER);
       const memberships = vi.spyOn(TeamMembershipStore.prototype, "listForUser");
       const { scheduler, requests } = createSteeringScheduler();
+      const steered = {
+        triggered: 0,
+        skipped: 0,
+        steered: 1,
+        invocationIds: [invocationId],
+      };
       const initial = await scheduler.event(slackEvent(actor));
-      expect(initial).toEqual({ triggered: 0, skipped: 0, steered: 1, invocationIds: [] });
+      expect(initial).toEqual(steered);
       await env.DB.prepare("UPDATE teams SET archived_at = 1 WHERE id IN (?, ?)")
         .bind(SESSION_TEAM, AUTOMATION_TEAM)
         .run();
       const archived = await scheduler.event(slackEvent(actor));
-      expect(archived).toEqual({ triggered: 0, skipped: 0, steered: 1, invocationIds: [] });
+      expect(archived).toEqual(steered);
       await env.DB.prepare("DELETE FROM team_memberships WHERE team_id = ? AND user_id = ?")
         .bind(SESSION_TEAM, actor)
         .run();
       const departed = await scheduler.event(slackEvent(actor));
-      expect(departed).toEqual({ triggered: 0, skipped: 0, steered: 0, invocationIds: [] });
+      expect(departed).toEqual({ triggered: 0, skipped: 1, steered: 0, invocationIds: [] });
       expect(memberships).toHaveBeenCalledTimes(3);
       expect(requests).toHaveBeenCalledTimes(2);
       expect(await requests.mock.calls[0][0].json()).toMatchObject({
@@ -232,12 +239,17 @@ describe("Scheduler Slack team steering (real D1)", () => {
   it.each(["suspended", "role revoked"])(
     "revalidates actor authority after %s",
     async (scenario) => {
-      const { automationId } = await seedSteerableSession();
+      const { automationId, invocationId } = await seedSteerableSession();
       const authorization = vi.spyOn(AuthorizationService.prototype, "getEffectiveAuthorization");
       const sessionGet = vi.spyOn(SessionIndexStore.prototype, "get");
       const { scheduler, requests } = createSteeringScheduler();
       const initial = await scheduler.event(slackEvent(SESSION_OWNER));
-      expect(initial).toEqual({ triggered: 0, skipped: 0, steered: 1, invocationIds: [] });
+      expect(initial).toEqual({
+        triggered: 0,
+        skipped: 0,
+        steered: 1,
+        invocationIds: [invocationId],
+      });
       sessionGet.mockClear();
       if (scenario === "suspended") {
         await env.DB.prepare("UPDATE users SET suspended_at = 1 WHERE id = ?")
@@ -249,7 +261,7 @@ describe("Scheduler Slack team steering (real D1)", () => {
           .run();
       }
       const revoked = await scheduler.event(slackEvent(SESSION_OWNER));
-      expect(revoked).toEqual({ triggered: 0, skipped: 0, steered: 0, invocationIds: [] });
+      expect(revoked).toEqual({ triggered: 0, skipped: 1, steered: 0, invocationIds: [] });
       expect(authorization).toHaveBeenCalledTimes(2);
       expect(sessionGet).not.toHaveBeenCalled();
       expect(requests).toHaveBeenCalledTimes(1);
@@ -261,7 +273,7 @@ describe("Scheduler Slack team steering (real D1)", () => {
     const { automationId, sessionId } = await seedSteerableSession();
     const { scheduler, requests } = createSteeringScheduler("off");
     const result = await scheduler.event(slackEvent(WORKSPACE_OWNER));
-    expect(result).toEqual({ triggered: 0, skipped: 0, steered: 0, invocationIds: [] });
+    expect(result).toEqual({ triggered: 0, skipped: 1, steered: 0, invocationIds: [] });
     expect(requests).not.toHaveBeenCalled();
     const audits = await env.DB.prepare(
       "SELECT principal_kind, actor_user_id_snapshot, resource_id, team_id FROM authorization_audit_events WHERE action = 'session.private_break_glass'"
@@ -299,7 +311,12 @@ describe("Scheduler Slack team steering (real D1)", () => {
     const sessionGet = vi.spyOn(SessionIndexStore.prototype, "get");
     const { scheduler, requests } = createSteeringScheduler();
     const result = await scheduler.event(slackEvent(MEMBER));
-    expect(result).toEqual({ triggered: 0, skipped: 0, steered: 1, invocationIds: [] });
+    expect(result).toEqual({
+      triggered: 0,
+      skipped: 2,
+      steered: 1,
+      invocationIds: [targets[1]!.invocationId],
+    });
     expect(requests).toHaveBeenCalledTimes(1);
     expect(requests.mock.calls[0][1]).toBe("2-allowed");
     expect(authorization).toHaveBeenCalledTimes(1);
