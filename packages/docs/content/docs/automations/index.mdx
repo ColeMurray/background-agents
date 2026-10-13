@@ -184,13 +184,13 @@ When the linked session is readable, click **View session** on a row to open its
 
 ## Concurrency
 
-Scheduled and manual triggers allow one active run per automation: a schedule slot that comes due during an active run is recorded as **Skipped**, and **Trigger Now** is rejected. Event-driven triggers use per-event concurrency keys, so unrelated events (for example two different pull requests) can run at the same time. The scheduled rules are in [Schedules](/automations/schedules#one-active-run-at-a-time); event rules are on each trigger's page.
+Scheduled and manual triggers admit up to the automation's **Concurrent runs** setting (default 1) at once: a schedule slot that comes due while the automation is at that bound is recorded as **Skipped**, and **Trigger Now** is rejected. Event-driven triggers use per-event concurrency keys, so unrelated events (for example two different pull requests) can run at the same time. The scheduled rules are in [Schedules](/automations/schedules#concurrent-runs); event rules are on each trigger's page.
 
 ## Auto-pause after failures
 
 Scheduled execution authorization denial is separate from the failure threshold: it records a **Skipped** invocation, pauses the automation immediately, and clears the next run time without adding a failure strike. Restore the required executor/team/target access or [reassign the executor](#reassigning-an-executor), then click **Resume**. Restoring access or reassigning alone does not resume the schedule. Generic event execution-authorization denial increments the event response's `skipped` count without pausing the automation or recording a run-history invocation. GitHub's pre-admission repository-grant denial instead records **Unauthorized** as described above; it also counts as skipped in the event response and neither adds a failure strike nor resets existing failures.
 
-An automation that fails three consecutive times is paused automatically. Scheduled and manual runs both count. Runs that outlive their execution budget count as failures too. Skipped firings count neither way.
+An automation that fails five consecutive times is paused automatically. Scheduled and manual runs both count. Runs that outlive their execution budget count as failures too. Skipped firings count neither way. The threshold allows for concurrency: with **Concurrent runs** above 1, one shared cause can fail every firing in flight at once, with no success between them to reset the counter.
 
 Click **Resume** to re-enable the automation. Resuming resets the failure counter and, for schedules, computes the next run from the current moment. A successful **Trigger Now** while paused also resets the counter without resuming.
 
@@ -208,8 +208,8 @@ Each run's session has an execution budget: the sandbox timeout in effect for th
 | Minimum schedule interval                    | 15 minutes                                                                                                    |
 | Inbound webhook payload                      | 64 KB                                                                                                         |
 | Sentry webhook payload                       | 256 KB                                                                                                        |
-| Concurrent runs per automation               | 1 for scheduled and manual triggers                                                                           |
-| Consecutive failures before auto-pause       | 3                                                                                                             |
+| Concurrent runs per automation               | 1 to 10, default 1 (scheduled and manual triggers)                                                            |
+| Consecutive failures before auto-pause       | 5                                                                                                             |
 | Run execution timeout                        | The session's execution budget (2 hours by default), plus a 100-minute sweep grace before `execution_timeout` |
 
 ## Next steps

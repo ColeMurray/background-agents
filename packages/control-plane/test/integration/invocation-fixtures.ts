@@ -1,5 +1,6 @@
 /** Row builders shared by the automation invocation integration suites. */
 
+import { DEFAULT_AUTOMATION_MAX_CONCURRENT_RUNS } from "@open-inspect/shared/types/automations";
 import type {
   AutomationInvocationRow,
   AutomationRow,
@@ -20,6 +21,7 @@ export function makeAutomation(overrides?: Partial<AutomationRow>): AutomationRo
     model: "anthropic/claude-sonnet-4-6",
     reasoning_effort: null,
     enabled: 1,
+    max_concurrent_runs: DEFAULT_AUTOMATION_MAX_CONCURRENT_RUNS,
     next_run_at: now + 86_400_000,
     consecutive_failures: 0,
     created_by: "user-1",

@@ -5,6 +5,7 @@ import { act, renderHook, waitFor } from "@testing-library/react";
 import { SWRConfig } from "swr";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { AutomationListItem, ListAutomationsResponse } from "@open-inspect/shared";
+import { DEFAULT_AUTOMATION_MAX_CONCURRENT_RUNS } from "@open-inspect/shared/types/automations";
 import { SwrFetchError } from "@/lib/swr-fetch-error";
 import { useAutomations } from "./use-automations";
 
@@ -24,6 +25,7 @@ function automation(id: string, name: string): AutomationListItem {
     model: "anthropic/claude-sonnet-4-6",
     reasoningEffort: null,
     enabled: true,
+    maxConcurrentRuns: DEFAULT_AUTOMATION_MAX_CONCURRENT_RUNS,
     nextRunAt: null,
     consecutiveFailures: 0,
     createdBy: "user-1",

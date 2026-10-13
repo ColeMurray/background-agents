@@ -254,7 +254,8 @@ Schedule recurring tasks or react to external events — no human in the loop:
 - **Inbound webhooks** — JSONPath condition filters to gate which payloads spawn sessions
 - **Multi-repo fan-out** — One scheduled automation can run across up to 10 repositories, opening a
   separate session and pull request for each
-- Auto-pause after 3 consecutive failures, manual trigger button, full run history
+- Auto-pause after 5 consecutive failures, configurable concurrent runs per automation, manual
+  trigger button, full run history
 
 See **[docs/AUTOMATIONS.md](docs/AUTOMATIONS.md)** for setup instructions.
 
