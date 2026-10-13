@@ -5,11 +5,11 @@ export interface AuthError {
   reason: string;
   status: 401 | 413 | 500;
   /**
-   * Which scheme was attempted and failed. A per-service attempt is terminal;
-   * "none" means no recognized credential was presented at all, and the
-   * router may still try sandbox auth on sandbox routes.
+   * Which scheme was attempted and failed. A per-service or access-token
+   * attempt is terminal; "none" means no recognized credential was presented
+   * at all, and the router may still try sandbox auth on sandbox routes.
    */
-  failedScheme: "per-service" | "browser-session" | "none";
+  failedScheme: "per-service" | "browser-session" | "access-token" | "none";
 }
 
 export type AuthResult =
