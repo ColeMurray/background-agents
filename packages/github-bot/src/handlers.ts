@@ -11,6 +11,7 @@ import { requestedReviewerPayloadSchema } from "./payload-schemas";
 import { containsBotMention, stripBotMention } from "./github-mention";
 import { parseInlinePromptFlags } from "@open-inspect/shared/inline-prompt-flags";
 import { startSession, type HandlerResult } from "./session-startup";
+import { resolveThreadSuggestionTarget } from "./suggested-changes";
 
 export type { HandlerResult } from "./session-startup";
 
@@ -192,9 +193,12 @@ export async function handleReviewComment(
         commentBody: inlineFlags.ok ? inlineFlags.text : "",
         commenter: sender.login,
         isPublic: !repo.private,
-        filePath: comment.path,
-        diffHunk: comment.diff_hunk,
-        commentId: comment.id,
+        reviewThread: {
+          rootCommentId: comment.in_reply_to_id ?? comment.id,
+          path: comment.path,
+          diffHunk: comment.diff_hunk,
+          suggestionTarget: resolveThreadSuggestionTarget(comment),
+        },
         commentActionInstructions: config.commentActionInstructions,
       }),
   });
