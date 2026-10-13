@@ -245,8 +245,8 @@ describe("browser Git author attribution", () => {
                 },
         });
       } finally {
-        await closeWebSocket(client);
-        await closeWebSocket(sandbox!);
+        await closeWebSocket(client, { bestEffort: true });
+        await closeWebSocket(sandbox!, { bestEffort: true });
       }
     }
   );

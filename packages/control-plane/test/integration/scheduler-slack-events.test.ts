@@ -323,7 +323,7 @@ describe("Scheduler slack event handling (integration)", () => {
         expect(second?.author).toEqual({ userId: "slack:U1", gitIdentity: { mode: "agent-only" } });
         expect(await fetchRuns(automationId)).toHaveLength(1);
       } finally {
-        await closeWebSocket(sandbox!);
+        await closeWebSocket(sandbox!, { bestEffort: true });
       }
     }
   );
