@@ -16,12 +16,14 @@ import { useSessionDiffPreferences, type DiffStyle } from "@/hooks/use-session-d
 import { sessionDiffKey } from "@/hooks/use-session-diffs";
 import { useDiffFileNavigation } from "@/hooks/use-diff-file-navigation";
 import { usePanelWidth } from "@/hooks/use-panel-width";
+import { isMarkdownPreviewPath, reconstructMarkdownDocument } from "@/lib/markdown-diff-document";
 import { parseDiffErrorBody } from "@/lib/session-diffs";
 import type { DiffSelection, ResolvedDiffSelection } from "@/lib/session-diffs";
 import { browserApiFetch, type BrowserApiPath } from "@/lib/browser-api-fetch";
 import { cn } from "@/lib/utils";
 import type { SessionCapabilities } from "@/lib/session-capabilities";
 import { DiffRetryNotice } from "@/components/diff-retry-notice";
+import { SafeMarkdown } from "@/components/safe-markdown";
 import { FilesChangedSection } from "@/components/sidebar/files-changed-section";
 import { BackIcon, ChevronRightIcon, FileIcon, SidebarIcon } from "@/components/ui/icons";
 
@@ -176,12 +178,18 @@ function ChangesPanelToolbar({
   onDiffStyleChange,
   wrap,
   onWrapChange,
+  markdownPreview = false,
+  preview = false,
+  onPreviewChange,
 }: {
   allowSplit: boolean;
   activeDiffStyle: DiffStyle;
   onDiffStyleChange: (style: DiffStyle) => void;
   wrap: boolean;
   onWrapChange: (wrap: boolean) => void;
+  markdownPreview?: boolean;
+  preview?: boolean;
+  onPreviewChange?: (preview: boolean) => void;
 }) {
   return (
     <div className="flex flex-wrap items-center gap-2 border-b border-border-muted px-4 py-2">
@@ -190,17 +198,20 @@ function ChangesPanelToolbar({
           <button
             key={style}
             type="button"
-            aria-pressed={activeDiffStyle === style}
+            aria-pressed={!preview && activeDiffStyle === style}
             disabled={style === "split" && !allowSplit}
             title={
               style === "split" && !allowSplit
                 ? "Split needs more code space. On desktop, widen the pane or hide the file list."
                 : undefined
             }
-            onClick={() => onDiffStyleChange(style)}
+            onClick={() => {
+              onPreviewChange?.(false);
+              onDiffStyleChange(style);
+            }}
             className={cn(
               "rounded-sm px-2.5 py-1 text-xs disabled:cursor-not-allowed disabled:opacity-40",
-              activeDiffStyle === style
+              !preview && activeDiffStyle === style
                 ? "bg-accent-muted text-foreground"
                 : "text-muted-foreground hover:bg-muted"
             )}
@@ -209,6 +220,21 @@ function ChangesPanelToolbar({
           </button>
         ))}
       </div>
+      {markdownPreview && (
+        <div role="group" className="inline-flex" aria-label="Markdown preview">
+          <button
+            type="button"
+            aria-pressed={preview}
+            onClick={() => onPreviewChange?.(!preview)}
+            className={cn(
+              "rounded-sm px-2.5 py-1 text-xs",
+              preview ? "bg-accent-muted text-foreground" : "text-muted-foreground hover:bg-muted"
+            )}
+          >
+            Preview
+          </button>
+        </div>
+      )}
       <label className="ml-auto flex items-center gap-1.5 text-xs text-muted-foreground">
         <input
           type="checkbox"
@@ -219,6 +245,27 @@ function ChangesPanelToolbar({
         Wrap lines
       </label>
     </div>
+  );
+}
+
+const PREVIEW_DELETED_MESSAGE = "This file was deleted, so there is no document to preview.";
+const PREVIEW_EMPTY_MESSAGE = "This document is empty.";
+const PREVIEW_UNAVAILABLE_MESSAGE =
+  "Preview is unavailable because the captured changes do not include the full document.";
+
+function MarkdownPreview({ patch }: { patch: string }) {
+  const reconstructed = reconstructMarkdownDocument(patch);
+  if (reconstructed.status === "deleted") {
+    return <PanelMessage>{PREVIEW_DELETED_MESSAGE}</PanelMessage>;
+  }
+  if (reconstructed.status === "empty") return <PanelMessage>{PREVIEW_EMPTY_MESSAGE}</PanelMessage>;
+  if (reconstructed.status === "unavailable") {
+    return <PanelMessage>{PREVIEW_UNAVAILABLE_MESSAGE}</PanelMessage>;
+  }
+  return (
+    <article aria-label="Markdown preview" className="min-w-0 max-w-full px-4 py-4">
+      <SafeMarkdown content={reconstructed.content} untrustedDocument />
+    </article>
   );
 }
 
@@ -248,6 +295,7 @@ export function SessionChangesPanel({
   const fileListId = useId();
   // Until the viewer toggles it, the file list opens only when nothing else lists the files.
   const [fileListChoice, setFileListChoice] = useState<boolean | null>(null);
+  const [previewSelected, setPreviewSelected] = useState(false);
   const isFileListOpen = fileListChoice ?? (!mobile && !sidebarShowsFileList);
   const codeWidth = usePanelWidth(codeColumnRef, { enabled: !mobile });
   const { resolvedTheme } = useTheme();
@@ -278,10 +326,12 @@ export function SessionChangesPanel({
   const effectiveDiffStyle = allowSplit ? diffStyle : "unified";
   const selectedPath = selected?.file.path;
   const selectedRepositoryPosition = selected?.repository.position;
+  const markdownPreview = selectedPath ? isMarkdownPreviewPath(selectedPath) : false;
+  const showPreview = previewSelected && markdownPreview;
 
   useEffect(() => {
     if (codeScrollRef.current) codeScrollRef.current.scrollTop = 0;
-  }, [selectedPath, selectedRepositoryPosition]);
+  }, [selectedPath, selectedRepositoryPosition, showPreview]);
 
   useEffect(() => {
     panelRef.current?.focus();
@@ -383,18 +433,33 @@ export function SessionChangesPanel({
             onDiffStyleChange={setDiffStyle}
             wrap={wrap}
             onWrapChange={setWrap}
+            markdownPreview={markdownPreview}
+            preview={showPreview}
+            onPreviewChange={setPreviewSelected}
           />
           <div ref={codeScrollRef} className="min-h-0 min-w-0 flex-1 overflow-auto">
             {resolved.status === "missing" ? (
               <PanelMessage>This file is no longer part of the latest changes.</PanelMessage>
+            ) : showPreview && resolved.file.renderState !== "renderable" ? (
+              <PanelMessage>Preview is unavailable. {fileMessage(resolved.file)}</PanelMessage>
             ) : resolved.file.renderState !== "renderable" ? (
               <PanelMessage>{fileMessage(resolved.file)}</PanelMessage>
+            ) : showPreview && resolved.file.status === "deleted" ? (
+              <PanelMessage>{PREVIEW_DELETED_MESSAGE}</PanelMessage>
             ) : isLoading ? (
-              <PanelMessage>Loading patch…</PanelMessage>
+              <PanelMessage>{showPreview ? "Loading preview…" : "Loading patch…"}</PanelMessage>
             ) : stale ? (
               <PanelMessage>Refreshing the latest revision…</PanelMessage>
             ) : patchError ? (
-              <PanelMessage>Unable to load this patch.</PanelMessage>
+              <PanelMessage>
+                {showPreview ? "Unable to load this preview." : "Unable to load this patch."}
+              </PanelMessage>
+            ) : showPreview ? (
+              patch ? (
+                <MarkdownPreview patch={patch} />
+              ) : (
+                <PanelMessage>{PREVIEW_UNAVAILABLE_MESSAGE}</PanelMessage>
+              )
             ) : patch ? (
               <PierreDiffRenderer
                 patch={patch}

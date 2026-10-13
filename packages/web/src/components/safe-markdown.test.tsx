@@ -173,3 +173,74 @@ describe("SafeMarkdown links", () => {
     expect(link).toHaveAttribute("target", "_blank");
   });
 });
+
+describe("SafeMarkdown untrusted documents", () => {
+  it("renders formatting without executing html, unsafe urls, relative links, or images", () => {
+    const onOpen = vi.fn();
+    const { container } = render(
+      <SessionFileLinksProvider manifest={manifest} onOpen={onOpen}>
+        <SafeMarkdown
+          untrustedDocument
+          content={[
+            "# Details",
+            "",
+            "A **bold** paragraph with ~~gone~~ text.",
+            "",
+            "- one",
+            "",
+            "> quoted",
+            "",
+            "`inline`",
+            "",
+            "```ts",
+            "const n = 1;",
+            "```",
+            "",
+            "| A | B |",
+            "| - | - |",
+            "| 1 | 2 |",
+            "",
+            "See [docs](https://example.com/docs) and [local](docs/guide.md).",
+            "",
+            "[jump](#details)",
+            "",
+            "[click](javascript:alert(1))",
+            "",
+            "![diagram](./secret.png)",
+            "",
+            "<script>alert(1)</script>",
+            "",
+            '<iframe src="https://evil.example"></iframe>',
+            "",
+          ].join("\n")}
+        />
+      </SessionFileLinksProvider>
+    );
+
+    expect(screen.getByRole("heading", { name: "Details" })).toBeVisible();
+    expect(screen.getByText("bold").tagName).toBe("STRONG");
+    expect(screen.getByText("gone").tagName).toBe("DEL");
+    expect(screen.getByRole("listitem")).toHaveTextContent("one");
+    expect(screen.getByRole("table")).toBeVisible();
+    expect(container.querySelector("pre")).toHaveClass("overflow-x-auto");
+    expect(container.querySelector("blockquote")).toBeTruthy();
+    expect(container.querySelector("script, iframe, img")).toBeNull();
+
+    const external = screen.getByRole("link", { name: "docs" });
+    expect(external).toHaveAttribute("href", "https://example.com/docs");
+    expect(external).toHaveAttribute("target", "_blank");
+    expect(external).toHaveAttribute("rel", "noopener noreferrer nofollow");
+
+    expect(screen.queryByRole("link", { name: "local" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: "click" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "local" })).not.toBeInTheDocument();
+    expect(screen.getByText("local")).toHaveProperty("tagName", "SPAN");
+    expect(screen.getByText("diagram: ./secret.png")).toBeVisible();
+
+    const jump = screen.getByRole("link", { name: "jump" });
+    const heading = screen.getByRole("heading", { name: "Details" });
+    expect(jump).toHaveAttribute("href", `#${heading.id}`);
+    expect(jump).not.toHaveAttribute("target");
+    expect(onOpen).not.toHaveBeenCalled();
+  });
+});

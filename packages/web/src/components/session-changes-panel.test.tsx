@@ -413,3 +413,300 @@ describe("SessionChangesPanel", () => {
     expect(onClose).toHaveBeenCalledOnce();
   });
 });
+
+const MARKDOWN_DOCUMENT = [
+  "# Title",
+  "",
+  "unchanged before",
+  "",
+  "- alpha",
+  "- beta",
+  "",
+  "> quote",
+  "",
+  "```ts",
+  "const value = 1;",
+  "```",
+  "",
+  "| A | B |",
+  "| - | - |",
+  "| 1 | 2 |",
+  "",
+  "See [docs](https://example.com/docs), ~~gone~~, and [local](docs/guide.md).",
+  "",
+  "![diagram](./secret.png)",
+  "",
+  "<script>alert(1)</script>",
+  "",
+  "[click](javascript:alert(1))",
+  "",
+].join("\n");
+
+function markdownFilePatch(content: string, path = "README.md"): string {
+  const normalized = content.endsWith("\n") ? content : `${content}\n`;
+  const lines = normalized.slice(0, -1).split("\n");
+  return [
+    `diff --git a/${path} b/${path}`,
+    "new file mode 100644",
+    "index 0000000000000000000000000000000000000000..1111111111111111111111111111111111111111",
+    "--- /dev/null",
+    `+++ b/${path}`,
+    `@@ -0,0 +1,${lines.length} @@`,
+    ...lines.map((line) => `+${line}`),
+    "",
+  ].join("\n");
+}
+
+function markdownSelection(
+  path: string,
+  overrides: {
+    fileId?: string;
+    revisionId?: string;
+    status?: "added" | "modified" | "deleted" | "renamed";
+    renderState?: "renderable" | "binary" | "too_large" | "metadata_only";
+    repoOwner?: string;
+    repoName?: string;
+    position?: number;
+  } = {}
+) {
+  const file = {
+    ...patchFile,
+    id: overrides.fileId ?? "file-md",
+    path,
+    status: overrides.status ?? "modified",
+    renderState: overrides.renderState ?? ("renderable" as const),
+  };
+  const repository = {
+    ...patchRepository,
+    position: overrides.position ?? 0,
+    repoOwner: overrides.repoOwner ?? "acme",
+    repoName: overrides.repoName ?? "web",
+    files: [file, readyRepository.files[1]!],
+  };
+  return {
+    state: { ...state, current: { ...state.current!, repositories: [repository] } },
+    resolved: {
+      status: "ready" as const,
+      revisionId: overrides.revisionId ?? "revision-1",
+      repository,
+      file,
+    },
+  };
+}
+
+describe("SessionChangesPanel markdown preview", () => {
+  it("offers preview only for markdown paths and preserves the diff selection", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(() => Promise.resolve(new Response(markdownFilePatch(MARKDOWN_DOCUMENT))))
+    );
+    const { state: markdownState, resolved } = markdownSelection("docs/Guide.MD");
+    const { rerender } = render(
+      patchPanel({
+        state: markdownState,
+        resolved,
+      })
+    );
+
+    expect(screen.getByText("acme/web")).toBeVisible();
+    expect(screen.getByRole("heading", { name: "docs/Guide.MD" })).toBeVisible();
+    const preview = screen.getByRole("button", { name: "Preview" });
+    preview.focus();
+    await userEvent.keyboard("{Enter}");
+
+    const article = await screen.findByRole("article", { name: "Markdown preview" });
+    expect(article).toHaveTextContent("unchanged before");
+    expect(article).toHaveTextContent("Title");
+    expect(article.querySelector(".prose")).toHaveClass("dark:prose-invert");
+    expect(article.querySelector("pre")).toHaveClass("overflow-x-auto");
+    expect(article.querySelector("table")?.parentElement).toHaveClass("overflow-x-auto");
+    expect(screen.getByRole("heading", { name: "docs/Guide.MD" })).toBeVisible();
+    expect(screen.queryByTestId("diff-renderer")).not.toBeInTheDocument();
+
+    rerender(
+      patchPanel({
+        state: state,
+        resolved: {
+          status: "ready",
+          revisionId: "revision-1",
+          repository: patchRepository,
+          file: patchFile,
+        },
+      })
+    );
+    expect(screen.queryByRole("button", { name: "Preview" })).not.toBeInTheDocument();
+    expect(await screen.findByTestId("diff-renderer")).toBeVisible();
+  });
+
+  it("returns to the saved diff layout without dropping the selection", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(markdownFilePatch("# Notes\n"))));
+    localStorage.setItem("session-changes.diff-style", "split");
+    localStorage.setItem("session-changes.wrap", "false");
+    const { state: markdownState, resolved } = markdownSelection("README.md");
+    render(patchPanel({ state: markdownState, resolved }));
+
+    await userEvent.click(await screen.findByRole("button", { name: "Preview" }));
+    expect(await screen.findByRole("heading", { name: "Notes" })).toBeVisible();
+    expect(screen.queryByTestId("diff-renderer")).not.toBeInTheDocument();
+    expect(localStorage.getItem("session-changes.diff-style")).toBe("split");
+
+    await userEvent.click(screen.getByRole("button", { name: "Preview" }));
+    const renderer = screen.getByTestId("diff-renderer");
+    expect(renderer).toHaveAttribute("data-style", "split");
+    expect(renderer).toHaveAttribute("data-wrap", "false");
+    expect(screen.getByRole("heading", { name: "README.md" })).toBeVisible();
+  });
+
+  it("renders the resulting document and keeps unsafe content inert", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(new Response(markdownFilePatch(MARKDOWN_DOCUMENT, "README.md")))
+    );
+    const { state: markdownState, resolved } = markdownSelection("README.md");
+    render(patchPanel({ state: markdownState, resolved }));
+    await userEvent.click(screen.getByRole("button", { name: "Preview" }));
+
+    const article = await screen.findByRole("article", { name: "Markdown preview" });
+    expect(article).toHaveTextContent("unchanged before");
+    expect(article).not.toHaveTextContent("diff --git");
+    expect(article).not.toHaveTextContent("@@");
+    expect(article.querySelector("script, iframe, img")).toBeNull();
+    expect(screen.queryByRole("link", { name: "local" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: "click" })).not.toBeInTheDocument();
+    const external = screen.getByRole("link", { name: "docs" });
+    expect(external).toHaveAttribute("href", "https://example.com/docs");
+    expect(external).toHaveAttribute("target", "_blank");
+    expect(external).toHaveAttribute("rel", "noopener noreferrer nofollow");
+    expect(screen.getByText("diagram: ./secret.png")).toBeVisible();
+    expect(screen.getByRole("table")).toBeVisible();
+    expect(screen.getByText("gone").tagName).toBe("DEL");
+  });
+
+  it("isolates preview content across files, repositories, and revisions", async () => {
+    const fetchMock = vi.fn(async (url: string) => {
+      if (url.endsWith("/revision-1/files/file-a")) {
+        return new Response(markdownFilePatch("# Alpha\n\nfrom web\n", "README.md"));
+      }
+      if (url.endsWith("/revision-1/files/file-b")) {
+        return new Response(markdownFilePatch("# Beta\n\nfrom docs\n", "README.md"));
+      }
+      if (url.endsWith("/revision-2/files/file-a")) {
+        return new Response(markdownFilePatch("# Gamma\n\nnext revision\n", "README.md"));
+      }
+      return new Response("nope", { status: 500 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const first = markdownSelection("README.md", { fileId: "file-a" });
+    const view = render(patchPanel({ state: first.state, resolved: first.resolved }));
+    await userEvent.click(screen.getByRole("button", { name: "Preview" }));
+    expect(await screen.findByRole("heading", { name: "Alpha" })).toBeVisible();
+
+    const otherRepository = markdownSelection("README.md", {
+      fileId: "file-b",
+      repoOwner: "other",
+      repoName: "docs",
+      position: 1,
+    });
+    view.rerender(patchPanel({ state: otherRepository.state, resolved: otherRepository.resolved }));
+    expect(screen.queryByRole("heading", { name: "Alpha" })).not.toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: "Beta" })).toBeVisible();
+    expect(screen.getByText("other/docs")).toBeVisible();
+    expect(screen.queryByText("from web")).not.toBeInTheDocument();
+
+    const nextRevision = markdownSelection("README.md", {
+      fileId: "file-a",
+      revisionId: "revision-2",
+    });
+    view.rerender(patchPanel({ state: nextRevision.state, resolved: nextRevision.resolved }));
+    expect(screen.queryByRole("heading", { name: "Beta" })).not.toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: "Gamma" })).toBeVisible();
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/sessions/session-1/diff/revision-2/files/file-a",
+      expect.objectContaining({ credentials: "same-origin" })
+    );
+  });
+
+  it("explains deleted, empty, incomplete, and non-renderable markdown", async () => {
+    const deletedPatch = [
+      "diff --git a/README.md b/README.md",
+      "deleted file mode 100644",
+      "index 1111111111111111111111111111111111111111..0000000000000000000000000000000000000000",
+      "--- a/README.md",
+      "+++ /dev/null",
+      "@@ -1 +0,0 @@",
+      "-# Gone",
+      "",
+    ].join("\n");
+    const fetchMock = vi.fn().mockResolvedValue(new Response(deletedPatch));
+    vi.stubGlobal("fetch", fetchMock);
+    const deleted = markdownSelection("README.md", { status: "deleted", fileId: "file-deleted" });
+    const view = render(patchPanel({ state: deleted.state, resolved: deleted.resolved }));
+    await userEvent.click(screen.getByRole("button", { name: "Preview" }));
+    expect(
+      await screen.findByText("This file was deleted, so there is no document to preview.")
+    ).toBeVisible();
+    expect(screen.queryByText("# Gone")).not.toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Unified" }));
+    expect(screen.getByTestId("diff-renderer")).toHaveTextContent("# Gone");
+
+    const empty = markdownSelection("EMPTY.md", { status: "added", fileId: "file-empty" });
+    fetchMock.mockResolvedValue(
+      new Response(
+        [
+          "diff --git a/EMPTY.md b/EMPTY.md",
+          "new file mode 100644",
+          "index 0000000000000000000000000000000000000000..e69de29bb2d1d6434b8b29ae775ad8c2e48c5391",
+          "",
+        ].join("\n")
+      )
+    );
+    view.rerender(patchPanel({ state: empty.state, resolved: empty.resolved }));
+    await userEvent.click(screen.getByRole("button", { name: "Preview" }));
+    expect(await screen.findByText("This document is empty.")).toBeVisible();
+
+    const partial = markdownSelection("PARTIAL.md", { fileId: "file-partial" });
+    fetchMock.mockResolvedValue(
+      new Response(
+        ["--- a/PARTIAL.md", "+++ b/PARTIAL.md", "@@ -40,1 +40,1 @@", "-old", "+new", ""].join("\n")
+      )
+    );
+    view.rerender(patchPanel({ state: partial.state, resolved: partial.resolved }));
+    expect(
+      await screen.findByText(
+        "Preview is unavailable because the captured changes do not include the full document."
+      )
+    ).toBeVisible();
+
+    const binary = markdownSelection("NOTES.md", { renderState: "binary", fileId: "file-binary" });
+    fetchMock.mockClear();
+    view.rerender(patchPanel({ state: binary.state, resolved: binary.resolved }));
+    expect(
+      screen.getByText(
+        "Preview is unavailable. This binary file changed, but it does not have a text diff."
+      )
+    ).toBeVisible();
+    expect(fetchMock).not.toHaveBeenCalled();
+    await userEvent.click(screen.getByRole("button", { name: "Unified" }));
+    expect(
+      screen.getByText("This binary file changed, but it does not have a text diff.")
+    ).toBeVisible();
+  });
+
+  it("keeps preview loading and failure states distinct on a narrow layout", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockReturnValue(new Promise(() => {})));
+    const pending = markdownSelection("README.markdown");
+    const view = render(
+      patchPanel({ mobile: true, state: pending.state, resolved: pending.resolved })
+    );
+    expect(screen.getByRole("button", { name: "Split" })).toBeDisabled();
+    await userEvent.click(screen.getByRole("button", { name: "Preview" }));
+    expect(screen.getByText("Loading preview…")).toBeVisible();
+
+    const failed = markdownSelection("README.markdown", { revisionId: "revision-2" });
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response("", { status: 500 })));
+    view.rerender(patchPanel({ mobile: true, state: failed.state, resolved: failed.resolved }));
+    expect(await screen.findByText("Unable to load this preview.")).toBeVisible();
+    expect(screen.getByRole("button", { name: "Previous changed file" })).toBeVisible();
+    expect(screen.getByRole("button", { name: "Show file list" })).toBeVisible();
+  });
+});

@@ -4,10 +4,11 @@ import ReactMarkdown from "react-markdown";
 import rehypeHighlight from "rehype-highlight";
 import rehypeSanitize, { defaultSchema } from "rehype-sanitize";
 import remarkGfm from "remark-gfm";
-import type { ComponentPropsWithoutRef } from "react";
+import { useId, type ComponentPropsWithoutRef, type ReactNode } from "react";
 import type { Root, RootContent } from "mdast";
 import { isPathWithLineReference, isRepositoryFileHref } from "@/lib/diff-file-links";
 import { useSessionFileLinks } from "@/lib/session-file-links";
+import { getSafeExternalUrl } from "@/lib/urls";
 
 // Strict sanitization schema to prevent XSS
 // Based on GitHub's sanitization but even more restrictive
@@ -89,6 +90,12 @@ interface SafeMarkdownProps {
    * agent-authored text opts in; other markdown (e.g. pull request bodies) keeps plain links.
    */
   linkRepositoryFiles?: boolean;
+  /**
+   * Untrusted repository markdown, such as a changes preview. Https links open in a new
+   * tab, in-document anchors stay inside this document, and every other URL is inert so
+   * it cannot navigate the session or load a repository asset. Images are placeholders.
+   */
+  untrustedDocument?: boolean;
 }
 
 function MarkdownLink({ href, children, ...props }: ComponentPropsWithoutRef<"a">) {
@@ -140,13 +147,91 @@ function RepositoryFileMarkdownLink({ href, children, ...props }: ComponentProps
   );
 }
 
+function nodeText(node: ReactNode): string {
+  if (typeof node === "string" || typeof node === "number") return String(node);
+  if (Array.isArray(node)) return node.map(nodeText).join("");
+  if (node && typeof node === "object" && "props" in node) {
+    const props = node.props as { children?: ReactNode };
+    return nodeText(props.children);
+  }
+  return "";
+}
+
+function slugifyHeading(text: string): string {
+  const slug = text
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}\s_-]/gu, "")
+    .trim()
+    .replace(/\s+/g, "-")
+    .replace(/-+/g, "-");
+  return slug || "section";
+}
+
+function scopedFragment(href: string, scope: string): string | null {
+  if (!href.startsWith("#") || href.length < 2) return null;
+  let fragment = href.slice(1);
+  try {
+    fragment = decodeURIComponent(fragment);
+  } catch {
+    return null;
+  }
+  fragment = fragment.toLowerCase();
+  if (!/^[\p{L}\p{N}_-]+$/u.test(fragment)) return null;
+  return `${scope}-${fragment}`;
+}
+
+function httpsDocumentHref(href: string | undefined): string | null {
+  const safe = getSafeExternalUrl(href);
+  if (!safe) return null;
+  return new URL(safe).protocol === "https:" ? safe : null;
+}
+
+type HeadingTag = "h1" | "h2" | "h3" | "h4" | "h5" | "h6";
+
+function DocumentHeading({
+  tag: Tag,
+  children,
+  ...props
+}: ComponentPropsWithoutRef<HeadingTag> & { tag: HeadingTag }) {
+  return <Tag {...props}>{children}</Tag>;
+}
+
 export function SafeMarkdown({
   content,
   className = "",
   baseUrl,
   imageMode = DEFAULT_IMAGE_MODE,
   linkRepositoryFiles = false,
+  untrustedDocument = false,
 }: SafeMarkdownProps) {
+  const anchorScope = useId().replace(/[^A-Za-z0-9_-]/g, "");
+  const headingCounts = new Map<string, number>();
+  const resolvedImageMode = untrustedDocument ? "placeholder" : imageMode;
+
+  function headingId(children: ReactNode): string {
+    const base = slugifyHeading(nodeText(children));
+    const seen = headingCounts.get(base) ?? 0;
+    headingCounts.set(base, seen + 1);
+    const slug = seen === 0 ? base : `${base}-${seen}`;
+    return `${anchorScope}-${slug}`;
+  }
+
+  function renderHeading(
+    tag: HeadingTag,
+    children: ReactNode,
+    props: ComponentPropsWithoutRef<HeadingTag>
+  ) {
+    return (
+      <DocumentHeading
+        tag={tag}
+        {...props}
+        id={untrustedDocument ? headingId(children) : undefined}
+      >
+        {children}
+      </DocumentHeading>
+    );
+  }
+
   return (
     <div
       className={`prose prose-sm dark:prose-invert min-w-0 max-w-none break-words [overflow-wrap:anywhere] ${className}`}
@@ -156,6 +241,32 @@ export function SafeMarkdown({
         rehypePlugins={[rehypeHighlight, [rehypeSanitize, sanitizeSchema]]}
         components={{
           a: ({ href, children, ...props }: ComponentPropsWithoutRef<"a">) => {
+            if (untrustedDocument) {
+              const external = httpsDocumentHref(href);
+              if (external) {
+                return (
+                  <MarkdownLink href={external} {...props}>
+                    {children}
+                  </MarkdownLink>
+                );
+              }
+              const fragment = href ? scopedFragment(href, anchorScope) : null;
+              if (fragment) {
+                return (
+                  <a href={`#${fragment}`} className="text-accent hover:underline">
+                    {children}
+                  </a>
+                );
+              }
+              return (
+                <span
+                  className="text-muted-foreground"
+                  title={href ? `Not opened from preview: ${href}` : undefined}
+                >
+                  {children}
+                </span>
+              );
+            }
             const resolvedHref = resolveMarkdownUrl(href, baseUrl);
             if (!resolvedHref) return <span>{children}</span>;
             if (linkRepositoryFiles && isRepositoryFileHref(href)) {
@@ -176,9 +287,25 @@ export function SafeMarkdown({
               typeof src === "string" ? src : undefined,
               baseUrl
             );
-            if (imageMode !== "placeholder") return null;
+            if (resolvedImageMode !== "placeholder") return null;
             return <span>{resolvedSrc ? `${alt?.trim() || "Image"}: ${resolvedSrc}` : alt}</span>;
           },
+          ...(untrustedDocument
+            ? {
+                h1: ({ children, ...props }: ComponentPropsWithoutRef<"h1">) =>
+                  renderHeading("h1", children, props),
+                h2: ({ children, ...props }: ComponentPropsWithoutRef<"h2">) =>
+                  renderHeading("h2", children, props),
+                h3: ({ children, ...props }: ComponentPropsWithoutRef<"h3">) =>
+                  renderHeading("h3", children, props),
+                h4: ({ children, ...props }: ComponentPropsWithoutRef<"h4">) =>
+                  renderHeading("h4", children, props),
+                h5: ({ children, ...props }: ComponentPropsWithoutRef<"h5">) =>
+                  renderHeading("h5", children, props),
+                h6: ({ children, ...props }: ComponentPropsWithoutRef<"h6">) =>
+                  renderHeading("h6", children, props),
+              }
+            : {}),
           // Code blocks with styling
           pre: ({ children, ...props }: ComponentPropsWithoutRef<"pre">) => (
             <pre
