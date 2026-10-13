@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import "@testing-library/jest-dom/vitest";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { StrictMode } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { SessionDiffManifest } from "@open-inspect/shared/types/session-diffs";
 import { SessionFileLinksProvider } from "@/lib/session-file-links";
@@ -242,5 +243,20 @@ describe("SafeMarkdown untrusted documents", () => {
     expect(jump).toHaveAttribute("href", `#${heading.id}`);
     expect(jump).not.toHaveAttribute("target");
     expect(onOpen).not.toHaveBeenCalled();
+  });
+
+  it("numbers duplicate headings sequentially under StrictMode", () => {
+    render(
+      <StrictMode>
+        <SafeMarkdown
+          untrustedDocument
+          content={["# Setup", "", "## Setup", "", "[second](#setup-1)", ""].join("\n")}
+        />
+      </StrictMode>
+    );
+
+    const [first, second] = screen.getAllByRole("heading", { name: "Setup" });
+    expect(second.id).toBe(`${first.id}-1`);
+    expect(screen.getByRole("link", { name: "second" })).toHaveAttribute("href", `#${second.id}`);
   });
 });

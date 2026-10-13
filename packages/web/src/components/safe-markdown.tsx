@@ -4,7 +4,8 @@ import ReactMarkdown from "react-markdown";
 import rehypeHighlight from "rehype-highlight";
 import rehypeSanitize, { defaultSchema } from "rehype-sanitize";
 import remarkGfm from "remark-gfm";
-import { useId, type ComponentPropsWithoutRef, type ReactNode } from "react";
+import { useId, type ComponentPropsWithoutRef } from "react";
+import type { Element as HastElement, Root as HastRoot, RootContent as HastContent } from "hast";
 import type { Root, RootContent } from "mdast";
 import { isPathWithLineReference, isRepositoryFileHref } from "@/lib/diff-file-links";
 import { useSessionFileLinks } from "@/lib/session-file-links";
@@ -147,14 +148,32 @@ function RepositoryFileMarkdownLink({ href, children, ...props }: ComponentProps
   );
 }
 
-function nodeText(node: ReactNode): string {
-  if (typeof node === "string" || typeof node === "number") return String(node);
-  if (Array.isArray(node)) return node.map(nodeText).join("");
-  if (node && typeof node === "object" && "props" in node) {
-    const props = node.props as { children?: ReactNode };
-    return nodeText(props.children);
-  }
+const HEADING_TAGS = new Set(["h1", "h2", "h3", "h4", "h5", "h6"]);
+
+function hastText(node: HastRoot | HastContent): string {
+  if (node.type === "text") return node.value;
+  if ("children" in node) return node.children.map(hastText).join("");
   return "";
+}
+
+function rehypeScopedHeadingIds(scope: string) {
+  return () => (tree: HastRoot) => {
+    const counts = new Map<string, number>();
+    const visit = (node: HastRoot | HastElement) => {
+      for (const child of node.children) {
+        if (child.type !== "element") continue;
+        if (HEADING_TAGS.has(child.tagName)) {
+          const base = slugifyHeading(hastText(child));
+          const seen = counts.get(base) ?? 0;
+          counts.set(base, seen + 1);
+          child.properties.id = `${scope}-${seen === 0 ? base : `${base}-${seen}`}`;
+        } else {
+          visit(child);
+        }
+      }
+    };
+    visit(tree);
+  };
 }
 
 function slugifyHeading(text: string): string {
@@ -186,16 +205,6 @@ function httpsDocumentHref(href: string | undefined): string | null {
   return new URL(safe).protocol === "https:" ? safe : null;
 }
 
-type HeadingTag = "h1" | "h2" | "h3" | "h4" | "h5" | "h6";
-
-function DocumentHeading({
-  tag: Tag,
-  children,
-  ...props
-}: ComponentPropsWithoutRef<HeadingTag> & { tag: HeadingTag }) {
-  return <Tag {...props}>{children}</Tag>;
-}
-
 export function SafeMarkdown({
   content,
   className = "",
@@ -205,32 +214,7 @@ export function SafeMarkdown({
   untrustedDocument = false,
 }: SafeMarkdownProps) {
   const anchorScope = useId().replace(/[^A-Za-z0-9_-]/g, "");
-  const headingCounts = new Map<string, number>();
   const resolvedImageMode = untrustedDocument ? "placeholder" : imageMode;
-
-  function headingId(children: ReactNode): string {
-    const base = slugifyHeading(nodeText(children));
-    const seen = headingCounts.get(base) ?? 0;
-    headingCounts.set(base, seen + 1);
-    const slug = seen === 0 ? base : `${base}-${seen}`;
-    return `${anchorScope}-${slug}`;
-  }
-
-  function renderHeading(
-    tag: HeadingTag,
-    children: ReactNode,
-    props: ComponentPropsWithoutRef<HeadingTag>
-  ) {
-    return (
-      <DocumentHeading
-        tag={tag}
-        {...props}
-        id={untrustedDocument ? headingId(children) : undefined}
-      >
-        {children}
-      </DocumentHeading>
-    );
-  }
 
   return (
     <div
@@ -238,7 +222,15 @@ export function SafeMarkdown({
     >
       <ReactMarkdown
         remarkPlugins={linkRepositoryFiles ? [remarkGfm, preserveFileLineReferences] : [remarkGfm]}
-        rehypePlugins={[rehypeHighlight, [rehypeSanitize, sanitizeSchema]]}
+        rehypePlugins={
+          untrustedDocument
+            ? [
+                rehypeHighlight,
+                [rehypeSanitize, sanitizeSchema],
+                rehypeScopedHeadingIds(anchorScope),
+              ]
+            : [rehypeHighlight, [rehypeSanitize, sanitizeSchema]]
+        }
         components={{
           a: ({ href, children, ...props }: ComponentPropsWithoutRef<"a">) => {
             if (untrustedDocument) {
@@ -290,22 +282,6 @@ export function SafeMarkdown({
             if (resolvedImageMode !== "placeholder") return null;
             return <span>{resolvedSrc ? `${alt?.trim() || "Image"}: ${resolvedSrc}` : alt}</span>;
           },
-          ...(untrustedDocument
-            ? {
-                h1: ({ children, ...props }: ComponentPropsWithoutRef<"h1">) =>
-                  renderHeading("h1", children, props),
-                h2: ({ children, ...props }: ComponentPropsWithoutRef<"h2">) =>
-                  renderHeading("h2", children, props),
-                h3: ({ children, ...props }: ComponentPropsWithoutRef<"h3">) =>
-                  renderHeading("h3", children, props),
-                h4: ({ children, ...props }: ComponentPropsWithoutRef<"h4">) =>
-                  renderHeading("h4", children, props),
-                h5: ({ children, ...props }: ComponentPropsWithoutRef<"h5">) =>
-                  renderHeading("h5", children, props),
-                h6: ({ children, ...props }: ComponentPropsWithoutRef<"h6">) =>
-                  renderHeading("h6", children, props),
-              }
-            : {}),
           // Code blocks with styling
           pre: ({ children, ...props }: ComponentPropsWithoutRef<"pre">) => (
             <pre
