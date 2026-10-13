@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import { SEARCH_DEBOUNCE_MS } from "@/lib/search";
 
@@ -8,43 +8,48 @@ import { SEARCH_DEBOUNCE_MS } from "@/lib/search";
  * A search box mirrored in one URL query parameter, so a filtered view can be shared or reloaded.
  *
  * The URL is the source of truth for the applied search (`value`). Typed text is written to the
- * URL SEARCH_DEBOUNCE_MS after the last keystroke, through `commit`, which maps text to the value
- * to write ("" removes the parameter) or to null when the text should not be written at all.
+ * URL once the value to write has been stable for SEARCH_DEBOUNCE_MS, through `commit`, which maps
+ * text to that value ("" removes the parameter) or to null when the text should not be written.
  *
- * The box remembers which URL value its text accounts for. When the URL changes to that value
- * (our own write arriving), the box keeps the text as typed; any other change is navigation and
- * replaces the box, unless a keystroke is still waiting to be written over it.
+ * The box remembers which URL value its text accounts for: the last one we wrote or navigated to.
+ * When the URL changes and still holds that value (our own write arriving, or another parameter
+ * changing), the box keeps the text as typed. Any other change is navigation: it replaces the box
+ * and discards text not yet written.
  */
 export function useUrlSearchParam(name: string, commit: (raw: string) => string | null) {
-  const value = useSearchParams().get(name) ?? "";
+  const params = useSearchParams();
+  const value = params.get(name) ?? "";
   const [text, setTextState] = useState(value);
-  // The URL value the box's text accounts for; null while a keystroke waits to be written.
-  const [expected, setExpected] = useState<string | null>(value);
-  const [seenValue, setSeenValue] = useState(value);
-  if (value !== seenValue) {
-    setSeenValue(value);
-    if (expected !== null && value !== expected) {
+  // The URL value the box's text accounts for.
+  const [expected, setExpected] = useState(value);
+  // What typed text will write once typing pauses; null when nothing is waiting.
+  const [draft, setDraft] = useState<string | null>(null);
+  // Watch the whole query, not just this parameter: after a write of ours that never showed up,
+  // navigation can return to the search already displayed and must still be noticed.
+  const query = params.toString();
+  const [seenQuery, setSeenQuery] = useState(query);
+  if (query !== seenQuery) {
+    setSeenQuery(query);
+    if (value !== expected) {
       setTextState(value);
       setExpected(value);
+      setDraft(null);
     }
   }
 
-  const debounce = useDebounce(SEARCH_DEBOUNCE_MS);
+  useEffect(() => {
+    if (draft === null) return;
+    const timeout = window.setTimeout(() => {
+      setExpected(draft);
+      setDraft(null);
+      writeSearchParam(name, draft);
+    }, SEARCH_DEBOUNCE_MS);
+    return () => window.clearTimeout(timeout);
+  }, [name, draft]);
 
   function setText(next: string) {
     setTextState(next);
-    const target = commit(next);
-    if (target === null) {
-      // Nothing to write: the box now accounts for the URL as it stands.
-      debounce.cancel();
-      setExpected(readSearchParam(name));
-      return;
-    }
-    setExpected(null);
-    debounce.run(() => {
-      setExpected(target);
-      writeSearchParam(name, target);
-    });
+    setDraft(commit(next));
   }
 
   return {
@@ -56,23 +61,8 @@ export function useUrlSearchParam(name: string, commit: (raw: string) => string 
   };
 }
 
-/** Runs the latest scheduled callback once `delayMs` passes without another; cleared on unmount. */
-function useDebounce(delayMs: number) {
-  const timer = useRef<number | undefined>(undefined);
-  useEffect(() => () => window.clearTimeout(timer.current), []);
-  return {
-    run(callback: () => void) {
-      window.clearTimeout(timer.current);
-      timer.current = window.setTimeout(callback, delayMs);
-    },
-    cancel() {
-      window.clearTimeout(timer.current);
-    },
-  };
-}
-
 // The address bar, not useSearchParams: replaceState updates it synchronously, while
-// useSearchParams follows a render later. Call these from event handlers, never during render.
+// useSearchParams follows a render later. Never call these during render.
 
 function readSearchParam(name: string): string {
   return new URLSearchParams(window.location.search).get(name) ?? "";

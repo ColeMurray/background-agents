@@ -139,7 +139,7 @@ describe("useUrlSearchParam", () => {
     expect(result.current).toMatchObject({ text: "rspecx", value: "rspecx" });
   });
 
-  it("PROBE A: a write whose echo never lands does not freeze later navigation", () => {
+  it("a write whose echo never lands does not freeze later navigation", () => {
     setUrl("search=rspec");
     const { result } = render();
     act(() => result.current.setText("docker"));
@@ -150,7 +150,7 @@ describe("useUrlSearchParam", () => {
     expect(result.current).toMatchObject({ text: "back", value: "back" });
   });
 
-  it("PROBE B: a reversal merged by the router does not freeze later navigation", () => {
+  it("a reversal merged by the router does not freeze later navigation", () => {
     setUrl("search=rspec");
     const { result } = render();
     act(() => result.current.setText("rspecs"));
@@ -162,22 +162,34 @@ describe("useUrlSearchParam", () => {
     expect(result.current).toMatchObject({ text: "go", value: "go" });
   });
 
-  it("always converges: after the debounce the URL holds what the box commits to", () => {
+  it("lets navigation replace the box, including text not yet written", () => {
     const { result } = render();
     act(() => result.current.setText("draft"));
-    setUrl("tab=memories&search=docker"); // navigation inside the debounce window
+    setUrl("tab=memories&search=docker");
+    expect(result.current).toMatchObject({ text: "docker", value: "docker" });
     waitForDebounce();
-    expect(new URLSearchParams(window.location.search).get("search")).toBe("draft");
-    land();
-    expect(result.current).toMatchObject({ text: "draft", value: "draft" });
+    expect(writes).toEqual([]);
   });
-  it("ADDED: follows router navigation that renders before the address bar updates", () => {
+
+  it("follows navigation that keeps the search after a write whose echo never lands", () => {
+    setUrl("search=rspec");
+    const { result } = render();
+    act(() => result.current.setText("docker"));
+    waitForDebounce();
+    url.echoes = [];
+    navigate("search=rspec&memoryId=other");
+    expect(result.current).toMatchObject({ text: "rspec", value: "rspec" });
+    waitForDebounce();
+    expect(writes).toEqual(["/page?search=docker"]);
+  });
+
+  it("follows router navigation that renders before the address bar updates", () => {
     const { result } = render();
     navigate("tab=memories&search=docker");
     expect(result.current).toMatchObject({ text: "docker", value: "docker" });
   });
 
-  it("ADDED: follows navigation after the URL already held the typed text", () => {
+  it("follows navigation after the URL already held the typed text", () => {
     const { result } = render();
     act(() => result.current.setText("docker"));
     setUrl("tab=memories&search=docker"); // navigation to the same value, inside the window
@@ -187,7 +199,7 @@ describe("useUrlSearchParam", () => {
     expect(result.current).toMatchObject({ text: "go", value: "go" });
   });
 
-  it("ADDED: unwritable text is replaced by later navigation", () => {
+  it("unwritable text is replaced by later navigation", () => {
     const { result } = render();
     act(() => result.current.setText("docker"));
     act(() => result.current.setText("docker!")); // cancels the pending write
@@ -197,7 +209,7 @@ describe("useUrlSearchParam", () => {
     expect(result.current).toMatchObject({ text: "go", value: "go" });
   });
 
-  it("ADDED: does not write after unmount", () => {
+  it("does not write after unmount", () => {
     const { result, unmount } = render();
     act(() => result.current.setText("docker"));
     unmount();
