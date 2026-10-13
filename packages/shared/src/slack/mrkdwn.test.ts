@@ -256,4 +256,43 @@ describe("sanitizeAgentText", () => {
     expect(result.truncated).toBe(true);
     expect(result.text.length).toBeLessThanOrEqual(50);
   });
+
+  it("strips a broadcast rebuilt by removing a user mention", () => {
+    const result = sanitizeAgentText("<!<@U123>here> hi", {
+      mentionsPolicy: "strip",
+      maxLength: 1000,
+    });
+    expect(result.text).toBe(" hi");
+    expect(result.strippedBroadcasts).toBe(true);
+    expect(result.mentionsModified).toBe(true);
+  });
+
+  it("strips a labelled broadcast rebuilt by removing a labelled user mention", () => {
+    const result = sanitizeAgentText("<!<@U123|bob>channel|x> hi", {
+      mentionsPolicy: "strip",
+      maxLength: 1000,
+    });
+    expect(result.text).toBe(" hi");
+    expect(result.strippedBroadcasts).toBe(true);
+  });
+
+  it("strips a broadcast rebuilt by unwrapping a link", () => {
+    // URLs may contain `<!`, so unwrapping can join the URL tail with trailing text.
+    const result = sanitizeAgentText("<https://a.co/<!|x>here> hi", {
+      mentionsPolicy: "allow",
+      maxLength: 1000,
+    });
+    expect(result.text).toBe("https://a.co/ hi");
+    expect(result.strippedBroadcasts).toBe(true);
+  });
+
+  it("does not report stripped broadcasts when mentions and links are removed", () => {
+    const result = sanitizeAgentText("hi <@U123> see <https://a.co|docs>", {
+      mentionsPolicy: "strip",
+      maxLength: 1000,
+    });
+    expect(result.text).toBe("hi  see https://a.co");
+    expect(result.strippedBroadcasts).toBe(false);
+    expect(result.mentionsModified).toBe(true);
+  });
 });

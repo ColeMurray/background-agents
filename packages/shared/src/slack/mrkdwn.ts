@@ -73,15 +73,17 @@ export function truncateForSlack(
 }
 
 export function sanitizeAgentText(text: string, opts: SanitizeOptions): SanitizeResult {
-  const afterBroadcasts = stripBroadcastMentions(text);
-  const strippedBroadcasts = afterBroadcasts !== text;
-
-  const afterLinks = sanitizeLinks(afterBroadcasts);
+  const afterLinks = sanitizeLinks(text);
 
   const afterMentions = applyMentionPolicy(afterLinks, opts.mentionsPolicy);
   const mentionsModified = afterMentions !== afterLinks;
 
-  const truncated = truncateForSlack(afterMentions, opts.maxLength);
+  // Strip broadcasts last: removing a link or mention can join its neighbours
+  // into a new one (`<!<@U1>here>` becomes `<!here>`).
+  const afterBroadcasts = stripBroadcastMentions(afterMentions);
+  const strippedBroadcasts = afterBroadcasts !== afterMentions;
+
+  const truncated = truncateForSlack(afterBroadcasts, opts.maxLength);
 
   return {
     text: truncated.text,
