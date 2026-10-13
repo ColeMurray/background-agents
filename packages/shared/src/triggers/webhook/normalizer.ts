@@ -18,9 +18,10 @@ export function normalizeWebhookEvent(
 
   // Strip idempotencyKey from body before including in context
   let contextBody = body;
-  if (body && typeof body === "object" && "idempotencyKey" in (body as Record<string, unknown>)) {
-    const { idempotencyKey: _, ...rest } = body as Record<string, unknown>;
-    contextBody = rest;
+  if (body && typeof body === "object" && !Array.isArray(body) && "idempotencyKey" in body) {
+    contextBody = Object.fromEntries(
+      Object.entries(body).filter(([key]) => key !== "idempotencyKey")
+    );
   }
 
   return {
@@ -45,7 +46,7 @@ export function resolveJsonPath(path: string, obj: unknown): unknown {
   let current: unknown = obj;
   for (const key of keys) {
     if (current == null || typeof current !== "object") return undefined;
-    current = (current as Record<string, unknown>)[key];
+    current = Reflect.get(current, key);
   }
   return current;
 }

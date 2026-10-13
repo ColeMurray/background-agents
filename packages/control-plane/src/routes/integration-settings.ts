@@ -6,10 +6,10 @@ import {
   DEFAULT_MAX_CONCURRENT_CHILD_SESSIONS,
   DEFAULT_MAX_TOTAL_CHILD_SESSIONS,
   DEFAULT_LINEAR_UNBOUND_CHANNELS,
+  githubBotSettingsSchema,
   linearBotGlobalSettingsSchema,
   type CodeServerSettings,
   type EnvironmentSettingsIntegrationId,
-  type GitHubBotSettings,
   type IntegrationId,
   type SandboxSettings,
   type VncSettings,
@@ -400,7 +400,7 @@ async function handleGetResolvedConfig(
   const { enabledRepos, settings } = await store.getResolvedConfig(id, repo);
 
   if (id === "github") {
-    const githubSettings = settings as GitHubBotSettings;
+    const githubSettings = githubBotSettingsSchema.parse(settings);
     const reasoningEffort =
       githubSettings.model &&
       githubSettings.reasoningEffort &&
