@@ -19,9 +19,13 @@ const mocks = vi.hoisted(() => ({
   hasPermission: (permission: string) => mocks.allowedPermissions.has(permission),
 }));
 
-vi.mock("next/navigation", () => ({
-  useSearchParams: () => new URLSearchParams(mocks.tab ? `tab=${mocks.tab}` : ""),
-}));
+vi.mock("next/navigation", async () => {
+  const { useState } = await import("react");
+  return {
+    useSearchParams: () =>
+      useState(() => new URLSearchParams(mocks.tab ? `tab=${mocks.tab}` : ""))[0],
+  };
+});
 
 vi.mock("@/lib/sandbox-provider", () => ({
   supportsRepoImages: () => mocks.repoImagesEnabled,

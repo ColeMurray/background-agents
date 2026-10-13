@@ -183,6 +183,18 @@ describe("useUrlSearchParam", () => {
     expect(writes).toEqual(["/page?search=docker"]);
   });
 
+  it("follows navigation directly back to the last rendered query after a dropped echo", () => {
+    setUrl("search=rspec");
+    const { result } = render();
+    act(() => result.current.setText("docker"));
+    waitForDebounce();
+    url.echoes = [];
+
+    navigate("search=rspec");
+
+    expect(result.current).toMatchObject({ text: "rspec", value: "rspec" });
+  });
+
   it("follows router navigation that renders before the address bar updates", () => {
     const { result } = render();
     navigate("tab=memories&search=docker");

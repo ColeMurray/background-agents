@@ -24,12 +24,11 @@ export function useUrlSearchParam(name: string, commit: (raw: string) => string 
   const [expected, setExpected] = useState(value);
   // What typed text will write once typing pauses; null when nothing is waiting.
   const [draft, setDraft] = useState<string | null>(null);
-  // Watch the whole query, not just this parameter: after a write of ours that never showed up,
-  // navigation can return to the search already displayed and must still be noticed.
-  const query = params.toString();
-  const [seenQuery, setSeenQuery] = useState(query);
-  if (query !== seenQuery) {
-    setSeenQuery(query);
+  // Watch each URL snapshot, not just its value: after a write of ours that never showed up,
+  // navigation can return to the exact query last rendered and must still be noticed.
+  const [seenParams, setSeenParams] = useState(params);
+  if (params !== seenParams) {
+    setSeenParams(params);
     if (value !== expected) {
       setTextState(value);
       setExpected(value);
