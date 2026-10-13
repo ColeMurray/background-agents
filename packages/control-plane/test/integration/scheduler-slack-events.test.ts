@@ -8,6 +8,7 @@ import {
   waitForSandboxStatus,
   seedActiveUser,
   sqlDatabase,
+  closeWebSocket,
 } from "./helpers";
 import { getUserAuth } from "../../src/auth/user/runtime";
 import { AutomationStore, type AutomationRow } from "../../src/db/automation-store";
@@ -322,7 +323,7 @@ describe("Scheduler slack event handling (integration)", () => {
         expect(second?.author).toEqual({ userId: "slack:U1", gitIdentity: { mode: "agent-only" } });
         expect(await fetchRuns(automationId)).toHaveLength(1);
       } finally {
-        sandbox!.close();
+        await closeWebSocket(sandbox!);
       }
     }
   );

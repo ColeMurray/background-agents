@@ -496,6 +496,39 @@ export function collectMessages(
 }
 
 /**
+ * Close a WebSocket and wait for the peer's reciprocal close.
+ *
+ * The session DO reciprocates only after its close handler has run (and
+ * logged), so awaiting this keeps that work inside the test. A fire-and-forget
+ * `close()` lets the DO log after the test file finishes, which fails the run
+ * with "Closing rpc while onUserConsoleLog was pending". Teardown is
+ * best-effort: resolves after `timeoutMs` rather than masking a test failure.
+ *
+ * Defaults to code 1000: a bare `close()` reaches the DO as 1005, which it
+ * cannot echo back on the wire, so the reciprocal close would never arrive.
+ */
+export function closeWebSocket(
+  ws: WebSocket,
+  opts?: { code?: number; reason?: string; timeoutMs?: number }
+): Promise<void> {
+  if (ws.readyState === WebSocket.CLOSED) return Promise.resolve();
+  const code = opts?.code ?? 1000;
+  if (ws.readyState === WebSocket.CLOSING) {
+    // The peer closed first and its close event has already fired; just reciprocate.
+    ws.close(code, opts?.reason);
+    return Promise.resolve();
+  }
+  return new Promise((resolve) => {
+    const timer = setTimeout(resolve, opts?.timeoutMs ?? INTEGRATION_WEBSOCKET_TIMEOUT_MS);
+    ws.addEventListener("close", () => {
+      clearTimeout(timer);
+      resolve();
+    });
+    ws.close(code, opts?.reason);
+  });
+}
+
+/**
  * Open a client WebSocket via SELF.fetch (full worker routing path).
  * Optionally subscribe by generating a WS token and completing the subscribe flow.
  */
