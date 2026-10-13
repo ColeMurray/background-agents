@@ -86,6 +86,21 @@ function writeSearchParam(name: string, value: string) {
   else query.delete(name);
   const queryString = query.toString();
   const { pathname } = window.location;
-  // Next syncs useSearchParams with native history calls whose state is not its own.
-  window.history.replaceState(null, "", queryString ? `${pathname}?${queryString}` : pathname);
+  window.history.replaceState(
+    appHistoryState(),
+    "",
+    queryString ? `${pathname}?${queryString}` : pathname
+  );
+}
+
+// Next skips syncing useSearchParams for writes carrying its own keys, and copies them back itself.
+const NEXT_HISTORY_KEYS = ["__NA", "_N", "__PRIVATE_NEXTJS_INTERNALS_TREE"];
+
+/** The current entry's app-owned state (e.g. mobile settings' detail flag), without Next's keys. */
+function appHistoryState(): Record<string, unknown> | null {
+  const state: unknown = window.history.state;
+  if (!state || typeof state !== "object") return null;
+  return Object.fromEntries(
+    Object.entries(state).filter(([key]) => !NEXT_HISTORY_KEYS.includes(key))
+  );
 }

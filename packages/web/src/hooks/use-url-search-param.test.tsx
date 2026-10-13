@@ -204,4 +204,19 @@ describe("useUrlSearchParam", () => {
     waitForDebounce();
     expect(writes).toEqual([]);
   });
+  it("keeps the entry's app state and drops Next's keys so Next still syncs the URL", () => {
+    realReplaceState(
+      { openInspectSettingsDetail: true, __NA: true, __PRIVATE_NEXTJS_INTERNALS_TREE: {} },
+      "",
+      "/page?tab=memories"
+    );
+    const { result } = render();
+    act(() => result.current.setText("rspec"));
+    waitForDebounce();
+    expect(window.history.replaceState).toHaveBeenLastCalledWith(
+      { openInspectSettingsDetail: true },
+      "",
+      "/page?tab=memories&search=rspec"
+    );
+  });
 });
