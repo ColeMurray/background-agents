@@ -160,4 +160,75 @@ describe("Scheduler webhook sessionKey (real D1)", () => {
     expect(await messages()).toEqual(["INSTRUCTIONS", "FOLLOW-UP"]);
     expect(await store.getHeldPrompts(run.id)).toEqual([]);
   });
+
+  async function seedLaunchingRun() {
+    await seedAutomation(Date.now());
+    await env.DB.prepare(
+      `INSERT INTO sessions
+         (id, title, owner_team_id, visibility, user_id, status, automation_id, automation_run_id,
+          spawn_source, created_at, updated_at)
+       VALUES (?, 'Card session', NULL, 'private', ?, 'created', ?, 'run-launching', 'automation', ?, ?)`
+    )
+      .bind(SESSION_ID, OWNER, AUTOMATION_ID, Date.now(), Date.now())
+      .run();
+    const run = makeRunRow(AUTOMATION_ID, { id: "run-launching", status: "starting" });
+    await seedRun(run, { concurrencyKey: "webhook:session:card-42" });
+    const store = new AutomationStore(env.DB);
+    await store.claimRunSession(run.id, SESSION_ID, Date.now(), Date.now() + 60_000);
+    return { run, store };
+  }
+
+  const delivery = (step: string) =>
+    normalizeWebhookEvent(
+      AUTOMATION_ID,
+      { step },
+      { idempotencyKey: `event-${step}`, sessionKey: "card-42" }
+    );
+
+  it("holds a delivery retried before the run's first prompt once and skips the retry", async () => {
+    const { run, store } = await seedLaunchingRun();
+    const { scheduler, prompts } = createScheduler();
+
+    expect(await scheduler.event(delivery("A"))).toEqual({
+      triggered: 0,
+      skipped: 0,
+      steered: 1,
+      invocationIds: [run.invocation_id],
+    });
+    expect(await scheduler.event(delivery("A"))).toEqual({
+      triggered: 0,
+      skipped: 1,
+      steered: 0,
+      invocationIds: [run.invocation_id],
+    });
+
+    expect(await store.getHeldPrompts(run.id)).toHaveLength(1);
+    expect(prompts).not.toHaveBeenCalled();
+  });
+
+  it("queues a delivery that arrives while held ones await release behind them", async () => {
+    const { run, store } = await seedLaunchingRun();
+    const { scheduler, prompts } = createScheduler();
+
+    await scheduler.event(delivery("A"));
+    // The run's first prompt is queued, but A has not been released yet.
+    await store.markRunFirstPromptQueued(run.id);
+    expect(await scheduler.event(delivery("B"))).toMatchObject({ steered: 1 });
+    expect(prompts).not.toHaveBeenCalled();
+
+    // A missed release is picked up by the tick's sweep, in order.
+    await env.DB.prepare("UPDATE automation_run_held_prompts SET created_at = created_at - ?")
+      .bind(10 * 60 * 1000)
+      .run();
+    await scheduler.tick();
+
+    const steps = await Promise.all(
+      prompts.mock.calls.map(async ([request]) => {
+        const { content } = (await request.json()) as { content: string };
+        return content.match(/"step": "(\w)"/)?.[1];
+      })
+    );
+    expect(steps).toEqual(["A", "B"]);
+    expect(await store.getHeldPrompts(run.id)).toEqual([]);
+  });
 });

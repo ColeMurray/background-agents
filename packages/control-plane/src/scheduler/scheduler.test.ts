@@ -157,7 +157,7 @@ function createMockStore() {
     getActiveRunForKey: vi.fn().mockResolvedValue(null),
     getLatestContinuableRun: vi.fn().mockResolvedValue(null),
     markRunFirstPromptQueued: vi.fn().mockResolvedValue(undefined),
-    holdPromptForLaunchingRun: vi.fn().mockResolvedValue(true),
+    holdPromptForLaunchingRun: vi.fn().mockResolvedValue("held"),
     getHeldPrompts: vi.fn().mockResolvedValue([]),
     deleteHeldPrompt: vi.fn().mockResolvedValue(undefined),
     deleteHeldPromptsForRun: vi.fn().mockResolvedValue(0),
@@ -521,6 +521,7 @@ function sampleRunRow(overrides?: Record<string, unknown>) {
     base_branch: "main",
     first_prompt_pending: 0,
     last_activity_at: now,
+    has_held_prompts: 0,
     ...overrides,
   };
 }
@@ -3951,6 +3952,7 @@ describe("Scheduler", () => {
           run_id: "run-1",
           actor_user_id: "user-1",
           actor_author_id: "user-1",
+          client_request_id: "webhook:held",
           prompt: JSON.stringify(prompt),
           request_id: "webhook:idem:held",
           created_at: now,
@@ -3969,6 +3971,7 @@ describe("Scheduler", () => {
         it.each([
           { phase: "before it has a session", run: { status: "starting", session_id: null } },
           { phase: "before its first prompt", run: { first_prompt_pending: 1 } },
+          { phase: "before earlier held follow-ups are released", run: { has_held_prompts: 1 } },
         ])("holds a follow-up that arrives $phase", async ({ run }) => {
           mockStore.getLatestContinuableRun.mockResolvedValue(
             sampleRunRow({ invocation_id: "inv-card", ...run })
@@ -3990,14 +3993,17 @@ describe("Scheduler", () => {
           const held = mockStore.holdPromptForLaunchingRun.mock.calls[0]?.[0] as {
             run_id: string;
             actor_user_id: string;
+            client_request_id: string;
             request_id: string;
             prompt: string;
           };
           expect(held).toMatchObject({
             run_id: "run-1",
             actor_user_id: "user-1",
+            client_request_id: expect.stringMatching(/^webhook:[0-9a-f]{64}$/),
             request_id: "webhook:idem:review-2",
           });
+          expect(JSON.parse(held.prompt).clientRequestId).toBe(held.client_request_id);
           expect(JSON.parse(held.prompt)).toMatchObject({
             source: "automation",
             clientRequestId: expect.stringMatching(/^webhook:[0-9a-f]{64}$/),
@@ -4013,7 +4019,7 @@ describe("Scheduler", () => {
             .mockResolvedValueOnce(
               sampleRunRow({ invocation_id: "inv-card", first_prompt_pending: 0 })
             );
-          mockStore.holdPromptForLaunchingRun.mockResolvedValue(false);
+          mockStore.holdPromptForLaunchingRun.mockResolvedValue("not_holding");
           const stub = createMockSessionStub();
 
           const result = await createScheduler(createEnv(undefined, stub)).event(
@@ -4024,37 +4030,71 @@ describe("Scheduler", () => {
           expect(promptCallCount(vi.mocked(stub.fetch))).toBe(1);
         });
 
-        it("releases held follow-ups after the run's own first prompt", async () => {
-          mockStore.getHeldPrompts.mockResolvedValue([
-            heldRow({ content: "HELD", authorId: "user-1", source: "automation" }),
-          ]);
+        it("skips a retry of a follow-up already held for the run", async () => {
+          mockStore.getLatestContinuableRun.mockResolvedValue(
+            sampleRunRow({ invocation_id: "inv-card", first_prompt_pending: 1 })
+          );
+          mockStore.holdPromptForLaunchingRun.mockResolvedValue("duplicate");
+          const stub = createMockSessionStub();
+
+          const result = await createScheduler(createEnv(undefined, stub)).event(
+            webhookEvent({ mode: "iterate" }, "review-2")
+          );
+
+          expect(result).toEqual({
+            triggered: 0,
+            skipped: 1,
+            steered: 0,
+            invocationIds: ["inv-card"],
+          });
+          expect(promptCallCount(vi.mocked(stub.fetch))).toBe(0);
+        });
+
+        it("releases held follow-ups after the run's own first prompt, including ones held meanwhile", async () => {
+          mockStore.getHeldPrompts
+            .mockResolvedValueOnce([
+              heldRow({ content: "HELD", authorId: "user-1", source: "automation" }),
+            ])
+            .mockResolvedValueOnce([
+              {
+                ...heldRow({ content: "HELD-LATER", authorId: "user-1", source: "automation" }),
+                id: "held-2",
+              },
+            ]);
           const stub = createMockSessionStub();
 
           await createScheduler(createEnv(undefined, stub)).event(webhookEvent({ mode: "build" }));
 
           const contents = await promptContents(vi.mocked(stub.fetch));
-          expect(contents).toHaveLength(2);
+          expect(contents).toHaveLength(3);
           expect(contents[0]).toContain(sampleWebhookAutomation.instructions);
-          expect(contents[1]).toBe("HELD");
+          expect(contents.slice(1)).toEqual(["HELD", "HELD-LATER"]);
           expect(mockStore.markRunFirstPromptQueued.mock.invocationCallOrder[0]).toBeLessThan(
             mockStore.getHeldPrompts.mock.invocationCallOrder[0]!
           );
-          expect(mockStore.deleteHeldPrompt).toHaveBeenCalledWith("held-1");
+          expect(mockStore.deleteHeldPrompt.mock.calls).toEqual([["held-1"], ["held-2"]]);
         });
 
-        it("keeps a held follow-up for the sweep when the session cannot be reached", async () => {
-          mockStore.getRunsWithStaleHeldPrompts.mockResolvedValue([
-            sampleRunRow({ session_id: "sess-card", first_prompt_pending: 0 }),
-          ]);
-          mockStore.getHeldPrompts.mockResolvedValue([heldRow({ content: "HELD" })]);
-          const stub = {
-            fetch: vi.fn(async () => Response.json({ error: "down" }, { status: 503 })),
-          } as never;
+        it.each([
+          { refusal: "cannot be reached", status: 503, code: null },
+          { refusal: "has a full queue", status: 429, code: "PROMPT_QUEUE_FULL" },
+        ])(
+          "keeps a held follow-up for the sweep when the session $refusal",
+          async ({ status, code }) => {
+            mockStore.getRunsWithStaleHeldPrompts.mockResolvedValue([
+              sampleRunRow({ session_id: "sess-card", first_prompt_pending: 0 }),
+            ]);
+            mockStore.getHeldPrompts.mockResolvedValue([heldRow({ content: "HELD" })]);
+            const fetch = vi.fn(async (_input: RequestInfo) =>
+              Response.json({ error: "busy", code }, { status })
+            );
 
-          await createScheduler(createEnv(undefined, stub)).tick();
+            await createScheduler(createEnv(undefined, { fetch } as never)).tick();
 
-          expect(mockStore.deleteHeldPrompt).not.toHaveBeenCalled();
-        });
+            expect(promptCallCount(fetch)).toBe(1);
+            expect(mockStore.deleteHeldPrompt).not.toHaveBeenCalled();
+          }
+        );
 
         it.each([
           {
@@ -4081,7 +4121,7 @@ describe("Scheduler", () => {
             mockStore.getRunsWithStaleHeldPrompts.mockResolvedValue([
               sampleRunRow({ session_id: "sess-card", ...run }),
             ]);
-            mockStore.getHeldPrompts.mockResolvedValue([heldRow({ content: "HELD" })]);
+            mockStore.getHeldPrompts.mockResolvedValueOnce([heldRow({ content: "HELD" })]);
             const stub = createMockSessionStub();
 
             await createScheduler(createEnv(undefined, stub)).tick();

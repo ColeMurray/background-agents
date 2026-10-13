@@ -110,21 +110,23 @@ export async function continueSession(
   if (!run || run.last_activity_at < now - SESSION_CONTINUITY_WINDOW_MS) {
     return { kind: "fall_through" };
   }
-  if (!isLaunching(run)) return continueRunSession(deps, run, policy);
+  if (!holdsFollowUps(run)) return continueRunSession(deps, run, policy);
 
   const held = await holdFollowUp(deps, run, policy);
   if (held) return held;
-  // The run got past its first prompt while this follow-up was being built.
+  // The run got past its first prompt, and its held follow-ups were released, while
+  // this follow-up was being built.
   const launched = await deps.store.getLatestContinuableRun(automation.id, concurrencyKey);
-  return launched && !isLaunching(launched)
+  return launched && !holdsFollowUps(launched)
     ? continueRunSession(deps, launched, policy)
     : { kind: "fall_through" };
 }
 
 /**
- * Queue a launched run's held follow-ups on its session, oldest first. A follow-up that
- * cannot be delivered right now stays held for the sweep, and so do the ones after it,
- * to keep their order.
+ * Queue a launched run's held follow-ups on its session, oldest first, until none are
+ * left: follow-ups that arrive meanwhile are held behind them. A follow-up that cannot
+ * be delivered right now stays held for the sweep, and so do the ones after it, to
+ * keep their order.
  */
 export async function releaseHeldPrompts(
   deps: SessionContinuityDeps,
@@ -132,8 +134,14 @@ export async function releaseHeldPrompts(
 ): Promise<void> {
   const sessionId = run.session_id;
   if (!sessionId) return;
-  for (const held of await deps.store.getHeldPrompts(run.id)) {
-    if (!(await releaseHeldPrompt(deps, run, sessionId, held))) return;
+  for (
+    let held = await deps.store.getHeldPrompts(run.id);
+    held.length > 0;
+    held = await deps.store.getHeldPrompts(run.id)
+  ) {
+    for (const prompt of held) {
+      if (!(await releaseHeldPrompt(deps, run, sessionId, prompt))) return;
+    }
   }
 }
 
@@ -182,9 +190,16 @@ export async function sweepHeldPrompts(deps: SessionContinuityDeps, now: number)
   }
 }
 
-/** From the run's creation until its own first prompt is on its session's queue. */
-function isLaunching(run: AutomationRunRow): boolean {
-  return run.status === "starting" || (run.status === "running" && run.first_prompt_pending === 1);
+/**
+ * From the run's creation until its own first prompt is on its session's queue, and
+ * then until the follow-ups held meanwhile are released, so later ones queue behind them.
+ */
+function holdsFollowUps(run: ContinuableRunRow): boolean {
+  return (
+    run.status === "starting" ||
+    (run.status === "running" && run.first_prompt_pending === 1) ||
+    run.has_held_prompts === 1
+  );
 }
 
 async function continueRunSession(
@@ -241,7 +256,7 @@ async function continueRunSession(
 /**
  * Hold a follow-up for a launching run. Its session may not exist yet, so session
  * admission waits for the release; the actor's own authority is checked now. Returns
- * null when the run finished launching first.
+ * null when the run finished launching, and released what it held, first.
  */
 async function holdFollowUp(
   deps: SessionContinuityDeps,
@@ -260,17 +275,21 @@ async function holdFollowUp(
 
   const { body, ctx } = await policy.buildPrompt(run, actor);
   const id = generateId();
+  // A retried delivery is held once, and the sweep may re-send a released prompt after
+  // a crash, which the session dedupes by this request id.
+  const clientRequestId = body.clientRequestId ?? `held:${id}`;
   const held = await deps.store.holdPromptForLaunchingRun({
     id,
     run_id: run.id,
     actor_user_id: actor.userId,
     actor_author_id: actor.authorId,
-    // The sweep may re-send a released prompt after a crash; a request id dedupes it.
-    prompt: JSON.stringify({ ...body, clientRequestId: body.clientRequestId ?? `held:${id}` }),
+    client_request_id: clientRequestId,
+    prompt: JSON.stringify({ ...body, clientRequestId }),
     request_id: ctx.request_id,
     created_at: Date.now(),
   });
-  if (!held) return null;
+  if (held === "not_holding") return null;
+  if (held === "duplicate") return { kind: "skipped", invocationId: run.invocation_id };
 
   deps.log.info("Held a follow-up until its run's first prompt is queued", {
     event: `scheduler.${policy.source}_steer_held`,
@@ -303,8 +322,9 @@ async function releaseHeldPrompt(
       });
     } else {
       const outcome = await enqueueSerializedSessionPrompt(deps.env, sessionId, held.prompt, ctx);
-      if (outcome.kind === "rejected" && outcome.status >= 500) {
-        deps.log.warn("Session failed to take a held follow-up; the sweep retries it", {
+      // A full queue or a failing session may take it later; the sender was told it was steered.
+      if (outcome.kind === "rejected" && (outcome.status === 429 || outcome.status >= 500)) {
+        deps.log.warn("Session could not take a held follow-up yet; the sweep retries it", {
           event: "scheduler.held_prompt_release_failed",
           ...fields,
           status: outcome.status,

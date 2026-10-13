@@ -157,7 +157,12 @@ export interface AutomationRunRow {
 export interface ContinuableRunRow extends AutomationRunRow {
   /** The session's latest activity, or the run's creation when it has no session row. */
   last_activity_at: number;
+  /** 1 while follow-ups held during the run's launch still await release. */
+  has_held_prompts: number;
 }
+
+/** {@link AutomationStore.holdPromptForLaunchingRun}: not holding once the run is ready and drained. */
+export type HoldPromptResult = "held" | "duplicate" | "not_holding";
 
 /** A continuity follow-up held until its run's first prompt is queued. */
 export interface HeldPromptRow {
@@ -165,6 +170,8 @@ export interface HeldPromptRow {
   run_id: string;
   actor_user_id: string;
   actor_author_id: string;
+  /** The prompt's clientRequestId, unique per run. */
+  client_request_id: string;
   /** JSON enqueue-prompt request body. */
   prompt: string;
   request_id: string;
@@ -1683,7 +1690,10 @@ export class AutomationStore {
     if (concurrencyKey === null) return null;
     return this.db
       .prepare(
-        `SELECT r.*, COALESCE(s.updated_at, r.created_at) AS last_activity_at
+        `SELECT r.*, COALESCE(s.updated_at, r.created_at) AS last_activity_at,
+           EXISTS (
+             SELECT 1 FROM automation_run_held_prompts h WHERE h.run_id = r.id
+           ) AS has_held_prompts
          FROM automation_runs r
          JOIN automation_invocations i ON i.id = r.invocation_id
          LEFT JOIN sessions s ON r.session_id = s.id
@@ -1699,34 +1709,48 @@ export class AutomationStore {
   // --- Held continuity prompts ---
 
   /**
-   * Hold a follow-up for a run whose own first prompt is not queued yet. The
-   * insert is conditional on that state, so it either lands before
-   * {@link markRunFirstPromptQueued} (and is released after it) or does nothing.
+   * Hold a follow-up for a run whose own first prompt is not queued yet, or whose
+   * earlier held follow-ups are not all released, so it queues behind them. The
+   * insert is conditional on that state, so it either lands before the release
+   * drains the run's last held prompt (and is released with them) or does nothing.
+   * A follow-up with a clientRequestId already held for the run is a duplicate.
    */
-  async holdPromptForLaunchingRun(prompt: HeldPromptRow): Promise<boolean> {
+  async holdPromptForLaunchingRun(prompt: HeldPromptRow): Promise<HoldPromptResult> {
     const result = await this.db
       .prepare(
         `INSERT INTO automation_run_held_prompts
-           (id, run_id, actor_user_id, actor_author_id, prompt, request_id, created_at)
-         SELECT ?, ?, ?, ?, ?, ?, ?
+           (id, run_id, actor_user_id, actor_author_id, client_request_id, prompt, request_id,
+            created_at)
+         SELECT ?, ?, ?, ?, ?, ?, ?, ?
          WHERE EXISTS (
            SELECT 1 FROM automation_runs
            WHERE id = ?
              AND (status = 'starting' OR (status = 'running' AND first_prompt_pending = 1))
-         )`
+         ) OR EXISTS (SELECT 1 FROM automation_run_held_prompts WHERE run_id = ?)
+         ON CONFLICT (run_id, client_request_id) DO NOTHING`
       )
       .bind(
         prompt.id,
         prompt.run_id,
         prompt.actor_user_id,
         prompt.actor_author_id,
+        prompt.client_request_id,
         prompt.prompt,
         prompt.request_id,
         prompt.created_at,
+        prompt.run_id,
         prompt.run_id
       )
       .run();
-    return (result.meta?.changes ?? 0) > 0;
+    if ((result.meta?.changes ?? 0) > 0) return "held";
+
+    const existing = await this.db
+      .prepare(
+        "SELECT 1 AS held FROM automation_run_held_prompts WHERE run_id = ? AND client_request_id = ?"
+      )
+      .bind(prompt.run_id, prompt.client_request_id)
+      .first<{ held: number }>();
+    return existing ? "duplicate" : "not_holding";
   }
 
   async getHeldPrompts(runId: string): Promise<HeldPromptRow[]> {

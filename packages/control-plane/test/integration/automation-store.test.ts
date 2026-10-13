@@ -1147,24 +1147,25 @@ describe("AutomationStore (D1 integration)", () => {
 describe("AutomationStore held continuity prompts", () => {
   beforeEach(cleanD1Tables);
 
-  function heldPrompt(runId: string, id: string, createdAt = Date.now()) {
+  function heldPrompt(runId: string, id: string, createdAt = Date.now(), clientRequestId = id) {
     return {
       id,
       run_id: runId,
       actor_user_id: "user-1",
       actor_author_id: "user-1",
+      client_request_id: clientRequestId,
       prompt: JSON.stringify({ content: id, authorId: "user-1", source: "automation" }),
       request_id: `req-${id}`,
       created_at: createdAt,
     };
   }
 
-  it("holds prompts from the run's creation until its first prompt is queued", async () => {
+  it("holds prompts from the run's creation until its first prompt is queued and the held ones drain", async () => {
     const store = new AutomationStore(env.DB);
     await store.create(makeAutomation({ id: "auto-hold1" }));
     await seedRunForKey("auto-hold1", "webhook:session:k", { id: "run-hold1", status: "starting" });
 
-    expect(await store.holdPromptForLaunchingRun(heldPrompt("run-hold1", "h1"))).toBe(true);
+    expect(await store.holdPromptForLaunchingRun(heldPrompt("run-hold1", "h1"))).toBe("held");
 
     expect(
       await store.claimRunSession("run-hold1", "sess-hold1", Date.now(), Date.now() + 60_000)
@@ -1172,12 +1173,41 @@ describe("AutomationStore held continuity prompts", () => {
     expect(await store.getLatestContinuableRun("auto-hold1", "webhook:session:k")).toMatchObject({
       status: "running",
       first_prompt_pending: 1,
+      has_held_prompts: 1,
     });
-    expect(await store.holdPromptForLaunchingRun(heldPrompt("run-hold1", "h2"))).toBe(true);
+    expect(await store.holdPromptForLaunchingRun(heldPrompt("run-hold1", "h2"))).toBe("held");
 
+    // The first prompt is queued, but h1 and h2 are not released yet: h3 queues behind them.
     await store.markRunFirstPromptQueued("run-hold1");
-    expect(await store.holdPromptForLaunchingRun(heldPrompt("run-hold1", "h3"))).toBe(false);
-    expect((await store.getHeldPrompts("run-hold1")).map((held) => held.id)).toEqual(["h1", "h2"]);
+    expect(await store.holdPromptForLaunchingRun(heldPrompt("run-hold1", "h3"))).toBe("held");
+    expect((await store.getHeldPrompts("run-hold1")).map((held) => held.id)).toEqual([
+      "h1",
+      "h2",
+      "h3",
+    ]);
+
+    for (const id of ["h1", "h2", "h3"]) await store.deleteHeldPrompt(id);
+    expect(await store.getLatestContinuableRun("auto-hold1", "webhook:session:k")).toMatchObject({
+      first_prompt_pending: 0,
+      has_held_prompts: 0,
+    });
+    expect(await store.holdPromptForLaunchingRun(heldPrompt("run-hold1", "h4"))).toBe(
+      "not_holding"
+    );
+  });
+
+  it("holds a retried follow-up once", async () => {
+    const store = new AutomationStore(env.DB);
+    await store.create(makeAutomation({ id: "auto-hold4" }));
+    await seedRunForKey("auto-hold4", "webhook:session:k", { id: "run-hold4", status: "starting" });
+
+    expect(
+      await store.holdPromptForLaunchingRun(heldPrompt("run-hold4", "h1", Date.now(), "webhook:r"))
+    ).toBe("held");
+    expect(
+      await store.holdPromptForLaunchingRun(heldPrompt("run-hold4", "h2", Date.now(), "webhook:r"))
+    ).toBe("duplicate");
+    expect((await store.getHeldPrompts("run-hold4")).map((held) => held.id)).toEqual(["h1"]);
   });
 
   it("does not hold prompts for a run that ended", async () => {
@@ -1189,7 +1219,9 @@ describe("AutomationStore held continuity prompts", () => {
       session_id: null,
     });
 
-    expect(await store.holdPromptForLaunchingRun(heldPrompt("run-hold2", "h1"))).toBe(false);
+    expect(await store.holdPromptForLaunchingRun(heldPrompt("run-hold2", "h1"))).toBe(
+      "not_holding"
+    );
   });
 
   it("finds runs whose prompts have been held past the cutoff and deletes them", async () => {

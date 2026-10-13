@@ -15,6 +15,8 @@ CREATE TABLE automation_run_held_prompts (
   -- session does not exist yet when the prompt is held.
   actor_user_id   TEXT    NOT NULL,
   actor_author_id TEXT    NOT NULL,
+  -- The prompt's clientRequestId: a retried delivery is held once.
+  client_request_id TEXT  NOT NULL,
   -- JSON enqueue-prompt request body, forwarded as-is on release.
   prompt          TEXT    NOT NULL,
   request_id      TEXT    NOT NULL,
@@ -23,4 +25,6 @@ CREATE TABLE automation_run_held_prompts (
 );
 
 CREATE INDEX idx_run_held_prompts_run ON automation_run_held_prompts (run_id, created_at);
+CREATE UNIQUE INDEX idx_run_held_prompts_request
+  ON automation_run_held_prompts (run_id, client_request_id);
 CREATE INDEX idx_run_held_prompts_created ON automation_run_held_prompts (created_at);
