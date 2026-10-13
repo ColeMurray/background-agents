@@ -12,9 +12,13 @@ import {
   isValidSandboxTimeoutMs,
   findSandboxPortConflict,
   matchRoutingRules,
+  MAX_MCP_SERVER_TOOLS,
+  createMcpServerInputSchema,
   mcpServerCommandSchema,
   mcpServerCredentialMapSchema,
   mcpServerTypeSchema,
+  mcpToolAllowlistSchema,
+  updateMcpServerInputSchema,
   normalizeRoutingRules,
   omitUnsupportedSandboxSettings,
   resolveBuildTimeoutSeconds,
@@ -381,6 +385,36 @@ describe("MCP server schemas", () => {
     expect(mcpServerCommandSchema.safeParse([]).success).toBe(false);
     expect(mcpServerCommandSchema.safeParse(["npx", 1]).success).toBe(false);
     expect(mcpServerCredentialMapSchema.safeParse({ DEBUG: 1 }).success).toBe(false);
+  });
+
+  it("normalizes a tool allowlist to sorted, unique, trimmed names", () => {
+    expect(mcpToolAllowlistSchema.parse([" search ", "fetch", "search"])).toEqual([
+      "fetch",
+      "search",
+    ]);
+    expect(mcpToolAllowlistSchema.parse([])).toEqual([]);
+  });
+
+  it("rejects blank tool names and allowlists over the size limit", () => {
+    expect(mcpToolAllowlistSchema.safeParse(["  "]).success).toBe(false);
+    expect(mcpToolAllowlistSchema.safeParse([1]).success).toBe(false);
+    const tooMany = Array.from({ length: MAX_MCP_SERVER_TOOLS + 1 }, (_, i) => `tool_${i}`);
+    expect(mcpToolAllowlistSchema.safeParse(tooMany).success).toBe(false);
+  });
+
+  it("keeps an empty allowlist distinct from no allowlist on create and update", () => {
+    const remote = { name: "docs", type: "remote", url: "https://mcp.example.com/mcp" };
+    expect(createMcpServerInputSchema.parse(remote).toolAllowlist).toBeUndefined();
+    expect(createMcpServerInputSchema.parse({ ...remote, toolAllowlist: null }).toolAllowlist).toBe(
+      null
+    );
+    expect(
+      createMcpServerInputSchema.parse({ ...remote, toolAllowlist: [] }).toolAllowlist
+    ).toEqual([]);
+    expect(updateMcpServerInputSchema.parse({ revision: 2, toolAllowlist: ["b", "a"] })).toEqual({
+      revision: 2,
+      toolAllowlist: ["a", "b"],
+    });
   });
 });
 

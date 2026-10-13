@@ -13,7 +13,23 @@ interface McpServerMetadata {
   hasEnv: boolean;
   hasHeaders: boolean;
   repoScopes: string[] | null;
+  toolAllowlist: string[] | null;
   enabled: boolean;
+}
+
+async function createRemote(body: Record<string, unknown> = {}): Promise<McpServerMetadata> {
+  const response = await serviceFetch("https://test.local/mcp-servers", {
+    method: "POST",
+    body: JSON.stringify({
+      name: "docs",
+      type: "remote",
+      url: "https://mcp.integration.test/mcp",
+      headers: { Authorization: "Bearer integration-mcp-token" },
+      ...body,
+    }),
+  });
+  expect(response.status).toBe(201);
+  return response.json<McpServerMetadata>();
 }
 
 describe("MCP Servers API", () => {
@@ -485,6 +501,104 @@ describe("MCP Servers API", () => {
         method: "DELETE",
       });
       expect(response.status).toBe(404);
+    });
+  });
+
+  describe("tool allowlists", () => {
+    it("exposes every tool by default and keeps an empty allowlist distinct", async () => {
+      expect((await createRemote()).toolAllowlist).toBeNull();
+      const none = await createRemote({ name: "none", toolAllowlist: [] });
+      expect(none.toolAllowlist).toEqual([]);
+
+      const response = await serviceFetch(`https://test.local/mcp-servers/${none.id}`);
+      expect((await response.json<McpServerMetadata>()).toolAllowlist).toEqual([]);
+    });
+
+    it("normalizes, keeps and clears an allowlist across updates", async () => {
+      const server = await createRemote();
+      const set = await serviceFetch(`https://test.local/mcp-servers/${server.id}`, {
+        method: "PUT",
+        body: JSON.stringify({ toolAllowlist: ["search", " fetch_page ", "search"], revision: 1 }),
+      });
+      expect(set.status).toBe(200);
+      expect((await set.json<McpServerMetadata>()).toolAllowlist).toEqual(["fetch_page", "search"]);
+
+      const renamed = await serviceFetch(`https://test.local/mcp-servers/${server.id}`, {
+        method: "PUT",
+        body: JSON.stringify({ name: "docs-renamed", revision: 2 }),
+      });
+      expect((await renamed.json<McpServerMetadata>()).toolAllowlist).toEqual([
+        "fetch_page",
+        "search",
+      ]);
+
+      const cleared = await serviceFetch(`https://test.local/mcp-servers/${server.id}`, {
+        method: "PUT",
+        body: JSON.stringify({ toolAllowlist: null, revision: 3 }),
+      });
+      expect((await cleared.json<McpServerMetadata>()).toolAllowlist).toBeNull();
+    });
+
+    it("rejects an allowlist that is not a list of tool names", async () => {
+      const server = await createRemote();
+      const response = await serviceFetch(`https://test.local/mcp-servers/${server.id}`, {
+        method: "PUT",
+        body: JSON.stringify({ toolAllowlist: "search", revision: 1 }),
+      });
+      expect(response.status).toBe(400);
+    });
+  });
+
+  describe("POST /mcp-servers/:id/tools", () => {
+    it("lists a remote server's tools using its stored headers", async () => {
+      const server = await createRemote();
+      const response = await serviceFetch(`https://test.local/mcp-servers/${server.id}/tools`, {
+        method: "POST",
+      });
+      expect(response.status).toBe(200);
+      expect(await response.json()).toEqual({
+        tools: [{ name: "fetch_page" }, { name: "search", description: "Search the docs" }],
+      });
+    });
+
+    it("does not repeat the server's response when it does not speak MCP", async () => {
+      const server = await createRemote({ url: "https://mcp.integration.test/not-mcp" });
+      const response = await serviceFetch(`https://test.local/mcp-servers/${server.id}/tools`, {
+        method: "POST",
+      });
+      expect(response.status).toBe(502);
+      await expect(response.json<{ error: string }>()).resolves.toEqual({
+        error: "Could not load tools from the MCP server",
+      });
+    });
+
+    it("reports a server that rejects the stored credentials as a bad gateway", async () => {
+      const server = await createRemote({ url: "https://mcp.integration.test/unauthorized" });
+      const response = await serviceFetch(`https://test.local/mcp-servers/${server.id}/tools`, {
+        method: "POST",
+      });
+      expect(response.status).toBe(502);
+      await expect(response.json<{ error: string }>()).resolves.toEqual({
+        error:
+          "Could not load tools from the MCP server: The server returned HTTP 401; check its headers",
+      });
+    });
+
+    it("refuses local servers and unknown ids", async () => {
+      const local = await serviceFetch("https://test.local/mcp-servers", {
+        method: "POST",
+        body: JSON.stringify({ name: "local", type: "local", command: ["npx", "server"] }),
+      });
+      const { id } = await local.json<McpServerMetadata>();
+      const localTools = await serviceFetch(`https://test.local/mcp-servers/${id}/tools`, {
+        method: "POST",
+      });
+      expect(localTools.status).toBe(400);
+
+      const missing = await serviceFetch("https://test.local/mcp-servers/missing/tools", {
+        method: "POST",
+      });
+      expect(missing.status).toBe(404);
     });
   });
 });

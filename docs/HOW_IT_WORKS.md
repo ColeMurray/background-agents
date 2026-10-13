@@ -404,6 +404,54 @@ reports preparation time on misses. This optimization removes redundant **global
 all MCP startup work: `npx` may still resolve registry metadata or populate its own execution cache,
 particularly with explicit `--package` commands.
 
+#### MCP tool allowlists
+
+Each MCP server has an optional `toolAllowlist`. `null` (the default) allows every tool the server
+offers; a list allows only those tool names. The control plane leaves a server with an empty list
+out of the session's MCP servers, since it could offer nothing. Admins set it under Settings › MCP
+Servers, where **Load tools** asks the control plane to connect to a saved remote server with its
+stored headers and list its tools (`POST /mcp-servers/:id/tools`, which requires
+`mcp_servers.manage`).
+
+Runtimes older than the manifest's `minimumMcpToolAllowlistGeneration` ignore the allowlist. A
+sandbox restored from a snapshot runs the snapshot's runtime, and a prebuilt image records the
+runtime it was built with, so the control plane withholds restricted servers from a launch on an
+older runtime. It logs `mcp.restricted_servers_withheld` and, on restore, adds a warning to the
+session. A launch from a provider's base image is assumed to run the control plane's own runtime
+version.
+
+The sandbox runtime applies the allowlist per harness (`mcp_tool_access.py`):
+
+- **OpenCode** names MCP tools `<server>_<tool>`. A restricted server gets a `<server>_*` deny rule
+  followed by an allow rule per selected tool, after the global allow. OpenCode leaves denied tools
+  out of the model request. Rules are ordered by name length so a restricted server whose name
+  extends another keeps its own rules, and OpenCode's built-in tools and custom tools
+  (Open-Inspect's and the repository's `.opencode/tool` files) that a deny pattern would match are
+  re-allowed. The rules must be in OpenCode's config before it loads those files, so the runtime
+  lists each file's exports with Bun's parser (`Bun.Transpiler.scan`, which reads a module without
+  running it) and names them as OpenCode does: `<file>` for the default export and `<file>_<export>`
+  for each named one. A CommonJS file, or one the parser rejects, falls back to its file name. A
+  tool re-exported with `export * from` cannot be listed and stays hidden if a deny pattern matches
+  it. If the scan fails, the runtime falls back to file names and logs
+  `opencode.custom_tool_scan_failed`. An unrestricted server whose name extends a restricted one
+  (`docs_extra` next to a restricted `docs`) gets no allow rule, because `docs_extra_*` would also
+  match `docs`' own `extra_*` tools; the runtime logs `mcp.tool_allowlist_shadowed_servers`.
+- **Claude Agent** runs in `dontAsk` mode, so a restricted server's `mcp__<server>__*` approval is
+  replaced by one `mcp__<server>__<tool>` approval per selected tool and other calls are refused.
+  Claude Code removes a tool from context only when a deny rule names it, so the unselected tools
+  stay listed. Approvals add up across sources (the session's Claude settings, or the wildcard of a
+  server whose name overlaps, since Claude Code splits names on `__`), so a `PreToolUse` hook also
+  refuses every unselected `mcp__<server>__*` tool of a restricted server. An unrestricted server
+  named `docs__extra` next to a restricted `docs` therefore gets no tools.
+- Servers whose names differ only in characters both harnesses replace with `_` (`my.docs` and
+  `my_docs`) produce the same tool names. They are treated as one: restricted if any of them is, to
+  the tools every restricted one allows.
+- Tools whose names render identically cannot be told apart by either harness, with or without an
+  allowlist: an MCP tool that renders as a built-in, Open-Inspect or repository tool name (an
+  `apply` server's `patch` tool versus OpenCode's `apply_patch`, or a `docs` server's `search` tool
+  versus a `search` export in `.opencode/tool/docs.ts`, tool or not), or as another server's
+  selected tool. That name stays allowed, so the MCP tool does too.
+
 ### When Snapshots Are Taken
 
 - **After successful prompt completion**: Preserves the workspace state

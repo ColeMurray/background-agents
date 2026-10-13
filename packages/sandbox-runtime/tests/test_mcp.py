@@ -2,11 +2,13 @@
 
 import json
 import os
+import shutil
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
 from sandbox_runtime.mcp_packages import NPM_PACKAGE_RE, McpPackageInstaller
+from sandbox_runtime.opencode_server import _custom_tool_ids
 from tests.runtime_helpers import make_opencode_server
 
 
@@ -249,3 +251,154 @@ class TestNpmPackageRegex:
     )
     def test_rejects_dangerous_inputs(self, regex, pkg):
         assert not regex.match(pkg), f"Expected {pkg} to NOT match"
+
+
+# ─── Tool allowlists in the OpenCode config ──────────────────────────────────
+
+
+async def _start_and_capture_config(sup, installed_paths=frozenset()):
+    with (
+        patch.object(sup, "_setup_managed_oauth"),
+        patch.object(sup, "_install_mcp_packages", new_callable=AsyncMock),
+        patch.object(sup, "_prepare_opencode_filesystem", return_value=set(installed_paths)),
+        patch.object(sup, "_wait_for_health", new_callable=AsyncMock),
+        patch(
+            "sandbox_runtime.opencode_server.asyncio.create_subprocess_exec",
+            new_callable=AsyncMock,
+            return_value=MagicMock(stdout=None),
+        ) as spawn,
+        patch(
+            "sandbox_runtime.opencode_server.asyncio.create_task",
+            side_effect=lambda coro: coro.close(),
+        ),
+    ):
+        await sup.start((), sup.workspace_path)
+    return json.loads(spawn.call_args.kwargs["env"]["OPENCODE_CONFIG_CONTENT"])
+
+
+class TestToolAllowlistConfig:
+    @pytest.mark.asyncio
+    async def test_unrestricted_servers_keep_the_blanket_permission(self, tmp_path):
+        sup = _make_supervisor(
+            {"mcp_servers": [{"name": "docs", "type": "remote", "url": "https://mcp.docs"}]}
+        )
+        sup.workspace_path = tmp_path
+        config = await _start_and_capture_config(sup)
+        assert config["permission"] == {"*": {"*": "allow"}}
+
+    @pytest.mark.asyncio
+    async def test_restricted_server_rules_follow_the_global_allow(self, tmp_path):
+        sup = _make_supervisor(
+            {
+                "mcp_servers": [
+                    {
+                        "name": "memory",
+                        "type": "remote",
+                        "url": "https://mcp.memory",
+                        "toolAllowlist": ["recall"],
+                    }
+                ]
+            }
+        )
+        sup.workspace_path = tmp_path / "repo"
+        # Open-Inspect's tools and the repository's own share the project tool directory.
+        project_tools = sup.workspace_path / ".opencode" / "tool"
+        project_tools.mkdir(parents=True)
+        for name, source in (
+            ("memory_read.js", "export default tool({})"),
+            ("spawn-child.js", "export default tool({})"),
+            ("memory_local.ts", "export const notes = tool({})"),
+            ("memory_notes.md", "export default tool({})"),
+        ):
+            (project_tools / name).write_text(source)
+        global_tools = tmp_path / "global" / "tools"
+        global_tools.mkdir(parents=True)
+        (global_tools / "memory_global.js").write_text("export default tool({})")
+        scanned = {
+            "memory_read.js": ["default"],
+            "spawn-child.js": ["default"],
+            "memory_local.ts": ["notes"],
+            "memory_global.js": ["default"],
+        }
+
+        async def read_tool_exports(paths):
+            return {str(path): scanned[path.name] for path in paths}
+
+        with (
+            patch.dict(os.environ, {"OPENCODE_CONFIG_DIR": str(tmp_path / "global")}),
+            patch("sandbox_runtime.opencode_server._read_tool_exports", read_tool_exports),
+        ):
+            config = await _start_and_capture_config(sup)
+        assert list(config["permission"].items()) == [
+            ("*", {"*": "allow"}),
+            ("memory_*", "deny"),
+            ("memory_recall", "allow"),
+            ("memory_global", "allow"),
+            ("memory_local_notes", "allow"),
+            ("memory_read", "allow"),
+        ]
+        assert config["mcp"]["memory"]["url"] == "https://mcp.memory"
+
+    @pytest.mark.asyncio
+    async def test_custom_tools_are_not_scanned_without_a_restricted_server(self, tmp_path):
+        sup = _make_supervisor(
+            {"mcp_servers": [{"name": "docs", "type": "remote", "url": "https://mcp.docs"}]}
+        )
+        sup.workspace_path = tmp_path
+        (tmp_path / ".opencode" / "tool").mkdir(parents=True)
+        (tmp_path / ".opencode" / "tool" / "docs_local.js").write_text("export default 1")
+        with patch("sandbox_runtime.opencode_server._read_tool_exports") as read_tool_exports:
+            config = await _start_and_capture_config(sup)
+        read_tool_exports.assert_not_called()
+        assert config["permission"] == {"*": {"*": "allow"}}
+
+
+class TestCustomToolIds:
+    @pytest.fixture
+    def tool_dir(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("OPENCODE_CONFIG_DIR", str(tmp_path / "global"))
+        tool_dir = tmp_path / ".opencode" / "tool"
+        tool_dir.mkdir(parents=True)
+        return tool_dir
+
+    @pytest.mark.asyncio
+    @pytest.mark.skipif(shutil.which("bun") is None, reason="needs bun, as in the sandbox image")
+    async def test_names_tools_as_opencode_does_from_bun_parsed_exports(self, tmp_path, tool_dir):
+        sources = {
+            # A comment or string that looks like an export is not one.
+            "docs.ts": '/* export const fetch_page = 1 */ const s = "export const x = 1";\n'
+            "export const local_index = tool({}), lookup = tool({});",
+            "docs_local.js": 'import { tool } from "@opencode-ai/plugin"; export default tool({});',
+            "docs_notes.js": "const a = tool({}); export { a, a as find };",
+            "broken.js": "export const = ;",
+            "legacy.js": 'const { tool } = require("@opencode-ai/plugin"); module.exports = tool({});',
+            "readme.md": "export default 1",
+        }
+        for name, source in sources.items():
+            (tool_dir / name).write_text(source)
+        (tool_dir / "folder.ts").mkdir()
+        (tool_dir / "gone.js").symlink_to(tmp_path / "missing.js")
+        log = MagicMock()
+
+        assert await _custom_tool_ids(tmp_path, log) == [
+            # A file Bun cannot parse, or a CommonJS one, falls back to its name.
+            "broken",
+            "docs_local",
+            "docs_local_index",
+            "docs_lookup",
+            "docs_notes_a",
+            "docs_notes_find",
+            "legacy",
+        ]
+        log.warn.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_falls_back_to_file_names_when_the_scan_fails(self, tmp_path, tool_dir):
+        (tool_dir / "docs_notes.js").write_text("export const lookup = tool({})")
+        log = MagicMock()
+        failing = AsyncMock(side_effect=FileNotFoundError("bun"))
+
+        with patch("sandbox_runtime.opencode_server._read_tool_exports", failing):
+            assert await _custom_tool_ids(tmp_path, log) == ["docs_notes"]
+        log.warn.assert_called_once()
+        assert log.warn.call_args.args[0] == "opencode.custom_tool_scan_failed"

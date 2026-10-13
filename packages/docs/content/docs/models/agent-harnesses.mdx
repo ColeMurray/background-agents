@@ -4,7 +4,7 @@ description: Compare the two agent harnesses, choose one when you create a sessi
 audience: team-owner
 owner: platform
 status: published
-lastReviewed: "2026-10-08"
+lastReviewed: "2026-10-09"
 relatedCode:
   - packages/shared/src/harnesses.ts
   - docs/CLAUDE_AGENT.md
@@ -89,7 +89,7 @@ OpenInspect's own tools are served to Claude Agent in-process as the `oi` MCP se
 | `create-pull-request`                                                                        | When the session has a repository                       |
 | `slack-notify`                                                                               | When agent notifications are enabled for the repository |
 
-Session MCP servers configured under Settings › MCP Servers are passed through unchanged.
+Session MCP servers configured under Settings › MCP Servers are passed through with their tool selection applied: Claude Agent allows only a restricted server's selected tools, and a server with none selected is left out. See [MCP servers](/configure/mcp-servers#limit-the-tools-an-agent-sees).
 
 ### Sub-agents
 
