@@ -286,6 +286,31 @@ describe("sanitizeAgentText", () => {
     expect(result.strippedBroadcasts).toBe(true);
   });
 
+  it.each([
+    ["strip", " hi"],
+    ["escape", "@U123 hi"],
+  ] as const)(
+    "applies the %s policy to a mention rebuilt by stripping a broadcast",
+    (policy, expected) => {
+      const result = sanitizeAgentText("<@<!here>U123> hi", {
+        mentionsPolicy: policy,
+        maxLength: 1000,
+      });
+      expect(result.text).toBe(expected);
+      expect(result.strippedBroadcasts).toBe(true);
+      expect(result.mentionsModified).toBe(true);
+    }
+  );
+
+  it("unwraps a link rebuilt by stripping a broadcast", () => {
+    const result = sanitizeAgentText("<ht<!here>tps://evil.example|trusted.example> hi", {
+      mentionsPolicy: "allow",
+      maxLength: 1000,
+    });
+    expect(result.text).toBe("https://evil.example hi");
+    expect(result.strippedBroadcasts).toBe(true);
+  });
+
   it("does not report stripped broadcasts when mentions and links are removed", () => {
     const result = sanitizeAgentText("hi <@U123> see <https://a.co|docs>", {
       mentionsPolicy: "strip",
