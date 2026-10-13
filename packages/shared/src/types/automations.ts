@@ -16,8 +16,16 @@ import { isEnvironmentId } from "./environments";
 import { isCanonicalUserId } from "../user-id";
 
 /** `unauthorized` is a terminal, sessionless GitHub repository grant denial. */
-export type AutomationRunStatus =
-  "starting" | "running" | "completed" | "failed" | "skipped" | "unauthorized";
+export const automationRunStatusSchema = z.enum([
+  "starting",
+  "running",
+  "completed",
+  "failed",
+  "skipped",
+  "unauthorized",
+]);
+
+export type AutomationRunStatus = z.infer<typeof automationRunStatusSchema>;
 
 export type AutomationInvocationSource = "schedule" | "manual" | "event";
 

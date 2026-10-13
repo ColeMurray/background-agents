@@ -319,6 +319,7 @@ export {
   createAutomationRequestSchema,
   updateAutomationRequestSchema,
   listAutomationsResponseSchema,
+  automationRunStatusSchema,
   automationInvocationStatusSchema,
 } from "./automations";
 export type {
