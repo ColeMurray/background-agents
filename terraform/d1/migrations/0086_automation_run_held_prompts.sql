@@ -21,10 +21,14 @@ CREATE TABLE automation_run_held_prompts (
   prompt          TEXT    NOT NULL,
   request_id      TEXT    NOT NULL,
   created_at      INTEGER NOT NULL,
+  -- When the held-prompt sweep next tries to settle the run's held prompts. A
+  -- launch releases them sooner; the sweep pushes this back for a run it cannot
+  -- settle yet, so other runs get their turn.
+  retry_at        INTEGER NOT NULL,
   FOREIGN KEY (run_id) REFERENCES automation_runs(id)
 );
 
 CREATE INDEX idx_run_held_prompts_run ON automation_run_held_prompts (run_id, created_at);
 CREATE UNIQUE INDEX idx_run_held_prompts_request
   ON automation_run_held_prompts (run_id, client_request_id);
-CREATE INDEX idx_run_held_prompts_created ON automation_run_held_prompts (created_at);
+CREATE INDEX idx_run_held_prompts_retry ON automation_run_held_prompts (retry_at);

@@ -2331,7 +2331,7 @@ describe("SessionMessageQueue", () => {
         clientRequestId: "webhook:abc",
       });
 
-      expect(queued.messageId).toBe("msg-existing");
+      expect(queued).toMatchObject({ messageId: "msg-existing", deduplicated: true });
       expect(h.repository.createMessageWithAttachments).not.toHaveBeenCalled();
     });
 
@@ -2363,6 +2363,23 @@ describe("SessionMessageQueue", () => {
         expect(h.repository.createMessageWithAttachments).not.toHaveBeenCalled();
       }
     );
+
+    it("refuses new work under a client request id before participant changes", async () => {
+      const h = buildQueue();
+      h.repository.getPendingOrProcessingCount.mockReturnValue(MAX_UNFINISHED_PROMPTS);
+      h.repository.getMessageByClientRequestId.mockReturnValue(null);
+      h.participantService.getByUserId.mockReturnValue(null as unknown as ParticipantRow);
+
+      await expect(
+        h.queue.enqueuePromptFromApi({
+          content: "Continue",
+          authorId: "new-user",
+          source: "automation",
+          clientRequestId: "webhook:new",
+        })
+      ).rejects.toMatchObject({ name: "PromptQueueFullError" });
+      expect(h.participantService.create).not.toHaveBeenCalled();
+    });
 
     it("rejects a client request id reused for a different prompt", async () => {
       const h = buildQueue();

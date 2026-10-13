@@ -4,6 +4,7 @@ import { normalizeWebhookEvent } from "@open-inspect/shared/triggers";
 import { createCloudflareEnv } from "../../src/cloudflare/platform";
 import { AutomationStore } from "../../src/db/automation-store";
 import { Scheduler } from "../../src/scheduler/scheduler";
+import { firstPromptRequestId } from "../../src/scheduler/session-continuity";
 import { cleanD1Tables } from "./cleanup";
 import { initNamedSession, queryDO, seedActiveUser } from "./helpers";
 import { fetchRuns, makeRunRow, seedRun } from "./run-helpers";
@@ -12,13 +13,17 @@ const OWNER = "11111111111111111111111111111111";
 const AUTOMATION_ID = "auto-webhook-session";
 const SESSION_ID = "session-webhook";
 
+/** A stand-in session that has not queued the run's first prompt under its request id. */
 function createScheduler() {
   const prompts = vi.fn(async (request: Request, _sessionId: string) => {
     expect(new URL(request.url).pathname).toBe("/internal/prompt");
     return Response.json({ messageId: "msg-follow-up", status: "queued" });
   });
   const schedulerEnv = createCloudflareEnv(env);
-  schedulerEnv.SESSION = (sessionId, request) => prompts(request, sessionId);
+  schedulerEnv.SESSION = async (sessionId, request) =>
+    new URL(request.url).pathname === "/internal/prompt-request"
+      ? Response.json({ queued: false })
+      : prompts(request, sessionId);
   return { scheduler: new Scheduler(env.DB, schedulerEnv, { submit() {} }), prompts };
 }
 
@@ -106,60 +111,77 @@ describe("Scheduler webhook sessionKey (real D1)", () => {
     expect(prompts.mock.calls[0]?.[1]).toBe(SESSION_ID);
   });
 
-  it("holds a follow-up that races the run's launch until the run's first prompt is queued", async () => {
-    const sessionId = `session-launching-${Date.now()}`;
-    await seedAutomation(Date.now());
-    const run = makeRunRow(AUTOMATION_ID, { id: "run-launching", status: "starting" });
-    await seedRun(run, { concurrencyKey: "webhook:session:card-42" });
-    const store = new AutomationStore(env.DB);
-    // The launch has claimed its session; the session itself is not created yet.
-    expect(await store.claimRunSession(run.id, sessionId, Date.now(), Date.now() + 60_000)).toBe(
-      true
-    );
-    const scheduler = new Scheduler(env.DB, createCloudflareEnv(env), { submit() {} });
+  it.each([
+    { marker: "recorded", recordMarker: true },
+    { marker: "never recorded (the worker died or the write failed)", recordMarker: false },
+  ])(
+    "holds a follow-up that races the run's launch until its first prompt is queued, with the marker $marker",
+    async ({ recordMarker }) => {
+      const sessionId = `session-launching-${Date.now()}`;
+      await seedAutomation(Date.now());
+      const run = makeRunRow(AUTOMATION_ID, { id: "run-launching", status: "starting" });
+      await seedRun(run, { concurrencyKey: "webhook:session:card-42" });
+      const store = new AutomationStore(env.DB);
+      // The launch has claimed its session; the session itself is not created yet.
+      expect(await store.claimRunSession(run.id, sessionId, Date.now(), Date.now() + 60_000)).toBe(
+        true
+      );
+      const scheduler = new Scheduler(env.DB, createCloudflareEnv(env), { submit() {} });
 
-    let followUp: unknown;
-    const { stub } = await initNamedSession(
-      sessionId,
-      { userId: OWNER, canonicalUserId: OWNER, spawnSource: "automation" },
-      async () => {
-        followUp = await scheduler.event(
-          normalizeWebhookEvent(AUTOMATION_ID, { step: "FOLLOW-UP" }, { sessionKey: "card-42" })
-        );
-      }
-    );
-    const messages = async () =>
-      (
-        await queryDO<{ content: string }>(
-          stub,
-          "SELECT content FROM messages ORDER BY created_at, rowid"
-        )
-      ).map(({ content }) => (content.includes("FOLLOW-UP") ? "FOLLOW-UP" : content));
+      let followUp: unknown;
+      const { stub } = await initNamedSession(
+        sessionId,
+        { userId: OWNER, canonicalUserId: OWNER, spawnSource: "automation" },
+        async () => {
+          followUp = await scheduler.event(
+            normalizeWebhookEvent(AUTOMATION_ID, { step: "FOLLOW-UP" }, { sessionKey: "card-42" })
+          );
+        }
+      );
+      const messages = async () =>
+        (
+          await queryDO<{ content: string }>(
+            stub,
+            "SELECT content FROM messages ORDER BY created_at, rowid"
+          )
+        ).map(({ content }) => (content.includes("FOLLOW-UP") ? "FOLLOW-UP" : content));
 
-    expect(followUp).toEqual({
-      triggered: 0,
-      skipped: 0,
-      steered: 1,
-      invocationIds: [run.invocation_id],
-    });
-    expect(await messages()).toEqual([]);
+      expect(followUp).toEqual({
+        triggered: 0,
+        skipped: 0,
+        steered: 1,
+        invocationIds: [run.invocation_id],
+      });
+      expect(await messages()).toEqual([]);
 
-    // The launch queues the run's own first prompt and marks it; a missed release is
-    // picked up by the tick's held-prompt sweep.
-    await stub.fetch("http://internal/internal/prompt", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ content: "INSTRUCTIONS", authorId: OWNER, source: "automation" }),
-    });
-    await store.markRunFirstPromptQueued(run.id);
-    await env.DB.prepare("UPDATE automation_run_held_prompts SET created_at = ?")
-      .bind(Date.now() - 10 * 60 * 1000)
-      .run();
-    await scheduler.tick();
+      // The launch queues the run's own first prompt under its stable request id. A
+      // missed release is picked up by the tick's held-prompt sweep, which asks the
+      // session when the run's own record of that prompt is missing.
+      await stub.fetch("http://internal/internal/prompt", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          content: "INSTRUCTIONS",
+          authorId: OWNER,
+          source: "automation",
+          clientRequestId: firstPromptRequestId(run.id),
+        }),
+      });
+      if (recordMarker) await store.markRunFirstPromptQueued(run.id);
+      await env.DB.prepare("UPDATE automation_run_held_prompts SET retry_at = ?")
+        .bind(Date.now() - 1)
+        .run();
+      await scheduler.tick();
 
-    expect(await messages()).toEqual(["INSTRUCTIONS", "FOLLOW-UP"]);
-    expect(await store.getHeldPrompts(run.id)).toEqual([]);
-  });
+      expect(await messages()).toEqual(["INSTRUCTIONS", "FOLLOW-UP"]);
+      expect(await store.getHeldPrompts(run.id)).toEqual([]);
+      expect(
+        await env.DB.prepare("SELECT first_prompt_pending FROM automation_runs WHERE id = ?")
+          .bind(run.id)
+          .first<{ first_prompt_pending: number }>()
+      ).toEqual({ first_prompt_pending: 0 });
+    }
+  );
 
   async function seedLaunchingRun() {
     await seedAutomation(Date.now());
@@ -217,8 +239,8 @@ describe("Scheduler webhook sessionKey (real D1)", () => {
     expect(prompts).not.toHaveBeenCalled();
 
     // A missed release is picked up by the tick's sweep, in order.
-    await env.DB.prepare("UPDATE automation_run_held_prompts SET created_at = created_at - ?")
-      .bind(10 * 60 * 1000)
+    await env.DB.prepare("UPDATE automation_run_held_prompts SET retry_at = ?")
+      .bind(Date.now() - 1)
       .run();
     await scheduler.tick();
 
@@ -237,14 +259,17 @@ describe("Scheduler webhook sessionKey (real D1)", () => {
     const { scheduler, prompts } = createScheduler();
 
     await scheduler.event(delivery("A"));
-    // The launching worker died after queueing the first prompt, before recording it:
-    // the run still reads as launching, so A stays held.
-    await env.DB.prepare("UPDATE automation_run_held_prompts SET created_at = created_at - ?")
-      .bind(10 * 60 * 1000)
+    // The run's record of its first prompt is missing and the session cannot confirm
+    // it either (this stand-in session does not know its request id), so A stays held.
+    await env.DB.prepare("UPDATE automation_run_held_prompts SET retry_at = ?")
+      .bind(Date.now() - 1)
       .run();
     await scheduler.tick();
     expect(prompts).not.toHaveBeenCalled();
 
+    await env.DB.prepare("UPDATE automation_run_held_prompts SET retry_at = ?")
+      .bind(Date.now() - 1)
+      .run();
     await scheduler.runComplete({
       automationId: AUTOMATION_ID,
       runId: run.id,

@@ -2,8 +2,9 @@ import type {
   AutomationCallbackContext,
   SlackCallbackContext,
 } from "@open-inspect/shared/types/session-api";
+import { sendPromptResponseSchema } from "@open-inspect/shared/types/session-api";
 import type { CorrelationContext } from "../logger";
-import { SessionInternalPaths } from "../session/contracts";
+import { promptRequestLookupSchema, SessionInternalPaths } from "../session/contracts";
 import type { EnqueuePromptRequest } from "../session/enqueue-prompt-contract";
 import { createSessionRuntimeClient } from "../session/runtime-client";
 import type { Env } from "../types";
@@ -17,7 +18,10 @@ export type SchedulerPromptRequest = Pick<
 
 export type SessionPromptOutcome =
   | { kind: "queued" }
+  /** The session already queued the prompt its clientRequestId names. */
   | { kind: "duplicate" }
+  /** The session already queued a different prompt under this clientRequestId. */
+  | { kind: "request_id_taken" }
   | { kind: "rejected"; status: number; code: string | null };
 
 /** Enqueue a prompt onto a session's queue through its runtime's prompt route. */
@@ -46,11 +50,35 @@ export async function enqueueSerializedSessionPrompt(
       body,
     }
   );
-  if (response.ok) return { kind: "queued" };
+  if (response.ok) {
+    const accepted = sendPromptResponseSchema.safeParse(await response.json().catch(() => null));
+    return accepted.success && accepted.data.deduplicated
+      ? { kind: "duplicate" }
+      : { kind: "queued" };
+  }
 
   const code = await rejectionCode(response);
-  if (response.status === 409 && code === "PROMPT_REQUEST_CONFLICT") return { kind: "duplicate" };
+  if (response.status === 409 && code === "PROMPT_REQUEST_CONFLICT") {
+    return { kind: "request_id_taken" };
+  }
   return { kind: "rejected", status: response.status, code };
+}
+
+/** Whether the session queued a prompt under this clientRequestId; throws when it cannot say. */
+export async function isSessionPromptRequestQueued(
+  env: Env,
+  sessionId: string,
+  clientRequestId: string,
+  ctx: CorrelationContext
+): Promise<boolean> {
+  const response = await createSessionRuntimeClient(env, ctx).fetch(
+    sessionId,
+    SessionInternalPaths.promptRequest,
+    { method: "GET" },
+    `?clientRequestId=${encodeURIComponent(clientRequestId)}`
+  );
+  if (!response.ok) throw new Error(`Prompt request lookup failed with status ${response.status}`);
+  return promptRequestLookupSchema.parse(await response.json()).queued;
 }
 
 async function rejectionCode(response: Response): Promise<string | null> {

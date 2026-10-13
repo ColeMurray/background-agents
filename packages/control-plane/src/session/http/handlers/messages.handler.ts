@@ -10,7 +10,11 @@ import type { MessageService } from "../../services/message.service";
 import { parseEventListCursor } from "../../event-cursor";
 import { parseMessageListCursor } from "../../message-cursor";
 import { SessionAttachmentError } from "../../session-attachment-resolver";
-import { sessionTraceFormatSchema, sessionTraceIncludeSchema } from "../../contracts";
+import {
+  type PromptRequestLookup,
+  sessionTraceFormatSchema,
+  sessionTraceIncludeSchema,
+} from "../../contracts";
 import {
   BudgetExhaustedError,
   PromptQueueFullError,
@@ -77,6 +81,16 @@ export class MessagesHandler {
       });
       throw error;
     }
+  }
+
+  lookupPromptRequest(url: URL): Response {
+    const clientRequestId = url.searchParams.get("clientRequestId");
+    if (!clientRequestId) {
+      return Response.json({ error: "clientRequestId is required" }, { status: 400 });
+    }
+    return Response.json({
+      queued: this.messageService.hasPromptRequest(clientRequestId),
+    } satisfies PromptRequestLookup);
   }
 
   async stop(): Promise<Response> {

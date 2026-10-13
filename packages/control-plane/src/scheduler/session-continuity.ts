@@ -17,6 +17,7 @@ import type { Env } from "../types";
 import {
   enqueueSerializedSessionPrompt,
   enqueueSessionPrompt,
+  isSessionPromptRequestQueued,
   type SchedulerPromptRequest,
   type SessionPromptOutcome,
 } from "./session-prompt";
@@ -30,11 +31,20 @@ import {
 const SESSION_CONTINUITY_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
 
 /**
- * How long a held follow-up may wait before the sweep treats its release as missed. A
- * launch releases its held follow-ups as soon as its own first prompt is queued.
+ * How long held follow-ups wait before the sweep tries to settle them, and again after
+ * each attempt that could not. A launch releases them as soon as its first prompt is
+ * queued, so the sweep only handles a missed or failed release.
  */
-const HELD_PROMPT_RELEASE_GRACE_MS = 2 * 60 * 1000;
+const HELD_PROMPT_RETRY_MS = 2 * 60 * 1000;
 const HELD_PROMPT_SWEEP_LIMIT = 50;
+
+/**
+ * The clientRequestId of a run's own first prompt: the session can say whether it took
+ * it, independently of the launching worker recording that.
+ */
+export function firstPromptRequestId(runId: string): string {
+  return `automation-run:${runId}`;
+}
 
 export interface SteeringActor {
   userId: string;
@@ -126,37 +136,35 @@ export async function continueSession(
  * Queue a launched run's held follow-ups on its session, oldest first, until none are
  * left: follow-ups that arrive meanwhile are held behind them. A follow-up that cannot
  * be delivered right now stays held for the sweep, and so do the ones after it, to
- * keep their order.
+ * keep their order. Returns whether every held follow-up was settled.
  */
 export async function releaseHeldPrompts(
   deps: SessionContinuityDeps,
   run: AutomationRunRow
-): Promise<void> {
+): Promise<boolean> {
   const sessionId = run.session_id;
-  if (!sessionId) return;
+  if (!sessionId) return false;
   for (
     let held = await deps.store.getHeldPrompts(run.id);
     held.length > 0;
     held = await deps.store.getHeldPrompts(run.id)
   ) {
     for (const prompt of held) {
-      if (!(await releaseHeldPrompt(deps, run, sessionId, prompt))) return;
+      if (!(await releaseHeldPrompt(deps, run, sessionId, prompt))) return false;
     }
   }
+  return true;
 }
 
 /**
- * Settle held follow-ups whose release was missed (the launching worker died, or the
- * release failed): release them once their run's first prompt is known to be queued,
- * and drop them once the run ended without it.
+ * Settle held follow-ups whose release was missed: the launching worker died, or the
+ * release or its first-prompt record failed. A run left unsettled is retried later, so
+ * the next sweep reaches other runs first.
  */
 export async function sweepHeldPrompts(deps: SessionContinuityDeps, now: number): Promise<void> {
   let runs: AutomationRunRow[];
   try {
-    runs = await deps.store.getRunsWithStaleHeldPrompts(
-      now - HELD_PROMPT_RELEASE_GRACE_MS,
-      HELD_PROMPT_SWEEP_LIMIT
-    );
+    runs = await deps.store.getRunsWithDueHeldPrompts(now, HELD_PROMPT_SWEEP_LIMIT);
   } catch (error) {
     deps.log.error("Held follow-up sweep failed to query runs", {
       event: "scheduler.recovery.held_prompts_query_error",
@@ -166,19 +174,9 @@ export async function sweepHeldPrompts(deps: SessionContinuityDeps, now: number)
   }
 
   for (const run of runs) {
+    let settled = false;
     try {
-      if (run.session_id && run.status !== "starting" && run.first_prompt_pending === 0) {
-        await releaseHeldPrompts(deps, run);
-      } else if (run.status !== "starting" && run.status !== "running") {
-        const dropped = await deps.store.deleteHeldPromptsForRun(run.id);
-        deps.log.warn("Dropped follow-ups held for a run that ended before its first prompt", {
-          event: "scheduler.recovery.held_prompts_dropped",
-          automation_id: run.automation_id,
-          run_id: run.id,
-          run_status: run.status,
-          count: dropped,
-        });
-      }
+      settled = await settleHeldPrompts(deps, run);
     } catch (error) {
       deps.log.error("Held follow-up sweep failed to settle a run", {
         event: "scheduler.recovery.held_prompts_error",
@@ -187,7 +185,51 @@ export async function sweepHeldPrompts(deps: SessionContinuityDeps, now: number)
         error: error instanceof Error ? error : new Error(String(error)),
       });
     }
+    if (!settled) {
+      await deps.store.deferHeldPrompts(run.id, now + HELD_PROMPT_RETRY_MS).catch((error) =>
+        deps.log.error("Held follow-up sweep failed to defer a run", {
+          event: "scheduler.recovery.held_prompts_error",
+          automation_id: run.automation_id,
+          run_id: run.id,
+          error: error instanceof Error ? error : new Error(String(error)),
+        })
+      );
+    }
   }
+}
+
+/**
+ * Release a run's held follow-ups once its first prompt is queued, and drop them once
+ * the run ended without it. Whether the first prompt is queued is the session's answer
+ * when the run's own record of it is missing. Returns false to retry later.
+ */
+async function settleHeldPrompts(
+  deps: SessionContinuityDeps,
+  run: AutomationRunRow
+): Promise<boolean> {
+  if (run.status === "starting" || run.first_prompt_pending === 1) {
+    const queued =
+      run.status !== "starting" &&
+      run.session_id !== null &&
+      (await isSessionPromptRequestQueued(deps.env, run.session_id, firstPromptRequestId(run.id), {
+        trace_id: `automation:${run.automation_id}`,
+        request_id: run.id,
+      }));
+    if (!queued) {
+      if (run.status === "starting" || run.status === "running") return false;
+      const dropped = await deps.store.deleteHeldPromptsForRun(run.id);
+      deps.log.warn("Dropped follow-ups held for a run that ended before its first prompt", {
+        event: "scheduler.recovery.held_prompts_dropped",
+        automation_id: run.automation_id,
+        run_id: run.id,
+        run_status: run.status,
+        count: dropped,
+      });
+      return true;
+    }
+    await deps.store.markRunFirstPromptQueued(run.id);
+  }
+  return releaseHeldPrompts(deps, run);
 }
 
 /**
@@ -235,7 +277,11 @@ async function continueRunSession(
         ...fields,
       });
       return { kind: "steered", invocationId: run.invocation_id };
+    // The request ids sent here name a delivery (a webhook's idempotencyKey), so a
+    // different prompt under the same id is that delivery again: a retry's context
+    // block carries its own receipt time.
     case "duplicate":
+    case "request_id_taken":
       return { kind: "skipped", invocationId: run.invocation_id };
     case "rejected":
       deps.log.warn("Session refused the follow-up", {
@@ -287,6 +333,7 @@ async function holdFollowUp(
     prompt: JSON.stringify({ ...body, clientRequestId }),
     request_id: ctx.request_id,
     created_at: Date.now(),
+    retry_at: Date.now() + HELD_PROMPT_RETRY_MS,
   });
   if (held === "not_holding") return null;
   if (held === "duplicate") return { kind: "skipped", invocationId: run.invocation_id };

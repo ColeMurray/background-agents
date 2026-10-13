@@ -923,6 +923,7 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
     snapshot: () => snapshotReader.handleSnapshot(),
     sandboxAccess: () => accessReader.handleSandboxAccess(),
     prompt: (request, _url, requestLog) => messagesHandler.enqueuePrompt(request, requestLog),
+    promptRequest: (_request, url) => messagesHandler.lookupPromptRequest(url),
     autofix: (request, _url, requestLog) => autofixHandler.handle(request, requestLog),
     stop: () => messagesHandler.stop(),
     sandboxEvent: (request) => sandboxHandler.sandboxEvent(request),

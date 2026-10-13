@@ -1185,6 +1185,7 @@ describe("AutomationStore held continuity prompts", () => {
       prompt: JSON.stringify({ content: id, authorId: "user-1", source: "automation" }),
       request_id: `req-${id}`,
       created_at: createdAt,
+      retry_at: createdAt,
     };
   }
 
@@ -1253,21 +1254,37 @@ describe("AutomationStore held continuity prompts", () => {
     );
   });
 
-  it("finds runs whose prompts have been held past the cutoff and deletes them", async () => {
+  it("selects runs whose held prompts are due, longest-waiting first, and defers them", async () => {
     const store = new AutomationStore(env.DB);
     await store.create(makeAutomation({ id: "auto-hold3" }));
-    await seedRunForKey("auto-hold3", "webhook:session:a", { id: "run-stale", status: "starting" });
-    await seedRunForKey("auto-hold3", "webhook:session:b", { id: "run-fresh", status: "starting" });
-    const cutoff = Date.now() - 60_000;
-    await store.holdPromptForLaunchingRun(heldPrompt("run-stale", "h-stale-1", cutoff - 2));
-    await store.holdPromptForLaunchingRun(heldPrompt("run-stale", "h-stale-2", cutoff - 1));
-    await store.holdPromptForLaunchingRun(heldPrompt("run-fresh", "h-fresh", cutoff + 1));
+    const now = Date.now();
+    for (const [runId, retryAt] of [
+      ["run-due-late", now - 1],
+      ["run-due-early", now - 60_000],
+      ["run-not-due", now + 60_000],
+    ] as const) {
+      await seedRunForKey("auto-hold3", `webhook:session:${runId}`, {
+        id: runId,
+        status: "starting",
+      });
+      await store.holdPromptForLaunchingRun(heldPrompt(runId, `h-${runId}`, retryAt));
+    }
 
-    const stale = await store.getRunsWithStaleHeldPrompts(cutoff, 10);
-    expect(stale.map((run) => [run.id, run.first_prompt_pending])).toEqual([["run-stale", 0]]);
+    expect((await store.getRunsWithDueHeldPrompts(now, 10)).map((run) => run.id)).toEqual([
+      "run-due-early",
+      "run-due-late",
+    ]);
+    expect((await store.getRunsWithDueHeldPrompts(now, 1)).map((run) => run.id)).toEqual([
+      "run-due-early",
+    ]);
 
-    expect(await store.deleteHeldPromptsForRun("run-stale")).toBe(2);
-    await store.deleteHeldPrompt("h-fresh");
-    expect(await store.getRunsWithStaleHeldPrompts(Date.now() + 1, 10)).toEqual([]);
+    // A run the sweep could not settle moves behind the others.
+    await store.deferHeldPrompts("run-due-early", now + 120_000);
+    expect((await store.getRunsWithDueHeldPrompts(now, 1)).map((run) => run.id)).toEqual([
+      "run-due-late",
+    ]);
+
+    expect(await store.deleteHeldPromptsForRun("run-due-late")).toBe(1);
+    expect(await store.getRunsWithDueHeldPrompts(now, 10)).toEqual([]);
   });
 });

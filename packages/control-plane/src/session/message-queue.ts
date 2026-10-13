@@ -709,12 +709,16 @@ export class SessionMessageQueue {
 
   async enqueuePromptFromApi(
     data: EnqueuePromptRequest
-  ): Promise<{ messageId: string; status: "queued" }> {
+  ): Promise<{ messageId: string; status: "queued"; deduplicated: boolean }> {
     this.assertPromptableSession();
     this.assertSandboxAcceptingPrompts();
-    if (!data.clientRequestId) {
-      // A request id may name a prompt already queued; enqueuePromptCore checks
-      // budget and capacity after its idempotency lookup.
+    // A request id naming a prompt already queued is answered by enqueuePromptCore's
+    // idempotency lookup, whatever the budget or capacity is now. New work is refused
+    // here, before any participant changes.
+    if (
+      !data.clientRequestId ||
+      !this.messageRepository.getMessageByClientRequestId(data.clientRequestId)
+    ) {
       this.assertBudgetAvailable();
       this.assertQueueCapacity();
     }
@@ -762,7 +766,7 @@ export class SessionMessageQueue {
 
     await this.processMessageQueue();
 
-    return { messageId: enqueued.messageId, status: "queued" };
+    return { messageId: enqueued.messageId, status: "queued", deduplicated: enqueued.deduplicated };
   }
 
   private async enqueuePromptCore(data: EnqueuePromptCoreData): Promise<EnqueuedPrompt> {
@@ -805,6 +809,7 @@ export class SessionMessageQueue {
         return {
           messageId: existing.id,
           position: this.messageRepository.getUnfinishedMessagePosition(existing.id),
+          deduplicated: true,
         };
       }
     }
@@ -888,7 +893,7 @@ export class SessionMessageQueue {
       queue_depth_after: position,
     });
 
-    return { messageId, position };
+    return { messageId, position, deduplicated: false };
   }
 
   private assertBudgetAvailable(): void {

@@ -176,6 +176,8 @@ export interface HeldPromptRow {
   prompt: string;
   request_id: string;
   created_at: number;
+  /** When the held-prompt sweep next tries to settle the run's held prompts. */
+  retry_at: number;
 }
 
 export interface EnrichedRunRow extends AutomationRunRow {
@@ -1725,8 +1727,8 @@ export class AutomationStore {
       .prepare(
         `INSERT INTO automation_run_held_prompts
            (id, run_id, actor_user_id, actor_author_id, client_request_id, prompt, request_id,
-            created_at)
-         SELECT ?, ?, ?, ?, ?, ?, ?, ?
+            created_at, retry_at)
+         SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?
          WHERE EXISTS (
            SELECT 1 FROM automation_runs
            WHERE id = ?
@@ -1743,6 +1745,7 @@ export class AutomationStore {
         prompt.prompt,
         prompt.request_id,
         prompt.created_at,
+        prompt.retry_at,
         prompt.run_id,
         prompt.run_id
       )
@@ -1778,21 +1781,29 @@ export class AutomationStore {
     return result.meta?.changes ?? 0;
   }
 
-  /** Runs holding a prompt since before `heldBefore`, whose release was missed. */
-  async getRunsWithStaleHeldPrompts(
-    heldBefore: number,
-    limit: number
-  ): Promise<AutomationRunRow[]> {
+  /** Runs whose held prompts the sweep should try to settle by `now`, longest-waiting first. */
+  async getRunsWithDueHeldPrompts(now: number, limit: number): Promise<AutomationRunRow[]> {
     const result = await this.db
       .prepare(
-        `SELECT * FROM automation_runs
-         WHERE id IN (
-           SELECT DISTINCT run_id FROM automation_run_held_prompts WHERE created_at < ? LIMIT ?
-         )`
+        `SELECT r.* FROM automation_runs r
+         JOIN (
+           SELECT run_id, MIN(retry_at) AS due_at FROM automation_run_held_prompts
+           GROUP BY run_id HAVING MIN(retry_at) <= ?
+           ORDER BY due_at LIMIT ?
+         ) due ON due.run_id = r.id
+         ORDER BY due.due_at`
       )
-      .bind(heldBefore, limit)
+      .bind(now, limit)
       .all<AutomationRunRow>();
     return result.results || [];
+  }
+
+  /** Push back the sweep's next attempt at a run it could not settle. */
+  async deferHeldPrompts(runId: string, retryAt: number): Promise<void> {
+    await this.db
+      .prepare("UPDATE automation_run_held_prompts SET retry_at = ? WHERE run_id = ?")
+      .bind(retryAt, runId)
+      .run();
   }
 
   // --- Recovery sweep queries ---

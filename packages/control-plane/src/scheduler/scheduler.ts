@@ -106,6 +106,7 @@ import {
 import type { RequestContext } from "../routes/shared";
 import {
   continueSession,
+  firstPromptRequestId,
   releaseHeldPrompts,
   steeringActor,
   sweepHeldPrompts,
@@ -1978,15 +1979,17 @@ export class Scheduler {
         canonicalUserId: executionPrincipal.platformUserId,
         source: "automation",
         callbackContext,
+        clientRequestId: firstPromptRequestId(runId),
       },
       { trace_id: `automation:${automation.id}`, request_id: runId }
     );
     if (outcome.kind === "rejected") {
       throw new Error(`Prompt enqueue failed with status ${outcome.status}`);
     }
-    if (outcome.kind === "duplicate") {
-      throw new Error("Prompt enqueue was refused as a duplicate");
+    if (outcome.kind === "request_id_taken") {
+      throw new Error("Prompt enqueue was refused: its request id names another prompt");
     }
+    // A duplicate means the session already queued this run's first prompt.
   }
 
   private async resolveScmEnrichment(userId: string): Promise<GitHubEnrichment | null> {

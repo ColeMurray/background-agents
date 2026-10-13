@@ -161,7 +161,8 @@ function createMockStore() {
     getHeldPrompts: vi.fn().mockResolvedValue([]),
     deleteHeldPrompt: vi.fn().mockResolvedValue(undefined),
     deleteHeldPromptsForRun: vi.fn().mockResolvedValue(0),
-    getRunsWithStaleHeldPrompts: vi.fn().mockResolvedValue([]),
+    getRunsWithDueHeldPrompts: vi.fn().mockResolvedValue([]),
+    deferHeldPrompts: vi.fn().mockResolvedValue(undefined),
     getRepositoriesForAutomation: vi.fn().mockResolvedValue([]),
     getRepositoriesForAutomationIds: vi.fn().mockResolvedValue(new Map()),
     getEnvironmentsForAutomation: vi.fn().mockResolvedValue([]),
@@ -298,7 +299,7 @@ interface SessionStub {
   fetch(request: Request): Promise<Response>;
 }
 
-function createMockSessionStub(): SessionStub {
+function createMockSessionStub({ firstPromptQueued = false } = {}): SessionStub {
   return {
     fetch: vi.fn(async (input: RequestInfo, _init?: RequestInit) => {
       const url = typeof input === "string" ? input : input.url;
@@ -306,6 +307,7 @@ function createMockSessionStub(): SessionStub {
       if (path === "/internal/init") return Response.json({ status: "ok" });
       if (path === "/internal/prompt")
         return Response.json({ messageId: "msg-1", status: "queued" });
+      if (path === "/internal/prompt-request") return Response.json({ queued: firstPromptQueued });
       return new Response("Not Found", { status: 404 });
     }),
   } as never;
@@ -4088,58 +4090,145 @@ describe("Scheduler", () => {
           { refusal: "cannot be reached", status: 503, code: null },
           { refusal: "has a full queue", status: 429, code: "PROMPT_QUEUE_FULL" },
         ])(
-          "keeps a held follow-up for the sweep when the session $refusal",
+          "keeps held follow-ups, in order, until the session $refusal no longer",
           async ({ status, code }) => {
-            mockStore.getRunsWithStaleHeldPrompts.mockResolvedValue([
+            mockStore.getRunsWithDueHeldPrompts.mockResolvedValue([
               sampleRunRow({ session_id: "sess-card", first_prompt_pending: 0 }),
             ]);
-            mockStore.getHeldPrompts.mockResolvedValue([heldRow({ content: "HELD" })]);
+            const held = [
+              heldRow({ content: "HELD-1" }),
+              { ...heldRow({ content: "HELD-2" }), id: "held-2" },
+            ];
+            mockStore.getHeldPrompts.mockResolvedValue(held);
+            let accepting = false;
             const fetch = vi.fn(async (_input: RequestInfo) =>
-              Response.json({ error: "busy", code }, { status })
+              accepting
+                ? Response.json({ messageId: "msg", status: "queued" })
+                : Response.json({ error: "busy", code }, { status })
             );
+            const scheduler = createScheduler(createEnv(undefined, { fetch } as never));
 
-            await createScheduler(createEnv(undefined, { fetch } as never)).tick();
+            await scheduler.tick();
 
+            // The first follow-up stays held, and the one behind it is not tried.
             expect(promptCallCount(fetch)).toBe(1);
             expect(mockStore.deleteHeldPrompt).not.toHaveBeenCalled();
+            expect(mockStore.deferHeldPrompts).toHaveBeenCalledWith("run-1", expect.any(Number));
+
+            accepting = true;
+            mockStore.getHeldPrompts.mockReset().mockResolvedValueOnce(held).mockResolvedValue([]);
+            await scheduler.tick();
+
+            expect(promptCallCount(fetch)).toBe(3);
+            expect(mockStore.deleteHeldPrompt.mock.calls).toEqual([["held-1"], ["held-2"]]);
           }
         );
 
         it.each([
           {
-            state: "its first prompt is queued",
+            state: "its first prompt is recorded as queued",
             run: { first_prompt_pending: 0 },
-            released: true,
-            dropped: false,
+            firstPromptQueued: false,
+            outcome: "released",
+          },
+          {
+            state: "the session took its first prompt but the record of it is missing",
+            run: { first_prompt_pending: 1 },
+            firstPromptQueued: true,
+            outcome: "released",
+          },
+          {
+            state: "it ended after the session took its first prompt",
+            run: { status: "failed", first_prompt_pending: 1 },
+            firstPromptQueued: true,
+            outcome: "released",
           },
           {
             state: "it ended before its first prompt",
             run: { status: "failed", first_prompt_pending: 1 },
-            released: false,
-            dropped: true,
+            firstPromptQueued: false,
+            outcome: "dropped",
           },
           {
             state: "it is still launching",
             run: { first_prompt_pending: 1 },
-            released: false,
-            dropped: false,
+            firstPromptQueued: false,
+            outcome: "deferred",
+          },
+          {
+            state: "it has not claimed a session yet",
+            run: { status: "starting", session_id: null },
+            firstPromptQueued: false,
+            outcome: "deferred",
           },
         ])(
-          "settles a missed release in the sweep when $state",
-          async ({ run, released, dropped }) => {
-            mockStore.getRunsWithStaleHeldPrompts.mockResolvedValue([
+          "settles held follow-ups in the sweep when $state",
+          async ({ run, firstPromptQueued, outcome }) => {
+            mockStore.getRunsWithDueHeldPrompts.mockResolvedValue([
               sampleRunRow({ session_id: "sess-card", ...run }),
             ]);
             mockStore.getHeldPrompts.mockResolvedValueOnce([heldRow({ content: "HELD" })]);
-            const stub = createMockSessionStub();
+            const stub = createMockSessionStub({ firstPromptQueued });
 
             await createScheduler(createEnv(undefined, stub)).tick();
 
-            expect(promptCallCount(vi.mocked(stub.fetch))).toBe(released ? 1 : 0);
-            expect(mockStore.deleteHeldPrompt).toHaveBeenCalledTimes(released ? 1 : 0);
-            expect(mockStore.deleteHeldPromptsForRun).toHaveBeenCalledTimes(dropped ? 1 : 0);
+            expect(promptCallCount(vi.mocked(stub.fetch))).toBe(outcome === "released" ? 1 : 0);
+            expect(mockStore.deleteHeldPrompt).toHaveBeenCalledTimes(
+              outcome === "released" ? 1 : 0
+            );
+            expect(mockStore.deleteHeldPromptsForRun).toHaveBeenCalledTimes(
+              outcome === "dropped" ? 1 : 0
+            );
+            expect(mockStore.deferHeldPrompts).toHaveBeenCalledTimes(
+              outcome === "deferred" ? 1 : 0
+            );
+            expect(mockStore.markRunFirstPromptQueued).toHaveBeenCalledTimes(
+              outcome === "released" && run.first_prompt_pending === 1 ? 1 : 0
+            );
           }
         );
+
+        it("defers a run whose session cannot say whether it took the first prompt", async () => {
+          mockStore.getRunsWithDueHeldPrompts.mockResolvedValue([
+            sampleRunRow({ session_id: "sess-card", first_prompt_pending: 1 }),
+          ]);
+          const fetch = vi.fn(async (_input: RequestInfo) => new Response("down", { status: 500 }));
+
+          await createScheduler(createEnv(undefined, { fetch } as never)).tick();
+
+          expect(mockStore.deferHeldPrompts).toHaveBeenCalledWith("run-1", expect.any(Number));
+          expect(mockStore.deleteHeldPromptsForRun).not.toHaveBeenCalled();
+        });
+
+        it("sends the run's first prompt under its stable request id", async () => {
+          const stub = createMockSessionStub();
+
+          await createScheduler(createEnv(undefined, stub)).event(webhookEvent({ mode: "build" }));
+
+          expect(await getPromptBody(vi.mocked(stub.fetch))).toMatchObject({
+            clientRequestId: expect.stringMatching(/^automation-run:/),
+          });
+        });
+
+        it("skips a retry the session reports as already queued", async () => {
+          mockStore.getLatestContinuableRun.mockResolvedValue(
+            sampleRunRow({ invocation_id: "inv-card" })
+          );
+          const fetch = vi.fn(async (_input: RequestInfo) =>
+            Response.json({ messageId: "msg-1", status: "queued", deduplicated: true })
+          );
+
+          const result = await createScheduler(createEnv(undefined, { fetch } as never)).event(
+            webhookEvent({ mode: "iterate" }, "review-2")
+          );
+
+          expect(result).toEqual({
+            triggered: 0,
+            skipped: 1,
+            steered: 0,
+            invocationIds: ["inv-card"],
+          });
+        });
       });
 
       it("refuses the delivery, rather than starting a fresh run, when the session cannot be reached", async () => {
