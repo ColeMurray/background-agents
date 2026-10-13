@@ -18,10 +18,10 @@ const mocks = vi.hoisted(() => ({
   nextOffset: null as number | null,
   collection: vi.fn(),
   canManageOwn: true,
-  replace: vi.fn(),
+  replaceState: vi.fn(),
   environments: [] as { id: string; name: string }[],
 }));
-// Like the real router, replace() updates the URL and re-renders readers of useSearchParams.
+// Like Next, native history writes re-render readers of useSearchParams.
 const urlListeners = new Set<() => void>();
 vi.mock("next/navigation", async () => {
   const { useSyncExternalStore } = await import("react");
@@ -31,8 +31,6 @@ vi.mock("next/navigation", async () => {
   };
   return {
     useSearchParams: () => useSyncExternalStore(subscribe, () => mocks.params),
-    usePathname: () => "/settings",
-    useRouter: () => ({ replace: mocks.replace }),
   };
 });
 vi.mock("@/hooks/use-memories", () => ({
@@ -114,13 +112,23 @@ const firstRevision: MemoryRevision = {
   createdAt: 1,
 };
 
+/** Navigate: the address bar and useSearchParams both show the new query. */
+function setParams(init: Record<string, string>) {
+  mocks.params = new URLSearchParams(init);
+  window.history.pushState(null, "", `/settings?${mocks.params}`);
+}
+
 describe("memory management", () => {
   beforeEach(() => {
     cleanup();
     vi.clearAllMocks();
     mocks.params = new URLSearchParams();
-    mocks.replace.mockImplementation((href: string) => {
-      mocks.params = new URLSearchParams(href.split("?")[1] ?? "");
+    window.history.pushState(null, "", "/settings");
+    const realReplaceState = History.prototype.replaceState;
+    vi.spyOn(window.history, "replaceState").mockImplementation((state, unused, href) => {
+      realReplaceState.call(window.history, state, unused, href);
+      mocks.replaceState(String(href));
+      mocks.params = new URLSearchParams(String(href).split("?")[1] ?? "");
       act(() => urlListeners.forEach((listener) => listener()));
     });
     mocks.records = [];
@@ -300,7 +308,7 @@ describe("memory management", () => {
     await waitFor(() =>
       expect(mocks.collection).toHaveBeenLastCalledWith({ type: "personal" }, "active", 0, "rspec")
     );
-    expect(mocks.replace).toHaveBeenLastCalledWith("/settings?search=rspec", { scroll: false });
+    expect(mocks.replaceState).toHaveBeenLastCalledWith("/settings?search=rspec");
     expect(screen.getByText("No active memories match “rspec”.")).toBeTruthy();
   });
 
@@ -321,9 +329,9 @@ describe("memory management", () => {
   });
 
   it("follows a search changed by navigation instead of restoring the old one", async () => {
-    mocks.params = new URLSearchParams({ search: "docker" });
+    setParams({ search: "docker" });
     const { rerender } = render(<MemoriesSettings />);
-    mocks.params = new URLSearchParams({ search: "rspec" });
+    setParams({ search: "rspec" });
     rerender(<MemoriesSettings />);
     await waitFor(() =>
       expect(mocks.collection).toHaveBeenLastCalledWith({ type: "personal" }, "active", 0, "rspec")
@@ -332,7 +340,7 @@ describe("memory management", () => {
       (screen.getByRole("searchbox", { name: "Search memories" }) as HTMLInputElement).value
     ).toBe("rspec");
     await new Promise((resolve) => setTimeout(resolve, 400));
-    expect(mocks.replace).not.toHaveBeenCalled();
+    expect(mocks.replaceState).not.toHaveBeenCalled();
   });
 
   it("explains a search with too many terms instead of requesting it", async () => {
@@ -364,19 +372,17 @@ describe("memory management", () => {
   });
 
   it("keeps a one-character edit after the URL echo", async () => {
-    mocks.params = new URLSearchParams({ search: "rspec" });
+    setParams({ search: "rspec" });
     render(<MemoriesSettings />);
     const box = screen.getByRole("searchbox", { name: "Search memories" }) as HTMLInputElement;
     fireEvent.change(box, { target: { value: "r" } });
-    await waitFor(() =>
-      expect(mocks.replace).toHaveBeenLastCalledWith("/settings", { scroll: false })
-    );
+    await waitFor(() => expect(mocks.replaceState).toHaveBeenLastCalledWith("/settings"));
     expect(box.value).toBe("r");
     expect(mocks.collection).toHaveBeenLastCalledWith({ type: "personal" }, "active", 0, "");
   });
 
   it("starts from a search already in the URL", () => {
-    mocks.params = new URLSearchParams({ search: "docker" });
+    setParams({ search: "docker" });
     render(<MemoriesSettings />);
     expect(mocks.collection).toHaveBeenLastCalledWith({ type: "personal" }, "active", 0, "docker");
     expect(
