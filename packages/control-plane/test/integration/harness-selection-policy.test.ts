@@ -32,10 +32,10 @@ describe("harness policy with real D1 and Durable Object storage", () => {
     });
   });
 
-  it("requires explicit native API routing when no connected-account default exists", async () => {
+  it("accepts native API-key routing when no connected-account default exists", async () => {
     await expect(
       validateHarnessAutomationAuth(env.DB, "codex", "openai/gpt-5.6-sol", {})
-    ).rejects.toThrow("requires an explicit OpenAI");
+    ).resolves.toBeUndefined();
     await expect(
       validateHarnessAutomationAuth(env.DB, "codex", "openai/gpt-5.6-sol", {
         openai: { mode: "api_key" },
