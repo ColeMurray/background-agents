@@ -60,6 +60,7 @@ export function RepoOverridesSection({
   defaultAutofix,
   defaultHarness,
   defaultModel,
+  defaultReasoningEffort,
 }: {
   overrides: RepoSettingsEntry[];
   availableRepos: EnrichedRepository[];
@@ -69,6 +70,7 @@ export function RepoOverridesSection({
   /** The inherited global harness filters the model picker. */
   defaultHarness: HarnessId | null;
   defaultModel: string | undefined;
+  defaultReasoningEffort: string | undefined;
 }) {
   const [addingRepo, setAddingRepo] = useState("");
 
@@ -118,6 +120,7 @@ export function RepoOverridesSection({
               defaultAutofix={defaultAutofix}
               defaultHarness={defaultHarness}
               defaultModel={defaultModel}
+              defaultReasoningEffort={defaultReasoningEffort}
             />
           ))}
         </div>
@@ -155,6 +158,7 @@ function RepoOverrideRow({
   defaultAutofix,
   defaultHarness,
   defaultModel,
+  defaultReasoningEffort,
 }: {
   entry: RepoSettingsEntry;
   enabledModelOptions: ModelCategory[];
@@ -162,6 +166,7 @@ function RepoOverrideRow({
   defaultAutofix: ResolvedGitHubAutofixSettings;
   defaultHarness: HarnessId | null;
   defaultModel: string | undefined;
+  defaultReasoningEffort: string | undefined;
 }) {
   const autoReviewNoticeId = useId();
   const [model, setModel] = useState(entry.settings.model ?? "");
@@ -205,10 +210,19 @@ function RepoOverrideRow({
   const [saving, setSaving] = useState(false);
   const [dirty, setDirty] = useState(false);
 
-  // Filter by the effective harness, but validate only explicit settings at
-  // this level. Cross-level incompatibilities are refused at launch.
+  // Only explicit settings block saves; effective cross-level mismatches are
+  // shown here and refused at launch.
   const effectiveHarness: HarnessId = harness ?? defaultHarness ?? DEFAULT_HARNESS;
-  const reasoningConfig = model ? getHarnessReasoningConfig(effectiveHarness, model) : undefined;
+  const effectiveModel = model || defaultModel;
+  const effectiveEffort = effort || defaultReasoningEffort;
+  const reasoningConfig = effectiveModel
+    ? getHarnessReasoningConfig(effectiveHarness, effectiveModel)
+    : undefined;
+  const reasoningEfforts = reasoningConfig?.efforts ?? [];
+  const visibleReasoningEfforts =
+    effort && !reasoningEfforts.some((value) => value === effort)
+      ? [effort, ...reasoningEfforts]
+      : reasoningEfforts;
   const visibleModelOptions = filterModelOptionsForHarness(effectiveHarness, enabledModelOptions);
   const harnessNeedsModel =
     harness !== undefined && getHarnessCapabilities(harness).modelFamilies !== "any";
@@ -217,9 +231,13 @@ function RepoOverrideRow({
     (model !== "" &&
       (!isValidModel(model) ||
         (harness !== undefined && shouldClearModelForHarness(harness, model))));
-  const effectiveModel = model || defaultModel;
   const mismatch = effectiveModel
-    ? checkHarnessCompatibility(effectiveHarness, getValidModelOrDefault(effectiveModel))
+    ? checkHarnessCompatibility(
+        effectiveHarness,
+        getValidModelOrDefault(effectiveModel),
+        undefined,
+        effectiveEffort
+      )
     : null;
 
   const handleModelChange = (newModel: string) => {
@@ -360,7 +378,7 @@ function RepoOverrideRow({
           </SelectContent>
         </Select>
 
-        {reasoningConfig && (
+        {(reasoningConfig !== undefined || effort !== "") && (
           <Select
             value={effort}
             onValueChange={(v) => {
@@ -368,11 +386,11 @@ function RepoOverrideRow({
               setDirty(true);
             }}
           >
-            <SelectTrigger density="compact" className="w-36">
+            <SelectTrigger density="compact" className="w-36" aria-label="Reasoning effort">
               <SelectValue placeholder="Default effort" />
             </SelectTrigger>
             <SelectContent>
-              {reasoningConfig.efforts.map((value) => (
+              {visibleReasoningEfforts.map((value) => (
                 <SelectItem key={value} value={value}>
                   {value}
                 </SelectItem>

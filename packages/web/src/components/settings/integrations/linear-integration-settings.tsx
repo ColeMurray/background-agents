@@ -149,6 +149,7 @@ export function LinearIntegrationSettings() {
             enabledModelOptions={enabledModelOptions}
             inheritedHarness={getValidHarnessOrDefault(settings?.defaults?.harness)}
             inheritedModel={settings?.defaults?.model}
+            inheritedReasoningEffort={settings?.defaults?.reasoningEffort}
           />
         </fieldset>
       </SettingsCardSection>
@@ -571,12 +572,14 @@ function RepoOverridesSection({
   enabledModelOptions,
   inheritedHarness,
   inheritedModel,
+  inheritedReasoningEffort,
 }: {
   overrides: RepoSettingsEntry[];
   availableRepos: EnrichedRepository[];
   enabledModelOptions: ModelCategory[];
   inheritedHarness: HarnessId;
   inheritedModel: string | undefined;
+  inheritedReasoningEffort: string | undefined;
 }) {
   const [addingRepo, setAddingRepo] = useState("");
 
@@ -624,6 +627,7 @@ function RepoOverridesSection({
               enabledModelOptions={enabledModelOptions}
               inheritedHarness={inheritedHarness}
               inheritedModel={inheritedModel}
+              inheritedReasoningEffort={inheritedReasoningEffort}
             />
           ))}
         </div>
@@ -659,11 +663,13 @@ function RepoOverrideRow({
   enabledModelOptions,
   inheritedHarness,
   inheritedModel,
+  inheritedReasoningEffort,
 }: {
   entry: RepoSettingsEntry;
   enabledModelOptions: ModelCategory[];
   inheritedHarness: HarnessId;
   inheritedModel: string | undefined;
+  inheritedReasoningEffort: string | undefined;
 }) {
   const [harness, setHarness] = useState(entry.settings.harness);
   const [model, setModel] = useState(entry.settings.model ?? "");
@@ -681,9 +687,18 @@ function RepoOverrideRow({
   const [dirty, setDirty] = useState(false);
 
   const effectiveHarness = harness ?? inheritedHarness;
-  const reasoningConfig = model ? getHarnessReasoningConfig(effectiveHarness, model) : undefined;
-  // Only explicit settings at this level are validated. Cross-level
-  // incompatibilities are refused at launch.
+  const effectiveModel = model || inheritedModel;
+  const effectiveEffort = effort || inheritedReasoningEffort;
+  const reasoningConfig = effectiveModel
+    ? getHarnessReasoningConfig(effectiveHarness, effectiveModel)
+    : undefined;
+  const reasoningEfforts = reasoningConfig?.efforts ?? [];
+  const visibleReasoningEfforts =
+    effort && !reasoningEfforts.some((value) => value === effort)
+      ? [effort, ...reasoningEfforts]
+      : reasoningEfforts;
+  // Only explicit settings block saves; effective cross-level mismatches are
+  // shown here and refused at launch.
   const harnessNeedsModel =
     harness !== undefined && getHarnessCapabilities(harness).modelFamilies !== "any";
   const invalidModelSelection =
@@ -691,9 +706,13 @@ function RepoOverrideRow({
     (model !== "" &&
       (!isValidModel(model) ||
         (harness !== undefined && shouldClearModelForHarness(harness, model))));
-  const effectiveModel = model || inheritedModel;
   const mismatch = effectiveModel
-    ? checkHarnessCompatibility(effectiveHarness, getValidModelOrDefault(effectiveModel))
+    ? checkHarnessCompatibility(
+        effectiveHarness,
+        getValidModelOrDefault(effectiveModel),
+        undefined,
+        effectiveEffort
+      )
     : null;
 
   const handleHarnessChange = (newHarness: HarnessId | undefined) => {
@@ -829,11 +848,11 @@ function RepoOverrideRow({
           }}
           disabled={!reasoningConfig}
         >
-          <SelectTrigger density="compact">
+          <SelectTrigger density="compact" aria-label="Reasoning effort">
             <SelectValue placeholder="Default effort" />
           </SelectTrigger>
           <SelectContent>
-            {(reasoningConfig?.efforts ?? []).map((value) => (
+            {visibleReasoningEfforts.map((value) => (
               <SelectItem key={value} value={value}>
                 {value}
               </SelectItem>

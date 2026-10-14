@@ -767,6 +767,60 @@ describe("GitHubIntegrationSettings", () => {
     expect(within(row).getByRole("button", { name: /^save$/i })).toBeEnabled();
   });
 
+  it("keeps a sparse effort visible when the inherited harness makes it incompatible", async () => {
+    const user = userEvent.setup();
+    setupSWR({
+      global: { defaults: { model: "openai/gpt-5.6-sol" } },
+      repos: [
+        {
+          repo: "acme/web",
+          settings: { model: "openai/gpt-5.6-sol", reasoningEffort: "none" },
+        },
+      ],
+      availableRepos: [repo("acme/web")],
+    });
+    fetchMock.mockResolvedValue(okJson({}));
+    const view = render(<GitHubIntegrationSettings />);
+    const row = repoOverrideRow("acme/web");
+    const reasoning = within(row).getByRole("combobox", { name: "Reasoning effort" });
+    expect(reasoning).toHaveTextContent("none");
+    expect(within(row).queryByText(/Sessions using this default model will be refused/)).toBeNull();
+
+    setupSWR({
+      global: { defaults: { harness: "codex", model: "openai/gpt-5.6-sol" } },
+      repos: [
+        {
+          repo: "acme/web",
+          settings: { model: "openai/gpt-5.6-sol", reasoningEffort: "none" },
+        },
+      ],
+      availableRepos: [repo("acme/web")],
+    });
+    view.rerender(<GitHubIntegrationSettings />);
+
+    expect(reasoning).toHaveTextContent("none");
+    expect(
+      within(row).getByText(/Sessions using this default model will be refused/)
+    ).toHaveTextContent(
+      'Reasoning effort "none" cannot run on openai/gpt-5.6-sol with the Codex harness.'
+    );
+
+    await selectAutoReviewMode(row, /override for this repo/i);
+    await user.click(within(row).getByRole("button", { name: /^save$/i }));
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/integration-settings/github/repos/acme/web",
+      expect.objectContaining({
+        body: JSON.stringify({
+          settings: {
+            model: "openai/gpt-5.6-sol",
+            reasoningEffort: "none",
+            autoReviewOnOpen: true,
+          },
+        }),
+      })
+    );
+  });
+
   it("clears incompatible model and effort when inheriting the global Claude harness", async () => {
     const user = userEvent.setup();
     setupSWR({
