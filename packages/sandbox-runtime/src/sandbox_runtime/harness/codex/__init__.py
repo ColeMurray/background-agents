@@ -49,6 +49,10 @@ STATE_VERSION = 1
 STOP_TIMEOUT_SECONDS = 5.0
 
 
+class _InactivityTimeout(Exception):
+    """The app-server sent nothing within the inactivity budget."""
+
+
 @dataclass(frozen=True)
 class CodexHarnessConfig:
     workdir: Path
@@ -241,19 +245,23 @@ class CodexHarness:
                 or state["toolCatalog"] != self._tool_hash
             ):
                 raise ValueError("incompatible state")
-            self.session_id = state["threadId"]
-            self._total = state["tokenTotal"]
-            self._usage_baseline_known = state.get("usageBaselineKnown") is True
+            thread_id = state["threadId"]
+            total = state["tokenTotal"]
             if (
-                not isinstance(self.session_id, str)
-                or not self.session_id
-                or not isinstance(self._total, dict)
-                or any(type(value) is not int or value < 0 for value in self._total.values())
+                not isinstance(thread_id, str)
+                or not thread_id
+                or not isinstance(total, dict)
+                or any(type(value) is not int or value < 0 for value in total.values())
             ):
                 raise ValueError("invalid state")
-            if not await self._resume_native(self.session_id):
+            # CodexTransportError propagates: the thread may still exist, so the
+            # manifest is kept and only this attempt fails.
+            if not await self._resume_native(thread_id):
                 raise ValueError("native thread unavailable")
-        except (KeyError, TypeError, ValueError, OSError, CodexRpcError, CodexTransportError):
+            self.session_id = thread_id
+            self._total = total
+            self._usage_baseline_known = state.get("usageBaselineKnown") is True
+        except (KeyError, TypeError, ValueError, OSError, CodexRpcError):
             self.log.warn("codex.session.history_unavailable")
             self.session_id = None
             self._total = {}
@@ -271,6 +279,8 @@ class CodexHarness:
                 "approvalPolicy": "never",
                 "sandbox": "danger-full-access",
                 "config": {"mcp_servers": self._mcp},
+                # Only the thread id is read; hydrating history can exceed the frame cap.
+                "excludeTurns": True,
             },
         )
         return result.get("thread", {}).get("id") == thread_id
@@ -278,14 +288,17 @@ class CodexHarness:
     async def resume_session(self, persisted_id: str) -> bool:
         if persisted_id == self.session_id:
             return True
+        # A transport error leaves the outcome unknown: it propagates with the
+        # current state and manifest intact, so a later open() can retry.
+        try:
+            resumed = await self._resume_native(persisted_id)
+        except CodexRpcError:
+            resumed = False
         self.session_id = None
         self._total = {}
         self._usage_baseline_known = False
         self._manifest_path.unlink(missing_ok=True)
-        try:
-            if not await self._resume_native(persisted_id):
-                return False
-        except (CodexRpcError, CodexTransportError):
+        if not resumed:
             self.log.warn("codex.session.history_unavailable")
             return False
         self.session_id = persisted_id
@@ -388,7 +401,7 @@ class CodexHarness:
                 # The transport queue retains notifications delivered before the
                 # start response. Only this epoch/thread/turn is projected.
                 while state.status is None:
-                    frame = await self._client.next_notification()
+                    frame = await self._next_notification()
                     for event in state.accept(frame):
                         await emit(event)
                     if self._total != state.total:
@@ -448,12 +461,44 @@ class CodexHarness:
                 "Codex rejected this session's configuration or credential; check Settings before retrying",
                 message_cost_usd=0,
             )
+        except _InactivityTimeout:
+            timeout_seconds = self.limits.inactivity_timeout_seconds
+            self.log.error("codex.turn.inactivity_timeout", timeout_s=timeout_seconds)
+            stopped = await self.stop_execution(STOP_TIMEOUT_SECONDS)
+            self._usage_baseline_known = False
+            if self.session_id:
+                self._persist()
+            return TurnOutcome.failed(
+                f"Codex produced no output for {timeout_seconds:.0f}s."
+                if stopped
+                else "Codex process containment could not be confirmed",
+                message_cost_usd=0,
+            )
+        except Exception:
+            # Any other abnormal exit (e.g. the event sink) may leave native work
+            # running: contain it before releasing the turn's ownership state.
+            if not await self.stop_execution(STOP_TIMEOUT_SECONDS):
+                self.log.error("codex.turn.containment_unconfirmed")
+            self._usage_baseline_known = False
+            raise
         finally:
             self._submitting = False
             self._turn_known.set()
             self._turn_id = None
             for path in paths:
                 path.unlink(missing_ok=True)
+
+    async def _next_notification(self) -> dict[str, Any]:
+        """Next frame, bounded by the inactivity budget while no host tool call is running."""
+        assert self._client is not None
+        while True:
+            try:
+                async with asyncio.timeout(self.limits.inactivity_timeout_seconds):
+                    return await self._client.next_notification()
+            except TimeoutError:
+                # A host callback (tool call, token refresh) is legitimate activity.
+                if not self._client.handling_requests:
+                    raise _InactivityTimeout from None
 
     async def _server_request(self, method: str, params: dict[str, Any]) -> dict[str, Any]:
         if method == "account/chatgptAuthTokens/refresh":

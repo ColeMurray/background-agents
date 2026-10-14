@@ -315,3 +315,128 @@ async def test_overlapping_prompts_run_one_native_turn_at_a_time(tmp_path):
     await first
     await second
     assert started == ["first", "second"]
+
+
+async def test_resume_requests_thread_metadata_without_history(tmp_path):
+    h, client = build(tmp_path)
+    await h.open()
+    h.session_id = "thread"
+    h._persist()
+    await h.close()
+    resumed, client = build(tmp_path)
+
+    async def request(method, params):
+        if method == "thread/resume":
+            return {"thread": {"id": "thread"}}
+        return {"account": {"type": "apiKey"}}
+
+    client.request.side_effect = request
+    await resumed.open()
+    params = next(c.args[1] for c in client.request.call_args_list if c.args[0] == "thread/resume")
+    assert params["excludeTurns"] is True
+
+
+async def test_transient_resume_failure_keeps_manifest_and_fails_only_this_attempt(tmp_path):
+    h, _ = build(tmp_path)
+    await h.open()
+    h.session_id = "thread"
+    h._persist()
+    await h.close()
+    saved = h._manifest_path.read_text()
+    resumed, client = build(tmp_path)
+
+    async def request(method, params):
+        if method == "thread/resume":
+            raise CodexTransportError("broken pipe")
+        return {"account": {"type": "apiKey"}}
+
+    client.request.side_effect = request
+    with pytest.raises(CodexTransportError):
+        await resumed.open()
+    assert resumed.session_id is None
+    assert resumed._manifest_path.read_text() == saved
+    assert not any(c.args[0] == "thread/start" for c in client.request.call_args_list)
+
+
+async def test_transient_bridge_resume_failure_propagates_without_clearing_state(tmp_path):
+    h, client = build(tmp_path)
+    await h.open()
+    h.session_id = "thread"
+    h._persist()
+    saved = h._manifest_path.read_text()
+
+    async def request(method, params):
+        if method == "thread/resume":
+            raise CodexTransportError("timed out")
+        return {"account": {"type": "apiKey"}}
+
+    client.request.side_effect = request
+    with pytest.raises(CodexTransportError):
+        await h.resume_session("other-thread")
+    assert h.session_id == "thread"
+    assert h._manifest_path.read_text() == saved
+
+
+async def test_unexpected_sink_failure_contains_native_execution(tmp_path):
+    h, client = build(tmp_path)
+    await h.open()
+    h.session_id = "thread"
+
+    async def request(method, params):
+        if method == "turn/start":
+            return {"turn": {"id": "turn"}}
+        return {"account": {"type": "apiKey"}}
+
+    client.request.side_effect = request
+    h.stop_execution = AsyncMock(return_value=True)
+    emit = AsyncMock(side_effect=RuntimeError("sink failed"))
+    with pytest.raises(RuntimeError, match="sink failed"):
+        await h.run_prompt(HarnessPrompt("m", "work"), emit)
+    h.stop_execution.assert_awaited()
+    assert h._turn_id is None
+
+
+async def test_silent_app_server_fails_the_turn_after_the_inactivity_budget(tmp_path):
+    h, client = build(tmp_path)
+    h.limits = PromptLimits(0.05, 30, 5)
+    await h.open()
+    h.session_id = "thread"
+
+    async def request(method, params):
+        if method == "turn/start":
+            return {"turn": {"id": "turn"}}
+        return {"account": {"type": "apiKey"}}
+
+    async def silent():
+        await asyncio.Event().wait()
+
+    client.request.side_effect = request
+    client.next_notification = silent
+    client.handling_requests = False
+    h.stop_execution = AsyncMock(return_value=True)
+    async with asyncio.timeout(2):
+        outcome = await h.run_prompt(HarnessPrompt("m", "work"), AsyncMock())
+    assert not outcome.success
+    assert "no output" in outcome.error
+    h.stop_execution.assert_awaited()
+
+
+async def test_running_host_callback_renews_inactivity(tmp_path):
+    h, client = build(tmp_path)
+    h.limits = PromptLimits(0.05, 30, 5)
+    await h.open()
+    h.session_id = "thread"
+    calls = 0
+
+    async def next_notification():
+        nonlocal calls
+        calls += 1
+        if calls < 3:
+            await asyncio.Event().wait()
+        client.handling_requests = False
+        return {"method": "noop", "params": {}}
+
+    client.next_notification = next_notification
+    client.handling_requests = True
+    assert await h._next_notification() == {"method": "noop", "params": {}}
+    assert calls == 3

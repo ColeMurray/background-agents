@@ -37,3 +37,22 @@ async def test_native_tool_uses_existing_authenticated_handler(tmp_path):
         result = await tools.call({"namespace": "oi", "tool": "spawn-child", "arguments": {}})
         assert not result["success"]
         assert len(requests) == 1
+
+
+async def test_handler_error_results_are_reported_as_native_failures(tmp_path):
+    def handle(request):
+        return httpx.Response(403, json={"error": "forbidden"})
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handle)) as http:
+        client = ControlPlaneToolClient(
+            ToolServerConfig(
+                "https://cp.example", "session", "fixture", tmp_path / "repos.json", True, False
+            ),
+            MagicMock(),
+            http,
+        )
+        result = await CodexTools(client).call(
+            {"namespace": "oi", "tool": "memory_search", "arguments": {"query": "deploy"}}
+        )
+        assert not result["success"]
+        assert "403" in result["contentItems"][0]["text"]

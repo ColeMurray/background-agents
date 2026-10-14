@@ -48,7 +48,8 @@ class CodexTools:
             return self._failure("Invalid OpenInspect tool arguments")
         result = await tool.handler(args)
         return {
-            "success": not result.get("isError", False),
+            # Shared handlers use the SDK handler convention (tool_results.error_result).
+            "success": not result.get("is_error", False),
             "contentItems": [
                 {"type": "inputText", "text": item["text"]}
                 for item in result.get("content", [])

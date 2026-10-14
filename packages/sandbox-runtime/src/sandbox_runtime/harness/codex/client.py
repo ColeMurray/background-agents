@@ -15,7 +15,7 @@ import signal
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from typing import TYPE_CHECKING, Any
 
-from ...process_output import spawn_owned_subprocess, wait_for_process_exit
+from ...process_output import wait_for_process_exit
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -54,6 +54,7 @@ class CodexClient:
         self._on_request = on_request
         self._containment_owner = containment_owner
         self._process: asyncio.subprocess.Process | None = None
+        self._spawn: asyncio.Future[asyncio.subprocess.Process] | None = None
         self._reader: asyncio.Task[None] | None = None
         self._stderr: asyncio.Task[None] | None = None
         self._handlers: set[asyncio.Task[None]] = set()
@@ -68,13 +69,20 @@ class CodexClient:
         self._close_task: asyncio.Task[bool] | None = None
 
     @property
+    def handling_requests(self) -> bool:
+        """Whether a host callback from the app-server is still running."""
+        return bool(self._handlers)
+
+    @property
     def running(self) -> bool:
         return self._process is not None and self._process.returncode is None and not self._failure
 
     async def open(self) -> None:
-        if self._process is not None:
+        if self._spawn is not None:
             raise CodexTransportError("Codex client is already open")
-        self._process = await spawn_owned_subprocess(
+        # The pending spawn belongs to this client, so every close path joins it
+        # and contains the process through the same subreaper protocol.
+        self._spawn = asyncio.ensure_future(
             asyncio.create_subprocess_exec(
                 *self._command,
                 cwd=self._cwd,
@@ -86,6 +94,15 @@ class CodexClient:
                 limit=MAX_FRAME_BYTES,
             )
         )
+        try:
+            process = await asyncio.shield(self._spawn)
+        except asyncio.CancelledError:
+            await self.close()
+            raise
+        if self._failure:
+            # Closed while spawning; close() already contained the process.
+            raise CodexTransportError(self._failure)
+        self._process = process
         self._reader = asyncio.create_task(self._read(), name="codex-jsonl-reader")
         self._stderr = asyncio.create_task(self._drain_stderr(), name="codex-stderr-drain")
 
@@ -238,6 +255,15 @@ class CodexClient:
         ]
         for task in tasks:
             task.cancel()
+        if self._process is None and self._spawn is not None:
+            # An unpublished process is not proof that no process exists.
+            with contextlib.suppress(Exception):
+                self._process = await asyncio.wait_for(
+                    asyncio.shield(self._spawn),
+                    max(0.001, deadline - asyncio.get_running_loop().time()),
+                )
+            if not self._spawn.done():
+                return False
         process = self._process
         stopped = process is None
         if process is not None:

@@ -109,3 +109,42 @@ async def test_undelivered_notification_bytes_are_bounded(tmp_path, monkeypatch)
                     await client.next_notification()
     finally:
         await client.close(timeout_seconds=2)
+
+
+def _slow_spawn(monkeypatch, entered: asyncio.Event, release: asyncio.Event):
+    real = asyncio.create_subprocess_exec
+
+    async def slow(*args, **kwargs):
+        process = await real(*args, **kwargs)
+        entered.set()
+        await release.wait()
+        return process
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", slow)
+
+
+@pytest.mark.parametrize("interrupt", ["cancel_open", "concurrent_close"])
+async def test_pending_spawn_is_contained_by_every_close_path(tmp_path, monkeypatch, interrupt):
+    entered, release = asyncio.Event(), asyncio.Event()
+    _slow_spawn(monkeypatch, entered, release)
+    client = CodexClient(
+        command=(sys.executable, "-c", "import time; time.sleep(30)"), cwd=tmp_path, env={}
+    )
+    opening = asyncio.create_task(client.open())
+    await entered.wait()
+    if interrupt == "cancel_open":
+        opening.cancel()
+        release.set()
+        with pytest.raises(asyncio.CancelledError):
+            await opening
+    else:
+        closing = asyncio.create_task(client.close(timeout_seconds=2))
+        await asyncio.sleep(0.05)
+        # close() must not report containment before the spawned process exists.
+        assert not closing.done()
+        release.set()
+        assert await closing
+        with pytest.raises(CodexTransportError):
+            await opening
+    assert client._process is not None
+    assert client._process.returncode is not None
