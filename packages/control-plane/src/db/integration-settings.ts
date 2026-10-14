@@ -427,8 +427,8 @@ export class IntegrationSettingsStore {
   /**
    * Model, reasoning effort and (where the integration has one) harness, checked
    * together. A harness and model saved at the same level must be compatible,
-   * like an automation on save; values merged from other levels can still
-   * disagree, so launchers resolve that with `resolveHarnessForModel`.
+   * like an automation on save. Sparse values merged from other levels can
+   * still disagree; launchers refuse incompatible resolved pairs.
    */
   private validateAgentSelection(settings: {
     model?: string;
@@ -437,6 +437,18 @@ export class IntegrationSettingsStore {
   }): void {
     if (settings.model !== undefined && !isValidModel(settings.model)) {
       throw new IntegrationSettingsValidationError(`Invalid model ID: ${settings.model}`);
+    }
+
+    // Deployment defaults are not visible here, so a restricted harness needs
+    // an explicit compatible default model at the same settings level.
+    if (
+      settings.harness !== undefined &&
+      settings.model === undefined &&
+      getHarnessCapabilities(settings.harness).modelFamilies !== "any"
+    ) {
+      throw new IntegrationSettingsValidationError(
+        `Choose a default model ${getHarnessLabel(settings.harness)} can run.`
+      );
     }
 
     const harnessIncompatibility =
@@ -632,18 +644,6 @@ export class IntegrationSettingsStore {
     }
 
     this.validateAgentSelection(settings);
-    // Slack refuses a model the harness cannot run. The bot's deployment
-    // default model is not visible here or in the settings form, so a harness
-    // limited to some models needs an explicit default model it can run.
-    if (
-      settings.harness !== undefined &&
-      settings.model === undefined &&
-      getHarnessCapabilities(settings.harness).modelFamilies !== "any"
-    ) {
-      throw new IntegrationSettingsValidationError(
-        `Choose a default model ${getHarnessLabel(settings.harness)} can run.`
-      );
-    }
 
     if (
       settings.mentionsPolicy !== undefined &&

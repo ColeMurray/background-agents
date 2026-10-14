@@ -9,11 +9,15 @@ import {
   type GitHubGlobalConfig,
   type ResolvedGitHubAutofixSettings,
 } from "@open-inspect/shared";
-import type { ModelCategory } from "@open-inspect/shared/models";
-import { DEFAULT_HARNESS, type HarnessId } from "@open-inspect/shared/harnesses";
+import { isValidModel, type ModelCategory } from "@open-inspect/shared/models";
+import {
+  DEFAULT_HARNESS,
+  getHarnessCapabilities,
+  getHarnessLabel,
+  type HarnessId,
+} from "@open-inspect/shared/harnesses";
 import { filterModelOptionsForHarness, shouldClearModelForHarness } from "@/lib/session-harness";
 import { HarnessSelect } from "./harness-select";
-import { GitHubHarnessWarning } from "./github-harness-warning";
 import { browserApiFetch } from "@/lib/browser-api-fetch";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -113,6 +117,10 @@ export function GlobalSettingsSection({
   // The model picker only offers models the selected harness can run. A model
   // the new harness cannot run is cleared, mirroring the composer behavior.
   const visibleModelOptions = filterModelOptionsForHarness(harness, enabledModelOptions);
+  const harnessNeedsModel = getHarnessCapabilities(harness).modelFamilies !== "any";
+  const invalidModelSelection =
+    (harnessNeedsModel && !model) ||
+    (model !== "" && (!isValidModel(model) || shouldClearModelForHarness(harness, model)));
 
   const handleHarnessChange = (next: HarnessId | undefined) => {
     const value = next ?? DEFAULT_HARNESS;
@@ -164,6 +172,7 @@ export function GlobalSettingsSection({
   };
 
   const handleSave = async () => {
+    if (invalidModelSelection) return;
     setSaving(true);
     setError("");
 
@@ -236,6 +245,7 @@ export function GlobalSettingsSection({
         model={model}
         reasoningEffort={effort}
         modelOptions={visibleModelOptions}
+        modelRequired={harnessNeedsModel}
         onChange={(nextModel, nextEffort) => {
           setModel(nextModel);
           setEffort(nextEffort);
@@ -243,6 +253,11 @@ export function GlobalSettingsSection({
           setError("");
         }}
       />
+      {invalidModelSelection && (
+        <p className="text-xs text-destructive mb-4">
+          Choose a default model {getHarnessLabel(harness)} can run.
+        </p>
+      )}
 
       <div className="mb-4">
         <label
@@ -283,7 +298,6 @@ export function GlobalSettingsSection({
         <p className="text-xs text-muted-foreground mt-1">
           Harness that runs GitHub-triggered sessions. It decides which models are available above.
         </p>
-        <GitHubHarnessWarning harness={harness} model={model} />
       </div>
 
       <div className="mb-4">
@@ -505,7 +519,7 @@ export function GlobalSettingsSection({
       </div>
 
       <div className="flex items-center gap-2">
-        <Button onClick={handleSave} disabled={saving || !dirty}>
+        <Button onClick={handleSave} disabled={saving || !dirty || invalidModelSelection}>
           {saving ? "Saving..." : "Save"}
         </Button>
 

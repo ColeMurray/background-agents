@@ -1,12 +1,17 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { SELF, env } from "cloudflare:test";
-import type { WebhookInvocationStatusResponse, WebhookTriggerResponse } from "@open-inspect/shared";
+import type {
+  WebhookFollowUpRefusedResponse,
+  WebhookInvocationStatusResponse,
+  WebhookTriggerResponse,
+} from "@open-inspect/shared";
+import { WEBHOOK_SESSION_KEY_MAX_LENGTH } from "@open-inspect/shared/triggers";
 import { AutomationStore, type AutomationRow } from "../../src/db/automation-store";
 import { hashApiKey } from "../../src/auth/webhook-key";
 import { encryptToken } from "../../src/auth/crypto";
 import { cleanD1Tables } from "./cleanup";
 import { fetchRuns } from "./run-helpers";
-import { seedActiveUser } from "./helpers";
+import { queryDO, seedActiveUser } from "./helpers";
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -583,6 +588,100 @@ describe("POST /webhooks/automation/:id", () => {
     });
 
     expect(response.status).toBe(413);
+  });
+
+  describe("with a sessionKey", () => {
+    function postSessionDelivery(automationId: string, body: Record<string, unknown>) {
+      return SELF.fetch(`https://test.local/webhooks/automation/${automationId}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${TEST_API_KEY}` },
+        body: JSON.stringify({ sessionKey: "card-1", ...body }),
+      });
+    }
+
+    function sessionStub(sessionId: string) {
+      return env.SESSION.get(env.SESSION.idFromName(sessionId));
+    }
+
+    async function startSession(automation: AutomationRow) {
+      const first = await postWebhook(automation.id, {
+        sessionKey: "card-1",
+        idempotencyKey: "event-1",
+        step: "first",
+      });
+      expect(first).toMatchObject({ triggered: 1, steered: 0 });
+      const [run] = await fetchRuns(automation.id);
+      return { invocationId: first.invocationId!, sessionId: run!.session_id! };
+    }
+
+    it("queues a follow-up after the run's first prompt and skips its retry", async () => {
+      const automation = await createWebhookAutomation();
+      const { invocationId, sessionId } = await startSession(automation);
+
+      const followUp = { sessionKey: "card-1", idempotencyKey: "event-2", step: "second" };
+      expect(await postWebhook(automation.id, followUp)).toEqual({
+        ok: true,
+        triggered: 0,
+        skipped: 0,
+        steered: 1,
+        invocationId,
+      });
+      // The session recognizes the retry by its request id and keeps one prompt.
+      expect(await postWebhook(automation.id, followUp)).toEqual({
+        ok: true,
+        triggered: 0,
+        skipped: 1,
+        steered: 0,
+        invocationId,
+      });
+
+      const messages = await queryDO<{ content: string }>(
+        sessionStub(sessionId),
+        "SELECT content FROM messages ORDER BY created_at, rowid"
+      );
+      expect(messages).toHaveLength(2);
+      expect(messages[0]!.content).toContain("Test instructions");
+      expect(messages[1]!.content).toContain('"step": "second"');
+      expect(messages[1]!.content).not.toContain("Test instructions");
+      expect(await fetchRuns(automation.id)).toHaveLength(1);
+    });
+
+    it.each([
+      {
+        refusal: "a closed session",
+        sql: "UPDATE session SET status = 'archived'",
+        code: "SESSION_NOT_PROMPTABLE",
+      },
+      {
+        refusal: "a spent budget",
+        sql: "UPDATE session SET budget_exhausted = 1",
+        code: "BUDGET_EXHAUSTED",
+      },
+    ])("returns 409 rather than starting a fresh session for $refusal", async ({ sql, code }) => {
+      const automation = await createWebhookAutomation();
+      const { invocationId, sessionId } = await startSession(automation);
+      await queryDO(sessionStub(sessionId), sql);
+
+      const response = await postSessionDelivery(automation.id, { idempotencyKey: "event-2" });
+
+      expect(response.status).toBe(409);
+      expect(await response.json<WebhookFollowUpRefusedResponse>()).toMatchObject({
+        code,
+        invocationId,
+      });
+      expect(await fetchRuns(automation.id)).toHaveLength(1);
+    });
+
+    it(`rejects a sessionKey longer than ${WEBHOOK_SESSION_KEY_MAX_LENGTH} characters`, async () => {
+      const automation = await createWebhookAutomation();
+
+      const response = await postSessionDelivery(automation.id, {
+        sessionKey: "k".repeat(WEBHOOK_SESSION_KEY_MAX_LENGTH + 1),
+      });
+
+      expect(response.status).toBe(400);
+      expect(await fetchRuns(automation.id)).toEqual([]);
+    });
   });
 
   describe("GET /webhooks/automation/:id/invocations/:invocationId", () => {

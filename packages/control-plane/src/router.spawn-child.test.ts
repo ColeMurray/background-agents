@@ -17,6 +17,8 @@ import { resolveRepoOrError } from "./routes/shared";
 import type * as SharedRoutes from "./routes/shared";
 import { SessionInternalPaths } from "./session/contracts";
 
+const modelPreferenceMocks = vi.hoisted(() => ({ getEnabledModels: vi.fn() }));
+
 const environmentMocks = vi.hoisted(() => ({ getById: vi.fn() }));
 
 const integrationSettingsMocks = vi.hoisted(() => ({
@@ -36,7 +38,10 @@ vi.mock("./db/environments", () => ({
 }));
 
 vi.mock("./db/model-preferences", () => ({
-  getEffectiveEnabledModels: vi.fn(),
+  getEffectiveEnabledModels: modelPreferenceMocks.getEnabledModels,
+  ModelPreferencesStore: class {
+    getEnabledModels = modelPreferenceMocks.getEnabledModels;
+  },
 }));
 
 vi.mock("./db/user-store", () => ({
@@ -385,6 +390,38 @@ describe("handleSpawnChild prompt enqueue handling", () => {
     return initRequest.json<{ reasoningEffort: string | null }>();
   }
 
+  it("falls back to an enabled native child model without rollout configuration", async () => {
+    const store = makeStore();
+    vi.mocked(SessionIndexStore).mockImplementation(function () {
+      return store as never;
+    });
+    vi.mocked(getEffectiveEnabledModels).mockResolvedValue([
+      "anthropic/claude-sonnet-4-6",
+      "openai/gpt-5.5",
+    ]);
+    const { env, childStub } = makeSuccessfulEnv({
+      ...spawnContext,
+      harness: "codex",
+      model: "openai/gpt-6.1-sol",
+      reasoningEffort: "max",
+    });
+    const response = await makeRequest(env);
+    expect(response.status).toBe(201);
+    expect(store.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        harness: "codex",
+        model: "openai/gpt-5.5",
+        reasoningEffort: "medium",
+      })
+    );
+    await expect(getInitBody(childStub)).resolves.toMatchObject({
+      harness: "codex",
+      model: "openai/gpt-5.5",
+      reasoningEffort: "medium",
+    });
+    expect(getEffectiveEnabledModels).toHaveBeenCalledOnce();
+  });
+
   it.each([undefined, null, "nonmember-author"])(
     "refuses a team child when the active author is unresolved or a nonmember (%s)",
     async (canonicalUserId) => {
@@ -452,7 +489,6 @@ describe("handleSpawnChild prompt enqueue handling", () => {
       expect.objectContaining({ ownerTeamId: "team_alpha", userId: "canonical-author-2" })
     );
   });
-
   it("inherits the parent's reasoning effort when omitted", async () => {
     const store = makeStore();
     vi.mocked(SessionIndexStore).mockImplementation(function () {

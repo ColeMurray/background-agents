@@ -85,7 +85,7 @@ export async function storePendingRequest(env: Env, request: PendingRequest): Pr
     pendingRequestKey(request.requestId),
     // Parse before persisting so only schema-known fields reach KV.
     JSON.stringify(pendingRequestSchema.parse(request)),
-    { expirationTtl: PENDING_REQUEST_TTL_MS / 1000 }
+    { ttlMs: PENDING_REQUEST_TTL_MS }
   );
 }
 

@@ -220,10 +220,11 @@ does not remove the search tool, and searching does not alter the session's pinn
 Search sits behind the `FactSearchIndex` port (`memory/fact-search.ts`): the session service builds
 an engine-independent `FactQuery` from authorized partitions and shapes the bounded response, and
 `LexicalFactIndex` answers it with one escaped-`LIKE` statement ranked in SQL by
-`FACT_SEARCH_FIELDS`. A different engine (Postgres full-text search, embeddings) is another adapter;
-no migration or new service is needed today. Body matching still scans text; bounded results do not
-guarantee constant query cost. The opt-in Node SQLite benchmark records query plans and
-rare/broad-query timings at 1,000 and 10,000 facts with representative and maximum-size bodies:
+`FACT_SEARCH_WEIGHTS` over `MEMORY_SEARCH_FIELDS` (`memory/search-fields.ts`). A different engine
+(Postgres full-text search, embeddings) is another adapter; no migration or new service is needed
+today. Body matching still scans text; bounded results do not guarantee constant query cost. The
+opt-in Node SQLite benchmark records query plans and rare/broad-query timings at 1,000 and 10,000
+facts with representative and maximum-size bodies:
 
 ```bash
 MEMORY_SEARCH_BENCHMARK=1 MEMORY_SEARCH_BENCHMARK_OUTPUT=/tmp/memory-search-benchmark.json \

@@ -32,6 +32,7 @@ class HarnessId(StrEnum):
 
     OPENCODE = "opencode"
     CLAUDE = "claude"
+    CODEX = "codex"
 
 
 DEFAULT_HARNESS_ID = HarnessId.OPENCODE

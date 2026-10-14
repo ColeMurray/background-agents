@@ -8,6 +8,7 @@ import type { ComponentPropsWithoutRef } from "react";
 import type { Root, RootContent } from "mdast";
 import { isPathWithLineReference, isRepositoryFileHref } from "@/lib/diff-file-links";
 import { useSessionFileLinks } from "@/lib/session-file-links";
+import { getSafeExternalUrl } from "@/lib/urls";
 
 // Strict sanitization schema to prevent XSS
 // Based on GitHub's sanitization but even more restrictive
@@ -85,10 +86,14 @@ interface SafeMarkdownProps {
   baseUrl?: string;
   imageMode?: "omit" | "placeholder";
   /**
-   * Inside a session, open links to changed repository files in the changes panel. Only
-   * agent-authored text opts in; other markdown (e.g. pull request bodies) keeps plain links.
+   * - `plain`: every sanitized link opens in a new tab.
+   * - `repositoryFiles`: inside a session, links to changed repository files open in the
+   *   changes panel. Only agent-authored text opts in; other markdown (e.g. pull request
+   *   bodies) keeps plain links.
+   * - `externalOnly`: untrusted repository documents. Only safe external URLs open; relative
+   *   and in-page links are inert so the document cannot navigate the session.
    */
-  linkRepositoryFiles?: boolean;
+  linkMode?: "plain" | "repositoryFiles" | "externalOnly";
 }
 
 function MarkdownLink({ href, children, ...props }: ComponentPropsWithoutRef<"a">) {
@@ -140,25 +145,50 @@ function RepositoryFileMarkdownLink({ href, children, ...props }: ComponentProps
   );
 }
 
+function ExternalOnlyMarkdownLink({ href, children, ...props }: ComponentPropsWithoutRef<"a">) {
+  const externalHref = getSafeExternalUrl(href);
+  if (!externalHref) {
+    return (
+      <span className="text-muted-foreground" title={href}>
+        {children}
+      </span>
+    );
+  }
+  return (
+    <MarkdownLink href={externalHref} {...props}>
+      {children}
+    </MarkdownLink>
+  );
+}
+
 export function SafeMarkdown({
   content,
   className = "",
   baseUrl,
   imageMode = DEFAULT_IMAGE_MODE,
-  linkRepositoryFiles = false,
+  linkMode = "plain",
 }: SafeMarkdownProps) {
   return (
     <div
       className={`prose prose-sm dark:prose-invert min-w-0 max-w-none break-words [overflow-wrap:anywhere] ${className}`}
     >
       <ReactMarkdown
-        remarkPlugins={linkRepositoryFiles ? [remarkGfm, preserveFileLineReferences] : [remarkGfm]}
+        remarkPlugins={
+          linkMode === "repositoryFiles" ? [remarkGfm, preserveFileLineReferences] : [remarkGfm]
+        }
         rehypePlugins={[rehypeHighlight, [rehypeSanitize, sanitizeSchema]]}
         components={{
           a: ({ href, children, ...props }: ComponentPropsWithoutRef<"a">) => {
+            if (linkMode === "externalOnly") {
+              return (
+                <ExternalOnlyMarkdownLink href={href} {...props}>
+                  {children}
+                </ExternalOnlyMarkdownLink>
+              );
+            }
             const resolvedHref = resolveMarkdownUrl(href, baseUrl);
             if (!resolvedHref) return <span>{children}</span>;
-            if (linkRepositoryFiles && isRepositoryFileHref(href)) {
+            if (linkMode === "repositoryFiles" && isRepositoryFileHref(href)) {
               return (
                 <RepositoryFileMarkdownLink href={href} {...props}>
                   {children}

@@ -22,11 +22,13 @@ export function ModelReasoningDefaultsFields({
   model,
   reasoningEffort,
   modelOptions,
+  modelRequired,
   onChange,
 }: {
   model: string;
   reasoningEffort: string;
   modelOptions: ModelCategory[];
+  modelRequired: boolean;
   onChange: (model: string, reasoningEffort: string) => void;
 }) {
   const reasoningConfig = getReasoningConfig(model);
@@ -36,7 +38,7 @@ export function ModelReasoningDefaultsFields({
       <label className="text-sm">
         <span className="block text-foreground font-medium mb-1">Default model</span>
         <Select
-          value={model || SYSTEM_DEFAULT_VALUE}
+          value={model || (modelRequired ? "" : SYSTEM_DEFAULT_VALUE)}
           onValueChange={(nextModel) => {
             if (nextModel === SYSTEM_DEFAULT_VALUE) {
               onChange("", "");
@@ -51,10 +53,12 @@ export function ModelReasoningDefaultsFields({
           }}
         >
           <SelectTrigger className="w-full" aria-label="Default model">
-            <SelectValue />
+            <SelectValue placeholder="Choose a model" />
           </SelectTrigger>
           <SelectContent>
-            <SelectItem value={SYSTEM_DEFAULT_VALUE}>Use system default</SelectItem>
+            {!modelRequired && (
+              <SelectItem value={SYSTEM_DEFAULT_VALUE}>Use system default</SelectItem>
+            )}
             {modelOptions.map((group) => (
               <SelectGroup key={group.category}>
                 <SelectLabel>{group.category}</SelectLabel>

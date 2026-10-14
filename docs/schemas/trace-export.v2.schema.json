@@ -23,7 +23,7 @@
         "parentSessionId": { "anyOf": [{ "type": "string" }, { "type": "null" }] },
         "rootSessionId": { "anyOf": [{ "type": "string" }, { "type": "null" }] },
         "spawnDepth": { "type": "number" },
-        "harness": { "type": "string", "enum": ["opencode", "claude"] },
+        "harness": { "type": "string", "enum": ["opencode", "claude", "codex"] },
         "repoOwner": { "anyOf": [{ "type": "string" }, { "type": "null" }] },
         "repoName": { "anyOf": [{ "type": "string" }, { "type": "null" }] },
         "baseBranch": { "anyOf": [{ "type": "string" }, { "type": "null" }] },
@@ -206,7 +206,10 @@
               "messageId": { "anyOf": [{ "type": "string" }, { "type": "null" }] },
               "model": { "anyOf": [{ "type": "string" }, { "type": "null" }] },
               "harness": {
-                "anyOf": [{ "type": "string", "enum": ["opencode", "claude"] }, { "type": "null" }]
+                "anyOf": [
+                  { "type": "string", "enum": ["opencode", "claude", "codex"] },
+                  { "type": "null" }
+                ]
               },
               "inputTokens": { "anyOf": [{ "type": "number" }, { "type": "null" }] },
               "outputTokens": { "anyOf": [{ "type": "number" }, { "type": "null" }] },

@@ -34,6 +34,11 @@ interface ModelCatalogEntry {
   name: string;
   description: string;
   default?: true;
+  /** Presence qualifies this model for Codex; only differences from reasoning are recorded. */
+  codex?: {
+    readonly additionalEfforts?: readonly ReasoningEffort[];
+    readonly default?: ReasoningEffort;
+  };
   reasoning?: {
     readonly efforts: readonly ReasoningEffort[];
     readonly default: ReasoningEffort | undefined;
@@ -168,6 +173,7 @@ export const MODEL_CATALOG = [
       },
       {
         id: "openai/gpt-5.5",
+        codex: { default: "medium" },
         name: "GPT 5.5",
         description: "Latest flagship model",
         reasoning: {
@@ -177,6 +183,7 @@ export const MODEL_CATALOG = [
       },
       {
         id: "openai/gpt-5.6-sol",
+        codex: { additionalEfforts: ["max"], default: "low" },
         name: "GPT 5.6 Sol",
         description: "Frontier model for complex professional work",
         reasoning: {
@@ -186,6 +193,7 @@ export const MODEL_CATALOG = [
       },
       {
         id: "openai/gpt-5.6-terra",
+        codex: { additionalEfforts: ["max"] },
         name: "GPT 5.6 Terra",
         description: "Balanced, cost-efficient everyday work",
         reasoning: {
@@ -195,6 +203,7 @@ export const MODEL_CATALOG = [
       },
       {
         id: "openai/gpt-5.6-luna",
+        codex: {},
         name: "GPT 5.6 Luna",
         description: "Fast, cost-efficient high-volume workloads",
         reasoning: {
@@ -204,6 +213,7 @@ export const MODEL_CATALOG = [
       },
       {
         id: "openai/gpt-6-astra",
+        codex: { default: "low" },
         name: "GPT-6 Astra",
         description: "Most capable model for complex, demanding work",
         reasoning: {
@@ -213,6 +223,7 @@ export const MODEL_CATALOG = [
       },
       {
         id: "openai/gpt-6-sol",
+        codex: {},
         name: "GPT-6 Sol",
         description: "Complex coding and agentic workflows",
         reasoning: {
@@ -222,6 +233,7 @@ export const MODEL_CATALOG = [
       },
       {
         id: "openai/gpt-6.1-sol",
+        codex: { default: "low" },
         name: "GPT-6.1 Sol",
         description: "Complex coding, computer use, and professional work",
         reasoning: {
@@ -231,6 +243,7 @@ export const MODEL_CATALOG = [
       },
       {
         id: "openai/gpt-6-luna",
+        codex: {},
         name: "GPT-6 Luna",
         description: "Efficient model for focused, high-volume tasks",
         reasoning: {
@@ -532,6 +545,25 @@ export function getReasoningConfig(model: string): ModelReasoningConfig | undefi
   const normalized = normalizeModelId(model);
   if (!isValidModel(normalized)) return undefined;
   return MODEL_REASONING_CONFIG[normalized as ValidModel];
+}
+
+/** Codex compatibility derives from the existing catalog, never a separate model list. */
+export function getCodexReasoningConfig(model: string): ModelReasoningConfig | undefined {
+  const normalized = normalizeModelId(model);
+  const entry: ModelCatalogEntry | undefined = MODEL_DEFINITIONS.find(
+    (candidate) => candidate.id === normalized
+  );
+  if (!entry?.codex || !entry.reasoning) return undefined;
+  // Native Codex does not expose the API's no-reasoning mode.
+  return {
+    efforts: [
+      ...new Set([
+        ...entry.reasoning.efforts.filter((effort) => effort !== "none"),
+        ...(entry.codex.additionalEfforts ?? []),
+      ]),
+    ],
+    default: entry.codex.default ?? entry.reasoning.default,
+  };
 }
 
 /**

@@ -146,6 +146,38 @@ export interface AutomationRunRow {
   base_branch: string | null;
   /** Environment snapshot taken at firing time (null for repository/repo-less runs). */
   environment_id: string | null;
+  /**
+   * 1 from the session claim until the run's own first prompt is on its session's
+   * queue; session continuity holds follow-ups meanwhile. 0 otherwise, including on
+   * rows that predate the column.
+   */
+  first_prompt_pending: number;
+}
+
+export interface ContinuableRunRow extends AutomationRunRow {
+  /** The session's latest activity, or the run's creation when it has no session row. */
+  last_activity_at: number;
+  /** 1 while follow-ups held during the run's launch still await release. */
+  has_held_prompts: number;
+}
+
+/** {@link AutomationStore.holdPromptForLaunchingRun}: not holding once the run is ready and drained. */
+export type HoldPromptResult = "held" | "duplicate" | "not_holding";
+
+/** A continuity follow-up held until its run's first prompt is queued. */
+export interface HeldPromptRow {
+  id: string;
+  run_id: string;
+  actor_user_id: string;
+  actor_author_id: string;
+  /** The prompt's clientRequestId, unique per run. */
+  client_request_id: string;
+  /** JSON enqueue-prompt request body. */
+  prompt: string;
+  request_id: string;
+  created_at: number;
+  /** When the held-prompt sweep next tries to settle the run's held prompts. */
+  retry_at: number;
 }
 
 export interface EnrichedRunRow extends AutomationRunRow {
@@ -1023,7 +1055,9 @@ export class AutomationStore {
   /**
    * Atomically assign a session only while a run still awaits launch. The
    * deadline lands in the same statement that makes the run sweepable, so a
-   * 'running' row never exists without one.
+   * 'running' row never exists without one. The run's first prompt stays
+   * pending until {@link markRunFirstPromptQueued}; continuity follow-ups are
+   * held until then.
    */
   async claimRunSession(
     id: string,
@@ -1034,12 +1068,24 @@ export class AutomationStore {
     const result = await this.db
       .prepare(
         `UPDATE automation_runs
-         SET status = 'running', session_id = ?, started_at = ?, execution_deadline_at = ?
+         SET status = 'running', session_id = ?, started_at = ?, execution_deadline_at = ?,
+             first_prompt_pending = 1
          WHERE id = ? AND status = 'starting'`
       )
       .bind(sessionId, startedAt, executionDeadlineAt, id)
       .run();
     return (result.meta?.changes ?? 0) > 0;
+  }
+
+  /**
+   * Record that a run's own first prompt is on its session's queue. From here on
+   * {@link holdPromptForLaunchingRun} refuses, so follow-ups go straight to the session.
+   */
+  async markRunFirstPromptQueued(id: string): Promise<void> {
+    await this.db
+      .prepare("UPDATE automation_runs SET first_prompt_pending = 0 WHERE id = ?")
+      .bind(id)
+      .run();
   }
 
   /**
@@ -1630,30 +1676,134 @@ export class AutomationStore {
   }
 
   /**
-   * The most recent materialized run (any status, with a session) for a thread's
-   * concurrency key, created at/after `sinceMs`. Powers Slack thread-session
-   * continuity: a reply continues this run's session regardless of run status.
-   * Excludes skipped rows and not-yet-started runs (session_id NULL). Served by
+   * The most recent run for a concurrency key that has a session (any status)
+   * or is still launching. A session id the run claimed but never created (a
+   * launch that failed early) does not count. Powers session continuity: a Slack thread reply or a
+   * webhook delivery with the same `sessionKey` continues this run's session
+   * regardless of run status. Excludes skipped rows and runs that never got a
+   * session. `last_activity_at` is the session's latest activity, falling back
+   * to the run's creation; the continuity window is measured from it. Served by
    * idx_invocations_concurrency joined to idx_runs_invocation (keys live on the
    * invocation).
    */
-  async getLatestSteerableRunForThread(
+  async getLatestContinuableRun(
     automationId: string,
-    concurrencyKey: string | null,
-    sinceMs: number
-  ): Promise<AutomationRunRow | null> {
+    concurrencyKey: string | null
+  ): Promise<ContinuableRunRow | null> {
     if (concurrencyKey === null) return null;
     return this.db
       .prepare(
-        `SELECT r.* FROM automation_runs r
+        `SELECT r.*, COALESCE(s.updated_at, r.created_at) AS last_activity_at,
+           EXISTS (
+             SELECT 1 FROM automation_run_held_prompts h WHERE h.run_id = r.id
+           ) AS has_held_prompts
+         FROM automation_runs r
          JOIN automation_invocations i ON i.id = r.invocation_id
+         LEFT JOIN sessions s ON r.session_id = s.id
          WHERE r.automation_id = ?
            AND i.concurrency_key = ?
-           AND r.session_id IS NOT NULL AND r.created_at >= ?
+           AND (
+             s.id IS NOT NULL
+             OR r.status = 'starting'
+             OR (r.status = 'running' AND r.first_prompt_pending = 1)
+           )
          ORDER BY r.created_at DESC LIMIT 1`
       )
-      .bind(automationId, concurrencyKey, sinceMs)
-      .first<AutomationRunRow>();
+      .bind(automationId, concurrencyKey)
+      .first<ContinuableRunRow>();
+  }
+
+  // --- Held continuity prompts ---
+
+  /**
+   * Hold a follow-up for a run whose own first prompt is not queued yet, or whose
+   * earlier held follow-ups are not all released, so it queues behind them. The
+   * insert is conditional on that state, so it either lands before the release
+   * drains the run's last held prompt (and is released with them) or does nothing.
+   * A follow-up with a clientRequestId already held for the run is a duplicate.
+   */
+  async holdPromptForLaunchingRun(prompt: HeldPromptRow): Promise<HoldPromptResult> {
+    const result = await this.db
+      .prepare(
+        `INSERT INTO automation_run_held_prompts
+           (id, run_id, actor_user_id, actor_author_id, client_request_id, prompt, request_id,
+            created_at, retry_at)
+         SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?
+         WHERE EXISTS (
+           SELECT 1 FROM automation_runs
+           WHERE id = ?
+             AND (status = 'starting' OR (status = 'running' AND first_prompt_pending = 1))
+         ) OR EXISTS (SELECT 1 FROM automation_run_held_prompts WHERE run_id = ?)
+         ON CONFLICT (run_id, client_request_id) DO NOTHING`
+      )
+      .bind(
+        prompt.id,
+        prompt.run_id,
+        prompt.actor_user_id,
+        prompt.actor_author_id,
+        prompt.client_request_id,
+        prompt.prompt,
+        prompt.request_id,
+        prompt.created_at,
+        prompt.retry_at,
+        prompt.run_id,
+        prompt.run_id
+      )
+      .run();
+    if ((result.meta?.changes ?? 0) > 0) return "held";
+
+    const existing = await this.db
+      .prepare(
+        "SELECT 1 AS held FROM automation_run_held_prompts WHERE run_id = ? AND client_request_id = ?"
+      )
+      .bind(prompt.run_id, prompt.client_request_id)
+      .first<{ held: number }>();
+    return existing ? "duplicate" : "not_holding";
+  }
+
+  async getHeldPrompts(runId: string): Promise<HeldPromptRow[]> {
+    const result = await this.db
+      .prepare("SELECT * FROM automation_run_held_prompts WHERE run_id = ? ORDER BY created_at, id")
+      .bind(runId)
+      .all<HeldPromptRow>();
+    return result.results || [];
+  }
+
+  async deleteHeldPrompt(id: string): Promise<void> {
+    await this.db.prepare("DELETE FROM automation_run_held_prompts WHERE id = ?").bind(id).run();
+  }
+
+  async deleteHeldPromptsForRun(runId: string): Promise<number> {
+    const result = await this.db
+      .prepare("DELETE FROM automation_run_held_prompts WHERE run_id = ?")
+      .bind(runId)
+      .run();
+    return result.meta?.changes ?? 0;
+  }
+
+  /** Runs whose held prompts the sweep should try to settle by `now`, longest-waiting first. */
+  async getRunsWithDueHeldPrompts(now: number, limit: number): Promise<AutomationRunRow[]> {
+    const result = await this.db
+      .prepare(
+        `SELECT r.* FROM automation_runs r
+         JOIN (
+           SELECT run_id, MIN(retry_at) AS due_at FROM automation_run_held_prompts
+           GROUP BY run_id HAVING MIN(retry_at) <= ?
+           ORDER BY due_at LIMIT ?
+         ) due ON due.run_id = r.id
+         ORDER BY due.due_at`
+      )
+      .bind(now, limit)
+      .all<AutomationRunRow>();
+    return result.results || [];
+  }
+
+  /** Push back the sweep's next attempt at a run it could not settle. */
+  async deferHeldPrompts(runId: string, retryAt: number): Promise<void> {
+    await this.db
+      .prepare("UPDATE automation_run_held_prompts SET retry_at = ? WHERE run_id = ?")
+      .bind(retryAt, runId)
+      .run();
   }
 
   // --- Recovery sweep queries ---

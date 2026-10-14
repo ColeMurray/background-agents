@@ -185,7 +185,8 @@ Each follow-up includes up to ten recent thread messages posted after the previo
 
 When a request is accepted, OpenInspect posts a working reply in the thread and adds a **View Session** button once the web session exists. When the agent finishes, the completion reply contains:
 
-- The agent's final response, shortened if it is too long for Slack
+- The agent's final response, rendered as Markdown (headings, lists, links, tables) and shortened
+  if it is too long for Slack. Broadcast mentions such as `@here` and `@channel` are removed.
 - Created artifacts such as pull requests or branches
 - A few key tool actions, such as edits or commands
 - The final status, model, session target, and reasoning effort when available

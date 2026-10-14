@@ -822,12 +822,92 @@ describe("POST /webhooks/github", () => {
     expect(await env.GITHUB_KV.get("delivery-dispatch:delivery-inline-flags")).toBe("processed");
   });
 
+  it.each(["failed response", "network failure"])(
+    "retries a compatibility refusal after a comment posting %s",
+    async (failure) => {
+      const commentsBefore = vi.mocked(postIssueComment).mock.calls.length;
+      if (failure === "failed response") {
+        vi.mocked(postIssueComment).mockResolvedValueOnce(false);
+      } else {
+        vi.mocked(postIssueComment).mockRejectedValueOnce(new Error("unavailable"));
+      }
+      const body = JSON.stringify({
+        action: "created",
+        issue: {
+          number: 42,
+          title: "Retry refusal",
+          pull_request: { url: "https://api.github.com/repos/test/repo/pulls/42" },
+        },
+        comment: { id: 123, body: "@test-bot[bot] fix this", user: { login: "alice" } },
+        repository: { id: 99, owner: { login: "test" }, name: "repo", private: false },
+        sender: { login: "alice", id: 1001, avatar_url: "https://example.com/alice.png" },
+      });
+      const signature = await sign(SECRET, body);
+      const env = makeEnv();
+      const ctx = makeCtx();
+      env.DEFAULT_MODEL = "gpt-6-sol";
+      const cpFetch = vi.mocked(env.CONTROL_PLANE.fetch);
+      cpFetch.mockImplementation(async (url) => {
+        if (String(url).includes("/integration-settings/github/resolved/")) {
+          return Response.json({
+            config: {
+              model: null,
+              harness: "claude",
+              reasoningEffort: null,
+              autoReviewOnOpen: true,
+              enabledRepos: null,
+              allowedTriggerUsers: null,
+              codeReviewInstructions: null,
+              commentActionInstructions: null,
+            },
+          });
+        }
+        return new Response(null, { status: 204 });
+      });
+      const request = () =>
+        new Request("http://localhost/webhooks/github", {
+          method: "POST",
+          body,
+          headers: {
+            "X-Hub-Signature-256": signature,
+            "X-GitHub-Event": "issue_comment",
+            "X-GitHub-Delivery": "delivery-refusal-retry",
+          },
+        });
+
+      expect(await (await app.fetch(request(), env, ctx)).json()).toEqual({ ok: true });
+      await flushWaitUntil(ctx, 0);
+      expect(await env.GITHUB_KV.get("delivery:delivery-refusal-retry")).toBeNull();
+      expect(await env.GITHUB_KV.get("delivery-dispatch:delivery-refusal-retry")).toBeNull();
+      expect(postIssueComment).toHaveBeenCalledTimes(commentsBefore + 1);
+      expect(
+        cpFetch.mock.calls.filter(([url]) => String(url).endsWith("/github-event"))
+      ).toHaveLength(1);
+
+      expect(await (await app.fetch(request(), env, ctx)).json()).toEqual({ ok: true });
+      await flushWaitUntil(ctx, 1);
+      expect(postIssueComment).toHaveBeenCalledTimes(commentsBefore + 2);
+      expect(vi.mocked(postIssueComment).mock.calls.at(-1)?.[2]).toContain(
+        'Model "openai/gpt-6-sol" cannot run on the Claude Agent harness.'
+      );
+      expect(cpFetch.mock.calls.some(([url]) => String(url).includes("/sessions"))).toBe(false);
+      expect(await env.GITHUB_KV.get("delivery-dispatch:delivery-refusal-retry")).toBe("processed");
+      expect(await env.GITHUB_KV.get("delivery:delivery-refusal-retry")).toBe("processed");
+      expect(await (await app.fetch(request(), env, ctx)).json()).toEqual({
+        ok: true,
+        duplicate: true,
+      });
+      expect(postIssueComment).toHaveBeenCalledTimes(commentsBefore + 2);
+    }
+  );
+
   describe.each([
     "terminal skip",
     "success",
     "not_member",
     "target_team_missing_grant",
     "team_archived",
+    "harness_model_incompatible",
     "config failure",
     "permission API error",
   ])("forwarding after builtin %s", (builtin) => {
@@ -839,10 +919,12 @@ describe("POST /webhooks/github", () => {
       },
       { name: "HTTP outage 503", respond: () => new Response("unavailable", { status: 503 }) },
     ])("retries $name without repeating completed external effects", async ({ respond }) => {
+      const compatibilityRefusal = builtin === "harness_model_incompatible";
       const isRefusal =
         builtin === "not_member" ||
         builtin === "target_team_missing_grant" ||
-        builtin === "team_archived";
+        builtin === "team_archived" ||
+        compatibilityRefusal;
       const checkpointed = builtin === "success" || isRefusal;
       const recovers = builtin === "config failure" || builtin === "permission API error";
       const refusalCommentsBefore = vi.mocked(postIssueComment).mock.calls.length;
@@ -874,13 +956,14 @@ describe("POST /webhooks/github", () => {
           if (builtin === "config failure" && !forwardFailed) {
             return new Response("config unavailable", { status: 503 });
           }
-          if (builtin === "terminal skip") {
+          if (builtin === "terminal skip" || compatibilityRefusal) {
             return Response.json({
               config: {
-                model: null,
+                model: compatibilityRefusal ? "gpt-6-sol" : null,
+                harness: compatibilityRefusal ? "claude" : "opencode",
                 reasoningEffort: null,
                 autoReviewOnOpen: true,
-                enabledRepos: [],
+                enabledRepos: compatibilityRefusal ? null : [],
                 allowedTriggerUsers: null,
                 codeReviewInstructions: null,
                 commentActionInstructions: null,
@@ -894,7 +977,7 @@ describe("POST /webhooks/github", () => {
         }
         if (requestUrl.endsWith("/metadata")) return Response.json({ metadata: null });
         if (requestUrl === "https://internal/sessions") {
-          if (isRefusal) {
+          if (isRefusal && !compatibilityRefusal) {
             return Response.json(
               { code: builtin },
               { status: builtin === "not_member" ? 403 : 409 }
@@ -941,7 +1024,7 @@ describe("POST /webhooks/github", () => {
       }
       expect(
         cpFetch.mock.calls.filter(([url]) => String(url) === "https://internal/sessions")
-      ).toHaveLength(checkpointed ? 1 : 0);
+      ).toHaveLength(checkpointed && !compatibilityRefusal ? 1 : 0);
       expect(cpFetch.mock.calls.filter(([url]) => String(url).endsWith("/prompt"))).toHaveLength(
         builtin === "success" ? 1 : 0
       );
@@ -954,11 +1037,16 @@ describe("POST /webhooks/github", () => {
       );
       expect(
         cpFetch.mock.calls.filter(([url]) => String(url) === "https://internal/sessions")
-      ).toHaveLength(builtin === "terminal skip" ? 0 : 1);
+      ).toHaveLength(builtin === "terminal skip" || compatibilityRefusal ? 0 : 1);
       expect(cpFetch.mock.calls.filter(([url]) => String(url).endsWith("/prompt"))).toHaveLength(
         builtin === "success" || recovers ? 1 : 0
       );
       expect(postIssueComment).toHaveBeenCalledTimes(refusalCommentsBefore + (isRefusal ? 1 : 0));
+      if (compatibilityRefusal) {
+        expect(vi.mocked(postIssueComment).mock.calls.at(-1)?.[2]).toContain(
+          'Model "openai/gpt-6-sol" cannot run on the Claude Agent harness.'
+        );
+      }
       expect(await env.GITHUB_KV.get("delivery-dispatch:delivery-forward-retry")).toBe(
         builtin === "terminal skip" ? null : "processed"
       );

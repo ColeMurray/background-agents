@@ -4,7 +4,7 @@ description: Automatic pull request reviews, @mention actions, PR Feedback Autof
 audience: team-owner
 owner: integrations
 status: published
-lastReviewed: "2026-10-03"
+lastReviewed: "2026-10-08"
 relatedCode:
   - docs/integrations/GITHUB.md
   - packages/shared/src/types/integrations.ts
@@ -94,6 +94,8 @@ flowchart TB
 
 The flags work like Slack's: each accepts a space or a colon before the value (`!model:anthropic/claude-sonnet-4-6`, `!reasoning:max`), and all flags must appear together at the start of the request, right after the mention. Models must be enabled under Settings › Models, and the reasoning value must be supported by the model. A model flag without `!reasoning` keeps the configured effort when the new model supports it. If a flag is invalid, the bot replies on the PR and does not start a session. Auto-reviews and review requests always use the configured model.
 
+If the configured **Agent harness** cannot run the resolved model, the bot replies on the PR and creates no session instead of switching to OpenCode. Retry a mention with a compatible `!model`, update the default model, or change the GitHub integration harness.
+
 **Inline review threads.** When you mention the bot in a review thread, the prompt includes that thread's file path and diff context. The agent can reply in the thread and can also post a summary comment on the PR.
 
 **Branch and session behavior.** Comment-triggered sessions start from the repository's default branch, not the PR head branch, so use them for answers and discussion rather than asking the agent to push to the PR branch. Each accepted webhook starts a new session; GitHub comments do not continue an existing session the way Slack replies do, though the agent reads the current PR conversation when it needs context. Mentions on ordinary issues are ignored, and so are the bot's own comments.
@@ -119,7 +121,7 @@ A routing lookup failure stops the request rather than guessing. Trigger-user ch
 
 When a request is accepted, the bot adds an eyes reaction. The reaction is best-effort: if GitHub rejects it, the session still starts.
 
-Everything after that is written by the agent from inside the session. For auto-review, that is the review itself. For mentions, it is a PR comment answering the question, plus a thread reply when the request came from a review thread. GitHub does not receive a managed completion message the way Slack does, so open the web app to watch progress, inspect logs, or see artifacts.
+Once a session starts, its output is written by the agent from inside the session. For auto-review, that is the review itself. For mentions, it is a PR comment answering the question, plus a thread reply when the request came from a review thread. GitHub does not receive a managed completion message the way Slack does, so open the web app to watch progress, inspect logs, or see artifacts.
 
 ## Settings › Integrations › GitHub
 
@@ -129,6 +131,7 @@ Everything after that is written by the agent from inside the session. For auto-
 | ------------------------ | ------------------------------------------------------------------------------------------------------------------------------------- |
 | Default model            | Model for GitHub-started sessions when a repository does not override it ("Use system default" leaves the deployment default)         |
 | Default reasoning effort | Reasoning depth for the selected model ("Use model default")                                                                          |
+| Agent harness            | **OpenCode** (default) or **Claude Agent** for new GitHub-started sessions                                                            |
 | Auto-review new PRs      | "Automatically review non-draft PRs when opened"                                                                                      |
 | Repository Scope         | **All repositories** (the bot responds in every accessible repository) or **Selected repositories** (only the allowlisted ones)       |
 | Allowed Trigger Users    | **All users with write access** (anyone with write permission on the repository) or **Only specific users** (listed GitHub usernames) |
@@ -150,7 +153,9 @@ Event automations match the numeric repository ID and retain their saved owning 
 
 ### Repository Overrides
 
-Add an override for a repository to replace the global defaults for that repository. Each field can be left on **Use global default** or switched to **Override for this repo**: default model and effort, Auto-review new PRs, PR Feedback Autofix, Allowed Trigger Users, Code Review Instructions, and Comment Action Instructions. If neither an override nor a global default sets a model, sessions use the deployment default model. A [`!model` or `!reasoning` flag](#mention-actions) at the start of a mention overrides both for that one session.
+Add an override for a repository to replace the global defaults for that repository. Each field can be left on **Use global default** or switched to **Override for this repo**: agent harness, default model and effort, Auto-review new PRs, PR Feedback Autofix, Allowed Trigger Users, Code Review Instructions, and Comment Action Instructions. Omitted harness and model fields inherit individually from the global settings. If neither level sets a harness, it is OpenCode; if neither sets a model, sessions use the deployment default model. A [`!model` or `!reasoning` flag](#mention-actions) at the start of a mention overrides the corresponding model or effort setting for that one session, not the harness.
+
+Explicitly choosing a restricted harness such as **Claude Agent** requires a compatible default model at that same settings level (global or repository), not an inherited model. The settings form and control plane reject a missing model or an incompatible pair at that level; **Use system default** is not offered when explicitly choosing Claude Agent. Save validation does not check the merged global/repository pair: a model-only repository override can inherit an incompatible global harness, in which case the bot refuses the launch.
 
 ## PR Feedback Autofix
 

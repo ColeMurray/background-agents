@@ -6,7 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ComponentProps } from "react";
 import { SWRConfig, mutate } from "swr";
 import type * as SwrModule from "swr";
-import type { SessionDiffState } from "@open-inspect/shared/types/session-diffs";
+import type { SessionDiffFile, SessionDiffState } from "@open-inspect/shared/types/session-diffs";
 import type { SessionCapabilities } from "@/lib/session-capabilities";
 
 const FULL_CAPABILITIES = {
@@ -411,5 +411,185 @@ describe("SessionChangesPanel", () => {
     expect(onSelect).toHaveBeenCalledWith({ repositoryPosition: 0, path: "src/lib.ts" });
     await userEvent.keyboard("{Escape}");
     expect(onClose).toHaveBeenCalledOnce();
+  });
+});
+
+function markdownFilePatch(content: string): string {
+  const lines = content.replace(/\n$/, "").split("\n");
+  return [
+    "diff --git a/README.md b/README.md",
+    "index 1111111..2222222 100644",
+    "--- a/README.md",
+    "+++ b/README.md",
+    `@@ -1,${lines.length} +1,${lines.length} @@`,
+    ...lines.map((line) => ` ${line}`),
+    "",
+  ].join("\n");
+}
+
+function markdownPanel(
+  path: string,
+  {
+    fileId = "file-md",
+    revisionId = "revision-1",
+    status = "modified",
+    renderState = "renderable",
+  }: {
+    fileId?: string;
+    revisionId?: string;
+    status?: SessionDiffFile["status"];
+    renderState?: SessionDiffFile["renderState"];
+  } = {}
+) {
+  const file = { ...patchFile, id: fileId, path, status, renderState };
+  const repository = { ...patchRepository, files: [file, readyRepository.files[1]!] };
+  return patchPanel({
+    state: { ...state, current: { ...state.current!, repositories: [repository] } },
+    resolved: { status: "ready", revisionId, repository, file },
+  });
+}
+
+describe("SessionChangesPanel Markdown preview", () => {
+  it("offers Preview only for Markdown files", () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(markdownFilePatch("# A"))));
+    const view = render(markdownPanel("docs/Guide.MD"));
+
+    expect(screen.getByRole("button", { name: "Preview" })).toHaveAttribute(
+      "aria-pressed",
+      "false"
+    );
+
+    view.rerender(patchPanel());
+    expect(screen.queryByRole("button", { name: "Preview" })).not.toBeInTheDocument();
+  });
+
+  it("renders the whole resulting document inertly and returns to the saved layout", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi
+        .fn()
+        .mockResolvedValue(
+          new Response(
+            markdownFilePatch(
+              [
+                "# Notes",
+                "",
+                "unchanged before",
+                "",
+                "See [docs](https://example.com/docs) and [local](docs/guide.md).",
+                "",
+                "![diagram](./secret.png)",
+                "",
+                "<script>alert(1)</script>",
+              ].join("\n")
+            )
+          )
+        )
+    );
+    localStorage.setItem("session-changes.diff-style", "split");
+    render(markdownPanel("README.md"));
+
+    await userEvent.click(screen.getByRole("button", { name: "Preview" }));
+    const article = await screen.findByRole("article", { name: "Markdown preview" });
+    expect(screen.getByRole("heading", { name: "Notes" })).toBeVisible();
+    expect(article).toHaveTextContent("unchanged before");
+    expect(article).not.toHaveTextContent("@@");
+    expect(article.querySelector("script, img")).toBeNull();
+    expect(screen.getByText("diagram: ./secret.png")).toBeVisible();
+    expect(screen.getByRole("link", { name: "docs" })).toHaveAttribute(
+      "href",
+      "https://example.com/docs"
+    );
+    expect(screen.queryByRole("link", { name: "local" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Split" })).toHaveAttribute("aria-pressed", "false");
+    expect(screen.queryByTestId("diff-renderer")).not.toBeInTheDocument();
+    expect(screen.queryByRole("checkbox", { name: "Wrap lines" })).not.toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole("button", { name: "Split" }));
+    expect(screen.getByTestId("diff-renderer")).toHaveAttribute("data-style", "split");
+    expect(screen.getByRole("button", { name: "Preview" })).toHaveAttribute(
+      "aria-pressed",
+      "false"
+    );
+    expect(screen.getByRole("checkbox", { name: "Wrap lines" })).toBeVisible();
+  });
+
+  it("explains empty Markdown files added or deleted without a patch", async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+    const view = render(
+      markdownPanel("EMPTY.md", { status: "added", renderState: "metadata_only" })
+    );
+
+    await userEvent.click(screen.getByRole("button", { name: "Preview" }));
+    expect(screen.getByText("This document is empty.")).toBeVisible();
+
+    view.rerender(markdownPanel("EMPTY.md", { status: "deleted", renderState: "metadata_only" }));
+    expect(
+      screen.getByText("This file was deleted, so there is no document to preview.")
+    ).toBeVisible();
+
+    await userEvent.click(screen.getByRole("button", { name: "Unified" }));
+    expect(
+      screen.queryByText("This file was deleted, so there is no document to preview.")
+    ).not.toBeInTheDocument();
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("keeps Preview selected across files and replaces the document per revision", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        async (url: string) =>
+          new Response(markdownFilePatch(url.includes("revision-2") ? "# Second" : "# First"))
+      )
+    );
+    const view = render(markdownPanel("README.md"));
+    await userEvent.click(screen.getByRole("button", { name: "Preview" }));
+    expect(await screen.findByRole("heading", { name: "First" })).toBeVisible();
+
+    view.rerender(patchPanel());
+    expect(await screen.findByTestId("diff-renderer")).toBeVisible();
+
+    view.rerender(markdownPanel("README.md", { revisionId: "revision-2" }));
+    expect(await screen.findByRole("heading", { name: "Second" })).toBeVisible();
+    expect(screen.queryByRole("heading", { name: "First" })).not.toBeInTheDocument();
+  });
+
+  it("explains deleted documents and incomplete captures", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(
+        new Response(
+          [
+            "diff --git a/README.md b/README.md",
+            "deleted file mode 100644",
+            "index 1111111..0000000",
+            "--- a/README.md",
+            "+++ /dev/null",
+            "@@ -1 +0,0 @@",
+            "-# Gone",
+            "",
+          ].join("\n")
+        )
+      );
+    vi.stubGlobal("fetch", fetchMock);
+    const view = render(markdownPanel("README.md", { status: "deleted", fileId: "deleted" }));
+    await userEvent.click(screen.getByRole("button", { name: "Preview" }));
+    expect(
+      await screen.findByText("This file was deleted, so there is no document to preview.")
+    ).toBeVisible();
+
+    fetchMock.mockResolvedValue(
+      new Response(
+        ["--- a/NOTES.md", "+++ b/NOTES.md", "@@ -40,1 +40,1 @@", "-old", "+new", ""].join("\n")
+      )
+    );
+    view.rerender(markdownPanel("NOTES.md", { fileId: "partial" }));
+    expect(
+      await screen.findByText(
+        "Preview is unavailable because the captured changes do not include the full document."
+      )
+    ).toBeVisible();
   });
 });

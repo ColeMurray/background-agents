@@ -27,3 +27,10 @@ download_checked "https://storage.googleapis.com/chrome-for-testing-public/$CHRO
 mkdir -p /opt/openinspect/chrome
 unzip -q "$download_dir/chrome.zip" -d /opt/openinspect/chrome
 ln -sf /opt/openinspect/chrome/chrome-linux64/chrome /usr/local/bin/google-chrome
+
+# Keep the complete pinned native closure in its release layout. Codex resolves
+# code-mode, ripgrep and sandbox helpers relative to the real executable.
+download_checked "https://github.com/openai/codex/releases/download/rust-v$CODEX_VERSION/codex-package-x86_64-unknown-linux-musl.tar.gz" "$CODEX_SHA256" "$download_dir/codex.tar.gz"
+mkdir -p /opt/openinspect/codex
+tar -xzf "$download_dir/codex.tar.gz" -C /opt/openinspect/codex
+ln -sf /opt/openinspect/codex/bin/codex /usr/local/bin/codex

@@ -391,6 +391,7 @@ export async function seedMessage(
 export async function initNamedSession(
   sessionName: string,
   overrides?: {
+    harness?: "opencode" | "claude" | "codex";
     repoOwner?: string | null;
     repoName?: string | null;
     repoId?: number | null;
@@ -424,6 +425,7 @@ export async function initNamedSession(
   const now = Date.now();
   await new SessionIndexStore(env.DB).create({
     id: sessionName,
+    harness: defaults.harness ?? "opencode",
     ownerTeamId: null,
     visibility: "workspace",
     title: defaults.title ?? null,
@@ -492,6 +494,46 @@ export function collectMessages(
         resolve(messages);
       }
     });
+  });
+}
+
+/**
+ * Close a WebSocket and wait for the peer's reciprocal close.
+ *
+ * The session DO reciprocates only after its close handler has run (and
+ * logged), so awaiting this keeps that work inside the test. A fire-and-forget
+ * `close()` lets the DO log after the test file finishes, which fails the run
+ * with "Closing rpc while onUserConsoleLog was pending". Rejects if the
+ * reciprocal close does not arrive within `timeoutMs`; pass `bestEffort` from
+ * `finally` cleanup so a teardown timeout cannot mask the test's own failure.
+ *
+ * Defaults to code 1000: a bare `close()` reaches the DO as 1005, which it
+ * cannot echo back on the wire, so the reciprocal close would never arrive.
+ */
+export function closeWebSocket(
+  ws: WebSocket,
+  opts?: { code?: number; reason?: string; timeoutMs?: number; bestEffort?: boolean }
+): Promise<void> {
+  if (ws.readyState === WebSocket.CLOSED) return Promise.resolve();
+  const code = opts?.code ?? 1000;
+  if (ws.readyState === WebSocket.CLOSING) {
+    // The peer closed first and its close event fired when that close arrived, so no
+    // further event will come; reciprocating is all that is left. The DO's close
+    // handler for this socket runs after it with no client-observable completion.
+    ws.close(code, opts?.reason);
+    return Promise.resolve();
+  }
+  return new Promise((resolve, reject) => {
+    const timeoutMs = opts?.timeoutMs ?? INTEGRATION_WEBSOCKET_TIMEOUT_MS;
+    const timer = setTimeout(() => {
+      if (opts?.bestEffort) resolve();
+      else reject(new Error(`WebSocket peer did not reciprocate close within ${timeoutMs}ms`));
+    }, timeoutMs);
+    ws.addEventListener("close", () => {
+      clearTimeout(timer);
+      resolve();
+    });
+    ws.close(code, opts?.reason);
   });
 }
 

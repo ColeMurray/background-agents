@@ -36,6 +36,10 @@ const EMAIL_ATTESTING_PROVIDERS: ReadonlySet<ProviderIdentity["provider"]> = new
   "linear",
 ]);
 
+export function isEmailAttestingProvider(provider: ProviderIdentity["provider"]): boolean {
+  return EMAIL_ATTESTING_PROVIDERS.has(provider);
+}
+
 export interface ResolvedUser {
   id: string;
   displayName: string | null;
@@ -332,6 +336,34 @@ export class UserStore {
       providerIssuer: issuer,
       createdAt: now,
     };
+  }
+
+  /**
+   * Set a display name or avatar the user lacks (NULL or blank) and never
+   * overwrite one it has. Each field is a single guarded UPDATE, so a value
+   * another writer stores first always wins. Blank inputs are ignored.
+   */
+  async fillMissingProfile(
+    userId: string,
+    profile: { displayName?: string; avatarUrl?: string }
+  ): Promise<void> {
+    const now = Date.now();
+    const fill = (column: "display_name" | "avatar_url", value: string | undefined) => {
+      const trimmed = value?.trim();
+      return trimmed
+        ? this.db
+            .prepare(
+              `UPDATE users SET ${column} = ?, updated_at = ?
+               WHERE id = ? AND (${column} IS NULL OR TRIM(${column}) = '')`
+            )
+            .bind(trimmed, now, userId)
+        : null;
+    };
+    const statements = [
+      fill("display_name", profile.displayName),
+      fill("avatar_url", profile.avatarUrl),
+    ].filter((statement) => statement !== null);
+    if (statements.length > 0) await this.db.batch(statements);
   }
 
   async updateUser(userId: string, updates: UserUpdate): Promise<void> {
