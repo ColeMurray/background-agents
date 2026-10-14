@@ -47,7 +47,7 @@ const manifest: SessionDiffManifest = {
 function renderInSession(content: string, onOpen = vi.fn()) {
   render(
     <SessionFileLinksProvider manifest={manifest} onOpen={onOpen}>
-      <SafeMarkdown content={content} linkRepositoryFiles />
+      <SafeMarkdown content={content} linkMode="repositoryFiles" />
     </SessionFileLinksProvider>
   );
   return onOpen;
@@ -166,10 +166,43 @@ describe("SafeMarkdown links", () => {
   });
 
   it("renders relative links as before outside a session", () => {
-    render(<SafeMarkdown content="See [parity.md](docs/plans/parity.md)." linkRepositoryFiles />);
+    render(
+      <SafeMarkdown content="See [parity.md](docs/plans/parity.md)." linkMode="repositoryFiles" />
+    );
     const link = screen.getByRole("link", { name: "parity.md" });
 
     expect(link).toHaveAttribute("href", "docs/plans/parity.md");
     expect(link).toHaveAttribute("target", "_blank");
+  });
+});
+
+describe("SafeMarkdown external-only links", () => {
+  it("opens safe external URLs and leaves every other link inert", () => {
+    const onOpen = vi.fn();
+    render(
+      <SessionFileLinksProvider manifest={manifest} onOpen={onOpen}>
+        <SafeMarkdown
+          linkMode="externalOnly"
+          content={[
+            "[docs](https://example.com/docs)",
+            "[changed](docs/plans/parity.md)",
+            "[jump](#details)",
+            "[insecure](http://example.com)",
+            "[click](javascript:alert(1))",
+          ].join(" ")}
+        />
+      </SessionFileLinksProvider>
+    );
+
+    const external = screen.getByRole("link", { name: "docs" });
+    expect(external).toHaveAttribute("href", "https://example.com/docs");
+    expect(external).toHaveAttribute("target", "_blank");
+    expect(external).toHaveAttribute("rel", "noopener noreferrer nofollow");
+    for (const name of ["changed", "jump", "insecure", "click"]) {
+      expect(screen.queryByRole("link", { name })).not.toBeInTheDocument();
+      expect(screen.queryByRole("button", { name })).not.toBeInTheDocument();
+      expect(screen.getByText(name)).toHaveProperty("tagName", "SPAN");
+    }
+    expect(onOpen).not.toHaveBeenCalled();
   });
 });

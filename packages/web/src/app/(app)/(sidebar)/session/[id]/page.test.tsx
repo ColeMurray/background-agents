@@ -249,7 +249,7 @@ it("keeps desktop actions available without collaboration and refreshes sidebar 
 
 // Memoized like the timeline's EventItem, so page re-renders keep the rendered link.
 const AssistantMessage = memo(function AssistantMessage() {
-  return <SafeMarkdown content="Updated [src/app.ts](src/app.ts)." linkRepositoryFiles />;
+  return <SafeMarkdown content="Updated [src/app.ts](src/app.ts)." linkMode="repositoryFiles" />;
 });
 
 it.each([
