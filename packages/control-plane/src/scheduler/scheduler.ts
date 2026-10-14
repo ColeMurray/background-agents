@@ -332,6 +332,7 @@ interface StartInvocationParams {
    * `instructionsOverride` so admitted children cannot be stranded.
    */
   instructionsOverrideFactory?: () => Promise<string>;
+  sessionTitle?: string;
 }
 
 interface WebhookFollowUpClaim {
@@ -780,7 +781,8 @@ export class Scheduler {
             authorization,
             target:
               targetSnapshot && "target" in targetSnapshot ? targetSnapshot.target : undefined,
-          }
+          },
+          params.sessionTitle
         );
         await this.sendPromptToSession(
           sessionId,
@@ -1463,6 +1465,7 @@ export class Scheduler {
         concurrencyKey: event.concurrencyKey,
         triggerMetadata: event.source === "slack" ? serializeSlackTriggerMetadata(event) : null,
         instructionsOverride,
+        sessionTitle: event.source === "webhook" ? event.sessionTitle : undefined,
         ...(event.source === "slack"
           ? {
               instructionsOverrideFactory: async () =>
@@ -1943,7 +1946,8 @@ export class Scheduler {
     executionPrincipal: ExecutionPrincipal,
     /** The instant the run claimed this session — what its deadline measures from. */
     startedAt: number,
-    admission: LaunchAdmission
+    admission: LaunchAdmission,
+    sessionTitle?: string
   ): Promise<void> {
     const ctx: RequestContext = {
       trace_id: `automation:${automation.id}`,
@@ -2018,7 +2022,7 @@ export class Scheduler {
       visibility: team?.defaultVisibility ?? "workspace",
       sessionId,
       ...target,
-      title: `[Auto] ${automation.name}`,
+      title: `[Auto] ${sessionTitle ?? automation.name}`,
       harness: getValidHarnessOrDefault(automation.harness),
       model: automation.model,
       reasoningEffort: automation.reasoning_effort,

@@ -3958,6 +3958,26 @@ describe("Scheduler", () => {
         );
       });
 
+      it("titles a session it starts with the delivery's sessionTitle", async () => {
+        const titled = createMockSessionStub();
+        await createScheduler(createEnv(undefined, titled)).event(
+          normalizeWebhookEvent(
+            "auto-hook",
+            { mode: "build" },
+            { sessionKey: "card-8161", sessionTitle: "#8161 Mentions in Comments" }
+          )
+        );
+        expect((await getInitBody(vi.mocked(titled.fetch))).title).toBe(
+          "[Auto] #8161 Mentions in Comments"
+        );
+
+        const untitled = createMockSessionStub();
+        await createScheduler(createEnv(undefined, untitled)).event(
+          webhookEvent({ mode: "build" })
+        );
+        expect((await getInitBody(vi.mocked(untitled.fetch))).title).toBe("[Auto] Card agent");
+      });
+
       it("starts a fresh run when the session has been idle past the window", async () => {
         mockStore.getLatestContinuableRun.mockResolvedValue(
           sampleRunRow({

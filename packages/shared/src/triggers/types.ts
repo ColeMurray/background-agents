@@ -212,11 +212,20 @@ export const WEBHOOK_SESSION_KEY_MAX_LENGTH = 256;
 
 export const webhookSessionKeySchema = z.string().min(1).max(WEBHOOK_SESSION_KEY_MAX_LENGTH);
 
+export const WEBHOOK_SESSION_TITLE_MAX_LENGTH = 120;
+
+export const webhookSessionTitleSchema = z
+  .string()
+  .trim()
+  .min(1)
+  .max(WEBHOOK_SESSION_TITLE_MAX_LENGTH);
+
 export const webhookAutomationEventSchema = z.object({
   ...baseAutomationEventSchema,
   source: z.literal("webhook"),
   automationId: z.string().min(1),
   sessionKey: webhookSessionKeySchema.optional(),
+  sessionTitle: webhookSessionTitleSchema.optional(),
   body: z.unknown(),
 });
 

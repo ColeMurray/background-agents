@@ -24,6 +24,7 @@ export type {
 export {
   TRIGGER_TYPE_TO_SOURCE,
   WEBHOOK_SESSION_KEY_MAX_LENGTH,
+  WEBHOOK_SESSION_TITLE_MAX_LENGTH,
   automationTriggerTypeSchema,
   automationEventSchema,
   githubAutomationEventSchema,
@@ -31,6 +32,7 @@ export {
   sentryAutomationEventSchema,
   webhookAutomationEventSchema,
   webhookSessionKeySchema,
+  webhookSessionTitleSchema,
   slackAutomationEventSchema,
   triggerConfigSchema,
 } from "./types";

@@ -154,6 +154,13 @@ To send several deliveries to one session, include a top-level `sessionKey` stri
 - If the session will not take the follow-up, for example because it was archived or ran out of budget, the request fails with an [error response](#error-responses) instead of starting over in a new session.
 - After 7 days without activity in the session, the next delivery starts a new run, and later deliveries continue that one.
 
+## Naming the session
+
+A session an automation starts is titled `[Auto]` and the automation's name. To tell sessions apart, include a top-level `sessionTitle` string, and the session is titled `[Auto]` and that instead, for example `[Auto] #8161 Mentions in Comments`.
+
+- It only names a session the delivery starts. A follow-up into an existing session leaves the title as it is.
+- `sessionTitle` stays in the stored body but is removed from the context block. It is trimmed and must then be a non-empty string of at most 120 characters; anything else is rejected with `400`.
+
 ## Responses
 
 A successful request returns:
@@ -177,7 +184,7 @@ Runtime authorization denial returns `ok: true` with `triggered: 0` and `skipped
 
 | Status | Meaning                                                                                                                                                |
 | ------ | ------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `400`  | Invalid JSON body, or a `sessionKey` that is not a non-empty string of at most 256 characters                                                          |
+| `400`  | Invalid JSON body, a `sessionKey` that is not a non-empty string of at most 256 characters, or a `sessionTitle` that is not one of at most 120         |
 | `401`  | Missing or invalid API key                                                                                                                             |
 | `404`  | Automation not found, or not an Inbound Webhook automation                                                                                             |
 | `409`  | A `sessionKey` follow-up the session cannot take: `SESSION_NOT_PROMPTABLE` (archived or cancelled), `BUDGET_EXHAUSTED`, or `SANDBOX_RECOVERY_REQUIRED` |
