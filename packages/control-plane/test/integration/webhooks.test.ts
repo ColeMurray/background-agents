@@ -646,7 +646,7 @@ describe("POST /webhooks/automation/:id", () => {
       expect(await fetchRuns(automation.id)).toHaveLength(1);
     });
 
-    it("skips a retried follow-up after its session continuity expires", async () => {
+    it("finds a legacy retry after a newer session starts and conditions change", async () => {
       const automation = await createWebhookAutomation();
       const { invocationId, sessionId } = await startSession(automation);
       const followUp = { sessionKey: "card-1", idempotencyKey: "event-2", step: "second" };
@@ -675,6 +675,28 @@ describe("POST /webhooks/automation/:id", () => {
         ),
       ]);
 
+      expect(
+        await postWebhook(automation.id, {
+          sessionKey: "card-1",
+          idempotencyKey: "event-3",
+          step: "third",
+        })
+      ).toMatchObject({ triggered: 1 });
+      await env.DB.prepare("UPDATE automations SET trigger_config = ? WHERE id = ?")
+        .bind(
+          JSON.stringify({
+            conditions: [
+              {
+                type: "jsonpath",
+                operator: "all_match",
+                value: [{ path: "$.step", comparison: "eq", value: "third" }],
+              },
+            ],
+          }),
+          automation.id
+        )
+        .run();
+
       expect(await postWebhook(automation.id, followUp)).toEqual({
         ok: true,
         triggered: 0,
@@ -682,7 +704,7 @@ describe("POST /webhooks/automation/:id", () => {
         steered: 0,
         invocationId,
       });
-      expect(await fetchRuns(automation.id)).toHaveLength(1);
+      expect(await fetchRuns(automation.id)).toHaveLength(2);
       expect(await receipt()).toEqual({ invocation_id: invocationId });
     });
 

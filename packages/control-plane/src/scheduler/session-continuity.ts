@@ -55,8 +55,9 @@ export interface SteeringActor {
 export interface ContinuationPolicy {
   source: "slack" | "webhook";
   logFields?: Record<string, unknown>;
-  /** Stable session request ID used to recognize a retry after continuity expires. */
-  deduplicationRequestId?: string;
+  claimDelivery?(run: AutomationRunRow): Promise<ContinuationOutcome | null>;
+  acceptDelivery?(): Promise<void>;
+  releaseDelivery?(): Promise<void>;
   resolveActor(): Promise<SteeringActor | null>;
   buildPrompt(
     run: AutomationRunRow,
@@ -119,9 +120,8 @@ export async function continueSession(
   policy: ContinuationPolicy
 ): Promise<ContinuationOutcome> {
   const run = await deps.store.getLatestContinuableRun(automation.id, concurrencyKey);
-  if (!run) return { kind: "fall_through" };
-  if (run.last_activity_at < now - SESSION_CONTINUITY_WINDOW_MS)
-    return deduplicateExpiredFollowUp(deps, run, policy);
+  if (!run || run.last_activity_at < now - SESSION_CONTINUITY_WINDOW_MS)
+    return { kind: "fall_through" };
   if (!holdsFollowUps(run)) return continueRunSession(deps, run, policy);
 
   const held = await holdFollowUp(deps, run, policy);
@@ -135,34 +135,40 @@ export async function continueSession(
 }
 
 /**
- * An expired session no longer receives new work, but its durable prompt receipt still
- * owns an idempotency key. Refuse to fork when the receipt cannot be checked: a retry is
- * safer than duplicate work.
+ * Search every session previously used by a continuity key for a durable prompt receipt.
+ * A failed lookup blocks a new delivery only when no other session proves it is a retry.
  */
-async function deduplicateExpiredFollowUp(
+export async function findHistoricalPromptReceipt(
   deps: SessionContinuityDeps,
-  run: ContinuableRunRow,
-  policy: ContinuationPolicy
+  automation: AutomationRow,
+  concurrencyKey: string | null,
+  requestId: string
 ): Promise<ContinuationOutcome> {
-  const requestId = policy.deduplicationRequestId;
-  if (!requestId || !run.session_id) return { kind: "fall_through" };
-
-  try {
-    const queued = await isSessionPromptRequestQueued(deps.env, run.session_id, requestId, {
-      trace_id: `automation:${run.automation_id}`,
-      request_id: requestId,
-    });
-    return queued ? { kind: "skipped", invocationId: run.invocation_id } : { kind: "fall_through" };
-  } catch (error) {
-    deps.log.warn("Failed to check an expired session for a follow-up retry", {
-      event: `scheduler.${policy.source}_expired_dedup_failed`,
-      automation_id: run.automation_id,
-      session_id: run.session_id,
-      ...policy.logFields,
-      error: error instanceof Error ? error : new Error(String(error)),
-    });
-    return { kind: "refused", invocationId: run.invocation_id, status: null, code: null };
+  const runs = await deps.store.getSessionRunsForContinuityKey(automation.id, concurrencyKey);
+  let unavailable: (typeof runs)[number] | null = null;
+  for (const run of runs) {
+    try {
+      if (
+        await isSessionPromptRequestQueued(deps.env, run.session_id, requestId, {
+          trace_id: `automation:${automation.id}`,
+          request_id: requestId,
+        })
+      ) {
+        return { kind: "skipped", invocationId: run.invocation_id };
+      }
+    } catch (error) {
+      unavailable ??= run;
+      deps.log.warn("Failed to check a historical session for a follow-up retry", {
+        event: "scheduler.webhook_historical_dedup_failed",
+        automation_id: automation.id,
+        session_id: run.session_id,
+        error: error instanceof Error ? error : new Error(String(error)),
+      });
+    }
   }
+  return unavailable
+    ? { kind: "refused", invocationId: unavailable.invocation_id, status: null, code: null }
+    : { kind: "fall_through" };
 }
 
 /**
@@ -291,6 +297,8 @@ async function continueRunSession(
 
   // Outside the try: a follow-up that cannot be attributed must fail, not fall through to a new run.
   const { body, ctx } = await policy.buildPrompt(run, actor);
+  const claimed = await policy.claimDelivery?.(run);
+  if (claimed) return claimed;
   let outcome: SessionPromptOutcome;
   try {
     outcome = await enqueueSessionPrompt(deps.env, sessionId, body, ctx);
@@ -305,6 +313,7 @@ async function continueRunSession(
 
   switch (outcome.kind) {
     case "queued":
+      await policy.acceptDelivery?.();
       deps.log.info("Steered session with a follow-up", {
         event: `scheduler.${policy.source}_steer`,
         ...fields,
@@ -315,8 +324,10 @@ async function continueRunSession(
     // block carries its own receipt time.
     case "duplicate":
     case "request_id_taken":
+      await policy.acceptDelivery?.();
       return { kind: "skipped", invocationId: run.invocation_id };
     case "rejected":
+      await policy.releaseDelivery?.();
       deps.log.warn("Session refused the follow-up", {
         event: `scheduler.${policy.source}_steer_failed`,
         ...fields,
@@ -353,6 +364,8 @@ async function holdFollowUp(
   if (!actor) return blocked(deps, policy, fields);
 
   const { body, ctx } = await policy.buildPrompt(run, actor);
+  const claimed = await policy.claimDelivery?.(run);
+  if (claimed) return claimed;
   const id = generateId();
   // A retried delivery is held once, and the sweep may re-send a released prompt after
   // a crash, which the session dedupes by this request id.
@@ -369,6 +382,7 @@ async function holdFollowUp(
     retry_at: Date.now() + HELD_PROMPT_RETRY_MS,
   });
   if (held === "not_holding") return null;
+  await policy.acceptDelivery?.();
   if (held === "duplicate") return { kind: "skipped", invocationId: run.invocation_id };
 
   deps.log.info("Held a follow-up until its run's first prompt is queued", {

@@ -222,6 +222,9 @@ export interface AutomationInvocationRow {
   updated_at: number;
 }
 
+export type FollowUpReceiptClaim =
+  { kind: "claimed" } | { kind: "accepted" | "pending"; invocationId: string };
+
 export interface AutomationTriggerFields {
   triggerType: AutomationTriggerType;
   triggerConfig: TriggerConfig | null;
@@ -1469,7 +1472,7 @@ export class AutomationStore {
         `SELECT id FROM automation_invocations WHERE automation_id = ? AND trigger_key = ?
          UNION ALL
          SELECT invocation_id AS id FROM automation_follow_up_receipts
-         WHERE automation_id = ? AND trigger_key = ?
+         WHERE automation_id = ? AND trigger_key = ? AND accepted_at IS NOT NULL
          LIMIT 1`
       )
       .bind(automationId, triggerKey, automationId, triggerKey)
@@ -1487,11 +1490,17 @@ export class AutomationStore {
     await this.db
       .prepare(
         `INSERT INTO automation_follow_up_receipts
-           (automation_id, trigger_key, invocation_id, created_at)
-         VALUES (?, ?, ?, ?)
-         ON CONFLICT (automation_id, trigger_key) DO NOTHING`
+           (automation_id, trigger_key, invocation_id, claim_id, claim_expires_at,
+            accepted_at, created_at)
+         VALUES (?, ?, ?, NULL, NULL, ?, ?)
+         ON CONFLICT (automation_id, trigger_key) DO UPDATE SET
+           invocation_id = excluded.invocation_id,
+           claim_id = NULL,
+           claim_expires_at = NULL,
+           accepted_at = excluded.accepted_at
+         WHERE automation_follow_up_receipts.accepted_at IS NULL`
       )
-      .bind(automationId, triggerKey, invocationId, createdAt)
+      .bind(automationId, triggerKey, invocationId, createdAt, createdAt)
       .run();
     const owner = await this.db
       .prepare(
@@ -1502,6 +1511,98 @@ export class AutomationStore {
       .first<{ invocation_id: string }>();
     if (!owner) throw new Error("Failed to record webhook follow-up receipt");
     return owner.invocation_id;
+  }
+
+  /** Claim a follow-up key before its prompt is handed to a session. */
+  async claimFollowUpReceipt(params: {
+    automationId: string;
+    triggerKey: string;
+    invocationId: string;
+    claimId: string;
+    now: number;
+    expiresAt: number;
+  }): Promise<FollowUpReceiptClaim> {
+    const inserted = await this.db
+      .prepare(
+        `INSERT INTO automation_follow_up_receipts
+           (automation_id, trigger_key, invocation_id, claim_id, claim_expires_at,
+            accepted_at, created_at)
+         VALUES (?, ?, ?, ?, ?, NULL, ?)
+         ON CONFLICT (automation_id, trigger_key) DO NOTHING`
+      )
+      .bind(
+        params.automationId,
+        params.triggerKey,
+        params.invocationId,
+        params.claimId,
+        params.expiresAt,
+        params.now
+      )
+      .run();
+    if ((inserted.meta?.changes ?? 0) > 0) return { kind: "claimed" };
+
+    const reclaimed = await this.db
+      .prepare(
+        `UPDATE automation_follow_up_receipts
+         SET invocation_id = ?, claim_id = ?, claim_expires_at = ?
+         WHERE automation_id = ? AND trigger_key = ?
+           AND accepted_at IS NULL AND claim_expires_at <= ?`
+      )
+      .bind(
+        params.invocationId,
+        params.claimId,
+        params.expiresAt,
+        params.automationId,
+        params.triggerKey,
+        params.now
+      )
+      .run();
+    if ((reclaimed.meta?.changes ?? 0) > 0) return { kind: "claimed" };
+
+    const owner = await this.db
+      .prepare(
+        `SELECT invocation_id, accepted_at FROM automation_follow_up_receipts
+         WHERE automation_id = ? AND trigger_key = ?`
+      )
+      .bind(params.automationId, params.triggerKey)
+      .first<{ invocation_id: string; accepted_at: number | null }>();
+    if (!owner) throw new Error("Failed to read webhook follow-up claim");
+    return {
+      kind: owner.accepted_at === null ? "pending" : "accepted",
+      invocationId: owner.invocation_id,
+    };
+  }
+
+  async acceptFollowUpReceipt(
+    automationId: string,
+    triggerKey: string,
+    claimId: string,
+    acceptedAt: number
+  ): Promise<void> {
+    const result = await this.db
+      .prepare(
+        `UPDATE automation_follow_up_receipts
+         SET claim_id = NULL, claim_expires_at = NULL, accepted_at = ?
+         WHERE automation_id = ? AND trigger_key = ? AND claim_id = ? AND accepted_at IS NULL`
+      )
+      .bind(acceptedAt, automationId, triggerKey, claimId)
+      .run();
+    if ((result.meta?.changes ?? 0) === 0)
+      throw new Error("Failed to accept webhook follow-up receipt claim");
+  }
+
+  async releaseFollowUpReceipt(
+    automationId: string,
+    triggerKey: string,
+    claimId: string
+  ): Promise<void> {
+    await this.db
+      .prepare(
+        `DELETE FROM automation_follow_up_receipts
+         WHERE automation_id = ? AND trigger_key = ? AND claim_id = ? AND accepted_at IS NULL`
+      )
+      .bind(automationId, triggerKey, claimId)
+      .run();
   }
 
   /** Sibling-run aggregate for finalization decisions (one query, no stored status). */
@@ -1744,6 +1845,24 @@ export class AutomationStore {
       )
       .bind(automationId, concurrencyKey)
       .first<ContinuableRunRow>();
+  }
+
+  /** Every session previously used by a continuity key, newest first. */
+  async getSessionRunsForContinuityKey(
+    automationId: string,
+    concurrencyKey: string | null
+  ): Promise<Array<{ invocation_id: string; session_id: string }>> {
+    if (concurrencyKey === null) return [];
+    const result = await this.db
+      .prepare(
+        `SELECT r.invocation_id, r.session_id FROM automation_runs r
+         JOIN automation_invocations i ON i.id = r.invocation_id
+         WHERE r.automation_id = ? AND i.concurrency_key = ? AND r.session_id IS NOT NULL
+         ORDER BY r.created_at DESC`
+      )
+      .bind(automationId, concurrencyKey)
+      .all<{ invocation_id: string; session_id: string }>();
+    return result.results || [];
   }
 
   // --- Held continuity prompts ---

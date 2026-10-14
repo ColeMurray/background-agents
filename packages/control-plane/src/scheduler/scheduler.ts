@@ -107,6 +107,7 @@ import {
 import type { RequestContext } from "../routes/shared";
 import {
   continueSession,
+  findHistoricalPromptReceipt,
   firstPromptRequestId,
   releaseHeldPrompts,
   steeringActor,
@@ -141,6 +142,9 @@ const TICK_CHILD_LAUNCH_BUDGET = 50;
  * is 10 repositories, so this only caps the per-invocation spike.
  */
 const AUTOMATION_LAUNCH_CONCURRENCY = 4;
+
+/** A crashed follow-up request may be retried after this D1 ownership lease expires. */
+const FOLLOW_UP_RECEIPT_CLAIM_MS = 2 * 60 * 1000;
 
 /** Threshold for detecting orphaned "starting" runs (5 minutes). */
 const ORPHAN_THRESHOLD_MS = 5 * 60 * 1000;
@@ -1262,6 +1266,9 @@ export class Scheduler {
       event.source === "webhook" && event.sessionKey && event.triggerKey.startsWith("webhook:idem:")
         ? event.triggerKey
         : null;
+    const webhookFollowUpRequestId = webhookFollowUpTriggerKey
+      ? `webhook:${await hashToken(webhookFollowUpTriggerKey)}`
+      : null;
     const recordContinuation = (
       outcome: Extract<ContinuationOutcome, { kind: "steered" | "skipped" }>
     ): void => {
@@ -1284,6 +1291,24 @@ export class Scheduler {
         if (original) {
           invocationIds.push(original);
           skipped++;
+          continue;
+        }
+
+        const historical = await findHistoricalPromptReceipt(
+          continuity,
+          automation,
+          event.concurrencyKey,
+          webhookFollowUpRequestId!
+        );
+        if (historical.kind === "refused") throw new SessionFollowUpRefusedError(historical);
+        if (historical.kind === "skipped" && historical.invocationId) {
+          const owner = await store.recordFollowUpReceipt(
+            automation.id,
+            webhookFollowUpTriggerKey,
+            historical.invocationId,
+            now
+          );
+          recordContinuation({ kind: "skipped", invocationId: owner });
           continue;
         }
       }
@@ -1335,22 +1360,16 @@ export class Scheduler {
           automation,
           event.concurrencyKey,
           now,
-          await this.webhookContinuation(event, automation, store)
+          await this.webhookContinuation(
+            event,
+            automation,
+            store,
+            webhookFollowUpTriggerKey,
+            webhookFollowUpRequestId
+          )
         );
         if (outcome.kind === "refused") throw new SessionFollowUpRefusedError(outcome);
         if (outcome.kind !== "fall_through") {
-          if (webhookFollowUpTriggerKey && outcome.invocationId) {
-            const owner = await store.recordFollowUpReceipt(
-              automation.id,
-              webhookFollowUpTriggerKey,
-              outcome.invocationId,
-              now
-            );
-            if (owner !== outcome.invocationId) {
-              recordContinuation({ kind: "skipped", invocationId: owner });
-              continue;
-            }
-          }
           recordContinuation(outcome);
           continue;
         }
@@ -2106,13 +2125,48 @@ export class Scheduler {
   private async webhookContinuation(
     event: WebhookAutomationEvent,
     automation: AutomationRow,
-    store: AutomationStore
+    store: AutomationStore,
+    triggerKey: string | null,
+    requestId: string | null
   ): Promise<ContinuationPolicy> {
-    const clientRequestId = `webhook:${await hashToken(event.triggerKey)}`;
+    const clientRequestId = requestId ?? `webhook:${await hashToken(event.triggerKey)}`;
+    const claimId = triggerKey ? generateId() : null;
+    let claimedInvocationId: string | null = null;
     return {
       source: "webhook",
-      deduplicationRequestId: event.triggerKey.startsWith("webhook:idem:")
-        ? clientRequestId
+      claimDelivery: claimId
+        ? async (run) => {
+            if (claimedInvocationId === run.invocation_id) return null;
+            const now = Date.now();
+            const claim = await store.claimFollowUpReceipt({
+              automationId: automation.id,
+              triggerKey: triggerKey!,
+              invocationId: run.invocation_id,
+              claimId,
+              now,
+              expiresAt: now + FOLLOW_UP_RECEIPT_CLAIM_MS,
+            });
+            if (claim.kind === "claimed") {
+              claimedInvocationId = run.invocation_id;
+              return null;
+            }
+            return claim.kind === "accepted"
+              ? { kind: "skipped", invocationId: claim.invocationId }
+              : {
+                  kind: "refused",
+                  invocationId: claim.invocationId,
+                  status: null,
+                  code: null,
+                };
+          }
+        : undefined,
+      acceptDelivery: claimId
+        ? async () => {
+            await store.acceptFollowUpReceipt(automation.id, triggerKey!, claimId, Date.now());
+          }
+        : undefined,
+      releaseDelivery: claimId
+        ? () => store.releaseFollowUpReceipt(automation.id, triggerKey!, claimId)
         : undefined,
       resolveActor: async () => {
         const owner = await store.resolveCanonicalOwner(automation);

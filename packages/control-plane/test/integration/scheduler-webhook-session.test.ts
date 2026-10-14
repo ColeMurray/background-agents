@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { normalizeWebhookEvent } from "@open-inspect/shared/triggers";
 import { createCloudflareEnv } from "../../src/cloudflare/platform";
 import { AutomationStore } from "../../src/db/automation-store";
-import { Scheduler } from "../../src/scheduler/scheduler";
+import { Scheduler, SessionFollowUpRefusedError } from "../../src/scheduler/scheduler";
 import { firstPromptRequestId } from "../../src/scheduler/session-continuity";
 import { cleanD1Tables } from "./cleanup";
 import { initNamedSession, queryDO, seedActiveUser } from "./helpers";
@@ -14,9 +14,10 @@ const AUTOMATION_ID = "auto-webhook-session";
 const SESSION_ID = "session-webhook";
 
 /** A stand-in session that has not queued the run's first prompt under its request id. */
-function createScheduler() {
+function createScheduler(promptDelayMs = 0) {
   const prompts = vi.fn(async (request: Request, _sessionId: string) => {
     expect(new URL(request.url).pathname).toBe("/internal/prompt");
+    if (promptDelayMs > 0) await new Promise((resolve) => setTimeout(resolve, promptDelayMs));
     return Response.json({ messageId: "msg-follow-up", status: "queued" });
   });
   const schedulerEnv = createCloudflareEnv(env);
@@ -109,6 +110,58 @@ describe("Scheduler webhook sessionKey (real D1)", () => {
 
     expect(result).toMatchObject({ steered: 1, invocationIds: [run.invocation_id] });
     expect(prompts.mock.calls[0]?.[1]).toBe(SESSION_ID);
+  });
+
+  it("leases an idempotency key before concurrent deliveries reach different sessions", async () => {
+    const first = await seedSessionRun();
+    const secondSessionId = "session-webhook-second";
+    await env.DB.prepare(
+      `INSERT INTO sessions
+         (id, title, owner_team_id, visibility, user_id, status, automation_id, automation_run_id,
+          spawn_source, created_at, updated_at)
+       VALUES (?, 'Second card session', NULL, 'private', ?, 'completed', ?, 'run-webhook-second',
+         'automation', ?, ?)`
+    )
+      .bind(secondSessionId, OWNER, AUTOMATION_ID, Date.now(), Date.now())
+      .run();
+    const second = makeRunRow(AUTOMATION_ID, {
+      id: "run-webhook-second",
+      session_id: secondSessionId,
+      status: "completed",
+      completed_at: Date.now(),
+    });
+    await seedRun(second, { concurrencyKey: "webhook:session:card-43" });
+    const { scheduler, prompts } = createScheduler(25);
+
+    const deliveries = await Promise.allSettled([
+      scheduler.event(
+        normalizeWebhookEvent(
+          AUTOMATION_ID,
+          { step: "same" },
+          { idempotencyKey: "event-same", sessionKey: "card-42" }
+        )
+      ),
+      scheduler.event(
+        normalizeWebhookEvent(
+          AUTOMATION_ID,
+          { step: "same" },
+          { idempotencyKey: "event-same", sessionKey: "card-43" }
+        )
+      ),
+    ]);
+
+    expect(prompts).toHaveBeenCalledTimes(1);
+    expect(deliveries.filter(({ status }) => status === "fulfilled")).toHaveLength(1);
+    const [refused] = deliveries.filter(({ status }) => status === "rejected");
+    expect(refused).toMatchObject({ reason: expect.any(SessionFollowUpRefusedError) });
+    const receipt = await env.DB.prepare(
+      `SELECT invocation_id, accepted_at FROM automation_follow_up_receipts
+       WHERE automation_id = ? AND trigger_key = 'webhook:idem:event-same'`
+    )
+      .bind(AUTOMATION_ID)
+      .first<{ invocation_id: string; accepted_at: number | null }>();
+    expect([first.invocation_id, second.invocation_id]).toContain(receipt?.invocation_id);
+    expect(receipt?.accepted_at).toEqual(expect.any(Number));
   });
 
   it.each([
