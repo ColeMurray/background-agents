@@ -167,6 +167,13 @@ class AgentHarness(Protocol):
 
 
 @runtime_checkable
+class SteerableHarness(Protocol):
+    async def steer(self, prompt: HarnessPrompt) -> bool:
+        """Hand ``prompt`` to the running turn; ``False`` when no turn can take it."""
+        ...
+
+
+@runtime_checkable
 class HarnessProcessOwner(Protocol):
     """Supervisor half of the seam: staging plus any resident vendor process."""
 

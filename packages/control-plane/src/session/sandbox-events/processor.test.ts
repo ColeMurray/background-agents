@@ -12,7 +12,7 @@ type ShutdownEvent = Extract<
   { type: "sandbox_generation_ready" | "preservation_prepared" }
 >;
 
-function createProcessor() {
+function createProcessor(execution?: unknown) {
   const sandboxSocket = {} as WebSocket;
   const log = { info: vi.fn(), debug: vi.fn(), warn: vi.fn(), error: vi.fn() };
   const repository = {
@@ -39,7 +39,7 @@ function createProcessor() {
     streaming as unknown as SandboxStreamingEventHandler,
     // Shutdown events must not depend on any other event-family handler.
     undefined as never,
-    undefined as never,
+    execution as never,
     runtime as unknown as SandboxRuntimeEventHandler,
     undefined as never,
     shutdown
@@ -112,6 +112,35 @@ describe.each([
 
     expect(h.shutdown[handler]).toHaveBeenCalledExactlyOnceWith(event);
     expect(h.send).not.toHaveBeenCalled();
+  });
+});
+
+describe("SessionSandboxEventProcessor steer_result", () => {
+  it("settles the steer before acknowledging it", async () => {
+    const execution = { handleSteerResult: vi.fn() };
+    const h = createProcessor(execution);
+    execution.handleSteerResult.mockImplementation(() => {
+      expect(h.send).not.toHaveBeenCalled();
+    });
+    const event = {
+      type: "steer_result",
+      sandboxId: "sandbox-1",
+      messageId: "msg-2",
+      accepted: true,
+      timestamp: 2,
+      ackId: "steer_result:msg-2",
+    } satisfies Extract<SandboxEvent, { type: "steer_result" }>;
+
+    await h.processor.processSandboxEvent(event);
+
+    expect(execution.handleSteerResult).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ type: "steer_result", messageId: "msg-2", accepted: true }),
+      expect.anything()
+    );
+    expect(h.send).toHaveBeenCalledExactlyOnceWith(h.sandboxSocket, {
+      type: "ack",
+      ackId: "steer_result:msg-2",
+    });
   });
 });
 

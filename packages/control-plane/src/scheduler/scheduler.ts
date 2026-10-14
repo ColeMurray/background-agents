@@ -2111,6 +2111,7 @@ export class Scheduler {
           source: "automation",
           // Hashed so the id fits clientRequestIdSchema's 128-character limit.
           clientRequestId: `webhook:${await hashToken(event.triggerKey)}`,
+          ...(event.steer ? { steer: true } : {}),
         },
         ctx: { trace_id: `automation:${automation.id}`, request_id: event.triggerKey },
       }),

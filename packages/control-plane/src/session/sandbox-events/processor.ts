@@ -47,6 +47,7 @@ const CRITICAL_EVENT_TYPES: ReadonlySet<string> = new Set([
   "push_error",
   "sandbox_generation_ready",
   "preservation_prepared",
+  "steer_result",
 ]);
 
 /**
@@ -154,6 +155,9 @@ export class SessionSandboxEventProcessor {
         return;
       case "execution_complete":
         await this.execution.handleExecutionComplete(event, context);
+        return;
+      case "steer_result":
+        this.execution.handleSteerResult(event, context);
         return;
       case "push_complete":
       case "push_error":
