@@ -376,6 +376,16 @@ describe("NewAutomationPage duplicate", () => {
     expect(screen.getByDisplayValue("Second (copy)")).toBeInTheDocument();
   });
 
+  it("refills the form when a source that failed to load arrives", () => {
+    search = "from=auto-1";
+    const view = render(<NewAutomationPage />);
+    expect(screen.getByRole("alert")).toHaveTextContent(/couldn.t load/i);
+
+    sourceAutomation = source;
+    view.rerender(<NewAutomationPage />);
+    expect(screen.getByDisplayValue("Nightly review (copy)")).toBeInTheDocument();
+  });
+
   it("prefers the source automation over a template", () => {
     sourceAutomation = source;
     search = "from=auto-1&template=find-bugs";
