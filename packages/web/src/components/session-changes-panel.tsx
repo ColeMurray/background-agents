@@ -16,7 +16,11 @@ import { useSessionDiffPreferences, type DiffStyle } from "@/hooks/use-session-d
 import { sessionDiffKey } from "@/hooks/use-session-diffs";
 import { useDiffFileNavigation } from "@/hooks/use-diff-file-navigation";
 import { usePanelWidth } from "@/hooks/use-panel-width";
-import { isMarkdownPath, previewMarkdownDocument } from "@/lib/markdown-preview";
+import {
+  emptyMarkdownPreviewStatus,
+  isMarkdownPath,
+  previewMarkdownDocument,
+} from "@/lib/markdown-preview";
 import { parseDiffErrorBody } from "@/lib/session-diffs";
 import type { DiffSelection, ResolvedDiffSelection } from "@/lib/session-diffs";
 import { browserApiFetch, type BrowserApiPath } from "@/lib/browser-api-fetch";
@@ -230,15 +234,17 @@ function ChangesPanelToolbar({
           </button>
         ))}
       </div>
-      <label className="ml-auto flex items-center gap-1.5 text-xs text-muted-foreground">
-        <input
-          type="checkbox"
-          className="accent-accent"
-          checked={wrap}
-          onChange={(event) => onWrapChange(event.target.checked)}
-        />
-        Wrap lines
-      </label>
+      {activeView !== "preview" && (
+        <label className="ml-auto flex items-center gap-1.5 text-xs text-muted-foreground">
+          <input
+            type="checkbox"
+            className="accent-accent"
+            checked={wrap}
+            onChange={(event) => onWrapChange(event.target.checked)}
+          />
+          Wrap lines
+        </label>
+      )}
     </div>
   );
 }
@@ -315,6 +321,8 @@ export function SessionChangesPanel({
   const canPreview = selectedPath !== undefined && isMarkdownPath(selectedPath);
   // The preview choice sticks across files; it applies only while a Markdown file is selected.
   const previewing = previewChosen && canPreview;
+  const emptyPreviewStatus =
+    previewing && selected ? emptyMarkdownPreviewStatus(selected.file) : null;
 
   useEffect(() => {
     if (codeScrollRef.current) codeScrollRef.current.scrollTop = 0;
@@ -428,6 +436,8 @@ export function SessionChangesPanel({
           <div ref={codeScrollRef} className="min-h-0 min-w-0 flex-1 overflow-auto">
             {resolved.status === "missing" ? (
               <PanelMessage>This file is no longer part of the latest changes.</PanelMessage>
+            ) : emptyPreviewStatus ? (
+              <PanelMessage>{MARKDOWN_PREVIEW_MESSAGES[emptyPreviewStatus]}</PanelMessage>
             ) : resolved.file.renderState !== "renderable" ? (
               <PanelMessage>{fileMessage(resolved.file)}</PanelMessage>
             ) : isLoading ? (

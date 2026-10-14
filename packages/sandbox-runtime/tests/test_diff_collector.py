@@ -110,6 +110,29 @@ async def test_markdown_patch_keeps_unchanged_context_without_moving_head(tmp_pa
 
 
 @pytest.mark.asyncio
+async def test_tracked_empty_markdown_add_and_delete_are_metadata_only(tmp_path: Path) -> None:
+    repository, _ = _repository(tmp_path)
+    (repository.path / "REMOVED.md").write_text("")
+    _git(repository.path, "add", "REMOVED.md")
+    _git(repository.path, "commit", "-m", "empty notes")
+    base_sha = _git(repository.path, "rev-parse", "HEAD")
+    # Capture each separately: Git pairs an added and a deleted empty file as a rename.
+    (repository.path / "ADDED.md").write_text("")
+    _git(repository.path, "add", "ADDED.md")
+    added = await collect_repository_diff(repository, base_sha, CaptureLimits.defaults())
+    _git(repository.path, "rm", "-q", "--force", "ADDED.md")
+    _git(repository.path, "rm", "-q", "REMOVED.md")
+    deleted = await collect_repository_diff(repository, base_sha, CaptureLimits.defaults())
+
+    assert [(f.path, f.status, f.render_state) for f in added.files] == [
+        ("ADDED.md", "added", "metadata_only")
+    ]
+    assert [(f.path, f.status, f.render_state) for f in deleted.files] == [
+        ("REMOVED.md", "deleted", "metadata_only")
+    ]
+
+
+@pytest.mark.asyncio
 async def test_collects_committed_staged_and_unstaged_changes(tmp_path: Path) -> None:
     repository, base_sha = _repository(tmp_path)
     (repository.path / "committed.txt").write_text("committed\n")

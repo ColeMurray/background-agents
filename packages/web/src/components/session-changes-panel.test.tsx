@@ -433,9 +433,15 @@ function markdownPanel(
     fileId = "file-md",
     revisionId = "revision-1",
     status = "modified",
-  }: { fileId?: string; revisionId?: string; status?: SessionDiffFile["status"] } = {}
+    renderState = "renderable",
+  }: {
+    fileId?: string;
+    revisionId?: string;
+    status?: SessionDiffFile["status"];
+    renderState?: SessionDiffFile["renderState"];
+  } = {}
 ) {
-  const file = { ...patchFile, id: fileId, path, status };
+  const file = { ...patchFile, id: fileId, path, status, renderState };
   const repository = { ...patchRepository, files: [file, readyRepository.files[1]!] };
   return patchPanel({
     state: { ...state, current: { ...state.current!, repositories: [repository] } },
@@ -497,6 +503,7 @@ describe("SessionChangesPanel Markdown preview", () => {
     expect(screen.queryByRole("link", { name: "local" })).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Split" })).toHaveAttribute("aria-pressed", "false");
     expect(screen.queryByTestId("diff-renderer")).not.toBeInTheDocument();
+    expect(screen.queryByRole("checkbox", { name: "Wrap lines" })).not.toBeInTheDocument();
 
     await userEvent.click(screen.getByRole("button", { name: "Split" }));
     expect(screen.getByTestId("diff-renderer")).toHaveAttribute("data-style", "split");
@@ -504,6 +511,29 @@ describe("SessionChangesPanel Markdown preview", () => {
       "aria-pressed",
       "false"
     );
+    expect(screen.getByRole("checkbox", { name: "Wrap lines" })).toBeVisible();
+  });
+
+  it("explains empty Markdown files added or deleted without a patch", async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+    const view = render(
+      markdownPanel("EMPTY.md", { status: "added", renderState: "metadata_only" })
+    );
+
+    await userEvent.click(screen.getByRole("button", { name: "Preview" }));
+    expect(screen.getByText("This document is empty.")).toBeVisible();
+
+    view.rerender(markdownPanel("EMPTY.md", { status: "deleted", renderState: "metadata_only" }));
+    expect(
+      screen.getByText("This file was deleted, so there is no document to preview.")
+    ).toBeVisible();
+
+    await userEvent.click(screen.getByRole("button", { name: "Unified" }));
+    expect(
+      screen.queryByText("This file was deleted, so there is no document to preview.")
+    ).not.toBeInTheDocument();
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 
   it("keeps Preview selected across files and replaces the document per revision", async () => {

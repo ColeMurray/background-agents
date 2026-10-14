@@ -1,10 +1,22 @@
 import { parsePatchFiles } from "@pierre/diffs";
+import type { SessionDiffFile } from "@open-inspect/shared/types/session-diffs";
 
 type MarkdownPreviewDocument =
   { status: "document"; content: string } | { status: "empty" | "deleted" | "unavailable" };
 
 export function isMarkdownPath(path: string): boolean {
   return /[^/]\.(md|markdown)$/i.test(path);
+}
+
+/**
+ * Tracked empty files that were added or deleted have no hunk, so the collector captures
+ * them as metadata only and there is no patch to preview.
+ */
+export function emptyMarkdownPreviewStatus(file: SessionDiffFile): "empty" | "deleted" | null {
+  if (file.renderState !== "metadata_only") return null;
+  if (file.status === "added") return "empty";
+  if (file.status === "deleted") return "deleted";
+  return null;
 }
 
 /**
