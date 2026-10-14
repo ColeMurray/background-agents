@@ -1,4 +1,4 @@
-/** Populated pre-0087 graph used in both SQLite host and workerd/D1 upgrades. */
+/** Populated pre-0087 graph seeded into the Node SQLite upgrade test (codex-migration.test.ts). */
 export const CODEX_MIGRATION_SEED = [
   "INSERT INTO users (id, created_at, updated_at) VALUES ('owner', 1, 1)",
   "INSERT INTO teams (id, slug, name, created_at, updated_at) VALUES ('team', 'team', 'Team', 1, 1)",
