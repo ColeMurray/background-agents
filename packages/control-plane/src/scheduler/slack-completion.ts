@@ -14,6 +14,8 @@ import { z } from "zod";
 const slackRunMetadataSchema = z.object({
   channel: z.string(),
   messageTs: z.string(),
+  /** Set when another bot posted the triggering message. */
+  isBot: z.boolean().optional(),
 });
 
 /**

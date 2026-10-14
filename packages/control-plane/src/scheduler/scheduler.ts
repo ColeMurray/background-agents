@@ -194,6 +194,15 @@ const INVOCATION_SWEEP_WINDOW_MS = 24 * 60 * 60 * 1000;
 const SLACK_THREAD_CONTEXT_TIMEOUT_MS = 10_000;
 
 /**
+ * Most runs that other bots' messages may start for one automation within
+ * SLACK_BOT_TRIGGER_WINDOW_MS. A bot can answer a run's output with another
+ * top-level post, so an automation that accepts bot messages can otherwise
+ * trigger itself indefinitely.
+ */
+export const SLACK_BOT_TRIGGER_LIMIT = 10;
+export const SLACK_BOT_TRIGGER_WINDOW_MS = 60 * 60 * 1000;
+
+/**
  * Repository label for user-facing surfaces (Slack), read from the run's
  * firing-time snapshot — the automation row's selection may have been edited
  * since this run started.
@@ -1341,6 +1350,21 @@ export class Scheduler {
         }
       }
 
+      if (
+        event.source === "slack" &&
+        event.isBot &&
+        (await this.slackBotTriggerLimitReached(store, automation.id, now))
+      ) {
+        this.log.warn("Skipped bot-triggered slack run over the hourly limit", {
+          event: "scheduler.slack_bot_trigger_limited",
+          automation_id: automation.id,
+          trigger_key: event.triggerKey,
+          limit: SLACK_BOT_TRIGGER_LIMIT,
+        });
+        skipped++;
+        continue;
+      }
+
       if (event.source === "slack" && !slackSettingsLoaded) {
         slackSessionInstructions = await getSlackSessionInstructions(this.db);
         slackSettingsLoaded = true;
@@ -1586,6 +1610,20 @@ export class Scheduler {
     // coordinates live on the invocation. Only the terminal CAS winner owns
     // publication retries; retrying runComplete itself would be ignored.
     await this.notifySlackCompletion(store, run, body);
+  }
+
+  /** Whether bot messages already started SLACK_BOT_TRIGGER_LIMIT runs in the window. */
+  private async slackBotTriggerLimitReached(
+    store: AutomationStore,
+    automationId: string,
+    now: number
+  ): Promise<boolean> {
+    const metadata = await store.listEventTriggerMetadataSince(
+      automationId,
+      now - SLACK_BOT_TRIGGER_WINDOW_MS
+    );
+    const botFirings = metadata.filter((raw) => parseSlackTriggerMetadata(raw)?.isBot).length;
+    return botFirings >= SLACK_BOT_TRIGGER_LIMIT;
   }
 
   /**
@@ -2147,6 +2185,7 @@ function serializeSlackTriggerMetadata(event: SlackAutomationEvent): string {
   const metadata: SlackRunMetadata = {
     channel: event.channelId,
     messageTs: event.ts,
+    ...(event.isBot ? { isBot: true } : {}),
   };
   return JSON.stringify(metadata);
 }
