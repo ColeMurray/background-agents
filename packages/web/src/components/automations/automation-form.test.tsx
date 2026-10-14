@@ -1446,6 +1446,35 @@ describe("agent harness", () => {
     );
   });
 
+  it.each([
+    { from: "opencode", effort: "none", to: "Codex", harness: "codex" },
+    { from: "codex", effort: "max", to: "OpenCode", harness: "opencode" },
+  ] as const)(
+    "shows and submits the model default after switching $from to $to with an unsupported effort",
+    ({ from, effort, to, harness }) => {
+      enabledModelsValue = ["openai/gpt-5.6-sol"];
+      const { onSubmit, submit } = renderForm(
+        {
+          harness: from,
+          model: "openai/gpt-5.6-sol",
+          reasoningEffort: effort,
+          providerSelections: { openai: { mode: "api_key" } },
+        },
+        "edit"
+      );
+      fireEvent.click(screen.getByRole("combobox", { name: "Agent harness" }));
+      fireEvent.click(within(screen.getByRole("listbox")).getByRole("option", { name: to }));
+      // The control shows what will be saved, never a blank value.
+      expect(screen.getByRole("combobox", { name: "Reasoning Effort" })).toHaveTextContent(
+        "Use model default"
+      );
+      submit();
+      expect(onSubmit).toHaveBeenCalledWith(
+        expect.objectContaining({ harness, reasoningEffort: null })
+      );
+    }
+  );
+
   it("submits the built-in harness when none was chosen", () => {
     const { onSubmit, submit } = renderForm({}, "create");
     expect(screen.getByRole("combobox", { name: "Agent harness" })).toHaveTextContent("OpenCode");
