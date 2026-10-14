@@ -7,6 +7,7 @@ import tomllib
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit
 
 from ..base import HarnessStartError
 
@@ -125,7 +126,6 @@ def mcp_configuration(
     Native thread state may persist these settings; do not copy them into the
     app-server's environment or log them.
     """
-    from urllib.parse import urlsplit
 
     result: dict[str, Any] = {}
     for index, server in enumerate(servers):

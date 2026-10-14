@@ -3,8 +3,6 @@
 import asyncio
 from unittest.mock import AsyncMock
 
-import pytest
-
 from sandbox_runtime.harness.base import TurnOutcome
 from tests.conftest import ScriptedHarness
 from tests.test_bridge_harness_lifecycle import _bridge
@@ -53,10 +51,13 @@ async def test_failed_generation_reauth_keeps_fence_and_does_not_ack():
     await bridge._handle_command(prepare_command())
     bridge._send_event.reset_mock()
     harness.reauthenticate_generation = AsyncMock(side_effect=RuntimeError("auth unavailable"))
-    with pytest.raises(RuntimeError, match="auth unavailable"):
-        await establish_generation(bridge, {**GENERATION, "createdAt": 2000})
+    bridge.ws = AsyncMock()
+    await establish_generation(bridge, {**GENERATION, "createdAt": 2000})
     assert bridge.shutdown_preparation.fenced
+    assert bridge._reauthenticating_generation
     bridge._send_event.assert_not_awaited()
+    # Reconnecting resends readiness, which makes the control plane resend the generation.
+    bridge.ws.close.assert_awaited_once()
 
 
 async def test_terminal_carries_zero_cost_even_when_step_delivery_is_lost():

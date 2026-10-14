@@ -81,6 +81,9 @@ class CodexHarness:
         self._token: Any = None
         self._lock = asyncio.Lock()
         self._auth_lock = asyncio.Lock()
+        # One native turn at a time: turn identity, the submission flag and the
+        # notification stream are per-harness, and failure cleanup stops the process.
+        self._turn_lock = asyncio.Lock()
         self._stopping = False
         self._revocation_stop: asyncio.Task[bool] | None = None
         self.session_id: str | None = None
@@ -318,6 +321,12 @@ class CodexHarness:
         return (selected or self.config.default_model).removeprefix("openai/")
 
     async def run_prompt(self, prompt: HarnessPrompt, emit: EventSink) -> TurnOutcome:
+        # Held through cleanup, so a waiting prompt never touches native state
+        # (or stops the process) while another turn is running.
+        async with self._turn_lock:
+            return await self._run_turn(prompt, emit)
+
+    async def _run_turn(self, prompt: HarnessPrompt, emit: EventSink) -> TurnOutcome:
         model = self._model(prompt.model)
         paths: list[Path] = []
         state: CodexTurnEvents | None = None
@@ -406,15 +415,8 @@ class CodexHarness:
             if self.session_id:
                 self._persist()
             if not stopped:
-                return TurnOutcome.failed(
-                    "Codex process containment could not be confirmed", message_cost_usd=0
-                )
-            return TurnOutcome(
-                False,
-                "Codex turn cancelled",
-                cancelled=True,
-                message_cost_usd=0,
-            )
+                self.log.error("codex.turn.cancel_containment_unconfirmed")
+            raise
         except (CodexTransportError, TimeoutError, OSError, KeyError, TypeError, ValueError):
             stopped = await self.stop_execution(STOP_TIMEOUT_SECONDS)
             self._usage_baseline_known = False

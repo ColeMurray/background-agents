@@ -11,7 +11,7 @@ from sandbox_runtime.harness.base import (
     PromptLimits,
 )
 from sandbox_runtime.harness.codex import CodexHarness, CodexHarnessConfig
-from sandbox_runtime.harness.codex.client import CodexTransportError
+from sandbox_runtime.harness.codex.client import CodexRpcError, CodexTransportError
 from sandbox_runtime.memories import memory_path
 
 
@@ -197,9 +197,9 @@ async def test_cancellation_without_containment_retains_owner_without_launching_
     task = asyncio.create_task(h.run_prompt(HarnessPrompt("m", "work"), AsyncMock()))
     await submitted.wait()
     task.cancel()
-    outcome = await task
-    assert not outcome.success
-    assert "containment" in outcome.error
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    h.log.error.assert_any_call("codex.turn.cancel_containment_unconfirmed")
     assert h._client is client
     factories = h._factory.call_count
     retry = await h.run_prompt(HarnessPrompt("next", "next instruction"), AsyncMock())
@@ -285,3 +285,33 @@ async def test_admitted_selection_is_forwarded_without_runtime_catalog(
     assert submitted["model"] == expected
     assert submitted["effort"] == effort
     await harness.close()
+
+
+async def test_overlapping_prompts_run_one_native_turn_at_a_time(tmp_path):
+    h, client = build(tmp_path)
+    await h.open()
+    h.session_id = "thread"
+    started: list[str] = []
+    first_running, release_first = asyncio.Event(), asyncio.Event()
+
+    async def request(method, params):
+        if method == "turn/start":
+            started.append(params["input"][0]["text"])
+            if len(started) == 1:
+                first_running.set()
+                await release_first.wait()
+            raise CodexRpcError("rejected")
+        return {"account": {"type": "apiKey"}}
+
+    client.request.side_effect = request
+    first = asyncio.create_task(h.run_prompt(HarnessPrompt("a", "first"), AsyncMock()))
+    await first_running.wait()
+    second = asyncio.create_task(h.run_prompt(HarnessPrompt("b", "second"), AsyncMock()))
+    await asyncio.sleep(0.05)
+    # The second prompt waits for the first turn, including its cleanup.
+    assert started == ["first"]
+    assert not second.done()
+    release_first.set()
+    await first
+    await second
+    assert started == ["first", "second"]

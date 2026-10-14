@@ -845,8 +845,8 @@ async def test_native_cancel_contains_detached_command_writer(tmp_path, response
                     pytest.fail(f"Native command did not start: {task.result()}; {outputs}")
                 await asyncio.sleep(0.02)
         task.cancel()
-        outcome = await asyncio.wait_for(task, 6)
-        assert outcome.cancelled
+        with pytest.raises(asyncio.CancelledError):
+            await asyncio.wait_for(task, 6)
         size = output.stat().st_size
         await asyncio.sleep(0.15)
         assert output.stat().st_size == size

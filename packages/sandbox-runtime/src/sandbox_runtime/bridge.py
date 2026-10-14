@@ -1002,10 +1002,14 @@ class AgentBridge:
                 await hook(generation)
                 if serial != self._generation_request_serial:
                     return
-            except BaseException:
-                # Failure keeps admission fenced. Another authenticated generation
-                # may retry, but reconnect must never implicitly clear the auth fence.
-                raise
+            except Exception as error:
+                # Failure keeps admission fenced; reconnect must never implicitly
+                # clear it. Readiness is resent on every connection and the control
+                # plane answers with this generation, so reconnecting is the retry.
+                self.log.error("bridge.sandbox_generation_reauth_failed", exc=error)
+                if self.ws is not None:
+                    await self.ws.close(code=1011, reason="generation reauthentication failed")
+                return
             else:
                 self._reauthenticating_generation = False
         await self._send_event(self.shutdown_preparation.establish_generation(generation))

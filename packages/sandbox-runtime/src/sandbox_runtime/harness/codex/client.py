@@ -22,6 +22,9 @@ if TYPE_CHECKING:
 
 MAX_FRAME_BYTES = 8 * 1024 * 1024
 MAX_NOTIFICATIONS = 4096
+# Aggregate cap on undelivered notification bytes. The reader cannot block
+# (responses share the pipe), so a stalled consumer fails the transport instead.
+MAX_QUEUED_NOTIFICATION_BYTES = 64 * 1024 * 1024
 MAX_SERVER_REQUESTS = 64
 RPC_TIMEOUT_SECONDS = 30.0
 ServerRequestHandler = Callable[[str, dict[str, Any]], Awaitable[dict[str, Any]]]
@@ -55,7 +58,10 @@ class CodexClient:
         self._stderr: asyncio.Task[None] | None = None
         self._handlers: set[asyncio.Task[None]] = set()
         self._pending: dict[str, asyncio.Future[dict[str, Any]]] = {}
-        self._notifications: asyncio.Queue[dict[str, Any] | None] = asyncio.Queue(MAX_NOTIFICATIONS)
+        self._notifications: asyncio.Queue[tuple[dict[str, Any], int] | None] = asyncio.Queue(
+            MAX_NOTIFICATIONS
+        )
+        self._queued_bytes = 0
         self._write_lock = asyncio.Lock()
         self._sequence = 0
         self._failure: str | None = None
@@ -116,9 +122,11 @@ class CodexClient:
     async def next_notification(self) -> dict[str, Any]:
         if self._failure and self._notifications.empty():
             raise CodexTransportError(self._failure)
-        frame = await self._notifications.get()
-        if frame is None:
+        item = await self._notifications.get()
+        if item is None:
             raise CodexTransportError(self._failure or "Codex transport closed")
+        frame, size = item
+        self._queued_bytes -= size
         return frame
 
     async def _write(self, frame: dict[str, Any]) -> None:
@@ -158,7 +166,10 @@ class CodexClient:
                         self._handlers.add(task)
                         task.add_done_callback(self._handlers.discard)
                     else:
-                        self._notifications.put_nowait(frame)
+                        if self._queued_bytes + len(line) > MAX_QUEUED_NOTIFICATION_BYTES:
+                            raise ValueError("notification backlog")
+                        self._notifications.put_nowait((frame, len(line)))
+                        self._queued_bytes += len(line)
                 elif "id" in frame:
                     future = self._pending.get(frame["id"])
                     if future is None or future.done():

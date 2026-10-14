@@ -88,3 +88,24 @@ async def test_wire_framing_handles_utf8_splits_and_rejects_oversize(tmp_path, m
                 await client.request(method, {})
     finally:
         assert await client.close(timeout_seconds=2)
+
+
+async def test_undelivered_notification_bytes_are_bounded(tmp_path, monkeypatch):
+    monkeypatch.setattr("sandbox_runtime.harness.codex.client.MAX_QUEUED_NOTIFICATION_BYTES", 4096)
+    flood = (
+        "import json,sys,time\n"
+        "for i in range(8):\n"
+        "    print(json.dumps({'method': 'note', 'params': {'pad': 'x' * 1024}}), flush=True)\n"
+        "time.sleep(30)\n"
+    )
+    client = CodexClient(command=(sys.executable, "-c", flood), cwd=tmp_path, env={})
+    await client.open()
+    try:
+        with pytest.raises(CodexTransportError):
+            async with asyncio.timeout(5):
+                while not client._failure:
+                    await asyncio.sleep(0.01)
+                while True:
+                    await client.next_notification()
+    finally:
+        await client.close(timeout_seconds=2)
