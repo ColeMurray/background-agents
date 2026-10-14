@@ -800,6 +800,10 @@ const CONDITION_SOURCE_FIELD = {
 const CATALOG_PAYLOADS: Record<string, [event: string, payload: Record<string, unknown>]> = {
   "pull_request.opened": ["pull_request", pullRequestOpenedPayload],
   "pull_request.synchronize": ["pull_request", pullRequestSynchronizePayload],
+  "pull_request.ready_for_review": [
+    "pull_request",
+    { ...pullRequestOpenedPayload, action: "ready_for_review" },
+  ],
   "pull_request.closed": ["pull_request", pullRequestClosedPayload],
   "issue_comment.created": ["issue_comment", issueCommentPayload],
   "pull_request_review_comment.created": ["pull_request_review_comment", reviewCommentPayload],

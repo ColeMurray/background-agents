@@ -61,6 +61,14 @@ export const GITHUB_WEBHOOK_EVENT_CATALOG = [
   },
   {
     event: "pull_request",
+    action: "ready_for_review",
+    displayName: "PR Ready for Review",
+    description: "A draft pull request was marked ready for review",
+    shortLabel: "PR ready for review",
+    supportedConditions: ["branch", "target_branch", "label", "actor"],
+  },
+  {
+    event: "pull_request",
     action: "closed",
     displayName: "PR Closed",
     description: "A pull request was closed or merged",
