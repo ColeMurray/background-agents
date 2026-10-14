@@ -218,9 +218,9 @@ function NewAutomationContent() {
             </div>
           )}
 
-          {/* Remount when the query-selected team changes so the form's team follows the URL. */}
+          {/* Remount when the query-selected team or duplicate source changes so the form follows the URL. */}
           <AutomationForm
-            key={teamId ?? ""}
+            key={`${teamId ?? ""}:${sourceId ?? ""}`}
             mode="create"
             initialValues={initialValues}
             requireTeam={searchParams.get("requireTeam") === "true"}

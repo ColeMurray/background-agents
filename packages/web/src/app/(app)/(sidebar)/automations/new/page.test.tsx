@@ -20,6 +20,7 @@ let search = "";
 let enabledModelsValue: string[] = [DEFAULT_MODEL, "anthropic/claude-opus-4-8", "openai/gpt-5.5"];
 let canCreate = true;
 let sourceAutomation: Record<string, unknown> | null = null;
+let sourcesById: Record<string, Record<string, unknown>> = {};
 let sourceLoading = false;
 const replace = vi.fn();
 const push = vi.fn();
@@ -51,7 +52,7 @@ vi.mock("@/hooks/use-current-user-authorization", () => ({
 
 vi.mock("@/hooks/use-automations", () => ({
   useAutomation: (id: string | undefined) => ({
-    automation: id ? sourceAutomation : null,
+    automation: id ? (sourcesById[id] ?? sourceAutomation) : null,
     loading: id ? sourceLoading : false,
     mutate: vi.fn(),
   }),
@@ -119,6 +120,7 @@ beforeEach(() => {
   enabledModelsValue = [DEFAULT_MODEL, "anthropic/claude-opus-4-8", "openai/gpt-5.5"];
   canCreate = true;
   sourceAutomation = null;
+  sourcesById = {};
   sourceLoading = false;
   replace.mockReset();
   push.mockReset();
@@ -358,6 +360,20 @@ describe("NewAutomationPage duplicate", () => {
     const nameInput = screen.getByPlaceholderText("Daily code review") as HTMLInputElement;
     expect(nameInput.value).toHaveLength(MAX_AUTOMATION_NAME_LENGTH);
     expect(nameInput.value.endsWith(" (copy)")).toBe(true);
+  });
+
+  it("refills the form when navigation switches to another cached source", () => {
+    sourcesById = {
+      first: { ...source, id: "first", name: "First" },
+      second: { ...source, id: "second", name: "Second" },
+    };
+    search = "from=first";
+    const view = render(<NewAutomationPage />);
+    expect(screen.getByDisplayValue("First (copy)")).toBeInTheDocument();
+
+    search = "from=second";
+    view.rerender(<NewAutomationPage />);
+    expect(screen.getByDisplayValue("Second (copy)")).toBeInTheDocument();
   });
 
   it("prefers the source automation over a template", () => {
