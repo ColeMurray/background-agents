@@ -285,14 +285,19 @@ ID in the untrusted event context sent to the agent. When GitHub supplies them, 
 includes the branch, commit SHA, workflow path, and run URL. Open-Inspect includes the attempt
 number in its deduplication key, so it can admit each GitHub rerun once.
 
+**Draft** matches on the pull request's draft state. Set it to **Not draft** to skip draft pull
+requests before Open-Inspect starts a session. Pair it with a **PR Ready for Review** automation,
+which fires when the author marks a draft pull request ready, so the pull request still gets a run
+when it leaves draft without a new push.
+
 **Conclusion** also works for completed check suites. **Check Conclusion** remains available for
 existing check-suite automations.
 
 Each event type offers only the conditions its payload can answer, so the choices change with the
 event you pick — pull requests offer branch, target branch, label, and actor; issues offer label and
-actor; comments offer actor. Changing the event type removes conditions the new one cannot answer,
-and the form says which. GitHub webhook payloads carry no file list, so path-pattern filtering is
-not offered for any GitHub event.
+actor; comments offer actor. PR opened and PR updated also offer **Draft**. Changing the event type
+removes conditions the new one cannot answer, and the form says which. GitHub webhook payloads carry
+no file list, so path-pattern filtering is not offered for any GitHub event.
 
 ---
 

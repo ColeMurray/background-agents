@@ -62,17 +62,18 @@ Under **Repository Configuration**, select exactly one repository. With none sel
 
 Under **Event Type**, choose one of:
 
-| Event Type             | Fires when                                   | Conditions offered                            |
-| ---------------------- | -------------------------------------------- | --------------------------------------------- |
-| PR Opened              | A pull request was opened                    | Head branch, Target branch, Label, Actor      |
-| PR Updated             | New commits were pushed to a pull request    | Head branch, Target branch, Label, Actor      |
-| PR Closed              | A pull request was closed or merged          | Head branch, Target branch, Label, Actor      |
-| Issue Comment          | A comment was added to an issue or PR        | Actor                                         |
-| Review Comment         | A review comment was added to a pull request | Head branch, Target branch, Actor             |
-| Check Suite Completed  | A CI check suite finished running            | Head branch, Actor, Conclusion                |
-| Workflow Run Completed | A GitHub Actions workflow run finished       | Head branch, Actor, Conclusion, Workflow Name |
-| Issue Opened           | A new issue was opened                       | Label, Actor                                  |
-| Issue Labeled          | A label was added to an issue                | Label, Actor                                  |
+| Event Type             | Fires when                                       | Conditions offered                              |
+| ---------------------- | ------------------------------------------------ | ----------------------------------------------- |
+| PR Opened              | A pull request was opened                        | Head branch, Target branch, Label, Actor, Draft |
+| PR Updated             | New commits were pushed to a pull request        | Head branch, Target branch, Label, Actor, Draft |
+| PR Ready for Review    | A draft pull request was marked ready for review | Head branch, Target branch, Label, Actor        |
+| PR Closed              | A pull request was closed or merged              | Head branch, Target branch, Label, Actor        |
+| Issue Comment          | A comment was added to an issue or PR            | Actor                                           |
+| Review Comment         | A review comment was added to a pull request     | Head branch, Target branch, Actor               |
+| Check Suite Completed  | A CI check suite finished running                | Head branch, Actor, Conclusion                  |
+| Workflow Run Completed | A GitHub Actions workflow run finished           | Head branch, Actor, Conclusion, Workflow Name   |
+| Issue Opened           | A new issue was opened                           | Label, Actor                                    |
+| Issue Labeled          | A label was added to an issue                    | Label, Actor                                    |
 
 Each event type offers only the conditions its payload can answer. Changing the event type removes conditions the new type cannot answer and the form says which were removed ("Removed Label, not available for this event type."). Paths are never offered: GitHub webhook payloads carry no file list, so there is no path-pattern filtering for any GitHub event.
 
@@ -88,8 +89,13 @@ Conditions are optional. When you add any, every condition must pass before a ru
 | Actor         | The GitHub login that triggered the event is in the list (**include**) or not in the list (**exclude**); matching ignores case.                    |
 | Conclusion    | Equals the chosen value.                                                                                                                           |
 | Workflow Name | Equals the workflow name exactly, for example `CI`.                                                                                                |
+| Draft         | **Not draft** skips draft pull requests, **Draft only** skips the rest.                                                                            |
 
 Every list-type condition needs at least one entry; an empty one blocks saving.
+
+### Draft pull requests
+
+Add **Draft** set to **Not draft** to PR Opened and PR Updated automations to skip draft pull requests. Open-Inspect checks the condition before it starts a session, so a skipped draft costs nothing. Add a **PR Ready for Review** automation with the same instructions so the pull request still gets a run when the author marks it ready without a new push.
 
 ### Workflow Run Completed
 
