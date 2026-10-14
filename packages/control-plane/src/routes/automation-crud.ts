@@ -25,7 +25,6 @@ import {
   getValidHarnessOrDefault,
   selectedProviderAuthModes,
   selectHarnessProviderSelections,
-  getHarnessCapabilities,
 } from "@open-inspect/shared/harnesses";
 import {
   HarnessAdmissionError,
@@ -33,7 +32,7 @@ import {
   resolveHarnessAutomationUpdate,
   validateHarnessAutomationAuth,
 } from "../harness-admission";
-import { isValidModel } from "@open-inspect/shared/models";
+import { isValidModel, normalizeModelId } from "@open-inspect/shared/models";
 import {
   AutomationStore,
   parseAutomationTriggerFields,
@@ -537,22 +536,24 @@ async function handleUpdateAutomation(
     return error("Invalid model", 400);
   }
 
-  const nextHarness =
-    body.harness !== undefined ? body.harness : getValidHarnessOrDefault(existing.harness);
+  const storedHarness = getValidHarnessOrDefault(existing.harness);
+  const nextHarness = body.harness !== undefined ? body.harness : storedHarness;
+  const storedProviderSelections = toProviderSelections(await providerAuthStore.list(id));
+  // Execution changes are judged against the stored configuration, not by which
+  // fields were sent: the edit form always resubmits them unchanged.
+  const harnessChanged = nextHarness !== storedHarness;
+  const modelChanged = body.model !== undefined && normalizeModelId(body.model) !== existing.model;
   const executionChanged =
-    body.harness !== undefined ||
-    body.model !== undefined ||
-    body.reasoningEffort !== undefined ||
-    replacementProviderSelections !== null;
+    harnessChanged ||
+    modelChanged ||
+    (body.reasoningEffort !== undefined &&
+      (body.reasoningEffort ?? null) !== existing.reasoning_effort) ||
+    (replacementProviderSelections !== null &&
+      !sameProviderSelections(replacementProviderSelections, storedProviderSelections));
   // The selections the automation will have after this write: the replacement
-  // when one is given, else the stored pins whenever harness or model moves.
+  // when one is given, else the stored pins whenever the execution changes.
   const nextProviderSelections =
-    replacementProviderSelections ??
-    (body.harness !== undefined ||
-    body.model !== undefined ||
-    (getHarnessCapabilities(nextHarness).selectionPolicy === "strict" && executionChanged)
-      ? toProviderSelections(await providerAuthStore.list(id))
-      : null);
+    replacementProviderSelections ?? (executionChanged ? storedProviderSelections : null);
   const requestedReasoningEffort = body.reasoningEffort;
   let updatedSelection;
   try {
@@ -606,7 +607,8 @@ async function handleUpdateAutomation(
   if (body.scheduleTz !== undefined) updateFields.schedule_tz = body.scheduleTz;
   if (body.harness !== undefined) updateFields.harness = nextHarness;
   if (body.model !== undefined) updateFields.model = nextModel;
-  if (body.reasoningEffort !== undefined || body.model !== undefined) {
+  // A harness switch can invalidate the stored effort just like a model change.
+  if (body.reasoningEffort !== undefined || body.model !== undefined || harnessChanged) {
     updateFields.reasoning_effort = resolvedReasoningEffort;
   }
 
@@ -899,3 +901,13 @@ automationCrudRoutes.put("/automations/:id", AUTOMATION_MANAGE, (c) =>
 automationCrudRoutes.delete("/automations/:id", AUTOMATION_MANAGE, (c) =>
   dispatch(c, handleDeleteAutomation)
 );
+
+function sameProviderSelections(a: ModelProviderSelections, b: ModelProviderSelections): boolean {
+  const canonical = (selections: ModelProviderSelections) =>
+    JSON.stringify(
+      Object.entries(selections)
+        .filter(([, selection]) => selection !== undefined)
+        .sort(([left], [right]) => left.localeCompare(right))
+    );
+  return canonical(a) === canonical(b);
+}

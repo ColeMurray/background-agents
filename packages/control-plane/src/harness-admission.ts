@@ -155,6 +155,21 @@ export async function validateHarnessAutomationAuth(
   if (incompatible) throw new HarnessAdmissionError(incompatible.message);
 }
 
+/**
+ * An inherited effort (from a parent, the stored automation or the session) applies
+ * only when the destination model supports it; otherwise the destination's own
+ * default applies. Explicit efforts are never inherited and are validated as given.
+ */
+export function inheritReasoningEffort(
+  harness: HarnessId,
+  model: string,
+  inherited: string | null | undefined
+): string | undefined {
+  return inherited && isValidHarnessReasoningEffort(harness, model, inherited)
+    ? inherited
+    : undefined;
+}
+
 /** Children inherit only efforts valid for their selected model. Native defaults must be enabled. */
 export async function resolveChildHarnessSelection(
   db: SqlDatabase,
@@ -169,12 +184,9 @@ export async function resolveChildHarnessSelection(
   const model = strict
     ? (requested.model ?? compatible.find((model) => model === inheritedModel) ?? compatible[0])
     : resolveEnabledModel({ model: inheritedModel, enabledModels });
-  const inheritedEffort =
-    model &&
-    parent.reasoningEffort &&
-    isValidHarnessReasoningEffort(parent.harness, model, parent.reasoningEffort)
-      ? parent.reasoningEffort
-      : undefined;
+  const inheritedEffort = model
+    ? inheritReasoningEffort(parent.harness, model, parent.reasoningEffort)
+    : undefined;
   if (
     requested.reasoningEffort !== undefined &&
     model &&
@@ -219,10 +231,11 @@ export async function resolveHarnessAutomationUpdate(
       harness: input.harness,
       model,
       reasoningEffort:
-        input.reasoningEffort !== undefined ? input.reasoningEffort : existing.reasoningEffort,
+        input.reasoningEffort !== undefined
+          ? input.reasoningEffort
+          : inheritReasoningEffort(input.harness, model, existing.reasoningEffort),
     });
-  if (input.reasoningEffort === undefined && input.model === undefined)
-    return { model, reasoningEffort: existing.reasoningEffort };
+  if (!input.executionChanged) return { model, reasoningEffort: existing.reasoningEffort };
   const effort =
     input.reasoningEffort !== undefined ? input.reasoningEffort : existing.reasoningEffort;
   return {

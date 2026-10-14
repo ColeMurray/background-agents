@@ -5,6 +5,7 @@ import {
   getHarnessReasoningConfig,
   getValidHarnessOrDefault,
 } from "@open-inspect/shared/harnesses";
+import { inheritReasoningEffort } from "../harness-admission";
 import { generateId, hashToken } from "../auth/crypto";
 import type { SessionIndexStore } from "../db/session-index";
 import type { Logger } from "../logger";
@@ -540,7 +541,11 @@ export class SessionMessageQueue {
     const gitIdentity = resolveParticipantGitIdentity(author, this.scmProvider);
     const requestedEffort =
       message.reasoning_effort ??
-      session?.reasoning_effort ??
+      inheritReasoningEffort(
+        getValidHarnessOrDefault(session?.harness),
+        resolvedModel,
+        session?.reasoning_effort
+      ) ??
       getHarnessReasoningConfig(getValidHarnessOrDefault(session?.harness), resolvedModel)
         ?.default ??
       getDefaultReasoningEffort(resolvedModel);
@@ -787,19 +792,61 @@ export class SessionMessageQueue {
     return { messageId: enqueued.messageId, status: "queued", deduplicated: enqueued.deduplicated };
   }
 
+  /** The original message for a retried clientRequestId, or a conflict if the request differs. */
+  private findDuplicatePrompt(
+    data: EnqueuePromptCoreData,
+    requestFingerprint: string | undefined
+  ): EnqueuedPrompt | null {
+    if (!data.clientRequestId) return null;
+    const queueDepthBefore = this.messageRepository.getPendingOrProcessingCount();
+    const existing = this.messageRepository.getMessageByClientRequestId(data.clientRequestId);
+    if (existing) {
+      if (
+        existing.author_id !== data.participant.id ||
+        existing.request_fingerprint !== requestFingerprint
+      ) {
+        this.log.warn("prompt.enqueue", {
+          event: "prompt.enqueue",
+          outcome: "conflict",
+          source: data.source,
+          queue_depth_before: queueDepthBefore,
+          queue_depth_after: queueDepthBefore,
+        });
+        throw new PromptRequestConflictError();
+      }
+      this.log.info("prompt.enqueue", {
+        event: "prompt.enqueue",
+        outcome: "deduplicated",
+        source: data.source,
+        queue_depth_before: queueDepthBefore,
+        queue_depth_after: queueDepthBefore,
+      });
+      return {
+        messageId: existing.id,
+        position: this.messageRepository.getUnfinishedMessagePosition(existing.id),
+        deduplicated: true,
+      };
+    }
+    return null;
+  }
+
   private async enqueuePromptCore(data: EnqueuePromptCoreData): Promise<EnqueuedPrompt> {
     const session = this.repository.getSession();
     const harness = getValidHarnessOrDefault(session?.harness);
     const strictSelection = getHarnessCapabilities(harness).selectionPolicy === "strict";
+    let requestFingerprint: string | undefined;
+    if (data.clientRequestId) {
+      requestFingerprint = await fingerprintWebPrompt(data.participant.id, data);
+    }
     if (strictSelection) {
+      // A retry of an accepted request returns its original message before the
+      // mutable model/auth policy is consulted: it is not new work.
+      const duplicate = this.findDuplicatePrompt(data, requestFingerprint);
+      if (duplicate) return duplicate;
       const modelError = await this.getProviderAuthenticationError(
         data.model || session?.model || DEFAULT_MODEL
       );
       if (modelError) throw new HarnessModelIncompatibleError(modelError);
-    }
-    let requestFingerprint: string | undefined;
-    if (data.clientRequestId) {
-      requestFingerprint = await fingerprintWebPrompt(data.participant.id, data);
     }
 
     // Keep the promptability check, idempotency lookup, budget and capacity
@@ -810,36 +857,10 @@ export class SessionMessageQueue {
     this.assertPromptableSession();
     this.assertSandboxAcceptingPrompts();
     const queueDepthBefore = this.messageRepository.getPendingOrProcessingCount();
-    if (data.clientRequestId) {
-      const existing = this.messageRepository.getMessageByClientRequestId(data.clientRequestId);
-      if (existing) {
-        if (
-          existing.author_id !== data.participant.id ||
-          existing.request_fingerprint !== requestFingerprint
-        ) {
-          this.log.warn("prompt.enqueue", {
-            event: "prompt.enqueue",
-            outcome: "conflict",
-            source: data.source,
-            queue_depth_before: queueDepthBefore,
-            queue_depth_after: queueDepthBefore,
-          });
-          throw new PromptRequestConflictError();
-        }
-        this.log.info("prompt.enqueue", {
-          event: "prompt.enqueue",
-          outcome: "deduplicated",
-          source: data.source,
-          queue_depth_before: queueDepthBefore,
-          queue_depth_after: queueDepthBefore,
-        });
-        return {
-          messageId: existing.id,
-          position: this.messageRepository.getUnfinishedMessagePosition(existing.id),
-          deduplicated: true,
-        };
-      }
-    }
+    // Also rechecked after the policy await: a concurrent identical request may
+    // have been inserted while this one was suspended.
+    const raced = this.findDuplicatePrompt(data, requestFingerprint);
+    if (raced) return raced;
     this.assertBudgetAvailable();
     this.assertQueueCapacity(queueDepthBefore);
     const resolvedAttachments = resolveSessionAttachments(
@@ -864,9 +885,14 @@ export class SessionMessageQueue {
     const effectiveModelForEffort =
       messageModel || this.repository.getSession()?.model || DEFAULT_MODEL;
     const incompatibility = checkHarnessPromptCompatibility(
-      getValidHarnessOrDefault(this.repository.getSession()?.harness),
+      harness,
       effectiveModelForEffort,
-      data.reasoningEffort ?? this.repository.getSession()?.reasoning_effort
+      data.reasoningEffort ??
+        inheritReasoningEffort(
+          harness,
+          effectiveModelForEffort,
+          this.repository.getSession()?.reasoning_effort
+        )
     );
     if (incompatibility) throw new HarnessModelIncompatibleError(incompatibility.message);
     const messageReasoningEffort = validateReasoningEffort(
