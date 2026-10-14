@@ -234,10 +234,35 @@ describe("Scheduler slack event handling (integration)", () => {
       );
       expect(botResult).toMatchObject({ triggered: 0, skipped: 1 });
       expect(await fetchRuns(id)).toHaveLength(0);
+      const skip = (await fetchInvocations(store, id)).find(
+        (invocation) => invocation.skipReason === "slack_bot_trigger_limit"
+      );
+      expect(skip).toBeDefined();
+      expect(botResult.invocationIds).toEqual([skip!.id]);
 
       // People are not limited.
       const personResult = await sendEvent(makeSlackEvent({ text: "Cost anomaly" }));
       expect(personResult.triggered).toBe(1);
+    });
+
+    it("resolves a redelivered bot message to its firing instead of the limit", async () => {
+      const store = new AutomationStore(env.DB);
+      const id = await seedSlackAutomation(store, { trigger_config: botTriggerConfig(true) });
+      await seedBotFirings(id, SLACK_BOT_TRIGGER_LIMIT, Date.now() - 60_000);
+      const redelivered = makeSlackEvent({
+        actorUserId: "BALERTS",
+        isBot: true,
+        text: "Cost anomaly",
+        triggerKey: "slack:msg:C1:seed-0",
+      });
+
+      const result = await sendEvent(redelivered);
+      expect(result.invocationIds).toEqual([`inv-bot-${id}-0`]);
+      expect(
+        (await fetchInvocations(store, id)).some(
+          (invocation) => invocation.skipReason === "slack_bot_trigger_limit"
+        )
+      ).toBe(false);
     });
 
     it("counts only bot firings inside the window", async () => {

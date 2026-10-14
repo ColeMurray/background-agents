@@ -36,7 +36,7 @@ vi.mock("@open-inspect/shared/slack", async () => {
 });
 
 import app from "./index";
-import { clearBotUserIdCache } from "./bot-identity";
+import { clearBotIdentityCache } from "./bot-identity";
 import { clearLocalCache } from "./classifier/repos";
 import { clearEnvironmentsLocalCache } from "./classifier/environments";
 import { RepoClassifier } from "./classifier";
@@ -478,7 +478,7 @@ function slackInteractionRequest(payload: Record<string, unknown>): Request {
 describe("POST /events", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    clearBotUserIdCache();
+    clearBotIdentityCache();
     clearLocalCache();
     clearEnvironmentsLocalCache();
     mockVerifySlackSignature.mockResolvedValue(true);

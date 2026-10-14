@@ -31,7 +31,7 @@ vi.mock("@open-inspect/shared/slack", async () => {
 
 import app from "./index";
 import { clearLocalCache } from "./classifier/repos";
-import { clearBotUserIdCache } from "./bot-identity";
+import { clearBotIdentityCache } from "./bot-identity";
 
 const BOT_USER_ID = "UBOT123";
 const BOT_ID = "BSELF";
@@ -151,7 +151,7 @@ describe("channel-message automation triggers (POST /events)", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     clearLocalCache();
-    clearBotUserIdCache();
+    clearBotIdentityCache();
     mockVerifySlackSignature.mockResolvedValue(true);
     mockAuthTest.mockResolvedValue({ ok: true, user_id: BOT_USER_ID, bot_id: BOT_ID });
     mockGetChannelInfo.mockResolvedValue({ ok: true, channel: { id: "C123", name: "ops" } });

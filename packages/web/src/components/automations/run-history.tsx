@@ -46,6 +46,9 @@ function formatDuration(startedAt: number | null, completedAt: number | null): s
 
 function formatRunReason(reason: string): string {
   if (reason === "concurrent_run_active") return "Skipped because a previous run is still active";
+  if (reason === "slack_bot_trigger_limit") {
+    return "Skipped because bot messages reached this automation's hourly run limit";
+  }
   if (reason === "repo_not_granted") {
     return "Repository is not granted to the automation's team. No sandbox or session was created.";
   }

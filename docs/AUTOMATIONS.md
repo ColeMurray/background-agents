@@ -356,9 +356,11 @@ A bot can start a run but never continues one: continuing a thread's session nee
 linked to an Open-Inspect account, so a bot's reply in a thread that already has a session is
 dropped.
 
-Bot messages can start at most 10 runs of one automation per hour; further bot messages in that hour
-are skipped. This stops a loop in which a run makes another bot post in the watched channel, which
-starts the automation again. Messages from people are not limited.
+Bot messages can start at most 10 runs of one automation per hour; later bot messages in that hour
+are skipped and appear in the automation's run history. This stops a loop in which a run makes
+another bot post in the watched channel, which starts the automation again. The limit can be
+overshot by a burst of bot messages that arrive at the same moment, but not by such a loop. Messages
+from people are not limited.
 
 Bot output is untrusted input that can start autonomous work, so allow it only in channels where you
 trust every bot that posts.

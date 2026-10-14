@@ -14,7 +14,7 @@ import {
   type SlackChannelMeta,
 } from "@open-inspect/shared/triggers";
 import type { Env } from "./types";
-import { channelTriggerAuthor } from "./dm-utils";
+import { channelTriggerAuthor, isOwnBotPost } from "./dm-utils";
 import { getWatchedChannels } from "./classifier/repos";
 import { getBotId, getBotUserId } from "./bot-identity";
 import { signedControlPlaneFetch } from "./internal-auth";
@@ -35,12 +35,13 @@ const slackTriggerForwardResponseSchema = z.object({
  * `/internal/slack-event` endpoint for automation matching.
  *
  * All filtering happens here so the Slack event ack path stays cheap:
- * 1. Bot identity (fail closed — no id ⇒ skip, since mention suppression needs it;
- *    a bot post also needs the bot's own bot_id to rule out its own messages).
+ * 1. Bot identity (fail closed — no id ⇒ skip, since mention suppression needs it).
  * 2. Structural candidacy + mention suppression (`channelTriggerAuthor`). Other
  *    bots' messages pass, marked `isBot`; the control plane applies each
  *    automation's bot-message setting.
  * 3. Watched-channel pre-filter (cached) — avoids forwarding every channel message.
+ *    A bot message then also needs the bot's own bot_id, to rule out its own posts
+ *    (fail closed).
  * 4. Normalize (+ best-effort channel name/permalink) and forward.
  */
 export async function handleChannelTrigger(
@@ -64,15 +65,7 @@ export async function handleChannelTrigger(
     return;
   }
 
-  // A bot post is recognised as this bot's own by its bot_id, so one cannot be
-  // considered without it (fail closed, like the user id above).
-  const botId = event.bot_id ? await getBotId(env, traceId) : undefined;
-  if (event.bot_id && !botId) {
-    log.warn("slack_trigger.skip", { trace_id: traceId, reason: "no_bot_id" });
-    return;
-  }
-
-  const author = channelTriggerAuthor(event, botUserId, botId ?? undefined);
+  const author = channelTriggerAuthor(event, botUserId);
   if (!author) {
     return;
   }
@@ -80,6 +73,12 @@ export async function handleChannelTrigger(
   const channel = event.channel!;
   const watched = await getWatchedChannels(env, traceId);
   if (!watched.has(channel)) {
+    return;
+  }
+
+  // A bot post is recognised as this bot's own by its bot_id, so one cannot be
+  // considered without it (fail closed, like the user id above).
+  if (author.isBot && isOwnBotPost(event.bot_id!, await getBotId(env, traceId))) {
     return;
   }
 

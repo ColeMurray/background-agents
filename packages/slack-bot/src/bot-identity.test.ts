@@ -9,7 +9,7 @@ vi.mock("@open-inspect/shared/slack", async () => {
   return { ...actual, authTest: mockAuthTest };
 });
 
-import { getBotId, getBotUserId, clearBotUserIdCache } from "./bot-identity";
+import { getBotId, getBotUserId, clearBotIdentityCache } from "./bot-identity";
 
 function makeEnv(kv: { get: ReturnType<typeof vi.fn>; put: ReturnType<typeof vi.fn> }): Env {
   return {
@@ -27,7 +27,7 @@ function emptyKv() {
 
 describe("getBotUserId", () => {
   beforeEach(() => {
-    clearBotUserIdCache();
+    clearBotIdentityCache();
     vi.clearAllMocks();
   });
 
@@ -73,7 +73,7 @@ describe("getBotUserId", () => {
 
 describe("getBotId", () => {
   beforeEach(() => {
-    clearBotUserIdCache();
+    clearBotIdentityCache();
     vi.clearAllMocks();
   });
 
@@ -83,6 +83,15 @@ describe("getBotId", () => {
 
     expect(await getBotId(makeEnv(kv))).toBe("BBOT123");
     expect(kv.put).toHaveBeenCalledWith("slack:bot-id", "BBOT123");
+  });
+
+  it("reuses the bot id from the auth.test call that resolved the user id", async () => {
+    mockAuthTest.mockResolvedValue({ ok: true, user_id: "UBOT123", bot_id: "BBOT123" });
+    const env = makeEnv(emptyKv());
+
+    expect(await getBotUserId(env)).toBe("UBOT123");
+    expect(await getBotId(env)).toBe("BBOT123");
+    expect(mockAuthTest).toHaveBeenCalledTimes(1);
   });
 
   it("serves the KV last-known-good id when auth.test fails", async () => {

@@ -198,9 +198,14 @@ const SLACK_THREAD_CONTEXT_TIMEOUT_MS = 10_000;
  * SLACK_BOT_TRIGGER_WINDOW_MS. A bot can answer a run's output with another
  * top-level post, so an automation that accepts bot messages can otherwise
  * trigger itself indefinitely.
+ *
+ * The count is read before the firing is inserted, so a burst of simultaneous
+ * bot messages can overshoot it. A loop cannot: each of its firings follows the
+ * previous run, which is already counted.
  */
 export const SLACK_BOT_TRIGGER_LIMIT = 10;
 export const SLACK_BOT_TRIGGER_WINDOW_MS = 60 * 60 * 1000;
+export const SLACK_BOT_TRIGGER_LIMIT_SKIP_REASON = "slack_bot_trigger_limit";
 
 /**
  * Repository label for user-facing surfaces (Slack), read from the run's
@@ -1355,12 +1360,8 @@ export class Scheduler {
         event.isBot &&
         (await this.slackBotTriggerLimitReached(store, automation.id, now))
       ) {
-        this.log.warn("Skipped bot-triggered slack run over the hourly limit", {
-          event: "scheduler.slack_bot_trigger_limited",
-          automation_id: automation.id,
-          trigger_key: event.triggerKey,
-          limit: SLACK_BOT_TRIGGER_LIMIT,
-        });
+        const invocationId = await this.recordSlackBotTriggerLimitSkip(store, automation, event);
+        if (invocationId) invocationIds.push(invocationId);
         skipped++;
         continue;
       }
@@ -1610,6 +1611,44 @@ export class Scheduler {
     // coordinates live on the invocation. Only the terminal CAS winner owns
     // publication retries; retrying runComplete itself would be ignored.
     await this.notifySlackCompletion(store, run, body);
+  }
+
+  /**
+   * Record a bot message refused by the hourly limit as a skipped firing, so it
+   * shows in the automation's history. A redelivery of a message that was
+   * already admitted resolves to that firing instead. Like an overlap skip, the
+   * row carries no trigger_key, so it never consumes the message's dedup slot.
+   */
+  private async recordSlackBotTriggerLimitSkip(
+    store: AutomationStore,
+    automation: AutomationRow,
+    event: SlackAutomationEvent
+  ): Promise<string | null> {
+    const ownerId = await store.getInvocationIdByTriggerKey(automation.id, event.triggerKey);
+    if (ownerId) return ownerId;
+
+    this.log.warn("Skipped bot-triggered slack run over the hourly limit", {
+      event: "scheduler.slack_bot_trigger_limited",
+      automation_id: automation.id,
+      trigger_key: event.triggerKey,
+      limit: SLACK_BOT_TRIGGER_LIMIT,
+    });
+    const now = Date.now();
+    const invocationId = generateId();
+    const { inserted } = await store.insertSkippedInvocation({
+      id: invocationId,
+      automation_id: automation.id,
+      source: "event",
+      scheduled_at: null,
+      trigger_key: null,
+      concurrency_key: event.concurrencyKey,
+      trigger_metadata: serializeSlackTriggerMetadata(event),
+      skip_reason: SLACK_BOT_TRIGGER_LIMIT_SKIP_REASON,
+      failure_counted_at: null,
+      created_at: now,
+      updated_at: now,
+    });
+    return inserted ? invocationId : null;
   }
 
   /** Whether bot messages already started SLACK_BOT_TRIGGER_LIMIT runs in the window. */
