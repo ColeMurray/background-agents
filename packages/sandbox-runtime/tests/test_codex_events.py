@@ -308,7 +308,9 @@ def _item(method, item):
     return _frame(method, item=item)
 
 
-def test_compaction_is_one_boundary_between_text_segments():
+def test_compaction_is_one_boundary_between_text_segments(monkeypatch):
+    # A fixed clock keeps the second delta inside the throttle window.
+    monkeypatch.setattr("sandbox_runtime.harness.codex.events.time.monotonic", lambda: 0.0)
     turn = _turn()
     events = turn.accept(_frame("item/agentMessage/delta", itemId="a", delta="Before"))
     # A throttled delta is still pending when compaction starts.
@@ -368,3 +370,16 @@ def test_large_tool_arguments_are_left_to_the_event_forwarder():
     item = {"type": "fileChange", "id": "f", "status": "completed", "changes": changes}
     [event] = _turn().accept(_item("item/completed", item))
     assert event["args"]["changes"] == changes
+
+
+@pytest.mark.parametrize(
+    "params",
+    [
+        None,
+        "bad",
+        {"threadId": "thread", "turn": None},
+        {"threadId": "thread", "turnId": "turn", "item": None},
+    ],
+)
+def test_malformed_native_fields_are_ignored(params):
+    assert _turn().accept({"method": "item/completed", "params": params}) == []

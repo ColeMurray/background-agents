@@ -148,3 +148,23 @@ async def test_pending_spawn_is_contained_by_every_close_path(tmp_path, monkeypa
             await opening
     assert client._process is not None
     assert client._process.returncode is not None
+
+
+async def test_spawn_finishing_after_the_close_deadline_is_still_contained(tmp_path, monkeypatch):
+    entered, release = asyncio.Event(), asyncio.Event()
+    _slow_spawn(monkeypatch, entered, release)
+    client = CodexClient(
+        command=(sys.executable, "-c", "import time; time.sleep(30)"), cwd=tmp_path, env={}
+    )
+    opening = asyncio.create_task(client.open())
+    await entered.wait()
+    # The spawn outlives the close budget: containment is reported unconfirmed...
+    assert not await client.close(timeout_seconds=0.05)
+    release.set()
+    with pytest.raises(CodexTransportError):
+        await opening
+    # ...but the process is still contained once the spawn completes.
+    assert client._late_containment is not None
+    await asyncio.wait_for(client._late_containment, 10)
+    assert client._process is not None
+    assert client._process.returncode is not None

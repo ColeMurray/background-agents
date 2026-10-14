@@ -83,3 +83,9 @@ def test_native_env_preserves_session_config_and_omits_legacy_header_variables(t
     assert "OI_MCP_0_HEADER_0" not in env
     assert env["USER_BUILD_VAR"] == "retained"
     assert parent["OI_MCP_0_HEADER_0"] == SECRET
+
+
+@pytest.mark.parametrize("url", ["", "   "])
+def test_remote_mcp_requires_a_non_empty_url(url):
+    with pytest.raises(HarnessStartError, match="requires a URL"):
+        mcp_configuration(({"name": "remote", "url": url},))

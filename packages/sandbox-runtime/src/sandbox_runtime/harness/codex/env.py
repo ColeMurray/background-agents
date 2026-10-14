@@ -158,7 +158,7 @@ def mcp_configuration(
                 config["env"] = dict(environment)
         else:
             url = server.get("url")
-            if not isinstance(url, str):
+            if not isinstance(url, str) or not url.strip():
                 raise HarnessStartError("Remote MCP server requires a URL")
             parsed = urlsplit(url)
             if parsed.username or parsed.password or parsed.query or parsed.fragment:

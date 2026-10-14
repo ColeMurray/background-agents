@@ -55,6 +55,7 @@ class CodexClient:
         self._containment_owner = containment_owner
         self._process: asyncio.subprocess.Process | None = None
         self._spawn: asyncio.Future[asyncio.subprocess.Process] | None = None
+        self._late_containment: asyncio.Task[None] | None = None
         self._reader: asyncio.Task[None] | None = None
         self._stderr: asyncio.Task[None] | None = None
         self._handlers: set[asyncio.Task[None]] = set()
@@ -235,6 +236,21 @@ class CodexClient:
         with contextlib.suppress(asyncio.QueueFull):
             self._notifications.put_nowait(None)
 
+    async def _contain_late_spawn(self, spawn: asyncio.Future[asyncio.subprocess.Process]) -> None:
+        try:
+            process = await spawn
+        except Exception:
+            return
+        self._process = process
+        with contextlib.suppress(ProcessLookupError):
+            os.killpg(process.pid, signal.SIGTERM)
+        try:
+            await asyncio.wait_for(wait_for_process_exit(process), 5.0)
+        except TimeoutError:
+            with contextlib.suppress(ProcessLookupError):
+                os.killpg(process.pid, signal.SIGKILL)
+            await wait_for_process_exit(process)
+
     async def close(self, *, timeout_seconds: float = 5.0) -> bool:
         # A caller's cancellation must not strand the owned process. Concurrent
         # stop paths share one bounded cleanup operation.
@@ -263,6 +279,12 @@ class CodexClient:
                     max(0.001, deadline - asyncio.get_running_loop().time()),
                 )
             if not self._spawn.done():
+                # Report containment as unconfirmed, but keep ownership: the
+                # process is contained whenever the spawn finally completes.
+                if self._late_containment is None:
+                    self._late_containment = asyncio.create_task(
+                        self._contain_late_spawn(self._spawn), name="codex-late-containment"
+                    )
                 return False
         process = self._process
         stopped = process is None

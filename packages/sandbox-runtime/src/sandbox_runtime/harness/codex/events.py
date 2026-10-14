@@ -113,14 +113,18 @@ class CodexTurnEvents:
         }
 
     def accept(self, frame: dict[str, Any]) -> list[dict[str, Any]]:
-        method, params = frame.get("method"), frame.get("params", {})
+        method, params = frame.get("method"), frame.get("params")
+        # Frames come from a separate process: tolerate null/non-object fields.
+        if not isinstance(params, dict):
+            return []
         if params.get("threadId") != self.thread_id:
             return []
-        turn_id = params.get("turnId") or params.get("turn", {}).get("id")
+        turn = params.get("turn") if isinstance(params.get("turn"), dict) else {}
+        turn_id = params.get("turnId") or turn.get("id")
         if turn_id != self.turn_id:
             return []
         if method == "turn/completed":
-            self.status = params.get("turn", {}).get("status")
+            self.status = turn.get("status")
             return self._text_event(force=True)
         if method == "thread/tokenUsage/updated":
             usage = params.get("tokenUsage")
@@ -158,7 +162,7 @@ class CodexTurnEvents:
             self._record_text(item_id, str(params.get("delta", "")))
             return self._text_event()
         if method in {"item/started", "item/completed"}:
-            item = params.get("item", {})
+            item = params.get("item") if isinstance(params.get("item"), dict) else {}
             kind, item_id = item.get("type"), str(item.get("id"))
             if kind == "agentMessage":
                 if method == "item/completed":

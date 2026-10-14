@@ -1,4 +1,5 @@
 import asyncio
+import base64
 import json
 from unittest.mock import AsyncMock, MagicMock
 
@@ -488,3 +489,98 @@ async def test_bridge_id_cannot_adopt_a_thread_whose_manifest_was_rejected(tmp_p
     assert not await resumed.resume_session("thread")
     assert resumed.session_id is None
     assert not resumed._manifest_path.exists()
+
+
+async def test_rejected_manifest_blocks_adoption_across_a_restart(tmp_path):
+    h, _ = build(tmp_path)
+    await h.open()
+    h.session_id = "thread"
+    h._persist()
+    await h.close()
+    state = json.loads(h._manifest_path.read_text())
+    state["toolCatalog"] = "catalog-before-slack-tools"
+    h._manifest_path.write_text(json.dumps(state))
+
+    async def request(method, params):
+        if method == "thread/resume":
+            return {"thread": {"id": "thread"}}
+        if method == "thread/start":
+            return {"thread": {"id": "fresh"}}
+        return {"account": {"type": "apiKey"}}
+
+    first, client = build(tmp_path)
+    client.request.side_effect = request
+    await first.open()
+    assert not await first.resume_session("thread")
+    await first.close()
+    # The bridge restarts before any prompt creates a new thread.
+    restarted, client = build(tmp_path)
+    client.request.side_effect = request
+    await restarted.open()
+    assert not await restarted.resume_session("thread")
+    assert not any(c.args[0] == "thread/resume" for c in client.request.call_args_list)
+    # Creating a fresh thread replaces the rejected record.
+    await restarted.create_session()
+    assert restarted.session_id == "fresh"
+    assert not restarted._rejected_manifest_path.exists()
+
+
+async def test_partially_written_attachment_is_removed(tmp_path, monkeypatch):
+    h, _ = build(tmp_path)
+    await h.open()
+    h.session_id = "thread"
+
+    def partial_write(self, data):
+        with open(self, "wb") as output:
+            output.write(data[:1])
+        raise OSError("disk full")
+
+    monkeypatch.setattr("pathlib.Path.write_bytes", partial_write)
+    prompt = HarnessPrompt(
+        "m", "look", attachments=({"content": base64.b64encode(b"image").decode()},)
+    )
+    outcome = await h.run_prompt(prompt, AsyncMock())
+    assert not outcome.success
+    assert list((h.config.state_dir / "openinspect-input").iterdir()) == []
+
+
+async def test_generation_reauthentication_waits_for_the_stopped_turn_to_unwind(tmp_path):
+    h, client = build(tmp_path)
+    await h.open()
+    h.session_id = "thread"
+    unwinding, release = asyncio.Event(), asyncio.Event()
+
+    async def request(method, params):
+        if method == "turn/start":
+            return {"turn": {"id": "turn"}}
+        return {"account": {"type": "apiKey"}}
+
+    async def next_notification():
+        await asyncio.Event().wait()
+
+    client.request.side_effect = request
+    client.next_notification = next_notification
+    client.handling_requests = False
+    stop = h.stop_execution
+
+    async def slow_cleanup_stop(timeout):
+        if not unwinding.is_set():
+            unwinding.set()
+            await release.wait()
+        return await stop(timeout)
+
+    turn = asyncio.create_task(h.run_prompt(HarnessPrompt("m", "work"), AsyncMock()))
+    await asyncio.sleep(0.05)
+    h.stop_execution = slow_cleanup_stop
+    turn.cancel()
+    await unwinding.wait()
+    opens = h._factory.call_count
+    reauth = asyncio.create_task(h.reauthenticate_generation({"sandboxId": "s", "createdAt": 2}))
+    await asyncio.sleep(0.05)
+    # The old turn still holds the lock in its cleanup: no new client yet.
+    assert h._factory.call_count == opens
+    release.set()
+    with pytest.raises(asyncio.CancelledError):
+        await turn
+    await reauth
+    assert h._factory.call_count == opens + 1
