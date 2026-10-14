@@ -79,6 +79,11 @@ const triggerConditionSchema = z.discriminatedUnion("type", [
     value: z.string(),
   }),
   z.object({
+    type: z.literal("draft"),
+    operator: z.literal("eq"),
+    value: z.boolean(),
+  }),
+  z.object({
     type: z.literal("linear_status"),
     operator: z.literal("any_of"),
     value: stringArrayConditionValueSchema,

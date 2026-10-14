@@ -98,6 +98,9 @@ export function ConditionBuilder({
       case "workflow_name":
         newCondition = { type: "workflow_name", operator: "eq", value: DEFAULT_WORKFLOW_NAME };
         break;
+      case "draft":
+        newCondition = { type: "draft", operator: "eq", value: false };
+        break;
       case "text_match":
         newCondition = { type: "text_match", operator: "contains", value: { pattern: "" } };
         break;
@@ -284,6 +287,21 @@ function ConditionEditor({
           placeholder="Exact workflow name, e.g. CI"
           className="text-xs"
         />
+      );
+    case "draft":
+      return (
+        <Select
+          value={String(condition.value)}
+          onValueChange={(v) => onChange({ ...condition, value: v === "true" })}
+        >
+          <SelectTrigger className="w-40 text-xs">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="false">Not draft</SelectItem>
+            <SelectItem value="true">Draft only</SelectItem>
+          </SelectContent>
+        </Select>
       );
     case "text_match": {
       const flags = condition.value.flags ?? "";

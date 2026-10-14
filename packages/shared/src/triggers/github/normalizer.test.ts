@@ -793,6 +793,7 @@ const CONDITION_SOURCE_FIELD = {
   actor: "actor",
   conclusion: "conclusion",
   workflow_name: "workflowName",
+  draft: "pullRequest",
 } as const satisfies Record<string, keyof GitHubAutomationEvent>;
 
 /** A payload per catalog event type. */

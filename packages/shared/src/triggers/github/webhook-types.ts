@@ -49,7 +49,7 @@ export const GITHUB_WEBHOOK_EVENT_CATALOG = [
     displayName: "PR Opened",
     description: "A pull request was opened",
     shortLabel: "PR opened",
-    supportedConditions: ["branch", "target_branch", "label", "actor"],
+    supportedConditions: ["branch", "target_branch", "label", "actor", "draft"],
   },
   {
     event: "pull_request",
@@ -57,7 +57,7 @@ export const GITHUB_WEBHOOK_EVENT_CATALOG = [
     displayName: "PR Updated",
     description: "New commits pushed to a pull request",
     shortLabel: "PR updated",
-    supportedConditions: ["branch", "target_branch", "label", "actor"],
+    supportedConditions: ["branch", "target_branch", "label", "actor", "draft"],
   },
   {
     event: "pull_request",
