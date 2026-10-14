@@ -4,11 +4,7 @@ import type {
 } from "@open-inspect/shared/types/session-api";
 import { sendPromptResponseSchema } from "@open-inspect/shared/types/session-api";
 import type { CorrelationContext } from "../logger";
-import {
-  promptRequestLookupSchema,
-  sessionNotFoundResponseSchema,
-  SessionInternalPaths,
-} from "../session/contracts";
+import { promptRequestLookupSchema, SessionInternalPaths } from "../session/contracts";
 import type { EnqueuePromptRequest } from "../session/enqueue-prompt-contract";
 import { createSessionRuntimeClient } from "../session/runtime-client";
 import type { Env } from "../types";
@@ -81,12 +77,6 @@ export async function isSessionPromptRequestQueued(
     { method: "GET" },
     `?clientRequestId=${encodeURIComponent(clientRequestId)}`
   );
-  if (response.status === 404) {
-    const missing = sessionNotFoundResponseSchema.safeParse(
-      await response.json().catch(() => null)
-    );
-    if (missing.success) return false;
-  }
   if (!response.ok) throw new Error(`Prompt request lookup failed with status ${response.status}`);
   return promptRequestLookupSchema.parse(await response.json()).queued;
 }

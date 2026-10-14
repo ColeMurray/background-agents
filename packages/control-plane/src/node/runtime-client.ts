@@ -22,7 +22,6 @@
  */
 
 import type { SessionRuntimeDispatch } from "../session/runtime-client";
-import { SESSION_NOT_FOUND_ERROR, type SessionNotFoundResponse } from "../session/contracts";
 
 /** What the dispatch needs of a runtime: the session's request entry point. */
 export interface RequestServingRuntime {
@@ -45,12 +44,7 @@ export function createNodeSessionRuntimeDispatch<Runtime extends RequestServingR
       const response = await runtimes.withRuntimeIfPresent(sessionId, (runtime) =>
         runtime.server.onRequest(request)
       );
-      return (
-        response ??
-        Response.json({ error: SESSION_NOT_FOUND_ERROR } satisfies SessionNotFoundResponse, {
-          status: 404,
-        })
-      );
+      return response ?? Response.json({ error: "Session not found" }, { status: 404 });
     });
 }
 

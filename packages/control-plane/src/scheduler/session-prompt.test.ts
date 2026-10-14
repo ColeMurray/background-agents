@@ -11,17 +11,11 @@ function envWithResponse(response: () => Response): Env {
 }
 
 describe("isSessionPromptRequestQueued", () => {
-  it("treats the runtime's missing-session response as not queued", async () => {
-    const env = envWithResponse(() =>
-      Response.json({ error: "Session not found" }, { status: 404 })
-    );
-
-    await expect(isSessionPromptRequestQueued(env, "missing", "prompt-1", context)).resolves.toBe(
-      false
-    );
-  });
-
   it.each([
+    {
+      name: "the runtime's missing-session response",
+      response: () => Response.json({ error: "Session not found" }, { status: 404 }),
+    },
     { name: "an unknown 404", response: () => new Response("Not Found", { status: 404 }) },
     {
       name: "a transient failure",

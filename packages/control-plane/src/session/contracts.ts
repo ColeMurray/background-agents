@@ -78,12 +78,6 @@ export type SessionTraceExport = z.infer<typeof sessionTraceExportSchema>;
 export const promptRequestLookupSchema = z.object({ queued: z.boolean() });
 export type PromptRequestLookup = z.infer<typeof promptRequestLookupSchema>;
 
-export const SESSION_NOT_FOUND_ERROR = "Session not found";
-export const sessionNotFoundResponseSchema = z.object({
-  error: z.literal(SESSION_NOT_FOUND_ERROR),
-});
-export type SessionNotFoundResponse = z.infer<typeof sessionNotFoundResponseSchema>;
-
 export const SessionInternalPaths = {
   init: "/internal/init",
   state: "/internal/state",
