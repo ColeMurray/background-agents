@@ -20,6 +20,15 @@ import { invalidateAutomationCache } from "@/lib/automation-cache";
 import { useAutomationScope } from "@/hooks/use-automation-scope";
 import { useCanCreateAutomation } from "@/hooks/use-can-create-automation";
 import { useAutomation } from "@/hooks/use-automations";
+import { MAX_AUTOMATION_NAME_LENGTH } from "@open-inspect/shared/types/automations";
+
+const COPY_NAME_SUFFIX = " (copy)";
+
+/** The source name plus a copy suffix, trimmed to fit the server's name limit. */
+function copyName(name: string): string {
+  const base = name.slice(0, MAX_AUTOMATION_NAME_LENGTH - COPY_NAME_SUFFIX.length).trimEnd();
+  return `${base}${COPY_NAME_SUFFIX}`;
+}
 
 function NewAutomationContent() {
   const { isOpen } = useSidebarContext();
@@ -67,7 +76,7 @@ function NewAutomationContent() {
     ? undefined
     : automationTemplates.find((candidate) => candidate.id === templateId);
   const initialValues: Partial<AutomationFormValues> = source
-    ? { ...automationToFormValues(source), name: `${source.name} (copy)` }
+    ? { ...automationToFormValues(source), name: copyName(source.name) }
     : { ...template?.prefill, teamId: teamId ?? null };
 
   const handleSubmit = async (values: AutomationFormValues) => {

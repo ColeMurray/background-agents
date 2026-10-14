@@ -7,6 +7,7 @@ import userEvent from "@testing-library/user-event";
 import * as matchers from "@testing-library/jest-dom/matchers";
 import type { ReactNode } from "react";
 import { DEFAULT_MODEL } from "@open-inspect/shared/models";
+import { MAX_AUTOMATION_NAME_LENGTH } from "@open-inspect/shared/types/automations";
 import NewAutomationPage from "./page";
 import { browserApiFetch } from "@/lib/browser-api-fetch";
 import { invalidateAutomationCache } from "@/lib/automation-cache";
@@ -347,6 +348,16 @@ describe("NewAutomationPage duplicate", () => {
     render(<NewAutomationPage />);
 
     expect(screen.getByRole("combobox", { name: "Team" })).toHaveTextContent("Design");
+  });
+
+  it("trims a long source name so the copy name fits the limit", () => {
+    sourceAutomation = { ...source, name: "a".repeat(MAX_AUTOMATION_NAME_LENGTH) };
+    search = "from=auto-1";
+    render(<NewAutomationPage />);
+
+    const nameInput = screen.getByPlaceholderText("Daily code review") as HTMLInputElement;
+    expect(nameInput.value).toHaveLength(MAX_AUTOMATION_NAME_LENGTH);
+    expect(nameInput.value.endsWith(" (copy)")).toBe(true);
   });
 
   it("prefers the source automation over a template", () => {
