@@ -338,6 +338,9 @@ class CodexHarness:
                 },
             )
             self.session_id = result["thread"]["id"]
+            # A newly started thread has an authoritative zero usage baseline.
+            self._total = {}
+            self._usage_baseline_known = True
             self._persist()
             self._rejected_manifest_path.unlink(missing_ok=True)
 

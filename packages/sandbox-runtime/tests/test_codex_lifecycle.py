@@ -257,6 +257,98 @@ async def test_unavailable_history_leaves_creation_to_the_next_prompt(tmp_path):
     assert not any(call.args[0] == "thread/start" for call in client.request.call_args_list)
 
 
+async def test_replacement_thread_accounts_first_turn_and_only_later_deltas(tmp_path):
+    def usage(turn_id, input_tokens, output_tokens, reasoning_tokens):
+        return {
+            "method": "thread/tokenUsage/updated",
+            "params": {
+                "threadId": "replacement-thread",
+                "turnId": turn_id,
+                "tokenUsage": {
+                    "total": {
+                        "inputTokens": input_tokens,
+                        "cachedInputTokens": 0,
+                        "outputTokens": output_tokens,
+                        "reasoningOutputTokens": reasoning_tokens,
+                        "totalTokens": input_tokens + output_tokens,
+                    }
+                },
+            },
+        }
+
+    def completed(turn_id):
+        return {
+            "method": "turn/completed",
+            "params": {
+                "threadId": "replacement-thread",
+                "turn": {"id": turn_id, "status": "completed"},
+            },
+        }
+
+    old, _ = build(tmp_path)
+    await old.open()
+    old.session_id = "old-thread"
+    old._total = {
+        "inputTokens": 100,
+        "cachedInputTokens": 0,
+        "cacheWriteInputTokens": 0,
+        "outputTokens": 20,
+        "reasoningOutputTokens": 5,
+        "totalTokens": 120,
+    }
+    old._persist()
+    await old.close()
+    state = json.loads(old._manifest_path.read_text())
+    state["toolCatalog"] = "incompatible-catalog"
+    old._manifest_path.write_text(json.dumps(state))
+
+    harness, client = build(tmp_path)
+    turns = iter(("turn-1", "turn-2"))
+
+    async def request(method, params):
+        if method == "thread/start":
+            return {"thread": {"id": "replacement-thread"}}
+        if method == "turn/start":
+            return {"turn": {"id": next(turns)}}
+        return {"account": {"type": "apiKey"}}
+
+    notifications = iter(
+        (
+            usage("turn-1", 10, 4, 1),
+            completed("turn-1"),
+            usage("turn-2", 16, 7, 2),
+            completed("turn-2"),
+        )
+    )
+
+    client.request.side_effect = request
+    client.next_notification = AsyncMock(side_effect=lambda: next(notifications))
+    events = []
+
+    async def emit(event):
+        events.append(event)
+
+    assert (await harness.run_prompt(HarnessPrompt("m1", "first"), emit)).success
+    assert (await harness.run_prompt(HarnessPrompt("m2", "second"), emit)).success
+    accounted = {event["messageId"]: event["tokens"] for event in events if event.get("tokens")}
+    assert accounted == {
+        "m1": {
+            "input": 10,
+            "output": 3,
+            "reasoning": 1,
+            "cache": {"read": 0, "write": 0},
+            "total": 14,
+        },
+        "m2": {
+            "input": 6,
+            "output": 2,
+            "reasoning": 1,
+            "cache": {"read": 0, "write": 0},
+            "total": 9,
+        },
+    }
+
+
 @pytest.mark.parametrize(
     ("model", "effort", "expected"),
     [
