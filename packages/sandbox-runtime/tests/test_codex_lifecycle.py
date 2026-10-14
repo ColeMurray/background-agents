@@ -177,6 +177,8 @@ async def test_pre_submit_broker_outage_is_retryable_without_unknown_execution(t
     h._authenticate = AsyncMock(side_effect=OpenAIAccessTokenUnavailable("unavailable"))
     outcome = await h.run_prompt(HarnessPrompt("m", "hello"), AsyncMock())
     assert not outcome.success
+    assert "retry" in outcome.error
+    assert "Settings" not in outcome.error
     assert not any(call.args[0] == "turn/start" for call in client.request.call_args_list)
 
 

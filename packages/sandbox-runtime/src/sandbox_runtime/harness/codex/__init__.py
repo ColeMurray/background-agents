@@ -461,10 +461,21 @@ class CodexHarness:
                 else "Codex process containment could not be confirmed",
                 message_cost_usd=0,
             )
+        except OpenAIAccessTokenUnavailable:
+            # Transient (timeout, 5xx, 429): a plain retry can succeed, so do not
+            # send the user to Settings.
+            if not await self.stop_execution(STOP_TIMEOUT_SECONDS):
+                return TurnOutcome.failed(
+                    "Codex process containment could not be confirmed",
+                    message_cost_usd=0,
+                )
+            return TurnOutcome.failed(
+                "Codex could not obtain a credential right now; retry shortly",
+                message_cost_usd=0,
+            )
         except (
             CodexRpcError,
             OpenAIAccessTokenDenied,
-            OpenAIAccessTokenUnavailable,
             HarnessStartError,
         ):
             if not await self.stop_execution(STOP_TIMEOUT_SECONDS):
