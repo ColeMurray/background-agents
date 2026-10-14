@@ -21,6 +21,20 @@ def error_text(response: httpx.Response) -> str:
     return text
 
 
+def content_text(content: Any) -> str:
+    """Text of a tool result's content: a string, or the text items of a content list."""
+    if content is None:
+        return ""
+    if isinstance(content, str):
+        return content
+    parts: list[str] = []
+    for item in content:
+        # MCP content uses ``text``; Codex dynamic-tool results use ``inputText``.
+        if isinstance(item, dict) and item.get("type") in {"text", "inputText"}:
+            parts.append(str(item.get("text", "")))
+    return "\n".join(parts)
+
+
 def text_result(text: str) -> dict[str, Any]:
     return {"content": [{"type": "text", "text": text}]}
 

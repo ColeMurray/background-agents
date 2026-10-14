@@ -91,6 +91,9 @@ class CodexHarness:
         self._stopping = False
         self._revocation_stop: asyncio.Task[bool] | None = None
         self.session_id: str | None = None
+        # Set when open() rejected an existing manifest. A rejected compatibility
+        # record must not read as an absent one that permits unchecked adoption.
+        self._manifest_rejected = False
         self._turn_id: str | None = None
         self._submitting = False
         self._turn_known = asyncio.Event()
@@ -263,6 +266,7 @@ class CodexHarness:
             self._usage_baseline_known = state.get("usageBaselineKnown") is True
         except (KeyError, TypeError, ValueError, OSError, CodexRpcError):
             self.log.warn("codex.session.history_unavailable")
+            self._manifest_rejected = True
             self.session_id = None
             self._total = {}
             self._usage_baseline_known = False
@@ -288,6 +292,12 @@ class CodexHarness:
     async def resume_session(self, persisted_id: str) -> bool:
         if persisted_id == self.session_id:
             return True
+        if self._manifest_rejected:
+            # The bridge's persisted id names the thread whose manifest was just
+            # rejected (catalog/version change); adopting it would certify an
+            # incompatible native tool set. The next prompt starts a new thread.
+            self.log.warn("codex.session.adoption_refused")
+            return False
         # A transport error leaves the outcome unknown: it propagates with the
         # current state and manifest intact, so a later open() can retry.
         try:
@@ -371,6 +381,11 @@ class CodexHarness:
                     inputs.append({"type": "localImage", "path": str(path)})
                 if asyncio.get_running_loop().time() >= deadline:
                     raise TimeoutError
+                # Durably distrust the baseline while native work may run: a crash
+                # mid-turn must not bill unobserved usage to the next message.
+                baseline_known = self._usage_baseline_known
+                self._usage_baseline_known = False
+                self._persist()
                 self._submitting = True
                 self._turn_known.clear()
                 response = await self._client.request(
@@ -395,7 +410,7 @@ class CodexHarness:
                     self._turn_id,
                     model,
                     self._total,
-                    baseline_known=self._usage_baseline_known,
+                    baseline_known=baseline_known,
                 )
                 await emit(state.start())
                 # The transport queue retains notifications delivered before the

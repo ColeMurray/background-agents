@@ -294,3 +294,77 @@ def test_invalid_restored_baseline_can_recover_authoritative_totals():
     assert usage(state, counts(10))["cost"] == 0
     assert state.has_usage
     assert state.total["inputTokens"] == 10
+
+
+def _turn():
+    return CodexTurnEvents("m", "thread", "turn", "gpt-6.1-sol", {})
+
+
+def _frame(method, **params):
+    return {"method": method, "params": {"threadId": "thread", "turnId": "turn", **params}}
+
+
+def _item(method, item):
+    return _frame(method, item=item)
+
+
+def test_compaction_is_one_boundary_between_text_segments():
+    turn = _turn()
+    events = turn.accept(_frame("item/agentMessage/delta", itemId="a", delta="Before"))
+    # A throttled delta is still pending when compaction starts.
+    events += turn.accept(_frame("item/agentMessage/delta", itemId="a", delta=" more"))
+    events += turn.accept(_item("item/started", {"type": "contextCompaction", "id": "c"}))
+    events += turn.accept(_item("item/completed", {"type": "contextCompaction", "id": "c"}))
+    events += turn.accept(
+        _item("item/completed", {"type": "agentMessage", "id": "b", "text": "After"})
+    )
+    assert [(e["type"], e.get("content")) for e in events] == [
+        ("token", "Before"),
+        ("token", "Before more"),
+        ("context_compacted", None),
+        ("token", "After"),
+    ]
+
+
+def test_dynamic_tool_output_is_the_tool_text_not_the_native_envelope():
+    envelope = json.dumps({"number": 7, "url": "https://example.com/pull/7"})
+    item = {
+        "type": "dynamicToolCall",
+        "id": "t",
+        "tool": "create-pull-request",
+        "status": "completed",
+        "contentItems": [{"type": "inputText", "text": envelope}],
+    }
+    [event] = _turn().accept(_item("item/completed", item))
+    assert event["output"] == envelope
+
+
+def test_mcp_tool_output_extracts_text_and_keeps_error_messages():
+    ok = {
+        "type": "mcpToolCall",
+        "id": "ok",
+        "server": "linear",
+        "tool": "get_issue",
+        "status": "completed",
+        "result": {"content": [{"type": "text", "text": "issue body"}]},
+    }
+    failed = {
+        "type": "mcpToolCall",
+        "id": "bad",
+        "server": "linear",
+        "tool": "get_issue",
+        "status": "failed",
+        "error": {"message": "not found"},
+    }
+    turn = _turn()
+    [success] = turn.accept(_item("item/completed", ok))
+    [failure] = turn.accept(_item("item/completed", failed))
+    assert success["output"] == "issue body"
+    assert (failure["status"], failure["output"]) == ("error", "not found")
+
+
+def test_large_tool_arguments_are_left_to_the_event_forwarder():
+    changes = [{"path": f"src/file_{i}.py", "diff": "+" * 1024} for i in range(70)]
+    item = {"type": "fileChange", "id": "f", "status": "completed", "changes": changes}
+    [event] = _turn().accept(_item("item/completed", item))
+    assert event["args"]["changes"] == changes

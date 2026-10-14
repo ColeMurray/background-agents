@@ -301,6 +301,8 @@ async def test_overlapping_prompts_run_one_native_turn_at_a_time(tmp_path):
                 first_running.set()
                 await release_first.wait()
             raise CodexRpcError("rejected")
+        if method == "thread/resume":
+            return {"thread": {"id": "thread"}}
         return {"account": {"type": "apiKey"}}
 
     client.request.side_effect = request
@@ -440,3 +442,47 @@ async def test_running_host_callback_renews_inactivity(tmp_path):
     client.handling_requests = True
     assert await h._next_notification() == {"method": "noop", "params": {}}
     assert calls == 3
+
+
+async def test_usage_baseline_is_durably_distrusted_while_a_turn_runs(tmp_path):
+    h, client = build(tmp_path)
+    await h.open()
+    h.session_id = "thread"
+    h._usage_baseline_known = True
+    h._persist()
+    observed = []
+
+    async def request(method, params):
+        if method == "turn/start":
+            observed.append(json.loads(h._manifest_path.read_text())["usageBaselineKnown"])
+            raise CodexRpcError("rejected")
+        return {"account": {"type": "apiKey"}}
+
+    client.request.side_effect = request
+    await h.run_prompt(HarnessPrompt("m", "work"), AsyncMock())
+    # A hard crash at submission would restore an untrusted baseline.
+    assert observed == [False]
+
+
+async def test_bridge_id_cannot_adopt_a_thread_whose_manifest_was_rejected(tmp_path):
+    h, _ = build(tmp_path)
+    await h.open()
+    h.session_id = "thread"
+    h._persist()
+    await h.close()
+    state = json.loads(h._manifest_path.read_text())
+    state["toolCatalog"] = "catalog-before-slack-tools"
+    h._manifest_path.write_text(json.dumps(state))
+    resumed, client = build(tmp_path)
+
+    async def request(method, params):
+        if method == "thread/resume":
+            return {"thread": {"id": "thread"}}
+        return {"account": {"type": "apiKey"}}
+
+    client.request.side_effect = request
+    await resumed.open()
+    assert resumed.session_id is None
+    assert not await resumed.resume_session("thread")
+    assert resumed.session_id is None
+    assert not resumed._manifest_path.exists()
