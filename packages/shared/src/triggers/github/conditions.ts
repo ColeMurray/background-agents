@@ -90,7 +90,8 @@ export const githubConditions = {
     },
     evaluate(condition, event) {
       if (event.source !== "github") return true;
-      return (event.pullRequest?.draft ?? false) === condition.value;
+      // GitHub always sends a boolean; an event without one matches neither choice.
+      return event.pullRequest?.draft === condition.value;
     },
   },
 } satisfies Partial<ConditionRegistry>;

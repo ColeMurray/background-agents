@@ -242,8 +242,8 @@ describe("matchesConditions", () => {
       expect(matchesConditions(notDraft, prEvent(false), conditionRegistry)).toBe(true);
     });
 
-    it("treats a missing draft flag as not draft", () => {
-      expect(matchesConditions(notDraft, prEvent(), conditionRegistry)).toBe(true);
+    it("matches neither choice when the draft flag is missing", () => {
+      expect(matchesConditions(notDraft, prEvent(), conditionRegistry)).toBe(false);
       expect(
         matchesConditions([{ ...notDraft[0], value: true }], prEvent(), conditionRegistry)
       ).toBe(false);
