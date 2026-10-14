@@ -303,6 +303,7 @@ export class SessionFollowUpRefusedError extends Error {
 interface StartInvocationParams {
   automation: AutomationRow;
   source: AutomationInvocationSource;
+  invocationId?: string;
   /** Human authority used for a manual firing; unattended sources use the automation owner. */
   executionPrincipal?: ExecutionPrincipal;
   /** Cron slot being served — becomes scheduled_at and the idempotency key (schedule source only). */
@@ -310,6 +311,8 @@ interface StartInvocationParams {
   /** Next cron slot, advanced atomically with the insert (schedule source only). */
   advanceToNextRunAt?: number;
   triggerKey?: string | null;
+  /** Finalize a webhook follow-up reservation as soon as its invocation is admitted. */
+  webhookFollowUpClaimId?: string;
   concurrencyKey?: string | null;
   /** Source-specific JSON stored on the invocation (slack message coordinates). */
   triggerMetadata?: string | null;
@@ -329,6 +332,11 @@ interface StartInvocationParams {
    * `instructionsOverride` so admitted children cannot be stranded.
    */
   instructionsOverrideFactory?: () => Promise<string>;
+}
+
+interface WebhookFollowUpClaim {
+  claimId: string;
+  invocationId: string;
 }
 
 interface ExecutionPrincipal {
@@ -532,7 +540,7 @@ export class Scheduler {
       }
     }
 
-    const invocationId = generateId();
+    const invocationId = params.invocationId ?? generateId();
     const scheduledAt = params.scheduledAt ?? now;
 
     const childBase = () => ({
@@ -686,6 +694,27 @@ export class Scheduler {
       // batch's schedule advance already ran (deliberately unconditional), so
       // the skip record must not advance again.
       return this.recordOverlapSkip(store, params, { advanceSchedule: false });
+    }
+
+    if (params.webhookFollowUpClaimId && triggerKey) {
+      try {
+        await store.acceptFollowUpReceipt(
+          automation.id,
+          triggerKey,
+          params.webhookFollowUpClaimId,
+          invocationId,
+          Date.now()
+        );
+      } catch (error) {
+        // The invocation's unique trigger key is already the durable owner; receipt repair
+        // must not strand its admitted children before launch.
+        this.log.warn("Failed to finalize an admitted webhook follow-up receipt", {
+          event: "scheduler.webhook_receipt_finalize_failed",
+          automation_id: automation.id,
+          invocation_id: invocationId,
+          error: error instanceof Error ? error : new Error(String(error)),
+        });
+      }
     }
 
     let attributionError: unknown;
@@ -1282,6 +1311,12 @@ export class Scheduler {
 
     for (const automation of candidates) {
       const now = Date.now();
+      let webhookClaim: WebhookFollowUpClaim | null = null;
+      const releaseWebhookClaim = async (): Promise<void> => {
+        if (webhookClaim) {
+          await store.releaseFollowUpReceipt(automation.id, event.triggerKey, webhookClaim.claimId);
+        }
+      };
 
       if (webhookFollowUpTriggerKey) {
         const original = await store.getInvocationIdByTriggerKey(
@@ -1294,6 +1329,31 @@ export class Scheduler {
           continue;
         }
 
+        const claimId = generateId();
+        const invocationId = generateId();
+        const claim = await store.claimFollowUpReceipt({
+          automationId: automation.id,
+          triggerKey: webhookFollowUpTriggerKey,
+          claimInvocationId: invocationId,
+          claimId,
+          now,
+          expiresAt: now + FOLLOW_UP_RECEIPT_CLAIM_MS,
+        });
+        if (claim.kind === "accepted") {
+          invocationIds.push(claim.invocationId);
+          skipped++;
+          continue;
+        }
+        if (claim.kind === "pending") {
+          throw new SessionFollowUpRefusedError({
+            kind: "refused",
+            invocationId: claim.invocationId,
+            status: null,
+            code: null,
+          });
+        }
+        webhookClaim = { claimId, invocationId };
+
         const historical = await findHistoricalPromptReceipt(
           continuity,
           automation,
@@ -1302,13 +1362,14 @@ export class Scheduler {
         );
         if (historical.kind === "refused") throw new SessionFollowUpRefusedError(historical);
         if (historical.kind === "skipped" && historical.invocationId) {
-          const owner = await store.recordFollowUpReceipt(
+          await store.acceptFollowUpReceipt(
             automation.id,
             webhookFollowUpTriggerKey,
+            claimId,
             historical.invocationId,
             now
           );
-          recordContinuation({ kind: "skipped", invocationId: owner });
+          recordContinuation(historical);
           continue;
         }
       }
@@ -1343,6 +1404,7 @@ export class Scheduler {
       try {
         config = parseAutomationTriggerFields(automation).triggerConfig ?? { conditions: [] };
       } catch {
+        await releaseWebhookClaim();
         this.log.error("Skipped automation with invalid stored trigger fields", {
           event: "scheduler.invalid_trigger_fields",
           automation_id: automation.id,
@@ -1351,6 +1413,7 @@ export class Scheduler {
         continue;
       }
       if (!matchesConditions(config.conditions, event, conditionRegistry)) {
+        await releaseWebhookClaim();
         continue;
       }
 
@@ -1364,7 +1427,7 @@ export class Scheduler {
             event,
             automation,
             store,
-            webhookFollowUpTriggerKey,
+            webhookClaim,
             webhookFollowUpRequestId
           )
         );
@@ -1394,6 +1457,8 @@ export class Scheduler {
       const result = await this.startInvocation(store, {
         automation,
         source: "event",
+        invocationId: webhookClaim?.invocationId,
+        webhookFollowUpClaimId: webhookClaim?.claimId,
         triggerKey: event.triggerKey,
         concurrencyKey: event.concurrencyKey,
         triggerMetadata: event.source === "slack" ? serializeSlackTriggerMetadata(event) : null,
@@ -1405,6 +1470,19 @@ export class Scheduler {
             }
           : {}),
       });
+      if (webhookClaim) {
+        if (result.outcome === "deduplicated" && result.invocationId) {
+          await store.acceptFollowUpReceipt(
+            automation.id,
+            event.triggerKey,
+            webhookClaim.claimId,
+            result.invocationId,
+            Date.now()
+          );
+        } else if (result.outcome !== "started") {
+          await releaseWebhookClaim();
+        }
+      }
       const invocationId = firingInvocationId(result);
       if (invocationId) invocationIds.push(invocationId);
 
@@ -2126,47 +2204,25 @@ export class Scheduler {
     event: WebhookAutomationEvent,
     automation: AutomationRow,
     store: AutomationStore,
-    triggerKey: string | null,
+    claim: WebhookFollowUpClaim | null,
     requestId: string | null
   ): Promise<ContinuationPolicy> {
     const clientRequestId = requestId ?? `webhook:${await hashToken(event.triggerKey)}`;
-    const claimId = triggerKey ? generateId() : null;
-    let claimedInvocationId: string | null = null;
     return {
       source: "webhook",
-      claimDelivery: claimId
+      acceptDelivery: claim
         ? async (run) => {
-            if (claimedInvocationId === run.invocation_id) return null;
-            const now = Date.now();
-            const claim = await store.claimFollowUpReceipt({
-              automationId: automation.id,
-              triggerKey: triggerKey!,
-              invocationId: run.invocation_id,
-              claimId,
-              now,
-              expiresAt: now + FOLLOW_UP_RECEIPT_CLAIM_MS,
-            });
-            if (claim.kind === "claimed") {
-              claimedInvocationId = run.invocation_id;
-              return null;
-            }
-            return claim.kind === "accepted"
-              ? { kind: "skipped", invocationId: claim.invocationId }
-              : {
-                  kind: "refused",
-                  invocationId: claim.invocationId,
-                  status: null,
-                  code: null,
-                };
+            await store.acceptFollowUpReceipt(
+              automation.id,
+              event.triggerKey,
+              claim.claimId,
+              run.invocation_id,
+              Date.now()
+            );
           }
         : undefined,
-      acceptDelivery: claimId
-        ? async () => {
-            await store.acceptFollowUpReceipt(automation.id, triggerKey!, claimId, Date.now());
-          }
-        : undefined,
-      releaseDelivery: claimId
-        ? () => store.releaseFollowUpReceipt(automation.id, triggerKey!, claimId)
+      releaseDelivery: claim
+        ? () => store.releaseFollowUpReceipt(automation.id, event.triggerKey, claim.claimId)
         : undefined,
       resolveActor: async () => {
         const owner = await store.resolveCanonicalOwner(automation);

@@ -179,7 +179,6 @@ function createMockStore() {
     recordAuthorizationDenied: vi.fn().mockResolvedValue({ inserted: true, paused: true }),
     getInvocationById: vi.fn().mockResolvedValue(null),
     getInvocationIdByTriggerKey: vi.fn().mockResolvedValue(null),
-    recordFollowUpReceipt: vi.fn(async (_automationId, _triggerKey, invocationId) => invocationId),
     claimFollowUpReceipt: vi.fn().mockResolvedValue({ kind: "claimed" }),
     acceptFollowUpReceipt: vi.fn().mockResolvedValue(undefined),
     releaseFollowUpReceipt: vi.fn().mockResolvedValue(undefined),
@@ -3934,14 +3933,28 @@ describe("Scheduler", () => {
         const stub = createMockSessionStub();
 
         const result = await createScheduler(createEnv(undefined, stub)).event(
-          webhookEvent({ mode: "build" })
+          webhookEvent({ mode: "build" }, "first")
         );
 
         expect(result.steered).toBe(0);
+        const claim = mockStore.claimFollowUpReceipt.mock.calls[0]?.[0];
         expect(mockStore.insertInvocationGuarded).toHaveBeenCalledWith(
           expect.objectContaining({
-            invocation: expect.objectContaining({ concurrency_key: "webhook:session:card-42" }),
+            invocation: expect.objectContaining({
+              id: claim.claimInvocationId,
+              concurrency_key: "webhook:session:card-42",
+            }),
           })
+        );
+        expect(mockStore.acceptFollowUpReceipt).toHaveBeenCalledWith(
+          "auto-hook",
+          "webhook:idem:first",
+          claim.claimId,
+          claim.claimInvocationId,
+          expect.any(Number)
+        );
+        expect(mockStore.acceptFollowUpReceipt.mock.invocationCallOrder[0]).toBeLessThan(
+          mockStore.claimRunSession.mock.invocationCallOrder[0]!
         );
       });
 
@@ -4288,6 +4301,7 @@ describe("Scheduler", () => {
 
           expect(refusal).toBeInstanceOf(SessionFollowUpRefusedError);
           expect(refusal).toMatchObject({ invocationId: "inv-card", status, code });
+          expect(mockStore.releaseFollowUpReceipt).toHaveBeenCalled();
           expect(mockStore.insertInvocationGuarded).not.toHaveBeenCalled();
         }
       );
@@ -4331,10 +4345,12 @@ describe("Scheduler", () => {
         const stub = createMockSessionStub();
 
         const result = await createScheduler(createEnv(undefined, stub)).event(
-          webhookEvent({ mode: "demo" })
+          webhookEvent({ mode: "demo" }, "no-match")
         );
 
         expect(result).toEqual({ triggered: 0, skipped: 0, steered: 0, invocationIds: [] });
+        expect(mockStore.claimFollowUpReceipt).toHaveBeenCalled();
+        expect(mockStore.releaseFollowUpReceipt).toHaveBeenCalled();
         expect(promptCallCount(vi.mocked(stub.fetch))).toBe(0);
       });
     });

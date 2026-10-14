@@ -55,8 +55,7 @@ export interface SteeringActor {
 export interface ContinuationPolicy {
   source: "slack" | "webhook";
   logFields?: Record<string, unknown>;
-  claimDelivery?(run: AutomationRunRow): Promise<ContinuationOutcome | null>;
-  acceptDelivery?(): Promise<void>;
+  acceptDelivery?(run: AutomationRunRow): Promise<void>;
   releaseDelivery?(): Promise<void>;
   resolveActor(): Promise<SteeringActor | null>;
   buildPrompt(
@@ -293,12 +292,13 @@ async function continueRunSession(
 
   const fields = { automation_id: run.automation_id, session_id: sessionId, ...policy.logFields };
   const actor = await admittedActor(deps, sessionId, policy, fields);
-  if (!actor) return blocked(deps, policy, fields);
+  if (!actor) {
+    await policy.releaseDelivery?.();
+    return blocked(deps, policy, fields);
+  }
 
   // Outside the try: a follow-up that cannot be attributed must fail, not fall through to a new run.
   const { body, ctx } = await policy.buildPrompt(run, actor);
-  const claimed = await policy.claimDelivery?.(run);
-  if (claimed) return claimed;
   let outcome: SessionPromptOutcome;
   try {
     outcome = await enqueueSessionPrompt(deps.env, sessionId, body, ctx);
@@ -313,7 +313,7 @@ async function continueRunSession(
 
   switch (outcome.kind) {
     case "queued":
-      await policy.acceptDelivery?.();
+      await policy.acceptDelivery?.(run);
       deps.log.info("Steered session with a follow-up", {
         event: `scheduler.${policy.source}_steer`,
         ...fields,
@@ -324,7 +324,7 @@ async function continueRunSession(
     // block carries its own receipt time.
     case "duplicate":
     case "request_id_taken":
-      await policy.acceptDelivery?.();
+      await policy.acceptDelivery?.(run);
       return { kind: "skipped", invocationId: run.invocation_id };
     case "rejected":
       await policy.releaseDelivery?.();
@@ -361,11 +361,12 @@ async function holdFollowUp(
     logAuthorizationFailure(deps, policy, fields, error);
     actor = null;
   }
-  if (!actor) return blocked(deps, policy, fields);
+  if (!actor) {
+    await policy.releaseDelivery?.();
+    return blocked(deps, policy, fields);
+  }
 
   const { body, ctx } = await policy.buildPrompt(run, actor);
-  const claimed = await policy.claimDelivery?.(run);
-  if (claimed) return claimed;
   const id = generateId();
   // A retried delivery is held once, and the sweep may re-send a released prompt after
   // a crash, which the session dedupes by this request id.
@@ -382,7 +383,7 @@ async function holdFollowUp(
     retry_at: Date.now() + HELD_PROMPT_RETRY_MS,
   });
   if (held === "not_holding") return null;
-  await policy.acceptDelivery?.();
+  await policy.acceptDelivery?.(run);
   if (held === "duplicate") return { kind: "skipped", invocationId: run.invocation_id };
 
   deps.log.info("Held a follow-up until its run's first prompt is queued", {
