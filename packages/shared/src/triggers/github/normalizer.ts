@@ -178,11 +178,14 @@ function normalizePullRequest(
   const headSha = pr.head?.sha;
   const branch = pr.head?.ref;
   const targetBranch = pr.base?.ref;
+  // A PR can go ready -> draft -> ready without a new commit. updated_at tells
+  // those transitions apart, while a redelivery of the same webhook still dedupes.
+  const occurrence = action === "ready_for_review" ? `:${pr.updated_at ?? "unknown"}` : "";
 
   return {
     source: "github",
     eventType,
-    triggerKey: `pr:${pr.number}:${action}:${headSha ?? "unknown"}`,
+    triggerKey: `pr:${pr.number}:${action}:${headSha ?? "unknown"}${occurrence}`,
     concurrencyKey: `pr:${pr.number}`,
     repositoryId: payload.repository.id,
     repoOwner: getRepoOwner(payload),

@@ -194,6 +194,24 @@ describe("normalizeGitHubEvent", () => {
     });
   });
 
+  describe("pull_request.ready_for_review", () => {
+    it("gives each ready transition at the same head SHA its own trigger key", () => {
+      const ready = (updatedAt: string) =>
+        normalizeGitHubEvent("pull_request", {
+          ...pullRequestOpenedPayload,
+          action: "ready_for_review",
+          pull_request: { ...basePR, updated_at: updatedAt },
+        });
+
+      const first = ready("2026-07-10T12:00:00Z");
+      const second = ready("2026-07-10T12:05:00Z");
+
+      expect(first!.triggerKey).toBe("pr:42:ready_for_review:abc1234def5678:2026-07-10T12:00:00Z");
+      expect(second!.triggerKey).not.toBe(first!.triggerKey);
+      expect(ready("2026-07-10T12:00:00Z")!.triggerKey).toBe(first!.triggerKey);
+    });
+  });
+
   describe("pull_request.closed", () => {
     it("returns event type pull_request.closed", () => {
       const event = normalizeGitHubEvent("pull_request", pullRequestClosedPayload);
